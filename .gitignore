@@ -1,0 +1,5 @@
+node_modules/
+dist/
+research/videos/*.mp4
+research/videos/*.webm
+*.log

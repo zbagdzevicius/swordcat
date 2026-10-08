@@ -1,0 +1,433 @@
+// Fur rendering (research/art.md §3): shell texturing on exposed fur (head, cheek ruff, bib, tail) with a
+// per-vertex coat colour + fur mask, wrap-diffuse + rim lighting from the scene's real lights, and a sheen
+// fallback quality switch (GAME_DESIGN §17: 16 shells hero, 10 kittens, sheen for villagers / far / mobile).
+import * as THREE from 'three';
+import { PAL } from './palette.js';
+import { rgb, mixRgb, fbm3, smoothstep, clamp, lerp } from './util.js';
+import { own, HOLY_COLOR } from './materials.js';
+
+// ---------------------------------------------------------------- quality
+
+/** Shell counts per tier and quality. 0 = sheen fallback. */
+export const FUR_QUALITY = Object.freeze({
+  ultra: { hero: 24, kitten: 12, npc: 8 },
+  high: { hero: 16, kitten: 10, npc: 0 },
+  med: { hero: 16, kitten: 10, npc: 0 },
+  low: { hero: 8, kitten: 0, npc: 0 },
+  off: { hero: 0, kitten: 0, npc: 0 },
+});
+let _quality = 'med';
+/** Shell counts when the quality was set from a core preset (runtime.furShellsForPreset). */
+let _custom = { hero: 16, kitten: 10, npc: 0 };
+const _parts = new Set();
+/** Max shells a part is allocated for (so quality can be raised later without rebuilding). */
+export const MAX_SHELLS = 24;
+/** Distance LOD (art.md §3 table: far LOD beyond ~12 units): full shells inside `near`, base layer only beyond `far`. */
+export const FUR_LOD = { near: 5, far: 12, min: 4 };
+const _lodV = new THREE.Vector3();
+
+/** Current fur quality name. */
+export function getFurQuality() { return _quality; }
+/** Shell count for a tier at the current quality. */
+export function shellsFor(tier) { return (_quality === 'custom' ? _custom : FUR_QUALITY[_quality] || FUR_QUALITY.med)[tier] ?? 0; }
+/**
+ * Switch fur quality for every live kitten: a name ('ultra' | 'high' | 'med' | 'low' | 'off') or explicit
+ * counts `{ hero, kitten, npc }` (runtime.initCharacters maps core's QUALITY.furShells / kittenShells this way).
+ * @param {string | {hero?: number, kitten?: number, npc?: number}} q
+ */
+export function setFurQuality(q) {
+  if (q && typeof q === 'object') {
+    _custom = { hero: q.hero ?? 16, kitten: q.kitten ?? 10, npc: q.npc ?? 0 };
+    _quality = 'custom';
+  } else if (FUR_QUALITY[q]) _quality = q;
+  else return;
+  for (const p of _parts) p.setShells(shellsFor(p.tier));
+}
+
+// ---------------------------------------------------------------- shared uniforms
+
+/** World-space wind for all fur (Env can write into `.value`). */
+export const FUR_WIND = { value: new THREE.Vector3(0.12, 0, 0.06) };
+/** Global fur time (advanced by kittens' update; any one call per frame is enough). */
+export const FUR_TIME = { value: 0 };
+let _timeFrame = -1, _timeStamp = -1e9;
+const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+/**
+ * Advance shared fur time once per rendered frame. Every kitten calls this from simulate(); with a frameId the
+ * first call per frame wins, without one calls closer than 3 ms (same frame) are ignored.
+ * @returns {boolean} true when time advanced
+ */
+export function tickFurTime(dt, frameId) {
+  if (frameId !== undefined) { if (frameId === _timeFrame) return false; _timeFrame = frameId; }
+  else { const t = _now(); if (t - _timeStamp < 3) return false; _timeStamp = t; }
+  FUR_TIME.value += dt;
+  return true;
+}
+
+// ---------------------------------------------------------------- strand texture (art.md §3.1)
+
+let _strandTex = null;
+/** Strand height field: R = tapered cone per cell, G = strand height, B = random. Generated once. */
+export function makeStrandTexture(size = 512, cells = 64, seed = 7) {
+  let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const n = cells * cells, cx = [], cy = [], ch = [], cr = [];
+  for (let i = 0; i < n; i++) { cx[i] = 0.18 + rnd() * 0.64; cy[i] = 0.18 + rnd() * 0.64; ch[i] = 0.5 + rnd() * 0.5; cr[i] = 0.4 + rnd() * 0.22; }
+  const cs = size / cells, data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const gx = Math.floor(x / cs), gy = Math.floor(y / cs);
+    // nearest strand among the 3x3 neighbouring cells (jittered centres overlap cell borders)
+    let best = 0;
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const nx = (gx + ox + cells) % cells, ny = (gy + oy + cells) % cells, i = ny * cells + nx;
+      const d = Math.hypot((x + 0.5) / cs - (gx + ox) - cx[i], (y + 0.5) / cs - (gy + oy) - cy[i]) / cr[i];
+      if (d < 1) best = Math.max(best, ch[i] * (1 - d * d * 0.9));
+    }
+    const o = (y * size + x) * 4;
+    data[o] = 255 * best; data[o + 1] = 255 * best; data[o + 2] = 255 * rnd(); data[o + 3] = 255;
+  }
+  const t = new THREE.DataTexture(data, size, size);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+export function strandTexture() { return _strandTex || (_strandTex = makeStrandTexture()); }
+
+// ---------------------------------------------------------------- coat painting (art.md §2.3, §3.2, §7)
+
+/** Face feature anchors in HEAD space (head bone at the neck, y = 0.62 H). */
+export const FACE = Object.freeze({
+  skull: [0, 0.165, 0], skullScale: [1.18, 0.96, 1.0], skullR: 0.145,
+  eyeL: [0.074, 0.158, 0.118], eyeR: [-0.074, 0.158, 0.118], nose: [0, 0.12, 0.158],
+  mouth: [0, 0.1, 0.15], muzzle: [0, 0.097, 0.135], chin: [0, 0.064, 0.108], pad: [0.028, 0.097, 0.125], eyeR0: 0.045,
+  cheek: [0.12, 0.075, 0.045], cheekR: 0.093,
+});
+const _d3 = (p, a) => Math.hypot(p.x - a[0], p.y - a[1], p.z - a[2]);
+
+/**
+ * Coat colour (linear rgb) at a point.
+ * @param {object} coat  { pattern, base, deep, light, cream, white?, patches?, points?, stripe?, muzzle?, smudge? }
+ * @param {'head'|'cheek'|'muzzle'|'bib'|'tail'|'body'|'leg'|'paw'|'ear'} region
+ * @param {THREE.Vector3} p  position in the region's space (head space for head parts; root space otherwise)
+ * @param {object} [o] { t: tail parameter 0..1, side: ±1 }
+ */
+export function coatColor(coat, region, p, o = {}) {
+  const base = rgb(coat.base), deep = rgb(coat.deep || coat.base), cream = rgb(coat.cream || coat.base);
+  const white = coat.white ? rgb(coat.white) : cream;
+  const pat = coat.pattern || 'solid';
+  let c = base;
+  const n = fbm3(p.x * 9 + 3.1, p.y * 9 + 1.7, p.z * 9 + 5.3, 3);
+  const stripeK = coat.stripe ?? 0.3;
+  const stripe = (v) => smoothstep(0.55, 0.85, 0.5 + 0.5 * Math.sin(v)) * stripeK;
+
+  // ---- tabby stripes
+  if (pat === 'mackerel' || pat === 'tabby' || pat === 'dilute') {
+    if (region === 'head') {
+      const fore = smoothstep(0.19, 0.25, p.y) * smoothstep(-0.02, 0.06, p.z) * smoothstep(0.1, 0.03, Math.abs(p.x) - 0.02);
+      const cheek = smoothstep(0.08, 0.13, Math.abs(p.x)) * smoothstep(0.2, 0.12, p.y);
+      let s = stripe(p.x * 75 + n * 2.0) * fore * 1.6 + stripe(p.y * 70 + n * 3.0 + Math.abs(p.x) * 20) * cheek * 0.8;
+      s += stripe(p.x * 40 + p.z * 25 + n * 4) * smoothstep(0.0, -0.08, p.z) * 0.7; // back of head
+      c = mixRgb(c, deep, s);
+    } else if (region === 'tail') {
+      c = mixRgb(c, deep, stripe((o.t ?? 0) * 46 + n * 2.0) * 1.1);
+    } else if (region === 'body' || region === 'leg') {
+      c = mixRgb(c, deep, stripe(p.y * 60 + n * 3.0) * 0.9);
+    } else if (region === 'ear') {
+      c = mixRgb(c, deep, 0.15);
+    }
+  }
+  // ---- calico / tortie patches
+  if (pat === 'calico') {
+    const cols = (coat.patches || ['#E09A4E', '#2A2624']).map(rgb);
+    const ps = coat.patchScale ?? 1;
+    const a = fbm3(p.x * 6 * ps + 11, p.y * 6 * ps + 2, p.z * 6 * ps + 7, 3), b = fbm3(p.x * 7 * ps + 31, p.y * 7 * ps + 13, p.z * 7 * ps + 3, 3);
+    if (a > 0.52) c = mixRgb(c, cols[0], smoothstep(0.52, 0.56, a));
+    if (b > 0.56) c = mixRgb(c, cols[1] || cols[0], smoothstep(0.56, 0.6, b));
+  }
+  // ---- cream / white zones (muzzle, chin, bib, belly, paws, tail tip & underside)
+  let creamK = 0;
+  const bibC = coat.bib ? rgb(coat.bib) : null;
+  if (region === 'head' || region === 'cheek' || region === 'muzzle') {
+    const dm = _d3(p, FACE.muzzle);
+    creamK = Math.max(creamK, smoothstep(0.07, 0.035, dm));
+    creamK = Math.max(creamK, smoothstep(0.09, 0.05, p.y) * smoothstep(0.03, 0.1, p.z)); // chin / throat
+    if (region === 'cheek') creamK = Math.max(creamK, smoothstep(0.06, 0.13, p.z) * smoothstep(0.07, 0.02, p.y) * 0.55);
+    if (region === 'muzzle') creamK = 0.9;
+    // pale ring around the eyes (ref2)
+    const de = Math.min(_d3(p, FACE.eyeL), _d3(p, FACE.eyeR));
+    creamK = Math.max(creamK, smoothstep(0.07, 0.05, de) * 0.3);
+  } else if (region === 'bib') creamK = 1;
+  else if (region === 'paw') creamK = coat.pawsCream === false ? 0 : 0.85;
+  else if (region === 'tail') {
+    const t = o.t ?? 0;
+    creamK = Math.max(smoothstep(0.78, 0.95, t), smoothstep(0.2, -0.6, o.under ?? 0) * 0.65);
+  } else if (region === 'body') creamK = smoothstep(0.05, 0.14, p.z) * smoothstep(0.42, 0.3, p.y) * 0.6;
+  if (pat === 'tuxedo' || pat === 'bicolour') {
+    if (region === 'head') {
+      const blaze = smoothstep(0.018, 0.008, Math.abs(p.x)) * smoothstep(0.24, 0.2, p.y) * smoothstep(0.08, 0.14, p.z);
+      creamK = Math.max(creamK, blaze);
+      creamK = creamK > 0.5 ? 1 : creamK * 1.4;
+    }
+    if (region === 'paw' || region === 'bib') creamK = 1;
+    if (region === 'tail') creamK = 0;
+    c = mixRgb(c, white, clamp(creamK, 0, 1));
+  } else if (pat === 'solid') {
+    c = mixRgb(c, cream, clamp(creamK, 0, 1) * 0.6);
+  } else if (pat === 'siamese') {
+    c = mixRgb(c, cream, clamp(creamK, 0, 1) * 0.5);
+  } else {
+    const cr = region === 'bib' && bibC ? bibC : (region === 'head' || region === 'cheek' || region === 'muzzle') && coat.face ? mixRgb(cream, rgb(coat.face), smoothstep(0.12, 0.06, p.y)) : cream;
+    c = mixRgb(c, cr, clamp(creamK, 0, 1));
+  }
+  // ---- siamese points
+  if (pat === 'siamese' && coat.points) {
+    const pc = rgb(coat.points);
+    let k = 0;
+    if (region === 'head' || region === 'muzzle' || region === 'cheek') k = smoothstep(0.1, 0.04, _d3(p, FACE.nose)) * 0.95 + smoothstep(0.13, 0.09, _d3(p, FACE.nose)) * 0.25;
+    if (region === 'ear') k = 0.95;
+    if (region === 'tail') k = smoothstep(0.1, 0.5, o.t ?? 0);
+    if (region === 'paw') k = 0.9;
+    if (region === 'leg') k = smoothstep(0.22, 0.06, p.y) * 0.8;
+    c = mixRgb(c, pc, clamp(k, 0, 1));
+  }
+  // ---- age (grey muzzle) and soot smudge
+  if (coat.muzzle && (region === 'head' || region === 'muzzle')) c = mixRgb(c, rgb(coat.muzzle), smoothstep(0.09, 0.05, _d3(p, FACE.muzzle)) * 0.85);
+  if (coat.smudge && region === 'head') {
+    const s = coat.smudge; c = mixRgb(c, rgb(s.color || '#3A3634'), smoothstep(s.r || 0.03, (s.r || 0.03) * 0.4, _d3(p, s.at)) * 0.85);
+  }
+  // gentle large-scale value variation so flat coats read as fur
+  const v = lerp(0.92, 1.06, fbm3(p.x * 4 + 9, p.y * 4 + 4, p.z * 4 + 1, 2));
+  return [c[0] * v, c[1] * v, c[2] * v];
+}
+
+/**
+ * Fur mask [density, lengthMul] in head space: 0 around eyes, nose and mouth (art.md §3.2), short on the muzzle,
+ * long on the cheek ruff.
+ */
+export function headFurMask(p, region, eyeScale = 1) {
+  const er = FACE.eyeR0 * eyeScale;
+  const de = Math.min(_d3(p, FACE.eyeL), _d3(p, FACE.eyeR));
+  let m = smoothstep(er * 1.02, er * 1.55, de);
+  m *= smoothstep(0.018, 0.034, _d3(p, FACE.nose));
+  m *= smoothstep(0.012, 0.03, _d3(p, FACE.mouth));
+  let len = 1;
+  if (region === 'cheek') len = 1.38;
+  else if (region === 'muzzle') len = 0.32;
+  else {
+    len = lerp(0.35, 1.0, smoothstep(0.03, 0.075, _d3(p, FACE.muzzle)));
+    len *= lerp(1.0, 1.15, smoothstep(0.1, 0.0, p.z)); // fuller at the back / sides
+  }
+  return [m, len];
+}
+
+// ---------------------------------------------------------------- shell material (art.md §3.3)
+
+const FUR_VERT = /* glsl */`
+uniform float uFurLen, uShells, uTime, uDensityBoost, uComb;
+uniform vec3 uGravity, uWind, uDrag;
+attribute vec2 fur;
+attribute vec3 comb;
+#ifdef FUR_BAKED
+attribute float aShell;
+#endif
+varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
+varying float vH, vMask;
+#include <common>
+#include <skinning_pars_vertex>
+#include <fog_pars_vertex>
+void main() {
+#ifdef FUR_BAKED
+  float h = aShell / max(uShells, 1.0);
+#else
+  float h = float(gl_InstanceID) / max(uShells, 1.0);
+#endif
+  #include <beginnormal_vertex>
+  #include <skinbase_vertex>
+  #include <skinnormal_vertex>
+  float len = uFurLen * fur.y * smoothstep(0.0, 0.35, fur.x);
+  vec3 nn = normalize(normal);
+  vec3 cd = comb - nn * dot(nn, comb);            // comb direction projected onto the surface
+  vec3 transformed = position + nn * len * h + cd * len * h * h * uComb;
+  #include <skinning_vertex>
+  vec4 wp = modelMatrix * vec4(transformed, 1.0);
+  float sc = length(modelMatrix[0].xyz);
+  float k = h * h;
+  float flutter = 0.6 + 0.4 * sin(uTime * 3.1 + dot(position, vec3(23.0, 17.0, 11.0)));
+  wp.xyz += (uGravity * 0.35 + (uWind + uDrag) * flutter) * len * sc * k;
+  vWPos = wp.xyz; vObjPos = position; vObjN = normalize(normal); vH = h; vMask = fur.x; vCoat = color;
+  vWN = normalize(mat3(modelMatrix) * objectNormal);
+  vec4 mvPosition = viewMatrix * wp;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}`;
+
+const FUR_FRAG = /* glsl */`
+uniform sampler2D uStrands;
+uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch;
+uniform vec3 uTipTint, uRimColor, uHolyColor;
+varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
+varying float vH, vMask;
+#include <common>
+#include <lights_pars_begin>
+#include <fog_pars_fragment>
+float strands(vec3 p, vec3 n) {
+  vec3 w = pow(abs(n), vec3(6.0)); w /= (w.x + w.y + w.z);
+  // strands are elongated along the (mostly downward / backward) comb so they read as streaks, not dots
+  return texture2D(uStrands, vec2(p.y * uStretch, p.z)).r * w.x + texture2D(uStrands, vec2(p.z * uStretch, p.x)).r * w.y + texture2D(uStrands, vec2(p.x, p.y * uStretch)).r * w.z;
+}
+void main() {
+  float alpha = 1.0;
+  if (vH > 0.0) {
+    float s = strands(vObjPos * uTiling, vObjN) * min(vMask * uDensityBoost, 1.0);
+    alpha = smoothstep(vH - 0.06, vH + 0.03, s) * mix(1.0, 0.6, vH * vH);
+    if (alpha < 0.3) discard;
+  }
+  vec3 N = normalize(vWN);
+  vec3 V = normalize(cameraPosition - vWPos);
+  vec3 albedo = vCoat * mix(uRootDark, 1.0, vH) + uTipTint * vH * vH;
+  vec3 nView = normalize((viewMatrix * vec4(N, 0.0)).xyz);
+  vec3 irr = ambientLightColor;
+  #if NUM_HEMI_LIGHTS > 0
+  for (int i = 0; i < NUM_HEMI_LIGHTS; i++) irr += getHemisphereLightIrradiance(hemisphereLights[i], nView);
+  #endif
+  vec3 direct = vec3(0.0);
+  #if NUM_DIR_LIGHTS > 0
+  for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+    float wrap = saturate((dot(nView, directionalLights[i].direction) + 0.5) / 1.5);
+    direct += directionalLights[i].color * wrap;
+  }
+  #endif
+  #if NUM_POINT_LIGHTS > 0
+  vec3 vPosView = (viewMatrix * vec4(vWPos, 1.0)).xyz;
+  for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+    IncidentLight pl; getPointLightInfo(pointLights[i], vPosView, pl);
+    float wrap = saturate((dot(nView, pl.direction) + 0.4) / 1.4);
+    direct += pl.color * wrap;
+  }
+  #endif
+  float rim = pow(1.0 - saturate(dot(N, V)), 3.0) * (0.35 + 0.65 * vH);
+  vec3 rimCol = mix(uRimColor * uRimStrength, uHolyColor * 1.25, uHoly);
+  vec3 col = albedo * (irr * uAmbMul + direct * uSunMul) * RECIPROCAL_PI + rim * rimCol;
+  col += albedo * uHolyColor * uHoly * 0.12 + vec3(uFlash);
+  gl_FragColor = vec4(col, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}`;
+
+/**
+ * Shell fur material. One per kitten (uniforms: shells, holy, drag). Programs are shared.
+ * @param {{ baked?: boolean, len?: number, tiling?: number, shells?: number, rim?: number }} o
+ */
+export function makeFurMaterial(o = {}) {
+  const mat = new THREE.ShaderMaterial({
+    vertexColors: true, fog: true, lights: true,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.lights, THREE.UniformsLib.fog, {
+      uStrands: { value: null }, uTiling: { value: o.tiling ?? 3.0 }, uShells: { value: o.shells ?? 16 }, uFurLen: { value: o.len ?? 0.045 },
+      uGravity: { value: new THREE.Vector3(0, -1, 0) }, uDrag: { value: new THREE.Vector3() },
+      uTipTint: { value: new THREE.Color(o.tipTint ?? PAL.furGingerLight).multiplyScalar(0.18) },
+      uRimColor: { value: new THREE.Color('#FFE9D2') }, uRimStrength: { value: o.rim ?? 0.3 },
+      uHoly: { value: 0 }, uAmbMul: { value: o.ambMul ?? 1.55 }, uSunMul: { value: o.sunMul ?? 1.0 },
+      uRootDark: { value: o.rootDark ?? 0.82 }, uDensityBoost: { value: o.density ?? 1.5 }, uFlash: { value: 0 },
+      uComb: { value: o.comb ?? 1.6 }, uStretch: { value: o.stretch ?? 0.65 },
+    }]),
+    vertexShader: FUR_VERT, fragmentShader: FUR_FRAG,
+  });
+  // shared objects (not cloned by merge)
+  mat.uniforms.uStrands.value = strandTexture();
+  mat.uniforms.uWind = FUR_WIND;
+  mat.uniforms.uTime = FUR_TIME;
+  mat.uniforms.uHolyColor = HOLY_COLOR;
+  if (o.baked) mat.defines = { FUR_BAKED: '' };
+  mat.alphaToCoverage = true; // soft strand tips with MSAA (Med/High); plain alpha-test otherwise
+  return own(mat);
+}
+
+// ---------------------------------------------------------------- fur parts
+
+/**
+ * A fur surface: base skin layer + N shells.
+ * Rigid parts use an InstancedMesh (instance i = shell i; instance 0 = skin).
+ * Skinned parts (tail) bake MAX shells into the geometry with an `aShell` attribute and use drawRange.
+ */
+export class FurPart {
+  /**
+   * @param {THREE.BufferGeometry} geo  must carry position, normal, color, fur, rmse (+ skinIndex/skinWeight if skinned)
+   * @param {object} o { furMat, bakedMat, sheenMat, tier, skeleton?, maxShells? }
+   */
+  constructor(geo, o) {
+    this.tier = o.tier || 'kitten';
+    this.furMat = o.furMat; this.sheenMat = o.sheenMat;
+    this.maxShells = o.maxShells ?? MAX_SHELLS;
+    if (o.skeleton) {
+      this.baked = true;
+      this.furMat = o.bakedMat;
+      this.idxPerShell = geo.index.count;
+      const g = bakeShells(geo, this.maxShells);
+      this.mesh = new THREE.SkinnedMesh(g, this.furMat);
+      this.mesh.bind(o.skeleton, o.bindMatrix || new THREE.Matrix4());
+    } else {
+      this.baked = false;
+      this.mesh = new THREE.InstancedMesh(geo, this.furMat, this.maxShells + 1);
+    }
+    this.mesh.frustumCulled = false;
+    // shells never render into shadow maps (17x cost); the kitten adds a low-poly shadow proxy instead
+    this.mesh.castShadow = false; this.mesh.receiveShadow = false;
+    this.mesh.name = o.name || 'fur';
+    this.shells = -1;
+    this._lodN = -1;
+    this.setShells(o.shells ?? shellsFor(this.tier));
+    // per-draw distance LOD: fewer shells far away (cheaper, and no shimmering strand tips)
+    this.mesh.onBeforeRender = (renderer, scene, camera) => this._lod(camera);
+    _parts.add(this);
+  }
+  _lod(camera) {
+    const n0 = this.shells;
+    if (n0 <= 0) return;
+    _lodV.setFromMatrixPosition(this.mesh.matrixWorld);
+    const d = _lodV.distanceTo(camera.position);
+    const k = clamp((FUR_LOD.far - d) / (FUR_LOD.far - FUR_LOD.near), 0, 1);
+    const n = k <= 0 ? 0 : Math.max(Math.min(FUR_LOD.min, n0), Math.round(n0 * k));
+    if (n === this._lodN) return;
+    this._lodN = n;
+    if (this.baked) this.mesh.geometry.setDrawRange(0, this.idxPerShell * (n + 1));
+    else this.mesh.count = n + 1;
+    this.furMat.uniforms.uShells.value = Math.max(n, 1);
+    this.furMat.uniformsNeedUpdate = true;
+  }
+  /** @param {number} n 0 = sheen fallback */
+  setShells(n) {
+    n = clamp(Math.round(n), 0, this.maxShells);
+    if (n === this.shells) return;
+    this.shells = n; this._lodN = -1;
+    const mat = n > 0 ? this.furMat : this.sheenMat;
+    this.mesh.material = mat;
+    if (n > 0) mat.uniforms.uShells.value = n;
+    if (this.baked) this.mesh.geometry.setDrawRange(0, this.idxPerShell * (n + 1));
+    else this.mesh.count = n + 1;
+  }
+  dispose() { _parts.delete(this); this.mesh.geometry.dispose(); }
+}
+
+/** Duplicate an indexed geometry (shells 0..n) with an `aShell` attribute; shell-major order for drawRange. */
+export function bakeShells(geo, n) {
+  const out = new THREE.BufferGeometry();
+  const vc = geo.attributes.position.count, copies = n + 1;
+  for (const [name, attr] of Object.entries(geo.attributes)) {
+    const Arr = attr.array.constructor, src = attr.array, dst = new Arr(src.length * copies);
+    for (let c = 0; c < copies; c++) dst.set(src, c * src.length);
+    out.setAttribute(name, new THREE.BufferAttribute(dst, attr.itemSize, attr.normalized));
+  }
+  const sh = new Float32Array(vc * copies);
+  for (let c = 0; c < copies; c++) sh.fill(c, c * vc, (c + 1) * vc);
+  out.setAttribute('aShell', new THREE.BufferAttribute(sh, 1));
+  const I = geo.index.array, ic = I.length, total = vc * copies;
+  const idx = total > 65535 ? new Uint32Array(ic * copies) : new Uint16Array(ic * copies);
+  for (let c = 0; c < copies; c++) for (let i = 0; i < ic; i++) idx[c * ic + i] = I[i] + c * vc;
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  out.computeBoundingSphere();
+  return out;
+}
+
+/** Live fur part count (debug / tests). */
+export function liveFurParts() { return _parts.size; }

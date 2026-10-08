@@ -1,0 +1,263 @@
+// tests/smoke/combat.mjs  (owner: combat) — the combat resolve path in the running game (GAME_DESIGN §19.9 item 3 +
+// combat's own checks). Screenshots go to tests/shots/combat/.
+//   combat:arc      swept arcs on real enemies (API-driven: left/right hit, behind/far missed) + the J combo kills a rat
+//   combat:parry    a real rat_pike pokes; the Stand starts just before its strike → player:parry, the rat staggers
+//   combat:reflect  a crossbow bolt is parried → combat:reflect, it flies back gold and kills the shooter for 25
+//   combat:holy     Holy Slash with Shard 2 → holyWave pierces a line of rats (each hit once)
+//   combat:tokens   4 rats around her: never more than the difficulty's melee tokens attack at once (Knight 2, Kitten 1)
+//   combat:visuals  every projectile look frozen in front of the camera (bolt, reflected bolt, orb, glob, wave, gleam)
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+fs.mkdirSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'shots', 'combat'), { recursive: true });
+
+/** Page helper source: spawn an enemy at (angle relative to her facing, distance), optionally AI-less, facing her. */
+const SPAWN = (type, rel, dist, opts = {}) => {
+  const g = window.__GAME__, ctx = g.ctx, p = ctx.player, THREE = g.THREE;
+  const a = p.facing + rel;
+  const pos = new THREE.Vector3(p.pos.x + Math.sin(a) * dist, 0, p.pos.z + Math.cos(a) * dist);
+  pos.y = ctx.physics.heightAt(pos.x, pos.z);
+  const e = ctx.enemies.spawn(type, pos, { facing: Math.atan2(p.pos.x - pos.x, p.pos.z - pos.z) });
+  if (opts.passive) e.ai = false;
+  return e;
+};
+
+/** Install the page-side helpers once per block. */
+async function prepare(t) {
+  await t.G((spawnSrc) => {
+    const g = window.__GAME__;
+    // eslint-disable-next-line no-new-func
+    g.__combatSpawn = new Function(`return (${spawnSrc})`)();
+    g.god(true);
+    g.ctx.input.setDevice?.('kbm');
+    g.ctx.game.setTimeScale(1);
+    return true;
+  }, SPAWN.toString());
+}
+
+/** Press the Stand (virtual guard) for `ms` real milliseconds from inside the page. */
+const guardFor = (ms) => {
+  const input = window.__GAME__.ctx.input;
+  input.setVirtual('guard', true);
+  setTimeout(() => { input.setVirtual('guard', false); input.setDevice?.('kbm'); }, ms);
+};
+
+export default [
+  {
+    name: 'combat:arc', order: 30, level: 'meadow', spawn: 'start', timeout: 60000,
+    async run(t) {
+      await prepare(t);
+      await t.frames(5);
+      // 1) API-driven slash1 on four passive rats around her (real Enemy hooks, real HIT events)
+      const r = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, S = g.__combatSpawn;
+        const L = S('rat_pike', 1.0, 1.5, { passive: true }), R = S('rat_pike', -1.0, 1.5, { passive: true });
+        const B = S('rat_pike', Math.PI, 1.5, { passive: true }), F = S('rat_pike', 0, 3.2, { passive: true });
+        const s = ctx.combat.beginSwing(p, ctx.config.ATTACKS.slash1, { assist: false, projectiles: false });
+        let n = 0; for (let i = 0; i < 30 && !s.done; i++) n += ctx.combat.updateSwing(s, 1 / 60);
+        ctx.game.hitstopT = 0;
+        const out = { n, L: L.hp, R: R.hp, B: B.hp, F: F.hp, max: L.maxHp, order: ctx.combat.log.slice(-2).map((e) => e.targetId === L.id ? 'L' : e.targetId === R.id ? 'R' : '?') };
+        for (const e of [L, R, B, F]) ctx.enemies.despawn(e);
+        return out;
+      });
+      t.assert(r.n === 2, `slash1 should hit 2 rats, hit ${r.n}`);
+      t.assert(r.L === r.max - 10 && r.R === r.max - 10, `left/right rats take 10 (hp ${r.L}, ${r.R} of ${r.max})`);
+      t.assert(r.B === r.max && r.F === r.max, `rats behind / out of range untouched (hp ${r.B}, ${r.F})`);
+      t.assert(r.order.join('') === 'LR', `slash1 sweeps left → right (got ${r.order.join('')})`);
+      // 2) the real combo: J J J on a rat right in front of her
+      const id = await t.G(() => window.__GAME__.__combatSpawn('rat_pike', 0, 1.35, { passive: true }).id);
+      await t.clearEvents();
+      await t.G(() => window.__GAME__.ctx.combat.log.length = 0);
+      await t.tap('KeyJ', 3, 260);
+      await t.wait(150);
+      await t.shot('combat/arc-combo');
+      await t.wait(900);
+      const c = await t.G((rid) => {
+        const ctx = window.__GAME__.ctx, e = ctx.actors.list.find((a) => a.id === rid);
+        return { hits: ctx.combat.log.filter((x) => x.targetId === rid && x.result === 'hit').map((x) => x.attackId), alive: e?.alive ?? false };
+      }, id);
+      const ev = await t.events();
+      t.log(`combo hits: ${c.hits.join(', ') || 'none'}; rat alive=${c.alive}; combat:hit events ${ev.filter((e) => e === 'combat:hit').length}`);
+      t.assert(c.hits.length >= 2, `the J combo should land ≥ 2 hits on the rat (got ${c.hits.length})`);
+      t.assert(ev.includes('combat:hit') && ev.includes('fx:shake'), 'combat:hit + fx:shake emitted');
+    },
+  },
+  {
+    name: 'combat:parry', order: 31, level: 'meadow', spawn: 'start', timeout: 60000,
+    async run(t) {
+      await prepare(t);
+      await t.frames(5);
+      await t.G((guardSrc) => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E;
+        const guard = new Function(`return (${guardSrc})`)();
+        const rat = g.__combatSpawn('rat_pike', 0, 1.7);
+        g.__parry = { rat: rat.id, tele: null, pressed: false, parried: null };
+        const st = g.__parry;
+        st.offT = ctx.bus.on(E.TELEGRAPH, (p) => { if (p.actor === rat && !st.pressed) st.tele = { t: ctx.game.time, d: p.duration }; });
+        st.offP = ctx.bus.on(E.PLAYER_PARRY, (p) => { st.parried = { gold: p.gold, attacker: p.attacker?.id, t: ctx.game.time }; });
+        st.offH = ctx.game.addFrameHook(() => {
+          if (!st.tele || st.pressed) return;
+          if (ctx.game.time >= st.tele.t + st.tele.d - 0.05) { st.pressed = true; guard(500); }
+        });
+        return true;
+      }, guardFor.toString());
+      const ok = await t.waitForEvent('player:parry', 12000);
+      await t.wait(60);
+      await t.shot('combat/parry');
+      const s = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, st = g.__parry, rat = ctx.actors.list.find((a) => a.id === st.rat);
+        st.offT(); st.offP(); st.offH();
+        return { parried: st.parried, pressed: st.pressed, ratId: st.rat, rat: rat ? { state: rat.stateName, staggerT: rat.staggerT, hp: rat.hp } : null,
+          hp: ctx.player.hp, valor: ctx.player.valor, last: ctx.combat.lastParry ? ctx.combat.lastParry.attacker?.id : null };
+      });
+      t.assert(ok && s.parried, `player:parry not emitted (guard pressed=${s.pressed})`);
+      if (s.parried) {
+        t.assert(s.parried.attacker === s.ratId, `player:parry carries the attacking rat (got ${s.parried.attacker})`);
+        t.assert(s.rat && (s.rat.state === 'stagger' || s.rat.staggerT > 0), `parried rat should stagger (state ${s.rat?.state})`);
+        t.assert(s.last != null, 'combat.lastParry recorded');
+      }
+      // Riposte (player area): ⚔ within 0.8 s of the parry
+      await t.tap('KeyJ', 1);
+      const rip = await t.waitForEvent('combat:hit', 1500);
+      const log = await t.G(() => window.__GAME__.ctx.combat.log.slice(-3).map((e) => `${e.attackId}:${e.result}:${e.damage}`));
+      t.log(`after parry: ${log.join(' ')}`);
+      if (!rip || !log.some((x) => x.startsWith('riposte'))) t.warn('no riposte hit after the parry (player area)');
+    },
+  },
+  {
+    name: 'combat:reflect', order: 32, level: 'meadow', spawn: 'start', timeout: 60000,
+    async run(t) {
+      await prepare(t);
+      await t.frames(5);
+      await t.G((guardSrc) => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E, THREE = g.THREE, p = ctx.player;
+        const guard = new Function(`return (${guardSrc})`)();
+        const rat = g.__combatSpawn('rat_xbow', 0.12, 8, { passive: true });
+        const from = new THREE.Vector3(rat.pos.x, rat.pos.y + rat.height * 0.6, rat.pos.z);
+        const dir = new THREE.Vector3(p.pos.x - from.x, p.pos.y + p.height * 0.55 - from.y, p.pos.z - from.z);
+        const bolt = ctx.combat.spawnProjectile(ctx.config.ATTACKS.rat_bolt, rat, from, dir);
+        g.__reflect = { rat: rat.id, pressed: false, reflected: false, bolt: bolt.id };
+        const st = g.__reflect;
+        st.off = ctx.bus.on(E.REFLECT, () => { st.reflected = true; });
+        st.offH = ctx.game.addFrameHook(() => {
+          if (st.pressed || !bolt.alive) return;
+          const d = Math.hypot(bolt.pos.x - p.pos.x, bolt.pos.z - p.pos.z) - p.radius - bolt.r;
+          if (d / bolt.speed <= 0.07) { st.pressed = true; guard(400); }
+        });
+        return true;
+      }, guardFor.toString());
+      const ok = await t.waitForEvent('combat:reflect', 6000);
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(0.06));
+      await t.wait(120);
+      await t.shot('combat/reflect');
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(1));
+      await t.wait(1200);
+      const s = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, st = g.__reflect;
+        st.off(); st.offH();
+        const rat = ctx.actors.list.find((a) => a.id === st.rat);
+        const hit = ctx.combat.log.find((e) => e.targetId === st.rat);
+        return { reflected: st.reflected, pressed: st.pressed, ratAlive: rat?.alive ?? false, hit, hp: ctx.player.hp, maxHp: ctx.player.maxHp, stats: ctx.combat.stats };
+      });
+      t.assert(ok && s.reflected, `bolt not reflected (guard pressed=${s.pressed})`);
+      t.assert(s.hit && s.hit.attackId === 'rat_bolt' && s.hit.damage === 25, `reflected bolt should hit the shooter for 25 (got ${JSON.stringify(s.hit)})`);
+      t.assert(!s.ratAlive, 'a 20-HP crossbow rat dies to its own reflected bolt');
+      t.log(`reflects ${s.stats.reflects}, parries ${s.stats.parries}, player hp ${s.hp}/${s.maxHp}`);
+    },
+  },
+  {
+    name: 'combat:holy', order: 33, level: 'meadow', spawn: 'start', timeout: 60000,
+    async run(t) {
+      await prepare(t);
+      await t.G(() => { const g = window.__GAME__; g.player.setShards(2); g.player.setValor(100); return true; });
+      await t.frames(3);
+      const ids = await t.G(() => {
+        const S = window.__GAME__.__combatSpawn;
+        return [S('rat_pike', 0.05, 5, { passive: true }), S('rat_pike', -0.08, 7.5, { passive: true }), S('rat_pike', 0.6, 4.5, { passive: true })].map((e) => { e.hp = e.maxHp = 100; return e.id; });
+      });
+      await t.clearEvents();
+      await t.hold('KeyJ', 1300);
+      let holy = await t.waitForEvent('player:holy', 400);
+      if (!holy) {                                                   // player area not wired yet: fire the swing directly
+        t.warn('no player:holy from a 1.3 s charge; driving the holy swing through the API');
+        await t.G(() => {
+          const ctx = window.__GAME__.ctx, p = ctx.player, s = ctx.combat.beginSwing(p, ctx.config.ATTACKS.holy);
+          for (let i = 0; i < 20; i++) ctx.combat.updateSwing(s, 1 / 60);
+          return true;
+        });
+      }
+      await t.wait(holy ? 330 : 30);
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(0.04));
+      await t.wait(150);
+      await t.shot('combat/holy-wave');
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(1));
+      await t.wait(1400);
+      const s = await t.G((rids) => {
+        const ctx = window.__GAME__.ctx;
+        const hits = ctx.combat.log.filter((e) => e.attackId === 'holyWave' && rids.includes(e.targetId));
+        return { waves: ctx.combat.stats.projectiles, hits: hits.map((h) => rids.indexOf(h.targetId)), dmg: hits.map((h) => h.damage) };
+      }, ids);
+      t.log(`holyWave hits on rats #${s.hits.join(', #')} for ${s.dmg.join(', ')}`);
+      t.assert(s.hits.includes(0) && s.hits.includes(1), 'holyWave pierces both rats in its path');
+      t.assert(new Set(s.hits).size === s.hits.length, 'each rat hit once by the wave');
+    },
+  },
+  {
+    name: 'combat:tokens', order: 34, level: 'meadow', spawn: 'start', timeout: 60000,
+    async run(t) {
+      await prepare(t);
+      await t.G(() => { const S = window.__GAME__.__combatSpawn; for (let i = 0; i < 4; i++) S('rat_pike', (i / 4) * Math.PI * 2, 3); return true; });
+      const sample = async (ms) => {
+        let max = 0, busy = 0;
+        for (let k = 0; k < ms / 100; k++) {
+          const n = await t.G(() => window.__GAME__.ctx.combat.tokens.count('melee'));
+          max = Math.max(max, n); if (n > 0) busy++;
+          await t.wait(100);
+        }
+        return { max, busy };
+      };
+      const knight = await sample(4000);
+      t.assert(knight.max <= 2, `Knight: at most 2 melee tokens (saw ${knight.max})`);
+      t.assert(knight.busy > 0, 'rats took attack tokens');
+      await t.G(() => { window.__GAME__.ctx.state.difficulty = 'kitten'; return true; });
+      await t.wait(1500);
+      const kitten = await sample(3000);
+      await t.G(() => { window.__GAME__.ctx.state.difficulty = 'knight'; return true; });
+      t.assert(kitten.max <= 1, `Kitten: at most 1 melee token (saw ${kitten.max})`);
+      await t.shot('combat/tokens');
+      t.log(`tokens: knight max ${knight.max} (busy ${knight.busy}/40), kitten max ${kitten.max}`);
+    },
+  },
+  {
+    name: 'combat:visuals', order: 35, level: 'meadow', spawn: 'start', timeout: 60000,
+    async run(t) {
+      await prepare(t);
+      await t.frames(10);
+      const n = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player, A = ctx.config.ATTACKS;
+        ctx.game.setTimeScale(0);
+        const f = p.facing, fx = Math.sin(f), fz = Math.cos(f), rx = Math.cos(f), rz = -Math.sin(f);
+        const at = (fwd, side, up) => { const x = p.pos.x + fx * fwd + rx * side, z = p.pos.z + fz * fwd + rz * side; return new THREE.Vector3(x, ctx.physics.heightAt(x, z) + up, z); };
+        const across = new THREE.Vector3(-rx, 0, -rz), toward = new THREE.Vector3(-fx, 0, -fz);
+        const shooter = { id: -1, faction: 'enemy', pos: at(9, 0, 0), facing: f + Math.PI, height: 0.8 };
+        const list = [
+          ctx.combat.spawnProjectile(A.rat_bolt, shooter, at(2.2, -0.9, 0.9), across),
+          ctx.combat.spawnProjectile(A.bone_bolt, shooter, at(2.6, 0.9, 1.0), toward),
+          ctx.combat.spawnProjectile(A.spider_web, shooter, at(2.4, 0.15, 0.55), toward.clone().add(across).normalize()),
+          ctx.combat.spawnProjectile(A.holyWave, p, at(5.5, 0, 0), new THREE.Vector3(fx, 0, fz)),
+          ctx.combat.spawnProjectile(A.gleam, p, at(3.4, -1.6, 0), new THREE.Vector3(fx, 0, fz)),
+        ];
+        const r = ctx.combat.spawnProjectile(A.rat_bolt, shooter, at(1.8, 0.55, 1.25), across);
+        ctx.combat.reflect(r, p);
+        for (const q of list) q.age = 0.12;                           // crescents fully grown
+        return ctx.combat.projectiles.list.length;
+      });
+      await t.frames(6);
+      await t.shot('combat/projectiles');
+      await t.G(() => { const ctx = window.__GAME__.ctx; ctx.combat.projectiles.clear(); ctx.game.setTimeScale(1); return true; });
+      t.assert(n === 6, `6 projectiles on screen (got ${n})`);
+      await t.blankCheck('combat:visuals');
+    },
+  },
+];

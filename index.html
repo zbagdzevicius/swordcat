@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#B7C0C3">
+  <title>Swordcat: Nine Lives of Meow Island</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #B7C0C3; overscroll-behavior: none;
+                 -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
+    #app { position: fixed; inset: 0; }
+    #app canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+    /* touch layer sits under the UI; the ui agent's touch.js shows it (class "on") on coarse pointers */
+    #touch { position: fixed; inset: 0; z-index: 5; display: none; touch-action: none; }
+    #touch.on { display: block; }
+    /* UI overlay: pointer-events none by default; interactive children opt in */
+    #ui { position: fixed; inset: 0; z-index: 10; pointer-events: none;
+          padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+    #boot-error { position: fixed; left: 16px; bottom: 16px; z-index: 50; padding: 10px 14px; border-radius: 10px;
+                  background: #F4E7C9; color: #3A2A1F; font: 600 14px system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="touch"></div>
+  <div id="ui"></div>
+  <noscript>Swordcat needs JavaScript and WebGL2.</noscript>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

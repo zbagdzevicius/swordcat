@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { fakeCtx } from './_fakeCtx.mjs';
 import { E } from '../../src/core/events.js';
-import { ENEMIES, BOSSES, KITTENS_BY_LEVEL, KITTEN_IDS, LEVEL_IDS } from '../../src/core/config.js';
+import { ENEMIES, BOSSES, KITTENS_BY_LEVEL, KITTEN_IDS, LEVEL_IDS, ATTACKS } from '../../src/core/config.js';
 import { ENV_PRESETS, finalFog, toState } from '../../src/world/Env.js';
 import { Objectives } from '../../src/world/Objectives.js';
 import { Arena, arenaRingPoints, ARENA } from '../../src/world/Arena.js';
@@ -18,6 +18,7 @@ import { Level, condOk, waterEntryLevel, colliderList } from '../../src/world/Le
 import { Terrain, polylineDistanceGrid } from '../../src/world/Terrain.js';
 import { VigilStone } from '../../src/world/VigilStone.js';
 import { Pickups } from '../../src/world/Pickups.js';
+import { PropActor, SwingingSack, WobbleKnight, plainAttribute } from '../../src/world/PropActor.js';
 import { defineLevel, buildLevel, levelModelPaths, procTemplate } from '../../src/world/LevelKit.js';
 import { LEVELS, rankFor, LevelManager } from '../../src/world/LevelManager.js';
 import { distToPolyline, fbm, fbmP, smoothPolyline, pointAlong, polylineLength } from '../../src/world/noise.js';
@@ -297,6 +298,43 @@ test('VigilStone: E lights it, emits checkpoint {levelId, spawnId, position, fac
   v1.dispose(); v2.dispose();
 });
 
+test('Pickups: enemy:died drops exactly the rolled fish / small heart (enemies roll them); boss rows drop gold fish', () => {
+  const ctx = fakeCtx({ systems: false });
+  ctx.player = null;
+  const pk = new Pickups(ctx, { heightAt: () => 0, levelId: 'meadow', root: new THREE.Group() });
+  const at = new THREE.Vector3(5, 0, 5);
+  ctx.bus.emit(E.ENEMY_DIED, { enemy: { def: { id: 'rat_pike', fish: [2, 3] } }, type: 'rat_pike', position: at, fish: 3, smallHeart: true });
+  assert.equal(pk.count('fish'), 3); assert.equal(pk.count('heart'), 1);
+  ctx.bus.emit(E.ENEMY_DIED, { enemy: { def: { id: 'crow', fish: [2, 2] } }, type: 'crow', position: at, fish: 0, smallHeart: false });
+  assert.equal(pk.count('fish'), 3); assert.equal(pk.count('heart'), 1);
+  ctx.bus.emit(E.ENEMY_DIED, { enemy: { def: { id: 'boss_grizzlechop', fish: 100, boss: true } }, type: 'boss_grizzlechop', position: at, fish: 100, smallHeart: false });
+  const gold = pk.items.filter((i) => i.alive && i.kind === 'fish' && i.gold);
+  assert.equal(gold.length, 10); assert.ok(gold.every((g) => g.value === 10));
+  pk.dispose();
+});
+
+test('PropActor: hit-sound materials per kind; the tutorial swingers keep their attack row off def (audio reads def.id)', () => {
+  const ctx = fakeCtx({ systems: false });
+  const dummy = new PropActor(ctx, { kind: 'dummy' }), crate = new PropActor(ctx, { kind: 'crate' }), rock = new PropActor(ctx, { kind: 'boulder', breaks: 'cracked' });
+  assert.deepEqual([dummy.material, crate.material, rock.material], ['straw', 'wood', 'stone']);
+  assert.ok(dummy.tags.has('prop') && dummy.tags.has('dummy') && dummy.breakable && dummy.faction === 'neutral');
+  assert.equal(rock.resolveIncoming({ faction: 'player' }, { breaks: [] }), 'block');
+  assert.equal(rock.resolveIncoming({ faction: 'player' }, { breaks: ['cracked'] }), 'hit');
+  assert.equal(rock.resolveIncoming({ faction: 'enemy' }, { breaks: ['cracked'] }), 'immune', 'player hits only');
+  const wk = new WobbleKnight(ctx, { id: 'wobble_knight', pos: new THREE.Vector3(), mesh: null });
+  assert.equal(wk.def, undefined); assert.equal(wk.atk, ATTACKS.dummy_swing); assert.equal(wk.material, 'armour');
+  const sack = new SwingingSack(ctx, { id: 'sack', pivot: new THREE.Vector3(0, 2.6, 0) });
+  assert.equal(sack.atk, ATTACKS.sack_swing); assert.equal(sack.hurtable, false);
+});
+
+test('PropActor: interleaved (meshopt) attributes are copied plainly', () => {
+  const ib = new THREE.InterleavedBuffer(new Float32Array([0, 1, 2, 9, 3, 4, 5, 9]), 4);
+  const a = new THREE.InterleavedBufferAttribute(ib, 3, 0);
+  const p = plainAttribute(a);
+  assert.ok(!p.isInterleavedBufferAttribute);
+  assert.deepEqual([...p.array], [0, 1, 2, 3, 4, 5]);
+});
+
 test('Pickups: fish magnet + collect, letters / Heart Bells update the save state once', () => {
   const ctx = fakeCtx({ systems: false });
   const bus = spy(ctx);
@@ -400,6 +438,13 @@ test('manifest: every model a level references is listed (and in its per-level p
   }
 });
 
+/** Distance from [x, z] to a segment collider { ax, az, bx, bz }. */
+function distToSegment([x, z], sg) {
+  const vx = sg.bx - sg.ax, vz = sg.bz - sg.az, l2 = vx * vx + vz * vz || 1;
+  const t = Math.max(0, Math.min(1, ((x - sg.ax) * vx + (z - sg.az) * vz) / l2));
+  return Math.hypot(x - sg.ax - vx * t, z - sg.az - vz * t);
+}
+
 // ---------------------------------------------------------------------------------------------- headless meadow build
 /** Stub glTF: a 1 m box (or a 1 × 0.35 × 0.07 fence-like plank) with Kenney-style material names. */
 function stubGltf(p) {
@@ -440,6 +485,16 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.ok(L.batch.count > 400, `batched props (${L.batch.count})`);
   assert.ok(L.trees.length >= 2 && L.trees.some((t) => t.name.startsWith('fade:')), 'trees + fadeable fences');
   assert.ok(L.octreeMeshes.some((m) => m.name === 'oldBridge'), 'the Old Bridge deck collides');
+  // the crossroads drystone walls (0.22 m segments) keep off every road and out of the Standing Stones arena
+  const walls = L.colliders.segments.filter((sg) => sg.r === 0.22);
+  assert.ok(walls.length >= 4, `crossroads walls (${walls.length})`);
+  for (const sg of walls) for (const [x, z] of [[sg.ax, sg.az], [sg.bx, sg.bz], [(sg.ax + sg.bx) / 2, (sg.az + sg.bz) / 2]]) {
+    assert.ok(distToPolyline(x, z, L.terrain.spine) > def.pathWidth / 2 + 0.5, `wall point ${x.toFixed(1)},${z.toFixed(1)} off the lane`);
+    for (const p of L.terrain.paths) assert.ok(distToPolyline(x, z, p.pts) > p.width / 2 + 0.5, 'off the side roads');
+    assert.ok(Math.hypot(x + 20, z + 4) > 14, 'outside the Standing Stones arena');
+  }
+  const perch = def.zones.find((zz) => zz.id === 'crossroads').spawns.find(([t]) => t === 'rat_xbow');
+  assert.ok(walls.some((sg) => distToSegment(perch[2], sg) < 0.25), 'the crossbow perch is on a wall top');
   assert.ok(L.grass && L.grass.count > 10000);
   assert.ok(L.waterMeshes?.count === 1);
   assert.equal(L.isDeepWater(10, 62), true);
@@ -450,11 +505,25 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.equal(kittens.find((k) => k.id === 'mochi').hide, 'cage');
   assert.equal(kittens.find((k) => k.id === 'noodle').opts.prop, 'barrel');
   assert.equal(enemies.list.length, 5 + 6, 'crossroads 2 + 2 pikes + 1 xbow, crow fields 4 crows + 2 xbows');
-  assert.equal(L.actors.filter((a) => a.kind === 'crate').length, 12);
+  assert.equal(L.actors.filter((a) => a.tags.has('crate')).length, 12);
+  assert.ok(L.actors.filter((a) => a.tags.has('crate')).every((a) => a.kind === 'crate' || a.kind === 'barrel'), 'crate / barrel kinds (audio)');
+  // Mochi still caged: companions build the cage cart, so our cart-high (and its collider) are gone
+  assert.equal(kittens.find((k) => k.id === 'mochi').opts.y, undefined, 'no perch height: companions build their cart');
+  assert.ok(!L.colliders.boxes.some((b) => Math.hypot(b.x - 30, b.z - 74) < 1.5), 'our cart collider removed while Mochi is caged');
+  assert.ok(L.anchor('bridge_cage'));
   assert.ok(L.actors.some((a) => a.kind === 'wobble_knight') && L.actors.filter((a) => a.kind === 'dummy').length === 3);
   assert.ok(L.critters.length === 2, 'two sleeping cows');
   assert.equal(L.pickups.count('fish'), def.fishLines.reduce((s, l) => s + l[2], 0));
   assert.equal(L.pickups.count('letter'), 1);
+  // Crow Fields hints: tut.pounce on the first crow alert, once per save
+  const toasts = spy(ctx);
+  ctx.bus.emit(E.ENEMY_ALERTED, { enemy: { def: { id: 'rat_pike' } } });
+  ctx.bus.emit(E.ENEMY_ALERTED, { enemy: { def: { id: 'crow' } } });
+  ctx.bus.emit(E.ENEMY_ALERTED, { enemy: { def: { id: 'crow' } } });
+  assert.equal(toasts.count(E.TOAST), 1);
+  assert.equal(ctx.state.getFlag('seen.tut.pounce'), true);
+  ctx.bus.emit(E.TELEGRAPH, { id: 1, actor: { def: { id: 'rat_xbow' } }, kind: 'aim' });
+  assert.equal(toasts.count(E.TOAST), 2);
   // the practice gate opens with prologue.tutorial (collider removed)
   ctx.state.setFlag('prologue.tutorial', true);
   ctx.bus.emit(E.FLAG_SET, { key: 'prologue.tutorial', value: true });
@@ -466,13 +535,17 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.equal(L.actors.length, 0);
 });
 
-test('LevelManager: env preset by flags (Appendix B byFlag), anchor / arena lookups without a level', () => {
+test('LevelManager: env preset + music by flags (Appendix B byFlag), anchor / arena lookups without a level', async () => {
   const ctx = fakeCtx({ systems: false });
   const lm = new LevelManager(ctx);
   const env = { default: 'meadow_day', byFlag: [['!prologue.done', 'meadow_night']] };
+  const music = (await loadDef('meadow')).music;
   assert.equal(lm.pickEnv(env), 'meadow_night');
+  assert.equal(lm.pickMusic(music), 'village_bards_tale', 'prologue music');
   ctx.state.setFlag('prologue.done', true);
   assert.equal(lm.pickEnv(env), 'meadow_day');
+  assert.equal(lm.pickMusic(music), 'field_of_dreams');
+  assert.equal(lm.pickMusic(null), null);
   assert.equal(lm.pickEnv('bog'), 'bog');
   assert.equal(lm.anchor('start'), null);
   assert.equal(lm.arenaNear(new THREE.Vector3()), null);

@@ -414,6 +414,50 @@ test('areaHit: ring band and height (jumping clears a 0.3 m shockwave); staggerA
   assert.equal(foes[2].staggerT, 0);
 });
 
+test('applyHit without opts: the heroine deals sharpness × Golden Hour; everyone else ×1', () => {
+  const { ctx, combat } = setup();
+  const cat = mk(ctx, 'player', 0, 0);
+  const rat = mk(ctx, 'enemy', 0, 1, { hp: 200 });
+  cat.golden = true; ctx.state.upgrades.sharp = 2;
+  combat.applyHit(cat, rat, ATTACKS.slash1);
+  assert.equal(200 - rat.hp, Math.round(10 * 1.5 * 1.30), 'Golden Hour 1.5 × Sharp II 1.30');
+  rat.invulnT = 0;
+  combat.applyHit(cat, rat, ATTACKS.slash1, { dmgMul: 1 });
+  assert.equal(200 - 20 - rat.hp, 10, 'an explicit dmgMul overrides');
+  const hero = mk(ctx, 'player', 3, 0, { hp: 8 });
+  combat.applyHit(rat, hero, ATTACKS.hyena_slash);
+  assert.equal(hero.hp, 6, 'enemies deal their nominal damage');
+});
+
+test('Shield Wall: enemy swings and area hits aimed past a wall land on the wall post (block), never behind it', () => {
+  const { ctx, combat, of } = setup();
+  const rat = mk(ctx, 'enemy', 0, 0);
+  const cat = mk(ctx, 'player', 0, 1.6, { hp: 8 });
+  // the wall spans x ∈ [-2, 2] at z = 0.9; its middle post (the one wallBetween answers) stands off the poke's arc
+  const post = mk(ctx, 'ally', 1.5, 0.9, { hp: 1e6, mass: 100 });
+  post.tags.add('shieldWall');
+  let struck = 0; post.resolveIncoming = () => { struck++; return 'block'; };
+  const wall = { alive: true, between: (ax, az, bx, bz) => (az - 0.9) * (bz - 0.9) < 0 && Math.abs(ax) < 2 && Math.abs(bx) < 2 };
+  ctx.companions = { walls: [wall], wallBetween: (a, b) => (wall.between(a.x, a.z, b.x, b.z) ? post : null) };
+  const s = combat.beginSwing(rat, ATTACKS.rat_poke);
+  runSwing(combat, s);
+  assert.equal(cat.hp, 8, 'the cat behind the wall is untouched');
+  assert.equal(struck, 1, 'the post took the poke once'); assert.ok(s.blocked);
+  assert.equal(of(E.HIT).at(-1).target, post); assert.equal(of(E.HIT).at(-1).blocked, true);
+  // a pug_slam ring from the far side reaches both the post and her: the post blocks once, she is shielded
+  assert.equal(combat.areaHit(rat, ATTACKS.pug_slam, { r: 2, y0: 0, y1: 0.3 }), 0);
+  assert.equal(cat.hp, 8); assert.equal(struck, 2, 'one block per blast');
+  // her own swings are never redirected
+  const foe = mk(ctx, 'enemy', 0, 3.0, { hp: 100 });
+  cat.facing = 0;
+  runSwing(combat, combat.beginSwing(cat, ATTACKS.slash1, { assist: false }));
+  assert.equal(foe.hp, 90);
+  // the wall gone: the poke reaches her
+  ctx.companions.walls = [];
+  runSwing(combat, combat.beginSwing(rat, ATTACKS.rat_poke));
+  assert.equal(cat.hp, 7); assert.equal(struck, 2);
+});
+
 // ------------------------------------------------------------------ projectiles
 function step(combat, n = 1) { for (let i = 0; i < n; i++) combat.update(DT); }
 

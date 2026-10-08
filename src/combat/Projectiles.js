@@ -35,7 +35,7 @@ const PAL = {
  * readable crescent instead of a white blob — Holy raises bloom to 1.2 while it plays).
  */
 const VIS = Object.freeze({
-  wave: 1.4, gleam: 1.35, trail: 0.85, trailGold: 1.7, trailGlob: 0.45, boltGold: 1.2,
+  wave: 1.15, gleam: 1.2, trail: 0.85, trailGold: 1.7, trailGlob: 0.45, boltGold: 1.2,
   orbCore: 1.1, halo: 1.15, haloGold: 1.4, haloSize: 3.2,
 });
 
@@ -87,18 +87,20 @@ void main() {
 const CRESCENT_VS = /* glsl */`
 attribute float aW; varying vec2 vUv; varying float vW;
 void main() { vUv = uv; vW = aW; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-// across the blade: a hot thin core line near the leading (upper/outer) edge, a soft gold body, dim rims;
-// along it: full in the middle, fading into the pointed tips.
+// across the blade (vUv.y 0 = lower/trailing rim → 1 = upper/leading rim): a thin hot core line just above the
+// middle, a gold body that fades to nothing at both rims; along it (vUv.x tip → tip): full in the middle, fading
+// into the pointed tips. Only the core line clears the bloom threshold, so the crescent keeps its shape.
 const CRESCENT_FS = /* glsl */`
 uniform vec3 uCore; uniform vec3 uEdge; uniform float uI; varying vec2 vUv; varying float vW;
 void main() {
-  float v = (vUv.y - 0.62) * 2.6;
   float x = abs(vUv.x - 0.5) * 2.0;
-  float body = 1.0 - smoothstep(0.35, 1.0, abs(vUv.y - 0.5) * 2.0);
-  float core = exp(-v * v * 3.0);
-  float tips = 1.0 - smoothstep(0.55, 1.0, x);
-  vec3 col = mix(uEdge, uCore, core);
-  gl_FragColor = vec4(col * (0.32 * body + core) * tips * vW * uI, 1.0);
+  float a = abs(vUv.y - 0.5) * 2.0;
+  float body = 1.0 - smoothstep(0.0, 1.0, a);
+  float c = (vUv.y - 0.58) * 5.0;
+  float core = exp(-c * c * 2.2);
+  float tips = 1.0 - smoothstep(0.35, 1.0, x);
+  vec3 col = mix(uEdge, uCore, core * (1.0 - 0.6 * x));
+  gl_FragColor = vec4(col * (0.42 * body * body + 0.78 * core) * tips * vW * uI, 1.0);
 }`;
 
 /** Additive, depth-tested, not depth-writing material (bloom picks the HDR values up). */
@@ -127,21 +129,21 @@ function boltGeometry() {
 }
 
 /**
- * "Sword beam" crescent of unit chord (x ∈ [-0.5, 0.5]), apex at z = 0, tips trailing back (−Z) and drooping, so
- * from behind it reads as a moon-shaped arch: a thick middle (y ≈ −0.1 … 0.5) tapering to points at y ≈ −0.3.
- * Two dimmer echo layers trail behind it (motion smear). UV.x runs tip → tip, UV.y bottom → top across the blade;
- * `aW` = layer weight.
+ * "Sword beam" crescent of unit chord (x ∈ [-0.5, 0.5]) and unit height, apex at z = 0, tips trailing back (−Z) and
+ * drooping, so from behind it reads as a thin moon-shaped arch: the middle band spans y ≈ 0.02 … 0.38 and tapers to
+ * points at y ≈ −0.3. Two dimmer echo layers trail behind it (motion smear). UV.x runs tip → tip, UV.y bottom → top
+ * across the blade; `aW` = layer weight.
  */
 function crescentGeometry(seg = 32, span = 2.2) {
   const R = 0.5 / Math.sin(span / 2);
   const pos = [], uv = [], w = [], idx = [];
-  const layers = [{ z: 0, s: 1, w: 1 }, { z: -0.13, s: 0.88, w: 0.42 }, { z: -0.25, s: 0.74, w: 0.18 }];
+  const layers = [{ z: 0, s: 1, w: 1 }, { z: -0.12, s: 0.9, w: 0.34 }, { z: -0.23, s: 0.8, w: 0.14 }];
   for (const L of layers) {
     const base = pos.length / 3;
     for (let i = 0; i <= seg; i++) {
       const u = i / seg, s = u * 2 - 1, a = (s * span) / 2, arch = Math.max(0, 1 - s * s);
       const x = Math.sin(a) * R * L.s, z = (Math.cos(a) - 1) * R * L.s + L.z;
-      const mid = (0.5 * arch - 0.3) * L.s, half = 0.3 * Math.pow(arch, 0.65) * L.s;
+      const mid = (0.5 * arch - 0.3) * L.s, half = 0.18 * Math.pow(arch, 0.6) * L.s;
       pos.push(x, mid - half, z, x, mid + half, z);
       uv.push(u, 0, u, 1);
       w.push(L.w, L.w);

@@ -23,7 +23,11 @@
 //               tgt.onHit(info), lethal hook `tgt.onLethal(info)` (Still Standing), death → tgt.onDeath,
 //               `combat:hit` {attacker, target, attackId, damage, position, dir, killed, blocked, parried, crit,
 //               popsSlime, heavy, broke, result, projectile?, reflected}. On the player side `damage` is what her
-//               hp actually lost (her hp setter applies Golden Hour / Still Standing); enemies get the nominal dmg.
+//               hp actually lost (after `damageTakenMul` and any hp clamp); enemies get the nominal dmg.
+//   dmgMul defaults to `dealtMul(attacker)` (sharpness × Golden Hour for the heroine, 1 for everyone else).
+//
+// Shield Wall (companions): an enemy swing or area hit whose line from the attacker to a target crosses a wall
+// (`ctx.companions.wallBetween(a, b)` → a wall post) lands on the wall instead (the post answers 'block').
 //
 // Optional duck-typed target members honoured here (all additive, see requests/combat.md):
 //   resolveIncoming, onParried, onBlocked, onHit, onDeath, onLethal(info) → true to survive (sets its own hp),
@@ -90,7 +94,7 @@ export class Combat {
     this.log = [];
     this._offs = [];
     this._filters = new Map();
-    this._scratch = [];
+    this._scratch = []; this._sets = [];
     this._depth = 0;
     this._shakeKey = -1; this._shakeMax = 0;
     this._rumbleKey = -1;
@@ -162,9 +166,11 @@ export class Combat {
     let n = 0;
     try {
       for (let i = 0; i < list.length; i++) {
-        const tgt = list[i];
+        let tgt = list[i];
         if (tgt === a || !tgt.alive || !tgt.hurtable || s.hitSet.has(tgt.id)) continue;
         if (!sectorHit(a, tgt, arc, a0, a1)) continue;
+        const wall = this.wallFor(a, tgt, a.pos);                // a Shield Wall in the way takes the blow
+        if (wall) { if (s.hitSet.has(wall.id)) continue; tgt = wall; }
         const r = this.applyHit(a, tgt, def, s.hitOpts);
         if (r === 'none') continue;
         s.hitSet.add(tgt.id); s.contacts++;
@@ -174,6 +180,19 @@ export class Combat {
       }
     } finally { this._release(); }
     return n;
+  }
+
+  /**
+   * Shield Wall occlusion (companions): the wall post standing between `origin` and `tgt` when an attacker hostile
+   * to allies (an enemy) aims at someone behind the wall; null otherwise (or when the target is the wall itself).
+   * @param {any} att @param {any} tgt @param {{x:number, z:number}} origin
+   */
+  wallFor(att, tgt, origin) {
+    const comp = this.ctx.companions;
+    if (!comp || typeof comp.wallBetween !== 'function' || !comp.walls?.length || !isHostile(att.faction, 'ally')) return null;
+    if (tgt.tags?.has?.('shieldWall')) return null;
+    const w = comp.wallBetween(origin, tgt.pos);
+    return w && w !== tgt && w.alive !== false && w.hurtable !== false ? w : null;
   }
 
   /** Stop a swing early (stagger, hurt, roll cancel). Safe on null. */
@@ -299,7 +318,7 @@ export class Combat {
     const base = typeof opts.dmg === 'number' ? opts.dmg : (typeof def.dmg === 'number' ? def.dmg : 0);
     const harmless = !(base > 0);                             // tutorial dummy / sack, web glob, snatch: knock only
     const critMul = Math.max(opts.crit ?? 1, def.crit ?? 1, this._critTaken(tgt));
-    let dmg = base * (opts.dmgMul ?? 1) * critMul;
+    let dmg = base * (opts.dmgMul ?? this.dealtMul(src)) * critMul;
     if (playerSide) {
       dmg = dmg > 0 ? Math.max(0, Math.round(diff.roundTaken(Math.round(dmg)))) : 0;
       const takenMul = tgt.damageTakenMul ?? 1;
@@ -392,15 +411,20 @@ export class Combat {
     const rIn = opts.rInner ?? 0;
     const y0 = opts.y0 ?? def.arc?.y0 ?? 0, y1 = opts.y1 ?? def.arc?.y1 ?? (att.height ?? 1);
     const list = this.ctx.actors.queryRadius(c, R + COMBAT.queryPad, this.targetFilter(att.faction), this._borrow());
+    const from = opts.from ?? c;
+    const seen = this._seenSet();                                 // ids resolved by this call (wall redirects)
     let n = 0;
     try {
       for (let i = 0; i < list.length; i++) {
-        const t = list[i];
-        if (t === att || !t.alive || !t.hurtable || opts.hitSet?.has(t.id)) continue;
+        let t = list[i];
+        if (t === att || !t.alive || !t.hurtable || opts.hitSet?.has(t.id) || seen.has(t.id)) continue;
         const d = Math.hypot(t.pos.x - c.x, t.pos.z - c.z), tr = t.radius ?? 0;
         if (d > R + tr || d < rIn - tr) continue;
         if (t.pos.y > c.y + y1 || t.pos.y + (t.height ?? 1) < c.y + y0) continue;
-        const res = this.applyHit(att, t, def, { dmg: opts.dmg, dmgMul: opts.dmgMul ?? this.dealtMul(att), crit: opts.crit, from: opts.from ?? c });
+        const wall = this.wallFor(att, t, from);                  // shielded by a Shield Wall: it takes the blast once
+        if (wall) { if (seen.has(wall.id) || opts.hitSet?.has(wall.id)) continue; t = wall; }
+        seen.add(t.id);
+        const res = this.applyHit(att, t, def, { dmg: opts.dmg, dmgMul: opts.dmgMul ?? this.dealtMul(att), crit: opts.crit, from });
         if (res === 'none') continue;
         opts.hitSet?.add(t.id);
         if (res === 'hit' || res === 'break') n++;
@@ -538,4 +562,12 @@ export class Combat {
   }
 
   _release() { this._depth = Math.max(0, this._depth - 1); }
+
+  /** A cleared scratch Set for the current nesting level (call right after `_borrow`). */
+  _seenSet() {
+    const k = this._depth - 1, sets = this._sets;
+    const set = sets[k] ?? (sets[k] = new Set());
+    set.clear();
+    return set;
+  }
 }

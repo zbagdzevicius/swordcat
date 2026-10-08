@@ -5,12 +5,12 @@ import * as THREE from 'three';
 import { PAL } from '../palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep } from '../util.js';
 import { kitMaterial, RM } from '../materials.js';
-import { potHelmGeometry } from '../Accessories.js';
+import { potHelmGeometry, flipShell } from '../Accessories.js';
 import { bowGeometry, bowMaterial } from '../Bow.js';
 
 /** Contract prop names (GAME_DESIGN §19.4) + extras. */
 export const PROP_NAMES = Object.freeze(['milk_cup', 'lantern', 'spoon', 'letter', 'pot_helm',
-  'milk_bottle', 'colander', 'signpost', 'post_bag', 'cot', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cage']);
+  'milk_bottle', 'colander', 'signpost', 'post_bag', 'cot', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cage', 'helmet']);
 
 /**
  * Where a kitten holds / wears each prop (joint + local transform). `name@at` variants override (e.g. letter@belt).
@@ -29,6 +29,9 @@ export const PROP_MOUNTS = {
   jester_hat: { joint: 'head', p: [0, 0.3, 0], r: [0, 0, 0] },
   postmaster_hat: { joint: 'head', p: [0, 0.31, 0], r: [0.1, 0, 0] },
   post_bag: { joint: 'chest', p: [-0.17, -0.12, 0.02], r: [0, -0.4, 0] },
+  // CS-01 shot 7: Marmalade's old helm is far too big and slides down over her eyes; then she holds it and looks at it
+  helmet: { joint: 'head', p: [0.004, 0.118, 0.012], r: [0.2, 0.06, 0.07] },
+  'helmet@paw': { joint: 'pawL', p: [-0.05, -0.07, 0.11], r: [-1.35, 0.25, 0] },
 };
 
 const mesh = (gb, name) => {
@@ -178,6 +181,30 @@ export function soupBowl() {
   return makeUpright(mesh(gb, 'soup_bowl'));
 }
 
+/**
+ * Marmalade's first helm (CS-01 shot 7): a dusty steel bascinet with a visor slit, sized for a much bigger cat, so on
+ * her head it sits over her eyes. Origin at the rim centre; ~0.5 H wide, 0.3 H tall.
+ */
+export function knightHelm(o = {}) {
+  const gb = new GeoBuilder(), s = o.scale ?? 1;
+  const steel = rgb('#A9AEB4'), dusty = rgb('#8E8C84'), dark = rgb('#24262A');
+  const prof = [[0.248, 0], [0.252, 0.03], [0.248, 0.1], [0.232, 0.17], [0.2, 0.23], [0.145, 0.275], [0.075, 0.3], [0.0001, 0.308]];
+  const dome = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 40);
+  // dust settles on the top; the eye slit is a dark band across the front
+  const slit = (v) => v.z > 0.12 && v.y > 0.085 && v.y < 0.112 && Math.abs(v.x) < 0.15;
+  gb.add(dome, { color: (v) => (slit(v) ? dark : mixRgb(steel, dusty, smoothstep(0.18, 0.3, v.y) * 0.65)), rmse: (v) => (slit(v) ? [0.9, 0.2, 0, 0] : [0.34, 1, 0, 0]) });
+  gb.add(flipShell(dome), { color: dark, rmse: [0.8, 0.5, 0, 0] });
+  // rim band and rivets
+  gb.add(new THREE.TorusGeometry(0.25, 0.01, 6, 44), { matrix: mat([0, 0.012, 0], [Math.PI / 2, 0, 0]), color: rgb('#7F8388'), rmse: RM.steel });
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    gb.add(new THREE.SphereGeometry(0.011, 8, 6), { matrix: mat([Math.sin(a) * 0.255, 0.045, Math.cos(a) * 0.255]), color: rgb(PAL.brass), rmse: RM.brass });
+  }
+  const g = gb.build(); if (s !== 1) g.scale(s, s, s);
+  const m = new THREE.Mesh(g, kitMaterial()); m.name = 'helmet'; m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+
 /** Jester hat: `size` = head diameter it should fit (kitten default 0.36; KayKit beast heads pass their own). */
 export function jesterHatProp(o = {}) {
   const gb = new GeoBuilder(), s = (o.size ?? 0.36) / 0.36, cols = [rgb('#A3202C'), rgb('#D9B26A')];
@@ -292,15 +319,16 @@ export function buildCage(o = {}) {
 const BUILDERS = {
   milk_cup: milkCup, milk_bottle: milkBottle, lantern, spoon, letter, pot_helm: potHelm, colander, signpost,
   post_bag: postBag, cot, soup_bowl: soupBowl, jester_hat: jesterHatProp, postmaster_hat: postmasterHat, cage: buildCage,
+  helmet: knightHelm,
 };
 
 /**
  * Build a prop by name. Unknown names return null.
- * @param {string} name one of PROP_NAMES
+ * @param {string} name one of PROP_NAMES (a 'name@mount' suffix is ignored here; Kitten.setProp uses it)
  * @param {object} [opts] builder options (lantern {light}, spoon {wood}, cage {style, ribbon}, hats {size})
  * @returns {THREE.Object3D|null}
  */
 export function buildProp(name, opts = {}) {
-  const fn = BUILDERS[name];
+  const fn = BUILDERS[String(name).split('@')[0]];
   return fn ? fn(opts) : null;
 }

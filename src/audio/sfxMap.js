@@ -70,6 +70,7 @@ export const SFX = {
   footStone:       { files: ['footsteps/stone_l1', 'footsteps/stone_l2', 'footsteps/stone_l3', 'footsteps/stone_r1', 'footsteps/stone_r2', 'footsteps/stone_r3'], vol: 0.3, rateVar: 0.06, minGap: 0.06 },
   footWood:        { files: seq('footsteps/footstep_wood_', 0, 4, 3), vol: 0.3, rateVar: 0.06, minGap: 0.06 },
   footMud:         { files: ['footsteps/sand_l1', 'footsteps/sand_l2', 'footsteps/sand_l3', 'footsteps/sand_r1', 'footsteps/sand_r2', 'footsteps/sand_r3'], vol: 0.5, rateVar: 0.06, minGap: 0.06 },
+  footDirt:        { files: ['footsteps/sand_l1', 'footsteps/sand_l2', 'footsteps/sand_l3', 'footsteps/sand_r1', 'footsteps/sand_r2', 'footsteps/sand_r3'], vol: 0.38, rate: 1.12, rateVar: 0.06, minGap: 0.06 },
   footSnow:        { files: seq('footsteps/footstep_snow_', 0, 4, 3), vol: 0.3, rateVar: 0.06, minGap: 0.06 },
   footWater:       { files: seq('creature/splash_', 1, 5), vol: 0.35, rate: 1.5, rateVar: 0.08, minGap: 0.06 },
   armorStep:       { files: ['impact/armor_light'], vol: 0.25, rateVar: 0.08, minGap: 0.1 },
@@ -274,8 +275,9 @@ export const TELEGRAPH_SFX = {
   shadow: { name: 'tgShadow' },
 };
 
-/** Footstep defs by surface; level default surfaces (until physics/world report one). */
-export const FOOTSTEP = { grass: 'footGrass', stone: 'footStone', wood: 'footWood', mud: 'footMud', sand: 'footMud', snow: 'footSnow', water: 'footWater' };
+/** Footstep defs by surface (world `level.surfaceAt`: grass / dirt (the paths) / stone / wood / water; bog mud). */
+export const FOOTSTEP = { grass: 'footGrass', dirt: 'footDirt', path: 'footDirt', stone: 'footStone', wood: 'footWood', mud: 'footMud', sand: 'footMud', snow: 'footSnow', water: 'footWater' };
+/** Per-level default surface (levels without `surfaceAt`, emitters without a position). */
 export const LEVEL_SURFACE = { meadow: 'grass', forest: 'grass', town: 'stone', gate: 'stone', bog: 'mud', keep: 'stone' };
 /** Fallback cadence for her footsteps when nobody emits actor:footstep: interval = clamp(k / (speed + c), min, max). */
 export const STEP_CADENCE = { k: 0.9, c: 0.8, min: 0.17, max: 0.45, minSpeed: 0.6, armorEvery: 2 };

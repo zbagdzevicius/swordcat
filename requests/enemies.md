@@ -12,10 +12,15 @@ Everything below is additive.
 - `pos`: a Vector3, `[x, z]`, `[x, y, z]`, `{x, z}`, an anchor name or anything with `.pos`. The feet snap to the ground
   below (terrain, prop tops, architecture) unless the given y is higher (bridges, the Bell Tower anchor).
 - `opts`: `facing` (default: toward her), `id` (cutscene actor id → `ctx.actors.get(id)`), `y` (height above the ground:
-  `{ y: 1.2 }` puts a crossbowman on a cart/wall → **perched**: it never leaves the spot, only turns and shoots),
+  `{ y: 1.2 }` puts a crossbowman on a cart/wall → **perched**: it never leaves the spot, only turns and shoots; it
+  stands on the nearest walkable top of about that height within 2.5 m — wall, cart bed, hay bale — else it hovers at
+  ground + y), `patrolRadius` (Appendix B.1 zone patrol radius; overrides the row's default; crows spread their r 5
+  circles over it),
   `runner` (objective runner, tag `runner`), `scripted` (cutscene actor from the start), `ai: false` (never thinks),
   `alerted` (spawns already fighting), `cage: 'pearl' | true | '<cat id>'` and `word` (hyena dressing), `home`, `noCap`.
-- **§8.3 budget**: at most `ctx.quality.maxEnemies` (8, Low 6) AI enemies alive. Extra spawns wait **dormant**
+- **§8.3 budget**: at most `ctx.quality.maxEnemies` (8, Low 6) AI enemies alive **per fight** (the enemies within 30 m
+  of the spawn point plus every alerted one; an idle squad in another zone never holds back an arena wave; `countNear(pos)`).
+  Extra spawns wait **dormant**
   (invisible, not registered in `ctx.actors`, not hurtable) in `ctx.enemies.pending` and wake with a `fx:burst {kind:
   'spawn'}` as slots free. Dormant enemies are `alive` and in `list`, so an arena's alive count keeps waiting for them.
   Scripted / AI-less / cutscene actors and bosses never count and are never held back.
@@ -33,6 +38,11 @@ Everything below is additive.
   `alert()`, `groundFlyer(sec)` (Sage's volley: crows drop and peck for `sec`), ScriptedActor API.
 
 ## To world (LevelKit / Arena / Pickups)
+- **Crossroads perch is 1.8 m off its wall** (found 2026-10-08, tests/shots/enemies/level-crossroads.png): the
+  `['rat_xbow', 1, [-24, -33], 0, { y: 1.2 }]` spawn lies 1.78 m from the wall run `[[-19.0, -36.4], [-25.8, -27.9]]`
+  (at x −24 the wall is at z ≈ −30.15). Enemies now snap a `{ y }` spawn onto the nearest walkable top within 2.5 m, so
+  it stands on the wall today, but please put the spawn on the wall line (its nearest wall point is `[-22.6, -31.9]`) so it doesn't rely on the snap.
+- LevelKit passes `home: (x, 0, z)`: fine (enemies keep a separate perch height), and `patrolRadius` is now honoured.
 - `enemy:died` carries `{ enemy, type, position, fish, smallHeart, height }`: `fish` is already rolled from the row's
   range (seeded), `smallHeart` from `PLAYER.smallHeart.chance` — drop exactly those.
 - Perched shooters: pass the cart/wall height as `opts.y` (Appendix B.1 `{ y: 1.2 }`); they stay put without a collider.
@@ -64,10 +74,23 @@ Everything below is additive.
   `duration`, then frozen). `actor` is always the Enemy.
 - Dormant spawns waking up emit `fx:burst { kind: 'spawn', position }` (the arena spawn poof).
 
+## To fx / ui
+- The §10.1 alert **"!"** over the head (the 0.4 s hop) is drawn by enemies (one shared sprite material, cream with an
+  ink outline, pops for 0.6 s on `enemy:alerted` via the `alert` state). Please don't add a second one.
+
 ## To audio
 - `enemy:alerted` (the "!" hop), `combat:telegraph` (kind → the §8.1 sound), `enemy:died` — nothing else is needed for M1.
 
+## To bosses' consumers (camera, ui, story)
+- `boss:dizzy` is emitted on every meter change (gain, parry, decay at 4 Hz, recovery) but **only once with
+  `dizzy: true` per dizzy window** (parries/hits during the window no longer re-emit it). Camera's one-shot shake is safe.
+- Barkus P3: `countShardParry()` counts parried `shardSlam`s (`BOSSES.barkus.phases[2].shardSlam.parriesNeeded`, 3) and
+  calls `freeShard()` on the 3rd; a phase retry resets the count. `__GAME__.boss.freeShard()` still skips it.
+
 ## To core (config additions; additive)
+- Dev-server tip for every agent: `vite` full-reloads every open page whenever ANY agent saves a file, which kills
+  long smoke runs mid-block (`__GAME__` undefined / timeouts). Enemies runs its server from a private config with
+  `server: { hmr: false }` (changed files are still served fresh on the next load). Maybe worth a line in CONTRIBUTING.
 - Please adopt `src/enemies/tuning.js` `TUNING` as `config.ENEMY_TUNING` (numbers GAME_DESIGN states in prose but
   Appendix A doesn't carry: 0.45 s windup floor, 0.4 s alert hop, 0.06 s hit flash, 0.15 s squash to 0.8, orbit ×1.4,
   helmet spin-off, death timings, pack-alert radius 8 m, boss phase invulnerability 1.0 s, ...). Enemies read their own

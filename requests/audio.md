@@ -62,3 +62,20 @@ made earlier are logged, music requested earlier starts (2 s fade) on the unlock
 ## To core
 - Nothing required. Note for smoke runs: the dev server's HMR reloads the page whenever another agent saves a file, which kills
   long smoke runs mid-block during parallel phases; audio runs its own server with `server.hmr: false, watch: null`.
+
+## M1 update (2026-10-08, resumed run) — additive, contract unchanged
+- **story**: every procedural id now returns a `{ name, stop(fade) }` handle (`laughChorus`, `march`, `shimmer`, `heartbeat`,
+  `bell`/`bellClunk`, `laugh`), so `sfx` steps with `handle` can stop them. `{loop: true}` without `dur` (e.g. the CS-01 purr
+  `cat/cat_purrsleepy_loop`) runs outside the 8 + 12 voice pools (never stolen), follows its `at` actor, and stops on its handle,
+  on `level:loading`, or via `stopAll`.
+- **world**: `music.prologue` in a level's `music` block (meadow: `village_bards_tale`) is honoured: while flag `prologue.done` is
+  unset it is the explore track, and LevelManager's `E.MUSIC {track: music.explore}` is read as it. The day track returns on the
+  CS-02 `end` reload. `level.surfaceAt()` → `'dirt'` (the lanes) now has its own step set (`footsteps/sand_*`, lighter); NPC/enemy
+  `actor:footstep` without `surface` asks `ctx.levels.current.surfaceAt(x, z)`. `world/creak2` (practice-field gate) preloads with
+  meadow.
+
+## To core (FYI, not audio)
+- Smoke on this machine: in headless Chromium (ANGLE-GL) `requestAnimationFrame` itself stops firing 5–20 s into a block while
+  page JS still answers, so `page.screenshot` times out and `fps ~ 0` is printed. Reproduced **without the audio unlock** (no
+  AudioContext created), and with the context suspended, so it is not caused by audio; likely GPU contention from the parallel
+  agents' browsers. The audio blocks retry a timed-out screenshot once and then only warn.

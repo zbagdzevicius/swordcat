@@ -24,7 +24,7 @@ import { SwordTrail } from './SwordTrail.js';
 import { DamageNumbers, formatDamage, formatHeal } from './DamageNumbers.js';
 import { Telegraphs } from './Telegraphs.js';
 import { HolyFX } from './HolyFX.js';
-import { Poof, HelmetPops, DEBRIS_KINDS, helmetFor } from './Poof.js';
+import { Poof, HelmetPops, DEBRIS_KINDS, DEBRIS_ALIAS, helmetFor } from './Poof.js';
 import { MistCards, AMBIENT_DENSITY } from './MistCards.js';
 import { Horde } from './Horde.js';
 import { ScreenFX } from './ScreenFX.js';
@@ -34,7 +34,7 @@ import { toVec3, resolveActor, resolveAnchor, isActor, actorWorldPos, headPoint,
 /** Every `burst` kind fx draws (anything else falls back to a sparkle). */
 export const BURST_KINDS = Object.freeze(['poof', 'hit', 'heavyHit', 'stars', 'spark', 'sparks', 'sparkle', 'sparkles', 'gold', 'dust',
   'dustRing', 'splash', 'heart', 'hearts', 'heal', 'spawn', 'spawnBones', 'smoke', 'helmet', 'fish', 'ring', 'confetti', 'shatter',
-  'holy', 'sunburst', 'flash', 'choke', ...DEBRIS_KINDS]);
+  'holy', 'sunburst', 'flash', 'choke', ...DEBRIS_KINDS, ...Object.keys(DEBRIS_ALIAS)]);
 
 /** Mist-card budget per quality preset (art.md §9.2: 30–60). */
 export const MIST_COUNT = Object.freeze({ low: 24, med: 44, high: 56 });
@@ -81,6 +81,9 @@ export class FX {
     this.ambient = null;
     this.dizzy = new Map();      // actor → { t, dur, gold }
     this._later = [];            // sim-timed calls { t, fn }
+    this._warm = 0;              // frames left to draw the shader warm-up (requests/player.md: first-use stalls)
+    this._warmSaved = [];        // [object, drawStart, drawCount, instanceCount, …] restored after the frame
+    this.warmups = 0;            // warm-up frames drawn (tests/smoke)
     this._offs = [];
     this._poofAt = { t: -1, x: 0, z: 0 };
     this.levelId = null;
@@ -116,7 +119,8 @@ export class FX {
     this.ambient = new Ambient(ctx);
     this.ambient.init(scene);
     this._applyQuality(ctx.quality);
-    this._offs.push(ctx.game?.addFrameHook?.(() => this.screen.afterFrame()) ?? (() => {}));
+    this._offs.push(ctx.game?.addFrameHook?.(() => { this.screen.afterFrame(); this._warmEnd(); }) ?? (() => {}));
+    this._warm = 1;
 
     const on = (ev, fn) => this._offs.push(bus.on(ev, fn));
     on(E.BURST, (p) => { if (p) this.burst(p.kind, p.position ?? p.pos, p); });
@@ -143,9 +147,9 @@ export class FX {
     on(E.BOSS_DEFEATED, (p) => { if (p?.boss) this.dizzy.delete(p.boss); });
     on(E.ITEM_PICKUP, (p) => this._onPickup(p));
     on(E.LEVEL_UNLOAD, () => this.clear());
-    on(E.LEVEL_LOADED, (p) => this._onLevel(p?.id));
+    on(E.LEVEL_LOADED, (p) => { this._onLevel(p?.id); this._warm = 1; });
     on(E.ENV_CHANGED, (p) => { if (this.levelId) this.ambient.set(motesFor(this.levelId, p?.grade ?? ctx.env?.grade)); });
-    on(E.QUALITY, (p) => this._applyQuality(p?.preset ?? ctx.quality));
+    on(E.QUALITY, (p) => { this._applyQuality(p?.preset ?? ctx.quality); this._warm = 1; });
     on(E.MEME_CAM, (p) => { this.mist.speedMul = p?.on ? (PLAYER.memeCam.mist ?? 2) : 1; });
     if (ctx.levels?.current?.id) this._onLevel(ctx.levels.current.id);
     this.ready = true;
@@ -212,17 +216,29 @@ export class FX {
         return;
       case 'helmet': this.helmets.pop(actor ? _p.setY(_p.y + h * 0.95) : _p, opts.style ?? helmetFor(opts.type ?? actor?.def?.id) ?? 'kettle', 0.34 * S, opts.dir ?? null); return;
       case 'fish': this._fish(mid(), n(4)); return;
-      case 'ring':
-        P.single(_p.setY(_p.y + 0.1), { shape: SHAPE.RING, color: opts.color ?? '#FFFFFF', intensity: 1.6, size0: 0.3 * S, size1: 3.2 * S, life: 0.35, grow: GROW.OUT });
+      case 'ring': {      // a flat shockwave ring on the ground
+        const gy = groundY(this.ctx, _p.x, _p.z, _p.y);
+        this.holyFx.arc({ x: _p.x, y: (actor ? _p.y : Math.max(gy, _p.y - 0.3)) + 0.06, z: _p.z, ring: true, r0: 0.3 * S, r1: 2.2 * S, thick: 0.22 * S,
+          life: 0.4, grow: 0.35, intensity: 1.1, color: opts.color ?? '#F4F8FF' });
         return;
+      }
       case 'flash': P.single(mid(), { shape: SHAPE.SOFT, color: opts.color ?? '#FFF6DA', intensity: 2.6, size0: 0.4 * S, size1: 1.6 * S, life: 0.16 }); return;
       case 'confetti': this._confetti(mid(), n(24), S); return;
       case 'shatter': this._shards(mid(), n(10), opts.color ?? '#D8E2EC', S); return;
       case 'holy': this.holyFx.cast(actor ? actorWorldPos(actor, _p) : _p, opts.dir ?? null); this.bloomSpike(); return;
       case 'sunburst': this.holyFx.sunburst(actor ? actorWorldPos(actor, _p) : _p); this.bloomSpike(1.3, 0.5); return;
-      default:
+      default: {
         if (DEBRIS_KINDS.includes(kind)) { this.poofs.debris(mid(), kind, S, opts.color ?? null, opts.count ?? null); return; }
+        const al = DEBRIS_ALIAS[kind];
+        if (al) {
+          mid();
+          this.poofs.debris(_p, al.debris, S, opts.color ?? null, opts.count ?? null);
+          this.poofs.dust(_p, 0.8 * S, 4);
+          if (al.sparks) this._sparks(_p, _up, 8, '#FFE3A3', S);
+          return;
+        }
         this.burst('sparkle', _p.clone(), opts);
+      }
     }
   }
 
@@ -304,7 +320,8 @@ export class FX {
       holy: { casts: this.holyFx?.casts ?? 0, flashes: this.holyFx?.flashes ?? 0, fizzles: this.holyFx?.fizzles ?? 0, bloomLevel: this.holyFx?.bloomLevel ?? 0,
         light: this.holyFx?.light?.intensity ?? 0, player: this.ctx.player ? this.holyFx?.level(this.ctx.player) ?? 0 : 0 },
       bloom: this.ctx.postfx?.bloom ?? 0, peakBloom: this.screen?.peakBloom ?? 0, vignette: this.screen?.vignette ?? 0,
-      dizzy: this.dizzy.size, marks: this.marks?.count ?? 0, counts: { ...this.counts },
+      dizzy: this.dizzy.size, marks: this.marks?.count ?? 0, counts: { ...this.counts }, warmups: this.warmups,
+      mistLoop: this.mist?.loopW ?? 0,
     };
   }
 
@@ -319,6 +336,7 @@ export class FX {
 
   render(alpha, frameDt) {
     if (!this.ready) return;
+    this._warmEnd();                    // normally done by the frame hook; a no-op when it already ran
     const ctx = this.ctx, dt = visualDt(ctx, frameDt), p = ctx.player;
     this.marks.begin();
     this.particles.update(dt);
@@ -335,6 +353,47 @@ export class FX {
     this.numbers.render(dt);
     this.marks.end();
     this.screen.render(frameDt);
+    if (this._warm > 0) { this._warm--; this._warmBegin(); }
+  }
+
+  /**
+   * One representative object per fx shader program (pure list; the first trail, holy charge, Golden Hour ring,
+   * telegraph, fog wall or horde would otherwise compile its program mid-fight: requests/player.md).
+   */
+  warmObjects() {
+    return [this.particles?.add.mesh, this.particles?.alpha.mesh, this.marks?.mesh, this.trail?.mesh,
+      this.holyFx?.fields[0]?.points, this.holyFx?.arcs[0]?.mesh, this.helmets?.list[0], this.telegraphs?.decals[0]?.mesh,
+      this.telegraphs?.lines[0]?.mesh, this.mist?.ambient?.mesh, this.hordeFx?.mesh, this.ambient?.points].filter(Boolean);
+  }
+
+  /**
+   * Shader warm-up: show every hidden fx object for this one frame with an empty draw range, so the real renderer
+   * (with the level's fog, lights and the composer's render target) builds its program now — under the loading veil —
+   * while nothing is actually drawn. `_warmEnd` (frame hook, after the frame) restores everything.
+   */
+  _warmBegin() {
+    const S = this._warmSaved;
+    for (const o of this.warmObjects()) {
+      if (o.visible || !o.parent) continue;
+      const g = o.geometry;
+      S.push(o, g.drawRange.start, g.drawRange.count, g.isInstancedBufferGeometry ? g.instanceCount : -1);
+      g.setDrawRange(0, 0);
+      if (g.isInstancedBufferGeometry) g.instanceCount = 0;
+      o.visible = true;
+    }
+    if (S.length) this.warmups++;
+  }
+
+  _warmEnd() {
+    const S = this._warmSaved;
+    if (!S.length) return;
+    for (let i = S.length - 4; i >= 0; i -= 4) {          // reverse: shared geometries get their original range back last
+      const o = S[i], g = o.geometry;
+      o.visible = false;
+      g.setDrawRange(S[i + 1], S[i + 2]);
+      if (S[i + 3] >= 0) g.instanceCount = S[i + 3];
+    }
+    S.length = 0;
   }
 
   dispose() {
@@ -569,7 +628,9 @@ export class FX {
     const P = this.particles, gy = groundY(this.ctx, pos.x, pos.z, pos.y);
     P.burst(_q.set(pos.x, Math.max(gy, pos.y) + 0.05, pos.z), { n, shape: SHAPE.DROPLET, color: '#CFE6F2', size: [0.07 * S, 0.12 * S], life: [0.5, 0.8],
       speed: [1.6, 3.2], dir: _up, spread: 0.9, gravity: 11, drag: 0.4, fade: FADE.HOLD, jitter: 0.15 });
-    P.single(_q, { shape: SHAPE.RING, color: '#E6F2F8', intensity: 1, size0: 0.3 * S, size1: 1.8 * S, life: 0.5, grow: GROW.OUT, alpha: 0.6, additive: false });
+    // the ripple lies flat on the water
+    this.holyFx.arc({ x: _q.x, y: _q.y - 0.02, z: _q.z, ring: true, r0: 0.2 * S, r1: 1.5 * S, thick: 0.14 * S, life: 0.6, grow: 0.55, intensity: 0.55,
+      color: '#DCEEF6' });
   }
 
   _fish(pos, n) {

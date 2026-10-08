@@ -27,7 +27,7 @@ export { dressBeast, BEAST_LOOKS, holdOnBone, silhouette } from './BeastDress.js
 export { cagedKitten } from './Cages.js';
 export { noteRender, envTick, envColorsFromLights, characterEnvColors, resetCharacterEnv, CHAR_ENV } from './runtime.js';
 export { STRANDS, FUR_RENDER_ORDER } from './Fur.js';
-export { CAPE_FRONT, capeFold } from './Cape.js';
+export { CAPE_FRONT, capeFold, capeHem, capeShade, capeFoldPhase, drapePoint } from './Cape.js';
 export { BOW_SELF_LIGHT } from './Bow.js';
 
 // ---- test / debug handle: the library reachable from any built kitten (`root.userData.kitten.constructor.lib`), so

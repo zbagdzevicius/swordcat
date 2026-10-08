@@ -11,7 +11,7 @@
 // Step types (§5.1 + additive `par seq if call`):
 //   cam    { preset | pos+look, anchor, target, fov, mode, path, dur, ease, noise, roll, ... } → ctx.cam.shot(step)
 //   actor  { id, at, pose, moveTo, speed, face, faceDur, clip, once, emote, visible, prop, attach, outfit, holy,
-//            scripted }                                             → the ScriptedActor API (§19.4)
+//            expression, scripted }                                 → the ScriptedActor API (§19.4)
 //   say    { who, key, auto, name, portrait, sfx, talk }           → dialog:start/line/end (ui + babble)
 //   sfx    { id, at, vol, rate, delay, loop, handle, stop }         → ctx.audio.play3D / play2D
 //   music  { track, fade }                                          → ctx.audio.music
@@ -23,7 +23,11 @@
 //   flag   { key, value }   wait { dur | input | dialog }   prompt { action, hold, textKey }
 //   objective { id, textKey, max, value, complete, add }   arena { id, lock, clear }   load { level, spawn }
 //   par { steps } · seq { steps } · if { cond, then, else } · call { fn(ctx, cutscene, step) → value | Promise }
+// Scene options: { id, kind: 'cutscene' | 'dialog' | 'ambient', skippable, prologue (skippable on the first viewing),
+//   letterbox (default true for full scenes), hud, player (false = don't script her), inputSkip (s: any input after it
+//   skips, G-01), steps, end }. `cs.every(fn(dt, cs))` registers a per-step ticker for the scene's lifetime.
 import * as THREE from 'three';
+import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
 import { clamp01, lerp, easeInOutSine } from '../core/math.js';
 import { text as stext, speakerName } from './strings.js';
@@ -207,6 +211,8 @@ export class Cutscene {
     this.dialogOpen = false;
     this.promptActive = null;
     this._warned = new Set();
+    /** per-step callbacks registered by `call` steps (title holy pulse, trembling paws…) */
+    this.tickers = [];
     this.resolve = null;
   }
 
@@ -249,9 +255,26 @@ export class Cutscene {
     const ts = this.ctx.game?.loop?.timeScale ?? 1;
     this.t += dt; this.realT += dt / Math.max(0.01, ts);
     this._dt = dt; this._realDt = dt / Math.max(0.01, ts);
+    for (let i = this.tickers.length - 1; i >= 0; i--) {
+      let keep = true;
+      try { keep = this.tickers[i](dt, this) !== false; } catch (e) { console.warn(`[story] ${this.id}: ticker failed`, e); keep = false; }
+      if (!keep) this.tickers.splice(i, 1);
+    }
+    if (this.def.inputSkip != null && this.t >= this.def.inputSkip && this.host?.anyPressed?.()) { this.skip(); return true; }
     if (this.root && !this.root.done) this.root.update(dt);
     if (this.root?.done && !this.finishing) this.finish(false);
     return !this.finished;
+  }
+
+  /** Register `fn(dt, cutscene)` to run every fixed step while the scene plays (return false to stop). */
+  every(fn) { if (typeof fn === 'function') this.tickers.push(fn); return this; }
+
+  /** Per rendered frame: animated asset spawns (the CS-01 chest lid…). */
+  render(frameDt) {
+    const dt = (this.ctx.game?.hitstopT ?? 0) > 0 ? 0 : frameDt * (this.ctx.game?.loop?.timeScale ?? 1);
+    for (const r of this.spawned) r.anim?.update(dt);
+    const p = this.ctx.player, k = p?.model?.k;
+    if (p?.__storyExpr && k && k.__storyExpr !== p.__storyExpr) holdKittenExpression(k, p.__storyExpr);
   }
 
   /** Skip: cancel every running step and apply the end block. */
@@ -304,6 +327,8 @@ export class Cutscene {
     if (typeof target === 'string') {
       const a = this.actor(target);
       if (a) return out.copy(a.pos);
+      const rec = this.spawned.find((r) => r.id === target && r.obj?.isObject3D);
+      if (rec) return rec.obj.getWorldPosition(out);
       const an = ctx.levels?.anchor?.(target);
       if (an?.pos) return out.copy(an.pos);
       this.warnOnce(`unknown point "${target}"`);
@@ -409,6 +434,7 @@ export class Cutscene {
     if (step.pose !== undefined) a.pose?.(step.pose ?? 'idle', { hold: step.hold !== false });
     if (step.prop != null) this.applyProps(a, step.prop);
     if (step.emote) for (const e of [].concat(step.emote)) a.emote?.(e);
+    if (step.expression !== undefined) setExpression(a, step.expression);
     if (step.attach !== undefined) {
       const at = step.attach;
       if (at === null || at === false) a.attach?.(null);
@@ -490,13 +516,17 @@ export class Cutscene {
     ctx.bus.emit(E.DIALOG_LINE, { speaker: who, name: line.name, text: line.text, portrait: line.portrait, key: line.key, auto: line.auto, id: this.id });
     host?.onLine?.(line);
     // talk: the speaker's mouth / a little nod (visual only, no-op where unsupported)
-    if (step.talk !== false) { const a = this.actor(who); a?.emote?.(step.talk ?? 'meow'); }
+    const speaker = this.actor(who);
+    const talk = step.talk !== undefined ? step.talk : (isCat(this.ctx, speaker) ? 'meow' : null);
+    if (talk && speaker) speaker.emote?.(talk);
+    if (step.expression !== undefined && speaker) setExpression(speaker, step.expression);
+    const ambient = this.kind === 'ambient';
     if (step.sfx) { const s = typeof step.sfx === 'string' ? { id: step.sfx } : step.sfx; this._playSound(s); }
     task.tick = (dt) => {
       line.t += dt;
       line.revealed = line.revealDur > 0 ? clamp01(line.t / line.revealDur) : 1;
       if (line.revealed >= 1) line.complete = true;
-      const press = host?.advancePressed?.() ?? false;
+      const press = ambient ? false : (host?.advancePressed?.() ?? false);
       if (press && line.t >= LINE_MIN) {
         if (!line.complete) { line.complete = true; line.revealed = 1; line.t = Math.max(line.t, line.revealDur); }
         else { task.hold = false; return; }
@@ -596,7 +626,7 @@ export class Cutscene {
       const id = n > 1 ? `${step.id}_${i + 1}` : step.id;
       const at = n > 1 ? layoutPoint(step, i, n) : step.at;
       const p = this.spawnOne({ ...step, id, at, index: i });
-      if (p && typeof p.then === 'function') task.wait(p, step.asset ? TIMEOUT.asset : TIMEOUT.prop);
+      if (p && typeof p.then === 'function' && !step.nowait) task.wait(p, step.asset ? TIMEOUT.asset : TIMEOUT.prop);
     }
     if (step.nowait) task.min = 0;
     return task;
@@ -663,7 +693,10 @@ export class Cutscene {
         root.name = `story:${s.id}`;
         ctx.scene?.add(root);
         rec.obj = root; rec.model = m;
-        if (s.clip && m.animations?.length) rec.clip = s.clip;
+        if (m.animations?.length) {
+          rec.anim = new Animator(m.scene ?? root, m.animations);
+          if (s.clip) rec.anim.play(s.clip, { once: !!s.once, clampEnd: s.once !== false, speed: s.clipSpeed ?? 1 });
+        }
         this.host?.onAssetSpawned?.(rec);
       });
     }
@@ -698,9 +731,14 @@ export class Cutscene {
     if (!r.obj) return;
     this.scriptedActors.delete(r.obj);
     this.holyActors.delete(r.obj);
+    r.anim?.mixer?.stopAllAction?.(); r.anim = null;
     if (r.kind === 'enemy' || r.kind === 'npc') despawnActor(ctx, r.obj);
     else if (r.kind === 'prop') ctx.levels?.despawnProp?.(r.obj);
-    else { r.obj.removeFromParent?.(); this.host?.onAssetDespawned?.(r); }
+    else {
+      r.obj.removeFromParent?.();
+      if (r.kind === 'object') { try { r.obj.userData?.dispose?.(); } catch (e) { console.warn(e); } }
+      this.host?.onAssetDespawned?.(r);
+    }
     r.obj = null;
   }
 
@@ -790,7 +828,8 @@ export class Cutscene {
     for (const [k, v] of Object.entries(end.flags ?? {})) host?.flag?.(k, v);
     if (end.shards != null && ctx.state) { ctx.state.shards = Math.max(ctx.state.shards ?? 0, end.shards); ctx.bus.emit(E.SHARD, { n: ctx.state.shards }); }
     for (const u of [].concat(end.unlock ?? [])) host?.unlock?.(u.kind, u.id);
-    // actor final states
+    // actor final states (an explicit end pose survives the release below)
+    const posed = new Set();
     for (const [id, st] of Object.entries(end.actors ?? {})) {
       const a = this.actor(id);
       if (!a || !st) continue;
@@ -801,14 +840,18 @@ export class Cutscene {
       if (st.visible != null && a.object3d) a.object3d.visible = !!st.visible;
       if (st.prop != null) this.applyProps(a, st.prop);
       if (st.attach === null) a.attach?.(null);
-      if (st.pose !== undefined) a.pose?.(st.pose ?? 'idle');
+      if (st.pose !== undefined) { a.pose?.(st.pose ?? 'idle'); if (st.pose && st.pose !== 'idle') posed.add(a); }
+      if (st.expression !== undefined) setExpression(a, st.expression);
       if (st.scripted === true) this.scriptedActors.delete(a);
     }
     if (!keep.has('holy')) for (const a of this.holyActors) ctx.fx?.holy?.(a, 0);
     this.holyActors.clear();
     // release the actors this scene drove (the player gets her input back)
-    for (const a of this.scriptedActors) { try { a.pose?.('idle'); a.setScripted?.(false); } catch (e) { console.warn(e); } }
+    for (const a of this.scriptedActors) {
+      try { if (!posed.has(a)) a.pose?.('idle'); setExpression(a, null); a.setScripted?.(false); } catch (e) { console.warn(e); }
+    }
     this.scriptedActors.clear();
+    this.tickers.length = 0;
     for (const s of [].concat(end.spawns ?? [])) this.spawnOne({ ...s, keep: true });
     // env, world
     if (end.env) applyEnv(ctx, typeof end.env === 'string' ? { preset: end.env, dur: skipped ? 0 : (end.envDur ?? 0) } : { ...end.env, dur: skipped ? 0 : (end.env.dur ?? 0) });
@@ -817,7 +860,7 @@ export class Cutscene {
     if (end.music !== undefined) { const m = end.music; try { ctx.audio?.music?.(m?.track ?? m ?? null, m?.fade ?? 1); } catch (e) { console.warn(e); } }
     if (end.companions) ctx.companions?.setActive?.(end.companions);
     // ui + camera handback (§5.1: letterbox off, HUD restored, 0.6 s blend; a skip cuts)
-    host?.cinema?.apply?.({ letterbox: false, hud: true, ...(end.ui ?? {}), caption: null, title: null }, this, true);
+    host?.cinema?.apply?.({ letterbox: false, hud: true, fade: { alpha: 0, dur: skipped ? 0 : 0.5 }, ...(end.ui ?? {}), caption: null, title: null }, this, true);
     if (skipped) host?.cinema?.clear?.();
     const camOpt = end.cam ?? 'follow';
     if (camOpt !== false) {
@@ -837,15 +880,58 @@ export class Cutscene {
     if (typeof end.call === 'function') { try { end.call(ctx, this, skipped, 'after'); } catch (e) { console.error(e); } }
     for (const k of [].concat(end.toasts ?? end.toast ?? [])) ctx.bus.emit(E.TOAST, { text: stext(k), key: k });
     if (end.chapter) host?.chapterCard?.(end.chapter);
-    // back to play
+    // back to play (the host clears `current`, restores the mode or starts the next queued scene)
     host?.seenSet?.(this.id);
-    if (this.kind !== 'ambient') host?.restoreMode?.();
+    host?.ended?.(this, skipped);
     ctx.bus.emit(E.CUTSCENE_END, { id: this.id, skipped });
     if (end.save) ctx.bus.emit(E.SAVE_REQUEST, {});
+    if (end.play) host?.play?.(end.play);
   }
 }
 
 // ==================================================================================================== shared appliers
+/** Is `a` a cat (talks with a little mouth-open "meow" emote)? Pudding roars instead; enemies have their own faces. */
+export function isCat(ctx, a) {
+  if (!a) return false;
+  if (a === ctx?.player) return true;
+  if (a.npcId === 'pudding' || a.tags?.has?.('pudding') || a.npcId === 'coo') return false;
+  return a.faction !== 'enemy' && (a.kittenId != null || a.npcId != null);
+}
+
+/**
+ * Face expression on any cast member (null = back to the pose's own): player.setExpression (requested in
+ * requests/story.md) → companions' KittenVisual.setExpression → the player's kitten rig (`model.k`).
+ */
+export function setExpression(a, name) {
+  if (!a) return;
+  try {
+    if (typeof a.setExpression === 'function') { a.setExpression(name); return; }
+    if (a.visual?.setExpression) { a.visual.setExpression(name ?? 'neutral'); return; }
+    if (a.head?.setExpression) { a.head.setExpression(name ?? 'neutral'); return; }      // beast heads (enemies)
+    if (a.model?.k?.setExpression) {
+      a.__storyExpr = name || null;
+      holdKittenExpression(a.model.k, a.__storyExpr);
+      if (!name) a.model.expr = null;                   // let the player's own face logic re-apply next frame
+    }
+  } catch (e) { console.warn('[story] expression failed', e); }
+}
+
+/**
+ * Hold `name` on a kitten rig (player.model.k) against its owner's per-frame face logic: the rig's setExpression is
+ * wrapped once so every call shows the held face while one is set (null releases it). A fallback until
+ * `player.setExpression` exists (requests/story.md); re-applied by Cutscene.render after an outfit rebuild.
+ */
+export function holdKittenExpression(k, name) {
+  if (!k?.setExpression) return;
+  if (!k.__storySetExpr) {
+    const orig = k.setExpression;
+    k.__storySetExpr = orig;
+    k.setExpression = function setExpressionHeld(n, instant) { return orig.call(this, this.__storyExpr ?? n, instant); };
+  }
+  k.__storyExpr = name || null;
+  if (name) k.__storySetExpr.call(k, name);
+}
+
 /** Which factory spawns `s.type` (enemy / npc / prop / asset). Pure-ish (reads ctx.config). */
 export function spawnKind(ctx, s) {
   if (s.asset) return 'asset';

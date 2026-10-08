@@ -47,14 +47,14 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quater
 function restPose(w, earsLow = 0) {
   const P = {
     body: [0, 0, 0], hips: [0, 0.30, 0], chest: [0, 0.10, 0], head: [0, 0.22, 0], mouth: [...FACE.mouth],
-    earL: [0.128, 0.246, -0.012], earR: [-0.128, 0.246, -0.012], eyeL: [...FACE.eyeL], eyeR: [...FACE.eyeR],
+    earL: [0.132, 0.256, -0.014], earR: [-0.132, 0.256, -0.014], eyeL: [...FACE.eyeL], eyeR: [...FACE.eyeR],
     shoulderL: [0.135 * w, 0.15, 0.0], elbowL: [0, -ARM.upper, 0], pawL: [0, -ARM.fore, 0],
     shoulderR: [-0.135 * w, 0.15, 0.0], elbowR: [0, -ARM.upper, 0], pawR: [0, -ARM.fore, 0],
     thighL: [0.085 * w, -0.06, 0], kneeL: [0, -0.10, 0], footL: [0, -0.11, 0],
     thighR: [-0.085 * w, -0.06, 0], kneeR: [0, -0.10, 0], footR: [0, -0.11, 0],
   };
   const R = {
-    earL: [-0.1, -0.08, -0.52 - earsLow * 0.6], earR: [-0.1, 0.08, 0.52 + earsLow * 0.6],
+    earL: [-0.1, -0.08, -0.45 - earsLow * 0.6], earR: [-0.1, 0.08, 0.45 + earsLow * 0.6],
     shoulderL: [0, 0, 0.12], shoulderR: [0, 0, -0.12],
   };
   // tail joints along the rest curve
@@ -215,7 +215,7 @@ export class Kitten {
     }
 
     // ---- ears (kit) + tufts
-    const earS = (cfg.ears?.size ?? 1) * 1.22;
+    const earS = (cfg.ears?.size ?? 1) * 1.28;   // ref2: big, wide-set ears that clear the head fluff by ~0.08 H
     for (const s of ['L', 'R']) {
       // art.md §2.2: tall rounded cones, flattened front-to-back, tilted out ~30°; pink inner ear faces forward
       const outer = roundedCone(0.07 * earS, 0.118 * earS, 20, 0.18, 0.84).scale(1, 1, 0.58);
@@ -285,7 +285,7 @@ export class Kitten {
     if (cfg.bow) {
       const bow = buildBow(cfg.bow);
       // target in head space (art.md §2.2: (+0.10, 0.955, 0.06) world → head-local (0.10, 0.335, 0.06))
-      const headPos = new THREE.Vector3(...(cfg.bow.at || [0.115, 0.285, 0.08]));
+      const headPos = new THREE.Vector3(...(cfg.bow.at || [0.118, 0.292, 0.08]));
       const toEar = _m2.copy(bind.earL).invert().multiply(bind.head);
       bow.position.copy(headPos.applyMatrix4(toEar));
       const earQ = new THREE.Quaternion(); bind.earL.decompose(_v, earQ, _v2);
@@ -363,13 +363,16 @@ export class Kitten {
   /** Skull, cheek ruffs, whisker pads and chin (art.md §2.2), in head space. */
   _headFurPieces(cfg) {
     const out = [];
-    const seg = this.lite ? [28, 20] : [46, 34];
-    const skull = new THREE.SphereGeometry(FACE.skullR, seg[0], seg[1]).scale(...FACE.skullScale).translate(...FACE.skull);
+    // segment counts per tier (every head-fur triangle is drawn once per shell: hero 17x, companions 11x)
+    const S = this.lite ? { skull: [28, 20], cheek: [14, 10], pad: [10, 8], chin: [10, 8] }
+      : this.tier === 'hero' ? { skull: [46, 34], cheek: [22, 16], pad: [14, 10], chin: [12, 9] }
+        : { skull: [38, 28], cheek: [20, 14], pad: [12, 9], chin: [10, 8] };
+    const skull = new THREE.SphereGeometry(FACE.skullR, S.skull[0], S.skull[1]).scale(...FACE.skullScale).translate(...FACE.skull);
     out.push({ geo: skull, region: 'head' });
     const cheekR = FACE.cheekR * (cfg.fur?.cheek ?? 1);
-    for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(cheekR, this.lite ? 14 : 26, this.lite ? 10 : 18).translate(s * FACE.cheek[0], FACE.cheek[1], FACE.cheek[2]), region: 'cheek' });
-    for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(0.042, this.lite ? 10 : 18, this.lite ? 8 : 12).translate(s * FACE.pad[0], FACE.pad[1], FACE.pad[2]), region: 'muzzle' });
-    out.push({ geo: new THREE.SphereGeometry(0.034, 14, 10).translate(...FACE.chin), region: 'muzzle' });
+    for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(cheekR, S.cheek[0], S.cheek[1]).scale(...FACE.cheekScale).translate(s * FACE.cheek[0], FACE.cheek[1], FACE.cheek[2]), region: 'cheek' });
+    for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(0.042, S.pad[0], S.pad[1]).translate(s * FACE.pad[0], FACE.pad[1], FACE.pad[2]), region: 'muzzle' });
+    out.push({ geo: new THREE.SphereGeometry(0.034, S.chin[0], S.chin[1]).translate(...FACE.chin), region: 'muzzle' });
     return out;
   }
 
@@ -416,10 +419,12 @@ export class Kitten {
       gb.add(g, { matrix: pm, bone: idx[bone], color: (v, n, lp) => mixRgb(color0, color1, smoothstep(0, len, lp.y)), rmse: RM.fur });
     };
     // ears: long cream tufts from the inner ear (the ref2 signature)
+    // (soft wisps fanning out of the inner ear; short enough that the ear's outline and pink inner still read)
+    const earTip = mixRgb(tip, root, 0.25);
     for (const [s, bone] of [[1, 'earL'], [-1, 'earR']]) {
-      for (let i = 0; i < 5; i++) {
-        const x = (i - 2) * 0.01 * earS;
-        card(bone, [x, 0.01 + rnd() * 0.02, 0.022], [x * 3.2 - s * 0.05, 1, 0.35 + rnd() * 0.25], (0.06 + rnd() * 0.035) * earS, 0.024);
+      for (let i = 0; i < 4; i++) {
+        const x = (i - 1.5) * 0.012 * earS;
+        card(bone, [x, 0.008 + rnd() * 0.016, 0.02], [x * 4.5 - s * 0.06, 1, 0.45 + rnd() * 0.25], (0.045 + rnd() * 0.03) * earS, 0.026, root, earTip);
       }
     }
     // cheek wisps: long fur sticking out sideways past the cheek ruff
@@ -484,7 +489,7 @@ export class Kitten {
 
   /** Tail: tapered tube along the rest curve (art.md §2.4), smooth-skinned to the 6 tail joints. */
   _tail(A, kit, bind, boneIndex) {
-    const curve = this.tailCurve, tub = this.lite ? 20 : 30, rad = this.lite ? 8 : 12;
+    const curve = this.tailCurve, tub = this.lite ? 20 : 24, rad = this.lite ? 8 : 10;
     const thick = this.cfg.tail?.thick ?? 1;
     const tg = new THREE.TubeGeometry(curve, tub, 1, rad, false);
     const pos = tg.attributes.position, c = new THREE.Vector3(), tmp = new THREE.Vector3();
@@ -744,8 +749,14 @@ export class Kitten {
   /** Meme Cam: cross-fade the hero cape to the looping sway (GAME_DESIGN §7.8) and back. */
   setCapeMode(mode, o) { this.cape?.setMode(mode, o); return this; }
 
-  /** Show / hide a procedural prop ('milk_cup', 'lantern', 'spoon', 'letter', 'pot_helm', ...). opts.at overrides the mount joint. */
+  /**
+   * Show / hide a procedural prop ('milk_cup', 'lantern', 'spoon', 'letter', 'pot_helm', 'helmet', ...). The mount
+   * variant comes from opts.at or a 'name@at' suffix, so the plain ScriptedActor `prop(name, on)` reaches it too:
+   * 'letter@belt' (CS-06), 'helmet@paw' (CS-01: she takes the helm off and looks at it). One object per base name.
+   */
   setProp(name, on = true, opts = {}) {
+    const cut = name.indexOf('@');
+    if (cut > 0) { opts = { ...opts, at: opts.at ?? name.slice(cut + 1) }; name = name.slice(0, cut); }
     let p = this.props[name];
     if (on) {
       if (!p) {
@@ -846,7 +857,9 @@ export class Kitten {
    * @param {{ velocity?: THREE.Vector3, wind?: THREE.Vector3, frameId?: number }} [o]
    */
   simulate(dt, o = {}) {
-    this.root.updateMatrixWorld(true);
+    // parents first: the actor root may have been teleported / turned this frame (level load, respawn), and the cape
+    // pins + colliders read the joints' matrixWorld (requests/player.md: the cloth re-initialised on the wrong side)
+    this.root.updateWorldMatrix(true, true);
     if (tickFurTime(dt, o.frameId)) { CAPE_TIME.value += dt; envTick(); }
     if (this.furMat) {
       const vel = o.velocity;

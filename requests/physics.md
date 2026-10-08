@@ -26,6 +26,9 @@ New calls, all additive:
   - `groundKind`: `'terrain' | 'static' | 'mesh' | null`.
   - `groundObject`, `groundNormal`, `wallHit`, `ceilingHit`, `sliding` (on terrain too steep to stand on, normal.y < 0.7).
   - `landImpact` (m/s, on the landing step only).
+  - `slideSpeed`: m/s down a too-steep terrain slope while `sliding`, else 0. Physics owns the slide: steering into a bank can't hold her on it, so there is no hanging on a cliff.
+- Gravity is now integrated exactly for constant acceleration. The jump apex is v²/2g = **1.245 m** (it was 1.183 m with semi-implicit Euler), and a mushroom bounce reaches 1.84 m. `player.test.js` still passes; its "Euler loses ~v·dt/2" comment is now stale.
+- Terrain cliffs: when the rendered triangle is steeper than normal.y 0.65, she can't stand on it. Before, the smoothed normal let her stand on the first cell of a cliff's foot, and bunny-hopping climbed it. Triangles between 0.65 and 0.7 use the smoothed slope, so a lone steepish triangle on walkable ground is no trap.
 - Optional inputs on the actor: `flying`, `gravityMul`, `terminalFall`, `stepUp` (default `PLAYER.stepUp`), `noClip`, `fixed`, `ghost`, `collideActors: false`.
 
 ## To world
@@ -47,6 +50,7 @@ New calls, all additive:
   - `addMesh` / `removeMesh` / `rebuildMeshes` rebuild the octree. Call them once per change, never per frame.
 - `Arena.validPoint` could use `physics.blockedAt(x, z, 0.5)` instead of scanning `colliders.circles/boxes`, so yawed boxes, segments and dynamic colliders count too.
 - `Level.isDeepWater(x, z, y)` gets `y = physics.topAt(x, z)` when a caller passes no feet height, so keep honouring `y` there. Water `pts` polylines and yawed `rect`s are supported on physics' side too.
+- Fence runs (`LevelKit.fence`) set `y1 = min(h(a), h(b)) + height`. Where the ground under a run climbs, the collider's top at the uphill end is lower than the fence she sees. She can hop it there more easily than the visual suggests, and if the climb exceeds `height`, she walks straight over the buried top. Suggest `max(h(a), h(b)) + height`: the collider is non-walkable, so a taller top only blocks. Or split long sloped runs.
 - Old Bridge (smoke `physics:bridge`): a walker crosses the deck at y ≈ 0.30 with no sinking. The player dropped on it stays on the deck with groundKind `'mesh'`. The deck top is about 3 cm under `BRIDGE.deckY` (0.293 vs 0.32).
 
 ## To camera
@@ -57,4 +61,4 @@ New calls, all additive:
 - `overlapsStatic(pos, r)` now exists. It is a sphere test against props and architecture. Fog-wall rings and colliders with `ray: false` are excluded.
 
 ## To core (optional, additive)
-- `config.PHYSICS` overrides the engine tunables in `PHYSICS_DEFAULTS` (Physics.js). The tunables are `walkableNormalY 0.7`, `groundSnap 0.3`, `skin 0.02`, `substep 0.5`, `maxSubsteps 24`, `deepWater 0.5` and `edgeSlip 2.0`. It isn't needed; the defaults match §7.1 and tech.md §5.
+- `config.PHYSICS` overrides the engine tunables in `PHYSICS_DEFAULTS` (Physics.js). The tunables are `walkableNormalY 0.7`, `groundSnap 0.3`, `skin 0.02`, `substep 0.5`, `maxSubsteps 24`, `deepWater 0.5`, `edgeSlip 2.0` and `steepFaceTol 0.05`. It isn't needed; the defaults match §7.1 and tech.md §5.

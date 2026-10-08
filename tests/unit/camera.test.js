@@ -429,12 +429,62 @@ test('FollowCamera: preset() / shot() / camera:mode, handback with a 0.6 s blend
   await done;
   ctx.game.mode = 'play';
   ctx.bus.emit(E.CUTSCENE_END, { id: 'cs03', skipped: false });
+  assert.equal(cam.modeName, 'preset', 'handback waits a frame (a chained scene may take over)');
+  frames(cam, 1);
   assert.equal(cam.modeName, 'follow');
-  frames(cam, 20);
+  frames(cam, 19);
   const d = ctx.camera.position.distanceTo(new THREE.Vector3(0, CAMERA.pivotY, 0));
   assert.ok(Math.abs(d - CAMERA.dist) > 0.05, 'mid-blend');
   frames(cam, 30);
   near(ctx.camera.position.distanceTo(new THREE.Vector3(0, CAMERA.pivotY, 0)), CAMERA.dist, 1e-6, 'handed back');
+  // a chained scene (end.cam: false, the next one starts right away) keeps its camera
+  ctx.game.mode = 'cutscene';
+  cam.mode('cutscene');
+  cam.shot({ preset: 'HERO_LOW', mode: 'cut' });
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'cs09', skipped: false });
+  ctx.bus.emit(E.CUTSCENE_START, { id: 'cs10' });
+  frames(cam, 3);
+  assert.equal(cam.modeName, 'preset', 'the next scene holds the shot');
+  nearV(ctx.camera.position, [0.8, 0.35, 2.2], 1e-6);
+  // a skipped scene that left the shot held cuts straight back
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'cs10', skipped: true });
+  frames(cam, 1);
+  assert.equal(cam.modeName, 'follow');
+  assert.equal(cam._blend.active, false, 'skip = cut');
+});
+
+test('FollowCamera: handback blends even when the cutscene moved her; a teleport during a blend cuts', async () => {
+  const { ctx, cam } = await makeCam();
+  frames(cam, 2);
+  ctx.game.mode = 'cutscene';
+  cam.mode('cutscene');
+  cam.shot({ preset: 'HERO_LOW', mode: 'cut' });
+  frames(cam, 2);
+  // the scene walks her 20 m away (scripted moveTo), the camera shot tracks her
+  const p = ctx.player;
+  p.pos.set(0, 0, 20); p.object3d.position.copy(p.pos);
+  frames(cam, 2);
+  ctx.game.mode = 'play';
+  cam.mode('follow', { blend: 0.6 });
+  frames(cam, 10);
+  assert.equal(cam._blend.active, true, 'handback still blending (not mistaken for a teleport)');
+  // respawn at a checkpoint far away mid-blend: cut straight to the new framing
+  p.pos.set(40, 0, -30); p.object3d.position.copy(p.pos);
+  frames(cam, 1);
+  assert.equal(cam._blend.active, false, 'teleport ends the blend');
+  near(ctx.camera.position.distanceTo(new THREE.Vector3(40, CAMERA.pivotY, -30)), CAMERA.dist, 1e-3, 'cut to the follow framing');
+});
+
+test('CutsceneCamera: authored low shots never dip into the terrain', async () => {
+  const ctx = makeCtx({ ground: 0 });
+  ctx.physics.heightAt = (x, z) => (z > 1 ? 0.6 : 0);                     // a bank rises in front of her
+  const cc = new CutsceneCamera(ctx);
+  cc.start({ preset: 'HERO_LOW', mode: 'cut' }, new CamPose());
+  near(cc.pose.pos.y, 0.6 + 0.1, 1e-9, 'lifted to 0.1 m above the bank');
+  nearV(cc.pose.look, [0, 0.9, 0], 1e-9, 'still looking at her');
+  ctx.physics.heightAt = () => 0;
+  cc.start({ preset: 'HERO_LOW', mode: 'cut' }, new CamPose());
+  near(cc.pose.pos.y, 0.35, 1e-9, 'flat ground: the spec height');
 });
 
 test('FollowCamera: E.SHAKE adds trauma (combat owns hit/parry/block shakes: no double); dizzy shakes once; Holy punches the FOV +5°', async () => {
@@ -506,6 +556,29 @@ test('FollowCamera: spring arm collides with solid statics and skips thin ones (
   assert.ok(d <= 2.2 - 0.5 - 0.2 + 1e-6 && d >= ARM_MIN_T, `conservative stop ${d.toFixed(3)}`);
 });
 const ARM_MIN_T = 0.8;
+
+test('FollowCamera: Meme Cam rotates the MEME_LOOP framing around her when a wall blocks the lens', async () => {
+  const { ctx, cam } = await makeCam();
+  const obstacles = [];
+  staticPhysics(ctx, obstacles);
+  assert.equal(cam.memeYawOffset(ctx.player), 0, 'clear view: straight in front of her face');
+  // a fence post 0.8 m in front of her face (she faces +Z), slightly to her left
+  obstacles.push({ c: new THREE.Vector3(0.1, 0.75, 0.8), r: 0.25, src: { x: 0.1, z: 0.8, r: 0.25 } });
+  const off = cam.memeYawOffset(ctx.player);
+  assert.ok(off !== 0 && Math.abs(off) <= 1.05 + 1e-9, `rotated framing (${off})`);
+  cam.mode('meme');
+  frames(cam, 160);
+  const ideal = localToWorld(PRESETS.MEME_LOOP.pos, ctx.player.pos, off, new THREE.Vector3());
+  assert.ok(ctx.camera.position.distanceTo(ideal) < 0.01, 'held at the rotated MEME_LOOP');
+  const eyes = new THREE.Vector3(0, PRESETS.MEME_LOOP.look[1], 0);
+  const dir = ctx.camera.position.clone().sub(eyes), len = dir.length();
+  assert.equal(ctx.physics.sphereCast(new THREE.Ray(eyes, dir.normalize()), 0.12, len), null, 'the lens sees her face');
+  near(ctx.camera.fov, 32, 1e-6);
+  // boxed in on every side: fall back to the spec framing
+  obstacles.push({ c: new THREE.Vector3(0, 0.75, 0), r: 1.3, src: { minX: -2, maxX: 2, minZ: -2, maxZ: 2 } });
+  assert.equal(cam.memeYawOffset(ctx.player), 0);
+  cam.mode('follow');
+});
 
 test('FollowCamera: lock line of sight ignores trunks, breaks after 1.5 s behind a wall', async () => {
   const { ctx, cam } = await makeCam();

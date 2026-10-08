@@ -38,6 +38,28 @@ export function visualDt(ctx, frameDt) {
   return frameDt * (g.loop?.timeScale ?? 1);
 }
 
+/** Shared alert "!" material (§10.1 the 0.4 s "!" hop): drawn on a canvas on first use (browser only), never per enemy. */
+let _bangMat = null;
+function bangMaterial() {
+  if (_bangMat) return _bangMat;
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 128;
+  const g = c.getContext('2d');
+  if (!g) return null;
+  const mark = () => {                                     // tapered bar + dot, in a 64 × 128 box
+    g.beginPath();
+    g.moveTo(20, 14); g.quadraticCurveTo(32, 6, 44, 14); g.lineTo(38, 78); g.quadraticCurveTo(32, 84, 26, 78); g.closePath();
+    g.moveTo(43, 103); g.arc(32, 103, 11, 0, Math.PI * 2);
+  };
+  g.lineJoin = 'round'; g.lineWidth = 12; g.strokeStyle = TUNING.bang.ink; mark(); g.stroke();
+  g.fillStyle = TUNING.bang.color; mark(); g.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  _bangMat = new THREE.SpriteMaterial({ name: 'enemy-alert-bang', map: tex, transparent: true, depthWrite: false, fog: false });
+  return _bangMat;
+}
+
 /** Telegraph kind → default §19.5 shape. */
 export function defaultShape(kind) {
   switch (kind) {
@@ -68,13 +90,13 @@ export const BASE_STATES = {
     update(e, dt) {
       e.brake(dt);
       if (e.checkWake(dt) || e.sees) return e.alert();
-      if (!e.perched && e.def.patrolRadius > 0 && e.stateT > e.idleFor) e.setState('patrol');
+      if (!e.perched && e.patrolRadius > 0 && e.stateT > e.idleFor) e.setState('patrol');
     },
   },
   patrol: {
     anim: 'move',
     enter(e) {
-      const a = e.ctx.rng.angle(), r = e.ctx.rng() * (e.def.patrolRadius ?? 0);
+      const a = e.ctx.rng.angle(), r = e.ctx.rng() * e.patrolRadius;
       e.goal.set(e.home.x + Math.sin(a) * r, e.home.y, e.home.z + Math.cos(a) * r);
     },
     update(e, dt) {
@@ -235,7 +257,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   /**
    * @param {any} ctx @param {any} def resolved type def (Appendix A ENEMIES row + types/<id>.js + id)
    * @param {{pos?: THREE.Vector3, facing?: number, runner?: boolean, ai?: boolean, perched?: boolean, y?: number,
-   *          id?: string, word?: string, cage?: boolean|string, seed?: number}} spawn
+   *          id?: string, word?: string, cage?: boolean|string, seed?: number, patrolRadius?: number}} spawn
+   *   patrolRadius: the level zone's patrol radius (Appendix B.1 `[type, n, at, patrolRadius]`) over the row's default
    */
   constructor(ctx, def, spawn = {}) {
     const diff = ctx.state?.difficultyCfg;
@@ -254,6 +277,10 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (this.objectiveRunner) this.tags.add('runner');
     this.ai = spawn.ai !== false && !def.aiLess;
     this.perched = spawn.perched ?? (!!def.perchable && (spawn.y ?? 0) >= TUNING.xbow.perchMinY);
+    /** feet height a perched shooter is pinned to (its cart / wall top), independent of `home` (levels pass home y 0) */
+    this.perchY = this.pos.y;
+    /** idle → patrol wander radius around `home` (0 = stands its post) */
+    this.patrolRadius = Math.max(0, spawn.patrolRadius ?? def.patrolRadius ?? 0);
     /** physics: no gravity (crows; perched shooters stay on their wall or cart) */
     this.flying = !!def.fly || this.perched;
     if (def.fly && !spawn.grounded) { this.pos.y += def.fly.alt ?? 3; this.home.y = this.pos.y; }
@@ -278,7 +305,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
     // visuals
     this.model = null; this.visual = null; this.anim = null; this.head = null; this.helmet = null; this.tipNode = null;
-    this.flashT = 0; this.squashT = 0; this.hitReactT = 0; this.wobbleT = 0;
+    this.flashT = 0; this.squashT = 0; this.hitReactT = 0; this.wobbleT = 0; this.bangT = 0; this.bang = null;
     this._flash = []; this._flashOn = 0;
     this._animKey = ''; this._animSerial = 0; this._hitSerial = 0; this._frame = 0; this._farDt = 0; this._wobblePh = 0;
     this.heldClip = null; this._pendingClip = null; this._pendingPose = null;
@@ -294,6 +321,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (!next) { console.warn(`[enemy] ${this.def.id}: unknown state ${name}`); return; }
     this.state?.exit?.(this);
     this.stateName = name; this.state = next; this.stateT = 0; this._animSerial++;
+    if (name === 'alert') this.bangT = TUNING.bang.dur;      // the "!" pops over the head (render)
     next.enter?.(this);
   }
 
@@ -601,7 +629,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   /** Integrate through physics (perched shooters stay put: knockback can't push them off their perch). */
   move(dt) {
-    if (this.perched) { this.vel.set(0, 0, 0); this.pos.y = this.home.y; return; }
+    if (this.perched) { this.vel.set(0, 0, 0); this.pos.y = this.perchY; return; }
     if (this.def.noPhysics) { this.pos.addScaledVector(this.vel, dt); return; }
     this.ctx.physics?.moveActor?.(this, dt);
   }
@@ -792,8 +820,29 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.cagedKitten?.render?.(dt);                 // KittenView applies hitstop / slow motion itself
     this.def.render?.(this, fdt, alpha);
     this._renderFx(fdt);
+    this._renderBang(fdt);
     if (this.uprightProps) applyUpright(this);
     if (this.telegraphId != null) this.updateTell();
+  }
+
+  /** §10.1 alert: a "!" pops up over the head (overshoot, then holds) for the 0.4 s hop. */
+  _renderBang(dt) {
+    if (this.bangT <= 0) { if (this.bang?.visible) this.bang.visible = false; return; }
+    this.bangT -= dt;
+    if (!this.bang) {
+      const mat = bangMaterial();
+      if (!mat) { this.bangT = 0; return; }
+      this.bang = new THREE.Sprite(mat);
+      this.bang.name = 'alert-bang';
+      this.bang.renderOrder = 10;
+      this.object3d.add(this.bang);
+    }
+    const B = TUNING.bang, h = this.height * (this.def.visualScale ?? 1);
+    const u = clamp(1 - this.bangT / B.dur, 0, 1), k = u < B.pop ? Math.sin((u / B.pop) * Math.PI * 0.5) * 1.25 : 1.25 - 0.25 * Math.min(1, (u - B.pop) / B.pop);
+    const size = clamp(h * B.perH, B.min, B.max);
+    this.bang.visible = this.bangT > 0 && this.alive;
+    this.bang.position.set(0, h + B.lift + size * 0.5, 0);
+    this.bang.scale.set(size * 0.5 * k, size * k, 1);
   }
 
   /** Flash, squash, stagger wobble, death shrink. */

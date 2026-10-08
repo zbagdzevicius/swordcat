@@ -63,7 +63,18 @@ export default [
       t.assert(Math.abs(day.fog - 0.045) < 0.004, `fog ≈ 0.045 (${day.fog})`);
       const st = await t.state();
       t.log(`meadow day: calls ${st.calls}, tris ${st.tris} (frame ${st.frameCalls}/${st.frameTris})`);
-      if (st.calls > 150) t.warn(`meadow draws ${st.calls} calls (> 150 budget)`);
+      if (st.calls > 300) t.warn(`meadow draws ${st.calls} calls (> 300 desktop budget, art.md §14)`);
+      // the level's own share (everything else hidden for 3 frames): one prop batch, instanced trees, grass layers...
+      const lv = await t.G(async () => {
+        const g = window.__GAME__, sc = g.ctx.scene, root = g.ctx.levels.current.root, hidden = [];
+        for (const c of sc.children) if (c !== root && !c.isLight && c.name !== 'sky' && c.visible) { c.visible = false; hidden.push(c); }
+        await g.waitFrames(3);
+        const s = g.state();
+        for (const c of hidden) c.visible = true;
+        return { calls: s.calls, tris: s.tris };
+      });
+      t.log(`meadow level only: calls ${lv.calls}, tris ${lv.tris}`);
+      t.assert(lv.calls <= 60, `the level draws ${lv.calls} calls (≤ 60)`);
       await t.G(() => { window.__GAME__.god(true); });
       for (const [name, x, z, yaw] of [['start', -4, -58, 0], ['lane', -3, -54, -0.45], ['practice', 9, -64, 2.5], ['tallbert', 3, -51, 3.0],
         ['crossroads', -12, -44, -0.6], ['stones', -27, -12, 0.65], ['glade', -6, 6, 0.75], ['crowfields', 14, 30, 0.6], ['bridge', 21.5, 56.5, 1.0], ['cart', 30, 57.5, 0]]) {
@@ -157,7 +168,7 @@ export default [
       const letters = await t.G(() => window.__GAME__.ctx.state.letters);
       t.assert(letters.includes('l1'), `Letter #1 collected (${JSON.stringify(letters)})`);
       // a crate breaks into fish
-      const crate = await t.G(() => { const c = window.__GAME__.ctx.levels.current.actors.find((a) => a.kind === 'crate'); return c ? [c.pos.x, c.pos.z, c.propId] : null; });
+      const crate = await t.G(() => { const c = window.__GAME__.ctx.levels.current.actors.find((a) => a.tags.has('crate')); return c ? [c.pos.x, c.pos.z, c.propId] : null; });
       if (crate) {
         await tp(t, crate[0], crate[1] - 1.3, 0);
         await t.tap('KeyJ', 2, 300);
@@ -173,10 +184,10 @@ export default [
       await fresh(t, 'start', { 'prologue.tutorial': true });
       await t.G(() => window.__GAME__.god(true));
       await tp(t, 30, 54.5, 0);
-      await t.hold('KeyW', 3200);
+      await t.hold('KeyW', 4600);
       await t.frames(10);
       const p = (await t.state()).player.pos;
-      t.assert(p[2] > 66, `crossed the Old Bridge (z ${p[2].toFixed(1)})`);
+      t.assert(p[2] > 67.5, `crossed the Old Bridge (z ${p[2].toFixed(1)})`);
       t.assert(p[1] > -0.5, `stayed on the deck (y ${p[1].toFixed(2)})`);
       await t.shot(shotDir(t) + 'bridge-crossed');
     },

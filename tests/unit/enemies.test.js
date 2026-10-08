@@ -167,6 +167,47 @@ test('U6: Barkus hpFloor holds at 10% until the shard is freed; then the rally p
   assert.equal(ev.filter((x) => x.ev === E.BOSS_DEFEATED).length, 0);
 });
 
+test('U6: Barkus P3 — the 3rd parried shardSlam frees the shard (other moves and other phases do not count; a retry resets)', async () => {
+  const ctx = await world();
+  const b = ctx.enemies.spawn('boss_barkus', at(0, 10));
+  const need = BOSSES.barkus.phases[2].shardSlam.parriesNeeded;
+  const parry = (move) => { b.attack = { id: move, def: b.attackDef(move) }; b.staggerT = 0; b.onParried(ctx.player, { gold: false }); b.meter.reset(); };
+  parry('shardSlam');
+  assert.equal(b.shardParries, 0, 'phase 1 parries do not count');
+  b.setHpFrac(0.3);
+  assert.equal(b.phase, 2);
+  parry('cleaverCombo');
+  assert.equal(b.shardParries, 0, 'only the shard move counts in P3');
+  parry('shardSlam'); parry('shardSlam');
+  assert.equal(b.shardParries, 2); assert.equal(b.hpFloor, 0.10);
+  ctx.bus.emit(E.PLAYER_LIFE_LOST, { lives: 8 });
+  assert.equal(b.shardParries, 0, 'dying restarts the phase and its parry count');
+  for (let i = 0; i < need; i++) parry('shardSlam');
+  assert.equal(b.shardFreed, true); assert.equal(b.hpFloor, null);
+});
+
+test('level spawns: a perched crossbowman keeps its cart height when the level passes home y 0; zone patrol radius', async () => {
+  const ctx = await world();
+  ctx.physics.heightAt = () => 0.5;
+  const x = ctx.enemies.spawn('rat_xbow', at(0, 12), { y: 1.2, home: at(0, 12), patrolRadius: 0 });
+  assert.equal(x.perched, true);
+  assert.ok(Math.abs(x.pos.y - 1.7) < 1e-6, `perched at ground + 1.2 (${x.pos.y})`);
+  step(ctx, 30);
+  assert.ok(Math.abs(x.pos.y - 1.7) < 1e-6, `still on its perch (${x.pos.y})`);
+  // a wall top (1.2 m, 0.22 m thick, along z) 1.7 m from the requested spot: the perch snaps onto it
+  const gAt = ctx.physics.groundAt;
+  ctx.physics.heightAt = () => 0;
+  ctx.physics.groundAt = (px, pz, fromY) => (px >= 1.6 && px <= 1.82 && fromY >= 1.2 ? 1.2 : 0);
+  const w = ctx.enemies.spawn('rat_xbow', at(0, 20), { y: 1.2 });
+  assert.ok(w.perched && w.pos.x >= 1.6 && w.pos.x <= 1.82 && Math.abs(w.pos.z - 20) < 1.8 && w.pos.y === 1.2, `on the wall (${w.pos.toArray()})`);
+  ctx.physics.groundAt = gAt;
+  const r = ctx.enemies.spawn('rat_pike', at(30, 30), { patrolRadius: 7, home: at(30, 30) });
+  assert.equal(r.patrolRadius, 7, 'zone patrol radius wins over the row default');
+  assert.equal(ctx.enemies.spawn('rat_pike', at(-30, 30)).patrolRadius, ENEMIES.rat_pike.patrolRadius);
+  const c = ctx.enemies.spawn('crow', at(-30, -30), { patrolRadius: 8 });
+  assert.ok(Math.hypot(c.circleOff.x, c.circleOff.z) <= 8 - ENEMIES.crow.fly.circleR + 1e-9, 'crow circles stay inside the zone');
+});
+
 test('U6: boss Dizzy — hits add poise × 4, a gold parry fills it, dizzy bosses take ×2 crits', async () => {
   const ctx = await world();
   const dz = record(ctx, E.BOSS_DIZZY);
@@ -456,6 +497,13 @@ test('§8.3 budget: at most quality.maxEnemies AI enemies; extra spawns wait dor
   step(ctx, 1);
   assert.equal(ctx.enemies.pending.length, 1); assert.equal(held.dormant, false); assert.ok(ctx.actors.has(held));
   assert.equal(ctx.enemies.count(), 6);
+  // the budget is per fight: an idle squad 50 m away doesn't hold this one back; alerted enemies count anywhere
+  const far = ctx.enemies.spawn('rat_pike', at(0, 30 + TUNING.capRadius + 20));
+  assert.equal(far.dormant, false, 'a spawn in another zone is not held');
+  assert.equal(ctx.enemies.countNear(far.pos), 1);
+  for (const e of list.slice(1, 6)) e.alerted = true;
+  assert.equal(ctx.enemies.countNear(far.pos), 6, 'alerted enemies join every fight');
+  assert.equal(ctx.enemies.spawn('rat_pike', at(4, 30 + TUNING.capRadius + 20)).dormant, true);
   ctx.enemies.clear();
   assert.equal(ctx.enemies.list.length, 0); assert.equal(ctx.enemies.pending.length, 0); assert.equal(ctx.enemies.boss, null);
 });

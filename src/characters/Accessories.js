@@ -9,7 +9,7 @@ import { capeMaterial, capeGeometry } from './Cape.js';
 import { buildSword } from './Sword.js';
 
 const C = (c) => rgb(c);
-const flipShell = (geo) => {
+export const flipShell = (geo) => {
   const g2 = geo.clone(); const idx = g2.index.array;
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
   const n = g2.attributes.normal; for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i));

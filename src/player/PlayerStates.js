@@ -125,9 +125,13 @@ export const STATES = {
       const preActive = s.t < act[0];
       // combo: a (buffered) press inside the window → the next swing
       if (def.next && def.combo && p.attackBuf > 0 && s.t >= def.combo[0] && s.t <= def.combo[1]) { p.startAttack(def.next); return; }
-      // cancels: Golden Hour any time before the active frames; Stand before/after them; Tumble / charge after
+      // cancels: Golden Hour any time before the active frames; Stand before/after them; Tumble / charge after.
+      // A Stand already held when the swing started (⚔ out of the Stand, a Riposte, Auto-Stand) never cancels it:
+      // only a fresh Stand press does (requests/combat.md); she drops back into the Stand when the swing ends.
       if (preActive && p.tryGolden()) return;
-      if ((preActive || recovering) && p.wantGuard() && p.onGround && !def.noCancel) { p.endSwing(); p.setState('guard'); return; }
+      const wantGuard = p.wantGuard();
+      if (!wantGuard) p.swingGuardLatch = false;
+      if ((preActive || recovering) && wantGuard && !p.swingGuardLatch && p.onGround && !def.noCancel) { p.endSwing(); p.setState('guard'); return; }
       const rollFrom = def.rollCancel ?? act[1];
       if (s.t >= rollFrom && p.dodgeBuf > 0 && p.canDodge() && !def.noCancel) { p.endSwing(); p.startDodge(); return; }
       // jump out of the recovery (after the active frames), so movement never feels glued to a swing

@@ -601,6 +601,63 @@ test('D-01 cart: Mochi sits on the cart bed; the cart blocks walkers; the empty 
   assert.equal(ctx.actors.get('mochi'), m.active[0]);
 });
 
+test('D-01 on the level\'s cart (world passes the bed height `y`): bars only, no second cart; pinned inside the cage', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  let loads = 0;
+  ctx.assets.model = () => { loads++; return new Promise(() => {}); };
+  const k = ctx.companions.spawnKitten('mochi', [30, 0, 74.5], 'cage', { hp: 30, needClear: 'bridge', play: 'd01', cage: 'cart', y: 1.05, facing: Math.PI });
+  assert.equal(loads, 0, 'no cart model of our own');
+  assert.equal(ctx.physics.colliders.size, 0, 'no cart collider of our own (the level\'s cart has one)');
+  assert.ok(Math.abs(k.perchY - 1.05) < 1e-9 && Math.abs(k.pos.y - 1.05) < 1e-9, 'on the given bed height');
+  assert.ok(Math.abs(k.cage.position.y - 1.05) < 1e-9, 'the bars stand on the bed');
+  // a level collider shoving the kitten out of the cart (physics resolves every actor against the cart box)
+  const move = ctx.physics.moveActor;
+  ctx.physics.moveActor = (a, dt) => { if (a === k) a.pos.z += 0.05; move.call(ctx.physics, a, dt); };
+  step(ctx, 30);
+  assert.ok(Math.abs(k.pos.z - 74.5) < 1e-9 && Math.abs(k.pos.y - 1.05) < 1e-9, 'stays in the cage');
+  ctx.physics.moveActor = move;
+  // freed: the hop lands toward her, clear of the cart's collider (a 2.4 × 2.4 m box here; the side toward her is
+  // blocked by a fence post too, so another direction is chosen)
+  ctx.physics.blockedAt = (x, z, r) => (Math.abs(x - 30) < 1.2 + r && Math.abs(z - 74.5) < 1.2 + r) || Math.hypot(x - 30, z - 72.7) < 0.5 + r;
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'bridge' });
+  ctx.player.pos.set(30, 0, 70);
+  for (let i = 0; i < 3 && !k.lock.opened; i++) { k.lock.invulnT = 0; ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); }
+  assert.ok(k.lock.opened);
+  let maxY = 0;
+  step(ctx, 70, () => { maxY = Math.max(maxY, k.pos.y); });
+  await new Promise((r) => setTimeout(r, 0));
+  const c = ctx.companions.active[0];
+  assert.equal(c?.kittenId, 'mochi', 'joined');
+  assert.ok(!ctx.physics.blockedAt(c.pos.x, c.pos.z, 0.2), `landed on free ground (${c.pos.x.toFixed(2)}, ${c.pos.z.toFixed(2)})`);
+  assert.ok(c.pos.z < 74.5, 'on her side of the cart');
+  assert.ok(maxY > 1.05, 'hopped up and out');
+  assert.equal(c.pos.y, 0, 'on the ground');
+});
+
+test('Pudding comes back after a cutscene despawned him while meadow.pudding is set (netted, then perched)', async () => {
+  const ctx = makeCtx({ anchors: { pud_1: [20, 36], pud_2: [36, 50] } }); await ctx.companions.init();
+  const m = ctx.companions;
+  const scenePud = m.spawnNpc('pudding', [2, 24], Math.PI);
+  ctx.state.setFlag('meadow.pudding', 'netted');
+  ctx.bus.emit(E.FLAG_SET, { key: 'meadow.pudding', value: 'netted' });
+  assert.equal(m.pudding, scenePud); assert.ok(scenePud.netted);
+  m.despawn(scenePud);                                         // the cutscene's end despawns its cast
+  assert.equal(m.pudding, null);
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'cs03', skipped: false });
+  assert.ok(m.pudding && m.pudding !== scenePud && m.pudding.netted, 'netted again in the glade');
+  assert.equal(ctx.actors.get('pudding'), m.pudding);
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'd01', skipped: true });
+  assert.equal(m.actors.filter((a) => a instanceof Pudding).length, 1, 'never two');
+  m.despawn(m.pudding);
+  ctx.state.setFlag('meadow.pudding', true);
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'x', skipped: false });
+  assert.equal(m.pudding?.mode, 'perch');
+  ctx.levels.current.id = 'forest';
+  m.despawn(m.pudding);
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'cs04', skipped: false });
+  assert.equal(m.pudding, null, 'only the meadow keeps a Pudding by itself');
+});
+
 test('lost kitten: the hiding barrel stays after the kitten goes home; the rescue line babbles', async () => {
   const ctx = makeCtx(); await ctx.companions.init();
   const m = ctx.companions;

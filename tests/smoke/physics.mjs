@@ -1,7 +1,8 @@
 // tests/smoke/physics.mjs  (owner: physics) — collision in the running game (GAME_DESIGN §19.2 physics, tech.md §5):
 // feet on the real level heightfield, a soak of synthetic actors over the level's props (no NaN, never under the
 // ground, never inside a prop, cheap), the real player against a prop wall and an Octree course (stairs, landing,
-// ramp), a fall and landing, actor separation, level bounds, rays. Screenshots → tests/shots/physics/*.png
+// ramp), a fall and landing, actor separation, level bounds, the Old Bridge, a 60° terrain bank (no bunny-hopping up
+// it; steering into it still slides her down), rays. Screenshots → tests/shots/physics/*.png
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -29,7 +30,7 @@ const camForward = (t) => t.G(() => {
 const recStart = (t) => t.G(() => {
   const g = window.__GAME__, p = g.ctx.player, out = [];
   window.__PHYS_REC__?.off?.();
-  const off = g.game.addFrameHook(() => { out.push({ t: g.game.time, pos: p.pos.toArray(), onGround: p.onGround, kind: p.groundKind ?? null }); });
+  const off = g.game.addFrameHook(() => { out.push({ t: g.game.time, pos: p.pos.toArray(), onGround: p.onGround, kind: p.groundKind ?? null, sl: !!p.sliding }); });
   window.__PHYS_REC__ = { out, off };
   return true;
 });
@@ -60,7 +61,7 @@ const simWait = async (t, sec) => {
 
 export default [
   {
-    name: 'physics:ground', order: 30, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'physics:ground', order: 30, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       shotDir(t);
       await t.frames(20);
@@ -90,7 +91,7 @@ export default [
     },
   },
   {
-    name: 'physics:soak', order: 31, level: 'meadow', spawn: 'start', timeout: 90000,
+    name: 'physics:soak', order: 31, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       // 32 synthetic actors run 10 s of fixed steps over the real meadow data (terrain + props), steering into the
       // nearest props, jumping now and then, shoving each other. Invariants are checked every step.
@@ -153,7 +154,7 @@ export default [
     },
   },
   {
-    name: 'physics:wall', order: 32, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'physics:wall', order: 32, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       await t.frames(10);
       const f = await camForward(t);
@@ -190,7 +191,7 @@ export default [
     },
   },
   {
-    name: 'physics:course', order: 33, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'physics:course', order: 33, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       await t.frames(10);
       const f = await camForward(t);
@@ -265,7 +266,7 @@ export default [
     },
   },
   {
-    name: 'physics:fall', order: 34, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'physics:fall', order: 34, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       const s0 = await ground(t);
       await t.clearEvents();
@@ -284,7 +285,7 @@ export default [
     },
   },
   {
-    name: 'physics:separation', order: 35, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'physics:separation', order: 35, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       await t.G(() => window.__GAME__.god(true));
       const sp = await t.G(() => {
@@ -313,7 +314,7 @@ export default [
     },
   },
   {
-    name: 'physics:bounds', order: 36, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'physics:bounds', order: 36, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       await t.frames(5);
       const f = await camForward(t);
@@ -339,7 +340,7 @@ export default [
     },
   },
   {
-    name: 'physics:bridge', order: 37, level: 'meadow', spawn: 'start', timeout: 90000,
+    name: 'physics:bridge', order: 37, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       // the meadow's Old Bridge (world architecture in the Octree) over the deep stream at z ≈ 62
       const b = await t.G(() => {
@@ -389,6 +390,92 @@ export default [
       await shot(t, 'bridge');
       await t.G(() => window.__GAME__.ctx.physics.setDebug(false));
       t.log(`bridge: crossed (${r.deck.length} steps on the deck at y ${b.y}, ${b.tris} tris), player held at y ${s.pos[1].toFixed(3)}`);
+    },
+  },
+  {
+    name: 'physics:cliff', order: 38, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      // a 60° bank, 3.5 m tall, raised into a copy of the meadow heightfield 3 m ahead of her (physics + a matching
+      // stone mesh); the real level data is untouched and restored afterwards
+      await t.frames(10);
+      const f = await camForward(t);
+      const c = await t.G((fw) => {
+        const g = window.__GAME__, T = g.THREE, ph = g.ctx.physics, p = g.ctx.player.pos, hf = ph.heightfield;
+        const k = Math.tan(60 * Math.PI / 180), w = hf.res + 1, h = hf.h.slice(), changed = new Uint8Array(w * w);
+        for (let iz = 0; iz < w; iz++) for (let ix = 0; ix < w; ix++) {
+          const x = ix * hf.cell - hf.half, z = iz * hf.cell - hf.half;
+          const u = (x - p.x) * fw[0] + (z - p.z) * fw[1], v = -(x - p.x) * fw[1] + (z - p.z) * fw[0];
+          if (u > 3 && Math.abs(v) < 7) { h[iz * w + ix] += Math.min(3.5, (u - 3) * k) * Math.min(1, (7 - Math.abs(v)) / 1.5); changed[iz * w + ix] = 1; }
+        }
+        const bank = new hf.constructor(hf.size, hf.res, h);
+        const geo = bank.toGeometry(), idx = geo.index.array, keep = [];
+        for (let i = 0; i < idx.length; i += 3) if (changed[idx[i]] || changed[idx[i + 1]] || changed[idx[i + 2]]) keep.push(idx[i], idx[i + 1], idx[i + 2]);
+        geo.setIndex(keep);
+        const mesh = new T.Mesh(geo, new T.MeshStandardMaterial({ color: 0x8d877c, roughness: 0.95, flatShading: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+        mesh.name = 'physics:test-bank'; mesh.receiveShadow = true; mesh.castShadow = true;
+        g.ctx.scene.add(mesh);
+        window.__PHYS_TEST__ = { orig: hf, bank, mesh };
+        ph.heightfield = bank;
+        // the grid samples the bank: depending on alignment, the triangles at its foot form a walkable ramp up to ~1 m
+        // high before the first clearly-too-steep triangle; one jump from its top is the most she may gain
+        // (the same goes for its top edge); steepA..steepB is the clearly-too-steep run between
+        let walkTop = 0, steepA = -1, steepB = -1;
+        const n = new T.Vector3();
+        for (let u = 0; u < 9; u += 0.02) {
+          const x = p.x + fw[0] * u, z = p.z + fw[1] * u;
+          const steep = bank.faceNormalAt(x, z, n).y < 0.65;
+          if (steep) { if (steepA < 0) steepA = u; steepB = u; } else if (steepA >= 0) break;
+          if (steepA < 0) walkTop = Math.max(walkTop, bank.heightAt(x, z) - hf.heightAt(x, z));
+        }
+        return { o: [p.x, p.y, p.z], k, walkTop, steepA, steepB };
+      }, f);
+      const restore = () => t.G(() => {
+        const x = window.__PHYS_TEST__, ph = window.__GAME__.ctx.physics;
+        if (!x) return;
+        if (ph.heightfield === x.bank) ph.heightfield = x.orig;
+        x.mesh.removeFromParent(); x.mesh.geometry.dispose(); x.mesh.material.dispose(); window.__PHYS_TEST__ = null;
+      });
+      try {
+        await t.frames(2);
+        const along = (q) => (q[0] - c.o[0]) * f[0] + (q[2] - c.o[2]) * f[1];
+        const rise = (s) => t.page.evaluate((pts) => { const x = window.__PHYS_TEST__; return pts.map((q) => [q[1] - x.orig.heightAt(q[0], q[2]), q[1] - x.bank.heightAt(q[0], q[2])]); }, s.map((q) => q.pos));
+        // 1. run at it, jumping (held 0.45 s, full height) whenever she can, for 3 s of game time
+        await recStart(t);
+        const t0 = await t.G(() => window.__GAME__.game.time);
+        await t.page.keyboard.down('KeyW');
+        try {
+          for (let i = 0; i < 40 && (await t.G(() => window.__GAME__.game.time)) - t0 < 3; i++) {
+            await t.page.keyboard.down('Space'); await t.wait(450); await t.page.keyboard.up('Space'); await t.wait(60);
+          }
+        } finally { await t.page.keyboard.up('KeyW'); await t.page.keyboard.up('Space'); }
+        const hop = await recStop(t);
+        const hr = await rise(hop);
+        const maxRise = Math.max(...hr.map((r) => r[0])), under = hr.filter((r) => r[1] < -1e-3).length;
+        const apex = 7.4 ** 2 / (2 * 22);
+        t.assert(hop.length > 20 && Math.max(...hop.map((s) => along(s.pos))) > 1.5, `she never reached the bank (furthest ${Math.max(...hop.map((s) => along(s.pos))).toFixed(2)} m)`);
+        t.assert(maxRise < c.walkTop + apex + 0.15, `climbed the 60° bank by hopping: ${maxRise.toFixed(2)} m above the old ground (walkable foot ${c.walkTop.toFixed(2)} + one jump ${apex.toFixed(2)})`);
+        t.assert(under === 0, `${under} frames with her feet under the bank`);
+        // 2. put her high on the steep run and hold W into it: she still slides down to its foot
+        t.assert(c.steepB - c.steepA > 1, `setup: steep run ${c.steepA.toFixed(2)}..${c.steepB.toFixed(2)} m`);
+        await t.G(([c, f]) => {
+          const g = window.__GAME__, T = g.THREE, u = c.steepA + 0.7 * (c.steepB - c.steepA), x = c.o[0] + f[0] * u, z = c.o[2] + f[1] * u;
+          g.ctx.player.teleport({ pos: new T.Vector3(x, window.__PHYS_TEST__.bank.heightAt(x, z) + 0.02, z), facing: Math.atan2(f[0], f[1]) });
+        }, [c, f]);
+        // a still of her on the bank (time frozen; the collider overlay draws her orange while she isn't grounded)
+        await t.frames(2);
+        await t.G(() => { const g = window.__GAME__; g.game.setTimeScale(0); g.ctx.physics.setDebug(true); });
+        try { await t.frames(3); await shot(t, 'cliff'); }
+        finally { await t.G(() => { const g = window.__GAME__; g.ctx.physics.setDebug(false); g.game.setTimeScale(1); }); }
+        await recStart(t);
+        await walkAlong(t, c.o, f, 1e9, 2.0);
+        const sl = await recStop(t);
+        const sr = await rise(sl);
+        const end = sr[sr.length - 1], last = sl[sl.length - 1];
+        t.assert(sl.some((s) => s.sl), 'never flagged sliding on the 60° bank');
+        t.assert(last.onGround && end[0] < c.walkTop + 0.05, `held on the bank while steering into it: ${end[0].toFixed(2)} m up at ${along(last.pos).toFixed(2)} m (walkable foot ${c.walkTop.toFixed(2)} m)`);
+        t.assert(sr.every((r) => r[1] > -1e-3), 'feet under the bank while sliding');
+        t.log(`cliff: hopping topped out ${maxRise.toFixed(2)} m above the old ground (walkable foot ${c.walkTop.toFixed(2)} + jump ${apex.toFixed(2)}); from high on the bank she slid down to ${end[0].toFixed(2)} m in ${sl.findIndex((s) => s.onGround && !s.sl)} frames while steering into it`);
+      } finally { await restore(); }
     },
   },
 ];

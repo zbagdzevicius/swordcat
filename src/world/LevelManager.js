@@ -92,7 +92,8 @@ export class LevelManager {
       } catch (e) { console.warn('[levels] shader pre-compile failed', e); }
       this.loading = false;
       bus.emit(E.LEVEL_LOADED, { id, level, spawnId });
-      if (level.music?.explore) bus.emit(E.MUSIC, { track: level.music.explore, fade: 1.5 });
+      const track = this.pickMusic(level.music);
+      if (track) bus.emit(E.MUSIC, { track, fade: 1.5 });
       return level;
     } finally {
       this.loading = false;
@@ -120,6 +121,13 @@ export class LevelManager {
     if (typeof env === 'string') return env;
     for (const [cond, name] of env.byFlag ?? []) if (this.ctx.state?.cond?.(cond) && ENV_PRESETS[name]) return name;
     return env.default ?? 'meadow_day';
+  }
+
+  /** Explore track on load: the first `music.byFlag` [cond, track] row that holds (meadow prologue), else `explore`. */
+  pickMusic(music) {
+    if (!music) return null;
+    for (const [cond, track] of music.byFlag ?? []) if (this.ctx.state?.cond?.(cond)) return track;
+    return music.explore ?? null;
   }
 
   /** Level anchor or spawn by name → { pos, facing } (null if unknown). */

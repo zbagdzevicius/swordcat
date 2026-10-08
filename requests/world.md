@@ -58,8 +58,10 @@ Additive (world):
 - `spawnKitten` calls from the meadow: noodle `('meow', {prop: 'barrel'})` at (−30, −26); button `('stand', {standTime: 3,
   zoneR: 1.2, needClear: 'stones'})` at (−20, −4); biscuit `('meow', {})` at (41.5, 30) behind the Crow Fields cow critter
   (`cow_fields`, wakes on Meow and walks 6 m north); mochi `('cage', {hp: 30, needClear: 'bridge', play: 'd01', cage:
-  'cart', y: 1.05, facing: π})` at (30, 74.5) on the `env/town/cart-high` model (bed ≈ 1.05 m). Kittens are only placed
-  after `prologue.done`; already rescued ones / an unlocked Mochi are skipped.
+  'cart', facing: π})` at (30, 74) — no `y`, so you build the whole cage cart (as asked). While Mochi is caged our
+  `cart-high` there is hidden and its collider removed; it only stands as the empty cart once he is in the party
+  (`state.companions.unlocked` has 'mochi' or flag `meadow.mochi`). Kittens are only placed after `prologue.done`;
+  already rescued ones / an unlocked Mochi are skipped.
 
 ## To core
 - Optional: `ctx.postfx.setGrade(name)` ('none' | 'grey' | 'gold' | 'night'); Env calls it every frame when it exists (the
@@ -68,9 +70,38 @@ Additive (world):
 ## To camera
 - Trees and the practice-field fences are `InstancedMesh`es tagged `userData.camFade = true`; all other static props
   are one `BatchedMesh` per level (`props:<id>`, `userData` not fadeable) — tall batched props are kept off the path.
+- Tree trunk colliders now carry `camFade: true` (as asked).
 
 ## To audio
-- World plays (ids, not paths): `world/wood_hit_01`, `world/wood_hit_02`, `world/wood_breaking_01`, `world/wood_breaking_02`,
-  `world/creak2`, `impact/impactSoft_medium_000`, `impact/impactPunch_heavy_000`, `impact/impactPunch_heavy_001`,
-  `creature/animal_moo`, `jingles/jingles_STEEL00` (arena clear). Music requests via `audio:music`: explore on load,
-  combat / boss on arena lock, explore 4 s after a clear. `level.music.prologue` = `village_bards_tale` for the prologue.
+- Hit sounds: every level PropActor has `material` (`dummy`/`sack` straw, `wobble_knight` armour, `crate`/`barrel`/
+  `rope_post` wood, `boulder` stone) and world plays no hit sounds of its own any more. Barrels are `kind: 'barrel'`
+  (crates `'crate'`; both tagged `crate`). Breaking emits `fx:burst {kind: 'crate' | 'barrel'}` (your crateBreak); the
+  tutorial swingers keep their attack rows on `atk`, not `def`, so `actorTypeId()` gets their `kind`.
+- World still plays (ids): `world/wood_breaking_02` (rope post snaps), `world/creak2` (practice gate), `impact/
+  impactPunch_heavy_001` (cracked boulder), `creature/animal_moo` (cows), `jingles/jingles_STEEL00` (arena clear).
+- Music via `audio:music`: on load the first `level.music.byFlag` [cond, track] row that holds, else `explore` — meadow
+  plays `village_bards_tale` while `!prologue.done`, then `field_of_dreams`; combat / boss on arena lock; explore 4 s
+  after a clear.
+
+## M1 update (2026-10-08, world)
+- Crossroads: the drystone walls now follow the carved lane 4 m to its sides (they used to stand on the path) and stay
+  out of the Standing Stones arena; the `rat_xbow` perch moved onto the south-west wall top: (−25.35, −32.45), y 1.2.
+- `enemy:died`: Pickups drops exactly the payload's `fish` / `smallHeart` (as enemies asked); a numeric boss `fish` row
+  drops gold fish (value 10).
+
+## To fx
+- Ambient mist cards cut a hard horizontal line where a card meets the ground (very visible on the flat practice field
+  in the day preset: a lighter band above the line, darker grass below). A soft-particle fade (compare the card's depth
+  with the scene depth over ~1 m) or a vertical alpha ramp on the card's bottom 30% would hide it. Repro:
+  `?test&level=meadow&spawn=start`, set flag `prologue.done`, reload the level, stand at (9, −64) facing yaw 2.5.
+
+## To story (M1 update)
+- Crow Fields hints are shown by world (§12.3 triggers column): `tut.pounce` on the first `enemy:alerted` of a crow and
+  `tut.reflect` on the first `combat:telegraph` of a rat_xbow, as `ui:toast {text, icon: 'hint', key}`, once per save
+  (flags `seen.tut.pounce` / `seen.tut.reflect`, set before the toast). If tutorial.js takes them over, check / set the
+  same flags and we never double up.
+
+## To core
+- `core:boot` fails now that real assets load: `Assets` emits `ui:progress` once per URL (195 of the 200 ring-buffer
+  slots right after boot), so `game:ready` / `level:loaded` scroll out of `__GAME__.events`. Throttle `E.PROGRESS`
+  (e.g. every 5 % or 100 ms, plus the last one) or keep `ui:progress` out of the ring buffer.

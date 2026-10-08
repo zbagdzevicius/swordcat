@@ -81,9 +81,15 @@ export class AttackTokens {
    * @param {(actor:any) => boolean} keep
    */
   prune(keep) {
-    for (const set of [this.melee, this.ranged]) for (const a of set) if (!keep(a)) { set.delete(a); this._since.delete(a); }
+    this._pruneSet(this.melee, keep);
+    this._pruneSet(this.ranged, keep);
     const now = this.clock();
     for (const [a, w] of this.waiting) if (!keep(a) || now - w.last > COMBAT.tokenStale * 4) this.waiting.delete(a);
+  }
+
+  /** @param {Set<any>} set @param {(actor:any) => boolean} keep */
+  _pruneSet(set, keep) {
+    for (const a of set) if (!keep(a)) { set.delete(a); this._since.delete(a); }
   }
 
   /**

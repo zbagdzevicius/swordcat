@@ -34,7 +34,9 @@ Add `cam: true` to a thin collider that must block, and `cam: false` to a big on
 - `await ctx.cam.shot(step)`: pass the `cam` step object as-is (`preset`, `pos`, `look`, `anchor`, `target`, `fov`, `mode`, `path`, `dur`, `ease`, `noise`, `roll`, plus `r`/`h`/`degPerSec` or `orbit: {r, h, degPerSec}` for orbit shots). It resolves after `dur`, or straight away for `cut`. `look` may be an actor id or an anchor name, e.g. the long lens on `bell_far`. `path` takes anchor names or `[x, y, z]` world points.
 - The `WHIP_FALL` landing pose holds until the next `cam` step (CS-03 shot 4, "sideways, static").
 - `MEME_LOOP` shots (CS-00 title loop, CS-02 shot 7) loop seamlessly. `ctx.cam.memeT` and `memePhase` run during these shots too, starting at 0 at the cut.
-- Handback: `ctx.cam.mode('follow', { blend: 0.6 })`. The camera also does this by itself on `E.CUTSCENE_END` when a shot is still held. `end.cam: 'follow'` maps to that call.
+- Handback: `ctx.cam.mode('follow', { blend: 0.6 })`. `end.cam: 'follow'` maps to that call. As a safety net, the camera also hands back by itself one frame after `E.CUTSCENE_END` if a shot is still held (a cut when `skipped`). An `E.CUTSCENE_START`, `cam.mode()` or `cam.shot()` in that frame cancels this, so a chained scene with `end.cam: false` (CS-09 → CS-10) keeps its shot.
+- If the scene moved her (moveTo, `end.actors.swordcat.pos`) before the handback, the 0.6 s blend still plays. A teleport after the handback (`end.player.spawn`, `end.load`) cuts instead of sweeping across the map.
+- Every authored shot stays at least 0.1 m above the terrain. For example, `HERO_LOW` at 0.35 m on a slope is lifted, and the look point is kept.
 - Skipping: `ctx.cam.mode('follow', { blend: false })` cuts straight back with no blend.
 - Timelines run in sim time: they slow down with `time` steps and freeze in the pause menu.
 
@@ -46,6 +48,9 @@ Add `cam: true` to a thin collider that must block, and `cam: false` to a big on
 
 ## characters / fx / world: Meme Cam loop sync (§7.8)
 `ctx.cam.memeT` (0..3.8 s), `ctx.cam.memePhase` (0..1) and `ctx.cam.memeLooping` (bool) are valid during the Meme Cam and during any MEME_LOOP shot. Drive the cape sway shader (gust peak at 1.2 s), the grass wind and the mist cards from `memeT` so they loop with the camera sway.
+
+## player: Meme Cam in tight spots
+The Meme Cam frames `MEME_LOOP` straight in front of her face. When a wall, fence, trunk or rock blocks that view (it tests a 0.12 m sphere from her eyes to the lens), the camera rotates the framing around her by 20°, 40° or 60°, whichever is clear first, and holds that 3/4 view. Her Oath pose still faces `player.facing`; nothing is needed from you. `ctx.cam.memeYawOffset(player)` returns the angle the camera would use, and `ctx.cam.mode('meme', { yawOffset })` forces one.
 
 ## ui
 `ctx.cam.showLockMarker = false` hides the camera's gold lock gem, in case ui draws its own reticle.

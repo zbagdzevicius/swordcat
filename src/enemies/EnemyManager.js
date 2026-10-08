@@ -8,9 +8,10 @@
 // any other Appendix A ENEMIES key, and a generic grunt (with a warning) for unknown ids.
 //
 // Rules owned here:
-//   - §8.3 arena budget: at most `quality.maxEnemies` (8; 6 on Low) AI enemies alive at once. Extra spawns wait
-//     dormant (invisible, unregistered) and wake, with a spawn poof, as slots free up. Scripted / AI-less cutscene
-//     actors and bosses never count and are never held back.
+//   - §8.3 arena budget: at most `quality.maxEnemies` (8; 6 on Low) AI enemies alive in one fight. A fight = the
+//     enemies within TUNING.capRadius of the spawn point plus every alerted one (an idle squad in a far zone of the
+//     level never holds back an arena wave). Extra spawns wait dormant (invisible, unregistered) and wake, with a
+//     spawn poof, as slots free up. Scripted / AI-less cutscene actors and bosses never count and are never held.
 //   - §7.7 Meow: unalerted enemies within PLAYER.meow.aggroRadius turn and alert.
 //   - Pack alerts: idle pack-mates near an alerted enemy join after a short beat (TUNING.groupAlert*).
 //   - A cutscene interrupts every free (non-scripted) enemy's attack: telegraphs end, tokens are released.
@@ -140,6 +141,22 @@ export class EnemyManager {
     return n;
   }
 
+  /**
+   * Budget enemies in the fight around `pos` (§8.3): alerted ones anywhere, the rest within TUNING.capRadius of `pos`.
+   * @param {{x: number, z: number}} pos @param {Enemy|null} [skip]
+   */
+  countNear(pos, skip = null) {
+    const r2 = TUNING.capRadius * TUNING.capRadius;
+    let n = 0;
+    for (let i = 0; i < this.list.length; i++) {
+      const e = this.list[i];
+      if (e === skip || !countsTowardCap(e)) continue;
+      const dx = e.pos.x - pos.x, dz = e.pos.z - pos.z;
+      if (e.alerted || dx * dx + dz * dz <= r2) n++;
+    }
+    return n;
+  }
+
   /** Live enemies of a type id. Returns a new array. */
   byType(type) { return this.list.filter((e) => e.type === type && e.alive); }
 
@@ -151,7 +168,8 @@ export class EnemyManager {
    * @param {{facing?: number, id?: string, runner?: boolean, y?: number, scripted?: boolean, ai?: boolean,
    *          perched?: boolean, grounded?: boolean, cage?: boolean|string, word?: string|null, seed?: number,
    *          home?: any, noCap?: boolean, alerted?: boolean}} [opts]
-   *   y: height above the ground (a crossbowman on a cart: `{ y: 1.2 }` → perched); scripted: cutscene actor from the
+   *   y: height above the ground (a crossbowman on a cart: `{ y: 1.2 }` → perched; it stands on the nearest walkable
+   *   top of about that height within TUNING.perch.search m, else floats at ground + y); scripted: cutscene actor from the
    *   start; ai: false = never thinks (CS-02 cast); cage / word: hyena dressing; alerted: spawn already fighting.
    * @returns {Enemy}
    */
@@ -162,14 +180,14 @@ export class EnemyManager {
     const p = new THREE.Vector3();
     if (!toPos(ctx, pos, p)) p.copy(ctx.player?.pos ?? _v.set(0, 0, 0)).setY(NaN);
     const ground = this._groundAt(p.x, p.z, Number.isFinite(p.y) ? p.y : undefined);
-    if (opts.y) p.y = ground + opts.y;
+    if (opts.y) { if (!this.findPerch(p, opts.y)) p.y = ground + opts.y; }
     else p.y = Number.isFinite(p.y) ? Math.max(p.y, ground) : ground;
     const facing = opts.facing ?? (ctx.player ? Math.atan2(ctx.player.pos.x - p.x, ctx.player.pos.z - p.z) : 0);
     const Cls = def.boss ? Boss : Enemy;
     const e = new Cls(ctx, def, { ...opts, pos: p, facing, y: opts.y ?? 0 });
     if (opts.home) toPos(ctx, opts.home, e.home);
     if (opts.ai === false) e.ai = false;
-    const held = !opts.noCap && !def.boss && !opts.scripted && e.ai && !e.tags.has('cutscene') && TUNING.pending && this.count() >= this.cap;
+    const held = !opts.noCap && !def.boss && !opts.scripted && e.ai && !e.tags.has('cutscene') && TUNING.pending && this.countNear(p) >= this.cap;
     this.list.push(e);
     e.object3d.name = `enemy:${def.id}#${e.id}`;
     ctx.scene.add(e.object3d);
@@ -314,6 +332,28 @@ export class EnemyManager {
     }
   }
 
+  /**
+   * Perch for a `{ y }` spawn: the nearest walkable top (wall, cart bed, hay bale) whose height above the terrain is
+   * within [y × minFrac, y + slack], searched on rings out to TUNING.perch.search m. Moves `p` onto it and returns
+   * true; false when the level has nothing there (the shooter then hovers at ground + y, as before).
+   * @param {THREE.Vector3} p in/out @param {number} h requested height above the terrain
+   */
+  findPerch(p, h) {
+    const ph = this.ctx.physics;
+    if (typeof ph?.groundAt !== 'function' || !(h > 0)) return false;
+    const P = TUNING.perch, x0 = p.x, z0 = p.z;
+    for (let r = 0; r <= P.search + 1e-6; r += P.ring) {
+      const n = r === 0 ? 1 : Math.max(8, Math.ceil((Math.PI * 2 * r) / P.arc));
+      const a0 = Math.atan2(-x0, -z0);                       // deterministic start angle per spot
+      for (let i = 0; i < n; i++) {
+        const a = a0 + (i / n) * Math.PI * 2, x = x0 + Math.sin(a) * r, z = z0 + Math.cos(a) * r;
+        const t = ph.heightAt?.(x, z) ?? 0, top = ph.groundAt(x, z, t + h + P.slack);
+        if (top - t >= h * P.minFrac && top - t <= h + P.slack) { p.set(x, top, z); return true; }
+      }
+    }
+    return false;
+  }
+
   _groundAt(x, z, fromY) {
     const ph = this.ctx.physics;
     if (!ph) return 0;
@@ -328,11 +368,13 @@ export class EnemyManager {
     this.ctx.actors.register(e, id ?? e.spawnOpts?.id);
   }
 
-  /** Wake held spawns while the budget has room (each with the arena spawn poof). */
+  /** Wake held spawns (oldest first) whose fight has a free slot, each with the arena spawn poof. */
   _drainPending() {
-    while (this.pending.length && this.count() < this.cap) {
-      const e = this.pending.shift();
-      if (!e.alive || e.disposed) continue;
+    for (let i = 0; i < this.pending.length; i++) {
+      const e = this.pending[i];
+      if (!e.alive || e.disposed) { this.pending.splice(i--, 1); continue; }
+      if (this.countNear(e.pos) >= this.cap) continue;
+      this.pending.splice(i--, 1);
       this._activate(e);
       e.snap();
       this.ctx.bus.emit(E.BURST, { kind: 'spawn', position: e.pos.clone() });

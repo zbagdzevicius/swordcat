@@ -18,6 +18,17 @@ const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quater
 const _ax = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 let _teleId = 5000000;
 
+/** Hit-sound material per PropActor kind (audio plays it on combat:hit; world adds no hit sounds of its own). */
+export const PROP_MATERIAL = Object.freeze({ dummy: 'straw', sack: 'straw', wobble_knight: 'armour', crate: 'wood', barrel: 'wood',
+  rope_post: 'wood', post: 'wood', boulder: 'stone', lock: 'metal', cage: 'metal' });
+
+/** A plain (non-interleaved) copy of a buffer attribute (meshopt GLBs ship interleaved ones; `clone()` warns on those). */
+export function plainAttribute(a) {
+  const n = a.count, k = a.itemSize, out = new Float32Array(n * k);
+  for (let i = 0; i < n; i++) for (let j = 0; j < k; j++) out[i * k + j] = a.getComponent(i, j);
+  return new THREE.BufferAttribute(out, k);
+}
+
 /** Is `att` the player (or a projectile she owns)? */
 export const byPlayer = (att) => att?.faction === 'player' || att?.owner?.faction === 'player' || att?.tags?.has?.('player');
 
@@ -30,6 +41,8 @@ export class PropActor extends Actor {
     super(ctx, { faction: o.faction ?? 'neutral', radius: o.radius ?? 0.4, height: o.height ?? 1, maxHp: o.hp ?? 1, mass: 50, maxPoise: 99 });
     this.kind = o.kind ?? 'prop';
     this.propId = o.id ?? null;
+    /** hit-sound material for audio (straw | wood | stone | armour | metal | rope); overrides the per-kind default */
+    this.material = o.material ?? PROP_MATERIAL[this.kind] ?? 'wood';
     this.breakable = o.breakable !== false;
     this.tags.add('prop').add(this.kind);
     for (const t of o.tags ?? []) this.tags.add(t);
@@ -109,7 +122,8 @@ export class SwingingSack extends PropActor {
     this.hurtable = false;
     this.pivot = o.pivot.clone();          // top of the rope (world)
     this.rope = 1.8; this.amp = o.amp ?? 0.85; this.axis = o.axis ?? 'x';
-    this.def = ATTACKS.sack_swing;
+    /** the swing's ATTACKS row (not `def`: audio / ui read `actor.def.id` as an enemy type) */
+    this.atk = ATTACKS.sack_swing;
     this.t = o.phase ?? 0; this.hitCd = 0;
     this.sackPos = new THREE.Vector3();
     this.mesh = o.mesh ?? null;             // own Object3D (rope + sack), rotated about the pivot
@@ -117,7 +131,7 @@ export class SwingingSack extends PropActor {
   }
 
   _place() {
-    const th = this.amp * Math.sin((this.t / this.def.period) * Math.PI * 2);
+    const th = this.amp * Math.sin((this.t / this.atk.period) * Math.PI * 2);
     const sx = Math.sin(th) * this.rope, sy = -Math.cos(th) * this.rope;
     this.sackPos.set(this.pivot.x + (this.axis === 'x' ? sx : 0), this.pivot.y + sy, this.pivot.z + (this.axis === 'z' ? sx : 0));
     this.pos.set(this.sackPos.x, this.sackPos.y - 0.3, this.sackPos.z);
@@ -131,10 +145,10 @@ export class SwingingSack extends PropActor {
     const p = this.ctx.player;
     if (!p?.alive || this.hitCd > 0) return;
     const dx = p.pos.x - this.sackPos.x, dz = p.pos.z - this.sackPos.z;
-    const yIn = this.sackPos.y - this.def.r < p.pos.y + p.height && this.sackPos.y + this.def.r > p.pos.y;
-    if (yIn && Math.hypot(dx, dz) < this.def.r + p.radius) {
+    const yIn = this.sackPos.y - this.atk.r < p.pos.y + p.height && this.sackPos.y + this.atk.r > p.pos.y;
+    if (yIn && Math.hypot(dx, dz) < this.atk.r + p.radius) {
       this.hitCd = 0.6;
-      this.ctx.combat?.applyHit?.(this, p, this.def);
+      this.ctx.combat?.applyHit?.(this, p, this.atk);
     }
   }
 
@@ -153,7 +167,7 @@ export class SwingingSack extends PropActor {
 export class WobbleKnight extends PropActor {
   constructor(ctx, o) {
     super(ctx, { ...o, kind: 'wobble_knight', infinite: true, hp: 999, radius: 0.45, height: 1.3 });
-    this.def = ATTACKS.dummy_swing;
+    this.atk = ATTACKS.dummy_swing;
     this.timer = o.delay ?? 1.0; this.phase = 'idle'; this.phaseT = 0;
     this.spinT = 0; this.spin = 0; this.arm = 0;
     this.active = o.active ?? (() => true);
@@ -162,14 +176,14 @@ export class WobbleKnight extends PropActor {
   }
 
   /** Combat calls this when the player parries the swing. */
-  onParried() { this.spinT = this.def.parriedSpin ?? 1.0; this.phase = 'idle'; this.timer = this.def.every; this._endTele(); }
+  onParried() { this.spinT = this.atk.parriedSpin ?? 1.0; this.phase = 'idle'; this.timer = this.atk.every; this._endTele(); }
   onBlocked() {}
 
   _endTele() { if (this.teleId) { this.ctx.bus.emit(E.TELEGRAPH_END, { id: this.teleId }); this.teleId = 0; } }
 
   update(dt) {
     super.update(dt);
-    const p = this.ctx.player, d = this.def;
+    const p = this.ctx.player, d = this.atk;
     if (this.spinT > 0) { this.spinT -= dt; this.spin += dt * 14 * Math.max(0.2, this.spinT); return; }
     const near = p?.alive && Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < 5 && this.active();
     if (near) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 4, dt);
@@ -206,7 +220,7 @@ export class WobbleKnight extends PropActor {
   }
 
   _inArc(p) {
-    const a = this.def.arc, dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, dist = Math.hypot(dx, dz);
+    const a = this.atk.arc, dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, dist = Math.hypot(dx, dz);
     if (dist > a.range + p.radius) return false;
     const ang = wrapAngle(Math.atan2(dx, dz) - this.facing);
     return Math.abs(ang) <= Math.max(Math.abs(a.from), Math.abs(a.to)) + 0.3;
@@ -240,8 +254,8 @@ export function mergeSkinnedMeshes(root) {
   const geos = list.map((m) => {
     const src = m.geometry, g = new THREE.BufferGeometry();
     const n = src.attributes.position.count;
-    g.setAttribute('position', src.attributes.position.clone());
-    g.setAttribute('normal', src.attributes.normal ? src.attributes.normal.clone() : new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    g.setAttribute('position', plainAttribute(src.attributes.position));
+    g.setAttribute('normal', src.attributes.normal ? plainAttribute(src.attributes.normal) : new THREE.BufferAttribute(new Float32Array(n * 3), 3));
     const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
     for (let i = 0; i < n; i++) for (let k = 0; k < 4; k++) { si[i * 4 + k] = src.attributes.skinIndex.getComponent(i, k); sw[i * 4 + k] = src.attributes.skinWeight.getComponent(i, k); }
     g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));

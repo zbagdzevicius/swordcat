@@ -242,7 +242,7 @@ export const levels = {
     'audio/sfx/impact/impactWood_medium_001.ogg', 'audio/sfx/impact/impactWood_medium_002.ogg',
     'audio/sfx/impact/impactWood_medium_003.ogg', 'audio/sfx/impact/impactWood_medium_004.ogg',
     'audio/sfx/sword/sword_unsheathe.ogg', 'audio/sfx/sword/sword_unsheathe2.ogg', 'audio/sfx/ui/drop_001.ogg',
-    'audio/sfx/world/creak1.ogg', 'audio/sfx/world/lock_open_01.ogg',
+    'audio/sfx/world/creak1.ogg', 'audio/sfx/world/creak2.ogg', 'audio/sfx/world/lock_open_01.ogg',
   ],
   forest: [
     'audio/sfx/creature/c80_bug_01.ogg', 'audio/sfx/creature/c80_bug_02.ogg', 'audio/sfx/creature/c80_bug_03.ogg',

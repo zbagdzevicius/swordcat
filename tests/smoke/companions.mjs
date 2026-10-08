@@ -46,6 +46,47 @@ const stage = (t, x = -4, z = -50, facing = 0) => t.G(([sx, sz, f]) => {
 
 const clearEnemies = (t) => t.G(() => { const c = window.__GAME__.ctx; for (const e of [...(c.enemies.list ?? [])]) c.enemies.despawn?.(e); });
 
+/** Screenshot with one retry: on a loaded machine page.screenshot can time out once while the GPU catches up. */
+const shot = async (t, name) => {
+  try { return await t.shot(name); } catch (e) { t.warn(`screenshot ${name} retry: ${String(e?.message ?? e).split('\n')[0]}`); await t.wait(1500); return t.shot(name); }
+};
+
+/**
+ * Poll `cond` (a page function → truthy) until it holds, `sim` seconds of game time pass, or `real` ms of wall clock
+ * pass (a loaded machine runs the sim slower than the wall clock, so waits are measured in game time). → last value.
+ */
+const until = async (t, cond, arg, { sim = 6, real = 60000, every = 200 } = {}) => {
+  const t0 = await t.G(() => window.__GAME__.game.time), r0 = Date.now();
+  let v = await t.G(cond, arg);
+  while (!v && Date.now() - r0 < real && (await t.G(() => window.__GAME__.game.time)) - t0 < sim) {
+    await t.wait(every);
+    v = await t.G(cond, arg);
+  }
+  return v;
+};
+
+/** Hold the Stand (L) until `cond` holds or `sim` s of game time pass. */
+const holdStandUntil = async (t, cond, arg, sim = 4.5) => {
+  await t.page.keyboard.down('KeyL');
+  try { return await until(t, cond, arg, { sim, real: 60000, every: 150 }); } finally { await t.page.keyboard.up('KeyL'); }
+};
+
+/** Teleport her to (x, z) on the ground, facing `facing`, camera behind her. */
+const put = (t, x, z, facing = 0) => t.G(([px, pz, f]) => {
+  const g = window.__GAME__, c = g.ctx;
+  c.player.teleport({ pos: new g.THREE.Vector3(px, c.physics.heightAt(px, pz), pz), facing: f });
+  try { c.cam.mode('follow'); c.cam.snapBehind?.(); } catch { /* camera mid-edit */ }
+}, [x, z, facing]);
+
+/** Her Meow at her position (the KeyC input path is covered by companions:kittens). */
+const meow = (t) => t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_MEOW, { position: g.ctx.player.pos.clone() }); });
+
+/** Summary of one lost kitten / caged squire by id. */
+const kitten = (t, id) => t.G((kid) => {
+  const k = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === kid);
+  return k ? { st: k.stateName, hidden: k.hidden, rescued: k.rescued, pos: k.pos.toArray(), hide: k.hide, perchY: k.perchY } : null;
+}, id);
+
 export default [
   {
     name: 'companions:follow', order: 70, level: 'meadow', spawn: 'start', timeout: 120000,
@@ -67,11 +108,18 @@ export default [
       s = await comp(t);
       t.assert(s.dist < 5.5, `Mochi fell behind while she ran (${s.dist.toFixed(2)} m)`);
       t.assert(s.behind < 0, `Mochi should trail behind her while she runs (${s.behind.toFixed(2)})`);
-      await t.shot('companions/follow-run');
-      await t.wait(2200);                                            // she stands still: Mochi comes up beside her
-      s = await comp(t);
+      await shot(t, 'companions/follow-run');
+      // she stands still: Mochi comes up beside her (0.8 s of her standing, then the walk: poll in sim time, since a
+      // loaded machine runs the sim slower than the wall clock)
+      const t0 = await t.G(() => window.__GAME__.game.time);
+      for (let i = 0; i < 40; i++) {
+        await t.wait(200);
+        s = await comp(t);
+        if (s.dist > 0.6 && s.dist < 2.4 && s.state === 'idle') break;
+        if ((await t.G(() => window.__GAME__.game.time)) - t0 > 4) break;
+      }
       t.assert(s.dist > 0.6 && s.dist < 2.4, `Mochi beside her when she stops: ${s.dist.toFixed(2)} m`);
-      await t.shot('companions/follow-still');
+      await shot(t, 'companions/follow-still');
       await t.blankCheck('companions:follow');
       // teleport: far away → he pops back to her side
       await t.G(() => { const g = window.__GAME__, p = g.ctx.player.pos; g.teleport(p.x + 22, p.y, p.z + 4); });
@@ -98,7 +146,7 @@ export default [
       await freeze(t, true);
       await frame(t, [3.2, 1.6, 2.5], [0, 0.5, 3.5], 55);
       await t.wait(300);
-      await t.shot('companions/fight');
+      await shot(t, 'companions/fight');
       await freeze(t, false);
       await follow(t);
       await clearEnemies(t);
@@ -139,10 +187,10 @@ export default [
       }
       t.assert(await t.G(() => window.__GAME__.ctx.companions.useAbility() === false), 'ability fired again during its cooldown');
       await t.wait(150);
-      await t.shot('companions/shield-wall');
+      await shot(t, 'companions/shield-wall');
       await frame(t, [2.6, 1.7, 5.2], [0, 0.6, 1.2], 50);
       await t.wait(250);
-      await t.shot('companions/shield-wall-front');
+      await shot(t, 'companions/shield-wall-front');
       await freeze(t, false);
       await follow(t);
       // 4.0 s of sim time later the wall is down (posts unregistered; the pane fades 0.35 s)
@@ -174,7 +222,7 @@ export default [
       await freeze(t, true);
       await frame(t, [2.2, 1.3, 2.4], [0.6, 0.4, -0.6], 45);
       await t.wait(300);
-      await t.shot('companions/nap');
+      await shot(t, 'companions/nap');
       await freeze(t, false);
       await follow(t);
       await t.G(() => window.__GAME__.game.setTimeScale?.(4));
@@ -199,7 +247,7 @@ export default [
         c.companions.spawnKitten('button', [p.pos.x, p.pos.z], 'stand', { standTime: 3, zoneR: 1.2 });
       });
       await t.wait(800);
-      await t.shot('companions/kitten-barrel');
+      await shot(t, 'companions/kitten-barrel');
       await t.clearEvents();
       await t.tap('KeyC');                                           // Meow
       let meowed = await t.waitForEvent('player:meow', 4000);
@@ -208,19 +256,19 @@ export default [
         await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_MEOW, { position: g.ctx.player.pos.clone() }); });
         meowed = true;
       }
-      t.assert(await t.waitForEvent('kitten:reveal', 3000), 'a Meow within 10 m did not reveal Noodle');
+      t.assert(await t.waitForEvent('kitten:reveal', 6000), 'a Meow within 10 m did not reveal Noodle');
       await t.wait(900);
-      await t.shot('companions/kitten-reveal');
+      await shot(t, 'companions/kitten-reveal');
       await t.G(() => {
         const g = window.__GAME__, c = g.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'noodle');
         c.player.teleport({ pos: new g.THREE.Vector3(k.pos.x + 0.7, k.pos.y, k.pos.z - 0.7), facing: Math.atan2(-0.7, 0.7) });
       });
-      t.assert(await t.waitForEvent('kitten:rescued', 2000), 'touching the revealed kitten did not rescue it');
+      t.assert(await t.waitForEvent('kitten:rescued', 8000), 'touching the revealed kitten did not rescue it');
       t.assert(await t.G(() => window.__GAME__.ctx.state.kittens.includes('noodle')), 'state.kittens lacks noodle');
       await freeze(t, true);
       await frame(t, [1.4, 1.1, 2.6], [-0.5, 0.65, 0.4], 45);
       await t.wait(350);
-      await t.shot('companions/kitten-rescue');
+      await shot(t, 'companions/kitten-rescue');
       await freeze(t, false);
       await follow(t);
       // Button: stand still in the zone with the Stand up (L held) for 3 s, no enemy near
@@ -231,16 +279,16 @@ export default [
       });
       await t.wait(400);
       await t.clearEvents();
-      await t.hold('KeyL', 3600);                                    // (2.5 s in, the Stand becomes Meme Cam: still counts)
-      const revealed = await t.G(() => !window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'button')?.hidden);
+      // (2.5 s in, the Stand becomes Meme Cam: still counts)
+      const revealed = await holdStandUntil(t, () => !window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'button')?.hidden);
       if (!revealed) {
         const why = await t.G(() => { const p = window.__GAME__.ctx.player; return { guarding: p.guarding, state: p.stateName, v: Math.hypot(p.vel.x, p.vel.z) }; });
         t.fail(`a 3 s Stand in the zone did not reveal Button (player ${JSON.stringify(why)})`);
       }
-      await t.wait(400);
-      await t.shot('companions/kitten-stand');
-      await t.G(() => window.__GAME__.setMode('play'));
+      await t.G(() => window.__GAME__.setMode('play'));               // out of Meme Cam to look at Button
       await follow(t);
+      await t.wait(500);
+      await shot(t, 'companions/kitten-stand');
       t.log('kittens ok: meow reveal, rescue, stand reveal');
     },
   },
@@ -261,7 +309,7 @@ export default [
       t.assert(!ok.lock, 'cage lock is hittable before the arena clears');
       t.assert(ok.id, 'the caged Mochi is not the cutscene actor "mochi"');
       await t.wait(1200);
-      await t.shot('companions/cage-cart');
+      await shot(t, 'companions/cage-cart');
       await t.G(() => window.__GAME__.ctx.bus.emit(window.__GAME__.E.ARENA_CLEAR, { id: 'smoke_bridge' }));
       await t.frames(2);
       const hits = await t.G(() => {
@@ -275,20 +323,16 @@ export default [
       await t.wait(300);
       await freeze(t, true);
       await t.wait(150);
-      await t.shot('companions/cage-open');
+      await shot(t, 'companions/cage-open');
       await freeze(t, false);
-      let joined = false;
-      for (let i = 0; i < 40 && !joined; i++) {
-        await t.wait(250);
-        joined = await t.G(() => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'mochi'; });
-      }
+      const joined = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'mochi'; }, null, { sim: 8, every: 250 });
       t.assert(joined, 'Mochi did not join the party after the cage opened');
       t.assert((await t.events()).includes('companion:changed'), 'companion:changed not emitted on the join');
       t.assert(await t.G(() => window.__GAME__.ctx.state.companions.unlocked.includes('mochi')), 'mochi not unlocked in state');
       await t.G(() => window.__GAME__.setMode('play'));
       await follow(t);
       await t.wait(1600);
-      await t.shot('companions/mochi-joined');
+      await shot(t, 'companions/mochi-joined');
       t.log(`mochi cage ok: ${hits.out.join(', ')}`);
     },
   },
@@ -308,7 +352,7 @@ export default [
       }, v);
       await setFlag('netted');
       let pud = null;
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 120; i++) {                                // the GLB loads on the wall clock
         await t.wait(250);
         pud = await t.G(() => { const p = window.__GAME__.ctx.companions.pudding; return p && { mode: p.mode, model: !!p.model, r: p.radius, fixed: p.fixed, pos: p.pos.toArray() }; });
         if (pud?.model) break;
@@ -319,7 +363,7 @@ export default [
       t.assert(await t.G(() => window.__GAME__.ctx.actors.get('pudding') === window.__GAME__.ctx.companions.pudding), 'actors.get("pudding") mismatch');
       await frame(t, [-2.2, 1.7, -2.5], [2, 1.0, 8], 55);
       await t.wait(400);
-      await t.shot('companions/pudding-netted');
+      await shot(t, 'companions/pudding-netted');
       await t.G(() => window.__GAME__.ctx.bus.emit(window.__GAME__.E.OBJECTIVE, { id: 'net_ropes', value: 2, max: 3 }));
       await t.wait(400);
       t.assert(await t.G(() => window.__GAME__.ctx.companions.pudding.ropesCut === 2), 'net_ropes progress did not reach the net');
@@ -327,16 +371,17 @@ export default [
       await t.wait(900);
       await freeze(t, true);
       await t.wait(150);
-      await t.shot('companions/pudding-free');
+      await shot(t, 'companions/pudding-free');
       await freeze(t, false);
-      for (let i = 0; i < 40; i++) { await t.wait(250); pud = await t.G(() => ({ mode: window.__GAME__.ctx.companions.pudding?.mode, i: window.__GAME__.ctx.companions.pudding?.perchIndex })); if (pud.mode === 'perch') break; }
+      await until(t, () => window.__GAME__.ctx.companions.pudding?.mode === 'perch', null, { sim: 10, every: 250 });
+      pud = await t.G(() => ({ mode: window.__GAME__.ctx.companions.pudding?.mode, i: window.__GAME__.ctx.companions.pudding?.perchIndex }));
       const anchors = await t.G(() => !!window.__GAME__.ctx.levels.anchor?.('pud_1'));
       if (anchors) t.assert(pud.mode === 'perch' && pud.i >= 0, `Pudding did not fly to a perch (${pud.mode})`);
       else t.warn('meadow has no pud_1 anchor yet (world in progress): Pudding stays put');
       await follow(t);
       await t.G(() => { const g = window.__GAME__, c = g.ctx; c.player.teleport({ pos: new g.THREE.Vector3(8, c.physics.heightAt(8, 25), 25), facing: Math.atan2(12, 11) }); c.cam.snapBehind?.(); });
       await t.wait(900);
-      await t.shot('companions/pudding-perch');
+      await shot(t, 'companions/pudding-perch');
       // CS-04 pose + emotes through the ScriptedActor API
       const ok = await t.G(() => { const p = window.__GAME__.ctx.companions.pudding; p.setScripted(true); p.pose('sleep'); p.emote('nod'); const m = p.mode; p.pose('idle'); p.setScripted(false); return m; });
       t.assert(ok === 'sleep', `pose('sleep') → mode ${ok}`);
@@ -364,7 +409,7 @@ export default [
       await t.wait(1500);
       await frame(t, [0.4, 1.2, -1.6], [0, 0.6, 3.5], 55);
       await t.wait(300);
-      await t.shot('companions/npcs');
+      await shot(t, 'companions/npcs');
       // scripted moveTo in cutscene mode (CS-01 style)
       await t.setMode('cutscene');
       const arrived = await t.G(async () => {
@@ -379,6 +424,116 @@ export default [
       t.assert(arrived < 0.3, `scripted moveTo missed by ${arrived.toFixed(2)} m`);
       await follow(t);
       t.log(`npcs ok: ${ids.map((x) => x[0]).join(', ')}`);
+    },
+  },
+  {
+    // Ch. 1 in world's real meadow (§12.3): the zones call spawnKitten after the prologue. Noodle (barrel, Meow),
+    // Biscuit (behind the Crow Fields cow, Meow), Button (stone ring Stand after the arena), Mochi in the cage on
+    // world's cart at the Old Bridge → D-01 → party. Flags / kittens / party are restored afterwards.
+    name: 'companions:meadow', order: 78, level: null, timeout: 240000,
+    async run(t) {
+      shotDir(t);
+      await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, st = c.state;
+        window.__cmpSnap = JSON.stringify({ flags: st.flags, kittens: st.kittens, companions: st.companions });
+        g.story.skip?.(); g.setMode('play'); g.game.setTimeScale?.(1);
+        for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) st.setFlag(k, true);
+        delete st.flags['meadow.pudding']; delete st.flags['meadow.mochi'];
+        st.kittens = []; st.companions = { unlocked: [], active: [] };
+        c.companions.setActive([]);
+      });
+      try {
+        await t.loadLevel('meadow', 'vigil_1');
+        await t.G(() => window.__GAME__.god(true));
+        let ids = [];
+        for (let i = 0; i < 120; i++) {
+          ids = await t.G(() => window.__GAME__.ctx.companions.kittens.map((k) => k.kittenId));
+          if (['noodle', 'button', 'biscuit', 'mochi'].every((id) => ids.includes(id))) break;
+          await t.wait(250);
+        }
+        if (!ids.length) { t.warn('meadow placed no kittens (world zones missing?): skipping the level walk'); return; }
+        t.assert(['noodle', 'button', 'biscuit', 'mochi'].every((id) => ids.includes(id)), `meadow kittens: ${ids.join(', ')}`);
+
+        // Noodle: the barrel at the crossroads; a Meow within 10 m pops him out; touching him rescues him
+        let k = await kitten(t, 'noodle');
+        t.assert(k?.hidden && k.hide === 'meow', `noodle should start hidden in the barrel (${JSON.stringify(k)})`);
+        await clearEnemies(t);
+        await put(t, -26.5, -28.5, Math.atan2(-3.5, 2.5));
+        await t.wait(700);
+        await shot(t, 'companions/meadow-noodle-barrel');
+        await t.clearEvents();
+        await meow(t);
+        t.assert(await t.waitForEvent('kitten:reveal', 6000), 'Meow at the crossroads did not reveal Noodle');
+        await t.wait(1000);
+        await t.G(() => {
+          const g = window.__GAME__, c = g.ctx, n = c.companions.kittens.find((x) => x.kittenId === 'noodle');
+          c.player.teleport({ pos: new g.THREE.Vector3(n.pos.x + 0.8, n.pos.y, n.pos.z - 0.6), facing: Math.atan2(-0.8, 0.6) });
+        });
+        t.assert(await t.waitForEvent('kitten:rescued', 8000), 'Noodle not rescued on contact');
+        await t.wait(400);
+        await shot(t, 'companions/meadow-noodle-rescued');
+
+        // Biscuit: behind the sleeping cow in the Crow Fields; her Meow wakes the cow (world) and reveals Biscuit (us)
+        await clearEnemies(t);
+        await put(t, 36.5, 28.5, Math.atan2(5, 1.5));
+        await t.wait(500);
+        await t.clearEvents();
+        await meow(t);
+        t.assert(await t.waitForEvent('kitten:reveal', 6000), 'Meow in the Crow Fields did not reveal Biscuit');
+        k = await kitten(t, 'biscuit');
+        t.assert(k && !k.hidden, `biscuit still hidden (${JSON.stringify(k)})`);
+        await t.wait(1200);
+        await shot(t, 'companions/meadow-biscuit');
+
+        // Button: the stone ring; only after the `stones` arena is cleared; a 3 s Stand in the centre
+        await t.G(() => { const g = window.__GAME__, a = g.ctx.levels.arena?.('stones'); if (a) a.clear(); else g.ctx.bus.emit(g.E.ARENA_CLEAR, { id: 'stones' }); });
+        await clearEnemies(t);
+        await put(t, -20, -3.7, 0);
+        await t.wait(400);
+        await t.clearEvents();
+        await holdStandUntil(t, () => !window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'button')?.hidden);
+        k = await kitten(t, 'button');
+        t.assert(k && !k.hidden, `a 3 s Stand in the stone ring did not reveal Button (${JSON.stringify(k)})`);
+        await t.G(() => window.__GAME__.setMode('play'));
+        await t.wait(500);
+        await shot(t, 'companions/meadow-button');
+
+        // Mochi: the cage cart at the Old Bridge (ours: cart + bars; or the level's cart when world passes its bed height
+        // `y`: bars only), opens after the bridge arena
+        k = await kitten(t, 'mochi');
+        t.assert(k?.st === 'caged' && k.perchY > 0.3, `mochi should sit caged on a cart bed (${JSON.stringify(k)})`);
+        const cart = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { ours: !!m?.cartCollider || !!m?.cart, y: m?.opts?.y ?? null }; });
+        t.assert(!(cart.ours && cart.y > 0), 'built our own cart although the level gave a bed height (two carts)');
+        t.log(`bridge cage on ${cart.ours ? 'our cart' : `the level's cart (bed ${cart.y} m)`}`);
+        await t.G(() => { const g = window.__GAME__, a = g.ctx.levels.arena?.('bridge'); if (a) a.clear(); else g.ctx.bus.emit(g.E.ARENA_CLEAR, { id: 'bridge' }); });
+        await clearEnemies(t);
+        await put(t, 28.2, 70.2, Math.atan2(1.8, 4.3));
+        await t.wait(900);
+        await shot(t, 'companions/meadow-cage');
+        const hits = await t.G(() => {
+          const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi'), out = [];
+          for (let i = 0; i < 6 && !m.lock.opened; i++) { m.lock.invulnT = 0; out.push(c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.slash1)); }
+          return { out, opened: m.lock.opened };
+        });
+        t.assert(hits.opened, `her slashes did not open the cage (${hits.out.join(', ')})`);
+        const joined = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'mochi'; }, null, { sim: 8, every: 250 });
+        t.assert(joined, 'Mochi did not join after the bridge cage opened');
+        await t.G(() => window.__GAME__.setMode('play'));
+        await follow(t);
+        await t.wait(1500);
+        await shot(t, 'companions/meadow-mochi-joined');
+        const st = await t.G(() => ({ kittens: [...window.__GAME__.ctx.state.kittens], unlocked: [...window.__GAME__.ctx.state.companions.unlocked] }));
+        t.assert(st.kittens.includes('noodle'), `state.kittens ${st.kittens}`);
+        t.assert(st.unlocked.includes('mochi'), `unlocked ${st.unlocked}`);
+        t.log(`meadow ok: kittens ${st.kittens.join(', ')}; mochi joined (${hits.out.join(', ')})`);
+      } finally {
+        await t.G(() => {
+          const g = window.__GAME__, c = g.ctx, s = JSON.parse(window.__cmpSnap ?? 'null');
+          g.god(false); g.game.setTimeScale?.(1);
+          if (s) { c.state.flags = s.flags; c.state.kittens = s.kittens; c.state.companions = s.companions; }
+          c.companions.setActive(c.state.companions?.active ?? []);
+        });
+      }
     },
   },
 ];

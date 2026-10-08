@@ -84,6 +84,7 @@ function bakeMesh(mesh, rootInv, o) {
     for (const g of src.groups) for (let k = g.start; k < g.start + g.count; k++) vMat[idx ? idx.getX(k) : k] = g.materialIndex ?? 0;
   }
   const flat = o.flatColor ? new THREE.Color(o.flatColor) : null;
+  const tint = o.tint ? new THREE.Color(o.tint) : null;
   for (let i = 0; i < n; i++) {
     if (mesh.isSkinnedMesh) mesh.getVertexPosition(i, _v); else _v.fromBufferAttribute(src.attributes.position, i);
     _v.applyMatrix4(_m);
@@ -98,6 +99,7 @@ function bakeMesh(mesh, rootInv, o) {
       if (mat?.map && uvAttr) { const px = pixelsOf(mat.map); if (px) _col.multiply(sampleTexture(px, mat.map, uvAttr.getX(i), uvAttr.getY(i), _c2)); }
       if (cAttr) _col.multiply(_c2.fromBufferAttribute(cAttr, i));
       gradeColor(_col, o.sat ?? (mat?.map ? 0.78 : 1), o.mul ?? 1);
+      if (tint) _col.multiply(tint);
     }
     col[i * 3] = _col.r; col[i * 3 + 1] = _col.g; col[i * 3 + 2] = _col.b;
   }
@@ -127,7 +129,7 @@ function bakeMesh(mesh, rootInv, o) {
 /**
  * Bake an Object3D (a cached glTF scene or a posed clone) into a PropTemplate.
  * @param {THREE.Object3D} root
- * @param {{key?:string, hide?:string[], dynamic?:string[], recolor?:boolean, recolorMap?:object, sat?:number, mul?:number, flatColor?:string, flatNormals?:boolean}} [o]
+ * @param {{key?:string, hide?:string[], dynamic?:string[], recolor?:boolean, recolorMap?:object, sat?:number, mul?:number, tint?:string, flatColor?:string, flatNormals?:boolean}} [o]
  * @returns {PropTemplate}
  */
 export function templateFromObject(root, o = {}) {
@@ -208,6 +210,87 @@ export function templateFromGeometry(key, geometry, color) {
   return { key, geometry: out, box: out.boundingBox.clone(), parts: [] };
 }
 
+// ------------------------------------------------------------------ materials
+const NOISE_GLSL = /* glsl */`
+float wdH(vec2 p) { p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
+float wdN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(wdH(i), wdH(i + vec2(1.0, 0.0)), f.x), mix(wdH(i + vec2(0.0, 1.0)), wdH(i + vec2(1.0, 1.0)), f.x), f.y); }
+`;
+
+/** Shared world-position varyings for the patches below (instancing / batching aware via worldpos_vertex). */
+function patchWorldPos(sh) {
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWdPos;\nvarying vec3 vWdNrm;')
+    .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+{
+  vec4 wdp = vec4(transformed, 1.0);
+  vec3 wdn = objectNormal;
+  #ifdef USE_BATCHING
+    wdp = batchingMatrix * wdp; wdn = mat3(batchingMatrix) * wdn;
+  #endif
+  #ifdef USE_INSTANCING
+    wdp = instanceMatrix * wdp; wdn = mat3(instanceMatrix) * wdn;
+  #endif
+  vWdPos = (modelMatrix * wdp).xyz;
+  vWdNrm = mat3(modelMatrix) * wdn;
+}`);
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWdPos;\nvarying vec3 vWdNrm;\n' + NOISE_GLSL);
+}
+
+/**
+ * Subtle world-space value noise on a vertex-coloured material (art.md §9.4: no flat-looking surfaces): breaks up the
+ * flat Kenney / procedural colours of batched props without textures. `amount` = ± brightness.
+ */
+export function withDetailNoise(m, amount = 0.15) {
+  m.onBeforeCompile = (sh) => {
+    patchWorldPos(sh);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+{
+  vec3 q = vWdPos * 1.7 + vWdNrm * 0.37;
+  float n = wdN(q.xz + q.y * 0.71) * 0.6 + wdN(q.zy * 2.3 + q.x * 0.3) * 0.4;
+  diffuseColor.rgb *= 1.0 + ${amount.toFixed(3)} * (n * 2.0 - 1.0);
+}`);
+  };
+  m.customProgramCacheKey = () => 'world-detail-' + amount.toFixed(3);
+  return m;
+}
+
+/**
+ * Dressed-stone material for architecture meshes (the Old Bridge): vertex colours × staggered flagstone blocks
+ * (grooves + per-block tint) on top faces and coursed blocks on the sides, plus weathering noise. World-space, so
+ * any scale reads right.
+ */
+export function makeStoneMaterial({ block = [0.62, 0.45], course = 0.3 } = {}) {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, envMapIntensity: 0.5 });
+  m.onBeforeCompile = (sh) => {
+    patchWorldPos(sh);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+{
+  vec3 wp = vWdPos, wn = vWdNrm / max(length(vWdNrm), 1e-4);
+  float top = smoothstep(0.55, 0.85, abs(wn.y));
+  // top faces: flagstones (staggered rows across X); sides: coursed blocks along the face
+  vec2 bt = vec2(wp.x / ${block[0].toFixed(3)}, wp.z / ${block[1].toFixed(3)});
+  bt.x += step(1.0, mod(floor(bt.y), 2.0)) * 0.5;
+  float along = abs(wn.x) > abs(wn.z) ? wp.z : wp.x;
+  vec2 bs = vec2(along / ${(block[0] * 1.2).toFixed(3)}, wp.y / ${course.toFixed(3)});
+  bs.x += step(1.0, mod(floor(bs.y), 2.0)) * 0.5;
+  vec2 b = mix(bs, bt, top);
+  vec2 f = fract(b), id = floor(b);
+  float e = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y) * 1.3);
+  float groove = 1.0 - smoothstep(0.015, 0.06, e);
+  float tint = 0.88 + 0.22 * wdH(id + 17.0);
+  float n = wdN(wp.xz * 1.3 + wp.y) * 0.5 + wdN(wp.xz * 4.7 - wp.y * 2.0) * 0.3 + wdN(wp.xz * 13.0) * 0.2;
+  float moss = smoothstep(0.62, 0.8, wdN(wp.xz * 0.6 + 3.0)) * (0.35 + 0.65 * top);
+  vec3 c = diffuseColor.rgb * tint * (0.78 + 0.4 * n) * (1.0 - groove * 0.5);
+  c = mix(c, c * vec3(0.78, 0.92, 0.62), moss * 0.55);
+  diffuseColor.rgb = c;
+}`);
+  };
+  m.customProgramCacheKey = () => 'world-stone-v1';
+  m.userData.owned = true;
+  return m;
+}
+
 /**
  * Compute the uniform scale for a template + fit option (MODEL_FIT fallback via core resolveFit).
  * @returns {{scale:number, axis:string}}
@@ -232,7 +315,7 @@ export class PropBatch {
     this.geos = new Map();
     /** @type {{geo: THREE.BufferGeometry, matrix: THREE.Matrix4, color: THREE.Color|null, id: number, cull: boolean, radius: number, center: THREE.Vector3, hidden: boolean, culled: boolean}[]} */
     this.items = [];
-    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, envMapIntensity: 0.6 });
+    this.material = withDetailNoise(new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, envMapIntensity: 0.6 }), 0.16);
     this.material.userData.owned = true;
     this.mesh = null;
     this._cullT = 0;

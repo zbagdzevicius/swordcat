@@ -2,6 +2,7 @@
 // combat's own checks). Screenshots go to tests/shots/combat/.
 //   combat:arc      swept arcs on real enemies (API-driven: left/right hit, behind/far missed) + the J combo kills a rat
 //   combat:parry    a real rat_pike pokes; the Stand starts just before its strike → player:parry, the rat staggers
+//   combat:block    a held Stand blocks a poke (0 dmg, 1 Grit, hitstop 0.04); dropped, the next poke hurts (1 HP, 0.9 s i-frames)
 //   combat:reflect  a crossbow bolt is parried → combat:reflect, it flies back gold and kills the shooter for 25
 //   combat:holy     Holy Slash with Shard 2 → holyWave pierces a line of rats (each hit once)
 //   combat:tokens   4 rats around her: never more than the difficulty's melee tokens attack at once (Knight 2, Kitten 1)
@@ -105,7 +106,7 @@ export default [
         st.offT = ctx.bus.on(E.TELEGRAPH, (p) => { if (p.actor === rat && !st.pressed) st.tele = { t: ctx.game.time, d: p.duration }; });
         st.offP = ctx.bus.on(E.PLAYER_PARRY, (p) => {
           st.parried = { gold: p.gold, attacker: p.attacker?.id, t: ctx.game.time };
-          input.setVirtual('guard', false); input.setDevice?.('kbm');   // drop the Stand (a held Stand cancels the swing)
+          // the Stand stays held (Stand + ⚔ is the natural riposte input; a Stand held into a swing can't cancel it)
           st.riposteAt = ctx.game.time + 0.12;                     // ⚔ well inside the 0.8 s Riposte window
         });
         st.offH = ctx.game.addFrameHook(() => {
@@ -143,6 +144,56 @@ export default [
         t.assert(s.riposte[0] === 'hit:36:true', `riposte should crit for 36 (got ${s.riposte[0]})`);
         t.assert(!s.ratAlive, 'a Riposte kills a Rat Pikeman (§7.2 DPS check)');
       } else t.warn('no riposte hit after the parry (player area)');
+    },
+  },
+  {
+    name: 'combat:block', order: 31.5, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await prepare(t, 5);
+      await t.frames(5);
+      // 1) a Stand held long before the poke (past the parry window) blocks: 0 damage, 1 Grit, block hitstop
+      // 2) Stand dropped: the next poke hurts her (god off) with the hurt row: 1 HP, 0.9 s i-frames, hitstop 0.07
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E, input = ctx.input, p = ctx.player;
+        g.god(false);
+        p.hp = p.maxHp;
+        const rat = g.__combatSpawn('rat_pike', 0.45, 1.7);                 // inside her ±70° Stand, in view of the camera
+        input.setDevice?.('kbm'); input.setVirtual('guard', true);
+        const st = g.__block = { rat: rat.id, hits: [], grit0: p.grit, dropped: false };
+        st.off = ctx.bus.on(E.HIT, (h) => {
+          if (h.target !== p || st.hits.some((x) => !x.blocked)) return;
+          st.hits.push({ result: h.result, blocked: h.blocked, damage: h.damage, hitstop: ctx.game.hitstopT, invulnT: p.invulnT, hp: p.hp, grit: p.grit });
+          if (!h.blocked) g.god(true);                                        // one hurt is enough
+          if (h.blocked && !st.dropped) { st.dropped = true; setTimeout(() => { input.setVirtual('guard', false); input.setDevice?.('kbm'); }, 50); }
+        });
+        return true;
+      });
+      await t.page.waitForFunction(() => window.__GAME__.__block.hits.some((h) => h.blocked), null, { timeout: 15000, polling: 100 }).catch(() => {});
+      await t.wait(40);
+      await t.shot('combat/block');
+      await t.page.waitForFunction(() => window.__GAME__.__block.hits.some((h) => !h.blocked), null, { timeout: 15000, polling: 100 }).catch(() => {});
+      await t.wait(80);
+      await t.shot('combat/hurt');
+      const s = await t.G(() => {
+        const g = window.__GAME__, st = g.__block;
+        st.off(); g.ctx.input.setVirtual('guard', false); g.god(true);
+        return { hits: st.hits, grit0: st.grit0 };
+      });
+      t.log(`player hits: ${s.hits.map((h) => `${h.result}:${h.damage} (hitstop ${h.hitstop.toFixed(2)}, iframes ${h.invulnT.toFixed(2)})`).join(', ')}`);
+      const b = s.hits.find((h) => h.blocked), h = s.hits.find((x) => !x.blocked);
+      t.assert(!!b, 'a held Stand blocks the poke (combat:hit {blocked})');
+      if (b) {
+        t.assert(b.result === 'block' && b.damage === 0, `block: 0 damage (${JSON.stringify(b)})`);
+        t.assert(b.grit === s.grit0 - 1, `block costs 1 Grit (${s.grit0} → ${b.grit})`);
+        t.assert(Math.abs(b.hitstop - 0.04) < 0.011, `block hitstop 0.04 (got ${b.hitstop})`);
+        t.assert(b.invulnT === 0, 'a block grants no i-frames');
+      }
+      t.assert(!!h, 'with the Stand dropped the next poke lands');
+      if (h) {
+        t.assert(h.result === 'hit' && h.damage === 1, `rat_poke hurts her for 1 HP (${JSON.stringify(h)})`);
+        t.assert(Math.abs(h.hitstop - 0.07) < 0.011, `player-hurt hitstop 0.07 (got ${h.hitstop})`);
+        t.assert(h.invulnT > 0.85, `0.9 s hurt i-frames (got ${h.invulnT})`);
+      }
     },
   },
   {

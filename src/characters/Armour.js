@@ -89,7 +89,7 @@ export function addPlateArmour(A, o = {}) {
   if (o.pauldrons !== false) for (const side of [1, -1]) {
     const gx = side * 0.148 * w, gy = 0.17;
     for (let i = 0; i < 4; i++) {
-      const geo = dent(new THREE.SphereGeometry(0.078 + i * 0.006, A.seg(40), A.seg(16), 0, Math.PI * 2, 0, Math.PI * 0.46).scale(1, 0.8, 1.08), dentAmt, 7 + i);
+      const geo = dent(new THREE.SphereGeometry(0.078 + i * 0.006, A.seg(32), A.seg(13), 0, Math.PI * 2, 0, Math.PI * 0.46).scale(1, 0.8, 1.08), dentAmt, 7 + i);
       const lm = new THREE.Matrix4().makeTranslation(gx, gy, 0)
         .multiply(mat([side * i * 0.009, -i * 0.03, 0], [0, 0, -side * (0.2 + i * 0.13)]));
       shell(A, 'chest', geo, lm, L.steel, L.inner);

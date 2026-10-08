@@ -58,7 +58,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.zoomies = false; this.zoomT = 0; this.zoomHeading = 0;
     this.gait = 0; this.stepCount = 0;
     this.sipHealed = false; this.sipActive = false;
-    this.swingSerial = 0; this.comboIndex = 0;
+    this.swingSerial = 0; this.comboIndex = 0; this.swingGuardLatch = false;
     this.gravityMul = 1; this.terminalFall = PLAYER.terminalFall; this.landImpact = 0;
     /** respawn point (level spawn or the last Vigil Stone) */
     this.respawnPoint = { pos: new THREE.Vector3(), facing: 0 };
@@ -372,8 +372,8 @@ export class Player extends ScriptedActorMixin(Actor) {
   _postStep(dt) {
     const ctx = this.ctx, phys = ctx.physics;
     // ---- water and pits (§7.1)
-    const deep = this.onGround && phys.isDeepWater?.(this.pos.x, this.pos.z);
-    this.inShallow = !deep && this.onGround && !!phys.isShallowWater?.(this.pos.x, this.pos.z);
+    const deep = this.onGround && phys.isDeepWater?.(this.pos.x, this.pos.z, this.pos.y);
+    this.inShallow = !deep && this.onGround && !!phys.isShallowWater?.(this.pos.x, this.pos.z, this.pos.y);
     if (this.alive && (deep || this.pos.y < TUNING.pitY)) this._splash();
     this.safeGround.update(dt, this.pos, this.alive && this.onGround && !deep && this.state !== 'dodge' && this.state !== 'pounce');
     // ---- threats, Standing Ground and Jeer (§7.3, §7.4)
@@ -521,6 +521,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.swing = ctx.combat.beginSwing(this, def, this._riposteFace ? { target: this._riposteFace } : undefined);
     this.applySwingOpts(this.swing);
     this.swingSerial++;
+    this.swingGuardLatch = this.wantGuard();        // a Stand held into the swing can't cancel it (PlayerStates.attack)
     this.attackBuf = 0;
     this.comboIndex = COMBO_INDEX[id] ?? 0;
     this.zoomies = false; this.zoomT = 0;
@@ -793,6 +794,8 @@ export class Player extends ScriptedActorMixin(Actor) {
   /** Her hits: Valor (light cap 8 per swing, heavy +6, Riposte +8) and the Purrfect Dodge crit is used up. */
   _onHitEvent(h) {
     if (!h || h.attacker !== this || h.blocked) return;
+    const tgt = h.target;
+    if (tgt && (tgt.breakable || tgt.tags?.has?.('prop'))) return;      // cage locks, crates, boulders: no Valor
     const def = ATTACKS[h.attackId];
     this.combatT = TUNING.combatStance;
     if (this.critT > 0 && !h.projectile) this.critT = 0;
@@ -839,9 +842,14 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.hp > this.maxHp) this.hp = this.maxHp;
     const satchel = st?.upgrades?.satchel ?? 0;
     const base = satchel > 0 ? (ECONOMY.shops.satchel.max[Math.min(satchel, ECONOMY.shops.satchel.max.length) - 1] ?? PLAYER.milk.start) : PLAYER.milk.start;
-    const active = this.ctx.companions?.active?.map?.((c) => c.kittenId ?? c) ?? st?.companions?.active ?? [];
-    const mochi = active.includes('mochi') ? (COMPANIONS.mochi?.milkBonus ?? 0) : 0;
-    this.milkMax = base + mochi;
+    const comp = this.ctx.companions;
+    let bonus;
+    if (typeof comp?.milkBonus === 'number') bonus = comp.milkBonus;                // CompanionManager: Mochi's passive
+    else {
+      const active = comp?.active?.map?.((c) => c.kittenId ?? c) ?? st?.companions?.active ?? [];
+      bonus = active.includes('mochi') ? (COMPANIONS.mochi?.milkBonus ?? 0) : 0;
+    }
+    this.milkMax = base + bonus;
     if (this.milk > this.milkMax) this.milk = this.milkMax;
   }
 

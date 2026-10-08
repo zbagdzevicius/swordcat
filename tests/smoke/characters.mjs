@@ -5,7 +5,8 @@
 //                     character env map, MEME_LOOP + full-body screenshots at prologue night and meadow day
 //   characters:cast   the M1 cast spawned through the real services: Pearl, Whiskerbottom, Marmalade, Mochi, the six
 //                     squires, a caged lost kitten, the CS-02 hyena with Pearl's cage, Cacklejaw and Pilfer
-//   characters:props  cutscene props (milk cup, lantern, spoon, letter, pot helm) in her paws + world props and cages
+//   characters:props  cutscene props (milk cup, lantern, spoon, letter, pot helm, CS-01 helmet) in her paws / on her head
+//                     + world props and cages
 //   characters:holy   setHoly ladder on the hero (aura hull, blade charge), fur quality switch with core QUALITY
 // Screenshots → tests/shots/characters/*.png. Works against the dev server and the bundled game (no /src imports:
 // the library is reached through any kitten, `root.userData.kitten.constructor.lib`).
@@ -48,7 +49,7 @@ const unstage = (t) => t.G(async () => {
 
 export default [
   {
-    name: 'characters:r1', order: 30, level: 'meadow', spawn: 'start', timeout: 150000,
+    name: 'characters:r1', order: 30, level: 'meadow', spawn: 'start', timeout: 300000,
     async run(t) {
       dir(t);
       const ok = await until(t, () => !!window.__GAME__.ctx.player?.model?.k, null, 15000);
@@ -72,11 +73,13 @@ export default [
         const hb = box(k.headFur.mesh.geometry), skullW = (hb.max.x - hb.min.x) * headS;
         const sword = k.sword ? loc(k.sword.tip).distanceTo(loc(k.sword.pommel)) : 0;
         const cb = k.cape ? box(k.cape.geo) : null;
+        const ao = k.cape?.geo.attributes.capeAO;
+        let aoMin = 1; if (ao) for (let i = 0; i < ao.count; i++) aoMin = Math.min(aoMin, ao.getX(i));
         const hsl = (hex) => { const c = new THREE.Color(hex), o = {}; c.getHSL(o); return o; };
         const coat = k.cfg.coat, base = hsl(coat.base), bib = hsl(coat.bib ?? coat.cream);
         return {
           bow: bow && bow.toArray(), bowParent: k.bow?.parent?.name, eye, shoulderW: maxX - minX, skullW, sword,
-          cape: k.cape ? { visible: k.cape.mesh.visible, maxZ: cb.max.z, topW: k.cape.d.topW, botW: k.cape.d.botW, style: k.capeStyle } : null,
+          cape: k.cape ? { visible: k.cape.mesh.visible, maxZ: cb.max.z, topW: k.cape.d.topW, botW: k.cape.d.botW, style: k.capeStyle, grid: [k.cape.rc, k.cape.rr], aoMin } : null,
           baseH: base.h, baseS: base.s, baseL: base.l, bibL: bib.l,
           envMap: !!k.kitMat.envMap, envColors: !!k.constructor.lib?.characterEnvColors?.(),
           shells: k.headFur.shells, furBlended: !!k.furMat?.transparent, calls: k.drawCalls(), pose: k.poseName,
@@ -89,6 +92,7 @@ export default [
       t.assert(m.sword > 0.92 && m.sword < 1.08, `R1 sword ≈ her height (${m.sword.toFixed(3)} H)`);
       t.assert(m.cape && m.cape.visible && m.cape.botW > m.cape.topW, 'R1 cape V-frame (flares toward the hem)');
       t.assert(m.cape && m.cape.maxZ < 0.12, `cape hangs behind her (max local z ${m.cape?.maxZ.toFixed(3)})`);
+      t.assert(m.cape && m.cape.grid[0] >= 25 && m.cape.aoMin < 0.8, `cape renders soft folds (grid ${m.cape?.grid}, fold shade ${m.cape?.aoMin?.toFixed(2)})`);
       t.assert(m.baseH > 0.04 && m.baseH < 0.11 && m.baseS > 0.4 && m.bibL > m.baseL, 'R1 ginger coat with a lighter cream bib');
       t.assert(m.envMap && m.envColors, 'character env map built from the live scene lights (polished plate)');
       t.assert(m.shells > 0 && m.furBlended, `shell fur on (${m.shells} shells, soft-blended)`);
@@ -137,7 +141,7 @@ export default [
     },
   },
   {
-    name: 'characters:cast', order: 31, level: 'meadow', spawn: 'start', timeout: 200000,
+    name: 'characters:cast', order: 31, level: 'meadow', spawn: 'start', timeout: 300000,
     async run(t) {
       dir(t);
       await stage(t, 'vigil');
@@ -196,7 +200,7 @@ export default [
     },
   },
   {
-    name: 'characters:props', order: 32, level: 'meadow', spawn: 'start', timeout: 150000,
+    name: 'characters:props', order: 32, level: 'meadow', spawn: 'start', timeout: 240000,
     async run(t) {
       dir(t);
       await stage(t, 'sip');
@@ -208,7 +212,7 @@ export default [
         // world props + every cage style on a shelf 1.6 m ahead
         const shelf = new THREE.Group(); shelf.name = 'smoke:props';
         const f = p.facing; shelf.position.copy(p.pos); shelf.rotation.y = f;
-        const items = ['lantern', 'spoon', 'letter', 'pot_helm', 'colander', 'milk_bottle', 'signpost', 'post_bag', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cot'];
+        const items = ['lantern', 'spoon', 'letter', 'pot_helm', 'colander', 'milk_bottle', 'signpost', 'post_bag', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cot', 'helmet'];
         const built = [];
         items.forEach((n, i) => {
           const o = lib.buildProp(n, n === 'lantern' ? { light: true } : {});
@@ -219,7 +223,7 @@ export default [
         });
         ['carry', 'hanging', 'cart', 'kennel'].forEach((style, i) => {
           const c = lib.buildCage({ style, ribbon: style === 'carry' });
-          c.position.set(1.6 - i * 1.05, 0, 3.6); c.rotation.y = Math.PI; c.userData.setOpen?.(i === 3 ? 1 : 0);
+          c.position.set(1.6 - i * 1.05, 0, 4.9); c.rotation.y = Math.PI; c.userData.setOpen?.(i === 3 ? 1 : 0);
           shelf.add(c); built.push('cage:' + style);
         });
         ctx.scene.add(shelf);
@@ -233,6 +237,27 @@ export default [
       await camShot(t, [0, 1.3, -0.6], [0, 0.35, 2.6], 46);
       await t.shot('characters/props-shelf');
       await t.blankCheck('props');
+      // CS-01 shot 7: the too-big helm slides over her eyes, then she holds it ('helmet@paw' through the plain prop())
+      const helm = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, k = p.model.k;
+        p.prop('milk_cup', false); p.pose('idle');
+        p.prop('helmet', true);
+        ctx.cam.preset('MEME_LOOP', 'swordcat');
+        await g.waitFrames(40);
+        const worn = k.props.helmet?.parent?.name;
+        return { worn };
+      });
+      t.assert(helm.worn === 'head', `prop('helmet') sits on her head (${helm.worn})`);
+      await t.shot('characters/props-helmet-worn');
+      const held = await t.G(async () => {
+        const g = window.__GAME__, p = g.ctx.player, k = p.model.k;
+        p.prop('helmet@paw', true);
+        await g.waitFrames(30);
+        const r = k.props.helmet?.parent?.name;
+        p.prop('helmet', false);
+        return { r, gone: !k.props.helmet?.parent };
+      });
+      t.assert(held.r === 'pawL' && held.gone, `prop('helmet@paw') moves it to her paw, prop('helmet', false) removes it (${held.r})`);
       await t.G(() => {
         const ctx = window.__GAME__.ctx, k = ctx.player.model.k;
         ctx.player.prop('milk_cup', false);
@@ -245,7 +270,7 @@ export default [
     },
   },
   {
-    name: 'characters:holy', order: 33, level: 'meadow', spawn: 'start', timeout: 120000,
+    name: 'characters:holy', order: 33, level: 'meadow', spawn: 'start', timeout: 180000,
     async run(t) {
       dir(t);
       await stage(t, 'oath');

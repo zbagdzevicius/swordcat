@@ -91,12 +91,21 @@ export function trackId(track) {
   return null;
 }
 
-/** Track ids that the director can choose for a level. */
-export function levelMusic(levelId, def) {
+/**
+ * Track ids that the director can choose for a level. A level's `music.prologue` track (meadow: the bards' tale that
+ * CS-01 fades in, carried through the night tutorial) replaces its explore track while `opts.prologue` is true (flag
+ * `prologue.done` unset); requests for the day explore track are then read as the prologue track (`alias`).
+ * @param {string|null} levelId @param {object|null} def  the level's `music` block
+ * @param {{prologue?: boolean}} [opts]
+ */
+export function levelMusic(levelId, def, { prologue = false } = {}) {
   const fb = LEVEL_MUSIC[levelId] ?? {};
   const m = def && typeof def === 'object' ? def : {};
+  const day = trackId(m.explore) ?? trackId(fb.explore);
+  const pro = prologue ? trackId(m.prologue) : null;
   return {
-    explore: trackId(m.explore) ?? trackId(fb.explore),
+    explore: pro ?? day,
+    alias: pro && day && pro !== day ? day : null,
     combat: trackId(m.combat) ?? trackId(fb.combat) ?? 'battle_fast_fight_loop',
     boss: trackId(m.boss) ?? trackId(fb.boss) ?? 'boss_epic_battle_loop',
     zones: Array.isArray(m.zones) ? m.zones : (fb.zones ?? []),
@@ -139,14 +148,18 @@ export class MusicDirector {
     this.target = track; this.fade = fade; this.version++;
   }
 
-  /** New level: dynamic state resets; its explore track arrives through E.MUSIC (or `explore()`). */
-  setLevel(levelId, def) {
-    this.level = levelMusic(levelId, def);
+  /**
+   * New level: dynamic state resets; its explore track arrives through E.MUSIC.
+   * @param {string|null} levelId @param {object|null} def @param {{prologue?: boolean}} [opts]  see levelMusic()
+   */
+  setLevel(levelId, def, opts) {
+    this.level = levelMusic(levelId, def, opts);
     this.combat = false; this.boss = false; this.forced = null; this.calmT = 0; this.arenas.clear(); this.zone = null;
   }
 
   request(track, fade = MUSIC_RULES.crossfade, { mode = 'play' } = {}) {
-    const id = trackId(track);
+    let id = trackId(track);
+    if (id && id === this.level.alias) id = this.level.explore;      // the day track asked for during the prologue
     if (!id) {
       // silence: inside a cutscene/dialogue the level music comes back when play resumes; in play it stays silent
       this._set(null, fade); this.restorePending = mode === 'cutscene' || mode === 'dialog'; this.forced = null;

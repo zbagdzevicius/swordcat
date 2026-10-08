@@ -8,6 +8,7 @@
 //     over 1.5 s (arena clear) and `remove()` drops it at once. Each wall / the field is ONE instanced draw call.
 import * as THREE from 'three';
 import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
+import { PLAYER } from '../core/config.js';
 import { groundY, toVec3, hash01 } from './util.js';
 
 export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.62, rise: 0.8, dissolve: 1.5 });
@@ -63,14 +64,27 @@ const FRAG = /* glsl */`
 uniform vec3 uColor;
 uniform float uTime, uMaxA, uNear;
 uniform vec2 uScroll;
+uniform vec2 uLoop;       // x = Meme Cam loop phase 0..1, y = loop weight 0..1
+uniform vec2 uLoopDrift;  // scroll distance per loop period
 varying vec2 vUv;
 varying float vSeed, vAlpha, vCamDist;
 #include <fog_pars_fragment>
 ${FOG_FACTOR}
 ${NOISE}
 void main() {
-  vec2 q = vec2( vUv.x * 2.2 + vSeed * 17.0, vUv.y * 1.1 + vSeed * 5.3 ) + uScroll;
-  float n = fxFbm2( q * 1.5 );
+  vec2 q0 = vec2( vUv.x * 2.2 + vSeed * 17.0, vUv.y * 1.1 + vSeed * 5.3 );
+  float n = fxFbm2( ( q0 + uScroll ) * 1.5 );
+  if ( uLoop.y > 0.001 ) {
+    // Meme Cam (§7.8: seamless 3.8 s loop): two layers scroll by uLoopDrift per period half a period apart and
+    // cross-fade (each is invisible when it jumps back), so the drift keeps moving yet repeats exactly
+    float pA = uLoop.x, pB = fract( uLoop.x + 0.5 );
+    float nA = fxFbm2( ( q0 + uLoopDrift * pA ) * 1.5 );
+    float nB = fxFbm2( ( q0 + uLoopDrift * pB + vec2( 0.37, 0.61 ) ) * 1.5 );
+    float wA = 1.0 - abs( 2.0 * pA - 1.0 );
+    float nL = mix( nB, nA, wA );
+    nL = 0.5 + ( nL - 0.5 ) * ( 1.0 + 0.42 * ( 1.0 - abs( 2.0 * wA - 1.0 ) ) );   // restore the contrast lost in the mix
+    n = mix( n, nL, uLoop.y );
+  }
   float a = smoothstep( 0.3, 0.8, n );
   a *= sin( clamp( vUv.x, 0.0, 1.0 ) * 3.14159 );
   a *= smoothstep( 0.0, 0.2, vUv.y ) * ( 1.0 - smoothstep( 0.42, 1.0, vUv.y ) );
@@ -104,13 +118,22 @@ export class CardSet {
     this.material = new THREE.ShaderMaterial({
       name, vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color('#9AA196') }, uTime: { value: 0 }, uMaxA: { value: maxA },
-        uNear: { value: 3 }, uScroll: { value: new THREE.Vector2() } },
+        uNear: { value: 3 }, uScroll: { value: new THREE.Vector2() }, uLoop: { value: new THREE.Vector2() },
+        uLoopDrift: { value: new THREE.Vector2() } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
     });
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.name = name;
     this.mesh.frustumCulled = false; this.mesh.matrixAutoUpdate = false; this.mesh.renderOrder = renderOrder;
     this.scroll = this.material.uniforms.uScroll.value;
+    this.loop = this.material.uniforms.uLoop.value;
+    this.loopDrift = this.material.uniforms.uLoopDrift.value;
+  }
+
+  /** Meme Cam loop sync: phase 0..1, weight 0..1, scroll speed (uv / s) and period (s). */
+  setLoop(phase, weight, sx, sy, period) {
+    this.loop.set(phase, weight);
+    this.loopDrift.set(sx * period, sy * period);
   }
 
   setCard(i, x, y, z, w, h, seed, alpha) {
@@ -144,6 +167,8 @@ export class MistCards {
     this.walls = new Set();
     this.speedMul = 1;           // Meme Cam / Standing Ground
     this._speed = 1;
+    this.loopW = 0;              // Meme Cam loop weight (0 free drift … 1 locked to the camera's 3.8 s loop)
+    this._loopPhase = 0;
     this._drift = new THREE.Vector2();
     this._offs = null;           // Float32Array of ambient base offsets
   }
@@ -220,8 +245,14 @@ export class MistCards {
   render(dt) {
     const ctx = this.ctx, fog = ctx.scene?.fog, time = ctx.game?.realTime ?? 0;
     this._speed += (this.speedMul - this._speed) * (1 - Math.exp(-3 * (dt || 0)));
+    // Meme Cam: lock the drift to the camera's loop (§7.8 "loops seamlessly with a 3.8 s period")
+    const cam = ctx.cam, looping = !!cam?.memeLooping && Number.isFinite(cam.memePhase);
+    if (looping) this._loopPhase = cam.memePhase - Math.floor(cam.memePhase);
+    this.loopW += ((looping ? 1 : 0) - this.loopW) * (1 - Math.exp(-2.5 * (dt || 0)));
+    if (!looping && this.loopW < 0.002) this.loopW = 0;
+    const period = PLAYER.memeCam?.loop ?? 3.8, free = 1 - this.loopW;
     const wind = Math.max(0.15, ctx.env?.wind ?? 0.6);
-    this._drift.x += dt * this._speed * wind * 0.9; this._drift.y += dt * this._speed * wind * 0.35;
+    this._drift.x += dt * this._speed * wind * 0.9 * free; this._drift.y += dt * this._speed * wind * 0.35 * free;
     if (fog?.color) fogLowFrom(fog.color, _fogLow); else _fogLow.set('#9AA196');
     // ---- ambient field (recycled around the camera)
     const A = this.ambient;
@@ -242,6 +273,7 @@ export class MistCards {
         const u = A.material.uniforms;
         u.uColor.value.copy(_fogLow); u.uTime.value = time;
         A.scroll.set(time * 0.035 * this._speed, -time * 0.012 * this._speed);
+        A.setLoop(this._loopPhase, this.loopW, 0.035 * this.speedMul, -0.012 * this.speedMul, period);
       }
     }
     // ---- walls
@@ -253,6 +285,7 @@ export class MistCards {
       const u = w.set.material.uniforms;
       u.uColor.value.copy(_fogLow); u.uTime.value = time;
       w.set.scroll.set(time * 0.06 * this._speed, -time * 0.02 * this._speed);
+      w.set.setLoop(this._loopPhase, this.loopW, 0.06 * this.speedMul, -0.02 * this.speedMul, period);
     }
   }
 

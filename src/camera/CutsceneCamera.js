@@ -23,6 +23,8 @@ export const SHOT_MODES = Object.freeze(['cut', 'blend', 'rail', 'orbit', 'handh
 
 const WHIP = { yaw: 120 * DEG, dur: 0.18, fovAdd: 15 };
 const FALL = { roll: 90 * DEG, y: 0.12, dur: 0.35 };
+/** minimum camera height above the terrain for authored shots (m; the WHIP_FALL landing sets its own 0.12) */
+export const GROUND_CLEAR = 0.1;
 const _warned = new Set();
 const warnOnce = (msg) => { if (_warned.has(msg)) return; _warned.add(msg); console.warn(msg); };
 
@@ -210,6 +212,10 @@ export class CutsceneCamera {
     }
     out.fov = this._fov(k);
     this._addMotion(out);
+    // safety net: an anchor-relative low shot on a slope (HERO_LOW at 0.35 m) or a rail over a hill never dips
+    // into the terrain (the look point stays: the subject keeps its place in the frame)
+    const g = this.ctx.physics?.heightAt?.(out.pos.x, out.pos.z);
+    if (Number.isFinite(g) && out.pos.y < g + GROUND_CLEAR) out.pos.y = g + GROUND_CLEAR;
   }
 
   _fov(k) {

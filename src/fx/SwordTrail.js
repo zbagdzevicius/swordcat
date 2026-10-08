@@ -36,6 +36,7 @@ export function trailWindow(def) {
 }
 
 const CAP = 40;          // samples
+const HILT_INSET = 0.3;  // the ribbon's inner edge, as a fraction of the way from the blade's hilt point to its tip
 const SUB = 4;           // Catmull-Rom subdivisions per sample gap
 const MAXV = (CAP - 1) * SUB + 1 + CAP * 2;   // + invisible bridge vertices between swings
 
@@ -57,11 +58,13 @@ varying vec2 vT;
 ${FOG_FACTOR}
 void main() {
   float a = clamp( vT.x, 0.0, 1.0 ), v = clamp( vT.y, 0.0, 1.0 );
-  // brightest along the tip edge, feathered toward the hilt; old samples fade quadratically
-  float edge = smoothstep( 0.0, 0.7, v ) * ( 0.25 + 0.75 * v * v );
-  float k = a * a * edge * uAlpha * 0.85;
+  // a crisp white-hot rim along the tip's path over a translucent body that feathers out toward the hilt;
+  // old samples fade quadratically (the rim stays a little longer than the body)
+  float body = smoothstep( 0.1, 0.95, v ) * 0.24;
+  float rim = smoothstep( 0.7, 1.0, v );
+  float k = ( body * a * a + rim * ( 0.45 + 0.75 * a ) * a ) * uAlpha;
   if ( k < 0.003 ) discard;
-  vec3 col = mix( uColor, vec3( 1.0 ), smoothstep( 0.8, 1.0, v ) * a * 0.7 ) * uIntensity;
+  vec3 col = mix( uColor, vec3( 1.0 ), rim * a * 0.7 ) * uIntensity * ( 1.0 + 0.8 * rim * a );
   gl_FragColor = vec4( col * k * ( 1.0 - fxFog() ), 1.0 );
   ${OUTPUT}
 }`;
@@ -149,7 +152,8 @@ export class SwordTrail {
         this._newRibbon = true;                        // each swing is its own ribbon
       }
       if (sw.t >= this._w0 && sw.t <= this._w1 && dt > 0) {
-        if (resolveBlade(actor, _h, _t) || this._arc(actor, sw, _h, _t)) this.push(_h, _t);
+        if (resolveBlade(actor, _h, _t)) { _h.lerp(_t, HILT_INSET); this.push(_h, _t); }       // the ribbon covers the outer blade
+        else if (this._arc(actor, sw, _h, _t)) this.push(_h, _t);
       }
     } else if (this._swing) { this._swing = null; this._newRibbon = true; }
     this._build();

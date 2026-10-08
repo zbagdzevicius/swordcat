@@ -8,7 +8,21 @@ import path from 'node:path';
 
 const A = 'window.__GAME__.ctx.audio';
 const st = (t) => t.G(() => window.__GAME__.ctx.audio.debugState());
-const shot = async (t, name) => { fs.mkdirSync(path.join(t.shotsDir, 'audio'), { recursive: true }); return t.shot(`audio/${name}`); };
+const shot = async (t, name) => {
+  fs.mkdirSync(path.join(t.shotsDir, 'audio'), { recursive: true });
+  for (let i = 0; i < 2; i++) {
+    try { return await t.shot(`audio/${name}`); } catch (e) { t.warn(`screenshot ${name} attempt ${i + 1}: ${String(e?.message ?? e).split('\n')[0]}`); }
+  }
+  return null;
+};
+
+/** The explore track the director should come back to on this level (meadow: the bards' tale until prologue.done). */
+const exploreNow = (t) => t.G(() => window.__GAME__.ctx.audio.director.level.explore);
+
+/** Wait (polling) until `fn()` in the page is truthy; resolves true/false. */
+const until = async (t, fn, ms, arg) => {
+  try { await t.page.waitForFunction(fn, arg, { timeout: ms, polling: 100 }); return true; } catch { return false; }
+};
 
 /** Peak RMS of a bus over `ms` (sampled every animation frame in the page). */
 const peak = (t, bus, ms) => t.page.evaluate(([b, d]) => new Promise((res) => {
@@ -35,9 +49,13 @@ export default [
   {
     name: 'audio:unlock', order: 80, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
-      const pre = await t.G(() => { const a = window.__GAME__.ctx.audio; return { ready: a.ready, track: a.currentTrack, state: a.ac?.state ?? null }; });
-      t.log(`before the gesture: ready=${pre.ready} ctx=${pre.state} wanted=${pre.track}`);
-      t.assert(pre.track === 'field_of_dreams', `meadow explore track requested on load (got ${pre.track})`);
+      const pre = await t.G(() => {
+        const g = window.__GAME__, a = g.ctx.audio;
+        return { ready: a.ready, track: a.currentTrack, state: a.ac?.state ?? null, prologueDone: !!g.ctx.state.getFlag('prologue.done') };
+      });
+      const want = pre.prologueDone ? 'field_of_dreams' : 'village_bards_tale';
+      t.log(`before the gesture: ready=${pre.ready} ctx=${pre.state} wanted=${pre.track} (prologue.done=${pre.prologueDone})`);
+      t.assert(pre.track === want, `meadow explore track requested on load: ${pre.track} (want ${want})`);
       if (!(await unlock(t))) return;
       await t.G(() => window.__GAME__.ctx.audio.showMeter(true));
       let musicOk = true;
@@ -45,7 +63,16 @@ export default [
       catch { musicOk = false; }
       const s = await st(t);
       t.assert(musicOk, `music bus silent 10 s after the unlock (deck: ${JSON.stringify(s.music?.decks)})`);
-      t.assert(s.music.track === 'field_of_dreams' && s.music.decks.some((d) => d.track === 'field_of_dreams' && d.playing), 'field_of_dreams deck playing');
+      t.assert(s.music.track === want && s.music.decks.some((d) => d.track === want && d.playing), `${want} deck playing`);
+      // after CS-02 (prologue.done) the same load explores to field_of_dreams
+      if (!pre.prologueDone) {
+        await t.G(() => window.__GAME__.ctx.state.setFlag('prologue.done', true));
+        await t.loadLevel('meadow', 'start');
+        const day = await t.G(() => window.__GAME__.ctx.audio.currentTrack);
+        t.assert(day === 'field_of_dreams', `day meadow explore track ${day}`);
+        await until(t, () => { const m = window.__GAME__.ctx.audio.musicPlayer.state(); return m.decks.some((d) => d.track === 'field_of_dreams' && d.playing); }, 8000);
+        await t.G(() => window.__GAME__.ctx.state.setFlag('prologue.done', false));
+      }
       t.assert(s.wind && s.wind.gainNow > 0.03, `procedural wind running (gain ${s.wind?.gainNow})`);
       t.assert(['heartThump', 'crowCaw', 'hyenaLaugh', 'blip'].every((k) => s.zzfx.includes(k)), `zzfx baked: ${s.zzfx}`);
       t.assert(s.gains.master > 0.5 && s.gains.music > 0.2 && s.gains.sfx > 0.5, `bus gains ${JSON.stringify(s.gains)}`);
@@ -54,6 +81,8 @@ export default [
       const m = await peak(t, 'master', 600);
       t.log(`unlocked: sr=${s.sampleRate} music ${db(s.levels.music)} dB, master peak ${db(m)} dB, wind ${s.wind.wind} → ${s.wind.freqNow} Hz`);
       await shot(t, '01-unlock-meadow');
+      // the level reload above re-requested the prologue/day track: put the night track back for the next blocks
+      if (!pre.prologueDone) await t.loadLevel('meadow', 'start');
     },
   },
   {
@@ -76,12 +105,17 @@ export default [
       const s1 = await st(t);
       const d = (k) => (s1.started[k] ?? 0) - (c0[k] ?? 0);
       t.assert(d('swishLight') + d('swishHeavy') >= 2, `swing swishes started: ${d('swishLight')} light / ${d('swishHeavy')} heavy`);
-      t.assert(d('footGrass') >= 3, `grass footsteps started: ${d('footGrass')}`);
+      // her steps follow level.surfaceAt (meadow: grass, the dirt lane, the bridge's stone)
+      const FOOT = ['footGrass', 'footDirt', 'footStone', 'footWood', 'footMud', 'footSnow', 'footWater'];
+      const steps = FOOT.reduce((n, k) => n + d(k), 0);
+      const stepMix = FOOT.filter((k) => d(k) > 0).map((k) => `${k} ${d(k)}`).join(', ');
+      const surf = await t.G(() => { const g = window.__GAME__, p = g.ctx.player.pos; return g.ctx.levels.current?.surfaceAt?.(p.x, p.z) ?? null; });
+      t.assert(steps >= 3, `footsteps started: ${steps} (${stepMix})`);
       t.assert(d('armorStep') >= 1, `armour rattle every 2nd step: ${d('armorStep')}`);
       const meowEv = (await t.events()).includes('player:meow');
       t.assert(d('meow') >= 1, `meow started: ${d('meow')} (player:meow emitted: ${meowEv}, requested: ${s1.counts.meow ?? 0})`);
       t.assert(sfxPeak > 0.002, `sfx bus peak during the combo ${db(sfxPeak)} dB`);
-      t.log(`swish ${d('swishLight')}+${d('swishHeavy')} steps ${d('footGrass')} armour ${d('armorStep')} meow ${d('meow')}, sfx peak ${db(sfxPeak)} dB`);
+      t.log(`swish ${d('swishLight')}+${d('swishHeavy')} steps ${steps} [${stepMix}; under her now: ${surf}] armour ${d('armorStep')} meow ${d('meow')}, sfx peak ${db(sfxPeak)} dB`);
       await shot(t, '02-gameplay-sfx');
 
       // a rat within 20 m: combat music; kill it: hit + poof + death squeak; explore 4 s after the last threat
@@ -98,10 +132,18 @@ export default [
       t.log(`combat: ${sc.music.decks.map((k) => `${k.track ?? '-'}@${k.gain}`).join(' | ')}`);
       await shot(t, '03-combat-music');
       // finish the rat: hits until dead (god on; the swing auto-aims within 3 m)
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 16; i++) {
         const alive = await t.G(() => window.__GAME__.ctx.enemies.list.filter((e) => e.alive && !e.tags?.has?.('prop')).length);
         if (!alive) break;
-        await t.G(() => { const g = window.__GAME__, pl = g.ctx.player; for (const e of g.ctx.enemies.list) if (e.alive) { e.hp = Math.min(e.hp, 1); pl.facing = Math.atan2(e.pos.x - pl.pos.x, e.pos.z - pl.pos.z); } });
+        await t.G(() => {
+          const g = window.__GAME__, pl = g.ctx.player;
+          for (const e of g.ctx.enemies.list) {
+            if (!e.alive || e.tags?.has?.('prop')) continue;
+            e.hp = Math.min(e.hp, 1);
+            if (Math.hypot(e.pos.x - pl.pos.x, e.pos.z - pl.pos.z) > 2.2) g.teleport(e.pos.x - 1.2, e.pos.y, e.pos.z - 1.2);
+            pl.facing = Math.atan2(e.pos.x - pl.pos.x, e.pos.z - pl.pos.z);
+          }
+        });
         await t.tap('KeyJ', 1);
         await t.wait(450);
       }
@@ -109,10 +151,17 @@ export default [
       const e = (k) => (s2.started[k] ?? 0) - (s1.started[k] ?? 0);
       t.assert(e('hitFur') >= 1, `rat hit sound (sword_attack): ${e('hitFur')}`);
       t.assert(e('killPoof') >= 1 && e('ratDeath') >= 1, `kill poof ${e('killPoof')} + death squeak ${e('ratDeath')}`);
-      let calm = true;
-      try { await t.page.waitForFunction(() => window.__GAME__.ctx.audio.director.target === 'field_of_dreams', null, { timeout: 9000, polling: 100 }); }
-      catch { calm = false; }
-      t.assert(calm, 'explore music did not resume after the fight');
+      // "Explore resumes 4 s after the last kill" (sim time: under load the game runs slower than the wall clock)
+      const explore = await exploreNow(t);
+      const calm = await until(t, (x) => { const d = window.__GAME__.ctx.audio.director; return !d.combat && d.target === x; }, 25000, explore);
+      if (!calm) {
+        const why = await t.G(() => {
+          const g = window.__GAME__, a = g.ctx.audio, d = a.director, p = g.ctx.player.pos;
+          return { target: d.target, base: d.base, combat: d.combat, calmT: +d.calmT.toFixed(2), arenas: [...d.arenas], threat: a._threat, mode: g.ctx.game.mode,
+            enemies: g.ctx.enemies.list.filter((e) => e.alive).map((e) => `${e.def?.id}:${e.stateName}@${Math.hypot(e.pos.x - p.x, e.pos.z - p.z).toFixed(1)}m`) };
+        });
+        t.fail(`explore music (${explore}) did not resume after the fight: ${JSON.stringify(why)}`);
+      }
       await t.G(() => window.__GAME__.god(false));
     },
   },
@@ -223,17 +272,26 @@ export default [
       const s2 = await st(t);
       t.assert(!s2.meme && s2.duckNow > 0.8, `music back after Meme Cam (${s2.duckNow})`);
       // dialogue babble: −6 dB under the line, blips from the speaker's pool, back to full after dialog:end
-      const nBlips = await t.G(() => {
-        const g = window.__GAME__; g.ctx.audio._gates.clear();
+      // sampled inside the page on animation frames (a loaded machine can take seconds per protocol round trip,
+      // longer than the whole line)
+      const bb = await t.page.evaluate(() => new Promise((res) => {
+        const g = window.__GAME__, a = g.ctx.audio;
+        a._gates.clear();
         g.ctx.bus.emit(g.E.DIALOG_START, { id: 'cs03' });
         g.ctx.bus.emit(g.E.DIALOG_LINE, { speaker: 'swordcat', text: 'Day one of rescuing everyone. Morale: high.' });
-        return g.ctx.audio.babbleState?.plan.length ?? 0;
-      });
-      t.assert(nBlips >= 8, `babble plan ${nBlips} blips`);
-      try { await t.page.waitForFunction(() => (window.__GAME__.ctx.audio.babbleState?.blips ?? 0) >= 3, null, { timeout: 5000, polling: 30 }); } catch { /* asserted below */ }
-      const s3 = await st(t);
-      t.assert(Math.abs(s3.duck - 0.5) < 1e-6 && s3.duckNow < 0.62, `dialogue duck ${s3.duck} / now ${s3.duckNow}`);
-      t.assert(s3.babble && s3.babble.blips >= 3, `babble blips ${s3.babble?.blips}`);
+        const plan = a.babbleState?.plan.length ?? 0, t0 = performance.now();
+        const f = () => {
+          const b = a.babbleState;
+          if (!b || b.blips >= 3 || performance.now() - t0 > 8000) {
+            res({ plan, blips: b?.blips ?? null, speaker: b?.speaker ?? null, duck: a.duck, duckNow: +a.bus.musicDuck.gain.value.toFixed(3) });
+          } else requestAnimationFrame(f);
+        };
+        requestAnimationFrame(f);
+      }));
+      t.assert(bb.plan >= 8, `babble plan ${bb.plan} blips`);
+      t.assert(bb.blips >= 3 && bb.speaker === 'swordcat', `babble blips ${bb.blips} (${bb.speaker})`);
+      t.assert(Math.abs(bb.duck - 0.5) < 1e-6 && bb.duckNow < 0.62, `dialogue duck ${bb.duck} / now ${bb.duckNow}`);
+      t.log(`babble: ${bb.blips}/${bb.plan} blips, music duck ${bb.duckNow}`);
       await shot(t, '07-dialogue-babble');
       await t.wait(1200);
       await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.DIALOG_LINE, { speaker: 'pudding', text: 'ROOOAAR. (Is that... milk?)' }); });
@@ -299,7 +357,11 @@ export default [
         // CS-01: stamps, purr, creak, unsheathe, armour, cloth
         g.game.setMode('cutscene'); bus.emit(E.CUTSCENE_START, { id: 'cs01' });
         for (const id of ['ui/drop_001', 'ui/drop_002', 'world/creak1', 'sword/sword_unsheathe', 'impact/armor_light', 'impact/cloth']) { step('2d', id); await wait(120); }
-        step('3d', 'cat/cat_purrsleepy_loop', 'swordcat', { vol: 0.6 });
+        // shot 5: the purr as a looping, followed sound outside the voice pools; the cutscene stops its handle
+        const purr = step('3d', 'cat/cat_purrsleepy_loop', 'swordcat', { vol: 0.6, loop: true });
+        await wait(250);
+        const purrLooping = !!purr && a.loops.has(purr) && !!purr.src?.loop && purr.follow === g.ctx.player;
+        purr?.stop(0.3);
         bus.emit(E.CUTSCENE_END, { id: 'cs01', skipped: false }); g.game.setMode('play');
         // tutorial: the sleeping cow moos
         step('3d', 'creature/animal_moo', g.ctx.player.pos.clone().add(new g.THREE.Vector3(6, 0, 0)), { vol: 0.9 });
@@ -332,7 +394,7 @@ export default [
         bus.emit(E.CUTSCENE_END, { id: 'cs03', skipped: false }); g.game.setMode('play');
         await wait(300);
         const end = a.debugState();
-        return { log, mid: { director: mid.director, chorus: mid.chorus, marching: mid.marching, bells: mid.bells }, end: { director: end.director, started: end.started, music: end.music } };
+        return { log, purrLooping, purrGone: !a.loops.has(purr), mid: { director: mid.director, chorus: mid.chorus, marching: mid.marching, bells: mid.bells }, end: { director: end.director, started: end.started, music: end.music } };
       });
       const s = r.end.started;
       const need = ['ui/drop_001', 'ui/drop_002', 'world/creak1', 'sword/sword_unsheathe', 'impact/armor_light', 'impact/cloth', 'cat/cat_purrsleepy_loop',
@@ -340,6 +402,7 @@ export default [
         'creature/creature_roar_02', 'creature/c80_roar_01'];
       const silent = need.filter((k) => !(s[k] > 0));
       t.assert(silent.length === 0, `cue sheet sounds that did not start: ${silent.join(', ')}`);
+      t.assert(r.purrLooping && r.purrGone, `CS-01 purr loop: looping ${r.purrLooping}, stopped ${r.purrGone}`);
       t.assert(r.mid.chorus === 6 && r.mid.marching && r.mid.bells >= 1, `CS-02 layers: chorus ${r.mid.chorus}, march ${r.mid.marching}, bells ${r.mid.bells}`);
       t.assert(r.mid.director.target === 'battle_theme_a', `CS-02 sting track ${r.mid.director.target}`);
       t.assert(r.end.director.target === 'battle_fast_fight_loop' && r.end.director.combat, `CS-03 end: ${JSON.stringify(r.end.director)}`);

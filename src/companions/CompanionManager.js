@@ -63,6 +63,7 @@ export class CompanionManager {
       bus.on(E.FLAG_SET, (p) => this._onFlag(p?.key, p?.value)),
       bus.on(E.OBJECTIVE, (p) => { if (p?.id === 'net_ropes' && this.pudding) this.pudding.setRopesCut(p.value ?? 0); }),
       bus.on(E.QUALITY, (p) => this._applyQuality(p?.preset ?? this.ctx.quality)),
+      bus.on(E.CUTSCENE_END, () => this._ensurePudding()),
     );
   }
 
@@ -311,12 +312,19 @@ export class CompanionManager {
     for (const c of this.active) if (c.object3d.parent !== this.ctx.scene) this.ctx.scene.add(c.object3d);   // a level swap may clear the scene
     this._place();
     for (const c of this.active) { if (c.napT > 0) c.wake(); c.hp = c.maxHp; c.cooldown = 0; }
-    // Pudding's meadow state after CS-03 (the level reloads after a death or a save)
-    if ((p?.id ?? this.ctx.levels?.current?.id) === 'meadow' && !this.pudding) {
-      const f = this.ctx.state?.getFlag?.('meadow.pudding');
-      if (f === 'netted') { this.spawnNpc('pudding', PUDDING.net.at, PUDDING.net.facing); this.pudding.setNetted(true); }
-      else if (f === true) { this.spawnNpc('pudding', PUDDING.net.at, PUDDING.net.facing); if (!this.pudding.perchNow()) this.despawn(this.pudding); }
-    }
+    this._ensurePudding(p?.id);
+  }
+
+  /**
+   * Pudding's meadow state after CS-03 (`meadow.pudding` 'netted' → in the net, true → perched along the level). Runs
+   * on level load (reload after a death or a save) and after every cutscene: a scene that spawned its own Pudding and
+   * despawned him at its end (or set the flag before that despawn) must not leave the glade empty.
+   */
+  _ensurePudding(levelId = this.ctx.levels?.current?.id) {
+    if (levelId !== 'meadow' || this.pudding || this.ctx.levels?.loading) return;
+    const f = this.ctx.state?.getFlag?.('meadow.pudding');
+    if (f === 'netted') { this.spawnNpc('pudding', PUDDING.net.at, PUDDING.net.facing); this.pudding.setNetted(true); }
+    else if (f === true) { this.spawnNpc('pudding', PUDDING.net.at, PUDDING.net.facing); if (!this.pudding.perchNow()) this.despawn(this.pudding); }
   }
 
   _applyQuality(preset) {

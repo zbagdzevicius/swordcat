@@ -3,13 +3,17 @@
 //   structural + shear constraints, 4 iterations, damping 0.985, gravity -20, wind + inertia, sphere colliders.
 // - Meme Cam: cross-fade (0.3 s) to a seamlessly looping sway (3.8 s period, gust peak at 1.2 s), back on exit.
 // - NPCs: static drape + vertex-shader sway (no CPU).
+// The 9 x 13 particles drive a finer RENDER grid (Catmull-Rom, CAPE_DEFAULTS.resX/resY): the soft vertical folds,
+// the gathered neckline and the wavy hem live on that grid, with a baked fold-shade (capeAO) so the cloth reads as
+// cloth under flat overcast light (a 9-column grid alone aliased the folds into a flat board).
 import * as THREE from 'three';
 import { CAPES } from './palette.js';
 import { own } from './materials.js';
 import { clamp, smoothstep } from './util.js';
 
-export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.38, botW: 0.55, len: 0.46, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.60, anchorZ: -0.1,
-  folds: 2.5, foldAmp: 0.03, hemCurve: 0.035 });
+export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.3, botW: 0.6, len: 0.47, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.61, anchorZ: -0.12,
+  folds: 3.5, foldAmp: 0.05, hemCurve: 0.035, hemWave: 0.014, gather: 0.008, neckArc: 0.014, ao: 0.5, resX: 4, resY: 2 });
+const TAU = Math.PI * 2;
 
 /** Shared sway clock for NPC capes. */
 export const CAPE_TIME = { value: 0 };
@@ -28,6 +32,9 @@ export function capeMaterial(style = 'red', o = {}) {
   const spec = CAPES[style] || { color: style, lining: style, sheen: '#ffffff', hem: '#D9B26A' };
   const m = new THREE.MeshPhysicalMaterial({
     color: spec.color, roughness: 0.88, sheen: 0.7, sheenColor: new THREE.Color(spec.sheen), sheenRoughness: 0.6, side: THREE.DoubleSide,
+    // wool takes the soft ambient from the hemisphere light; the character env map (lifted for readable steel at
+    // night) made pale capes glow like paper, so cloth takes only half of it (like the kit's fur / cloth damping)
+    envMapIntensity: 0.5,
   });
   const uniforms = {
     uLining: { value: new THREE.Color(spec.lining) }, uHem: { value: new THREE.Color(spec.hem) },
@@ -37,9 +44,9 @@ export function capeMaterial(style = 'red', o = {}) {
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nuniform float uTime, uSpeed, uSwayAmp;')
+      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nattribute float capeAO;\nuniform float uTime, uSpeed, uSwayAmp;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vCapeUv = uv;
+        vCapeUv = uv; vCapeAO = capeAO;
         #ifdef CAPE_SWAY
         {
           float k = pow(1.0 - uv.y, 2.0);
@@ -49,27 +56,37 @@ export function capeMaterial(style = 'red', o = {}) {
         }
         #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nuniform vec3 uLining, uHem;')
+      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nuniform vec3 uLining, uHem;')
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (!gl_FrontFacing) diffuseColor.rgb = uLining;
         float hemK = smoothstep(0.004, 0.012, vCapeUv.y) * (1.0 - smoothstep(0.03, 0.038, vCapeUv.y));
         diffuseColor.rgb = mix(diffuseColor.rgb, uHem, hemK);
         diffuseColor.rgb *= mix(0.82, 1.0, smoothstep(0.0, 0.25, vCapeUv.y)); // grimy hem / fold shade
-        diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.72, 1.0, vCapeUv.y));  // tucked under the collar / head`);
+        diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.72, 1.0, vCapeUv.y));  // tucked under the collar / head`)
+      // baked fold shade on ALL the light (diffuse + sheen + env): overcast light comes from above, so vertical folds
+      // get almost no shading from their normals alone
+      .replace('#include <opaque_fragment>', `outgoingLight *= vCapeAO;
+        #include <opaque_fragment>`);
   };
   if (o.sway) m.defines = { CAPE_SWAY: '' };
-  m.customProgramCacheKey = () => 'sc-cape-v2' + (o.sway ? '-sway' : '');
+  m.customProgramCacheKey = () => 'sc-cape-v4' + (o.sway ? '-sway' : '');
   _mats.set(key, own(m));
   return m;
 }
 
 // ------------------------------------------------------------------ geometry
 
-/** Cape plane (cols x rows vertices), v = 1 at the shoulders; winding flipped so the OUTSIDE (away from the back) is the front face. */
-export function capeGeometry(cols = 9, rows = 13) {
+/**
+ * Cape plane (cols x rows vertices), v = 1 at the shoulders; winding flipped so the OUTSIDE (away from the back) is
+ * the front face. Carries `capeAO` (baked fold shade, 1 = unshaded): `d` given → from the fold field, else all 1.
+ */
+export function capeGeometry(cols = 9, rows = 13, d = null) {
   const g = new THREE.PlaneGeometry(1, 1, cols - 1, rows - 1);
   const idx = g.index.array;
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
+  const ao = new Float32Array(cols * rows).fill(1);
+  if (d) for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) ao[r * cols + c] = capeShade(c / (cols - 1), r / (rows - 1), d);
+  g.setAttribute('capeAO', new THREE.BufferAttribute(ao, 1));
   return g;
 }
 
@@ -78,15 +95,58 @@ export function drapePoint(u, v, d = CAPE_DEFAULTS, out = new THREE.Vector3()) {
   const w = THREE.MathUtils.lerp(d.topW, d.botW, Math.pow(v, 0.8));
   const x = (u - 0.5) * w;
   const side = (2 * u - 1) ** 2;
-  const z = d.anchorZ + side * 0.085 * (1 - v * 0.35) - v * 0.06 - Math.sin(v * Math.PI) * 0.02;
+  // the top corners sit on the shoulder blades just behind the pauldrons; lower down the sides wrap forward around them
+  const wrap = 0.085 * THREE.MathUtils.lerp(0.25, 1, smoothstep(0, 0.35, v)) * (1 - v * 0.35);
+  const z = d.anchorZ + side * wrap - v * 0.06 - Math.sin(v * Math.PI) * 0.02;
   // rounded hem: the middle hangs a little lower than the corners (reads as cloth, not a board)
   const hem = (d.hemCurve ?? 0) * (1 - side) * Math.pow(v, 3);
-  return out.set(x, d.anchorY - v * d.len - hem, z);
+  // neckline: the middle rides up the nape, the corners settle on the shoulders
+  const neck = (d.neckArc ?? 0) * (1 - side) * (1 - v) * (1 - v);
+  return out.set(x, d.anchorY - v * d.len - hem + neck, z);
 }
 
-/** Soft vertical folds (kitten-space depth offset) that open toward the hem; added at write time, not simulated. */
+/** Fold field across the cape, about -1..1 (+ = a valley pressed toward her back). Two frequencies so it isn't regular. */
+export function capeFoldPhase(u, d = CAPE_DEFAULTS) {
+  const f = d.folds ?? 3;
+  return 0.72 * Math.sin(u * TAU * f + 0.5) + 0.28 * Math.sin(u * TAU * f * 1.87 + 1.9);
+}
+/** Gathered pleats just under the neckline (fade out by a third of the length). */
+function gatherK(v) { return smoothstep(0, 0.06, v) * (1 - smoothstep(0.06, 0.32, v)); }
+
+/**
+ * Soft vertical folds (kitten-space depth offset) opening toward the hem; added at write time, not simulated. Only
+ * ever OUTWARD (<= 0, away from her back): valleys sit on the simulated surface, crests billow out, so the folds
+ * never push the cloth into the armour under it.
+ */
 export function capeFold(u, v, d = CAPE_DEFAULTS) {
-  return Math.sin(u * Math.PI * 2 * (d.folds ?? 2) + 0.5) * (d.foldAmp ?? 0) * Math.pow(v, 0.85);
+  const fold = (capeFoldPhase(u, d) - 1) * 0.5 * (d.foldAmp ?? 0) * Math.pow(v, 0.85);
+  const gather = ((d.gather ?? 0) * (Math.sin(u * TAU * 7 + 0.3) - 1) * 0.5) * gatherK(v);
+  return fold + gather;
+}
+/** Wavy hem (kitten-space height offset): crests hang a touch lower than the valleys. */
+export function capeHem(u, v, d = CAPE_DEFAULTS) {
+  return (d.hemWave ?? 0) * capeFoldPhase(u, d) * smoothstep(0.7, 1, v);
+}
+/** Baked fold shade 0..1 for (u, v): fold valleys and gathers darker, a slight lift on the crests. */
+export function capeShade(u, v, d = CAPE_DEFAULTS) {
+  const ph = capeFoldPhase(u, d), open = Math.pow(v, 0.7);
+  const valley = Math.max(0, ph) * open, crest = Math.max(0, -ph) * open;
+  const g = Math.max(0, Math.sin(u * TAU * 7 + 0.3)) * gatherK(v);
+  return clamp(1 - (d.ao ?? 0.3) * valley + 0.05 * crest - 0.16 * g, 0, 1.1);
+}
+
+/** Catmull-Rom taps (4 indices + 4 weights per render sample) from a fine grid onto a coarse one. */
+function crTaps(nCoarse, res) {
+  const nFine = (nCoarse - 1) * res + 1;
+  const ix = new Int16Array(nFine * 4), w = new Float32Array(nFine * 4);
+  for (let f = 0; f < nFine; f++) {
+    let i = Math.floor(f / res), t = f / res - i;
+    if (i >= nCoarse - 1) { i = nCoarse - 2; t = 1; }
+    const t2 = t * t, t3 = t2 * t;
+    const ws = [(-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2, (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2];
+    for (let k = 0; k < 4; k++) { ix[f * 4 + k] = clamp(i - 1 + k, 0, nCoarse - 1); w[f * 4 + k] = ws[k]; }
+  }
+  return { n: nFine, ix, w };
 }
 
 // ------------------------------------------------------------------ verlet sim (pure math; node-testable)
@@ -235,9 +295,13 @@ export const CAPE_FRONT = Object.freeze({ margin: 0.07, marginLow: 0.05, snapYaw
 
 /** Collision spheres in kitten space (art.md §5: torso, legs, tail root; plus pauldrons and tassets). */
 export const CAPE_COLLIDERS = Object.freeze([
-  { j: 'chest', p: [0, 0.03, -0.03], r: 0.165 }, { j: 'chest', p: [0.17, 0.14, -0.01], r: 0.1 }, { j: 'chest', p: [-0.17, 0.14, -0.01], r: 0.1 },
+  { j: 'chest', p: [0, 0.03, -0.03], r: 0.165 }, { j: 'chest', p: [0.17, 0.13, -0.02], r: 0.11 }, { j: 'chest', p: [-0.17, 0.13, -0.02], r: 0.11 },
   { j: 'hips', p: [0, -0.04, -0.01], r: 0.18 }, { j: 'thighL', p: [0, -0.08, 0], r: 0.075 }, { j: 'thighR', p: [0, -0.08, 0], r: 0.075 },
   { j: 'tail0', p: [0, 0, 0], r: 0.07 }, { j: 'head', p: [0, 0.12, -0.02], r: 0.2 },
+  // shins + feet (kneel, sit, faint: the cloth lies over the folded legs instead of through the sabatons)
+  { j: 'kneeL', p: [0, -0.05, 0], r: 0.06 }, { j: 'kneeR', p: [0, -0.05, 0], r: 0.06 },
+  { j: 'footL', p: [0, -0.02, 0.02], r: 0.085 }, { j: 'footR', p: [0, -0.02, 0.02], r: 0.085 },
+  { j: 'footL', p: [0, -0.03, 0.075], r: 0.06 }, { j: 'footR', p: [0, -0.03, 0.075], r: 0.06 },
 ]);
 
 /**
@@ -252,7 +316,18 @@ export class HeroCape {
     this.rig = o.rig; this.root = o.root;
     this.d = { ...CAPE_DEFAULTS, ...(o.dims || {}) };
     this.sim = new ClothSim(this.d);
-    this.geo = capeGeometry(this.d.cols, this.d.rows);
+    // render grid (finer than the sim): Catmull-Rom taps per render column / row
+    this._tx = crTaps(this.d.cols, Math.max(1, this.d.resX | 0));
+    this._ty = crTaps(this.d.rows, Math.max(1, this.d.resY | 0));
+    /** render grid size (columns, rows) */
+    this.rc = this._tx.n; this.rr = this._ty.n;
+    this.geo = capeGeometry(this.rc, this.rr, this.d);
+    this._loc = new Float32Array(this.sim.N * 3);   // sim particles in root-local space (per write)
+    this._fold = new Float32Array(this.rc * this.rr * 2);
+    for (let r = 0; r < this.rr; r++) for (let c = 0; c < this.rc; c++) {
+      const u = c / (this.rc - 1), v = r / (this.rr - 1), i = (r * this.rc + c) * 2;
+      this._fold[i] = capeFold(u, v, this.d); this._fold[i + 1] = capeHem(u, v, this.d);
+    }
     this.mesh = new THREE.Mesh(this.geo, capeMaterial(o.style || 'red'));
     this.mesh.name = 'cape'; this.mesh.frustumCulled = false; this.mesh.castShadow = true; this.mesh.receiveShadow = true;
     this.style = o.style || 'red';
@@ -271,6 +346,8 @@ export class HeroCape {
     for (let c = 0; c < this.d.cols; c++) this.pinLocal.push(drapePoint(c / (this.d.cols - 1), 0, this.d, new THREE.Vector3()));
   }
   setStyle(style) { this.style = style; this.mesh.material = capeMaterial(style); }
+  /** Render-geometry vertex index of sim particle (column c, row r). */
+  vertexIndex(c, r) { return r * Math.max(1, this.d.resY | 0) * this.rc + c * Math.max(1, this.d.resX | 0); }
   /** 'verlet' | 'sway'. blend seconds (Meme Cam: 0.3 in, 0.6 out). */
   setMode(mode, { blend = 0.3, period, gustPeak, amp } = {}) {
     this.mode = mode; this.wTarget = mode === 'sway' ? 1 : 0; this.blendDur = Math.max(1e-3, blend);
@@ -340,7 +417,7 @@ export class HeroCape {
     this._write(speed);
   }
   _write(speed) {
-    const pos = this.geo.attributes.position, C = this.d.cols, R = this.d.rows;
+    const C = this.d.cols, R = this.d.rows, loc = this._loc;
     _inv.copy(this.root.matrixWorld).invert();
     _m.multiplyMatrices(_inv, this._pinM); // kitten bind space -> root local, following the chest
     const w = smoothstep(0, 1, this.w);
@@ -348,14 +425,13 @@ export class HeroCape {
     const t = this.sway.t % T;
     const gust = 0.5 + 0.5 * Math.cos(om * (t - this.sway.gustPeak));
     const amp = this.sway.amp * (0.6 + 0.8 * gust);
+    // 1) sim particles → root local (cross-faded with the looping Meme Cam sway)
     for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
-      const i = r * C + c, k = i * 3;
-      const u = c / (C - 1), vv = r / (R - 1), fold = capeFold(u, vv, this.d);
+      const k = (r * C + c) * 3;
+      const u = c / (C - 1), vv = r / (R - 1);
       _v.set(this.sim.p[k], this.sim.p[k + 1], this.sim.p[k + 2]).applyMatrix4(_inv);
-      _v.z += fold;
       if (w > 0) {
         drapePoint(u, vv, this.d, _w).applyMatrix4(_m);
-        _w.z += fold;
         const kk = vv * vv;
         _w.z -= kk * (0.05 + speed * 0.18) + kk * gust * 0.07 * amp;
         _w.x += kk * Math.sin(om * 2 * t + vv * 4.0) * 0.028 * amp;
@@ -363,7 +439,25 @@ export class HeroCape {
         _w.y += kk * gust * 0.025 * amp;
         _v.lerp(_w, w);
       }
-      pos.setXYZ(i, _v.x, _v.y, _v.z);
+      loc[k] = _v.x; loc[k + 1] = _v.y; loc[k + 2] = _v.z;
+    }
+    // 2) Catmull-Rom up to the render grid + folds / gathers / wavy hem
+    const pos = this.geo.attributes.position, arr = pos.array, tx = this._tx, ty = this._ty, rc = this.rc, fold = this._fold;
+    for (let r = 0; r < this.rr; r++) {
+      for (let c = 0; c < rc; c++) {
+        let x = 0, y = 0, z = 0;
+        for (let b = 0; b < 4; b++) {
+          const wy = ty.w[r * 4 + b]; if (wy === 0) continue;
+          const row = ty.ix[r * 4 + b] * C;
+          for (let a = 0; a < 4; a++) {
+            const ww = wy * tx.w[c * 4 + a]; if (ww === 0) continue;
+            const k = (row + tx.ix[c * 4 + a]) * 3;
+            x += loc[k] * ww; y += loc[k + 1] * ww; z += loc[k + 2] * ww;
+          }
+        }
+        const i = r * rc + c;
+        arr[i * 3] = x; arr[i * 3 + 1] = y + fold[i * 2 + 1]; arr[i * 3 + 2] = z + fold[i * 2];
+      }
     }
     pos.needsUpdate = true;
     this.geo.computeVertexNormals();
@@ -377,13 +471,15 @@ export class HeroCape {
  */
 export function buildSwayCape(style = 'cream', dims = {}, toChest = null) {
   const d = { ...CAPE_DEFAULTS, ...dims };
-  const g = capeGeometry(d.cols, d.rows);
+  const cols = (d.cols - 1) * Math.max(1, d.resX | 0) + 1, rows = (d.rows - 1) * Math.max(1, d.resY | 0) + 1;
+  const g = capeGeometry(cols, rows, d);
   const pos = g.attributes.position, v = new THREE.Vector3();
-  for (let r = 0; r < d.rows; r++) for (let c = 0; c < d.cols; c++) {
-    drapePoint(c / (d.cols - 1), r / (d.rows - 1), d, v);
-    v.z += capeFold(c / (d.cols - 1), r / (d.rows - 1), d);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const u = c / (cols - 1), vv = r / (rows - 1);
+    drapePoint(u, vv, d, v);
+    v.z += capeFold(u, vv, d); v.y += capeHem(u, vv, d);
     if (toChest) v.applyMatrix4(toChest);
-    pos.setXYZ(r * d.cols + c, v.x, v.y, v.z);
+    pos.setXYZ(r * cols + c, v.x, v.y, v.z);
   }
   g.computeVertexNormals();
   const mesh = new THREE.Mesh(g, capeMaterial(style, { sway: true }));

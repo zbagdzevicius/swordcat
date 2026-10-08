@@ -34,12 +34,15 @@ y 0 means "on the ground here" (terrain or a bridge deck).
   - Already-rescued kittens (and squires already in the party) don't come back on a reload; their barrel / opened cage stays.
 - Squire rescue (`bridge` zone `rescue: { companion: 'mochi', cage: [30,74], hp: 30, play: 'd01' }`) →
   `ctx.companions.spawnKitten('mochi', [30, 74], 'cage', { needClear: 'bridge', hp: 30, play: 'd01', facing: Math.PI })`.
-  **We build the whole rat cage cart** (Kenney `env/town/cart.glb` fitted to 2.0 m + bars on its bed + a box collider), so
-  please don't place `cart-high` at the cage spot. (`cart-high` from §12.3 is loaded with sacks, so bars had nowhere to sit.)
-  When the lock opens Mochi hops out, `story.play('d01')` runs, then he joins the party where the cage stood.
+  Without `y` we build the whole rat cage cart (Kenney `env/town/cart.glb` fitted to 2.0 m + bars on its bed + a box
+  collider). **With `y` (the meadow passes `y: 1.05` on its own `cart-high`) we add only the bars at that height** — no
+  second cart, no collider; the caged kitten is pinned inside the bars (your cart's box collider can't push it out).
+  When the lock opens Mochi hops out toward her onto free ground (`physics.blockedAt` / deep water / bounds checked),
+  `story.play('d01')` runs, then he joins the party where he landed. Smoke `companions:meadow` walks this in your meadow.
 - CS-03 net: Pudding listens to `objective:progress {id: 'net_ropes', value}` (a tether drops per cut rope, in your post
   order (−2,24), (6,24), (2,28)) and to flag `meadow.pudding` (`'netted'` → the net; `true` → he sniffs, nods, flies to the
-  `pud_1..4` anchors). On a reload with `'netted'` / `true` he comes back netted / perched by himself.
+  `pud_1..4` anchors). On a reload with `'netted'` / `true` he comes back netted / perched by himself, and also after
+  any `cutscene:end` in the meadow that left no Pudding (a scene that despawns its own Pudding at its end is fine).
 
 ### For story (cutscenes)
 - `spawn` step `{ id: 'pudding', type: 'pudding', at, facing }` → `ctx.companions.spawnNpc('pudding', at, facing)`.
@@ -63,7 +66,9 @@ y 0 means "on the ground here" (terrain or a bridge deck).
 - **Taunt** (Mochi's Shield Wall, §9.2): taunted enemies get `tauntedBy` (the Companion) and `tauntT` (s left; cleared to
   `null` / 0 when the wall drops). Please make `targetActor()` return `tauntedBy` while `tauntT > 0 && tauntedBy.alive &&
   tauntedBy.napT <= 0`, so they go for Mochi / the wall. Melee hits on the wall posts already stagger the attacker 1.0 s
-  (`stagger(sec)`).
+  (`stagger(sec)`). **Still open (M1 re-check 2026-10-08):** `Enemy.targetActor()` / `distToPlayer()` only know the
+  player, so the taunt is set but has no effect yet (the wall itself already blocks and staggers). Range checks in
+  `chaseMelee` should use the distance to `targetActor()` for this to work.
 - **Token share** (§9.1, `COMPANIONS.tokenShare` 0.2): when an enemy is granted an attack token and an awake companion
   (`ctx.companions.active`, `napT <= 0`) is within `COMPANIONS.engage` (6 m), attack the companion instead 20% of the time.
 - Companions only fight enemies that are `alerted` or in an engaging state (`chase, windup, strike, recover, attack, orbit,

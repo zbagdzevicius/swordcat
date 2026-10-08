@@ -106,7 +106,7 @@ export const FACE = Object.freeze({
   skull: [0, 0.165, 0], skullScale: [1.18, 0.96, 1.0], skullR: 0.145,
   eyeL: [0.074, 0.158, 0.118], eyeR: [-0.074, 0.158, 0.118], nose: [0, 0.12, 0.158],
   mouth: [0, 0.1, 0.15], muzzle: [0, 0.097, 0.135], chin: [0, 0.064, 0.108], pad: [0.028, 0.097, 0.125], eyeR0: 0.045,
-  cheek: [0.12, 0.075, 0.045], cheekR: 0.093,
+  cheek: [0.118, 0.08, 0.022], cheekR: 0.093, cheekScale: [1, 0.9, 0.82],
 });
 const _d3 = (p, a) => Math.hypot(p.x - a[0], p.y - a[1], p.z - a[2]);
 

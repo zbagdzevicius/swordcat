@@ -9,7 +9,8 @@
 // play2D / play3D ids: an SFX name (sfxMap.js), a file id ('pickup/bubble2'), a GAME_DESIGN pattern
 // ('impact/chain_0x', 'sword/swish_01–13'), a full path, or a procedural id routed to the builders below so cutscene
 // `sfx` steps can name them: 'laugh' (laugh build), 'laughChorus', 'bell' / 'sunbell', 'bellClunk' (damped Sunbell),
-// 'heartbeat', 'march' (opts.on === false stops it), 'shimmer'.
+// 'heartbeat', 'march' (opts.on === false stops it), 'shimmer'. Each returns a `{ name, stop(fade) }` handle.
+// `{ loop: true }` without `dur` becomes loop(): outside the voice pools, following its `at` actor.
 //
 // Graph (one THREE.AudioListener on ctx.camera; its gain is the MASTER bus):
 //   decks ─► musicDuck ─► hitDuck ─► music ─┐
@@ -43,19 +44,40 @@ const PLAYER_IDS = new Set(['swordcat', 'player', 'clem', 'clementine']);
 const hasWebAudio = () => typeof window !== 'undefined' && !!(window.AudioContext || window.webkitAudioContext);
 const sliderGain = (v) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 1)) ** MIX.curve;
 
-/** Procedural ids accepted by play2D / play3D (cutscene `sfx` steps name them like files). */
+/** `{ name, stop(fade) }` handle for procedural layers (cutscene `sfx` steps keep and stop them like file sounds). */
+const procHandle = (name, stop, extra) => ({ name, ...extra, stop: (fade) => { try { stop(fade); } catch { /* gone */ } } });
+const volOf = (o) => o.volume ?? o.vol;
+
+/**
+ * Procedural ids accepted by play2D / play3D (cutscene `sfx` steps name them like files). Every entry returns a
+ * `{ name, stop(fade) }` handle (null when nothing could start). `vol` is accepted as an alias of `volume`.
+ */
 const PROCEDURAL = {
-  laugh: (am, at, o) => am.laugh(at, o),
-  hyenaLaugh: (am, at, o) => am.laugh(at, o),
-  laughBuild: (am, at, o) => am.laugh(at, o),
-  laughChorus: (am, at, o) => am.laughChorus(at, o),
-  bell: (am, at, o) => am.bell({ ...o, pos: at ?? o.pos }),
-  sunbell: (am, at, o) => am.bell({ ...o, pos: at ?? o.pos }),
-  bellClunk: (am, at, o) => am.bell({ ...o, damped: true, pos: at ?? o.pos }),
-  sunbellDamped: (am, at, o) => am.bell({ ...o, damped: true, pos: at ?? o.pos }),
-  heartbeat: (am, at, o) => am.heartbeat(o),
-  march: (am, at, o) => am.march(o.on !== false, { center: at ?? o.center ?? null, volume: o.volume ?? o.vol ?? 1 }),
-  shimmer: (am, at, o) => am.shimmer(o.on !== false),
+  laugh: (am, at, o) => am.laugh(at, { ...o, volume: volOf(o) }),
+  hyenaLaugh: (am, at, o) => am.laugh(at, { ...o, volume: volOf(o) }),
+  laughBuild: (am, at, o) => am.laugh(at, { ...o, volume: volOf(o) }),
+  laughChorus: (am, at, o) => {
+    const n = am.laughChorus(at, { ...o, volume: volOf(o) });
+    return procHandle('laughChorus', (f) => am.stopLaughs(f), { count: n });
+  },
+  bell: (am, at, o) => am.bell({ ...o, volume: volOf(o), pos: at ?? o.pos }),
+  sunbell: (am, at, o) => am.bell({ ...o, volume: volOf(o), pos: at ?? o.pos }),
+  bellClunk: (am, at, o) => am.bell({ ...o, volume: volOf(o), damped: true, pos: at ?? o.pos }),
+  sunbellDamped: (am, at, o) => am.bell({ ...o, volume: volOf(o), damped: true, pos: at ?? o.pos }),
+  heartbeat: (am, at, o) => {
+    const n = am.heartbeat({ ...o, volume: volOf(o) ?? 1 });
+    return n ? procHandle('heartbeat', () => {}, { beats: n }) : null;
+  },
+  march: (am, at, o) => {
+    const on = o.on !== false;
+    am.march(on, { center: at ?? o.center ?? null, volume: volOf(o) ?? 1 });
+    return on ? procHandle('march', () => am.march(false)) : null;
+  },
+  shimmer: (am, at, o) => {
+    const on = o.on !== false;
+    am.shimmer(on);
+    return on ? procHandle('shimmer', () => am.shimmer(false)) : null;
+  },
 };
 
 /** Files to keep decoded for a level: the manifest's '*' subset + that level's subset (+ buffered music). */
@@ -315,6 +337,9 @@ export class AudioManager {
       if (!v.follow || v.endAt <= now) { if (v.endAt <= now) v.follow = null; continue; }
       if (this._posOf(v.follow, v.pos)) this._setPannerPos(v.panner, v.pos, 0.03);
     }
+    if (this.loops.size) {
+      for (const h of this.loops) if (h.follow && h.panner && this._posOf(h.follow, _v)) this._setPannerPos(h.panner, _v, 0.05);
+    }
     if (this.bells.size) {
       for (const b of this.bells) if (now > b.endAt + 0.5) { this.bells.delete(b); try { b.panner?.disconnect(); } catch { /* gone */ } }
     }
@@ -518,6 +543,11 @@ export class AudioManager {
     this._note(at != null ? '3d' : '2d', name);
     const proc = PROCEDURAL[name];
     if (proc) return proc(this, at, opts);
+    // an endless loop (cutscene purr, ambience) runs outside the voice pools so a burst of one-shots never steals it
+    if (opts.loop && !(opts.dur > 0)) {
+      return this.loop(name, { volume: volOf(opts) ?? 1, rate: opts.rate ?? 1, at, bus: opts.bus ?? (at != null ? 'world' : 'player'),
+        fadeIn: opts.fadeIn ?? 0.3, noted: true });
+    }
     const def = SFX[name];
     if (def) {
       const h = this._playDef(def, name, at, opts);
@@ -695,14 +725,17 @@ export class AudioManager {
     return r;
   }
 
-  /** Looping sound (ambience, purr) outside the pools. Returns { stop(fade), setVolume(v, fade) } or null. */
-  loop(id, { volume = 1, vol, rate = 1, at = null, bus = 'world', fadeIn = 0.8 } = {}) {
-    this._note('loop', id);
+  /**
+   * Looping sound (ambience, purr) outside the pools; with `at` it is positional (an actor / Object3D is followed).
+   * Returns { name, stop(fade), setVolume(v, fade) } at once (the buffer may still be decoding), or null.
+   */
+  loop(id, { volume = 1, vol, rate = 1, at = null, bus = 'world', fadeIn = 0.8, noted = false } = {}) {
+    if (!noted) this._note('loop', id);
     if (!this.ready) return null;
     const def = SFX[id];
     const path = this.resolve(def ? def.files[0] : id);
-    if (!path) return null;
-    const handle = { name: String(id), src: null, out: null, dead: false,
+    if (!path) { this._warnOnce('id:' + id, 'unknown sound id (not in src/audio/assets.manifest.js)'); return null; }
+    const handle = { name: String(id), src: null, out: null, panner: null, follow: this._followOf(at), dead: false,
       stop: (fade = 0.6) => {
         handle.dead = true; this.loops.delete(handle);
         if (!handle.out) return;
@@ -721,13 +754,15 @@ export class AudioManager {
       let dest = this.bus[bus] ?? this.bus.world;
       if (at != null && this._posOf(at, _v)) {
         const p = ac.createPanner(); p.distanceModel = MIX.distanceModel; p.refDistance = MIX.refDistance; p.rolloffFactor = MIX.rolloff;
-        this._setPannerPos(p, _v, 0); p.connect(this.bus.world); dest = p;
+        p.maxDistance = MIX.maxDistance;
+        this._setPannerPos(p, _v, 0); p.connect(this.bus.world); dest = p; handle.panner = p;
       }
       out.connect(dest);
       const src = ac.createBufferSource(); src.buffer = buf; src.loop = true; src.playbackRate.value = rate * (def?.rate ?? 1);
       src.connect(out); src.start(t, this.rand() * buf.duration * 0.9);
-      src.onended = () => { try { out.disconnect(); if (dest !== out && dest.disconnect && dest !== this.bus[bus]) dest.disconnect(); } catch { /* */ } };
+      src.onended = () => { try { out.disconnect(); handle.panner?.disconnect(); } catch { /* */ } };
       handle.src = src; handle.out = out;
+      this.started[handle.name] = (this.started[handle.name] ?? 0) + 1;
     });
     return handle;
   }
@@ -835,7 +870,10 @@ export class AudioManager {
 
   _levelLoaded(id, level) {
     this.levelId = id ?? null;
-    this.director.setLevel(id, level?.music ?? level?.def?.music ?? null);
+    const m = level?.music ?? level?.def?.music ?? null;
+    // meadow's night tutorial keeps the CS-01 bards' tale (`music.prologue`) until CS-02 sets prologue.done
+    const prologue = !!m?.prologue && !this.ctx.state?.getFlag?.('prologue.done');
+    this.director.setLevel(id, m, { prologue });
     this.surface = level?.surface ?? LEVEL_SURFACE[id] ?? 'grass';
     if (this.ready) this._setAmbience(id);
   }
@@ -1022,7 +1060,12 @@ export class AudioManager {
   footstep(actor, position, surface) {
     const player = this.ctx.player, isP = !!actor && (actor === player || actor.tags?.has?.('player'));
     if (isP) this._playerSteps = true;
-    const name = FOOTSTEP[surface] ?? FOOTSTEP[this.surface] ?? 'footGrass';
+    let surf = surface;
+    if (!FOOTSTEP[surf]) {                                    // emitter without a surface: ask the level where it stands
+      const p = actor?.pos ?? position, lvl = this.ctx.levels?.current;
+      if (p && typeof lvl?.surfaceAt === 'function') { try { surf = lvl.surfaceAt(p.x, p.z); } catch { surf = null; } }
+    }
+    const name = FOOTSTEP[surf] ?? FOOTSTEP[this.surface] ?? 'footGrass';
     if (isP || (!actor && !position)) this._herStep(name);
     else this.play3D(name, actor ?? position, { volume: 0.8 });
   }

@@ -26,7 +26,7 @@ export function swordcatConfig({ cape = 'cream', armour = true, bow = true, swor
     id: 'swordcat', name: 'Clementine', tier, scale: 1, width: 1, headScale: 1.0,
     coat: SWORDCAT_COAT,
     eyes: { inner: PAL.irisInner, outer: PAL.irisOuter, ring: PAL.irisRing, pupil: PAL.pupil, size: 1.0 },
-    fur: { len: 0.046, cheek: 1.04 }, tail: { thick: 0.88 },
+    fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 0.88 },
     bow: bow ? SWORDCAT_BOW : null,
     outfit: { armour: armour ? 'plate' : null },
     accessories: armour ? [] : [{ id: 'tunic', color: '#9C7B57', trim: '#6E5638' }],

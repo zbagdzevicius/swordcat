@@ -8,7 +8,7 @@
 //   - Dizzy: poise × 4 per hit, +35 per parry, full on a gold parry / lesson; 2 s idle → decay 8/s; full → 3 s
 //     dizzy (staggered; `critMul` 2 for Combat), then 0.
 //   - Death and retry: when she loses a life, the current phase restarts at full phase HP and the adds despawn.
-//   - Barkus: `hpFloor` (any phase row's) holds until freeShard(); with the shard freed, reaching `rallyAt` plays
+//   - Barkus: `hpFloor` (any phase row's) holds until freeShard() (the 3rd P3 `shardSlam` parry calls it); with the shard freed, reaching `rallyAt` plays
 //     CS-15 (`onRally.play`) instead of dying (CS-15's `end` emits boss:defeated).
 import { Enemy } from './Enemy.js';
 import { Dizzy } from './Dizzy.js';
@@ -53,6 +53,8 @@ export class Boss extends Enemy {
     this.meter = new Dizzy(def.dizzyMax ?? 100);
     this.dizzyMax = this.meter.max;
     this.shardFreed = false; this.rallied = false; this.started = false;
+    /** parries of the P3 shard move so far (countShardParry) */
+    this.shardParries = 0;
     this._rallyPending = false;
     this._phasesFired = new Set([0]);
     this._eventsFired = new Set();
@@ -167,6 +169,7 @@ export class Boss extends Enemy {
     }
     this.despawnAdds();
     this.meter.reset();
+    if (!this.shardFreed) this.shardParries = 0;
     this.endTelegraph(); this.swing = null; this.releaseToken(); this.attack = null; this.staggerT = 0;
     this.emitDizzy();
     if (!this.scripted) this.setState('idle');
@@ -225,12 +228,26 @@ export class Boss extends Enemy {
   /** Barkus: the third phase-3 parry frees the shard (hpFloor off). */
   freeShard() { this.shardFreed = true; }
 
+  /**
+   * §11.5 Barkus P3: parries of the phase row's shard move (`shardSlam.parriesNeeded`, 3) free the shard. Counts
+   * only the `shardSlam` move when the row lists it, any parry otherwise; a phase retry resets the count.
+   */
+  countShardParry() {
+    const row = this.def.phases?.[this.phase];
+    const need = row?.shardSlam?.parriesNeeded ?? row?.parriesNeeded;
+    if (!need || this.shardFreed) return;
+    if (row.moves?.includes('shardSlam') && this.attack?.id !== 'shardSlam') return;
+    this.shardParries++;
+    if (this.shardParries >= need) this.freeShard();
+  }
+
   /** §11.1: +35 per parry (full on a gold glint); a parried boss is briefly interrupted. */
   onParried(by, { gold = false } = {}) {
     if (!this.alive) return;
-    const res = this.meter.addParry(gold);
+    this.countShardParry();
+    const res = this.meter.addParry(gold);                     // '' while already dizzy: nothing to report
     if (res !== 'dizzy') this.stagger(PLAYER.guard.eliteParryStagger);
-    this._dizzyResult(res || 'gain');
+    this._dizzyResult(res);
   }
 
   onHit(hit) {

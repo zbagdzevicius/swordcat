@@ -36,8 +36,23 @@ const DEBRIS_STYLE = {
   fur:      { n: 8, shape: SHAPE.FEATHER, color: '#A88A5E', size: [0.08, 0.12], life: [0.8, 1.2], speed: [1.2, 2.4], gravity: 1.8, drag: 3.0, spin: 6, up: 1.0 },
   wood:     { n: 8, shape: SHAPE.SHARD, color: '#8A6A44', size: [0.07, 0.13], life: [0.6, 0.9], speed: [2.0, 3.6], gravity: 12, drag: 0.4, spin: 10, up: 2.4, floor: true },
   leaves:   { n: 10, shape: SHAPE.FEATHER, color: '#5E7A3A', size: [0.1, 0.16], life: [1.0, 1.6], speed: [1.0, 2.2], gravity: 1.2, drag: 2.8, spin: 5, up: 1.0 },
+  rocks:    { n: 10, shape: SHAPE.SHARD, color: '#8C8A84', size: [0.08, 0.16], life: [0.6, 0.95], speed: [2.2, 4.0], gravity: 13, drag: 0.4, spin: 8, up: 2.6, floor: true },
+  straw:    { n: 12, shape: SHAPE.FEATHER, color: '#D9BE72', size: [0.09, 0.15], life: [0.9, 1.4], speed: [1.2, 2.6], gravity: 2.2, drag: 2.6, spin: 7, up: 1.4 },
+  metal:    { n: 7, shape: SHAPE.SHARD, color: '#9EA4AA', size: [0.05, 0.09], life: [0.45, 0.7], speed: [2.4, 4.2], gravity: 13, drag: 0.4, spin: 14, up: 2.2, floor: true },
 };
 export const DEBRIS_KINDS = Object.keys(DEBRIS_STYLE);
+
+/**
+ * Burst kinds other areas emit for breakables (requests/audio.md, world props) → the debris they throw (pure; unit-tested).
+ * `sparks` adds a metal spark burst on top (locks, cages).
+ */
+export const DEBRIS_ALIAS = Object.freeze({
+  crate: { debris: 'wood' }, barrel: { debris: 'wood' }, post: { debris: 'wood' }, fence: { debris: 'wood' },
+  cage: { debris: 'wood', sparks: true }, lock: { debris: 'metal', sparks: true }, chain: { debris: 'metal', sparks: true },
+  stone: { debris: 'rocks' }, boulder: { debris: 'rocks' }, rock: { debris: 'rocks' }, pebbles: { debris: 'rocks' },
+  sack: { debris: 'straw' }, hay: { debris: 'straw' }, dummy: { debris: 'straw' },
+  slime: { debris: 'droplets' }, feather: { debris: 'feathers' }, bone: { debris: 'bones' }, leaf: { debris: 'leaves' },
+});
 
 const _p = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);

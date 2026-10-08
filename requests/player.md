@@ -65,3 +65,17 @@ for one frame would hide it. (The player smoke blocks wait on sim-side condition
   `pounce`; resolve at the end when `once`) and emote clips (`meow`, `sneeze`, `nod`, `shake`, `blink`, `earsFlat`,
   `tailPuff`, `bowBounce`, `jump`), `emote(...)`, `prop(...)`, `attach(...)`, and `player.setOutfit('tunic' |
   'tunic_bow' | 'armour')` for CS-01.
+
+## Done since (M1 resume, 2026-10-08)
+- combat's "Riposte is cancelled by the Stand that made the parry": fixed. A Stand that is already held when a swing starts
+  (Riposte, ⚔ out of the Stand, Auto-Stand) no longer cancels that swing; only a fresh Stand press does, and she drops
+  back into the still-held Stand when the swing ends (unit test in tests/unit/player.test.js).
+- physics: `isDeepWater` / `isShallowWater` now get her feet height (`pos.y`).
+- companions: hits on `breakable` targets or actors tagged `prop` (cage locks, crates, boulders) give no Valor.
+- Milk capacity reads `ctx.companions.milkBonus` when CompanionManager provides it (falls back to the Mochi config).
+
+## To core — smoke under load (FYI)
+- With many agents' browsers on the one GPU, `page.screenshot` took 5–30 s (one boot screenshot timed out at 30 s) and
+  `__GAME__.events` (ring of 200) sometimes lost `player:*` names. tests/smoke/player.mjs now pauses the sim
+  (`setTimeScale(0)`) around its own screenshots and records `player:*` / `camera:meme` / `combat:hit` with its own
+  `bus.tap`. A harness-level "freeze during t.shot" and a larger ring would help every area.

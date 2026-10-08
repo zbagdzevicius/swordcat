@@ -512,15 +512,15 @@ export const S = {
   'obj.done': d('Objective complete!'),
 
   // ================================================================== prompts (interaction tags, cutscene prompts)
-  'prompt.interact': d('Interact'),
+  'prompt.interact': d('[E]'),
   'prompt.talk': d('Talk'),
-  'prompt.picnic': d('Milk break'),
+  'prompt.picnic': d('Sit for a Milk Break [E]'),
   'prompt.vigil': d('Rest'),
   'prompt.read': d('Read'),
   'prompt.open': d('Open'),
   'prompt.shop': d('Browse'),
   'prompt.board': d('Quest Board'),
-  'prompt.skip': d('Hold to skip'),
+  'prompt.skip': d('Hold [Esc] to skip'),
   'prompt.next': d('Next'),
   'prompt.continue': d('Continue'),
 
@@ -635,6 +635,18 @@ export const S = {
   'hud.lives': d('×{n}'),
   'hud.kittens': d('{n}/{max}'),
   'memecam.hint': d('Any key to stop posing'),
+  'hud.riposte': d('Riposte!'),
+  'menu.quitConfirm': d('Return to the title screen? Your progress up to the last Vigil Stone is kept.'),
+  'menu.close': d('Close'),
+  'pause.foundIn': d('{region}'),
+  'pause.kittensCount': d('{n}/{max} found'),
+  'pause.lettersCount': d('{n}/{max} found'),
+  'credits.made': d('Made with love for one very small knight.'),
+  'credits.team': d('Design · Code · Art · Music direction: the Swordcat team'),
+  'vigil.swapNone': d('No squires yet. Rescue one!'),
+  'vigil.active': d('At your side'),
+  'results.infinite': d('∞'),
+  'loading.hint': d('Loading'),
   'rotate.hint': d('Turn your device sideways'),
 };
 

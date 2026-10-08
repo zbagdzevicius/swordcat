@@ -360,6 +360,18 @@ test('Player: parry through Combat.applyHit → +20 Valor, enemy onParried, then
   assert.equal(r.count(E.PLAYER_PARRY), 1);
   r.step(); r.tap('attack');
   assert.equal(p.swing?.def.id, 'riposte');
+  // the Stand that made the parry is still held: it must not cancel the Riposte (requests/combat.md)
+  r.seconds(0.3);
+  assert.equal(p.state, 'attack', 'held Stand does not cancel the Riposte'); assert.equal(p.swing?.def.id, 'riposte');
+  r.seconds(0.3);
+  assert.equal(p.state, 'guard', 'back into the still-held Stand when the swing ends');
+  // ⚔ out of a held Stand (no parry): a slash that plays out; a FRESH Stand press still cancels a swing
+  r.seconds(1); r.tap('attack');
+  assert.equal(p.swing?.def.id, 'slash1'); r.step(4);
+  assert.equal(p.state, 'attack', 'held Stand does not cancel a slash out of the Stand');
+  r.release('guard'); r.seconds(0.5); assert.equal(p.state, 'move');
+  r.tap('attack'); r.step(2); r.press('guard'); r.step(2);
+  assert.equal(p.state, 'guard', 'a fresh Stand press cancels the wind-up');
   r.release('guard');
   // a late hit in the Stand is a block (1 Grit)
   const r2 = await rig(), e2 = r2.enemy(1.2, 0);
@@ -489,4 +501,19 @@ test('Player: Zoomies after 2 s of straight full-stick running (7.2 m/s), ended 
   assert.equal(p.state, 'hurt'); assert.equal(p.hp, p.maxHp);
   r.seconds(PLAYER.hurt.stun * TUNING.bumpStunMul + 0.03);
   assert.equal(p.state, 'move', 'bump stun is half of the 0.35 s');
+});
+
+test('Player: her hits give Valor (light cap 8 per swing) but cage locks / props (breakable, tag prop) give none', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const e = r.enemy(1.2, 0);
+  r.tap('attack');
+  const hit = (target, attackId = 'slash1') => ctx.bus.emit(E.HIT, { attacker: p, target, attackId, damage: 10, blocked: false });
+  hit(e); hit(e); hit(e);
+  assert.equal(p.valor, PLAYER.valor.lightPerSwingCap, 'light hits +4, capped at +8 per swing');
+  const lock = { breakable: true, tags: new Set(['prop']), pos: e.pos, alive: true };
+  r.seconds(0.6); r.tap('attack');
+  hit(lock);
+  assert.equal(p.valor, PLAYER.valor.lightPerSwingCap, 'a cage lock gives no Valor');
+  hit({ tags: new Set(['prop']), pos: e.pos, alive: true }, 'slash3');
+  assert.equal(p.valor, PLAYER.valor.lightPerSwingCap, 'a prop gives no Valor');
 });

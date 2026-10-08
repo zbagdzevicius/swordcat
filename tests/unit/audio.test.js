@@ -872,3 +872,79 @@ test('fake WebAudio: level change cleans up voices / loops and evicts buffers ou
     assert.equal(am._decoding.size, 0, 'no decode left in flight');
   } finally { restore(); }
 });
+
+// ================================================================================================ M1 additions
+test('§16.1 prologue: meadow `music.prologue` is the explore track until prologue.done; day requests read as it', async () => {
+  const lm = levelMusic('meadow', { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', prologue: 'village_bards_tale' }, { prologue: true });
+  assert.equal(lm.explore, 'village_bards_tale');
+  assert.equal(lm.alias, 'field_of_dreams');
+  assert.equal(levelMusic('meadow', { explore: 'field_of_dreams', prologue: 'village_bards_tale' }).explore, 'field_of_dreams', 'after the prologue');
+  const d = new MusicDirector();
+  d.setLevel('meadow', { explore: 'field_of_dreams', prologue: 'village_bards_tale' }, { prologue: true });
+  assert.equal(d.request('field_of_dreams'), 'village_bards_tale', 'LevelManager asks for the day track');
+  assert.equal(d.target, 'village_bards_tale');
+  assert.equal(d.base, 'village_bards_tale');
+  assert.equal(d.request('castle_kings_feast'), 'castle_kings_feast', 'other tracks pass through');
+  // through the manager: the flag decides on LEVEL_LOADED
+  const ctx = fakeCtx();
+  const am = ctx.audio;
+  await am.init();
+  const level = { music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', prologue: 'village_bards_tale' } };
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'meadow', level });
+  ctx.bus.emit(E.MUSIC, { track: 'field_of_dreams', fade: 1.5 });
+  assert.equal(am.currentTrack, 'village_bards_tale', 'night tutorial');
+  ctx.state.setFlag('prologue.done', true);
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'meadow', level });
+  ctx.bus.emit(E.MUSIC, { track: 'field_of_dreams', fade: 1.5 });
+  assert.equal(am.currentTrack, 'field_of_dreams', 'day meadow after CS-02');
+  am.dispose();
+});
+
+test('§16.2 footsteps: dirt paths use the sand set; a surface-less emitter asks level.surfaceAt', async () => {
+  assert.equal(FOOTSTEP.dirt, 'footDirt');
+  assert.ok(SFX.footDirt.files.every((f) => f.startsWith('footsteps/sand_')));
+  const ctx = fakeCtx();
+  const am = ctx.audio;
+  await am.init();
+  ctx.levels = { current: { surfaceAt: (x) => (x > 0 ? 'wood' : 'dirt') } };
+  ctx.bus.emit(E.FOOTSTEP, { actor: ctx.player, position: new THREE.Vector3(), surface: 'dirt' });
+  assert.equal(am.counts.footDirt, 1);
+  const npc = { id: 5, pos: new THREE.Vector3(3, 0, 0), tags: new Set(['npc']) };
+  ctx.bus.emit(E.FOOTSTEP, { actor: npc, position: npc.pos.clone() });
+  assert.equal(am.counts.footWood, 1, 'NPC on the bridge deck');
+  am.dispose();
+});
+
+test('fake WebAudio: cutscene loops run outside the voice pools and follow; procedural ids return stoppable handles', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    await am.decode('cat/cat_purrsleepy_loop');
+    const actor = { pos: new THREE.Vector3(2, 0, 0), height: 1 };
+    const h = am.play3D('cat/cat_purrsleepy_loop', actor, { vol: 0.6, loop: true });
+    assert.ok(h && typeof h.stop === 'function');
+    await flush(); await flush();
+    assert.ok(am.loops.has(h) && h.src?.loop, 'a looping source in the loop set');
+    assert.ok(am.voices3D.every((v) => v.endAt <= ac.currentTime), 'no pooled voice taken');
+    for (let i = 0; i < 40; i++) { ac.currentTime += 0.001; am._gates.clear(); am.play3D('cat/cat_purrsleepy_loop', new THREE.Vector3(i % 4, 0, 1)); }
+    assert.ok(am.loops.has(h), 'a burst of one-shots never steals the loop');
+    actor.pos.set(6, 0, 0); am.render(0, 1 / 60);
+    assert.equal(h.panner.positionX.goal, 6, 'the loop follows its actor');
+    h.stop(0.2);
+    assert.ok(!am.loops.has(h) && h.src.stopped > 0);
+    // procedural handles (story keeps and stops them by `handle`)
+    const m = am.play3D('march', actor, { on: true });
+    assert.ok(am.marching && m?.name === 'march');
+    m.stop(); assert.equal(am.marching, null);
+    const sh = am.play2D('shimmer', { on: true });
+    assert.ok(am.shim.on); sh.stop(); assert.ok(!am.shim.on);
+    const ch = am.play3D('laughChorus', actor, { count: 4, r: 10, dur: 3 });
+    assert.equal(ch.count, 4); assert.ok(am.chorus);
+    ch.stop(); assert.equal(am.chorus, null);
+    const hb = am.play2D('heartbeat', { beats: 2, vol: 0.5 });
+    assert.equal(hb.beats, 2);
+    const bell = am.play3D('bellClunk', [0, 3, 10], { vol: 0.5 });
+    assert.ok(bell && typeof bell.stop === 'function' && am.bells.has(bell));
+    void ctx;
+  } finally { restore(); }
+});

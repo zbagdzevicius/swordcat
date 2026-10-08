@@ -5,6 +5,7 @@ export const TUNING = Object.freeze({
   windupMin: 0.45,                       // §10.1 minimum windup on Knight (scaled by the difficulty windup multiplier)
   alertHopV: 2.2,                        // §10.1 alert: a 0.4 s "!" hop (vertical speed; GRAVITY 22 → ~0.2 s up + 0.2 s down)
   alertDur: 0.4,
+  bang: { dur: 0.6, pop: 0.2, perH: 0.4, min: 0.28, max: 0.6, lift: 0.1, color: '#F2E6C8', ink: '#2B2330' },   // the alert "!" (m)
   groupAlertRadius: 8,                   // idle pack-mates within this radius join an alert
   groupAlertDelay: [0.15, 0.45],
   hitFlash: 0.06,                        // §8.2 light hit: 60 ms white flash on the target
@@ -32,6 +33,8 @@ export const TUNING = Object.freeze({
   boss: { phaseInvuln: 1.0, addsRing: 6, dizzyEventEvery: 0.25, fallbackRange: 2.2 },
   animFarDist: 40,                       // tech.md §11.1: mixers beyond this update every 2nd frame
   pending: true,                         // §8.3 arena budget: spawns beyond the cap wait dormant for a free slot
+  capRadius: 30,                         // §8.3: unalerted enemies farther than this from a spawn are another fight
+  perch: { search: 2.5, ring: 0.2, arc: 0.12, minFrac: 0.6, slack: 0.45 },   // `{ y }` spawns snap onto a nearby wall / cart top
 });
 
 /** Seeded pick in [a, b] (rng = ctx.rng). */

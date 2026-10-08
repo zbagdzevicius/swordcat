@@ -143,9 +143,10 @@ test('props attach and detach; every prop and cage builds', () => {
 
 test('cape: verlet cloth stays pinned, hangs and keeps its constraints; sway cross-fade works', () => {
   const sim = new C.ClothSim();
-  for (let c = 0; c < sim.C; c++) { sim.pins[c * 3] = (c / 8 - 0.5) * 0.38; sim.pins[c * 3 + 1] = 0.6; sim.pins[c * 3 + 2] = -0.1; }
+  const pin = new THREE.Vector3();
+  for (let c = 0; c < sim.C; c++) { C.drapePoint(c / (sim.C - 1), 0, sim.d, pin); sim.pins[c * 3] = pin.x; sim.pins[c * 3 + 1] = pin.y; sim.pins[c * 3 + 2] = pin.z; }
   for (let i = 0; i < 180; i++) sim.step(1 / 60, { x: 0.5, y: 0, z: -0.5 });
-  for (let c = 0; c < sim.C; c++) assert.ok(Math.abs(sim.p[c * 3 + 1] - 0.6) < 1e-6, 'top row pinned');
+  for (let c = 0; c < sim.C; c++) assert.ok(Math.abs(sim.p[c * 3 + 1] - sim.pins[c * 3 + 1]) < 1e-6, 'top row pinned');
   const bottomY = sim.p[(sim.N - 5) * 3 + 1];
   assert.ok(bottomY < 0.25, `hem hangs down (${bottomY.toFixed(3)})`);
   for (let j = 0; j < sim.cons.length; j += 4) {
@@ -234,14 +235,14 @@ test('cape hangs BEHIND her even when the kitten spawns far from the origin (tel
   for (let i = 0; i < 40; i++) k.update(1 / 60, { wind: new THREE.Vector3(0.2, 0, 0.2) });
   const pos = k.cape.geo.attributes.position, C9 = k.cape.d.cols, R = k.cape.d.rows;
   for (let r = 3; r < R; r++) {
-    const z = pos.getZ(r * C9 + Math.floor(C9 / 2));
+    const z = pos.getZ(k.cape.vertexIndex(Math.floor(C9 / 2), r));
     assert.ok(z < -0.08, `cape centre row ${r} hangs behind (local z ${z.toFixed(3)})`);
   }
   // a tail wind (blowing toward her face) must not wrap the cape forward either
   const k2 = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
   for (let i = 0; i < 120; i++) k2.update(1 / 60, { wind: new THREE.Vector3(0, 0, 0.6) });
   const p2 = k2.cape.geo.attributes.position;
-  assert.ok(p2.getZ((k2.cape.d.rows - 1) * C9 + 4) < -0.05, 'hem stays behind in a tail wind');
+  assert.ok(p2.getZ(k2.cape.vertexIndex(4, k2.cape.d.rows - 1)) < -0.05, 'hem stays behind in a tail wind');
   k.dispose(); k2.dispose();
 });
 
@@ -435,4 +436,130 @@ test('Kitten.lib: the library is reachable from any built kitten (smoke tests ag
   for (const fn of ['buildKitten', 'buildProp', 'buildCage', 'buildBeastHead', 'buildPlate', 'catConfig', 'cagedKitten', 'characterEnvColors', 'getCharacterEnvMap']) assert.equal(typeof lib[fn], 'function', fn);
   assert.ok(lib.PROP_NAMES.includes('milk_cup') && lib.CATS.swordcat && lib.SQUIRE_IDS.length === 6);
   k.dispose();
+});
+
+test('cape render grid: Catmull-Rom up from the 9 x 13 sim, folds + baked fold shade, pinned neckline', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'cream' }));
+  const holder = new THREE.Group(); holder.add(k.root);
+  for (let i = 0; i < 20; i++) k.update(1 / 60);
+  const cape = k.cape, d = cape.d;
+  assert.equal(cape.rc, (d.cols - 1) * d.resX + 1); assert.equal(cape.rr, (d.rows - 1) * d.resY + 1);
+  assert.ok(cape.rc >= 25 && cape.rr >= 25, `render grid ${cape.rc} x ${cape.rr} (folds need more than 9 columns)`);
+  const pos = cape.geo.attributes.position, ao = cape.geo.attributes.capeAO;
+  assert.equal(pos.count, cape.rc * cape.rr); assert.equal(ao.count, pos.count);
+  let aoMin = 1, aoMax = 0;
+  for (let i = 0; i < ao.count; i++) { aoMin = Math.min(aoMin, ao.getX(i)); aoMax = Math.max(aoMax, ao.getX(i)); }
+  assert.ok(aoMin < 0.75 && aoMax >= 1, `fold valleys shaded (${aoMin.toFixed(2)}..${aoMax.toFixed(2)})`);
+  // the render grid passes through the sim particles (top row = the pins), plus the fold offset
+  k.root.updateMatrixWorld(true);
+  const inv = k.root.matrixWorld.clone().invert(), v = new THREE.Vector3();
+  for (const [c, r] of [[0, 0], [4, 0], [8, 0], [4, 6], [2, 12]]) {
+    const i = r * d.cols + c;
+    v.set(cape.sim.p[i * 3], cape.sim.p[i * 3 + 1], cape.sim.p[i * 3 + 2]).applyMatrix4(inv);
+    const vi = cape.vertexIndex(c, r), u = c / (d.cols - 1), vv = r / (d.rows - 1);
+    assert.ok(Math.abs(pos.getX(vi) - v.x) < 1e-3, `x at sim (${c},${r})`);
+    assert.ok(Math.abs(pos.getY(vi) - (v.y + C.capeHem(u, vv, d))) < 1e-3, `y at sim (${c},${r})`);
+    assert.ok(Math.abs(pos.getZ(vi) - (v.z + C.capeFold(u, vv, d))) < 1e-3, `z at sim (${c},${r})`);
+  }
+  // folds between the sim columns: depth along the hem row turns over several times (a 9-column grid alone can't)
+  let turns = 0, prev = 0;
+  for (let c = 1; c < cape.rc; c++) {
+    const dz = pos.getZ((cape.rr - 1) * cape.rc + c) - pos.getZ((cape.rr - 1) * cape.rc + c - 1);
+    if (prev && Math.sign(dz) !== Math.sign(prev)) turns++;
+    prev = dz;
+  }
+  assert.ok(turns >= 5, `hem folds (${turns} turns)`);
+  // neckline: the middle of the top edge rides higher than the shoulder corners
+  assert.ok(C.drapePoint(0.5, 0).y > C.drapePoint(0, 0).y + 0.01, 'neckline arc');
+  // NPC sway capes use the same fine grid + fold shade
+  const pearl = C.buildKitten(C.CATS.pearl);
+  assert.ok(pearl.swayCape && pearl.swayCape.geometry.attributes.capeAO, 'NPC cape: fine grid with fold shade');
+  assert.equal(pearl.swayCape.geometry.attributes.position.count, cape.rc * cape.rr);
+  k.dispose(); pearl.dispose();
+});
+
+test('cape after a teleport + turn of the PARENT (level load / respawn): pins follow the new transform at once', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const actor = new THREE.Group(); const scene = new THREE.Group(); scene.add(actor); actor.add(k.root);
+  for (let i = 0; i < 30; i++) k.update(1 / 60);
+  // the actor moves and turns 180° this frame; nobody has updated its matrixWorld yet (requests/player.md)
+  actor.position.set(12, 0, -40); actor.rotation.y = Math.PI;
+  k.update(1 / 60);
+  actor.updateMatrixWorld(true);
+  const inv = k.root.matrixWorld.clone().invert(), p = k.cape.sim.p, v = new THREE.Vector3();
+  let maxZ = -Infinity, far = 0;
+  for (let i = k.cape.d.cols; i < k.cape.sim.N; i++) {
+    v.set(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]).applyMatrix4(inv);
+    maxZ = Math.max(maxZ, v.z); far = Math.max(far, Math.hypot(v.x, v.z));
+  }
+  assert.ok(maxZ < C.CAPE_FRONT.margin + C.CAPE_FRONT.marginLow + 0.02, `cloth behind her after the turn (max local z ${maxZ.toFixed(3)})`);
+  assert.ok(far < 0.8, `cloth came along with the teleport (max local distance ${far.toFixed(2)})`);
+  k.dispose();
+});
+
+test('ears clear the head fluff (ref2: big wide-set ears well above the fur); bow at the left ear base', () => {
+  const k = C.buildKitten(C.swordcatConfig());
+  k.setPose('idle', { blend: 0 }); k.update(1 / 60); k.root.updateMatrixWorld(true);
+  const furLen = C.swordcatConfig().fur.len * 1.15;   // longest crown fur (headFurMask)
+  // ear tip: the highest kit vertex skinned to earL (kitten space = bind space here)
+  const pos = k.kitMesh.geometry.attributes.position, si = k.kitMesh.geometry.attributes.skinIndex, earIdx = C.BONE_NAMES.indexOf('earL');
+  const tip = new THREE.Vector3(0, -Infinity, 0), p = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) if (si.getX(i) === earIdx && pos.getY(i) > tip.y) tip.fromBufferAttribute(pos, i);
+  // fur surface: head fur base vertices (head space → kitten space) + the fur length
+  const hp = k.headFur.mesh.geometry.attributes.position, hm = k.rig.head.matrixWorld;
+  let crown = -Infinity, below = -Infinity;
+  for (let i = 0; i < hp.count; i++) {
+    p.fromBufferAttribute(hp, i).applyMatrix4(hm);
+    crown = Math.max(crown, p.y);
+    if (Math.abs(p.x - tip.x) < 0.015) below = Math.max(below, p.y);
+  }
+  crown += furLen; below += furLen;
+  assert.ok(tip.y > crown + 0.015, `ear tips above the crown fluff (${(tip.y - crown).toFixed(3)} H)`);
+  assert.ok(tip.y - below > 0.07, `ears stand ${(tip.y - below).toFixed(3)} H clear of the fur under them (ref2 ~0.08 H)`);
+  assert.ok(tip.y > 0.97 && tip.y < 1.06, `ear tips at ~1 H (${tip.y.toFixed(3)})`);
+  // the bow still sits at the base of her LEFT ear
+  const bow = worldPos(k.bow); assert.ok(bow.x > 0.05 && bow.y > 0.85 && bow.y < 1.0);
+  k.dispose();
+});
+
+test("props: 'name@mount' suffix through the plain prop(name, on) hook; CS-01 helmet on the head, then in her paw", () => {
+  const k = C.buildKitten(C.swordcatConfig());
+  assert.ok(C.PROP_NAMES.includes('helmet'));
+  k.setProp('helmet', true);
+  assert.equal(k.props.helmet.parent, k.rig.head, 'worn: on the head joint');
+  k.setPose('idle', { blend: 0 }); k.update(1 / 60);
+  // it covers her eyes (the gag): the rim sits below the eye line, the dome above the ear tips
+  const helm = new THREE.Box3().setFromObject(k.props.helmet), eye = worldPos(k.eyes.eyes[0].eye);
+  assert.ok(helm.min.y < eye.y && helm.max.y > 1.0, `helm ${helm.min.y.toFixed(2)}..${helm.max.y.toFixed(2)} vs eyes ${eye.y.toFixed(2)}`);
+  const obj = k.props.helmet;
+  k.setProp('helmet@paw', true);
+  assert.equal(k.props.helmet, obj, 'same object, new mount');
+  assert.equal(obj.parent, k.rig.pawL);
+  assert.equal(k.props['helmet@paw'], undefined);
+  k.setProp('helmet', false); assert.equal(obj.parent, null);
+  k.setProp('letter@belt', true); assert.equal(k.props.letter.parent, k.rig.hips, 'CS-06 letter on the belt');
+  assert.ok(C.buildProp('helmet@paw')?.name === 'helmet', 'buildProp ignores the mount suffix');
+  k.dispose();
+});
+
+test('cape: no armour / leg pokes through the cloth in the standing, combat and kneeling poses', () => {
+  for (const pose of ['vigil', 'idle', 'ready', 'kneel']) {
+    const k = C.buildKitten(C.swordcatConfig());
+    const holder = new THREE.Group(); holder.add(k.root);
+    k.setPose(pose, { blend: 0 });
+    for (let i = 0; i < 120; i++) k.update(1 / 60);
+    k.root.updateMatrixWorld(true);
+    const cp = k.cape.geo.attributes.position, km = k.kitMesh, kp = km.geometry.attributes.position;
+    const v = new THREE.Vector3();
+    let worst = 0;
+    for (let i = 0; i < kp.count; i++) {
+      km.getVertexPosition(i, v);
+      if (v.z > -0.04) continue;
+      let best = 1e9, bz = 0;
+      for (let j = 0; j < cp.count; j++) { const dx = cp.getX(j) - v.x, dy = cp.getY(j) - v.y, d = dx * dx + dy * dy; if (d < best) { best = d; bz = cp.getZ(j); } }
+      if (best < 0.012 * 0.012) worst = Math.max(worst, bz - v.z);
+    }
+    assert.ok(worst < 0.006, `${pose}: kit pokes ${(worst * 100).toFixed(1)} cm through the cape`);
+    k.dispose();
+  }
 });

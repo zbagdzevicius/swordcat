@@ -51,10 +51,16 @@ export default [
       t.assert(s.pos[1] >= s.ground + 0.25, 'camera below the terrain');
       await t.shot('camera/follow');
       const p0 = s.player;
-      await t.hold('KeyW', 1500);
+      // run forward (in chunks: a loaded machine can stall the first frames after a level load)
+      let moved = 0;
+      for (let i = 0; i < 6 && moved < 3; i++) {
+        await t.hold('KeyW', 800);
+        s = await camState(t);
+        moved = Math.hypot(s.player[0] - p0[0], s.player[2] - p0[2]);
+      }
       await t.frames(20);
       s = await camState(t);
-      const moved = Math.hypot(s.player[0] - p0[0], s.player[2] - p0[2]);
+      moved = Math.hypot(s.player[0] - p0[0], s.player[2] - p0[2]);
       t.assert(moved > 1, `player did not move (${moved.toFixed(2)} m)`);
       t.assert(Math.abs(s.dist - 3.6) < 0.4, `arm after running ${s.dist.toFixed(2)} m`);
       t.assert(s.local[2] < -2, 'camera stays behind her while running');
@@ -159,6 +165,39 @@ export default [
       t.assert(c.mode === 'follow', `after exit cam mode ${c.mode}`);
       t.assert(Math.abs(c.dist - 3.6) < 0.4, `after exit arm ${c.dist.toFixed(2)} m`);
       t.log(`meme local ${fmt(a.local)} fov ${a.fov.toFixed(1)}; sway ${(sway * 1000).toFixed(1)} mm/0.5 s`);
+
+      // a wall right in front of her face: the framing swings around her to a clear 3/4 view (never inside the wall)
+      await t.frames(60);
+      const wall = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player, f = p.facing, s = Math.sin(f), co = Math.cos(f);
+        const cx = p.pos.x + s * 0.85 + co * 0.15, cz = p.pos.z + co * 0.85 - s * 0.15, gy = ctx.physics.heightAt(cx, cz);
+        const col = { x: cx, z: cz, r: 0.35, y0: gy - 1, y1: gy + 3 };
+        const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 3, 14), new THREE.MeshStandardMaterial({ color: '#7A7468' }));
+        mesh.position.set(cx, gy + 1.5, cz); mesh.name = 'smoke:pillar'; ctx.scene.add(mesh);
+        ctx.physics.addCollider(col);
+        window.__camSmoke = { col, mesh };
+        return { off: ctx.cam.memeYawOffset(p) };
+      });
+      t.assert(wall.off !== 0, 'a pillar in front of her face did not rotate the Meme Cam framing');
+      await t.clearEvents();
+      await t.G(() => window.__GAME__.idle(16));
+      t.assert(await t.waitForEvent('camera:meme', 10000), 'second Meme Cam did not start');
+      t.assert(await until(t, "c.modeName === 'meme' && !c._blend.active"), 'second Meme Cam blend-in never finished');
+      const w = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player, cam = ctx.camera;
+        const eyes = new THREE.Vector3(p.pos.x, p.pos.y + 0.82, p.pos.z);
+        return { off: ctx.cam._meme.yawOffset, clear: ctx.physics.lineOfSight(eyes, cam.position, { terrain: true, mesh: true, statics: true }) };
+      });
+      t.assert(w.off !== 0 && w.clear, `meme behind the pillar: yaw offset ${w.off}, clear view ${w.clear}`);
+      await t.shot('camera/meme-pillar');
+      await t.hold('KeyW', 120);
+      await until(t, "c.modeName !== 'meme'", 3000);
+      await t.G(() => {
+        const ctx = window.__GAME__.ctx, k = window.__camSmoke;
+        ctx.physics.removeCollider(k.col); k.mesh.removeFromParent(); k.mesh.geometry.dispose(); k.mesh.material.dispose();
+        delete window.__camSmoke;
+      });
+      t.log(`pillar in front of her: Meme Cam framing rotated ${(w.off * 180 / Math.PI).toFixed(0)}°`);
     },
   },
   {

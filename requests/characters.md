@@ -1,5 +1,31 @@
 # Requests / notes from the characters area
 
+## M1 pass 2 (2026-10-08 evening) — what changed for everyone
+- **Cape renders on a finer grid.** The 9 x 13 verlet particles now drive a 33 x 25 render mesh (Catmull-Rom), which
+  adds soft vertical folds, gathered pleats under the neckline, a wavy hem and a baked fold shade (`capeAO` attribute,
+  applied to all the light; overcast light from above gave vertical folds no shading). It no longer reads as a flat
+  board from the follow camera. `HeroCape.rc / rr` = render grid size, `cape.vertexIndex(col, row)` maps a sim
+  particle to its render vertex; `cape.geo` is the render geometry, `cape.sim.p` the particles (unchanged). NPC sway
+  capes use the same fine grid. The folds only billow outward, the top corners sit on the shoulder blades just behind
+  the pauldrons (top 0.30 → hem 0.60 H, more V-frame), and the colliders now include shins + sabatons: no armour pokes
+  through the cloth in vigil / idle / ready / kneel (unit-tested; `node --import ./tests/unit/_setup.mjs
+  src/characters/tools/capeclip.mjs <pose>` reports it per pose). Cloth takes half the character env map (it glowed like
+  paper at night); faded cream is a touch warmer (`#CDBB98`).
+- **Ears read as ears.** Bigger (×1.28), more upright (25° instead of 30°), set a little higher and wider; the ear tufts
+  are 4 shorter cream wisps per ear. Tips are still ~1.0 H. Cheek ruffs are flatter front-to-back and sit further back
+  (`FACE.cheek`, new `FACE.cheekScale`), so the eyes show in profile; Swordcat's cheek fluff is 0.97 (was 1.04).
+- **Triangles:** hero 196k → 164k, companion-tier kittens 128k → 94k (head-fur segments per tier, tail tube, pauldron
+  lames). Lite tier unchanged (~13k). Fur shells still follow `QUALITY.furShells` / `kittenShells`.
+- **To player** (requests/player.md, cape pins after a teleport): fixed on our side. `Kitten.simulate` now calls
+  `root.updateWorldMatrix(true, true)` (parents first), so the cape pins and colliders see this frame's actor transform.
+  Your `actor.object3d.updateWorldMatrix(true, false)` workaround is harmless and can stay or go.
+- **New prop `helmet`** (CS-01 shot 7, Marmalade's far-too-big old helm): `prop('helmet', true)` puts it on her head,
+  over her eyes; `prop('helmet@paw', true)` moves the same helm into her left paw ("she takes it off, looks at it");
+  `prop('helmet', false)` removes it. **Any prop name accepts a `@mount` suffix** through the plain ScriptedActor
+  `prop(name, on)` (core's prop() has no opts): `'letter@belt'` (CS-06), `'helmet@paw'`. One object per base name.
+- To enemies: the carried-cage issue below is **resolved** (tests/shots/characters/cast-cs02.png: Pearl's cage hangs
+  from the hyena's fist). Thanks.
+
 ## M1 changes everyone should know (2026-10-08)
 - **Shell fur is alpha-blended now** (was alpha-to-coverage: the dithered strand tips read as salt-and-pepper speckles
   against the bright fog). Fur meshes are `transparent`, depth-writing, drawn in instance order (skin → tip) with
@@ -19,7 +45,7 @@
   buildBeastHead, buildPlate, CATS, catConfig, SQUIRE_IDS, cagedKitten, characterEnvColors, getCharacterEnvMap, ... }`
   (tests/smoke/characters.mjs uses it; it works against the bundled game where /src imports don't exist).
 
-## To enemies — the carried cage (CS-02 `cage: 'pearl'`) hangs INSIDE the hyena's body [found 2026-10-08]
+## [RESOLVED] To enemies — the carried cage (CS-02 `cage: 'pearl'`) hangs INSIDE the hyena's body [found 2026-10-08]
 - `ctx.enemies.spawn('hyena', at, { scripted: true, ai: false, cage: 'pearl', word: 'HATER' })`: `e.extraProps.cage`
   ends up at the body centre (local x ≈ 0.02 m, y ≈ 0.49 m on a 1.35 m hyena facing the camera), so neither the cage nor
   Pearl is visible (tests/shots/characters/cast-cs02.png). The left fist is ~0.3 m to the side. Probably `posIn(m.root,
@@ -90,7 +116,7 @@ Import only from `src/characters/index.js`.
 
 ### Props and cages (story / world / companions)
 - `buildProp(name, opts)` for 'milk_cup','milk_bottle','lantern' ({ light: true } adds PointLight #FFC46B 1.5 d6),
-  'spoon','letter','pot_helm','colander','signpost','post_bag','cot','soup_bowl','jester_hat','postmaster_hat','cage'.
+  'spoon','letter','pot_helm','colander','signpost','post_bag','cot','soup_bowl','jester_hat','postmaster_hat','cage','helmet'.
 - `buildCage({ style: 'carry'|'hanging'|'cart'|'kennel', size, ribbon })` → `userData.setOpen(0..1)`; Pearl's cage:
   `ribbon: true` (pale pink bow). `cagedKitten(ctx, catId, { style, ribbon })` = cage + a sad kitten inside, `release()`.
 

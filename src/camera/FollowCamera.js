@@ -11,6 +11,8 @@
 //                             (also while a cutscene holds a MEME_LOOP shot, e.g. the CS-00 title loop)
 //   addFadeable(obj) / removeFadeable(obj) / refreshFadeable(obj)   tree fade registration (or tag
 //                             userData.camFade = true / camFadeIds on a BatchedMesh; see Occluders.js)
+//   memeYawOffset(actor)      the MEME_LOOP framing's rotation around her that clears walls / fences / trunks in
+//                             front of her face (mode('meme') uses it; opts.yawOffset overrides)
 //   snapBehind(), recenter(), modeName, distance, showLockMarker
 // Emits E.MEME_CAM { on } entering / leaving 'meme'. Listens: E.SHAKE, E.CAM_MODE, E.BOSS_START / BOSS_DEFEATED,
 // E.ARENA_CLEAR, E.LEVEL_LOADING / LEVEL_LOADED / LEVEL_UNLOAD, E.PLAYER_SPAWNED, E.PLAYER_HOLY (FOV punch),
@@ -34,7 +36,7 @@ import { CutsceneCamera, SHOT_MODES } from './CutsceneCamera.js';
 import { MemeCam } from './MemeCam.js';
 import { pickLockTarget, nearestLockTarget, switchLockTarget, lockable, FlickDetector, StickFlick, LockMarker } from './LockOn.js';
 import { OccluderFader } from './Occluders.js';
-import { PRESETS } from './presets.js';
+import { PRESETS, localToWorld } from './presets.js';
 
 const LOCK = PLAYER.lockOn;
 /** default orbit pitch (rad): slightly above her, looking a touch down the path ahead */
@@ -54,6 +56,11 @@ const THIN_SEGMENT = 0.2;
 const MAX_SKIPS = 6;
 /** tree fade only while the camera is this close to its subject (m): follow / lock / boss arms, close shots */
 export const FADE_MAX_DIST = 9;
+/** Meme Cam: rotations of the MEME_LOOP framing around her (rad) tried in order until the lens has a clear view */
+export const MEME_YAWS = Object.freeze([0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05]);
+/** Meme Cam view test: everything solid counts (a fence or trunk 1 m in front of her face spoils the shot too) */
+const MEME_CAST = Object.freeze({ terrain: true, mesh: true, statics: true });
+const MEME_LENS_R = 0.12;
 
 /**
  * Should the camera ignore this static collider (it fades instead / is too thin to matter)?
@@ -87,6 +94,8 @@ function exitDistance(src, o, d, radius, hitDist) {
 }
 
 const GAMEPLAY = new Set(['follow', 'lock', 'boss']);
+/** the player moving more than this between two rendered frames is a teleport (m²: 6 m) */
+const TELEPORT_SQ = 36;
 const ZERO_LOOK = Object.freeze({ x: 0, y: 0, px: 0, py: 0 });
 
 const _dir = new THREE.Vector3(), _piv = new THREE.Vector3(), _right = new THREE.Vector3(), _tmp = new THREE.Vector3();
@@ -144,6 +153,8 @@ export class FollowCamera {
     this._dizzyShaken = false;
     this._landShaken = false;
     this._lockLook = new THREE.Vector3();
+    /** pending safety handback after E.CUTSCENE_END: blend seconds, or −1 for none */
+    this._handback = -1;
     this._offs = [];
   }
 
@@ -168,7 +179,10 @@ export class FollowCamera {
       // Golden Hour activation punch-in, unless the player already framed it with a preset shot (§7.5 HERO_LOW)
       bus.on(E.PLAYER_GOLDEN, (p) => { if (p?.on && GAMEPLAY.has(this.modeName)) this._goldenT = PLAYER.golden.activate; }),
       bus.on(E.BOSS_DIZZY, (p) => { if (p?.dizzy && !this._dizzyShaken) { this._dizzyShaken = true; this.shake(JUICE.dizzy.shake); } else if (!p?.dizzy) this._dizzyShaken = false; }),
-      bus.on(E.CUTSCENE_END, () => { if (this.modeName === 'preset' || this.modeName === 'cutscene') this.mode('follow', { blend: CAMERA.ease }); }),
+      // safety handback when a scene ends with the camera still held (story normally calls mode('follow') itself).
+      // Deferred to the next frame so a chained scene (CS-09 → CS-10, `end.cam: false`) keeps its shot instead.
+      bus.on(E.CUTSCENE_END, (p) => { if (this.modeName === 'preset' || this.modeName === 'cutscene') this._handback = p?.skipped ? 0 : CAMERA.ease; }),
+      bus.on(E.CUTSCENE_START, () => { this._handback = -1; }),
       bus.on(E.GAME_MODE, (p) => { if (p?.mode === 'cutscene' || p?.mode === 'dialog') this.unlock(); }),
     );
     this._marker.build(this.ctx.scene);
@@ -204,6 +218,7 @@ export class FollowCamera {
   mode(name, opts = {}) {
     opts = opts ?? {};
     const prev = this.modeName;
+    this._handback = -1;
     switch (name) {
       case 'follow':
       case 'lock':
@@ -216,6 +231,7 @@ export class FollowCamera {
           if (prev === 'meme') { this._meme.exit(); this.ctx.bus.emit(E.MEME_CAM, { on: false }); }
           else { this._cut.stop(); if (opts.keepYaw !== true) this._behind(); }
           this._snap = true;
+          this._markPlayerPos();            // a cutscene may have moved her: that is not a teleport (keep the blend)
           this._startBlend(blend, opts.ease, this._playerPivot(_blendPivot), false);
         }
         this.modeName = 'follow';
@@ -232,7 +248,7 @@ export class FollowCamera {
         this.unlock();
         this._cut.stop();
         this.presetState = null;
-        this._meme.enter(p);
+        this._meme.enter(p, opts.yawOffset ?? this.memeYawOffset(p));
         this.modeName = 'meme';
         this._startBlend(typeof opts.blend === 'number' ? opts.blend : PLAYER.memeCam.blendIn, opts.ease ?? 'inOutSine', this._playerPivot(_blendPivot), false);
         this.ctx.bus.emit(E.MEME_CAM, { on: true });
@@ -272,6 +288,7 @@ export class FollowCamera {
    * @param {object} step @returns {Promise<void>}
    */
   shot(step) {
+    this._handback = -1;
     if (this.modeName === 'meme') { this._meme.exit(); this.ctx.bus.emit(E.MEME_CAM, { on: false }); }
     if (this.lockTarget) this.unlock();
     const promise = this._cut.start(step ?? {}, this._outPose);
@@ -351,6 +368,31 @@ export class FollowCamera {
   /** the running shot's normalized step (read-only) or null */
   get currentShot() { return this._cut.shot; }
 
+  /**
+   * Rotation (rad) of the MEME_LOOP framing around `actor` that gives the lens a clear view of her face: the first
+   * of MEME_YAWS whose line from her eyes to the camera (a 0.12 m sphere: the near plane) hits no terrain,
+   * architecture or static prop. 0 when every candidate is blocked or there is no physics.
+   * @param {any} actor
+   */
+  memeYawOffset(actor) {
+    const ph = this.ctx.physics;
+    if (!actor || !ph?.raycast) return 0;
+    const P = PRESETS.MEME_LOOP, o = actor.object3d?.position ?? actor.pos, f = actor.facing ?? 0;
+    const sphere = typeof ph.sphereCast === 'function';
+    _org.set(o.x, o.y + P.look[1], o.z);
+    for (const off of MEME_YAWS) {
+      localToWorld(P.pos, o, f + off, _tgt);
+      _losDir.subVectors(_tgt, _org);
+      const len = _losDir.length();
+      if (len < 1e-3) return 0;
+      _losDir.multiplyScalar(1 / len);
+      _ray.set(_org, _losDir);
+      const hit = sphere ? ph.sphereCast(_ray, MEME_LENS_R, len, MEME_CAST) : ph.raycast(_ray, len + MEME_LENS_R, MEME_CAST);
+      if (!hit) return off;
+    }
+    return 0;
+  }
+
   // ------------------------------------------------------------------ internals
   _candidates() {
     return this.ctx.actors?.queryRadius?.(this.ctx.player.pos, Math.max(LOCK.range, LOCK.breakRange), hostileTo('player')) ?? [];
@@ -371,6 +413,14 @@ export class FollowCamera {
     if (p) this.yaw = (p.facing ?? 0) + Math.PI;
     this.pitch = DEFAULT_PITCH;
     this._recenter = false;
+  }
+
+  /** Remember where the player is now (the gameplay framing's teleport detector compares against it). */
+  _markPlayerPos() {
+    const p = this.ctx.player;
+    if (!p) return;
+    this._lastPlayerPos.copy(p.object3d?.position ?? p.pos);
+    this._hadPlayer = true;
   }
 
   _playerPivot(out) {
@@ -492,7 +542,11 @@ export class FollowCamera {
     const ctx = this.ctx, p = ctx.player, out = this._gamePose, gm = ctx.game?.mode;
     if (!p) return out.copy(this._outPose);
     const ppos = p.object3d?.position ?? p.pos;
-    if (!this._hadPlayer || ppos.distanceToSquared(this._lastPlayerPos) > 36) this._snap = true;      // teleport
+    if (!this._hadPlayer) this._snap = true;
+    else if (ppos.distanceToSquared(this._lastPlayerPos) > TELEPORT_SQ) {        // teleport / respawn: cut, never sweep
+      this._snap = true;
+      this._blend.active = false;
+    }
     this._hadPlayer = true;
     this._lastPlayerPos.copy(ppos);
 
@@ -606,6 +660,11 @@ export class FollowCamera {
     const paused = game?.mode === 'menu';
     const sdt = paused ? 0 : dt * (game?.loop?.timeScale ?? 1);         // sim-time for cutscene timelines
     const look = ctx.input?.consumeLook?.() ?? ZERO_LOOK;
+    if (this._handback >= 0) {
+      const b = this._handback;
+      this._handback = -1;
+      if (this.modeName === 'preset' || this.modeName === 'cutscene') this.mode('follow', { blend: b > 0 ? b : false });
+    }
     let pose;
     switch (this.modeName) {
       case 'meme': pose = this._meme.update(dt); break;

@@ -10,8 +10,10 @@ requests hitstop / shake / rumble / slow-mo (combat and camera own those, reques
   Actors get the effect at mid-height (feet for ground kinds: `dust`, `spawn`, `splash`, `ring`, `holy`).
 - `opts`: `count`, `color`, `scale`, `type` (enemy type → poof debris), `dir`, `style` (helmet).
 - kinds: `poof hit heavyHit stars spark(s) sparkle(s) gold dust dustRing splash heart(s) heal spawn spawnBones smoke helmet
-  fish ring flash confetti shatter holy sunburst choke` + debris `feathers droplets bones dirt fur wood leaves`.
-  Unknown kinds fall back to a sparkle.
+  fish ring flash confetti shatter holy sunburst choke` + debris `feathers droplets bones dirt fur wood leaves rocks straw
+  metal` + breakable aliases `crate barrel post fence cage lock chain stone boulder rock pebbles sack hay dummy slime
+  feather bone leaf` (debris + a dust puff; cage / lock / chain add metal sparks). `ring` and `splash` lay a flat ripple
+  on the ground / water. Unknown kinds fall back to a sparkle.
 - Enemy deaths: fx draws ONE poof per `enemy:died` (12 white puffs, 6 gold stars, faction debris by type, fish burst =
   `fish` count). The `fx:burst {kind:'poof'}` that Enemy.die emits in the same step is folded into it (no double poof).
   Helmets stay with enemies (`EnemyManager.spawnDebris`); fx only pops a procedural helm on `burst('helmet', ...)`.
@@ -46,7 +48,9 @@ requests hitstop / shake / rumble / slow-mo (combat and camera own those, reques
   All walls are dropped on `level:unload`.
 - Ambient mist cards (art.md §9.2) and ambient motes (§8 table: meadow fluff, forest fireflies, town dust, gate ash, bog
   spores, keep embers; night grade → fireflies) switch automatically on `level:loaded` / `env:changed`.
-  Override: `ctx.fx.setAmbient('fireflies' | 'embers' | ... | null)`. Meme Cam doubles the mist drift.
+  Override: `ctx.fx.setAmbient('fireflies' | 'embers' | ... | null)`. Meme Cam doubles the mist drift, and while
+  `ctx.cam.memeLooping` the mist locks to `ctx.cam.memePhase` (cards hold still, the noise scroll repeats every 3.8 s:
+  two layers half a period apart cross-fade), so the MEME_LOOP shot loops seamlessly (requests/camera.md).
 
 ### horde(on, anchor, opts)  (fx/Horde.js; one instanced draw call, 40 members, 24 on Low)
 - `on`: `true` / `'march'` (a stream along a path), `'mill'` (a band shuffling and laughing in place), `'flee'`
@@ -87,3 +91,19 @@ requests hitstop / shake / rumble / slow-mo (combat and camera own those, reques
 ## To core
 - Nothing blocking. Note for the debug overlay: `ctx.fx.stats()` returns live counts (particles, telegraphs by kind,
   horde, bloom, vignette) if you want them in lil-gui.
+
+## To player / core / characters — first-use shader stalls (re requests/player.md, 2026-10-08)
+- fx now warms its own programs: on init, every `level:loaded` and every `game:quality`, fx shows each hidden fx object
+  (both particle pools, marks, sword trail, holy sparkles + arcs, helmet, telegraph decal + aim line, mist cards, horde,
+  motes) for ONE frame with an empty draw range, so the real renderer (level fog, lights, the composer's render target)
+  builds the programs under the loading veil and nothing is drawn. The first swing trail / Holy charge / Golden Hour
+  ring no longer compile fx shaders mid-fight.
+- The rest of those stalls are characters materials (the aura hull, fur gold rim, blade emissive variants): the same
+  trick (or `renderer.compileAsync` with the composer's render target bound) on the kitten rig would cover them.
+
+## Smoke note (everyone)
+- Other agents' edits make Vite full-reload pages mid-smoke. fx runs its smoke against a dev server started with a
+  scratch config `{ ...projectConfig, server: { hmr: false } }` (`npx vite --config <scratch>/vite.nohmr.mjs`).
+- Seen at boot during fx smoke on 2026-10-08 (characters, in progress): `Cape` MeshPhysicalMaterial fragment shader
+  fails to compile — `'vCapeAO' : undeclared identifier` (`outgoingLight *= vCapeAO;` without the varying declared in
+  that program variant). Not fx's file; noted for characters.

@@ -1,52 +1,670 @@
-// src/save/SaveManager.js  (owner: save) — M0 STUB: tech.md §16 + GAME_DESIGN §19.7 schema.
-//   load() → migrated data | null;  write(d) → bool;  clear();  defaultSave();  migrate(d)
-// Autosaves ctx.state on CHECKPOINT, LEVEL_LOADED, KITTEN_RESCUED, cutscene:end, objective done
-// (never in ?test). All storage access is wrapped: private mode / quota must not crash the game.
+// src/save/SaveManager.js  (owner: save) — persistence: tech.md §16 as amended by GAME_DESIGN §19.1 A8 / §19.7.
+//
+// One localStorage slot, key `swordcat.save.v1` (+ `.bak`, the previous good progress save). The stored record is
+// the §19.7 schema (= core GameState.toJSON()) plus `progress` (false for a settings-only record written before any
+// game was started). Every storage access is wrapped: private mode / quota / SecurityError never crash the game.
+//
+// Frozen contract (§19.3):  load() → migrated data | null   write(d) → bool   clear()
+// Module exports:           KEY, BACKUP_KEY, SAVE_VERSION, defaultSave(), migrate(d), isLegacyV1(d), hasProgress(rec),
+//                           resumeSpawn(levelId, spawnId, flags), summarize(rec), createMemoryStorage()
+// Additive service API (ui / story):
+//   hasSave()                      a progress save exists → show "Continue" / "Skip the prologue?"
+//   summary()                      { levelId, spawnId, difficulty, playtime, savedAt, kittens, ... } | null (Continue card)
+//   newGame({difficulty, skipPrologue}) → { levelId, spawnId }   fresh §19.7 state (keeps settings)
+//   continueGame({load = true}) → Promise<{ levelId, spawnId } | null>  state ← the stored save, then levels.load()
+//   beginSession() / endSession()  manual session control (optional: level loads drive sessions on their own)
+//   request(reason)                autosave at the end of this fixed step (coalesced; held while a scene plays / loads)
+//   save(reason)                   write ctx.state now · saveSettings() write state.settings now (patch only)
+//   lastSave                       { at, reason, ok, count } (ui may poll it for a "saved" seal)
+//
+// Autosave (§19.7 + tech.md §16): CHECKPOINT, LEVEL_LOADED, KITTEN_RESCUED, cutscene:end, objective:progress {done},
+// save:request (cutscene `end.save`, Vigil "Rest", shop purchases), plus quest completion, letter / Heart Bell pickups,
+// unlocks, a level exit (resume point = the next level) and, on Nine Lives, a lost life. Settings: on settings:changed
+// (≤ 4 Hz while a slider drags). Not in ?test (smoke enables it via setEnabled) nor on ?level= dev jumps (?save=1
+// overrides). A pending save is also written on pagehide / tab hidden.
+//
+// Sessions: the `title` spawn never saves. Any other level load (story's / ui's New Game and Continue flows, or
+// newGame()/continueGame()) starts a session, which may overwrite the slot only from its first successful write on, so
+// a New Game abandoned during CS-01 keeps the old save. Loading the `title` spawn ends the session (a final save if it
+// had written) and puts the stored game back into ctx.state, including the resume point LevelManager just replaced
+// with meadow/title, so story's Continue (which reads ctx.state) resumes where the save says. Title-screen time is
+// kept out of `playtime`.
 import { E } from '../core/events.js';
-import { defaultState } from '../core/GameState.js';
+import { defaultState, SAVE_KEYS } from '../core/GameState.js';
+import { COMPANIONS, DIFFICULTY, ECONOMY, KITTEN_IDS, LEVEL_IDS, PLAYER } from '../core/config.js';
 
 export const KEY = 'swordcat.save.v1';
+export const BACKUP_KEY = KEY + '.bak';
+/** Schema version written into every record (§19.7 `v: 1`). Bump together with a MIGRATIONS step. */
+export const SAVE_VERSION = 1;
 
-/** §19.7 schema (identical to core GameState.defaultState). */
+/** §19.7 schema (identical to core GameState.defaultState; the contract test checks it). */
 export const defaultSave = () => defaultState();
 
-/** Upgrade any older shape (incl. tech.md's original v1: hp 6, holy) to the §19.7 schema. */
-export function migrate(d) {
-  if (!d || typeof d !== 'object') return null;
-  const base = defaultSave();
-  const out = { ...base, ...d, settings: { ...base.settings, ...(d.settings ?? {}) } };
-  if ('holy' in out) delete out.holy;
-  if ('inventory' in out) delete out.inventory;
-  if ('quests' in out) delete out.quests;
-  if (!(d.maxHp >= 8)) { out.maxHp = 8; out.hp = Math.min(Math.max(d.hp ?? 8, 8), 8); }
-  for (const k of ['companions', 'upgrades', 'cosmetics']) out[k] = { ...base[k], ...(d[k] ?? {}) };
+// ------------------------------------------------------------------ constants
+const PROLOGUE_FLAGS = ['prologue.armour', 'prologue.tutorial', 'prologue.done'];
+const RANKS = ['pawsome', 'purrfect', 'mewtiful'];
+const QUALITY_NAMES = ['auto', 'low', 'med', 'high'];
+/** numeric settings: [min, max] */
+const SETTING_RANGES = {
+  master: [0, 1], music: [0, 1], sfx: [0, 1], shake: [0, 1],
+  sensitivity: [0.1, 5], subtitleSize: [0.5, 3], dialogSpeed: [0.25, 4], touchSize: [0.5, 3],
+};
+const ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const MAX_STR = 64;
+const MILK_CAP = PLAYER.milk.max + (COMPANIONS.mochi?.milkBonus ?? 1);   // satchel II + Mochi (§7.6)
+/** Dawnstone shards in the game (§13.1). */
+const MAX_SHARDS = 3;
+/** Sanity caps for counters (far above any reachable value; they only stop corrupt numbers). */
+const MAX_FISH = 999999, MAX_COUNT = 1e6;
+/** HP per heart (§7.6: 4 hearts = 8 HP). */
+const HP_PER_HEART = 2;
+const QUEST_DONE = new Set(['done', 'complete', 'completed', 'cleared']);
+/** A dirty save waits for the end of a cutscene / load, but never longer than this (sim seconds). */
+const MAX_DEFER = 180;
+/** Minimum real time between two settings writes while a slider drags (ms). */
+const SETTINGS_INTERVAL = 250;
+/** Future schema steps: { [fromVersion]: (d) => d at fromVersion + 1 }. */
+const MIGRATIONS = {};
+
+// ------------------------------------------------------------------ pure helpers
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+const now = () => Date.now();
+const realMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+
+function num(v, def, lo = -Infinity, hi = Infinity, int = false) {
+  let n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+  if (!Number.isFinite(n)) return def;
+  if (int) n = Math.round(n);
+  return Math.min(hi, Math.max(lo, n));
+}
+const bool = (v, def) => (typeof v === 'boolean' ? v : def);
+const id = (v) => (typeof v === 'string' && ID_RE.test(v) ? v : null);
+
+/** Unique valid id strings (optionally restricted to `allowed`), at most `max`. */
+function ids(arr, { allowed = null, max = 64 } = {}) {
+  const out = [];
+  if (!Array.isArray(arr)) return out;
+  for (const v of arr) {
+    const s = id(v);
+    if (s && !out.includes(s) && (!allowed || allowed.includes(s))) out.push(s);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** A JSON primitive worth keeping in flags / settings / level records. */
+function prim(v) {
+  if (typeof v === 'boolean') return { ok: true, v };
+  if (typeof v === 'number') return Number.isFinite(v) ? { ok: true, v } : { ok: false };
+  if (typeof v === 'string') return v.length <= MAX_STR ? { ok: true, v } : { ok: false };
+  if (v === null) return { ok: true, v: null };
+  return { ok: false };
+}
+
+/** tech.md §16's original v1 shape (hp 6, `holy`, `inventory`, `quests`) — same `v: 1`, so detected structurally. */
+export function isLegacyV1(d) {
+  if (!isObj(d)) return false;
+  return 'holy' in d || 'inventory' in d || 'quests' in d || (typeof d.maxHp === 'number' && d.maxHp < PLAYER.hpStart);
+}
+
+/** tech.md v1 → §19.7: hearts 6 → 8 HP (she resumes at full health), `holy` / `quests` dropped, `inventory.fish` kept. */
+function fromTechV1(d) {
+  const out = { ...d };
+  const inv = isObj(d.inventory) ? d.inventory : {};
+  if (out.fish == null && Number.isFinite(inv.fish)) out.fish = inv.fish;
+  delete out.holy; delete out.inventory; delete out.quests;
+  out.maxHp = Math.max(PLAYER.hpStart, num(d.maxHp, PLAYER.hpStart, 0, PLAYER.hpMax, true));
+  out.hp = out.maxHp;
   out.v = 1;
   return out;
 }
 
+/** Where "Continue" resumes: the saved spawn, except the title backdrop (→ `practice` before the prologue ends, else `start`). */
+export function resumeSpawn(levelId, spawnId, flags = {}) {
+  const s = id(spawnId);
+  if (s && s !== 'title') return s;
+  if ((levelId ?? 'meadow') === 'meadow' && !flags?.['prologue.done']) return 'practice';
+  return 'start';
+}
+
+/** Validate / clamp every field onto a fresh §19.7 object (unknown top-level keys dropped). */
+function sanitize(d) {
+  const b = defaultSave();
+  const out = defaultSave();
+  out.v = SAVE_VERSION;
+
+  // flags first: the resume spawn depends on them
+  out.flags = {};
+  if (isObj(d.flags)) for (const [k, v] of Object.entries(d.flags)) { const p = prim(v); if (p.ok && k.length <= MAX_STR) out.flags[k] = p.v; }
+
+  const levelOk = typeof d.levelId === 'string' && LEVEL_IDS.includes(d.levelId);
+  out.levelId = levelOk ? d.levelId : b.levelId;
+  out.spawnId = levelOk ? resumeSpawn(out.levelId, d.spawnId, out.flags) : resumeSpawn(out.levelId, null, out.flags);
+  out.difficulty = typeof d.difficulty === 'string' && DIFFICULTY[d.difficulty] ? d.difficulty : b.difficulty;
+  out.playtime = num(d.playtime, 0, 0);
+  out.savedAt = num(d.savedAt, 0, 0, Number.MAX_SAFE_INTEGER, true);
+
+  out.maxHp = num(d.maxHp, b.maxHp, PLAYER.hpStart, PLAYER.hpMax, true);
+  out.hp = num(d.hp, out.maxHp, 0, out.maxHp, true);
+  if (out.hp <= 0) out.hp = out.maxHp;                      // never resume fainted
+  out.lives = num(d.lives, b.lives, 0, PLAYER.lives, true);  // Kitten's Infinity serialises as null → default
+  out.milkMax = num(d.milkMax, b.milkMax, PLAYER.milk.start, MILK_CAP, true);
+  out.milk = num(d.milk, Math.min(b.milk, out.milkMax), 0, out.milkMax, true);
+  out.fish = num(d.fish, 0, 0, MAX_FISH, true);
+  out.shards = num(d.shards, 0, 0, MAX_SHARDS, true);
+  out.memeCamSeen = num(d.memeCamSeen, 0, 0, MAX_COUNT, true);
+
+  out.heartBells = ids(d.heartBells, { max: ECONOMY.heartBells ?? 3 });
+  out.kittens = ids(d.kittens, { allowed: KITTEN_IDS, max: KITTEN_IDS.length });
+  out.letters = ids(d.letters, { max: 16 });
+
+  const c = isObj(d.companions) ? d.companions : {};
+  out.companions = { ...b.companions, unlocked: ids(c.unlocked, { max: 16 }), active: ids(c.active, { max: 4 }) };
+
+  const u = isObj(d.upgrades) ? d.upgrades : {};
+  out.upgrades = {
+    satchel: num(u.satchel, 0, 0, ECONOMY.shops.satchel.cost.length, true),
+    sharp: num(u.sharp, 0, 0, ECONOMY.shops.sharp.cost.length, true),
+    quickCharge: bool(u.quickCharge, false), valorGain: bool(u.valorGain, false), waveReach: bool(u.waveReach, false),
+  };
+
+  const cos = isObj(d.cosmetics) ? d.cosmetics : {};
+  // the starting skins / cape can never be lost
+  const ownedSwords = ids(cos.swords, { max: 32 }), ownedCapes = ids(cos.capes, { max: 32 });
+  const swords = [...b.cosmetics.swords.filter((s) => !ownedSwords.includes(s)), ...ownedSwords];
+  const capes = [...b.cosmetics.capes.filter((s) => !ownedCapes.includes(s)), ...ownedCapes];
+  out.cosmetics = {
+    swords, capes,
+    sword: swords.includes(cos.sword) ? cos.sword : b.cosmetics.sword,
+    cape: capes.includes(cos.cape) ? cos.cape : b.cosmetics.cape,
+  };
+
+  out.levels = {};
+  if (isObj(d.levels)) {
+    for (const [lid, rec] of Object.entries(d.levels)) {
+      if (!id(lid) || !isObj(rec)) continue;
+      const r = {};
+      for (const [k, v] of Object.entries(rec)) { const p = prim(v); if (p.ok) r[k] = p.v; }
+      r.cleared = rec.cleared === true;
+      if (!RANKS.includes(r.bestRank)) delete r.bestRank;
+      if (!(typeof r.bestTime === 'number' && r.bestTime > 0)) delete r.bestTime;
+      out.levels[lid] = r;
+    }
+  }
+
+  out.settings = { ...b.settings };
+  if (isObj(d.settings)) {
+    for (const [k, v] of Object.entries(d.settings)) {
+      if (k in SETTING_RANGES) out.settings[k] = num(v, b.settings[k], SETTING_RANGES[k][0], SETTING_RANGES[k][1]);
+      else if (k === 'quality') out.settings.quality = QUALITY_NAMES.includes(v) ? v : b.settings.quality;
+      else if (typeof b.settings[k] === 'boolean') out.settings[k] = bool(v, b.settings[k]);
+      else if (!(k in b.settings) && k.length <= MAX_STR) { const p = prim(v); if (p.ok) out.settings[k] = p.v; }   // future ui keys
+    }
+  }
+
+  // exactly the §19.7 keys, in schema order
+  const ordered = {};
+  for (const k of SAVE_KEYS) ordered[k] = out[k];
+  return ordered;
+}
+
+/**
+ * Upgrade any stored shape to the §19.7 schema (tech.md §16 rules: non-objects → null; one step at a time).
+ * Handles tech.md's original v1 default (hp 6, `holy`, `inventory`, `quests`), partial / older records (missing keys
+ * take the defaults), records from a newer build (best effort) and garbage values (clamped / defaulted).
+ * @param {any} d @returns {ReturnType<typeof defaultSave> | null}
+ */
+export function migrate(d) {
+  if (!isObj(d)) return null;
+  let x = { ...d };
+  if (isLegacyV1(x)) x = fromTechV1(x);
+  let v = num(x.v, 1, 0, Number.MAX_SAFE_INTEGER, true);
+  while (v < SAVE_VERSION && MIGRATIONS[v]) { x = MIGRATIONS[v](x); v++; }
+  return sanitize(x);
+}
+
+/** Does a raw stored record hold a started game (vs. a settings-only record)? */
+export function hasProgress(rec) {
+  if (!isObj(rec)) return false;
+  if (typeof rec.progress === 'boolean') return rec.progress;
+  if (isLegacyV1(rec)) return true;
+  const n = (a) => (Array.isArray(a) ? a.length : 0);
+  return (isObj(rec.flags) && Object.keys(rec.flags).length > 0) || n(rec.kittens) > 0 || n(rec.letters) > 0 ||
+    num(rec.shards, 0) > 0 || (typeof rec.levelId === 'string' && rec.levelId !== 'meadow');
+}
+
+/** Compact Continue-card summary of a peek() result. */
+export function summarize(p) {
+  if (!p?.data) return null;
+  const d = p.data;
+  return {
+    progress: !!p.progress, savedAt: p.savedAt ?? d.savedAt ?? 0, levelId: d.levelId, spawnId: d.spawnId,
+    difficulty: d.difficulty, playtime: d.playtime, kittens: d.kittens.length, kittensTotal: KITTEN_IDS.length,
+    letters: d.letters.length, heartBells: d.heartBells.length, shards: d.shards, fish: d.fish,
+    hearts: d.maxHp / HP_PER_HEART, cleared: LEVEL_IDS.filter((l) => d.levels[l]?.cleared), cape: d.cosmetics.cape,
+    ending: !!d.flags['ending.seen'],
+  };
+}
+
+/** In-memory Storage stand-in (unit tests; same getItem / setItem / removeItem surface). */
+export function createMemoryStorage(init = {}) {
+  const m = new Map(Object.entries(init));
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { m.set(k, String(v)); },
+    removeItem: (k) => { m.delete(k); },
+    clear: () => m.clear(),
+    key: (i) => [...m.keys()][i] ?? null,
+    get length() { return m.size; },
+  };
+}
+
+const normScene = (sid) => String(sid ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const isTitleScene = (sid) => { const n = normScene(sid); return n === 'cs00' || n === 'title'; };
+
+/** `?save=1|0` URL override (null when absent). */
+function urlFlag(name) {
+  try {
+    if (typeof location === 'undefined') return null;
+    const q = new URLSearchParams(location.search);
+    if (!q.has(name)) return null;
+    const v = q.get(name);
+    return !(v === '0' || v === 'false' || v === 'off');
+  } catch { return null; }
+}
+
+// ------------------------------------------------------------------ the system
 export class SaveManager {
-  constructor(ctx) {
+  /**
+   * @param {any} ctx
+   * @param {{ storage?: Storage | null, key?: string }} [opts]  storage: injected Storage (tests); null = none
+   */
+  constructor(ctx, { storage, key = KEY } = {}) {
     this.ctx = ctx;
-    this.enabled = !ctx?.params?.test;
+    this.key = key;
+    this.backupKey = key === KEY ? BACKUP_KEY : key + '.bak';
+    const p = ctx?.params ?? {};
+    /** autosave master switch: off in ?test and on ?level= dev jumps (override with ?save=1 / ?save=0, or setEnabled) */
+    this.enabled = urlFlag('save') ?? !(p.test || p.level);
+    /** true while the title screen is up (boot, after "Quit to Title"): nothing is written */
+    this.atTitle = true;
+    /** the running game may overwrite the stored save (false right after newGame until its first autosave) */
+    this.committed = false;
+    /** pending autosave reason (written at the end of the fixed step), or null */
+    this.dirty = null;
+    /** ui may poll this for a "saved" seal */
+    this.lastSave = { at: 0, reason: /** @type {string|null} */ (null), ok: /** @type {boolean|null} */ (null), count: 0 };
+    /** the last load()/peek() result: { data, progress, savedAt } | null */
+    this.loaded = null;
+    this._dirtyT = 0;
+    this._resume = null;            // { levelId, spawnId } after a level exit, until the next level has loaded
+    this._titleTime = 0;            // sim seconds on the title screen since it came up (kept out of playtime)
+    this._hadSession = false;       // a non-title level was loaded since the last title load
+    this._settingsDirty = false; this._settingsKey = null; this._settingsAt = -Infinity;
+    this._objDone = new Set();       // objective ids already saved as done in this level (one write per completion)
+    this._storage = storage;        // undefined → resolve localStorage lazily
     this._offs = [];
+    this._warned = new Set();
+    this._onHide = this._onHide.bind(this);
+    this._onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'hidden') this._onHide(); };
   }
 
   async init() {
-    const bus = this.ctx.bus, autosave = () => this.save();
+    const bus = this.ctx.bus;
+    const req = (reason) => () => this.request(reason);
     this._offs.push(
-      bus.on(E.CHECKPOINT, autosave), bus.on(E.LEVEL_LOADED, autosave), bus.on(E.KITTEN_RESCUED, autosave),
-      bus.on(E.CUTSCENE_END, autosave), bus.on(E.OBJECTIVE, (p) => { if (p?.done) autosave(); }),
-      bus.on(E.SAVE_REQUEST, autosave), bus.on(E.SETTINGS_CHANGED, autosave),
+      bus.on(E.LEVEL_LOADING, (p) => this._onLevelLoading(p)),
+      bus.on(E.LEVEL_LOADED, (p) => this._onLevelLoaded(p)),
+      bus.on(E.LEVEL_EXIT, (p) => this._onLevelExit(p)),
+      bus.on(E.CHECKPOINT, (p) => this._onCheckpoint(p)),
+      bus.on(E.KITTEN_RESCUED, req('kitten')),
+      bus.on(E.CUTSCENE_END, (p) => { if (!isTitleScene(p?.id)) this.request('cutscene'); }),
+      bus.on(E.OBJECTIVE, (p) => this._onObjective(p)),
+      bus.on(E.QUEST_UPDATE, (p) => { if (QUEST_DONE.has(p?.state)) this.request('quest'); }),
+      bus.on(E.ITEM_PICKUP, (p) => { if (p?.item === 'letter' || p?.item === 'heartBell') this.request('pickup'); }),
+      bus.on(E.UNLOCK, req('unlock')),
+      bus.on(E.PLAYER_LIFE_LOST, () => { if (this.ctx.state?.difficultyCfg?.livesScope === 'game') this.request('life'); }),
+      bus.on(E.SAVE_REQUEST, (p) => this.request(typeof p?.reason === 'string' ? p.reason : 'request')),
+      bus.on(E.SETTINGS_CHANGED, (p) => this._onSettings(p)),
     );
+    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('pagehide', this._onHide);
+    if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', this._onVis);
   }
 
-  /** Persist ctx.state now. */
-  save() { return this.enabled ? this.write(this.ctx.state.toJSON()) : false; }
+  // ------------------------------------------------------------------ storage primitives (frozen contract)
+  /** Read the stored save, migrated to §19.7 (also a settings-only record, so settings apply at boot). */
+  load() {
+    const p = this.peek();
+    this.loaded = p;
+    return p ? p.data : null;
+  }
 
-  load() { try { const raw = localStorage.getItem(KEY); return raw ? migrate(JSON.parse(raw)) : null; } catch { return null; } }
-  write(d) { try { localStorage.setItem(KEY, JSON.stringify({ ...d, savedAt: Date.now() })); return true; } catch (e) { console.warn('[save] failed', e); return false; } }
-  clear() { try { localStorage.removeItem(KEY); } catch { /* ignore */ } }
+  /**
+   * Write `d` (sanitised to §19.7) as the stored record. Returns false (never throws) on any storage failure.
+   * @param {object} d @param {{ progress?: boolean, savedAt?: number, backup?: boolean }} [o]
+   */
+  write(d, { progress = true, savedAt = now(), backup = true } = {}) {
+    const s = this._store();
+    if (!s) return false;
+    const clean = migrate(d);
+    if (!clean) return false;
+    clean.savedAt = savedAt;
+    let raw;
+    try { raw = JSON.stringify({ ...clean, progress: !!progress }); } catch (e) { this._warn('json', '[save] could not serialise the save', e); return false; }
+    try {
+      if (backup) {
+        const prev = s.getItem(this.key);
+        if (prev && prev !== raw && hasProgress(safeParse(prev))) s.setItem(this.backupKey, prev);
+      }
+    } catch { /* backup is best effort */ }
+    try { s.setItem(this.key, raw); return true; } catch (e) {
+      // quota: drop the backup and retry once
+      try { s.removeItem(this.backupKey); s.setItem(this.key, raw); return true; } catch { /* fall through */ }
+      this._warn('write', '[save] write failed (storage full or blocked); progress is kept in memory only', e);
+      return false;
+    }
+  }
 
-  update(dt) {}
-  dispose() { for (const off of this._offs) off(); this._offs.length = 0; }
+  /** Delete the save (and its backup). */
+  clear() {
+    const s = this._store();
+    this.loaded = null;
+    if (!s) return;
+    try { s.removeItem(this.key); } catch { /* ignore */ }
+    try { s.removeItem(this.backupKey); } catch { /* ignore */ }
+  }
+
+  // ------------------------------------------------------------------ queries
+  /** The stored record without touching ctx.state: { data, progress, savedAt, fromBackup } | null. */
+  peek() {
+    const s = this._store();
+    if (!s) return null;
+    let raw = null, bak = null;
+    try { raw = s.getItem(this.key); } catch { raw = null; }
+    const rec = raw ? safeParse(raw) : null;
+    if (raw && !isObj(rec)) {
+      this._warn('corrupt', '[save] the save is unreadable; trying the backup');
+      try { bak = s.getItem(this.backupKey); } catch { bak = null; }
+      const b = bak ? safeParse(bak) : null;
+      return isObj(b) ? { data: migrate(b), progress: hasProgress(b), savedAt: num(b.savedAt, 0), fromBackup: true } : null;
+    }
+    if (!isObj(rec)) return null;
+    return { data: migrate(rec), progress: hasProgress(rec), savedAt: num(rec.savedAt, 0), fromBackup: false };
+  }
+
+  /** A started game is stored (main menu "Continue"; New Game's "Skip the prologue?"). */
+  hasSave() { return !!this.peek()?.progress; }
+
+  /** Continue-card summary of the stored save, or null. */
+  summary() { const p = this.peek(); return p?.progress ? summarize(p) : null; }
+
+  /** true once the running game owns the slot (it has written, or it is the stored game it continued). */
+  get active() { return !this.atTitle && this.committed; }
+
+  // ------------------------------------------------------------------ sessions
+  // A session starts when a level other than the `title` spawn loads (story / ui flows), or via newGame() /
+  // continueGame(). It commits (may overwrite the slot) on its first successful write, so an abandoned new game
+  // never replaces the stored one. Loading the `title` spawn ends it: a final save if it committed, then ctx.state is
+  // put back to the stored game (what Continue resumes) and title-screen time is kept out of the playtime.
+
+  /**
+   * Start a fresh game: ctx.state ← §19.7 defaults (current settings kept), emits save:loaded {reason:'new'}. Nothing
+   * is written until the new game's first autosave, so quitting during CS-01 keeps the old save. The caller plays
+   * CS-01 / loads the returned spawn.
+   * @param {{ difficulty?: 'kitten'|'knight'|'nine', skipPrologue?: boolean }} [o]
+   * @returns {{ levelId: string, spawnId: string }}
+   */
+  newGame({ difficulty = 'knight', skipPrologue = false } = {}) {
+    const st = this.ctx.state;
+    const data = defaultSave();
+    data.settings = { ...data.settings, ...(st?.settings ?? {}) };
+    if (DIFFICULTY[difficulty]) data.difficulty = difficulty;
+    if (skipPrologue) { for (const k of PROLOGUE_FLAGS) data.flags[k] = true; data.spawnId = 'start'; }
+    const clean = migrate(data);
+    st?.reset?.(clean);
+    this._startSession(false);
+    this.ctx.bus.emit(E.SAVE_LOADED, { data: st?.toJSON?.() ?? clean, reason: 'new' });
+    return { levelId: clean.levelId, spawnId: clean.spawnId };
+  }
+
+  /**
+   * "Continue": ctx.state ← the stored save (current settings kept; title-screen playtime discarded), emits
+   * save:loaded {reason:'continue'}, then loads its level at the resume spawn (`load: false` to load it yourself).
+   * @param {{ load?: boolean }} [o] @returns {Promise<{ levelId: string, spawnId: string } | null>}
+   */
+  async continueGame({ load = true } = {}) {
+    const p = this.peek();
+    if (!p?.progress) return null;
+    const st = this.ctx.state;
+    const data = p.data;
+    if (st?.settings) data.settings = { ...data.settings, ...st.settings };
+    data.spawnId = resumeSpawn(data.levelId, data.spawnId, data.flags);
+    st?.reset?.(data);
+    this.loaded = p;
+    this._startSession(true);
+    this.ctx.bus.emit(E.SAVE_LOADED, { data: st?.toJSON?.() ?? data, reason: 'continue' });
+    const target = { levelId: data.levelId, spawnId: data.spawnId };
+    if (load && this.ctx.levels?.load) await this.ctx.levels.load(target.levelId, target.spawnId);
+    return target;
+  }
+
+  /** Leave the title without newGame/continueGame (the caller set ctx.state up). `commit`: may overwrite at once. */
+  beginSession({ commit = true } = {}) { this._startSession(commit); }
+
+  /** Back to the title: a final save of the running game (if it has committed), then no writes until a new session. */
+  endSession(reason = 'quit') {
+    if (!this.atTitle && this.enabled && this.committed) this._flush(this.dirty ?? reason);
+    this.atTitle = true; this.committed = false;
+    this.dirty = null; this._resume = null; this._titleTime = 0;
+  }
+
+  _startSession(commit) {
+    this.atTitle = false; this.committed = !!commit; this._hadSession = true;
+    this.dirty = null; this._dirtyT = 0; this._resume = null; this._titleTime = 0;
+  }
+
+  /**
+   * The `title` spawn has loaded. LevelManager just set state.levelId/spawnId to meadow/title, so put the resume point
+   * back: after a session the whole stored game (= what a reboot would show), at boot only levelId/spawnId (core has
+   * already applied the save). Never in ?test (runs never read the slot).
+   */
+  _enterTitle(fromSession) {
+    this.endSession('title');
+    if (!this.enabled) return;
+    const st = this.ctx.state, p = this.peek();
+    if (!st || !p?.progress) return;
+    if (fromSession) {
+      const data = p.data;
+      data.settings = { ...data.settings, ...(st.settings ?? {}) };
+      st.reset?.(data);
+      this.loaded = p;
+      this.ctx.bus.emit(E.SAVE_LOADED, { data: st.toJSON?.() ?? data, reason: 'title' });
+    } else {
+      st.levelId = p.data.levelId; st.spawnId = p.data.spawnId;
+    }
+  }
+
+  // ------------------------------------------------------------------ saving
+  /** Turn autosave on/off at runtime (smoke tests; a debug toggle). */
+  setEnabled(on = true) { this.enabled = !!on; return this.enabled; }
+
+  /**
+   * Ask for an autosave. It is written at the end of the current fixed step (several triggers in one step = one
+   * write), after the running cutscene / level load. Ignored at the title, in ?test, or when disabled.
+   * @returns {boolean} accepted
+   */
+  request(reason = 'request') {
+    if (!this.enabled || this.atTitle) return false;
+    if (!this.dirty) this._dirtyT = 0;
+    this.dirty = reason;
+    return true;
+  }
+
+  /** Write ctx.state now (ignores the cutscene deferral). @returns {boolean} written */
+  save(reason = 'manual') {
+    if (!this.enabled || this.atTitle) return false;
+    return this._flush(reason);
+  }
+
+  /** Persist state.settings now (a patch: the stored game progress is untouched). @returns {boolean} */
+  saveSettings(key = null) {
+    this._settingsDirty = false;
+    if (!this.enabled) return false;
+    const st = this.ctx.state;
+    if (!st?.settings) return false;
+    this._settingsAt = realMs();
+    const k = key ?? this._settingsKey;
+    this._settingsKey = null;
+    return this._patch((rec) => {
+      rec.settings = { ...st.settings };
+      if (k === 'difficulty' && DIFFICULTY[st.difficulty]) rec.difficulty = st.difficulty;
+    });
+  }
+
+  update(dt) {
+    if (this.atTitle) {
+      // mirror core's playtime clock (Game.step: not while loading, not in 'menu') to discount the title screen
+      const c = this.ctx;
+      if (!c.levels?.loading && c.game?.mode !== 'menu') this._titleTime += dt;
+    }
+    if (this._settingsDirty && realMs() - this._settingsAt >= SETTINGS_INTERVAL) this.saveSettings();
+    if (!this.dirty) return;
+    this._dirtyT += dt;
+    if (this._blocked() && this._dirtyT < MAX_DEFER) return;
+    this._flush(this.dirty);
+  }
+
+  dispose() {
+    if (this._settingsDirty) this.saveSettings();
+    for (const off of this._offs) off();
+    this._offs.length = 0;
+    if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('pagehide', this._onHide);
+    if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', this._onVis);
+  }
+
+  // ------------------------------------------------------------------ internals
+  /**
+   * A playing story scene or a level load holds the save until the scene's end state is in place. Mode 'cutscene' on
+   * its own is not enough: ui also uses it to freeze the world under the results card, where the level-exit save
+   * (the next level as the resume point) must land.
+   */
+  _blocked() {
+    const c = this.ctx;
+    return !!(c.levels?.loading || c.story?.isPlaying);
+  }
+
+  /** The record a progress save writes: ctx.state, with the resume point of a pending level exit. */
+  _compose() {
+    const d = this.ctx.state.toJSON();
+    if (this._resume) { d.levelId = this._resume.levelId; d.spawnId = this._resume.spawnId; }
+    d.spawnId = resumeSpawn(d.levelId, d.spawnId, d.flags);
+    return d;
+  }
+
+  _flush(reason) {
+    this.dirty = null; this._dirtyT = 0;
+    if (!this.enabled || !this.ctx.state?.toJSON) return false;
+    const at = now();
+    const ok = this.write(this._compose(), { progress: true, savedAt: at });
+    if (ok) { this.ctx.state.savedAt = at; this.committed = true; this._settingsDirty = false; }
+    this.lastSave = { at, reason: reason ?? 'save', ok, count: this.lastSave.count + (ok ? 1 : 0) };
+    return ok;
+  }
+
+  /** Read-modify-write of the stored record (settings, playtime). Creates a settings-only record if none exists. */
+  _patch(fn) {
+    if (!this._store()) return false;
+    const p = this.peek();                      // same backup fallback as every read: a corrupt record is not lost
+    const data = p?.data ?? defaultSave();
+    fn(data);
+    return this.write(data, { progress: p?.progress ?? false, savedAt: p?.savedAt ?? 0, backup: false });
+  }
+
+  _onSettings(p) {
+    if (!this.enabled) return;
+    if (p?.key === 'difficulty') this._settingsKey = 'difficulty';
+    this._settingsDirty = true;
+    if (realMs() - this._settingsAt >= SETTINGS_INTERVAL) this.saveSettings();   // first change: immediately
+  }
+
+  _onObjective(p) {
+    if (!p) return;
+    if (!p.done) { if (p.id != null) this._objDone.delete(p.id); return; }
+    if (p.id != null) { if (this._objDone.has(p.id)) return; this._objDone.add(p.id); }
+    this.request('objective');
+  }
+
+  _onLevelLoading(p) {
+    this._objDone.clear();
+    if (p?.spawnId === 'title') {
+      // leaving for the title (Quit to Title, CS-16 → title): final save even mid-cutscene, then the session ends
+      if (!this.atTitle) this.endSession('title');
+      return;
+    }
+    if (this.atTitle) {
+      // a game starts from the title through story/ui (not newGame/continueGame): the time spent on the title
+      // screen is not play time (a state story just reset simply clamps at 0)
+      const st = this.ctx.state;
+      if (st && Number.isFinite(st.playtime)) st.playtime = Math.max(0, st.playtime - this._titleTime);
+      this._titleTime = 0;
+    }
+  }
+
+  _onLevelLoaded(p) {
+    this._resume = null;
+    if (p?.spawnId === 'title') { const had = this._hadSession; this._hadSession = false; this._enterTitle(had); return; }
+    if (this.atTitle) this._startSession(false);
+    this._hadSession = true;
+    this.request('level');
+  }
+
+  _onLevelExit(p) {
+    if (typeof p?.to === 'string' && LEVEL_IDS.includes(p.to)) this._resume = { levelId: p.to, spawnId: id(p.spawnId) ?? 'start' };
+    this.request('exit');
+  }
+
+  _onCheckpoint(p) {
+    const st = this.ctx.state;
+    if (st && !this.atTitle && typeof p?.levelId === 'string' && LEVEL_IDS.includes(p.levelId) && id(p.spawnId)) {
+      st.levelId = p.levelId; st.spawnId = p.spawnId;
+    }
+    this.request('checkpoint');
+  }
+
+  /** Tab hidden / page closing: write what is pending; otherwise keep the stored playtime current. */
+  _onHide() {
+    if (!this.enabled) return;
+    if (this._settingsDirty) this.saveSettings();
+    if (this.atTitle) return;
+    if (this.dirty && !this._blocked()) { this._flush(this.dirty); return; }
+    if (!this.committed) return;
+    const t = this.ctx.state?.playtime;
+    if (Number.isFinite(t)) this._patch((rec) => { rec.playtime = Math.max(rec.playtime, t); });
+  }
+
+  _store() {
+    if (this._storage !== undefined) return this._storage;
+    let s = null;
+    try {
+      s = globalThis.localStorage ?? null;
+      s?.getItem(KEY);                          // SecurityError (sandboxed iframe / blocked cookies) throws here
+    } catch (e) {
+      s = null;
+      this._warn('storage', '[save] localStorage is unavailable; progress will not persist', e);
+    }
+    this._storage = s;
+    return s;
+  }
+
+  _warn(key, msg, err) {
+    if (this._warned.has(key)) return;
+    this._warned.add(key);
+    console.warn(msg, err ?? '');
+  }
+}
+
+function safeParse(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }

@@ -137,23 +137,31 @@ test('falls under GRAVITY, lands with landImpact, then rests', () => {
   const expectV = Math.min(Math.sqrt(2 * GRAVITY * 5), PLAYER.terminalFall);
   assert.ok(Math.abs(impact - expectV) < 1.0, `impact ${impact.toFixed(2)} ≈ ${expectV.toFixed(2)}`);
   assert.equal(a.landImpact, 0, 'landImpact is per step');
-  // terminal fall is respected
-  const b = actor(0, 200, 0); b.terminalFall = 14;
-  run(ph, b, 3);
-  const c = actor(0, 200, 0); c.terminalFall = 14;
+  // terminal fall is respected (actor override, else PLAYER.terminalFall), and gravityMul scales the fall
+  const b = actor(0, 200, 0); b.terminalFall = 9;
+  let minVy = 0;
+  run(ph, b, 2, null, (x) => { minVy = Math.min(minVy, x.vel.y); });
+  assert.ok(minVy >= -9 - 1e-9 && Math.abs(b.vel.y + 9) < 1e-9 && !b.onGround, `actor terminalFall (vy ${b.vel.y})`);
+  const c = actor(0, 200, 0);
   run(ph, c, 2.0);
-  assert.ok(c.vel.y >= -14 - 1e-9, 'terminal fall');
+  assert.ok(Math.abs(c.vel.y + PLAYER.terminalFall) < 1e-9, `config terminalFall (vy ${c.vel.y})`);
+  const heavy = actor(0, 200, 0, { gravityMul: 1.35 }), light = actor(0, 200, 0);
+  run(ph, heavy, 0.25); run(ph, light, 0.25);
+  assert.ok(Math.abs(heavy.vel.y / light.vel.y - 1.35) < 1e-9, 'gravityMul (player fall gravity ×1.35)');
 });
 
-test('jumping leaves the ground; apex matches v²/2g', () => {
+test('jumping leaves the ground; apex is exactly v²/2g (constant-acceleration integration)', () => {
   const { ph } = world({ hf: flat(0) });
-  const a = actor(0, 0, 0); a.onGround = true;
-  a.vel.y = PLAYER.jumpV; a.onGround = false;
-  let apex = 0;
-  run(ph, a, 1.2, null, (x) => { apex = Math.max(apex, x.pos.y); });
-  const want = PLAYER.jumpV ** 2 / (2 * GRAVITY);
-  assert.ok(Math.abs(apex - want) < 0.08, `apex ${apex.toFixed(3)} ≈ ${want.toFixed(3)}`);
-  assert.ok(a.onGround);
+  for (const [v0, name] of [[PLAYER.jumpV, 'jump 1.245 m'], [PLAYER.mushroomBounceV, 'mushroom ≈ 1.8 m']]) {
+    const a = actor(0, 0, 0);
+    a.vel.y = v0; a.onGround = false;
+    let apex = 0, steps = 0;
+    run(ph, a, 1.6, null, (x) => { apex = Math.max(apex, x.pos.y); if (!x.onGround) steps++; });
+    const want = v0 ** 2 / (2 * GRAVITY);
+    assert.ok(Math.abs(apex - want) < 0.005, `${name}: apex ${apex.toFixed(4)} vs ${want.toFixed(4)}`);
+    assert.ok(Math.abs(steps / 60 - (2 * v0) / GRAVITY) < 2 / 60, `${name}: airtime ${(steps / 60).toFixed(3)} s`);
+    assert.ok(a.onGround && a.pos.y === 0);
+  }
 });
 
 test('ground snap keeps a runner grounded down a walkable slope; steep terrain cannot be climbed and slides', () => {
@@ -188,6 +196,31 @@ test('ground snap keeps a runner grounded down a walkable slope; steep terrain c
   run(w2.ph, c, 2);
   assert.ok(c.pos.x < 0.5, `slid down (x ${c.pos.x.toFixed(2)})`);
   assert.ok(c.onGround, 'lands at the foot');
+});
+
+test('cliff banks: no bunny-hopping up the smoothed foot; steering into a bank still slides down it', () => {
+  for (const deg of [50, 60, 75]) for (const res of [80, 40]) {                  // 1 m and 2 m cells
+    const k = Math.tan(deg * Math.PI / 180);
+    const { ph } = world({ hf: Heightfield.fromFunction(80, res, (x) => Math.max(0, x + 6) * k) });
+    // run at it and jump every time she touches ground: never higher than one jump
+    const j = actor(-10, 0, 0); let maxY = 0;
+    run(ph, j, 5, (x) => { x.vel.x = PLAYER.run; x.vel.z = 0; if (x.onGround) { x.vel.y = PLAYER.jumpV; x.onGround = false; } },
+      (x) => { maxY = Math.max(maxY, x.pos.y); });
+    assert.ok(maxY < PLAYER.jumpV ** 2 / (2 * GRAVITY) + 0.02, `${deg}° (${80 / res} m cells): climbed to ${maxY.toFixed(2)} m by hopping`);
+    // dropped high on the bank while a controller sets its velocity straight into it every step: slides to the foot
+    const s = actor(-2, 4 * k, 0);
+    let slid = 0;
+    run(ph, s, 4, (x) => { x.vel.x = PLAYER.run; x.vel.z = 0; }, (x) => { if (x.sliding) { slid++; assert.ok(!x.onGround && x.slideSpeed > 0); } });
+    assert.ok(slid > 5 && s.onGround && s.pos.y < 0.01 && s.pos.x <= -6 + 1e-6, `${deg}° (${80 / res} m cells): ended at x ${s.pos.x.toFixed(2)} y ${s.pos.y.toFixed(2)}`);
+    assert.equal(s.slideSpeed, 0, 'slideSpeed resets on the ground');
+  }
+  // a lone steepish triangle (normal.y 0.65..0.7) on walkable ground is no trap: the smoothed slope decides there
+  const { ph } = world({ hf: Heightfield.fromFunction(20, 20, (x, z) => (x === 1 && z === 0 ? 0.78 : 0)) });
+  const tri = ph.heightfield.faceNormalAt(0.8, -0.1, new THREE.Vector3()).y;
+  assert.ok(tri < PHYSICS_DEFAULTS.walkableNormalY && tri > PHYSICS_DEFAULTS.walkableNormalY - PHYSICS_DEFAULTS.steepFaceTol, `setup: triangle ${tri.toFixed(3)}`);
+  assert.equal(ph._terrainSteep(0.8, -0.1), false);
+  const w = actor(0.8, 0.5, -0.1); run(ph, w, 0.5);
+  assert.ok(w.onGround && !w.sliding, 'stands on it');
 });
 
 test('without a level: flat ground at 0; flying ignores gravity but stays above ground; noClip integrates only', () => {

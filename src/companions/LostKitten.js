@@ -41,6 +41,8 @@ export const CAGE_CART = {
 export const RESCUE = { standClearR: 15, radius: 1.3, height: 1.6, leaveAfter: 2.8, leaveDur: 2.6, leaveSpeed: 2.2, wobbleEvery: 6, wobbleDur: 0.7, waveRadius: 7 };
 
 const _v = new THREE.Vector3();
+/** Hop-out directions tried around "toward her" (radians), nearest first. */
+const HOP_TRIES = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
 
 /**
  * The breakable cage lock: a fixed `neutral` actor flagged `breakable` (requests/combat.md) so only player-side
@@ -172,9 +174,11 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   _buildCage() {
     const o = this.opts, style = o.cage ?? (this.companion ? 'cart' : 'carry');
-    const cart = style === 'cart' && o.cartModel !== false;
+    // A given perch height `y` means the level already built the surface the cage stands on (world's meadow places
+    // `cart-high` at the Old Bridge and passes its bed height): then we add only the bars, not a second cart.
+    const cart = style === 'cart' && o.cartModel !== false && !(o.y > 0);
     if (cart && !(this.perchY > 0)) { this.perchY = CAGE_CART.bedY; this.flying = true; }
-    const size = o.size ?? (cart ? CAGE_CART.size : this.companion ? [1.3, 1.2, 1.0] : undefined);
+    const size = o.size ?? (style === 'cart' ? CAGE_CART.size : this.companion ? [1.3, 1.2, 1.0] : undefined);
     const root = this._propRoot();
     try {
       this.cage = buildCage({ style, size, ribbon: o.ribbon ?? false });
@@ -324,23 +328,38 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
         } else if (this.hide === 'stand') this._standCheck(dt, p, d);
         return;
       case 'caged':
+        // pinned inside the bars: the cart / level colliders around the cage must not push us out
         this.vel.set(0, 0, 0);
+        this.pos.set(this.home.x, this.home.y + (this.perchY > 0 ? this.perchY : 0), this.home.z);
+        this.onGround = true;
         if (p && d < 10) this.facing = dampAngle(this.facing, Math.atan2(dx, dz), 3, dt);
-        break;
+        return;
       case 'opening': {
+        // the door swings open (0.35 s), then a scripted hop toward her onto free ground: no collisions on the way,
+        // so the cart (ours or the level's) can't catch the kitten mid-air or shove it out the far side
         this.cageOpenT += dt;
-        if (this.cageOpenT >= 0.35 && !this._hopped) {
-          this._hopped = true;
-          const f = this.facing, out = (this.cageSize?.[2] ?? 0.5) * 0.5 + 0.55;
-          this.vel.set(Math.sin(f) * out / 0.45, 3.4, Math.cos(f) * out / 0.45);
-          this.onGround = false; this.flying = false;
+        if (this.cageOpenT >= 0.35 && !this.hop) {
+          const to = this._hopTarget(new THREE.Vector3());
+          const d = Math.hypot(to.x - this.pos.x, to.z - this.pos.z);
+          this.hop = { from: this.pos.clone(), to, t: 0, dur: 0.45 + 0.12 * d, h: 0.45 + 0.1 * d };
+          this.ghost = true; this.onGround = false;
+          if (d > 1e-3) this.facing = Math.atan2(to.x - this.pos.x, to.z - this.pos.z);
           this.visual?.setPose('idle', 0.15); this.visual?.setExpression('happy');
         }
-        if (this._hopped && this.onGround && this.cageOpenT > 0.6) {
-          this.vel.x = 0; this.vel.z = 0; this.collideActors = true;
-          this.stateName = 'waiting'; this.rescue();
+        const h = this.hop;
+        if (h) {
+          h.t += dt;
+          const u = clamp01(h.t / h.dur);
+          this.pos.set(h.from.x + (h.to.x - h.from.x) * u, h.from.y + (h.to.y - h.from.y) * u + 4 * h.h * u * (1 - u), h.from.z + (h.to.z - h.from.z) * u);
+          this.vel.set((h.to.x - h.from.x) / h.dur, 0, (h.to.z - h.from.z) / h.dur);
+          if (u >= 1) {
+            this.hop = null; this.ghost = false; this.flying = false; this.onGround = true; this.collideActors = true;
+            this.vel.set(0, 0, 0);
+            this.visual?.punch(-0.15);
+            this.stateName = 'waiting'; this.rescue();
+          }
         }
-        break;
+        return;
       }
       case 'waiting': {
         this.vel.x = damp(this.vel.x, 0, this.onGround ? 8 : 0.5, dt); this.vel.z = damp(this.vel.z, 0, this.onGround ? 8 : 0.5, dt);
@@ -408,6 +427,30 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     if (ok) for (const e of this.ctx.enemies?.list ?? []) if (e?.alive && Math.hypot(e.pos.x - at.x, e.pos.z - at.z) < RESCUE.standClearR) { ok = false; break; }
     this.standT = ok ? this.standT + dt : 0;
     if (this.standT >= (o.standTime ?? 3)) this.reveal();
+  }
+
+  /**
+   * Where a freed kitten lands: toward her, just clear of the cage (and of the cart under a perched cage), on free
+   * walkable ground (no static collider, no deep water); other directions are tried when that spot is blocked.
+   * Writes into `out` (y = the ground there).
+   */
+  _hopTarget(out) {
+    const ph = this.ctx.physics, p = this.ctx.player, hx = this.home.x, hz = this.home.z;
+    const base = p && Math.hypot(p.pos.x - hx, p.pos.z - hz) > 0.3 ? Math.atan2(p.pos.x - hx, p.pos.z - hz) : this.facing;
+    const half = Math.max(this.cageSize?.[0] ?? 0.5, this.cageSize?.[2] ?? 0.5) * 0.5;
+    const dist = this.perchY > 0.3 ? half + 1.15 : half + 0.55;
+    const r = this.radius + 0.1;
+    for (const k of [1, 1.4]) {
+      for (const off of HOP_TRIES) {
+        const a = base + off, x = hx + Math.sin(a) * dist * k, z = hz + Math.cos(a) * dist * k;
+        if (ph?.blockedAt?.(x, z, r)) continue;
+        if (ph?.isDeepWater?.(x, z)) continue;
+        if (ph?.inBounds && !ph.inBounds(x, z, 0.5)) continue;
+        return out.set(x, groundY(this.ctx, x, z, this.home.y), z);
+      }
+    }
+    const x = hx + Math.sin(base) * dist, z = hz + Math.cos(base) * dist;
+    return out.set(x, groundY(this.ctx, x, z, this.home.y), z);
   }
 
   _homeYaw() {

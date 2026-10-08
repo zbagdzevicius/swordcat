@@ -21,13 +21,16 @@
 //   out: onGround, landImpact (m/s on the landing step, else 0), groundNormal (Vector3), groundY, groundKind
 //        ('terrain' | 'static' | 'mesh' | null), groundObject, sliding (on a too-steep slope), wallHit, ceilingHit,
 //        stepY (height gained / lost stepping onto or off a prop or stair this step; ease visuals with it),
-//        bounced (vy given by a bounce surface on the landing step; onGround stays false)
+//        bounced (vy given by a bounce surface on the landing step; onGround stays false),
+//        slideSpeed (m/s down a too-steep terrain slope while sliding, else 0)
 // Robustness: motion is split into sub-steps of at most half the collision radius (no tunnelling through thin
 // walls at dodge, knockback or terminal-fall speeds; beyond 24 sub-steps the motion is shortened, never skipped);
 // walkable contacts push straight up (no creeping down ramps); walls and steep faces push sideways only (no
 // climbing); step-up 0.3 m (PLAYER.stepUp) onto props and meshes, never onto a taller riser's rim; downhill ground
 // snap 0.3 m that never snaps through architecture (a grounded capsule follows step edges down and slips off ledges);
-// slopes with normal.y < 0.7 can't be walked up and slide (GAME_DESIGN §7.1); separation shoves are swept too.
+// slopes with normal.y < 0.7 can't be walked up and slide (GAME_DESIGN §7.1) — the slide is physics-owned
+// (`slideSpeed`), so an actor steering into a bank can't hang on it; separation shoves are swept too. Gravity is
+// integrated exactly for constant acceleration (jump apex = v²/2g: 1.245 m for the player, §7.1).
 import * as THREE from 'three';
 import { StaticColliders } from './StaticColliders.js';
 import { MeshCollider } from './MeshCollider.js';
@@ -39,6 +42,8 @@ import { PhysicsDebug } from './PhysicsDebug.js';
  */
 export const PHYSICS_DEFAULTS = Object.freeze({
   walkableNormalY: 0.7,    // §7.1: slopes steeper than normal.y 0.7 slide
+  steepFaceTol: 0.05,      // terrain: a rendered triangle steeper than walkableNormalY - this is always too steep (cliff
+                           // banks: no standing on the smoothed foot of a cliff); between the two the smoothed slope decides
   groundSnap: 0.3,         // tech.md §5: stick to downhill slopes / step down
   skin: 0.02,              // resting-contact tolerance (m)
   substep: 0.5,            // max motion per sub-step as a fraction of the collision radius
@@ -49,6 +54,7 @@ export const PHYSICS_DEFAULTS = Object.freeze({
 });
 
 const _n = new THREE.Vector3();
+const _n2 = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const RAY_DEFAULTS = Object.freeze({ terrain: true, mesh: true, statics: false });
 const LOS_DEFAULTS = Object.freeze({ terrain: true, mesh: true, statics: true });
@@ -375,16 +381,22 @@ export class Physics {
     const wasGround = !!a.onGround;
     a.landImpact = 0; a.wallHit = false; a.ceilingHit = false; a.stepY = 0; a.bounced = 0;
     if (!a.groundNormal) a.groundNormal = new THREE.Vector3(0, 1, 0);         // once per actor
-    if (a.noClip) { p.addScaledVector(v, dt); a.onGround = false; a.sliding = false; a.groundKind = null; return; }
+    if (a.noClip) { p.addScaledVector(v, dt); a.onGround = false; a.sliding = false; a.slideSpeed = 0; a.groundKind = null; return; }
 
     const flying = !!a.flying;
+    // exact for constant acceleration: the step moves by the mean of the vertical velocity before and after gravity
+    // (semi-implicit Euler would lose v·dt/2 of every jump: 6 cm of the player's 1.245 m apex)
+    let vyBias = 0;
     if (!flying) {
       if (!wasGround || v.y > 0) {
+        const vy0 = v.y;
         v.y -= C.gravity * (a.gravityMul ?? 1) * dt;
         const tf = a.terminalFall ?? C.terminalFall;
         if (v.y < -tf) v.y = -tf;
+        if (vy0 > v.y) vyBias = (vy0 - v.y) / 2;
       } else if (v.y < 0) v.y = 0;
     }
+    const vyG = v.y;
 
     const r = a.radius ?? 0.35, h = a.height ?? 1, capR = Math.max(0.01, Math.min(r, h * 0.5));
     const maxStep = Math.max(0.02, capR * C.substep);
@@ -400,7 +412,8 @@ export class Physics {
     let impact = 0;
     for (let i = 0; i < n; i++) {
       const vyBefore = v.y;
-      const now = this._substep(a, v.x * sdt, v.y * sdt, v.z * sdt, grounded, flying, capR, sdt);
+      const vyMove = v.y === vyG ? v.y + vyBias : v.y;                    // (until a contact changes v.y)
+      const now = this._substep(a, v.x * sdt, vyMove * sdt, v.z * sdt, grounded, flying, capR, sdt);
       if (now && !grounded && -vyBefore > impact) impact = -vyBefore;
       grounded = now;
     }
@@ -414,6 +427,7 @@ export class Physics {
       a.groundY = NaN; a.groundKind = null; a.groundObject = null;
     }
     if (!wasGround && grounded) a.landImpact = impact;
+    if (!a.sliding) a.slideSpeed = 0;
     this.clampToBounds(a);
   }
 
@@ -472,17 +486,13 @@ export class Physics {
       if (snap !== SNAP_NONE) {
         on = true; kind = MESH; nx = this._snNx; ny = this._snNy; nz = this._snNz; obj = mesh.sweepTri?.obj ?? null;
       } else {
-        if (gKind === TERRAIN && hf) hf.normalAt(p.x, p.z, _n); else _n.set(0, 1, 0);
-        if (_n.y >= C.walkableNormalY) {
+        const steep = gKind === TERRAIN && hf ? this._terrainSteep(p.x, p.z) : false;
+        if (!steep) {
+          if (gKind === TERRAIN && hf) hf.normalAt(p.x, p.z, _n); else _n.set(0, 1, 0);   // (smooth: for visuals)
           p.y = gy; on = true; kind = gKind; nx = _n.x; ny = _n.y; nz = _n.z; bounce = gBounce; obj = gObj;
         } else if (p.y <= gy + C.skin) {                                  // too steep: slide down it
           p.y = gy; a.sliding = true; a.groundNormal.copy(_n);
-          const vn = v.x * _n.x + v.y * _n.y + v.z * _n.z;
-          if (vn < 0) {
-            const ty = v.y - _n.y * vn;
-            if (ty <= 0) { v.x -= _n.x * vn; v.y = ty; v.z -= _n.z * vn; }
-            else { const hl = Math.hypot(_n.x, _n.z) || 1, hx = _n.x / hl, hz = _n.z / hl, vh = v.x * hx + v.z * hz; if (vh < 0) { v.x -= hx * vh; v.z -= hz * vh; } if (v.y < 0) v.y = 0; }
-          }
+          this._slide(a, sdt);
         }
       }
     } else if (canSnap && this.octree && this._snapMesh(a, capR, C.groundSnap, sdt) !== SNAP_NONE) {
@@ -535,17 +545,47 @@ export class Physics {
    * feet (no clipping the body into a cliff or bank before the centre reaches it, on any grid resolution).
    */
   _blockSteepTerrain(a, x0, z0, y0) {
-    const p = a.pos, hf = this.heightfield, walk = this.cfg.walkableNormalY;
+    const p = a.pos, hf = this.heightfield;
     const dx = p.x - x0, dz = p.z - z0, dl = Math.hypot(dx, dz);
     if (dl < 1e-9) return;
     // 1. the slope under the centre
-    hf.normalAt(p.x, p.z, _n);
-    if (_n.y < walk && hf.heightAt(p.x, p.z) > y0 + 1e-4) this._removeUphill(a, x0, z0);   // (else airborne / going down)
+    if (hf.heightAt(p.x, p.z) > y0 + 1e-4 && this._terrainSteep(p.x, p.z)) this._removeUphill(a, x0, z0);   // (else airborne / going down)
     // 2. the leading rim
     const r = a.radius ?? 0.35, ex = p.x + (dx / dl) * r, ez = p.z + (dz / dl) * r;
     if (hf.heightAt(ex, ez) - y0 <= RIM_RISE) return;
-    hf.faceNormalAt(ex, ez, _n);
-    if (_n.y < walk) this._removeUphill(a, x0, z0);
+    if (this._terrainSteep(ex, ez)) this._removeUphill(a, x0, z0);
+  }
+
+  /**
+   * Is the terrain at (x, z) too steep to stand on or walk up? The rendered triangle there decides when it is clearly
+   * walkable or clearly a cliff (normal.y < walkableNormalY - steepFaceTol); in between, the smoothed slope does (so a
+   * lone steepish triangle on walkable ground is no trap, and the smoothed foot of a cliff is no ladder).
+   * When steep, `_n` holds the triangle's normal (the slide / push direction).
+   */
+  _terrainSteep(x, z) {
+    const hf = this.heightfield, C = this.cfg;
+    hf.faceNormalAt(x, z, _n);
+    if (_n.y >= C.walkableNormalY) return false;
+    if (_n.y < C.walkableNormalY - C.steepFaceTol) return true;
+    return hf.normalAt(x, z, _n2).y < C.walkableNormalY;
+  }
+
+  /**
+   * On too-steep terrain (normal _n): the velocity into the surface and up the slope is removed, and the actor slides
+   * down it at no less than `slideSpeed`, which gravity along the slope builds up. Physics owns that speed, so a
+   * controller that sets its velocity straight into the bank every step still slides down (no hanging on a cliff).
+   */
+  _slide(a, sdt) {
+    const C = this.cfg, v = a.vel, nx = _n.x, ny = _n.y, nz = _n.z;
+    const vn = v.x * nx + v.y * ny + v.z * nz;
+    if (vn < 0) { v.x -= nx * vn; v.y -= ny * vn; v.z -= nz * vn; }
+    const s = Math.sqrt(Math.max(1e-9, 1 - ny * ny));                    // sin(slope)
+    const dx = (nx * ny) / s, dy = -s, dz = (nz * ny) / s;               // downhill, in the plane
+    const vd = v.x * dx + v.y * dy + v.z * dz;
+    const tf = a.terminalFall ?? C.terminalFall;
+    const want = Math.min(tf, Math.max(0, a.slideSpeed || 0) + C.gravity * (a.gravityMul ?? 1) * s * sdt);
+    a.slideSpeed = want;
+    if (vd < want) { const k = want - vd; v.x += dx * k; v.y += dy * k; v.z += dz * k; }
   }
 
   /** Cancel the part of this sub-step's move (and of the velocity) that goes up the slope with normal _n. */

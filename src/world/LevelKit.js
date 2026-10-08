@@ -44,8 +44,6 @@ export const KIT_MODELS = {
   barrel: 'models/env/village-kaykit/decoration/barrel.glb',
 };
 
-/** Sound ids (audio maps them; not literal asset paths). */
-const SFX = { wood: ['world/wood_breaking_01', 'world/wood_breaking_02'], woodHit: 'world/wood_hit_01', rock: 'impact/impactPunch_heavy_000' };
 
 /** Per-biome defaults (grass, horizon tree silhouettes). */
 const BIOME = {
@@ -186,14 +184,28 @@ export class Kit {
     this.level.listen(E.FLAG_SET, (p) => { if (p?.key === key) fn(p.value, false); });
   }
   warnOnce(msg) { if (!this._warned.has(msg)) { this._warned.add(msg); console.warn(msg); } }
+  /** Clearance (m) from (x, z) to the nearest road edge: the smoothed spine and the extra paths (negative = on a road). */
+  roadClearance(x, z) {
+    let c = distToPolyline(x, z, this.terrain.spine) - (this.def.pathWidth ?? 6) / 2;
+    for (const p of this.terrain.paths) c = Math.min(c, distToPolyline(x, z, p.pts) - p.width / 2);
+    return c;
+  }
+  /** Is (x, z) inside an arena zone grown by `pad`? */
+  inArena(x, z, pad = 0) {
+    for (const zn of this.def.zones ?? []) {
+      if (zn.kind !== 'arena') continue;
+      if (zn.size ? inBox(x, z, zn.at, [zn.size[0] + pad * 2, zn.size[1] + pad * 2]) : Math.hypot(x - zn.at[0], z - zn.at[1]) < (zn.r ?? 12) + pad) return true;
+    }
+    return false;
+  }
 
   // ------------------------------------------------------------------ templates
   /**
    * A baked prop template for a GLB (cached per level). opts: { key, pose: clip, poseT, hide, show, dynamic: [nodes],
-   * recolor, recolorMap, sat, mul, flatColor, flatNormals }.
+   * recolor, recolorMap, sat, mul, tint (multiplied after the grade), flatColor, flatNormals }.
    */
   tpl(path, o = {}) {
-    const key = o.key ?? [path, o.pose ?? '', (o.hide ?? []).join(','), (o.show ?? []).join(','), (o.dynamic ?? []).join(','), o.flatColor ?? '', o.mul ?? '', o.sat ?? '', o.recolorMap ? JSON.stringify(o.recolorMap) : ''].join('|');
+    const key = o.key ?? [path, o.pose ?? '', (o.hide ?? []).join(','), (o.show ?? []).join(','), (o.dynamic ?? []).join(','), o.flatColor ?? '', o.mul ?? '', o.sat ?? '', o.tint ?? '', o.recolorMap ? JSON.stringify(o.recolorMap) : ''].join('|');
     let p = this._tpls.get(key);
     if (!p) {
       p = this._makeTpl(path, key, o).then((t) => {
@@ -212,7 +224,7 @@ export class Kit {
     const root = o.pose ? posedScene(gltf, o.pose, o.poseT ?? 0.5) : gltf.scene;
     const show = new Set(o.show ?? []);
     const hide = [...(resolveFit(path).hide ?? []), ...(o.hide ?? [])].filter((n) => !show.has(n));
-    const t = templateFromObject(root, { key, hide, dynamic: o.dynamic, recolor: o.recolor, recolorMap: o.recolorMap, sat: o.sat, mul: o.mul,
+    const t = templateFromObject(root, { key, hide, dynamic: o.dynamic, recolor: o.recolor, recolorMap: o.recolorMap, sat: o.sat, mul: o.mul, tint: o.tint,
       flatColor: o.flatColor, flatNormals: o.flatNormals });
     t.path = path;
     return t;
@@ -307,7 +319,7 @@ export class Kit {
     const top = o.height ?? (b.max.y - b.min.y) * sv[1];
     const base = { y0: y - 0.6, y1: y + top };
     if (o.walkable === false) base.walkable = false;
-    if (o.tree) return [{ x, z, r: o.trunk ?? Math.max(0.22, Math.min(w, d) * 0.08), ...base }];
+    if (o.tree) return [{ x, z, r: o.trunk ?? Math.max(0.22, Math.min(w, d) * 0.08), camFade: true, ...base }];   // camera: fade, don't pull in
     const kind = o.collider === 'circle' || o.collider === 'box' ? o.collider : (Math.max(w, d) / Math.max(0.01, Math.min(w, d)) > 1.6 ? 'box' : 'circle');
     if (kind === 'circle') return [{ x: cx, z: cz, r: Math.max(0.15, (w + d) / 4), ...base }];
     return [{ x: cx, z: cz, hx: w / 2, hz: d / 2, yaw, ...base }];
@@ -323,8 +335,8 @@ export class Kit {
 
   /**
    * A straight run of a fence / wall template from a to b ([x, z]); pieces are centred on the line and spaced by
-   * their fitted width. One thin segment collider for the whole run. opts: fit, height (collider), gap: [[x, z, r]],
-   * yawOffset, jitter, walkable.
+   * their fitted width. One thin segment collider per unbroken stretch. opts: fit, height (collider), gaps: [[x, z, r]],
+   * skip(x, z) → true drops that piece (keep walls off roads / out of arenas), yawOffset, jitter, walkable.
    * @returns {{pieces: any[], collider: any}}
    */
   fence(src, a, b, o = {}) {
@@ -341,7 +353,7 @@ export class Kit {
     let segStart = null;
     for (let i = 0; i < n; i++) {
       const t = (i + 0.5) / n, x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t;
-      const inGap = (o.gaps ?? []).some(([gx, gz, gr]) => Math.hypot(x - gx, z - gz) < gr);
+      const inGap = (o.gaps ?? []).some(([gx, gz, gr]) => Math.hypot(x - gx, z - gz) < gr) || !!o.skip?.(x, z);
       if (inGap) { if (segStart !== null) { segs.push([segStart, (i) / n]); segStart = null; } continue; }
       if (segStart === null) segStart = i / n;
       const p = this.place(tpl, x, z, { scale: [sx, sc, sz], yaw, center: true, collider: false,
@@ -512,6 +524,23 @@ export class Kit {
       default: break;     // setpiece / platforming / objective zones: content comes from their builders
     }
     if (zn.interact && zn.kind !== 'arena' && zn.kind !== 'interact') this._interactZone(zn.interact);
+    for (const h of zn.hints ?? []) this._hint(zn, h);
+  }
+
+  /**
+   * A one-time tutorial hint tied to a zone (§12.3 Crow Fields: `tut.pounce` on the first crow alert, `tut.reflect` on
+   * the first crossbow shot): { key, on: 'alert' | 'telegraph', type } → `ui:toast` once per save (flag `seen.<key>`;
+   * story's tutorial can read the same flag). Only while the zone's `onlyIf` holds.
+   */
+  _hint(zn, h) {
+    const { ctx, level } = this, flag = 'seen.' + h.key;
+    level.listen(h.on === 'telegraph' ? E.TELEGRAPH : E.ENEMY_ALERTED, (p) => {
+      const a = p?.actor ?? p?.enemy;
+      const type = a?.def?.id ?? a?.type ?? null;
+      if ((h.type && type !== h.type) || !this.cond(zn.onlyIf) || ctx.state?.getFlag?.(flag)) return;
+      ctx.state?.setFlag?.(flag, true);
+      ctx.bus.emit(E.TOAST, { text: ctx.strings?.t?.(h.key) ?? h.key, icon: 'hint', key: h.key });
+    });
   }
 
   _fireTrigger(zn) {
@@ -674,15 +703,16 @@ export class Kit {
       if (!p) { clusterLeft--; continue; }
       const hasMilk = milkAt.has(made);
       const pos = new THREE.Vector3(x, p.y, z);
-      const a = new PropActor(ctx, { id: `crate_${made}`, kind: 'crate', hp: 1, radius: p.radius * 0.8, height: p.top - p.y, pos, wobble: 0.2,
+      // hit sounds come from audio (combat:hit → the actor's `material`), the break crunch + splinters from the
+      // `crate` / `barrel` burst (fx debris, audio crateBreak)
+      const kind = path === KIT_MODELS.barrel ? 'barrel' : 'crate';
+      const a = new PropActor(ctx, { id: `crate_${made}`, kind, hp: 1, radius: p.radius * 0.8, height: p.top - p.y, pos, wobble: 0.2,
         visual: { batch: this.batch, handle: p.handle, base: p.matrix },
-        onHit: () => ctx.audio?.play3D?.(SFX.woodHit, pos.clone(), { vol: 0.6 }),
         onBreak: (self) => {
           this.batch.setVisible(p.handle, false);
           for (const c of p.colliders) level.removeCollider(c);
           level.pickups.dropCrate(pos, { milk: hasMilk });
-          ctx.audio?.play3D?.(rng.pick(SFX.wood), pos.clone(), { vol: 0.9 });
-          ctx.bus.emit(E.BURST, { kind: 'wood', position: pos.clone().setY(pos.y + 0.4), count: 14 });
+          ctx.bus.emit(E.BURST, { kind, position: pos.clone().setY(pos.y + 0.4), count: 14 });
           level.removeActor(self);
         } });
       a.tags.add('crate');

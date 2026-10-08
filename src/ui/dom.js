@@ -1,0 +1,70 @@
+// src/ui/dom.js  (owner: ui) — tiny DOM helpers shared by the ui modules. Functions only touch the DOM when called
+// (never at import), so every ui module stays node-importable.
+
+/**
+ * Create an element. `cls` is a class string; `html` sets innerHTML (trusted, built from escaped strings / our SVG).
+ * @param {string} tag @param {string} [cls] @param {{html?: string, text?: string, attrs?: Record<string,string>, parent?: Element}} [o]
+ * @returns {HTMLElement}
+ */
+export function el(tag, cls = '', o = {}) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (o.html != null) e.innerHTML = o.html;
+  else if (o.text != null) e.textContent = o.text;
+  if (o.attrs) for (const [k, v] of Object.entries(o.attrs)) e.setAttribute(k, v);
+  if (o.parent) o.parent.appendChild(e);
+  return e;
+}
+
+/** Set textContent only when it changed (avoids layout work). */
+export function setText(e, s) {
+  if (!e) return;
+  const v = String(s ?? '');
+  if (e._t !== v) { e._t = v; e.textContent = v; }
+}
+
+/** Set innerHTML only when it changed. */
+export function setHtml(e, s) {
+  if (!e) return;
+  const v = String(s ?? '');
+  if (e._h !== v) { e._h = v; e.innerHTML = v; }
+}
+
+/** Toggle a class only when it changed. */
+export function flag(e, cls, on) {
+  if (!e) return;
+  const k = '_c_' + cls;
+  if (e[k] === !!on) return;
+  e[k] = !!on;
+  e.classList.toggle(cls, !!on);
+}
+
+/** Set a CSS custom property only when it changed. */
+export function setVar(e, name, v) {
+  if (!e) return;
+  const k = '_v_' + name, s = String(v);
+  if (e[k] === s) return;
+  e[k] = s;
+  e.style.setProperty(name, s);
+}
+
+/** Restart a CSS animation class (remove, reflow, add). */
+export function pulse(e, cls) {
+  if (!e) return;
+  e.classList.remove(cls);
+  void e.offsetWidth;   // reflow so the animation restarts
+  e.classList.add(cls);
+}
+
+/** Translate an absolutely positioned element (px), skipping unchanged writes. */
+export function place(e, x, y, extra = '') {
+  if (!e) return;
+  const s = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)${extra}`;
+  if (e._tr !== s) { e._tr = s; e.style.transform = s; }
+}
+
+/** Show / hide via the `is-on` class. */
+export function show(e, on) { flag(e, 'is-on', on); }
+
+/** Is a DOM available? */
+export const hasDom = () => typeof document !== 'undefined' && typeof window !== 'undefined';

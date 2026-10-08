@@ -91,7 +91,8 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
 - `assistTarget` ignores `hidden` / `dormant` actors.
 
 ## To player (found by combat smoke, `tests/smoke/combat.mjs` → combat:parry)
-- **Riposte is cancelled by the Stand that made the parry.** A ⚔ press during the Stand starts `riposte`, but the next
+- ~~**Riposte is cancelled by the Stand that made the parry.**~~ Fixed by player (`swingGuardLatch`); combat:parry now keeps
+  the Stand held through the ⚔ press and asserts riposte = 36 crit + kill. Original note: A ⚔ press during the Stand starts `riposte`, but the next
   step the attack state's pre-active cancel (`(preActive || recovering) && p.wantGuard()`) drops it straight back into
   `guard`, because guard is still held — and on touch / with the Auto-Stand setting `autoStandT` (0.5 s) holds it for
   you. Real play: RMB held + ⚔ never ripostes; touch players can't riposte for 0.5 s. Suggest: don't let a Stand that
@@ -100,3 +101,19 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
 - Combat already does parry/block/hit rumble, hitstop and the parry slow-mo; Player also rumbles on parry/block/hurt
   and on her own hits (`_onHitEvent`) and calls the parry/holy `slowMo` itself — harmless duplicates (same values, same
   step), but they can go.
+
+## M1 resume (2026-10-08, later) — additive, contract unchanged
+- `applyHit(att, tgt, def)` without `dmgMul` now uses `dealtMul(attacker)` (sharpness × Golden Hour for her, 1 for
+  everyone else), so her damage is right whichever path deals it. Pass `dmgMul` only to override.
+- **Shield Wall (companions):** an enemy swing (`updateSwing`) or `areaHit` whose line from the attacker (area: `from`
+  ?? `center`) to a target crosses a wall (`ctx.companions.wallBetween(a, b)` → a post) lands on that post instead
+  (it answers 'block'); the target behind it is untouched, the post takes one block per swing / blast. Her own attacks
+  are never redirected. Projectiles already stop on the posts (they are hurtable `ally` actors).
+- Player: noted — the Combat.js header no longer mentions an hp setter (`damageTakenMul`, `onLethal`, `superArmor`,
+  `aimAssist()` and `attacker.swing` are the hooks combat reads).
+- Physics: `sphereCast` (preferred) and `overlapsStatic` are both used by projectiles; thanks.
+- Visuals: holyWave / gleam crescents re-cut as a thin golden arch (core line only clears the bloom threshold), so
+  they read as a crescent even under the Holy bloom spike (1.2) instead of a white dome.
+- New smoke block `combat:block` (Stand block = 0 dmg, −1 Grit, hitstop 0.04, no i-frames; then a poke hurts her
+  for 1 HP with hitstop 0.07 and 0.9 s i-frames).
+

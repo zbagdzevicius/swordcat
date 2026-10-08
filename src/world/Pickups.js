@@ -173,15 +173,23 @@ export class Pickups {
     return it;
   }
 
+  /**
+   * enemy:died → drops. Enemies roll the payload (requests/enemies.md): `fish` (silver count for a [min, max] row,
+   * the total value for a numeric boss row → gold fish) and `smallHeart` (bool); we drop exactly those. Without them
+   * (older payloads) we roll from the enemy's def ourselves.
+   */
   _onEnemyDied(p) {
     const e = p?.enemy, at = p?.position ?? e?.pos;
     if (!at) return;
-    const f = e?.def?.fish;
+    const f = e?.def?.fish, rolled = typeof p?.fish === 'number';
     let n = 0, value = ECONOMY.fish.silver;
-    if (Array.isArray(f)) n = f[0] + Math.floor(this.rnd() * (f[1] - f[0] + 1));
-    else if (typeof f === 'number') { value = ECONOMY.fish.gold; n = Math.max(1, Math.round(f / value)); }
+    if (typeof f === 'number' && !Array.isArray(f)) { value = ECONOMY.fish.gold; n = f > 0 ? Math.max(1, Math.round((rolled ? p.fish : f) / value)) : 0; }
+    else if (rolled) n = Math.max(0, Math.round(p.fish));
+    else if (Array.isArray(f)) n = f[0] + Math.floor(this.rnd() * ((f[1] ?? f[0]) - f[0] + 1));
     if (n > 0) this.spawnFish(at, n, { value });
-    if (!e?.def?.boss && this.ctx.rng?.chance?.(e?.def?.smallHeart ?? PLAYER.smallHeart.chance)) this.spawnHeart(at);
+    const heart = typeof p?.smallHeart === 'boolean' ? p.smallHeart
+      : (!e?.def?.boss && e?.def?.smallHeart !== false && !!this.ctx.rng?.chance?.(PLAYER.smallHeart.chance));
+    if (heart) this.spawnHeart(at);
   }
 
   /** Crate / barrel contents (§12.1: 1–3 fish; milk bottles only from crates). */

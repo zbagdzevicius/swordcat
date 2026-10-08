@@ -190,7 +190,7 @@ export class HolyFX {
     const q = this.ctx.quality ?? {};
     const count = (q.particles ?? 2000) < 1000 ? 80 : 160;
     for (let i = 0; i < 3; i++) { const f = new SparkleField(count, this.rng); this.fields.push(f); scene.add(f.points); }
-    for (let i = 0; i < 4; i++) { const a = new GoldArc(); this.arcs.push(a); scene.add(a.mesh); }
+    for (let i = 0; i < 8; i++) { const a = new GoldArc(); this.arcs.push(a); scene.add(a.mesh); }
     // one persistent point light (intensity 0 when idle): adding / removing lights at runtime recompiles every material
     this.light = new THREE.PointLight(HOLY_LIGHT.color, 0, HOLY_LIGHT.distance, HOLY_LIGHT.decay);
     this.light.name = 'fx.holy.light';
@@ -218,10 +218,10 @@ export class HolyFX {
     const y = pos.y;
     const yaw = dir ? Math.atan2(dir.x, dir.z) : 0;
     // the gold crescent follows the blade's full turn at chest height; the ground ring decal races out to the reach
-    this.arc({ x: pos.x, y: y + 0.75, z: pos.z, theta0: yaw + 1.2, sweep: -Math.PI * 2, r0: 1.1, r1: r * 0.9, thick: 0.32, life: 0.3, grow: 0.16, intensity: 1.5 });
-    this.arc({ x: pos.x, y: y + 0.06, z: pos.z, ring: true, r0: 0.4, r1: r + 0.4, thick: 0.28, life: 0.45, grow: 0.45, intensity: 1.2 });
+    this.arc({ x: pos.x, y: y + 0.75, z: pos.z, theta0: yaw + 1.2, sweep: -Math.PI * 2, r0: 1.1, r1: r * 0.9, thick: 0.32, life: 0.3, grow: 0.16, intensity: 1.15 });
+    this.arc({ x: pos.x, y: y + 0.06, z: pos.z, ring: true, r0: 0.4, r1: r + 0.4, thick: 0.28, life: 0.45, grow: 0.45, intensity: 0.95 });
     _p.set(pos.x, y + 0.9, pos.z);
-    this.particles.burst(_p, { additive: true, n: 28, shape: SHAPE.STAR4, color: '#FFE3A3', intensity: 2.6, size: [0.16, 0.3], sizeEnd: 0.2,
+    this.particles.burst(_p, { additive: true, n: 24, shape: SHAPE.STAR4, color: '#FFE3A3', intensity: 2.2, size: [0.16, 0.3], sizeEnd: 0.2,
       life: [0.5, 0.9], speed: [2.5, 5.0], spread: Math.PI, gravity: -0.5, drag: 2.2, fade: FADE.TWINKLE, jitter: 0.3 });
   }
 
@@ -243,12 +243,17 @@ export class HolyFX {
       life: [0.8, 1.3], speed: [1.5, 4], spread: Math.PI, gravity: -1.2, drag: 1.5, fade: FADE.TWINKLE, jitter: 0.3 });
   }
 
-  /** Start a gold arc / ring (pooled). */
+  /**
+   * Start a flat arc / ground ring (pooled; gold unless `o.color`): { x, y, z, ring?, theta0?, sweep?, r0, r1, thick, life,
+   * grow, intensity, color? }. When every arc is busy the oldest is recycled.
+   */
   arc(o) {
-    const a = this.arcs.find((x) => !x.mesh.visible) ?? this.arcs[0];
+    let a = this.arcs.find((x) => !x.mesh.visible);
+    if (!a) a = this.arcs.reduce((m, x) => (x.t / Math.max(0.01, x.o?.life ?? 1) > m.t / Math.max(0.01, m.o?.life ?? 1) ? x : m));
     a.o = o; a.t = 0;
     a.mesh.position.set(o.x, o.y, o.z);
     const u = a.material.uniforms;
+    u.uColor.value.set(o.color ?? '#FFD34D');
     u.uRing.value = o.ring ? 1 : 0; u.uSweep.value = o.ring ? Math.PI * 2 : (o.sweep ?? Math.PI); u.uTheta0.value = o.theta0 ?? 0;
     u.uThick.value = o.thick ?? 0.3; u.uR.value = o.r0 ?? 1; u.uI.value = 0;
     a.mesh.visible = true;

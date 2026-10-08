@@ -7,6 +7,8 @@
 //   enemies:crow      crow: circles 4 m up, `shadow` decal → dive → lands and pecks (hittable) → defeated
 //   enemies:budget    §8.3 arena budget: 10 AI spawns → 8 active + 2 dormant; despawns free slots
 //   enemies:meow      §7.7 Meow alerts an unalerted rat behind her
+//   enemies:level     the meadow's own open-zone spawns after the prologue (world's LevelKit → ctx.enemies.spawn):
+//                     crossroads pikes + a crossbowman perched on the wall (y 1.2), Crow Fields crows + perched xbows
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,13 +52,16 @@ const HELPERS = () => {
         h.tele.push({ kind: p.kind, shape: p.shape, type: p.actor?.def?.id, dur: p.duration });
         if (h.freezeKind === p.kind && h.freezeAt === Infinity) h.freezeAt = ctx.game.time + h.freezeDelay;
       }));
+      h.offs.push(ctx.bus.on(E.ENEMY_ALERTED, () => {
+        if (h.freezeKind === 'alert' && h.freezeAt === Infinity) h.freezeAt = ctx.game.time + h.freezeDelay;
+      }));
       // screenshots of split-second states: freeze the simulation (time scale 0) at a chosen sim time
       h.offs.push(ctx.game.addFrameHook(() => {
         if (!h.frozen && ctx.game.time >= h.freezeAt) { ctx.game.setTimeScale(0); h.frozen = true; }
       }));
     },
     freezeKind: null, freezeDelay: 0, freezeAt: Infinity, frozen: false,
-    /** freeze `delay` sim-seconds after the next telegraph of `kind` (or after now when kind is null) */
+    /** freeze `delay` sim-seconds after the next telegraph of `kind` ('alert' = the next enemy:alerted; null = now) */
     freezeAfter(kind, delay) { h.freezeKind = kind; h.freezeDelay = delay; h.freezeAt = kind ? Infinity : ctx.game.time + delay; h.frozen = false; },
     thaw() { h.freezeKind = null; h.freezeAt = Infinity; h.frozen = false; ctx.game.setTimeScale(1); },
     done() { h.thaw(); for (const off of h.offs) off(); h.offs.length = 0; h.follow(); ctx.enemies.clear(); },
@@ -91,7 +96,7 @@ async function until(t, fn, arg, ms = 8000) {
 
 export default [
   {
-    name: 'enemies:looks', order: 40, level: 'meadow', spawn: 'start', timeout: 120000,
+    name: 'enemies:looks', order: 40, level: 'meadow', spawn: 'start', timeout: 240000,
     async run(t) {
       await prepare(t);
       const FRONT = { rat_pike: [[0.55, 0.75, 2.0], [0, 0.4, 0]], rat_xbow: [[0.55, 0.75, 2.0], [0, 0.4, 0]], crow: [[0.9, 0.5, 2.6], [0, 0.1, 0]] };
@@ -131,7 +136,7 @@ export default [
     },
   },
   {
-    name: 'enemies:cs02', order: 41, level: 'meadow', spawn: 'start', timeout: 90000,
+    name: 'enemies:cs02', order: 41, level: 'meadow', spawn: 'start', timeout: 180000,
     async run(t) {
       await prepare(t);
       const ids = await t.G(() => {
@@ -191,16 +196,24 @@ export default [
     },
   },
   {
-    name: 'enemies:pike', order: 42, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'enemies:pike', order: 42, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
       await prepare(t);
       const id = await t.G(() => window.__GAME__.__en.spawn('rat_pike', 0, 5.5, { passive: true }).id);
       await waitLoaded(t);
-      await t.G((rid) => { const g = window.__GAME__; g.clearEvents(); g.ctx.enemies.list.find((x) => x.id === rid).ai = true; }, id);
+      await t.G((rid) => { const g = window.__GAME__; g.clearEvents(); g.__en.freezeAfter('alert', 0.12); g.ctx.enemies.list.find((x) => x.id === rid).ai = true; }, id);
       const alerted = await t.waitForEvent('enemy:alerted', 4000);
       t.assert(alerted, 'rat_pike alerted (her within 10 m in its FOV)');
+      if (alerted && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        const bang = await t.G((rid) => { const e = window.__GAME__.ctx.enemies.list.find((x) => x.id === rid); return { on: !!e.bang?.visible, state: e.stateName }; }, id);
+        t.assert(bang.on && bang.state === 'alert', `the alert "!" pops over its head (${bang.state})`);
+        await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, [1.4, 1.0, 2.6], [0, 0.7, 0], 42); }, id);
+        await t.frames(3);
+        await t.shot('enemies/pike-alert');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
       await t.G(() => window.__GAME__.__en.freezeAfter('parry', 0.3));
-      const tele = await until(t, () => window.__GAME__.__en.tele.some((x) => x.type === 'rat_pike'), null, 8000);
+      const tele = await until(t, () => window.__GAME__.__en.tele.some((x) => x.type === 'rat_pike'), null, 15000);
       t.assert(tele, 'rat_pike telegraphs its poke');
       if (tele && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
         await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, [1.3, 0.9, 1.9], [0, 0.45, 0.6], 42); }, id);
@@ -208,7 +221,7 @@ export default [
         await t.shot('enemies/pike-windup');
         await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
       }
-      const hit = await until(t, () => window.__GAME__.ctx.combat.log.some((x) => x.attackId === 'rat_poke' || x.attackId === 'rat_poke2'), null, 6000);
+      const hit = await until(t, () => window.__GAME__.ctx.combat.log.some((x) => x.attackId === 'rat_poke' || x.attackId === 'rat_poke2'), null, 12000);
       t.assert(hit, 'rat_poke connects with her (god mode: 0 damage)');
       const st = await t.G((rid) => {
         const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid);
@@ -238,13 +251,13 @@ export default [
         await t.shot('enemies/pike-defeat');
         await t.G(() => window.__GAME__.__en.thaw());
       }
-      const gone = await until(t, (rid) => !window.__GAME__.ctx.enemies.list.some((x) => x.id === rid), id, 4000);
+      const gone = await until(t, (rid) => !window.__GAME__.ctx.enemies.list.some((x) => x.id === rid), id, 12000);
       t.assert(gone, 'defeated rat despawns after scampering');
       await t.G(() => window.__GAME__.__en.done());
     },
   },
   {
-    name: 'enemies:xbow', order: 43, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'enemies:xbow', order: 43, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
       await prepare(t);
       const id = await t.G(() => window.__GAME__.__en.spawn('rat_xbow', 0.2, 9).id);
@@ -269,7 +282,7 @@ export default [
     },
   },
   {
-    name: 'enemies:crow', order: 44, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'enemies:crow', order: 44, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
       await prepare(t);
       const id = await t.G(() => window.__GAME__.__en.spawn('crow', 0.3, 7).id);
@@ -299,7 +312,7 @@ export default [
       t.assert(r.res === 'hit', 'a pecking crow is hittable');
       if (peck) {
         await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.ctx.cam.shot({ anchor: e, pos: [1.2, 0.8, 2.0], look: [0, 0.2, 0], mode: 'cut', fov: 50 }); }, id);
-        await t.wait(60);
+        await t.wait(300);                              // past the 60 ms hit flash
         await t.shot('enemies/crow-peck');
         await t.G(() => window.__GAME__.__en.follow());
       }
@@ -318,7 +331,8 @@ export default [
       await prepare(t);
       const r = await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx, h = g.__en;
-        const list = []; for (let i = 0; i < 10; i++) list.push(h.spawn('rat_pike', Math.PI + (i - 5) * 0.15, 26));
+        // one squad behind her, out of sight (all within TUNING.capRadius of each other: one fight)
+        const list = []; for (let i = 0; i < 10; i++) list.push(h.spawn('rat_pike', Math.PI + (i - 5) * 0.15, 16));
         const before = { active: ctx.enemies.count(), pending: ctx.enemies.pending.length, cap: ctx.enemies.cap };
         ctx.enemies.despawn(list[0]); ctx.enemies.despawn(list[1]);
         return before;
@@ -332,13 +346,12 @@ export default [
     },
   },
   {
-    name: 'enemies:meow', order: 46, level: 'meadow', spawn: 'start', timeout: 30000,
+    name: 'enemies:meow', order: 46, level: 'meadow', spawn: 'start', timeout: 60000,
     async run(t) {
       await prepare(t);
       const id = await t.G(() => {
-        const e = window.__GAME__.__en.spawn('rat_pike', Math.PI, 6, { facing: window.__GAME__.ctx.player.facing + Math.PI });
-        e.def = { ...e.def, patrolRadius: 0 };          // stays on its post, looking away from her
-        return e.id;
+        // stays on its post (patrol radius 0), looking away from her
+        return window.__GAME__.__en.spawn('rat_pike', Math.PI, 6, { facing: window.__GAME__.ctx.player.facing + Math.PI, patrolRadius: 0 }).id;
       });
       await t.frames(10);
       const before = await t.G((rid) => window.__GAME__.ctx.enemies.list.find((x) => x.id === rid).alerted, id);
@@ -348,6 +361,68 @@ export default [
       t.assert(!before, 'a rat behind her (facing away) has not noticed her');
       t.assert(after.alerted && (after.state === 'alert' || after.state === 'chase'), `Meow pulls it (${after.state})`);
       await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:level', order: 47, level: null, timeout: 180000,
+    async run(t) {
+      await t.G(() => window.__GAME__.story.flag('prologue.done', true));
+      await t.loadLevel('meadow', 'start');
+      await prepare(t);
+      try {
+        await waitLoaded(t);
+        const s0 = await t.G(() => {
+          const ctx = window.__GAME__.ctx, by = {};
+          for (const e of ctx.enemies.list) (by[e.type] ??= []).push(e);
+          const g = (e) => +(e.pos.y - ctx.physics.heightAt(e.pos.x, e.pos.z)).toFixed(2);
+          return {
+            counts: Object.fromEntries(Object.entries(by).map(([k, v]) => [k, v.length])),
+            dormant: ctx.enemies.list.filter((e) => e.dormant).length,
+            perched: (by.rat_xbow ?? []).map((e) => ({ id: e.id, perched: e.perched, alt: g(e), y: e.pos.y })),
+            crows: (by.crow ?? []).map((e) => ({ id: e.id, alt: g(e), x: e.pos.x, z: e.pos.z })),
+            patrol: (by.rat_pike ?? []).map((e) => e.patrolRadius),
+          };
+        });
+        t.log(`meadow spawns ${JSON.stringify(s0.counts)}, dormant ${s0.dormant}; xbows ${s0.perched.map((p) => `${p.perched ? 'perched' : 'ground'}@${p.alt}`).join(' ')}; crows alt ${s0.crows.map((c) => c.alt).join(' ')}; pike patrol r ${s0.patrol.join(' ')}`);
+        t.assert(s0.counts.rat_pike === 4 && s0.counts.rat_xbow === 3 && s0.counts.crow === 4, `crossroads + Crow Fields spawns (${JSON.stringify(s0.counts)})`);
+        t.assert(s0.dormant === 0, 'two far-apart zones never hold each other back (§8.3 budget is per fight)');
+        t.assert(s0.perched.every((p) => p.perched && p.alt >= 0.9), 'crossbowmen sit on their wall / hay bales');
+        t.assert(s0.crows.every((c) => c.alt > 2.5), 'crows fly');
+        t.assert(s0.patrol.includes(4) && s0.patrol.includes(2), 'zone patrol radii reach the pikes');
+        const t0 = await t.G(() => window.__GAME__.ctx.game.time);
+        await until(t, (a) => window.__GAME__.ctx.game.time >= a + 1.5, t0, 20000);     // 1.5 s of sim time
+        const s1 = await t.G(() => {
+          const ctx = window.__GAME__.ctx;
+          return {
+            perched: ctx.enemies.list.filter((e) => e.type === 'rat_xbow').map((e) => ({ id: e.id, y: e.pos.y })),
+            crows: ctx.enemies.list.filter((e) => e.type === 'crow').map((e) => ({ id: e.id, x: e.pos.x, z: e.pos.z, st: e.stateName })),
+            mode: ctx.game.mode, loading: !!ctx.levels.loading, time: ctx.game.time,
+          };
+        });
+        t.log(`after 1.5 s: mode ${s1.mode}, loading ${s1.loading}; crows moved ${s1.crows.map((c) => { const o = s0.crows.find((q) => q.id === c.id); return `${c.st}:${Math.hypot(c.x - o.x, c.z - o.z).toFixed(1)}`; }).join(' ')}`);
+        t.assert(s1.perched.every((p) => Math.abs(p.y - s0.perched.find((q) => q.id === p.id).y) < 0.01), 'perched crossbowmen stay put');
+        t.assert(s1.crows.every((c) => { const o = s0.crows.find((q) => q.id === c.id); return Math.hypot(c.x - o.x, c.z - o.z) > 1; }), 'crows circle');
+        // the crossroads perch, seen from the road
+        await t.G(() => {
+          const g = window.__GAME__, ctx = g.ctx;
+          const x = ctx.enemies.list.find((e) => e.type === 'rat_xbow' && e.pos.z < 0);
+          x.facing = Math.atan2(-18 - x.pos.x, -38 - x.pos.z);
+          return ctx.cam.shot({ anchor: x, pos: [1.2, 0.6, 3.6], look: [0, -0.1, 0], mode: 'cut', fov: 50 });
+        });
+        await t.frames(20);
+        await t.shot('enemies/level-crossroads');
+        // Crow Fields: a crossbowman on a hay bale under the circling crows
+        await t.G(() => {
+          const g = window.__GAME__, ctx = g.ctx;
+          const x = ctx.enemies.list.find((e) => e.type === 'rat_xbow' && e.pos.z > 40);
+          x.facing = Math.atan2(24 - x.pos.x, 40 - x.pos.z);
+          return ctx.cam.shot({ anchor: x, pos: [1.6, 1.0, 5.0], look: [-1.0, 2.2, 0], mode: 'cut', fov: 60 });
+        });
+        await t.frames(20);
+        await t.shot('enemies/level-crowfields');
+      } finally {
+        await t.G(() => { const g = window.__GAME__; g.story.flag('prologue.done', false); g.__en?.done(); });
+      }
     },
   },
 ];

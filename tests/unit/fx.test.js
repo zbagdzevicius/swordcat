@@ -19,7 +19,7 @@ import { trailStyle, trailWindow, TRAIL_COLORS } from '../../src/fx/SwordTrail.j
 import { formatDamage, formatHeal, DAMAGE_STYLE } from '../../src/fx/DamageNumbers.js';
 import { chargeState } from '../../src/fx/HolyFX.js';
 import { bloomTarget, vignetteOpacity, LOW_HP } from '../../src/fx/ScreenFX.js';
-import { debrisFor, helmetFor, DEBRIS_KINDS } from '../../src/fx/Poof.js';
+import { debrisFor, helmetFor, DEBRIS_KINDS, DEBRIS_ALIAS } from '../../src/fx/Poof.js';
 import { ringCardPositions, rectCardPositions, AMBIENT_DENSITY } from '../../src/fx/MistCards.js';
 import { hordeLayout, hordeMode, partOffset, buildHordeGeometry, HORDE } from '../../src/fx/Horde.js';
 import { motesFor, MOTES } from '../../src/fx/Ambient.js';
@@ -201,6 +201,9 @@ test('poof debris per faction and helmets', () => {
   assert.equal(helmetFor('rat_pike'), 'kettle');
   assert.equal(helmetFor('crow'), null);
   for (const k of DEBRIS_KINDS) assert.ok(BURST_KINDS.includes(k), `burst kind ${k}`);
+  // breakables other areas emit (world's meadow boulder 'rocks', audio's crate / cage / lock / slime list)
+  for (const k of ['rocks', 'wood', 'crate', 'barrel', 'cage', 'lock', 'slime', 'stone', 'sack']) assert.ok(BURST_KINDS.includes(k), `burst kind ${k}`);
+  for (const [k, a] of Object.entries(DEBRIS_ALIAS)) assert.ok(DEBRIS_KINDS.includes(a.debris), `${k} → ${a.debris}`);
 });
 
 test('mist walls: cards every ~1.5 m on rings and rectangles; ambient density per level', () => {
@@ -477,5 +480,53 @@ test('FX service: fog walls (ring + rect, dissolve), horde modes, quality budget
   assert.equal(ctx.fx.mist.ambient.count, MIST_COUNT.low);
   ctx.bus.emit(E.MEME_CAM, { on: true });
   assert.equal(ctx.fx.mist.speedMul, PLAYER.memeCam.mist);
+  // the Meme Cam loop: while the camera loops, the mist drift locks to its phase (cards stop moving, the noise scroll
+  // repeats every 3.8 s); it lets go after the loop ends
+  ctx.cam = { memeLooping: true, memePhase: 0.25 };
+  const card0 = ctx.fx.mist.ambient.aPos.array.slice(0, 3);
+  ctx.fx.mist.setAmbient(true, 1);
+  await frames(ctx, 150);
+  assert.ok(ctx.fx.stats().mistLoop > 0.95, `mist loop weight ${ctx.fx.stats().mistLoop}`);
+  const u = ctx.fx.mist.ambient.material.uniforms;
+  assert.equal(u.uLoop.value.x, 0.25);
+  assert.ok(Math.abs(u.uLoopDrift.value.x - 0.035 * PLAYER.memeCam.mist * PLAYER.memeCam.loop) < 1e-9);
+  const a1 = ctx.fx.mist.ambient.aPos.array.slice(0, 3);
+  await frames(ctx, 60);
+  const a2 = ctx.fx.mist.ambient.aPos.array.slice(0, 3);
+  assert.ok(Math.abs(a2[0] - a1[0]) < 0.02 && Math.abs(a2[2] - a1[2]) < 0.02, 'cards hold still while the loop is locked');
+  void card0;
+  ctx.cam = { memeLooping: false, memePhase: 0 };
+  await frames(ctx, 240);
+  assert.equal(ctx.fx.stats().mistLoop, 0);
+  ctx.fx.dispose();
+});
+
+test('FX service: shader warm-up shows hidden fx objects for one frame with an empty draw range, then restores them', async () => {
+  const ctx = setupFx();
+  let hook = null;
+  ctx.game.addFrameHook = (fn) => { hook = fn; return () => { hook = null; }; };
+  await ctx.fx.init();
+  const objs = ctx.fx.warmObjects();
+  assert.ok(objs.length >= 10, `warm objects ${objs.length}`);
+  const before = objs.map((o) => [o.visible, o.geometry.drawRange.start, o.geometry.drawRange.count, o.geometry.instanceCount]);
+  ctx.fx.render(1, DT);                       // init armed one warm-up frame
+  assert.equal(ctx.fx.stats().warmups, 1);
+  for (const o of objs) {
+    assert.equal(o.visible, true, `${o.name} shown for the warm-up`);
+    if (!before[objs.indexOf(o)][0]) assert.equal(o.geometry.drawRange.count, 0, `${o.name} draws nothing`);
+  }
+  hook();                                     // after the frame
+  objs.forEach((o, i) => {
+    const b = before[i];
+    assert.equal(o.visible, b[0], `${o.name} visibility restored`);
+    assert.equal(o.geometry.drawRange.start, b[1]); assert.equal(o.geometry.drawRange.count, b[2], `${o.name} draw range restored`);
+    assert.equal(o.geometry.instanceCount, b[3], `${o.name} instance count restored`);
+  });
+  ctx.fx.render(1, DT);
+  assert.equal(ctx.fx.stats().warmups, 1, 'one frame only');
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'meadow' });
+  ctx.fx.render(1, DT);
+  assert.equal(ctx.fx.stats().warmups, 2, 'again after a level load');
+  hook();
   ctx.fx.dispose();
 });

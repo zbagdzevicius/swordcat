@@ -54,7 +54,13 @@ export default {
   walk: 1.2, run: def.fly.speed * 0.8,
   anims: { ...CLIP_MAPS.pigeon.roles },
   smallHeart: true,
-  init(e) { e.circleA = e.ctx.rng.angle(); e.circleDir = e.ctx.rng.sign(); e.diveTarget = new THREE.Vector3(); e.grounded = false; e.peckDur = def.peck; e.dived = false; },
+  init(e) {
+    const rng = e.ctx.rng;
+    e.circleA = rng.angle(); e.circleDir = rng.sign(); e.diveTarget = new THREE.Vector3(); e.grounded = false; e.peckDur = def.peck; e.dived = false;
+    // a flock sharing one zone centre (Appendix B.1 `['crow', 4, at, 8]`) spreads its r 5 circles over the patrol radius
+    const a = rng.angle(), r = Math.max(0, e.patrolRadius - def.fly.circleR) * Math.sqrt(rng());
+    e.circleOff = new THREE.Vector3(Math.sin(a) * r, 0, Math.cos(a) * r);
+  },
 
   async build(e, m) {
     const space = m.root, head = bone(m.scene, 'Head'), k = (m.size?.x ?? 1.2) / 1.2;
@@ -104,7 +110,7 @@ export default {
       anim: 'move',
       update(e, dt) {
         if (e.checkWake(dt) || e.sees) return e.alert();
-        circle(e, e.home.x, e.home.z, dt, e.def.fly.speed * 0.7);
+        circle(e, e.home.x + e.circleOff.x, e.home.z + e.circleOff.z, dt, e.def.fly.speed * 0.7);
       },
     },
     patrol: { anim: 'move', update(e) { e.setState('idle'); } },
@@ -116,7 +122,7 @@ export default {
         e.ctx.enemies?.alertNear?.(e.pos, TUNING.groupAlertRadius * 1.5, e);
       },
       update(e, dt) {
-        circle(e, e.home.x, e.home.z, dt);
+        circle(e, e.home.x + e.circleOff.x, e.home.z + e.circleOff.z, dt);
         if (e.stateT >= TUNING.alertDur) e.setState(e.targetActor() ? 'chase' : 'idle');
       },
     },

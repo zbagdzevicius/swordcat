@@ -1,14 +1,15 @@
 // src/companions/KittenVisual.js  (owner: companions) — the procedural cat look for every companion-area actor
-// (Companion, NpcActor, LostKitten): characters' buildKitten(cfg) plus this area's procedural motion layer
-// (requests/characters.md: k.animate → our joint offsets → k.simulate):
+// (Companion, NpcActor, LostKitten): characters' KittenView (buildKitten + the in-game glue: character env map,
+// fur/cape wind, hitstop / pause / slow-mo aware visual dt, quality) plus this area's procedural motion layer
+// (requests/characters.md: view.animate → our joint offsets → view.simulate):
 //   trot / run gait, arm stances for kittens without a sword (relaxed, shield up, cheer, staff, bow), a shield-bash
 //   swing, hops, squash, appear/vanish scale, head look-at and hurt flash.
 // Visual only: driven from the owning actor's render(alpha, frameDt).
 import * as THREE from 'three';
-import { buildKitten } from '../characters/index.js';
+import { KittenView } from '../characters/index.js';
 import { clamp, clamp01, damp, smoothstep, easeOutBack, wrapAngle } from '../core/math.js';
 
-const _e = new THREE.Euler(), _q = new THREE.Quaternion(), _v = new THREE.Vector3();
+const _e = new THREE.Euler(), _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _zero = new THREE.Vector3();
 /** Multiply a local Euler offset onto a joint (bones hang along −Y; +X swings a limb BACK, −X forward). */
 function rot(bone, x, y, z) { if (bone) bone.quaternion.multiply(_q.setFromEuler(_e.set(x, y, z, 'XYZ'))); }
 
@@ -38,11 +39,11 @@ export class KittenVisual {
    */
   constructor(ctx, cfg) {
     this.ctx = ctx; this.cfg = cfg;
-    this.k = buildKitten(cfg);
     /** offset group: hops, appear scale (the actor's object3d holds the interpolated transform) */
     this.root = new THREE.Group();
     this.root.name = 'kittenVisual:' + (cfg?.id ?? 'cat');
-    this.root.add(this.k.root);
+    this.view = new KittenView(ctx, cfg, { parent: this.root, memeCam: false });
+    this.k = this.view.kitten;
     this.hasSword = !!this.k.sword;
     this.phase = Math.random() * 6;           // visual only
     this.moveBlend = 0; this.speed = 0;
@@ -93,11 +94,14 @@ export class KittenVisual {
 
   /**
    * Per rendered frame.
-   * @param {number} dt frame seconds (0 during hitstop)
-   * @param {{ velocity?: THREE.Vector3, onGround?: boolean, frameId?: number, still?: boolean }} [o]
+   * @param {number} frameDt real frame seconds (KittenView turns it into the visual dt: 0 in hitstop / the pause
+   *   menu, scaled by slow motion)
+   * @param {{ velocity?: THREE.Vector3, onGround?: boolean }} [o]
    */
-  update(dt, o = {}) {
+  update(frameDt, o = {}) {
     const k = this.k, J = k.rig.joints, R = k.rest;
+    const dt = this.view.animate(frameDt, { idle: true });
+    this.dt = dt;
     const vel = o.velocity;
     const sp = vel ? Math.hypot(vel.x, vel.z) : 0;
     this.speed = damp(this.speed, sp, 12, dt);
@@ -105,8 +109,6 @@ export class KittenVisual {
     const gait = GAIT_POSES.has(pose) && o.onGround !== false;
     this.moveBlend = damp(this.moveBlend, gait && this.speed > 0.25 ? 1 : 0, 10, dt);
     const s01 = clamp01(this.speed / 5.2) * this.moveBlend;
-
-    k.animate(dt, { idle: true });
 
     // ---- arms: stance for kittens without a sword (the pose library's arms assume a sword grip)
     for (const key in this._stanceW) this._stanceW[key] = damp(this._stanceW[key], key === this.stance ? 1 : 0, 12, dt);
@@ -166,8 +168,9 @@ export class KittenVisual {
     if (Math.abs(this.look) > 1e-3) { rot(J.head, 0, this.look * 0.7, 0); rot(J.chest, 0, this.look * 0.3, 0); }
 
     // ---- squash spring (volume preserving), hop, appear scale
+    const sdt = Math.min(dt, 1 / 30);                         // explicit spring: keep the step stable on frame hitches
     const acc = -120 * this.squash - 14 * this._sqV;
-    this._sqV += acc * dt; this.squash += this._sqV * dt;
+    this._sqV += acc * sdt; this.squash += this._sqV * sdt;
     this.squash = clamp(this.squash, -0.35, 0.35);
     const sy = 1 + this.squash, sxz = 1 / Math.sqrt(Math.max(0.3, sy));
     J.body.scale.set(sxz * R.body.s.x, sy * R.body.s.y, sxz * R.body.s.z);
@@ -185,13 +188,13 @@ export class KittenVisual {
 
     if (this.flashT > 0) { this.flashT = Math.max(0, this.flashT - dt); k.setFlash(this.flashT > 0 ? 1 : 0); }
 
-    k.simulate(dt, { velocity: vel, frameId: o.frameId, airborne: hopY > 0.05 || o.onGround === false });
+    this.view.simulate({ velocity: vel ?? _zero, airborne: hopY > 0.05 || o.onGround === false });
   }
 
-  snap() { this.k.snap(); }
+  snap() { this.view.snap(); }
 
   /** Paw position in world space (for props / arrows). */
   jointWorld(name, out = _v) { const b = this.k.rig.joints[name]; if (!b) return out.set(0, 0, 0); b.updateWorldMatrix(true, false); return b.getWorldPosition(out); }
 
-  dispose() { this.k.dispose(); this.root.removeFromParent(); }
+  dispose() { this.view.dispose(); this.root.removeFromParent(); }
 }

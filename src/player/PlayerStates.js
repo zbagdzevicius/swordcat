@@ -39,11 +39,13 @@ export function speedForStick(mag) {
  * Steer horizontal velocity toward the stick (camera-relative) at up to `maxSpeed`, and turn toward it.
  * @param {import('./Player.js').Player} p
  * @param {number} dt
- * @param {{max?:number, turn?:'damp'|'rate'|'none', rate?:number, face?:boolean, decel?:number}} [o]
+ * @param {{max?:number, boost?:number, turn?:'damp'|'rate'|'none', rate?:number, face?:boolean, decel?:number}} [o]
+ *   max: speed cap; boost: full-stick top speed above the run (Zoomies 7.2 m/s)
  */
 export function locomote(p, dt, o = {}) {
   const mag = p.wishDir(_wish);
   let speed = speedForStick(mag);
+  if (o.boost != null && mag > TUNING.walkStick) speed = Math.max(speed, o.boost * mag);
   if (o.max != null) speed = Math.min(speed, o.max);
   speed *= p.speedMul;
   let lambda;
@@ -97,7 +99,7 @@ export const STATES = {
       if (tryActions(p)) return;
       // a charge can also start from neutral (button held through a cancelled swing)
       if (p.onGround && p.chargeHeld() && p.attackHeldTime() >= PLAYER.charge.start) { p.setState('charge'); return; }
-      const mag = locomote(p, dt, { max: p.zoomies ? PLAYER.zoomies : undefined });
+      const mag = locomote(p, dt, { boost: p.zoomies ? PLAYER.zoomies : undefined });
       p.updateZoomies(dt, mag);
       const sp = Math.hypot(p.vel.x, p.vel.z);
       p.stateName = !p.onGround ? (p.vel.y > 0 ? 'jump' : 'fall') : p.zoomies ? 'zoomies' : sp > 3.5 ? 'run' : sp > 0.3 ? 'walk' : 'idle';
@@ -128,6 +130,8 @@ export const STATES = {
       if ((preActive || recovering) && p.wantGuard() && p.onGround && !def.noCancel) { p.endSwing(); p.setState('guard'); return; }
       const rollFrom = def.rollCancel ?? act[1];
       if (s.t >= rollFrom && p.dodgeBuf > 0 && p.canDodge() && !def.noCancel) { p.endSwing(); p.startDodge(); return; }
+      // jump out of the recovery (after the active frames), so movement never feels glued to a swing
+      if (recovering && !def.noCancel && def.id !== 'holy' && p.jumpBuf > 0 && p.onGround) { p.endSwing(); p.setState('move'); p.doJump(); return; }
       if (recovering && !def.noCancel && def.id !== 'holy' && p.chargeHeld() && p.attackHeldTime() >= PLAYER.charge.start && p.onGround) {
         p.endSwing(); p.setState('charge'); return;
       }
@@ -211,7 +215,7 @@ export const STATES = {
       if (p.tryGolden()) return;
       if (!p.wantGuard() || !p.onGround) { p.setState('move'); return; }
       if (p.dodgeBuf > 0 && p.canDodge()) { p.startDodge(); return; }
-      if (p.attackBuf > 0 && p.riposteReady()) { p.startGroundAttack(); return; }
+      if (p.attackBuf > 0) { p.startGroundAttack(); return; }          // Riposte after a parry, else a slash out of the Stand
       if (p.pushT > 0) {                                  // block pushback carries, then the Stand brakes again
         p.vel.x = damp(p.vel.x, 0, TUNING.blockPushDamp, dt); p.vel.z = damp(p.vel.z, 0, TUNING.blockPushDamp, dt);
       } else locomote(p, dt, { max: PLAYER.guard.move, turn: 'rate', rate: PLAYER.guard.turnRate, face: true });
@@ -238,10 +242,10 @@ export const STATES = {
 
   // ------------------------------------------------------------------ hurt / guard break / hard landing
   hurt: {
-    enter(p) { p.stateName = 'hurt'; },
+    enter(p, mul = 1) { p.stateName = 'hurt'; p.hurtDur = PLAYER.hurt.stun * mul; },
     update(p, dt) {
       brake(p, dt, TUNING.hurtDamp);
-      if (p.stateT >= PLAYER.hurt.stun) p.setState('move');
+      if (p.stateT >= p.hurtDur) p.setState('move');
     },
   },
   stagger: {

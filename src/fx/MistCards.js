@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
 import { groundY, toVec3, hash01 } from './util.js';
 
-export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.2, maxA: 0.4, rise: 0.8, dissolve: 1.5 });
+export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.62, rise: 0.8, dissolve: 1.5 });
 export const AMBIENT = Object.freeze({ w: 8, h: 2.5, maxA: 0.22, radius: 34 });
 /** Ambient density per level id (× the quality count). */
 export const AMBIENT_DENSITY = Object.freeze({ meadow: 1, forest: 0.85, town: 0.45, gate: 1, bog: 1.3, keep: 0.6, sky: 0 });
@@ -175,12 +175,14 @@ export class MistCards {
   setAmbient(on, density = 1) { this.ambientOn = !!on && density > 0; this.density = density; }
 
   /**
-   * A fog wall. `r` = radius, or `[w, d]` / `{w, d}` for a rectangle. Options: { spacing, height, width, yaw, alpha, rise }.
+   * A fog wall. `r` = radius, or `[w, d]` / `{w, d}` for a rectangle (also `opts.size`, as world's Arena passes it).
+   * Options: { size, spacing, height, width, yaw, alpha, rise, id }.
    * @returns {{ center: THREE.Vector3, r: number, size: number[]|null, readonly alive: boolean, dissolve(sec?: number): void, dispose(sec?: number): void, remove(): void }}
    */
   ring(center, r, opts = {}) {
     const c = toVec3(center, new THREE.Vector3()) ?? new THREE.Vector3();
-    const rect = Array.isArray(r) ? r : (r && typeof r === 'object' ? [r.w ?? r.x ?? 10, r.d ?? r.z ?? r.h ?? 10] : null);
+    const sz = opts.size ?? r;
+    const rect = Array.isArray(sz) ? sz : (sz && typeof sz === 'object' ? [sz.w ?? sz.x ?? 10, sz.d ?? sz.z ?? sz.h ?? 10] : null);
     const radius = rect ? Math.hypot(rect[0], rect[1]) / 2 : Math.max(1, +r || 10);
     const spacing = opts.spacing ?? WALL.spacing;
     const pts = rect ? rectCardPositions(c.x, c.z, rect[0], rect[1], spacing, opts.yaw ?? 0) : ringCardPositions(c.x, c.z, radius, spacing);

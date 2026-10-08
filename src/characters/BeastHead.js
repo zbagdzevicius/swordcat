@@ -156,7 +156,7 @@ export function buildBeastHead(preset = 'hyena', opts = {}) {
   inner.add(headMesh);
   const jawMesh = new THREE.Mesh(jawGb.build(), kitMaterial()); jawMesh.castShadow = true; jawMesh.name = 'beastJaw';
   jaw.add(jawMesh); inner.add(jaw);
-  if (!tuftGb.empty) { const tm = new THREE.Mesh(tuftGb.build(), tuftMaterial()); tm.name = 'beastMane'; inner.add(tm); parts.mane = tm; }
+  if (!tuftGb.empty) { const tm = new THREE.Mesh(tuftGb.build(), tuftMaterial()); tm.name = 'beastMane'; tm.renderOrder = 2; inner.add(tm); parts.mane = tm; }
 
   // eyes (art.md §2.5 texture with slit / beady pupils) + angry brows
   const eGeo = eyeGeometry(eyeR, 0.6), eMat = eyeMaterial(P.eye);

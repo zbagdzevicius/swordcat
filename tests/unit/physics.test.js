@@ -7,8 +7,13 @@ import { Heightfield } from '../../src/physics/Heightfield.js';
 import { StaticColliders } from '../../src/physics/StaticColliders.js';
 import { MeshCollider, _internal } from '../../src/physics/MeshCollider.js';
 import { Physics, PHYSICS_DEFAULTS } from '../../src/physics/Physics.js';
-import { fakeCtx } from './_fakeCtx.mjs';
-import { PLAYER, GRAVITY } from '../../src/core/config.js';
+import * as config from '../../src/core/config.js';
+import { ActorRegistry } from '../../src/core/ActorRegistry.js';
+
+const { PLAYER, GRAVITY } = config;
+
+/** Core services physics reads (config, actors, scene); physics-only, so other areas' work in progress can't break it. */
+const fakeCtx = () => ({ config, actors: new ActorRegistry(), scene: new THREE.Scene(), bus: null, game: { mode: 'play' } });
 
 const DT = 1 / 60;
 let nextId = 1;
@@ -20,7 +25,7 @@ function actor(x, y, z, o = {}) {
 }
 
 function world({ hf = null, colliders = null, meshes = [], bounds = null, water, isDeepWater } = {}) {
-  const ctx = fakeCtx({ systems: false });
+  const ctx = fakeCtx();
   const ph = new Physics(ctx);
   ctx.physics = ph;
   const level = { heightfield: hf, colliders, octreeMeshes: meshes, bounds, root: new THREE.Group() };
@@ -166,8 +171,17 @@ test('ground snap keeps a runner grounded down a walkable slope; steep terrain c
   const w2 = world({ hf: Heightfield.fromFunction(80, 160, (x) => (x > 0 ? x * k2 : 0)) });
   const b = actor(-3, 0, 0); b.onGround = true;
   run(w2.ph, b, 3, walk(PLAYER.run, 0));
-  assert.ok(b.pos.y < PHYSICS_DEFAULTS.groundSnap + 0.35, `did not climb the 60° slope (y ${b.pos.y.toFixed(3)})`);
-  assert.ok(b.pos.x < 0.6, `held at the foot (x ${b.pos.x.toFixed(3)})`);
+  assert.ok(b.pos.y < 0.01, `did not climb the 60° slope (y ${b.pos.y.toFixed(3)})`);
+  assert.ok(b.pos.x <= -b.radius + 0.1, `held at the foot without the body clipping into it (x ${b.pos.x.toFixed(3)})`);
+  // capsule vs heightfield on a coarse grid (2 m cells: the smoothed normal alone would let her creep up), and
+  // running at it diagonally slides along its foot
+  const w3 = world({ hf: Heightfield.fromFunction(80, 40, (x) => (x > 0 ? x * k2 : 0)) });
+  const b2 = actor(-3, 0, 0); b2.onGround = true;
+  run(w3.ph, b2, 3, walk(PLAYER.run, 0));
+  assert.ok(b2.pos.y < 0.01 && b2.pos.x <= -b2.radius + 0.1, `coarse grid: held at the foot (x ${b2.pos.x.toFixed(3)}, y ${b2.pos.y.toFixed(3)})`);
+  const b3 = actor(-3, 0, 0); b3.onGround = true;
+  run(w3.ph, b3, 2, walk(4, 4));
+  assert.ok(b3.pos.y < 0.01 && b3.pos.x <= 0 && b3.pos.z > 7, `slides along the foot (x ${b3.pos.x.toFixed(2)}, z ${b3.pos.z.toFixed(2)})`);
 
   // dropped onto the steep face: slides down (x decreases), never rests on it
   const c = actor(3, 3 * k2 + 0.5, 0);
@@ -177,7 +191,7 @@ test('ground snap keeps a runner grounded down a walkable slope; steep terrain c
 });
 
 test('without a level: flat ground at 0; flying ignores gravity but stays above ground; noClip integrates only', () => {
-  const ctx = fakeCtx({ systems: false });
+  const ctx = fakeCtx();
   const ph = new Physics(ctx);
   const a = actor(0, 3, 0);
   run(ph, a, 2);
@@ -207,8 +221,10 @@ test('StaticColliders: hash queries, circle / box / yawed box / segment push-out
 
   const a = actor(0.5, 0, 0.2); a.vel.set(-3, 0, 0);
   st.resolve(a, 0, 0.3);
-  assert.ok(Math.hypot(a.pos.x, a.pos.z) >= 1 + a.radius - 1e-9 && st.wall);
-  assert.ok(a.vel.x >= -1e-9, 'inward velocity removed');
+  const dist = Math.hypot(a.pos.x, a.pos.z);
+  assert.ok(dist >= 1 + a.radius - 1e-9 && st.wall);
+  assert.ok((a.vel.x * a.pos.x + a.vel.z * a.pos.z) / dist >= -1e-9, 'inward velocity removed');
+  assert.ok(Math.abs(a.vel.x * -a.pos.z + a.vel.z * a.pos.x) > 0.1, 'tangential velocity kept (slides around)');
 
   const a2 = actor(11, 0, 0.9);                                                // centre inside the box: shallowest face
   st.resolve(a2, 0, 0.3);
@@ -248,8 +264,10 @@ test('props: no tunnelling at 60 m/s through a 10 cm wall; step onto 0.25 m crat
     assert.ok(a.wallHit);
   }
   const s = actor(0, 0, 2); s.onGround = true;
-  run(ph, s, 1.5, walk(0, PLAYER.run));
+  let stepY = 0;
+  run(ph, s, 0.6, walk(0, PLAYER.run), (x) => { stepY += x.stepY; });           // z 2 → 5.3: on top of the crate
   assert.ok(Math.abs(s.pos.y - 0.25) < 1e-9 && s.onGround && s.groundKind === 'static', `stepped up onto the crate (y ${s.pos.y})`);
+  assert.ok(s.groundObject === crate && Math.abs(stepY - 0.25) < 1e-9, `stepY reports the 0.25 m step (${stepY})`);
   run(ph, s, 1.5, walk(0, PLAYER.run));                                        // walks off the far side
   assert.ok(s.pos.z > 6.3 && Math.abs(s.pos.y) < 1e-9 && s.onGround, 'steps back down');
 
@@ -257,10 +275,29 @@ test('props: no tunnelling at 60 m/s through a 10 cm wall; step onto 0.25 m crat
   run(ph, t, 1.5, walk(0, -PLAYER.run));
   assert.ok(t.pos.z >= -4 + t.radius - 1e-6 && t.pos.y === 0, `0.45 m blocks (z ${t.pos.z})`);
 
-  const j = actor(-3, 0, 0); j.onGround = true;
+  const j = actor(-4.5, 0, 0); j.onGround = true;                               // the bale's side is at x -5.2
   j.vel.y = PLAYER.jumpV; j.onGround = false;
   run(ph, j, 1.2, (x) => { x.vel.x = x.pos.x > -6 ? -3 : 0; });
   assert.ok(Math.abs(j.pos.y - 1) < 1e-9 && j.onGround, `landed on the bale top (y ${j.pos.y.toFixed(3)})`);
+});
+
+test('props: a gap narrower than the actor (post beside a crate) is never squeezed into', () => {
+  // the meadow layout that wedged the smoke soak: a fence post 0.6 m from a yawed crate (gap < 0.64 m)
+  const post = { x: 0, z: 0, r: 0.15, y0: -1, y1: 2 };
+  const crate = { x: -0.213, z: -1.089, hx: 0.342, hz: 0.342, yaw: -0.142, y0: -1, y1: 0.62 };
+  const { ph } = world({ hf: flat(0), colliders: { circles: [post], boxes: [crate] } });
+  let inside = 0, where = '';
+  for (let k = 0; k < 8; k++) {
+    const an = (k / 8) * Math.PI * 2, a = actor(Math.sin(an) * 3, 0, -0.45 + Math.cos(an) * 3); a.onGround = true;
+    run(ph, a, 4, (x, i) => {                                              // steer into the gap, weaving
+      const dx = -x.pos.x, dz = -0.45 - x.pos.z, l = Math.hypot(dx, dz) || 1, w = Math.sin(i * 0.05 + k) * 0.6;
+      x.vel.x = (dx / l + Math.cos(i * 0.03 + k) * w) * PLAYER.run; x.vel.z = (dz / l + Math.sin(i * 0.03 + k) * w) * PLAYER.run;
+    }, (x) => {
+      if (ph.statics.overlaps(x.pos.x, x.pos.z, x.radius - 0.02, 0.31, 0.95, null, true)) { inside++; where ||= `${x.pos.x.toFixed(3)}, ${x.pos.z.toFixed(3)}`; }
+    });
+    assert.ok(Number.isFinite(a.pos.x + a.pos.z) && a.pos.y === 0);
+  }
+  assert.equal(inside, 0, `${inside} steps squeezed > 2 cm into the post or crate (first at ${where})`);
 });
 
 test('props: factions filter, bounce pads, dynamic add/remove through Physics', () => {
@@ -330,20 +367,54 @@ test('architecture: ramps ≤ 45° climb, 55° does not; stairs with 0.25 m rise
     const r = ramp(deg, 6);
     const { ph } = world({ hf: flat(0), meshes: [r.group] });
     const a = actor(0, 0, 0); a.onGround = true;
-    run(ph, a, 4, walk(0, PLAYER.run));
-    if (ok) assert.ok(a.pos.y > r.top - 0.1, `${deg}° ramp climbed (y ${a.pos.y.toFixed(2)} of ${r.top.toFixed(2)})`);
-    else assert.ok(a.pos.y < 0.6, `${deg}° ramp not climbed (y ${a.pos.y.toFixed(2)})`);
+    let air = 0;
+    // run up to just short of the ramp's top edge, then stop
+    run(ph, a, 4, (x) => { x.vel.z = x.pos.z < r.end - 0.4 ? PLAYER.run : 0; }, (x) => { if (!x.onGround) air++; });
+    if (ok) {
+      const want = (r.end - 0.4 - 2) * Math.tan(deg * Math.PI / 180);
+      assert.ok(Math.abs(a.pos.y - want) < 0.15 && a.onGround && a.groundKind === 'mesh', `${deg}° ramp climbed (y ${a.pos.y.toFixed(2)}, want ≈ ${want.toFixed(2)})`);
+      assert.ok(air < 4, `${deg}° ramp: grounded all the way (${air} airborne steps)`);
+      run(ph, a, 2);                                                               // standing still on the ramp: no creep
+      assert.ok(Math.abs(a.pos.y - want) < 0.15 && Math.abs(a.pos.z - (r.end - 0.4)) < 0.15, `${deg}° ramp: rests without sliding`);
+    } else assert.ok(a.pos.y < 0.6, `${deg}° ramp not climbed (y ${a.pos.y.toFixed(2)})`);
   }
   {
-    const { ph } = world({ hf: flat(0), meshes: [stairs(6, 0.25, 0.4)] });
+    const { ph } = world({ hf: flat(0), meshes: [stairs(6, 0.25, 0.4)] });   // steps z 2..4.4, landing to 8.4
     const a = actor(0, 0, 0); a.onGround = true;
-    run(ph, a, 4, walk(0, PLAYER.run));
-    assert.ok(Math.abs(a.pos.y - 1.5) < 0.02 && a.onGround, `climbed 0.25 m stairs (y ${a.pos.y.toFixed(3)})`);
-    // and back down without leaving the ground for long
+    let stepped = 0;
+    run(ph, a, 3, (x) => { x.vel.z = x.pos.z < 6 ? PLAYER.run : 0; }, (x) => { stepped += x.stepY; });
+    assert.ok(Math.abs(a.pos.y - 1.5) < 0.02 && a.onGround && a.pos.z > 5.5, `climbed 0.25 m stairs (y ${a.pos.y.toFixed(3)}, z ${a.pos.z.toFixed(2)})`);
+    assert.ok(stepped > 0.5, `step-ups reported in stepY (${stepped.toFixed(2)})`);
+    // and back down (walking and running) without ever leaving the ground or sinking into a step
+    for (const speed of [PLAYER.walk, PLAYER.run]) {
+      if (speed === PLAYER.run) { a.pos.set(0, 1.5, 5.5); a.onGround = true; }
+      let air = 0, sunk = 0;
+      run(ph, a, 4, (x) => { x.vel.z = x.pos.z > 0 ? -speed : 0; }, (x) => {
+        if (!x.onGround) air++;
+        if (ph.mesh.penetrates(x.pos.x, x.pos.y, x.pos.z, x.radius, x.height, 0.03)) sunk++;
+      });
+      assert.ok(Math.abs(a.pos.y) < 0.02, `walked back down at ${speed} m/s (y ${a.pos.y.toFixed(3)})`);
+      assert.equal(air, 0, `grounded all the way down at ${speed} m/s`);
+      assert.equal(sunk, 0, 'never inside a step');
+    }
+  }
+  {
+    // ledges: a platform 2 m up — standing with the centre past the edge slips off and falls; 0.25 m up — steps down
+    const g = new THREE.Group();
+    g.add(boxMesh(4, 2, 4, 0, 1, 10), boxMesh(4, 0.25, 4, 10, 0.125, 10));
+    const { ph } = world({ hf: flat(0), meshes: [g] });
+    // the rim holds her while the contact is walkable (centre ≤ r·0.71 past the edge); further out she slips off
+    const ok = actor(0, 2, 12.15); ok.onGround = true;
+    run(ph, ok, 0.5);
+    assert.ok(ok.onGround && ok.pos.y > 1.9, `rests on the rim (y ${ok.pos.y.toFixed(2)})`);
+    const hi = actor(0, 2, 12.28); hi.onGround = true;
+    let fell = false;
+    run(ph, hi, 1.5, null, (x) => { if (!x.onGround) fell = true; });
+    assert.ok(fell && hi.onGround && Math.abs(hi.pos.y) < 1e-6 && hi.pos.z > 12.3, `slipped off the ledge (y ${hi.pos.y.toFixed(2)}, z ${hi.pos.z.toFixed(2)})`);
+    const lo = actor(10, 0.25, 11); lo.onGround = true;
     let air = 0;
-    run(ph, a, 4, walk(0, -PLAYER.walk), (x) => { if (!x.onGround) air++; });
-    assert.ok(Math.abs(a.pos.y) < 0.02, `walked back down (y ${a.pos.y.toFixed(3)})`);
-    assert.ok(air < 20, `mostly grounded going down (${air} airborne steps)`);
+    run(ph, lo, 0.8, walk(0, PLAYER.walk), (x) => { if (!x.onGround) air++; });
+    assert.ok(lo.pos.z > 12.3 && Math.abs(lo.pos.y) < 1e-6 && air === 0, `stepped down 0.25 m without falling (air ${air})`);
   }
   {
     const { ph } = world({ hf: flat(0), meshes: [stairs(3, 0.45, 0.5)] });
@@ -361,7 +432,18 @@ test('architecture: bridge deck over water, walking off the end, groundAt(fromY)
   const a = actor(0, 6, -2);
   run(ph, a, 1.5);
   assert.ok(Math.abs(a.pos.y - 2) < 0.01 && a.onGround && a.groundKind === 'mesh', `stands on the deck (y ${a.pos.y.toFixed(3)})`);
-  assert.equal(ph.groundAt(0, 0, 10), 2.0);
+  assert.ok(Math.abs(ph.groundAt(0, 0, 10) - 2.0) < 1e-6, 'groundAt(fromY) finds the deck');
+  assert.ok(Math.abs(ph.topAt(0, 0) - 2.0) < 1e-6 && Math.abs(ph.topAt(0, 30)) < 1e-9, 'topAt: deck, else terrain');
+  {
+    const deck2 = boxMesh(4, 0.3, 10, 0, 1.85, 0);
+    const w = world({ hf: Heightfield.fromFunction(64, 64, (x, z) => (Math.abs(z) < 4 ? -1.5 : 0)), meshes: [deck2],
+      water: [{ kind: 'stream', from: [-20, 0], to: [20, 0], width: 8, y: -0.4, deep: true }] });
+    assert.equal(w.ph.isDeepWater(0, 0), false, 'the deck over the stream is dry (top surface)');
+    assert.equal(w.ph.isDeepWater(0, 0, 2), false, 'feet on the deck: dry');
+    assert.equal(w.ph.isDeepWater(0, 0, -1.5), true, 'feet on the bed under the deck: deep');
+    assert.equal(w.ph.isDeepWater(6, 0), true, 'open stream beside the deck: deep');
+    assert.equal(w.ph.isDeepWater(6, 10), false, 'dry bank');
+  }
   assert.equal(ph.groundAt(0, 0), 0, 'without fromY: terrain');
   assert.ok(Math.abs(ph.groundAt(0, 0, 1) - 0) < 1e-9, 'below the deck: terrain');
   run(ph, a, 2.5, walk(0, PLAYER.run));
@@ -435,6 +517,63 @@ test('separateActors: mass-weighted, fixed, vertical gaps ignored, stacked actor
   assert.equal(liv.pos.x, 5.1, 'dead actors do not push');
 });
 
+test('separation shoves never tunnel through thin walls; extreme speeds are clamped, not tunnelled', () => {
+  const thin = { minX: 0.95, maxX: 1.05, minZ: -5, maxZ: 5, y0: -1, y1: 3 };
+  const wallM = boxMesh(0.1, 3, 10, -5, 1.5, 0);
+  const { ctx, ph } = world({ hf: flat(0), colliders: { boxes: [thin] }, meshes: [wallM] });
+  // a fixed giant overlapping a small actor right next to the 10 cm prop wall: pushed along, never across
+  const big = actor(0.2, 0, 0, { fixed: true, radius: 2.0 }), small = actor(0.6, 0, 0);
+  ctx.actors.register(big); ctx.actors.register(small);
+  for (let i = 0; i < 5; i++) ph.separateActors();
+  assert.ok(small.pos.x <= 0.95 - small.radius + 1e-6, `stayed on its side of the prop wall (x ${small.pos.x.toFixed(3)})`);
+  // same against an architecture wall
+  const big2 = actor(-6.6, 0, 3, { fixed: true, radius: 2.0 }), small2 = actor(-5.5, 0, 3);
+  ctx.actors.register(big2); ctx.actors.register(small2);
+  for (let i = 0; i < 5; i++) ph.separateActors();
+  assert.ok(small2.pos.x <= -5.05 - small2.radius + 0.02, `stayed on its side of the mesh wall (x ${small2.pos.x.toFixed(3)})`);
+  // 500 m/s (a broken knockback) still stops at the wall
+  const f = actor(-2, 0, -3); f.onGround = true;
+  run(ph, f, 0.2, walk(500, 0));
+  assert.ok(f.pos.x <= 0.95 - f.radius + 1e-6, `500 m/s stopped (x ${f.pos.x.toFixed(3)})`);
+  const g = actor(-2, 0, 2); g.onGround = true;
+  run(ph, g, 0.2, walk(-500, 0));
+  assert.ok(g.pos.x >= -4.95 + g.radius - 0.02, `500 m/s stopped by the mesh wall (x ${g.pos.x.toFixed(3)})`);
+});
+
+test('services: refreshColliders keeps addCollider extras, overlapsStatic, bounceAt, isShallowWater, topAt, groundAt', () => {
+  const circles = [{ x: 0, z: 0, r: 1, y0: -1, y1: 2 }];
+  const pad = { x: 10, z: 0, r: 1, y0: -1, y1: 0.3, bounce: 9 };
+  const hf = Heightfield.fromFunction(64, 32, (x) => (x > 15 ? -0.3 : 0));
+  const shelf = boxMesh(4, 0.2, 4, -10, 0.9, 0, { userData: { bounce: 12 } });
+  const { ph, level } = world({ hf, colliders: { circles: [...circles, pad], boxes: [] }, meshes: [shelf],
+    water: [{ kind: 'rect', minX: 15, maxX: 30, minZ: -10, maxZ: 10, y: 0 }] });
+  const door = ph.addCollider({ minX: 4, maxX: 5, minZ: -1, maxZ: 1, y0: -1, y1: 3 });
+  level.colliders.circles.push({ x: 0, z: 6, r: 0.5, y0: -1, y1: 2 });       // edited in place (arena fog wall)
+  ph.refreshColliders();
+  assert.ok(ph.statics.has(door), 'addCollider extra survives refreshColliders');
+  assert.equal(ph.statics.count, 4);
+  assert.ok(ph.overlapsStatic(new THREE.Vector3(0, 6.4, 0), 0.2) === false, 'above the trunk');
+  assert.ok(ph.overlapsStatic(new THREE.Vector3(0, 1, 6.4), 0.2), 'the new circle');
+  assert.ok(ph.overlapsStatic(new THREE.Vector3(4.5, 1, 0), 0.1), 'the door');
+  assert.ok(ph.overlapsStatic(new THREE.Vector3(-10, 0.95, 0), 0.1), 'architecture');
+  assert.ok(!ph.overlapsStatic(new THREE.Vector3(-10, 0.95, 0), 0.1, { mesh: false }));
+  ph.addCollider({ x: 20, z: -20, r: 4, kind: 'ring' });
+  assert.ok(!ph.overlapsStatic(new THREE.Vector3(24, 1, -20), 0.3), 'fog-wall rings do not stop projectiles');
+  assert.equal(ph.bounceAt(10, 0, 0.3), 9, 'prop bounce');
+  assert.equal(ph.bounceAt(-10, 0, 1.0), 12, 'mesh bounce');
+  assert.equal(ph.bounceAt(5, 5, 0), 0);
+  assert.ok(Math.abs(ph.topAt(-10, 0) - 1.0) < 1e-6 && ph.topAt(0, 0) === 2 && ph.topAt(5, 8) === 0);
+  assert.ok(Math.abs(ph.groundAt(-10, 0, 0.5)) < 1e-9, 'under the shelf: terrain');
+  assert.equal(ph.isShallowWater(20, 0), true, '0.3 m: wading');
+  assert.equal(ph.isDeepWater(20, 0), false);
+  assert.equal(ph.isShallowWater(5, 0), false, 'dry');
+  ph.removeCollider(door);
+  ph.refreshColliders();
+  assert.ok(!ph.statics.has(door), 'removed extras stay removed');
+  ph.setLevel(null);
+  assert.equal(ph.statics.count, 0, 'setLevel drops extras');
+});
+
 // ------------------------------------------------------------------ rays, water, bounds, robustness
 test('raycast / sphereCast / lineOfSight: terrain, architecture, props; shared hit object', () => {
   const hf = Heightfield.fromFunction(64, 32, (x, z) => 0.5 + 0.1 * x);
@@ -452,6 +591,8 @@ test('raycast / sphereCast / lineOfSight: terrain, architecture, props; shared h
   assert.equal(ph.raycast(side, 30)?.kind ?? null, null, 'props are ignored by default (camera)');
   const hs = ph.raycast(side, 30, { statics: true });
   assert.ok(hs && hs.kind === 'static' && Math.abs(hs.distance - 9) < 1e-6 && hs.object === rock);
+  assert.ok(ph.castIgnore === true && ph.raycast(side, 30, { statics: true, ignore: (src) => src === rock }) === null, 'opts.ignore skips a prop');
+  assert.equal(ph.lineOfSight(new THREE.Vector3(0, 1, 0), new THREE.Vector3(-20, 1, 0), { terrain: true, mesh: true, statics: true, ignore: (src) => src === rock }), true);
   const sc = ph.sphereCast(fwd, 0.3, 30);
   assert.ok(sc && Math.abs(sc.distance - 9.6) < 1e-3, `sphere stops a radius early (${sc?.distance})`);
   assert.equal(ph.lineOfSight(new THREE.Vector3(0, 1.5, 0), new THREE.Vector3(0, 1.5, 20)), false);
@@ -469,9 +610,17 @@ test('isDeepWater: level function wins, else level.water; feet above the surface
   assert.equal(ph.isDeepWater(0, 10), false);
   assert.equal(ph.waterLevelAt(0, 1), -0.4);
   assert.equal(ph.waterLevelAt(0, 20), null);
-  const w2 = world({ hf: flat(0), isDeepWater: (x) => x > 5 });
+  const w2 = world({ hf: flat(0), isDeepWater: (x, z, y) => x > 5 && !(y > 1) });
   assert.equal(w2.ph.isDeepWater(6, 0), true);
   assert.equal(w2.ph.isDeepWater(4, 0), false);
+  w2.ph.addMesh(boxMesh(4, 0.2, 4, 8, 1.9, 0));                                // a deck at y 2 over the level's water
+  assert.equal(w2.ph.isDeepWater(8, 0), false, 'level function is asked about the top surface (the deck) without y');
+  assert.equal(w2.ph.isDeepWater(8, 0, 0), true, 'and about the feet when given');
+  // polyline streams (world's `pts`) and yawed rects
+  const w4 = world({ hf: flat(-2), water: [{ kind: 'stream', pts: [[-40, 0], [0, 0], [0, 40]], width: 4, y: 0, deep: true },
+    { kind: 'rect', at: [20, -20], size: [10, 2], yaw: Math.PI / 2, y: 0 }] });
+  assert.ok(w4.ph.isDeepWater(-20, 1) && w4.ph.isDeepWater(1, 20) && !w4.ph.isDeepWater(20, 20), 'polyline stream');
+  assert.ok(w4.ph.isDeepWater(20, -24) && !w4.ph.isDeepWater(24, -20), 'yawed rect: long along z after a 90° yaw');
   const w3 = world({ hf: Heightfield.fromFunction(100, 50, (x) => (x > 0 ? -0.2 : -2)), water: [{ y: 0 }] });
   assert.equal(w3.ph.isDeepWater(10, 0), false, 'shallow plane water');
   assert.equal(w3.ph.isDeepWater(-10, 0), true, 'deep plane water');
@@ -503,7 +652,9 @@ test('robustness: NaN positions recover, attachedTo is skipped, setLevel(null) i
     ph.separateActors();
   }
   const ms = performance.now() - t0;
-  assert.ok(ms < 4000, `30 actors × 10 s of steps took ${ms.toFixed(0)} ms`);
+  // a sanity bound against accidental O(n²)/O(tris) blow-ups, loose enough for a machine busy with other agents'
+  // smoke runs (≈130 ms when idle); the smoke block physics:soak reports µs per actor-step on the real level
+  assert.ok(ms < 15000, `30 actors × 10 s of steps took ${ms.toFixed(0)} ms`);
   for (const a of list) {
     assert.ok(Number.isFinite(a.pos.x + a.pos.y + a.pos.z));
     assert.ok(a.pos.y >= ph.heightAt(a.pos.x, a.pos.z) - 1e-6, 'never below the terrain');

@@ -38,7 +38,7 @@ function roundRect(g, x, y, w, h, r) {
  */
 export class TextSprite {
   /** @param {{kind?: 'bubble'|'zzz', y?: number, scale?: number}} [o] */
-  constructor({ kind = 'bubble', y = 1.2, scale = 0.06 } = {}) {
+  constructor({ kind = 'bubble', y = 1.2, scale = kind === 'zzz' ? 0.05 : 0.125 } = {}) {
     this.kind = kind; this.y = y; this.baseScale = scale;
     this.object = new THREE.Group(); this.object.name = 'bubble:' + kind;
     this.object.position.y = y;
@@ -50,7 +50,9 @@ export class TextSprite {
     this.tex = new THREE.CanvasTexture(this.canvas);
     this.tex.colorSpace = THREE.SRGBColorSpace;
     this.tex.minFilter = THREE.LinearFilter; this.tex.generateMipmaps = false;
-    const mat = new THREE.SpriteMaterial({ map: this.tex, transparent: true, depthTest: false, depthWrite: false, fog: false, toneMapped: false, sizeAttenuation: false });
+    // colour 0.85: the paper stays under the bloom threshold (RENDER.bloom 0.85), so the ink stays crisp
+    const mat = new THREE.SpriteMaterial({ map: this.tex, color: new THREE.Color(0.85, 0.85, 0.85), transparent: true, depthTest: false,
+      depthWrite: false, fog: false, toneMapped: false, sizeAttenuation: false });
     this.sprite = new THREE.Sprite(mat);
     this.sprite.center.set(0.5, 0);
     this.sprite.renderOrder = 999;
@@ -86,9 +88,9 @@ export class TextSprite {
       g.font = `600 ${fs}px ${FONT}`;
       let w = 0; for (const l of lines) w = Math.max(w, g.measureText(l).width);
       const bw = Math.min(c.width - 8, Math.ceil(w + padX * 2)), bh = lines.length * lh + padY * 2;
-      c.height = Math.min(512, bh + tail + 8);                  // resizing clears the canvas
-      g.font = `600 ${fs}px ${FONT}`;
-      const x = (c.width - bw) / 2, y = 4;
+      // fixed 512 × 256 canvas (a CanvasTexture can't change size once uploaded): the bubble sits on the bottom edge,
+      // its tail tip at the sprite's anchor; 3 lines (bh 180 + tail) still fit
+      const x = (c.width - bw) / 2, y = Math.max(4, c.height - 6 - tail - bh);
       g.fillStyle = 'rgba(40,28,20,0.25)'; roundRect(g, x + 4, y + 6, bw, bh, 22); g.fill();
       g.fillStyle = PAPER; g.strokeStyle = INK; g.lineWidth = 5;
       roundRect(g, x, y, bw, bh, 22); g.fill();

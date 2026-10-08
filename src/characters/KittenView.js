@@ -85,6 +85,10 @@ export class KittenView {
     const a = this.actor;
     const velocity = o.velocity ?? (a?.attachedTo ? _zero : a?.vel) ?? _zero;
     const airborne = o.airborne ?? (a ? a.onGround === false && !a.attachedTo && !a.scripted : false);
+    // Meme Cam: lock the cape sway to the camera's 3.8 s loop (requests/camera.md: ctx.cam.memeT), so the cape, the
+    // camera sway, the grass and the mist all repeat on the same frame (the cape adds this frame's dt itself)
+    const cam = this.ctx?.cam, cape = this.kitten.cape;
+    if (this._meme && cape && cam && cam.memeLooping !== false && Number.isFinite(cam.memeT)) cape.setSwayTime(cam.memeT - this._dt);
     this.kitten.simulate(this._dt, { velocity, airborne, wind: FUR_WIND.value, frameId: this.ctx?.game?.frameCount });
     return this;
   }

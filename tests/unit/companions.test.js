@@ -14,12 +14,16 @@ import { E } from '../../src/core/events.js';
 import { SCRIPTED_METHODS } from '../../src/core/ScriptedActor.js';
 import {
   followSlot, arrive, separation, segmentHit, isEngaged, pickTarget, estimateDamage, BarkGate, camForwardYaw, wallSide,
+  groundY, isFlyer, SLOT,
 } from '../../src/companions/steering.js';
+import { groundFlyer } from '../../src/companions/abilities.js';
 import { CompanionManager } from '../../src/companions/CompanionManager.js';
 import { Companion } from '../../src/companions/Companion.js';
 import { LostKitten, CageLock } from '../../src/companions/LostKitten.js';
 import { NpcActor, npcLook } from '../../src/companions/NpcActor.js';
-import { Pudding, PUDDING } from '../../src/companions/Pudding.js';
+import { Pudding, PUDDING, puddingRecolour, rgbToHsl } from '../../src/companions/Pudding.js';
+import { CAGE_CART } from '../../src/companions/LostKitten.js';
+import { KittenView } from '../../src/characters/index.js';
 import { ShieldWall } from '../../src/companions/ShieldWall.js';
 import { BARKS, FALLBACK, lineText } from '../../src/companions/lines.js';
 import { wrapText } from '../../src/companions/Bubble.js';
@@ -67,6 +71,9 @@ function makeCtx({ anchors = {} } = {}) {
         if (a.pos.y <= 0) { a.pos.y = 0; if (a.vel.y < 0) a.vel.y = 0; a.onGround = true; } else a.onGround = false;
       },
       raycast: () => null,
+      colliders: new Set(),
+      addCollider(c) { this.colliders.add(c); return c; },
+      removeCollider(c) { return this.colliders.delete(c); },
     },
     combat: {
       calls: [],
@@ -88,8 +95,9 @@ function makeCtx({ anchors = {} } = {}) {
     cam: { yaw: Math.PI },               // FollowCamera: forward = (−sin yaw, 0, −cos yaw) → +Z
     input: { _p: new Set(), pressed(a) { return this._p.has(a); } },
     story: { played: [], play(id) { this.played.push(id); return Promise.resolve(); } },
+    audio: { babbles: [], babble(who, text) { this.babbles.push([who, text]); return 1; }, sounds: [], play3D(id) { this.sounds.push(id); return null; } },
     assets: { model: () => new Promise(() => {}) },
-    objectives: null, env: null, ui: null, audio: null, save: null, postfx: null,
+    objectives: null, env: null, ui: null, save: null, postfx: null,
   };
   ctx.player = new FakePlayer(ctx);
   ctx.actors.register(ctx.player, 'swordcat');
@@ -362,7 +370,8 @@ test('§12.1 cage hide: 3 of her hits open it (others are immune); needClear kee
   const k = m.spawnKitten('biscuit', new THREE.Vector3(3, 0, 3), 'cage');
   const lock = k.lock;
   assert.ok(lock instanceof CageLock && ctx.actors.has(lock));
-  assert.equal(lock.faction, 'enemy', 'her swings (hostile to player) reach it');
+  assert.equal(lock.breakable, true, 'player-side attacks reach it (Combat targetFilter: breakable)');
+  assert.notEqual(lock.faction, 'enemy', 'not an enemy: lock-on, arenas and companions ignore it');
   const e = new FakeEnemy(ctx, 4, 4);
   assert.equal(ctx.combat.applyHit(e, lock, { dmg: 10 }), 'immune');
   for (let i = 0; i < 3; i++) { ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }); lock.invulnT = 0; }
@@ -462,6 +471,7 @@ test('CS-03 Pudding: netted (collider r 2.5) → ropes → free → flies to pud
   assert.equal(pud.radius, PUDDING.radius); assert.ok(pud.fixed, 'static collider');
   ctx.bus.emit(E.OBJECTIVE, { id: 'net_ropes', value: 2, max: 3 });
   assert.equal(pud.ropesCut, 2);
+  ctx.state.setFlag('meadow.pudding', true);                        // story.flag() sets the state, then emits
   ctx.bus.emit(E.FLAG_SET, { key: 'meadow.pudding', value: true });
   assert.equal(pud.mode, 'free');
   step(ctx, Math.round(10 / DT));
@@ -505,4 +515,217 @@ test('companion visuals build from characters buildKitten (Mochi with shield, lo
   const k = new LostKitten(ctx, 'biscuit', { pos: new THREE.Vector3(), hide: 'cage' });
   assert.equal(k.visual.k.tier, 'lite');
   k.render(1, DT); k.dispose();
+});
+
+// ------------------------------------------------------------------ M1 additions
+
+test('steering: groundY prefers physics.groundAt (bridge decks), then the heightfield; isFlyer by tag or def.fly', () => {
+  assert.equal(groundY({ physics: { groundAt: () => 2.5, heightAt: () => 0 } }, 0, 0, 2), 2.5);
+  assert.equal(groundY({ physics: { heightAt: () => 1.25 } }, 0, 0, 9), 1.25);
+  assert.equal(groundY({}, 0, 0, 3), 3);
+  assert.ok(isFlyer({ tags: new Set(['flyer']) })); assert.ok(isFlyer({ tags: new Set(), def: { fly: { alt: 4 } } }));
+  assert.ok(!isFlyer({ tags: new Set(['enemy']), def: {} }));
+  const calls = [];
+  const crow = { alive: true, tags: new Set(['enemy']), def: { fly: {} }, groundFlyer: (sec) => calls.push(sec) };
+  assert.ok(groundFlyer(crow, 3)); assert.deepEqual(calls, [3], 'the volley uses Enemy.groundFlyer(sec)');
+  assert.ok(!groundFlyer({ alive: true, tags: new Set(['enemy']), def: {} }, 3), 'walkers are not grounded');
+});
+
+test('§9.1 follow: once she stands still he comes up beside her (in the camera view) and settles', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const [c] = ctx.companions.setActive(['mochi']);
+  const p = ctx.player;
+  step(ctx, 180, () => { p.vel.set(0, 0, 4); p.facing = 0; p.pos.addScaledVector(p.vel, DT); });
+  const behindWhileRunning = p.pos.z - c.pos.z;
+  assert.ok(behindWhileRunning > 1.2, `trails behind while she runs (${behindWhileRunning.toFixed(2)} m)`);
+  p.vel.set(0, 0, 0);
+  step(ctx, 240);
+  const d = dist(c, p), behind = p.pos.z - c.pos.z;
+  assert.ok(Math.abs(d - SLOT.regroupDist) < 0.5, `beside her at ~${SLOT.regroupDist} m (got ${d.toFixed(2)})`);
+  assert.ok(behind < 0.9, `level with her shoulder, not trailing (${behind.toFixed(2)} m behind)`);
+  assert.ok(c.pos.x > p.pos.x, 'on his side (Mochi: her left, +X)');
+  const before = c.pos.clone();
+  step(ctx, 60);
+  assert.ok(c.pos.distanceTo(before) < 0.05, 'settled: no shuffling about');
+  assert.equal(c.stateName, 'idle');
+});
+
+test('§9.1 teleport: 4 s out of line of sight → back at her side, never into deep water or a collider', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const [c] = ctx.companions.setActive(['mochi']);
+  ctx.physics.lineOfSight = () => false;                       // a wall between them
+  ctx.physics.isDeepWater = (x) => x > 0.5;                       // the stream is on her left (+X): Mochi's side
+  ctx.physics.blockedAt = () => false;
+  const stuck = () => { if (c.stats.teleports === 0) c.pos.set(-6, 0, -6); };   // behind a wall he can't path around
+  step(ctx, Math.round(3 / DT), stuck);
+  assert.equal(c.stats.teleports, 0, 'not before 4 s');
+  step(ctx, Math.round(1.4 / DT), stuck);
+  assert.ok(c.stats.teleports >= 1, 'teleported after 4 s out of sight');
+  assert.ok(c.pos.x <= 0.5, `landed on the dry side (x ${c.pos.x.toFixed(2)})`);
+  assert.ok(dist(c, ctx.player) < 2.5);
+});
+
+test('cage lock: neutral + breakable + prop (lock-on / arenas ignore it); her reflected shots count, others are immune', () => {
+  const ctx = makeCtx();
+  const k = ctx.companions.spawnKitten('biscuit', new THREE.Vector3(2, 0, 2), 'cage');
+  const l = k.lock;
+  assert.equal(l.faction, 'neutral'); assert.equal(l.breakable, true); assert.ok(l.tags.has('prop'));
+  assert.equal(l.resolveIncoming({ isProjectile: true, faction: 'player', owner: ctx.player }), 'hit');
+  assert.equal(l.resolveIncoming({ isProjectile: true, faction: 'enemy' }), 'immune');
+  assert.equal(k.collideActors, false, 'the caged kitten sits inside the solid lock circle without being pushed out');
+});
+
+test('D-01 cart: Mochi sits on the cart bed; the cart blocks walkers; the empty cage + cart stay as dressing', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const k = m.spawnKitten('mochi', new THREE.Vector3(30, 0, 74), 'cage', { hp: 30, play: 'd01', facing: Math.PI });
+  assert.ok(Math.abs(k.perchY - CAGE_CART.bedY) < 1e-9 && Math.abs(k.pos.y - CAGE_CART.bedY) < 1e-9, 'on the bed');
+  const col = [...ctx.physics.colliders][0];
+  assert.ok(col && col.walkable === false && col.factions.includes('player') && !col.factions.includes('neutral'), 'cart collider');
+  for (let i = 0; i < 3 && !k.lock.opened; i++) { k.lock.invulnT = 0; ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); }
+  assert.ok(k.lock.opened);
+  ctx.player.pos.set(30, 0, 71);
+  step(ctx, 90);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(m.active[0]?.kittenId, 'mochi');
+  assert.equal(m.dressing.length, 1, 'the cart and the open cage stay in the level');
+  assert.ok(ctx.physics.colliders.has(col), 'the cart stays solid');
+  m.clearLevel();
+  assert.equal(m.dressing.length, 0); assert.ok(!ctx.physics.colliders.has(col), 'collider removed with the level');
+  // a reload after the join: no Mochi in the cage, just the open cage on its cart
+  const again = m.spawnKitten('mochi', new THREE.Vector3(30, 0, 74), 'cage', { hp: 30 });
+  assert.equal(again.stateName, 'gone');
+  assert.equal(ctx.actors.get('mochi'), m.active[0], 'the party Mochi keeps the cutscene id');
+  step(ctx, 1);
+  assert.ok(!m.actors.includes(again)); assert.equal(m.dressing.length, 1);
+  assert.equal(ctx.actors.get('mochi'), m.active[0]);
+});
+
+test('lost kitten: the hiding barrel stays after the kitten goes home; the rescue line babbles', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const k = m.spawnKitten('noodle', new THREE.Vector3(3, 0, 3), 'meow', { prop: 'barrel' });
+  ctx.bus.emit(E.PLAYER_MEOW, { position: new THREE.Vector3() });
+  ctx.player.pos.copy(k.pos);
+  step(ctx, 2);
+  assert.ok(k.rescued);
+  assert.ok(ctx.audio.babbles.some(([who]) => who === 'noodle'), 'babble for the rescue line');
+  ctx.player.pos.set(0, 0, -30);
+  step(ctx, Math.round(7 / DT));
+  assert.ok(!m.actors.includes(k));
+  assert.equal(m.dressing.length, 1, 'barrel kept');
+});
+
+test('§7.8 × §12.1: the Stand turning into Meme Cam (2.5 s) keeps counting toward the 3 s stand reveal', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const k = ctx.companions.spawnKitten('button', new THREE.Vector3(0, 0, 0), 'stand', { standTime: 3 });
+  const p = ctx.player;
+  p.guarding = true;
+  step(ctx, Math.round(2.5 / DT));
+  p.guarding = false; p.stateName = 'memecam'; ctx.game.mode = 'memecam';
+  step(ctx, Math.round(0.6 / DT));
+  assert.ok(!k.hidden, 'revealed during Meme Cam');
+});
+
+test('barks babble only in play; the shared bark gate still applies', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const [c] = ctx.companions.setActive(['mochi']);
+  assert.ok(ctx.companions.bark(c, 'idle', { force: true }));
+  assert.equal(ctx.audio.babbles.at(-1)[0], 'mochi');
+  ctx.game.mode = 'cutscene';
+  const n = ctx.audio.babbles.length;
+  ctx.companions.bark(c, 'combat', { force: true });
+  assert.equal(ctx.audio.babbles.length, n, 'no babble over cutscene dialogue');
+});
+
+test('Pudding recolour: purple / maroon body cells → the design red, lighter; eyes, claws and white cells unchanged', () => {
+  const [th] = PUDDING.red;
+  for (const c of [[139, 61, 94], [91, 53, 74], [114, 25, 35]]) {
+    const [r, g, b] = puddingRecolour(...c);
+    const [h, , l] = rgbToHsl(r, g, b), [, , l0] = rgbToHsl(...c);
+    assert.ok(Math.abs(h - th) < 12, `hue ${h.toFixed(1)} for ${c}`);
+    assert.ok(l > l0, 'lighter');
+    assert.ok(r > g * 1.6 && r > b * 1.6, `reads red: ${[r, g, b]}`);
+  }
+  for (const c of [[30, 31, 34], [255, 255, 255], [143, 146, 160], [204, 145, 41], [165, 140, 114]]) assert.deepEqual(puddingRecolour(...c), c);
+});
+
+test('Pudding sniffs before he lifts off (lean + purr), then nods; roars are gameplay-only sounds', async () => {
+  const anchors = { pud_1: [20, 36] };
+  const ctx = makeCtx({ anchors }); await ctx.companions.init();
+  const pud = ctx.companions.spawnNpc('pudding', [2, 24], Math.PI);
+  pud.setNetted(true);
+  ctx.player.pos.set(2, 0, 16);
+  const z0 = pud.pos.z;
+  pud.free();
+  step(ctx, Math.round(1.2 / DT));
+  assert.ok(pud.pos.z < z0, 'shuffled toward her while sniffing');
+  assert.ok(ctx.audio.sounds.includes('cat/cat_purractive_loop'), 'purr');
+  pud.setScripted(true);
+  const n = ctx.audio.sounds.length;
+  pud.roar(0.3);
+  assert.equal(ctx.audio.sounds.length, n, 'a scripted roar is the cutscene\'s to cue');
+  pud.setScripted(false);
+  pud.roar(0.3);
+  assert.equal(ctx.audio.sounds.at(-1), 'puddingRoar');
+});
+
+test('companion visuals ride on characters KittenView (env map, wind, hitstop-aware dt)', () => {
+  const ctx = makeCtx();
+  const c = new Companion(ctx, 'mochi');
+  assert.ok(c.visual.view instanceof KittenView);
+  ctx.game.hitstopT = 0.1;
+  c.visual.update(1 / 60, { velocity: new THREE.Vector3() });
+  assert.equal(c.visual.dt, 0, 'frozen during hitstop');
+  ctx.game.hitstopT = 0;
+  c.visual.update(1 / 60, { velocity: new THREE.Vector3() });
+  assert.ok(c.visual.dt > 0);
+  c.dispose();
+});
+
+test('§9.2 Sage Volley (5 arrows over 0.6 s, ≤ 3 targets in 14 m, flyers grounded) and Clover Purr of Mending (4 HP over 3 s)', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const [sage] = m.setActive(['sage']);
+  assert.ok(sage.visual?.k?.rig, 'Sage builds');
+  const crow = new FakeEnemy(ctx, 3, 5, { state: 'chase', alerted: true, flyer: true, hp: 1000 });
+  crow.pos.y = 0.5;
+  const grounded = [];
+  crow.groundFlyer = (s) => grounded.push(s);
+  const rat = new FakeEnemy(ctx, -2, 6, { state: 'chase', alerted: true, hp: 1000 });
+  ctx.enemies.list.push(crow, rat); ctx.actors.register(crow); ctx.actors.register(rat);
+  assert.ok(sage.useAbility());
+  assert.equal(emitted(ctx, E.COMPANION_ABILITY).at(-1).ability, 'volley');
+  step(ctx, Math.round(1.6 / DT));
+  const arrows = ctx.combat.calls.filter((h) => h.att === sage && h.def.id === 'companion_arrow');
+  assert.equal(arrows.length, COMPANIONS.sage.arrows, '5 arrows');
+  assert.ok(arrows.every((h) => h.def.dmg === COMPANIONS.sage.dmg));
+  assert.ok(grounded.length >= 1 && grounded[0] === COMPANIONS.sage.groundFlyers, 'the crow is grounded 3 s');
+  assert.equal(sage.cooldown > 0, true);
+  // Clover
+  ctx.enemies.list.length = 0;
+  const [clover] = m.setActive(['clover']);
+  assert.ok(clover.visual?.k?.rig, 'Clover builds');
+  ctx.player.hp = 2;
+  ctx.player.slowT = 2;
+  assert.ok(clover.useAbility());
+  step(ctx, Math.round((COMPANIONS.clover.channel - 0.1) / DT));
+  assert.equal(ctx.player.hp, 2, 'nothing during the 1 s channel');
+  step(ctx, Math.round((COMPANIONS.clover.over + 0.3) / DT));
+  assert.equal(ctx.player.hp, 2 + COMPANIONS.clover.heal, '+4 HP over 3 s');
+  assert.equal(ctx.player.slowT, 0, 'slow cleansed');
+  assert.ok(Math.abs(clover.cooldown - (COMPANIONS.clover.cd - COMPANIONS.clover.channel - COMPANIONS.clover.over - 0.2)) < 0.5);
+});
+
+test('CS-03 end order: netted first, moved after (pose then pos) → the net follows him to (2,24)', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const pud = ctx.companions.spawnNpc('pudding', [2, 0, 30], Math.PI);
+  pud.setScripted(true);
+  pud.pose('netted');
+  assert.ok(pud.netted && pud.net);
+  pud.pos.set(2, 0, 24);
+  ctx.game.mode = 'cutscene';
+  step(ctx, 1);
+  assert.ok(Math.hypot(pud.net.group.position.x - 2, pud.net.group.position.z - 24) < 1e-6, 'net rebuilt on him');
+  assert.equal(pud.net.ropes.length, PUDDING.net.posts.length);
 });

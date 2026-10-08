@@ -18,7 +18,7 @@ export const GRASS_COLORS = {
   keep:   { root: '#24221E', tip: '#4E4C3E', dry: '#6A665A' },
 };
 
-const FLOWER_COLORS = ['#C77DA8', '#EDEFE6', '#E8C547', '#EDEFE6', '#B98BC9'];
+const FLOWER_COLORS = ['#B5809E', '#E2E4DA', '#D6BA52', '#E2E4DA', '#A88BB5'];
 
 /** Blade: 7 verts / 5 tris, base at y 0, height 1, width 1, slight forward curve (scaled per instance in the shader). */
 export function makeBladeGeometry() {
@@ -39,8 +39,12 @@ export function makeBladeGeometry() {
 
 /** Flower: a stem quad plus two crossed head quads; attribute aHead marks head verts. */
 export function makeFlowerGeometry() {
-  const P = [], H = [], idx = [];
-  const quad = (pts, head) => { const b = P.length / 3; for (const p of pts) { P.push(...p); H.push(head); } idx.push(b, b + 1, b + 2, b + 2, b + 1, b + 3); };
+  const P = [], H = [], UV = [], idx = [];
+  const quad = (pts, head) => {
+    const b = P.length / 3;
+    pts.forEach((p, k) => { P.push(...p); H.push(head); UV.push(k & 1, k >> 1); });
+    idx.push(b, b + 1, b + 2, b + 2, b + 1, b + 3);
+  };
   quad([[-0.03, 0, 0], [0.03, 0, 0], [-0.02, 0.82, 0], [0.02, 0.82, 0]], 0);
   quad([[-0.5, 0.78, 0], [0.5, 0.78, 0], [-0.5, 1.12, 0], [0.5, 1.12, 0]], 1);
   quad([[0, 0.78, -0.5], [0, 0.78, 0.5], [0, 1.12, -0.5], [0, 1.12, 0.5]], 1);
@@ -48,6 +52,7 @@ export function makeFlowerGeometry() {
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(P.length).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
   g.setAttribute('aHead', new THREE.Float32BufferAttribute(H, 1));
+  g.setAttribute('aFUV', new THREE.Float32BufferAttribute(UV, 2));
   g.setIndex(idx);
   return g;
 }
@@ -57,7 +62,9 @@ attribute vec3 aOff;      // tile-local x, z in [0, tile), r = density threshold
 attribute vec4 aP;        // yaw, height factor, lean, tint rand
 #ifdef GRASS_FLOWER
 attribute float aHead;
+attribute vec2 aFUV;
 varying float vHead;
+varying vec2 vFUV;
 #endif
 uniform float uTime, uWind, uGust, uTile, uBladeH, uBladeW;
 uniform vec2 uWindDir, uCenter;
@@ -94,7 +101,7 @@ vec3 transformed;
   vec3 lp = position;
   float tip = clamp(lp.y, 0.0, 1.0);
   #ifdef GRASS_FLOWER
-    vHead = aHead;
+    vHead = aHead; vFUV = aFUV;
     vec3 p = vec3(lp.x * wid, lp.y * hgt, lp.z * wid);
   #else
     vec3 p = vec3(lp.x * wid, lp.y * hgt, lp.z * hgt);
@@ -120,6 +127,7 @@ uniform vec3 uRoot, uTip, uDry;
 varying float vH, vTint, vDry;
 #ifdef GRASS_FLOWER
 varying float vHead;
+varying vec2 vFUV;
 uniform vec3 uF0, uF1, uF2;
 #endif
 `;
@@ -130,6 +138,7 @@ const FRAG_COLOR = /* glsl */`
   vec3 tipC = mix(uTip, uDry, clamp(vDry + step(0.86, vTint) * 0.55, 0.0, 1.0));
   vec3 c = mix(uRoot, tipC, pow(h, 1.15)) * mix(0.8, 1.12, fract(vTint * 7.31));
   #ifdef GRASS_FLOWER
+    if (vHead > 0.5) { vec2 q = vFUV * 2.0 - 1.0; if (dot(q, q) > 0.85) discard; }
     float k = fract(vTint * 3.17);
     vec3 fc = k < 0.4 ? uF0 : (k < 0.75 ? uF1 : uF2);
     c = mix(mix(uRoot, uTip, 0.6), fc, step(0.5, vHead));
@@ -226,12 +235,12 @@ export class Grass {
     const nearCount = Math.round((q.grass ?? 30000) * (o.near ?? 1));
     this.group = new THREE.Group(); this.group.name = 'grass';
     this.layers = [];
-    const nearTile = low ? 22 : 36;
-    if (nearCount > 0) this.layers.push(makeGrassLayer({ count: nearCount, tile: nearTile, bladeH: H, bladeW: 0.065, fade: [-1, 0, nearTile * 0.36, nearTile * 0.49], seed, colors, ground: o.ground, groundUV }));
+    const nearTile = low ? 22 : 31;
+    if (nearCount > 0) this.layers.push(makeGrassLayer({ count: nearCount, tile: nearTile, bladeH: H, bladeW: 0.05, fade: [-1, 0, nearTile * 0.36, nearTile * 0.49], seed, colors, ground: o.ground, groundUV }));
     const farCount = low ? 0 : Math.round(nearCount * 0.33 * (o.far ?? 1));
     if (farCount > 0) this.layers.push(makeGrassLayer({ count: farCount, tile: 96, bladeH: H * 1.35, bladeW: 0.2, fade: [nearTile * 0.3, nearTile * 0.44, 38, 47], seed: seed + 1, colors, ground: o.ground, groundUV, lean: 0.5 }));
-    const fl = Math.round((low ? 150 : q.id === 'high' ? 1100 : 750) * (o.flowers ?? 1));
-    if (fl > 0) this.layers.push(makeGrassLayer({ count: fl, tile: 40, bladeH: H * 1.25, bladeW: 0.11, fade: [-1, 0, 14, 19.5], seed: seed + 2, colors, ground: o.ground, groundUV, flower: true, lean: 0.2 }));
+    const fl = Math.round((low ? 120 : q.id === 'high' ? 700 : 480) * (o.flowers ?? 1));
+    if (fl > 0) this.layers.push(makeGrassLayer({ count: fl, tile: 40, bladeH: H * 1.15, bladeW: 0.085, fade: [-1, 0, 14, 19.5], seed: seed + 2, colors, ground: o.ground, groundUV, flower: true, lean: 0.2 }));
     for (const l of this.layers) this.group.add(l.mesh);
     this._dir = new THREE.Vector2();
   }

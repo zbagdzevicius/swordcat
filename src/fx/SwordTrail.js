@@ -19,12 +19,12 @@ const HOLY = '#FFD34D';
  * @returns {{color: string, intensity: number, life: number}}
  */
 export function trailStyle(attackId, skin = 'borrowed', golden = false) {
-  if (attackId === 'holy' || attackId === 'sunburst' || attackId === 'holyWave') return { color: HOLY, intensity: 2.6, life: 0.3 };
-  if (golden) return { color: HOLY, intensity: 2.0, life: 0.22 };
-  if (attackId === 'bright') return { color: '#F6F9FF', intensity: 2.3, life: 0.24 };
-  if (attackId === 'riposte') return { color: '#FFE9A8', intensity: 2.0, life: 0.2 };
+  if (attackId === 'holy' || attackId === 'sunburst' || attackId === 'holyWave') return { color: HOLY, intensity: 1.8, life: 0.3 };
+  if (golden) return { color: HOLY, intensity: 1.4, life: 0.22 };
+  if (attackId === 'bright') return { color: '#F6F9FF', intensity: 1.5, life: 0.24 };
+  if (attackId === 'riposte') return { color: '#FFE9A8', intensity: 1.4, life: 0.2 };
   const c = TRAIL_COLORS[skin] ?? TRAIL_COLORS.borrowed;
-  return { color: c, intensity: skin === 'dawnblade' ? 2.0 : 1.45, life: attackId === 'slash3' || attackId === 'pounce' ? 0.2 : 0.17 };
+  return { color: c, intensity: skin === 'dawnblade' ? 1.4 : 0.95, life: attackId === 'slash3' || attackId === 'pounce' ? 0.2 : 0.17 };
 }
 
 /** Sampling window of a swing in swing time (s): [from, to]. Pure. */
@@ -57,8 +57,9 @@ varying vec2 vT;
 ${FOG_FACTOR}
 void main() {
   float a = clamp( vT.x, 0.0, 1.0 ), v = clamp( vT.y, 0.0, 1.0 );
-  float edge = smoothstep( 0.0, 0.45, v ) * ( 0.45 + 0.55 * v );
-  float k = a * a * edge * uAlpha;
+  // brightest along the tip edge, feathered toward the hilt; old samples fade quadratically
+  float edge = smoothstep( 0.0, 0.7, v ) * ( 0.25 + 0.75 * v * v );
+  float k = a * a * edge * uAlpha * 0.85;
   if ( k < 0.003 ) discard;
   vec3 col = mix( uColor, vec3( 1.0 ), smoothstep( 0.8, 1.0, v ) * a * 0.7 ) * uIntensity;
   gl_FragColor = vec4( col * k * ( 1.0 - fxFog() ), 1.0 );

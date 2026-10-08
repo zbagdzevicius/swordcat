@@ -7,7 +7,7 @@ import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
 import { damp, dampAngle, wrapAngle } from '../core/math.js';
-import { catConfig, villagerConfig } from '../characters/index.js';
+import { catConfig, villagerConfig, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 
@@ -67,7 +67,7 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
   }
 
   /** Show a speech bubble (barks; cutscene dialogue is the ui's). */
-  say(text, dur = 1.6) { this.bubble.show(text, dur); this.visual?.emote('meow'); }
+  say(text, dur = 1.6) { this.bubble.show(text, dur); this.visual?.emote('meow'); this.ctx.companions?.babble?.(this, text); }
 
   // ---- ScriptedActor visual hooks
   onPose(name) { this.visual?.setPose(name); }
@@ -125,7 +125,7 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
 
   render(alpha, dt) {
     super.render(alpha);
-    const vdt = this.ctx.game.hitstopT > 0 ? 0 : (dt ?? 0);
+    const vdt = visualDt(this.ctx, dt ?? 0);         // 0 in hitstop / the pause menu, × slow-mo
     if (this.visual) {
       const p = this.ctx.player;
       let look = 0;
@@ -134,7 +134,7 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
         if (d < LOOK_RADIUS + 1.5) look = wrapAngle(Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z) - this.facing);
       }
       this.visual.lookAt(look);
-      this.visual.update(vdt, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo, frameId: this.ctx.game.frameCount });
+      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo });
     } else if (this.anim) {
       const moving = Math.hypot(this.vel.x, this.vel.z) > 0.3;
       const want = moving ? this.glb.walk : (this._loopClip ?? this.glb.idle);

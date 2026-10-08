@@ -139,6 +139,10 @@ export class CutsceneCamera {
 
   get active() { return !!this.shot; }
   get mode() { return this.shot?.mode ?? null; }
+  /** true while the shot carries the seamless MEME_LOOP sway (a 3.8 s loop that the cape / grass sync to) */
+  get looping() { return !!this.shot && this.shot.sway > 0; }
+  /** loop-local time of a looping shot (0 at the shot's start, wraps at its `loop` period) */
+  get loopT() { return this.looping ? this.t % this.shot.loop : 0; }
   /** world position of the shot's subject (for tree fade + the blend arc) */
   get subject() { return this.frame.pos; }
 
@@ -330,7 +334,7 @@ export class CutsceneCamera {
   _addMotion(out) {
     const s = this.shot;
     if (s.sway > 0) {
-      memeSway(this.clock % s.loop, s.loop, s.sway, _s);
+      memeSway(this.t % s.loop, s.loop, s.sway, _s);                  // shot-local: loop 0 = the cut
       // sway in the anchor frame (same as MemeCam)
       const c = Math.cos(this._yaw0), sn = Math.sin(this._yaw0);
       const wx = _s.x * c + _s.z * sn, wz = -_s.x * sn + _s.z * c;

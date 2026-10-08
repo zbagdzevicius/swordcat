@@ -1,6 +1,6 @@
 // src/fx/Poof.js  (owner: fx) — the cute, non-lethal defeat (art.md §8, GAME_DESIGN §8.2 "Kill"): 12 white puffs
 // (scale 0 → 1.4, opacity 1 → 0, ~0.35 s), 6 gold stars, faction debris (feathers, dirt, slime droplets, bone chips),
-// and the helmet popping off, spinning. Also the arena `spawn` poof (§12.1) and small utility puffs.
+// and (on request) a helmet popping off, spinning. Also the arena `spawn` poof (§12.1) and small utility puffs.
 import * as THREE from 'three';
 import { SHAPE, FADE, GROW } from './Particles.js';
 
@@ -136,14 +136,15 @@ export class Poof {
     // 12 white puffs (art.md §8): scale 0 → 1.4, opacity 1 → 0, ~0.35 s
     P.burst(_p, { n: 12, shape: SHAPE.PUFF, color: o.color ?? '#FBF8F1', tint: 0.05, size: [0.3 * S, 0.42 * S], sizeEnd: 1.4,
       grow: GROW.OUT, fade: FADE.HOLD, life: [0.34, 0.48], speed: [1.0 * S, 2.2 * S], drag: 5, up: 0.5, jitter: 0.22 * S, jitterY: 0.8 });
-    // inner flash so the poof pops even in bright fog
-    P.single(_p, { shape: SHAPE.SOFT, color: '#FFF6DA', intensity: 2.2, size0: 0.4 * S, size1: 1.3 * S, life: 0.14, fade: FADE.LINEAR });
+    // a short inner flash so the poof pops even in bright fog (kept dim: bloom turns anything brighter into an orb)
+    P.single(_p, { shape: SHAPE.SOFT, color: '#FFF6DA', intensity: 1.1, size0: 0.35 * S, size1: 1.0 * S, life: 0.1, fade: FADE.LINEAR });
     // 6 gold stars
     P.burst(_p, { additive: true, n: 6, shape: SHAPE.STAR5, color: '#FFD34D', intensity: 1.9, size: [0.14 * S, 0.2 * S], sizeEnd: 0.6,
       life: [0.55, 0.8], speed: [2.4, 3.8], dir: _up, spread: 1.2, gravity: 7, drag: 1.2, spin: 7, fade: FADE.HOLD });
     const debris = o.debris ?? debrisFor(o.type);
     if (debris) this.debris(_p, debris, S);
-    const helm = o.helmet ?? helmetFor(o.type);
+    // helmets: enemies pop their own real helmet (EnemyManager.spawnDebris); fx adds one only when asked (`o.helmet`)
+    const helm = o.helmet === true ? helmetFor(o.type) ?? 'kettle' : o.helmet || null;
     if (helm && this.helmets) {
       _p.copy(pos); _p.y += o.centre ? h * 0.5 : h * 0.95;
       this.helmets.pop(_p, helm, 0.34 * Math.min(1.6, h), o.dir ?? null);
@@ -151,10 +152,10 @@ export class Poof {
   }
 
   /** Faction debris burst (`feathers`, `droplets`, `bones`, `dirt`, `fur`, `wood`, `leaves`). */
-  debris(pos, kind, S = 1, color = null) {
+  debris(pos, kind, S = 1, color = null, n = null) {
     const st = DEBRIS_STYLE[kind];
     if (!st) return;
-    this.p.burst(pos, { n: st.n, shape: st.shape, color: color ?? st.color, tint: 0.12, size: [st.size[0] * S, st.size[1] * S],
+    this.p.burst(pos, { n: n ?? st.n, shape: st.shape, color: color ?? st.color, tint: 0.12, size: [st.size[0] * S, st.size[1] * S],
       life: st.life, speed: st.speed, dir: _up, spread: 1.35, gravity: st.gravity, drag: st.drag, spin: st.spin, up: st.up,
       fade: FADE.HOLD, floor: !!st.floor, jitter: 0.15 * S });
   }

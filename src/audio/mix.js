@@ -42,3 +42,8 @@ export const DUCK = {
   pausedSfx: 0.35,
   tau: 0.12,            // default setTargetAtTime constant
 };
+
+/** §16.1 Meme Cam: no music (DUCK.meme), the wind ×1.6. */
+export const MEME = {
+  windMul: 1.6,
+};

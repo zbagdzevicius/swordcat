@@ -14,11 +14,11 @@ import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { E } from '../core/events.js';
 import { PLAYER, ATTACKS } from '../core/config.js';
 import { damp, dampAngle, wrapAngle, clamp01, easeOutCubic } from '../core/math.js';
-import { CATS, lostKittenConfig, buildCage } from '../characters/index.js';
+import { CATS, lostKittenConfig, buildCage, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { lineText } from './lines.js';
-import { COMPANION_IDS } from './steering.js';
+import { COMPANION_IDS, groundY } from './steering.js';
 
 export const HIDES = Object.freeze(['meow', 'cage', 'stand', 'break', 'climb']);
 
@@ -28,30 +28,49 @@ export const HIDE_PROPS = {
   bush: { model: 'models/env/nature/plant_bushLarge.glb', fit: { h: 1.05 }, top: 0.5 },
 };
 
-export const RESCUE = { radius: 1.3, height: 1.6, leaveAfter: 2.8, leaveDur: 2.6, leaveSpeed: 2.2, wobbleEvery: 6, wobbleDur: 0.7, waveRadius: 7 };
+/**
+ * The squire cage cart (§12.3 Old Bridge, D-01 Mochi): Kenney's open `cart` fitted to 2.0 m long with the procedural
+ * bars on its bed. (`cart-high` from §12.3 carries a load of sacks that fills the bed, so the bars had nowhere to sit.)
+ * `offset` slides the cart (local X) so the middle of its bed is under the cage; `footprint` is the collider [x, z].
+ */
+export const CAGE_CART = {
+  model: 'models/env/town/cart.glb', fit: { max: 2.0 }, yaw: Math.PI / 2, offset: -0.27,
+  bedY: 0.5, size: [1.3, 1.0, 1.0], footprint: [2.0, 1.35],
+};
+
+export const RESCUE = { standClearR: 15, radius: 1.3, height: 1.6, leaveAfter: 2.8, leaveDur: 2.6, leaveSpeed: 2.2, wobbleEvery: 6, wobbleDur: 0.7, waveRadius: 7 };
 
 const _v = new THREE.Vector3();
 
-/** The breakable cage lock: a fixed `enemy`-faction actor so her swings hit it (player hits only). */
+/**
+ * The breakable cage lock: a fixed `neutral` actor flagged `breakable` (requests/combat.md) so only player-side
+ * attacks reach it, and only her blows count (companions, enemies and stray projectiles are immune). Tagged `prop`
+ * so lock-on, threat arrows and companion targeting skip it (the world PropActor convention).
+ */
 export class CageLock extends Actor {
   constructor(ctx, owner, { pos, facing = 0, radius = 0.45, height = 0.9, hits = 3, hp = null } = {}) {
-    super(ctx, { faction: 'enemy', radius, height, maxHp: hp ?? 1e4, mass: 100, maxPoise: 1e4 });
+    super(ctx, { faction: 'neutral', radius, height, maxHp: hp ?? 1e4, mass: 100, maxPoise: 1e4 });
     this.owner = owner;
     this.fixed = true;
+    this.breakable = true;
     this.hitsNeeded = hp == null ? hits : null;
     this.hits = 0; this.opened = false;
-    this.tags.add('breakable'); this.tags.add('cage');
+    this.tags.add('breakable'); this.tags.add('cage'); this.tags.add('prop');
     this.home = pos.clone(); this.pos.copy(pos); this.facing = facing;
     this.object3d.name = 'cageLock';
     this.snap();
   }
-  /** Only her blows count (enemies and companions can't open it). */
-  resolveIncoming(att) { return att?.faction === 'player' ? 'hit' : 'immune'; }
+  /** Only her blows (or her reflected shots) count. */
+  resolveIncoming(att) {
+    const her = att?.faction === 'player' || att?.owner?.faction === 'player' || att?.tags?.has?.('player');
+    return her ? 'hit' : 'immune';
+  }
   onHit() {
     this.hits++; this.hold();
     this.owner.rattle();
     if (this.hitsNeeded != null && this.hits >= this.hitsNeeded) this.open();
   }
+  /** Lethal blow on an hp lock (companion cages: 30 HP). */
   onDeath() { this.open(); }
   hold() { this.pos.copy(this.home); this.vel.set(0, 0, 0); this.staggerT = 0; this.poise = this.maxPoise; }
   open() {
@@ -100,7 +119,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     this.object3d.add(this.bubble.object);
     this.propRoot = null; this.prop = null; this.cage = null; this.lock = null; this.cageOpen = 0; this.rattleT = 0;
     this._clipWaits = [];
-    if (this.hide === 'cage') this._buildCage();
+    if (this.hide === 'cage') { this._buildCage(); this.collideActors = false; }   // sits inside the lock's solid circle
     if (this.hide === 'meow' && HIDE_PROPS[o.prop]) this._loadProp(o.prop);
     if (this.visual) {
       this.visual.setPose(this.hide === 'cage' ? 'sit' : 'idle', 0);
@@ -109,14 +128,27 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     }
     this.object3d.visible = !this.hidden;
     // already home? (a reload after the rescue): vanish on the first step
-    if (!companion && ctx.state?.hasKitten?.(kittenId)) { this.rescued = true; this.hidden = false; this.stateName = 'gone'; this.object3d.visible = false; this.ghost = true; }
+    // (a squire who already joined the party doesn't sit in the cage again either)
+    const home = companion ? !!ctx.state?.companions?.unlocked?.includes?.(kittenId) : !!ctx.state?.hasKitten?.(kittenId);
+    if (home) {
+      this.rescued = true; this.hidden = false; this.stateName = 'gone'; this.object3d.visible = false; this.ghost = true;
+      if (this.lock) this.lock.opened = true;
+      this.cage?.userData?.setOpen?.(1); this.cageOpenT = 1;          // the empty cage stays, door open
+    }
     this.snap();
   }
 
   /** Called by CompanionManager once registered (actor list + scene). */
   attachToWorld() {
-    if (this.perchY > 0) { this.pos.y = (this.ctx.physics?.heightAt?.(this.pos.x, this.pos.z) ?? 0) + this.perchY; this.snap(); }
-    if (this.propRoot) { this.propRoot.position.set(this.home.x, this.ctx.physics?.heightAt?.(this.home.x, this.home.z) ?? this.home.y, this.home.z); this.ctx.scene?.add(this.propRoot); }
+    const g = groundY(this.ctx, this.home.x, this.home.z, this.home.y);
+    this.home.y = g;
+    if (!(this.perchY > 0) && this.pos.y > g + 0.3) { this.perchY = this.pos.y - g; this.flying = true; }   // given a 3D perch
+    this.pos.y = g + (this.perchY > 0 ? this.perchY : 0);
+    if (this.cage) this.cage.position.y = this.perchY > 0 ? this.perchY : 0;
+    if (this.lock) this.lock.height = (this.cageSize?.[1] ?? 0.75) + (this.perchY > 0 ? this.perchY : 0);
+    if (this.lock) this.lock.home.y = g;
+    this.snap();
+    if (this.propRoot) { this.propRoot.position.set(this.home.x, g, this.home.z); this.ctx.scene?.add(this.propRoot); }
     this._syncLock();
   }
 
@@ -140,17 +172,36 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   _buildCage() {
     const o = this.opts, style = o.cage ?? (this.companion ? 'cart' : 'carry');
-    const size = this.companion ? [1.3, 1.2, 1.0] : undefined;
+    const cart = style === 'cart' && o.cartModel !== false;
+    if (cart && !(this.perchY > 0)) { this.perchY = CAGE_CART.bedY; this.flying = true; }
+    const size = o.size ?? (cart ? CAGE_CART.size : this.companion ? [1.3, 1.2, 1.0] : undefined);
     const root = this._propRoot();
     try {
-      this.cage = buildCage({ style, size, ribbon: !!o.ribbon });
+      this.cage = buildCage({ style, size, ribbon: o.ribbon ?? false });
       if (this.perchY > 0) this.cage.position.y = this.perchY;
       root.add(this.cage);
     } catch (e) { console.warn('[companions] cage build failed', e); }
-    const sz = this.cage?.userData?.size ?? [0.6, 0.75, 0.5];
+    const sz = this.cage?.userData?.size ?? size ?? [0.6, 0.75, 0.5];
     this.cageSize = sz;
+    if (cart) this._loadCart();
     const lockPos = this.home.clone();
     this.lock = new CageLock(this.ctx, this, { pos: lockPos, facing: this.facing, radius: Math.max(sz[0], sz[2]) * 0.5, height: sz[1] + this.perchY, hits: o.hits ?? 3, hp: o.hp ?? (this.companion ? 30 : null) });
+  }
+
+  /** The rat cage cart under a squire's cage (§12.3 Old Bridge): fitted GLB + a box collider for everyone but us. */
+  async _loadCart() {
+    const root = this._propRoot();
+    const c = CAGE_CART, f = this.facing;
+    // collider in world space (the cart's footprint, rotated with the kitten's facing)
+    this.cartCollider = { x: this.home.x + Math.cos(f) * c.offset, z: this.home.z - Math.sin(f) * c.offset, hx: c.footprint[0] / 2, hz: c.footprint[1] / 2, yaw: f, y0: -Infinity,
+      y1: Infinity, walkable: false, factions: ['player', 'enemy', 'ally'] };
+    try { this.ctx.physics?.addCollider?.(this.cartCollider); } catch (e) { console.warn('[companions] cart collider failed', e); this.cartCollider = null; }
+    try {
+      const m = await this.ctx.assets.model(c.model, { fit: c.fit, castShadow: true, receiveShadow: true });
+      if (this.disposed) return;
+      m.root.rotation.y = c.yaw; m.root.position.x = c.offset;
+      this.cart = m.root; root.add(m.root);
+    } catch (e) { console.warn('[companions] cage cart failed', e); }
   }
 
   /** Register the lock only while it can be opened (an `enemy`-faction actor must never hold an arena open). */
@@ -222,7 +273,9 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     this.ctx.state?.addKitten?.(this.kittenId);
     this.ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: this.kittenId });
     this.visual?.setPose('cheer', 0.2); this.visual?.setExpression('happy'); this.visual?.hop(0.35);
-    this.bubble.show(lineText(this.ctx, 'kitten.' + this.kittenId), RESCUE.leaveAfter);
+    const line = lineText(this.ctx, 'kitten.' + this.kittenId);
+    this.bubble.show(line, RESCUE.leaveAfter);
+    this.ctx.companions?.babble?.(this, line);
     this.ctx.fx?.burst?.('sparkle', this.pos, { count: 14 });
     this.ctx.companions?.onKittenRescued?.(this);
   }
@@ -283,7 +336,10 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
           this.onGround = false; this.flying = false;
           this.visual?.setPose('idle', 0.15); this.visual?.setExpression('happy');
         }
-        if (this._hopped && this.onGround && this.cageOpenT > 0.6) { this.vel.x = 0; this.vel.z = 0; this.stateName = 'waiting'; this.rescue(); }
+        if (this._hopped && this.onGround && this.cageOpenT > 0.6) {
+          this.vel.x = 0; this.vel.z = 0; this.collideActors = true;
+          this.stateName = 'waiting'; this.rescue();
+        }
         break;
       }
       case 'waiting': {
@@ -344,10 +400,12 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   _standCheck(dt, p, d) {
     const o = this.opts, at = o.zoneAt ?? this.home, r = o.zoneR ?? 1.2;
-    let ok = !!p && p.alive !== false && p.guarding === true && Math.hypot(p.vel.x, p.vel.z) < 0.35
+    // her Stand, or the Meme Cam pose it turns into after 2.5 s (§7.8 manual trigger): "I thought you were a statue"
+    const standing = p?.guarding === true || p?.stateName === 'memecam' || this.ctx.game?.mode === 'memecam';
+    let ok = !!p && p.alive !== false && standing && Math.hypot(p.vel.x, p.vel.z) < 0.35
       && Math.hypot(p.pos.x - at.x, p.pos.z - at.z) <= r;
     if (ok && o.needClear && !this.cleared) ok = false;
-    if (ok) for (const e of this.ctx.enemies?.list ?? []) if (e?.alive && Math.hypot(e.pos.x - at.x, e.pos.z - at.z) < 25) { ok = false; break; }
+    if (ok) for (const e of this.ctx.enemies?.list ?? []) if (e?.alive && Math.hypot(e.pos.x - at.x, e.pos.z - at.z) < RESCUE.standClearR) { ok = false; break; }
     this.standT = ok ? this.standT + dt : 0;
     if (this.standT >= (o.standTime ?? 3)) this.reveal();
   }
@@ -363,7 +421,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   render(alpha, dt) {
     super.render(alpha);
-    const vdt = this.ctx.game.hitstopT > 0 ? 0 : (dt ?? 0);
+    const vdt = visualDt(this.ctx, dt ?? 0);         // 0 in hitstop / the pause menu, × slow-mo
     if (this.prop && this.hide === 'meow') {                          // hint wobble every 6 s while hidden
       const u = this.stateName === 'hidden' ? (this.wobbleT - RESCUE.wobbleEvery) / RESCUE.wobbleDur : -1;
       this.prop.rotation.z = u >= 0 && u <= 1 ? Math.sin(u * Math.PI * 6) * 0.09 * (1 - u) : 0;
@@ -378,9 +436,23 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
       const near = p && Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < RESCUE.waveRadius;
       this.visual.setWave((this.stateName === 'waiting' && near) || (this.stateName === 'caged' && near && (this.t % 3) < 1.4));
       this.visual.lookAt(p && this.stateName !== 'leaving' ? wrapAngle(Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z) - this.facing) : 0);
-      this.visual.update(vdt, { velocity: this.vel, onGround: this.onGround || this.flying, frameId: this.ctx.game.frameCount });
+      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || this.flying });
     }
     this.bubble.update(vdt);
+  }
+
+  /**
+   * Hand the hiding prop / the opened cage (and the cart's collider) over to the level: they stay after we leave.
+   * CompanionManager keeps them until the level unloads. Returns null when there is nothing to keep.
+   */
+  releaseDressing() {
+    const root = this.propRoot;
+    if (!root) return null;
+    const d = { root, collider: this.cartCollider ?? null, cage: this.cage ?? null };
+    if (this.cage) this.cage.rotation.z = 0;
+    if (this.prop) { this.prop.rotation.set(0, 0, 0); }
+    this.propRoot = null; this.cartCollider = null; this.cage = null; this.prop = null; this.cart = null;
+    return d;
   }
 
   dispose() {
@@ -389,6 +461,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     this._clipWaits.length = 0;
     if (this.lock && !this.lock.opened) { this.lock.opened = true; this.ctx.actors.unregister(this.lock); }
     if (this.cage) this.cage.traverse((c) => { if (c.isMesh) c.geometry?.dispose(); });
+    if (this.cartCollider) { try { this.ctx.physics?.removeCollider?.(this.cartCollider); } catch { /* level gone */ } this.cartCollider = null; }
     this.propRoot?.removeFromParent();
     this.visual?.dispose();
     this.bubble.dispose();

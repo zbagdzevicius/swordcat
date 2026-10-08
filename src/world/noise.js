@@ -30,6 +30,16 @@ export function fbm(x, z, { freq = 0.02, octaves = 3, seed = 0, gain = 0.5, lac 
   return sum / norm;
 }
 
+/** fbm with positional arguments (no option object: the terrain's hot loop). */
+export function fbmP(x, z, freq, octaves, seed) {
+  let amp = 1, f = freq, sum = 0, norm = 0;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * (valueNoise(x * f + o * 17.31, z * f - o * 9.73, seed + o * 101) * 2 - 1);
+    norm += amp; amp *= 0.5; f *= 2.03;
+  }
+  return sum / norm;
+}
+
 /** smoothstep(a, b, x) */
 export const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 

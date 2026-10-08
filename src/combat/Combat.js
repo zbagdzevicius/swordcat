@@ -9,18 +9,21 @@
 //
 // applyHit, in order (tech.md §9.3 + §19.4):
 //   1. `none`  — target dead / not hurtable / invulnT > 0 (the caller may retry next step).
+//      `immune` — the target is inside its own swing's `iframes` window (Holy Slash 0–0.46 s).
 //   2. `tgt.resolveIncoming(att, def, hitDir)` → 'hit' | 'block' | 'parry' | 'break' | 'immune'
 //      ('perfectDodge' / 'graze' from player/Guard.js are treated as 'immune').
 //   3. parry  — att.onParried(tgt, {gold}) (enemy stagger / boss dizzy; a projectile reflects), hitstop 0.12,
 //               time scale 0.5 for 0.15 s, shake, rumble, `player:parry` {attacker, gold, projectile?, position}.
-//   4. block  — 0 damage, guard pushback, att.onBlocked(tgt, def), block juice, `combat:hit` {blocked: true}.
+//   4. block  — 0 damage, guard pushback / mass, att.onBlocked(tgt, def), block juice, `combat:hit` {blocked: true}.
 //   5. hit / break — dmg = def.dmg × dmgMul × crit; player side: difficulty `roundTaken` (+ optional
 //               `damageTakenMul`, rounded down); enemy side: × difficulty playerDmgMul. god → 0. Knockback /
-//               mass, i-frames (player 0.9 s, others 0.12 s anti multi-hit), poise → stagger 0.6 s
+//               mass, i-frames (player 0.9 s, others 0.12 s anti multi-hit; a harmless 0-damage def — tutorial
+//               dummy, web glob — only 0.12 s and light juice), poise → stagger 0.6 s
 //               (break → PLAYER.guard.breakStagger), hitstop + shake + rumble by the §8.2 row (+ kill bonus),
 //               tgt.onHit(info), lethal hook `tgt.onLethal(info)` (Still Standing), death → tgt.onDeath,
 //               `combat:hit` {attacker, target, attackId, damage, position, dir, killed, blocked, parried, crit,
-//               popsSlime, heavy, broke, result, projectile?, reflected}.
+//               popsSlime, heavy, broke, result, projectile?, reflected}. On the player side `damage` is what her
+//               hp actually lost (her hp setter applies Golden Hour / Still Standing); enemies get the nominal dmg.
 //
 // Optional duck-typed target members honoured here (all additive, see requests/combat.md):
 //   resolveIncoming, onParried, onBlocked, onHit, onDeath, onLethal(info) → true to survive (sets its own hp),
@@ -29,7 +32,7 @@
 //   attacks may hit it even though it is not an enemy).
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { PLAYER, JUICE, DIZZY, DIFFICULTY, ATTACKS, ECONOMY } from '../core/config.js';
+import { PLAYER, JUICE, DIZZY, DIFFICULTY, ATTACKS } from '../core/config.js';
 import { clamp, wrapAngle, easeSwing } from '../core/math.js';
 import { isHostile } from '../core/ActorRegistry.js';
 import { AttackTokens } from './AttackTokens.js';
@@ -40,6 +43,12 @@ const _dir = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const RESULTS = new Set(['hit', 'block', 'parry', 'break', 'immune']);
+
+/** Is `actor` inside the `iframes` window of its own current swing (Holy Slash 0–0.46 s)? */
+export function inSwingIframes(actor) {
+  const sw = actor?.swing, f = sw?.def?.iframes;
+  return !!f && sw.attacker === actor && !sw.cancelled && sw.t >= f[0] && sw.t <= f[1];
+}
 
 /** Does `tgt`'s hurt cylinder intersect the arc slice [a0, a1] (radians relative to att.facing)? tech.md §9.2 */
 export function sectorHit(att, tgt, arc, a0, a1) {
@@ -100,7 +109,8 @@ export class Combat {
    * Start a swing. The attacker keeps the returned object and calls `updateSwing` every step.
    * Defs without `arc` get a body-contact arc (or a full circle of `def.r`); defs without `active` are active
    * from 0 to `dur` (pounce: until the caller stops updating).
-   * Side effects from the def: `iframes` (attacker invulnT), `timeScale` (slow-mo), and on the first active step
+   * Def side effects: `iframes` (applyHit answers 'immune' to the attacker while `swing.t` is inside them, as long
+   * as the attacker exposes this swing as `attacker.swing`), and on the first active step `timeScale` (slow-mo),
    * aim assist (player), `projectile` (holyWave from `projectileMinShards`) and Golden Hour `gleam`s.
    * @param {any} attacker @param {any} def
    * @param {{ dmgMul?: number, crit?: number, dmg?: number, arc?: any, active?: [number, number], target?: any,
@@ -118,8 +128,6 @@ export class Combat {
       baseDmgMul: this.dealtMul(attacker),
       hitOpts: { dmgMul: opts.dmgMul ?? this.dealtMul(attacker), crit: opts.crit ?? 1, dmg: opts.dmg },
     };
-    if (attacker && def.iframes && def.iframes[0] <= 0) attacker.invulnT = Math.max(attacker.invulnT ?? 0, def.iframes[1]);
-    if (def.timeScale && opts.timeScale !== false) this.ctx.game?.slowMo?.(def.timeScale[0], def.timeScale[1]);
     this.stats.swings++;
     return s;
   }
@@ -136,7 +144,6 @@ export class Combat {
     const a = s.attacker;
     const tPrev = s.t; s.t += dt;
     const def = s.def;
-    if (def.iframes && a && s.t >= def.iframes[0] && s.t <= def.iframes[1]) a.invulnT = Math.max(a.invulnT ?? 0, def.iframes[1] - s.t);
     if (s.t >= s.dur) s.done = true;
     if (!a || a.alive === false) return 0;
     const t0 = s.active ? s.active[0] : 0, t1 = s.active ? s.active[1] : s.dur;
@@ -178,9 +185,11 @@ export class Combat {
     return { range: (attacker?.radius ?? 0.35) + COMBAT.contactReach, from: half, to: -half, y0: 0, y1: attacker?.height ?? 1 };
   }
 
-  /** First active step: aim assist (player side) and swing-spawned projectiles. */
+  /** First active step: slow-mo (holy), aim assist (player side) and swing-spawned projectiles. */
   _swingStart(s) {
-    const a = s.attacker, o = s.opts;
+    const a = s.attacker, o = s.opts, def = s.def;
+    // the moment of impact; a caller doing the same this step overlaps harmlessly (Game.slowMo keeps the slowest)
+    if (def.timeScale && o.timeScale !== false) this.ctx.game?.slowMo?.(def.timeScale[0], def.timeScale[1]);
     // aim assist for the player side, unless the attacker runs its own (Player.aimAssist) or opts.assist === false
     const own = typeof a.aimAssist === 'function' && o.assist === undefined;
     if (a.faction === 'player' && o.assist !== false && !own && !isFullCircle(s.arc)) this._assist(s);
@@ -212,11 +221,7 @@ export class Combat {
     if (typeof def.projectile === 'string') {
       const pdef = ATTACKS[def.projectile];
       const shards = a.shards ?? ctx.state?.shards ?? 0;
-      if (pdef && shards >= (def.projectileMinShards ?? 0)) {
-        const reach = ECONOMY.shops.waveReach;
-        const range = ctx.state?.upgrades?.waveReach && shards >= reach.needShards ? reach.range : undefined;
-        s.spawned.push(this.spawnProjectile(pdef, a, pos, dir, { range, dmgMul: s.hitOpts.dmgMul }));
-      }
+      if (pdef && shards >= (def.projectileMinShards ?? 0)) s.spawned.push(this.spawnProjectile(pdef, a, pos, dir, { dmgMul: s.hitOpts.dmgMul }));
     }
     if (a.faction === 'player' && GLEAM_FROM.has(def.id) && (s.opts.gleam ?? a.golden === true) && ATTACKS.gleam) {
       s.spawned.push(this.spawnProjectile(ATTACKS.gleam, a, pos, dir, { dmgMul: s.hitOpts.dmgMul }));
@@ -233,6 +238,7 @@ export class Combat {
   applyHit(att, tgt, def, opts = {}) {
     if (!att || !tgt || !def) return 'none';
     if (!tgt.alive || !tgt.hurtable || tgt.invulnT > 0) return 'none';
+    if (inSwingIframes(tgt)) { this.stats.immune++; this._log(def, 'immune', 0, tgt, false, false); return 'immune'; }
     const proj = att.isProjectile ? att : (opts.projectile ?? undefined);
     const src = att.isProjectile ? (att.owner ?? att) : att;
     this._hitDir(att, tgt, opts.from, _dir);
@@ -270,8 +276,8 @@ export class Combat {
 
   _block(att, src, tgt, def, proj) {
     const ctx = this.ctx;
-    const pv = PLAYER.guard.pushback * COMBAT.pushbackVelMul;
-    if (tgt.vel) { tgt.vel.x += _dir.x * pv; tgt.vel.z += _dir.z * pv; }
+    const pv = (PLAYER.guard.pushback * COMBAT.pushbackVelMul) / (tgt.mass || 1);
+    if (tgt.vel && !tgt.superArmor) { tgt.vel.x += _dir.x * pv; tgt.vel.z += _dir.z * pv; }
     const dir = _dir.clone();
     att.onBlocked?.(tgt, def);
     this.stats.blocks++;
@@ -291,6 +297,7 @@ export class Combat {
     const diff = ctx.state?.difficultyCfg ?? { roundTaken: (d) => d, playerDmgMul: 1 };
     const playerSide = tgt.faction === 'player' || tgt.faction === 'ally';
     const base = typeof opts.dmg === 'number' ? opts.dmg : (typeof def.dmg === 'number' ? def.dmg : 0);
+    const harmless = !(base > 0);                             // tutorial dummy / sack, web glob, snatch: knock only
     const critMul = Math.max(opts.crit ?? 1, def.crit ?? 1, this._critTaken(tgt));
     let dmg = base * (opts.dmgMul ?? 1) * critMul;
     if (playerSide) {
@@ -302,7 +309,9 @@ export class Combat {
       dmg = dmg > 0 ? Math.max(1, Math.round(dmg)) : 0;
     }
     if (tgt.god) dmg = 0;
-    tgt.hp = Math.max(0, tgt.hp - dmg);
+    const hpBefore = tgt.hp;
+    tgt.hp = Math.max(0, hpBefore - dmg);
+    if (playerSide) dmg = Math.max(0, Math.min(dmg, hpBefore - tgt.hp));   // her hp setter may soften it
 
     // knockback / lift, i-frames, poise → stagger
     const armor = !!tgt.superArmor;
@@ -312,7 +321,7 @@ export class Combat {
       if (k > 0) { tgt.vel.y += Math.min(COMBAT.knockLiftMax, k * COMBAT.knockLiftMul); tgt.onGround = false; }
     }
     const isPlayer = tgt.faction === 'player';
-    tgt.invulnT = Math.max(tgt.invulnT ?? 0, isPlayer ? PLAYER.hurt.iframes : COMBAT.antiMultiHit);
+    tgt.invulnT = Math.max(tgt.invulnT ?? 0, isPlayer && !harmless ? PLAYER.hurt.iframes : COMBAT.antiMultiHit);
     if (!armor) {
       if (r === 'break') { tgt.staggerT = Math.max(tgt.staggerT ?? 0, PLAYER.guard.breakStagger); tgt.poise = tgt.maxPoise; }
       else if (!isPlayer) {                                   // the player's hurt stun is her own (§7.6)
@@ -329,7 +338,7 @@ export class Combat {
 
     // juice (only when the heroine is involved: companion skirmishes never freeze the world)
     if (isPlayer || src?.faction === 'player') {
-      const j = juiceFor(def, tgt.faction, src?.faction);
+      const j = juiceFor(def, isPlayer && harmless ? 'bump' : tgt.faction, src?.faction);
       let hs = j.hitstop, sh = j.shake, rb = j.rumble;
       if (r === 'break') { hs = Math.max(hs, JUICE.guardBreak.hitstop); sh = Math.max(sh, JUICE.guardBreak.shake); rb = JUICE.guardBreak.rumble; }
       if (killed) { hs += JUICE.kill.hitstopAdd; sh += JUICE.kill.shakeAdd; }
@@ -422,7 +431,7 @@ export class Combat {
   assistTarget(actor, range, angle, prefer = null) {
     const filter = this.targetFilter(actor.faction);
     const score = (t) => {
-      if (!t || t === actor || !t.alive || !t.hurtable || t.breakable || !filter(t)) return Infinity;
+      if (!t || t === actor || !t.alive || !t.hurtable || t.breakable || t.hidden || t.dormant || !filter(t)) return Infinity;
       const dx = t.pos.x - actor.pos.x, dz = t.pos.z - actor.pos.z;
       const d = Math.hypot(dx, dz) - (t.radius ?? 0);
       if (d > range) return Infinity;

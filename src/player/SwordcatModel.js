@@ -1,5 +1,5 @@
 // src/player/SwordcatModel.js  (owner: player) — Swordcat's visual body: the characters area's hero kitten
-// (`buildKitten(swordcatConfig())`) driven procedurally every rendered frame (GAME_DESIGN §7, tech.md §11.2):
+// (`new KittenView(ctx, swordcatConfig())`) driven procedurally every rendered frame (GAME_DESIGN §7, tech.md §11.2):
 //   • base poses from the gameplay state (idle / ready / vigil (the Stand) / oath (charge, Golden Hour, Meme Cam) /
 //     sip / faint / kneel), blended by the kitten's pose system;
 //   • additive layers on the rig: run cycle synced to the sim gait (footsteps), bob, forward lean, turn lean,
@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
 import { damp, clamp, lerp, easeSwing, easeOutCubic, easeInOutSine, wrapAngle, Spring } from '../core/math.js';
-import { buildKitten, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, setFurQuality, POSES, mulberry32 } from '../characters/index.js';
+import { KittenView, MEME_CAPE, visualDt, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, POSES, mulberry32 } from '../characters/index.js';
 import { TUNING } from './tuning.js';
 
 // ------------------------------------------------------------------ visual swing profiles (look only; hit arcs are config)
@@ -29,13 +29,18 @@ const VIS = {
   sunburst: { e0: 0.30, e1: 0.00, eb: 1.05, r: 1.1, h: 0.52, spin: true, hop: 0.16 },
   pounce:   { e0: -1.15, e1: -1.15, eb: 1.25, r: 0.9, h: 0.48, twist: 0 },
 };
+/** Running carry (look only): both paws low on the grip, blade forward-up and out to her right so the face stays clear. */
+const CARRY = { a: -0.55, e: 0.55, reach: 0.9, h: 0.40, bob: 0.07, minSpeed: 2.2 };
+/** Tumble look: pivot height (H), hop at the upside-down moment (H), ball squash. */
+const ROLL = { pivot: 0.42, lift: 0.3, ball: 0.14 };
+/** Upper-body pitch (rad, + = forward) during a swing: lean back on the wind-up, into the strike, settle after. */
+const SWING_LEAN = { back: 0.07, strike: 0.16 };
 const ANTIC = 0.35;          // extra wind-up beyond the arc start (rad), tech.md §11.2
 const SIDE = 1.25;           // max sword angle relative to the body before the body turns with it
 const GRIP_X = 0.17, GRIP_Z = 0.12, GRIP_Z0 = 0.1;
 const SWING_POSE_BLEND = 0.06;
 const POSE_BLEND = { vigil: PLAYER.guard.enter, oath: 0.14, ready: 0.14, idle: 0.35, faint: 0.35, sip: 0.12, kneel: 0.08 };
 const SWING_IDS = new Set(Object.keys(VIS));
-const FUR_FOR_QUALITY = { low: 'low', med: 'med', high: 'high' };
 const SWORD_GLB = { diamond: 'models/weapons/quaternius/Sword_Diamond.glb', toobig: 'models/weapons/quaternius/Claymore.glb' };
 
 // ------------------------------------------------------------------ temporaries (no per-frame allocation)
@@ -51,6 +56,7 @@ const _S = new THREE.Vector3(), _T = new THREE.Vector3(), _W = new THREE.Vector3
 const _centre = new THREE.Vector3(...ARM.pawCentre);
 const _pivot = new THREE.Vector3();
 const _one = new THREE.Vector3(1, 1, 1);
+const _zero = new THREE.Vector3();
 const TWIST = { R: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0.6)), L: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.6)) };
 const POLE = { R: new THREE.Vector3(-1, -0.5, -0.45), L: new THREE.Vector3(1, -0.6, -0.45) };
 
@@ -65,7 +71,9 @@ export class SwordcatModel {
   constructor(player) {
     this.player = player;
     this.ctx = player.ctx;
-    /** @type {any} characters' Kitten */
+    /** @type {import('../characters/index.js').KittenView|null} characters' in-game glue (env map, wind, fur LOD) */
+    this.view = null;
+    /** @type {any} characters' Kitten (this.view.kitten) */
     this.k = null;
     this.fallback = null;
     this.ready = false;
@@ -79,8 +87,11 @@ export class SwordcatModel {
     this.gaitAmp = 0; this.air = 0; this.zoom = 0; this.turn = 0; this.lean = 0; this.prevYaw = null; this.prevSpeed = 0;
     this.flinch = 0; this.recoil = 0; this.parryKick = 0; this.headYaw = 0; this.charge = 0;
     this.holyVis = 0; this.holyLast = -1;
+    this.flash = 0; this.flashLast = -1; this.stepOff = 0; this.stepSeen = 0; this.meme = false;
     // sword driver
     this.sw = { w: 0, a: 0, e: 0, reach: 1, h: 0.5, spin: 0, hop: 0, armW: 0 };
+    this.carryW = 0;
+    this.sw.twist = 0; this.sw.lean = 0;
     /** scripted visual swing / clip: { def, vis, t, speed, dur, resolve, kind } */
     this.clip = null;
     this.idleStill = 0; this.sneezeNext = 0; this.sneezeT = 0; this.blinkCd = 0; this.slowBlinkT = 0;
@@ -93,13 +104,12 @@ export class SwordcatModel {
   // ------------------------------------------------------------------ lifecycle
   async init() {
     const ctx = this.ctx, bus = ctx.bus;
-    this._applyFurQuality(ctx.quality?.id);
     this._build();
     this._offs.push(
       bus.on(E.PLAYER_JUMP, () => this._squashTo(PLAYER.stretchJump)),
       bus.on(E.PLAYER_LAND, (p) => this._squashTo(PLAYER.squashLand * clamp((p?.impact ?? 6) / PLAYER.hardLandSpeed, 0.45, 1.25))),
       bus.on(E.PLAYER_SWING, (p) => { if (p?.attackId !== 'pounce') this._squashTo(0.06); }),
-      bus.on(E.PLAYER_DAMAGED, (p) => { if ((p?.amount ?? 0) > 0 || p?.broke) { this.flinch = 1; this._squashTo(-0.14); } }),
+      bus.on(E.PLAYER_DAMAGED, (p) => { if ((p?.amount ?? 0) > 0 || p?.broke) { this.flinch = 1; this.flash = 1; this._squashTo(-0.14); } }),
       bus.on(E.PLAYER_PARRY, () => { this.parryKick = 1; this._squashTo(0.08); }),
       bus.on(E.PLAYER_DODGE, () => this._squashTo(-0.12)),
       bus.on(E.PLAYER_STILL_STANDING, () => { this.holyVis = Math.max(this.holyVis, 0.6); }),
@@ -107,7 +117,6 @@ export class SwordcatModel {
         if (h?.target === this.player && h.blocked) { this.recoil = 1; this._squashTo(-0.07); }
         else if (h?.attacker === this.player && !h.blocked) this._squashTo(h.killed ? -0.1 : -0.05);
       }),
-      bus.on(E.QUALITY, (p) => this._applyFurQuality(p?.name ?? p?.preset?.id)),
       bus.on(E.PLAYER_SPAWNED, () => this.snap()),
     );
     this.sneezeNext = TUNING.sneezeEvery * (0.6 + 0.8 * this.rand());
@@ -124,9 +133,9 @@ export class SwordcatModel {
     const root = this.player.object3d;
     this._disposeKitten();
     try {
-      const k = buildKitten(this._config());
-      root.add(k.root);
-      this.k = k;
+      this.view = new KittenView(this.ctx, this._config(), { actor: this.player, parent: root, memeCam: false });
+      const k = this.k = this.view.kitten;
+      if (this.meme) this.view.setMemeCam(true);
       this.poseName = null; this.expr = null;
       this.capeApplied = this.ctx.state?.cosmetics?.cape ?? 'cream';
       this.swordApplied = k.sword?.skin ?? null;
@@ -153,7 +162,8 @@ export class SwordcatModel {
   }
 
   _disposeKitten() {
-    if (this.k) { this.k.dispose(); this.k = null; }
+    if (this.view) { this.view.dispose(); this.view = null; }
+    this.k = null;
     if (this.fallback) {
       this.fallback.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
       this.fallback.removeFromParent(); this.fallback = null;
@@ -170,11 +180,6 @@ export class SwordcatModel {
 
   /** After teleports / respawns / cuts: settle the cape. */
   snap() { this.k?.snap(); this.prevYaw = null; }
-
-  _applyFurQuality(id) {
-    const q = FUR_FOR_QUALITY[id];
-    if (q) { try { setFurQuality(q); } catch (e) { console.warn('[player] fur quality', e); } }
-  }
 
   /** Wardrobe / unlocks change `state.cosmetics`: apply cape and sword skin (checked twice a second). */
   _applyCosmetics(force = false) {
@@ -214,12 +219,10 @@ export class SwordcatModel {
     if (this.ready) this._build();
   }
 
+  /** Meme Cam (§7.8): the hero cape cross-fades to the 3.8 s looping sway (and back on exit). */
   memeCam(on) {
-    const k = this.k;
-    if (!k) return;
-    const M = PLAYER.memeCam;
-    if (on) k.setCapeMode('sway', { blend: 0.3, period: M.loop, gustPeak: 1.2 });
-    else k.setCapeMode('verlet', { blend: M.blendOut });
+    this.meme = !!on;
+    this.view?.setMemeCam(this.meme);
   }
 
   /** ScriptedActor.play: swings and emotes are procedural "clips". Resolves when a `once` clip ends. */
@@ -249,9 +252,7 @@ export class SwordcatModel {
   render(alpha, frameDt) {
     const p = this.player, ctx = this.ctx, game = ctx.game;
     if (!this.ready) return;
-    const frozen = game.hitstopT > 0;
-    const ts = game.loop?.timeScale ?? 1;
-    const dt = frozen ? 0 : Math.min(frameDt, 0.1) * ts;
+    const dt = Math.min(visualDt(ctx, frameDt), 0.1);          // 0 in hitstop / pause, × slow motion
     this.t += dt;
     if (this.fallback) { this._renderFallback(dt); return; }
     const k = this.k;
@@ -268,7 +269,7 @@ export class SwordcatModel {
     }
     if (!p.scripted || !this.scriptPose) this._expression();
     this._propsForState();
-    k.animate(dt);
+    this.view.animate(frameDt);
 
     const J = k.rig.joints;
     const sp = Math.hypot(p.vel.x, p.vel.z);
@@ -296,11 +297,14 @@ export class SwordcatModel {
 
     // whole-body spin (full-circle attacks) and hop live on the kitten root (actor yaw is the sim facing)
     k.root.rotation.y = this.sw.spin;
-    k.root.position.y = Math.max(0, this.sw.hop);
+    k.root.position.y = Math.max(0, this.sw.hop) + this._stepSmooth(dt);
 
     this._glow(dt);
-    k.simulate(dt, { velocity: p.vel, frameId: game.frameCount, airborne: !p.onGround });
-    this._blinkAndBlob();
+    if (k.cape) k.cape.windMul = this.meme ? MEME_CAPE.windMul : p.standingGround ? TUNING.standCapeWind : 1;
+    // the cape pins read the rig's world matrices: bring the actor root up to date first (teleports, turns)
+    p.object3d.updateWorldMatrix(true, false);
+    this.view.simulate({ velocity: p.attachedTo ? _zero : p.vel, airborne: !p.onGround && !p.attachedTo });
+    this._blinkAndBlob(dt);
   }
 
   /** Which kitten pose the gameplay state shows. */
@@ -503,7 +507,7 @@ export class SwordcatModel {
     void alpha;
   }
 
-  /** Tumble: a full forward roll about the hips, tucked, with a little hop. */
+  /** Tumble: a full forward roll, tucked into a ball, about her middle; the hop arc keeps the big head off the ground. */
   _layerRoll(J, alpha) {
     const p = this.player;
     if (p.state !== 'dodge') return;
@@ -516,14 +520,13 @@ export class SwordcatModel {
     rot(J.kneeL, 1.7 * tuck, 0, 0); rot(J.kneeR, 1.7 * tuck, 0, 0);
     rot(J.chest, 0.5 * tuck, 0, 0); rot(J.head, 0.45 * tuck, 0, 0); rot(J.hips, 0.2 * tuck, 0, 0);
     rot(J.tail0, -0.6 * tuck, 0.5 * tuck, 0);
-    const c = 0.27;                                                                      // pivot height (H)
-    _pivot.set(0, c, 0);
+    _pivot.set(0, ROLL.pivot, 0);
     _q2.setFromAxisAngle(_v2.set(1, 0, 0), th);
     J.body.quaternion.premultiply(_q2);
     _v.copy(J.body.position).sub(_pivot).applyQuaternion(_q2).add(_pivot);
     J.body.position.copy(_v);
-    J.body.position.y += 0.06 * tuck - 0.04 * tuck;
-    J.body.scale.multiplyScalar(1 - 0.08 * tuck);
+    J.body.position.y += ROLL.lift * Math.sin(th * 0.5);                                // upside down = top of the hop
+    J.body.scale.multiplyScalar(1 - ROLL.ball * tuck);
   }
 
   // ------------------------------------------------------------------ sword driver (swing arcs + two-bone IK)
@@ -547,6 +550,7 @@ export class SwordcatModel {
     if (src.pounce) {
       const hang = src.pounce === 'hang';
       out.a = 0; out.e = hang ? vis.eb : vis.e0; out.reach = vis.r; out.h = hang ? 0.62 : vis.h; out.spin = 0; out.hop = 0; out.c = 0;
+      out.twist = 0; out.lean = hang ? -0.12 : 0.3;
       return out;
     }
     const [t0, t1] = def.active ?? [0, def.dur ?? 0.4];
@@ -555,6 +559,7 @@ export class SwordcatModel {
     const sgn = Math.sign(from - to) || 1;
     const post = Math.max(0.05, ((def.dur ?? t1) - t1) * 0.8);
     out.reach = vis.r; out.h = vis.h; out.hop = 0;
+    out.twist = full ? 0 : (vis.twist ?? 0.3); out.lean = 0;
     if (full) {
       if (t < t0) { const u = easeOutCubic(t0 > 0 ? t / t0 : 1); out.c = SIDE * u; out.spin = (from - SIDE) * u; out.e = lerp(vis.e0, vis.eb, u); }
       else if (t <= t1) { const u = easeSwing((t - t0) / Math.max(1e-4, t1 - t0)); out.c = SIDE; out.spin = lerp(from, to, u) - SIDE; out.e = lerp(vis.e0, vis.e1, u); out.hop = (vis.hop ?? 0) * Math.sin(u * Math.PI); }
@@ -564,15 +569,17 @@ export class SwordcatModel {
     }
     const back = from + ANTIC * sgn;
     let a;
-    if (t < t0) { const u = easeOutCubic(t0 > 0 ? t / t0 : 1); a = back; out.e = lerp(vis.e0, vis.eb, u); }
+    if (t < t0) { const u = easeOutCubic(t0 > 0 ? t / t0 : 1); a = back; out.e = lerp(vis.e0, vis.eb, u); out.lean = -SWING_LEAN.back * u; }
     else if (t <= t1) {
       const u = easeSwing((t - t0) / Math.max(1e-4, t1 - t0));
       a = lerp(back, to, u); out.e = lerp(vis.eb, vis.e1, u);
       out.hop = (vis.hop ?? 0) * Math.sin(u * Math.PI);
+      out.lean = SWING_LEAN.strike * (vis.hop ? 1.4 : 1) * Math.sin(Math.min(1, u * 1.3) * Math.PI * 0.5);
       if (vis.thrust) out.reach = lerp(0.4, 1.9, Math.sin(u * Math.PI * 0.5));
     } else {
       const u = easeOutCubic(clamp((t - t1) / post, 0, 1));
       a = to - sgn * 0.22 * u; out.e = vis.e1 - 0.08 * u;
+      out.lean = SWING_LEAN.strike * (vis.hop ? 1.4 : 1) * (1 - u);
       if (vis.thrust) out.reach = lerp(1.9, 1.2, u);
     }
     out.c = clamp(a, -SIDE, SIDE);
@@ -589,8 +596,13 @@ export class SwordcatModel {
       this.clip.t += dt * this.clip.speed;
       if (this.clip.t >= this.clip.dur) { const r = this.clip.resolve; this.clip = null; r?.(); }
     }
-    const prof = this._prof || (this._prof = { a: 0, e: 0, c: 0, reach: 1, h: 0.5, spin: 0, hop: 0 });
+    const prof = this._prof || (this._prof = { a: 0, e: 0, c: 0, reach: 1, h: 0.5, spin: 0, hop: 0, twist: 0, lean: 0 });
     const active = !!src && !!g && g.visible;
+    const p = this.player;
+    const carry = !active && !!g && g.visible && this.poseName === 'ready' && p.onGround && (p.state === 'move' || p.scripted) &&
+      Math.hypot(p.vel.x, p.vel.z) > CARRY.minSpeed;
+    this.carryW = damp(this.carryW, carry ? 1 : 0, carry ? 6 : 10, dt);
+    if (this.carryW < 0.002) this.carryW = 0;
     if (active) {
       this._profile(src, prof);
       const first = sw.w < 0.02;
@@ -598,15 +610,29 @@ export class SwordcatModel {
       sw.a = lerp(sw.a, prof.c, k1); sw.e = lerp(sw.e, prof.e, k1); sw.reach = lerp(sw.reach, prof.reach, k1); sw.h = lerp(sw.h, prof.h, k1);
       sw.spin = first ? prof.spin : lerp(sw.spin, prof.spin, 1 - Math.exp(-60 * dt));
       sw.hop = damp(sw.hop, prof.hop, 30, dt);
+      sw.twist = lerp(sw.twist, prof.twist, k1); sw.lean = damp(sw.lean, prof.lean, 40, dt);
       sw.w = Math.min(1, sw.w + dt / SWING_POSE_BLEND);
     } else {
       sw.w = Math.max(0, sw.w - dt / 0.14);
       sw.spin = damp(wrapAngle(sw.spin), 0, 12, dt);
       sw.hop = damp(sw.hop, 0, 14, dt);
       if (Math.abs(sw.spin) < 1e-4) sw.spin = 0;
+      if (this.carryW > 0) {                              // running carry: ease (a, e) there; a little bob per step
+        const k1 = sw.w < 0.02 && this.carryW < 0.05 ? 1 : 1 - Math.exp(-14 * dt);
+        const bob = Math.sin(p.gait * Math.PI * 2) * CARRY.bob * this.gaitAmp;
+        sw.a = lerp(sw.a, CARRY.a, k1); sw.e = lerp(sw.e, CARRY.e + bob, k1);
+        sw.reach = lerp(sw.reach, CARRY.reach, k1); sw.h = lerp(sw.h, CARRY.h + bob * 0.2, k1);
+      }
+      sw.twist = damp(sw.twist, this.carryW > 0 ? 0.2 : 0, 10, dt); sw.lean = damp(sw.lean, 0, 10, dt);
     }
-    if (sw.w <= 0.001 || !g || !g.visible || !g.parent) return;
-    const w = easeInOutSine(sw.w);
+    const wAll = Math.max(sw.w, this.carryW);
+    if (wAll <= 0.001 || !g || !g.visible || !g.parent) return;
+    const w = easeInOutSine(wAll);
+    // body follows the blade: chest / hips twist toward the sword side, lean into the strike (the IK below adapts)
+    const tw = sw.a * sw.twist * w;
+    rot(J.hips, sw.lean * 0.35 * w, tw * 0.4, 0);
+    rot(J.chest, sw.lean * 0.65 * w, tw * 0.6, 0);
+    rot(J.head, -sw.lean * 0.5 * w, -tw * 0.45, 0);                    // the eyes stay on the target
 
     // ---- root-space chain body → hips → chest (after every layer above)
     _mBody.compose(J.body.position, J.body.quaternion, J.body.scale);
@@ -635,7 +661,7 @@ export class SwordcatModel {
 
     // ---- blend, then put both paws on the grip
     _posS.lerpVectors(_posP, _posS, w);
-    _quatS.slerpQuaternions(_quatP, _quatS, w);
+    _quatS.copy(_quatP.slerp(_quatS, w));             // (slerpQuaternions(a, this) would alias: copy(a) first)
     _mSW.compose(_posS, _quatS, _one);
     _Y.set(0, 1, 0).applyQuaternion(_quatS);
     const armW = clamp(w * 3, 0, 1);
@@ -694,10 +720,25 @@ export class SwordcatModel {
     k.sword?.setValorGlow?.(p.valor / PLAYER.valor.max);
   }
 
-  _blinkAndBlob() {
+  /** Physics step-ups (stepY) snap the feet up 0.3 m in one step: ease the body up over ~0.1 s instead. */
+  _stepSmooth(dt) {
+    const p = this.player, acc = p.stepAccum ?? 0;
+    const d = acc - this.stepSeen;
+    this.stepSeen = acc;
+    if (d > 0 && d < 0.6) this.stepOff -= d;
+    this.stepOff = damp(this.stepOff, 0, 22, dt);
+    if (this.stepOff > -1e-4) this.stepOff = 0;
+    return this.stepOff;
+  }
+
+  _blinkAndBlob(dt) {
     const p = this.player, k = this.k, ctx = this.ctx;
-    const blink = p.alive && p.invulnT > 0 && p.state !== 'hurt' && p.state !== 'dead' && !p.scripted;
+    // §7.6 hurt: 0.9 s of i-frames with the mesh blinking at 15 Hz (after the stun); a white flash on the hit itself
+    const blink = p.alive && p.blinkT > 0 && p.state !== 'hurt' && p.state !== 'dead' && !p.scripted;
     k.root.visible = !blink || Math.floor(ctx.game.realTime * PLAYER.hurt.blinkHz * 2) % 2 === 0;
+    if (dt > 0 || this.flash === 1) this.flash = Math.max(0, this.flash - (dt > 0 ? dt : 0) / TUNING.hurtFlash);
+    const f = this.flash > 0 ? Math.min(1, this.flash * 1.5) : 0;
+    if (Math.abs(f - this.flashLast) > 0.01) { this.flashLast = f; k.setFlash(f); }
     if (k.blob) {
       const ground = ctx.physics?.heightAt?.(p.object3d.position.x, p.object3d.position.z) ?? p.object3d.position.y;
       const h = p.object3d.position.y + k.root.position.y - ground;
@@ -718,6 +759,6 @@ export class SwordcatModel {
     } else if (p.guarding) { tilt = 0.2; }
     sw.rotation.y = damp(sw.rotation.y, yaw, 30, dt);
     sw.rotation.x = damp(sw.rotation.x, tilt, 20, dt);
-    this.fallback.visible = !(p.alive && p.invulnT > 0 && p.state !== 'hurt' && Math.floor(this.ctx.game.realTime * PLAYER.hurt.blinkHz * 2) % 2 === 1);
+    this.fallback.visible = !(p.alive && p.blinkT > 0 && p.state !== 'hurt' && Math.floor(this.ctx.game.realTime * PLAYER.hurt.blinkHz * 2) % 2 === 1);
   }
 }

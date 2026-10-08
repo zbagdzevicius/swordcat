@@ -17,11 +17,14 @@ function bladeShape(len = 0.85, w0 = 0.0275, w1 = 0.02, point = 0.09) {
   return s;
 }
 
+/** Holy streak look: a narrow white-gold core with a soft golden falloff (ref1), bloom does the rest. */
+export const STREAK = Object.freeze({ width: 0.16, gain: 1.05, color: '#FFD98A', bladeGlow: 1.9 });
+
 /** Holy streak: cylindrical billboard along the blade (art.md §4.3). */
-export function makeStreak(len = 1.0, width = 0.22) {
+export function makeStreak(len = 1.0, width = STREAK.width) {
   const m = own(new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-    uniforms: { uColor: { value: new THREE.Color(PAL.holy) }, uI: { value: 0 }, uWidth: { value: width } },
+    uniforms: { uColor: { value: new THREE.Color(STREAK.color) }, uI: { value: 0 }, uWidth: { value: width }, uGain: { value: STREAK.gain } },
     vertexShader: /* glsl */`uniform float uWidth; varying vec2 vUv;
       void main(){ vUv = uv;
         vec3 base = (modelMatrix * vec4(0.0, position.y, 0.0, 1.0)).xyz;
@@ -29,10 +32,10 @@ export function makeStreak(len = 1.0, width = 0.22) {
         vec3 side = normalize(cross(axis, normalize(cameraPosition - base)));
         float sc = length(modelMatrix[0].xyz);
         gl_Position = projectionMatrix * viewMatrix * vec4(base + side * position.x * uWidth * sc, 1.0); }`,
-    fragmentShader: /* glsl */`uniform vec3 uColor; uniform float uI; varying vec2 vUv;
+    fragmentShader: /* glsl */`uniform vec3 uColor; uniform float uI, uGain; varying vec2 vUv;
       void main(){ float x = abs(vUv.x - 0.5) * 2.0;
-        float a = exp(-x * 7.0) * smoothstep(0.0, 0.1, vUv.y) * smoothstep(1.0, 0.75, vUv.y);
-        gl_FragColor = vec4(uColor * a * uI * 1.6, 1.0); }`,
+        float a = (exp(-x * 9.0) * 0.75 + exp(-x * 3.0) * 0.25) * smoothstep(0.0, 0.1, vUv.y) * smoothstep(1.0, 0.75, vUv.y);
+        gl_FragColor = vec4(uColor * a * uI * uGain, 1.0); }`,
   }));
   const g = new THREE.PlaneGeometry(1, len, 1, 8).translate(0, len / 2, 0);
   const mesh = new THREE.Mesh(g, m);
@@ -172,7 +175,7 @@ export function buildSword(skin = 'borrowed', o = {}) {
   group.add(tip, mid, grip, pommel);
   let charge = 0, valor = 0;
   const apply = () => {
-    bladeMat.emissiveIntensity = Math.max(baseGlow, valor * 0.6, 2.6 * easeIn(charge));
+    bladeMat.emissiveIntensity = Math.max(baseGlow, valor * 0.6, STREAK.bladeGlow * easeIn(charge));
     streak.material.uniforms.uI.value = Math.max(charge, baseGlow > 0 ? 0.25 : 0);
     streak.visible = streak.material.uniforms.uI.value > 0.01;
   };

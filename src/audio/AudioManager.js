@@ -4,7 +4,12 @@
 //                    · unlock() · load(path)
 // Additions:         heartbeat(opts) · shimmer(on) · babble(speaker, text, opts) · stopBabble() · laughChorus(center, opts)
 //                    · stopLaughs() · march(on, opts) · loop(id, opts) · stopAll(fade) · setVolumes({master,music,sfx})
-//                    · level(bus) · debugState() · showMeter(on) · resolve(id)
+//                    · chargeTone(name) · endCharge(fade) · level(bus) · debugState() · showMeter(on) · resolve(id)
+//
+// play2D / play3D ids: an SFX name (sfxMap.js), a file id ('pickup/bubble2'), a GAME_DESIGN pattern
+// ('impact/chain_0x', 'sword/swish_01–13'), a full path, or a procedural id routed to the builders below so cutscene
+// `sfx` steps can name them: 'laugh' (laugh build), 'laughChorus', 'bell' / 'sunbell', 'bellClunk' (damped Sunbell),
+// 'heartbeat', 'march' (opts.on === false stops it), 'shimmer'.
 //
 // Graph (one THREE.AudioListener on ctx.camera; its gain is the MASTER bus):
 //   decks ─► musicDuck ─► hitDuck ─► music ─┐
@@ -17,10 +22,10 @@
 // Random choices use ctx.rng.fork('audio'), so sound never consumes the gameplay random stream.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import manifest from './assets.manifest.js';
-import { MIX, DUCK } from './mix.js';
+import manifest, { levels as manifestLevels } from './assets.manifest.js';
+import { MIX, DUCK, MEME } from './mix.js';
 import { SFX, bindSfx, FOOTSTEP, LEVEL_SURFACE, STEP_CADENCE, TELEGRAPH_SFX, enemyVoiceFor, actorTypeId } from './sfxMap.js';
-import { MusicDirector, TRACKS, MUSIC_RULES, AMBIENCE, levelMusic } from './musicMap.js';
+import { MusicDirector, TRACKS, MUSIC_RULES, AMBIENCE } from './musicMap.js';
 import { MusicPlayer } from './MusicPlayer.js';
 import { Wind, strikeBell, laughPlan, laughLength, LAUGH, Shimmer, HEART, heartbeatPlan, MARCH } from './procedural.js';
 import { BABBLE, babblePlan, voiceFor, speakerKey } from './babble.js';
@@ -29,11 +34,37 @@ import { buildIndex, resolveId, isMusicPath } from './ids.js';
 
 const _v = new THREE.Vector3();
 const _cam = new THREE.Vector3();
+const _c = new THREE.Vector3();
 const RECENT = 40;
 const IDLE_STATES = new Set(['idle', 'patrol', 'return', 'sleep', 'hidden', 'dead', 'spawn']);
+/** cutscene actor ids that mean her (until the player registers under 'swordcat') */
+const PLAYER_IDS = new Set(['swordcat', 'player', 'clem', 'clementine']);
 
 const hasWebAudio = () => typeof window !== 'undefined' && !!(window.AudioContext || window.webkitAudioContext);
 const sliderGain = (v) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 1)) ** MIX.curve;
+
+/** Procedural ids accepted by play2D / play3D (cutscene `sfx` steps name them like files). */
+const PROCEDURAL = {
+  laugh: (am, at, o) => am.laugh(at, o),
+  hyenaLaugh: (am, at, o) => am.laugh(at, o),
+  laughBuild: (am, at, o) => am.laugh(at, o),
+  laughChorus: (am, at, o) => am.laughChorus(at, o),
+  bell: (am, at, o) => am.bell({ ...o, pos: at ?? o.pos }),
+  sunbell: (am, at, o) => am.bell({ ...o, pos: at ?? o.pos }),
+  bellClunk: (am, at, o) => am.bell({ ...o, damped: true, pos: at ?? o.pos }),
+  sunbellDamped: (am, at, o) => am.bell({ ...o, damped: true, pos: at ?? o.pos }),
+  heartbeat: (am, at, o) => am.heartbeat(o),
+  march: (am, at, o) => am.march(o.on !== false, { center: at ?? o.center ?? null, volume: o.volume ?? o.vol ?? 1 }),
+  shimmer: (am, at, o) => am.shimmer(o.on !== false),
+};
+
+/** Files to keep decoded for a level: the manifest's '*' subset + that level's subset (+ buffered music). */
+function keepSet(levelId) {
+  const out = new Set(manifestLevels?.['*'] ?? []);
+  for (const p of manifestLevels?.[levelId] ?? []) out.add(p);
+  for (const t of Object.values(TRACKS)) if (t.buffer) out.add(t.file);
+  return out;
+}
 
 /**
  * @typedef {object} Voice
@@ -55,8 +86,6 @@ export class AudioManager {
     this.unlocked = false;
     /** graph built and running at least once */
     this.ready = false;
-    /** music track the director wants (stub-compatible field) */
-    this.currentTrack = null;
     /** last requested sounds (debug): strings `${kind}:${id}` */
     this.log = [];
     /** recent requests with time (debug / smoke) */
@@ -66,6 +95,8 @@ export class AudioManager {
     /** sounds actually started per name */
     this.started = Object.create(null);
 
+    /** the SFX defs (sfxMap.js, read-only): names accepted by play2D / play3D */
+    this.defs = SFX;
     this.index = buildIndex(manifest);
     this.rand = typeof ctx?.rng?.fork === 'function' ? ctx.rng.fork('audio') : Math.random;
     this.director = new MusicDirector();
@@ -97,8 +128,9 @@ export class AudioManager {
     this._gates = new Map();
     this._offs = [];
     this._dom = [];
-    this._fizzleT = 0;
     this._chargeLevel = 0;
+    this._chargeH = null;
+    this._mode = 'play';
     this._shimmerWant = false;
     this._hs = false;
     this._stingUntil = 0;
@@ -120,7 +152,11 @@ export class AudioManager {
     this.meter = null;
     this._unlocking = null;
     this._hiddenSuspend = false;
+    this._wantMeter = false;
   }
+
+  /** Music track the director wants right now (id or null). */
+  get currentTrack() { return this.director.target; }
 
   // =============================================================================================== lifecycle
   async init() {
@@ -130,7 +166,7 @@ export class AudioManager {
     this._offs.push(...bindSfx(this));
 
     on(E.MUSIC, ({ track, fade }) => this.music(track ?? null, fade ?? MUSIC_RULES.crossfade));
-    on(E.LEVEL_LOADING, () => this._levelCleanup());
+    on(E.LEVEL_LOADING, ({ id }) => this._levelCleanup(id));
     on(E.LEVEL_LOADED, ({ id, level }) => this._levelLoaded(id, level));
     on(E.ARENA_LOCK, ({ id }) => this.director.arenaLock(id));
     on(E.ARENA_CLEAR, ({ id }) => this.director.arenaClear(id));
@@ -174,7 +210,8 @@ export class AudioManager {
     try { if (!this.ac) this._build(); } catch (e) { console.warn('[audio] WebAudio unavailable', e); return false; }
     const ac = this.ac;
     if (ac.state !== 'running') {
-      try { await Promise.race([ac.resume(), new Promise((r) => setTimeout(r, 500))]); } catch { /* blocked: next gesture */ }
+      // a busy main thread can take seconds to resume; a late 'running' finishes the unlock via onstatechange
+      try { await Promise.race([ac.resume(), new Promise((r) => setTimeout(r, 3000))]); } catch { /* blocked: next gesture */ }
     }
     if (ac.state !== 'running') return false;
     this.unlocked = true;
@@ -218,26 +255,30 @@ export class AudioManager {
       url: (f) => (this.ctx.assets?.url ? this.ctx.assets.url(f) : 'assets/' + f),
       buffer: (f) => this._decode(f),
       has: (f) => this.index.has(f),
+      stingDest: hitDuck,                                   // the sting plays over the ducked decks
       canOgg: typeof Audio !== 'undefined' ? new Audio().canPlayType('audio/ogg; codecs="vorbis"') !== '' : true,
     });
     this.wind = new Wind(ac, world, this.rand);
     this.shim = new Shimmer(ac, player);
-    ac.onstatechange = () => { if (ac.state === 'running') this.musicPlayer?.resume(); };
+    ac.onstatechange = () => {
+      if (ac.state !== 'running' || this.ac !== ac) return;
+      if (!this.ready) this.unlock(); else this.musicPlayer?.resume();
+    };
     this._applyVolumes(0);
     this._applyDucks(0);
   }
 
   async _firstRun() {
-    this.wind.start(this.ctx.env?.wind ?? 0.6, this.memeOn ? MUSIC_RULES_MEME : 1);
+    this.wind.start(this.ctx.env?.wind ?? 0.6, this.memeOn ? MEME.windMul : 1);
     if (this._shimmerWant) this.shim.set(true);
     // music requested before the unlock fades in now (CS-00: "fades in over 2 s")
     this.director.take();
-    this.currentTrack = this.director.target;
     if (this.director.target) this.musicPlayer.play(this.director.target, MUSIC_RULES.titleFade);
     if (this.levelId) this._setAmbience(this.levelId);
-    const jobs = [bakeZzfx(this.ac).then((m) => { for (const [k, b] of m) this.zz.set(k, b); })];
-    for (const p of this._fetched) jobs.push(this._decode(p));
-    await Promise.all(jobs);
+    // files fetched before the unlock (level preloads) decode in the background; the zzfx bake is quick
+    for (const p of this._fetched) this._decode(p);
+    const m = await bakeZzfx(this.ac);
+    for (const [k, b] of m) this.zz.set(k, b);
   }
 
   update(dt) {
@@ -246,9 +287,8 @@ export class AudioManager {
     if (this.telegraphs.size) {
       for (const [id, t] of this.telegraphs) if ((t.t -= dt) <= 0) { this.telegraphs.delete(id); this.play3D(t.name, t.at); }
     }
-    if (this._fizzleT > 0 && (this._fizzleT -= dt) <= 0) this.play2D('chargeFizzle');
     // music director (§16.1)
-    if ((this._threatT -= dt) <= 0) { this._threatT = 0.25; this._threat = this._computeThreat(); }
+    if ((this._threatT -= dt) <= 0) { this._threatT = 0.25; this._threat = this._computeThreat(); this._syncArenas(); }
     this.director.tick(dt, { mode, threat: this._threat, zone: this._zoneTrack() });
     if (mode === 'play' || mode === 'memecam') {
       this._lowHp(dt);
@@ -259,9 +299,8 @@ export class AudioManager {
   render(alpha, frameDt) {
     const dt = Math.max(0, Math.min(0.25, frameDt || 0));
     this.time += dt;
-    if (this.ready) this._applyMusicChanges();
-    else this.currentTrack = this.director.target;
     if (!this.ready) return;
+    this._applyMusicChanges();
     const ac = this.ac, now = ac.currentTime;
     // hitstop duck (rising edge)
     const hs = (this.ctx.game?.hitstopT ?? 0) > 0;
@@ -270,11 +309,14 @@ export class AudioManager {
     if (this._stingUntil && now >= this._stingUntil) { this._stingUntil = 0; this.ducks.sting = 1; this._applyDucks(); }
     if (this._dialogHold && this.time > this._dialogHold && !this.babbleState) { this._dialogHold = 0; this._applyDucks(); }
     // wind follows Env (0–3), ×1.6 in Meme Cam
-    this.wind.set(this.ctx.env?.wind ?? 0.6, this.memeOn ? MUSIC_RULES_MEME : 1);
+    this.wind.set(this.ctx.env?.wind ?? 0.6, this.memeOn ? MEME.windMul : 1);
     // 3D voices that follow actors
     for (const v of this.voices3D) {
       if (!v.follow || v.endAt <= now) { if (v.endAt <= now) v.follow = null; continue; }
       if (this._posOf(v.follow, v.pos)) this._setPannerPos(v.panner, v.pos, 0.03);
+    }
+    if (this.bells.size) {
+      for (const b of this.bells) if (now > b.endAt + 0.5) { this.bells.delete(b); try { b.panner?.disconnect(); } catch { /* gone */ } }
     }
     this._babbleTick(dt);
     this._chorusTick(dt);
@@ -296,14 +338,18 @@ export class AudioManager {
       this.wind?.stop();
       this.shim?.dispose();
       for (const v of [...this.voices2D, ...this.voices3D]) v.panner?.disconnect();
-      for (const k of Object.keys(this.bus ?? {})) { try { this.bus[k].disconnect(); } catch { /* listener input */ } }
-      this.listener?.removeFilter?.();
+      try { this.listener?.removeFilter?.(); } catch { /* already detached */ }
+      for (const [k, node] of Object.entries(this.bus ?? {})) { if (k !== 'master') { try { node.disconnect(); } catch { /* gone */ } } }
+      for (const a of Object.values(this.analysers ?? {})) { try { a.disconnect(); } catch { /* gone */ } }
       this.listener?.parent?.remove(this.listener);
       if (this.ac) this.ac.onstatechange = null;
     }
     this.telegraphs.clear(); this.alerted.clear(); this.loops.clear(); this.bells.clear();
     this.log.length = 0; this.recent.length = 0;
-    this.ready = false; this.unlocked = false;
+    this.buffers.clear(); this._decoding.clear();
+    this.bus = null; this.analysers = null; this.listener = null; this.musicPlayer = null; this.wind = null; this.shim = null;
+    this.voices2D = []; this.voices3D = [];
+    this.ac = null; this.ready = false; this.unlocked = false;
   }
 
   // =============================================================================================== settings, ducks
@@ -330,7 +376,7 @@ export class AudioManager {
 
   /** Effective music duck factor (product of the active ducks). */
   get duck() {
-    const dialog = (this.ctx.game?.mode === 'dialog' || this.babbleState || this._dialogHold) ? DUCK.dialog : 1;
+    const dialog = (this._mode === 'dialog' || this.babbleState || this._dialogHold) ? DUCK.dialog : 1;
     return this.ducks.menu * this.ducks.meme * this.ducks.sting * Math.min(this.ducks.dialog, dialog);
   }
 
@@ -344,6 +390,7 @@ export class AudioManager {
   }
 
   _onMode(mode) {
+    this._mode = mode ?? this.ctx.game?.mode ?? 'play';
     this.ducks.menu = mode === 'menu' ? DUCK.menu : 1;
     this.pausedWorld = mode === 'menu';
     if (mode === 'menu') this.stopBabble();
@@ -354,6 +401,7 @@ export class AudioManager {
     this.memeOn = on;
     this.ducks.meme = on ? DUCK.meme : 1;
     this._applyDucks(on ? DUCK.memeFade / 3 : 0.25);     // ~95% of the way in 1 s
+    if (on) this.stopBabble();
   }
 
   _hitstopDuck() {
@@ -385,17 +433,22 @@ export class AudioManager {
     return p;
   }
 
-  /** Decoded buffer for a path (fetch + decode once). Before the unlock only fetches. Never rejects. */
+  /**
+   * Decoded buffer for a path (fetch + decode once; `_decoding` holds only in-flight decodes, so a buffer dropped by
+   * evict() decodes again from the cached bytes). Before the unlock it only fetches. Never rejects.
+   */
   _decode(path) {
     const b = this.buffers.get(path);
     if (b) return Promise.resolve(b);
     if (!this.ac) return this._fetch(path).then(() => null, (e) => { this._warnOnce(path, e); return null; });
     let p = this._decoding.get(path);
     if (!p) {
+      const ac = this.ac;
       p = this._fetch(path)
-        .then((ab) => this.ac.decodeAudioData(ab.slice(0)))
-        .then((buf) => { this.buffers.set(path, buf); return buf; })
-        .catch((e) => { this._warnOnce(path, e); this._decoding.delete(path); return null; });
+        .then((ab) => ac.decodeAudioData(ab.slice(0)))
+        .then((buf) => { if (this.ac === ac) this.buffers.set(path, buf); return buf; })
+        .catch((e) => { this._warnOnce(path, e); return null; })
+        .finally(() => { this._decoding.delete(path); });
       this._decoding.set(path, p);
     }
     return p;
@@ -403,19 +456,28 @@ export class AudioManager {
 
   _warnOnce(key, e) { if (!this._missing.has(key)) { this._missing.add(key); console.warn(`[audio] ${key}: ${e?.message ?? e}`); } }
 
+  /** Normalised path for a sound id / pattern / path. */
+  _pathOf(id) { return this.resolve(id) ?? String(id).replace(/^\.?\//, '').replace(/^(public\/)?assets\//, ''); }
+
   /**
-   * Preload hook (ctx.assets.preload routes .ogg/.mp3/.wav here). Streamed music is skipped; everything else is
-   * fetched now and decoded once the context runs. Resolves the path; never rejects.
+   * Preload hook (ctx.assets.preload routes .ogg/.mp3/.wav here): resolves once the bytes are fetched, so a level load
+   * never waits on audio decoding; the decode runs in the background (now, or on the unlock). Streamed music is
+   * skipped. Resolves the path; never rejects.
    */
   async load(path) {
-    const p = this.resolve(path) ?? String(path).replace(/^\.?\//, '').replace(/^(public\/)?assets\//, '');
+    const p = this._pathOf(path);
     if (isMusicPath(p)) {
       const def = Object.values(TRACKS).find((t) => t.file === p);
       if (!def?.buffer) return p;
     }
-    await this._decode(p);
+    if (this.buffers.has(p)) return p;
+    await this._fetch(p).catch((e) => { this._warnOnce(p, e); });
+    if (this.ac) this._decode(p);
     return p;
   }
+
+  /** Fetch + decode a sound now: resolves its AudioBuffer (null before the unlock or on failure). */
+  decode(id) { return this._decode(this._pathOf(id)); }
 
   // =============================================================================================== playback core
   _note(kind, id) {
@@ -454,6 +516,8 @@ export class AudioManager {
     const name = String(id ?? '');
     if (!name) return null;
     this._note(at != null ? '3d' : '2d', name);
+    const proc = PROCEDURAL[name];
+    if (proc) return proc(this, at, opts);
     const def = SFX[name];
     if (def) {
       const h = this._playDef(def, name, at, opts);
@@ -473,14 +537,23 @@ export class AudioManager {
     return this._playPath(path, name, at, opts, def);
   }
 
-  _playPath(path, name, at, opts, def) {
+  /**
+   * Play `path` (or the def's zzfx fallback). A sound whose buffer is still decoding plays late if the decode lands
+   * within MIX.lateWindow; `ready` is that decoded buffer on the (single) retry.
+   */
+  _playPath(path, name, at, opts, def, ready = null) {
     if (!this.ready) return null;
-    let buf = path ? this.buffers.get(path) : null;
-    if (!buf && def?.zzfx) buf = this.zz.get(def.zzfx) ?? null;
+    let buf = ready ?? (path ? this.buffers.get(path) : null);
+    if (!buf && def?.zzfx) {                                   // the synth stand-in now, the file from next time on
+      buf = this.zz.get(def.zzfx) ?? null;
+      if (path) this._decode(path);
+    }
     if (!buf) {
       if (!path) return null;
       const t0 = this.ac.currentTime;
-      this._decode(path).then((b) => { if (b && this.ac.currentTime - t0 <= MIX.lateWindow) this._playPath(path, name, at, opts, def); });
+      this._decode(path).then((b) => {
+        if (b && this.ready && this.ac.currentTime - t0 <= MIX.lateWindow) this._playPath(path, name, at, opts, def, b);
+      });
       return null;
     }
     const rv = opts.rateVar ?? def?.rateVar ?? 0.03;
@@ -527,7 +600,7 @@ export class AudioManager {
   _posOf(at, out) {
     if (at == null) return false;
     if (typeof at === 'string') {
-      const a = this.ctx.actors?.get?.(at);
+      const a = this.ctx.actors?.get?.(at) ?? (PLAYER_IDS.has(at) ? this.ctx.player : null);
       if (a) return this._posOf(a, out);
       const an = this.ctx.levels?.anchor?.(at);
       return an?.pos ? this._posOf(an.pos, out) : false;
@@ -542,7 +615,7 @@ export class AudioManager {
 
   /** follow target for moving emitters (actors / Object3Ds), else null. */
   _followOf(at) {
-    if (at == null || typeof at !== 'object') return typeof at === 'string' ? (this.ctx.actors?.get?.(at) ?? null) : null;
+    if (at == null || typeof at !== 'object') return typeof at === 'string' ? (this.ctx.actors?.get?.(at) ?? (PLAYER_IDS.has(at) ? this.ctx.player : null)) : null;
     return at.pos?.isVector3 || at.isObject3D ? at : null;
   }
 
@@ -642,7 +715,7 @@ export class AudioManager {
     this.loops.add(handle);
     const target = (vol ?? volume) * (def?.vol ?? 1);
     this._decode(path).then((buf) => {
-      if (!buf || handle.dead) return;
+      if (!buf || handle.dead || !this.ready) return;
       const ac = this.ac, t = ac.currentTime;
       const out = ac.createGain(); out.gain.setValueAtTime(0, t); out.gain.linearRampToValueAtTime(target, t + fadeIn);
       let dest = this.bus[bus] ?? this.bus.world;
@@ -680,14 +753,12 @@ export class AudioManager {
     this._note('music', track ?? 'null');
     const id = this.director.request(track, Number.isFinite(fade) ? fade : MUSIC_RULES.crossfade, { mode: this.ctx.game?.mode ?? 'play' });
     if (track != null && !id) console.warn(`[audio] unknown music track "${track}"`);
-    this.currentTrack = this.director.target;
     if (this.ready) this._applyMusicChanges();
     return id;
   }
 
   _applyMusicChanges() {
     const ch = this.director.take();
-    this.currentTrack = this.director.target;
     if (!ch) return;
     if (ch.track !== undefined) this.musicPlayer.play(ch.track, ch.fade);
     if (ch.sting) this._sting(ch.sting);
@@ -696,7 +767,7 @@ export class AudioManager {
   _sting(id) {
     this.ducks.sting = DUCK.sting; this._applyDucks(0.08);
     this._stingUntil = this.ac.currentTime + MUSIC_RULES.stingDur;
-    this.musicPlayer.playSting(id).then((d) => { if (d > 0) this._stingUntil = this.ac.currentTime + d; else this._stingUntil = this.ac.currentTime; });
+    this.musicPlayer.playSting(id).then((d) => { if (this.ready) this._stingUntil = this.ac.currentTime + Math.max(0, d); });
   }
 
   _computeThreat() {
@@ -714,6 +785,16 @@ export class AudioManager {
     return false;
   }
 
+  /** An arena that unlocked without arena:clear (death inside → Arena.reset) no longer holds the combat music. */
+  _syncArenas() {
+    const list = this.ctx.levels?.current?.arenas, held = this.director.arenas;
+    if (!held.size || !Array.isArray(list)) return;
+    for (const id of [...held]) {
+      const a = list.find((x) => x?.id === id);
+      if (a && !a.locked && !a.cleared) held.delete(id);
+    }
+  }
+
   _zoneTrack() {
     const zones = this.director.level?.zones, p = this.ctx.player?.pos;
     if (!zones?.length || !p) return null;
@@ -725,23 +806,37 @@ export class AudioManager {
     return null;
   }
 
-  _levelCleanup() {
+  _levelCleanup(nextId) {
     if (this.ready) {
       for (const v of this.voices3D) if (v.out) this._release(v, 0.2);
       for (const h of [...this.loops]) h.stop(0.4);
       this.stopLaughs(); this.march(false); this.stopBabble();
       this.shimmer(false);
+      this.endCharge(0.05);
     }
     this.ambience = null;
     this.telegraphs.clear(); this.alerted.clear();
     this._threat = false;
+    if (nextId) this.evict(nextId);
+  }
+
+  /**
+   * Drop decoded buffers the next level doesn't list (manifest `levels['*']` + `levels[id]`); a dropped sound
+   * decodes again from the cached bytes the first time it is asked for (well inside MIX.lateWindow).
+   * Keeps PCM memory near one level's working set (all SFX decoded ≈ 200 MB). Returns the number dropped.
+   * @param {string} levelId
+   */
+  evict(levelId) {
+    const keep = keepSet(levelId);
+    let n = 0;
+    for (const p of [...this.buffers.keys()]) if (!keep.has(p)) { this.buffers.delete(p); n++; }
+    return n;
   }
 
   _levelLoaded(id, level) {
     this.levelId = id ?? null;
     this.director.setLevel(id, level?.music ?? level?.def?.music ?? null);
     this.surface = level?.surface ?? LEVEL_SURFACE[id] ?? 'grass';
-    this._playerSteps = this._playerSteps && true;
     if (this.ready) this._setAmbience(id);
   }
 
@@ -801,9 +896,10 @@ export class AudioManager {
 
   /**
    * CS-02 "cackling from every direction": `count` emitters at radius `r` around `center`, each laughing every
-   * 0.6–1.8 s for `dur` seconds (real time). `stopLaughs()` ends it.
+   * 0.6–1.8 s for `dur` seconds (real time). `stopLaughs()` ends it. The default volume makes up most of the
+   * distance roll-off at r 18 (inverse model: ref 3, rolloff 1.4 → −18 dB), so the fog cackles clearly.
    */
-  laughChorus(center, { count = 6, r = 18, dur = 8, rate = 1, volume = 1 } = {}) {
+  laughChorus(center, { count = 6, r = 18, dur = 8, rate = 1, volume = 2.2 } = {}) {
     this._note('laugh', 'chorus');
     const c = new THREE.Vector3();
     if (!this._posOf(center ?? this.ctx.player, c)) c.set(0, 0, 0);
@@ -845,7 +941,7 @@ export class AudioManager {
   _marchTick(dt) {
     const m = this.marching;
     if (!m) return;
-    const c = new THREE.Vector3();
+    const c = _c;
     if (!this._posOf(m.center, c)) return;
     const jitter = () => (this.rand() - 0.5) * 2 * MARCH.spread;
     if ((m.stepT -= dt) <= 0) {
@@ -875,18 +971,17 @@ export class AudioManager {
       this._setPannerPos(panner, _v, 0); panner.connect(this.bus.world); dest = panner;
     }
     const h = strikeBell(ac, dest, { damped, volume: opts.volume ?? 1, base: opts.base, detune: () => (this.rand() * 2 - 1) * 3 });
-    const layer = damped ? 'bellClunk' : 'bellLayer';
+    const layer = damped ? 'bellClunkLayer' : 'bellLayer';
     if (panner) this.play3D(layer, opts.pos, { volume: opts.volume ?? 1 }); else this.play2D(layer, { volume: opts.volume ?? 1, bus: 'world' });
-    const handle = { ...h, stop: (fade) => { h.stop(fade); this.bells.delete(handle); } };
-    this.bells.add(handle);
-    setTimeout(() => { this.bells.delete(handle); try { panner?.disconnect(); } catch { /* */ } }, Math.ceil((h.endAt - ac.currentTime + 0.5) * 1000));
+    const handle = { ...h, panner, stop: (fade) => { h.stop(fade); this.bells.delete(handle); } };
+    this.bells.add(handle);                                   // pruned in render() once rung out
     this.started.bell = (this.started.bell ?? 0) + 1;
     return handle;
   }
 
   /** zzfx lub-dub heartbeat(s) (§16.3; Still Standing, low HP). */
   heartbeat({ beats = 1, bpm = HEART.bpm, volume = 1 } = {}) {
-    this._note('heartbeat', beats);
+    this._note('heartbeat', 'heartbeat');
     if (!this.ready) return 0;
     const buf = this.zz.get('heartThump');
     if (!buf) return 0;
@@ -894,6 +989,20 @@ export class AudioManager {
     for (const b of heartbeatPlan(beats, bpm, volume)) this._oneShot(buf, { when: t + b.t, gain: b.gain * (SFX.heartThump.vol ?? 1), dest: this.bus.player });
     this.started.heartbeat = (this.started.heartbeat ?? 0) + beats;
     return beats;
+  }
+
+  /** Charge tier tone (§16.2 'chargeT1' / 'chargeT2'): replaces the previous tier's rising tone. */
+  chargeTone(name) {
+    this.endCharge(0.06);
+    this._chargeH = this.play2D(name);
+    return this._chargeH;
+  }
+
+  /** Fade out the rising charge tone (release swing, cancel, level change). */
+  endCharge(fade = 0.12) {
+    const h = this._chargeH;
+    this._chargeH = null;
+    if (h?.stop) h.stop(fade);
   }
 
   /** Golden Hour shimmer pad on/off (§16.3). */
@@ -963,7 +1072,8 @@ export class AudioManager {
     const v = voiceFor(speaker);
     const sp = speed ?? this.ctx.state?.settings?.dialogSpeed ?? 1;
     const plan = babblePlan(text, { speed: sp, mode: v.mode ?? 'blip' });
-    if (!plan.length || (v.mode !== 'laugh' && !v.pool.length)) return 0;
+    this._note('babble', speakerKey(speaker));
+    if (!this.ready || !plan.length || (v.mode !== 'laugh' && !v.pool.length)) return 0;
     this.babbleState = { v, plan, i: 0, t: 0, speaker: speakerKey(speaker), blips: 0 };
     this._dialogHold = this.time + plan[plan.length - 1] + 1.5;
     this._applyDucks();
@@ -1054,6 +1164,3 @@ export class AudioManager {
     return !!on;
   }
 }
-
-/** Meme Cam wind multiplier (§16.1 "wind ×1.6"). */
-const MUSIC_RULES_MEME = 1.6;

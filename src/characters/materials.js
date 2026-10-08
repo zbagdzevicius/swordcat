@@ -138,9 +138,14 @@ let _tuftMat = null;
 export function tuftMaterial() {
   if (_tuftMat) return _tuftMat;
   const t = tuftTexture();
+  // soft-blended wisps (no depth writes) drawn after the shell fur; a little self-light keeps them cream when the
+  // card faces away from the sun (back-lit tufts are what reads as "fluffy" in the refs)
   _tuftMat = own(new THREE.MeshStandardMaterial({
-    vertexColors: true, map: t, alphaTest: 0.42, side: THREE.DoubleSide, roughness: 0.9, metalness: 0, transparent: false,
+    vertexColors: true, map: t, alphaTest: 0.08, side: THREE.DoubleSide, roughness: 0.9, metalness: 0, transparent: true, depthWrite: false,
   }));
-  _tuftMat.alphaToCoverage = true;
+  _tuftMat.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.16;');
+  };
+  _tuftMat.customProgramCacheKey = () => 'sc-tuft-v2';
   return _tuftMat;
 }

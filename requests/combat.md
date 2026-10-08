@@ -13,12 +13,15 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
   want to override, never pre-multiplied on top**), `crit` (Purrfect-Dodge ×1.5 for the next hit), `dmg` (base override),
   `arc`, `active`, `target` (assist preference), `assist: false | {range, angle}`, `projectiles: false`, `gleam: bool`,
   `timeScale: false`.
-- Def-driven side effects (so the player does NOT have to do them): `iframes` (holy 0–0.46 → `attacker.invulnT`),
-  `timeScale` (holy: `game.slowMo(0.35, 0.25)`), aim assist on the first active step for the player faction (60°/3 m;
-  touch 90°/4 m; `riposte` → the last parried enemy within 4 m; prefers `opts.target` / `actor.lockTarget`), `holyWave`
-  spawned on holy's first active step when `actor.shards ?? state.shards ≥ 2` (Wave Reach upgrade → range 15), and a `gleam`
-  per slash (slash1/2/3, bright, riposte) while `actor.golden`. Spawning holyWave/gleam yourself as well is harmless: the
-  same projectile def from the same owner within 0.1 s is deduplicated.
+- Def-driven side effects (so the player does NOT have to do them): `iframes` (holy 0–0.46: `applyHit` answers
+  `'immune'` to an actor whose own `actor.swing` is inside its def's `iframes`; no `invulnT` is written, so nothing
+  blinks), `timeScale` (holy: `game.slowMo(0.35, 0.25)` on the **first active step**, the moment of impact; calling it
+  yourself in the same step overlaps harmlessly), aim assist on the first active step for the player faction (60°/3 m;
+  touch 90°/4 m; `riposte` → the last parried enemy within 4 m; prefers `opts.target` / `actor.lockTarget`; skipped when
+  the attacker has its own `aimAssist()`), `holyWave` spawned on holy's first active step when
+  `actor.shards ?? state.shards ≥ 2`, and a `gleam` per slash (slash1/2/3, bright, riposte) while `actor.golden`.
+  Spawning holyWave/gleam yourself as well is harmless: the same projectile def from the same owner within 0.1 s is
+  deduplicated, and the Wave Reach upgrade (range 15) is applied inside `spawnProjectile`, whoever spawns the wave.
 - Defs without `arc` get a body-contact arc (radius + 0.45 m, ±90°) or, with numeric `def.r`, a full circle; defs without
   `active` are active 0..dur (pounce: until you stop updating).
 
@@ -66,8 +69,9 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
   `combat:hit {blocked: true}`. Add `PLAYER_BLOCK` only if someone needs a dedicated event.
 
 ## To physics
-- Please expose `overlapsStatic(pos: Vector3, r: number) → boolean` (sphere vs static colliders, any spatial hash you use).
-  Projectiles use it to stop on walls/trees; until it exists they read `physics.statics.circles/boxes` defensively.
+- ~~Please expose `overlapsStatic(pos, r)`~~ — no longer needed: projectiles now sweep `physics.sphereCast(ray, r,
+  stepLen, {terrain: false, mesh: true, statics: true})` over each step (falling back to `overlapsStatic` /
+  `blockedAt(x, z, r, y0, y1)` if `sphereCast` is missing). Please keep `sphereCast` honouring `statics: true`.
 
 ## To enemies
 - `onParried(by, {gold})` is called for melee parries; boss Dizzy crits: set `critTaken = DIZZY.critMul` (or keep `isDizzy`).
@@ -75,3 +79,24 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
   Pug shield: return `'block'` from `resolveIncoming` for frontal hits, `'break'` when `def.guardBreak` /
   `def.breaksShieldFromAbove` (attacker above) breaks it (combat adds damage + stagger ≥ 0.8; your own longer stagger wins).
 - Ranged: `spawnProjectile(ATTACKS.rat_bolt, enemy, chestPos, dirToPlayerChest)`; reflected bolts come back for 25.
+
+## M1 update (2026-10-08) — additive behaviour changes, contract unchanged
+- `combat:hit.damage` on the player side is what her hp actually lost (her `hp` setter applies Golden Hour halving and
+  Still Standing); enemies still get the nominal damage (overkill shows the full number).
+- Harmless hits (def `dmg` 0: `dummy_swing`, `sack_swing`, `spider_web`, `stealer_snatch`) still knock her back and fire
+  `onHit`, but give only the 0.12 s anti-multi-hit window (no 0.9 s blinking i-frames) and light juice without rumble.
+- Block pushback is divided by the blocker's mass and skipped for `superArmor` (a Pug shield block barely slides).
+- Reflected projectiles keep homing on their shooter (≤ 5 rad/s) while it stays within 60° ahead, so a strafing
+  crossbow rat still eats its bolt. Round projectiles now stop on props and architecture (`onEnd(p, 'wall')`).
+- `assistTarget` ignores `hidden` / `dormant` actors.
+
+## To player (found by combat smoke, `tests/smoke/combat.mjs` → combat:parry)
+- **Riposte is cancelled by the Stand that made the parry.** A ⚔ press during the Stand starts `riposte`, but the next
+  step the attack state's pre-active cancel (`(preActive || recovering) && p.wantGuard()`) drops it straight back into
+  `guard`, because guard is still held — and on touch / with the Auto-Stand setting `autoStandT` (0.5 s) holds it for
+  you. Real play: RMB held + ⚔ never ripostes; touch players can't riposte for 0.5 s. Suggest: don't let a Stand that
+  was already held when the swing started (or `autoStandT`) cancel `riposte` (only a fresh guard press should).
+  The smoke works around it (drops the Stand at the parry, stays on kbm) and then asserts riposte = 36 crit + kill.
+- Combat already does parry/block/hit rumble, hitstop and the parry slow-mo; Player also rumbles on parry/block/hurt
+  and on her own hits (`_onHitEvent`) and calls the parry/holy `slowMo` itself — harmless duplicates (same values, same
+  step), but they can go.

@@ -152,10 +152,12 @@ void main() {
     float ha = uAngle * 0.5;
     edge = min( uR - d, ( ha - ang ) * max( d, 0.25 ) );
     fillM = smoothstep( -aa, aa, uR * uFill - d );
-  } else if ( uShape == 4 ) {                        // shadow: grows, darkens, soft edge, no rim
+  } else if ( uShape == 4 ) {                        // shadow: grows and darkens; a faint pale rim keeps it readable on dark grass
     float R = uR * ( 0.35 + 0.65 * uFill );
-    float a = ( 0.22 + 0.46 * uFill ) * ( 1.0 - smoothstep( R * 0.72, R, d ) );
-    a *= uAlpha;
+    float a = ( 0.3 + 0.45 * uFill ) * ( 1.0 - smoothstep( R * 0.7, R, d ) );
+    float rimM = ( 1.0 - smoothstep( 0.0, 0.05 + 0.04 * uR, abs( d - R * 0.97 ) ) ) * ( 0.25 + 0.2 * uFill );
+    col = mix( col, vec3( 0.78, 0.8, 0.84 ), rimM / max( rimM + a, 1e-3 ) );
+    a = max( a, rimM ) * uAlpha;
     if ( a < 0.004 ) discard;
     gl_FragColor = vec4( col, a );
     ${OUTPUT}
@@ -349,9 +351,23 @@ class Live {
     this.n = null; this.id = null; this.t = 0; this.real = 0; this.out = -1; this.fadeIn = 0;
     this.origin = new THREE.Vector3(); this.dir = new THREE.Vector3(0, 0, 1);
     this.aimTo = new THREE.Vector3(); this.color = new THREE.Color();
+    this.livePos = null; this.liveDir = null; this.trackTarget = false;
     this.follow = false; this.decal = null; this.line = null; this.actor = null; this.target = null; this.frozen = false;
     this.bounds = null;
   }
+}
+
+/**
+ * Where a telegraph's origin comes from each frame (pure; unit-tested):
+ *  - 'live'   `pos` is a Vector3 the emitter keeps writing (Enemy.tellPos / the crow's diveTarget): read it every frame;
+ *             the emitter decides when it stops tracking (the §8.1 aim / shadow rules live in the enemy);
+ *  - 'actor'  no `pos` but an actor: centred on the actor's feet and following it (slams, barks, spins);
+ *  - 'fixed'  anything else (arrays, anchors, plain objects).
+ */
+export function originMode(desc) {
+  if (desc?.pos?.isVector3) return 'live';
+  if (desc?.pos == null && isActor(desc?.actor)) return 'actor';
+  return 'fixed';
 }
 
 export class Telegraphs {
@@ -365,6 +381,7 @@ export class Telegraphs {
     this.decals = []; this.lines = [];
     this.scene = null;
     this.started = 0;          // total telegraphs started (tests/smoke)
+    this.byKind = Object.fromEntries(KINDS.map((k) => [k, 0]));
     this._ground = (x, z, fb) => groundY(ctx, x, z, fb);
   }
 
@@ -387,13 +404,18 @@ export class Telegraphs {
     L.actor = isActor(n.actor) ? n.actor : null;
     L.target = isActor(n.target) ? n.target : (n.shape === 'line' || n.shape === 'shadow' ? this.ctx.player ?? null : null);
     L.color.set(n.color);
-    if (!toVec3(desc.pos, L.origin)) { if (L.actor) actorWorldPos(L.actor, L.origin); else L.origin.set(0, 0, 0); }
+    const mode = originMode(desc);
+    L.livePos = mode === 'live' ? desc.pos : null;
+    L.liveDir = desc.dir?.isVector3 ? desc.dir : null;
+    if (mode === 'live') L.origin.copy(desc.pos);
+    else if (!toVec3(desc.pos, L.origin)) { if (L.actor) actorWorldPos(L.actor, L.origin); else L.origin.set(0, 0, 0); }
     if (desc.dir && toVec3(desc.dir, L.dir) && (L.dir.x * L.dir.x + L.dir.z * L.dir.z) > 1e-8) { L.dir.y = 0; L.dir.normalize(); }
     else if (L.actor) L.dir.set(Math.sin(L.actor.facing), 0, Math.cos(L.actor.facing));
     else L.dir.set(0, 0, 1);
     // follow the actor when the shape is centred on it (slams, barks, spins); fixed when placed elsewhere (landing spots)
-    L.follow = n.follow ?? (!!L.actor && n.shape !== 'shadow' && n.shape !== 'line'
-      && Math.hypot(L.origin.x - L.actor.pos.x, L.origin.z - L.actor.pos.z) < 0.75);
+    L.follow = n.follow ?? (mode === 'actor' && n.shape !== 'shadow' && n.shape !== 'line');
+    // a shadow with no position of its own hunts the target itself (§8.1: tracks the first 60%, then freezes)
+    L.trackTarget = n.shape === 'shadow' && desc.pos == null;
     L.decal = null; L.line = null;
     L.bounds = decalBounds(n);
     if (DECAL_SHAPE[n.shape] !== undefined) {
@@ -412,6 +434,7 @@ export class Telegraphs {
     }
     this.active.set(id, L);
     this.started++;
+    if (this.byKind[n.kind] !== undefined) this.byKind[n.kind]++;
     return id;
   }
 
@@ -421,12 +444,15 @@ export class Telegraphs {
     if (L && L.out < 0) L.out = 0;
   }
 
+  /** End every telegraph owned by `actor` (despawn, scripted, death). */
+  endFor(actor) { for (const L of this.active.values()) if (L.actor === actor && L.out < 0) L.out = 0; }
+
   /** Remove everything immediately (level unload). */
   clear() { for (const L of [...this.active.values()]) this._release(L); }
 
   _release(L) {
     L.decal?.reset(); L.line?.reset();
-    L.decal = null; L.line = null; L.actor = null; L.target = null; L.n = null;
+    L.decal = null; L.line = null; L.actor = null; L.target = null; L.n = null; L.livePos = null; L.liveDir = null;
     this.active.delete(L.id);
     this._free.push(L);
   }
@@ -442,7 +468,7 @@ export class Telegraphs {
 
   /** Per frame: place visuals and push marks. `dt` = visual dt. */
   render(dt) {
-    const ctx = this.ctx, cam = ctx.camera, time = ctx.game?.realTime ?? 0;
+    const ctx = this.ctx, cam = ctx.camera;
     const patterns = !!ctx.state?.settings?.patterns;
     for (const L of this.active.values()) {
       const n = L.n;
@@ -454,11 +480,11 @@ export class Telegraphs {
       const tracking = isTracking(n.shape, n.kind, L.t, n.duration);
       const pattern = patterns ? (n.kind === 'red' ? 1 : n.kind === 'gold' ? 2 : 0) : 0;
       // ---- origin / direction
-      if (L.follow && L.actor) {
-        actorWorldPos(L.actor, L.origin);
-        if (n.shape === 'cone') { const f = L.actor.object3d.rotation.y; L.dir.set(Math.sin(f), 0, Math.cos(f)); }
-      }
-      if (n.shape === 'shadow' && tracking && L.target) actorWorldPos(L.target, L.origin);
+      if (L.livePos) L.origin.copy(L.livePos);
+      else if (L.follow && L.actor) actorWorldPos(L.actor, L.origin);
+      else if (L.trackTarget && tracking && L.target) actorWorldPos(L.target, L.origin);
+      if (L.liveDir && (L.liveDir.x * L.liveDir.x + L.liveDir.z * L.liveDir.z) > 1e-8) L.dir.set(L.liveDir.x, 0, L.liveDir.z).normalize();
+      else if (L.follow && L.actor && n.shape === 'cone') { const f = L.actor.object3d.rotation.y; L.dir.set(Math.sin(f), 0, Math.cos(f)); }
       // ---- ground decal
       if (L.decal) {
         const d = L.decal;
@@ -469,23 +495,41 @@ export class Telegraphs {
       }
       // ---- aim line
       if (L.line) this._aim(L, cam, alpha, tracking);
-      // ---- marks
-      if (L.actor) this._marks(L, alpha, prog, pattern, time);
+      // ---- marks (glints, "!", "!!", swirls, rings)
+      this._marks(L, alpha, pattern);
     }
   }
 
   _aim(L, cam, alpha, tracking) {
-    const n = L.n, l = L.line;
-    if (L.actor) weaponPoint(L.actor, _a); else _a.copy(L.origin).setY(L.origin.y + 0.6);
-    if (tracking || !L.frozen) {
-      if (tracking && L.target) { actorWorldPos(L.target, L.aimTo); L.aimTo.y += (L.target.height ?? 1) * 0.55; }
-      else if (!L.target) L.aimTo.copy(_a).addScaledVector(L.dir, n.l);
-      if (!tracking) L.frozen = true;
+    const n = L.n, l = L.line, T = L.target;
+    // start: the live muzzle point, else the shooter's weapon, else the origin
+    if (L.livePos) _a.copy(L.livePos);
+    else if (L.actor) weaponPoint(L.actor, _a);
+    else _a.copy(L.origin).setY(L.origin.y + 0.6);
+    if (L.liveDir) {
+      // the shooter steers the aim and freezes it (rat_xbow aimLock); fx draws along it, ending just past the target
+      _d.copy(L.liveDir);
+      if (_d.lengthSq() < 1e-8) _d.copy(L.dir);
+      _d.normalize();
+      let len = n.l;
+      if (T) {
+        actorWorldPos(T, _q); _q.y += (T.height ?? 1) * 0.55;
+        const along = _q.sub(_a).dot(_d);
+        if (along > 0.5) len = Math.min(n.l, along - 0.1);           // ends at her chest (never between her and the camera)
+      }
+      _b.copy(_a).addScaledVector(_d, len);
+      L.frozen = !tracking;
+    } else {
+      if (!L.frozen) {
+        if (T) { actorWorldPos(T, L.aimTo); L.aimTo.y += (T.height ?? 1) * 0.55; }
+        else L.aimTo.copy(_a).addScaledVector(L.dir, n.l);
+        if (!tracking) L.frozen = true;
+      }
+      _b.subVectors(L.aimTo, _a);
+      const d = _b.length();
+      if (d > 1e-4) _b.multiplyScalar(Math.min(n.l, Math.max(0.3, d - 0.1)) / d);
+      _b.add(_a);
     }
-    _b.subVectors(L.aimTo, _a);
-    const len = _b.length();
-    if (len > n.l) _b.multiplyScalar(n.l / len);
-    _b.add(_a);
     l.set(_a, _b, cam.position, 0.16);
     const u = l.material.uniforms;
     u.uAlpha.value = alpha;
@@ -494,48 +538,69 @@ export class Telegraphs {
     l.mesh.visible = true;
   }
 
-  _marks(L, alpha, prog, pattern, time) {
+  /** Weapon / glint point for marks: the live tell point, else the actor's weapon, else the origin + 0.9 m. */
+  _glintPoint(L, out) {
+    if (L.livePos && L.n.shape === 'glint') return out.copy(L.livePos);
+    if (L.actor) return weaponPoint(L.actor, out);
+    return out.copy(L.origin).setY(L.origin.y + 0.9);
+  }
+
+  _headPoint(L, out, lift) {
+    if (L.actor) return headPoint(L.actor, out, lift);
+    return out.copy(L.origin).setY(L.origin.y + 1.2 + lift);
+  }
+
+  _marks(L, alpha, pattern) {
     const n = L.n, A = L.actor, M = this.marks, t = L.real;
     const pop = Math.min(1, t / 0.12), popS = pop < 1 ? 1 + 2.70158 * (pop - 1) ** 3 + 1.70158 * (pop - 1) ** 2 : 1;
+    // the strike flash: a brighter, bigger glint 0.25 s before the active frame (the audio "ting" lands on it)
     const flashAt = n.duration - 0.25;
     const flash = L.t > flashAt && L.t < flashAt + 0.14 ? Math.sin(((L.t - flashAt) / 0.14) * Math.PI) : 0;
+    const glint = n.shape === 'glint';
     switch (n.kind) {
       case 'parry': {
-        weaponPoint(A, _p);
+        if (!glint && !A) break;
+        this._glintPoint(L, _p);
         const tw = 0.85 + 0.15 * Math.sin(t * 18);
         M.push(_p.x, _p.y, _p.z, (0.62 + 0.5 * flash) * popS * tw, MARK.STAR4, _white, 3.2 + 3 * flash, alpha, t * 0.8, pattern);
         M.push(_p.x, _p.y, _p.z, 0.28 * popS, MARK.SOFT, _white, 2.0, alpha * 0.7);
-        headPoint(A, _q, 0.32 + 0.04 * Math.sin(t * 9));
+        this._headPoint(L, _q, 0.32 + 0.04 * Math.sin(t * 9));
         M.push(_q.x, _q.y, _q.z, 0.34 * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
         break;
       }
       case 'gold': {
-        weaponPoint(A, _p);
+        if (!glint && !A) break;
+        this._glintPoint(L, _p);
         _col.copy(L.color);
         M.push(_p.x, _p.y, _p.z, (0.9 + 0.5 * flash) * popS, MARK.STAR8, _col, 2.8 + 2.5 * flash, alpha, t * 1.1, pattern);
         M.push(_p.x, _p.y, _p.z, 0.45 * popS, MARK.STAR4, _white, 2.4, alpha * 0.9, -t * 0.6, 0);
         break;
       }
       case 'red': {
-        weaponPoint(A, _p);
         const pulse = 0.75 + 0.25 * Math.sin(t * 22);
-        M.push(_p.x, _p.y, _p.z, 0.95 * pulse * popS, MARK.SOFT, RED_GLOW, 2.6, alpha, 0, pattern);
-        // body glow: a halo pushed behind the actor so its silhouette rims red
-        this._behind(A, 0.4, _q);
-        const h = (A.height ?? 1) * (A.object3d?.scale?.y ?? 1);
-        M.push(_q.x, _q.y, _q.z, h * 1.25, MARK.HALO, RED_GLOW, 1.8, alpha * (0.45 + 0.15 * pulse), 0, 0, 1.35);
-        headPoint(A, _q, 0.34 + 0.05 * Math.abs(Math.sin(t * 12)));
+        if (glint || A) {
+          this._glintPoint(L, _p);
+          M.push(_p.x, _p.y, _p.z, 0.95 * pulse * popS, MARK.SOFT, RED_GLOW, 2.6, alpha, 0, pattern);
+        }
+        if (A) {
+          // body glow: a halo pushed behind the actor so its silhouette rims red
+          this._behind(A, 0.4, _q);
+          const h = (A.height ?? 1) * (A.object3d?.scale?.y ?? 1);
+          M.push(_q.x, _q.y, _q.z, h * 1.25, MARK.HALO, RED_GLOW, 1.8, alpha * (0.45 + 0.15 * pulse), 0, 0, 1.35);
+        }
+        this._headPoint(L, _q, 0.34 + 0.05 * Math.abs(Math.sin(t * 12)));
         M.push(_q.x, _q.y, _q.z, 0.5 * popS, MARK.EXCL2, RED_GLOW, 1.3, alpha, 0, pattern, 0.95);
         break;
       }
       case 'grab': {
-        weaponPoint(A, _p);
+        this._glintPoint(L, _p);
         _col.copy(L.color);
         M.push(_p.x, _p.y, _p.z, 0.85 * popS, MARK.SWIRL, _col, 1.9, alpha, t * 2.4);
+        M.push(_p.x, _p.y, _p.z, 0.4 * popS, MARK.SOFT, _col, 1.5, alpha * 0.6);
         break;
       }
       case 'jeer': {
-        headPoint(A, _q, -0.25);
+        this._headPoint(L, _q, -0.25);
         _col.copy(L.color);
         for (let k = 0; k < 2; k++) {
           const f = (t * 1.1 + k * 0.5) % 1;

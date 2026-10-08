@@ -13,23 +13,28 @@ import { PLAYER, ATTACKS } from '../core/config.js';
 import { FOG_FACTOR, OUTPUT, fogUniforms } from './shaders.js';
 import { MARK } from './Marks.js';
 import { SHAPE, FADE, GROW } from './Particles.js';
-import { actorWorldPos, resolveBlade, isActor } from './util.js';
+import { actorWorldPos, resolveBlade, isActor, auraOwner } from './util.js';
 
 const GOLD = new THREE.Color('#FFD57A'), GOLD_CORE = new THREE.Color('#FFF1C4'), SILVER = new THREE.Color('#E4EAF6');
 const HALO_GOLD = new THREE.Color('#FFD98A');
 export const HOLY_LIGHT = { color: '#FFD38A', intensity: 0.6, distance: 3, decay: 2, ahead: 0.5 };
 
-/** Player charge → holy visual state (pure; unit-tested). */
+/**
+ * Player charge → holy visual state (pure; unit-tested). Prefers the player's own `chargeTier` / `chargeFizzled`
+ * (PlayerStates decides tier 2 with `canHoly()`); falls back to the §7.2 thresholds on `charge` (0..1).
+ */
 export function chargeState(p) {
   if (!p) return { level: 0, gold: 0, ready: false, tier: 0 };
-  const ready = (p.valor ?? 0) >= PLAYER.charge.holyMinValor && (p.shards ?? 0) >= (ATTACKS.holy.minShards ?? 1);
+  const ready0 = (p.valor ?? 0) >= PLAYER.charge.holyMinValor && (p.shards ?? 0) >= (ATTACKS.holy.minShards ?? 1);
   if (p.golden) return { level: 1, gold: 1, ready: true, tier: 2 };
   const c = p.charge ?? 0;
-  if (!(c > 0)) return { level: 0, gold: 0, ready, tier: 0 };
+  const hasTier = Number.isFinite(p.chargeTier);
+  if (!(c > 0) && !(hasTier && p.chargeTier > 0)) return { level: 0, gold: 0, ready: ready0, tier: 0 };
   const t1 = (PLAYER.charge.tier1 - PLAYER.charge.start) / (PLAYER.charge.tier2 - PLAYER.charge.start);
-  const tier = c >= 0.999 ? 2 : c >= t1 ? 1 : 0;
-  if (tier === 2 && ready) return { level: 0.85, gold: 1, ready, tier };
-  return { level: 0.2 + 0.45 * Math.min(1, c), gold: 0, ready, tier };
+  const tier = hasTier ? p.chargeTier : c >= 0.999 ? 2 : c >= t1 ? 1 : 0;
+  const ready = hasTier ? tier >= 2 || (!p.chargeFizzled && ready0) : ready0;
+  if (tier >= 2 && ready) return { level: 0.85, gold: 1, ready, tier: 2 };
+  return { level: 0.2 + 0.45 * Math.min(1, c), gold: 0, ready, tier: Math.min(tier, 1) };
 }
 
 // ------------------------------------------------------------------ sparkles (art.md §8)
@@ -177,9 +182,8 @@ export class HolyFX {
     this.states = new Map();
     this.fields = []; this.arcs = [];
     this.light = null;
-    this._prevCharge = 0; this._tierFlags = 0;
     this.bloomLevel = 0;
-    this.fizzles = 0;            // count (tests/smoke)
+    this.fizzles = 0; this.flashes = 0; this.casts = 0;   // counts (tests/smoke)
   }
 
   init(scene) {
@@ -198,21 +202,24 @@ export class HolyFX {
   set(actor, level) {
     if (!isActor(actor)) return;
     const v = Math.max(0, Math.min(1, +level || 0));
+    const own = auraOwner(actor);
     let s = this.states.get(actor);
-    if (!s) { if (v <= 0) { actor.setHoly?.(0); return; } s = new HolyState(); this.states.set(actor, s); }
+    if (!s) { if (v <= 0) return; s = new HolyState(); this.states.set(actor, s); }
     s.explicit = v;
-    if (typeof actor.setHoly === 'function' && s.forwarded !== v) { actor.setHoly(v); s.forwarded = v; }
+    if (own && s.forwarded !== v) { own.setHoly(v); s.forwarded = v; }
   }
 
   level(actor) { return this.states.get(actor)?.level ?? 0; }
 
   /** Holy Slash cast (PLAYER_HOLY): gold crescent (full turn), ground ring, sparkle burst. */
   cast(pos, dir) {
+    this.casts++;
     const r = ATTACKS.holy.arc?.range ?? 3.6;
     const y = pos.y;
     const yaw = dir ? Math.atan2(dir.x, dir.z) : 0;
-    this.arc({ x: pos.x, y: y + 0.7, z: pos.z, theta0: yaw + 1.2, sweep: -Math.PI * 2, r0: 0.9, r1: r, thick: 0.45, life: 0.32, grow: 0.16, intensity: 3.2 });
-    this.arc({ x: pos.x, y: y + 0.06, z: pos.z, ring: true, r0: 0.4, r1: r + 0.4, thick: 0.35, life: 0.45, grow: 0.45, intensity: 2.2 });
+    // the gold crescent follows the blade's full turn at chest height; the ground ring decal races out to the reach
+    this.arc({ x: pos.x, y: y + 0.75, z: pos.z, theta0: yaw + 1.2, sweep: -Math.PI * 2, r0: 1.1, r1: r * 0.9, thick: 0.32, life: 0.3, grow: 0.16, intensity: 1.5 });
+    this.arc({ x: pos.x, y: y + 0.06, z: pos.z, ring: true, r0: 0.4, r1: r + 0.4, thick: 0.28, life: 0.45, grow: 0.45, intensity: 1.2 });
     _p.set(pos.x, y + 0.9, pos.z);
     this.particles.burst(_p, { additive: true, n: 28, shape: SHAPE.STAR4, color: '#FFE3A3', intensity: 2.6, size: [0.16, 0.3], sizeEnd: 0.2,
       life: [0.5, 0.9], speed: [2.5, 5.0], spread: Math.PI, gravity: -0.5, drag: 2.2, fade: FADE.TWINKLE, jitter: 0.3 });
@@ -221,8 +228,8 @@ export class HolyFX {
   /** Sunburst (end of Golden Hour, `ATTACKS.sunburst` r 6). */
   sunburst(pos) {
     const r = ATTACKS.sunburst?.arc?.range ?? 6;
-    this.arc({ x: pos.x, y: pos.y + 0.08, z: pos.z, ring: true, r0: 0.5, r1: r, thick: 0.6, life: 0.6, grow: 0.5, intensity: 2.6 });
-    this.arc({ x: pos.x, y: pos.y + 0.8, z: pos.z, theta0: 0, sweep: Math.PI * 2, r0: 1, r1: r, thick: 0.7, life: 0.45, grow: 0.3, intensity: 2.4 });
+    this.arc({ x: pos.x, y: pos.y + 0.08, z: pos.z, ring: true, r0: 0.5, r1: r, thick: 0.45, life: 0.6, grow: 0.5, intensity: 1.4 });
+    this.arc({ x: pos.x, y: pos.y + 0.8, z: pos.z, theta0: 0, sweep: Math.PI * 2, r0: 1, r1: r * 0.85, thick: 0.4, life: 0.45, grow: 0.3, intensity: 1.3 });
     _p.set(pos.x, pos.y + 1.0, pos.z);
     this.particles.burst(_p, { additive: true, n: 40, shape: SHAPE.STAR4, color: '#FFE3A3', intensity: 2.6, size: [0.18, 0.32], sizeEnd: 0.2,
       life: [0.6, 1.0], speed: [3, 7], spread: Math.PI, gravity: -0.3, drag: 2, fade: FADE.TWINKLE, jitter: 0.4 });
@@ -230,7 +237,7 @@ export class HolyFX {
 
   /** Golden Hour activation burst (§7.5). */
   goldenOn(pos) {
-    this.arc({ x: pos.x, y: pos.y + 0.06, z: pos.z, ring: true, r0: 0.3, r1: PLAYER.golden.staggerRadius ?? 8, thick: 0.5, life: 0.8, grow: 0.7, intensity: 2.2 });
+    this.arc({ x: pos.x, y: pos.y + 0.06, z: pos.z, ring: true, r0: 0.3, r1: PLAYER.golden.staggerRadius ?? 8, thick: 0.4, life: 0.8, grow: 0.7, intensity: 1.4 });
     _p.set(pos.x, pos.y + 0.8, pos.z);
     this.particles.burst(_p, { additive: true, n: 36, shape: SHAPE.STAR4, color: '#FFF1C4', intensity: 2.8, size: [0.18, 0.3], sizeEnd: 0.3,
       life: [0.8, 1.3], speed: [1.5, 4], spread: Math.PI, gravity: -1.2, drag: 1.5, fade: FADE.TWINKLE, jitter: 0.3 });
@@ -248,12 +255,11 @@ export class HolyFX {
   }
 
   clear() {
-    for (const [actor, s] of this.states) { if (s.field) { s.field.actor = null; s.field.points.visible = false; } if (s.forwarded > 0) actor.setHoly?.(0); }
+    for (const [actor, s] of this.states) { if (s.field) { s.field.actor = null; s.field.points.visible = false; } if (s.forwarded > 0) auraOwner(actor)?.setHoly(0); }
     this.states.clear();
     for (const a of this.arcs) a.mesh.visible = false;
     if (this.light) this.light.intensity = 0;
     this.bloomLevel = 0;
-    this._prevCharge = 0; this._tierFlags = 0;
   }
 
   /** Per frame. `dt` = visual dt, `realDt` = real frame dt. */
@@ -264,7 +270,6 @@ export class HolyFX {
     if (isActor(player) && player.alive !== false) {
       const cs = chargeState(player);
       autoLevel = cs.level; autoGold = cs.gold;
-      this._chargeFlashes(player, cs);
       if (autoLevel > 0 && !this.states.has(player)) this.states.set(player, new HolyState());
     }
     let best = null, bestL = 0, bloom = 0;
@@ -278,12 +283,12 @@ export class HolyFX {
       const gone = actor.alive === false || !actor.object3d?.parent;
       if ((s.level < 0.003 && tgt === 0) || gone) {
         if (s.field) { s.field.actor = null; s.field.points.visible = false; s.field = null; }
-        if (s.forwarded > 0 && gone) actor.setHoly?.(0);
+        if (s.forwarded > 0 && gone) auraOwner(actor)?.setHoly(0);
         if (tgt === 0 || gone) { this.states.delete(actor); continue; }
       }
       s.t += dt;
       this._sparkles(actor, s, time);
-      const own = typeof actor.setHoly === 'function';
+      const own = !!auraOwner(actor);
       if (!own) { this._halo(actor, s); this._streak(actor, s, dt); }
       const L = s.level * s.gold;
       if (L > bestL) { bestL = L; best = actor; }
@@ -374,32 +379,32 @@ export class HolyFX {
     }
   }
 
-  /** Tier flashes while the player charges (silver at tier 1; gold or a fizzle at tier 2). */
-  _chargeFlashes(p, cs) {
-    const c = p.charge ?? 0;
-    if (!(c > 0) || p.golden) { this._tierFlags = 0; this._prevCharge = 0; return; }
-    if (cs.tier >= 1 && !(this._tierFlags & 1)) {
-      this._tierFlags |= 1;
-      if (resolveBlade(p, _h, _t)) this.particles.burst(_t, { additive: true, n: 10, shape: SHAPE.STAR4, color: '#EEF3FF', intensity: 2.6,
+  /**
+   * player:charge {level, fizzle, holy}: tier flashes at the blade tip — silver at tier 1 (Bright Slash ready), a gold
+   * 8-point star at tier 2 (Holy ready), or the §7.2 fizzle (the gold sparkles visibly fizzle) when Holy is not ready.
+   */
+  chargeEvent(p, e) {
+    if (!isActor(p) || !e) return;
+    const lvl = e.level ?? 0;
+    if (!(lvl > 0)) return;
+    const at = resolveBlade(p, _h, _t) ? _t : actorWorldPos(p, _t).setY(_t.y + 0.8);
+    if (e.fizzle) {
+      this.fizzles++;
+      this.particles.burst(at, { additive: true, n: 16, shape: SHAPE.SPARK, color: '#E8B04A', intensity: 1.4, size: [0.05, 0.08], sizeEnd: 0.2,
+        life: [0.35, 0.6], speed: [0.8, 2.0], spread: 1.2, dir: _q.set(0, 1, 0), gravity: 9, drag: 1.5, stretch: 3, fade: FADE.TWINKLE });
+      this.particles.burst(at, { n: 3, shape: SHAPE.PUFF, color: '#9C968A', alpha: 0.5, size: [0.08, 0.12], sizeEnd: 2.2, grow: GROW.OUT,
+        life: [0.4, 0.6], speed: [0.2, 0.5], up: 0.6, drag: 2 });
+    } else if (lvl >= 1 || e.holy) {
+      this.flashes++;
+      this.particles.single(at, { shape: SHAPE.STAR8, color: '#FFD34D', intensity: 3, size0: 0.2, size1: 1.1, life: 0.32, grow: GROW.OUT, fade: FADE.POP, spin: 2 });
+      this.particles.burst(at, { additive: true, n: 18, shape: SHAPE.STAR4, color: '#FFE3A3', intensity: 2.8, size: [0.14, 0.26], sizeEnd: 0.3,
+        life: [0.4, 0.7], speed: [1.5, 3.2], spread: Math.PI, drag: 2.5, fade: FADE.TWINKLE });
+    } else {
+      this.flashes++;
+      this.particles.single(at, { shape: SHAPE.STAR4, color: '#EEF3FF', intensity: 2.6, size0: 0.15, size1: 0.7, life: 0.22, grow: GROW.OUT, fade: FADE.POP });
+      this.particles.burst(at, { additive: true, n: 10, shape: SHAPE.STAR4, color: '#EEF3FF', intensity: 2.6,
         size: [0.14, 0.24], sizeEnd: 0.3, life: [0.3, 0.45], speed: [1.0, 2.4], spread: Math.PI, drag: 3, fade: FADE.POP });
     }
-    if (cs.tier >= 2 && !(this._tierFlags & 2)) {
-      this._tierFlags |= 2;
-      const at = resolveBlade(p, _h, _t) ? _t : actorWorldPos(p, _t).setY(_t.y + 0.8);
-      if (cs.ready) {
-        this.particles.single(at, { shape: SHAPE.STAR8, color: '#FFD34D', intensity: 3, size0: 0.2, size1: 1.1, life: 0.32, grow: GROW.OUT, fade: FADE.POP, spin: 2 });
-        this.particles.burst(at, { additive: true, n: 18, shape: SHAPE.STAR4, color: '#FFE3A3', intensity: 2.8, size: [0.14, 0.26], sizeEnd: 0.3,
-          life: [0.4, 0.7], speed: [1.5, 3.2], spread: Math.PI, drag: 2.5, fade: FADE.TWINKLE });
-      } else {
-        // the gold sparkles visibly fizzle (§7.2): a puff of dim gold sparks that drop and die
-        this.fizzles++;
-        this.particles.burst(at, { additive: true, n: 16, shape: SHAPE.SPARK, color: '#E8B04A', intensity: 1.4, size: [0.05, 0.08], sizeEnd: 0.2,
-          life: [0.35, 0.6], speed: [0.8, 2.0], spread: 1.2, dir: _q.set(0, 1, 0), gravity: 9, drag: 1.5, stretch: 3, fade: FADE.TWINKLE });
-        this.particles.burst(at, { n: 3, shape: SHAPE.PUFF, color: '#9C968A', alpha: 0.5, size: [0.08, 0.12], sizeEnd: 2.2, grow: GROW.OUT,
-          life: [0.4, 0.6], speed: [0.2, 0.5], up: 0.6, drag: 2 });
-      }
-    }
-    this._prevCharge = c;
   }
 
   dispose() {

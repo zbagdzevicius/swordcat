@@ -18,7 +18,7 @@ import { NpcActor } from './NpcActor.js';
 import { LostKitten } from './LostKitten.js';
 import { Pudding, PUDDING } from './Pudding.js';
 import { BARKS, lineText } from './lines.js';
-import { BarkGate, COMPANION_IDS, JOIN_FLAGS, followSlot, FOLLOW_SIDE } from './steering.js';
+import { BarkGate, COMPANION_IDS, JOIN_FLAGS, followSlot, groundY, FOLLOW_SIDE, SLOT } from './steering.js';
 
 const _slot = { x: 0, z: 0 };
 const toVec = (p) => (p == null ? new THREE.Vector3()
@@ -36,6 +36,8 @@ export class CompanionManager {
     this.actors = [];
     /** live Shield Walls */
     this.walls = [];
+    /** hiding props and opened cages left behind by kittens who went home ({ root, collider }) */
+    this.dressing = [];
     /** arena ids cleared in the current level (cage / stand hides that need a clear) */
     this.cleared = new Set();
     this.gate = new BarkGate({ gap: 6, noRepeat: 60 });
@@ -102,14 +104,15 @@ export class CompanionManager {
     return this.active;
   }
 
-  /** Put companions beside her (behind, on their side), on the ground. */
+  /** Put companions beside her (just behind her shoulder, on their side, where the camera sees them), on the ground. */
   _place(list = this.active) {
     const p = this.ctx.player;
     if (!p) return;
     for (const c of list) {
-      followSlot(p.pos, p.facing, FOLLOW_SIDE[c.kittenId] ?? 1, _slot, { dist: 1.6 });
-      c.pos.set(_slot.x, this.ctx.physics?.heightAt?.(_slot.x, _slot.z) ?? p.pos.y, _slot.z);
+      followSlot(p.pos, p.facing, FOLLOW_SIDE[c.kittenId] ?? 1, _slot, { dist: SLOT.regroupDist, angle: SLOT.regroupAngle });
+      c.pos.set(_slot.x, groundY(this.ctx, _slot.x, _slot.z, p.pos.y), _slot.z);
       c.vel.set(0, 0, 0); c.facing = p.facing; c.heading = p.facing; c.target = null; c.losT = 0;
+      c.herStillT = SLOT.besideAfter; c.settled = true;
       c.snap(); c.visual?.snap();
     }
   }
@@ -127,7 +130,7 @@ export class CompanionManager {
     this.setActive([...this.active.map((c) => c.kittenId), id], { place: !pos });
     const c = this.active.find((x) => x.kittenId === id);
     if (c && pos) {
-      pos.y = this.ctx.physics?.heightAt?.(pos.x, pos.z) ?? pos.y;
+      pos.y = groundY(this.ctx, pos.x, pos.z, pos.y);
       c.pos.copy(pos); c.facing = facing; c.snap(); c.visual?.snap(); c.visual?.hop(0.3);
     }
     return true;
@@ -156,7 +159,9 @@ export class CompanionManager {
 
   _add(actor, id) {
     this.actors.push(actor);
-    this.ctx.actors.register(actor, id);
+    // a party member keeps its cutscene id (a reloaded level re-spawning the empty squire cage must not steal 'mochi')
+    const taken = this.active.some((c) => c.kittenId === id && c !== actor);
+    this.ctx.actors.register(actor, taken ? undefined : id);
     this.ctx.scene.add(actor.object3d);
     return actor;
   }
@@ -164,7 +169,7 @@ export class CompanionManager {
   /** Spawn a scripted NPC (cutscene `spawn` step). 'pudding' creates the Pudding actor. */
   spawnNpc(id, pos, facing = 0) {
     const at = toVec(pos);
-    if (at.y === 0 && this.ctx.physics?.heightAt) at.y = this.ctx.physics.heightAt(at.x, at.z);
+    if (at.y === 0) at.y = groundY(this.ctx, at.x, at.z, this.ctx.physics?.heightAt?.(at.x, at.z) ?? 0);
     if (id === 'pudding') {
       if (this.pudding) this.despawn(this.pudding);
       const p = new Pudding(this.ctx, { pos: at, facing });
@@ -201,16 +206,25 @@ export class CompanionManager {
   despawn(actor) {
     const i = this.actors.indexOf(actor);
     if (i >= 0) this.actors.splice(i, 1);
+    const d = actor instanceof LostKitten ? actor.releaseDressing() : null;    // the barrel / empty cage stays
+    if (d) this.dressing.push(d);
     if (this.pudding === actor) this.pudding = null;
     this.ctx.actors.unregister(actor);
     actor.dispose();
+    for (const c of this.active) if (!this.ctx.actors.get(c.kittenId)) this.ctx.actors.register(c, c.kittenId);
   }
 
   clearLevel() {
     for (const a of [...this.actors]) this.despawn(a);
+    for (const d of this.dressing) {
+      d.root.removeFromParent();
+      d.cage?.traverse((o) => { if (o.isMesh) o.geometry?.dispose(); });     // procedural; GLB clones share the cache
+      if (d.collider) { try { this.ctx.physics?.removeCollider?.(d.collider); } catch { /* level gone */ } }
+    }
+    this.dressing.length = 0;
     for (const w of this.walls) w.dispose();
     this.walls.length = 0;
-    for (const c of this.active) { c._endAbility(); c.target = null; }
+    for (const c of this.active) { c._endAbility(); c.clearArrows(); c.target = null; }
     this.cleared.clear();
   }
 
@@ -246,14 +260,22 @@ export class CompanionManager {
     if (category === 'meow') key = keys[0];
     else key = this.gate.pick(keys, this.ctx.game?.time ?? 0, this.ctx.rng ?? Math.random, { chance, force });
     if (!key) return null;
-    actor.bubble.show(lineText(this.ctx, key), dur);
+    const text = lineText(this.ctx, key);
+    actor.bubble.show(text, dur);
     actor.visual?.emote('meow');
+    this.babble(actor, text);
     return key;
+  }
+
+  /** Babble blips for a bubble line (§16.4), only in play: cutscene dialogue owns the voice channel. */
+  babble(actor, text) {
+    if (this.ctx.game?.mode !== 'play' && this.ctx.game?.mode !== 'memecam') return;
+    try { this.ctx.audio?.babble?.(actor.kittenId ?? actor.npcId ?? 'kitten', text); } catch (e) { console.warn('[companions] babble failed', e); }
   }
 
   /** A lost kitten was rescued: the active companion may cheer about it. */
   onKittenRescued(k) {
-    for (const c of this.active) if (c.napT <= 0 && !c.scripted) { this.bark(c, 'kitten', { chance: 0.5 }); break; }
+    for (const c of this.active) if (c.napT <= 0 && !c.scripted) { this.bark(c, 'kitten', { chance: 0.25 }); break; }
   }
 
   // ------------------------------------------------------------------ events
@@ -286,6 +308,7 @@ export class CompanionManager {
 
   _onLevelLoaded(p) {
     this._syncFromState();
+    for (const c of this.active) if (c.object3d.parent !== this.ctx.scene) this.ctx.scene.add(c.object3d);   // a level swap may clear the scene
     this._place();
     for (const c of this.active) { if (c.napT > 0) c.wake(); c.hp = c.maxHp; c.cooldown = 0; }
     // Pudding's meadow state after CS-03 (the level reloads after a death or a save)

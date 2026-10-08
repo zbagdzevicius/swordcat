@@ -135,11 +135,13 @@ export function colander() {
 export function signpost() {
   const gb = new GeoBuilder(), wood = rgb('#7A5A3E'), board = rgb('#A88458');
   gb.add(new THREE.CylinderGeometry(0.035, 0.045, 1.4, 8), { matrix: mat([0, 0.7, 0]), color: wood, rmse: RM.wood });
+  let tilt = 0.031;
   const arrow = (y, yaw, len) => {
+    tilt = -tilt * 1.4; // a little crooked, deterministic
     const s = new THREE.Shape();
     s.moveTo(0, -0.055); s.lineTo(len - 0.07, -0.055); s.lineTo(len, 0); s.lineTo(len - 0.07, 0.055); s.lineTo(0, 0.055); s.closePath();
     const g = new THREE.ExtrudeGeometry(s, { depth: 0.022, bevelEnabled: false }).translate(0.02, 0, -0.011);
-    gb.add(g, { matrix: mat([0, y, 0], [0, yaw, (Math.random() - 0.5) * 0.08]), color: (v) => mixRgb(board, wood, smoothstep(0.4, 0.9, Math.sin(v.x * 60) * 0.5 + 0.5) * 0.3), rmse: RM.wood });
+    gb.add(g, { matrix: mat([0, y, 0], [0, yaw, tilt]), color: (v) => mixRgb(board, wood, smoothstep(0.4, 0.9, Math.sin(v.x * 60) * 0.5 + 0.5) * 0.3), rmse: RM.wood });
   };
   arrow(1.22, 0.3, 0.42); arrow(1.06, Math.PI - 0.5, 0.38);
   gb.add(new THREE.TorusGeometry(0.02, 0.004, 6, 12, Math.PI * 1.4), { matrix: mat([0.05, 0.85, 0], [0, 0, -0.5]), color: rgb('#3B3D42'), rmse: RM.iron });

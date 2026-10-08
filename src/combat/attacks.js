@@ -39,6 +39,8 @@ export const COMBAT = Object.freeze({
   projectileDedupe: 0.1,
   /** Reflected projectiles home on their original shooter when it lies within this half-angle of the flipped path. */
   reflectAimCone: Math.PI / 3,
+  /** ...and keep curving toward it at up to this rate (rad/s) while it stays inside that cone (it may dodge). */
+  reflectHomingRate: 5,
   /** Wave crescents (holyWave, gleam) ride the ground with their centre at max(height/2, waveHover) m. */
   waveHover: 0.6,
   /** Wave hit-shape thickness (m, along travel) and crescent height when a def has no `height` (× width). */
@@ -103,9 +105,12 @@ export function isActive(def, t, active = def?.active) {
 
 /**
  * GAME_DESIGN §8.2 row for a hit: 'hurt' (the player takes it), 'holy' (holy / sunburst), 'heavy' or 'light'.
+ * `targetFaction === 'bump'` marks a harmless 0-damage hit on the player (tutorial dummy / sack, web glob): the
+ * light row's hitstop and shake, no rumble.
  * @param {any} def @param {string} [targetFaction]
  */
 export function juiceKind(def, targetFaction) {
+  if (targetFaction === 'bump') return 'bump';
   if (targetFaction === 'player') return 'hurt';
   if (def?.id === 'holy' || def?.id === 'sunburst') return 'holy';
   return def?.heavy ? 'heavy' : 'light';
@@ -123,6 +128,7 @@ export function juiceFor(def, targetFaction, attackerFaction) {
   if (kind === 'hurt') {
     return { kind, hitstop: PLAYER.hurt.hitstop, shake: (def?.shake ?? PLAYER.hurt.shake) * JUICE.hurt.shakeMul, rumble: JUICE.hurt.rumble };
   }
+  if (kind === 'bump') return { kind, hitstop: JUICE.light.hitstop, shake: JUICE.light.shake, rumble: null };
   const row = JUICE[kind];
   const playerSide = attackerFaction === 'player';
   return {

@@ -18,7 +18,7 @@ import { relYaw, pickLockTarget, switchLockTarget, nearestLockTarget, FlickDetec
 import { segmentHitsBox, distSqPointSegment, OccluderFader } from '../../src/camera/Occluders.js';
 import { CutsceneCamera, normalizeShot } from '../../src/camera/CutsceneCamera.js';
 import { MemeCam } from '../../src/camera/MemeCam.js';
-import { FollowCamera, aspectFov, DEFAULT_PITCH } from '../../src/camera/FollowCamera.js';
+import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, FADE_MAX_DIST } from '../../src/camera/FollowCamera.js';
 import manifest from '../../src/camera/assets.manifest.js';
 
 const { CAMERA, PLAYER } = config;
@@ -226,7 +226,10 @@ test('OccluderFader: a tree between the camera and her fades to CAMERA.treeFadeO
   assert.equal(tree.material, mat, 'original material restored');
   const m = new THREE.Matrix4(); inst.getMatrixAt(1, m);
   assert.equal(m.elements[0], 0, 'occluding instance hidden (zero scale)');
-  assert.ok(scene.children.some((c) => c.name === 'cam:fadeProxy' && c.visible), 'proxy drawn instead');
+  const px = scene.children.find((c) => c.name === 'cam:fadeProxy' && c.visible);
+  assert.ok(px, 'proxy drawn instead');
+  assert.equal(px.isInstancedMesh, true, 'instanced source → single-instance InstancedMesh proxy (same shader path)');
+  px.getMatrixAt(0, m); near(m.elements[14], 2, 1e-9, 'proxy instance matrix = the hidden instance');
   fader.clear();
   inst.getMatrixAt(1, m); assert.equal(m.elements[0], 1, 'instance matrix restored on clear');
   assert.equal(fader.count, 0);
@@ -434,15 +437,184 @@ test('FollowCamera: preset() / shot() / camera:mode, handback with a 0.6 s blend
   near(ctx.camera.position.distanceTo(new THREE.Vector3(0, CAMERA.pivotY, 0)), CAMERA.dist, 1e-6, 'handed back');
 });
 
-test('FollowCamera: E.SHAKE and juice events add trauma; Holy punches the FOV +5°', async () => {
+test('FollowCamera: E.SHAKE adds trauma (combat owns hit/parry/block shakes: no double); dizzy shakes once; Holy punches the FOV +5°', async () => {
   const { ctx, cam } = await makeCam();
   ctx.bus.emit(E.SHAKE, { trauma: 0.3 }); near(cam.shaker.trauma, 0.3, 1e-9);
-  ctx.bus.emit(E.PLAYER_PARRY, {}); near(cam.shaker.trauma, 0.3 + config.JUICE.parry.shake, 1e-9);
+  ctx.bus.emit(E.PLAYER_PARRY, {}); near(cam.shaker.trauma, 0.3, 1e-9, 'parry shake comes from combat via E.SHAKE');
+  ctx.bus.emit(E.HIT, { target: ctx.player, blocked: true }); near(cam.shaker.trauma, 0.3, 1e-9, 'block shake comes from combat');
+  ctx.bus.emit(E.BOSS_DIZZY, { dizzy: true }); near(cam.shaker.trauma, 0.3 + config.JUICE.dizzy.shake, 1e-9);
+  ctx.bus.emit(E.BOSS_DIZZY, { dizzy: true }); near(cam.shaker.trauma, 0.3 + config.JUICE.dizzy.shake, 1e-9, 'once per dizzy');
   ctx.bus.emit(E.PLAYER_HOLY, {});
   frames(cam, 5);
   assert.ok(ctx.camera.fov > CAMERA.fov + 2, `fov punch ${ctx.camera.fov}`);
   frames(cam, 20);
   near(ctx.camera.fov, CAMERA.fov, 1e-3);
+});
+
+/** Static obstacles as spheres around a collider description (`src`, what physics returns as hit.object). */
+function staticPhysics(ctx, obstacles) {
+  const cast = (ray, radius, max) => {
+    let best = null;
+    for (const o of obstacles) {
+      const oc = ray.origin.clone().sub(o.c), b = oc.dot(ray.direction), c = oc.lengthSq() - (o.r + radius) ** 2;
+      const disc = b * b - c;
+      if (disc < 0) continue;
+      let t = -b - Math.sqrt(disc);
+      if (t < 0) { if (c < 0) t = 0; else continue; }
+      if (t <= max && (!best || t < best.distance)) best = { distance: t, kind: 'static', object: o.src, point: ray.at(t, new THREE.Vector3()), normal: new THREE.Vector3(0, 1, 0) };
+    }
+    return best;
+  };
+  ctx.physics.sphereCast = (ray, radius, max) => cast(ray, radius, max);
+  ctx.physics.raycast = (ray, max) => cast(ray, 0, max);
+}
+
+test('camTransparent: thin circles / segments / cam:false skip; boxes, big circles, cam:true block', () => {
+  assert.equal(camTransparent({ x: 0, z: 0, r: 0.3 }), true, 'trunk');
+  assert.equal(camTransparent({ x: 0, z: 0, r: THIN_RADIUS + 0.1 }), false, 'big rock');
+  assert.equal(camTransparent({ ax: 0, az: 0, bx: 4, bz: 0 }), true, 'fence segment');
+  assert.equal(camTransparent({ minX: -1, maxX: 1, minZ: -1, maxZ: 1 }), false, 'house box');
+  assert.equal(camTransparent({ x: 0, z: 0, hx: 3, hz: 3 }), false, 'centre-form box');
+  assert.equal(camTransparent({ minX: -1, maxX: 1, minZ: -1, maxZ: 1, cam: false }), true, 'tagged cam:false');
+  assert.equal(camTransparent({ x: 0, z: 0, r: 0.2, cam: true }), false, 'tagged cam:true');
+  assert.equal(camTransparent(null), false);
+});
+
+test('FollowCamera: spring arm collides with solid statics and skips thin ones (they fade instead)', async () => {
+  const { ctx, cam } = await makeCam();
+  const obstacles = [];
+  staticPhysics(ctx, obstacles);
+  frames(cam, 2);
+  const piv = cam.pivot.clone(), dir = ctx.camera.position.clone().sub(piv).normalize();
+  const along = (d) => piv.clone().addScaledVector(dir, d);
+  const t = along(1.5);
+  obstacles.push({ c: t, r: 0.3, src: { x: t.x, z: t.z, r: 0.3 } });                     // a trunk right on the arm
+  frames(cam, 60);
+  near(ctx.camera.position.distanceTo(cam.pivot), CAMERA.dist, 0.02, 'trunk ignored');
+  const house = { minX: -2, maxX: 2, minZ: -5, maxZ: -3 };
+  obstacles.push({ c: along(3.0), r: 0.5, src: house });                                   // a wall behind the trunk
+  frames(cam, 60);
+  near(ctx.camera.position.distanceTo(cam.pivot), 3.0 - 0.5 - 0.2 - 0.05, 0.03, 'pulled in to the wall');
+  house.cam = false;
+  frames(cam, 150);
+  near(ctx.camera.position.distanceTo(cam.pivot), CAMERA.dist, 0.03, 'cam:false wall ignored, eased back out');
+  // a wall hugging the trunk (the restart lands inside it): stop at the trunk, never inside the wall
+  house.cam = undefined;
+  obstacles[1].c = along(2.2);
+  frames(cam, 60);
+  const d = ctx.camera.position.distanceTo(cam.pivot);
+  assert.ok(d <= 2.2 - 0.5 - 0.2 + 1e-6 && d >= ARM_MIN_T, `conservative stop ${d.toFixed(3)}`);
+});
+const ARM_MIN_T = 0.8;
+
+test('FollowCamera: lock line of sight ignores trunks, breaks after 1.5 s behind a wall', async () => {
+  const { ctx, cam } = await makeCam();
+  const obstacles = [];
+  staticPhysics(ctx, obstacles);
+  const e = enemyAt(ctx, 0, 6);
+  assert.equal(cam.lock(e), e);
+  obstacles.push({ c: new THREE.Vector3(0, 1, 3), r: 0.3, src: { x: 0, z: 3, r: 0.3 } });
+  for (let i = 0; i < 150; i++) cam.update(1 / 60);
+  assert.equal(cam.lockTarget, e, 'a trunk does not break the lock');
+  obstacles.push({ c: new THREE.Vector3(0, 1, 4), r: 0.8, src: { minX: -3, maxX: 3, minZ: 3.5, maxZ: 4.5 } });
+  for (let i = 0; i < 60; i++) cam.update(1 / 60);
+  assert.equal(cam.lockTarget, e, 'still locked after 1 s');
+  for (let i = 0; i < 40; i++) cam.update(1 / 60);
+  assert.equal(cam.lockTarget, null, 'broken after > 1.5 s without line of sight');
+});
+
+test('OccluderFader: BatchedMesh instances (camFadeIds) hide and draw through a proxy; untagged batches are ignored', () => {
+  const scene = new THREE.Scene();
+  const mat = new THREE.MeshStandardMaterial({ color: '#ffffff' });
+  const bm = new THREE.BatchedMesh(4, 4000, 12000, mat);
+  const gT = bm.addGeometry(new THREE.CylinderGeometry(0.4, 0.4, 3).translate(0, 1.5, 0)), gR = bm.addGeometry(new THREE.BoxGeometry(1, 1, 1));
+  const a = bm.addInstance(gT); bm.setMatrixAt(a, new THREE.Matrix4().makeTranslation(0, 0, -2));
+  const b = bm.addInstance(gR); bm.setMatrixAt(b, new THREE.Matrix4().makeTranslation(0, 0.5, -3));
+  const c = bm.addInstance(gT); bm.setMatrixAt(c, new THREE.Matrix4().makeTranslation(8, 0, 8));
+  bm.setColorAt(a, new THREE.Color(0.5, 0.5, 0.5));
+  bm.userData.camFadeIds = [a, c];
+  scene.add(bm);
+  const untagged = new THREE.BatchedMesh(2, 400, 1200, new THREE.MeshStandardMaterial());
+  untagged.name = 'trees';
+  untagged.addInstance(untagged.addGeometry(new THREE.BoxGeometry(1, 1, 1)));
+  scene.add(untagged);
+  const fader = new OccluderFader({ minOpacity: CAMERA.treeFadeOpacity });
+  assert.equal(fader.scan(scene, scene), 2, 'the two tagged trunks only');
+  const camPos = new THREE.Vector3(0, 1.5, -4.5), subj = [new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(0, 1.05, 0)];
+  for (let i = 0; i < 90; i++) fader.update(1 / 60, camPos, subj);
+  assert.equal(bm.getVisibleAt(a), false, 'occluding trunk instance hidden');
+  assert.equal(bm.getVisibleAt(b), true, 'untagged rock instance untouched');
+  assert.equal(bm.getVisibleAt(c), true, 'far trunk untouched');
+  const proxy = scene.children.find((o) => o.name === 'cam:fadeProxy' && o.visible);
+  assert.ok(proxy, 'proxy drawn instead');
+  const range = bm.getGeometryRangeAt(gT);
+  assert.equal(proxy.geometry.index, bm.geometry.index, 'proxy shares the batch buffers');
+  assert.deepEqual([proxy.geometry.drawRange.start, proxy.geometry.drawRange.count], [range.start, range.count]);
+  near(proxy.material.opacity, CAMERA.treeFadeOpacity, 0.02);
+  near(proxy.material.color.r, 0.5, 1e-6, 'instance colour carried over');
+  camPos.set(0, 1.5, 4);
+  for (let i = 0; i < 120; i++) fader.update(1 / 60, camPos, subj);
+  assert.equal(bm.getVisibleAt(a), true, 'restored');
+  assert.equal(proxy.visible, false, 'proxy released');
+  // an instance the world has culled is never faded (and never re-shown by the camera)
+  bm.setVisibleAt(a, false);
+  camPos.set(0, 1.5, -4.5);
+  for (let i = 0; i < 90; i++) fader.update(1 / 60, camPos, subj);
+  fader.clear();
+  assert.equal(bm.getVisibleAt(a), false, 'world-hidden instance stays hidden');
+});
+
+test('OccluderFader: big merged trees are refined against triangles (passing under the canopy does not fade)', () => {
+  const scene = new THREE.Scene();
+  const trunk = new THREE.CylinderGeometry(0.3, 0.3, 3, 8).translate(0, 1.5, 0).toNonIndexed();
+  const crown = new THREE.IcosahedronGeometry(2.5, 1).translate(0, 4.5, 0).toNonIndexed();
+  const merged = new THREE.BufferGeometry();
+  const pos = new Float32Array(trunk.attributes.position.array.length + crown.attributes.position.array.length);
+  pos.set(trunk.attributes.position.array, 0); pos.set(crown.attributes.position.array, trunk.attributes.position.array.length);
+  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const tree = new THREE.Mesh(merged, new THREE.MeshStandardMaterial());
+  tree.position.set(0, 0, -2); tree.userData.camFade = true; scene.add(tree);
+  const fader = new OccluderFader({ minOpacity: CAMERA.treeFadeOpacity });
+  assert.equal(fader.scan(scene, scene), 1);
+  assert.equal(fader.units[0].precise, true, 'radius > PRECISE_RADIUS → triangle refinement');
+  // under the crown, 1.2 m beside the trunk: the merged box is hit, the triangles are not
+  const camPos = new THREE.Vector3(1.2, 1.2, -4.5), subj = [new THREE.Vector3(1.2, 0.5, 0), new THREE.Vector3(1.2, 1.05, 0)];
+  for (let i = 0; i < 60; i++) fader.update(1 / 60, camPos, subj);
+  assert.equal(fader.fadedCount, 0, 'no fade under the canopy');
+  camPos.x = 0; subj[0].x = 0; subj[1].x = 0;
+  for (let i = 0; i < 60; i++) fader.update(1 / 60, camPos, subj);
+  assert.equal(fader.fadedCount, 1, 'the trunk itself fades');
+  fader.clear();
+});
+
+test('FollowCamera: memeT follows a MEME_LOOP cutscene shot (title loop sync) and resets on the next shot', async () => {
+  const { ctx, cam } = await makeCam();
+  ctx.game.mode = 'cutscene';
+  cam.shot({ preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut' });
+  frames(cam, 60);
+  assert.equal(cam.memeLooping, true);
+  near(cam.memeT, 1.0, 0.02);
+  frames(cam, 180);                                   // 4.0 s in → wrapped at 3.8
+  near(cam.memeT, 4.0 - PLAYER.memeCam.loop, 0.02);
+  near(cam.memePhase, cam.memeT / PLAYER.memeCam.loop, 1e-9);
+  cam.shot({ preset: 'HERO_LOW', anchor: 'swordcat', mode: 'cut' });
+  frames(cam, 2);
+  assert.equal(cam.memeLooping, false); assert.equal(cam.memeT, 0);
+});
+
+test('FollowCamera: tree fade works in close shots, never in far establishing shots', async () => {
+  const { ctx, cam } = await makeCam();
+  ctx.game.mode = 'cutscene';
+  const bush = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshStandardMaterial());
+  bush.position.set(0.4, 0.42, 1.1); ctx.scene.add(bush);
+  assert.equal(cam.addFadeable(bush), 1);
+  cam.shot({ preset: 'HERO_LOW', anchor: 'swordcat', mode: 'cut' });       // camera (0.8, 0.35, 2.2) → her: the bush is in between
+  frames(cam, 60);
+  assert.equal(cam._fader.fadedCount, 1, 'close shot fades the occluder');
+  cam.shot({ pos: [0, 12, -14], look: [0, 0.5, 0], anchor: 'swordcat', mode: 'cut' });   // ~18 m away
+  frames(cam, 90);
+  assert.ok(ctx.camera.position.distanceTo(ctx.player.pos) > FADE_MAX_DIST, "far shot");
+  assert.equal(cam._fader.fadedCount, 0, 'far shot keeps foreground props solid');
 });
 
 test('aspectFov keeps a 4:3 horizontal field on portrait screens', () => {

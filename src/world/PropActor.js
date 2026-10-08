@@ -1,9 +1,12 @@
 // src/world/PropActor.js  (owner: world) — level objects that take part in combat (GAME_DESIGN §12.1, §5.4 tutorial,
 // §18.3 procedural builds): straw dummies, crates/barrels, net rope posts, cage locks, cracked boulders, the swinging
 // sack, the Wobble Knight, and placed critters (sleeping cows). They are Actors registered in ctx.actors so the
-// player's swings hit them through Combat.applyHit (faction 'enemy', tag 'prop'; companions, lock-on and threat
-// arrows should skip tag 'prop'). Their visuals are PropBatch instances (or own meshes) moved in render().
+// player's swings hit them through Combat.applyHit: faction 'neutral' + `breakable = true` (combat lets player-side
+// attacks hit breakables; aim assist, lock-on and enemy AI ignore them), tag 'prop' plus their kind ('dummy',
+// 'crate', 'rope_post', 'boulder', 'sack', 'wobble_knight'). Their visuals are PropBatch instances (or own meshes)
+// moved in render().
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
@@ -24,8 +27,10 @@ export const byPlayer = (att) => att?.faction === 'player' || att?.owner?.factio
  */
 export class PropActor extends Actor {
   constructor(ctx, o = {}) {
-    super(ctx, { faction: o.faction ?? 'enemy', radius: o.radius ?? 0.4, height: o.height ?? 1, maxHp: o.hp ?? 1, mass: 50, maxPoise: 99 });
+    super(ctx, { faction: o.faction ?? 'neutral', radius: o.radius ?? 0.4, height: o.height ?? 1, maxHp: o.hp ?? 1, mass: 50, maxPoise: 99 });
     this.kind = o.kind ?? 'prop';
+    this.propId = o.id ?? null;
+    this.breakable = o.breakable !== false;
     this.tags.add('prop').add(this.kind);
     for (const t of o.tags ?? []) this.tags.add(t);
     this.fixed = true;
@@ -100,7 +105,7 @@ export class PropActor extends Actor {
  */
 export class SwingingSack extends PropActor {
   constructor(ctx, o) {
-    super(ctx, { ...o, kind: 'sack', hp: 1, faction: 'enemy', radius: 0.3, height: 0.6 });
+    super(ctx, { ...o, kind: 'sack', hp: 1, faction: 'neutral', radius: 0.3, height: 0.6, breakable: false });
     this.hurtable = false;
     this.pivot = o.pivot.clone();          // top of the rope (world)
     this.rope = 1.8; this.amp = o.amp ?? 0.85; this.axis = o.axis ?? 'x';
@@ -220,6 +225,57 @@ export class WobbleKnight extends PropActor {
 }
 
 /**
+ * Merge the skinned meshes of one model that share a skeleton (Quaternius animals ship 7 flat-coloured parts) into
+ * ONE vertex-coloured SkinnedMesh: 1 draw call + 1 shadow call instead of 7 + 7. Visual only; returns the new mesh
+ * or null when there is nothing to merge (textured parts, different skeletons).
+ */
+export function mergeSkinnedMeshes(root) {
+  const list = [];
+  root.traverse((o) => { if (o.isSkinnedMesh) list.push(o); });
+  if (list.length < 2) return null;
+  const sk = list[0].skeleton;
+  if (list.some((m) => m.skeleton.bones.length !== sk.bones.length || m.skeleton.bones.some((b, i) => b !== sk.bones[i]))) return null;
+  if (list.some((m) => (Array.isArray(m.material) ? m.material : [m.material]).some((mt) => mt.map))) return null;
+  const col = new THREE.Color();
+  const geos = list.map((m) => {
+    const src = m.geometry, g = new THREE.BufferGeometry();
+    const n = src.attributes.position.count;
+    g.setAttribute('position', src.attributes.position.clone());
+    g.setAttribute('normal', src.attributes.normal ? src.attributes.normal.clone() : new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) for (let k = 0; k < 4; k++) { si[i * 4 + k] = src.attributes.skinIndex.getComponent(i, k); sw[i * 4 + k] = src.attributes.skinWeight.getComponent(i, k); }
+    g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
+    g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const c = new Float32Array(n * 3);
+    const vm = new Int16Array(n);
+    if (Array.isArray(m.material) && src.groups.length) for (const gr of src.groups) for (let k = gr.start; k < gr.start + gr.count; k++) vm[src.index ? src.index.getX(k) : k] = gr.materialIndex ?? 0;
+    for (let i = 0; i < n; i++) { col.copy(mats[vm[i]]?.color ?? col.setRGB(1, 1, 1)); c[i * 3] = col.r; c[i * 3 + 1] = col.g; c[i * 3 + 2] = col.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    g.setIndex(src.index ? src.index.clone() : null);
+    // the parts may sit under different nodes: bring them into the first part's space
+    m.updateWorldMatrix(true, false);
+    if (m !== list[0]) { list[0].updateWorldMatrix(true, false); g.applyMatrix4(new THREE.Matrix4().copy(list[0].matrixWorld).invert().multiply(m.matrixWorld)); }
+    return g;
+  });
+  if (geos.some((g) => !g.index) && geos.some((g) => g.index)) for (const g of geos) if (g.index) { const ni = g.toNonIndexed(); g.copy(ni); }
+  const merged = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  if (!merged) return null;
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
+  const first = list[0];
+  const mesh = new THREE.SkinnedMesh(merged, mat);
+  mesh.name = first.name + ':merged';
+  mesh.castShadow = first.castShadow; mesh.receiveShadow = true; mesh.frustumCulled = false;
+  first.parent.add(mesh);
+  mesh.position.copy(first.position); mesh.quaternion.copy(first.quaternion); mesh.scale.copy(first.scale);
+  mesh.bind(first.skeleton, first.bindMatrix);
+  for (const m of list) m.removeFromParent();
+  mesh.userData.owned = true; mat.userData.owned = true; merged.userData = { owned: true };
+  return mesh;
+}
+
+/**
  * A placed animated creature (sleeping cows): a ScriptedActor with an Animator; `meowWakes` → on a Meow within
  * PLAYER.meow.kittenRadius it moos, plays `wakeClip`, then walks `walkTo` (6 m east by default) and calls onWake.
  */
@@ -244,6 +300,7 @@ export class Critter extends ScriptedActorMixin(Actor) {
       if (this.disposed) return;
       this.model = m;
       m.scene.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
+      try { mergeSkinnedMeshes(m.scene); } catch (e) { console.warn('[world] critter merge failed', e); }
       this.object3d.add(m.root);
       this.anim = new Animator(m.scene, m.animations);
       this.anim.play(this.anim.pick(this.clip, 'Idle'));
@@ -288,7 +345,11 @@ export class Critter extends ScriptedActorMixin(Actor) {
 
   render(alpha, dt) {
     super.render(alpha);
-    this.anim?.update(this.ctx.game?.hitstopT > 0 ? 0 : dt ?? 0);
+    // fog culling: beyond the fog the cow is invisible anyway (and its mixer can rest)
+    const cam = this.ctx.camera, far = this.ctx.levels?.current?.cullDist?.() ?? 120;
+    const vis = !cam || cam.position.distanceToSquared(this.pos) < far * far;
+    this.object3d.visible = vis;
+    if (vis) this.anim?.update(this.ctx.game?.hitstopT > 0 ? 0 : dt ?? 0);
   }
 
   dispose() {

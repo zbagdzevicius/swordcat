@@ -7,16 +7,19 @@
 //              owner = the parrying actor, dmg = def.reflectDmg (25), gold look, `combat:reflect` emitted;
 //   'block'  → the projectile breaks on the guard;   'immune' → passes through (tumble i-frames);
 //   'hit'    → damage; the projectile dies unless it pierces (holyWave, gleam).
-// Shapes: round projectiles (bolts, orbs, globs) test a swept segment vs the target cylinder; waves (holyWave,
-// gleam) are crescents `width` wide that ride the ground, pierce, and (holyWave) eat enemy projectiles.
+// Shapes: round projectiles (bolts, orbs, globs) test a swept segment vs the target cylinder and stop on props and
+// architecture (physics.sphereCast over the step, so nothing behind a wall is touched); waves (holyWave, gleam) are
+// crescents `width` wide that ride the ground, pierce, and (holyWave) eat enemy projectiles. A reflected shot keeps
+// curving toward its shooter (≤ COMBAT.reflectHomingRate) while the shooter stays inside COMBAT.reflectAimCone.
+// The Wave Reach upgrade (15 m) is applied here, so it holds whoever spawns the holyWave (combat or the player).
 // Visuals (pooled per kind, one draw call per part): `bolt` (crossbow bolt + light trail), `orb` (glowing core +
 // halo + trail), `glob` (web glob), `wave` (golden crescent, art.md holy palette), `gleam` (small white-gold crescent).
 // No allocations per step: pooled objects, module temporaries, a reused query array.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { E } from '../core/events.js';
-import { PLAYER, ATTACKS } from '../core/config.js';
-import { clamp01 } from '../core/math.js';
+import { PLAYER, ATTACKS, ECONOMY } from '../core/config.js';
+import { clamp, clamp01 } from '../core/math.js';
 import { isHostile } from '../core/ActorRegistry.js';
 import { COMBAT, PROJECTILE_KIND, AUTO_PROJECTILES, reflectedDef } from './attacks.js';
 
@@ -24,13 +27,25 @@ import { COMBAT, PROJECTILE_KIND, AUTO_PROJECTILES, reflectedDef } from './attac
 const PAL = {
   holyCore: '#FFF6DA', holy: '#FFE3A3', holyEdge: '#E8A95A', sparkle: '#FFF1C4', sparkleWarm: '#FFD57A',
   wood: '#8A6A45', iron: '#8E949E', fletch: '#E2D6C0', web: '#ECE8DC', webShade: '#BDB6A6',
-  orbCore: '#D8FFF6', orbGlow: '#5FC8C8', aim: '#FFFFFF',
+  orbCore: '#B8F5E8', orbGlow: '#5FC8C8', aim: '#FFFFFF',
 };
+
+/**
+ * HDR intensities (additive, untonemapped; bloom threshold is 0.85, so only the hot cores bloom and a wave stays a
+ * readable crescent instead of a white blob — Holy raises bloom to 1.2 while it plays).
+ */
+const VIS = Object.freeze({
+  wave: 1.4, gleam: 1.35, trail: 0.85, trailGold: 1.7, trailGlob: 0.45, boltGold: 1.2,
+  orbCore: 1.1, halo: 1.15, haloGold: 1.4, haloSize: 3.2,
+});
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+const _ray = new THREE.Ray();
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+/** physics.sphereCast options: props and architecture stop round projectiles; the ground is tested by height. */
+const WALL_CAST = Object.freeze({ terrain: false, mesh: true, statics: true });
 
 let nextProjectileId = 1;
 
@@ -72,16 +87,18 @@ void main() {
 const CRESCENT_VS = /* glsl */`
 attribute float aW; varying vec2 vUv; varying float vW;
 void main() { vUv = uv; vW = aW; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+// across the blade: a hot thin core line near the leading (upper/outer) edge, a soft gold body, dim rims;
+// along it: full in the middle, fading into the pointed tips.
 const CRESCENT_FS = /* glsl */`
 uniform vec3 uCore; uniform vec3 uEdge; uniform float uI; varying vec2 vUv; varying float vW;
 void main() {
-  float y = abs(vUv.y - 0.5) * 2.0;
+  float v = (vUv.y - 0.62) * 2.6;
   float x = abs(vUv.x - 0.5) * 2.0;
-  float body = 1.0 - smoothstep(0.25, 1.0, y);
-  float tips = 1.0 - smoothstep(0.45, 1.0, x);
-  float core = exp(-y * y * 9.0);
+  float body = 1.0 - smoothstep(0.35, 1.0, abs(vUv.y - 0.5) * 2.0);
+  float core = exp(-v * v * 3.0);
+  float tips = 1.0 - smoothstep(0.55, 1.0, x);
   vec3 col = mix(uEdge, uCore, core);
-  gl_FragColor = vec4(col * body * tips * vW * uI, 1.0);
+  gl_FragColor = vec4(col * (0.32 * body + core) * tips * vW * uI, 1.0);
 }`;
 
 /** Additive, depth-tested, not depth-writing material (bloom picks the HDR values up). */
@@ -110,20 +127,22 @@ function boltGeometry() {
 }
 
 /**
- * Standing crescent of unit chord (x ∈ [-0.5, 0.5]) and unit height, apex at z = 0, tips curving back (−Z),
- * plus a dimmer echo layer behind it (motion smear). UV.x runs tip → tip, UV.y bottom → top; `aW` = layer weight.
+ * "Sword beam" crescent of unit chord (x ∈ [-0.5, 0.5]), apex at z = 0, tips trailing back (−Z) and drooping, so
+ * from behind it reads as a moon-shaped arch: a thick middle (y ≈ −0.1 … 0.5) tapering to points at y ≈ −0.3.
+ * Two dimmer echo layers trail behind it (motion smear). UV.x runs tip → tip, UV.y bottom → top across the blade;
+ * `aW` = layer weight.
  */
-function crescentGeometry(seg = 28, span = 1.8) {
+function crescentGeometry(seg = 32, span = 2.2) {
   const R = 0.5 / Math.sin(span / 2);
   const pos = [], uv = [], w = [], idx = [];
-  const layers = [{ z: 0, s: 1, w: 1 }, { z: -0.16, s: 0.84, w: 0.5 }, { z: -0.3, s: 0.66, w: 0.22 }];
+  const layers = [{ z: 0, s: 1, w: 1 }, { z: -0.13, s: 0.88, w: 0.42 }, { z: -0.25, s: 0.74, w: 0.18 }];
   for (const L of layers) {
     const base = pos.length / 3;
     for (let i = 0; i <= seg; i++) {
-      const u = i / seg, s = u * 2 - 1, a = (s * span) / 2;
+      const u = i / seg, s = u * 2 - 1, a = (s * span) / 2, arch = Math.max(0, 1 - s * s);
       const x = Math.sin(a) * R * L.s, z = (Math.cos(a) - 1) * R * L.s + L.z;
-      const h = Math.pow(Math.max(0, 1 - s * s), 0.75) * 0.5 * L.s;
-      pos.push(x, -h, z, x, h, z);
+      const mid = (0.5 * arch - 0.3) * L.s, half = 0.3 * Math.pow(arch, 0.65) * L.s;
+      pos.push(x, mid - half, z, x, mid + half, z);
       uv.push(u, 0, u, 1);
       w.push(L.w, L.w);
     }
@@ -177,7 +196,7 @@ export class Projectiles {
     const pd = def.projectile && typeof def.projectile === 'object' ? def.projectile : def;
     const p = this._free.pop() ?? this._create();
     const speed = Math.max(0.1, opts.speed ?? pd.speed ?? COMBAT.projectileSpeed);
-    const range = opts.range ?? pd.range ?? COMBAT.projectileRange;
+    const range = opts.range ?? this._waveReach(def, owner) ?? pd.range ?? COMBAT.projectileRange;
     const width = pd.width ?? 0;
     p.id = nextProjectileId++;
     p.def = def; p.baseDef = def; p.owner = owner ?? null; p.source = owner ?? null;
@@ -197,7 +216,7 @@ export class Projectiles {
     p.crit = opts.crit ?? 1;
     p.dmg = opts.dmg;
     p.onHit = opts.onHit ?? null; p.onEnd = opts.onEnd ?? null;
-    p.reflected = false; p.alive = true; p.endReason = null; p.age = 0;
+    p.reflected = false; p.homing = null; p.alive = true; p.endReason = null; p.age = 0;
     p.hitSet.clear();
     if (owner?.id != null) p.hitSet.add(owner.id);
     p.pos.copy(pos); p.prevPos.copy(pos);
@@ -218,7 +237,10 @@ export class Projectiles {
     return p;
   }
 
-  /** §19.4 reflect: flip ×reflectSpeedMul (homing on the shooter within a cone), owner = `by`, dmg = reflectDmg. */
+  /**
+   * §19.4 reflect: flip ×reflectSpeedMul, owner = `by`, dmg = reflectDmg. When the shooter stands within
+   * `COMBAT.reflectAimCone` of the flipped path the shot is aimed at its chest and keeps homing on it.
+   */
   reflect(p, by) {
     if (!p?.alive) return p;
     const speed = Math.max(p.vel.length(), p.speed) * PLAYER.guard.reflectSpeedMul;
@@ -226,12 +248,13 @@ export class Projectiles {
     if (_v.lengthSq() < 1e-8) _v.set(Math.sin(by?.facing ?? 0), 0, Math.cos(by?.facing ?? 0));
     _v.normalize();
     const src = p.source;
+    p.homing = null;
     if (src && src !== by && src.alive !== false && src.pos) {
       _w.set(src.pos.x - p.pos.x, src.pos.y + (src.height ?? 1) * 0.5 - p.pos.y, src.pos.z - p.pos.z);
       const flat = Math.hypot(_w.x, _w.z), vflat = Math.hypot(_v.x, _v.z);
       if (flat > 1e-4 && vflat > 1e-4) {
         const cos = (_w.x * _v.x + _w.z * _v.z) / (flat * vflat);
-        if (cos >= Math.cos(COMBAT.reflectAimCone)) _v.copy(_w).normalize();
+        if (cos >= Math.cos(COMBAT.reflectAimCone)) { _v.copy(_w).normalize(); p.homing = src; }
       }
     }
     p.vel.copy(_v).multiplyScalar(speed);
@@ -284,18 +307,45 @@ export class Projectiles {
 
   _step(p, dt) {
     p.age += dt; p.life -= dt;
+    if (p.homing) this._home(p, dt);
     if (p.gravity) p.vel.y -= p.gravity * dt;
     p.pos.addScaledVector(p.vel, dt);
     const ground = this._ground(p.pos.x, p.pos.z);
     if (p.wave) p.pos.y = ground + p.hover;
     if (p.vel.x || p.vel.z) p.facing = Math.atan2(p.vel.x, p.vel.z);
+    // walls first: a hit truncates this step's segment, so nobody behind the wall is touched
+    const wall = !p.wave && this._hitsStatic(p);
     this._hitActors(p, dt);
     if (!p.alive) return;
+    if (wall) return this.kill(p, 'wall');
     if (p.life <= 0) return this.kill(p, 'expired');
     if (!p.wave && p.pos.y < ground) return this.kill(p, 'ground');
-    if (!p.wave && this._hitsStatic(p)) return this.kill(p, 'wall');
     const b = this.ctx.physics?.bounds;
     if (b?.min && b?.max && (p.pos.x < b.min.x - 2 || p.pos.x > b.max.x + 2 || p.pos.z < b.min.y - 2 || p.pos.z > b.max.y + 2)) this.kill(p, 'bounds');
+  }
+
+  /** Reflected shots curve toward their shooter (≤ COMBAT.reflectHomingRate) while it stays ahead of them. */
+  _home(p, dt) {
+    const t = p.homing;
+    if (!t || t.alive === false || !t.pos) { p.homing = null; return; }
+    _w.set(t.pos.x - p.pos.x, t.pos.y + (t.height ?? 1) * 0.5 - p.pos.y, t.pos.z - p.pos.z);
+    const d = _w.length(), sp = p.vel.length();
+    if (d < 1e-4 || sp < 1e-4) return;
+    _w.multiplyScalar(1 / d);
+    _v.copy(p.vel).multiplyScalar(1 / sp);
+    const ang = Math.acos(clamp(_v.dot(_w), -1, 1));
+    if (ang > COMBAT.reflectAimCone) { p.homing = null; return; }      // it dodged past: fly straight on
+    const turn = COMBAT.reflectHomingRate * dt;
+    if (ang <= turn) _v.copy(_w); else _v.lerp(_w, turn / ang).normalize();
+    p.vel.copy(_v).multiplyScalar(sp);
+  }
+
+  /** holyWave range from the Wave Reach upgrade (§13.3: 15 m once she has Shard 2), whoever spawns the wave. */
+  _waveReach(def, owner) {
+    if (def?.id !== 'holyWave' || owner?.faction !== 'player') return undefined;
+    const st = this.ctx.state, reach = ECONOMY.shops.waveReach;
+    const shards = owner.shards ?? st?.shards ?? 0;
+    return st?.upgrades?.waveReach && shards >= reach.needShards ? reach.range : undefined;
   }
 
   _hitActors(p, dt) {
@@ -359,11 +409,26 @@ export class Projectiles {
     return Number.isFinite(h) ? h : 0;
   }
 
-  /** Static colliders: physics' `overlapsStatic(pos, r)` if provided (requested), else its XZ circles/boxes. */
+  /**
+   * Props and architecture. Swept with `physics.sphereCast` over this step's segment when available (no tunnelling
+   * through a thin wall at 16–24 m/s; on a hit `pos` moves to the impact point), else an overlap test at `pos`
+   * (`overlapsStatic(pos, r)`, `blockedAt(x, z, r, y0, y1)` or the raw XZ circles / boxes).
+   */
   _hitsStatic(p) {
     const ph = this.ctx.physics;
     if (!ph) return false;
+    if (typeof ph.sphereCast === 'function') {
+      _w.subVectors(p.pos, p.prevPos);
+      const len = _w.length();
+      if (len > 1e-6) {
+        _ray.origin.copy(p.prevPos); _ray.direction.copy(_w).multiplyScalar(1 / len);
+        const hit = ph.sphereCast(_ray, p.r, len, WALL_CAST);
+        if (hit) { p.pos.copy(p.prevPos).addScaledVector(_ray.direction, Math.max(0, hit.distance)); return true; }
+        return false;
+      }
+    }
     if (typeof ph.overlapsStatic === 'function') return !!ph.overlapsStatic(p.pos, p.r);
+    if (typeof ph.blockedAt === 'function') return !!ph.blockedAt(p.pos.x, p.pos.z, p.r, p.pos.y - p.r, p.pos.y + p.r);
     const st = ph.statics, x = p.pos.x, y = p.pos.y, z = p.pos.z, r = p.r;
     if (!st) return false;
     if (Array.isArray(st.circles)) {
@@ -394,7 +459,7 @@ export class Projectiles {
       isProjectile: true, id: 0, def: null, baseDef: null, owner: null, source: null, faction: 'enemy', kind: 'orb',
       pos: new THREE.Vector3(), prevPos: new THREE.Vector3(), vel: new THREE.Vector3(), facing: 0, speed: 0,
       r: 0.2, radius: 0.2, height: 0.4, halfW: 0, halfH: 0, hover: 0, wave: false, pierce: false, eats: false, gravity: 0,
-      life: 0, maxLife: 0, age: 0, alive: false, reflected: false, endReason: null, dmgMul: 1, crit: 1, dmg: undefined,
+      life: 0, maxLife: 0, age: 0, alive: false, reflected: false, homing: null, endReason: null, dmgMul: 1, crit: 1, dmg: undefined,
       hitSet: new Set(), visual: null, onHit: null, onEnd: null,
       /** applyHit parry hook → reflect */
       onParried: (by) => this.reflect(p, by),
@@ -412,7 +477,7 @@ export class Projectiles {
       pool.push(p.visual);
       p.visual = null;
     }
-    p.def = p.baseDef = p.owner = p.source = null;
+    p.def = p.baseDef = p.owner = p.source = p.homing = null;
     p.onHit = p.onEnd = null;
     p.hitSet.clear();
     this._free.push(p);
@@ -434,7 +499,7 @@ export class Projectiles {
       trailMat: glowMaterial(TRAIL_VS, TRAIL_FS, { uWidth: { value: 0.07 }, uLen: { value: 0.8 }, uColor: { value: new THREE.Color(PAL.aim) }, uI: { value: 1 } }, THREE.DoubleSide),
       haloMat: glowMaterial(HALO_VS, HALO_FS, { uSize: { value: 0.6 }, uColor: { value: new THREE.Color(PAL.orbGlow) }, uI: { value: 1 } }, THREE.DoubleSide),
       crescentMat: glowMaterial(CRESCENT_VS, CRESCENT_FS, { uCore: { value: new THREE.Color(PAL.holyCore) }, uEdge: { value: new THREE.Color(PAL.holyEdge) }, uI: { value: 1 } }, THREE.DoubleSide),
-      coreMat: new THREE.MeshBasicMaterial({ color: new THREE.Color(PAL.orbCore).multiplyScalar(2.2), toneMapped: false }),
+      coreMat: new THREE.MeshBasicMaterial({ color: new THREE.Color(PAL.orbCore).multiplyScalar(VIS.orbCore), toneMapped: false }),
     };
     return this._res;
   }
@@ -468,6 +533,9 @@ export class Projectiles {
       v.body.scale.setScalar(1.25);
       group.add(v.body);
       v.trail = trail(0.07);
+      v.halo = new THREE.Mesh(R.haloGeo, R.haloMat.clone());        // shown once reflected (gold)
+      v.halo.frustumCulled = false; v.halo.renderOrder = 6; v.halo.visible = false;
+      group.add(v.halo);
     } else if (kind === 'glob') {
       v.body = new THREE.Mesh(R.globGeo, R.globMat.clone());
       group.add(v.body);
@@ -498,27 +566,29 @@ export class Projectiles {
     if (v.trail) {
       const u = v.trail.material.uniforms;
       u.uColor.value.set(gold ? PAL.sparkleWarm : p.kind === 'orb' ? PAL.orbGlow : PAL.aim);
-      u.uLen.value = Math.min(1.6, Math.max(0.35, p.speed * 0.05));
-      u.uI.value = gold ? 2.6 : p.kind === 'glob' ? 0.5 : 1.3;
+      u.uLen.value = Math.min(gold ? 2.2 : 1.6, Math.max(0.35, p.speed * (gold ? 0.075 : 0.05)));
+      u.uI.value = gold ? VIS.trailGold : p.kind === 'glob' ? VIS.trailGlob : VIS.trail;
+      u.uWidth.value = (p.kind === 'bolt' ? 0.07 : 0.12) * (gold ? 1.8 : 1);
     }
     if (v.body && p.kind === 'bolt') {
       v.body.material.emissive.set(gold ? PAL.holy : 0x000000);
-      v.body.material.emissiveIntensity = gold ? 1.6 : 0;
+      v.body.material.emissiveIntensity = gold ? VIS.boltGold : 0;
     }
     if (v.body && p.kind === 'orb') {
-      v.body.material.color.set(gold ? PAL.holyCore : PAL.orbCore).multiplyScalar(2.2);
+      v.body.material.color.set(gold ? PAL.holyCore : PAL.orbCore).multiplyScalar(VIS.orbCore);
       v.body.scale.setScalar(Math.max(0.06, p.r * 0.75));
     }
     if (v.halo) {
       const u = v.halo.material.uniforms;
       u.uColor.value.set(gold ? PAL.sparkleWarm : PAL.orbGlow);
-      u.uSize.value = Math.max(0.3, p.r * 4.5);
+      u.uSize.value = Math.max(0.25, p.r * VIS.haloSize);
+      if (p.kind === 'bolt') v.halo.visible = gold;
     }
     if (v.body && p.kind === 'glob') v.body.scale.setScalar(Math.max(0.06, p.r * 0.9));
     if (v.crescent) {
       const u = v.crescent.material.uniforms;
       const gleam = p.kind === 'gleam';
-      u.uCore.value.set(PAL.holyCore);
+      u.uCore.value.set(gleam ? PAL.holyCore : PAL.holy);
       u.uEdge.value.set(gleam ? PAL.sparkle : PAL.holyEdge);
     }
   }
@@ -535,7 +605,7 @@ export class Projectiles {
       v.crescent.scale.set(p.halfW * 2 * grow, p.halfH * 2 * (0.75 + 0.25 * grow), p.halfW * 2 * grow);
       const fadeIn = Math.min(1, p.age / 0.05 + 0.35), fadeOut = clamp01(p.life / Math.max(0.05, p.maxLife * 0.35));
       const flicker = 0.92 + 0.08 * Math.sin(time * 40 + p.id);
-      v.crescent.material.uniforms.uI.value = (p.kind === 'gleam' ? 2.4 : 2.8) * fadeIn * fadeOut * flicker;
+      v.crescent.material.uniforms.uI.value = (p.kind === 'gleam' ? VIS.gleam : VIS.wave) * fadeIn * fadeOut * flicker;
       return;
     }
     const len = p.vel.length();
@@ -544,7 +614,7 @@ export class Projectiles {
       const s = Math.max(0.06, p.r * 0.9), wob = Math.sin(time * 22 + p.id) * 0.12;
       v.body.scale.set(s * (1 + wob), s * (1 - wob), s * (1 + wob * 0.5));
     }
-    if (v.halo) v.halo.material.uniforms.uI.value = (p.reflected ? 2.4 : 1.8) * (0.85 + 0.15 * Math.sin(time * 30 + p.id));
+    if (v.halo) v.halo.material.uniforms.uI.value = (p.reflected ? VIS.haloGold : VIS.halo) * (0.85 + 0.15 * Math.sin(time * 30 + p.id));
   }
 
   render(alpha, frameDt) {

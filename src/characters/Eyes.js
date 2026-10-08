@@ -2,7 +2,7 @@
 // planar front UVs, clearcoat. Coat-coloured eyelids give blinks and expressions; a wet glint for "glisten".
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { canvas2d, Spring, damp } from './util.js';
+import { canvas2d, Spring, damp, mulberry32, hashString } from './util.js';
 import { own } from './materials.js';
 
 const _texCache = new Map();
@@ -159,7 +159,8 @@ export class EyePair {
     }
     this.state = { up: 0, low: 0, tilt: 0, glisten: 0 };
     this.target = { ...EXPRESSIONS.neutral };
-    this.blinkT = 0; this.nextBlink = 1.5 + Math.random() * 3; this.blinkDur = 0.14;
+    this.rnd = mulberry32(hashString(String(o.seed ?? 'eyes')));
+    this.blinkT = 0; this.nextBlink = 1.5 + this.rnd() * 3; this.blinkDur = 0.14;
     this.autoBlink = o.autoBlink ?? true;
     this.look = new THREE.Vector2(); this.lookTarget = new THREE.Vector2();
     this.squash = new Spring(220, 18);
@@ -180,7 +181,7 @@ export class EyePair {
     s.glisten = damp(s.glisten, t.glisten, 4, dt);
     if (this.autoBlink && t.up < 0.9) {
       this.nextBlink -= dt;
-      if (this.nextBlink <= 0) { this.blink(); this.nextBlink = 2.5 + Math.random() * 3.5; if (Math.random() < 0.2) this.nextBlink = 0.22; }
+      if (this.nextBlink <= 0) { this.blink(); this.nextBlink = 2.5 + this.rnd() * 3.5; if (this.rnd() < 0.2) this.nextBlink = 0.22; }
     }
     this.look.x = damp(this.look.x, this.lookTarget.x, 8, dt); this.look.y = damp(this.look.y, this.lookTarget.y, 8, dt);
     if (this.blinkT > 0) this.blinkT = Math.max(0, this.blinkT - dt);

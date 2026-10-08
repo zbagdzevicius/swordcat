@@ -343,6 +343,16 @@ export class MeshCollider {
     return false;
   }
 
+  /** Does a sphere (centre x, y, z, radius r) touch any triangle (either side)? Sets `rayTri` to it. */
+  overlapsSphere(x, y, z, r) {
+    if (!this.octree) return false;
+    const m = r + 1e-3, cand = this.gather(x - m, y - m, z - m, x + m, y + m, z + m, this._cand2), r2 = r * r;
+    for (let i = 0; i < cand.length; i++) {
+      if (closestPtPointTri(x, y, z, cand[i]) <= r2) { this.rayTri = cand[i]; return true; }
+    }
+    return false;
+  }
+
   // -------------------------------------------------------------------- swept sphere (continuous)
   /**
    * Time of impact of a sphere (centre c, radius r) moving along unit direction d for up to maxDist.

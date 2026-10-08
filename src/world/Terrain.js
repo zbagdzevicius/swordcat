@@ -6,11 +6,11 @@
 // A dryness). Node-safe except finalize(), which only builds three objects (no DOM).
 import * as THREE from 'three';
 import { Heightfield } from '../physics/Heightfield.js';
-import { fbm, valueNoise, smooth, distToPolyline, smoothPolyline } from './noise.js';
+import { fbmP, valueNoise, smooth, distToPolyline, smoothPolyline } from './noise.js';
 
 /** Ground palette (art.md §6.2 misty meadow tokens, darkened under the grass so sparse blades read as full). */
 export const GROUND = {
-  meadow: { root: '#2B3413', mid: '#3A4520', dry: '#59573A', path: '#7A7358', pathDark: '#5E5743', soil: '#3A3220', mud: '#2F2A1E', field: '#4A4A2A' },
+  meadow: { root: '#28311A', mid: '#36421F', dry: '#545335', path: '#625D44', pathDark: '#4C4835', soil: '#3A3220', mud: '#2F2A1E', field: '#4A4A2A' },
   forest: { root: '#22301C', mid: '#2F4A2A', dry: '#4E5232', path: '#5E4E38', pathDark: '#463A2A', soil: '#30281C', mud: '#262018', field: '#3A4226' },
   town:   { root: '#3E4228', mid: '#56583A', dry: '#7A7656', path: '#9C927C', pathDark: '#7A725E', soil: '#4A4030', mud: '#3A3226', field: '#5A5A3A' },
   gate:   { root: '#33372A', mid: '#4A4E3C', dry: '#6A6A52', path: '#7C786C', pathDark: '#5E5A50', soil: '#3E382C', mud: '#2E2A22', field: '#4A4A38' },
@@ -18,7 +18,33 @@ export const GROUND = {
   keep:   { root: '#2A2628', mid: '#3A3638', dry: '#4E4A4A', path: '#5A5658', pathDark: '#444042', soil: '#2E2A28', mud: '#221E1E', field: '#363234' },
 };
 
-const _a = new THREE.Color(), _b = new THREE.Color(), _c = new THREE.Color();
+const _a = new THREE.Color(), _c = new THREE.Color();
+
+/**
+ * Distance (m) from every grid vertex to a polyline, clamped to `maxD` (rasterised per segment inside its
+ * bounding box + maxD: ~100× cheaper than a polyline query per vertex). Pure.
+ * @returns {Float32Array} (res+1)² row-major, row 0 at z = −size/2
+ */
+export function polylineDistanceGrid(pts, size, res, maxD) {
+  const W = res + 1, cell = size / res, half = size / 2, out = new Float32Array(W * W).fill(maxD * maxD);
+  for (let s = 0; s < pts.length - 1; s++) {
+    const ax = pts[s][0], az = pts[s][1], bx = pts[s + 1][0], bz = pts[s + 1][1];
+    const vx = bx - ax, vz = bz - az, l2 = vx * vx + vz * vz || 1e-9;
+    const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - maxD + half) / cell)), i1 = Math.min(res, Math.ceil((Math.max(ax, bx) + maxD + half) / cell));
+    const j0 = Math.max(0, Math.floor((Math.min(az, bz) - maxD + half) / cell)), j1 = Math.min(res, Math.ceil((Math.max(az, bz) + maxD + half) / cell));
+    for (let j = j0; j <= j1; j++) {
+      const z = j * cell - half, row = j * W;
+      for (let i = i0; i <= i1; i++) {
+        const x = i * cell - half;
+        let t = ((x - ax) * vx + (z - az) * vz) / l2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = x - ax - vx * t, dz = z - az - vz * t, d2 = dx * dx + dz * dz;
+        if (d2 < out[row + i]) out[row + i] = d2;
+      }
+    }
+  }
+  for (let i = 0; i < out.length; i++) out[i] = Math.sqrt(out[i]);
+  return out;
+}
 
 export class Terrain {
   /**
@@ -38,7 +64,7 @@ export class Terrain {
     /** extra paths: [{ pts, width }] (smoothed) */
     this.paths = (def.paths ?? []).map((p) => ({ pts: smoothPolyline(p.pts, 1.5), width: p.width ?? 3 }));
     this.flats = flats;
-    this.water = def.water ?? [];
+    this.water = (def.water ?? []).filter((w) => !w.kind || w.kind === 'stream');   // planes / rects don't carve
     this.keep = def.keep ?? [];          // [{ box:[x0,z0,x1,z1], h }] keep-height overrides (bridge decks)
     this.palette = GROUND[def.biome ?? def.id] ?? GROUND.meadow;
     const n = this.W * this.W;
@@ -48,40 +74,42 @@ export class Terrain {
     /** rgb + weight overrides painted by setpieces */
     this.paint = new Float32Array(n * 4);
     this.heightfield = null;
-    this._seg = { i: 0, t: 0, along: 0 };
   }
 
   /** Low-frequency height the path follows (gentle rolls along the lane). */
-  pathHeight(x, z) { return this.amp * 0.35 * fbm(x, z, { freq: 0.012, octaves: 2, seed: this.seed + 7 }); }
+  pathHeight(x, z) { return this.amp * 0.35 * fbmP(x, z, 0.012, 2, this.seed + 7); }
 
   /** Natural (uncarved) height. */
   rawHeight(x, z) {
-    const n = fbm(x, z, { freq: this.freq, octaves: this.octaves, seed: this.seed });
-    const ridge = 1 - Math.abs(fbm(x + 311, z - 97, { freq: this.freq * 0.6, octaves: 2, seed: this.seed + 3 }));
+    const n = fbmP(x, z, this.freq, this.octaves, this.seed);
+    const ridge = 1 - Math.abs(fbmP(x + 311, z - 97, this.freq * 0.6, 2, this.seed + 3));
     let h = this.amp * (n * 1.1 + (ridge - 0.5) * 0.5);
     const rim = this.def.rim ?? 5;                          // the land rises toward the misty edge of the world
-    if (rim) { const e = Math.max(Math.abs(x), Math.abs(z)); h += rim * smooth(this.half - 32, this.half, e) * (0.6 + 0.4 * valueNoise(x * 0.05, z * 0.05, this.seed + 11)); }
+    if (rim) { const e = Math.max(Math.abs(x), Math.abs(z)); h += rim * smooth(this.half - (this.def.rimWidth ?? 22), this.half + 4, e) * (0.6 + 0.4 * valueNoise(x * 0.05, z * 0.05, this.seed + 11)); }
     return h;
   }
 
   /** Final carved height at (x, z): path, extra paths, flat discs, water beds, keep-height boxes. */
-  heightFn(x, z) {
+  heightFn(x, z, vi = -1) {
     let h = this.rawHeight(x, z);
     const pw = this.pathWidth * 0.5;
-    const dp = distToPolyline(x, z, this.spine);
-    h = h + (this.pathHeight(x, z) - h) * (1 - smooth(pw, pw + 3, dp));
-    for (const p of this.paths) {
-      const d = distToPolyline(x, z, p.pts);
-      h = h + (this.pathHeight(x, z) - h) * (1 - smooth(p.width * 0.5, p.width * 0.5 + 2.5, d)) * 0.85;
+    const dp = vi >= 0 && this._dSpine ? this._dSpine[vi] : distToPolyline(x, z, this.spine);
+    if (dp < pw + 3) h = h + (this.pathHeight(x, z) - h) * (1 - smooth(pw, pw + 3, dp));
+    for (let k = 0; k < this.paths.length; k++) {
+      const p = this.paths[k];
+      const d = vi >= 0 && this._dPaths ? this._dPaths[k][vi] : distToPolyline(x, z, p.pts);
+      if (d < p.width * 0.5 + 2.5) h = h + (this.pathHeight(x, z) - h) * (1 - smooth(p.width * 0.5, p.width * 0.5 + 2.5, d)) * 0.85;
     }
     for (const f of this.flats) {
-      const d = Math.hypot(x - f.x, z - f.z);
-      if (d > f.r + 3) continue;
-      const fh = f.h ?? this.pathHeight(f.x, f.z);
+      const dx = x - f.x, dz = z - f.z, R = f.r + 3;
+      if (dx * dx + dz * dz > R * R) continue;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      const fh = f.h ?? (f._h ??= this.pathHeight(f.x, f.z));
       h = h + (fh - h) * (1 - smooth(f.r, f.r + 3, d));
     }
-    for (const w of this.water) {
-      const d = distToPolyline(x, z, [w.from, w.to]);
+    for (let k = 0; k < this.water.length; k++) {
+      const w = this.water[k];
+      const d = vi >= 0 && this._dWater ? this._dWater[k][vi] : distToPolyline(x, z, w.pts ?? [w.from, w.to]);
       const hw = (w.width ?? 6) / 2;
       const bed = (w.y ?? -0.4) - (w.deep ? 1.1 : 0.25);
       const bank = (w.y ?? -0.4) + 0.15;
@@ -101,16 +129,24 @@ export class Terrain {
 
   /** Build the heightfield + default paint (grass density along paths / water, dry patches, tall clumps). */
   build() {
-    this.heightfield = Heightfield.fromFunction(this.size, this.res, (x, z) => this.heightFn(x, z));
-    const W = this.W, pw = this.pathWidth * 0.5;
+    const W = this.W, pw = this.pathWidth * 0.5, size = this.size, res = this.res;
+    this._dSpine = polylineDistanceGrid(this.spine, size, res, pw + 8);
+    this._dPaths = this.paths.map((p) => polylineDistanceGrid(p.pts, size, res, p.width * 0.5 + 6));
+    this._dWater = this.water.map((w) => polylineDistanceGrid(w.pts ?? [w.from, w.to], size, res, (w.width ?? 6) / 2 + 8));
+    const hgt = new Float32Array(W * W);
+    for (let iz = 0; iz < W; iz++) for (let ix = 0; ix < W; ix++) {
+      const i = iz * W + ix;
+      hgt[i] = this.heightFn(ix * this.cell - this.half, iz * this.cell - this.half, i);
+    }
+    this.heightfield = new Heightfield(size, res, hgt);
     for (let iz = 0; iz < W; iz++) for (let ix = 0; ix < W; ix++) {
       const i = iz * W + ix, x = ix * this.cell - this.half, z = iz * this.cell - this.half;
-      const dp = distToPolyline(x, z, this.spine);
+      const dp = this._dSpine[i];
       const wob = (valueNoise(x * 0.4, z * 0.4, this.seed + 5) - 0.5) * 1.4;
-      let dens = smooth(pw * 0.45, pw + 0.8, dp + wob);
-      for (const p of this.paths) dens = Math.min(dens, smooth(p.width * 0.3, p.width * 0.5 + 0.8, distToPolyline(x, z, p.pts) + wob * 0.6));
-      for (const w of this.water) {
-        const d = distToPolyline(x, z, [w.from, w.to]), hw = (w.width ?? 6) / 2;
+      let dens = 0.08 + 0.92 * smooth(pw * 0.2, pw * 0.9, dp + wob);   // a trodden lane: sparse blades in the middle
+      for (let k = 0; k < this.paths.length; k++) { const p = this.paths[k]; dens = Math.min(dens, smooth(p.width * 0.3, p.width * 0.5 + 0.8, this._dPaths[k][i] + wob * 0.6)); }
+      for (let k = 0; k < this.water.length; k++) {
+        const d = this._dWater[k][i], hw = (this.water[k].width ?? 6) / 2;
         dens = Math.min(dens, smooth(hw - 0.2, hw + 0.8, d));
       }
       const patch = valueNoise(x * 0.07, z * 0.07, this.seed + 21);
@@ -172,23 +208,25 @@ export class Terrain {
 
   /** Vertex colour at grid index i (x, z world). */
   _groundColor(i, x, z, out) {
-    const P = this.palette, pw = this.pathWidth * 0.5, s = this.seed;
+    const P = this._pal ??= Object.fromEntries(Object.entries(this.palette).map(([k, v]) => [k, new THREE.Color(v)]));
+    const pw = this.pathWidth * 0.5, s = this.seed;
     const n1 = valueNoise(x * 0.13, z * 0.13, s + 51), n2 = valueNoise(x * 0.6, z * 0.6, s + 52);
-    out.set(P.root).lerp(_b.set(P.mid), 0.25 + 0.6 * n1);
-    out.lerp(_b.set(P.dry), this.dry[i] * 0.55);
+    out.copy(P.root).lerp(P.mid, 0.25 + 0.6 * n1);
+    out.lerp(P.dry, this.dry[i] * 0.55);
     // worn path: two ruts and a grassy crown
-    const seg = this._seg, dp = distToPolyline(x, z, this.spine, seg);
-    let pathW = 1 - smooth(pw * 0.55, pw + 0.4, dp + (n2 - 0.5) * 1.1);
-    for (const p of this.paths) pathW = Math.max(pathW, (1 - smooth(p.width * 0.3, p.width * 0.5 + 0.3, distToPolyline(x, z, p.pts) + (n2 - 0.5) * 0.8)) * 0.9);
+    const dp = this._dSpine ? this._dSpine[i] : distToPolyline(x, z, this.spine);
+    let pathW = 1 - smooth(pw * 0.3, pw * 0.85, dp + (n2 - 0.5) * 1.1);
+    for (let k = 0; k < this.paths.length; k++) { const p = this.paths[k]; pathW = Math.max(pathW, (1 - smooth(p.width * 0.3, p.width * 0.5 + 0.3, (this._dPaths ? this._dPaths[k][i] : distToPolyline(x, z, p.pts)) + (n2 - 0.5) * 0.8)) * 0.9); }
     if (pathW > 0) {
       const rut = smooth(0.5, 0.0, Math.abs(Math.abs(dp) - pw * 0.42)) * 0.5;
-      _c.set(P.path).lerp(_b.set(P.pathDark), rut + (n2 - 0.5) * 0.3);
+      _c.copy(P.path).lerp(P.pathDark, rut + (n2 - 0.5) * 0.3);
       out.lerp(_c, pathW * 0.92);
     }
-    for (const w of this.water) {
-      const d = distToPolyline(x, z, [w.from, w.to]), hw = (w.width ?? 6) / 2;
+    for (let wi = 0; wi < this.water.length; wi++) {
+      const w = this.water[wi];
+      const d = this._dWater ? this._dWater[wi][i] : distToPolyline(x, z, w.pts ?? [w.from, w.to]), hw = (w.width ?? 6) / 2;
       const k = 1 - smooth(hw - 0.5, hw + 2.5, d);
-      if (k > 0) out.lerp(_b.set(d < hw ? P.mud : P.soil), k * 0.9);
+      if (k > 0) out.lerp(d < hw ? P.mud : P.soil, k * 0.9);
     }
     const o = i * 4, pwgt = this.paint[o + 3];
     if (pwgt > 0) { _c.setRGB(this.paint[o], this.paint[o + 1], this.paint[o + 2]); out.lerp(_c, pwgt); }

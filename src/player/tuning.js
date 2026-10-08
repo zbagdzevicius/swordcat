@@ -27,8 +27,10 @@ export const TUNING = Object.freeze({
   blockPushDamp: 5,          // λ during that window
   autoStand: 0.5,            // §7.9 Auto-Stand assist: Stand held automatically for 0.5 s after a parry
   goldenMinShards: 2,        // §7.5 Golden Hour needs Shard 2 (unlocked in CS-09)
-  goldenCamPreset: 'HERO_LOW', // §7.5 "the camera punches in to ref1 framing" (a low hero shot of the Oath)
   combatStance: 3.0,         // s she keeps the sword raised ('ready') after combat activity before relaxing
+  bumpStunMul: 0.5,          // a 0-damage knock (tutorial dummy / sack) stuns for half of PLAYER.hurt.stun
+  hurtFlash: 0.12,           // s of the white flash on her mesh when a hit lands (before the 15 Hz blink)
+  standCapeWind: 1.8,        // §7.3 Standing Ground: "her cape billows harder" (cape wind ×)
 
   // ---- ambient behaviours (§7.7) ----
   tailPuffHeight: 2.0,       // tail puff when an enemy taller than 2 m alerts
@@ -40,9 +42,6 @@ export const TUNING = Object.freeze({
   sneezeMinFog: 0.06,        // …when fog ≥ 0.06
   alertRadius: 15,           // enemy alert radius that ends the Zoomies (= PLAYER.zoomiesClearRadius)
 });
-
-/** Swing ids that fire a Golden Hour `gleam` crescent (§7.5 "every slash"). */
-export const GLEAM_SWINGS = Object.freeze(['slash1', 'slash2', 'slash3', 'bright', 'riposte']);
 
 /** Enemy states that count as "targeting her" for Standing Ground (§7.3). */
 export const PASSIVE_ENEMY_STATES = Object.freeze(['idle', 'patrol', 'return', 'die', 'dead', 'stagger', 'flee', 'sleep']);

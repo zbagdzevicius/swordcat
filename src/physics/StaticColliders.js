@@ -15,12 +15,14 @@
 // Pure module, no allocations in queries.
 
 const EPS = 1e-4;
+const MIN_DEPTH = 1e-6;              // contacts shallower than this are resting, not penetrating
+const MAX_PASSES = 4;
 const CIRCLE = 0, BOX = 1, RING = 2;
 const BIG_CELLS = 4096;              // colliders spanning more hash cells than this live in an always-checked list
 
 /** @typedef {{src:any, kind:number, cx:number, cz:number, r:number, t:number, hx:number, hz:number, c:number, s:number,
  *   y0:number, y1:number, walk:boolean, bounce:number, filter:Function|null, factions:string[]|null, ray:boolean,
- *   minX:number, maxX:number, minZ:number, maxZ:number, stamp:number}} Rec */
+ *   minX:number, maxX:number, minZ:number, maxZ:number, stamp:number, hint:'ring'|null}} Rec */
 
 /** Normalise a collider description into an internal record (or null if it has no usable shape). */
 export function toRecord(c, hint = null) {
@@ -30,7 +32,7 @@ export function toRecord(c, hint = null) {
     y0: Number.isFinite(c.y0) ? c.y0 : -Infinity, y1: Number.isFinite(c.y1) ? c.y1 : Infinity,
     walk: c.walkable !== false && c.top !== false, bounce: +c.bounce || 0,
     filter: typeof c.filter === 'function' ? c.filter : null, factions: Array.isArray(c.factions) ? c.factions : null,
-    ray: c.ray !== false, minX: 0, maxX: 0, minZ: 0, maxZ: 0, stamp: 0,
+    ray: c.ray !== false, minX: 0, maxX: 0, minZ: 0, maxZ: 0, stamp: 0, hint,
   };
   const yaw = +c.yaw || 0;
   if (hint === 'ring' || c.kind === 'ring' || c.ring === true || c.inside === true) {
@@ -103,7 +105,7 @@ export class StaticColliders {
     /** @type {Rec[]} */ this._cand = [];
     /** @type {Rec[]} */ this._cand2 = [];
     // outputs of the last resolve()/supportAt()/raycast() (shared; read immediately)
-    this.wall = false; this.wallNx = 0; this.wallNz = 0;
+    this.wall = false; this.wallNx = 0; this.wallNz = 0; this.stuck = false;
     this.support = -Infinity; this.supportSrc = null; this.supportBounce = 0;
     this.hitSrc = null; this.hitNx = 0; this.hitNy = 0; this.hitNz = 0;
   }
@@ -155,7 +157,7 @@ export class StaticColliders {
   }
 
   /** Re-index a collider whose fields changed (moved door, resized wall). */
-  update(c) { if (this._bySrc.has(c)) { this.remove(c); this.add(c, c.kind === 'ring' ? 'ring' : null); } }
+  update(c) { const rec = this._bySrc.get(c); if (rec) { this.remove(c); this.add(c, rec.hint); } }
 
   has(c) { return this._bySrc.has(c); }
 
@@ -200,7 +202,8 @@ export class StaticColliders {
    * Push actor `a` (pos = feet, radius, height) sideways out of every blocking collider; remove its inward velocity.
    * Colliders whose walkable top is at or below `max(feetPrev, pos.y) + allowance` don't block: they are support
    * candidates instead (`this.support` = the highest such top under the footprint, `this.supportSrc`, `supportBounce`).
-   * Sets `this.wall` (+ `wallNx/Nz`) when something pushed. Returns `this.support`.
+   * Sets `this.wall` (+ `wallNx/Nz`) when something pushed, and `this.stuck` when the push-out did not converge
+   * (wedged between props closer together than the actor is wide: the caller cancels the move). Returns `this.support`.
    * @param {any} a actor @param {number} feetPrev feet height before this sub-step's vertical move
    * @param {number} allowance step-up height (grounded) or a small epsilon (airborne)
    * @param {boolean} [zeroVel] also cancel velocity into the contact (default true)
@@ -210,9 +213,10 @@ export class StaticColliders {
     if (!this.records.length) return this.support;
     const p = a.pos, r = a.radius ?? 0.35, h = a.height ?? 1;
     const bottom = Math.max(feetPrev, p.y) + allowance;
-    const cand = this.query(p.x - r - 0.05, p.z - r - 0.05, p.x + r + 0.05, p.z + r + 0.05);
-    for (let pass = 0; pass < 3; pass++) {
-      let moved = false;
+    const cand = this.query(p.x - r - 0.3, p.z - r - 0.3, p.x + r + 0.3, p.z + r + 0.3);
+    let moved = false;
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      moved = false;
       for (let i = 0; i < cand.length; i++) {
         const rec = cand[i];
         if (rec.y0 >= p.y + h || !applies(rec, a)) continue;
@@ -223,6 +227,7 @@ export class StaticColliders {
       }
       if (!moved) break;
     }
+    this.stuck = moved;                                             // wedged in a gap narrower than the actor
     this._supportFrom(cand, a, p.x, p.z, r, bottom);
     return this.support;
   }
@@ -248,13 +253,14 @@ export class StaticColliders {
   /**
    * First collider (source object) overlapping the circle (x, z, r) within heights [y0, y1], or null.
    * @param {any} [actor] apply per-collider filters for this actor
+   * @param {boolean} [solidOnly] skip colliders rays ignore (`ray: false`, fog-wall rings): projectile tests
    */
-  overlaps(x, z, r = 0, y0 = -Infinity, y1 = Infinity, actor = null) {
+  overlaps(x, z, r = 0, y0 = -Infinity, y1 = Infinity, actor = null, solidOnly = false) {
     if (!this.records.length) return null;
     const cand = this.query(x - r - 0.05, z - r - 0.05, x + r + 0.05, z + r + 0.05);
     for (let i = 0; i < cand.length; i++) {
       const rec = cand[i];
-      if (rec.y0 >= y1 || rec.y1 <= y0 || (actor && !applies(rec, actor))) continue;
+      if (rec.y0 >= y1 || rec.y1 <= y0 || (actor && !applies(rec, actor)) || (solidOnly && !rec.ray)) continue;
       if (overlapXZ(rec, x, z, r)) return rec.src;
     }
     return null;
@@ -273,6 +279,7 @@ export class StaticColliders {
       const min = rec.r + r, d2 = dx * dx + dz * dz;
       if (d2 >= min * min) return false;
       const d = Math.sqrt(d2);
+      if (min - d <= MIN_DEPTH) return false;
       let nx = 1, nz = 0;
       if (d > 1e-6) { nx = dx / d; nz = dz / d; }
       else { const an = ((a.id ?? 0) * 2.399963) % 6.2831853; nx = Math.sin(an); nz = Math.cos(an); }
@@ -289,6 +296,7 @@ export class StaticColliders {
     if (d2 > 1e-12) {
       if (d2 >= r * r) return false;
       const d = Math.sqrt(d2);
+      if (r - d <= MIN_DEPTH) return false;
       lnx = ex / d; lnz = ez / d; depth = r - d;
     } else {                                                       // centre inside: leave by the shallowest face
       const px = hx - Math.abs(lx), pz = hz - Math.abs(lz);
@@ -307,8 +315,12 @@ export class StaticColliders {
     const nx = dx / d, nz = dz / d;
     if (d < rec.r) {                                               // inside: stay inside
       const target = Math.max(0, rec.r - band);
+      if (d - target <= MIN_DEPTH) return false;
       this._pushCircleOut(a, -nx, -nz, d - target, zeroVel);
-    } else this._pushCircleOut(a, nx, nz, rec.r + band - d, zeroVel);
+    } else {
+      if (rec.r + band - d <= MIN_DEPTH) return false;
+      this._pushCircleOut(a, nx, nz, rec.r + band - d, zeroVel);
+    }
     return true;
   }
 
@@ -316,9 +328,10 @@ export class StaticColliders {
    * Ray vs the colliders as solids (circles = vertical cylinders, boxes = oriented boxes; rings only with ray:true).
    * @param {number} inflate grow every shape by this (sphere casts)
    * @param {any} [actor] apply per-collider filters for this actor
+   * @param {((src:any) => boolean)|null} [ignore] skip colliders for which this returns true (camera: thin props fade)
    * @returns {number} distance or -1. Sets `hitSrc`, `hitNx/Ny/Nz`.
    */
-  raycast(ox, oy, oz, dx, dy, dz, maxDist, inflate = 0, actor = null) {
+  raycast(ox, oy, oz, dx, dy, dz, maxDist, inflate = 0, actor = null, ignore = null) {
     this.hitSrc = null;
     if (!this.records.length || !(maxDist > 0)) return -1;
     const ex = ox + dx * maxDist, ez = oz + dz * maxDist, m = inflate + 0.01;
@@ -326,7 +339,7 @@ export class StaticColliders {
     let best = maxDist, found = false;
     for (let i = 0; i < cand.length; i++) {
       const rec = cand[i];
-      if (!rec.ray || (actor && !applies(rec, actor))) continue;
+      if (!rec.ray || (actor && !applies(rec, actor)) || (ignore && ignore(rec.src))) continue;
       const t = rec.kind === BOX ? this._rayBox(rec, ox, oy, oz, dx, dy, dz, best, inflate)
         : rec.kind === CIRCLE ? this._rayCyl(rec, ox, oy, oz, dx, dy, dz, best, inflate) : this._rayRing(rec, ox, oy, oz, dx, dy, dz, best);
       if (t >= 0 && t <= best) { best = t; found = true; this.hitSrc = rec.src; this.hitNx = this._nx; this.hitNy = this._ny; this.hitNz = this._nz; }

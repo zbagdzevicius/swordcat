@@ -1,17 +1,676 @@
-// src/story/strings.js  (owner: story) — M0 STUB: the strings table (empty in M0) and the resolver
-// exposed as ctx.strings.t(key, vars). Format (§19.6): S[key] = { default: '...', homage?: '...' }.
-// `homage` variants are used only when HOMAGE_LINES is true (§4.4). Missing keys return the key itself.
+// src/story/strings.js  (owner: story) — EVERY line of display text in the game (GAME_DESIGN §4.4, §5, §6, §14), plus
+// the resolver exposed as ctx.strings.t(key, vars) / has(key) / S.
+//
+// Format (§19.6): S[key] = { default: '...', homage?: '...' }. `homage` variants are the community / token-site
+// captions (§4.4); they are used only when config.HOMAGE_LINES is true (it ships false until a legal check).
+// Keys: cutscene lines are `<sceneId>.<n>` (cs03.1 …); barks `bark.<speaker>.<trigger>[.n]`; boss barks keep the short
+// `<boss>.<beat>` keys the enemy data uses (B.4: 'barkus.p2'); lost-kitten lines `kitten.<id>`; names `name.<id>`.
+// `{name}` placeholders are filled from `vars`. Missing keys return the key itself (never throws).
+// Pure data + two pure functions: node-safe, no DOM, imports only core/config.js.
 import { HOMAGE_LINES } from '../core/config.js';
 
-/** @type {Record<string, {default: string, homage?: string}>} */
-export const S = {};
+/** §1: the title lives here so a rename is one edit. */
+export const GAME_TITLE = 'SWORDCAT';
+export const GAME_SUBTITLE = 'Nine Lives of Meow Island';
 
-/** Resolve `key` with `{name}` placeholders filled from `vars`. */
-export function t(key, vars = null) {
-  const row = S[key];
-  let s = row ? (HOMAGE_LINES && row.homage ? row.homage : row.default) : key;
-  if (vars) s = s.replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m));
-  return s;
+const d = (text, homage) => (homage ? { default: text, homage } : { default: text });
+
+/** @type {Record<string, {default: string, homage?: string}>} */
+export const S = {
+  // ================================================================== title, chapters, regions (§1, §4.2, §4.4, §14.3)
+  'game.title': d(GAME_TITLE),
+  'game.subtitle': d(GAME_SUBTITLE),
+  'title.press': d('Press any key'),
+  'title.tap': d('Tap to start'),
+  'title.prompt': d('Press any key / Tap to start'),
+  'ch.label': d('Chapter {n}'),
+  'ch.label.prologue': d('Prologue'),
+  'ch.label.epilogue': d('Epilogue'),
+  'ch.prologue': d('One Ear-Tuft Short', 'Too Small for the Sword'),
+  'ch.1': d('Small Paws, Big Sword', 'Holding It Anyway'),
+  'ch.2': d('The Cheese Mill'),
+  'ch.3': d('The Quiet Town'),
+  'ch.4': d('Where I Stand', 'Standing My Ground'),
+  'ch.5': d('The Bow'),
+  'ch.6': d('The Last Light', 'The Hour Is Gold'),
+  'ch.epilogue': d('Dame Swordcat of the Ninth Seat', 'Protecting Meow Island'),
+  'region.meadow': d('Purrdale Meadows'),
+  'region.forest': d('Whiskerwood'),
+  'region.town': d('Pawsbury'),
+  'region.gate': d('The Low Gate'),
+  'region.bog': d('Bogmire'),
+  'region.keep': d('Houndhold Keep'),
+  'region.sky': d('Above the Clouds'),
+
+  // ================================================================== speaker names (dialogue ribbon)
+  'name.swordcat': d('Clem'),
+  'name.clementine': d('Clementine'),
+  'name.pearl': d('Pearl'),
+  'name.marmalade': d('Sir Marmalade'),
+  'name.snowpaw': d('Princess Snowpaw'),
+  'name.whiskerbottom': d('Sgt. Whiskerbottom'),
+  'name.mochi': d('Mochi'),
+  'name.sage': d('Sage'),
+  'name.clover': d('Clover'),
+  'name.tofu': d('Tofu'),
+  'name.earlgrey': d('Earl Grey'),
+  'name.pip': d('Pip'),
+  'name.pudding': d('Pudding'),
+  'name.dragon': d('Very Big Dragon'),
+  'name.coo': d('Coo'),
+  'name.snoozalot': d('Sir Snoozalot'),
+  'name.cacklejaw': d('Warchief Cacklejaw'),
+  'name.pilfer': d('Pilfer'),
+  'name.stealer': d('Post Stealer'),
+  'name.grizzlechop': d('Captain Grizzlechop'),
+  'name.brutus': d('Sir Brutus'),
+  'name.barkus': d('Lord Barkus'),
+  'name.squire': d('Squire'),
+  'name.squires': d('Squires'),
+  'name.kittens': d('Kittens'),
+  'name.villager': d('Villager'),
+  'name.hyena': d('Hyena'),
+  'name.rat': d('Rat'),
+  'name.biscuit': d('Biscuit'), 'name.noodle': d('Noodle'), 'name.button': d('Button'),
+  'name.pickles': d('Pickles'), 'name.pebble': d('Pebble'), 'name.sprout': d('Sprout'),
+  'name.waffles': d('Waffles'), 'name.toffee': d('Toffee'), 'name.muffin': d('Muffin'),
+  'name.tater': d('Tater'), 'name.mittens': d('Mittens'), 'name.socks': d('Socks'),
+  'name.juniper': d('Juniper'), 'name.bramble': d('Bramble'), 'name.fennel': d('Fennel'),
+  'name.bean': d('Bean'), 'name.crumpet': d('Crumpet'), 'name.dumpling': d('Dumpling'),
+
+  // ================================================================== CS-00 Title Loop
+  // (no lines; the logo + prompt are 'game.title' / 'game.subtitle' / 'title.prompt')
+
+  // ================================================================== CS-01 Knighting Eve
+  'cs01.caption': d('Meow Island. The eve of Knighting Day.'),
+  'cs01.1': d('Tall enough! Next!'),
+  'cs01.2': d('Tall enough! Next!'),
+  'cs01.3': d('Too small for the sword, Clementine.'),
+  'cs01.4': d('I was too small last year.'),
+  'cs01.5': d("And you've been very consistent about it. Next!"),
+  'cs01.6': d('There. Now you look less scary.'),
+  'cs01.7': d("I wasn't scary."),
+  'cs01.8': d("I know. I'm being nice."),
+  'cs01.9': d("Tomorrow the Sunbell rings at dawn, and I'm sleeping over with the squires. Front row!"),
+  'cs01.chest': d('M. — my first'),
+  'cs01.10': d('...Practice.'),
+
+  // ================================================================== Midnight Practice (§5.4 tutorial, §6.6)
+  'tut.move': d('Move [WASD] · Look [Mouse]'),
+  'tut.jump': d('Jump the fence [Space]'),
+  'tut.combo': d('Snip, Snap, Swoosh! [⚔ ×3]'),
+  'tut.roll': d("Tumble past the sack [Shift]. You can't be hurt mid-tumble."),
+  'tut.stand': d('Hold the Stand [RMB]. Block the Wobble Knight twice.'),
+  'tut.parry': d('Raise the Stand *just* as it swings. A white glint means "parry me".'),
+  'tut.bright': d('Hold ⚔ until it shines, then let go. Bright Slash breaks cracked things.'),
+  'tut.meow': d('Meow [C]. Hidden kittens answer. So do cows.'),
+  'tut.pearl1': d("Shh! I'm not here."),
+  'tut.pearl2': d("...You're getting good, Clem."),
+  'tut.riposte': d('Parried! Press ⚔ now for a Riposte.'),
+  'tut.pounce': d('Jump, then ⚔ in the air: Pounce. Bounce off crows!'),
+  'tut.reflect': d('Parry a bolt to send it back.'),
+  'tut.milk': d("Milk Break [R]: heals 2 hearts. Don't get hit while you sip."),
+  'tut.vigil': d('Vigil Stone: rest, save, refill milk, swap kittens [E].'),
+  'tut.valor': d('Standing your ground fills Valor. Hold the Stand near enemies.'),
+  'tut.companion': d('[Q] Kitten ability'),
+  'tut.holy': d('Holy Slash: hold ⚔ until it turns gold (needs 50 Valor).'),
+  'tut.golden': d('Golden Hour: at full Valor, press Stand + ⚔ together.'),
+  'tut.line': d('Hold the Line! Keep enemies away from the winch.'),
+  'tut.jeer': d("A jeering hyena drains your Valor. Hold the Stand and it can't touch you, or hit it to make it choke."),
+  'tut.bones': d('Scatter the bones! Hit a bone pile with a heavy attack before it gets up.'),
+  'tut.title': d('Midnight Practice'),
+  'tut.step': d('{n}/{total}'),
+  'tut.skip': d('Hold [Esc] to skip practice'),
+  'tut.done': d('Practice done. The north gate is open.'),
+  'tut.skipped': d('Practice skipped. The north gate is open.'),
+
+  // ================================================================== G-01 Sir Tallbert
+  'g01.1': d('...Hello.'),
+
+  // ================================================================== CS-02 The Laughing Fog (never cut)
+  'cs02.1': d('CLEM!'),
+  'cs02.2': d('A kitten! With a SWORD! And a little BOW!'),
+  'cs02.3': d("HAHAHA— no, stop, I can't— leave it. LEAVE it! It isn't even a threat!"),
+  'cs02.4': d('Mine.'),
+  'cs02.5': d('Also mine.'),
+  'cs02.6': d('...Okay.'),
+
+  // ================================================================== CS-03 Milk Break (never cut)
+  'cs03.1': d('Day one of rescuing everyone. Morale: high.'),
+  'cs03.2': d('Milk: also high.'),
+  'cs03.3': d('ROOOAAR. (Is that... milk?)'),
+  'cs03.4': d('...It is.'),
+  'cs03.5': d("RRrrr. (I haven't eaten in three days. The laughing dogs chased me out of my cave.)"),
+  'cs03.6': d('Why are you tied up?'),
+  'cs03.7': d('(...They also had a net.)'),
+  'cs03.8': d('Here.'),
+  'cs03.9': d("(...It's very good.)"),
+  'cs03.10': d("What's your name?"),
+  'cs03.11': d('(Pudding.)'),
+  'cs03.12': d("ROAR! (Sorry! Sorry. I roar when I'm nervous.)"),
+  'cs03.13': d("Hold still. I'll cut you loose."),
+  'cs03b.1': d("(I'll... follow. From a distance. A safe distance.)"),
+
+  // ================================================================== D-01 Mochi Joins
+  'd01.1': d("Squire Mochi reporting! Well. Reject Mochi. Too clumsy, they said."),
+  'd01.2': d('Too small, they said.'),
+  'd01.3': d("Then we're a team!"),
+  'd01.4': d("I'll do the shield. You do the... pointy part."),
+  'toast.mochi': d('Mochi joined! [Q] Shield Wall'),
+
+  // ================================================================== D-02 Sage Joins
+  'd02.1': d('Thanks for the landing.'),
+  'd02.2': d('Mrrf.'),
+  'd02.3': d("You're the one with the sword bigger than you."),
+  'd02.4': d('Yes.'),
+  'd02.5': d('...Fair.'),
+  'toast.sage': d('Sage joined! Swap kittens at any Vigil Stone.'),
+
+  // ================================================================== CS-04 Lantern Night
+  'cs04.1': d("Can I ask something? Why you? You're the smallest of us."),
+  'cs04.2': d('Because I was there.'),
+  'cs04.3': d("I'm not brave. I'm just... here."),
+  'cs04.4': d("That's what brave is, I think. Being scared and being here."),
+  'cs04.5': d("...Don't tell anyone I cried."),
+
+  // ================================================================== CS-05 First Light
+  'cs05.1': d('I yield! I YIELD! Mind the cheese!'),
+  'cs05.2': d('Take the shiny rock! The Warlord paid us in cheese to slow down anyone who followed. Which, to be fair, we expected to be... bigger.'),
+  'cs05.3': d('The cages went to Pawsbury. The Legion holds the whole town!'),
+  'cs05.4': d("Then I'm going home."),
+  'toast.holy': d('Holy Slash learned! Hold ⚔, release with 50 Valor.'),
+
+  // ================================================================== D-03 On Loan
+  'd03.1': d('Clem? Is that... my armour?'),
+  'd03.2': d("...It's borrowed."),
+  'd03.3': d('Is it now.'),
+  'd03.4': d("That armour's on loan, then. Bring it back with a story in it."),
+  'd03.5': d("That hooded thief took the Royal Post. Get it back, would you? My knees don't run anymore."),
+
+  // ================================================================== CS-06 The Letters
+  'cs06.1': d("'To the Knights of the Order of Nine Lives. Please come home. The gate needs holding. — Snowpaw.'"),
+  'cs06.2': d('Eight of these. None delivered.'),
+  'cs06.3': d('They never got them. Nobody came because nobody knew.'),
+  'cs06.4': d('Then we tell them.'),
+  'cs06.5': d('Coo.'),
+  'cs06.6': d('Every knight. Fast as you can.'),
+  'cs06.7': d('Coo.'),
+
+  // ================================================================== D-04 Rescues in town
+  'd04.tofu.1': d('Is it over? ...Is that a sword or a door?'),
+  'd04.tofu.2': d('A sword.'),
+  'd04.tofu.3': d('Huh. Want it sharper? I can barely lift it, but I can sharpen it.'),
+  'd04.earlgrey.1': d('Do you MIND? I was nearly at the good chapter.'),
+  'd04.earlgrey.2': d('...Oh. You\'re rescuing me. How embarrassing. Carry on.'),
+  'd04.clover.1': d("Well, aren't you a tiny thing in a big tin."),
+  'd04.clover.2': d('Somebody has to keep you lot alive. Hold still, sweetpea.'),
+  'toast.clover': d('Clover joined!'),
+
+  // ================================================================== CS-07 The Red Cape
+  'cs07.1': d('You chased off the Legion. All of them. By yourself?'),
+  'cs07.2': d('With friends.'),
+  'cs07.3': d('Mostly her.'),
+  'cs07.4': d('The Royal Wardrobe has nothing your size. Except this.'),
+  'cs07.5': d('It was a tablecloth. Velvet, mostly.'),
+  'cs07.6': d('...Thank you, Your Highness.'),
+  'cs07.7': d("The Dawnstone's in three pieces now. You've got one in that sword."),
+  'cs07.8': d("The rats say the hyenas have the second. They'll come for the town, through the Low Gate."),
+  'cs07.9': d("Then I'll be at the gate."),
+  'toast.free': d('Pawsbury is free!'),
+  'toast.shops': d('Shops are open.'),
+  'toast.hub': d('Kittens you rescue will live here.'),
+
+  // ================================================================== D-06 Pip Joins
+  'd06.1': d('Took you long enough. I was waiting for dramatic effect.'),
+  'd06.2': d("That pin they pinched? I know who's got it. Leave him to me."),
+
+  // ================================================================== CS-08 Nobody's Coming (never cut)
+  'cs08.1': d("Nobody's coming."),
+  'cs08.2': d("So I'm staying."),
+  'cs08.3': d("We're not leaving you out here by yourself."),
+  'cs08.4': d('I brought a spoon!'),
+  'cs08.5': d('I brought two!'),
+  'cs08.6': d('...Thank you.'),
+
+  // ================================================================== G-02 Marmalade's Leap
+  'g02.1': d('OOF!'),
+
+  // ================================================================== CS-09 Last Laugh
+  'cs09.1': d('Get her! ALL OF YOU! Everybody CHARGE!'),
+  'cs09.2': d('ROOOOAR! (NOT. MY. FRIENDS.)'),
+  'cs09.3': d('They used to laugh at me. The runt. So I laughed first. Always first.'),
+  'cs09.4': d("You can stop now. I'll hold it for a bit."),
+  'cs09.5': d("...You're very strange."),
+  'cs09.6': d('I know.'),
+  'toast.golden': d('Golden Hour unlocked! At full Valor: Stand + ⚔'),
+
+  // ================================================================== CS-10 Eighth Life
+  'cs10.1': d("Where's Sir Marmalade?"),
+  'cs10.2': d('Eighth life. Gone. Worth it, mind.'),
+  'cs10.3': d('...Seven months old. Look at that handwriting.'),
+  'cs10.4': d("Doctor says bed and soup. You'll have to finish this one, Dame—"),
+  'cs10.5': d("I'm not a dame."),
+  'cs10.6': d('...Yet.'),
+  'cs10.7': d("That's the Warlord's doing. The last shard is on him. Houndhold Keep, north across the Bogmire."),
+  'cs10.8': d("And the smugglers' landing in the bog is where they ship the kittens."),
+  'cs10.9': d('Pearl.'),
+
+  // ================================================================== CS-11 The Bow
+  'cs11.1': d('You came!'),
+  'cs11.2': d("Of course. I'm a knight."),
+  'cs11.3': d('Since when?'),
+  'cs11.4': d('...Since now.'),
+  'cs11.5': d("Hold still. Your bow's crooked. You can't save an island with a crooked bow."),
+  'cs11.6': d("It's been a long week."),
+  'cs11.7': d("I know. You're doing good."),
+  'cs11.8': d("I'll go home and tell everyone. Go get them, Clem."),
+
+  // ================================================================== CS-12 Get On
+  'cs12.1': d('(Get on. Before I change my mind.)'),
+  'cs12.2': d("(I'm not scared. I'm not scared. I'm a little scared.)"),
+  'cs12.3': d('Me too.'),
+
+  // ================================================================== CS-13 Dragonfire Gate
+  'cs13.1': d('ROAR! (Sorry!)'),
+  'cs13.2': d('(...No. Not sorry.)'),
+  'cs13.3': d("(I'm going back for the others. Everyone wanted to come. EVERYONE.)"),
+  'cs13.4': d('Be careful.'),
+  'cs13.5': d("(I'm a DRAGON.)"),
+  'cs13.6': d("(...I'll be careful.)"),
+
+  // ================================================================== CS-14 The Champion Kneels
+  'cs14.1': d("I don't fight from up there. Down here, we're equals."),
+  'cs14.2': d('I watched you at the gate. You never stepped back once.'),
+  'cs14.3': d("I couldn't. The gate was behind me."),
+  'cs14.4': d('And now?'),
+  'cs14.5': d('Now the kittens are.'),
+  'cs14.6': d('Then we understand each other.'),
+
+  // ================================================================== D-05 Brutus Yields
+  'd05.1': d('...You stood.'),
+  'd05.2': d('Hold your gate, little knight.'),
+
+  // ================================================================== CS-15 Nine Lives (never cut)
+  'cs15.1': d('Stay down, little thing.'),
+  'cs15.2': d("Why won't you STAY DOWN?"),
+  'cs15.3': d('Not strong yet. Still here.'),
+  'cs15.4': d('GO, CLEM!'),
+  'cs15.5': d('SWORDCAT! SWORDCAT!'),
+  'prompt.holdStand': d('HOLD THE STAND'),
+  'prompt.chargeRelease': d('Hold ⚔, then release'),
+
+  // ================================================================== CS-16 The Golden Hour (never cut)
+  'cs16.1': d('Every morning the bell rang. And every morning, the cats got the sunny steps.'),
+  'cs16.2': d('Here. It helps.'),
+  'cs16.3': d('...It is warm.'),
+  'prompt.ringBell': d('Ring the Sunbell'),
+  'cs16.4': d('Did we miss it?'),
+  'cs16.5': d('Coo.'),
+  'cs16.6': d('Kneel, squire.'),
+  'cs16.7': d("...Actually, stand. I can't see you."),
+  'cs16.8': d('By the power vested in me by the Order of Nine Lives, and also my mum... Arise, Dame Clementine of the Pink Bow, Knight of the Ninth Seat.'),
+  'cs16.9': d("...Your Highness? Could it be 'Swordcat'? Everyone calls me that."),
+  'cs16.10': d('Arise, Dame Swordcat of the Ninth Seat.'),
+  'cs16.11': d('Still too small. Still a knight.'),
+  'cs16.12': d("The armour. It's on loan."),
+  'cs16.13': d('Bring it back with a story in it, I said.'),
+  'cs16.14': d('...There are a few more stories in there yet. Keep it.'),
+  'cs16.15': d('Special delivery.'),
+  'postcredits.pilfer1': d('The posts...'),
+  'postcredits.pilfer2': d("...And this time, it's yours.", '...do not stop.'),
+  'ending.caption': d('And the sun came home.', 'The hour is gold.'),
+  'credits.title': d('Credits'),
+  'credits.thanks': d('Thank you for playing.'),
+  'credits.assets': d('Asset attribution'),
+
+  // ================================================================== §6.1 Swordcat barks
+  'bark.clem.alert.1': d('Halt, villain. ...Please.'),
+  'bark.clem.alert.2': d('En garde.'),
+  'bark.clem.alert.3': d('I am a knight. Mostly.'),
+  'bark.clem.stand': d('Hold.'),
+  'bark.clem.standingGround': d('Not one step.'),
+  'bark.clem.parry.1': d('No, thank you.'),
+  'bark.clem.parry.2': d('Mrrp.'),
+  'bark.clem.parry.3': d('Not today.'),
+  'bark.clem.holy.1': d('For Pearl!'),
+  'bark.clem.holy.2': d('Shine.'),
+  'bark.clem.golden.first': d('Where I stand, the gate holds.'),
+  'bark.clem.golden': d('Now.'),
+  'bark.clem.stillStanding': d('...Still standing.'),
+  'bark.clem.lowHp': d("I'm fine. I'm fine. I'm fine."),
+  'bark.clem.respawn.1': d('Not strong yet. Still here.'),
+  'bark.clem.respawn.2': d('...Ow.'),
+  'bark.clem.lastLife': d('Ninth life. Making it count.'),
+  'bark.clem.milk.1': d('Mm.'),
+  'bark.clem.milk.2': d('Milk break.'),
+  'bark.clem.kitten': d("You're safe now. Follow the lanterns home."),
+  'bark.clem.arena.1': d('Small paws. Big sword. Still standing.'),
+  'bark.clem.arena.2': d('Sorry! Sorry.'),
+  'bark.clem.sneeze': d('...chu.'),
+  'bark.clem.twoSpoons': d('Two spoons.'),
+
+  // ================================================================== §6.2 companion barks (keys used by src/companions/lines.js)
+  'bark.mochi.ability.1': d('Squire on duty!'),
+  'bark.mochi.ability.2': d("I'm not hiding, I'm BEING A WALL."),
+  'bark.mochi.combat.1': d('Left! No, your other left!'),
+  'bark.mochi.combat.2': d("I'm not scared! My tummy is scared. Separate thing."),
+  'bark.mochi.kitten': d('Another one! Can we keep them all?'),
+  'bark.mochi.idle': d('Is it lunch? It feels like lunch.'),
+  'bark.mochi.caged.1': d('Over here! Behind the bars! Hi!'),
+  'bark.mochi.caged.2': d("I'd help, but I'm in a box."),
+  'bark.sage.ability.1': d('Target. Down.'),
+  'bark.sage.ability.2': d('Volley.'),
+  'bark.sage.combat.1': d('Behind you. Obviously.'),
+  'bark.sage.combat.2': d("That was... actually cool. Don't tell anyone I said that."),
+  'bark.sage.kitten': d('Kitten nearby. I can smell the panic.'),
+  'bark.sage.idle': d("I've counted forty hyenas. We have four kittens and a spoon."),
+  'bark.clover.ability.1': d('Hold still, sweetpea. This purr is medicinal.'),
+  'bark.clover.ability.2': d('Mrrrr.'),
+  'bark.clover.combat.1': d('Who hurt you? Point.'),
+  'bark.clover.combat.2': d("Not the face, she's growing into it!"),
+  'bark.clover.idle': d('Eat something. Knights need snacks.'),
+  'bark.companion.nap.1': d('Just... resting my eyes...'),
+  'bark.companion.nap.2': d('Zzz.'),
+  'bark.companion.wake': d("I'm up! I'm up!"),
+  'bark.companion.mrrp': d('Mrrp!'),
+
+  // ================================================================== §6.3 enemy barks
+  'bark.rat.alert.1': d('Squeak formation!'),
+  'bark.rat.alert.2': d('Cheese for the Captain!'),
+  'bark.rat.flee.1': d('Eek!'),
+  'bark.rat.flee.2': d('Nope. Nope nope nope.'),
+  'bark.hyena.alert.1': d('Look at it! A kitten with a butter knife!'),
+  'bark.hyena.alert.2': d('Go home, fluffball!'),
+  'bark.hyena.alert.3': d("Nobody's coming for you!"),
+  'bark.hyena.gloat.1': d('Hehehe-HAHA-hoo!'),
+  'bark.hyena.gloat.2': d('BOOOO!'),
+  'bark.hyena.gloat.3': d('Get off the stage!'),
+  'bark.hyena.choke': d('hrk!'),
+  'bark.hyena.defeat.1': d('...That was actually kinda cool.'),
+  'bark.hyena.defeat.2': d('Tell no one.'),
+  'bark.hyena.defeat.3': d("I'm telling my mum."),
+  'bark.stealer.snatch': d('Finders keepers! Stealers... also keepers!'),
+  'bark.stealer.hit': d('Ow! Fine! Take it!'),
+  'bark.stealer.escape': d('Bye-bye, fishies!'),
+  'bark.pug.alert': d('HRRF.'),
+  'bark.pug.shield': d('Wall. Am wall.'),
+  'bark.bone.collapse': d('*clatter*'),
+  'bark.bone.reassemble': d('Ta-daa.'),
+  'bark.bone.scattered': d('*clack*'),
+  'grizzlechop.intro': d('Halt! This cheese is under the protection of Captain Grizzlechop!'),
+  'grizzlechop.p2': d('Charge! ...I said CHARGE! Why is nobody charging?'),
+  'grizzlechop.wheel': d('My WHEEL!'),
+  'grizzlechop.snack': d("Snack break! Captain's privilege!"),
+  'grizzlechop.choke': d('hrk— wrong pipe! WRONG PIPE!'),
+  'cacklejaw.intro': d("Oh, it's YOU! The tiny one! Lads, she came all this way!"),
+  'cacklejaw.p1': d('Is that a sword or a toothpick?'),
+  'cacklejaw.p2': d('Ratio RUSH!'),
+  'cacklejaw.stumble': d('How are you STILL there?'),
+  'cacklejaw.p3': d("Who's laughing now? ...Me. It's still me."),
+  'cacklejaw.meowed': d('WHAT?'),
+  'cacklejaw.choked': d("hrk— that's rude!"),
+  'pilfer.pin': d("It's a post! Technically!"),
+  'pilfer.chased': d('Catch me if you— why are you so FAST?'),
+  'brutus.parry': d('Good.'),
+  'brutus.again': d('Again.'),
+  'brutus.show': d('Show me your Stand.'),
+  'brutus.one': d('One.'),
+  'brutus.two': d('Two.'),
+  'barkus.intro': d('No cats. On the sunny. Steps.'),
+  'barkus.p1': d('This is MY fog now!'),
+  'barkus.p2': d('My HELMET? ...LADS! HERE, BOY! ALL OF YOU!'),
+  'barkus.p3': d('You want your shiny rock? COME AND GET IT!'),
+  'barkus.parry1': d('WHAT?'),
+  'barkus.parry2': d('STOP THAT!'),
+  'barkus.parry3': d('MY ROCK!'),
+
+  // ================================================================== §6.4 lost kittens (rescue line; also their hub line)
+  'kitten.biscuit': d('Is the cow gone? Is it? Okay. Hi.'),
+  'kitten.noodle': d('I was being a barrel. It was going well.'),
+  'kitten.button': d('You stood so still I thought you were a statue. I copied you!'),
+  'kitten.pickles': d("The mushroom said I could stay. The mushroom didn't say anything. I was scared."),
+  'kitten.pebble': d('You broke a ROCK. With a SWORD.'),
+  'kitten.sprout': d('They said I was too small to be worth cheese.'),
+  'kitten.waffles': d("I can see the whole town from here! It's mostly rats."),
+  'kitten.toffee': d('I climbed up and then I forgot how down works.'),
+  'kitten.muffin': d("The bell's quiet. I don't like it quiet."),
+  'kitten.tater': d("Pip said you'd come. Pip says a lot of things."),
+  'kitten.mittens': d('I bit one! On the tail! Gently!'),
+  'kitten.socks': d("It's damp under here. I've been very brave about the damp."),
+  'kitten.juniper': d('The lights in the water keep winking at me.'),
+  'kitten.bramble': d('There were spiders. I named them. Then I ran.'),
+  'kitten.fennel': d('Is the tower supposed to be sideways?'),
+  'kitten.bean': d("The dogs aren't mean. They're just loud. Like Mochi."),
+  'kitten.crumpet': d('The skeleton guard tells good jokes. Bad breath, though. He has no lungs.'),
+  'kitten.dumpling': d("I'm not stuck. I'm guarding the banner."),
+  'kitten.where.biscuit': d('Behind a sleeping cow, Crow Fields'), 'kitten.where.noodle': d('In a barrel, the crossroads'),
+  'kitten.where.button': d('The Standing Stones'), 'kitten.where.pickles': d('A mushroom house'),
+  'kitten.where.pebble': d('Behind a cracked boulder'), 'kitten.where.sprout': d('A rat tent cage'),
+  'kitten.where.waffles': d('Above Lantern Alley'), 'kitten.where.toffee': d('On the fountain statue'),
+  'kitten.where.muffin': d('The Bell Tower loft'), 'kitten.where.tater': d('A hyena war-wagon'),
+  'kitten.where.mittens': d('A hyena war-wagon'), 'kitten.where.socks': d('Under the causeway stairs'),
+  'kitten.where.juniper': d('A dead-tree stump'), 'kitten.where.bramble': d('The Spider Reeds'),
+  'kitten.where.fennel': d('The sunken tower'), 'kitten.where.bean': d('A barrel in the Courtyard'),
+  'kitten.where.crumpet': d('A kennel cage, the cellars'), 'kitten.where.dumpling': d('A banner beam on the ramparts'),
+
+  // ================================================================== §6.5 hub lines
+  'hub.marmalade.1': d("Milk's on the house. Straws are extra. Kidding. Straws are free."),
+  'hub.marmalade.2': d("Bend the knees, girl. The tail's for balance, not for swishing at butterflies."),
+  'hub.marmalade.bed': d("Take what you need. Leave the fish in the jar. Doctor's watching."),
+  'hub.tofu.1': d('Sharpen it? I can barely *lift* it.'),
+  'hub.tofu.2': d('Every notch on that blade is a story. Please stop adding notches.'),
+  'hub.earlgrey.1': d("Fascinating. The shard resonates with your blade. Or you're vibrating. Kittens do that."),
+  'hub.earlgrey.2': d('Knowledge is power. Also, power is power.'),
+  'hub.pip.1': d("{n} kittens still out in {level}. One's somewhere silly. Don't ask how I know."),
+  'hub.pip.2': d("Found your fish. ...I'm keeping one."),
+  'hub.pearl.1': d("Red's your colour. Every colour's your colour. You're my sister."),
+  'hub.pearl.2': d("Twirl. ...Okay, don't twirl in armour."),
+  'hub.snowpaw.1': d('The castle steps are yours, Swordcat. Watch out for dogs.'),
+  'hub.snowpaw.2': d("I'm practising knighting people on the cook. He's very patient."),
+  'hub.coo.1': d('Coo.'),
+  'hub.villager.1': d("Is that THE Swordcat? She's so small!"),
+  'hub.villager.2': d('My nan says the bell will ring again.'),
+  'hub.villager.3': d("I'm going to be a knight too. I'm already too small, so that part's done."),
+  'hub.villager.4': d("Mind the fountain, it bites. It doesn't. But it might."),
+  'hub.villager.5': d('Thank you, Dame— um. Squire. Um. Swordcat!'),
+  'hub.villager.6': d('Fish? Fish!'),
+
+  // ================================================================== §6.7 Lost Letters
+  'letter.l1.title': d("Mochi's letter home"),
+  'letter.l1': d("Dear Mum. Squire food is fine. Please send fish. Not the bony ones. — Mochi"),
+  'letter.l2.title': d("Grizzlechop's shopping list"),
+  'letter.l2': d("Grizzlechop's shopping list: cheese, more cheese, a hat with a bigger feather, cheese."),
+  'letter.l3.title': d('A request to the Armour-Painting Office'),
+  'letter.l3': d("To the Snickerpack Armour-Painting Office: please change my word from NAYSAYER to YAYSAYER. I've thought about it a lot. — Private Snorkle"),
+  'letter.l4.title': d('A letter for Pudding'),
+  'letter.l4': d('Dear Pudding. You can come home now. We fixed the cave. — the bats'),
+  'letter.l5.title': d('A secret letter'),
+  'letter.l5': d("Dear Clem, if you're reading this, you found my secret letter spot. I'm proud of you. — P."),
+  'letter.l6.title': d('A pup\'s letter'),
+  'letter.l6': d("Dear Mum. The cats said no dogs on the sunny steps again. One day I'll get my own sun. — Barky, age 1"),
+  'letter.marmalade.title': d("Marmalade's letter"),
+  'letter.marmalade': d("Dear Knights. They say I'm too little to be a squire. I've decided to be one anyway. I will practise every night. — Marmalade, age 7 months.",
+    'Dear Knights. They say I am too small for the sword. I am going to hold it anyway. — Marmalade, age 7 months.'),
+  'letter.summons': d('To the Knights of the Order of Nine Lives. Please come home. The gate needs holding. — Snowpaw.'),
+
+  // ================================================================== §4.4 Meme Cam captions, achievements
+  'meme.cap1': d('Where I stand, the gate holds.', 'Too small for the sword. Holding it anyway.'),
+  'meme.cap2': d('Small paws. Big sword. Still standing.', 'The armor is borrowed. The hour is gold.'),
+  'meme.cap3': d('Not strong yet. Still here.', 'born to :3, forced to ⚔'),
+  'ach.memecam': d('A Legendary Pose', 'me trying to handle things maturely'),
+
+  // ================================================================== §6.6 objectives
+  'obj.ropes': d('Cut the net ropes {n}/{max}'),
+  'obj.kitten': d('Free the kitten'),
+  'obj.stealer': d('Catch the Post Stealer'),
+  'obj.lanterns': d('Light the lanterns {n}/{max}'),
+  'obj.line': d('Hold the Line! Gate repair {p}%'),
+  'obj.keys': d('Find the keys {n}/{max}'),
+  'obj.belltower': d('Reach the Bell Tower'),
+  'obj.mochi': d('Free the squire in the cage cart'),
+  'obj.follow': d('Follow the trail of letters'),
+  'obj.done': d('Objective complete!'),
+
+  // ================================================================== prompts (interaction tags, cutscene prompts)
+  'prompt.interact': d('Interact'),
+  'prompt.talk': d('Talk'),
+  'prompt.picnic': d('Milk break'),
+  'prompt.vigil': d('Rest'),
+  'prompt.read': d('Read'),
+  'prompt.open': d('Open'),
+  'prompt.shop': d('Browse'),
+  'prompt.board': d('Quest Board'),
+  'prompt.skip': d('Hold to skip'),
+  'prompt.next': d('Next'),
+  'prompt.continue': d('Continue'),
+
+  // ================================================================== §6.8 UI copy
+  'life.lost': d('{n} lives left'),
+  'life.lost1': d('1 life left'),
+  'life.last': d('Last life!'),
+  'gameover.title': d('Time for a cat nap.'),
+  'gameover.retry': d('Wake up (retry level)'),
+  'gameover.hub': d('Back to Pawsbury'),
+  'results.title': d('Chapter clear!'),
+  'results.time': d('Time'),
+  'results.kittens': d('Kittens'),
+  'results.letter': d('Letter'),
+  'results.fish': d('Fish'),
+  'results.lives': d('Lives left'),
+  'results.rank': d('Rank'),
+  'results.rank.pawsome': d('Paw-some'),
+  'results.rank.purrfect': d('Purr-fect'),
+  'results.rank.mewtiful': d('Mew-tiful'),
+  'results.next': d('Onward'),
+  'toast.kitten': d('Lost kitten found! ({n}/18)'),
+  'toast.letter': d('Letter found: {title}'),
+  'toast.heartbell': d('Heart Bell! +1 heart'),
+  'toast.stolen': d('The Post Stealer took {n} fish!'),
+  'toast.stolenMilk': d('The Post Stealer took a milk bottle!'),
+  'toast.returned': d('Post returned! +5 fish'),
+  'toast.memecam': d('A legendary pose. (Meme White cape unlocked)'),
+  'toast.skin': d('Sword unlocked: {name}'),
+  'toast.cape': d('Cape unlocked: {name}'),
+  'toast.objective': d('Objective complete!'),
+  'toast.saved': d('Saved.'),
+  'toast.checkpoint': d('Vigil Stone lit. Progress saved.'),
+  'toast.shard': d('A shard of the Dawnstone! ({n}/3)'),
+  'loading.title': d('Loading…'),
+  'loading.tip.1': d('A white glint means you can parry it.'),
+  'loading.tip.2': d('Red means move!'),
+  'loading.tip.3': d('Hyenas laugh after hitting you. Hit them while they gloat.'),
+  'loading.tip.4': d('Meow near barrels. Kittens hide in silly places.'),
+  'loading.tip.5': d('Bright Slash pops slimes without splitting them.'),
+  'loading.tip.6': d('Standing your ground fills Valor.'),
+  'loading.tip.7': d('Nine lives per level. Use them.'),
+
+  // ================================================================== §14.3 menus (ui reads these keys)
+  'menu.continue': d('Continue'),
+  'menu.newGame': d('New Game'),
+  'menu.settings': d('Settings'),
+  'menu.credits': d('Credits'),
+  'menu.back': d('Back'),
+  'menu.confirm': d('Confirm'),
+  'menu.yes': d('Yes'),
+  'menu.no': d('No'),
+  'newgame.title': d('New Game'),
+  'newgame.skipPrologue': d('Skip the prologue?'),
+  'difficulty.title': d('Difficulty'),
+  'difficulty.kitten': d('Kitten'),
+  'difficulty.kitten.desc': d('Gentle hits, endless lives, wider parries. Just enjoy the story.'),
+  'difficulty.knight': d('Knight'),
+  'difficulty.knight.desc': d('The intended adventure. Nine lives per level.'),
+  'difficulty.nine': d('Nine Lives'),
+  'difficulty.nine.desc': d('Nine lives for the whole game. Every one counts.'),
+  'pause.title': d('Paused'),
+  'pause.resume': d('Resume'),
+  'pause.kittens': d('Kittens'),
+  'pause.letters': d('Letters'),
+  'pause.settings': d('Settings'),
+  'pause.hub': d('Return to Pawsbury'),
+  'pause.quit': d('Quit to Title'),
+  'pause.missing': d('???'),
+  'settings.title': d('Settings'),
+  'settings.master': d('Master volume'),
+  'settings.music': d('Music'),
+  'settings.sfx': d('Sound effects'),
+  'settings.invertY': d('Invert Y'),
+  'settings.sensitivity': d('Look sensitivity'),
+  'settings.quality': d('Quality'),
+  'settings.quality.auto': d('Auto'),
+  'settings.quality.low': d('Low'),
+  'settings.quality.med': d('Medium'),
+  'settings.quality.high': d('High'),
+  'settings.difficulty': d('Difficulty'),
+  'settings.holdStand': d('Stand: hold (off = toggle)'),
+  'settings.holdCharge': d('Charge: hold (off = toggle)'),
+  'settings.autoStand': d('Auto-Stand assist'),
+  'settings.shake': d('Screen shake'),
+  'settings.reduceFlashes': d('Reduce flashes'),
+  'settings.patterns': d('Telegraph patterns'),
+  'settings.subtitleSize': d('Subtitle size'),
+  'settings.dialogSpeed': d('Dialogue speed'),
+  'settings.touchSize': d('Touch button size'),
+  'settings.on': d('On'),
+  'settings.off': d('Off'),
+  'vigil.title': d('Vigil Stone'),
+  'vigil.rest': d('Rest'),
+  'vigil.swap': d('Swap kitten'),
+  'vigil.difficulty': d('Difficulty'),
+  'shop.bakery': d('Bakery'),
+  'shop.forge': d('Forge'),
+  'shop.library': d('Library'),
+  'shop.wardrobe': d('Wardrobe'),
+  'shop.lookout': d('Lookout'),
+  'shop.buy': d('Buy'),
+  'shop.owned': d('Owned'),
+  'shop.equip': d('Equip'),
+  'shop.equipped': d('Equipped'),
+  'shop.cost': d('{n} fish'),
+  'shop.poor': d('Not enough fish.'),
+  'board.title': d('Quest Board'),
+  'board.next': d('Next: {chapter}'),
+  'board.cleared': d('Cleared'),
+  'hud.boss.dizzy': d('DIZZY!'),
+  'hud.lives': d('×{n}'),
+  'hud.kittens': d('{n}/{max}'),
+  'memecam.hint': d('Any key to stop posing'),
+  'rotate.hint': d('Turn your device sideways'),
+};
+
+/** Pick the text of a row (homage variant only when HOMAGE_LINES is on). Pure. */
+export function pick(row, homage = HOMAGE_LINES) {
+  if (!row) return null;
+  return homage && row.homage ? row.homage : row.default;
 }
 
+/** Fill `{name}` placeholders from `vars` (unknown placeholders stay as they are). Pure. */
+export function fill(s, vars) {
+  if (!vars || typeof s !== 'string') return s;
+  return s.replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m));
+}
+
+/** Resolve `key` with `{name}` placeholders filled from `vars`. Missing keys return the key itself. */
+export function t(key, vars = null) {
+  const row = Object.prototype.hasOwnProperty.call(S, key) ? S[key] : null;
+  return fill(row ? pick(row) : String(key), vars);
+}
+
+/** Is `key` a strings row? */
 export function has(key) { return Object.prototype.hasOwnProperty.call(S, key); }
+
+/** Text for a key OR literal text: keys resolve through `t`, anything else passes through (cutscene `ui` steps). */
+export function text(keyOrText, vars = null) {
+  if (keyOrText == null) return '';
+  return has(keyOrText) ? t(keyOrText, vars) : fill(String(keyOrText), vars);
+}
+
+/** Display name for a cutscene speaker id ('swordcat' → 'Clem'); unknown ids are capitalised. */
+export function speakerName(who) {
+  if (!who) return '';
+  const k = 'name.' + who;
+  if (has(k)) return t(k);
+  const base = String(who).replace(/[_-]\d+$/, '');
+  if (has('name.' + base)) return t('name.' + base);
+  return String(who).charAt(0).toUpperCase() + String(who).slice(1);
+}

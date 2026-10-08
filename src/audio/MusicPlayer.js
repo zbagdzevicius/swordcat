@@ -1,7 +1,7 @@
 // src/audio/MusicPlayer.js  (owner: audio) — A/B music decks with crossfades (tech.md §14, GAME_DESIGN §16.1) and a
 // one-shot sting deck. Long tracks stream through an <audio> element (MediaElementAudioSourceNode) so a 3-minute
 // track never sits decoded in memory; short seamless loops and stings (`buffer: true`) are decoded AudioBuffers.
-import { TRACKS } from './musicMap.js';
+import { TRACKS, trackGain } from './musicMap.js';
 
 /**
  * @typedef {object} Deck
@@ -17,8 +17,9 @@ import { TRACKS } from './musicMap.js';
 
 export class MusicPlayer {
   /**
-   * @param {AudioContext} ac @param {AudioNode} dest  music bus (after the duck)
-   * @param {{ url: (file: string) => string, buffer: (file: string) => Promise<AudioBuffer|null>, canOgg?: boolean }} io
+   * @param {AudioContext} ac @param {AudioNode} dest  music bus input (the decks are ducked there)
+   * @param {{ url: (file: string) => string, buffer: (file: string) => Promise<AudioBuffer|null>, canOgg?: boolean,
+   *           has?: (file: string) => boolean, stingDest?: AudioNode }} io  stingDest: where stings go (past the duck)
    */
   constructor(ac, dest, io) {
     this.ac = ac; this.dest = dest; this.io = io;
@@ -26,7 +27,7 @@ export class MusicPlayer {
     this.decks = [this._deck(), this._deck()];
     this.active = 0;
     this.sting = { gain: ac.createGain(), src: null, endAt: 0 };
-    this.sting.gain.connect(dest);
+    this.sting.gain.connect(io.stingDest ?? dest);
     this.current = null;     // track id on the active deck (or null)
   }
 
@@ -51,7 +52,7 @@ export class MusicPlayer {
     const def = trackId ? TRACKS[trackId] : null;
     if (trackId && !def) { console.warn(`[audio] unknown music track "${trackId}"`); return; }
     const cur = this.decks[this.active];
-    if (def && cur.track === trackId) { cur.stopAt = 0; this._ramp(cur.gain.gain, def.vol ?? 1, fade); this.current = trackId; return; }
+    if (def && cur.track === trackId) { cur.stopAt = 0; this._ramp(cur.gain.gain, trackGain(def), fade); this.current = trackId; return; }
     // fade the live deck out
     if (cur.track) { this._ramp(cur.gain.gain, 0, fade); cur.stopAt = this.ac.currentTime + fade + 0.05; }
     this.current = trackId;
@@ -59,7 +60,7 @@ export class MusicPlayer {
     const next = this.decks[this.active ^ 1];
     this.active ^= 1;
     if (next.track === trackId && next.stopAt) {          // it was still fading out: bring it back, no restart
-      next.stopAt = 0; this._ramp(next.gain.gain, def.vol ?? 1, fade); return;
+      next.stopAt = 0; this._ramp(next.gain.gain, trackGain(def), fade); return;
     }
     this._stopDeck(next);
     next.track = trackId; next.stopAt = 0; next.startedAt = this.ac.currentTime;
@@ -71,15 +72,18 @@ export class MusicPlayer {
         const s = this.ac.createBufferSource(); s.buffer = buf; s.loop = def.loop !== false;
         s.connect(next.gain); s.start(this.ac.currentTime, Math.min(def.offset ?? 0, buf.duration - 0.01));
         next.src = s;
-        if (!next.stopAt) this._ramp(next.gain.gain, def.vol ?? 1, fade);
+        if (!next.stopAt) this._ramp(next.gain.gain, trackGain(def), fade);
       });
     } else {
       const el = this._element(next);
       el.loop = def.loop !== false;
       el.src = this.io.url(this._file(def));
-      if (def.offset) { try { el.currentTime = def.offset; } catch { /* set after metadata */ } }
+      if (def.offset) {
+        const seek = () => { if (next.token === token) { try { el.currentTime = def.offset; } catch { /* not seekable */ } } };
+        if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
+      }
       el.play().catch(() => { /* aborted by a newer request, or autoplay pending: retried on unlock */ });
-      this._ramp(next.gain.gain, def.vol ?? 1, fade);
+      this._ramp(next.gain.gain, trackGain(def), fade);
     }
   }
 
@@ -114,7 +118,7 @@ export class MusicPlayer {
     if (!buf) return 0;
     if (this.sting.src) { try { this.sting.src.stop(); } catch { /* */ } this.sting.src.disconnect(); }
     const s = this.ac.createBufferSource(); s.buffer = buf; s.connect(this.sting.gain);
-    this.sting.gain.gain.value = (def.vol ?? 1) * volume;
+    this.sting.gain.gain.value = trackGain(def) * volume;
     s.start(); this.sting.src = s; this.sting.endAt = this.ac.currentTime + buf.duration;
     return buf.duration;
   }

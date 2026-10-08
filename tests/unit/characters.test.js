@@ -357,3 +357,82 @@ test('cagedKitten: kitten fits inside the cage, door opens, release hands over a
     v.dispose(); c.dispose();
   }
 });
+
+test('character env map follows the LIVE scene lights, lifted to the readability floors (night still reads silver)', () => {
+  const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  // meadow_night-like lights: dim bluish hemisphere, weak moon
+  const hemi = new THREE.HemisphereLight('#9FB0C8', '#2A3024', 0.7), sun = new THREE.DirectionalLight('#BFD3FF', 0.6);
+  const night = C.envColorsFromLights(hemi, sun, { color: new THREE.Color('#8C97A6') });
+  assert.ok(lum(night.top) >= C.CHAR_ENV.minTop - 1e-6, `sky reflection lifted (${lum(night.top).toFixed(3)})`);
+  assert.ok(lum(night.horizon) >= C.CHAR_ENV.minHorizon - 1e-6, 'horizon lifted');
+  assert.ok(lum(night.box) >= C.CHAR_ENV.minBox - 1e-6, 'softbox highlight lifted');
+  assert.ok(night.top.b > night.top.r, 'the lift keeps the hue (moonlit blue)');
+  assert.ok(lum(night.ground) < 0.1, 'ground stays dark: the contrast under the pauldron domes');
+  // bright day: untouched by the floors
+  const day = C.envColorsFromLights(new THREE.HemisphereLight('#D5DDE3', '#4A5230', 1.1), new THREE.DirectionalLight('#FFF2E0', 1.4), { color: new THREE.Color('#B7C0C3') });
+  assert.ok(lum(day.top) > C.CHAR_ENV.minTop);
+  // no hemisphere light (look-dev scenes): art.md's overcast defaults
+  const none = C.envColorsFromLights(null, null, null);
+  assert.equal('#' + none.top.getHexString(), C.CHAR_ENV.fallback.top.toLowerCase());
+  // without a renderer nothing is built; noteRender ignores non-scenes; a kitten mesh reports its renderer + scene
+  C.resetCharacterEnv();
+  assert.equal(C.envTick(), false);
+  C.noteRender({}, { isScene: false });
+  assert.equal(C.envTick(), false);
+  const k = C.buildKitten(C.CATS.pearl);
+  assert.equal(k.kitMesh.onBeforeRender, C.noteRender, 'every kitten reports who draws it');
+  assert.equal(C.getCharacterEnvMap(), null);
+  k.dispose(); C.resetCharacterEnv();
+});
+
+test('cape never wraps in front of her: 180° snap re-drapes, a spin keeps the cloth behind the body plane', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const holder = new THREE.Group(); holder.add(k.root);
+  for (let i = 0; i < 30; i++) k.update(1 / 60);
+  const maxLocalZ = () => {
+    k.root.updateMatrixWorld(true);
+    const inv = k.root.matrixWorld.clone().invert(), p = k.cape.sim.p, v = new THREE.Vector3();
+    let m = -Infinity;
+    for (let i = k.cape.d.cols; i < k.cape.sim.N; i++) { v.set(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]).applyMatrix4(inv); m = Math.max(m, v.z); }
+    return m;
+  };
+  const limit = C.CAPE_FRONT.margin + C.CAPE_FRONT.marginLow + 0.02;
+  assert.ok(maxLocalZ() < limit, 'hangs behind at rest');
+  holder.rotation.y = Math.PI;                   // spawn facing applied after the first frame
+  for (let i = 0; i < 3; i++) k.update(1 / 60);
+  assert.ok(maxLocalZ() < limit, `180° facing snap: still behind (${maxLocalZ().toFixed(3)})`);
+  for (let i = 0; i < 90; i++) { holder.rotation.y += 0.35; k.update(1 / 60, { velocity: new THREE.Vector3(2, 0, 0) }); }  // a full-circle spin
+  assert.ok(maxLocalZ() < limit + 0.01, `spin: the plane keeps the cloth behind (${maxLocalZ().toFixed(3)})`);
+  // visual folds open toward the hem (top row flat)
+  assert.ok(Math.abs(C.capeFold(0.3, 0)) < 1e-12, 'top row flat');
+  let fold = 0; for (let u = 0; u <= 1; u += 0.05) fold = Math.max(fold, Math.abs(C.capeFold(u, 1)));
+  assert.ok(fold > 0.015, `folds at the hem (${fold.toFixed(3)})`);
+  k.dispose();
+});
+
+test('soft shell fur: blended shells drawn bib → tail → head, tufts and whiskers after; seeded visual randomness', () => {
+  const k = C.buildKitten(C.swordcatConfig());
+  assert.ok(k.furMat.transparent && k.furMat.depthWrite && !k.furMat.alphaToCoverage, 'alpha-blended shells with depth writes');
+  assert.ok(k.bibFur.mesh.renderOrder < k.headFur.mesh.renderOrder && k.tailFur.mesh.renderOrder < k.headFur.mesh.renderOrder);
+  assert.ok(k.tuftMesh.renderOrder > k.headFur.mesh.renderOrder, 'tufts blend over the fur');
+  assert.ok(k.root.getObjectByName('whiskers').renderOrder > k.headFur.mesh.renderOrder);
+  assert.equal(k.furMat.uniforms.uCells.value, C.STRANDS.cells);
+  const tex = C.makeStrandTexture(64, 12, 3);
+  let covered = 0;
+  for (let i = 0; i < 64 * 64; i++) if (tex.image.data[i * 4 + 1] > 0) covered++;
+  assert.ok(covered > 64 * 64 * 0.4, `strands cover the root layer (${covered})`);
+  // same cat id → same idle phase / blinks (deterministic screenshots), different ids differ
+  const a = C.buildKitten(C.CATS.mochi), b = C.buildKitten(C.CATS.mochi), c = C.buildKitten(C.CATS.pearl);
+  assert.equal(a.time, b.time); assert.equal(a.eyes.nextBlink, b.eyes.nextBlink); assert.notEqual(a.time, c.time);
+  // the pink bow keeps a touch of self-light (recognition cue #1 in fog and at night)
+  assert.ok(C.BOW_SELF_LIGHT > 0 && C.BOW_SELF_LIGHT < 0.5);
+  for (const x of [k, a, b, c]) x.dispose();
+});
+
+test('Kitten.lib: the library is reachable from any built kitten (smoke tests against the bundled game)', () => {
+  const k = C.buildKitten(C.CATS.pearl);
+  const lib = k.root.userData.kitten.constructor.lib;
+  for (const fn of ['buildKitten', 'buildProp', 'buildCage', 'buildBeastHead', 'buildPlate', 'catConfig', 'cagedKitten', 'characterEnvColors', 'getCharacterEnvMap']) assert.equal(typeof lib[fn], 'function', fn);
+  assert.ok(lib.PROP_NAMES.includes('milk_cup') && lib.CATS.swordcat && lib.SQUIRE_IDS.length === 6);
+  k.dispose();
+});

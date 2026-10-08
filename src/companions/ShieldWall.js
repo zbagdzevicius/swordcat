@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { COMPANIONS } from '../core/config.js';
-import { segmentHit, wallSide } from './steering.js';
+import { segmentHit, wallSide, groundY } from './steering.js';
 
 const POST_SPACING = 0.5, POST_R = 0.3;
 
@@ -55,29 +55,42 @@ function paneMaterial() {
       uniform float uTime, uRise, uAlpha, uW, uH; uniform vec3 uColor, uEdge; uniform vec4 uHits[4];
       varying vec2 vUv; varying vec3 vLocal;
       float hexDist(vec2 p) { p = abs(p); return max(dot(p, normalize(vec2(1.0, 1.7320508))), p.x); }
+      float sdBox(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+      float paw(vec2 p) {                                              // Mochi's paw crest, ~0.5 m across
+        float d = length((p - vec2(0.0, -0.06)) * vec2(1.0, 1.25)) - 0.13;
+        d = min(d, length(p - vec2(-0.15, 0.10)) - 0.055);
+        d = min(d, length(p - vec2(-0.055, 0.17)) - 0.055);
+        d = min(d, length(p - vec2(0.055, 0.17)) - 0.055);
+        d = min(d, length(p - vec2(0.15, 0.10)) - 0.055);
+        return d;
+      }
       void main() {
         float y = vUv.y;
         if (y > uRise) discard;
+        vec2 c = vec2(vLocal.x, vLocal.y - uH * 0.5);
+        float box = sdBox(c, vec2(uW * 0.5, uH * 0.5), c.y > 0.0 ? 0.38 : 0.03);   // rounded top corners
+        if (box > 0.0) discard;
+        float edge = smoothstep(-0.07, 0.0, box);                         // bright rim
         vec2 p = vec2(vLocal.x, vLocal.y) * 4.2;
         vec2 r = vec2(1.0, 1.7320508), h = r * 0.5;
         vec2 a = mod(p, r) - h, b = mod(p - h, r) - h;
         vec2 g = dot(a, a) < dot(b, b) ? a : b;
         float hex = smoothstep(0.42, 0.5, hexDist(g));                     // cell borders
-        float edgeX = smoothstep(0.42, 0.5, abs(vUv.x - 0.5));
-        float top = smoothstep(uRise - 0.08, uRise, y);
-        float base = smoothstep(0.12, 0.0, y);
-        float scan = 0.5 + 0.5 * sin(y * 40.0 - uTime * 6.0);
+        float top = smoothstep(uRise - 0.08, uRise, y) * step(uRise, 0.999);
+        float base = smoothstep(0.10, 0.0, y);
+        float scan = 0.5 + 0.5 * sin(y * 30.0 - uTime * 5.0);
+        float crest = 1.0 - smoothstep(0.0, 0.012, paw(c - vec2(0.0, 0.05)));
         float rip = 0.0;
         for (int i = 0; i < 4; i++) {
           float age = uTime - uHits[i].z;
           if (age < 0.0 || age > 0.6) continue;
           float d = length(vec2(vLocal.x - uHits[i].x, vLocal.y - uHits[i].y));
-          rip += smoothstep(0.12, 0.0, abs(d - age * 2.6)) * (1.0 - age / 0.6) * 1.6;
+          rip += smoothstep(0.12, 0.0, abs(d - age * 2.6)) * (1.0 - age / 0.6) * 1.4;
         }
-        float fadeTop = 1.0 - smoothstep(0.75, 1.0, y) * 0.6;
-        float a1 = (0.10 + 0.22 * hex * (0.7 + 0.3 * scan) + 0.55 * edgeX + 0.6 * top + 0.35 * base) * fadeTop + rip;
-        vec3 col = mix(uColor, uEdge, clamp(edgeX + top + rip * 0.6, 0.0, 1.0));
-        gl_FragColor = vec4(col * max(a1, 0.0) * uAlpha * 0.9, 1.0);
+        float fadeTop = 1.0 - smoothstep(0.7, 1.0, y) * 0.5;
+        float a1 = (0.05 + 0.12 * hex * (0.7 + 0.3 * scan) + 0.45 * edge + 0.5 * top + 0.22 * base + 0.22 * crest) * fadeTop + rip;
+        vec3 col = mix(uColor, uEdge, clamp(edge + top + crest * 0.6 + rip * 0.6, 0.0, 1.0));
+        gl_FragColor = vec4(col * max(a1, 0.0) * uAlpha * 0.75, 1.0);
       }`,
   });
   return _mat.clone();
@@ -101,7 +114,7 @@ export class ShieldWall {
     for (let i = 0; i < n; i++) {
       const s = -width / 2 + (width * i) / (n - 1);
       const x = center.x + this.tx * s, z = center.z + this.tz * s;
-      const y = ctx.physics?.heightAt?.(x, z) ?? center.y;
+      const y = groundY(ctx, x, z, center.y);
       this.posts.push(new WallPost(ctx, this, x, y, z));
     }
     this.mesh = null;

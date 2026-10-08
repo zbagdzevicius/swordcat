@@ -25,3 +25,23 @@ export { KittenView, MEME_CAPE, POSE_BLEND } from './KittenView.js';
 export { initCharacters, disposeCharacters, characterFrame, visualDt, furShellsForPreset, WIND } from './runtime.js';
 export { dressBeast, BEAST_LOOKS, holdOnBone, silhouette } from './BeastDress.js';
 export { cagedKitten } from './Cages.js';
+export { noteRender, envTick, envColorsFromLights, characterEnvColors, resetCharacterEnv, CHAR_ENV } from './runtime.js';
+export { STRANDS, FUR_RENDER_ORDER } from './Fur.js';
+export { CAPE_FRONT, capeFold } from './Cape.js';
+export { BOW_SELF_LIGHT } from './Bow.js';
+
+// ---- test / debug handle: the library reachable from any built kitten (`root.userData.kitten.constructor.lib`), so
+// smoke tests driving the BUNDLED game (no /src imports there) can build props, cages and cats next to the player.
+import { Kitten as _Kitten, buildKitten as _buildKitten } from './KittenBuilder.js';
+import { buildProp as _buildProp, buildCage as _buildCage, PROP_NAMES as _PROP_NAMES } from './Props/ProcProps.js';
+import { buildBeastHead as _buildBeastHead, BEAST_PRESETS as _BEAST_PRESETS } from './BeastHead.js';
+import { buildPlate as _buildPlate } from './Plate.js';
+import { CATS as _CATS, catConfig as _catConfig, SQUIRE_IDS as _SQUIRE_IDS } from './configs.js';
+import { cagedKitten as _cagedKitten } from './Cages.js';
+import { characterEnvColors as _characterEnvColors } from './runtime.js';
+import { getCharacterEnvMap as _getCharacterEnvMap } from './materials.js';
+_Kitten.lib = Object.freeze({
+  buildKitten: _buildKitten, buildProp: _buildProp, buildCage: _buildCage, PROP_NAMES: _PROP_NAMES, buildBeastHead: _buildBeastHead,
+  BEAST_PRESETS: _BEAST_PRESETS, buildPlate: _buildPlate, CATS: _CATS, catConfig: _catConfig, SQUIRE_IDS: _SQUIRE_IDS,
+  cagedKitten: _cagedKitten, characterEnvColors: _characterEnvColors, getCharacterEnvMap: _getCharacterEnvMap,
+});

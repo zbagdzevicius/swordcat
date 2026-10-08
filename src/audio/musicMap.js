@@ -5,29 +5,42 @@
  * @typedef {object} TrackDef
  * @property {string} file    path relative to public/assets/
  * @property {'explore'|'combat'|'boss'|'story'|'sting'|'results'} kind
- * @property {number} [vol]   track gain (default 1)
+ * @property {number} [vol]   design volume (§16.1, default 1)
+ * @property {number} [meanDb] the file's mean level (ffmpeg volumedetect, dBFS): trackGain() normalises every track
+ *                            to MUSIC_TARGET_DB (the means span −26 … −9 dB; unnormalised, the fight loop would be
+ *                            17 dB louder than field_of_dreams)
  * @property {boolean} [loop] default true (stings: false)
  * @property {number} [offset] start offset in seconds
  * @property {boolean} [buffer] decode to an AudioBuffer (short seamless loops / stings); else streamed
  */
 
+/** Target mean loudness every track is normalised to (dBFS, before the music bus). */
+export const MUSIC_TARGET_DB = -18;
+
 /** @type {Record<string, TrackDef>} — all 14 tracks are used (§16.1). */
 export const TRACKS = {
-  village_bards_tale:         { file: 'audio/music/village_bards_tale.mp3', kind: 'explore' },          // title, menu, CS-01, hub gold, credits tail
-  field_of_dreams:            { file: 'audio/music/field_of_dreams.mp3', kind: 'explore' },             // meadow + forest day, ending flight
-  battle_fast_fight_loop:     { file: 'audio/music/battle_fast_fight_loop.ogg', kind: 'combat', buffer: true, vol: 0.85 }, // 24 s seamless loop
-  battle_theme_a:             { file: 'audio/music/battle_theme_a.mp3', kind: 'combat', vol: 0.9 },     // The Line waves, CS-02 sting, keep courtyard
-  boss_epic_battle_loop:      { file: 'audio/music/boss_epic_battle_loop.ogg', kind: 'boss' },
-  dark_forest_creepy:         { file: 'audio/music/dark_forest_creepy.ogg', kind: 'explore', vol: 0.6 },
-  cave_theme:                 { file: 'audio/music/cave_theme.ogg', kind: 'explore' },
-  village_town_theme:         { file: 'audio/music/village_town_theme.mp3', kind: 'explore' },
-  tavern_old_tower_inn:       { file: 'audio/music/tavern_old_tower_inn.mp3', kind: 'explore' },
-  story_lament_warriors_soul: { file: 'audio/music/story_lament_warriors_soul.mp3', kind: 'story' },
-  castle_kings_feast:         { file: 'audio/music/castle_kings_feast.mp3', kind: 'story' },
-  festival_minstrel_dance:    { file: 'audio/music/festival_minstrel_dance.mp3', kind: 'story' },
-  victory_fanfare:            { file: 'audio/music/victory_fanfare.mp3', kind: 'sting', loop: false, buffer: true },
-  victory_8bit_loop:          { file: 'audio/music/victory_8bit_loop.ogg', kind: 'results', vol: 0.8 },
+  village_bards_tale:         { file: 'audio/music/village_bards_tale.mp3', kind: 'explore', meanDb: -21.0 }, // title, menu, CS-01, hub gold, credits tail
+  field_of_dreams:            { file: 'audio/music/field_of_dreams.mp3', kind: 'explore', meanDb: -26.3 }, // meadow + forest day, ending flight
+  battle_fast_fight_loop:     { file: 'audio/music/battle_fast_fight_loop.ogg', kind: 'combat', buffer: true, meanDb: -9.1 }, // 24 s seamless loop
+  battle_theme_a:             { file: 'audio/music/battle_theme_a.mp3', kind: 'combat', meanDb: -13.1 }, // The Line waves, CS-02 sting, keep courtyard
+  boss_epic_battle_loop:      { file: 'audio/music/boss_epic_battle_loop.ogg', kind: 'boss', meanDb: -8.6 },
+  dark_forest_creepy:         { file: 'audio/music/dark_forest_creepy.ogg', kind: 'explore', vol: 0.6, meanDb: -26.0 }, // "at volume 0.6"
+  cave_theme:                 { file: 'audio/music/cave_theme.ogg', kind: 'explore', meanDb: -14.1 },
+  village_town_theme:         { file: 'audio/music/village_town_theme.mp3', kind: 'explore', meanDb: -15.6 },
+  tavern_old_tower_inn:       { file: 'audio/music/tavern_old_tower_inn.mp3', kind: 'explore', meanDb: -20.3 },
+  story_lament_warriors_soul: { file: 'audio/music/story_lament_warriors_soul.mp3', kind: 'story', meanDb: -19.5 },
+  castle_kings_feast:         { file: 'audio/music/castle_kings_feast.mp3', kind: 'story', meanDb: -16.2 },
+  festival_minstrel_dance:    { file: 'audio/music/festival_minstrel_dance.mp3', kind: 'story', meanDb: -15.2 },
+  victory_fanfare:            { file: 'audio/music/victory_fanfare.mp3', kind: 'sting', loop: false, buffer: true, meanDb: -21.0 },
+  victory_8bit_loop:          { file: 'audio/music/victory_8bit_loop.ogg', kind: 'results', meanDb: -18.2 },
 };
+
+/** Most a quiet track is boosted (+10 dB) by the normalisation. */
+export const MUSIC_MAX_BOOST = 3.16;
+
+/** Deck gain of a track: design volume × loudness normalisation to MUSIC_TARGET_DB. */
+export const trackGain = (def) => (def?.vol ?? 1) *
+  (Number.isFinite(def?.meanDb) ? Math.min(MUSIC_MAX_BOOST, 10 ** ((MUSIC_TARGET_DB - def.meanDb) / 20)) : 1);
 
 /** Per-level defaults (used when the level def has no `music`; the level's own `music` wins). */
 export const LEVEL_MUSIC = {
@@ -66,7 +79,7 @@ export const MUSIC_RULES = {
   titleFade: 2.0,          // CS-00: bards tale fades in over 2 s after the unlock
 };
 
-/** Normalise a track request ('field_of_dreams', 'music/field_of_dreams.mp3', 'audio/music/x.ogg') → id | null. */
+/** Normalise a track request ('field_of_dreams', 'music/field_of_dreams.mp3', a full audio/music/ path) → id | null. */
 export function trackId(track) {
   if (track == null || track === '' || track === false) return null;
   if (typeof track === 'object') track = track.track ?? track.id ?? null;
@@ -139,7 +152,8 @@ export class MusicDirector {
       this._set(null, fade); this.restorePending = mode === 'cutscene' || mode === 'dialog'; this.forced = null;
       return null;
     }
-    const kind = TRACKS[id].kind;
+    // the level's own explore track is explore music whatever its kind (a level may explore to battle_theme_a)
+    const kind = id === this.level.explore ? 'explore' : TRACKS[id].kind;
     if (kind === 'sting') { this.sting = id; return id; }
     this.restorePending = false;
     if (kind === 'combat') {

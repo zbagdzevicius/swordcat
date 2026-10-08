@@ -8,7 +8,8 @@ import { CAPES } from './palette.js';
 import { own } from './materials.js';
 import { clamp, smoothstep } from './util.js';
 
-export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.38, botW: 0.55, len: 0.46, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.60, anchorZ: -0.1 });
+export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.38, botW: 0.55, len: 0.46, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.60, anchorZ: -0.1,
+  folds: 2.5, foldAmp: 0.03, hemCurve: 0.035 });
 
 /** Shared sway clock for NPC capes. */
 export const CAPE_TIME = { value: 0 };
@@ -26,7 +27,7 @@ export function capeMaterial(style = 'red', o = {}) {
   if (_mats.has(key)) return _mats.get(key);
   const spec = CAPES[style] || { color: style, lining: style, sheen: '#ffffff', hem: '#D9B26A' };
   const m = new THREE.MeshPhysicalMaterial({
-    color: spec.color, roughness: 0.85, sheen: 1, sheenColor: new THREE.Color(spec.sheen), sheenRoughness: 0.6, side: THREE.DoubleSide,
+    color: spec.color, roughness: 0.88, sheen: 0.7, sheenColor: new THREE.Color(spec.sheen), sheenRoughness: 0.6, side: THREE.DoubleSide,
   });
   const uniforms = {
     uLining: { value: new THREE.Color(spec.lining) }, uHem: { value: new THREE.Color(spec.hem) },
@@ -53,10 +54,11 @@ export function capeMaterial(style = 'red', o = {}) {
         if (!gl_FrontFacing) diffuseColor.rgb = uLining;
         float hemK = smoothstep(0.004, 0.012, vCapeUv.y) * (1.0 - smoothstep(0.03, 0.038, vCapeUv.y));
         diffuseColor.rgb = mix(diffuseColor.rgb, uHem, hemK);
-        diffuseColor.rgb *= mix(0.82, 1.0, smoothstep(0.0, 0.25, vCapeUv.y)); // grimy hem / fold shade`);
+        diffuseColor.rgb *= mix(0.82, 1.0, smoothstep(0.0, 0.25, vCapeUv.y)); // grimy hem / fold shade
+        diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.72, 1.0, vCapeUv.y));  // tucked under the collar / head`);
   };
   if (o.sway) m.defines = { CAPE_SWAY: '' };
-  m.customProgramCacheKey = () => 'sc-cape' + (o.sway ? '-sway' : '');
+  m.customProgramCacheKey = () => 'sc-cape-v2' + (o.sway ? '-sway' : '');
   _mats.set(key, own(m));
   return m;
 }
@@ -77,7 +79,14 @@ export function drapePoint(u, v, d = CAPE_DEFAULTS, out = new THREE.Vector3()) {
   const x = (u - 0.5) * w;
   const side = (2 * u - 1) ** 2;
   const z = d.anchorZ + side * 0.085 * (1 - v * 0.35) - v * 0.06 - Math.sin(v * Math.PI) * 0.02;
-  return out.set(x, d.anchorY - v * d.len, z);
+  // rounded hem: the middle hangs a little lower than the corners (reads as cloth, not a board)
+  const hem = (d.hemCurve ?? 0) * (1 - side) * Math.pow(v, 3);
+  return out.set(x, d.anchorY - v * d.len - hem, z);
+}
+
+/** Soft vertical folds (kitten-space depth offset) that open toward the hem; added at write time, not simulated. */
+export function capeFold(u, v, d = CAPE_DEFAULTS) {
+  return Math.sin(u * Math.PI * 2 * (d.folds ?? 2) + 0.5) * (d.foldAmp ?? 0) * Math.pow(v, 0.85);
 }
 
 // ------------------------------------------------------------------ verlet sim (pure math; node-testable)
@@ -119,6 +128,14 @@ export class ClothSim {
     this.acc = 0; this.t = 0;
     this.spheres = []; // [{x,y,z,r}]
     this.groundY = -Infinity;
+    // "behind her" half-space: a cape never wraps to the front of the body (fast turns, spins, spawn facing).
+    // plane = { x, y, z (unit forward), d (= forward · root) }; planeMax[i] = how far forward particle i may go.
+    this.plane = null;
+    this.planeMax = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const row = Math.floor(i / C) / (R - 1);
+      this.planeMax[i] = this.p[i * 3 + 2] + CAPE_FRONT.margin + CAPE_FRONT.marginLow * row;
+    }
   }
   /** Teleport every particle by an offset (respawn / cutscene cut) to avoid a whip. */
   shift(dx, dy, dz) {
@@ -179,10 +196,14 @@ export class ClothSim {
     }
   }
   collide() {
-    const p = this.p, N = this.N, S = this.spheres, gy = this.groundY;
+    const p = this.p, N = this.N, S = this.spheres, gy = this.groundY, pl = this.plane;
     for (let i = 0; i < N; i++) {
       if (this.pinned[i]) continue;
       const k = i * 3;
+      if (pl) {
+        const ahead = p[k] * pl.x + p[k + 1] * pl.y + p[k + 2] * pl.z - pl.d - this.planeMax[i] * pl.s;
+        if (ahead > 0) { p[k] -= pl.x * ahead; p[k + 1] -= pl.y * ahead; p[k + 2] -= pl.z * ahead; }
+      }
       for (let s = 0; s < S.length; s++) {
         const o = S[s];
         const dx = p[k] - o.x, dy = p[k + 1] - o.y, dz = p[k + 2] - o.z, rr = o.r * o.r, d2 = dx * dx + dy * dy + dz * dz;
@@ -205,6 +226,12 @@ export class ClothSim {
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _inv = new THREE.Matrix4(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
 /** Wind shelter (fractions of the wind magnitude, kitten frame): max forward push, constant backward trail. */
 export const CAPE_WIND = Object.freeze({ front: 0.12, trail: 0.3 });
+/**
+ * Front limit (kitten units, kitten frame): a particle may sit at most `margin` (+ `marginLow` × row) in front of its
+ * rest drape depth, so the cloth billows sideways and back but never wraps around her (spins, 180° turns, spawns).
+ * `snapYaw`: a root rotation jump larger than this in one update re-drapes the cloth (teleports / cuts / spawns).
+ */
+export const CAPE_FRONT = Object.freeze({ margin: 0.07, marginLow: 0.05, snapYaw: 1.2 });
 
 /** Collision spheres in kitten space (art.md §5: torso, legs, tail root; plus pauldrons and tassets). */
 export const CAPE_COLLIDERS = Object.freeze([
@@ -266,6 +293,11 @@ export class HeroCape {
       c.w.x = _v.x; c.w.y = _v.y; c.w.z = _v.z; c.w.r = c.r * s;
     }
     this.sim.groundY = this.root.getWorldPosition(_w).y + 0.012 * this.root.scale.y;
+    // "behind her" plane from the root (body facing; leaning / lying poses keep their back to -Z)
+    const e = this.root.matrixWorld.elements, s = Math.hypot(e[8], e[9], e[10]) || 1;
+    const pl = this.sim.plane || (this.sim.plane = { x: 0, y: 0, z: 1, d: 0, s: 1 });
+    pl.x = e[8] / s; pl.y = e[9] / s; pl.z = e[10] / s; pl.s = s;
+    pl.d = pl.x * e[12] + pl.y * e[13] + pl.z * e[14];
   }
   update(dt, { wind = null, speed = 0 } = {}) {
     if (!this.rig.chestBind) return;
@@ -276,7 +308,13 @@ export class HeroCape {
       this._initialised = true;
       this.root.getWorldPosition(this._lastRootPos);    // the reset already placed the cloth: no teleport shift
     }
-    // detect teleports: large root jumps shift the cloth instead of whipping it
+    // detect teleports: large root jumps shift the cloth instead of whipping it; a facing snap re-drapes it
+    const pl = this.sim.plane;
+    const yaw = Math.atan2(pl.x, pl.z);
+    if (this._lastYaw !== undefined && Math.abs(Math.atan2(Math.sin(yaw - this._lastYaw), Math.cos(yaw - this._lastYaw))) > CAPE_FRONT.snapYaw) {
+      this.sim.reset((v) => v.applyMatrix4(this._pinM));
+    }
+    this._lastYaw = yaw;
     const rp = this.root.getWorldPosition(_w);
     if (this._lastRootPos.distanceToSquared(rp) > 1.0) this.sim.shift(rp.x - this._lastRootPos.x, rp.y - this._lastRootPos.y, rp.z - this._lastRootPos.z);
     this._lastRootPos.copy(rp);
@@ -312,10 +350,12 @@ export class HeroCape {
     const amp = this.sway.amp * (0.6 + 0.8 * gust);
     for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
       const i = r * C + c, k = i * 3;
+      const u = c / (C - 1), vv = r / (R - 1), fold = capeFold(u, vv, this.d);
       _v.set(this.sim.p[k], this.sim.p[k + 1], this.sim.p[k + 2]).applyMatrix4(_inv);
+      _v.z += fold;
       if (w > 0) {
-        const u = c / (C - 1), vv = r / (R - 1);
         drapePoint(u, vv, this.d, _w).applyMatrix4(_m);
+        _w.z += fold;
         const kk = vv * vv;
         _w.z -= kk * (0.05 + speed * 0.18) + kk * gust * 0.07 * amp;
         _w.x += kk * Math.sin(om * 2 * t + vv * 4.0) * 0.028 * amp;
@@ -341,6 +381,7 @@ export function buildSwayCape(style = 'cream', dims = {}, toChest = null) {
   const pos = g.attributes.position, v = new THREE.Vector3();
   for (let r = 0; r < d.rows; r++) for (let c = 0; c < d.cols; c++) {
     drapePoint(c / (d.cols - 1), r / (d.rows - 1), d, v);
+    v.z += capeFold(c / (d.cols - 1), r / (d.rows - 1), d);
     if (toChest) v.applyMatrix4(toChest);
     pos.setXYZ(r * d.cols + c, v.x, v.y, v.z);
   }

@@ -19,7 +19,7 @@ import { Lives } from './Lives.js';
 import { SafeGround } from './SafeGround.js';
 import { MemeCamTrigger } from './MemeCamTrigger.js';
 import { STATES } from './PlayerStates.js';
-import { TUNING, GLEAM_SWINGS, PASSIVE_ENEMY_STATES } from './tuning.js';
+import { TUNING, PASSIVE_ENEMY_STATES } from './tuning.js';
 import { SwordcatModel } from './SwordcatModel.js';
 
 const _v = new THREE.Vector3(), _dir = new THREE.Vector3();
@@ -66,28 +66,16 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.jeerers = new Set();
     this.inJeer = false; this.threatened = false;
     this.inShallow = false;
-    /** visual-only flags the model consumes */
+    /** visual-only fields the model consumes: squash cue, hurt blink timer (i-frames after a hurt / respawn) */
     this.squashEvent = null;
+    this.blinkT = 0; this.stepAccum = 0; this.hurtDur = PLAYER.hurt.stun;
     this._valorAcc = 0; this._valorAccReason = '';
-    this._incoming = false; this._lastDamage = 0; this._stillStandingPending = false;
-    this._goldenPrevCam = null;
+    this._stillStandingPending = false;
     this._offs = [];
     this.model = new SwordcatModel(this);
   }
 
   // ------------------------------------------------------------------ contract fields (§19.4)
-  get hp() { return this._hp; }
-  /** Damage written by Combat while a hit resolves passes through Golden Hour halving and Still Standing. */
-  set hp(v) {
-    if (this._incoming && v < this._hp) {
-      let dmg = this._hp - v;
-      if (this.golden) dmg = Math.floor(dmg * PLAYER.golden.takenMul);
-      v = this._hp - dmg;
-      if (v <= 0 && this.livesState?.tryStillStanding()) { v = PLAYER.stillStanding.hp; this._stillStandingPending = true; }
-      this._lastDamage = this._hp - v;
-    }
-    this._hp = v;
-  }
   get lives() { return this.livesState.lives; }
   set lives(v) { this.livesState.lives = v; }
   get grit() { return this.guardState.grit; }
@@ -100,6 +88,12 @@ export class Player extends ScriptedActorMixin(Actor) {
   set shards(n) { if (this.ctx.state) this.ctx.state.shards = n; }
   /** Standing Ground paying out right now (visuals / barks). */
   get standingGround() { return this.valorState.standing; }
+  /** Combat hook (requests/combat.md): Golden Hour halves damage taken, rounded down (1-HP hits do nothing). */
+  get damageTakenMul() { return this.golden ? PLAYER.golden.takenMul : 1; }
+  /** Combat hook: no knockback / stagger during Golden Hour (super armour) and its activation. */
+  get superArmor() { return this.golden || this.state === 'golden'; }
+  /** Unlimited lives (Kitten difficulty: the HUD hides the counter). */
+  get infiniteLives() { return this.livesState.infinite; }
 
   // ------------------------------------------------------------------ lifecycle
   async init() {
@@ -118,6 +112,7 @@ export class Player extends ScriptedActorMixin(Actor) {
       bus.on(E.CHECKPOINT, (p) => this._onCheckpoint(p)),
       bus.on(E.HIT, (h) => this._onHitEvent(h)),
       bus.on(E.KITTEN_RESCUED, () => this.addValor(PLAYER.valor.kitten, 'kitten')),
+      bus.on(E.ENEMY_CHOKE, () => this.addValor(PLAYER.valor.choke, 'choke')),
       bus.on(E.ENEMY_JEER, (p) => { if (!p?.enemy) return; if (p.on) this.jeerers.add(p.enemy); else this.jeerers.delete(p.enemy); }),
       bus.on(E.ENEMY_ALERTED, (p) => this._onEnemyAlerted(p?.enemy)),
       bus.on(E.ITEM_PICKUP, (p) => this._onPickup(p)),
@@ -132,7 +127,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   dispose() {
     for (const off of this._offs) off();
     this._offs.length = 0;
-    this.ctx.env?.clear?.('golden');
+    if (this.golden) this.ctx.env?.clear?.('golden');
     this.model.dispose();
     this.ctx.actors.unregister(this);
     super.dispose();
@@ -179,12 +174,13 @@ export class Player extends ScriptedActorMixin(Actor) {
     g.dodging = this.state === 'dodge';
     g.parryWindow = parryWindowFor(ctx.state?.difficultyCfg, ctx.input?.device === 'touch');
     const r = g.resolve(def, hitDir, this.facing);
+    this.combatT = TUNING.combatStance;
     switch (r) {
       case 'perfectDodge': case 'graze': {
         if (!this.dodgeRewarded) {
           this.dodgeRewarded = true;
           const graze = r === 'graze', D = PLAYER.dodge;
-          ctx.bus.emit(E.PLAYER_PERFECT_DODGE, { attacker: att, graze });
+          ctx.bus.emit(E.PLAYER_PERFECT_DODGE, { attacker: att?.isProjectile ? (att.owner ?? att) : att, graze });
           if (graze) this._valorChanged(this.valorState.gain('graze'), 'graze');
           else {
             ctx.game.slowMo?.(D.perfectTimeScale, D.perfectDur);
@@ -195,42 +191,45 @@ export class Player extends ScriptedActorMixin(Actor) {
         return 'immune';
       }
       case 'parry': {
+        // Combat owns the parry juice (hitstop, slow motion, shake, rumble) and emits player:parry.
         const G = PLAYER.guard;
         this._valorChanged(this.valorState.gain('parry'), 'parry');
-        ctx.game.slowMo?.(G.parryTimeScale[0], G.parryTimeScale[1]);
         this.riposteTarget = att?.isProjectile ? null : att;
         this.riposteT = this.riposteTarget ? G.riposteWindow : 0;
         if (ctx.state?.settings?.autoStand || ctx.input?.device === 'touch') this.autoStandT = TUNING.autoStand;
-        this._rumble(JUICE.parry.rumble);
-        this.combatT = TUNING.combatStance;
         return 'parry';
       }
       case 'block':
         this.pushT = TUNING.blockPushT;
         ctx.bus.emit(E.PLAYER_GRIT, { value: g.grit, max: g.gritMax, broken: false });
-        this._rumble(JUICE.block.rumble);
-        this.combatT = TUNING.combatStance;
         return 'block';
       case 'break':
         ctx.bus.emit(E.PLAYER_GRIT, { value: Math.max(0, g.grit), max: g.gritMax, broken: true });
-        this._rumble(JUICE.guardBreak.rumble);
-        this._incoming = true; this._lastDamage = 0;
         return 'break';
       default:
-        this._incoming = true; this._lastDamage = 0;
         return 'hit';
     }
   }
 
-  /** Combat applied a hit (after damage, knockback, i-frames). */
+  /**
+   * Combat hook (requests/combat.md): a lethal blow. Still Standing (§7.6) — once per checkpoint segment she
+   * survives at 1 HP. Returns true when she survives.
+   */
+  onLethal() {
+    if (!this.alive || !this.livesState.tryStillStanding()) return false;
+    this.hp = PLAYER.stillStanding.hp;
+    this._stillStandingPending = true;
+    return true;
+  }
+
+  /** Combat applied a hit (after damage, knockback, i-frames). `hit` = combat's info {dmg, broke, def, killed, ...}. */
   onHit(hit) {
     const ctx = this.ctx;
-    const dmg = this._incoming ? this._lastDamage : (hit?.dmg ?? 0);
-    this._incoming = false;
-    if (this._hp > this.maxHp) this._hp = this.maxHp;
+    const dmg = hit?.dmg ?? 0;
+    if (this.hp > this.maxHp) this.hp = this.maxHp;
     ctx.bus.emit(E.PLAYER_DAMAGED, { amount: dmg, hp: this.hp, maxHp: this.maxHp, source: hit?.attacker ?? null, broke: !!hit?.broke });
     this.combatT = TUNING.combatStance;
-    if (dmg > 0) { this._valorChanged(this.valorState.hurt(), 'hurt'); this._rumble(JUICE.hurt.rumble); }
+    if (dmg > 0) { this._valorChanged(this.valorState.hurt(), 'hurt'); this.blinkT = PLAYER.hurt.iframes; }
     if (hit?.killed || !this.alive) return;
     if (this.memeCamTrigger.active) this.memeCamTrigger.exit();
     if (this._stillStandingPending) { this._triggerStillStanding(); return; }
@@ -239,7 +238,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.state === 'charge') this.cancelCharge();
     if (this.swing) this.endSwing();
     if (hit?.broke) { this.setState('stagger'); return; }
-    if (dmg > 0 || (hit?.def?.knock ?? 0) > 0) this.setState('hurt');
+    // a harmless bump (tutorial dummy, swinging sack: 0 damage, knock only) staggers her for half the stun
+    if (dmg > 0 || (hit?.def?.knock ?? 0) > 0) this.setState('hurt', dmg > 0 ? 1 : TUNING.bumpStunMul);
   }
 
   /** Combat (or env damage) killed her. */
@@ -294,7 +294,6 @@ export class Player extends ScriptedActorMixin(Actor) {
   update(dt) {
     const ctx = this.ctx;
     if (!ctx.game.simActive(this)) return;
-    this._incoming = false;
     this.stateT += dt;
     this._tickTimers(dt);
 
@@ -319,9 +318,11 @@ export class Player extends ScriptedActorMixin(Actor) {
       this.vel.y *= PLAYER.jumpCut; this.jumpCutDone = true;
     }
     const wasGround = this.onGround;
-    this.landImpact = 0;
+    this.landImpact = 0; this.bounced = 0;
     ctx.physics.moveActor(this, dt);
-    if (!wasGround && this.onGround) this._landed();
+    if (this.stepY > 0) this.stepAccum += this.stepY;                   // visual step-up smoothing (model)
+    if (this.bounced > 0) this._bounced();
+    else if (!wasGround && this.onGround) this._landed();
     this._postStep(dt);
     this._syncState();
   }
@@ -331,6 +332,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.invulnT = Math.max(0, this.invulnT - dt);
     this.staggerT = Math.max(0, this.staggerT - dt);
     dec('dodgeCd'); dec('riposteT'); dec('autoStandT'); dec('pushT'); dec('critT'); dec('immuneT'); dec('meowT'); dec('meowCd'); dec('combatT');
+    dec('blinkT');
     if (this.riposteT <= 0) this.riposteTarget = null;
     this.valorState.update(dt);
     if (this.guardState.update(dt)) this.ctx.bus.emit(E.PLAYER_GRIT, { value: this.guardState.grit, max: this.guardState.gritMax, broken: false });
@@ -357,8 +359,13 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.jumping = false; this.jumpCutDone = false; this.pounceReady = true;
     this.ctx.bus.emit(E.PLAYER_LAND, { impact });
     if (impact > PLAYER.hardLandSpeed && this.state === 'move') this.setState('land');
-    const bounce = this.ctx.physics.bounceAt?.(this.pos.x, this.pos.z, this.pos.y);      // mushroom caps (optional)
-    if (bounce) { this.vel.y = typeof bounce === 'number' ? bounce : PLAYER.mushroomBounceV; this.onGround = false; this.squashEvent = 'bounce'; }
+  }
+
+  /** Physics sprang her off a bounce surface (mushroom caps, §7.1): a jump that can't be cut short. */
+  _bounced() {
+    this.jumping = false; this.jumpCutDone = true; this.pounceReady = true; this.coyoteT = 0;
+    this.squashEvent = 'bounce';
+    this.ctx.bus.emit(E.PLAYER_JUMP, { bounce: this.bounced });
   }
 
   /** After physics: safe ground, water / pits, Standing Ground + Jeer, Golden Hour clock, zoomies, footsteps. */
@@ -509,8 +516,9 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (id === 'riposte' && this.riposteTarget) this._faceActor(this.riposteTarget);
     else if (lock && Math.hypot(lock.pos.x - this.pos.x, lock.pos.z - this.pos.z) < PLAYER.lockOn.range) this._faceActor(lock);
     else if (this.wishDir(_dir) > 0.3) this.facing = Math.atan2(_dir.x, _dir.z);
+    this._riposteFace = id === 'riposte' ? this.riposteTarget : null;
     if (id === 'riposte') { this.riposteT = 0; this.riposteTarget = null; }
-    this.swing = ctx.combat.beginSwing(this, def);
+    this.swing = ctx.combat.beginSwing(this, def, this._riposteFace ? { target: this._riposteFace } : undefined);
     this.applySwingOpts(this.swing);
     this.swingSerial++;
     this.attackBuf = 0;
@@ -521,55 +529,52 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (id === 'holy') {
       if (!this.golden) this._valorChanged(this.valorState.spend(def.cost ?? PLAYER.valor.holyCost), 'holy');
       ctx.bus.emit(E.PLAYER_HOLY, { position: this.pos.clone(), dir: new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing)), golden: this.golden });
-      this._rumble(JUICE.holy.rumble);
     }
     this.emitSwing(id, this.comboIndex);
   }
 
   emitSwing(id, combo) { this.ctx.bus.emit(E.PLAYER_SWING, { attackId: id, combo, golden: this.golden }); }
 
-  /** dmgMul (sharpness × Golden Hour) and crit (def.crit × Purrfect Dodge) for Combat.applyHit via swing.opts. */
+  /**
+   * Crit for Combat.applyHit via swing.opts (Purrfect Dodge: the next hit within 1.2 s crits ×1.5). Combat already
+   * applies sharpness × Golden Hour (`dealtMul`), i-frames, Holy slow motion, the holyWave and the gleams.
+   */
   applySwingOpts(s) {
     if (!s) return;
-    const st = this.ctx.state, sharp = st?.upgrades?.sharp ?? 0;
-    const sharpMul = sharp > 0 ? (ECONOMY.shops.sharp.mul[Math.min(sharp, ECONOMY.shops.sharp.mul.length) - 1] ?? 1) : 1;
     s.opts = s.opts ?? {};
-    s.opts.dmgMul = sharpMul * (this.golden ? PLAYER.golden.dmgMul : 1);
-    s.opts.crit = (s.def.crit ?? 1) * (this.critT > 0 ? PLAYER.dodge.perfectCrit : 1);
+    s.opts.crit = this.critT > 0 ? PLAYER.dodge.perfectCrit : 1;
   }
 
   endSwing() { this.swing = null; this.comboIndex = 0; }
 
-  /** First active frame: aim assist, Golden Hour gleam, Holy wave + slow motion. */
+  /** First active frame: aim assist (Combat defers to ours), the crit window is re-read. */
   onActiveStart(s) {
-    const ctx = this.ctx, def = s.def, full = def.arc && Math.abs(def.arc.from - def.arc.to) >= Math.PI * 2 - 1e-3;
-    if (!full) this.aimAssist();
-    s.opts && (s.opts.crit = (def.crit ?? 1) * (this.critT > 0 ? PLAYER.dodge.perfectCrit : 1));
-    _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
-    _v.copy(this.pos); _v.y += this.height * 0.6;
-    if (this.golden && GLEAM_SWINGS.includes(def.id)) ctx.combat.spawnProjectile?.(ATTACKS.gleam, this, _v, _dir);
-    if (def.id === 'holy') {
-      if (def.timeScale) ctx.game.slowMo?.(def.timeScale[0], def.timeScale[1]);
-      if (this.golden || this.shards >= (def.projectileMinShards ?? 2)) ctx.combat.spawnProjectile?.(ATTACKS.holyWave, this, _v, _dir);
-    }
+    const def = s.def, full = def.arc && Math.abs(def.arc.from - def.arc.to) >= Math.PI * 2 - 1e-3;
+    const rt = def.id === 'riposte' ? this._riposteFace : null;                // Riposte: auto-turn to the parried enemy
+    if (rt && rt.alive !== false && Math.hypot(rt.pos.x - this.pos.x, rt.pos.z - this.pos.z) <= PLAYER.guard.riposteRange + (rt.radius ?? 0)) this._faceActor(rt);
+    else if (!full) this.aimAssist();
+    this.applySwingOpts(s);
   }
 
-  /** §7.2 Assists: turn toward the nearest enemy within 60° / 3 m (touch 90° / 4 m). */
+  /** §7.2 Assists: turn toward the nearest enemy within 60° / 3 m (touch 90° / 4 m); the lock-on target wins. */
   aimAssist() {
     const A = PLAYER.assist, touch = this.ctx.input?.device === 'touch';
     const ang = touch ? A.touchAngle : A.angle, range = touch ? A.touchRange : A.range;
     const lock = this.lockTarget();
-    if (lock && Math.hypot(lock.pos.x - this.pos.x, lock.pos.z - this.pos.z) <= range + lock.radius) { this._faceActor(lock); return; }
-    let best = null, bd = Infinity;
-    const list = this.ctx.actors.queryRadius(this.pos, range, _hostile);
-    for (const a of list) {
-      if (!a.alive || a.hurtable === false || a.hidden) continue;
-      const dx = a.pos.x - this.pos.x, dz = a.pos.z - this.pos.z, d = Math.hypot(dx, dz);
-      if (d < 1e-3) continue;
-      if (Math.abs(wrapAngle(Math.atan2(dx, dz) - this.facing)) > ang) continue;
-      if (d < bd) { bd = d; best = a; }
+    if (lock && Math.hypot(lock.pos.x - this.pos.x, lock.pos.z - this.pos.z) <= range + (lock.radius ?? 0)) { this._faceActor(lock); return lock; }
+    let best = null;
+    if (typeof this.ctx.combat?.assistTarget === 'function') best = this.ctx.combat.assistTarget(this, range, ang, null);
+    else {
+      let bd = Infinity;
+      for (const a of this.ctx.actors.queryRadius(this.pos, range + 1, _hostile)) {
+        if (!a.alive || a.hurtable === false || a.hidden) continue;
+        const dx = a.pos.x - this.pos.x, dz = a.pos.z - this.pos.z, d = Math.hypot(dx, dz) - (a.radius ?? 0);
+        if (d > range || Math.abs(wrapAngle(Math.atan2(dx, dz) - this.facing)) > ang) continue;
+        if (d < bd) { bd = d; best = a; }
+      }
     }
     if (best) this._faceActor(best);
+    return best;
   }
 
   _faceActor(a) { this.facing = Math.atan2(a.pos.x - this.pos.x, a.pos.z - this.pos.z); }
@@ -659,14 +664,13 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._valorChanged(this.valorState.spend(PLAYER.valor.goldenCost), 'golden');
     this.golden = true; this.goldenActivating = true;
     this.goldenT = G.dur + (ctx.state?.getFlag?.('ending.seen') ? G.postGameBonus : 0);
-    ctx.env?.contribute?.('golden', { fogMul: G.fogMul });
-    for (const e of ctx.actors.queryRadius(this.pos, G.staggerRadius, _hostile)) {
+    ctx.env?.contribute?.('golden', { fogMul: G.fogMul });                // the Gloom recedes
+    if (typeof ctx.combat?.staggerArea === 'function') ctx.combat.staggerArea(this, G.staggerRadius, G.staggerDur);
+    else for (const e of ctx.actors.queryRadius(this.pos, G.staggerRadius, _hostile)) {
       if (!e.alive) continue;
       if (typeof e.stagger === 'function') e.stagger(G.staggerDur); else e.staggerT = Math.max(e.staggerT ?? 0, G.staggerDur);
     }
-    this._goldenPrevCam = ctx.cam?.modeName && ctx.cam.modeName !== 'preset' ? ctx.cam.modeName : 'follow';
-    this._goldenPrevLock = ctx.cam?.lockTarget ?? null;
-    ctx.cam?.preset?.(TUNING.goldenCamPreset, 'swordcat', { blend: 0.2, golden: true });
+    // the camera punches in on player:golden by itself (FollowCamera), fx/audio key off it too (bloom, stinger)
     this._rumble(JUICE.holy.rumble);
     this.combatT = TUNING.combatStance;
     this.setState('golden');
@@ -675,11 +679,6 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   finishGoldenActivation() {
     this.goldenActivating = false;
-    const cam = this.ctx.cam;
-    if (cam?.mode && cam.modeName === 'preset' && (cam.presetState?.opts?.golden ?? true)) {
-      cam.mode(this._goldenPrevCam ?? 'follow', this._goldenPrevLock ? { target: this._goldenPrevLock } : {});
-    }
-    this._goldenPrevLock = null;
     if (this.state === 'golden') this.setState('move');
   }
 
@@ -718,8 +717,8 @@ export class Player extends ScriptedActorMixin(Actor) {
   respawn() {
     const ctx = this.ctx;
     this.alive = true; this.hurtable = true;
-    this._hp = this.maxHp;
-    this.invulnT = TUNING.respawnInvuln;
+    this.hp = this.maxHp;
+    this.invulnT = TUNING.respawnInvuln; this.blinkT = TUNING.respawnInvuln;
     this._valorChanged(this.valorState.respawn(), 'respawn');
     this.guardState.reset();
     this.setState('move');
@@ -745,13 +744,16 @@ export class Player extends ScriptedActorMixin(Actor) {
   /** Damage that doesn't come through Combat (water, pits). Honours god, Golden Hour and Still Standing. */
   _envDamage(n, source) {
     if (this.god || !this.alive || !(n > 0)) return;
-    this._incoming = true; this._lastDamage = 0;
-    this.hp = this.hp - n;
-    const dmg = this._lastDamage;
-    this._incoming = false;
+    const diff = this.ctx.state?.difficultyCfg;
+    let dmg = diff?.roundTaken ? Math.round(diff.roundTaken(n)) : n;
+    if (this.golden) dmg = Math.floor(dmg * PLAYER.golden.takenMul);
+    if (dmg <= 0) return;
+    this.hp = Math.max(0, this.hp - dmg);
+    if (this.hp <= 0) this.onLethal();
     this.ctx.bus.emit(E.PLAYER_DAMAGED, { amount: dmg, hp: this.hp, maxHp: this.maxHp, source });
-    if (dmg > 0) this._valorChanged(this.valorState.hurt(), 'hurt');
-    if (this.hp <= 0) { this.hp = 0; this.onDeath(); }
+    this._valorChanged(this.valorState.hurt(), 'hurt');
+    this.blinkT = PLAYER.hurt.iframes;
+    if (this.hp <= 0) { this.alive = false; this.onDeath(); }
     else if (this._stillStandingPending) this._triggerStillStanding();
   }
 
@@ -788,18 +790,17 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.ctx.bus.emit(E.PLAYER_VALOR, { value: this.valorState.value, max: this.valorState.max, delta, reason });
   }
 
-  /** Her hits: Valor (light cap 8 per swing, heavy +6, Riposte +8), Purrfect Dodge crit consumed, rumble. */
+  /** Her hits: Valor (light cap 8 per swing, heavy +6, Riposte +8) and the Purrfect Dodge crit is used up. */
   _onHitEvent(h) {
     if (!h || h.attacker !== this || h.blocked) return;
     const def = ATTACKS[h.attackId];
     this.combatT = TUNING.combatStance;
-    if (this.critT > 0) this.critT = 0;
+    if (this.critT > 0 && !h.projectile) this.critT = 0;
     if (!def) return;
     const key = this.swingSerial;
     if (def.valorFlat) {
       if (this._riposteValorKey !== key) { this._riposteValorKey = key; this._valorChanged(this.valorState.add(def.valorFlat, 'riposte'), 'riposte'); }
     } else if (def.valor) this._valorChanged(this.valorState.hit(def.valor, key), def.valor);
-    this._rumble(def.heavy ? JUICE.heavy.rumble : JUICE.light.rumble);
   }
 
   _onEnemyAlerted(e) {
@@ -835,7 +836,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     const st = this.ctx.state;
     const bells = st?.heartBells?.length ?? 0;
     this.maxHp = Math.min(PLAYER.hpMax, PLAYER.hpStart + TUNING.heartBellHp * bells);
-    if (this._hp > this.maxHp) this._hp = this.maxHp;
+    if (this.hp > this.maxHp) this.hp = this.maxHp;
     const satchel = st?.upgrades?.satchel ?? 0;
     const base = satchel > 0 ? (ECONOMY.shops.satchel.max[Math.min(satchel, ECONOMY.shops.satchel.max.length) - 1] ?? PLAYER.milk.start) : PLAYER.milk.start;
     const active = this.ctx.companions?.active?.map?.((c) => c.kittenId ?? c) ?? st?.companions?.active ?? [];
@@ -860,7 +861,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.livesState.levelStart(st?.lives);
     this._recomputeMax();
     if (!this.alive || this.state === 'dead') { this.alive = true; this.hurtable = true; }
-    this._hp = this.maxHp;
+    this.hp = this.maxHp;
     this.invulnT = 0; this.immuneT = 0; this.critT = 0; this.riposteT = 0; this.autoStandT = 0;
     this.guardState.reset();
     this.respawnPoint.pos.copy(this.pos); this.respawnPoint.facing = this.facing;

@@ -22,7 +22,7 @@ export const PAL = Object.freeze({
 
 /** Cape colours (GAME_DESIGN §13.5; §13.3 shop capes). id → { color, lining, sheen, hem }. */
 export const CAPES = Object.freeze({
-  cream:     { color: '#E2D6C0', lining: '#B9AB92', sheen: '#FFF6E6', hem: '#CDBB9C' },
+  cream:     { color: '#D3C4A6', lining: '#A89878', sheen: '#F2E6CF', hem: '#B8A47F' },   // Marmalade's faded cape
   red:       { color: '#A3202C', lining: '#6B0F1A', sheen: '#E0525A', hem: '#D9B26A' },
   memeWhite: { color: '#F2EFE8', lining: '#CFCAC0', sheen: '#FFFFFF', hem: '#D9B26A' },
   blue:      { color: '#3F6FB5', lining: '#25426E', sheen: '#8DB0E8', hem: '#D9B26A' },

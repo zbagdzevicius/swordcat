@@ -23,31 +23,39 @@ const SPAWN = (type, rel, dist, opts = {}) => {
   return e;
 };
 
-/** Install the page-side helpers once per block. */
-async function prepare(t) {
-  await t.G((spawnSrc) => {
-    const g = window.__GAME__;
+/**
+ * Install the page-side helpers once per block. `forward` (m) first walks her out along her facing, clear of the
+ * fence rail right behind the meadow `start` spawn, so the follow camera has an open view.
+ */
+async function prepare(t, forward = 0) {
+  await t.G(([spawnSrc, fwd]) => {
+    const g = window.__GAME__, ctx = g.ctx, p = ctx.player;
     // eslint-disable-next-line no-new-func
     g.__combatSpawn = new Function(`return (${spawnSrc})`)();
     g.god(true);
-    g.ctx.input.setDevice?.('kbm');
-    g.ctx.game.setTimeScale(1);
+    ctx.input.setDevice?.('kbm');
+    ctx.game.setTimeScale(1);
+    if (fwd > 0) {
+      const f = p.facing, x = p.pos.x + Math.sin(f) * fwd, z = p.pos.z + Math.cos(f) * fwd;
+      p.teleport({ pos: new g.THREE.Vector3(x, ctx.physics.heightAt(x, z), z), facing: f });
+    }
     return true;
-  }, SPAWN.toString());
+  }, [SPAWN.toString(), forward]);
+  if (forward > 0) await t.frames(45);                       // let the follow camera settle behind her
 }
 
 /** Press the Stand (virtual guard) for `ms` real milliseconds from inside the page. */
 const guardFor = (ms) => {
   const input = window.__GAME__.ctx.input;
-  input.setVirtual('guard', true);
+  input.setVirtual('guard', true); input.setDevice?.('kbm');     // stay on kbm: touch would add Auto-Stand after a parry
   setTimeout(() => { input.setVirtual('guard', false); input.setDevice?.('kbm'); }, ms);
 };
 
 export default [
   {
-    name: 'combat:arc', order: 30, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'combat:arc', order: 30, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
-      await prepare(t);
+      await prepare(t, 5);
       await t.frames(5);
       // 1) API-driven slash1 on four passive rats around her (real Enemy hooks, real HIT events)
       const r = await t.G(() => {
@@ -84,19 +92,28 @@ export default [
     },
   },
   {
-    name: 'combat:parry', order: 31, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'combat:parry', order: 31, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
-      await prepare(t);
+      await prepare(t, 5);
       await t.frames(5);
       await t.G((guardSrc) => {
-        const g = window.__GAME__, ctx = g.ctx, E = g.E;
+        const g = window.__GAME__, ctx = g.ctx, E = g.E, input = ctx.input;
         const guard = new Function(`return (${guardSrc})`)();
         const rat = g.__combatSpawn('rat_pike', 0, 1.7);
-        g.__parry = { rat: rat.id, tele: null, pressed: false, parried: null };
+        g.__parry = { rat: rat.id, tele: null, pressed: false, parried: null, stagger: null, riposteAt: -1, released: false };
         const st = g.__parry;
         st.offT = ctx.bus.on(E.TELEGRAPH, (p) => { if (p.actor === rat && !st.pressed) st.tele = { t: ctx.game.time, d: p.duration }; });
-        st.offP = ctx.bus.on(E.PLAYER_PARRY, (p) => { st.parried = { gold: p.gold, attacker: p.attacker?.id, t: ctx.game.time }; });
+        st.offP = ctx.bus.on(E.PLAYER_PARRY, (p) => {
+          st.parried = { gold: p.gold, attacker: p.attacker?.id, t: ctx.game.time };
+          input.setVirtual('guard', false); input.setDevice?.('kbm');   // drop the Stand (a held Stand cancels the swing)
+          st.riposteAt = ctx.game.time + 0.12;                     // ⚔ well inside the 0.8 s Riposte window
+        });
         st.offH = ctx.game.addFrameHook(() => {
+          if (st.parried && !st.stagger) st.stagger = { state: rat.stateName, staggerT: rat.staggerT };
+          if (st.riposteAt >= 0 && ctx.game.time >= st.riposteAt && !st.released) {
+            if (!st.attackOn) { st.attackOn = true; input.setVirtual('attack', true); input.setDevice?.('kbm'); st.attackT = ctx.game.time; }
+            else if (ctx.game.time - st.attackT > 0.08) { input.setVirtual('attack', false); input.setDevice?.('kbm'); st.released = true; }
+          }
           if (!st.tele || st.pressed) return;
           if (ctx.game.time >= st.tele.t + st.tele.d - 0.05) { st.pressed = true; guard(500); }
         });
@@ -105,51 +122,57 @@ export default [
       const ok = await t.waitForEvent('player:parry', 12000);
       await t.wait(60);
       await t.shot('combat/parry');
+      await t.wait(900);
       const s = await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx, st = g.__parry, rat = ctx.actors.list.find((a) => a.id === st.rat);
         st.offT(); st.offP(); st.offH();
-        return { parried: st.parried, pressed: st.pressed, ratId: st.rat, rat: rat ? { state: rat.stateName, staggerT: rat.staggerT, hp: rat.hp } : null,
-          hp: ctx.player.hp, valor: ctx.player.valor, last: ctx.combat.lastParry ? ctx.combat.lastParry.attacker?.id : null };
+        const rip = ctx.combat.log.filter((e) => e.attackId === 'riposte' && e.targetId === st.rat);
+        return { parried: st.parried, pressed: st.pressed, ratId: st.rat, stagger: st.stagger, ratAlive: rat?.alive ?? false,
+          riposte: rip.map((e) => `${e.result}:${e.damage}:${e.crit}`), log: ctx.combat.log.slice(-3).map((e) => `${e.attackId}:${e.result}:${e.damage}`),
+          last: ctx.combat.lastParry ? ctx.combat.lastParry.attacker?.id : null };
       });
       t.assert(ok && s.parried, `player:parry not emitted (guard pressed=${s.pressed})`);
       if (s.parried) {
         t.assert(s.parried.attacker === s.ratId, `player:parry carries the attacking rat (got ${s.parried.attacker})`);
-        t.assert(s.rat && (s.rat.state === 'stagger' || s.rat.staggerT > 0), `parried rat should stagger (state ${s.rat?.state})`);
-        t.assert(s.last != null, 'combat.lastParry recorded');
+        t.assert(s.stagger && (s.stagger.state === 'stagger' || s.stagger.staggerT > 0), `parried rat should stagger (${JSON.stringify(s.stagger)})`);
+        t.assert(s.last === s.ratId, 'combat.lastParry recorded');
       }
-      // Riposte (player area): ⚔ within 0.8 s of the parry
-      await t.tap('KeyJ', 1);
-      const rip = await t.waitForEvent('combat:hit', 1500);
-      const log = await t.G(() => window.__GAME__.ctx.combat.log.slice(-3).map((e) => `${e.attackId}:${e.result}:${e.damage}`));
-      t.log(`after parry: ${log.join(' ')}`);
-      if (!rip || !log.some((x) => x.startsWith('riposte'))) t.warn('no riposte hit after the parry (player area)');
+      // Riposte: ⚔ within 0.8 s of the parry → 18 × 2 crit = 36 kills the 30-HP pikeman (the trigger is the player area's)
+      t.log(`after parry: ${s.log.join(' ')}; riposte ${s.riposte.join(', ') || 'none'}`);
+      if (s.riposte.length) {
+        t.assert(s.riposte[0] === 'hit:36:true', `riposte should crit for 36 (got ${s.riposte[0]})`);
+        t.assert(!s.ratAlive, 'a Riposte kills a Rat Pikeman (§7.2 DPS check)');
+      } else t.warn('no riposte hit after the parry (player area)');
     },
   },
   {
-    name: 'combat:reflect', order: 32, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'combat:reflect', order: 32, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
-      await prepare(t);
+      await prepare(t, 5);
       await t.frames(5);
       await t.G((guardSrc) => {
         const g = window.__GAME__, ctx = g.ctx, E = g.E, THREE = g.THREE, p = ctx.player;
         const guard = new Function(`return (${guardSrc})`)();
-        const rat = g.__combatSpawn('rat_xbow', 0.12, 8, { passive: true });
+        const rat = g.__combatSpawn('rat_xbow', 0.7, 7, { passive: true });      // off to her left: the gold return is in view
         const from = new THREE.Vector3(rat.pos.x, rat.pos.y + rat.height * 0.6, rat.pos.z);
         const dir = new THREE.Vector3(p.pos.x - from.x, p.pos.y + p.height * 0.55 - from.y, p.pos.z - from.z);
         const bolt = ctx.combat.spawnProjectile(ctx.config.ATTACKS.rat_bolt, rat, from, dir);
-        g.__reflect = { rat: rat.id, pressed: false, reflected: false, bolt: bolt.id };
+        g.__reflect = { rat: rat.id, pressed: false, reflected: false, frozen: false, bolt: bolt.id };
         const st = g.__reflect;
         st.off = ctx.bus.on(E.REFLECT, () => { st.reflected = true; });
         st.offH = ctx.game.addFrameHook(() => {
-          if (st.pressed || !bolt.alive) return;
-          const d = Math.hypot(bolt.pos.x - p.pos.x, bolt.pos.z - p.pos.z) - p.radius - bolt.r;
-          if (d / bolt.speed <= 0.07) { st.pressed = true; guard(400); }
+          if (!bolt.alive) return;
+          const d = Math.hypot(bolt.pos.x - p.pos.x, bolt.pos.z - p.pos.z);
+          // freeze the world once the gold return is ~1.6 m out (frame-exact, whatever the machine load)
+          if (st.reflected && !st.frozen && bolt.reflected && d >= 1.6) { st.frozen = true; ctx.game.setTimeScale(0); }
+          if (st.pressed) return;
+          if ((d - p.radius - bolt.r) / bolt.speed <= 0.07) { st.pressed = true; guard(400); }
         });
         return true;
       }, guardFor.toString());
       const ok = await t.waitForEvent('combat:reflect', 6000);
-      await t.G(() => window.__GAME__.ctx.game.setTimeScale(0.06));
-      await t.wait(120);
+      try { await t.page.waitForFunction(() => window.__GAME__.__reflect.frozen, null, { timeout: 4000, polling: 'raf' }); } catch { t.warn('reflect: never froze for the shot'); }
+      await t.frames(2);
       await t.shot('combat/reflect');
       await t.G(() => window.__GAME__.ctx.game.setTimeScale(1));
       await t.wait(1200);
@@ -167,9 +190,9 @@ export default [
     },
   },
   {
-    name: 'combat:holy', order: 33, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'combat:holy', order: 33, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
-      await prepare(t);
+      await prepare(t, 5);
       await t.G(() => { const g = window.__GAME__; g.player.setShards(2); g.player.setValor(100); return true; });
       await t.frames(3);
       const ids = await t.G(() => {
@@ -177,10 +200,13 @@ export default [
         return [S('rat_pike', 0.05, 5, { passive: true }), S('rat_pike', -0.08, 7.5, { passive: true }), S('rat_pike', 0.6, 4.5, { passive: true })].map((e) => { e.hp = e.maxHp = 100; return e.id; });
       });
       await t.clearEvents();
-      await t.hold('KeyJ', 1300);
-      let holy = await t.waitForEvent('player:holy', 400);
+      // hold ⚔ until the charge reaches tier 2 in game time (a loaded machine runs the sim slower than real time)
+      await t.page.keyboard.down('KeyJ');
+      try { await t.page.waitForFunction(() => (window.__GAME__.ctx.player.chargeTier ?? 0) >= 2, null, { timeout: 6000, polling: 'raf' }); } catch { /* fallback below */ }
+      await t.page.keyboard.up('KeyJ');
+      let holy = await t.waitForEvent('player:holy', 1000);
       if (!holy) {                                                   // player area not wired yet: fire the swing directly
-        t.warn('no player:holy from a 1.3 s charge; driving the holy swing through the API');
+        t.warn('no player:holy from a tier-2 charge; driving the holy swing through the API');
         await t.G(() => {
           const ctx = window.__GAME__.ctx, p = ctx.player, s = ctx.combat.beginSwing(p, ctx.config.ATTACKS.holy);
           for (let i = 0; i < 20; i++) ctx.combat.updateSwing(s, 1 / 60);
@@ -204,35 +230,42 @@ export default [
     },
   },
   {
-    name: 'combat:tokens', order: 34, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'combat:tokens', order: 34, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
-      await prepare(t);
-      await t.G(() => { const S = window.__GAME__.__combatSpawn; for (let i = 0; i < 4; i++) S('rat_pike', (i / 4) * Math.PI * 2, 3); return true; });
-      const sample = async (ms) => {
-        let max = 0, busy = 0;
-        for (let k = 0; k < ms / 100; k++) {
-          const n = await t.G(() => window.__GAME__.ctx.combat.tokens.count('melee'));
-          max = Math.max(max, n); if (n > 0) busy++;
-          await t.wait(100);
-        }
-        return { max, busy };
-      };
-      const knight = await sample(4000);
-      t.assert(knight.max <= 2, `Knight: at most 2 melee tokens (saw ${knight.max})`);
-      t.assert(knight.busy > 0, 'rats took attack tokens');
-      await t.G(() => { window.__GAME__.ctx.state.difficulty = 'kitten'; return true; });
-      await t.wait(1500);
-      const kitten = await sample(3000);
-      await t.G(() => { window.__GAME__.ctx.state.difficulty = 'knight'; return true; });
-      t.assert(kitten.max <= 1, `Kitten: at most 1 melee token (saw ${kitten.max})`);
+      await prepare(t, 5);
+      // sampled every rendered frame inside the page, in game time: Knight 4 s → Kitten (3 s settle) → 3 s
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, S = g.__combatSpawn, tk = ctx.combat.tokens;
+        for (let i = 0; i < 4; i++) S('rat_pike', (i / 4) * Math.PI * 2, 3);
+        const st = g.__tokens = { phase: 'knight', t0: ctx.game.time, knight: { max: 0, busy: 0, n: 0 }, kitten: { max: 0, busy: 0, n: 0 }, done: false };
+        st.off = ctx.game.addFrameHook(() => {
+          const dt = ctx.game.time - st.t0, c = tk.count('melee');
+          if (st.phase === 'knight') {
+            st.knight.max = Math.max(st.knight.max, c); st.knight.n++; if (c > 0) st.knight.busy++;
+            if (dt >= 4) { ctx.state.difficulty = 'kitten'; st.phase = 'settle'; st.t0 = ctx.game.time; }
+          } else if (st.phase === 'settle') {
+            if (dt >= 3) { st.phase = 'kitten'; st.t0 = ctx.game.time; }
+          } else if (st.phase === 'kitten') {
+            st.kitten.max = Math.max(st.kitten.max, c); st.kitten.n++; if (c > 0) st.kitten.busy++;
+            if (dt >= 3) { ctx.state.difficulty = 'knight'; st.phase = 'done'; st.done = true; st.off(); }
+          }
+        });
+        return true;
+      });
+      await t.page.waitForFunction(() => window.__GAME__.__tokens.done, null, { timeout: 100000, polling: 250 });
       await t.shot('combat/tokens');
-      t.log(`tokens: knight max ${knight.max} (busy ${knight.busy}/40), kitten max ${kitten.max}`);
+      const s = await t.G(() => { const st = window.__GAME__.__tokens; return { knight: st.knight, kitten: st.kitten }; });
+      t.assert(s.knight.max <= 2, `Knight: at most 2 melee tokens (saw ${s.knight.max})`);
+      t.assert(s.knight.busy > 0, 'rats took attack tokens');
+      t.assert(s.kitten.max <= 1, `Kitten: at most 1 melee token (saw ${s.kitten.max})`);
+      t.assert(s.kitten.busy > 0, 'Kitten: rats still attack, one at a time');
+      t.log(`tokens: knight max ${s.knight.max} (busy ${s.knight.busy}/${s.knight.n} frames), kitten max ${s.kitten.max} (busy ${s.kitten.busy}/${s.kitten.n})`);
     },
   },
   {
-    name: 'combat:visuals', order: 35, level: 'meadow', spawn: 'start', timeout: 60000,
+    name: 'combat:visuals', order: 35, level: 'meadow', spawn: 'start', timeout: 120000,
     async run(t) {
-      await prepare(t);
+      await prepare(t, 5);
       await t.frames(10);
       const n = await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player, A = ctx.config.ATTACKS;

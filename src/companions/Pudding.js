@@ -14,17 +14,84 @@ import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
 import { damp, dampAngle, clamp01, easeInOutSine, lerp } from '../core/math.js';
+import { visualDt } from '../characters/index.js';
 
 export const PUDDING_MODEL = 'models/creatures/monsters-flying/Dragon_Evolved.glb';
 export const PUDDING = {
-  tint: '#E0503A', radius: 2.5, height: 3.5,
+  tint: '#E0503A', red: [8, 0.72], radius: 2.5, height: 3.5,
   /** CS-03 net (meadow glade): Pudding at (2,24), rope posts at (−2,24), (6,24), (2,28) (§12.3). */
   net: { at: [2, 24], facing: Math.PI, posts: [[-2, 24], [6, 24], [2, 28]], dome: [2.6, 2.2, 3.2] },
-  perch: { anchors: ['pud_1', 'pud_2', 'pud_3', 'pud_4'], approach: 12, firstMin: 14, speed: 9, arc: 6 },
-  free: { sniff: 1.6, nod: 1.2, lift: 1.4 },
+  perch: { anchors: ['pud_1', 'pud_2', 'pud_3', 'pud_4'], approach: 12, firstMin: 14, speed: 9, arc: 6, duck: 0.45 },
+  free: { sniff: 1.6, nod: 1.2, lift: 1.4, lean: 0.55 },
 };
 
 const _v = new THREE.Vector3();
+
+// ------------------------------------------------------------------ the red recolour (§3.6: red #E0503A)
+
+/** RGB (0..255) → HSL (h in degrees, s, l in 0..1). */
+export function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (d < 1e-6) return [0, 0, l];
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+
+/**
+ * Pudding's palette remap: the atlas cells in the purple / magenta / maroon family (his body and wings) move to the
+ * design red (#E0503A, hue 8°) and get lighter, so he reads as a big friendly red dragon in the fog instead of the
+ * near-black a plain colour multiply gives. Eyes, claws, horns and belly cells keep their colours. Pure.
+ * @param {number} r @param {number} g @param {number} b 0..255 @returns {[number, number, number]} 0..255
+ */
+export function puddingRecolour(r, g, b) {
+  const [h, s, l] = rgbToHsl(r, g, b);
+  const body = s > 0.18 && l > 0.06 && l < 0.75 && (h >= 280 || h <= 18);
+  if (!body) return [r, g, b];
+  const [th, ts] = PUDDING.red;
+  const nl = Math.min(0.68, l * 1.15 + 0.16), ns = Math.max(ts, s);
+  const c = new THREE.Color().setHSL(th / 360, ns, nl);
+  return [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)];
+}
+
+const _recoloured = new WeakMap();
+
+/** Swap every material map under `root` for the recoloured atlas (cached per source texture). Browser only. */
+function paintPudding(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m?.map) { m?.color?.set(PUDDING.tint); continue; }
+      let tex = _recoloured.get(m.map);
+      if (tex === undefined) { tex = recolourTexture(m.map); _recoloured.set(m.map, tex); }
+      if (tex) { m.map = tex; m.color?.setRGB(1, 1, 1); } else m.color?.multiply(new THREE.Color(PUDDING.tint));
+      m.needsUpdate = true;
+    }
+  });
+}
+
+function recolourTexture(src) {
+  const img = src.image;
+  if (typeof document === 'undefined' || !img?.width) return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height), px = d.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const [r, gg, b] = puddingRecolour(px[i], px[i + 1], px[i + 2]);
+      px[i] = r; px[i + 1] = gg; px[i + 2] = b;
+    }
+    g.putImageData(d, 0, 0);
+    const t = new THREE.CanvasTexture(c);
+    for (const k of ['flipY', 'colorSpace', 'magFilter', 'minFilter', 'wrapS', 'wrapT', 'generateMipmaps', 'anisotropy']) t[k] = src[k];
+    t.channel = src.channel ?? 0;
+    t.needsUpdate = true;
+    return t;
+  } catch (e) { console.warn('[pudding] recolour failed', e); return null; }
+}
 
 /** Build the rope net: a dome of meridians + rings (tubes) plus tether ropes to the posts. */
 function buildNet(dome, tethers) {
@@ -79,8 +146,9 @@ export class Pudding extends ScriptedActorMixin(Actor) {
 
   async loadVisual() {
     try {
-      const m = await this.ctx.assets.model(PUDDING_MODEL, { tint: PUDDING.tint });
+      const m = await this.ctx.assets.model(PUDDING_MODEL, { cloneMaterials: true, castShadow: true });
       if (this.disposed) return;
+      paintPudding(m.root);
       this.model = m;
       this.object3d.add(m.root);
       this.anim = new Animator(m.scene, m.animations);
@@ -94,15 +162,29 @@ export class Pudding extends ScriptedActorMixin(Actor) {
   setNetted(on = true) {
     if (on) {
       this.mode = 'netted'; this.modeT = 0;
-      if (!this.net && this.ctx.scene) {
-        const off = PUDDING.net.posts.map(([x, z]) => [x - this.pos.x, z - this.pos.z]);
-        this.net = buildNet(PUDDING.net.dome, off);
-        this.net.group.position.copy(this.pos);
-        this.ctx.scene.add(this.net.group);
-      }
+      if (!this.net) this._buildNet();
       this._updateRopes();
     } else if (this.net) { this.netDrop = 0; }
     this._applyModeClip();
+  }
+
+  /** The net over him, tethered to the 3 rope posts (world positions, §12.3). */
+  _buildNet() {
+    if (!this.ctx.scene) return;
+    const off = PUDDING.net.posts.map(([x, z]) => [x - this.pos.x, z - this.pos.z]);
+    this.net = buildNet(PUDDING.net.dome, off);
+    this.net.group.position.copy(this.pos);
+    this.ctx.scene.add(this.net.group);
+  }
+
+  /** Keep the net on him if a cutscene moved him after netting him (the CS-03 `end` sets pose and position). */
+  _syncNet() {
+    const n = this.net;
+    if (!n || this.netDrop >= 0 || this.mode !== 'netted') return;
+    if (Math.hypot(n.group.position.x - this.pos.x, n.group.position.z - this.pos.z) < 0.25) { n.group.position.y = this.pos.y; return; }
+    this._disposeNet();
+    this._buildNet();
+    this._updateRopes();
   }
 
   /** A rope post was cut (objective progress): drop that tether, the net sags, he flinches. */
@@ -110,7 +192,7 @@ export class Pudding extends ScriptedActorMixin(Actor) {
     if (n === this.ropesCut) return;
     this.ropesCut = n;
     this._updateRopes();
-    if (this.mode === 'netted' && this.anim) this._once('HitReact');
+    if (this.mode === 'netted') { if (this.anim) this._once('HitReact'); this.sound('puddingRoar', { vol: 0.45 }); }
   }
 
   _updateRopes() {
@@ -144,10 +226,17 @@ export class Pudding extends ScriptedActorMixin(Actor) {
 
   sleep() { this.mode = 'sleep'; this.modeT = 0; this._applyModeClip(); }
 
-  /** Nervous roar (Headbutt lunge + camera shake). */
+  /** Nervous roar (Headbutt lunge + camera shake + the roar). */
   roar(trauma = 0.5) {
     if (this.anim) this._once('Headbutt');
     this.ctx.bus.emit(E.SHAKE, { trauma });
+    this.sound('puddingRoar');
+  }
+
+  /** A positional sound that follows him (audio ids: requests/audio.md). Gameplay only: cutscenes cue their own. */
+  sound(id, opts) {
+    if (this.scripted) return null;
+    try { return this.ctx.audio?.play3D?.(id, this, opts) ?? null; } catch (e) { console.warn('[pudding] sound failed', e); return null; }
   }
 
   _firstPerch() {
@@ -230,6 +319,7 @@ export class Pudding extends ScriptedActorMixin(Actor) {
   update(dt) {
     if (!this.ctx.game.simActive(this)) return;
     this.modeT += dt;
+    this._syncNet();
     if (this.scripted || this.attachedTo) {
       this.scriptedStep(dt);
       if (!this.attachedTo) this.ctx.physics.moveActor(this, dt);
@@ -240,13 +330,26 @@ export class Pudding extends ScriptedActorMixin(Actor) {
       case 'netted':
         this.vel.set(0, 0, 0);
         this.flinchT -= dt;
-        if (this.flinchT <= 0) { this.flinchT = 5 + (this.ctx.rng?.() ?? 0.5) * 7; this._once(this.ctx.rng?.() < 0.5 ? 'HitReact' : 'No'); }
+        if (this.flinchT <= 0) {                                       // nervous: flinches (and roars, which is always)
+          this.flinchT = 5 + (this.ctx.rng?.() ?? 0.5) * 7;
+          const r = this.ctx.rng?.() ?? 0.5;
+          this._once(r < 0.5 ? 'HitReact' : 'No');
+          if (r < 0.3) this.sound('puddingRoar', { vol: 0.35 });
+        }
         break;
       case 'free': {
         this.vel.set(0, 0, 0);
         const F = PUDDING.free;
         this._facePlayer(dt);
-        if (this._freeStep === 0 && this.modeT >= 0.4) { this._freeStep = 1; this._once('HitReact'); }
+        // sniff: lean down toward her and shuffle half a step closer (the purr is the audio's), then nod
+        if (this._freeStep === 0 && this.modeT >= 0.3) {
+          this._freeStep = 1;
+          this.sound('cat/cat_purractive_loop', { rate: 0.6, vol: 0.9, dur: F.sniff + F.nod });
+        }
+        if (this._freeStep === 1 && p) {
+          const dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, d = Math.hypot(dx, dz);
+          if (d > this.radius + 1.2) { this.pos.x += (dx / d) * 0.5 * dt; this.pos.z += (dz / d) * 0.5 * dt; }
+        }
         if (this._freeStep === 1 && this.modeT >= F.sniff) { this._freeStep = 2; this._once('Yes'); }
         if (this._freeStep === 2 && this.modeT >= F.sniff + F.nod) {
           this._freeStep = 3;
@@ -294,11 +397,13 @@ export class Pudding extends ScriptedActorMixin(Actor) {
 
   render(alpha, dt) {
     super.render(alpha);
-    const vdt = this.ctx.game.hitstopT > 0 ? 0 : (dt ?? 0);
+    const vdt = visualDt(this.ctx, dt ?? 0);         // 0 in hitstop / the pause menu, × slow-mo
     this.anim?.update(vdt);
     if (this.model) {
-      // netted: crouched low and squashed under the net; sleep: slow breathing
-      const crouch = this.mode === 'netted' ? 1 : 0;
+      // netted: crouched low and squashed under the net; perch: ducking "behind" a tree half his size;
+      // free: leaning down to sniff her; sleep: slow breathing
+      const crouch = this.mode === 'netted' ? 1 : this.mode === 'perch' ? PUDDING.perch.duck
+        : this.mode === 'free' && this._freeStep === 1 ? PUDDING.free.lean : 0;
       this._crouch = damp(this._crouch ?? crouch, crouch, 4, vdt);
       const breathe = this.mode === 'sleep' ? 1 + Math.sin(this.ctx.game.realTime * 1.3) * 0.015 : 1;
       this.model.root.scale.set(1 + 0.06 * this._crouch, (1 - 0.22 * this._crouch) * breathe, 1 + 0.06 * this._crouch);

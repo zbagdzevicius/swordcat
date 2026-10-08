@@ -169,6 +169,29 @@ function emptyGeometry() {
   return g;
 }
 
+/** Merge coloured primitive geometries into one vertex-coloured, indexed template: parts = [[geometry, colour, {flat}], ...]. */
+export function procTemplate(key, parts) {
+  const geos = [];
+  for (const [geo, color, o] of parts) {
+    let g = geo.index ? geo.toNonIndexed() : geo.clone();
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+    if (!g.attributes.normal || o?.flat) g.computeVertexNormals();
+    const n = g.attributes.position.count, col = new Float32Array(n * 3);
+    _col.set(color);
+    for (let i = 0; i < n; i++) { col[i * 3] = _col.r; col[i * 3 + 1] = _col.g; col[i * 3 + 2] = _col.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geos.push(g);
+    geo.dispose();
+  }
+  const geometry = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  const n = geometry.attributes.position.count, idx = new Uint32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  geometry.setIndex(new THREE.BufferAttribute(idx, 1));
+  geometry.computeBoundingBox();
+  return { key, geometry, box: geometry.boundingBox.clone(), parts: [] };
+}
+
 /** Simple procedural geometry → template (vertex-coloured), e.g. posts, planks, gate boards. */
 export function templateFromGeometry(key, geometry, color) {
   const g = geometry.index ? geometry : mergeVertices(geometry);

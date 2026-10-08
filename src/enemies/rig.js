@@ -76,12 +76,15 @@ export function tintAll(root, tint) {
   });
 }
 
-/** Materials under `root` that can flash (have `emissive`), skipping shared prop materials. */
+/**
+ * Materials under `root` that can flash (have `emissive`): only this instance's own materials (`markOwned`), never
+ * shared ones (prop gear, characters' beast-head materials), so a hit never flashes every enemy at once.
+ */
 export function flashMaterials(root, out = []) {
   root.traverse((o) => {
     if (!o.isMesh || o.userData.sharedProp) return;
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-      if (m?.emissive && !out.some((x) => x.mat === m)) out.push({ mat: m, base: m.emissive.clone(), baseI: m.emissiveIntensity ?? 1 });
+      if (m?.emissive && m.userData?.enemyOwned && !out.some((x) => x.mat === m)) out.push({ mat: m, base: m.emissive.clone(), baseI: m.emissiveIntensity ?? 1 });
     }
   });
   return out;

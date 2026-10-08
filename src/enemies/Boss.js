@@ -10,14 +10,12 @@
 //   - Death and retry: when she loses a life, the current phase restarts at full phase HP and the adds despawn.
 //   - Barkus: `hpFloor` (any phase row's) holds until freeShard(); with the shard freed, reaching `rallyAt` plays
 //     CS-15 (`onRally.play`) instead of dying (CS-15's `end` emits boss:defeated).
-import { Enemy, BASE_STATES } from './Enemy.js';
+import { Enemy } from './Enemy.js';
 import { Dizzy } from './Dizzy.js';
 import { E } from '../core/events.js';
 import { ATTACKS, DIZZY, PLAYER } from '../core/config.js';
 import { TUNING } from './tuning.js';
 import * as THREE from 'three';
-
-const _p = new THREE.Vector3();
 
 /** Phase index for HP fraction `frac` (pure; exported for tests). */
 export function phaseFor(phases, frac) {
@@ -72,6 +70,8 @@ export class Boss extends Enemy {
   get isDizzy() { return !!this.meter?.dizzy; }
   /** Crit multiplier Combat applies to hits on this boss (×2 while dizzy). */
   get critMul() { return this.meter?.critMul ?? 1; }
+  /** Combat's duck-typed name for the same multiplier (requests/combat.md). */
+  get critTaken() { return this.critMul; }
 
   /** HP floor fraction (null = none): any phase row's `hpFloor` (Barkus P3: 0.10) holds until freeShard(). */
   get hpFloor() {
@@ -163,7 +163,7 @@ export class Boss extends Enemy {
     this._hp = Math.max(1, Math.round(this.maxHp * top));
     for (const k of [...this._eventsFired]) {
       const [i, j] = k.split(':').map(Number), ev = rows[i]?.events?.[j];
-      if (ev && ev.at < top) this._eventsFired.delete(k);
+      if (ev && ev.at <= top) this._eventsFired.delete(k);        // the phase's own start events fire again on the next hit
     }
     this.despawnAdds();
     this.meter.reset();
@@ -271,5 +271,3 @@ export class Boss extends Enemy {
   }
 }
 
-export { BASE_STATES };
-export const _bossTmp = _p;

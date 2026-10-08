@@ -21,8 +21,8 @@ function kaykit(row, look) {
 /** @type {Record<string, any>} */
 export const GENERIC = {
   spider: { ...ENEMIES.spider, anims: animsFor(ENEMIES.spider.model), scamper: true },
-  stealer: kaykit(ENEMIES.stealer, { head: 'hyena', headNode: 'Rogue_Head_Hooded', headOpts: { mane: false }, plate: ENEMIES.stealer.plateWords, bag: true }),
-  pug: kaykit(ENEMIES.pug, { head: 'pug', headNode: 'Knight_Head', headOpts: { scale: (ENEMIES.pug.helmetScale ?? 1) * 1.15 } }),
+  stealer: kaykit(ENEMIES.stealer, { look: 'stealer', headNode: 'Rogue_Head_Hooded', bag: true }),
+  pug: kaykit(ENEMIES.pug, { look: 'pug', headNode: 'Knight_Head', head: { scale: (ENEMIES.pug.helmetScale ?? 1) * 1.15 }, plate: false }),
   warhound: { ...ENEMIES.warhound, radius: 0.4, height: 0.8, mass: 1.2, sight: 14, fov: 2.79, leash: 25, attacks: [{ id: 'bone_chop', weight: 1, range: 1.3 }], anims: animsFor(ENEMIES.warhound.model) },
   bat: { ...ENEMIES.bat, radius: 0.25, height: 0.4, mass: 0.2, walk: 3, run: ENEMIES.bat.speed, sight: 10, fov: 6.28, leash: 20, attacks: [{ id: 'spider_bite', weight: 1, range: 1.0 }], anims: animsFor(ENEMIES.bat.model), scamper: true },
   hornet: { ...ENEMIES.hornet, radius: 0.3, height: 0.6, mass: 0.4, walk: 2, run: 3, sight: 15, fov: 3.14, leash: 20, attacks: [{ id: 'bone_chop', weight: 1, range: 1.4 }], anims: animsFor(ENEMIES.hornet.model) },

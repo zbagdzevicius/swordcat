@@ -8,15 +8,20 @@
 //   shot(step) → Promise      run a §5.1 `cam` step; resolves after its `dur` (cut: at once)
 //   lockTarget                the locked enemy (Actor) or null; lock(target?) / unlock() / switchLock(dir)
 //   memeT, memePhase          Meme Cam loop time (0..3.8 s) / phase (0..1) for the cape sway + grass wind sync
-//   addFadeable(obj) / removeFadeable(obj)   tree fade registration (or tag userData.camFade = true)
+//                             (also while a cutscene holds a MEME_LOOP shot, e.g. the CS-00 title loop)
+//   addFadeable(obj) / removeFadeable(obj) / refreshFadeable(obj)   tree fade registration (or tag
+//                             userData.camFade = true / camFadeIds on a BatchedMesh; see Occluders.js)
 //   snapBehind(), recenter(), modeName, distance, showLockMarker
 // Emits E.MEME_CAM { on } entering / leaving 'meme'. Listens: E.SHAKE, E.CAM_MODE, E.BOSS_START / BOSS_DEFEATED,
-// E.ARENA_CLEAR, E.LEVEL_LOADING / LEVEL_LOADED / LEVEL_UNLOAD, E.PLAYER_SPAWNED, E.PLAYER_HOLY, E.PLAYER_GOLDEN,
-// E.PLAYER_PARRY, E.HIT (blocked), E.PLAYER_GRIT (broken), E.BOSS_DIZZY, E.CUTSCENE_END, E.GAME_MODE.
+// E.ARENA_CLEAR, E.LEVEL_LOADING / LEVEL_LOADED / LEVEL_UNLOAD, E.PLAYER_SPAWNED, E.PLAYER_HOLY (FOV punch),
+// E.PLAYER_GOLDEN (punch-in), E.BOSS_DIZZY (the §8.2 dizzy shake), E.CUTSCENE_END (handback), E.GAME_MODE.
+// Hit / parry / block / guard-break shakes arrive as E.SHAKE from combat (one source, no double shake).
 //
 // Follow camera (tech.md §8): orbit around a pivot at the player's head (CAMERA.pivotY) with a spring arm
-// (physics.raycast; pulls in fast, eases out slowly), never below the terrain; auto-follow after 1.5 s without
+// (physics.sphereCast; pulls in fast, eases out slowly), never below the terrain; auto-follow after 1.5 s without
 // look input; lock-on frames the midpoint over her right shoulder at 4.5 m; boss arenas ease to 6.0 m over 0.6 s.
+// The arm collides with terrain, architecture and solid static props (houses, walls, statues, big rocks); thin
+// statics (trunks, posts, fences: see camTransparent) and colliders tagged `cam: false` are skipped: they fade.
 // Everything runs in render() with the interpolated player position (no 120 Hz jitter); input edges in update().
 import * as THREE from 'three';
 import { E } from '../core/events.js';
@@ -38,15 +43,55 @@ export const DEFAULT_PITCH = 0.2;
 export const SHOULDER = 0.55;
 /** min/max spring-arm length (m) */
 const ARM_MIN = 0.8, ARM_MARGIN = 0.3, ARM_RADIUS = 0.2;
-/** what blocks the spring arm and the lock-on line of sight: terrain + architecture, not props (trees fade) */
-const ARM_OPTS = Object.freeze({ terrain: true, mesh: true, statics: false });
+/** what the spring arm and the lock-on line of sight test: terrain + architecture + static props (thin ones skipped) */
+const ARM_OPTS = Object.freeze({ terrain: true, mesh: true, statics: true });
+/** same, for a physics that supports `opts.ignore(src)` (and says so with `physics.castIgnore = true`) */
+const ARM_OPTS_IGNORE = Object.freeze({ terrain: true, mesh: true, statics: true, ignore: (src) => camTransparent(src) });
+/** static circles up to this radius (trunks, posts, pillars of a fence) never pull the camera in (m) */
+export const THIN_RADIUS = 0.6;
+/** segment colliders (fences, thin walls) up to this half-thickness are skipped too (m) */
+const THIN_SEGMENT = 0.2;
+const MAX_SKIPS = 6;
+/** tree fade only while the camera is this close to its subject (m): follow / lock / boss arms, close shots */
+export const FADE_MAX_DIST = 9;
+
+/**
+ * Should the camera ignore this static collider (it fades instead / is too thin to matter)?
+ * Collider descriptions (physics/StaticColliders) may carry `cam: false` (always skip) / `cam: true` (always block);
+ * `camFade: true` also skips. Otherwise thin circles and segments are skipped; boxes and big circles block.
+ * @param {any} src the collider description (physics hit.object for kind 'static')
+ */
+export function camTransparent(src) {
+  if (!src || typeof src !== 'object') return false;
+  if (src.cam === false || src.camFade === true) return true;
+  if (src.cam === true) return false;
+  if (src.ax !== undefined || Array.isArray(src.a)) return (src.r ?? 0.1) <= THIN_SEGMENT;                // segment
+  const isBox = src.minX !== undefined || src.hx !== undefined || src.w !== undefined || src.d !== undefined;
+  if (!isBox && typeof src.r === 'number') return src.r <= THIN_RADIUS && !(src.kind === 'ring' || src.ring || src.inside);
+  return false;
+}
+
+/**
+ * Distance along the cast (from `o`, unit `d`) at which a sphere of `radius` has fully left the skipped static
+ * `src`: exact for circles (2D exit of the swept vertical cylinder r + radius), a short step otherwise.
+ */
+function exitDistance(src, o, d, radius, hitDist) {
+  if (src && typeof src.r === 'number' && Number.isFinite(src.x) && Number.isFinite(src.z) && src.ax === undefined && !Array.isArray(src.a)) {
+    const R = src.r + radius, ox = o.x - src.x, oz = o.z - src.z, a = d.x * d.x + d.z * d.z;
+    if (a > 1e-6) {
+      const b = 2 * (ox * d.x + oz * d.z), c = ox * ox + oz * oz - R * R, disc = b * b - 4 * a * c;
+      if (disc >= 0) { const t = (-b + Math.sqrt(disc)) / (2 * a); if (t > hitDist) return t + 0.02; }
+    }
+  }
+  return hitDist + 2 * radius + 0.25;
+}
 
 const GAMEPLAY = new Set(['follow', 'lock', 'boss']);
 const ZERO_LOOK = Object.freeze({ x: 0, y: 0, px: 0, py: 0 });
 
 const _dir = new THREE.Vector3(), _piv = new THREE.Vector3(), _right = new THREE.Vector3(), _tmp = new THREE.Vector3();
 const _org = new THREE.Vector3(), _lookPt = new THREE.Vector3(), _tgt = new THREE.Vector3(), _ray = new THREE.Ray();
-const _blendPivot = new THREE.Vector3();
+const _blendPivot = new THREE.Vector3(), _castOrg = new THREE.Vector3(), _sideOrg = new THREE.Vector3(), _losDir = new THREE.Vector3();
 const _subjects = [new THREE.Vector3(), new THREE.Vector3()];
 
 export class FollowCamera {
@@ -120,10 +165,8 @@ export class FollowCamera {
       bus.on(E.BOSS_DEFEATED, () => this._setBoss(false)),
       bus.on(E.ARENA_CLEAR, () => { if (!this.ctx.enemies?.boss?.alive) this._setBoss(false); }),
       bus.on(E.PLAYER_HOLY, () => { this._fovPunchT = 0.15; }),
-      bus.on(E.PLAYER_GOLDEN, (p) => { if (p?.on) this._goldenT = PLAYER.golden.activate; }),
-      bus.on(E.PLAYER_PARRY, () => this.shake(JUICE.parry.shake)),
-      bus.on(E.HIT, (h) => { if (h?.blocked && h.target === this.ctx.player) this.shake(JUICE.block.shake); }),
-      bus.on(E.PLAYER_GRIT, (p) => { if (p?.broken) this.shake(JUICE.guardBreak.shake); }),
+      // Golden Hour activation punch-in, unless the player already framed it with a preset shot (§7.5 HERO_LOW)
+      bus.on(E.PLAYER_GOLDEN, (p) => { if (p?.on && GAMEPLAY.has(this.modeName)) this._goldenT = PLAYER.golden.activate; }),
       bus.on(E.BOSS_DIZZY, (p) => { if (p?.dizzy && !this._dizzyShaken) { this._dizzyShaken = true; this.shake(JUICE.dizzy.shake); } else if (!p?.dizzy) this._dizzyShaken = false; }),
       bus.on(E.CUTSCENE_END, () => { if (this.modeName === 'preset' || this.modeName === 'cutscene') this.mode('follow', { blend: CAMERA.ease }); }),
       bus.on(E.GAME_MODE, (p) => { if (p?.mode === 'cutscene' || p?.mode === 'dialog') this.unlock(); }),
@@ -287,10 +330,22 @@ export class FollowCamera {
   /** Register / unregister a fadeable prop (static; see Occluders.js). */
   addFadeable(obj) { return this._fader.add(obj, this.ctx.scene); }
   removeFadeable(obj) { this._fader.remove(obj); }
+  /** Re-register a fadeable whose instances / matrices changed (e.g. a BatchedMesh that grew). */
+  refreshFadeable(obj) { return this._fader.refresh(obj, this.ctx.scene); }
 
-  get memeT() { return this._meme.active ? this._meme.t : 0; }
-  get memePhase() { return this._meme.active ? this._meme.phase : 0; }
+  /**
+   * Loop time (0..memePeriod s) of the running Meme Cam, or of a cutscene shot holding the MEME_LOOP sway
+   * (CS-00 title, CS-02 shot 7); 0 otherwise. The cape sway shader and the grass wind use it (same 3.8 s period).
+   */
+  get memeT() {
+    if (this._meme.active) return this._meme.t;
+    if (this.modeName === 'preset' && this._cut.looping) return this._cut.loopT;
+    return 0;
+  }
+  get memePhase() { return this.memeT / this._meme.period; }
   get memePeriod() { return this._meme.period; }
+  /** true while the Meme Cam or a MEME_LOOP-style looping shot is on screen */
+  get memeLooping() { return this._meme.active || (this.modeName === 'preset' && this._cut.looping); }
   /** true while a cutscene shot is running or held */
   get inShot() { return this.modeName === 'preset'; }
   /** the running shot's normalized step (read-only) or null */
@@ -360,21 +415,17 @@ export class FollowCamera {
     }
     const d = Math.hypot(t.pos.x - p.pos.x, t.pos.z - p.pos.z);
     if (d > LOCK.breakRange) { this.unlock(); return; }
-    // line of sight: pivot → target chest (terrain + architecture; a thin trunk doesn't break the lock)
-    const ph = this.ctx.physics;
-    if (ph?.lineOfSight || ph?.raycast) {
+    // line of sight: pivot → target chest (terrain, architecture, solid props; a thin trunk doesn't break the lock)
+    if (this.ctx.physics?.raycast) {
       _org.copy(p.pos); _org.y += CAMERA.pivotY;
       _tgt.copy(t.pos); _tgt.y += (t.height ?? 1) * 0.6;
+      _losDir.subVectors(_tgt, _org);
+      const len = _losDir.length();
       let blocked = false;
-      if (typeof ph.lineOfSight === 'function') blocked = !ph.lineOfSight(_org, _tgt, ARM_OPTS);
-      else {
-        _dir.subVectors(_tgt, _org);
-        const len = _dir.length();
-        if (len > 0.5) {
-          _ray.set(_org, _dir.multiplyScalar(1 / len));
-          const hit = ph.raycast(_ray, len);
-          blocked = !!hit && hit.distance < len - 0.3;
-        }
+      if (len > 0.5) {
+        _losDir.multiplyScalar(1 / len);
+        const d = this._cast(_org, _losDir, len, 0);
+        blocked = d >= 0 && d < len - 0.3;
       }
       this._losT = blocked ? this._losT + dt : 0;
       if (this._losT > LOCK.losTimeout) this.unlock();
@@ -382,24 +433,56 @@ export class FollowCamera {
   }
 
   /**
-   * Spring-arm length along `dir` from `origin`: physics.sphereCast (r 0.2) against terrain + architecture
-   * (props / trees don't pull the camera in; they fade). Fallback: 3 rays (centre + both sides).
+   * Cast from `origin` along unit `dir` (a sphere of `radius`, or a ray for 0) against terrain + architecture +
+   * static props, skipping camera-transparent statics (camTransparent). Returns the hit distance or −1.
+   * @param {THREE.Vector3} origin @param {THREE.Vector3} dir @param {number} maxDist @param {number} radius
+   */
+  _cast(origin, dir, maxDist, radius) {
+    const ph = this.ctx.physics;
+    if (!ph?.raycast) return -1;
+    const sphere = radius > 0 && typeof ph.sphereCast === 'function';
+    // physics that honours opts.ignore(src) (requests/camera.md) does it in one exact cast
+    const opts = ph.castIgnore === true ? ARM_OPTS_IGNORE : ARM_OPTS;
+    _castOrg.copy(origin);
+    let travelled = 0, thinAt = -1;
+    for (let i = 0; i <= MAX_SKIPS; i++) {
+      const rem = maxDist - travelled;
+      if (rem <= 1e-4) return -1;
+      _ray.set(_castOrg, dir);
+      const hit = sphere ? ph.sphereCast(_ray, radius, rem, opts) : ph.raycast(_ray, rem, opts);
+      if (!hit) return -1;
+      if (hit.kind !== 'static' || !camTransparent(hit.object)) {
+        // restarted inside a solid right behind a thin prop: its surface is somewhere in the skipped stretch;
+        // stop at the thin prop (conservative: never inside the wall)
+        if (thinAt >= 0 && hit.distance < 1e-3) return thinAt;
+        return travelled + hit.distance;
+      }
+      thinAt = travelled + hit.distance;
+      const skip = exitDistance(hit.object, _castOrg, dir, radius, hit.distance);
+      travelled += skip;
+      _castOrg.addScaledVector(dir, skip);
+    }
+    return -1;
+  }
+
+  /**
+   * Spring-arm length along `dir` from `origin`: a sphere cast (r 0.2) against terrain, architecture and solid
+   * static props (thin props / trees don't pull the camera in; they fade). Without physics.sphereCast: 3 rays
+   * (centre + both sides).
    */
   _armLength(origin, dir, want, right) {
     const ph = this.ctx.physics;
     if (!ph?.raycast) return want;
-    _ray.set(origin, dir);
     if (typeof ph.sphereCast === 'function') {
-      const hit = ph.sphereCast(_ray, ARM_RADIUS, want + ARM_RADIUS, ARM_OPTS);
-      return hit ? clamp(hit.distance - 0.05, ARM_MIN, want) : want;
+      const d = this._cast(origin, dir, want + ARM_RADIUS, ARM_RADIUS);
+      return d >= 0 ? clamp(d - 0.05, ARM_MIN, want) : want;
     }
     let allowed = want;
     for (let i = 0; i < 3; i++) {
       const side = i === 0 ? 0 : i === 1 ? ARM_RADIUS : -ARM_RADIUS;
-      _org.copy(origin).addScaledVector(right, side);
-      _ray.set(_org, dir);
-      const hit = ph.raycast(_ray, want + ARM_MARGIN);
-      if (hit) allowed = Math.min(allowed, Math.max(ARM_MIN, hit.distance - ARM_MARGIN));
+      _sideOrg.copy(origin).addScaledVector(right, side);
+      const d = this._cast(_sideOrg, dir, want + ARM_MARGIN, 0);
+      if (d >= 0) allowed = Math.min(allowed, Math.max(ARM_MIN, d - ARM_MARGIN));
     }
     return allowed;
   }
@@ -446,7 +529,6 @@ export class FollowCamera {
     this.distance = lerp(D.from, D.to, easeInOutSine(CAMERA.ease > 0 ? D.t / CAMERA.ease : 1));
     const charging = p.stateName === 'charge' || (p.charge ?? 0) > 0;
     this._chargeW = damp(this._chargeW, charging ? 1 : 0, 5, dt);
-    if (this._goldenT > 0) this._goldenT = Math.max(0, this._goldenT - dt);
     const g = this._goldenEnvelope();
     let want = this.distance - (CAMERA.dist - PLAYER.charge.camDist) * this._chargeW;
     want = lerp(want, 2.0, g);
@@ -532,6 +614,7 @@ export class FollowCamera {
       default: pose = this._gameplay(dt, paused ? ZERO_LOOK : look); this._flicks(dt, look);
     }
     if (this.modeName !== 'preset') this._landShaken = false;
+    if (this._goldenT > 0) this._goldenT = Math.max(0, this._goldenT - dt);       // real time, in every mode
 
     const b = this._blend, out = this._outPose;
     if (b.active) {
@@ -553,13 +636,15 @@ export class FollowCamera {
 
     this.shaker.apply(cam, dt, ctx.state?.settings?.shake ?? 1);    // camera-space rotations after lookAt
 
-    // tree fade: anything between the camera and the subject (her, or the shot's subject)
+    // tree fade: anything between the camera and the subject (her, or the shot's subject); establishing / long-lens
+    // shots (camera far from the subject) keep their foreground trees solid
     const subj = this.modeName === 'preset' ? this._cut.subject : ctx.player ? (ctx.player.object3d?.position ?? ctx.player.pos) : null;
     if (subj) {
       const h = this.modeName === 'preset' ? (this._cut.frame.height ?? 1) : (ctx.player?.height ?? 1);
       _subjects[0].copy(subj); _subjects[0].y += h * 0.5;
       _subjects[1].copy(subj); _subjects[1].y += h * 1.05;
-      this._fader.update(dt, cam.position, _subjects, 2);
+      const near = cam.position.distanceToSquared(_subjects[0]) <= FADE_MAX_DIST * FADE_MAX_DIST;
+      this._fader.update(dt, cam.position, _subjects, near ? 2 : 0);
     }
     this._marker.update(GAMEPLAY.has(this.modeName) ? this.lockTarget : null, cam, dt, this.showLockMarker);
   }

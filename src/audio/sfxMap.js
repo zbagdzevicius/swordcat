@@ -8,7 +8,7 @@
 //                                        'creature/c80_scream_01/02'  (a random existing variant is picked)
 //   - a full path                        'audio/sfx/pickup/bubble2.ogg'
 import { E } from '../core/events.js';
-import { ATTACKS } from '../core/config.js';
+import { ATTACKS, ECONOMY } from '../core/config.js';
 
 /** 'sword/swish_', 1, 13 → ['sword/swish_01', …, 'sword/swish_13'] (pad = digits; 0 = no padding). */
 export function seq(prefix, from, to, pad = 2) {
@@ -20,7 +20,7 @@ export function seq(prefix, from, to, pad = 2) {
 /**
  * @typedef {object} SfxDef
  * @property {string[]} files   ids under audio/sfx/ (no extension); one is picked at random per play
- * @property {number} [vol]     0..1 (default 1)
+ * @property {number} [vol]     gain (default 1; > 1 lifts quiet source files — levels in tests/unit/audio.test.js notes)
  * @property {number} [rate]    playback rate (default 1)
  * @property {number} [rateVar] ± random fraction (default 0.03)
  * @property {'player'|'world'|'ui'} [bus]  default: 'player' for 2D, 'world' for 3D
@@ -41,15 +41,15 @@ export const SFX = {
   guardBreak:      { files: ['impact/metal_small1'], vol: 0.85, also: ['guardBreakPlate'] },
   guardBreakPlate: { files: ['impact/impactPlate_heavy_000'], vol: 0.9 },
   guardOn:         { files: ['impact/chainmail1'], vol: 0.22, minGap: 0.25 },
-  chargeT1:        { files: ['pickup/powerup_rise01'], vol: 0.5, rateVar: 0 },
-  chargeT2:        { files: ['pickup/powerup_rise03'], vol: 0.6, rateVar: 0 },
+  chargeT1:        { files: ['pickup/powerup_rise01'], vol: 1, rateVar: 0 },
+  chargeT2:        { files: ['pickup/powerup_rise03'], vol: 0.9, rateVar: 0 },
   chargeFizzle:    { files: ['ui/glitch_001'], vol: 0.3 },
-  holySlash:       { files: ['magic/spell_fire_03'], vol: 0.9, also: ['holyImpact'] },
+  holySlash:       { files: ['magic/spell_fire_03'], vol: 3.5, also: ['holyImpact'] },
   holyImpact:      { files: seq('impact/impactMetal_heavy_', 0, 4, 3), vol: 0.7 },
   holyWave:        { files: ['magic/magic1'], vol: 0.7 },
   goldenOn:        { files: ['pickup/powerup_upper01'], vol: 0.8, rateVar: 0, also: ['goldenJingle'] },
   goldenJingle:    { files: seq('jingles/jingles_STEEL', 0, 4), vol: 0.55, rateVar: 0 },
-  sunburst:        { files: ['magic/spell_fire_07'], vol: 0.95, also: ['sunburstImpact'] },
+  sunburst:        { files: ['magic/spell_fire_07'], vol: 2.5, also: ['sunburstImpact'] },
   sunburstImpact:  { files: seq('impact/impactPlate_heavy_', 0, 4, 3), vol: 0.8 },
   dodge:           { files: ['impact/cloth_heavy'], vol: 0.55, also: ['dodgeMail'] },
   dodgeMail:       { files: ['impact/chainmail2'], vol: 0.35 },
@@ -66,11 +66,12 @@ export const SFX = {
   vigilMagic:      { files: ['magic/magic1'], vol: 0.55 },
   stillStanding:   { files: ['magic/spell_02'], vol: 0.85, rateVar: 0 },
   // footsteps (2D for her, 3D for everyone else)
-  footGrass:       { files: seq('footsteps/footstep_grass_', 0, 4, 3), vol: 0.3, rateVar: 0.06, minGap: 0.06 },
+  footGrass:       { files: seq('footsteps/footstep_grass_', 0, 4, 3), vol: 0.75, rateVar: 0.06, minGap: 0.06 },
   footStone:       { files: ['footsteps/stone_l1', 'footsteps/stone_l2', 'footsteps/stone_l3', 'footsteps/stone_r1', 'footsteps/stone_r2', 'footsteps/stone_r3'], vol: 0.3, rateVar: 0.06, minGap: 0.06 },
   footWood:        { files: seq('footsteps/footstep_wood_', 0, 4, 3), vol: 0.3, rateVar: 0.06, minGap: 0.06 },
-  footMud:         { files: ['footsteps/sand_l1', 'footsteps/sand_l2', 'footsteps/sand_l3', 'footsteps/sand_r1', 'footsteps/sand_r2', 'footsteps/sand_r3'], vol: 0.3, rateVar: 0.06, minGap: 0.06 },
+  footMud:         { files: ['footsteps/sand_l1', 'footsteps/sand_l2', 'footsteps/sand_l3', 'footsteps/sand_r1', 'footsteps/sand_r2', 'footsteps/sand_r3'], vol: 0.5, rateVar: 0.06, minGap: 0.06 },
   footSnow:        { files: seq('footsteps/footstep_snow_', 0, 4, 3), vol: 0.3, rateVar: 0.06, minGap: 0.06 },
+  footWater:       { files: seq('creature/splash_', 1, 5), vol: 0.35, rate: 1.5, rateVar: 0.08, minGap: 0.06 },
   armorStep:       { files: ['impact/armor_light'], vol: 0.25, rateVar: 0.08, minGap: 0.1 },
 
   // ---------------------------------------------------------------- hits (3D at the hit point)
@@ -84,8 +85,13 @@ export const SFX = {
   hitSlime:        { files: seq('creature/slime_', 1, 16), vol: 0.7 },
   hitHeavySword:   { files: ['sword/melee_sword'], vol: 0.8 },
   hitHeavyPunch:   { files: seq('impact/impactPunch_heavy_', 0, 4, 3), vol: 0.55 },
+  hitStraw:        { files: seq('impact/impactSoft_medium_', 0, 4, 3), vol: 0.45, rate: 1.1, rateVar: 0.06, also: ['hitStrawRustle'] },
+  hitStrawRustle:  { files: ['impact/cloth'], vol: 0.35, rate: 1.3 },
+  hitStone:        { files: seq('impact/impactGeneric_light_', 0, 4, 3), vol: 0.8, rate: 0.8 },
+  hitMetal:        { files: seq('impact/impactMetal_light_', 0, 4, 3), vol: 0.75 },
+  hitRope:         { files: ['impact/cloth_heavy'], vol: 0.6, rate: 1.2 },
   killPoof:        { files: ['creature/creature_die_01'], vol: 0.7, also: ['killSparkle'] },
-  killSparkle:     { files: ['pickup/powerup_fx01'], vol: 0.4, rate: 1.3, rateVar: 0.02 },
+  killSparkle:     { files: ['pickup/powerup_fx01'], vol: 1, rate: 1.3, rateVar: 0.02 },
   reflect:         { files: seq('sword/sword_clash_', 1, 10), vol: 0.8, also: ['reflectMagic'] },
   reflectMagic:    { files: ['magic/spell_01'], vol: 0.5, rate: 1.4 },
   companionHurt:   { files: seq('cat/cute_creature_', 1, 10), vol: 0.6, rate: 1.25 },
@@ -95,15 +101,15 @@ export const SFX = {
   tgGold:          { files: ['ui/pluck_001'], vol: 0.65, rateVar: 0 },
   tgRed:           { files: seq('creature/c80_grunt_', 1, 5), vol: 0.75, rate: 0.7 },
   tgAoe:           { files: ['magic/spell_01'], vol: 0.6, rate: 0.8 },
-  tgAim:           { files: ['world/metalClick'], vol: 0.6 },
+  tgAim:           { files: ['world/metalClick'], vol: 1 },
   tgGrab:          { files: ['creature/c80_eat_01'], vol: 0.7 },
   tgShadow:        { files: ['impact/cloth'], vol: 0.6, rate: 0.85 },
   bossDizzy:       { files: ['jingles/jingles_NES03'], vol: 0.6, rateVar: 0 },
 
   // ---------------------------------------------------------------- creatures
-  ratAttack:       { files: ['creature/rat_squeak_attack'], vol: 0.65, rateVar: 0.08, minGap: 0.15 },
-  ratPain:         { files: ['creature/rat_squeak_pain'], vol: 0.6, rateVar: 0.08, minGap: 0.15 },
-  ratDeath:        { files: ['creature/rat_squeak_death'], vol: 0.7, rateVar: 0.06 },
+  ratAttack:       { files: ['creature/rat_squeak_attack'], vol: 0.35, rateVar: 0.08, minGap: 0.15 },
+  ratPain:         { files: ['creature/rat_squeak_pain'], vol: 0.4, rateVar: 0.08, minGap: 0.15 },
+  ratDeath:        { files: ['creature/rat_squeak_death'], vol: 0.45, rateVar: 0.06 },
   crowCaw:         { files: ['creature/c80_scream_01', 'creature/c80_scream_02'], vol: 0.55, rate: 1.4, rateVar: 0.06, zzfx: 'crowCaw', minGap: 0.3 },
   crowWings:       { files: ['impact/cloth'], vol: 0.5, rate: 1.2 },
   spider:          { files: seq('creature/c80_bug_', 1, 4), vol: 0.6, rate: 1.3, minGap: 0.15 },
@@ -118,9 +124,9 @@ export const SFX = {
   boneCollapse:    { files: seq('impact/impactWood_medium_', 0, 4, 3), vol: 0.8 },
   puddingRoar:     { files: [...seq('creature/creature_roar_', 1, 3), ...seq('creature/c80_roar_', 1, 3)], vol: 0.9, rate: 0.75, rateVar: 0.04 },
   puddingNervous:  { files: ['creature/c80_ooh'], vol: 0.7, rate: 0.8 },
-  puddingSnore:    { files: ['creature/c80_snore'], vol: 0.6, rate: 0.6, rateVar: 0 },
-  puddingPurr:     { files: ['cat/cat_purractive_loop'], vol: 0.7, rate: 0.6, rateVar: 0 },
-  grizzleRoar:     { files: ['creature/rat_squeak_attack', 'creature/rat_squeak_pain'], vol: 0.9, rate: 0.8, also: ['grizzleMonster'] },
+  puddingSnore:    { files: ['creature/c80_snore'], vol: 1, rate: 0.6, rateVar: 0 },
+  puddingPurr:     { files: ['cat/cat_purractive_loop'], vol: 0.45, rate: 0.6, rateVar: 0 },
+  grizzleRoar:     { files: ['creature/rat_squeak_attack', 'creature/rat_squeak_pain'], vol: 0.5, rate: 0.8, also: ['grizzleMonster'] },
   grizzleMonster:  { files: seq('creature/rpg_mnstr', 1, 15, 0), vol: 0.7 },
   brutus:          { files: seq('creature/rpg_giant', 1, 5, 0), vol: 0.85, minGap: 0.3 },
   barkusBark:      { files: ['creature/c80_barking_01', 'creature/c80_barking_02'], vol: 0.95, rate: 0.7, also: ['barkusGiant'], minGap: 0.3 },
@@ -137,7 +143,7 @@ export const SFX = {
   fish:            { files: seq('pickup/coins_', 1, 4), vol: 0.55, minGap: 0.05 },
   goldFish:        { files: ['pickup/coin2'], vol: 0.7 },
   smallHeart:      { files: ['pickup/gem_01'], vol: 0.6 },
-  heartBell:       { files: ['pickup/powerup_rise05'], vol: 0.8, rateVar: 0, also: ['heartBellJingle'] },
+  heartBell:       { files: ['pickup/powerup_rise05'], vol: 2, rateVar: 0, also: ['heartBellJingle'] },
   heartBellJingle: { files: ['jingles/jingles_NES02'], vol: 0.6, rateVar: 0 },
   letter:          { files: ['ui/bookFlip1'], vol: 0.7, also: ['letterJingle'] },
   letterJingle:    { files: ['jingles/jingles_NES00'], vol: 0.6, rateVar: 0 },
@@ -157,15 +163,15 @@ export const SFX = {
   splash:          { files: seq('creature/splash_', 1, 5), vol: 0.6 },
   shieldWall:      { files: seq('impact/impactMetal_heavy_', 0, 4, 3), vol: 0.7 },
   bellLayer:       { files: ['impact/metal_ringing'], vol: 0.3, rate: 0.5, rateVar: 0 },
-  bellClunk:       { files: ['impact/impactMetal_heavy_000'], vol: 0.5, rate: 0.6, rateVar: 0 },
+  bellClunkLayer:  { files: ['impact/impactMetal_heavy_000'], vol: 0.5, rate: 0.6, rateVar: 0 },
   heartThump:      { files: [], zzfx: 'heartThump', vol: 0.9, rateVar: 0 },
 
   // ---------------------------------------------------------------- UI (2D, ui bus) — ui calls these by name
   'ui.click':      { files: seq('ui/click_', 1, 5, 3), vol: 0.5, bus: 'ui', rateVar: 0.02 },
   'ui.select':     { files: seq('ui/select_', 1, 8, 3), vol: 0.45, bus: 'ui', rateVar: 0.02 },
-  'ui.confirm':    { files: ['ui/confirmation_001'], vol: 0.55, bus: 'ui', rateVar: 0 },
+  'ui.confirm':    { files: ['ui/confirmation_001'], vol: 0.3, bus: 'ui', rateVar: 0 },
   'ui.back':       { files: ['ui/back_001'], vol: 0.5, bus: 'ui', rateVar: 0 },
-  'ui.bookOpen':   { files: ['ui/bookOpen'], vol: 0.6, bus: 'ui' },
+  'ui.bookOpen':   { files: ['ui/bookOpen'], vol: 1, bus: 'ui' },
   'ui.bookClose':  { files: ['ui/bookClose'], vol: 0.6, bus: 'ui' },
   'ui.page':       { files: ['ui/bookFlip1'], vol: 0.55, bus: 'ui' },
   'ui.dialogOpen': { files: ['ui/scroll_001'], vol: 0.45, bus: 'ui' },
@@ -196,6 +202,10 @@ export const MATERIAL_HIT = {
   bone:   { light: ['hitBone'], heavy: ['hitBoneHeavy', 'hitHeavyPunch'] },
   slime:  { light: ['hitSlime'], heavy: ['hitSlime', 'hitHeavyPunch'] },
   wood:   { light: ['hitWood'], heavy: ['hitWoodHeavy'] },
+  straw:  { light: ['hitStraw'], heavy: ['hitStraw', 'hitHeavyPunch'] },
+  stone:  { light: ['hitStone'], heavy: ['hitStone', 'hitHeavyPunch'] },
+  metal:  { light: ['hitMetal'], heavy: ['hitMetal', 'hitPlateMedium'] },
+  rope:   { light: ['hitRope'], heavy: ['hitRope', 'hitWood'] },
 };
 
 /**
@@ -213,8 +223,18 @@ export const ENEMY_VOICE = {
   pug:              { material: 'armour', alert: 'pugBark', telegraph: 'pugSnort', pain: 'pugBark', death: 'pugBark' },
   warhound:         { material: 'fur', alert: 'pugBark', pain: 'pugBark', death: 'pugBark' },
   bonehead:         { material: 'bone', alert: 'boneClack', pain: 'boneClack', death: 'boneCollapse' },
-  dummy:            { material: 'wood' },
-  sack:             { material: 'wood' },
+  // world PropActors (kind) — §5.4 tutorial set, breakables, cages
+  dummy:            { material: 'straw' },
+  sack:             { material: 'straw' },
+  wobble_knight:    { material: 'armour' },
+  crate:            { material: 'wood' },
+  barrel:           { material: 'wood' },
+  boulder:          { material: 'stone' },
+  cage:             { material: 'metal' },
+  lock:             { material: 'metal' },
+  rope:             { material: 'rope' },
+  post:             { material: 'wood' },
+  cow:              { material: 'fur', alert: 'cow' },
   pudding:          { material: 'fur', alert: 'puddingRoar', pain: 'puddingNervous' },
   cacklejaw:        { material: 'fur', alert: 'laugh', laughRate: 0.85, pain: 'hyenaHurt', death: 'laugh', phase: 'laugh' },
   boss_grizzlechop: { material: 'fur', alert: 'grizzleRoar', telegraph: 'ratAttack', pain: 'ratPain', death: 'grizzleRoar', phase: 'grizzleRoar' },
@@ -239,7 +259,7 @@ export function enemyVoiceFor(typeId) {
 /** Type id of any actor-ish target (Enemy.def.id, NPC/kitten ids, tags). */
 export function actorTypeId(a) {
   if (!a) return null;
-  return a.def?.id ?? a.type ?? a.npcId ?? a.actorId ?? (a.tags?.has?.('dummy') ? 'dummy' : null);
+  return a.def?.id ?? a.type ?? a.npcId ?? a.actorId ?? a.kind ?? (a.tags?.has?.('dummy') ? 'dummy' : null);
 }
 
 /** §8.1 telegraph sounds. `lead` = seconds before the strike (duration − lead after the start); else at the start. */
@@ -255,7 +275,7 @@ export const TELEGRAPH_SFX = {
 };
 
 /** Footstep defs by surface; level default surfaces (until physics/world report one). */
-export const FOOTSTEP = { grass: 'footGrass', stone: 'footStone', wood: 'footWood', mud: 'footMud', sand: 'footMud', snow: 'footSnow' };
+export const FOOTSTEP = { grass: 'footGrass', stone: 'footStone', wood: 'footWood', mud: 'footMud', sand: 'footMud', snow: 'footSnow', water: 'footWater' };
 export const LEVEL_SURFACE = { meadow: 'grass', forest: 'grass', town: 'stone', gate: 'stone', bog: 'mud', keep: 'stone' };
 /** Fallback cadence for her footsteps when nobody emits actor:footstep: interval = clamp(k / (speed + c), min, max). */
 export const STEP_CADENCE = { k: 0.9, c: 0.8, min: 0.17, max: 0.45, minSpeed: 0.6, armorEvery: 2 };
@@ -304,23 +324,26 @@ export function bindSfx(am) {
 
   // ---- player ----
   on(E.PLAYER_SWING, ({ attackId }) => {
-    am._fizzleT = 0;
+    am.endCharge(0.15);                                            // a release swing ends the rising charge tone
     if (attackId === 'holy' || attackId === 'holyWave' || attackId === 'gleam') return;   // PLAYER_HOLY / projectile sounds
     if (attackId === 'sunburst') { am.play2D('sunburst'); return; }
     am.play2D(ATTACKS[attackId]?.heavy ? 'swishHeavy' : 'swishLight');
   });
   on(E.PLAYER_HOLY, (p) => {
-    am._fizzleT = 0;
+    am.endCharge(0.1);
     am.play2D('holySlash');
     const minShards = ATTACKS.holy?.projectileMinShards ?? 2;
-    if (p.wave || (ctx.state?.shards ?? 0) >= minShards) am.play2D('holyWave', { delay: 0.12 });
+    if (p.wave || p.golden || (ctx.player?.shards ?? ctx.state?.shards ?? 0) >= minShards) am.play2D('holyWave', { delay: 0.12 });
   });
-  on(E.PLAYER_CHARGE, ({ level = 0 }) => {
+  // charge (§7.2): 0 on entering / cancelling the charge, 0.5 at tier 1, 1 at tier 2 (Holy); `fizzle` = tier 2 reached
+  // without the Valor or a Shard for Holy
+  on(E.PLAYER_CHARGE, ({ level = 0, fizzle = false }) => {
     const prev = am._chargeLevel ?? 0;
     am._chargeLevel = level;
-    if (level >= 1 && prev < 1) am.play2D('chargeT2');
-    else if (level > 0 && level < 1 && prev <= 0) am.play2D('chargeT1');
-    else if (level <= 0 && prev > 0) am._fizzleT = 0.1;          // fizzle unless a release swing follows (update())
+    if (fizzle) { am.play2D('chargeFizzle'); return; }
+    if (level >= 1 && prev < 1) am.chargeTone('chargeT2');
+    else if (level > 0 && level < 1 && prev <= 0) am.chargeTone('chargeT1');
+    else if (level <= 0 && prev > 0) am.endCharge(0.12);           // cancelled (guard, dodge, hurt, fell)
   });
   on(E.PLAYER_GOLDEN, ({ on: isOn }) => { if (isOn) am.play2D('goldenOn'); am.shimmer(!!isOn); });
   on(E.PLAYER_DODGE, () => am.play2D('dodge'));
@@ -343,12 +366,15 @@ export function bindSfx(am) {
   on(E.HIT, (h) => {
     const tgt = h.target, pos = h.position ?? posOf(tgt);
     if (!pos) return;
-    if (h.blocked) { (isPlayer(tgt) ? am.play2D('block') : am.play3D('block', pos)); return; }
+    if (h.blocked) {                                               // her parries sound via player:parry
+      if (isPlayer(tgt)) am.play2D('block'); else am.play3D(h.parried ? 'parry' : 'block', pos);
+      return;
+    }
     if (isPlayer(tgt)) return;                                     // PLAYER_DAMAGED plays her hurt layer
     if (tgt?.faction === 'player') { am.play3D('companionHurt', pos); return; }
     const v = enemyVoiceFor(actorTypeId(tgt));
     const mat = MATERIAL_HIT[tgt?.material] ? tgt.material : (v?.material ?? 'fur');
-    const heavy = !!ATTACKS[h.attackId]?.heavy || h.crit;
+    const heavy = !!(h.heavy ?? ATTACKS[h.attackId]?.heavy) || !!h.crit;     // crits land with the heavy layer
     for (const n of MATERIAL_HIT[mat][heavy ? 'heavy' : 'light']) am.play3D(n, pos);
     if (!h.killed && v?.pain && v.pain !== 'laugh') voice(tgt, v.pain, pos);
   });
@@ -380,9 +406,9 @@ export function bindSfx(am) {
   on(E.BOSS_DIZZY, ({ dizzy }) => { if (dizzy) am.play2D('bossDizzy'); });
 
   // ---- pickups / kittens / companions / world ----
-  on(E.ITEM_PICKUP, ({ item, id, amount }) => {
+  on(E.ITEM_PICKUP, ({ item, id, amount, gold }) => {
     let name = PICKUP_SFX[item];
-    if (item === 'fish' && (id === 'gold' || id === 'goldFish' || amount >= 10)) name = 'goldFish';
+    if (item === 'fish' && (gold || id === 'gold' || id === 'goldFish' || amount >= (ECONOMY?.fish?.gold ?? 10))) name = 'goldFish';
     if (name) am.play2D(name);
   });
   on(E.KITTEN_REVEAL, ({ position }) => am.play3D('kittenMew', position ?? null));

@@ -6,6 +6,8 @@ import { GeoBuilder, mat, rgb, mixRgb, smoothstep, Spring } from './util.js';
 import { own } from './materials.js';
 
 const _mats = new Map();
+/** Fraction of the bow's albedo added as emission. */
+export const BOW_SELF_LIGHT = 0.22;
 /** Satin material (shared per colour set). Vertex colours carry base/shade/knot. */
 export function bowMaterial(sheenColor = PAL.bowLight) {
   if (_mats.has(sheenColor)) return _mats.get(sheenColor);
@@ -13,6 +15,11 @@ export function bowMaterial(sheenColor = PAL.bowLight) {
     vertexColors: true, roughness: 0.38, sheen: 1, sheenColor: new THREE.Color(sheenColor), sheenRoughness: 0.3,
     clearcoat: 0.25, clearcoatRoughness: 0.4, side: THREE.DoubleSide,
   }));
+  // the bow is recognition cue #1 (art.md §0): a touch of self-light keeps it pastel pink in shade, fog and night
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * ${BOW_SELF_LIGHT.toFixed(3)};`);
+  };
+  m.customProgramCacheKey = () => 'sc-bow-v2';
   _mats.set(sheenColor, m);
   return m;
 }

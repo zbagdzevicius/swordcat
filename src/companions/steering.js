@@ -17,7 +17,24 @@ export const JOIN_FLAGS = Object.freeze({ 'meadow.mochi': 'mochi', 'forest.sage'
 export const FOLLOW_SIDE = Object.freeze({ mochi: 1, sage: -1, clover: 1 });
 
 /** Follow-slot geometry (metres): the slot sits COMPANIONS.follow (2.5 m) from her, behind and to the side. */
-export const SLOT = Object.freeze({ angle: 0.6, regroupDist: 1.1, regroupAngle: 1.35, deadZone: 0.35, idleBand: [1.1, 3.4] });
+export const SLOT = Object.freeze({
+  angle: 0.6,                    // the moving slot: 0.6 rad off straight behind (≈ 2.06 m back, 1.41 m aside)
+  regroupDist: 1.35, regroupAngle: 1.3,   // beside her (after her Meow, or once she stands still): in the camera's view
+  besideAfter: 0.8,              // seconds she must stand still before we come up beside her
+  settleRadius: 1.2,             // once settled beside her, stay put until the slot drifts this far
+  deadZone: 0.35, idleBand: [1.0, 3.4],
+});
+
+/**
+ * Walkable ground height at (x, z) for an actor arriving from about `fromY` (bridge decks, prop tops, terrain),
+ * through physics' `groundAt` when present, else the heightfield, else `fromY`.
+ */
+export function groundY(ctx, x, z, fromY = 0) {
+  const ph = ctx?.physics;
+  if (typeof ph?.groundAt === 'function') { const g = ph.groundAt(x, z, fromY + 1.2); if (Number.isFinite(g)) return g; }
+  if (typeof ph?.heightAt === 'function') { const g = ph.heightAt(x, z); if (Number.isFinite(g)) return g; }
+  return fromY;
+}
 
 /**
  * World XZ of the follow slot for a player heading `yaw` (radians, facing = atan2(x, z); +X is her left when facing +Z).
@@ -60,6 +77,9 @@ export function separation(pos, others, radius, strength, out, self = null) {
   return out;
 }
 
+/** Flying enemy (crows, bats): tagged `flyer`, or its type flies (ENEMIES[*].fly). */
+export function isFlyer(e) { return !!(e?.tags?.has?.('flyer') || e?.def?.fly); }
+
 /** True when `e` is a live, hurtable enemy currently engaging the player (§9.1). */
 export function isEngaged(e) {
   if (!e || !e.alive || e.hurtable === false || e.faction !== 'enemy') return false;
@@ -91,9 +111,15 @@ export function pickTarget(companionPos, playerPos, enemies, { engage = COMPANIO
   return best;
 }
 
-/** Damage a non-player target takes from `def` (mirrors Combat.applyHit for allies). */
-export function estimateDamage(def, diff, { dmgMul = 1, crit = 1 } = {}) {
-  return (def?.dmg ?? 0) * dmgMul * crit * (diff?.playerDmgMul ?? 1);
+/**
+ * Damage `def` would deal (mirrors Combat.applyHit): `ally` targets (companions) take player-scale damage with the
+ * difficulty rounding (`roundTaken`); others take × `playerDmgMul`, at least 1.
+ */
+export function estimateDamage(def, diff, { dmgMul = 1, crit = 1, ally = false } = {}) {
+  const base = (def?.dmg ?? 0) * dmgMul * Math.max(crit, def?.crit ?? 1);
+  if (!(base > 0)) return 0;
+  if (ally) return Math.max(0, Math.round(typeof diff?.roundTaken === 'function' ? diff.roundTaken(Math.round(base)) : base));
+  return Math.max(1, Math.round(base * (diff?.playerDmgMul ?? 1)));
 }
 
 /**

@@ -135,11 +135,33 @@ test('U4: damage the player takes is rounded per difficulty (Kitten max(1, floor
       combat.applyHit(rat, cat, { id: 'test', dmg: d, knock: 0, poise: 0 });
       assert.equal(before - cat.hp, want[d - 1], `${diff}: ${d} → ${want[d - 1]}`);
     }
+    assert.equal(cat.invulnT, PLAYER.hurt.iframes, 'player i-frames after a hit');
     cat.invulnT = 0; const hp0 = cat.hp;
     combat.applyHit(rat, cat, ATTACKS.dummy_swing);
     assert.equal(cat.hp, hp0, `${diff}: a 0-damage attack stays 0 (tutorial props can't hurt)`);
-    assert.equal(cat.invulnT, PLAYER.hurt.iframes, 'player i-frames after a hit');
+    assert.equal(cat.invulnT, COMBAT.antiMultiHit, 'a harmless bump grants only the anti multi-hit window (no blinking)');
   }
+});
+
+test('harmless bumps: light juice, no rumble, no hurt row; HIT reports the hp she actually lost', () => {
+  const { ctx, combat, of } = setup();
+  let rumbles = 0; ctx.input.rumble = () => rumbles++;
+  const dummy = mk(ctx, 'enemy', 0, 0);
+  const cat = mk(ctx, 'player', 0, 1, { hp: 8 });
+  assert.equal(combat.applyHit(dummy, cat, ATTACKS.dummy_swing), 'hit');
+  assert.deepEqual(ctx.game.hitstops, [JUICE.light.hitstop]);
+  assert.ok(Math.abs(of(E.SHAKE)[0].trauma - JUICE.light.shake) < 1e-9);
+  assert.equal(rumbles, 0);
+  assert.ok(cat.vel.z > 0, 'still knocked back');
+  // her hp setter (Golden Hour halving / Still Standing) decides what she really loses
+  Object.defineProperty(cat, 'hp', { get() { return this._h ?? 8; }, set(v) { this._h = Math.max(v, 1); }, configurable: true });
+  cat.invulnT = 0;
+  combat.applyHit(dummy, cat, ATTACKS.hyena_slash);
+  cat.invulnT = 0;
+  combat.applyHit(dummy, cat, { ...ATTACKS.hyena_slash, dmg: 20 });
+  const h = of(E.HIT).filter((x) => x.target === cat).map((x) => x.damage);
+  assert.deepEqual(h, [0, 2, 5], 'bump 0, slash 2, then 20 floored to the 1 HP she had left beyond 1');
+  assert.equal(cat.alive, true);
 });
 
 test('U4: attack tokens per difficulty (Kitten 1/1, Knight 2/2, Nine Lives 3/2)', () => {
@@ -321,11 +343,21 @@ test('applyHit juice: several targets in one step shake like the strongest hit, 
 test('swing side effects: holy i-frames + slow-mo, holyWave from 2 shards, Golden Hour gleam, dedupe', () => {
   const { ctx, combat } = setup();
   const cat = mk(ctx, 'player', 0, 0);
+  const rat = mk(ctx, 'enemy', 0, 1);
   ctx.player = cat;
   cat.shards = 1;
   let s = combat.beginSwing(cat, ATTACKS.holy);
-  assert.ok(cat.invulnT >= ATTACKS.holy.iframes[1] - 1e-9, 'holy i-frames from 0');
+  cat.swing = s;
+  assert.equal(cat.invulnT, 0, 'no invulnT (that would make her blink); the swing itself is the i-frame window');
+  assert.equal(combat.applyHit(rat, cat, ATTACKS.rat_poke), 'immune', 'holy i-frames from 0');
+  assert.equal(ctx.game.slowMos.length, 0, 'slow-mo waits for the moment of impact');
+  for (let i = 0; i < 14; i++) combat.updateSwing(s, DT);
+  assert.equal(ctx.game.slowMos.length, 1, 'slow-mo on the first active step, once');
   assert.deepEqual(ctx.game.slowMos.at(-1), ATTACKS.holy.timeScale);
+  assert.equal(combat.applyHit(rat, cat, ATTACKS.rat_poke), 'immune', 'still inside 0–0.46');
+  while (s.t < ATTACKS.holy.iframes[1] + 0.02) combat.updateSwing(s, DT);
+  assert.equal(combat.applyHit(rat, cat, ATTACKS.rat_poke), 'hit', 'after 0.46 she can be hit');
+  cat.swing = null; cat.invulnT = 0; cat.hp = 30;
   runSwing(combat, s);
   assert.equal(combat.projectiles.list.length, 0, 'Shard 1: no wave');
   cat.shards = 2;
@@ -456,6 +488,82 @@ test('holyWave: pierces a line of enemies (each hit once), eats enemy projectile
   assert.ok(of(E.HIT).every((h) => h.popsSlime));
   step(combat, 60);
   assert.equal(combat.projectiles.list.length, 0, 'life = range / speed');
+});
+
+test('holyWave range: Wave Reach upgrade (15 m with Shard 2) applies whoever spawns the wave', () => {
+  const { ctx, combat } = setup();
+  const cat = mk(ctx, 'player', 0, 0);
+  cat.shards = 2;
+  const fwd = new THREE.Vector3(0, 0, 1);
+  let w = combat.spawnProjectile(ATTACKS.holyWave, cat, cat.pos, fwd);
+  assert.ok(Math.abs(w.maxLife - ATTACKS.holyWave.range / ATTACKS.holyWave.speed) < 1e-9, '10 m');
+  combat.projectiles.clear();
+  ctx.state.upgrades.waveReach = true;
+  w = combat.spawnProjectile(ATTACKS.holyWave, cat, cat.pos, fwd);
+  assert.ok(Math.abs(w.maxLife - 15 / ATTACKS.holyWave.speed) < 1e-9, '15 m with the upgrade');
+  combat.projectiles.clear();
+  const s = combat.beginSwing(cat, ATTACKS.holy);
+  runSwing(combat, s);
+  assert.equal(combat.projectiles.list.length, 1);
+  assert.ok(Math.abs(combat.projectiles.list[0].maxLife - 15 / 14) < 1e-9, 'the swing-spawned wave too');
+});
+
+test('reflected bolts home on a shooter that sidesteps (within the cone), then fly straight if it dodges past', () => {
+  const { ctx, combat, of } = setup();
+  const rat = mk(ctx, 'enemy', 0, 9, { hp: 20 });
+  const cat = mk(ctx, 'player', 0, 0, { hp: 8 });
+  cat.resolveIncoming = (att) => (att.isProjectile ? 'parry' : 'hit');
+  const p = combat.spawnProjectile(ATTACKS.rat_bolt, rat, new THREE.Vector3(0, 0.5, 6), new THREE.Vector3(0, 0, -1));
+  let reflected = false;
+  for (let i = 0; i < 80 && rat.alive; i++) {
+    combat.update(DT);
+    if (p.reflected && !reflected) reflected = true;
+    if (reflected) rat.pos.x += 3 * DT;                    // strafes at 3 m/s after the parry
+  }
+  assert.ok(reflected, 'parried');
+  assert.equal(rat.alive, false, 'the homing reflected bolt still finds the strafing rat');
+  assert.equal(of(E.HIT).find((h) => h.target === rat).damage, 25);
+  // a shooter far outside the cone: no homing at all
+  const { ctx: c2, combat: k2 } = setup();
+  const r2 = mk(c2, 'enemy', 8, 1, { hp: 20 });
+  const q = k2.spawnProjectile(ATTACKS.rat_bolt, r2, new THREE.Vector3(0, 0.5, 2), new THREE.Vector3(0, 0, -1));
+  k2.reflect(q, mk(c2, 'player', 0, 0));
+  assert.equal(q.homing, null); assert.ok(q.vel.z > 0 && Math.abs(q.vel.x) < 1e-9, 'straight back up the path');
+});
+
+test('projectiles stop on props and walls (physics.sphereCast over the step), never hitting what is behind', () => {
+  const { ctx, combat } = setup();
+  const casts = [];
+  ctx.physics = {                                            // a wall across z = 3
+    heightAt: () => 0,
+    sphereCast(ray, r, maxDist, opts) {
+      casts.push({ r, opts });
+      if (ray.direction.z >= 0) return null;
+      const t = (ray.origin.z - (3 + r)) / -ray.direction.z;
+      return t >= 0 && t <= maxDist ? { distance: t, kind: 'static' } : null;
+    },
+  };
+  const rat = mk(ctx, 'enemy', 0, 8);
+  const cat = mk(ctx, 'player', 0, 2.6, { hp: 8 });
+  const ends = [];
+  const p = combat.spawnProjectile(ATTACKS.rat_bolt, rat, new THREE.Vector3(0, 0.5, 7), new THREE.Vector3(0, 0, -1), { onEnd: (_, r) => ends.push(r) });
+  step(combat, 30);
+  assert.deepEqual(ends, ['wall']); assert.equal(cat.hp, 8, 'the cat behind the wall is safe');
+  assert.ok(Math.abs(p.pos.z - 3.15) < 1e-6, `stopped at the wall face (${p.pos.z})`);
+  assert.equal(casts[0].r, ATTACKS.rat_bolt.projectile.r); assert.equal(casts[0].opts.terrain, false);
+  // waves ride through props
+  casts.length = 0;
+  combat.spawnProjectile(ATTACKS.holyWave, cat, cat.pos, new THREE.Vector3(0, 0, 1));
+  step(combat, 5);
+  assert.equal(casts.length, 0);
+  // fallback without sphereCast: blockedAt(x, z, r, y0, y1)
+  const { ctx: c2, combat: k2 } = setup();
+  c2.physics = { heightAt: () => 0, blockedAt: (x, z) => (z < 3 ? { id: 'crate' } : null) };
+  const r2 = mk(c2, 'enemy', 0, 8);
+  const ends2 = [];
+  k2.spawnProjectile(ATTACKS.rat_bolt, r2, new THREE.Vector3(0, 0.5, 7), new THREE.Vector3(0, 0, -1), { onEnd: (_, r) => ends2.push(r) });
+  for (let i = 0; i < 30; i++) k2.update(DT);
+  assert.deepEqual(ends2, ['wall']);
 });
 
 test('Combat system contract: init/update/render/dispose, clears on level unload', async () => {

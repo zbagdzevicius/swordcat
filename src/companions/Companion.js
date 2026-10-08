@@ -11,14 +11,17 @@ import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { COMPANIONS, PLAYER } from '../core/config.js';
 import { E } from '../core/events.js';
 import { damp, dampAngle, clamp, wrapAngle } from '../core/math.js';
-import { CATS, catConfig } from '../characters/index.js';
+import { CATS, catConfig, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { createAbility, updatePassive, COMPANION_HITS, Arrow } from './abilities.js';
-import { followSlot, arrive, separation, pickTarget, estimateDamage, FOLLOW_SIDE, SLOT } from './steering.js';
+import { followSlot, arrive, separation, pickTarget, estimateDamage, groundY, FOLLOW_SIDE, SLOT } from './steering.js';
 
 const _slot = { x: 0, z: 0 }, _des = { x: 0, z: 0 }, _sep = { x: 0, z: 0 };
-const _ray = new THREE.Ray(), _v = new THREE.Vector3();
+const _ray = new THREE.Ray(), _v = new THREE.Vector3(), _from = new THREE.Vector3(), _to = new THREE.Vector3();
+const _her = [null];                     // one-element list for separation() (no per-step allocation)
+/** §6 bark rule: 25% per trigger (nap / wake / the Meow answer are status lines and always show). */
+const BARK_CHANCE = 0.25;
 const THINK = 0.2;                       // AI "thinks" (targets, line of sight) at 5 Hz (tech.md §10)
 
 export class Companion extends ScriptedActorMixin(Actor) {
@@ -47,6 +50,9 @@ export class Companion extends ScriptedActorMixin(Actor) {
     this.losT = 0; this.regroupT = 0;
     this.heading = 0;            // smoothed player heading the follow slot hangs off
     this.stillT = 0; this.blinkCd = 6;
+    this.herStillT = 0; this.settled = false;  // she has stood still this long / we're parked beside her
+    /** terrain height for pickTarget's flyer check (bound once: no closure per think) */
+    this._groundAt = (x, z) => this.ctx.physics?.heightAt?.(x, z) ?? this.pos.y;
     this.idleBarkT = 45 + (ctx.rng?.() ?? 0.5) * 40;
     this.ability = null;
     this.passive = {};
@@ -62,7 +68,7 @@ export class Companion extends ScriptedActorMixin(Actor) {
       this.object3d.add(this.visual.root);
     }
     this.bubble = new TextSprite({ kind: 'bubble', y: this.height + 0.32 });
-    this.zzz = new TextSprite({ kind: 'zzz', y: this.height * 0.75, scale: 0.035 });
+    this.zzz = new TextSprite({ kind: 'zzz', y: this.height * 0.7, scale: 0.08 });
     this.object3d.add(this.bubble.object, this.zzz.object);
     this.snap();
   }
@@ -83,14 +89,18 @@ export class Companion extends ScriptedActorMixin(Actor) {
     if (!ab || !ab.start()) return false;
     this.ability = ab;
     this.cooldown = this.cfg.cd ?? 10;
+    this.abilityAt = this.ctx.game?.time ?? 0;     // sim time of the last use (HUD flash, tests)
     this.stateName = 'ability';
     this.stats.abilities++;
     this.ctx.bus.emit(E.COMPANION_ABILITY, { kittenId: this.kittenId, ability: this.cfg.ability, position: this.pos.clone() });
-    this.ctx.companions?.bark?.(this, 'ability', { chance: 0.6, force: false });
+    this.ctx.companions?.bark?.(this, 'ability', { chance: BARK_CHANCE });
     return true;
   }
 
   _endAbility() { if (this.ability) { this.ability.end(); this.ability = null; } }
+
+  /** Drop arrows in flight (level unload). */
+  clearArrows() { for (const a of this.arrows) a.dispose(); this.arrows.length = 0; }
 
   /** Fire a homing arrow at `target` (Sage's volley and passive). */
   fireArrow(target, def, onHit) {
@@ -105,7 +115,7 @@ export class Companion extends ScriptedActorMixin(Actor) {
   resolveIncoming(att, def, dir) {
     if (this.napT > 0 || !this.hurtable) return 'immune';
     if (this.ability?.blocksFrom?.(att, dir)) { this.stats.blocks++; return 'block'; }
-    const dmg = estimateDamage(def, this.ctx.state?.difficultyCfg);
+    const dmg = estimateDamage(def, this.ctx.state?.difficultyCfg, { ally: true });
     if (this.hp - dmg <= 0) { this.startNap(); return 'immune'; }
     return 'hit';
   }
@@ -156,10 +166,27 @@ export class Companion extends ScriptedActorMixin(Actor) {
     this.ctx.companions?.bark?.(this, 'meow', { chance: 1, pool: 'any', force: true, dur: 1.1 });
   }
 
+  /**
+   * A free spot beside her to teleport to: her side slot, the other side, straight behind, then her own spot.
+   * Skips deep water and static colliders. Writes into `out` (y = walkable ground under the spot).
+   */
+  _landingNear(p, out) {
+    const ph = this.ctx.physics, sides = [this.side, -this.side];
+    for (let i = 0; i < 3; i++) {
+      if (i < 2) followSlot(p.pos, this.heading, sides[i], _slot, { dist: SLOT.regroupDist + 0.5, angle: SLOT.regroupAngle });
+      else followSlot(p.pos, this.heading, 0, _slot, { dist: 1.4, angle: 0 });
+      if (ph?.isDeepWater?.(_slot.x, _slot.z)) continue;
+      if (ph?.blockedAt?.(_slot.x, _slot.z, this.radius)) continue;
+      if (ph?.inBounds && !ph.inBounds(_slot.x, _slot.z, 1)) continue;
+      return out.set(_slot.x, groundY(this.ctx, _slot.x, _slot.z, p.pos.y), _slot.z);
+    }
+    return out.set(p.pos.x, p.pos.y, p.pos.z);
+  }
+
   /** Teleport next to `pos` (on the ground) with a poof. */
   teleportTo(pos, facing = this.facing) {
     this.ctx.fx?.burst?.('poof', this.pos, { scale: 0.4 });
-    this.pos.set(pos.x, this.ctx.physics?.heightAt?.(pos.x, pos.z) ?? pos.y, pos.z);
+    this.pos.set(pos.x, groundY(this.ctx, pos.x, pos.z, pos.y), pos.z);
     this.vel.set(0, 0, 0); this.facing = facing; this.onGround = true;
     this.snap(); this.visual?.snap();
     this.ctx.fx?.burst?.('poof', this.pos, { scale: 0.4 });
@@ -250,26 +277,31 @@ export class Companion extends ScriptedActorMixin(Actor) {
     ctx.physics.moveActor(this, dt);
   }
 
+  /** Line of sight from our chest to hers (terrain, architecture and props), or true when physics can't tell. */
+  _canSee(p) {
+    const ph = this.ctx.physics;
+    _from.set(this.pos.x, this.pos.y + this.height * 0.6, this.pos.z);
+    _to.set(p.pos.x, p.pos.y + (p.height ?? 1) * 0.6, p.pos.z);
+    if (typeof ph?.lineOfSight === 'function') return ph.lineOfSight(_from, _to);
+    if (typeof ph?.raycast !== 'function') return true;
+    _ray.origin.copy(_from);
+    _v.subVectors(_to, _from);
+    const len = _v.length();
+    if (len < 1e-4) return true;
+    _ray.direction.copy(_v.divideScalar(len));
+    const hit = ph.raycast(_ray, len);
+    return !(hit && hit.distance < len - 0.3);
+  }
+
   /** 5 Hz: target choice, line of sight, teleport. */
   _think(p) {
     const ctx = this.ctx;
     const d = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
-    // line of sight (heightfield ray, chest to chest)
-    let blocked = false;
-    if (ctx.physics?.raycast && d > 1.5) {
-      _ray.origin.set(this.pos.x, this.pos.y + this.height * 0.6, this.pos.z);
-      _v.set(p.pos.x, p.pos.y + 0.6, p.pos.z).sub(_ray.origin);
-      const len = _v.length();
-      _ray.direction.copy(_v.normalize());
-      const hit = ctx.physics.raycast(_ray, len);
-      blocked = !!hit && hit.distance < len - 0.3;
-    }
+    const blocked = d > 1.5 && !this._canSee(p);
     this.losT = blocked ? this.losT + THINK : 0;
     if (d > COMPANIONS.teleportBeyond || this.losT >= COMPANIONS.teleportLos) {
       if (!this.ability?.holds) {
-        followSlot(p.pos, this.heading, this.side, _slot, { dist: 1.6 });
-        _v.set(_slot.x, p.pos.y, _slot.z);
-        this.teleportTo(_v, p.facing);
+        this.teleportTo(this._landingNear(p, _v), p.facing);
         this.target = null;
       }
       return;
@@ -277,34 +309,39 @@ export class Companion extends ScriptedActorMixin(Actor) {
     if (this.ability?.holds) return;
     const prev = this.target;
     this.target = pickTarget(this.pos, p.pos, ctx.enemies?.list ?? [], {
-      engage: COMPANIONS.engage, current: prev, groundAt: ctx.physics?.heightAt ? (x, z) => ctx.physics.heightAt(x, z) : null,
+      engage: COMPANIONS.engage, current: prev, groundAt: this._groundAt,
     });
     if (this.target && !prev) {
       this.stateName = 'engage';
-      this.ctx.companions?.bark?.(this, 'combat', { chance: 0.25 });
+      this.ctx.companions?.bark?.(this, 'combat', { chance: BARK_CHANCE });
     }
   }
 
   _follow(dt, p, pSpeed) {
     const regroup = this.regroupT > 0;
     if (regroup) this.regroupT -= dt;
+    this.herStillT = pSpeed < 0.3 ? this.herStillT + dt : 0;
     const dP = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
     let maxS = Math.max(PLAYER.run * 1.15, pSpeed * 1.2);
-    // idle band: she's standing still and we're comfortably near → stay put, look where she looks
+    // While she moves: the §9.1 slot, 2.5 m behind and to the side. Once she has stood still for a moment (or
+    // after her Meow) we come up beside her, where the camera can see us, and settle inside a loose band.
+    const beside = regroup || this.herStillT >= SLOT.besideAfter;
+    if (beside) followSlot(p.pos, this.heading, this.side, _slot, { dist: SLOT.regroupDist, angle: SLOT.regroupAngle });
+    else followSlot(p.pos, this.heading, this.side, _slot);
+    const toSlot = Math.hypot(_slot.x - this.pos.x, _slot.z - this.pos.z);
     const [b0, b1] = SLOT.idleBand;
-    if (!regroup && pSpeed < 0.3 && dP >= b0 && dP <= b1) {
-      _des.x = 0; _des.z = 0;
+    if (this.settled && beside && !regroup && dP >= b0 && dP <= b1 && toSlot < SLOT.settleRadius) {
+      _des.x = 0; _des.z = 0;                                          // settled: don't shuffle about
       this.stateName = 'idle';
     } else {
-      if (regroup) followSlot(p.pos, this.heading, this.side, _slot, { dist: SLOT.regroupDist, angle: SLOT.regroupAngle });
-      else followSlot(p.pos, this.heading, this.side, _slot);
-      const dist = arrive(this.pos.x, this.pos.z, _slot.x, _slot.z, maxS, 2.2, _des, SLOT.deadZone);
+      const dist = arrive(this.pos.x, this.pos.z, _slot.x, _slot.z, beside ? PLAYER.walk * 1.4 + pSpeed : maxS, 2.2, _des, SLOT.deadZone);
       if (dist > 4) maxS *= 1.15;
+      this.settled = beside && dist <= SLOT.deadZone + 0.05;
       this.stateName = dist > SLOT.deadZone ? 'follow' : 'idle';
     }
     // separation from her and other allies
     _sep.x = 0; _sep.z = 0;
-    separation(this.pos, [p], 1.0, 3.0, _sep);
+    _her[0] = p; separation(this.pos, _her, 1.0, 3.0, _sep);
     const allies = this.ctx.companions?.active ?? [];
     separation(this.pos, allies, 0.9, 2.0, _sep, this);
     _des.x += _sep.x; _des.z += _sep.z;
@@ -342,7 +379,7 @@ export class Companion extends ScriptedActorMixin(Actor) {
       // approach, offset to her side of the target so we don't stand in her swing
       const k = Math.min(PLAYER.run * 1.1, (d - reach) * 4 + 1.5);
       _sep.x = 0; _sep.z = 0;
-      separation(this.pos, [p], 0.9, 2.5, _sep);
+      _her[0] = p; separation(this.pos, _her, 0.9, 2.5, _sep);
       this.vel.x = damp(this.vel.x, (dx / d) * k + _sep.x, 9, dt);
       this.vel.z = damp(this.vel.z, (dz / d) * k + _sep.z, 9, dt);
     } else {
@@ -371,7 +408,7 @@ export class Companion extends ScriptedActorMixin(Actor) {
     }
     if (!this.target) {
       this.idleBarkT -= dt;
-      if (this.idleBarkT <= 0) { this.idleBarkT = 50 + (this.ctx.rng?.() ?? 0.5) * 50; this.ctx.companions?.bark?.(this, 'idle', { chance: 0.6 }); }
+      if (this.idleBarkT <= 0) { this.idleBarkT = 25 + (this.ctx.rng?.() ?? 0.5) * 30; this.ctx.companions?.bark?.(this, 'idle', { chance: BARK_CHANCE }); }
     }
   }
 
@@ -379,14 +416,14 @@ export class Companion extends ScriptedActorMixin(Actor) {
 
   render(alpha, dt) {
     super.render(alpha);
-    const vdt = this.ctx.game.hitstopT > 0 ? 0 : (dt ?? 0);
+    const vdt = visualDt(this.ctx, dt ?? 0);         // 0 in hitstop / the pause menu, × slow-mo
     if (this.visual) {
       const p = this.ctx.player;
       let look = 0;
       const tgt = this.target ?? (this.stateName === 'idle' && p ? p : null);
       if (tgt && this.napT <= 0) look = wrapAngle(Math.atan2(tgt.pos.x - this.pos.x, tgt.pos.z - this.pos.z) - this.facing);
       this.visual.lookAt(look);
-      this.visual.update(vdt, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo, frameId: this.ctx.game.frameCount });
+      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo });
     }
     this.ability?.render?.(vdt);
     for (const a of this.arrows) a.render();

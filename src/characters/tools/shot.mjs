@@ -7,7 +7,7 @@ import path from 'node:path';
 
 const PORT = process.env.SHOT_PORT || 5201;
 const OUT = process.env.SHOT_OUT || 'tests/shots/characters';
-const GPU = process.argv.includes('--swiftshader') ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'];
+const GPU = process.argv.includes('--swiftshader') ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [process.env.SHOT_GPU === 'd3d11' ? '--use-angle=d3d11' : '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist'];
 const specs = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 fs.mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch({ headless: true, args: GPU });

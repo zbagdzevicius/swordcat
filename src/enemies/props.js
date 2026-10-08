@@ -7,7 +7,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** art.md §11 palette (enemies never use the heroes' pink). */
 export const ENEMY_PAL = Object.freeze({
-  ratFur: '#7B6F68', ratBelly: '#B9ADA4', ratSkin: '#C2958C', helm: '#8A8D90', rust: '#8C5A3A', tunic: '#6E5B3A',
+  ratFur: '#8C8079', ratBelly: '#B9ADA4', ratSkin: '#C2958C', helm: '#8A8D90', rust: '#8C5A3A', tunic: '#6E5B3A',
   sigil: '#B28B2E', wood: '#7A5A3E', woodDark: '#5A3E2B', steel: '#B8BCC2', hood: '#4D5A3A', hoodDark: '#36402A',
   ratEye: '#FF4A3A', crowEye: '#F2C94C', iron: '#5A5D63', ironDark: '#3B3D42', plume: '#A3202C', silhouette: '#15161A',
 });
@@ -65,7 +65,7 @@ function mat(name) {
   if (MAT[name]) return MAT[name];
   switch (name) {
     case 'metal': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-metal', vertexColors: true, roughness: 0.55, metalness: 0.45 }); break;
-    case 'cloth': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-cloth', vertexColors: true, roughness: 0.95, metalness: 0 }); break;
+    case 'cloth': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-cloth', vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide }); break;
     case 'gear': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-gear', vertexColors: true, roughness: 0.75, metalness: 0.15 }); break;
     case 'eyeRat': MAT[name] = new THREE.MeshBasicMaterial({ name: 'enemy-eye-rat', color: new THREE.Color(ENEMY_PAL.ratEye).multiplyScalar(1.6) }); break;
     case 'eyeCrow': MAT[name] = new THREE.MeshBasicMaterial({ name: 'enemy-eye-crow', color: new THREE.Color(ENEMY_PAL.crowEye).multiplyScalar(1.4) }); break;
@@ -101,17 +101,21 @@ const BUILD = {
     const holes = [[0.025, 0.02], [-0.02, -0.025], [0.0, -0.005]].map(([y, z]) => part(new THREE.SphereGeometry(0.012, 6, 5), '#7E6420', { pos: [0.032, y, z], scale: [0.4, 1, 1] }));
     return merged([disc, rim, wedge, ...holes]);
   },
-  /** Crossbowman's hood: a cowl over the head with a drooping tip at the back. */
+  /** Crossbowman's hood: a cowl over the crown and the back of the head, open at the face (+Z), with a drooping tip. */
   hood() {
-    const cowl = part(new THREE.SphereGeometry(0.17, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.62), (v) => (v.y < 0.03 ? ENEMY_PAL.hoodDark : ENEMY_PAL.hood), { scale: [1, 0.9, 1.15] });
-    const tip = part(new THREE.ConeGeometry(0.06, 0.2, 8), ENEMY_PAL.hood, { pos: [0, 0.07, -0.2], rot: [-2.1, 0, 0] });
-    return merged([cowl, tip]);
+    const open = Math.PI * 0.62;                                  // face opening centred on +Z (phi = π/2 in SphereGeometry)
+    const cowl = part(new THREE.SphereGeometry(0.16, 20, 12, Math.PI / 2 + open / 2, Math.PI * 2 - open, 0, Math.PI * 0.6),
+      (v) => (v.y < 0.03 ? ENEMY_PAL.hoodDark : ENEMY_PAL.hood), { scale: [1.05, 0.85, 1.1] });
+    const rim = part(new THREE.TorusGeometry(0.152, 0.014, 6, 20, Math.PI * 2 - open), ENEMY_PAL.hoodDark,
+      { pos: [0, -0.042, 0], rot: [Math.PI / 2, 0, Math.PI / 2 + open / 2], scale: [1.05, 1.1, 1] });   // hem
+    const tip = part(new THREE.ConeGeometry(0.055, 0.22, 8), ENEMY_PAL.hood, { pos: [0, 0.05, -0.2], rot: [-2.0, 0, 0] });
+    return merged([cowl, rim, tip]);
   },
   /** Crow's tiny iron hood with a red plume. */
   crowHood() {
     const cap = part(new THREE.SphereGeometry(0.075, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), rusty(ENEMY_PAL.iron, ENEMY_PAL.ironDark, 0.25, 40), { scale: [1, 0.85, 1.2] });
     const nasal = part(new THREE.BoxGeometry(0.014, 0.05, 0.012), ENEMY_PAL.ironDark, { pos: [0, 0.0, 0.085] });
-    const plumes = [-0.25, 0, 0.25].map((a) => part(new THREE.ConeGeometry(0.022, 0.16, 6), ENEMY_PAL.plume, { pos: [Math.sin(a) * 0.02, 0.1, -0.035], rot: [-0.55, 0, a], scale: [1, 1, 0.45] }));
+    const plumes = [-0.35, 0, 0.35].map((a, i) => part(new THREE.ConeGeometry(0.026, i === 1 ? 0.1 : 0.08, 6), ENEMY_PAL.plume, { pos: [Math.sin(a) * 0.025, 0.075, -0.045], rot: [-0.9, 0, a], scale: [1, 1, 0.4] }));
     return merged([cap, nasal, ...plumes]);
   },
   /** Two eye glints (spheres ±x), origin between the eyes. */

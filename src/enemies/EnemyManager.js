@@ -1,101 +1,366 @@
-// src/enemies/EnemyManager.js  (owner: enemies) — M0 STUB satisfying the ctx.enemies contract (§19.3):
-//   spawn(type, pos, opts) → Enemy;  spawnWave(list, points);  despawn(e);  list;  boss
-// Types: Appendix A ENEMIES keys ('rat_pike', 'hyena', ...), 'bonehead:<variant>', 'jelly' / 'jelly_l|m|s',
-// and bosses 'boss_<key>' (BOSSES + core BOSS_MODELS). Unknown types spawn a generic grunt with a warning.
+// src/enemies/EnemyManager.js  (owner: enemies) — the ctx.enemies service (GAME_DESIGN §19.3):
+//   spawn(type, pos, opts) → Enemy;  spawnWave(list, points) → Enemy[];  despawn(e);  list;  boss
+// plus helpers other areas may use: alertNear(pos, r), count(filter?), byType(type), clear().
+//
+// Types (resolveEnemyDef): the type files in types/ and scripted/ (rat_pike, rat_xbow, crow, hyena; the CS-02 cast
+// cacklejaw, pilfer, barkus_silhouette), base versions of the M2/M3 rows (spider, stealer, pug, warhound, bat, hornet),
+// 'bonehead:<minion|warrior|rogue|mage>', 'jelly' / 'jelly_l|m|s|giant', bosses 'boss_<key>' (BOSSES + BOSS_MODELS),
+// any other Appendix A ENEMIES key, and a generic grunt (with a warning) for unknown ids.
+//
+// Rules owned here:
+//   - §8.3 arena budget: at most `quality.maxEnemies` (8; 6 on Low) AI enemies alive at once. Extra spawns wait
+//     dormant (invisible, unregistered) and wake, with a spawn poof, as slots free up. Scripted / AI-less cutscene
+//     actors and bosses never count and are never held back.
+//   - §7.7 Meow: unalerted enemies within PLAYER.meow.aggroRadius turn and alert.
+//   - Pack alerts: idle pack-mates near an alerted enemy join after a short beat (TUNING.groupAlert*).
+//   - A cutscene interrupts every free (non-scripted) enemy's attack: telegraphs end, tokens are released.
+//   - §10.1 defeat: helmets spin off as debris (visual only, animated in render).
+//   - Everything is cleared on level:unload.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { ENEMIES, BOSSES, BOSS_MODELS, MODEL_FIT } from '../core/config.js';
-import { Enemy } from './Enemy.js';
+import { ENEMIES, BOSSES, BOSS_MODELS, MODEL_FIT, PLAYER, GRAVITY } from '../core/config.js';
+import { Enemy, visualDt } from './Enemy.js';
 import { Boss } from './Boss.js';
+import { TUNING, rangeOf } from './tuning.js';
+import { CLIP_MAPS, rigFor } from './clipMaps.js';
+import ratPike from './types/rat_pike.js';
+import ratXbow from './types/rat_xbow.js';
+import crow from './types/crow.js';
+import hyena from './types/hyena.js';
+import { GENERIC, boneheadDef, jellyDef, animsFor } from './types/generic.js';
+import { dressKayKit } from './types/kaykitGear.js';
+import { dressRat } from './types/ratGear.js';
+import cacklejaw, { CACKLEJAW_HIDE, CACKLEJAW_LOOK } from './scripted/Cacklejaw.js';
+import pilfer from './scripted/Pilfer.js';
+import barkusSilhouette from './scripted/BarkusSilhouette.js';
 
-const DEFAULT_BOSS_ATTACK = [{ id: 'pug_chop', weight: 1, range: 2.2 }];
+/** Every hand-written type (Appendix B.3 shape). */
+export const TYPES = Object.freeze({
+  rat_pike: ratPike, rat_xbow: ratXbow, crow, hyena, ...GENERIC,
+  cacklejaw, pilfer, barkus_silhouette: barkusSilhouette,
+});
 
-/** Resolve a spawn type to a def (pure; exported for tests). */
+/** Base boss looks until the boss type files (M2/M3) replace them: the §11 builds on the shared rigs. */
+const KNIGHT_PROPS = ['1H_Sword', '1H_Sword_Offhand', '2H_Sword', 'Badge_Shield', 'Rectangle_Shield', 'Round_Shield', 'Spike_Shield'];
+const BOSS_LOOKS = {
+  grizzlechop: { build: (e, m) => dressRat(e, m, { helm: true, buckler: true }) },
+  cacklejaw: { hide: CACKLEJAW_HIDE, build: (e, m) => dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' }) },
+  brutus: { hide: ['Knight_Head', '1H_Sword', '1H_Sword_Offhand', 'Badge_Shield', 'Round_Shield', 'Spike_Shield'], show: ['2H_Sword', 'Rectangle_Shield', 'Knight_Helmet'],
+    build: (e, m) => dressKayKit(e, m, { look: 'brutus', headNode: 'Knight_Head', expression: 'neutral', plate: false }) },
+  barkus: { hide: ['Knight_Head', 'Knight_Helmet', ...KNIGHT_PROPS], show: ['Knight_Cape'], tint: { Knight_Cape: '#22242A' },
+    build: (e, m) => dressKayKit(e, m, { look: 'barkus', headNode: 'Knight_Head', expression: 'angry', plate: false,
+      weapon: { model: 'models/weapons/quaternius/Claymore.glb', bone: 'handslot.r', fit: 'barkus' } }) },
+};
+
+const GENERIC_GRUNT = { hp: 30, radius: 0.35, height: 1, mass: 1, poise: 1, walk: 1.5, run: 3, sight: 10, fov: 2.09, leash: 18,
+  attacks: [{ id: 'rat_poke', weight: 1, range: 1.8 }] };
+
+/**
+ * Resolve a spawn type id to its def (pure; exported for tests). Always returns a def with `id === type`
+ * (bonehead / jelly variants normalise unknown sub-ids to their default).
+ * @param {string} type
+ */
 export function resolveEnemyDef(type) {
-  if (ENEMIES[type]) return { ...ENEMIES[type], id: type };
-  if (type.startsWith('bonehead:')) {
-    const v = type.split(':')[1], base = ENEMIES.bonehead, variant = base.variants[v] ?? base.variants.minion;
-    return { ...base, ...variant, id: type, variant: v, attacks: [{ id: variant.attack, weight: 1, range: 1.7 }] };
-  }
-  if (type.startsWith('jelly')) {
-    const size = (type.split('_')[1] ?? 'l').toUpperCase(), base = ENEMIES.jelly, s = base.sizes[size] ?? base.sizes.L;
-    return { ...base, id: type, size, hp: s.hp, radius: s.r, height: s.h, mass: 0.6, fish: [s.fish, s.fish] };
-  }
-  if (type.startsWith('boss_')) {
-    const key = type.slice(5), b = BOSSES[key], m = BOSS_MODELS[key];
+  const t = String(type ?? '');
+  if (TYPES[t]) return { ...TYPES[t], id: t };
+  if (t === 'bonehead' || t.startsWith('bonehead:')) return boneheadDef(t.split(':')[1] ?? 'minion');
+  if (t === 'jelly' || /^jelly_(l|m|s|giant)$/i.test(t)) return jellyDef(t === 'jelly' ? 'jelly_l' : t);
+  if (t.startsWith('boss_')) {
+    const key = t.slice(5), b = BOSSES[key], m = BOSS_MODELS[key];
     if (b) {
       const h = m ? (MODEL_FIT[m.model]?.uses?.[m.role] ?? b.fit?.h ?? 2) : (b.fit?.h ?? 2);
-      return { radius: Math.max(0.5, h * 0.22), height: h, mass: 4, sight: 30, leash: 60, run: 3.5, attacks: DEFAULT_BOSS_ATTACK,
-        ...b, hp: Array.isArray(b.hp) ? b.hp[0] : b.hp, model: m?.model, role: m?.role, fit: m?.role, id: type, key, boss: true };
+      const look = BOSS_LOOKS[key] ?? {};
+      const rig = m ? rigFor(m.model) : null;
+      return {
+        radius: Math.max(0.5, h * 0.22), height: h, mass: 4, sight: 30, fov: 6.28, leash: 60, walk: 2.0, run: 3.5,
+        anims: rig ? { ...CLIP_MAPS[rig].roles } : {}, smallHeart: false,
+        ...b, ...look, hp: Array.isArray(b.hp) ? b.hp[0] : b.hp, model: m?.model, role: m?.role, fit: m?.role ?? b.fit,
+        id: t, key, boss: true,
+      };
     }
   }
-  return { id: type, hp: 30, radius: 0.35, height: 1, mass: 1, poise: 1, sight: 10, leash: 18, run: 3, attacks: [{ id: 'rat_poke', weight: 1, range: 1.8 }], unknown: true };
+  if (ENEMIES[t]) {
+    const row = ENEMIES[t];
+    return { ...GENERIC_GRUNT, ...row, anims: row.model ? animsFor(row.model) : {}, id: t };
+  }
+  return { ...GENERIC_GRUNT, id: t, unknown: true };
+}
+
+/** Is `e` an AI combatant that counts against the §8.3 arena budget? */
+export function countsTowardCap(e) {
+  return !!e && e.alive && !e.dormant && e.ai && !e.scripted && !e.def?.boss && !e.tags?.has('cutscene') && e.faction === 'enemy';
+}
+
+const _v = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _s = new THREE.Vector3();
+const GOLDEN = 2.399963229728653;        // golden angle (rad): even scatter of wave members around a point
+
+/** Resolve a position-ish (Vector3, [x, z], [x, y, z], {x, z}, {pos}, anchor name) into `out` (null if unknown). */
+function toPos(ctx, p, out) {
+  if (p == null) return null;
+  if (typeof p === 'string') { const a = ctx.levels?.anchor?.(p); return a?.pos ? out.copy(a.pos) : null; }
+  if (Array.isArray(p)) return p.length >= 3 ? out.set(p[0], p[1], p[2]) : out.set(p[0] ?? 0, NaN, p[1] ?? 0);
+  if (p.pos && typeof p.pos.x === 'number') return out.copy(p.pos);
+  if (typeof p.x === 'number' && typeof p.z === 'number') return out.set(p.x, typeof p.y === 'number' ? p.y : NaN, p.z);
+  return null;
 }
 
 export class EnemyManager {
   constructor(ctx) {
     this.ctx = ctx;
-    /** @type {Enemy[]} */
+    /** @type {Enemy[]} every spawned enemy (dormant ones included) */
     this.list = [];
     /** @type {Boss|null} */
     this.boss = null;
+    /** @type {Enemy[]} over-budget spawns waiting for a free slot (FIFO) */
+    this.pending = [];
+    /** @type {{obj: THREE.Object3D, vel: THREE.Vector3, axis: THREE.Vector3, spin: number, t: number, life: number, base: THREE.Vector3, bounced: boolean}[]} */
+    this.debris = [];
+    this._iter = [];
     this._offs = [];
   }
 
   async init() {
-    this._offs.push(this.ctx.bus.on(E.LEVEL_UNLOAD, () => this.clear()));
+    const bus = this.ctx.bus;
+    this._offs.push(
+      bus.on(E.LEVEL_UNLOAD, () => this.clear()),
+      bus.on(E.CUTSCENE_START, () => this.interruptAll()),
+      bus.on(E.PLAYER_MEOW, (p) => this.onMeow(p?.position ?? this.ctx.player?.pos)),
+    );
   }
 
+  /** Current §8.3 budget (quality preset: 8, Low 6). */
+  get cap() { return this.ctx.quality?.maxEnemies ?? 8; }
+
+  /** Number of enemies matching `filter` (default: live, non-dormant AI enemies that count against the budget). */
+  count(filter = countsTowardCap) {
+    let n = 0;
+    for (let i = 0; i < this.list.length; i++) if (filter(this.list[i])) n++;
+    return n;
+  }
+
+  /** Live enemies of a type id. Returns a new array. */
+  byType(type) { return this.list.filter((e) => e.type === type && e.alive); }
+
   /**
-   * @param {string} type @param {THREE.Vector3} pos
-   * @param {{facing?: number, id?: string, runner?: boolean, y?: number, scripted?: boolean}} [opts]
+   * Spawn an enemy (§19.3). `pos` is a Vector3, [x, z], [x, y, z], {x, z}, an anchor or an Actor-like {pos}; the
+   * feet snap to the ground below unless the given y is higher (bridges, roofs, the Bell Tower).
+   * @param {string} type
+   * @param {any} pos
+   * @param {{facing?: number, id?: string, runner?: boolean, y?: number, scripted?: boolean, ai?: boolean,
+   *          perched?: boolean, grounded?: boolean, cage?: boolean|string, word?: string|null, seed?: number,
+   *          home?: any, noCap?: boolean, alerted?: boolean}} [opts]
+   *   y: height above the ground (a crossbowman on a cart: `{ y: 1.2 }` → perched); scripted: cutscene actor from the
+   *   start; ai: false = never thinks (CS-02 cast); cage / word: hyena dressing; alerted: spawn already fighting.
+   * @returns {Enemy}
    */
   spawn(type, pos, opts = {}) {
+    const ctx = this.ctx;
     const def = resolveEnemyDef(type);
     if (def.unknown) console.warn(`[enemies] unknown type "${type}" (generic stand-in)`);
+    const p = new THREE.Vector3();
+    if (!toPos(ctx, pos, p)) p.copy(ctx.player?.pos ?? _v.set(0, 0, 0)).setY(NaN);
+    const ground = this._groundAt(p.x, p.z, Number.isFinite(p.y) ? p.y : undefined);
+    if (opts.y) p.y = ground + opts.y;
+    else p.y = Number.isFinite(p.y) ? Math.max(p.y, ground) : ground;
+    const facing = opts.facing ?? (ctx.player ? Math.atan2(ctx.player.pos.x - p.x, ctx.player.pos.z - p.z) : 0);
     const Cls = def.boss ? Boss : Enemy;
-    const p = new THREE.Vector3().copy(pos ?? new THREE.Vector3());
-    if (opts.y) p.y += opts.y;
-    const e = new Cls(this.ctx, def, { pos: p, facing: opts.facing ?? 0, runner: opts.runner });
+    const e = new Cls(ctx, def, { ...opts, pos: p, facing, y: opts.y ?? 0 });
+    if (opts.home) toPos(ctx, opts.home, e.home);
+    if (opts.ai === false) e.ai = false;
+    const held = !opts.noCap && !def.boss && !opts.scripted && e.ai && !e.tags.has('cutscene') && TUNING.pending && this.count() >= this.cap;
     this.list.push(e);
-    this.ctx.actors.register(e, opts.id);
-    this.ctx.scene.add(e.object3d);
+    e.object3d.name = `enemy:${def.id}#${e.id}`;
+    ctx.scene.add(e.object3d);
+    if (held) {
+      e.dormant = true; e.hurtable = false; e.object3d.visible = false;
+      this.pending.push(e);
+    } else this._activate(e, opts.id);
     e.snap();
     if (opts.scripted) e.setScripted(true);
+    if (opts.alerted && !held) { e.alerted = true; if (e.ai && !e.scripted) e.setState('chase'); }
     if (def.boss) { this.boss = /** @type {Boss} */ (e); e.start(); }
     e.loadVisual();
-    this.ctx.bus.emit(E.ENEMY_SPAWNED, { enemy: e });
+    ctx.bus.emit(E.ENEMY_SPAWNED, { enemy: e });
     return e;
   }
 
-  /** list: [[type, count, ...], ...]; points: Vector3[] used round-robin. Returns the spawned enemies. */
+  /**
+   * Spawn a wave. `list` entries: [type, count = 1, at?, spread?, opts?] (Appendix B.1 zones: at = [x, z] centre,
+   * spread = scatter radius) or [type, count, opts] (arena waves), or {type, count, at, spread, ...opts}.
+   * `points` (Vector3 / [x, z] / anchor names) are used round-robin for entries without `at`; members sharing a point
+   * fan out on a golden-angle spiral. Returns the spawned enemies.
+   * @param {any[]} list @param {any[]|any} [points]
+   */
   spawnWave(list, points = []) {
-    const out = [];
-    let i = 0;
-    for (const [type, n = 1] of list) for (let k = 0; k < n; k++) {
-      const pt = points.length ? points[i++ % points.length] : this.ctx.player?.pos ?? new THREE.Vector3();
-      out.push(this.spawn(type, pt));
+    const ctx = this.ctx, out = [];
+    const pts = (Array.isArray(points) && !(points.length && typeof points[0] === 'number') ? points : [points])
+      .map((q) => toPos(ctx, q, new THREE.Vector3())).filter(Boolean);
+    let k = 0;
+    for (const raw of list ?? []) {
+      const entry = Array.isArray(raw) ? raw : [raw.type, raw.count ?? 1, raw.at, raw.spread, raw];
+      const [type, n = 1] = entry;
+      let at = null, spread = 0, o = {};
+      for (const x of entry.slice(2)) {
+        if (Array.isArray(x) || (x && typeof x === 'object' && (typeof x.x === 'number' || x.pos)) || typeof x === 'string') { if (!at) at = x; }
+        else if (typeof x === 'number') spread = x;
+        else if (x && typeof x === 'object') o = x;
+      }
+      const centre = at ? toPos(ctx, at, new THREE.Vector3()) : null;
+      for (let i = 0; i < n; i++) {
+        const c = centre ?? pts[k % Math.max(1, pts.length)] ?? ctx.player?.pos ?? _v.set(0, 0, 0);
+        const ring = centre ? i : Math.floor(k / Math.max(1, pts.length));
+        const r = centre ? (n > 1 ? spread * Math.sqrt((i + 0.5) / n) : 0) : 0.9 * ring;
+        const a = (centre ? i : k) * GOLDEN + (centre ? ctx.rng() * 0.6 : 0);
+        const pos = new THREE.Vector3(c.x + Math.sin(a) * r, Number.isFinite(c.y) ? c.y : NaN, c.z + Math.cos(a) * r);
+        const { type: _t, count: _c, at: _a, spread: _s2, ...rest } = o;
+        out.push(this.spawn(type, pos, rest));
+        k++;
+      }
     }
     return out;
   }
 
+  /** Remove an enemy for good (idempotent). */
   despawn(e) {
+    if (!e) return;
     const i = this.list.indexOf(e);
     if (i >= 0) this.list.splice(i, 1);
+    const j = this.pending.indexOf(e);
+    if (j >= 0) this.pending.splice(j, 1);
     if (this.boss === e) this.boss = null;
-    this.ctx.combat?.tokens?.release(e);
+    this.ctx.combat?.tokens?.release?.(e);
     this.ctx.actors.unregister(e);
-    e.dispose();
+    if (!e.disposed) e.dispose();
   }
 
-  clear() { for (const e of [...this.list]) this.despawn(e); }
+  /** Despawn everything (level unload, tests). */
+  clear() {
+    for (const e of [...this.list]) this.despawn(e);
+    this.pending.length = 0;
+    for (const d of this.debris) d.obj.removeFromParent();
+    this.debris.length = 0;
+    this.boss = null;
+  }
+
+  /** Pack alert: idle / patrolling enemies within `r` of `pos` join the fight after a short, staggered beat. */
+  alertNear(pos, r = TUNING.groupAlertRadius, from = null) {
+    if (!pos) return;
+    for (const e of this.list) {
+      if (e === from || !e.alive || e.dormant || e.alerted || !e.ai || e.scripted) continue;
+      if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) > r) continue;
+      e.wake(rangeOf(this.ctx.rng, TUNING.groupAlertDelay));
+    }
+  }
+
+  /** §7.7 Meow: unalerted enemies within the aggro radius turn toward her and alert. */
+  onMeow(pos) {
+    if (!pos) return;
+    const r = PLAYER.meow.aggroRadius;
+    for (const e of this.list) {
+      if (!e.alive || e.dormant || e.alerted || !e.ai || e.scripted) continue;
+      if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) > r) continue;
+      e.facing = Math.atan2(pos.x - e.pos.x, pos.z - e.pos.z);
+      e.alert();
+    }
+  }
+
+  /** A cutscene starts: free enemies drop their attacks (no telegraph freezes on screen, tokens return). */
+  interruptAll() {
+    for (const e of this.list) if (!e.scripted && e.alive && !e.dormant) e.interrupt?.();
+  }
+
+  /**
+   * §10.1: a defeated enemy's helmet pops off spinning. `obj` leaves its bone (world transform kept) and flies up and
+   * away from the hit, bounces once, then shrinks away. Visual only.
+   * @param {THREE.Object3D} obj @param {Enemy} e @param {THREE.Vector3|null} [dir]
+   */
+  spawnDebris(obj, e, dir = null) {
+    const scene = this.ctx.scene;
+    if (!obj || !scene) return;
+    obj.updateWorldMatrix(true, false);
+    const pos = new THREE.Vector3(), base = new THREE.Vector3();
+    obj.matrixWorld.decompose(pos, _q, base);
+    obj.removeFromParent();
+    obj.position.copy(pos); obj.quaternion.copy(_q); obj.scale.copy(base);
+    scene.add(obj);
+    const h = TUNING.helmet, rng = this.ctx.rng;
+    const dx = dir?.x ?? rng.range(-1, 1), dz = dir?.z ?? rng.range(-1, 1), dl = Math.hypot(dx, dz) || 1;
+    const side = h.side * (0.7 + rng() * 0.6), a = rng.range(-0.5, 0.5);
+    const vx = (dx / dl) * Math.cos(a) - (dz / dl) * Math.sin(a), vz = (dz / dl) * Math.cos(a) + (dx / dl) * Math.sin(a);
+    const vel = new THREE.Vector3(vx * side, h.up * (0.85 + rng() * 0.3), vz * side);
+    const axis = new THREE.Vector3(rng.range(-1, 1), rng.range(0.2, 1), rng.range(-1, 1)).normalize();
+    this.debris.push({ obj, vel, axis, spin: h.spin * (0.8 + rng() * 0.4), t: 0, life: h.life, base, bounced: false });
+  }
+
+  _updateDebris(dt) {
+    if (!this.debris.length || !(dt > 0)) return;
+    for (let i = this.debris.length - 1; i >= 0; i--) {
+      const d = this.debris[i], o = d.obj;
+      d.t += dt;
+      d.vel.y -= GRAVITY * dt;
+      o.position.addScaledVector(d.vel, dt);
+      const g = this._groundAt(o.position.x, o.position.z);
+      if (o.position.y < g + 0.05 && d.vel.y < 0) {
+        o.position.y = g + 0.05;
+        if (!d.bounced) { d.bounced = true; d.vel.y *= -0.35; d.vel.x *= 0.5; d.vel.z *= 0.5; d.spin *= 0.4; }
+        else { d.vel.set(0, 0, 0); d.spin *= 0.8; }
+      }
+      o.quaternion.multiply(_q.setFromAxisAngle(d.axis, d.spin * dt));
+      const left = d.life - d.t, k = left < TUNING.die.shrink ? Math.max(0.001, left / TUNING.die.shrink) : 1;
+      o.scale.copy(_s.copy(d.base).multiplyScalar(k));
+      if (d.t >= d.life) { o.removeFromParent(); this.debris.splice(i, 1); }
+    }
+  }
+
+  _groundAt(x, z, fromY) {
+    const ph = this.ctx.physics;
+    if (!ph) return 0;
+    if (fromY !== undefined && typeof ph.groundAt === 'function') return ph.groundAt(x, z, fromY + 0.25);
+    return typeof ph.heightAt === 'function' ? ph.heightAt(x, z) : 0;
+  }
+
+  _activate(e, id) {
+    e.dormant = false;
+    e.object3d.visible = true;
+    if (e.alive && !e.scripted && e.def.hurtable !== false) e.hurtable = true;
+    this.ctx.actors.register(e, id ?? e.spawnOpts?.id);
+  }
+
+  /** Wake held spawns while the budget has room (each with the arena spawn poof). */
+  _drainPending() {
+    while (this.pending.length && this.count() < this.cap) {
+      const e = this.pending.shift();
+      if (!e.alive || e.disposed) continue;
+      this._activate(e);
+      e.snap();
+      this.ctx.bus.emit(E.BURST, { kind: 'spawn', position: e.pos.clone() });
+    }
+  }
 
   update(dt) {
     const g = this.ctx.game;
-    for (const e of [...this.list]) if (g.simActive(e)) e.update(dt);
+    if (this.pending.length) this._drainPending();
+    const it = this._iter;
+    it.length = 0;
+    for (let i = 0; i < this.list.length; i++) it.push(this.list[i]);
+    for (let i = 0; i < it.length; i++) {
+      const e = it[i];
+      if (e.disposed || e.dormant || !g.simActive(e)) continue;
+      e.update(dt);
+    }
+    it.length = 0;
   }
 
-  render(alpha, dt) { for (const e of this.list) e.render(alpha, dt); }
+  render(alpha, dt) {
+    for (let i = 0; i < this.list.length; i++) { const e = this.list[i]; if (!e.dormant) e.render(alpha, dt); }
+    this._updateDebris(visualDt(this.ctx, dt));
+  }
 
-  dispose() { this.clear(); for (const off of this._offs) off(); this._offs.length = 0; }
+  dispose() {
+    this.clear();
+    for (const off of this._offs) off?.();
+    this._offs.length = 0;
+  }
 }

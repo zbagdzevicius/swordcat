@@ -67,23 +67,29 @@ export function tickFurTime(dt, frameId) {
 // ---------------------------------------------------------------- strand texture (art.md §3.1)
 
 let _strandTex = null;
-/** Strand height field: R = tapered cone per cell, G = strand height, B = random. Generated once. */
-export function makeStrandTexture(size = 512, cells = 64, seed = 7) {
+/** Strand texture defaults: 512² with 96 strands per side (≈2–3 px per strand in the Meme Cam close-up). */
+export const STRANDS = Object.freeze({ size: 512, cells: 96, seed: 7 });
+/**
+ * Strand height field (art.md §3.1), generated once:
+ * R = strand height (a tapered cone per jittered cell: thick root, fine tip), G = coverage at the root (1 inside any
+ * strand), B = per-STRAND random (colour streaks: neighbouring texels of one strand share it), A = 1.
+ */
+export function makeStrandTexture(size = STRANDS.size, cells = STRANDS.cells, seed = STRANDS.seed) {
   let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  const n = cells * cells, cx = [], cy = [], ch = [], cr = [];
-  for (let i = 0; i < n; i++) { cx[i] = 0.18 + rnd() * 0.64; cy[i] = 0.18 + rnd() * 0.64; ch[i] = 0.5 + rnd() * 0.5; cr[i] = 0.4 + rnd() * 0.22; }
+  const n = cells * cells, cx = [], cy = [], ch = [], cr = [], cv = [];
+  for (let i = 0; i < n; i++) { cx[i] = 0.15 + rnd() * 0.7; cy[i] = 0.15 + rnd() * 0.7; ch[i] = 0.45 + rnd() * 0.55; cr[i] = 0.42 + rnd() * 0.2; cv[i] = rnd(); }
   const cs = size / cells, data = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
     const gx = Math.floor(x / cs), gy = Math.floor(y / cs);
-    // nearest strand among the 3x3 neighbouring cells (jittered centres overlap cell borders)
-    let best = 0;
+    // tallest strand among the 3x3 neighbouring cells (jittered centres overlap cell borders)
+    let best = 0, id = -1;
     for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
       const nx = (gx + ox + cells) % cells, ny = (gy + oy + cells) % cells, i = ny * cells + nx;
       const d = Math.hypot((x + 0.5) / cs - (gx + ox) - cx[i], (y + 0.5) / cs - (gy + oy) - cy[i]) / cr[i];
-      if (d < 1) best = Math.max(best, ch[i] * (1 - d * d * 0.9));
+      if (d < 1) { const h = ch[i] * (1 - d) * (1 - d * 0.35); if (h > best) { best = h; id = i; } }
     }
     const o = (y * size + x) * 4;
-    data[o] = 255 * best; data[o + 1] = 255 * best; data[o + 2] = 255 * rnd(); data[o + 3] = 255;
+    data[o] = 255 * best; data[o + 1] = best > 0 ? 255 : 0; data[o + 2] = 255 * (id >= 0 ? cv[id] : 0.5); data[o + 3] = 255;
   }
   const t = new THREE.DataTexture(data, size, size);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -263,28 +269,44 @@ void main() {
 
 const FUR_FRAG = /* glsl */`
 uniform sampler2D uStrands;
-uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch;
+uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade;
 uniform vec3 uTipTint, uRimColor, uHolyColor;
 varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
 varying float vH, vMask;
 #include <common>
 #include <lights_pars_begin>
 #include <fog_pars_fragment>
-float strands(vec3 p, vec3 n) {
+vec3 strands(vec3 p, vec3 n) {
   vec3 w = pow(abs(n), vec3(6.0)); w /= (w.x + w.y + w.z);
   // strands are elongated along the (mostly downward / backward) comb so they read as streaks, not dots
-  return texture2D(uStrands, vec2(p.y * uStretch, p.z)).r * w.x + texture2D(uStrands, vec2(p.z * uStretch, p.x)).r * w.y + texture2D(uStrands, vec2(p.x, p.y * uStretch)).r * w.z;
+  return texture2D(uStrands, vec2(p.y * uStretch, p.z)).rgb * w.x + texture2D(uStrands, vec2(p.z * uStretch, p.x)).rgb * w.y + texture2D(uStrands, vec2(p.x, p.y * uStretch)).rgb * w.z;
 }
 void main() {
   float alpha = 1.0;
+  float streak = 0.5;
   if (vH > 0.0) {
-    float s = strands(vObjPos * uTiling, vObjN) * min(vMask * uDensityBoost, 1.0);
-    alpha = smoothstep(vH - 0.06, vH + 0.03, s) * mix(1.0, 0.6, vH * vH);
-    if (alpha < 0.3) discard;
+    vec3 tp = vObjPos * uTiling;
+    vec3 st = strands(tp, vObjN);
+    float dens = min(vMask * uDensityBoost, 1.0);
+    float s = st.r * dens;
+    streak = st.b;
+    // strand edge softness follows the pixel footprint: crisp strands up close, a soft volume when they go sub-pixel
+    float fw = fwidth(s);
+    float sharp = smoothstep(vH - 0.05 - fw, vH + 0.02 + fw, s);
+    // expected coverage of a tapered strand field at this height (what a pixel covering many strands sees)
+    float foot = length(fwidth(tp)) * uCells;
+    // dense body for the inner half of the length, then a quick fade: a soft but defined fluffy edge (not a blur)
+    float vol = (1.0 - smoothstep(0.42, 0.86, vH)) * dens;
+    alpha = mix(sharp, vol, smoothstep(0.35, 1.25, foot)) * mix(1.0, 0.5, vH * vH);
+    // edge-on, each outer shell's silhouette shows as a ring ("onion layers"): fade the outer shells there so the
+    // silhouette turns into a soft fringe instead
+    float ndv = abs(dot(normalize(vWN), normalize(cameraPosition - vWPos)));
+    alpha *= mix(1.0, smoothstep(0.02, uEdgeFade, ndv), smoothstep(0.35, 0.85, vH));
+    if (alpha < 0.06) discard;   // nearly invisible tips must not write depth over what is behind them
   }
   vec3 N = normalize(vWN);
   vec3 V = normalize(cameraPosition - vWPos);
-  vec3 albedo = vCoat * mix(uRootDark, 1.0, vH) + uTipTint * vH * vH;
+  vec3 albedo = (vCoat * mix(uRootDark, 1.0, vH) + uTipTint * vH * vH) * mix(1.0 - uStreak, 1.0 + uStreak, streak);
   vec3 nView = normalize((viewMatrix * vec4(N, 0.0)).xyz);
   vec3 irr = ambientLightColor;
   #if NUM_HEMI_LIGHTS > 0
@@ -306,9 +328,9 @@ void main() {
   }
   #endif
   float rim = pow(1.0 - saturate(dot(N, V)), 3.0) * (0.35 + 0.65 * vH);
-  vec3 rimCol = mix(uRimColor * uRimStrength, uHolyColor * 1.25, uHoly);
+  vec3 rimCol = mix(uRimColor * uRimStrength, uHolyColor * 1.05, uHoly);
   vec3 col = albedo * (irr * uAmbMul + direct * uSunMul) * RECIPROCAL_PI + rim * rimCol;
-  col += albedo * uHolyColor * uHoly * 0.12 + vec3(uFlash);
+  col += albedo * uHolyColor * uHoly * 0.07 + vec3(uFlash);   // stays ginger under the glow (ref1)
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -330,6 +352,7 @@ export function makeFurMaterial(o = {}) {
       uHoly: { value: 0 }, uAmbMul: { value: o.ambMul ?? 1.55 }, uSunMul: { value: o.sunMul ?? 1.0 },
       uRootDark: { value: o.rootDark ?? 0.82 }, uDensityBoost: { value: o.density ?? 1.5 }, uFlash: { value: 0 },
       uComb: { value: o.comb ?? 1.6 }, uStretch: { value: o.stretch ?? 0.65 },
+      uCells: { value: STRANDS.cells }, uStreak: { value: o.streak ?? 0.09 }, uEdgeFade: { value: o.edgeFade ?? 0.35 },
     }]),
     vertexShader: FUR_VERT, fragmentShader: FUR_FRAG,
   });
@@ -339,9 +362,16 @@ export function makeFurMaterial(o = {}) {
   mat.uniforms.uTime = FUR_TIME;
   mat.uniforms.uHolyColor = HOLY_COLOR;
   if (o.baked) mat.defines = { FUR_BAKED: '' };
-  mat.alphaToCoverage = true; // soft strand tips with MSAA (Med/High); plain alpha-test otherwise
+  // Soft shells: alpha-blended, drawn in instance order (skin → tip), which is back-to-front on the visible side.
+  // Depth writes stay on so the outer shells of one part never get overdrawn by its inner shells.
+  // (Alpha-to-coverage dithered the strand tips into salt-and-pepper speckles against the bright fog.)
+  mat.transparent = true;
+  mat.depthWrite = true;
   return own(mat);
 }
+
+/** Render order for shell fur (after the opaque pass; whiskers draw after it). */
+export const FUR_RENDER_ORDER = 1;
 
 // ---------------------------------------------------------------- fur parts
 
@@ -371,6 +401,7 @@ export class FurPart {
       this.mesh = new THREE.InstancedMesh(geo, this.furMat, this.maxShells + 1);
     }
     this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = FUR_RENDER_ORDER;
     // shells never render into shadow maps (17x cost); the kitten adds a low-poly shadow proxy instead
     this.mesh.castShadow = false; this.mesh.receiveShadow = false;
     this.mesh.name = o.name || 'fur';

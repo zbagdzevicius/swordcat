@@ -316,9 +316,14 @@ export function dagger(A) {
   A.add('pawR', new THREE.BoxGeometry(0.018, 0.13, 0.005), { m: mat([0, 0.04, 0.04], [0.2, 0, 0]), color: C(PAL.blade), rmse: RM.steel });
   A.add('pawR', new THREE.BoxGeometry(0.06, 0.01, 0.012), { m: mat([0, -0.03, 0.03], [0.2, 0, 0]), color: C(PAL.brass), rmse: RM.brass });
 }
+/** Practice sword (CS-01 squires): gripped in the right paw, blade lowered down-forward past the paw. */
 export function woodenSword(A) {
-  A.add('pawR', new THREE.BoxGeometry(0.03, 0.4, 0.01), { m: mat([0, 0.14, 0.04], [0.25, 0, 0]), color: C('#B08A55'), rmse: RM.wood });
-  A.add('pawR', new THREE.BoxGeometry(0.1, 0.016, 0.02), { m: mat([0, -0.06, 0.0], [0.25, 0, 0]), color: C('#8A6440'), rmse: RM.wood });
+  const tilt = 0.5, dy = -Math.cos(tilt), dz = Math.sin(tilt), g = [0, -0.035, 0.012];
+  const at = (k) => [g[0], g[1] + dy * k, g[2] + dz * k];
+  A.add('pawR', new THREE.BoxGeometry(0.03, 0.36, 0.012), { m: mat(at(0.21), [-tilt, 0, 0]), color: C('#B08A55'), rmse: RM.wood });
+  A.add('pawR', new THREE.ConeGeometry(0.0155, 0.035, 4).rotateY(Math.PI / 4).scale(1, 1, 0.4).rotateX(Math.PI), { m: mat(at(0.405), [-tilt, 0, 0]), color: C('#B08A55'), rmse: RM.wood });
+  A.add('pawR', new THREE.BoxGeometry(0.1, 0.016, 0.022), { m: mat(at(0.02), [-tilt, 0, 0]), color: C('#8A6440'), rmse: RM.wood });
+  A.add('pawR', new THREE.CylinderGeometry(0.011, 0.011, 0.06, 8), { m: mat(at(-0.02), [-tilt, 0, 0]), color: C('#6B4429'), rmse: RM.leather });
 }
 
 /** Floating book (Earl Grey): separate object bobbing beside him. */
@@ -329,7 +334,7 @@ export function floatingBook(A, { color = '#7A2E3A' } = {}) {
   const mesh = new THREE.Mesh(gb.build(), kitMaterial());
   mesh.castShadow = true; mesh.name = 'floatingBook';
   const holder = new THREE.Group(); holder.position.set(0.32, 0.62, 0.12); holder.add(mesh);
-  let t = Math.random() * 6;
+  let t = 2.4; // fixed phase (visual only)
   holder.userData.update = (dt) => { t += dt; mesh.position.y = Math.sin(t * 1.7) * 0.03; mesh.rotation.set(0.5 + Math.sin(t * 1.1) * 0.08, -0.5 + Math.sin(t * 0.7) * 0.15, 0.1); };
   A.attachRoot(holder);
 }

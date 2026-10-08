@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { COMPANIONS } from '../core/config.js';
 import { E } from '../core/events.js';
 import { ShieldWall } from './ShieldWall.js';
-import { camForwardYaw, isEngaged } from './steering.js';
+import { camForwardYaw, isEngaged, isFlyer, groundY } from './steering.js';
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
 
@@ -21,10 +21,14 @@ export const COMPANION_HITS = {
   passiveArrow: { id: 'companion_arrow_passive', dmg: COMPANIONS.sage.passive.flyerDmg, knock: 1, poise: 1, hitstop: 0, shake: 0 },
 };
 
-/** Ground a flyer for `sec` (duck-typed: enemies may implement ground(sec); else the fields enemies read). */
+/**
+ * Ground a flyer for `sec` (§9.2 Volley). Enemy.groundFlyer(sec) is the enemies' hook (a no-op for walkers);
+ * older duck types: ground(sec), else the `groundedT` / `grounded` fields.
+ */
 export function groundFlyer(e, sec) {
-  if (!e?.tags?.has?.('flyer')) return false;
-  if (typeof e.ground === 'function') e.ground(sec);
+  if (!e?.alive || !isFlyer(e)) return false;
+  if (typeof e.groundFlyer === 'function') e.groundFlyer(sec);
+  else if (typeof e.ground === 'function') e.ground(sec);
   else { e.groundedT = Math.max(e.groundedT ?? 0, sec); e.grounded = true; }
   return true;
 }
@@ -53,7 +57,7 @@ export class ShieldWallAbility extends Ability {
     if (!p) return false;
     const yaw = playerForwardYaw(ctx);
     const center = new THREE.Vector3(p.pos.x + Math.sin(yaw) * cfg.dist, p.pos.y, p.pos.z + Math.cos(yaw) * cfg.dist);
-    center.y = ctx.physics?.heightAt?.(center.x, center.z) ?? p.pos.y;
+    center.y = groundY(ctx, center.x, center.z, p.pos.y);
     this.wall = new ShieldWall(ctx, { center, yaw, owner: this.c, width: cfg.width, height: cfg.height, dur: cfg.dur });
     ctx.companions?.addWall?.(this.wall) ?? this.wall.start();
     this.yaw = yaw;
@@ -183,7 +187,7 @@ export class VolleyAbility extends Ability {
       && Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z) <= cfg.range);
     if (!cand.length) return false;
     // flyers first, then engaged enemies, then nearest
-    const score = (e) => (e.tags?.has?.('flyer') ? 0 : 100) + (isEngaged(e) ? 0 : 50) + Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z);
+    const score = (e) => (isFlyer(e) ? 0 : 100) + (isEngaged(e) ? 0 : 50) + Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z);
     cand.sort((a, b) => score(a) - score(b));
     this.targets = cand.slice(0, cfg.targets);
     this.fired = 0;
@@ -289,7 +293,7 @@ export function updatePassive(c, dt, st) {
       st.flyerT = pc.flyerEvery;
       let best = null, bd = c.cfg.range;
       for (const e of ctx.enemies?.list ?? []) {
-        if (!e?.alive || e.hurtable === false || !e.tags?.has?.('flyer') || !isEngaged(e)) continue;
+        if (!e?.alive || e.hurtable === false || !isFlyer(e) || !isEngaged(e)) continue;
         const d = Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z);
         if (d < bd) { bd = d; best = e; }
       }

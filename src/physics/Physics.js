@@ -1,8 +1,10 @@
 // src/physics/Physics.js  (owner: physics) — custom kinematic collision (tech.md §5; GAME_DESIGN §7.1, §19.2).
 //
 // Frozen API (§19.2): setLevel, moveActor, separateActors, raycast, heightAt, isDeepWater(x, z), clampToBounds.
-// Additive API: groundAt, normalAt, sphereCast, lineOfSight, waterLevelAt, inBounds, blockedAt, addCollider,
-//   removeCollider, updateCollider, addMesh, removeMesh, rebuildMeshes, setDebug.
+// Additive API: groundAt, normalAt, sphereCast, lineOfSight, waterLevelAt, isShallowWater, inBounds, blockedAt,
+//   overlapsStatic, bounceAt, addCollider, removeCollider, updateCollider, refreshColliders, addMesh, removeMesh,
+//   rebuildMeshes, setDebug.
+// Without a level (or a level without a heightfield) the terrain is the plane y = 0 (heightAt → 0).
 //
 // World model, per level (LevelData from world/LevelKit):
 //   1. ground    `heightfield` — exact on the rendered terrain triangles (physics/Heightfield.js)
@@ -18,11 +20,14 @@
 //        flying (no gravity, never below ground), gravityMul, terminalFall, stepUp, noClip (integrate only)
 //   out: onGround, landImpact (m/s on the landing step, else 0), groundNormal (Vector3), groundY, groundKind
 //        ('terrain' | 'static' | 'mesh' | null), groundObject, sliding (on a too-steep slope), wallHit, ceilingHit,
-//        stepY (height gained by a step-up this step; smooth visuals with it), bounced (vy from a bounce surface)
+//        stepY (height gained / lost stepping onto or off a prop or stair this step; ease visuals with it),
+//        bounced (vy given by a bounce surface on the landing step; onGround stays false)
 // Robustness: motion is split into sub-steps of at most half the collision radius (no tunnelling through thin
-// walls at dodge, knockback or terminal-fall speeds); walkable contacts push straight up (no creeping down ramps);
-// walls and steep faces push sideways only (no climbing); step-up 0.3 m (PLAYER.stepUp) onto props and meshes;
-// downhill ground snap 0.3 m; slopes with normal.y < 0.7 can't be walked up and slide (GAME_DESIGN §7.1).
+// walls at dodge, knockback or terminal-fall speeds; beyond 24 sub-steps the motion is shortened, never skipped);
+// walkable contacts push straight up (no creeping down ramps); walls and steep faces push sideways only (no
+// climbing); step-up 0.3 m (PLAYER.stepUp) onto props and meshes, never onto a taller riser's rim; downhill ground
+// snap 0.3 m that never snaps through architecture (a grounded capsule follows step edges down and slips off ledges);
+// slopes with normal.y < 0.7 can't be walked up and slide (GAME_DESIGN §7.1); separation shoves are swept too.
 import * as THREE from 'three';
 import { StaticColliders } from './StaticColliders.js';
 import { MeshCollider } from './MeshCollider.js';
@@ -37,9 +42,10 @@ export const PHYSICS_DEFAULTS = Object.freeze({
   groundSnap: 0.3,         // tech.md §5: stick to downhill slopes / step down
   skin: 0.02,              // resting-contact tolerance (m)
   substep: 0.5,            // max motion per sub-step as a fraction of the collision radius
-  maxSubsteps: 16,
+  maxSubsteps: 24,         // (r 0.32: tunnel-free up to ~230 m/s; faster motion is clamped to that)
   deepWater: 0.5,          // water deeper than this (m) is "deep" unless the water entry says deep: true/false
   ceilingNormalY: -0.2,
+  edgeSlip: 2.0,           // m/s: a grounded actor resting on a ledge edge (capsule rim) rolls off it at this speed
 });
 
 const _n = new THREE.Vector3();
@@ -48,6 +54,8 @@ const RAY_DEFAULTS = Object.freeze({ terrain: true, mesh: true, statics: false }
 const LOS_DEFAULTS = Object.freeze({ terrain: true, mesh: true, statics: true });
 const KIND_NAMES = ['terrain', 'static', 'mesh'];
 const TERRAIN = 0, STATIC = 1, MESH = 2;
+const SNAP_NONE = 0, SNAP_FLOOR = 1, SNAP_EDGE = 2;
+const RIM_RISE = 0.05;           // terrain this far above the feet at the capsule's leading rim counts as "in the way"
 
 export class Physics {
   constructor(ctx) {
@@ -72,12 +80,19 @@ export class Physics {
     /** @type {{min:{x:number,y:number}, max:{x:number,y:number}}|null} */
     this.bounds = null;
     this._hit = { distance: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0), object: null, kind: null };
+    /** raycast / sphereCast / lineOfSight honour `opts.ignore(src)` for static props (requests/camera.md) */
+    this.castIgnore = true;
     this._debug = null;
     this._sepStamp = 0;
     this._moved = [];
     this._warnedNaN = false;
+    this._waterDeep = undefined;
+    /** @type {Map<object, 'ring'|null>} colliders added with addCollider (kept across refreshColliders; dropped by setLevel) */
+    this._extra = new Map();
     // per-substep scratch (avoids allocations)
     this._g = { onGround: false, kind: -1, nx: 0, ny: 1, nz: 0, obj: null, bounce: 0, sliding: false };
+    this._snNx = 0; this._snNy = 1; this._snNz = 0;
+    this._stepNx = 0; this._stepNy = 1; this._stepNz = 0; this._stepObj = null; this._stepKind = -1;
   }
 
   async init() {}
@@ -98,6 +113,7 @@ export class Physics {
   setLevel(level) {
     this.level = level ?? null;
     this.heightfield = level?.heightfield ?? null;
+    this._extra.clear();
     this.statics.set(level?.colliders ?? null);
     this.bounds = level?.bounds ?? null;
     const sources = [];
@@ -117,10 +133,24 @@ export class Physics {
 
   // ---- dynamic colliders (arena fog walls, nets, doors, cages) ----
   /** Add a static collider (any StaticColliders shape). Returns it; remove with removeCollider(sameObject). */
-  addCollider(c, hint = null) { const r = this.statics.add(c, hint); this._debug?.rebuild(); return r; }
-  removeCollider(c) { const r = this.statics.remove(c); this._debug?.rebuild(); return r; }
+  addCollider(c, hint = null) {
+    const r = this.statics.add(c, hint);
+    if (r) this._extra.set(c, hint);
+    this._debug?.rebuild();
+    return r;
+  }
+  removeCollider(c) { this._extra.delete(c); const r = this.statics.remove(c); this._debug?.rebuild(); return r; }
   /** Re-index a collider whose fields you changed (moved door). */
   updateCollider(c) { this.statics.update(c); this._debug?.rebuild(); }
+  /**
+   * Re-read `level.colliders` after editing its arrays in place (arena fog walls, opened gates). Colliders added with
+   * addCollider stay.
+   */
+  refreshColliders() {
+    this.statics.set(this.level?.colliders ?? null);
+    for (const [c, hint] of this._extra) if (!this.statics.has(c)) this.statics.add(c, hint);
+    this._debug?.rebuild();
+  }
   /** Add an Object3D's meshes to the architecture (rebuilds the Octree: once per change, not per frame). */
   addMesh(obj) { this.mesh.add(obj); this.octree = this.mesh.octree; this._debug?.rebuild(); return obj; }
   removeMesh(obj) { const r = this.mesh.remove(obj); this.octree = this.mesh.octree; this._debug?.rebuild(); return r; }
@@ -140,28 +170,44 @@ export class Physics {
     if (fromY === undefined || fromY === null || !Number.isFinite(fromY)) return t;
     let g = t;
     if (this.octree) {
-      const d = this.mesh.raycast(x, fromY + 1e-3, z, 0, -1, 0, fromY + 1e-3 - g);
-      if (d >= 0 && this.mesh.rayNy > 0) g = Math.max(g, fromY + 1e-3 - d);
+      const mesh = this.mesh, walk = this.cfg.walkableNormalY;
+      let y = fromY + 1e-3;
+      for (let k = 0; k < 6 && y > g; k++) {                             // skip steep / downward faces (roofs, undersides)
+        const d = mesh.raycast(x, y, z, 0, -1, 0, y - g);
+        if (d < 0) break;
+        const tri = mesh.rayTri, ny = tri.ds ? Math.abs(tri.ny) : tri.ny;
+        if (ny >= walk) { g = Math.max(g, y - d); break; }
+        y -= d + 1e-3;
+      }
     }
     const s = this.statics.supportAt(x, z, 0, fromY + 1e-3);
     return s > g ? s : g;
+  }
+
+  /** Highest walkable surface at (x, z): terrain, prop tops or architecture (bridge decks, causeways). */
+  topAt(x, z) {
+    let from = this.heightAt(x, z) + 50;
+    const ob = this.octree?.bounds;
+    if (ob && Number.isFinite(ob.max.y)) from = Math.max(from, ob.max.y + 1);
+    return this.groundAt(x, z, from);
   }
 
   /** Smooth terrain normal (tech.md §5). */
   normalAt(x, z, out = new THREE.Vector3()) { return this.heightfield ? this.heightfield.normalAt(x, z, out) : out.set(0, 1, 0); }
 
   /**
-   * Water surface height at (x, z) or null. From `level.water` entries (Appendix B.1): { kind: 'stream', from, to,
-   * width, y, deep }, { kind: 'rect', at, size } | { minX, maxX, minZ, maxZ }, { kind: 'disc', at, r },
-   * { kind: 'poly', points }, or a plain { y } plane (covers the level wherever the terrain is lower).
+   * Water surface height at (x, z) or null. From `level.waterLevelAt(x, z)` when the level provides it, else the
+   * `level.water` entries (Appendix B.1): { kind: 'stream', from, to | pts, width, y, deep }, { kind: 'rect', at, size } |
+   * { minX, maxX, minZ, maxZ }, { kind: 'disc', at, r }, { kind: 'poly', points }, or a plain { y } plane (the whole
+   * level wherever the ground is lower). The highest surface wins.
    */
   waterLevelAt(x, z) {
     const lvl = this.level;
+    this._waterDeep = undefined;
     if (typeof lvl?.waterLevelAt === 'function') { const y = lvl.waterLevelAt(x, z); return Number.isFinite(y) ? y : null; }
     const list = Array.isArray(lvl?.water) ? lvl.water : null;
     if (!list) return null;
     let best = null;
-    this._waterDeep = undefined;
     for (const w of list) {
       if (!w || !inWater(w, x, z)) continue;
       const y = Number.isFinite(w.y) ? w.y : 0;
@@ -170,20 +216,42 @@ export class Physics {
     return best;
   }
 
+  /** Depth of water over the standing surface (feet `y`, or the top surface at x, z); 0 when dry. Sets _waterDeep. */
+  _waterDepth(x, z, y) {
+    const wy = this.waterLevelAt(x, z);
+    if (wy === null) return 0;
+    const deepFlag = this._waterDeep;
+    const top = Number.isFinite(y) ? y : this.topAt(x, z);
+    this._waterDeep = deepFlag;
+    const depth = wy - top;
+    return depth > 0.05 ? depth : 0;
+  }
+
   /**
-   * Deep water (or a pit) at (x, z)? Delegates to `level.isDeepWater(x, z, y)` when the level provides it; else
-   * uses `level.water`. With `y` (feet height), anything standing above the surface (a bridge deck) is dry.
+   * Deep water (or a pit) at (x, z)? Delegates to `level.isDeepWater(x, z, y)` when the level provides it; else uses
+   * `level.water`. With `y` (feet height) the depth is measured from the feet (on a bridge deck or a stepping stone
+   * above the surface: dry). Without `y`, from the highest walkable surface there (`topAt`, also what a level function
+   * is passed), so bridge decks and causeways over water are dry and the stream bed under open water is deep. A water
+   * entry's `deep: true / false` overrides the depth test (config `PHYSICS.deepWater`, 0.5 m).
    */
   isDeepWater(x, z, y) {
     const lvl = this.level;
-    if (typeof lvl?.isDeepWater === 'function') return !!lvl.isDeepWater(x, z, y);
-    const wy = this.waterLevelAt(x, z);
-    if (wy === null) return false;
-    if (Number.isFinite(y) && y >= wy - 0.05) return false;
-    const depth = wy - this.heightAt(x, z);
-    if (depth <= 0.05) return false;
+    // the level's own water test, asked about the surface one would stand on when no feet height is given
+    if (typeof lvl?.isDeepWater === 'function') return !!lvl.isDeepWater(x, z, Number.isFinite(y) ? y : this.topAt(x, z));
+    const depth = this._waterDepth(x, z, y);
+    if (depth <= 0) return false;
     const deep = this._waterDeep;
     return deep === true ? true : deep === false ? false : depth > this.cfg.deepWater;
+  }
+
+  /** Wading water (footstep splashes, slow-down): water over the standing surface that isn't deep. */
+  isShallowWater(x, z, y) {
+    const lvl = this.level;
+    if (typeof lvl?.isShallowWater === 'function') return !!lvl.isShallowWater(x, z, Number.isFinite(y) ? y : this.topAt(x, z));
+    if (typeof lvl?.isDeepWater === 'function' && typeof lvl?.waterLevelAt !== 'function' && !Array.isArray(lvl?.water)) return false;
+    const depth = this._waterDepth(x, z, y);
+    if (depth <= 0) return false;
+    return !this.isDeepWater(x, z, y);
   }
 
   /** Inside the level bounds (inset by margin)? */
@@ -200,9 +268,41 @@ export class Physics {
   blockedAt(x, z, r = 0, y0 = -Infinity, y1 = Infinity, actor = null) { return this.statics.overlaps(x, z, r, y0, y1, actor); }
 
   /**
+   * Does a sphere (centre `pos`, radius r) touch a solid prop or the architecture? (projectiles: stop on walls and
+   * trees; arena fog-wall rings and `ray: false` colliders don't count.)
+   * @param {{x:number,y:number,z:number}} pos @param {number} [r] @param {{statics?:boolean, mesh?:boolean}} [opts]
+   */
+  overlapsStatic(pos, r = 0, opts = LOS_DEFAULTS) {
+    if (!pos) return false;
+    const x = pos.x, y = pos.y, z = pos.z;
+    if (opts.statics !== false && this.statics.overlaps(x, z, r, y - r, y + r, null, true)) return true;
+    if (opts.mesh !== false && this.octree && this.mesh.overlapsSphere(x, y, z, r)) return true;
+    return false;
+  }
+
+  /**
+   * Bounce velocity of the surface right under feet (x, y, z) — a prop or mesh with `bounce` (mushroom caps) — or 0.
+   * moveActor already applies bounces on landing (sets `actor.bounced`); this is the query form.
+   */
+  bounceAt(x, z, y) {
+    const C = this.cfg;
+    const yy = Number.isFinite(y) ? y : this.topAt(x, z);
+    const s = this.statics.supportAt(x, z, 0, yy + C.skin);
+    let best = s > yy - C.skin - 0.05 ? this.statics.supportBounce : 0;
+    if (this.octree) {
+      const d = this.mesh.raycast(x, yy + C.skin, z, 0, -1, 0, 2 * C.skin + 0.05);
+      if (d >= 0 && this.mesh.rayTri?.bounce > best) best = this.mesh.rayTri.bounce;
+    }
+    return best;
+  }
+
+  /**
    * Ray vs terrain + architecture (+ static props with opts.statics). Returns a shared hit object
-   * { distance, point, normal, object, kind: 'terrain'|'mesh'|'static' } or null. Copy what you keep.
-   * @param {THREE.Ray} ray @param {number} [maxDist] @param {{terrain?:boolean, mesh?:boolean, statics?:boolean, actor?:any}} [opts]
+   * { distance, point, normal, object, kind: 'terrain'|'mesh'|'static' } or null. Copy what you keep. For props,
+   * `object` is the collider description itself (its own fields, e.g. `cam`, come back). `opts.ignore(src) → true`
+   * skips a prop (announced by `castIgnore`); `opts.actor` applies per-collider faction filters.
+   * @param {THREE.Ray} ray @param {number} [maxDist]
+   * @param {{terrain?:boolean, mesh?:boolean, statics?:boolean, actor?:any, ignore?:(src:any)=>boolean}} [opts]
    */
   raycast(ray, maxDist = 100, opts = RAY_DEFAULTS) {
     const o = ray.origin;
@@ -243,7 +343,7 @@ export class Physics {
       }
     }
     if (opts.statics && this.statics.count) {
-      const t = this.statics.raycast(ox, oy, oz, dx, dy, dz, best, radius, opts.actor ?? null);
+      const t = this.statics.raycast(ox, oy, oz, dx, dy, dz, best, radius, opts.actor ?? null, typeof opts.ignore === 'function' ? opts.ignore : null);
       if (t >= 0 && t <= best) { best = t; kind = STATIC; obj = this.statics.hitSrc; h.normal.set(this.statics.hitNx, this.statics.hitNy, this.statics.hitNz); }
     }
     if (kind < 0) return null;
@@ -288,9 +388,10 @@ export class Physics {
 
     const r = a.radius ?? 0.35, h = a.height ?? 1, capR = Math.max(0.01, Math.min(r, h * 0.5));
     const maxStep = Math.max(0.02, capR * C.substep);
-    const len = Math.max(Math.hypot(v.x, v.z), Math.abs(v.y)) * dt;
+    const len = Math.hypot(v.x, v.y, v.z) * dt;
     const n = Math.min(C.maxSubsteps, Math.max(1, Math.ceil(len / maxStep)));
-    const sdt = dt / n;
+    // beyond maxSubsteps × maxStep per step the motion is shortened (never the velocity): no tunnelling at any speed
+    const sdt = (dt / n) * (len > n * maxStep ? (n * maxStep) / len : 1);
     const g = this._g;
     let grounded = wasGround && v.y <= 0 && !flying;
     a.sliding = false;
@@ -299,7 +400,7 @@ export class Physics {
     let impact = 0;
     for (let i = 0; i < n; i++) {
       const vyBefore = v.y;
-      const now = this._substep(a, v.x * sdt, v.y * sdt, v.z * sdt, grounded, flying, capR);
+      const now = this._substep(a, v.x * sdt, v.y * sdt, v.z * sdt, grounded, flying, capR, sdt);
       if (now && !grounded && -vyBefore > impact) impact = -vyBefore;
       grounded = now;
     }
@@ -317,7 +418,7 @@ export class Physics {
   }
 
   /** One sub-step. Returns whether the actor ends it on walkable ground; ground details in this._g. */
-  _substep(a, sx, sy, sz, grounded, flying, capR) {
+  _substep(a, sx, sy, sz, grounded, flying, capR, sdt) {
     const C = this.cfg, p = a.pos, v = a.vel, hf = this.heightfield, mesh = this.mesh, g = this._g;
     const x0 = p.x, y0 = p.y, z0 = p.z;
     const stepUp = flying ? 0 : (a.stepUp ?? C.stepUp);
@@ -327,8 +428,14 @@ export class Physics {
     // 1. too-steep terrain can't be walked (or slid) up
     if (hf && !flying) this._blockSteepTerrain(a, x0, z0, y0);
 
-    // 2. props: sideways push-out; tops within reach are support
-    const support = this.statics.resolve(a, y0, grounded ? stepUp : C.skin);
+    // 2. props: sideways push-out; tops within reach are support. Wedged between props closer together than the
+    //    actor is wide (a post beside a crate): cancel this sub-step's sideways move instead of ending up inside one.
+    let support = this.statics.resolve(a, y0, grounded ? stepUp : C.skin);
+    if (this.statics.stuck) {
+      p.x = x0; p.z = z0;
+      support = this.statics.resolve(a, y0, grounded ? stepUp : C.skin);
+      a.wallHit = true;
+    }
     if (this.statics.wall) a.wallHit = true;
     const supportBounce = this.statics.supportBounce, supportSrc = this.statics.supportSrc;
 
@@ -349,8 +456,7 @@ export class Physics {
     }
 
     // 4. ground: terrain and prop tops (never below either), then architecture floors / snap
-    let gy = -Infinity, gKind = -1, gBounce = 0, gObj = null;
-    if (hf) { gy = hf.heightAt(p.x, p.z); gKind = TERRAIN; }
+    let gy = hf ? hf.heightAt(p.x, p.z) : 0, gKind = TERRAIN, gBounce = 0, gObj = null;   // no heightfield: plane y 0
     if (support > gy) { gy = support; gKind = STATIC; gBounce = supportBounce; gObj = supportSrc; }
     if (flying) { if (p.y < gy) p.y = gy; return false; }
 
@@ -359,11 +465,14 @@ export class Physics {
     if (meshFloor) {
       on = true; kind = MESH; nx = mfnx; ny = mfny; nz = mfnz; bounce = mfBounce; obj = mfObj;
     } else if (p.y <= gy + (canSnap ? C.groundSnap : C.skin)) {
-      // an architecture floor between us and that ground wins (walking off a low deck onto terrain)
-      if (canSnap && this.octree && p.y - gy > C.skin && this._snapMesh(a, capR, p.y - gy)) {
-        on = true; kind = MESH; nx = mesh.sweepNx; ny = mesh.sweepNy; nz = mesh.sweepNz; obj = mesh.sweepTri?.obj ?? null;
+      // architecture between us and that ground wins: a floor (walking off a low deck onto terrain) is stood on, and
+      // a ledge edge is never snapped through (we roll off it instead)
+      // (only while grounded: airborne actors reach here at most `skin` above the ground)
+      const snap = this.octree && p.y - gy > C.skin ? this._snapMesh(a, capR, p.y - gy, sdt) : SNAP_NONE;
+      if (snap !== SNAP_NONE) {
+        on = true; kind = MESH; nx = this._snNx; ny = this._snNy; nz = this._snNz; obj = mesh.sweepTri?.obj ?? null;
       } else {
-        if (gKind === TERRAIN) hf.normalAt(p.x, p.z, _n); else _n.set(0, 1, 0);
+        if (gKind === TERRAIN && hf) hf.normalAt(p.x, p.z, _n); else _n.set(0, 1, 0);
         if (_n.y >= C.walkableNormalY) {
           p.y = gy; on = true; kind = gKind; nx = _n.x; ny = _n.y; nz = _n.z; bounce = gBounce; obj = gObj;
         } else if (p.y <= gy + C.skin) {                                  // too steep: slide down it
@@ -376,8 +485,8 @@ export class Physics {
           }
         }
       }
-    } else if (canSnap && this.octree && this._snapMesh(a, capR, C.groundSnap)) {
-      on = true; kind = MESH; nx = mesh.sweepNx; ny = mesh.sweepNy; nz = mesh.sweepNz; obj = mesh.sweepTri?.obj ?? null;
+    } else if (canSnap && this.octree && this._snapMesh(a, capR, C.groundSnap, sdt) !== SNAP_NONE) {
+      on = true; kind = MESH; nx = this._snNx; ny = this._snNy; nz = this._snNz; obj = mesh.sweepTri?.obj ?? null;
     }
 
     if (on) {
@@ -387,29 +496,63 @@ export class Physics {
         v.y = bounce; a.bounced = bounce; on = false;
       }
     }
-    if (on) { g.kind = kind; g.nx = nx; g.ny = ny; g.nz = nz; g.obj = obj; }
+    if (on) {
+      // a step onto / off a prop top or between surfaces: report the height jump so visuals can smooth it
+      if (grounded && (kind !== g.kind || obj !== g.obj) && kind !== MESH) { const d = p.y - (y0 + sy); if (d > C.skin || d < -C.skin) a.stepY += d; }
+      g.kind = kind; g.nx = nx; g.ny = ny; g.nz = nz; g.obj = obj;
+    }
     return on;
   }
 
-  /** Sweep the capsule's bottom sphere down by up to `maxDown`; on a walkable hit, move the actor there. */
-  _snapMesh(a, capR, maxDown) {
+  /**
+   * Keep a grounded actor on architecture: sweep the capsule's bottom sphere down by up to `maxDown` and move it onto
+   * the first thing below. SNAP_FLOOR: a walkable face. SNAP_EDGE: a ledge or step edge under the capsule's rim — it
+   * rests on the edge (so it follows the rounded profile down stairs and is never snapped through architecture to the
+   * terrain under it) and slips off it at `edgeSlip`. SNAP_NONE: nothing within reach. Normal in _snN*.
+   */
+  _snapMesh(a, capR, maxDown, sdt) {
     const p = a.pos, mesh = this.mesh;
     const t = mesh.sweepSphere(p.x, p.y + capR, p.z, 0, -1, 0, capR, maxDown);
-    if (t < 0 || mesh.sweepNy < this.cfg.walkableNormalY) return false;
+    if (t < 0 || mesh.sweepNy <= 0.05) return SNAP_NONE;
     p.y -= t;
-    return true;
+    if (mesh.sweepNy >= this.cfg.walkableNormalY) {
+      this._snNx = mesh.sweepNx; this._snNy = mesh.sweepNy; this._snNz = mesh.sweepNz;
+      return SNAP_FLOOR;
+    }
+    const hl = Math.hypot(mesh.sweepNx, mesh.sweepNz);
+    if (hl > 1e-6 && sdt > 0) {
+      const k = (this.cfg.edgeSlip * sdt) / hl;
+      p.x += mesh.sweepNx * k; p.z += mesh.sweepNz * k;
+    }
+    this._snNx = 0; this._snNy = 1; this._snNz = 0;
+    return SNAP_EDGE;
   }
 
-  /** Remove the uphill part of this sub-step's motion where the terrain ahead is steeper than walkable. */
+  /**
+   * Capsule vs heightfield: the feet ride the terrain (exact triangles), and the body may not push into terrain steeper
+   * than walkable. Two probes remove the uphill part of this sub-step's motion: the smoothed slope under the centre
+   * (no walking up a steep hillside) and the exact triangle under the capsule's leading rim when it rises above the
+   * feet (no clipping the body into a cliff or bank before the centre reaches it, on any grid resolution).
+   */
   _blockSteepTerrain(a, x0, z0, y0) {
-    const p = a.pos, hf = this.heightfield;
-    if (p.x === x0 && p.z === z0) return;
+    const p = a.pos, hf = this.heightfield, walk = this.cfg.walkableNormalY;
+    const dx = p.x - x0, dz = p.z - z0, dl = Math.hypot(dx, dz);
+    if (dl < 1e-9) return;
+    // 1. the slope under the centre
     hf.normalAt(p.x, p.z, _n);
-    if (_n.y >= this.cfg.walkableNormalY) return;
-    if (hf.heightAt(p.x, p.z) <= y0 + 1e-4) return;                      // airborne above it, or going down
+    if (_n.y < walk && hf.heightAt(p.x, p.z) > y0 + 1e-4) this._removeUphill(a, x0, z0);   // (else airborne / going down)
+    // 2. the leading rim
+    const r = a.radius ?? 0.35, ex = p.x + (dx / dl) * r, ez = p.z + (dz / dl) * r;
+    if (hf.heightAt(ex, ez) - y0 <= RIM_RISE) return;
+    hf.faceNormalAt(ex, ez, _n);
+    if (_n.y < walk) this._removeUphill(a, x0, z0);
+  }
+
+  /** Cancel the part of this sub-step's move (and of the velocity) that goes up the slope with normal _n. */
+  _removeUphill(a, x0, z0) {
     const hl = Math.hypot(_n.x, _n.z);
     if (hl < 1e-9) return;
-    const ux = -_n.x / hl, uz = -_n.z / hl;                              // uphill
+    const p = a.pos, ux = -_n.x / hl, uz = -_n.z / hl;                    // uphill
     const m = (p.x - x0) * ux + (p.z - z0) * uz;
     if (m <= 0) return;
     p.x -= ux * m; p.z -= uz * m;
@@ -436,15 +579,21 @@ export class Physics {
     const maxDown = stepUp + C.groundSnap;
     let land = -Infinity, kind = -1;
     const t = mesh.sweepSphere(p.x, p.y + capR, p.z, 0, -1, 0, capR, maxDown);
-    if (t >= 0 && mesh.sweepNy >= C.walkableNormalY) {
-      land = p.y - t; kind = MESH;
-      this._stepNx = mesh.sweepNx; this._stepNy = mesh.sweepNy; this._stepNz = mesh.sweepNz; this._stepObj = mesh.sweepTri?.obj ?? null;
+    if (t >= 0) {
+      // the first thing below: a floor, or the edge of the next step (rest on it and roll over it as we move on);
+      // either way nothing below it (terrain under a stair box) may be chosen instead
+      // (the contact point itself must be within stepUp: resting on the rim of a taller riser is not a step)
+      if (mesh.sweepNy <= 0.05 || p.y - t + capR * (1 - mesh.sweepNy) > y0 + stepUp + 1e-3) { p.set(bx, by, bz); v.set(bvx, bvy, bvz); return false; }
+      land = p.y - t; kind = MESH; this._stepObj = mesh.sweepTri?.obj ?? null;
+      if (mesh.sweepNy >= C.walkableNormalY) { this._stepNx = mesh.sweepNx; this._stepNy = mesh.sweepNy; this._stepNz = mesh.sweepNz; }
+      else { this._stepNx = 0; this._stepNy = 1; this._stepNz = 0; }
     }
     if (hf) { const gy = hf.heightAt(p.x, p.z); if (gy <= p.y + 1e-4 && gy > land) { land = gy; kind = TERRAIN; } }
     const s = this.statics.supportAt(p.x, p.z, a.radius ?? capR, p.y + 1e-4, a);
     if (s > land) { land = s; kind = STATIC; }
     const progress = (p.x - x0) * sx + (p.z - z0) * sz;
-    if (kind < 0 || land > y0 + stepUp + 1e-3 || land < y0 - C.groundSnap || progress <= got + 1e-6) {
+    if (kind < 0 || land > y0 + stepUp + 1e-3 || land < y0 - C.groundSnap || progress <= got + 1e-6
+        || mesh.penetrates(p.x, land, p.z, capR, h, 0.02)) {
       p.set(bx, by, bz); v.set(bvx, bvy, bvz);
       return false;
     }
@@ -469,9 +618,14 @@ export class Physics {
     return a && a.pos && a.alive !== false && !a.ghost && !a.attachedTo && !a.noClip && a.collideActors !== false && (a.radius ?? 0) > 0;
   }
 
-  /** Mass-weighted XZ circle separation between live, solid actors (O(n²), n < 40); then props/walls/bounds again. */
+  /**
+   * Mass-weighted XZ circle separation between live, solid actors (O(n²), n < 40; tech.md §5 item 4). `fixed` actors
+   * (Pudding, shield posts, props) never move and push others fully; actors whose height ranges don't overlap (a crow
+   * overhead, a kitten on a balcony) are ignored. Every pushed actor is then swept from where it stood through props,
+   * architecture and bounds, so a shove never tunnels through a thin wall, and is lifted onto the ground it lands on.
+   */
   separateActors() {
-    const list = this.ctx.actors?.list;
+    const list = this.ctx?.actors?.list;
     if (!list || list.length < 2) return;
     const stamp = ++this._sepStamp, moved = this._moved;
     moved.length = 0;
@@ -492,27 +646,46 @@ export class Physics {
           dx = Math.sin(an) * 1e-3; dz = Math.cos(an) * 1e-3; d2 = 1e-6;
         }
         const d = Math.sqrt(d2), push = min - d, nx = dx / d, nz = dz / d;
-        const ma = a.fixed ? 1e9 : Math.max(1e-3, a.mass ?? 1), mb = b.fixed ? 1e9 : Math.max(1e-3, b.mass ?? 1);
-        const wa = mb / (ma + mb), wb = ma / (ma + mb);
-        a.pos.x -= nx * push * wa; a.pos.z -= nz * push * wa;
-        b.pos.x += nx * push * wb; b.pos.z += nz * push * wb;
-        if (a._physSep !== stamp && wa > 1e-6) { a._physSep = stamp; moved.push(a); }
-        if (b._physSep !== stamp && wb > 1e-6) { b._physSep = stamp; moved.push(b); }
+        let wa, wb;
+        if (a.fixed) { wa = 0; wb = 1; }
+        else if (b.fixed) { wa = 1; wb = 0; }
+        else { const ma = Math.max(1e-3, a.mass ?? 1), mb = Math.max(1e-3, b.mass ?? 1); wa = mb / (ma + mb); wb = ma / (ma + mb); }
+        if (wa > 0) {
+          if (a._physSep !== stamp) { a._physSep = stamp; a._sepX = a.pos.x; a._sepZ = a.pos.z; moved.push(a); }
+          a.pos.x -= nx * push * wa; a.pos.z -= nz * push * wa;
+        }
+        if (wb > 0) {
+          if (b._physSep !== stamp) { b._physSep = stamp; b._sepX = b.pos.x; b._sepZ = b.pos.z; moved.push(b); }
+          b.pos.x += nx * push * wb; b.pos.z += nz * push * wb;
+        }
       }
     }
     for (let i = 0; i < moved.length; i++) this._settle(moved[i]);
     moved.length = 0;
   }
 
-  /** Re-resolve props, architecture walls and bounds after a positional nudge (no velocity changes). */
+  /**
+   * After a separation shove: sweep the actor from its pre-shove spot to where the shove put it, resolving props and
+   * architecture each sub-step (no velocity changes), lift it onto the ground there, keep it in bounds.
+   */
   _settle(a) {
-    if (a.fixed) return;
-    const C = this.cfg;
-    this.statics.resolve(a, a.pos.y, a.onGround ? (a.stepUp ?? C.stepUp) : C.skin, false);
-    if (this.octree) {
-      const r = a.radius ?? 0.35, capR = Math.max(0.01, Math.min(r, (a.height ?? 1) * 0.5));
-      this.mesh.resolveCapsule(a, capR, C.walkableNormalY, 0, false);
+    const C = this.cfg, p = a.pos;
+    const r = a.radius ?? 0.35, capR = Math.max(0.01, Math.min(r, (a.height ?? 1) * 0.5));
+    const tx = p.x, tz = p.z, sx = Number.isFinite(a._sepX) ? a._sepX : tx, sz = Number.isFinite(a._sepZ) ? a._sepZ : tz;
+    const dx = tx - sx, dz = tz - sz, len = Math.hypot(dx, dz);
+    const n = Math.min(C.maxSubsteps, Math.max(1, Math.ceil(len / Math.max(0.02, capR * C.substep))));
+    const allowance = a.onGround && !a.flying ? (a.stepUp ?? C.stepUp) : C.skin;
+    p.x = sx; p.z = sz;
+    let support = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const px = p.x, pz = p.z;
+      p.x += dx / n; p.z += dz / n;
+      support = this.statics.resolve(a, p.y, allowance, false);
+      if (this.statics.stuck) { p.x = px; p.z = pz; support = this.statics.resolve(a, p.y, allowance, false); break; }
+      if (this.octree) this.mesh.resolveCapsule(a, capR, C.walkableNormalY, 0, false);
     }
+    const t = this.heightAt(p.x, p.z), ground = support > t ? support : t;
+    if (p.y < ground) p.y = ground;
     this.clampToBounds(a);
   }
 
@@ -541,15 +714,24 @@ export class Physics {
 /** Is (x, z) inside the area of a `level.water` entry? */
 function inWater(w, x, z) {
   const kind = w.kind;
-  if (kind === 'stream' || (w.from && w.to)) {
-    const [ax, az] = w.from, [bx, bz] = w.to, vx = bx - ax, vz = bz - az, l2 = vx * vx + vz * vz || 1;
-    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / l2));
-    const dx = x - (ax + vx * t), dz = z - (az + vz * t);
-    const hw = (w.width ?? 4) / 2;
-    return dx * dx + dz * dz <= hw * hw;
+  if (kind === 'stream' || (w.from && w.to) || (Array.isArray(w.pts) && w.pts.length > 1)) {
+    const pts = Array.isArray(w.pts) && w.pts.length > 1 ? w.pts : null, hw = (w.width ?? 6) / 2;
+    const n = pts ? pts.length - 1 : 1;
+    for (let i = 0; i < n; i++) {
+      const [ax, az] = pts ? pts[i] : w.from, [bx, bz] = pts ? pts[i + 1] : w.to;
+      const vx = bx - ax, vz = bz - az, l2 = vx * vx + vz * vz || 1;
+      const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / l2));
+      const dx = x - (ax + vx * t), dz = z - (az + vz * t);
+      if (dx * dx + dz * dz <= hw * hw) return true;
+    }
+    return false;
   }
   if (w.minX !== undefined) return x >= w.minX && x <= w.maxX && z >= w.minZ && z <= w.maxZ;
-  if ((kind === 'rect' || kind === 'box') && w.at && w.size) return Math.abs(x - w.at[0]) <= w.size[0] / 2 && Math.abs(z - w.at[1]) <= w.size[1] / 2;
+  if ((kind === 'rect' || kind === 'box') && w.at && w.size) {
+    let dx = x - w.at[0], dz = z - w.at[1];
+    if (w.yaw) { const c = Math.cos(w.yaw), s = Math.sin(w.yaw), lx = dx * c - dz * s; dz = dx * s + dz * c; dx = lx; }   // as StaticColliders boxes
+    return Math.abs(dx) <= w.size[0] / 2 && Math.abs(dz) <= w.size[1] / 2;
+  }
   if ((kind === 'disc' || kind === 'pool' || w.r) && w.at) return Math.hypot(x - w.at[0], z - w.at[1]) <= w.r;
   if ((kind === 'poly' || w.points) && Array.isArray(w.points)) {
     let inside = false;

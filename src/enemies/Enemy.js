@@ -21,8 +21,22 @@ const _d = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const WHITE = new THREE.Color(1, 1, 1);
 
+/** KayKit head meshes a beast head replaces (characters' attachBeastHead hides them after measuring). */
+const KAYKIT_HEADS = new Set(['Barbarian_Head', 'Knight_Head', 'Rogue_Head_Hooded', 'Rogue_Head', 'Mage_Head']);
+
 const MELEE_FALLBACK = { telegraph: 'parry', windup: 0.6, dur: 0.45, active: [0, 0.12], arc: { range: 1.6, from: 0.7, to: -0.7, y0: 0, y1: 1.3 },
   dmg: 1, knock: 3, poise: 1, recover: 0.8 };
+
+/**
+ * Visual (animation) dt for a rendered frame: frozen during hitstop and the pause menu, scaled by slow motion
+ * (the loop's timeScale) so mixers slow down with the simulation.
+ */
+export function visualDt(ctx, frameDt) {
+  const g = ctx?.game;
+  if (!g) return frameDt;
+  if (g.hitstopT > 0 || g.mode === 'menu') return 0;
+  return frameDt * (g.loop?.timeScale ?? 1);
+}
 
 /** Telegraph kind → default §19.5 shape. */
 export function defaultShape(kind) {
@@ -190,16 +204,21 @@ export const BASE_STATES = {
     anim: (e) => (e.def.scamper ? ['run', { speed: 1.3 }] : ['death', { once: true, clampEnd: true }]),
     enter(e) {
       e.hurtable = false; e.endTelegraph(); e.swing = null; e.followUp = null; e.releaseToken();
+      if (e.perched) { e.perched = false; e.flying = !!e.def.fly; }        // a perched shooter tumbles off its wall
       e.deathAt = e.pos.clone();
-      const rng = e.ctx.rng, fish = e.def.fish ? rng.int(e.def.fish[0], e.def.fish[1] ?? e.def.fish[0]) : 0;
+      const rng = e.ctx.rng, f = e.def.fish, fish = Array.isArray(f) ? rng.int(f[0], f[1] ?? f[0]) : (typeof f === 'number' ? f : 0);
       const smallHeart = e.def.smallHeart !== false && rng.chance(PLAYER.smallHeart.chance);
-      e.ctx.bus.emit(E.ENEMY_DIED, { enemy: e, type: e.def.id, position: e.deathAt.clone(), fish, smallHeart });
-      e.ctx.bus.emit(E.BURST, { kind: 'poof', position: _v.copy(e.pos).setY(e.pos.y + e.height * 0.5).clone(), count: 12 });
-      e.dropHelmet();
       const p = e.ctx.player;
+      if (p) _d.set(e.pos.x - p.pos.x, 0, e.pos.z - p.pos.z); else _d.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
+      if (_d.lengthSq() < 1e-6) _d.set(0, 0, 1);
+      _d.normalize();
+      e.ctx.bus.emit(E.ENEMY_DIED, { enemy: e, type: e.def.id, position: e.deathAt.clone(), fish, smallHeart, height: e.height });
+      // §8.2 Kill: the poof (fx adds the faction debris by `type`); our own helmet spins off below, so fx's
+      // generic helmet pop is switched off with `helmet: false`
+      e.ctx.bus.emit(E.BURST, { kind: 'poof', position: e.pos.clone(), type: e.def.id, height: e.height, dir: _d.clone(), helmet: false, count: 12 });
+      e.dropHelmet(_d);
       if (e.def.scamper) {
-        e.scamperYaw = p ? Math.atan2(e.pos.x - p.pos.x, e.pos.z - p.pos.z) : e.facing + Math.PI;
-        e.scamperYaw += (rng() - 0.5) * 0.8;
+        e.scamperYaw = Math.atan2(_d.x, _d.z) + (rng() - 0.5) * 0.8;
       }
     },
     update(e, dt) {
@@ -235,7 +254,9 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (this.objectiveRunner) this.tags.add('runner');
     this.ai = spawn.ai !== false && !def.aiLess;
     this.perched = spawn.perched ?? (!!def.perchable && (spawn.y ?? 0) >= TUNING.xbow.perchMinY);
-    if (def.fly) { this.flying = true; this.pos.y += def.fly.alt ?? 3; this.home.y = this.pos.y; }
+    /** physics: no gravity (crows; perched shooters stay on their wall or cart) */
+    this.flying = !!def.fly || this.perched;
+    if (def.fly && !spawn.grounded) { this.pos.y += def.fly.alt ?? 3; this.home.y = this.pos.y; }
     if (def.hurtable === false) this.hurtable = false;
     this.seed = spawn.seed ?? this.id;
 
@@ -305,7 +326,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   distToPlayer() { const p = this.ctx.player?.pos; return p ? Math.hypot(p.x - this.pos.x, p.z - this.pos.z) : Infinity; }
 
-  /** tech.md §10 canSee: range + FOV cone; closer than sight × 0.35 is "heard". */
+  /** tech.md §10 canSee: range + FOV cone + line of sight (eye to chest); closer than sight × 0.35 is "heard". */
   canSee() {
     const p = this.targetActor();
     if (!p) return false;
@@ -313,8 +334,12 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (d > sight) return false;
     if (d < sight * TUNING.heardFrac) return true;
     const fov = this.def.fov ?? 2.09;
-    if (fov >= Math.PI * 2 - 0.05) return true;
-    return Math.abs(wrapAngle(Math.atan2(dx, dz) - this.facing)) <= fov * 0.5;
+    if (fov < Math.PI * 2 - 0.05 && Math.abs(wrapAngle(Math.atan2(dx, dz) - this.facing)) > fov * 0.5) return false;
+    const ph = this.ctx.physics;
+    if (typeof ph?.lineOfSight !== 'function') return true;
+    _v.set(this.pos.x, this.pos.y + this.height * 0.8, this.pos.z);
+    _d.set(p.pos.x, p.pos.y + p.height * 0.6, p.pos.z);
+    return ph.lineOfSight(_v, _d);
   }
 
   /** Fire `def`'s projectile from chest height toward her chest (or straight ahead). */
@@ -492,6 +517,16 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.tellDir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
   }
 
+  /** Drop the current attack (cutscene start, arena reset): telegraph ends, token returns, back to the chase. */
+  interrupt() {
+    this.endTelegraph(); this.swing = null; this.followUp = null; this.preTold = false;
+    this.releaseToken();
+    if (!this.alive || this.dormant) return;
+    const busy = ['windup', 'strike', 'recover'].includes(this.stateName) || this.state?.attacking;
+    this.attack = null; this.attackChoice = null;
+    if (busy && this.ai) this.setState(this.alerted && this.targetActor() ? 'chase' : 'idle');
+  }
+
   // ------------------------------------------------------------------ hits
   stagger(sec) {
     if (!this.alive || this.dormant) return;
@@ -535,12 +570,13 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   dieDur() { return this.def.scamper ? TUNING.die.scamperDur : TUNING.die.dur; }
 
-  /** §10.1: the helmet spins off (EnemyManager animates the debris). */
-  dropHelmet() {
+  /** §10.1: the helmet spins off, away from the hit (EnemyManager animates the debris). */
+  dropHelmet(dir = null) {
     const h = this.helmet;
     if (!h || !h.parent) return;
     this.helmet = null;
-    this.ctx.enemies?.spawnDebris?.(h, this);
+    if (this.ctx.enemies?.spawnDebris) this.ctx.enemies.spawnDebris(h, this, dir);
+    else h.visible = false;
   }
 
   // ------------------------------------------------------------------ step
@@ -552,15 +588,22 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     for (const k in this.attackCd) if (this.attackCd[k] > 0) this.attackCd[k] -= dt;
     if (this.scripted || this.attachedTo) {
       this.scriptedStep(dt);
-      if (!this.attachedTo) this.ctx.physics.moveActor(this, dt);
+      if (!this.attachedTo) this.move(dt);
       return;
     }
-    if (!this.ai) { this.brake(dt); this.ctx.physics.moveActor(this, dt); return; }
+    if (!this.ai) { this.brake(dt); this.move(dt); return; }
     this.thinkT -= dt;
     if (this.thinkT <= 0) { this.thinkT += TUNING.thinkEvery; this.sees = this.canSee(); }
     if (this.staggerT > 0 && this.alive && this.stateName !== 'stagger' && this.stateName !== 'die' && this.stateName !== 'flee' && !this.state.noStagger) this.setState('stagger');
     this.state.update?.(this, dt);
-    this.ctx.physics.moveActor(this, dt);
+    this.move(dt);
+  }
+
+  /** Integrate through physics (perched shooters stay put: knockback can't push them off their perch). */
+  move(dt) {
+    if (this.perched) { this.vel.set(0, 0, 0); this.pos.y = this.home.y; return; }
+    if (this.def.noPhysics) { this.pos.addScaledVector(this.vel, dt); return; }
+    this.ctx.physics?.moveActor?.(this, dt);
   }
 
   // ------------------------------------------------------------------ ScriptedActor visual hooks (§19.4)
@@ -632,16 +675,23 @@ export class Enemy extends ScriptedActorMixin(Actor) {
         return;
       }
       if (!def.model) return;
-      const m = await this.ctx.assets.model(def.model, { fit: def.fit ?? def.role, hide: def.hide, show: def.show, tint: def.tint, cloneMaterials: true });
+      // KayKit head meshes stay visible while fitting (§10.2 heights include the head); the beast head hides them
+      const hide = def.hide?.filter((n) => !KAYKIT_HEADS.has(n));
+      const m = await this.ctx.assets.model(def.model, { fit: def.fit ?? def.role, hide, show: def.show, tint: def.tint, cloneMaterials: true });
+      if (def.hide && hide.length !== def.hide.length && !def.build) for (const n of def.hide) if (KAYKIT_HEADS.has(n)) { const o = m.scene.getObjectByName(n); if (o) o.visible = false; }
       if (this.disposed) return;
       markOwned(m.scene);
       this.model = m; this.visual = m.root;
       if (def.visualScale) m.root.scale.setScalar(def.visualScale);
       this.object3d.add(m.root);
       this.object3d.updateMatrixWorld(true);
-      if (def.build) await def.build(this, m);
+      if (def.build) {
+        m.root.visible = false;                       // shown once dressed (beast heads, gear)
+        try { await def.build(this, m); } catch (err) { console.warn(`[enemy] dressing failed for ${def.id}`, err); }
+        m.root.visible = true;
+      }
       if (this.disposed) return;
-      this._flash = flashMaterials(m.root);
+      this._flash = def.noFlash ? [] : flashMaterials(m.root);
       this.anim = new Animator(m.scene, clipsFor(def.anims, m.animations));
       this._animKey = '';
       if (this._pendingClip) { const c = this._pendingClip; this._pendingClip = null; this.playClip(c.name, c).then(c.resolve); }
@@ -735,10 +785,11 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   render(alpha, dt) {
     if (this.dormant) return;
     super.render(alpha);
-    const fdt = this.ctx.game?.hitstopT > 0 ? 0 : dt;
+    const fdt = visualDt(this.ctx, dt);
     if (this.hitReactT > 0) { this.hitReactT -= fdt; if (this.hitReactT <= 0) this._hitSerial = (this._hitSerial ?? 0) + 1; }
     this._updateAnim(fdt);
     this.head?.update?.(fdt);
+    this.cagedKitten?.render?.(dt);                 // KittenView applies hitstop / slow motion itself
     this.def.render?.(this, fdt, alpha);
     this._renderFx(fdt);
     if (this.uprightProps) applyUpright(this);
@@ -789,7 +840,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this._pendingClip?.resolve(); this._pendingClip = null;
     this._finishMove?.(); this._finishFace?.();
     this.anim?.dispose(); this.anim = null;
-    this.head?.dispose?.(); this.head = null;
+    this.head?.dispose?.(); this.head = null; this.dress = null; this.plate = null;
+    this.cagedKitten?.dispose?.(); this.cagedKitten = null;
     this.def.onDispose?.(this);
     if (this.visual) disposeInstanceMaterials(this.visual);
     super.dispose();

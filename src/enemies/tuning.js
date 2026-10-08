@@ -27,7 +27,7 @@ export const TUNING = Object.freeze({
   blockRecoil: 2.5,                      // m/s pushed back when the player blocks
   die: { dur: 1.0, scamperDur: 1.1, scamperSpeed: 4.5, shrink: 0.3 },   // §10.1 never violent: poof, helmet, scamper
   helmet: { up: 3.2, side: 1.6, spin: 14, life: 1.2 },
-  crow: { hoverDist: 3.5, hoverUp: 0.6, landDist: 0.35, featherCount: 15, deathRise: 2.5 },
+  crow: { hoverDist: 3.5, hoverUp: 0.6, landDist: 0.35 },
   xbow: { strafe: [1.5, 3.0], perchMinY: 0.3, muzzleUp: 0.45, muzzleFwd: 0.45 },
   boss: { phaseInvuln: 1.0, addsRing: 6, dizzyEventEvery: 0.25, fallbackRange: 2.2 },
   animFarDist: 40,                       // tech.md §11.1: mixers beyond this update every 2nd frame

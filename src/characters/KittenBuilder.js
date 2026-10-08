@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, roundedCone, hashString, mulberry32 } from './util.js';
 import { makeKitMaterial, kitMaterial, RM, own, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR } from './materials.js';
-import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, MAX_SHELLS, FUR_WIND, tickFurTime } from './Fur.js';
+import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
 import { EyePair, EXPRESSIONS, eyePivotMatrix, ringGeometry } from './Eyes.js';
 import { buildBow } from './Bow.js';
 import { HeroCape, buildSwayCape, capeMaterial, CAPE_TIME } from './Cape.js';
@@ -25,6 +25,7 @@ import { addPlateArmour, addGauntlet } from './Armour.js';
 import { ACCESSORIES } from './Accessories.js';
 import { POSES, solveTwoBone, swordMatrix } from './Poses.js';
 import { buildProp, PROP_MOUNTS } from './Props/ProcProps.js';
+import { noteRender, envTick } from './runtime.js';
 
 // ------------------------------------------------------------------ skeleton definition
 
@@ -53,7 +54,7 @@ function restPose(w, earsLow = 0) {
     thighR: [-0.085 * w, -0.06, 0], kneeR: [0, -0.10, 0], footR: [0, -0.11, 0],
   };
   const R = {
-    earL: [-0.12, -0.22, -0.78 - earsLow * 0.5], earR: [-0.12, 0.22, 0.78 + earsLow * 0.5],
+    earL: [-0.1, -0.08, -0.52 - earsLow * 0.6], earR: [-0.1, 0.08, 0.52 + earsLow * 0.6],
     shoulderL: [0, 0, 0.12], shoulderR: [0, 0, -0.12],
   };
   // tail joints along the rest curve
@@ -207,7 +208,7 @@ export class Kitten {
     } else {
       const lidC = coatColor(coat, 'head', new THREE.Vector3(FACE.eyeL[0], FACE.eyeL[1] + 0.07, FACE.eyeL[2] - 0.02));
       const lidMat = own(new THREE.MeshStandardMaterial({ color: new THREE.Color(lidC[0], lidC[1], lidC[2]).multiplyScalar(0.78), roughness: 0.95 }));
-      this.eyes = new EyePair({ r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat, slit: eyeCfg.slit, lash: eyeCfg.lash ?? 1 });
+      this.eyes = new EyePair({ r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat, slit: eyeCfg.slit, lash: eyeCfg.lash ?? 1, seed: (cfg.id || 'kitten') + ':eyes' });
       joints.head.add(this.eyes.group);
       for (const [pos, side] of [[posL, 1], [posR, -1]]) A.add('head', ringGeometry(eyeR), { m: eyePivotMatrix(pos, side, 0.3), color: rgb(PAL.eyeLine), rmse: RM.eyeLine });
       if (flags.hideEye) { /* set after accessories */ }
@@ -216,10 +217,11 @@ export class Kitten {
     // ---- ears (kit) + tufts
     const earS = (cfg.ears?.size ?? 1) * 1.22;
     for (const s of ['L', 'R']) {
-      const outer = roundedCone(0.076 * earS, 0.108 * earS, 20, 0.16, 0.86).scale(1, 1, 0.46);
-      A.add('ear' + s, outer, { m: mat([0, -0.02, 0]), color: (v, n, lp) => coatColor(coat, 'ear', lp), rmse: RM.furShort });
-      const inner = roundedCone(0.052 * earS, 0.082 * earS, 16, 0.16, 0.86).scale(1, 1, 0.28);
-      A.add('ear' + s, inner, { m: mat([0, -0.008, 0.02]), color: (v, n, lp) => mixRgb(rgb(cfg.earInner ?? PAL.earInner), rgb(coat.base), smoothstep(0.0, 0.09, lp.y) * 0.35 + 0.1), rmse: RM.skin });
+      // art.md §2.2: tall rounded cones, flattened front-to-back, tilted out ~30°; pink inner ear faces forward
+      const outer = roundedCone(0.07 * earS, 0.118 * earS, 20, 0.18, 0.84).scale(1, 1, 0.58);
+      A.add('ear' + s, outer, { m: mat([0, -0.02, 0]), color: (v, n, lp) => mixRgb(coatColor(coat, 'ear', lp), rgb(coat.light || coat.base), smoothstep(0.02, 0.12, lp.y) * 0.25), rmse: RM.furShort });
+      const inner = roundedCone(0.054 * earS, 0.094 * earS, 16, 0.18, 0.84).scale(1, 1, 0.36);
+      A.add('ear' + s, inner, { m: mat([0, -0.01, 0.024]), color: (v, n, lp) => mixRgb(rgb(cfg.earInner ?? PAL.earInner), rgb(coat.cream || coat.base), smoothstep(0.03, 0.11, lp.y) * 0.4), rmse: RM.skin });
     }
     if (!this.lite && cfg.ears?.tufts !== false) this._tufts(tufts, bind, boneIndex, earS);
 
@@ -249,15 +251,18 @@ export class Kitten {
     kitMesh.name = 'kitBody'; kitMesh.castShadow = true; kitMesh.receiveShadow = true; kitMesh.frustumCulled = false;
     root.add(kitMesh);
     kitMesh.bind(skeleton, new THREE.Matrix4());
+    // report who draws characters: the character env map follows that scene's lights (runtime.envTick)
+    kitMesh.onBeforeRender = noteRender;
     this.kitMesh = kitMesh;
     if (!tufts.empty) {
       const tm = new THREE.SkinnedMesh(tufts.build(), tuftMaterial());
-      tm.name = 'tufts'; tm.castShadow = false; tm.frustumCulled = false;
+      tm.name = 'tufts'; tm.castShadow = false; tm.frustumCulled = false; tm.renderOrder = FUR_RENDER_ORDER + 1;
       root.add(tm); tm.bind(skeleton, new THREE.Matrix4());
       this.tuftMesh = tm;
     }
     if (this.tailFurGeo) {
       this.tailFur = new FurPart(this.tailFurGeo, { bakedMat: this.furMatBaked, sheenMat: this.kitMat, tier: furTier, skeleton, name: 'furTail' });
+      this.tailFur.mesh.renderOrder = FUR_RENDER_ORDER - 0.3;
       root.add(this.tailFur.mesh);
     }
     // shadow proxy for the shell-fur surfaces (shells don't cast): head, bib and tail as low-poly shapes
@@ -315,11 +320,13 @@ export class Kitten {
 
     // ---- runtime state
     this.props = {};
-    this.time = Math.random() * 10;
+    // visual-only randomness, seeded per cat id (deterministic screenshots; never Math.random)
+    this.rnd = mulberry32(hashString((cfg.id || 'kitten') + ':life'));
+    this.time = this.rnd() * 10;
     this.holy = 0;
     this.expr = cfg.expression || 'neutral';
     this.emotes = { earsFlat: 0, tailPuff: 0, nod: 0, shake: 0, meow: 0, sneeze: 0 };
-    this.earTwitch = { L: 0, R: 0, next: 2 + Math.random() * 4 };
+    this.earTwitch = { L: 0, R: 0, next: 2 + this.rnd() * 4 };
     this.springs = { head: new Spring(90, 12), tail: new Spring(40, 6) };
     this.idleLife = true;
     this._snapshots = new Map();
@@ -395,10 +402,14 @@ export class Kitten {
     const root = rgb(this.coat.cream ?? PAL.tuftRoot), tip = rgb(this.cfg.tuftTip ?? PAL.tuftTip);
     const baseC = rgb(this.coat.base);
     const rnd = mulberry32(hashString(this.cfg.id || 'kitten'));
-    const card = (bone, at, dir, len, wid, color0 = root, color1 = tip) => {
+    // cards face mostly forward (+Z, where the camera usually is) with a random twist, so they read broad-side
+    const card = (bone, at, dir, len, wid, color0 = root, color1 = tip, twist = 0.6) => {
       const g = new THREE.PlaneGeometry(wid, len, 1, 3).translate(0, len / 2, 0);
       const up = new THREE.Vector3(...dir).normalize();
-      const side = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).cross(up).normalize();
+      const face = new THREE.Vector3((rnd() - 0.5) * twist, (rnd() - 0.5) * twist * 0.5, 1);
+      const side = new THREE.Vector3().crossVectors(up, face);
+      if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+      side.normalize();
       const nrm = new THREE.Vector3().crossVectors(side, up).normalize();
       const m = new THREE.Matrix4().makeBasis(side, up, nrm).setPosition(at[0], at[1], at[2]);
       const pm = _m.multiplyMatrices(bind[bone], m).clone();
@@ -407,8 +418,8 @@ export class Kitten {
     // ears: long cream tufts from the inner ear (the ref2 signature)
     for (const [s, bone] of [[1, 'earL'], [-1, 'earR']]) {
       for (let i = 0; i < 5; i++) {
-        const x = (i - 2) * 0.011 * earS;
-        card(bone, [x, 0.0 + rnd() * 0.02, 0.022], [x * 3 - s * 0.05, 1, 0.25 + rnd() * 0.25], (0.085 + rnd() * 0.035) * earS, 0.032);
+        const x = (i - 2) * 0.01 * earS;
+        card(bone, [x, 0.01 + rnd() * 0.02, 0.022], [x * 3.2 - s * 0.05, 1, 0.35 + rnd() * 0.25], (0.06 + rnd() * 0.035) * earS, 0.024);
       }
     }
     // cheek wisps: long fur sticking out sideways past the cheek ruff
@@ -445,6 +456,7 @@ export class Kitten {
       gb.add(bibGeo, { color: (v, n, lp) => coatColor(this.coat, 'bib', lp), rmse: RM.fur, fur: (v, n, lp) => [smoothstep(-0.02, 0.06, lp.z) * smoothstep(0.15, 0.2, lp.y), 0.8], comb: [0, -0.45, 0.85] });
       if (!armour && !clothed) gb.add(bodyGeo, { color: bellyColor, rmse: RM.fur, fur: [1, 0.9], comb: [0, -1, -0.3] });
       this.bibFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMat, tier: this.furTier, name: 'furBib' });
+      this.bibFur.mesh.renderOrder = FUR_RENDER_ORDER - 0.4; // under the chin: draw before the head shells blend over it
       this.rig.chest.add(this.bibFur.mesh);
       if (!armour && clothed) A.add('chest', bodyGeo, { color: bellyColor, rmse: RM.fur });
     }
@@ -529,7 +541,7 @@ export class Kitten {
     }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     const m = whiskerMaterial(o.color ?? PAL.whisker);
-    const ls = new THREE.LineSegments(g, m); ls.name = 'whiskers';
+    const ls = new THREE.LineSegments(g, m); ls.name = 'whiskers'; ls.renderOrder = 2;
     return ls;
   }
 
@@ -798,7 +810,7 @@ export class Kitten {
       J.head.quaternion.multiply(E(-br * 0.008 + Math.sin(t * 0.7) * 0.01, Math.sin(t * 0.43) * 0.02, Math.sin(t * 0.37) * 0.015));
       for (let i = 0; i < 6; i++) J['tail' + i].quaternion.multiply(E(0, Math.sin(t * 1.3 - i * 0.55) * (lying ? 0.03 : 0.07) * (0.5 + i * 0.12), 0));
       this.earTwitch.next -= dt;
-      if (this.earTwitch.next <= 0) { this.earTwitch[Math.random() < 0.5 ? 'L' : 'R'] = 0.18; this.earTwitch.next = 2.5 + Math.random() * 5; }
+      if (this.earTwitch.next <= 0) { this.earTwitch[this.rnd() < 0.5 ? 'L' : 'R'] = 0.18; this.earTwitch.next = 2.5 + this.rnd() * 5; }
     }
     for (const s of ['L', 'R']) {
       if (this.earTwitch[s] > 0) this.earTwitch[s] = Math.max(0, this.earTwitch[s] - dt);
@@ -819,7 +831,7 @@ export class Kitten {
     // lite tier blink via eye-bone scale
     if (this.lite) {
       this._liteNext = (this._liteNext ?? 2) - dt;
-      if (this._liteNext <= 0) { this._liteBlink = 0.14; this._liteNext = 2.5 + Math.random() * 4; }
+      if (this._liteNext <= 0) { this._liteBlink = 0.14; this._liteNext = 2.5 + this.rnd() * 4; }
       if (this._liteBlink > 0) this._liteBlink = Math.max(0, this._liteBlink - dt);
       const b = this._liteBlink > 0 ? Math.sin((1 - this._liteBlink / 0.14) * Math.PI) : 0;
       const open = 1 - Math.max(b, this._liteLid ?? 0) * 0.92;
@@ -835,7 +847,7 @@ export class Kitten {
    */
   simulate(dt, o = {}) {
     this.root.updateMatrixWorld(true);
-    if (tickFurTime(dt, o.frameId)) CAPE_TIME.value += dt;
+    if (tickFurTime(dt, o.frameId)) { CAPE_TIME.value += dt; envTick(); }
     if (this.furMat) {
       const vel = o.velocity;
       this.drag.set(vel ? -vel.x * 0.15 : 0, vel ? -vel.y * 0.08 : 0, vel ? -vel.z * 0.15 : 0);

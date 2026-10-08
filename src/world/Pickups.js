@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { ECONOMY, PLAYER, GRAVITY } from '../core/config.js';
 import { mulberry32, hashSeed } from '../core/rng.js';
+import { procTemplate } from './Props.js';
 
 const MAX_FISH = 240;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _v = new THREE.Vector3();
@@ -48,17 +49,17 @@ function mergeSimple(list) {
   return out;
 }
 
-/** Parchment letter with a pink wax seal (0.5 m read radius), lying slightly tilted. */
+/** Parchment letter with a pink wax seal (0.5 m read radius), lying slightly tilted. ONE mesh (vertex colours). */
 export function makeLetterMesh() {
-  const g = new THREE.Group(); g.name = 'pickup:letter';
-  const paper = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.012, 0.24), new THREE.MeshStandardMaterial({ color: '#F4E7C9', roughness: 0.8 }));
-  const flap = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.09, 4, 1), new THREE.MeshStandardMaterial({ color: '#E8D5AA', roughness: 0.8 }));
-  flap.rotation.set(Math.PI / 2, 0, Math.PI / 4); flap.scale.set(1.4, 1, 0.12); flap.position.set(0, 0.012, 0.04);
-  const seal = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.016, 14), new THREE.MeshStandardMaterial({ color: '#E86A92', roughness: 0.35, emissive: '#7A2040', emissiveIntensity: 0.4 }));
-  seal.position.set(0, 0.02, 0.0);
-  for (const m of [paper, flap, seal]) { m.castShadow = true; g.add(m); }
-  g.traverse((o) => { o.userData.owned = true; });
-  return g;
+  const flap = new THREE.ConeGeometry(0.17, 0.09, 4, 1);
+  flap.rotateX(Math.PI / 2); flap.rotateZ(Math.PI / 4); flap.scale(1.4, 1, 0.12); flap.translate(0, 0.012, 0.04);
+  const seal = new THREE.CylinderGeometry(0.035, 0.035, 0.016, 14); seal.translate(0, 0.02, 0);
+  const t = procTemplate('letter', [[new THREE.BoxGeometry(0.34, 0.012, 0.24), '#F4E7C9'], [flap, '#E8D5AA'], [seal, '#E86A92']]);
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, emissive: '#3A1E24', emissiveIntensity: 0.25 });
+  const m = new THREE.Mesh(t.geometry, mat);
+  m.name = 'pickup:letter'; m.castShadow = true;
+  m.userData.owned = true; mat.userData.owned = true;
+  return m;
 }
 
 /** Heart Bell: a small gold bell with a pink ribbon on a stone pedestal (≈1.0 m). */
@@ -87,6 +88,13 @@ export function makeMilkMesh() {
   for (const m of [glass, capM]) { m.castShadow = true; g.add(m); }
   g.traverse((o) => { o.userData.owned = true; });
   return g;
+}
+
+/** Remove a pickup mesh (group) from the scene and free its geometry / materials. */
+function disposeMesh(o) {
+  if (!o) return;
+  o.removeFromParent();
+  o.traverse((c) => { c.geometry?.dispose?.(); if (c.material && !Array.isArray(c.material)) c.material.dispose(); });
 }
 
 /**
@@ -214,7 +222,7 @@ export class Pickups {
 
   _collect(it, p, st) {
     it.alive = false;
-    it.mesh?.removeFromParent();
+    disposeMesh(it.mesh);
     const bus = this.ctx.bus, position = it.pos.clone();
     switch (it.kind) {
       case 'fish':
@@ -274,6 +282,7 @@ export class Pickups {
       }
     }
     this.fishMesh.count = nf; this.heartMesh.count = nh;
+    this.fishMesh.visible = nf > 0; this.heartMesh.visible = nh > 0;
     if (nf) { this.fishMesh.instanceMatrix.needsUpdate = true; this.fishMesh.instanceColor.needsUpdate = true; }
     if (nh) this.heartMesh.instanceMatrix.needsUpdate = true;
   }
@@ -284,7 +293,7 @@ export class Pickups {
   dispose() {
     for (const off of this._offs) off();
     this._offs.length = 0;
-    for (const it of this.items) it.mesh?.removeFromParent();
+    for (const it of this.items) disposeMesh(it.mesh);
     this.items.length = 0;
     this.fishMesh.removeFromParent(); this.heartMesh.removeFromParent();
     this.fishMesh.geometry.dispose(); this.heartMesh.geometry.dispose();

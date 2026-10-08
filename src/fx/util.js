@@ -92,6 +92,26 @@ export function hash01(n) {
   return (x >>> 0) / 4294967296;
 }
 
+/** True when `o` and all its ancestors are visible (a hidden / sheathed sword has no trail). */
+export function isShown(o) {
+  for (let x = o; x; x = x.parent) if (x.visible === false) return false;
+  return true;
+}
+
+/**
+ * The object that renders an actor's own holy aura (fur rim, aura hull, blade emissive + streak), i.e. the first of
+ * `actor`, `actor.model.k` (player SwordcatModel → buildKitten rig), `actor.visual.k` / `actor.visual` (companions'
+ * KittenVisual), `actor.k`, `actor.kitten` that has a `setHoly(v)` method; null when the actor has none (GLB actors,
+ * the M0 placeholder) and fx must draw its fallback halo + streak.
+ */
+export function auraOwner(actor) {
+  if (!actor) return null;
+  if (typeof actor.setHoly === 'function') return actor;
+  const c = [actor.model?.k, actor.visual?.k, actor.visual, actor.k, actor.kitten];
+  for (const o of c) if (o && typeof o.setHoly === 'function') return o;
+  return null;
+}
+
 // ------------------------------------------------------------------ blade (sword) lookup
 const _bladeCache = new WeakMap();
 
@@ -144,12 +164,14 @@ function measureHolder(holder) {
 export function resolveBlade(actor, outHilt, outTip) {
   if (!actor) return false;
   if (typeof actor.trailSegment === 'function') return !!actor.trailSegment(outHilt, outTip);
-  const s = actor.sword ?? actor.kitten?.sword ?? actor.model?.sword ?? actor.k?.sword ?? actor.visual?.sword ?? null;
+  const s = actor.sword ?? actor.model?.k?.sword ?? actor.visual?.k?.sword ?? actor.kitten?.sword ?? actor.model?.sword
+    ?? actor.k?.sword ?? actor.visual?.sword ?? null;
   if (s?.tip?.isObject3D) {
+    if (!isShown(s.tip)) return false;
     s.tip.updateWorldMatrix(true, false);
     outTip.setFromMatrixPosition(s.tip.matrixWorld);
     const g = s.grip ?? s.group ?? s.mid;
-    if (g?.isObject3D) { g.updateWorldMatrix(true, false); outHilt.setFromMatrixPosition(g.matrixWorld).lerp(outTip, 0.2); }
+    if (g?.isObject3D) { g.updateWorldMatrix(true, false); outHilt.setFromMatrixPosition(g.matrixWorld).lerp(outTip, 0.3); }
     else outHilt.copy(outTip);
     return true;
   }

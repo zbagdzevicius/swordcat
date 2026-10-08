@@ -107,10 +107,13 @@ export class DamageNumbers {
 
   get active() { let k = 0; for (const n of this.pool) if (n.active) k++; return k; }
 
+  _any() { for (const n of this.pool) if (n.active) return true; return false; }
+
   /** Per frame: project and animate (dt = visual dt; frozen in the pause menu). */
   render(dt) {
-    if (!this.layer) return;
-    const cam = this.ctx.camera, w = this.layer.clientWidth || window.innerWidth, h = this.layer.clientHeight || window.innerHeight;
+    if (!this.layer || !this._any()) return;
+    // window size, not layer.clientWidth: reading layout after last frame's transform writes would force a reflow
+    const cam = this.ctx.camera, w = window.innerWidth, h = window.innerHeight;
     for (const n of this.pool) {
       if (!n.active) continue;
       n.t += dt;

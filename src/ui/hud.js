@@ -87,8 +87,12 @@ export class Hud {
     // ---- top-centre: boss bar + objective line
     const tc = el('div', 'hud-tc', { parent: root });
     this.bossEl = el('div', 'hud-boss', { parent: tc });
-    this.bossEl.innerHTML = '<div class="boss-name"><span></span></div><div class="boss-bar"><div class="boss-chip"></div><div class="boss-fill"></div><div class="boss-pips"></div></div>'
-      + '<div class="boss-dizzy"><div class="dizzy-fill"></div><span class="dizzy-lbl"></span></div>';
+    this.bossEl.innerHTML = '<div class="boss-name"><span></span></div>'
+      + '<div class="boss-row"><div class="boss-medal"><div class="boss-face"></div></div><div class="boss-bars">'
+      + '<div class="boss-bar"><div class="boss-chip"></div><div class="boss-fill"></div><div class="boss-shine"></div><div class="boss-pips"></div></div>'
+      + `<div class="boss-dizzy"><span class="dizzy-ico">${I.dizzyStars()}</span><div class="dizzy-track"><div class="dizzy-fill"></div></div><span class="dizzy-lbl"></span></div>`
+      + '</div><div class="boss-cap"></div></div>';
+    this.bossFace = this.bossEl.querySelector('.boss-face');
     this.bossName = this.bossEl.querySelector('.boss-name span');
     this.bossFill = this.bossEl.querySelector('.boss-fill');
     this.bossChip = this.bossEl.querySelector('.boss-chip');
@@ -96,7 +100,9 @@ export class Hud {
     this.dizzyFill = this.bossEl.querySelector('.dizzy-fill');
     this.dizzyLbl = this.bossEl.querySelector('.dizzy-lbl');
     this.objEl = el('div', 'hud-obj', { parent: tc });
-    this.objEl.innerHTML = '<div class="obj-txt"></div><div class="obj-bar"><div class="obj-fill"></div></div>';
+    this.objEl.innerHTML = `<div class="obj-line"><span class="obj-ico">${I.flag()}</span><span class="obj-txt"></span><span class="obj-pct"></span></div><div class="obj-bar"><div class="obj-fill"></div><div class="obj-marks"></div></div>`;
+    this.objPct = this.objEl.querySelector('.obj-pct');
+    this.objMarks = this.objEl.querySelector('.obj-marks');
     this.objTxt = this.objEl.querySelector('.obj-txt');
     this.objFill = this.objEl.querySelector('.obj-fill');
     this.toastSlot = el('div', 'hud-toast-slot', { parent: tc });
@@ -180,6 +186,7 @@ export class Hud {
     this.bossMax = Math.max(1, p.maxHp ?? this.boss?.maxHp ?? 1);
     this.bossChipV = frac(this.boss?.hp ?? this.bossMax, this.bossMax); this.bossHold = 0; this.bossOut = 0; this._bossLast = null;
     setText(this.bossName, tx(this.ctx, p.name ?? p.id ?? ''));
+    this.bossFace.innerHTML = portraitSVG(String(p.id ?? this.boss?.type ?? 'boss').replace(/^boss_/, ''), { expression: 'normal' });
     let pips = '';
     for (const at of p.phases ?? []) if (at > 0 && at < 1) pips += `<i style="left:${(at * 100).toFixed(1)}%"></i>`;
     setHtml(this.bossPips, pips);
@@ -191,8 +198,9 @@ export class Hud {
   _bossDizzy(p) {
     if (!p) return;
     setVar(this.dizzyFill, '--f', frac(p.value ?? 0, p.max ?? 100).toFixed(3));
+    if (p.dizzy && !this.bossEl.classList.contains('is-dizzy')) pulse(this.bossEl, 'is-dizzy-in');
     flag(this.bossEl, 'is-dizzy', !!p.dizzy);
-    setText(this.dizzyLbl, p.dizzy ? tx(this.ctx, 'hud.boss.dizzy') : '');
+    setText(this.dizzyLbl, p.dizzy ? `${tx(this.ctx, 'hud.boss.dizzy')} ${tx(this.ctx, 'ui.boss.crit')}` : '');
   }
 
   _bossHide() { this.boss = null; this.bossOut = 0; flag(this.bossEl, 'is-on', false); }
@@ -219,6 +227,12 @@ export class Hud {
     flag(this.objEl, 'is-frozen', !!p.frozen);
     flag(this.objEl, 'is-complete', !!p.done);
     setVar(this.objFill, '--f', frac(p.value ?? 0, p.max ?? 1).toFixed(3));
+    // percentage objectives (The Line: max 100) show the number beside the bar unless the text already carries it
+    const pct = showBar && (p.max ?? 0) >= 100 && !/%/.test(t) ? `${Math.floor(frac(p.value ?? 0, p.max) * 100)}%` : '';
+    setText(this.objPct, pct);
+    // optional milestone ticks (`marks`: fractions 0..1, e.g. The Line's wave thresholds); passed ones turn gold
+    const marks = Array.isArray(p.marks) ? p.marks : null, f = frac(p.value ?? 0, p.max ?? 1);
+    setHtml(this.objMarks, marks ? marks.filter((m) => m > 0 && m < 1).map((m) => `<i class="${f >= m ? 'f' : ''}" style="left:${(m * 100).toFixed(1)}%"></i>`).join('') : '');
   }
 
   // ------------------------------------------------------------------ polling (10 Hz + on events)

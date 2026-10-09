@@ -23,6 +23,8 @@ const _her = [null];                     // one-element list for separation() (n
 /** §6 bark rule: 25% per trigger (nap / wake / the Meow answer are status lines and always show). */
 const BARK_CHANCE = 0.25;
 const THINK = 0.2;                       // AI "thinks" (targets, line of sight) at 5 Hz (tech.md §10)
+/** Sage's stand-off band (m) and bow draw time (s) for her basic shot. */
+export const RANGED = Object.freeze({ min: 2.5, max: 6.5, draw: 0.35 });
 
 export class Companion extends ScriptedActorMixin(Actor) {
   /**
@@ -359,6 +361,7 @@ export class Companion extends ScriptedActorMixin(Actor) {
     if (!t || !t.alive || t.hurtable === false) { this.target = null; return; }
     this.stateName = this.swingT >= 0 ? 'attack' : 'engage';
     const dx = t.pos.x - this.pos.x, dz = t.pos.z - this.pos.z, d = Math.hypot(dx, dz);
+    if (this.kittenId === 'sage') return this._shoot(dt, p, t, d, dx, dz);
     const reach = (t.radius ?? 0.35) + this.radius + 0.55;
     this.facing = dampAngle(this.facing, Math.atan2(dx, dz), 12, dt);
     this.attackT = Math.max(0, this.attackT - dt);
@@ -389,6 +392,36 @@ export class Companion extends ScriptedActorMixin(Actor) {
         this.swingT = 0; this._swingHit = false;
         this.visual?.attack(this.kittenId === 'mochi' ? 'bash' : 'swipe');
       }
+    }
+  }
+
+  /**
+   * Sage's basic attack (§9.1 numbers, ranger flavour): she keeps a few metres off and looses an arrow for 5 every 1.6 s
+   * instead of closing to paw range.
+   */
+  _shoot(dt, p, t, d, dx, dz) {
+    const R = RANGED;
+    this.facing = dampAngle(this.facing, Math.atan2(dx, dz), 12, dt);
+    this.attackT = Math.max(0, this.attackT - dt);
+    _sep.x = 0; _sep.z = 0;
+    _her[0] = p; separation(this.pos, _her, 1.0, 2.5, _sep);
+    let vx = _sep.x, vz = _sep.z;
+    if (d > R.max) { const k = Math.min(PLAYER.run * 1.05, (d - R.max) * 3 + 1.2); vx += (dx / d) * k; vz += (dz / d) * k; }
+    else if (d < R.min) { const k = (R.min - d) * 3; vx -= (dx / d) * k; vz -= (dz / d) * k; }
+    this.vel.x = damp(this.vel.x, vx, 9, dt); this.vel.z = damp(this.vel.z, vz, 9, dt);
+    if (this.swingT >= 0) {
+      this.swingT += dt;
+      if (this.swingT >= R.draw && !this._swingHit) {
+        this._swingHit = true;
+        if (t.alive && t.hurtable !== false) this.fireArrow(t, COMPANION_HITS.shot);
+      }
+      if (this.swingT >= R.draw + 0.25) { this.swingT = -1; if (!this.ability) this.visual?.setStance('relaxed'); }
+      return;
+    }
+    if (d <= R.max + 0.5 && this.attackT <= 0) {
+      this.attackT = COMPANIONS.rate;
+      this.swingT = 0; this._swingHit = false;
+      this.visual?.setStance('bow');
     }
   }
 

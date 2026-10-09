@@ -51,6 +51,9 @@ export const PLAYER = {
   combatStance: 3.0, bumpStunMul: 0.5, hurtFlash: 0.12, standCapeWind: 1.8,
   tailPuffHeight: 2.0, tailPuffDur: 1.0, slowBlinkStill: 3.0, slowBlinkRadius: 3.0, slowBlinkCooldown: 12.0,
   sneezeEvery: 90, sneezeMinFog: 0.06,
+  // core+ M2 (requests/player.md, review fixes)
+  splashReturnDist: 3.0, splashClearRadius: 2.0, splashCooldown: 1.5, splashLockMin: 0.5, splashLockMax: 3.0,
+  comboGrace: 0.18, autoComboGrace: 0.35,
 };
 
 export const CAMERA = { dist: 3.6, lockDist: 4.5, bossDist: 6.0, ease: 0.6, fov: 45, pitch: [-0.35, 1.1],
@@ -313,3 +316,104 @@ export const INPUT = {
   wheelRepeat: 0.12,          // s between wheel lock-switch edges
   preventDefault: ['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace'],
 };
+
+// ---- core+ M2: area tuning tables adopted into config (requests/combat.md, enemies.md, physics.md). The owning
+// area keeps authoring the numbers; its old module re-exports these (combat/attacks.js COMBAT, enemies/tuning.js
+// TUNING, physics/Physics.js PHYSICS_DEFAULTS).
+/**
+ * Combat tuning not covered by Appendix A. Every value is quoted from the spec it comes from.
+ * Owner of the values: combat (adopted into config by core, M2; src/combat/attacks.js re-exports it).
+ */
+export const COMBAT = Object.freeze({
+  /** tech.md §9.3: an enemy's invulnT after taking a hit (anti multi-hit; the player uses PLAYER.hurt.iframes). */
+  antiMultiHit: 0.12,
+  /** tech.md §9.3 / GAME_DESIGN §10.3: poise break → stagger 0.6 s, poise refilled. */
+  poiseBreakStagger: 0.6,
+  /** tech.md §9.3: knockback lifts the target by min(3, k × 0.25) m/s. */
+  knockLiftMul: 0.25, knockLiftMax: 3,
+  /** §19.4: a block pushes the guard back by `PLAYER.guard.pushback × 6` m/s. */
+  pushbackVelMul: 6,
+  /** tech.md §9.2: point-blank radius added to the target radius; broad-phase query pad. */
+  pointBlank: 0.25, queryPad: 1.5,
+  /** Body-contact attacks with no `arc` (hyena_lunge, stealer_snatch dashes): reach past the attacker's radius, half-angle. */
+  contactReach: 0.45, contactHalfArc: Math.PI / 2,
+  /** AttackTokens: a waiting request older than this stops blocking newer requesters; a token held this long is reclaimed. */
+  tokenStale: 0.25, tokenMaxHold: 10,
+  /** Tokenless enemies orbit at 1.4× their attack range (GAME_DESIGN §8.3). */
+  orbitMul: 1.4,
+  /** The same auto-spawned projectile (holyWave / gleam) from one owner within this window is deduplicated. */
+  projectileDedupe: 0.1,
+  /** Reflected projectiles home on their original shooter when it lies within this half-angle of the flipped path. */
+  reflectAimCone: Math.PI / 3,
+  /** ...and keep curving toward it at up to this rate (rad/s) while it stays inside that cone (it may dodge). */
+  reflectHomingRate: 5,
+  /** Wave crescents (holyWave, gleam) ride the ground with their centre at max(height/2, waveHover) m. */
+  waveHover: 0.6,
+  /** Wave hit-shape thickness (m, along travel) and crescent height when a def has no `height` (× width). */
+  waveThickness: 0.35, waveHeightOfWidth: 0.4,
+  /** Fallback projectile numbers for defs that omit them. */
+  projectileSpeed: 12, projectileRange: 12, projectileRadius: 0.2,
+  /** Pooled projectiles alive at once (the oldest is recycled beyond this). */
+  maxProjectiles: 48,
+});
+
+
+// Enemy / boss numbers GAME_DESIGN states in prose (§8, §10, §11) but Appendix A doesn't carry (owner: enemies).
+export const ENEMY_TUNING = Object.freeze({
+  windupMin: 0.45,                       // §10.1 minimum windup on Knight (scaled by the difficulty windup multiplier)
+  alertHopV: 2.2,                        // §10.1 alert: a 0.4 s "!" hop (vertical speed; GRAVITY 22 → ~0.2 s up + 0.2 s down)
+  alertDur: 0.4,
+  bang: { dur: 0.6, pop: 0.2, perH: 0.4, min: 0.28, max: 0.6, lift: 0.1, color: '#F2E6C8', ink: '#2B2330' },   // the alert "!" (m)
+  groupAlertRadius: 8,                   // idle pack-mates within this radius join an alert
+  groupAlertDelay: [0.15, 0.45],
+  hitFlash: 0.06,                        // §8.2 light hit: 60 ms white flash on the target
+  hitReact: 0.12,                        // §10.3 hit reactions: 0.12 s Hit_A / HitReact, else squash
+  squash: { dur: 0.15, y: 0.8 },         // §10.1 missing clip → procedural squash (0.15 s, scale y 0.8)
+  orbitMul: 1.4,                         // §8.3 tokenless enemies orbit at 1.4× their attack range
+  orbitDrift: 0.45,                      // rad/s around the player while waiting for a token
+  orbitRepick: [1.5, 3.0],
+  windupTrackStop: 0.15,                 // stop turning this long before the strike (fair windups)
+  turnRate: 10, chaseTurnRate: 8, windupTurnRate: 6,
+  steerDamp: 8,
+  idleTime: [1.5, 3.5],                  // tech.md §10 idle → patrol
+  patrolTimeout: 6,
+  arrive: 0.4,
+  heardFrac: 0.35,                       // tech.md §10 canSee: closer than sight × 0.35 is "heard" (no FOV check)
+  thinkEvery: 0.1,                       // perception at 10 Hz, staggered per id
+  returnHeal: true,                      // tech.md §10 return: hp back to max at home
+  cooldown: [0.35, 0.9],                 // between attacks when the row gives none
+  recoverDefault: 0.8,
+  blockRecoil: 2.5,                      // m/s pushed back when the player blocks
+  die: { dur: 1.0, scamperDur: 1.1, scamperSpeed: 4.5, shrink: 0.3 },   // §10.1 never violent: poof, helmet, scamper
+  helmet: { up: 3.2, side: 1.6, spin: 14, life: 1.2 },
+  crow: { hoverDist: 3.5, hoverUp: 0.6, landDist: 0.35 },
+  xbow: { strafe: [1.5, 3.0], perchMinY: 0.3, muzzleUp: 0.45, muzzleFwd: 0.45 },
+  boss: { phaseInvuln: 1.0, addsRing: 6, dizzyEventEvery: 0.25, fallbackRange: 2.2 },
+  animFarDist: 40,                       // tech.md §11.1: mixers beyond this update every 2nd frame
+  pending: true,                         // §8.3 arena budget: spawns beyond the cap wait dormant for a free slot
+  capRadius: 30,                         // §8.3: unalerted enemies farther than this from a spawn are another fight
+  // walkers never path into deep water (the Old Bridge stream): a step whose probe point (radius + probe + speed × look
+  // ahead) is deep turns by the listed angles (rad) until dry, else stops; one that ends up in deep water anyway
+  // (knockback) for `rescueAfter` s, or an arena member more than `arenaSlack` m outside its locked arena, is put back
+  // on its last dry footing / the nearest valid arena ring point (else despawned: the wave can still clear)
+  water: { probe: 0.45, lookAhead: 0.3, turns: [0.6, -0.6, 1.2, -1.2, 1.75, -1.75, 2.4, -2.4], rescueAfter: 0.35, arenaSlack: 2, dryEvery: 0.2 },
+  // open-zone enemies leave a locked arena they don't belong to alone: no alert on her while she is inside it,
+  // a running chase drops back to `return`, and flyers are kept `flyerPad` m outside its fog wall
+  foreignArena: { pad: 0.5, flyerPad: 1.0 },
+  standoff: 0.35,                        // m between a long-bodied enemy's capsule front (its snout) and her collider
+  perch: { search: 2.5, ring: 0.2, arc: 0.12, minFrac: 0.6, slack: 0.45 },   // `{ y }` spawns snap onto a nearby wall / cart top
+});
+
+/** Physics engine tunables (GAME_DESIGN §7.1 / tech.md §5; owner: physics). */
+export const PHYSICS = Object.freeze({
+  walkableNormalY: 0.7,    // §7.1: slopes steeper than normal.y 0.7 slide
+  steepFaceTol: 0.05,      // terrain: a rendered triangle steeper than walkableNormalY - this is always too steep (cliff
+                           // banks: no standing on the smoothed foot of a cliff); between the two the smoothed slope decides
+  groundSnap: 0.3,         // tech.md §5: stick to downhill slopes / step down
+  skin: 0.02,              // resting-contact tolerance (m)
+  substep: 0.5,            // max motion per sub-step as a fraction of the collision radius
+  maxSubsteps: 24,         // (r 0.32: tunnel-free up to ~230 m/s; faster motion is clamped to that)
+  deepWater: 0.5,          // water deeper than this (m) is "deep" unless the water entry says deep: true/false
+  ceilingNormalY: -0.2,
+  edgeSlip: 2.0,           // m/s: a grounded actor resting on a ledge edge (capsule rim) rolls off it at this speed
+});

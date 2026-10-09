@@ -18,6 +18,7 @@ const _v = new THREE.Vector3(), _w = new THREE.Vector3();
 export const COMPANION_HITS = {
   bash: { id: 'companion_bash', dmg: COMPANIONS.dmg, knock: 3, poise: 1, hitstop: 0, shake: 0 },
   arrow: { id: 'companion_arrow', dmg: COMPANIONS.sage.dmg, knock: 1.5, poise: 1, hitstop: 0, shake: 0 },
+  shot: { id: 'companion_shot', dmg: COMPANIONS.dmg, knock: 1, poise: 1, hitstop: 0, shake: 0 },
   passiveArrow: { id: 'companion_arrow_passive', dmg: COMPANIONS.sage.passive.flyerDmg, knock: 1, poise: 1, hitstop: 0, shake: 0 },
 };
 

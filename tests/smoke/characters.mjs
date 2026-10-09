@@ -8,6 +8,12 @@
 //   characters:props  cutscene props (milk cup, lantern, spoon, letter, pot helm, CS-01 helmet) in her paws / on her head
 //                     + world props and cages
 //   characters:holy   setHoly ladder on the hero (aura hull, blade charge), fur quality switch with core QUALITY
+// M2 (§19.10 Acts I–II):
+//   characters:m2cast Sage, Clover, Mochi, Tofu, Earl Grey, Pip, Marmalade, hub residents (activity poses / props) and the
+//                     Spoon Brigade (lite tier, pot helms, spoon throw) spawned through companions.spawnNpc
+//   characters:skins  the 7 sword skins (§13.4; GLB skins fitted by core, the claymore tip drags on the ground) and the 7
+//                     capes (§13.5) on the hero, the bow staying pink on her left ear
+//   characters:warm   the hero's shader warm-up (no program compiles on the first Holy charge) and the fur distance LOD
 // Screenshots → tests/shots/characters/*.png. Works against the dev server and the bundled game (no /src imports:
 // the library is reached through any kitten, `root.userData.kitten.constructor.lib`).
 import fs from 'node:fs';
@@ -302,6 +308,186 @@ export default [
       t.log(`fur shells per quality: ${JSON.stringify(q)}`);
       t.assert(['low', 'high', 'med'].every((n) => q[n].hero === q[n].want), 'core QUALITY.furShells drives the hero fur shells');
       await unstage(t);
+    },
+  },
+  // ================================================================== M2 (Acts I–II)
+  {
+    name: 'characters:m2cast', order: 34, level: 'meadow', spawn: 'start', timeout: 300000,
+    async run(t) {
+      dir(t);
+      await stage(t, 'vigil');
+      await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset('meadow_day', 0); g.ctx.player.object3d.visible = false; await g.waitFrames(5); });
+      const ids = {
+        companions: ['sage', 'clover', 'mochi'], service: ['tofu', 'earlgrey', 'pip', 'marmalade'],
+        hub: ['hub_waffles', 'hub_juniper', 'hub_biscuit', 'hub_pickles'], spoons: ['spoon_tater', 'spoon_mittens', 'spoon_socks', 'spoon_bean'],
+      };
+      const spawned = await t.G((I) => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player;
+        const f = p.facing, P = p.pos, out = { ok: [], errors: [] };
+        const at = (x, z) => new THREE.Vector3(P.x + x * Math.cos(f) + z * Math.sin(f), 0, P.z - x * Math.sin(f) + z * Math.cos(f));
+        const face = f + Math.PI;
+        const row = (list, z, gap) => list.forEach((id, i) => {
+          try { ctx.companions.spawnNpc(id, at((list.length - 1) / 2 * gap - i * gap, z), face); out.ok.push(id); } catch (e) { out.errors.push(`${id}: ${e.message}`); }
+        });
+        row([...I.companions, ...I.service], 3.4, 0.82);
+        row(I.hub, 6.4, 0.9);
+        row(I.spoons, 8.6, 0.75);
+        return out;
+      }, ids);
+      t.log(`m2 cast: ${spawned.ok.join(', ')}${spawned.errors.length ? ' | errors: ' + spawned.errors.join('; ') : ''}`);
+      t.assert(!spawned.errors.length, `M2 cast spawns without errors (${spawned.errors.join('; ')})`);
+      const all = [...ids.companions, ...ids.service, ...ids.hub, ...ids.spoons];
+      const info = await until(t, (list) => {
+        const ctx = window.__GAME__.ctx, found = {};
+        ctx.scene.traverse((o) => { if (o.name?.startsWith('kitten:') && o.userData.kitten) found[o.name.slice(7)] = o.userData.kitten; });
+        if (!list.every((id) => found[id])) return null;
+        const r = {};
+        for (const id of list) {
+          const k = found[id];
+          const names = new Set(); k.root.traverse((o) => names.add(o.name));
+          r[id] = { tier: k.tier, lite: k.lite, calls: k.drawCalls(), pose: k.poseName, props: Object.keys(k.props).filter((n) => k.props[n].parent), names: [...names].filter(Boolean).slice(0, 60) };
+        }
+        return r;
+      }, all, 20000);
+      if (!t.assert(!!info, 'every M2 cat is a buildKitten root (named, hub and Spoon Brigade ids resolve through catConfig)')) return;
+      // hub residents and the brigade are the cheap tier with their activity pose / props
+      t.assert(ids.spoons.every((id) => info[id].lite && info[id].pose === 'spoonReady' && info[id].props.includes('spoon')),
+        `Spoon Brigade: lite tier (sheen fur), spoonReady stance, spoon in paw (${ids.spoons.map((id) => `${id}:${info[id].tier}/${info[id].pose}/${info[id].props}`).join(' ')})`);
+      t.assert(ids.spoons.every((id) => info[id].props.includes('pot_helm') || info[id].props.includes('colander')), 'Spoon Brigade wear pot helms / colanders');
+      t.assert(info.hub_waffles.pose === 'wave' && info.hub_juniper.pose === 'read' && info.hub_biscuit.pose === 'fish' && info.hub_biscuit.props.includes('fishing_rod'),
+        `hub kittens take their §12.5 activity (${['hub_waffles', 'hub_juniper', 'hub_biscuit'].map((id) => `${id}:${info[id].pose}/${info[id].props}`).join(' ')})`);
+      t.assert([...ids.hub, ...ids.spoons].every((id) => info[id].calls <= 7), `lite cats stay cheap (${[...ids.hub, ...ids.spoons].map((id) => info[id].calls).join(',')} calls)`);
+      t.assert(['sage', 'clover', 'tofu', 'earlgrey', 'pip'].every((id) => info[id].tier === 'kitten' && !info[id].lite), 'companions + service kittens use the companion fur tier');
+      await t.G(() => window.__GAME__.waitFrames(30));
+      await camShot(t, [0, 0.82, 0.9], [0, 0.5, 3.4], 44);
+      await t.shot('characters/m2-companions', { freeze: true });
+      await t.blankCheck('m2 companions');
+      await camShot(t, [-1.6, 0.75, 1.9], [-1.2, 0.5, 3.4], 36);
+      await t.shot('characters/m2-service', { freeze: true });
+      await camShot(t, [0, 1.0, 3.9], [0, 0.35, 6.4], 40);
+      await t.shot('characters/m2-hub', { freeze: true });
+      // the brigade lobs spoons together (emote 'throw'), captured at the wind-up
+      await t.G(async () => {
+        const g = window.__GAME__;
+        g.ctx.scene.traverse((o) => { if (o.name?.startsWith('kitten:spoon_')) o.userData.kitten.emote('throw'); });
+        await g.waitFrames(9);
+      });
+      await camShot(t, [0, 0.9, 6.6], [0, 0.45, 8.6], 40, 2);
+      await t.shot('characters/m2-spoons', { freeze: true });
+      // Mochi readability (STATUS M1: too dark): his coat must still read lighter than pure black under day light
+      const mochi = await t.G(() => {
+        let k = null; window.__GAME__.ctx.scene.traverse((o) => { if (o.name === 'kitten:mochi') k = o.userData.kitten; });
+        const u = k?.furMat?.uniforms;
+        return u ? { sheen: u.uSheen?.value ?? 0, amb: u.uAmbMul?.value ?? 0 } : null;
+      });
+      t.log(`mochi fur: ${JSON.stringify(mochi)}`);
+      t.assert(mochi && mochi.sheen > 0, 'Mochi gets the dark-coat sky sheen');
+      const st = await t.state();
+      t.log(`M2 cast scene: ${st.calls} calls, ${(st.tris / 1000).toFixed(0)}k tris`);
+      await unstage(t);
+    },
+  },
+  {
+    name: 'characters:skins', order: 35, level: 'meadow', spawn: 'start', timeout: 300000,
+    async run(t) {
+      dir(t);
+      await stage(t, 'vigil');
+      // a line-up of all 7 sword skins (§13.4) on companion-tier Swordcats next to her; the GLB skins load through core
+      const r = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player, lib = p.model.k.constructor.lib;
+        ctx.env.preset('meadow_day', 0);
+        const grp = new THREE.Group(); grp.name = 'smoke:skins';
+        grp.position.copy(p.pos); grp.rotation.y = p.facing; ctx.scene.add(grp);
+        const glb = {};
+        for (const [id, path, fit] of [['diamond', 'models/weapons/quaternius/Sword_Diamond.glb', 1.0], ['toobig', 'models/weapons/quaternius/Claymore.glb', 'toobig']]) {
+          try { glb[id] = (await ctx.assets.model(path, { fit })).root; } catch (e) { glb[id] = null; }
+        }
+        const cats = [];
+        lib.SWORD_SKINS.forEach((skin, i) => {
+          const cfg = { ...lib.CATS.swordcat_red, id: 'skin_' + skin, tier: 'kitten' };
+          const k = lib.buildKitten(cfg);
+          k.setSword(glb[skin] ? { skin, model: glb[skin].clone(true) } : skin);
+          k.setPose(i === 5 ? 'idle' : 'vigil', { blend: 0 });
+          k.root.position.set(2.6 - i * 0.86, 0, 2.4); k.root.rotation.y = Math.PI;
+          grp.add(k.root); cats.push(k);
+        });
+        const off = ctx.game.addFrameHook((dt) => { for (const k of cats) k.update(Math.min(dt, 0.05), { frameId: ctx.game.frameCount }); });
+        grp.userData.off = off; grp.userData.cats = cats;
+        await g.waitFrames(20);
+        const out = {};
+        for (const k of cats) {
+          k.root.updateMatrixWorld(true);
+          const inv = new THREE.Matrix4().copy(k.root.matrixWorld).invert();
+          const tip = k.sword.tip.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv);
+          out[k.sword.skin] = { tipY: +tip.y.toFixed(3), len: k.sword.length, sparkles: !!k.sword.sparkles, glb: !!k.sword.group.getObjectByName('swordModel') };
+        }
+        return out;
+      });
+      t.log(`sword skins: ${JSON.stringify(r)}`);
+      t.assert(Object.keys(r).length === 7, 'all 7 sword skins build');
+      t.assert(r.diamond?.glb && r.toobig?.glb, 'Diamond Sword and Even More Too Big mount their fitted GLBs');
+      t.assert(r.toobig && r.toobig.tipY >= 0 && r.toobig.tipY < 0.06, `Even More Too Big: the tip drags ON the ground (tip y ${r.toobig?.tipY})`);
+      t.assert(r.dawnblade?.sparkles, 'Dawnblade carries its 20 sparkles');
+      await camShot(t, [0, 0.85, 0.2], [0, 0.45, 2.4], 50);
+      await t.shot('characters/skins-swords', { freeze: true });
+      await t.blankCheck('skins');
+      // the 7 capes (§13.5) on the hero herself; the bow stays pink on her LEFT ear through every swap (hard rule)
+      const capes = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, k = ctx.player.model.k, lib = k.constructor.lib;
+        const s = ctx.scene.getObjectByName('smoke:skins');
+        if (s) { s.userData.off?.(); for (const c of s.userData.cats) c.dispose(); s.removeFromParent(); }
+        const out = [];
+        for (const id of ['cream', 'red', 'memeWhite', 'blue', 'green', 'midnight', 'gold']) {
+          k.setCape(id);
+          await g.waitFrames(4);
+          const col = k.cape?.mesh.material.uniforms?.uColor?.value ?? k.cape?.mesh.material.color;
+          out.push({ id, style: k.capeStyle, color: col ? '#' + col.getHexString() : null, bowParent: k.bow?.parent?.name, bowVisible: !!k.bow?.visible, bowHex: k.cfg.bow?.color });
+        }
+        k.setCape('red');
+        return { out, want: Object.fromEntries(Object.entries(lib.CAPES).map(([key, v]) => [key, v.color.toLowerCase()])) };
+      });
+      t.log(`capes: ${capes.out.map((c) => `${c.id}=${c.color}`).join(' ')}`);
+      t.assert(capes.out.every((c) => c.style === c.id), 'every §13.5 cape equips on the hero');
+      t.assert(capes.out.every((c) => c.bowParent === 'earL' && c.bowVisible && /F2A2B8/i.test(c.bowHex)), 'the bow stays pink on her LEFT ear with every cape');
+      await t.G(async () => { const g = window.__GAME__; g.ctx.cam.shot({ pos: [0.7, 0.9, -2.2], look: [0, 0.5, 0], fov: 36, anchor: 'swordcat' }); await g.waitFrames(40); });
+      await t.shot('characters/skins-cape-red', { freeze: true });
+      await t.G(async () => { const g = window.__GAME__, ctx = g.ctx; ctx.player.model._applyCosmetics?.(true); await g.waitFrames(3); });
+      await unstage(t);
+    },
+  },
+  {
+    name: 'characters:warm', order: 36, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      // requests/fx.md + player.md: the first Holy charge / Golden Hour must not compile characters programs mid-fight
+      await t.G(() => window.__GAME__.waitFrames(30));
+      const r = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, k = ctx.player.model.k;
+        const progs = () => ctx.renderer.info.programs?.length ?? -1;
+        const before = progs();
+        const aura0 = k.auraMeshes.every((m) => !m.visible);
+        k.setHoly(1);
+        await g.waitFrames(3);
+        const after = progs();
+        k.setHoly(0);
+        await g.waitFrames(2);
+        const aura1 = k.auraMeshes.every((m) => !m.visible) && !k.sword.streak.visible;
+        return { before, after, warmups: k.warmups ?? 0, aura0, aura1 };
+      });
+      t.log(`warm-up: ${r.warmups} warm frames; programs ${r.before} → ${r.after} on the first Holy charge`);
+      t.assert(r.warmups >= 1, 'the hero rig ran its shader warm-up frame');
+      t.assert(r.before > 0 && r.after === r.before, `first Holy charge compiles no new program (${r.before} → ${r.after})`);
+      t.assert(r.aura0 && r.aura1, 'warm-up leaves the aura hull and streak hidden at holy 0');
+      // fur LOD (requests/world.md): fewer hero shells at the follow distance, none past ~8 m
+      const lod = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, k = ctx.player.model.k, lib = k.constructor.lib;
+        await g.waitFrames(5);
+        const d = ctx.camera.position.distanceTo(k.headFur.mesh.getWorldPosition(new g.THREE.Vector3()));
+        return { d: +d.toFixed(2), n: k.headFur._lodN, shells: k.headFur.shells, far: lib.FUR_LOD.far };
+      });
+      t.log(`fur LOD at ${lod.d} m: ${lod.n}/${lod.shells} shells (off past ${lod.far} m)`);
+      if (lod.shells > 0) t.assert(lod.n > 0 && lod.n <= lod.shells, 'hero fur draws a distance-LOD shell count');
+      const st = await t.state();
+      t.log(`meadow follow view: ${st.calls} calls / ${(st.tris / 1000).toFixed(0)}k tris (scene), frame ${st.frameCalls} / ${(st.frameTris / 1000).toFixed(0)}k`);
     },
   },
 ];

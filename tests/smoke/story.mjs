@@ -1,5 +1,6 @@
 // tests/smoke/story.mjs  (owner: story) — smoke blocks for src/story: the title loop, CS-01, Midnight Practice, G-01,
-// CS-02 (never cut), CS-03 (never cut) + the Pudding follow beat, D-01, hold-to-skip and barks. Screenshots go to
+// CS-02 (never cut), CS-03 (never cut) + the Pudding follow beat, D-01, hold-to-skip and barks; M2: forest (D-02, CS-04,
+// CS-05), town (D-03, CS-06, D-04 ×3, CS-07) and gate (yard, D-06, CS-08 never cut, G-02, CS-09, CS-10 → the grey hub). Screenshots go to
 // tests/shots/story/. Run against your own dev server:
 //   SMOKE_URL=http://localhost:5211/ SMOKE_ONLY=story node tests/smoke.mjs
 // Scenes are watched at real speed and photographed at their beats (dialogue keys / scene time); the sim is frozen
@@ -89,6 +90,233 @@ function checkHandback(t, a, label) {
   t.assert(!a.playing, `${label}: no scene running`);
   t.assert(!a.dlg, `${label}: dialogue box closed`);
 }
+
+// ====================================================================================================== M2: Acts I–II
+/** Play `id` and wait for it to start (play() returns a promise we must not serialise). */
+async function playScene(t, id) {
+  await t.G((i) => { window.__GAME__.ctx.story.play(i); }, id);
+  return until(t, (i) => window.__GAME__.ctx.story.playingId === i, id, { timeout: 8000 });
+}
+
+/** Shoot at a dialogue line (frozen on it), else warn. */
+async function atLine(t, key, name, timeout = 40000) {
+  if (await freezeOnLine(t, key, timeout)) await shot(t, name); else t.warn(`missed line ${key}`);
+}
+
+/** Wait until scene `id` is over and gameplay is back (`level` loaded when given). */
+async function sceneOver(t, id, timeout = 90000) {
+  return until(t, (i) => { const g = window.__GAME__; return g.ctx.story.playingId !== i && !g.ctx.story.queue.some((e) => e.id === i) && !g.ctx.levels.loading; }, id, { timeout });
+}
+
+const flagsOf = (keys) => { const s = window.__GAME__.ctx.state; return Object.fromEntries(keys.map((k) => [k, s.getFlag(k)])); };
+
+const MEADOW_DONE = { 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true, 'meadow.pudding': true, 'meadow.mochi': true, 'meadow.done': true };
+const FOREST_DONE = { ...MEADOW_DONE, 'forest.sage': true, 'forest.camp': true, 'forest.boss': true, 'forest.done': true };
+const TOWN_DONE = { ...FOREST_DONE, 'town.marmalade': true, 'town.letters': true, 'town.tofu': true, 'town.earlgrey': true, 'town.clover': true, 'town.free': true, 'town.done': true };
+
+const M2_BLOCKS = [
+  // ------------------------------------------------------------------ forest: D-02, CS-04 Lantern Night, CS-05 First Light
+  {
+    name: 'story:forest', order: 78, level: 'forest', spawn: 'start', timeout: 300000,
+    async run(t) {
+      ensureDir(t);
+      await fresh(t, MEADOW_DONE, 'forest', 'start');
+      await t.G(() => { const g = window.__GAME__; g.ctx.state.companions.unlocked = ['mochi']; g.ctx.companions.setActive?.(['mochi']); });
+      // D-02: Sage at the treetop (spawned here: the cage is companions')
+      await tp(t, 18, -11.5, 0);
+      await t.G(() => { window.__GAME__.ctx.companions.spawnNpc('sage', [18.4, -9.6], Math.PI); });
+      await t.frames(20);
+      t.assert(!!(await playScene(t, 'd02')), 'D-02 plays');
+      await atLine(t, 'd02.3', '10a-d02-sage');
+      t.assert(!!(await sceneOver(t, 'd02', 30000)), 'D-02 finished');
+      let f = await t.G(flagsOf, ['forest.sage']);
+      t.assert(f['forest.sage'] === true, 'flag forest.sage');
+      checkHandback(t, await t.G(afterScene), 'D-02');
+      // CS-04 through the world trigger `camp` when it exists, else directly
+      await tp(t, 6, 33, 0);
+      await t.hold('KeyW', 900);
+      let on = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs04', null, { timeout: 3000 });
+      if (!on) { t.log('camp trigger not reached: playing cs04 directly'); on = await playScene(t, 'cs04'); }
+      t.assert(!!on, 'CS-04 plays');
+      if (await until(t, sceneT, ['cs04', 6.0], { timeout: 15000 })) await shot(t, '10b-cs04-crane');
+      await atLine(t, 'cs04.1', '10c-cs04-sage');
+      await atLine(t, 'cs04.3', '10d-cs04-here');
+      await atLine(t, 'cs04.4', '10e-cs04-mochi');
+      if (await until(t, () => (window.__GAME__.ctx.story.current?.t ?? 0) > 0 && window.__GAME__.ctx.cam.currentShot?.mode === 'rail' && !window.__GAME__.ctx.story.line, null, { timeout: 20000 })) { await t.wait(1500); await shot(t, '10f-cs04-pushout'); }
+      t.assert(!!(await sceneOver(t, 'cs04', 40000)), 'CS-04 finished');
+      await t.wait(800);
+      const s4 = await t.G(() => { const g = window.__GAME__; return { camp: g.ctx.state.getFlag('forest.camp'), env: g.ctx.env.presetName, vigil: g.ctx.levels.current?.vigils?.find((v) => v.id === 'vigil_3')?.lit ?? null }; });
+      t.assert(s4.camp === true, 'flag forest.camp');
+      t.assert(s4.env === 'forest_night', `env forest_night (${s4.env})`);
+      if (s4.vigil !== null) t.assert(s4.vigil === true, 'vigil_3 lit by CS-04');
+      checkHandback(t, await t.G(afterScene), 'CS-04');
+      await shot(t, '10g-cs04-after');
+      // CS-05: the real B1 when enemies provide it (god, 1% HP, one hit), else the scene by id
+      await t.G(() => window.__GAME__.god(true));
+      await t.loadLevel('forest', 'boss');
+      await t.frames(20);
+      await t.clearEvents();
+      const boss = await t.G(() => { const g = window.__GAME__; g.startBoss?.(); return !!g.ctx.enemies.boss; });
+      let five = false;
+      if (boss) {
+        await t.wait(600);
+        await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss, p = g.ctx.player; g.ctx.story.skipAll(); g.setMode('play');
+          b.setHpFrac?.(0.01); p.teleport({ pos: b.pos.clone().add(new g.THREE.Vector3(0, 0, -1.6)), facing: 0 }); });
+        for (let i = 0; i < 6 && !five; i++) { await t.tap('KeyJ', 1, 200); five = !!(await until(t, () => window.__GAME__.ctx.story.playingId === 'cs05', null, { timeout: 1500 })); }
+        if (!five) t.warn('B1 did not fall to the test hit: playing cs05 directly');
+      } else t.warn('no B1 boss yet: playing cs05 directly');
+      if (!five) five = !!(await playScene(t, 'cs05'));
+      t.assert(five, 'CS-05 plays');
+      await atLine(t, 'cs05.1', '10h-cs05-yield');
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'HERO_LOW' && window.__GAME__.ctx.story.playingId === 'cs05', null, { timeout: 25000 })) { await t.wait(1900); await shot(t, '10i-cs05-shard'); }
+      t.assert(!!(await sceneOver(t, 'cs05', 40000)), 'CS-05 finished');
+      const s5 = await t.G(() => ({ shards: window.__GAME__.ctx.state.shards, boss: window.__GAME__.ctx.state.getFlag('forest.boss') }));
+      t.assert(s5.shards >= 1 && s5.boss === true, `Shard 1 + forest.boss (${JSON.stringify(s5)})`);
+      checkHandback(t, await t.G(afterScene), 'CS-05');
+    },
+  },
+
+  // ------------------------------------------------------------------ town: D-03, CS-06 (letter card), D-04 ×3, CS-07 (red cape, results)
+  {
+    name: 'story:town', order: 79, level: 'town', spawn: 'start', timeout: 360000,
+    async run(t) {
+      ensureDir(t);
+      await fresh(t, FOREST_DONE, 'town', 'start');
+      await t.G(() => { const g = window.__GAME__; g.ctx.state.companions.unlocked = ['mochi', 'sage']; g.ctx.companions.setActive?.(['mochi']); });
+      await tp(t, -19, -18, -Math.PI / 2);
+      await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.ARENA_CLEAR, { id: 'bakery' }); });
+      t.assert(!!(await until(t, () => window.__GAME__.ctx.story.playingId === 'd03', null, { timeout: 5000 })), 'Bakery Street clear → D-03');
+      await atLine(t, 'd03.1', '11a-d03-armour');
+      await atLine(t, 'd03.4', '11b-d03-loan');
+      t.assert(!!(await sceneOver(t, 'd03', 40000)), 'D-03 finished');
+      const s3 = await t.G(() => ({ f: window.__GAME__.ctx.state.getFlag('town.marmalade'), chase: !!window.__GAME__.ctx.objectives.get?.('chase') }));
+      t.assert(s3.f === true, 'flag town.marmalade');
+      t.assert(s3.chase, 'objective "Catch the Post Stealer"');
+      checkHandback(t, await t.G(afterScene), 'D-03');
+      // the bag comes back → CS-06 at the Post Office
+      await tp(t, -30, 1, -Math.PI / 2);
+      await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.ITEM_RETURNED, { item: 'post_bag', amount: 1 }); });
+      t.assert(!!(await until(t, () => window.__GAME__.ctx.story.playingId === 'cs06', null, { timeout: 5000 })), 'post bag returned → CS-06');
+      await atLine(t, 'cs06.1', '11c-cs06-summons');
+      await atLine(t, 'cs06.3', '11d-cs06-nobody');
+      await atLine(t, 'cs06.6', '11e-cs06-coo');
+      if (await until(t, () => !!window.__GAME__.ctx.story.cinema.letterOn, null, { timeout: 25000 })) { await t.wait(1600); await shot(t, '11f-cs06-letter'); }
+      t.assert(!!(await sceneOver(t, 'cs06', 40000)), 'CS-06 finished');
+      const s6 = await t.G(() => ({ f: window.__GAME__.ctx.state.getFlag('town.letters'), card: window.__GAME__.ctx.story.cinema.letterOn }));
+      t.assert(s6.f === true, 'flag town.letters');
+      t.assert(!s6.card, 'letter card closed');
+      checkHandback(t, await t.G(afterScene), 'CS-06');
+      await shot(t, '11g-cs06-belt');
+      // D-04 ×3
+      for (const [id, at, flag] of [['d04tofu', [18, -11], 'town.tofu'], ['d04earlgrey', [0, 2], 'town.earlgrey'], ['d04clover', [9, 11.5], 'town.clover']]) {
+        await tp(t, at[0], at[1], 0);
+        t.assert(!!(await playScene(t, id)), `${id} plays`);
+        const key = { d04tofu: 'd04.tofu.1', d04earlgrey: 'd04.earlgrey.1', d04clover: 'd04.clover.1' }[id];
+        await atLine(t, key, `11h-${id}`);
+        t.assert(!!(await sceneOver(t, id, 30000)), `${id} finished`);
+        t.assert((await t.G((k) => window.__GAME__.ctx.state.getFlag(k), flag)) === true, `flag ${flag}`);
+      }
+      t.assert((await t.G(() => window.__GAME__.ctx.state.companions.unlocked.includes('clover'))), 'Clover joined the roster');
+      // CS-07: the steps trigger when world provides it, else directly
+      await tp(t, 0, 29, 0);
+      await t.hold('KeyW', 900);
+      let on = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs07', null, { timeout: 3000 });
+      if (!on) { t.log('steps trigger not reached: playing cs07 directly'); on = await playScene(t, 'cs07'); }
+      t.assert(!!on, 'CS-07 plays');
+      if (await until(t, sceneT, ['cs07', 3.5], { timeout: 15000 })) await shot(t, '11i-cs07-crane');
+      await atLine(t, 'cs07.5', '11j-cs07-cape');
+      await atLine(t, 'cs07.8', '11k-cs07-bell');
+      if (await until(t, () => window.__GAME__.events.includes('ui:toast') && window.__GAME__.ctx.story.playingId === 'cs07' && (window.__GAME__.ctx.story.current?.t ?? 0) > 30, null, { timeout: 40000 })) { await t.wait(600); await shot(t, '11l-cs07-free'); }
+      t.assert(!!(await sceneOver(t, 'cs07', 60000)), 'CS-07 finished');
+      await until(t, () => window.__GAME__.events.includes('level:results'), null, { timeout: 10000 });
+      const s7 = await t.G(() => { const g = window.__GAME__, s = g.ctx.state; return { free: s.getFlag('town.free'), done: s.getFlag('town.done'), cape: s.cosmetics.cape, capes: s.cosmetics.capes, results: g.events.includes('level:results'), level: g.ctx.levels.current?.id }; });
+      t.assert(s7.free === true && s7.done === true, 'flags town.free + town.done');
+      t.assert(s7.cape === 'red' && s7.capes.includes('red'), `red cape equipped (${s7.cape})`);
+      t.assert(s7.results, 'Chapter 3 results card');
+      t.assert(s7.level === 'town', 'town stays loaded (it becomes the hub)');
+      await t.G(() => { const ui = window.__GAME__.ctx.ui; ui?.closeResults?.(); ui?.results?.close?.(); });
+      await until(t, () => window.__GAME__.mode === 'play', null, { timeout: 8000 });
+      await t.wait(800);
+      await shot(t, '11m-cs07-red-cape');
+      const board = await t.G(() => window.__GAME__.ctx.story.board());
+      t.assert(board.next === 'gate', `Quest Board: next level gate (${board.next})`);
+      const hub = await t.G(() => window.__GAME__.ctx.story.hubTalk('snowpaw'));
+      t.assert(!!hub?.key?.startsWith('hub.snowpaw'), 'hub line');
+    },
+  },
+
+  // ------------------------------------------------------------------ gate: yard, D-06, CS-08 (never cut), G-02, CS-09, CS-10 → hub
+  {
+    name: 'story:gate', order: 80, level: 'gate', spawn: 'start', timeout: 420000,
+    async run(t) {
+      ensureDir(t);
+      await fresh(t, TOWN_DONE, 'gate', 'start');
+      await t.G(() => { const g = window.__GAME__, s = g.ctx.state; s.companions.unlocked = ['mochi', 'sage', 'clover']; g.ctx.companions.setActive?.(['mochi']);
+        s.kittens = ['biscuit', 'noodle', 'button', 'pickles', 'pebble', 'sprout', 'waffles']; });
+      t.assert(!!(await playScene(t, 'gate_yard')), 'the yard dialogue plays');
+      await atLine(t, 'gate.yard.2', '12a-gate-yard');
+      t.assert(!!(await sceneOver(t, 'gate_yard', 40000)), 'yard dialogue finished');
+      // D-06 at the war-wagon
+      await tp(t, 3.2, -76.5, Math.PI * 0.8);
+      t.assert(!!(await playScene(t, 'd06')), 'D-06 plays');
+      await atLine(t, 'd06.1', '12b-d06-pip');
+      t.assert(!!(await sceneOver(t, 'd06', 30000)), 'D-06 finished');
+      t.assert((await t.G(() => window.__GAME__.ctx.state.getFlag('gate.pip'))) === true, 'flag gate.pip');
+      // The Line: 70% → CS-08 (never cut) through the story's own listener
+      await tp(t, 0, 10, Math.PI);
+      await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e);
+        const o = g.ctx.objectives; if (!o.get('line')) o.start('line', { max: 100, value: 0, textKey: 'obj.line' }); o.set('line', 70); });
+      t.assert(!!(await until(t, () => window.__GAME__.ctx.story.playingId === 'cs08', null, { timeout: 12000 })), 'repair 70% → CS-08');
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'MEME_LOOP' && window.__GAME__.ctx.story.playingId === 'cs08', null, { timeout: 8000 })) { await t.wait(2000); await shot(t, '12c-cs08-meme'); }
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'REVERSE_HORDE', null, { timeout: 10000 })) { await t.wait(3500); await shot(t, '12d-cs08-horde'); }
+      await atLine(t, 'cs08.1', '12e-cs08-nobody');
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'PULLBACK', null, { timeout: 15000 })) { await t.wait(5200); await shot(t, '12f-cs08-pullback'); }
+      const rows = await t.G(() => window.__GAME__.ctx.story.current?._rows?.length ?? 0);
+      t.assert(rows === 7, `7 rescued kittens behind her (${rows})`);
+      await atLine(t, 'cs08.4', '12g-cs08-spoon');
+      t.assert(!!(await sceneOver(t, 'cs08', 40000)), 'CS-08 finished');
+      t.assert((await t.G(() => window.__GAME__.ctx.state.getFlag('gate.spoons'))) === true, 'Spoon Brigade on');
+      checkHandback(t, await t.G(afterScene), 'CS-08');
+      // 85% → G-02 Marmalade's Leap
+      await t.G(() => window.__GAME__.ctx.objectives.set('line', 86));
+      t.assert(!!(await until(t, () => window.__GAME__.ctx.story.playingId === 'g02', null, { timeout: 6000 })), 'repair 85% → G-02');
+      if (await until(t, () => window.__GAME__.ctx.story.current?._leaping, null, { timeout: 6000 })) { await t.wait(1500); await shot(t, '12h-g02-leap'); }
+      t.assert(!!(await sceneOver(t, 'g02', 20000)), 'G-02 finished');
+      const tsc = await t.G(() => window.__GAME__.game.loop?.timeScale ?? 1);
+      t.assert(Math.abs(tsc - 1) < 1e-6, `time scale back to 1 (${tsc})`);
+      checkHandback(t, await t.G(afterScene), 'G-02');
+      // 100% → the gate test (ambient)
+      await t.G(() => window.__GAME__.ctx.objectives.set('line', 100));
+      await until(t, () => window.__GAME__.ctx.state.getFlag('gate.line') === true, null, { timeout: 12000 });
+      t.assert((await t.G(() => window.__GAME__.ctx.state.getFlag('gate.line'))) === true, 'flag gate.line');
+      // CS-09 → CS-10
+      await tp(t, 0, 8, Math.PI);
+      t.assert(!!(await playScene(t, 'cs09')), 'CS-09 plays');
+      await atLine(t, 'cs09.1', '12i-cs09-charge');
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'HERO_LOW' && window.__GAME__.ctx.story.playingId === 'cs09', null, { timeout: 25000 })) { await t.wait(3300); await shot(t, '12j-cs09-gold-ref1'); }
+      await atLine(t, 'cs09.2', '12k-cs09-pudding');
+      await atLine(t, 'cs09.4', '12l-cs09-hold');
+      t.assert(!!(await until(t, () => window.__GAME__.ctx.story.playingId === 'cs10', null, { timeout: 60000 })), 'CS-10 follows');
+      const s9 = await t.G(() => ({ shards: window.__GAME__.ctx.state.shards, boss: window.__GAME__.ctx.state.getFlag('gate.boss') }));
+      t.assert(s9.shards >= 2 && s9.boss === true, `Shard 2 + gate.boss (${JSON.stringify(s9)})`);
+      await atLine(t, 'cs10.1', '12m-cs10-where');
+      await t.G(() => { const ui = window.__GAME__.ctx.ui; setTimeout(() => { ui?.closeResults?.(); ui?.results?.close?.(); }, 1500); });
+      await atLine(t, 'cs10.3', '12n-cs10-letter', 60000);
+      await atLine(t, 'cs10.6', '12o-cs10-yet');
+      if (await until(t, () => window.__GAME__.ctx.env.presetName === 'hub_grey' && window.__GAME__.ctx.story.playingId === 'cs10', null, { timeout: 20000 })) { await t.wait(3000); await shot(t, '12p-cs10-gloom'); }
+      t.assert(!!(await sceneOver(t, 'cs10', 60000)), 'CS-10 finished');
+      await t.wait(1000);
+      const s10 = await t.G(() => { const g = window.__GAME__; return { done: g.ctx.state.getFlag('gate.done'), gd: g.ctx.state.getFlag('gate.done'), level: g.ctx.levels.current?.id, env: g.ctx.env.presetName, results: g.events.includes('level:results') }; });
+      t.assert(s10.done === true, 'flag gate.done');
+      t.assert(s10.level === 'town', `back in Pawsbury (${s10.level})`);
+      t.assert(s10.env === 'hub_grey', `the hub is grey (${s10.env})`);
+      checkHandback(t, await t.G(afterScene), 'CS-10');
+      await shot(t, '12q-hub-grey');
+      const q = await t.G(() => window.__GAME__.ctx.story.quest?.id);
+      t.assert(q === 'hub-bog', `quest: north to the Bogmire (${q})`);
+    },
+  },
+];
 
 export default [
   // ------------------------------------------------------------------ CS-00 title loop, then New Game → CS-01
@@ -414,10 +642,9 @@ export default [
       t.assert(+st.fade < 0.05, `no black left on screen (fade ${st.fade})`);
       checkHandback(t, await t.G(afterScene), 'skip');
       // a later-milestone scene runs as a placeholder that applies its end state
-      await t.G(() => { window.__GAME__.story.play('cs05'); });
-      const ph = await until(t, () => window.__GAME__.ctx.state.getFlag('forest.boss') === true && !window.__GAME__.ctx.story.isPlaying, null, { timeout: 5000 });
-      t.assert(!!ph, 'placeholder CS-05 applies forest.boss');
-      t.assert((await t.G(() => window.__GAME__.ctx.state.shards)) >= 1, 'placeholder CS-05 gives Shard 1');
+      await t.G(() => { window.__GAME__.story.play('cs13'); });
+      const ph = await until(t, () => window.__GAME__.ctx.state.getFlag('keep.gate') === true && !window.__GAME__.ctx.story.isPlaying, null, { timeout: 5000 });
+      t.assert(!!ph, 'placeholder CS-13 applies keep.gate');
       // barks: Still Standing always speaks; a bubble shows over her
       await t.G(() => { const g = window.__GAME__; g.ctx.state.shards = 0; g.ctx.bus.emit(g.E.PLAYER_STILL_STANDING, {}); });
       const bark = await until(t, () => [...window.__GAME__.ctx.story.barks.bubbles.values()].some((b) => b.sprite.visible), null, { timeout: 3000 });
@@ -425,4 +652,5 @@ export default [
       if (bark) await shot(t, '07b-bark');
     },
   },
+  ...M2_BLOCKS,
 ];

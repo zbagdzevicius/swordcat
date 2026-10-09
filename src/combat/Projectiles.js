@@ -177,6 +177,9 @@ export class Projectiles {
     this._allVisuals = [];
     this._res = null;
     this._query = [];
+    /** frame-hook unsubscribe while a shader warm-up frame is pending; `warmups` = warm-up frames run (smoke) */
+    this._warmOff = null;
+    this.warmups = 0;
   }
 
   // ---------------------------------------------------------------- spawn
@@ -632,7 +635,46 @@ export class Projectiles {
     this.list.length = 0;
   }
 
+  /**
+   * Shader warm-up (requests/world.md, core M2): one pooled visual per kind is shown for ONE rendered frame with an
+   * empty draw range, so the real renderer (level fog / lights / the composer target) compiles the bolt trail, orb
+   * halo, glob and wave crescent programs under the loading veil instead of on the first shot mid-fight.
+   * Combat calls it on `level:loaded`; restored by a one-shot frame hook after that frame.
+   */
+  warm() {
+    const scene = this.ctx.scene, game = this.ctx.game;
+    if (!scene || typeof game?.addFrameHook !== 'function' || this._warmOff) return false;
+    const saved = [];   // [object, visible, frustumCulled, drawStart, drawCount] × n
+    for (const kind of ['bolt', 'orb', 'glob', 'wave']) {
+      let pool = this._visualPool.get(kind);
+      if (!pool) this._visualPool.set(kind, (pool = []));
+      if (!pool.length) pool.push(this._makeVisual(kind));
+      const v = pool[pool.length - 1];
+      if (!v.group.parent) scene.add(v.group);
+      saved.push(v.group, v.group.visible, v.group.frustumCulled, -1, -1);
+      v.group.visible = true;
+      v.group.traverse((o) => {
+        if (!o.isMesh) return;
+        const g = o.geometry;
+        saved.push(o, o.visible, o.frustumCulled, g.drawRange.start, g.drawRange.count);
+        g.setDrawRange(0, 0);
+        o.visible = true; o.frustumCulled = false;
+      });
+    }
+    this._warmOff = game.addFrameHook(() => {        // runs after the frame that drew (compiled) them
+      for (let i = saved.length - 5; i >= 0; i -= 5) {   // reverse: shared geometries get their original range back last
+        const o = saved[i];
+        o.visible = saved[i + 1]; o.frustumCulled = saved[i + 2];
+        if (saved[i + 3] >= 0) o.geometry.setDrawRange(saved[i + 3], saved[i + 4]);
+      }
+      this._warmOff?.(); this._warmOff = null;
+      this.warmups++;
+    });
+    return true;
+  }
+
   dispose() {
+    this._warmOff?.(); this._warmOff = null;
     this.clear();
     for (const v of this._allVisuals) {
       v.group.removeFromParent();

@@ -2,12 +2,15 @@
 // gameplay SFX from real input (swings, footsteps, meow, hits, kill), the combat ↔ explore music rule, every manifest
 // file decoding in Chromium, the procedural layer (laugh build, chorus, Sunbell, clunk, heartbeat, shimmer, march),
 // Meme Cam / dialogue / hitstop ducks, the voice limits, and the CS-00…CS-03 audio cue sheets.
+// M2: forest day/night music + ambience + B1, the town hub states / bakery zone / hub ambience / shops / CS-06,07,10
+// cues, and the gate: low approach, The Line hold + winch + freeze + portcullis, CS-08 / G-02 / CS-09 cues and B2.
 // Screenshots (with the debug audio meter on) go to tests/shots/audio/.
 import fs from 'node:fs';
 import path from 'node:path';
 
 const A = 'window.__GAME__.ctx.audio';
-const st = (t) => t.G(() => window.__GAME__.ctx.audio.debugState());
+// debugState() is plain data; read it as JSON (t.G's plain() caps objects at 200 keys and `started` / `counts` grow past it)
+const st = (t) => t.page.evaluate(() => JSON.parse(JSON.stringify(window.__GAME__.ctx.audio.debugState())));
 const shot = async (t, name) => {
   fs.mkdirSync(path.join(t.shotsDir, 'audio'), { recursive: true });
   for (let i = 0; i < 2; i++) {
@@ -411,6 +414,209 @@ export default [
       await shot(t, '08-cs03-glade-music');
       // back to explore for the next blocks
       await t.G(() => { const a = window.__GAME__.ctx.audio; a.stopAll(0.1); a.music('field_of_dreams', 0.5); a.director.combat = false; a.director.forced = null; });
+    },
+  },
+  // ============================================================================================ M2 (Acts I–II)
+  {
+    name: 'audio:forest', order: 87, level: 'forest', spawn: 'start', timeout: 180000,
+    async run(t) {
+      if (!(await unlock(t))) return;
+      await t.G(() => window.__GAME__.ctx.audio.showMeter(true));
+      const day = await exploreNow(t);
+      t.assert(day === 'field_of_dreams', `forest day explore ${day}`);
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'field_of_dreams' && d.playing), 10000), 'field_of_dreams deck playing');
+      // birdsong + the stream bed at the stumps (§12.4)
+      await t.G(() => window.__GAME__.teleport(22, 1, 10));
+      const birds = await until(t, () => (window.__GAME__.ctx.audio.started.birds ?? 0) > 0, 12000);
+      let s = await st(t);
+      t.assert(birds, `procedural birdsong (${JSON.stringify(s.ambience)})`);
+      t.assert(s.ambience.includes('stream') && s.loops.includes('world/loop_water_01'), `stream loop: ${s.loops}`);
+      const sfxDay = await peak(t, 'sfx', 1500);
+      t.log(`forest day: ambience ${s.ambience.join(',')}; sfx peak ${db(sfxDay)} dBFS`);
+      await shot(t, '09-forest-day-stream');
+      // CS-04 Lantern Night: forest.camp → dark_forest_creepy (track volume 0.6), crickets, the campfire, the owl
+      await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('forest.camp', true); else c.state.setFlag('forest.camp', true); });
+      await t.G(() => window.__GAME__.teleport(4, 1, 34));
+      const night = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'dark_forest_creepy' && d.playing && !d.fading), 12000);
+      s = await st(t);
+      t.assert(night, `night track after forest.camp (${JSON.stringify(s.music.decks)})`);
+      t.assert(['crickets', 'campfire', 'owl'].every((k) => s.ambience.includes(k)) && !s.ambience.includes('birds'), `night ambience ${s.ambience}`);
+      t.assert(s.loops.includes('crickets') && s.loops.includes('campfire'), `night beds ${s.loops}`);
+      // CS-04 cue sheet as the story plays it
+      const cue = await t.G(() => {
+        const a = window.__GAME__.ctx.audio, h = [];
+        for (const id of ['cs04.crackle', 'cs04.snore', 'cs04.rollover', 'cs04.tailCurl']) h.push(!!a.play3D(id, [6, 0.5, 44]));
+        const purr = a.play3D('cs04.purr', 'swordcat');
+        return { ok: h.every(Boolean), purr: !!purr, n: a.loops.size, stop: (purr?.stop?.(0.3), true) };
+      });
+      t.assert(cue.ok && cue.purr, `CS-04 cues ${JSON.stringify(cue)}`);
+      const sfxNight = await peak(t, 'sfx', 1500);
+      t.assert(sfxNight > 0.002, `night ambience audible (${db(sfxNight)} dBFS)`);
+      await shot(t, '10-forest-night-camp');
+      // B1 at the Cheese Mill: the boss loop snaps in with the fog-wall stinger (§11.2)
+      await t.G(() => { const g = window.__GAME__; g.god(true); g.teleport(-10, 1, 78); });
+      await t.frames(5);
+      await t.clearEvents();
+      await t.G(() => window.__GAME__.startBoss?.());
+      let real = await t.waitForEvent('boss:start', 8000);
+      if (!real) {
+        t.warn('no boss:start from the mill arena (enemies M2 in progress?) — emulating B1');
+        await t.G(() => { const g = window.__GAME__; window.__fakeBoss = { def: { id: 'boss_grizzlechop' }, id: 'boss_grizzlechop', pos: g.ctx.player.pos.clone() }; g.ctx.bus.emit(g.E.BOSS_START, { boss: window.__fakeBoss, id: 'boss_grizzlechop', name: 'Grizzlechop', maxHp: 100, phases: [0.5], dizzyMax: 100 }); });
+      }
+      const bossOn = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'boss_epic_battle_loop' && d.playing), 8000);
+      s = await st(t);
+      t.assert(bossOn && s.director.boss, `B1 boss loop (${JSON.stringify(s.director)})`);
+      t.assert((s.counts.bossIntroB1 ?? 0) >= 1, 'B1 stinger');
+      await shot(t, '11-forest-b1-boss');
+      await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.BOSS_DEFEATED, { boss: window.__fakeBoss ?? g.ctx.enemies?.boss ?? null, id: 'boss_grizzlechop' }); window.__fakeBoss = null; });
+      await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().sting, 5000);
+      await t.G(() => { const g = window.__GAME__; g.god(false); g.ctx.audio.stopAll(0.1); });
+    },
+  },
+  {
+    name: 'audio:town', order: 88, level: 'town', spawn: 'start', timeout: 180000,
+    async run(t) {
+      if (!(await unlock(t))) return;
+      await t.G(() => window.__GAME__.ctx.audio.showMeter(true));
+      t.assert((await exploreNow(t)) === 'village_town_theme', 'occupied town explore');
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'village_town_theme' && d.playing), 10000), 'village_town_theme playing');
+      let s = await st(t);
+      t.assert(s.ambience.includes('rats') && !s.ambience.includes('fountain'), `occupied ambience ${s.ambience}`);
+      // CS-07 end: town.free → hub gold, the hub comes alive
+      await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('town.free', true); else c.state.setFlag('town.free', true); });
+      await t.G(() => window.__GAME__.teleport(4, 1, 2));
+      const gold = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'village_bards_tale' && d.playing && !d.fading), 12000);
+      t.assert(gold, 'hub gold track (village_bards_tale)');
+      const alive = await until(t, () => { const a = window.__GAME__.ctx.audio; return (a.started.birds ?? 0) > 0 && a.log.some((l) => /cute_creature|kitten_mew|meow_baby/.test(l)); }, 15000);
+      s = await st(t);
+      t.assert(['fountain', 'kittens', 'forge', 'oven', 'birds'].every((k) => s.ambience.includes(k)), `hub ambience ${s.ambience}`);
+      t.assert(alive, 'hub birds + kitten chatter heard');
+      t.assert(s.loops.includes('world/loop_water_01'), `fountain loop ${s.loops}`);
+      await shot(t, '12-town-hub-fountain');
+      // the forge's anvil near the smithy
+      await t.G(() => window.__GAME__.teleport(24, 1, -6));
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.log.some((l) => /metal_hit_0|rpg_metal_0/.test(l)), 12000), 'the forge anvil rings');
+      // the Bakery radius 8 m → tavern_old_tower_inn (§16.1)
+      await t.G(() => window.__GAME__.teleport(-22, 1, -16));
+      const tavern = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'tavern_old_tower_inn' && d.playing && !d.fading), 10000);
+      t.assert(tavern, 'tavern music by the bakery');
+      await shot(t, '13-town-bakery-tavern');
+      // shops (§13.3): the counter bell, a purchase with the station flavour, a refusal, equip, Quest Board
+      const shop = await t.page.evaluate(async () => {
+        const a = window.__GAME__.ctx.audio, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        await Promise.all(['pickup/handleCoins', 'pickup/handleCoins2', 'jingles/jingles_PIZZI05', 'impact/metal_hit_01', 'ui/error_003', 'ui/open_001', 'ui/drop_003', 'pickup/bottle'].map((p) => a.decode(p)));
+        const b0 = a.started.bell ?? 0;
+        a.shop('open', { station: 'forge' }); await wait(250);
+        a.shop('hover'); a.shop('select'); await wait(120);
+        a.shop('buy', { station: 'forge' }); await wait(400);
+        a.shop('denied'); await wait(250);
+        a.shop('equipSword'); a.shop('buy', { station: 'bakery' }); await wait(250);
+        a.play2D('quest.open'); a.play2D('quest.pin'); a.play2D('quest.go'); await wait(250);
+        a.shop('close');
+        let m = 0; const t0 = performance.now();
+        while (performance.now() - t0 < 600) { m = Math.max(m, a.level('sfx')); await wait(16); }
+        return { bell: (a.started.bell ?? 0) - b0, started: a.started, counts: a.counts, peak: m };
+      });
+      const need = ['shop.open', 'shop.buy', 'shop.anvil', 'shop.denied', 'shop.equipSword', 'shop.bakery', 'quest.pin', 'shop.close'];
+      t.assert(need.every((k) => shop.counts[k] >= 1), `shop requests ${need.filter((k) => !(shop.counts[k] >= 1))}`);
+      t.assert(shop.bell >= 1, 'the counter bell rang');
+      t.assert(['shop.buy', 'shop.anvil', 'shop.denied'].every((k) => shop.started[k] >= 1), `shop sounds started: ${['shop.buy', 'shop.anvil', 'shop.denied'].map((k) => `${k}=${shop.started[k] ?? 0}`)}`);
+      await shot(t, '14-town-shop');
+      // CS-06 / CS-07 / CS-10 cues and the grey hub (gate.done)
+      const cues = await t.page.evaluate(async () => {
+        const g = window.__GAME__, a = g.ctx.audio, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        g.game.setMode('cutscene');
+        for (const id of ['cs06.spill', 'cs06.fan', 'cs06.coo', 'cs06.cooFlutter', 'cs06.parchment', 'cs07.door', 'cs07.cape', 'cs07.free', 'cs10.cheer', 'cs10.soup', 'cs10.letter', 'cs10.gloom']) {
+          a._gates.clear(); a.play3D(id, [-30, 1, 2]); await wait(150);
+        }
+        await wait(1500);
+        g.game.setMode('play');
+        return { started: a.started, counts: a.counts };
+      });
+      t.assert(['letterFan', 'coo', 'wings', 'doorOpen', 'kittenCheer', 'rumble'].every((k) => (cues.started[k] ?? cues.counts[k] ?? 0) >= 1), `town cue parts: ${JSON.stringify(Object.fromEntries(['letterFan', 'coo', 'wings', 'doorOpen', 'kittenCheer', 'rumble'].map((k) => [k, cues.started[k] ?? 0])))}`);
+      await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('gate.done', true); else c.state.setFlag('gate.done', true); window.__GAME__.teleport(0, 1, -46); });
+      const grey = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'story_lament_warriors_soul' && d.playing && !d.fading), 12000);
+      s = await st(t);
+      t.assert(grey && !s.ambience.includes('birds'), `hub grey: lament ${grey}, ambience ${s.ambience}`);
+      await shot(t, '15-town-hub-grey');
+      await t.G(() => window.__GAME__.ctx.audio.stopAll(0.1));
+    },
+  },
+  {
+    name: 'audio:gate', order: 89, level: 'gate', spawn: 'start', timeout: 200000,
+    async run(t) {
+      if (!(await unlock(t))) return;
+      await t.G(() => window.__GAME__.ctx.audio.showMeter(true));
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'village_town_theme' && d.playing), 10000), 'gate approach track');
+      let s = await st(t);
+      const deck = s.music.decks.find((d) => d.track === 'village_town_theme');
+      t.log(`gate approach deck gain ${deck?.gain} (director gain ${await t.G(() => window.__GAME__.ctx.audio.director.gainFor('village_town_theme'))})`);
+      t.assert(s.loops.includes('world/loop_water_01') && s.ambience.includes('raft'), `tide + raft ambience ${s.loops} / ${s.ambience}`);
+      // The Line: battle_theme_a held for the whole repair, the winch working, Pilfer's freeze, the portcullis test
+      await t.G(() => { const g = window.__GAME__; g.god(true); g.teleport(0, 1, 40); });
+      const viaWorld = await t.G(() => {
+        const c = window.__GAME__.ctx, o = c.objectives;
+        if (o?.start) { o.start('line', { max: 100, textKey: 'obj.line', rate: 0 }); return true; }
+        c.bus.emit(window.__GAME__.E.OBJECTIVE, { id: 'line', value: 0, max: 100, textKey: 'obj.line', frozen: false, done: false });
+        return false;
+      });
+      const held = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'battle_theme_a' && d.playing && !d.fading), 8000);
+      t.assert(held, 'battle_theme_a for The Line');
+      await t.G(() => window.__GAME__.teleport(2, 1, 38));
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.log.some((l) => /chain_0/.test(l)), 8000), 'the winch chains clank');
+      await t.wait(5000);
+      s = await st(t);
+      t.assert(s.director.target === 'battle_theme_a' && s.holds.includes('line'), `still held with no enemy near (${JSON.stringify(s.director)})`);
+      await shot(t, '16-gate-line-winch');
+      await t.G((w) => {
+        const c = window.__GAME__.ctx, E = window.__GAME__.E, emit = (p) => c.bus.emit(E.OBJECTIVE, { id: 'line', max: 100, textKey: 'obj.line', done: false, ...p });
+        if (w && c.objectives?.set) { c.objectives.set('line', 20); c.objectives.freeze('line', true); } else emit({ value: 20, frozen: true });
+      }, viaWorld);
+      await t.wait(400);
+      await t.G((w) => {
+        const c = window.__GAME__.ctx, E = window.__GAME__.E;
+        if (w && c.objectives?.freeze) { c.objectives.freeze('line', false); c.objectives.complete('line'); }
+        else { c.bus.emit(E.OBJECTIVE, { id: 'line', value: 20, max: 100, textKey: 'obj.line', frozen: false, done: false }); c.bus.emit(E.OBJECTIVE, { id: 'line', value: 100, max: 100, textKey: 'obj.line', frozen: false, done: true }); }
+        if (!c.audio.started.portcullisOpen) c.audio.play3D('line.portcullis', [0, 1, 47]);   // story's gate_open scene plays it at 100 %
+      }, viaWorld);
+      const port = await until(t, () => (window.__GAME__.ctx.audio.counts.portcullisClose ?? 0) >= 1, 12000);
+      s = await st(t);
+      t.assert((s.counts.repairFreeze ?? 0) >= 1 && (s.counts.repairResume ?? 0) >= 1, `freeze ${s.counts.repairFreeze} / resume ${s.counts.repairResume}`);
+      t.assert((s.counts.portcullisOpen ?? 0) >= 1 && port, `portcullis test (open ${s.counts.portcullisOpen}, close ${s.counts.portcullisClose}; objectives ${JSON.stringify(s.objectives)}, pending ${s.pending})`);
+      // CS-08 / G-02 / CS-09 cue sheets
+      const cues = await t.page.evaluate(async () => {
+        const g = window.__GAME__, a = g.ctx.audio, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        g.game.setMode('cutscene');
+        a.music(null, 0.5);
+        a.play3D('cs08.horde', [0, 1, -40]); await wait(900);
+        const mid = a.debugState();
+        a.play2D('cs08.spoons'); a.music('battle_theme_a', 0.3); await wait(500);
+        for (const id of ['g02.ballista', 'g02.leap', 'cs09.laugh', 'cs09.charge', 'cs09.plant', 'cs09.shard', 'cs09.roar', 'cs09.scatter', 'cs09.sob']) {
+          a._gates.clear(); a.play3D(id, g.ctx.player.pos.clone().add(new g.THREE.Vector3(2, 0, -4))); await wait(220);
+        }
+        await wait(1200);
+        a.stopLaughs(); a.march(false);
+        g.game.setMode('play');
+        return { mid: { chorus: mid.chorus }, started: a.started, director: a.debugState().director };
+      });
+      const want = ['laugh', 'spoonClink', 'ballistaFire', 'marmaladeOof', 'flourPuff', 'rumble', 'pickup/powerup_rise07', 'creature/creature_roar_03'];
+      t.assert(cues.mid.chorus === 6, `CS-08 laugh chorus ×6 (${cues.mid.chorus})`);
+      t.assert(want.every((k) => (cues.started[k] ?? 0) >= 1), `gate cue parts: ${want.map((k) => `${k}=${cues.started[k] ?? 0}`)}`);
+      // B2 on the causeway (§11.3)
+      await t.G(() => window.__GAME__.teleport(0, 1, 10));
+      await t.clearEvents();
+      await t.G(() => window.__GAME__.startBoss?.());
+      if (!(await t.waitForEvent('boss:start', 8000))) {
+        t.warn('no boss:start on the causeway (enemies / world M2 in progress?) — emulating B2');
+        await t.G(() => { const g = window.__GAME__; window.__fakeBoss = { def: { id: 'boss_cacklejaw' }, id: 'boss_cacklejaw', pos: g.ctx.player.pos.clone() }; g.ctx.bus.emit(g.E.BOSS_START, { boss: window.__fakeBoss, id: 'boss_cacklejaw', name: 'Cacklejaw', maxHp: 100, phases: [0.66, 0.33], dizzyMax: 100 }); });
+      }
+      const b2 = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'boss_epic_battle_loop' && d.playing), 8000);
+      s = await st(t);
+      t.assert(b2 && (s.counts.bossIntroB2 ?? 0) >= 1, `B2 boss loop + stinger (${s.counts.bossIntroB2})`);
+      await shot(t, '17-gate-b2-boss');
+      await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.BOSS_DEFEATED, { boss: window.__fakeBoss ?? g.ctx.enemies?.boss ?? null, id: 'boss_cacklejaw' }); window.__fakeBoss = null; });
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().sting, 5000), 'victory sting after B2');
+      await t.G(() => { const g = window.__GAME__; g.god(false); g.ctx.audio.stopAll(0.1); });
     },
   },
 ];

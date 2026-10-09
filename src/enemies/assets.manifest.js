@@ -20,11 +20,12 @@ const MVP_PLUS = ['models/creatures/animals/Husky.glb', 'models/creatures/polypi
 
 export default [RAT, PIGEON, XBOW, BARBARIAN, ROGUE, KNIGHT, BLADE, SPIDER, SLIME, ...SKELETONS, ...SKELETON_GEAR, SABRE, CLEAVER, ...MVP_PLUS];
 
+// Gloomjellies are procedural since M2 (Slime.glb stays listed: the §10.2 fallback model and its U11 clip map).
 export const levels = {
   meadow: [RAT, XBOW, PIGEON, BARBARIAN, ROGUE, KNIGHT, BLADE],                 // rats, crows + the CS-02 cast
-  forest: [RAT, XBOW, PIGEON, SPIDER, SABRE],                                    // + B1 Grizzlechop
-  town: [RAT, XBOW, PIGEON, SLIME, ROGUE, KNIGHT],
-  gate: [BARBARIAN, BLADE, ROGUE, KNIGHT, RAT, XBOW, PIGEON],                    // The Line + B2 Cacklejaw
-  bog: [RAT, XBOW, PIGEON, SLIME, SPIDER, ROGUE, KNIGHT],
+  forest: [RAT, XBOW, PIGEON, SPIDER, SABRE],                                    // + B1 Grizzlechop (Rat.glb ×2 + sabre)
+  town: [RAT, XBOW, PIGEON, ROGUE, KNIGHT],                                      // stealers, pugs, Pilfer's chase
+  gate: [BARBARIAN, BLADE, ROGUE, KNIGHT, RAT, XBOW, PIGEON],                    // The Line + B2 Cacklejaw (+ clones)
+  bog: [RAT, XBOW, PIGEON, SPIDER, ROGUE, KNIGHT],
   keep: [BARBARIAN, BLADE, KNIGHT, PIGEON, RAT, XBOW, ...SKELETONS, ...SKELETON_GEAR, CLEAVER],
 };

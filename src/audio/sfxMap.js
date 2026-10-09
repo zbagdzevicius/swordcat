@@ -167,6 +167,55 @@ export const SFX = {
   bellClunkLayer:  { files: ['impact/impactMetal_heavy_000'], vol: 0.5, rate: 0.6, rateVar: 0 },
   heartThump:      { files: [], zzfx: 'heartThump', vol: 0.9, rateVar: 0 },
 
+  // ---------------------------------------------------------------- M2: forest (§12.4)
+  mushroomBounce:  { files: seq('impact/impactSoft_heavy_', 0, 4, 3), vol: 0.7, rate: 1.35, also: ['bouncePluck'] },
+  bouncePluck:     { files: ['ui/pluck_002'], vol: 0.5, rate: 0.55, rateVar: 0.04 },
+  ropePostCut:     { files: seq('world/wood_breaking_', 1, 2), vol: 0.8, also: ['ropeSnap'] },
+  ropeSnap:        { files: ['impact/cloth_heavy'], vol: 0.7, rate: 1.5 },
+  cageLower:       { files: ['world/creak3'], vol: 0.8, rate: 0.8, also: ['winch'] },
+  webTear:         { files: seq('creature/c80_spit_', 1, 3), vol: 0.5, rate: 1.3 },
+  rockBreak:       { files: seq('impact/impactPunch_heavy_', 0, 4, 3), vol: 0.75, rate: 0.7, also: ['rockCrumble'] },
+  rockCrumble:     { files: seq('impact/impactGeneric_light_', 0, 4, 3), vol: 0.8, rate: 0.55 },
+  hitCheese:       { files: seq('impact/impactSoft_heavy_', 0, 4, 3), vol: 0.7, rate: 0.85 },
+  // ---------------------------------------------------------------- M2: town (§12.5)
+  lanternLight:    { files: ['magic/spell_fire_01'], vol: 0.55, rate: 1.3, also: ['lanternGlow'] },
+  lanternGlow:     { files: ['pickup/powerup_fx02'], vol: 0.35, rate: 0.8, rateVar: 0 },
+  pilferStumble:   { files: seq('creature/c80_hurt_', 1, 5), vol: 0.6, rate: 1.45, also: ['jump'] },
+  mailbagDrop:     { files: seq('impact/impactSoft_heavy_', 0, 4, 3), vol: 0.7, also: ['letterFan'] },
+  letterFan:       { files: ['ui/bookFlip2', 'ui/bookFlip3'], vol: 0.65 },
+  stocksOpen:      { files: ['world/creak3'], vol: 0.75, also: ['latch'] },
+  latch:           { files: ['world/metalLatch'], vol: 0.7 },
+  jellyRise:       { files: seq('creature/bubble_', 1, 3), vol: 0.75, rate: 0.7, also: ['splash'] },
+  doorOpen:        { files: ['world/doorOpen_1', 'world/doorOpen_2'], vol: 0.7 },
+  doorClose:       { files: seq('world/doorClose_', 1, 4, 0), vol: 0.7 },
+  wings:           { files: ['impact/cloth'], vol: 0.45, rate: 1.6, rateVar: 0.1, minGap: 0.08 },
+  // ---------------------------------------------------------------- M2: gate / The Line (§12.6)
+  farHorn:         { files: ['creature/c80_howl'], vol: 0.9, rate: 0.8, rateVar: 0 },
+  repairFreeze:    { files: ['world/metalLatch'], vol: 0.8, rate: 0.8, also: ['repairFreezeClunk'] },
+  repairFreezeClunk: { files: ['impact/impactMetal_heavy_001'], vol: 0.5, rate: 0.7, rateVar: 0 },
+  repairResume:    { files: ['world/metalClick'], vol: 0.9, also: ['winch'] },
+  portcullisOpen:  { files: ['world/metal_open_01'], vol: 0.95, rate: 0.85, rateVar: 0, also: ['winch'] },
+  portcullisClose: { files: ['world/metal_close_01'], vol: 0.95, rate: 0.85, rateVar: 0, also: ['portcullisSlam'] },
+  portcullisSlam:  { files: ['impact/impactMetal_heavy_003'], vol: 0.7, rate: 0.6, rateVar: 0 },
+  ballistaFire:    { files: seq('impact/impactWood_heavy_', 0, 4, 3), vol: 0.9, also: ['boltWhoosh'] },
+  boltWhoosh:      { files: ['sword/blade_02'], vol: 0.8, rate: 0.7 },
+  flourPuff:       { files: seq('impact/impactSoft_heavy_', 0, 4, 3), vol: 0.75, rate: 0.9, also: ['flourCloth'] },
+  flourCloth:      { files: ['impact/cloth_heavy'], vol: 0.6, rate: 0.8 },
+  marmaladeOof:    { files: ['cat/meow_01'], vol: 0.85, rate: 0.6, rateVar: 0, dur: 0.4 },
+  spoonClink:      { files: seq('impact/metal_small', 1, 3, 0), vol: 0.4, rate: 1.6, rateVar: 0.12, minGap: 0.05 },
+  spoonThrow:      { files: seq('sword/swish_', 1, 13), vol: 0.3, rate: 1.6, rateVar: 0.08, minGap: 0.05 },
+  causewayFall:    { files: seq('creature/splash_', 1, 5), vol: 0.9, rate: 0.85 },
+  // ---------------------------------------------------------------- M2: bosses B1 / B2 (§11.2, §11.3)
+  bossIntro:       { files: seq('impact/impactMetal_heavy_', 0, 4, 3), vol: 0.8, rate: 0.6, rateVar: 0, also: ['bossIntroBoom'] },
+  bossIntroBoom:   { files: seq('impact/impactPunch_heavy_', 0, 4, 3), vol: 0.8, rate: 0.5, rateVar: 0 },
+  bossIntroB1:     { files: seq('impact/impactWood_heavy_', 0, 4, 3), vol: 0.85, rate: 0.6, rateVar: 0, also: ['bossIntroBoom'] },   // the Cheese Mill's fog wall
+  bossIntroB2:     { files: seq('impact/chain_', 1, 3), vol: 0.8, rate: 0.7, rateVar: 0, also: ['bossIntro'] },                    // the causeway gate chains
+  bossPhase:       { files: seq('impact/impactPlate_heavy_', 0, 4, 3), vol: 0.7, rate: 0.7, also: ['bossIntroBoom'] },
+  // ---------------------------------------------------------------- M2: objectives (objective:progress)
+  objectiveTick:   { files: ['ui/pluck_002'], vol: 0.45, rateVar: 0, bus: 'ui' },
+  objectiveDone:   { files: ['jingles/jingles_NES07'], vol: 0.5, rateVar: 0, bus: 'ui' },
+  unlock:          { files: ['jingles/jingles_PIZZI06'], vol: 0.55, rateVar: 0, bus: 'ui' },
+
   // ---------------------------------------------------------------- UI (2D, ui bus) — ui calls these by name
   'ui.click':      { files: seq('ui/click_', 1, 5, 3), vol: 0.5, bus: 'ui', rateVar: 0.02 },
   'ui.select':     { files: seq('ui/select_', 1, 8, 3), vol: 0.45, bus: 'ui', rateVar: 0.02 },
@@ -180,7 +229,70 @@ export const SFX = {
   'ui.error':      { files: ['ui/error_001'], vol: 0.45, bus: 'ui', rateVar: 0 },
   'ui.toggle':     { files: ['ui/toggle_001'], vol: 0.45, bus: 'ui', rateVar: 0 },
   'ui.blip':       { files: [], zzfx: 'blip', vol: 0.4, bus: 'ui' },
+
+  // ---------------------------------------------------------------- M2: hub shops + Quest Board (§13.3; ui calls these)
+  'shop.open':     { files: ['ui/open_001'], vol: 0.45, bus: 'ui', rateVar: 0 },              // + the counter bell (shop())
+  'shop.close':    { files: ['ui/close_001'], vol: 0.45, bus: 'ui', rateVar: 0 },
+  'shop.hover':    { files: ['ui/tick_002'], vol: 0.35, bus: 'ui', rateVar: 0.03, minGap: 0.04 },
+  'shop.select':   { files: seq('ui/select_', 1, 8, 3), vol: 0.45, bus: 'ui' },
+  'shop.buy':      { files: ['pickup/handleCoins', 'pickup/handleCoins2'], vol: 0.7, bus: 'ui', also: ['shop.buyJingle'] },
+  'shop.buyJingle': { files: ['jingles/jingles_PIZZI05'], vol: 0.45, bus: 'ui', rateVar: 0 },
+  'shop.coin':     { files: ['pickup/coin3'], vol: 0.35, bus: 'ui', rate: 1.2, rateVar: 0.06, minGap: 0.03 },
+  'shop.denied':   { files: ['ui/error_003'], vol: 0.5, bus: 'ui', rateVar: 0, also: ['shop.deniedCoin'] },
+  'shop.deniedCoin': { files: ['pickup/coin'], vol: 0.3, bus: 'ui', rate: 0.6, rateVar: 0 },
+  'shop.equip':    { files: ['world/beltHandle1', 'world/beltHandle2'], vol: 0.6, bus: 'ui' },
+  'shop.equipSword': { files: ['sword/sword_unsheathe4', 'sword/sword_unsheathe5'], vol: 0.6, bus: 'ui' },
+  'shop.equipCape': { files: ['impact/cloth_heavy'], vol: 0.6, bus: 'ui', rate: 1.15 },
+  // station flavour on a purchase (shop(action, {station}))
+  'shop.bakery':   { files: ['pickup/bottle'], vol: 0.6, bus: 'ui', also: ['milkSip'] },
+  'shop.anvil':    { files: seq('impact/metal_hit_', 1, 5), vol: 0.6, bus: 'ui', also: ['shop.anvilRing'] },
+  'shop.anvilRing': { files: seq('impact/rpg_metal_', 1, 3), vol: 0.35, bus: 'ui' },
+  'shop.library':  { files: ['ui/bookFlip2', 'ui/bookFlip3'], vol: 0.6, bus: 'ui', also: ['shop.libraryMagic'] },
+  'shop.libraryMagic': { files: ['magic/spell'], vol: 0.45, bus: 'ui' },
+  'shop.wardrobe': { files: ['impact/cloth_heavy'], vol: 0.6, bus: 'ui', rate: 1.2, also: ['shop.wardrobeTwirl'] },
+  'shop.wardrobeTwirl': { files: ['ui/maximize_001'], vol: 0.4, bus: 'ui', rateVar: 0 },
+  'shop.barracks': { files: ['impact/cloth_heavy'], vol: 0.55, bus: 'ui', rate: 0.9, also: ['kittenChirp'] },
+  'quest.open':    { files: ['ui/scroll_002'], vol: 0.5, bus: 'ui' },
+  'quest.select':  { files: seq('ui/switch_', 1, 7, 3), vol: 0.45, bus: 'ui' },
+  'quest.pin':     { files: ['ui/drop_003'], vol: 0.6, bus: 'ui', also: ['quest.pinClick'] },
+  'quest.pinClick': { files: ['world/metalClick'], vol: 0.4, bus: 'ui', rate: 1.4 },
+  'quest.go':      { files: ['jingles/jingles_NES05'], vol: 0.45, bus: 'ui', rateVar: 0 },
 };
+
+/** Ids other areas have used that are not files: read as these SFX names (keeps old calls sounding). */
+export const SFX_ALIASES = { 'fire/fire_ignite': 'lanternLight', 'fire/ignite': 'lanternLight' };
+
+/** ctx.audio.shop(action, { station }) → SFX names (§13.3). A purchase also plays the station's own flavour. */
+export const SHOP_SFX = {
+  open: 'shop.open', close: 'shop.close', hover: 'shop.hover', select: 'shop.select', buy: 'shop.buy', coin: 'shop.coin',
+  denied: 'shop.denied', equip: 'shop.equip', equipSword: 'shop.equipSword', equipCape: 'shop.equipCape',
+};
+export const STATION_SFX = {
+  bakery: 'shop.bakery', forge: 'shop.anvil', library: 'shop.library', wardrobe: 'shop.wardrobe', barracks: 'shop.barracks',
+  questboard: 'quest.pin', quest: 'quest.pin',
+};
+
+/**
+ * objective:progress feedback by objective id or textKey (§12.4–12.6). tick = each value step up (count objectives),
+ * done = completion, freeze / resume = The Line's repair pausing (Pilfer has the pin), doneSeq = timed SFX on done
+ * (the portcullis test: open, then close). Objectives not listed are silent (rescues have their own jingles).
+ */
+export const OBJECTIVE_SFX = {
+  'obj.lanterns': { done: 'objectiveDone' },                       // each lantern: world plays its ignite at the lantern
+  'obj.ropes':    { tick: 'objectiveTick', done: 'objectiveDone' },
+  'obj.stealer':  { done: 'objectiveDone' },
+  'obj.keys':     { tick: 'keys', done: 'objectiveDone' },
+  // freeze / resume = Pilfer has the pin (not the enemy-near-winch pause); the 100 % portcullis test is story's
+  // `line.portcullis` cue (gate_open), so no doneSeq here
+  'obj.line':     { freeze: 'repairFreeze', resume: 'repairResume' },
+};
+export const OBJECTIVE_ALIASES = { lanterns: 'obj.lanterns', ropes: 'obj.ropes', net_ropes: 'obj.ropes', tree_ropes: 'obj.ropes', stealer: 'obj.stealer', line: 'obj.line', keys: 'obj.keys' };
+
+/** OBJECTIVE_SFX row for an objective:progress payload. */
+export function objectiveSfxFor(p) {
+  if (!p) return null;
+  return OBJECTIVE_SFX[p.textKey] ?? OBJECTIVE_SFX[OBJECTIVE_ALIASES[p.id]] ?? OBJECTIVE_SFX[p.id] ?? null;
+}
 
 /**
  * Sounds the cutscenes (§5) name directly as file ids (`sfx` steps). Listed so the manifest ships them;
@@ -207,6 +319,7 @@ export const MATERIAL_HIT = {
   stone:  { light: ['hitStone'], heavy: ['hitStone', 'hitHeavyPunch'] },
   metal:  { light: ['hitMetal'], heavy: ['hitMetal', 'hitPlateMedium'] },
   rope:   { light: ['hitRope'], heavy: ['hitRope', 'hitWood'] },
+  cheese: { light: ['hitCheese'], heavy: ['hitCheese', 'hitHeavyPunch'] },     // Grizzlechop's cheese shield (§11.2)
 };
 
 /**
@@ -234,7 +347,12 @@ export const ENEMY_VOICE = {
   cage:             { material: 'metal' },
   lock:             { material: 'metal' },
   rope:             { material: 'rope' },
+  rope_post:        { material: 'rope' },
   post:             { material: 'wood' },
+  lantern:          { material: 'metal' },
+  stocks:           { material: 'wood' },
+  wagon:            { material: 'wood' },
+  winch:            { material: 'metal' },
   cow:              { material: 'fur', alert: 'cow' },
   pudding:          { material: 'fur', alert: 'puddingRoar', pain: 'puddingNervous' },
   cacklejaw:        { material: 'fur', alert: 'laugh', laughRate: 0.85, pain: 'hyenaHurt', death: 'laugh', phase: 'laugh' },
@@ -286,7 +404,14 @@ export const STEP_CADENCE = { k: 0.9, c: 0.8, min: 0.17, max: 0.45, minSpeed: 0.
 export const PICKUP_SFX = { fish: 'fish', goldFish: 'goldFish', smallHeart: 'smallHeart', heartBell: 'heartBell', letter: 'letter', milk: 'milkPickup' };
 
 /** fx:burst kinds that make a sound (world breakables etc.). 'poof' is covered by enemy:died. */
-export const BURST_SFX = { crate: 'crateBreak', barrel: 'crateBreak', wood: 'crateHit', cage: 'cageOpen', lock: 'lockOpen', splash: 'splash', bones: 'boneCollapse', slime: 'jellySplit' };
+export const BURST_SFX = {
+  crate: 'crateBreak', barrel: 'crateBreak', wood: 'crateHit', cage: 'cageOpen', lock: 'lockOpen', splash: 'splash', bones: 'boneCollapse',
+  slime: 'jellySplit',
+  // M2 (§12.4–12.6): breakables and set pieces world / fx may burst
+  boulder: 'rockBreak', rock: 'rockBreak', web: 'webTear', rope: 'ropePostCut', rope_post: 'ropePostCut',
+  lantern: 'lanternLight', letters: 'letterFan', mailbag: 'mailbagDrop', flour: 'flourPuff', cheese: 'hitCheese',
+  bounce: 'mushroomBounce', stocks: 'stocksOpen', fall: 'causewayFall',
+};
 
 /** companion:ability → def. */
 export const ABILITY_SFX = { shieldWall: 'shieldWall', shield: 'shieldWall', default: 'kittenChirp' };

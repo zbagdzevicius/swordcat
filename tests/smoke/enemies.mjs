@@ -9,6 +9,16 @@
 //   enemies:meow      §7.7 Meow alerts an unalerted rat behind her
 //   enemies:level     the meadow's own open-zone spawns after the prologue (world's LevelKit → ctx.enemies.spawn):
 //                     crossroads pikes + a crossbowman perched on the wall (y 1.2), Crow Fields crows + perched xbows
+//   M2:
+//   enemies:m2looks   spider / hyena / stealer / pug / Gloomjelly L + giant (Earl Grey inside) close-ups + a lineup
+//   enemies:spider    white glint (abdomen pulse) → web glob slows her → a web patch; a slash cuts it
+//   enemies:hyena     a pack of 3: Jeer (purple rings, enemy:jeer), Gloat after a landed hit (choke) / flank giggle
+//   enemies:stealer   grab swirl → snatch 10% of her fish → getaway; a hit returns it (item:returned)
+//   enemies:pug       frontal block; pug_slam red ground circle → ring; a Bright Slash drops the shield
+//   enemies:jelly     slam aoe circle; L → 2 M → 4 S; a bright slash pops without a split
+//   enemies:pilfer    the town chase on a path: runs, 3 hits drop the post bag (item:returned), hands over to story
+//   enemies:b1        forest Cheese Mill: Grizzlechop — flurry gold glint, Wheel Ride lane, P2 crossbowmen, Cheese Bombs; beaten with god
+//   enemies:b2        gate causeway: Cacklejaw — Laugh Quake, Ratio Rush (gold lane), the Jeer Duet, 3 shadow clones; beaten with god
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +39,7 @@ const HELPERS = () => {
       if (opts.passive) e.ai = false;
       return e;
     },
-    loaded() { return ctx.enemies.list.every((e) => e.dormant || (e.visual && (e.anim || !e.def.anims))); },
+    loaded() { return ctx.enemies.list.every((e) => e.dormant || !e.alive || (e.visual && (e.anim || e.def.procedural || !e.def.anims || !Object.keys(e.def.anims).length))); },
     /** fitted visual height (m) vs the def height */
     fit(e) {
       e.object3d.updateMatrixWorld(true);
@@ -82,9 +92,10 @@ const HELPERS = () => {
   return true;
 };
 
-async function prepare(t) {
+async function prepare(t, day = false) {
   await t.G((src) => new Function(`return (${src})`)()(), HELPERS.toString());
   await t.G(() => window.__GAME__.__en.listen());
+  if (day) await t.G(() => window.__GAME__.ctx.env?.preset?.('meadow_day', 0));      // M2 looks read better in daylight
 }
 
 /** Wait until every spawned enemy has its model (or fail after `ms`). */
@@ -106,7 +117,7 @@ export default [
       const FRONT = { rat_pike: [[0.55, 0.75, 2.0], [0, 0.4, 0]], rat_xbow: [[0.55, 0.75, 2.0], [0, 0.4, 0]], crow: [[0.9, 0.5, 2.6], [0, 0.1, 0]] };
       const SIDE = { rat_pike: [[-2.4, 0.75, 0.6], [0, 0.4, 0.2]], rat_xbow: [[-2.4, 0.75, 0.6], [0, 0.4, 0.2]], crow: [[-2.8, 0.6, 0.4], [0, 0.1, 0]] };
       for (const type of ['rat_pike', 'rat_xbow', 'crow']) {
-        const id = await t.G((ty) => window.__GAME__.__en.spawn(ty, 0, 5, { passive: true }).id, type);
+        const id = await t.G((ty) => window.__GAME__.__en.spawn(ty, -0.9, ty.startsWith('boss') ? 7 : 5, { passive: true }).id, type);   // clear of the wall
         await waitLoaded(t);
         await t.frames(20);
         const f = await t.G((rid) => {
@@ -117,7 +128,7 @@ export default [
         t.log(`${f.type}: visual ${f.fit.x.toFixed(2)} × ${f.fit.y.toFixed(2)} × ${f.fit.z.toFixed(2)} m, clip ${f.current}, ${f.clips} actions, helmet ${f.helmet}, tip ${f.tip}, alt ${f.alt}`);
         t.assert(f.clips > 0 && f.current, `${f.type}: no animation playing`);
         if (type === 'crow') {
-          t.assert(Math.abs(f.fit.x / f.wing - 1) < 0.25, `crow wingspan ${f.fit.x.toFixed(2)} vs ${f.wing}`);
+          t.assert(Math.abs(Math.max(f.fit.x, f.fit.z) / f.wing - 1) < 0.25, `crow wingspan ${Math.max(f.fit.x, f.fit.z).toFixed(2)} vs ${f.wing}`);   // world AABB: the span lies on x or z by its facing
           t.assert(f.alt > 2.5, `crow flies (altitude ${f.alt} m)`);
         } else t.assert(f.fit.y >= f.h * 0.85 && f.fit.y <= f.h * 1.45, `${f.type}: height ${f.fit.y.toFixed(2)} vs ${f.h} (gear included)`);
         t.assert(f.helmet, `${f.type}: helm / hood worn`);
@@ -406,6 +417,11 @@ export default [
       await prepare(t);
       try {
         await waitLoaded(t);
+        // no cutscene (the title loop after a reload) holds the zones
+        for (let i = 0; i < 20 && (await t.G(() => window.__GAME__.ctx.game.mode)) !== 'play'; i++) {
+          await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.story.skipAll?.(); g.setMode('play'); });
+          await t.wait(150);
+        }
         const s0 = await t.G(() => {
           const ctx = window.__GAME__.ctx, by = {};
           for (const e of ctx.enemies.list) (by[e.type] ??= []).push(e);
@@ -430,13 +446,14 @@ export default [
           const ctx = window.__GAME__.ctx;
           return {
             perched: ctx.enemies.list.filter((e) => e.type === 'rat_xbow').map((e) => ({ id: e.id, y: e.pos.y })),
-            crows: ctx.enemies.list.filter((e) => e.type === 'crow').map((e) => ({ id: e.id, x: e.pos.x, z: e.pos.z, st: e.stateName })),
-            mode: ctx.game.mode, loading: !!ctx.levels.loading, time: ctx.game.time,
+            crows: ctx.enemies.list.filter((e) => e.type === 'crow').map((e) => ({ id: e.id, x: e.pos.x, z: e.pos.z, st: e.stateName, asleep: !!e.asleep, vis: e.object3d.visible })),
+            mode: ctx.game.mode, loading: !!ctx.levels.loading, time: ctx.game.time, cs: ctx.story?.current?.id ?? ctx.story?.current?.def?.id ?? null,
           };
         });
-        t.log(`after 1.5 s: mode ${s1.mode}, loading ${s1.loading}; crows moved ${s1.crows.map((c) => { const o = s0.crows.find((q) => q.id === c.id); return `${c.st}:${Math.hypot(c.x - o.x, c.z - o.z).toFixed(1)}`; }).join(' ')}`);
+        t.log(`after 1.5 s: mode ${s1.mode} (${s1.cs}), loading ${s1.loading}; crows moved ${s1.crows.map((c) => { const o = s0.crows.find((q) => q.id === c.id); return `${c.st}:${Math.hypot(c.x - o.x, c.z - o.z).toFixed(1)}`; }).join(' ')}`);
         t.assert(s1.perched.every((p) => Math.abs(p.y - s0.perched.find((q) => q.id === p.id).y) < 0.01), 'perched crossbowmen stay put');
-        t.assert(s1.crows.every((c) => { const o = s0.crows.find((q) => q.id === c.id); return Math.hypot(c.x - o.x, c.z - o.z) > 1; }), 'crows circle');
+        t.assert(s1.crows.every((c) => { const o = s0.crows.find((q) => q.id === c.id); return c.asleep ? !c.vis : Math.hypot(c.x - o.x, c.z - o.z) > 1; }),
+          'crows circle (far ones sleep hidden: the world §18 budget request)');
         // the crossroads perch, seen from the road
         await t.G(() => {
           const g = window.__GAME__, ctx = g.ctx;
@@ -458,6 +475,394 @@ export default [
       } finally {
         await t.G(() => { const g = window.__GAME__; g.story.flag('prologue.done', false); g.__en?.done(); });
       }
+    },
+  },
+  // ============================================================================ M2: forest, town, gate
+  {
+    name: 'enemies:m2looks', order: 48, level: 'meadow', spawn: 'start', timeout: 300000,
+    async run(t) {
+      await prepare(t, true);
+      const VIEW = {
+        spider: [[0.9, 0.7, 1.9], [0, 0.2, 0]], hyena: [[0.9, 1.1, 2.6], [0, 0.75, 0]], stealer: [[0.9, 1.0, 2.5], [0, 0.65, 0]],
+        pug: [[0.9, 1.0, 2.6], [0, 0.7, 0]], jelly_l: [[0.8, 0.8, 2.2], [0, 0.4, 0]], jelly_giant: [[1.2, 1.3, 3.6], [0, 0.8, 0]],
+        boss_grizzlechop: [[2.6, 1.4, 3.4], [0, 0.7, 0.4]], boss_cacklejaw: [[1.2, 1.8, 4.0], [0, 1.3, 0]], cacklejaw_clone: [[1.2, 1.8, 4.0], [0, 1.3, 0]],
+      };
+      for (const [type, [pos, look]] of Object.entries(VIEW)) {
+        const id = await t.G((ty) => window.__GAME__.__en.spawn(ty, -0.9, ty.startsWith('boss') ? 7 : 5, { passive: true }).id, type);   // clear of the wall
+        if (!(await waitLoaded(t))) break;
+        await t.frames(15);
+        const f = await t.G((rid) => {
+          const g = window.__GAME__, h = g.__en, e = g.ctx.enemies.list.find((x) => x.id === rid);
+          return { type: e.type, fit: h.fit(e), h: e.def.height, clips: e.anim ? Object.keys(e.anim.actions).length : -1, helmet: !!e.helmet, tip: !!e.tipNode, head: !!e.head };
+        }, id);
+        t.log(`${f.type}: ${f.fit.x.toFixed(2)} × ${f.fit.y.toFixed(2)} × ${f.fit.z.toFixed(2)} m (row h ${f.h}), clips ${f.clips}, head ${f.head}, tip ${f.tip}`);
+        t.assert(Math.abs(f.fit.y / f.h - 1) < 0.3, `${type}: fitted height ${f.fit.y.toFixed(2)} vs ${f.h}`);
+        await t.G(([rid, p, l]) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, p, l, 40); }, [id, pos, look]);
+        await t.frames(8);
+        await t.shot(`enemies/m2-looks-${type}`);
+        await t.G((rid) => { const g = window.__GAME__; g.ctx.enemies.despawn(g.ctx.enemies.list.find((x) => x.id === rid)); g.__en.follow(); }, id);
+      }
+      // the lineup (left → right): spider, jelly S / M / L, stealer, hyena, pug
+      await t.G(() => {
+        const g = window.__GAME__, h = g.__en, p = g.ctx.player;
+        const types = ['spider', 'jelly_s', 'jelly_m', 'jelly_l', 'stealer', 'hyena', 'pug'];
+        types.forEach((ty, i) => h.spawn(ty, (i - 3) * 0.17, 6, { passive: true, facing: p.facing + Math.PI }));
+      });
+      await waitLoaded(t);
+      await t.frames(15);
+      await t.G(() => { const g = window.__GAME__; return g.ctx.cam.shot({ anchor: g.ctx.player, pos: [0, 1.4, -0.6], look: [0, 0.6, 6], mode: 'cut', fov: 55 }); });
+      await t.frames(8);
+      await t.shot('enemies/m2-lineup');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:spider', order: 49, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, true);
+      // off to her right, clear of the practice-field wall ahead-left of the start spawn
+      const id = await t.G(() => { const e = window.__GAME__.__en.spawn('spider', -0.9, 6.0, { alerted: true }); e.attackCd.spider_bite = 99; return e.id; });
+      await waitLoaded(t);
+      await t.G(() => window.__GAME__.__en.freezeAfter('parry', 0.4));
+      const tele = await until(t, () => window.__GAME__.__en.tele.some((x) => x.type === 'spider'), null, 15000);
+      t.assert(tele, 'spider telegraphs its web glob (white glint)');
+      if (tele && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, [1.2, 0.8, 1.8], [0, 0.25, 0.3], 42); }, id);
+        await t.frames(3);
+        await t.shot('enemies/spider-windup');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      const slowed = await until(t, () => { const p = window.__GAME__.ctx.player; return (p.slowT ?? 0) > 0 || p.isSlowed?.(); }, null, 15000);
+      t.assert(slowed, 'the web glob slows her');
+      const patch = await until(t, () => window.__GAME__.ctx.enemies.webs.list.length > 0, null, 5000);
+      t.assert(patch, 'a web patch lies where the glob landed');
+      if (patch) {
+        await t.G(() => {
+          const g = window.__GAME__, w = g.ctx.enemies.webs.list[0];
+          g.ctx.game.setTimeScale(0);
+          return g.ctx.cam.shot({ anchor: g.ctx.player, pos: [1.6, 2.0, -2.2], look: [w.pos.x - g.ctx.player.pos.x, 0, w.pos.z - g.ctx.player.pos.z], mode: 'cut', fov: 55 });
+        });
+        await t.wait(300);
+        await t.shot('enemies/spider-web');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+        // a slash cuts the patch
+        const cut = await t.G(() => {
+          const g = window.__GAME__, ctx = g.ctx, w = ctx.enemies.webs.list[0], p = ctx.player;
+          p.teleport({ pos: new g.THREE.Vector3(w.pos.x, w.pos.y, w.pos.z - 1.2), facing: 0 });
+          ctx.bus.emit(g.E.PLAYER_SWING, { attackId: 'slash1', combo: 1 });
+          return w.cut;
+        });
+        t.assert(cut, 'one slash cuts the patch');
+      }
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:hyena', order: 50, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      await prepare(t, true);
+      const ids = await t.G(() => {
+        const h = window.__GAME__.__en;
+        return [-0.5, 0, 0.5].map((a, i) => h.spawn('hyena', a, 5.5 + i * 0.6, { alerted: true }).id);
+      });
+      await waitLoaded(t);
+      await t.G(() => window.__GAME__.__en.freezeAfter('jeer', 0.7));
+      const jeer = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'jeer' && x.type === 'hyena'), null, 25000);
+      t.assert(jeer, 'a waiting hyena Jeers (purple rings)');
+      if (jeer && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => {
+          const g = window.__GAME__, e = g.__en.tele.find((x) => x.kind === 'jeer').actor;
+          return g.ctx.cam.shot({ anchor: e, pos: [2.4, 2.4, 4.2], look: [0, 0.6, 0], mode: 'cut', fov: 55 });
+        });
+        await t.frames(3);
+        await t.shot('enemies/hyena-jeer');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      t.assert((await t.events()).includes('enemy:jeer'), 'enemy:jeer emitted');
+      const gl = await until(t, (r) => window.__GAME__.ctx.enemies.list.some((e) => r.includes(e.id) && (e.stateName === 'gloat' || e.stateName === 'giggle')), ids, 45000);
+      t.assert(gl, 'a hyena gloats after landing a hit (or a flanker giggles behind her)');
+      const st = await t.G((r) => {
+        const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => r.includes(x.id) && (x.stateName === 'gloat' || x.stateName === 'giggle'));
+        if (!e) return null;
+        ctx.game.setTimeScale(0);
+        ctx.cam.shot({ anchor: e, pos: [1.0, 1.3, 2.4], look: [0, 0.9, 0], mode: 'cut', fov: 45 });
+        return { id: e.id, state: e.stateName };
+      }, ids);
+      if (st) {
+        await t.wait(300);
+        await t.shot(`enemies/hyena-${st.state}`);
+        await t.G(() => window.__GAME__.__en.thaw());
+        if (st.state === 'gloat') {
+          await t.G((rid) => { const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid); e.invulnT = 0; ctx.combat.applyHit(ctx.player, e, { ...ctx.config.ATTACKS.slash1, dmg: 1 }); }, st.id);
+          t.assert((await t.events()).includes('enemy:choke'), 'a hit during the gloat chokes it');
+        }
+      }
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:stealer', order: 51, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, true);
+      await t.G(() => { window.__GAME__.ctx.state.fish = 100; });
+      const id = await t.G(() => window.__GAME__.__en.spawn('stealer', 0.3, 5, { alerted: true }).id);
+      await waitLoaded(t);
+      await t.G(() => window.__GAME__.__en.freezeAfter('grab', 0.35));
+      const tele = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'grab'), null, 15000);
+      t.assert(tele, 'stealer telegraphs its snatch (purple grab swirl)');
+      if (tele && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, [1.3, 1.1, 2.2], [0, 0.7, 0], 45); }, id);
+        await t.frames(3);
+        await t.shot('enemies/stealer-grab');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      const stolen = await t.waitForEvent('item:stolen', 8000);
+      t.assert(stolen, 'it steals (item:stolen)');
+      const s1 = await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return { fish: g.ctx.state.fish, loot: e?.loot, state: e?.stateName }; }, id);
+      t.log(`after the snatch: fish ${s1.fish}, loot ${JSON.stringify(s1.loot)}, state ${s1.state}`);
+      t.assert(s1.fish === 90 && s1.loot?.amount === 10 && s1.state === 'getaway', '10% of 100 fish, then the getaway');
+      await t.G((rid) => { const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid); e.invulnT = 0; ctx.combat.applyHit(ctx.player, e, { ...ctx.config.ATTACKS.slash1, dmg: 1 }); }, id);
+      t.assert((await t.events()).includes('item:returned'), 'a hit returns the post (item:returned)');
+      await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); g.ctx.game.setTimeScale(0); return g.__en.frame(e, [1.6, 1.6, 2.6], [0, 0.3, 0.6], 50); }, id);
+      await t.wait(400);
+      await t.shot('enemies/stealer-returned');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:pug', order: 52, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, true);
+      const id = await t.G(() => window.__GAME__.__en.spawn('pug', 0, 2.2, { passive: true }).id);
+      await waitLoaded(t);
+      const r = await t.G((rid) => {
+        const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid);
+        e.invulnT = 0; const front = ctx.combat.applyHit(ctx.player, e, ctx.config.ATTACKS.slash1);
+        return { front, hp: e.hp, max: e.maxHp };
+      }, id);
+      t.assert(r.front === 'block' && r.hp === r.max, `frontal slash blocked by the shield (${r.front})`);
+      await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, [1.3, 1.2, 2.4], [0, 0.65, 0], 42); }, id);
+      await t.frames(10);
+      await t.shot('enemies/pug-guard');
+      await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); g.__en.follow(); e.attackCd.pug_bash = 999; e.ai = true; e.alerted = true; e.setState('chase'); g.__en.freezeAfter('red', 0.75); }, id);
+      const tele = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'red' && x.type === 'pug'), null, 15000);
+      t.assert(tele, 'pug_slam telegraphs red');
+      if (tele && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, [2.8, 2.6, 3.6], [0, 0.2, 0], 50); }, id);
+        await t.frames(3);
+        await t.shot('enemies/pug-slam-tell');
+        await t.G(() => { const h = window.__GAME__.__en; h.thaw(); });
+      }
+      const slam = await until(t, () => window.__GAME__.ctx.combat.log.some((x) => x.attackId === 'pug_slam'), null, 6000);
+      t.assert(slam, 'the shockwave ring hits her (standing)');
+      // break the shield with a Bright Slash
+      const br = await t.G((rid) => {
+        const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid), p = ctx.player;
+        e.staggerT = 0; e.invulnT = 0; e.facing = Math.atan2(p.pos.x - e.pos.x, p.pos.z - e.pos.z);
+        const res = ctx.combat.applyHit(p, e, ctx.config.ATTACKS.bright);
+        return { res, down: e.shieldDownT };
+      }, id);
+      t.assert(br.res === 'hit' && br.down > 0, 'a Bright Slash breaks the shield');
+      await t.G(() => window.__GAME__.__en.follow());
+      await t.frames(20);
+      await t.shot('enemies/pug-shield-down');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:jelly', order: 53, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, true);
+      const id = await t.G(() => window.__GAME__.__en.spawn('jelly_l', 0, 4.5, { alerted: true }).id);
+      await waitLoaded(t);
+      await t.G(() => window.__GAME__.__en.freezeAfter('aoe', 0.4));
+      const tele = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'aoe' && String(x.type).startsWith('jelly')), null, 15000);
+      t.assert(tele, 'Gloomjelly telegraphs its slam (aoe circle)');
+      if (tele && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => { const g = window.__GAME__; return g.ctx.cam.shot({ anchor: g.ctx.player, pos: [2.2, 2.4, -2.6], look: [0, 0.3, 2.5], mode: 'cut', fov: 50 }); });
+        await t.frames(3);
+        await t.shot('enemies/jelly-slam-tell');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      const split = await t.G((rid) => {
+        const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid);
+        e.invulnT = 0; ctx.combat.applyHit(ctx.player, e, ctx.config.ATTACKS.slash3, { dmg: 999 });
+        return ctx.enemies.byType('jelly_m').length;
+      }, id);
+      t.assert(split === 2, `L splits into 2 M (${split})`);
+      await waitLoaded(t);
+      await t.wait(250);
+      await t.G(() => { const g = window.__GAME__; g.ctx.game.setTimeScale(0); return g.ctx.cam.shot({ anchor: g.ctx.player, pos: [1.8, 1.6, -1.8], look: [0, 0.2, 3.5], mode: 'cut', fov: 50 }); });
+      await t.wait(300);
+      await t.shot('enemies/jelly-split');
+      const counts = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx;
+        ctx.game.setTimeScale(1);
+        for (const m of ctx.enemies.byType('jelly_m')) { m.invulnT = 0; ctx.combat.applyHit(ctx.player, m, ctx.config.ATTACKS.slash3, { dmg: 999 }); }
+        const s = ctx.enemies.byType('jelly_s').length;
+        const one = ctx.enemies.byType('jelly_s')[0]; one.invulnT = 0;
+        ctx.combat.applyHit(ctx.player, one, ctx.config.ATTACKS.bright, { dmg: 999 });
+        return { s, after: ctx.enemies.byType('jelly_s').length };
+      });
+      t.assert(counts.s === 4 && counts.after === 3, `2 M → 4 S; a bright slash pops one without a split (${JSON.stringify(counts)})`);
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:pilfer', order: 54, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, true);
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, V = g.THREE.Vector3;
+        const f = p.facing, fw = [Math.sin(f), Math.cos(f)], rt = [Math.cos(f), -Math.sin(f)];
+        const pt = (a, b) => [p.pos.x + fw[0] * a + rt[0] * b, p.pos.z + fw[1] * a + rt[1] * b];
+        const path = [pt(4, 0), pt(10, 1), pt(16, -2), pt(20, 3), pt(14, 6), pt(8, 4)];
+        g.__en.chase = ctx.enemies.pilferChase({ path });
+        g.__en.chase.done.then((r) => { g.__en.chaseDone = r; });
+        return true;
+      });
+      await waitLoaded(t);
+      const run = await until(t, () => window.__GAME__.__en.chase.pilfer.stateName === 'run', null, 5000);
+      t.assert(run, 'Pilfer runs the chase path');
+      await t.wait(700);
+      await t.G(() => { const g = window.__GAME__, e = g.__en.chase.pilfer; g.ctx.game.setTimeScale(0); return g.__en.frame(e, [1.8, 1.2, 2.8], [0, 0.6, 0], 45); });
+      await t.wait(300);
+      await t.shot('enemies/pilfer-chase');
+      await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      for (let i = 0; i < 3; i++) {
+        await t.G(() => { const g = window.__GAME__, ctx = g.ctx, e = g.__en.chase.pilfer; e.invulnT = 0; ctx.combat.applyHit(ctx.player, e, { ...ctx.config.ATTACKS.slash1 }); });
+        await t.wait(800);
+      }
+      const ret = await until(t, () => !!window.__GAME__.__en.chaseDone, null, 3000);
+      t.assert(ret && (await t.events()).includes('item:returned'), '3 hits: he drops the post bag (item:returned)');
+      const s = await t.G(() => { const e = window.__GAME__.__en.chase.pilfer; return { ai: e.ai, hurtable: e.hurtable, alive: e.alive }; });
+      t.assert(!s.ai && !s.hurtable && s.alive, 'Pilfer hands over to the story (AI off, not hurtable)');
+      await t.G(() => { const g = window.__GAME__, e = g.__en.chase.pilfer; return g.__en.frame(e, [1.6, 1.3, 2.4], [0, 0.4, 0], 45); });
+      await t.frames(30);
+      await t.shot('enemies/pilfer-bag-dropped');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:b1', order: 55, level: 'forest', spawn: 'boss', timeout: 300000,
+    async run(t) {
+      await prepare(t);
+      const ok = await t.G(() => { const g = window.__GAME__; g.startBoss(); return !!g.ctx.enemies.boss && g.ctx.enemies.boss.def.id; });
+      t.assert(ok === 'boss_grizzlechop', `the Cheese Mill arena spawns Grizzlechop (${ok})`);
+      if (ok !== 'boss_grizzlechop') return;
+      await waitLoaded(t);
+      t.assert((await t.events()).includes('boss:start'), 'boss:start');
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; g.ctx.game.setTimeScale(0); return g.__en.frame(b, [2.2, 2.0, 4.6], [0, 0.9, 0], 45); });
+      await t.wait(400);
+      await t.shot('enemies/b1-grizzlechop');
+      await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      // Sabre Flurry: the third glint is gold
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; b.forceMove = 'sabreFlurry'; b.attackChoice = null; g.__en.freezeAfter('gold', 0.3); });
+      const gold = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'gold' && x.type === 'boss_grizzlechop'), null, 20000);
+      t.assert(gold, 'Sabre Flurry ends on a gold glint');
+      if (gold && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; return g.__en.frame(b, [2.0, 1.8, 3.6], [0, 0.8, 0.8], 45); });
+        await t.frames(3);
+        await t.shot('enemies/b1-flurry-gold');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      // phase 2: the Wheel Ride lane
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; g.boss.setHpFrac(0.55); g.__en.freezeAfter('aoe', 0.6); return b.phase; });
+      const lane = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'aoe' && x.shape === 'lane'), null, 20000);
+      t.assert(lane, 'Wheel Ride: a charge lane (aoe lane)');
+      if (lane && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; return g.ctx.cam.shot({ anchor: b, pos: [0.5, 11, -6.5], look: [0, 0, 4], mode: 'cut', fov: 60 }); });
+        await t.frames(3);
+        await t.shot('enemies/b1-wheel-lane');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      const xb = await t.G(() => window.__GAME__.ctx.enemies.boss.adds.filter((a) => a.type === 'rat_xbow').length);
+      t.assert(xb === 2, `phase 2 brings 2 crossbowmen (${xb})`);
+      // phase 3: cheese bombs
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; b.staggerT = 0; g.boss.setHpFrac(0.2); b.forceMove = 'cheeseBombs'; b.attackChoice = null; g.__en.tele.length = 0; g.__en.freezeAfter('aoe', 0.5); });
+      const bombs = await until(t, () => window.__GAME__.__en.tele.filter((x) => x.kind === 'aoe' && x.shape === 'circle' && x.type === 'boss_grizzlechop').length >= 5, null, 20000);
+      t.assert(bombs, 'Cheese Bombs: 5 circles');
+      if (bombs && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => { const g = window.__GAME__; return g.ctx.cam.shot({ anchor: g.ctx.player, pos: [1.5, 10, -5.5], look: [0, 0, 1.0], mode: 'cut', fov: 60 }); });
+        await t.frames(3);
+        await t.shot('enemies/b1-cheese-bombs');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      // beaten with god
+      await t.G(() => { const g = window.__GAME__, ctx = g.ctx, b = ctx.enemies.boss; g.god(true); g.boss.setHpFrac(0.01); b.invulnT = 0; b.staggerT = 0; ctx.combat.applyHit(ctx.player, b, ctx.config.ATTACKS.slash3); });
+      const def = await t.waitForEvent('boss:defeated', 5000);
+      t.assert(def, 'B1 beaten (boss:defeated)');
+      const cs = await t.waitForEvent('cutscene:start', 8000);
+      t.log(`after the defeat: cutscene:start ${cs}`);
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:b2', order: 56, level: 'gate', spawn: 'boss', timeout: 300000,
+    async run(t) {
+      await prepare(t);
+      const ok = await t.G(() => { const g = window.__GAME__; g.startBoss(); return g.ctx.enemies.boss?.def.id ?? null; });
+      t.assert(ok === 'boss_cacklejaw', `the causeway arena spawns Cacklejaw (${ok})`);
+      if (ok !== 'boss_cacklejaw') return;
+      await waitLoaded(t);
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; g.ctx.game.setTimeScale(0); return g.__en.frame(b, [1.8, 2.2, 4.2], [0, 1.4, 0], 45); });
+      await t.wait(400);
+      await t.shot('enemies/b2-cacklejaw');
+      await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      // Laugh Quake
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; b.forceMove = 'laughQuake'; b.attackChoice = null; g.__en.freezeAfter('jeer', 0.55); });
+      const q = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'jeer' && x.type === 'boss_cacklejaw'), null, 20000);
+      t.assert(q, 'Laugh Quake: jeer rings');
+      if (q && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; return g.ctx.cam.shot({ anchor: b, pos: [3.5, 3.4, 6.5], look: [0, 1.0, 0], mode: 'cut', fov: 55 }); });
+        await t.frames(3);
+        await t.shot('enemies/b2-laugh-quake');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      // phase 2: Ratio Rush + the stealers' Jeer Duet
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; b.staggerT = 0; g.boss.setHpFrac(0.55); g.__en.freezeAfter('gold', 0.5); });
+      const rush = await until(t, () => window.__GAME__.__en.tele.some((x) => x.kind === 'gold' && x.type === 'boss_cacklejaw'), null, 20000);
+      t.assert(rush, 'Ratio Rush: gold glint + lane');
+      if (rush && await until(t, () => window.__GAME__.__en.frozen, null, 5000)) {
+        await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; return g.ctx.cam.shot({ anchor: b, pos: [-3.0, 4.5, -4.0], look: [0, 0.8, 4], mode: 'cut', fov: 60 }); });
+        await t.frames(3);
+        await t.shot('enemies/b2-ratio-rush');
+        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      }
+      const duet = await t.G(() => window.__GAME__.ctx.enemies.boss.adds.filter((a) => a.type === 'stealer').length);
+      t.assert(duet === 2, `2 stealers join (${duet})`);
+      t.assert((await t.events()).includes('enemy:jeer'), 'the Jeer Duet');
+      // phase 3: shadow clones
+      await t.G(() => { const g = window.__GAME__, b = g.ctx.enemies.boss; b.staggerT = 0; g.boss.setHpFrac(0.25); });
+      const clones = await until(t, () => window.__GAME__.ctx.enemies.byType('cacklejaw_clone').length === 3, null, 5000);
+      t.assert(clones, '3 shadow clones');
+      await waitLoaded(t);
+      await t.wait(2200);
+      // the real one (blob shadow, hatless: the chipped ear) among his shadow clones, seen from above her shoulder
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, b = ctx.enemies.boss, p = ctx.player;
+        for (const a of b.adds.filter((x) => x.type === 'stealer')) ctx.enemies.despawn(a);
+        const cl = ctx.enemies.byType('cacklejaw_clone');
+        let cx = b.pos.x, cz = b.pos.z;
+        for (const c of cl) { cx += c.pos.x; cz += c.pos.z; }
+        cx /= cl.length + 1; cz /= cl.length + 1;
+        ctx.game.setTimeScale(0);
+        const dx = cx - p.pos.x, dz = cz - p.pos.z, d = Math.hypot(dx, dz) || 1;
+        p.facing = Math.atan2(dx, dz); p.snap?.();
+        return ctx.cam.shot({ anchor: p, pos: [0.6, 5.0, -4.0], look: [0, 0.8, d], mode: 'cut', fov: 60 });
+      });
+      await t.wait(400);
+      await t.shot('enemies/b2-clones');
+      await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+      // beaten with god
+      await t.G(() => { const g = window.__GAME__, ctx = g.ctx, b = ctx.enemies.boss; g.god(true); g.boss.setHpFrac(0.01); b.invulnT = 0; b.staggerT = 0; ctx.combat.applyHit(ctx.player, b, ctx.config.ATTACKS.slash3); });
+      const def = await t.waitForEvent('boss:defeated', 5000);
+      t.assert(def, 'B2 beaten (boss:defeated)');
+      const left = await t.G(() => window.__GAME__.ctx.enemies.byType('cacklejaw_clone').length);
+      t.assert(left === 0, 'clones vanish with him');
+      const cs = await t.waitForEvent('cutscene:start', 8000);
+      t.log(`after the defeat: cutscene:start ${cs}`);
+      await t.G(() => window.__GAME__.__en.done());
     },
   },
 ];

@@ -27,7 +27,7 @@ export const CAPES = Object.freeze({
   memeWhite: { color: '#F2EFE8', lining: '#CFCAC0', sheen: '#FFFFFF', hem: '#D9B26A' },
   blue:      { color: '#3F6FB5', lining: '#25426E', sheen: '#8DB0E8', hem: '#D9B26A' },
   green:     { color: '#5E7F3E', lining: '#3A4F26', sheen: '#A9C57E', hem: '#D9B26A' },
-  midnight:  { color: '#262A44', lining: '#15172A', sheen: '#6C74A8', hem: '#C9CED8' },
+  midnight:  { color: '#22242A', lining: '#141519', sheen: '#6C74A8', hem: '#C9CED8' },   // §13.3 Midnight #22242A
   gold:      { color: '#D9B26A', lining: '#A87C32', sheen: '#FFE9B0', hem: '#FFF1C4' },
   pilgrim:   { color: '#E2D6C0', lining: '#C4B497', sheen: '#FFF6E6', hem: '#CDBB9C' },
   black:     { color: '#22242A', lining: '#141519', sheen: '#555A66', hem: '#8E1B22' },

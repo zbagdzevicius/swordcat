@@ -1,9 +1,9 @@
 // Public API of the characters area (GAME_DESIGN §19.2 characters row). Import from 'src/characters/index.js' only.
-export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE } from './KittenBuilder.js';
-export { POSES, POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
+export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELEASE } from './KittenBuilder.js';
+export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
 export {
   CATS, SWORDCAT, swordcatConfig, villagerConfig, lostKittenConfig, squireConfig, spoonBrigadeConfig, catConfig, eyeSet,
-  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS,
+  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY,
 } from './configs.js';
 export { PAL, CAPES, SIGNATURE, VILLAGER_COATS } from './palette.js';
 export {
@@ -12,12 +12,13 @@ export {
 export { makeEyeTexture, eyeGeometry, eyeMaterial, EyePair, EXPRESSIONS } from './Eyes.js';
 export { buildBow, bowGeometry, bowMaterial } from './Bow.js';
 export { HeroCape, ClothSim, buildSwayCape, capeMaterial, capeGeometry, CAPE_DEFAULTS, CAPE_TIME, CAPE_WIND } from './Cape.js';
-export { buildSword, mountModel, makeStreak, SWORD, SWORD_SKINS } from './Sword.js';
+export { buildSword, mountModel, makeStreak, SWORD, SWORD_SKINS, DAWN_SPARKLES, makeBladeSparkles, restyleClaymore, guardHeight } from './Sword.js';
 export { makePlateTexture, buildPlate, attachPlate, ensurePlateFont, pickPlateWord, PLATE_WORDS } from './Plate.js';
 export { buildBeastHead, attachBeastHead, BEAST_PRESETS, KAYKIT_HEADS } from './BeastHead.js';
 export { addPlateArmour, addGauntlet } from './Armour.js';
 export { ACCESSORIES } from './Accessories.js';
 export { buildProp, buildCage, PROP_NAMES, PROP_MOUNTS } from './Props/ProcProps.js';
+export { CHEESE, M2_BUILDERS, M2_MOUNTS } from './Props/M2Props.js';
 export { registerMaterialPatcher, makeKitMaterial, kitMaterial, RM, HOLY_COLOR, setCharacterEnvMap, getCharacterEnvMap } from './materials.js';
 export { assetUrl, setAssetResolver, mulberry32, hashString } from './util.js';
 // ---- in-game glue (M1)
@@ -36,7 +37,10 @@ import { Kitten as _Kitten, buildKitten as _buildKitten } from './KittenBuilder.
 import { buildProp as _buildProp, buildCage as _buildCage, PROP_NAMES as _PROP_NAMES } from './Props/ProcProps.js';
 import { buildBeastHead as _buildBeastHead, BEAST_PRESETS as _BEAST_PRESETS } from './BeastHead.js';
 import { buildPlate as _buildPlate } from './Plate.js';
-import { CATS as _CATS, catConfig as _catConfig, SQUIRE_IDS as _SQUIRE_IDS } from './configs.js';
+import { CATS as _CATS, catConfig as _catConfig, SQUIRE_IDS as _SQUIRE_IDS, KITTEN_IDS as _KITTEN_IDS, HUB_ACTIVITY as _HUB } from './configs.js';
+import { SWORD_SKINS as _SWORD_SKINS } from './Sword.js';
+import { CAPES as _CAPES } from './palette.js';
+import { FUR_LOD as _FUR_LOD } from './Fur.js';
 import { cagedKitten as _cagedKitten } from './Cages.js';
 import { characterEnvColors as _characterEnvColors } from './runtime.js';
 import { getCharacterEnvMap as _getCharacterEnvMap } from './materials.js';
@@ -44,4 +48,5 @@ _Kitten.lib = Object.freeze({
   buildKitten: _buildKitten, buildProp: _buildProp, buildCage: _buildCage, PROP_NAMES: _PROP_NAMES, buildBeastHead: _buildBeastHead,
   BEAST_PRESETS: _BEAST_PRESETS, buildPlate: _buildPlate, CATS: _CATS, catConfig: _catConfig, SQUIRE_IDS: _SQUIRE_IDS,
   cagedKitten: _cagedKitten, characterEnvColors: _characterEnvColors, getCharacterEnvMap: _getCharacterEnvMap,
+  KITTEN_IDS: _KITTEN_IDS, HUB_ACTIVITY: _HUB, SWORD_SKINS: _SWORD_SKINS, CAPES: _CAPES, FUR_LOD: _FUR_LOD,
 });

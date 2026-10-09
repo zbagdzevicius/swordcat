@@ -52,13 +52,27 @@ export function tabard(A, { color = '#3F6FB5', crest = '#D8DCE2', trim = '#2C529
   }
 }
 
-/** Apron (Tofu's oversized smith's apron, villager aprons). */
+/** Apron (Tofu's oversized smith's apron with a bib, neck strap and tool pocket; plain villager aprons). */
 export function apron(A, { color = '#8A6A4A', big = false, strap = '#5A3E2B' } = {}) {
-  const h = big ? 0.42 : 0.3, r = big ? 0.19 : 0.18;
-  const g = new THREE.CylinderGeometry(r * A.w, (r + (big ? 0.05 : 0.03)) * A.w, h, 16, 4, true, -0.75, 1.5);
-  both(A, 'hips', g, mat([0, 0.1 - h / 2 + (big ? 0.12 : 0.08), 0.01]), C(color), RM.leather);
-  A.add('chest', new THREE.TorusGeometry(0.1, 0.008, 6, 24, Math.PI), { m: mat([0, 0.2, 0.03], [0.4, 0, 0]), color: C(strap), rmse: RM.leather });
-  if (big) A.add('hips', new THREE.BoxGeometry(0.08, 0.05, 0.01), { m: mat([0.05, 0.0, 0.215], [0, 0.2, 0]), color: mixRgb(C(color), [0, 0, 0], 0.25), rmse: RM.leather });
+  const c = C(color), edge = mixRgb(c, [0, 0, 0], 0.3), st = C(strap);
+  const h = big ? 0.44 : 0.3, r = big ? 0.19 : 0.18;
+  const g = new THREE.CylinderGeometry(r * A.w, (r + (big ? 0.06 : 0.03)) * A.w, h, 20, 6, true, -0.8, 1.6);
+  const yc = 0.1 - h / 2 + (big ? 0.12 : 0.08);
+  both(A, 'hips', g, mat([0, yc, 0.01]), (v, n, lp) => mixRgb(c, edge, smoothstep(-h / 2 + 0.03, -h / 2, lp.y) * 0.8 + smoothstep(0.62, 0.78, Math.abs(Math.atan2(lp.x, lp.z))) * 0.5), RM.leather);
+  if (!big) {
+    A.add('chest', new THREE.TorusGeometry(0.1, 0.008, 6, 24, Math.PI), { m: mat([0, 0.2, 0.03], [0.4, 0, 0]), color: st, rmse: RM.leather });
+    return;
+  }
+  // bib up the chest, sagging a little because it is far too big for her
+  const bib = new THREE.CylinderGeometry(0.168 * A.w, 0.182 * A.w, 0.19, 16, 4, true, -0.62, 1.24);
+  both(A, 'chest', bib, mat([0, 0.045, 0.012]), (v, n, lp) => mixRgb(c, edge, smoothstep(0.08, 0.095, lp.y) * 0.8), RM.leather);
+  // neck strap and waist ties
+  A.add('chest', new THREE.TorusGeometry(0.098, 0.009, 6, 28, Math.PI * 1.1), { m: mat([0, 0.18, -0.005], [0.15, 0, -0.05 * Math.PI]), color: st, rmse: RM.leather });
+  A.add('hips', new THREE.TorusGeometry(0.19, 0.008, 6, 40), { m: mat([0, 0.06, 0], [Math.PI / 2, 0, 0], [1.06 * A.w, 1.04, 1]), color: st, rmse: RM.leather });
+  // tool pocket with a hammer handle sticking out (she can barely lift it)
+  A.add('hips', new THREE.BoxGeometry(0.09, 0.07, 0.012), { m: mat([0.065, -0.02, 0.224], [0, 0.28, 0]), color: edge, rmse: RM.leather });
+  A.add('hips', new THREE.CylinderGeometry(0.008, 0.008, 0.11, 8), { m: mat([0.085, 0.03, 0.222], [0, 0, -0.25]), color: C('#8A6440'), rmse: RM.wood });
+  A.add('hips', new THREE.BoxGeometry(0.05, 0.022, 0.022), { m: mat([0.1, 0.085, 0.222], [0, 0, -0.25]), color: C(PAL.steelDark), rmse: RM.steel });
 }
 
 /** Gown (Princess Snowpaw): bodice + long bell skirt to the ground. */
@@ -70,29 +84,112 @@ export function gown(A, { color = '#B9A3D6', trim = '#E8DFF5' } = {}) {
   for (const s of ['L', 'R']) A.add('shoulder' + s, new THREE.SphereGeometry(0.06, 16, 12).scale(1, 0.8, 1), { m: mat([0, -0.02, 0]), color: t, rmse: RM.cloth });
 }
 
-/** Pointed leaf-green hood (Sage): shell over the back/top of the head + a bent cone tip + short mantle. */
-export function hood(A, { color = '#5E7F3E' } = {}) {
-  const c = C(color);
-  const g = new THREE.SphereGeometry(0.205, 32, 20, Math.PI * 0.08, Math.PI * 1.84, 0, Math.PI * 0.62).scale(1.08, 1.0, 1.02);
-  both(A, 'head', g, mat([0, 0.17, -0.02], [-0.25, Math.PI, 0]), c, RM.cloth);
-  // bent tip
-  const tip = new THREE.ConeGeometry(0.07, 0.2, 16, 6, true);
-  const p = tip.attributes.position;
-  for (let i = 0; i < p.count; i++) { const t = (p.getY(i) + 0.1) / 0.2; p.setZ(i, p.getZ(i) - t * t * 0.08); }
-  tip.computeVertexNormals();
-  both(A, 'head', tip, mat([0, 0.33, -0.12], [-1.0, 0, 0]), c, RM.cloth);
-  const mantle = new THREE.CylinderGeometry(0.13, 0.24, 0.12, 24, 1, true);
-  both(A, 'chest', mantle, mat([0, 0.17, -0.005]), c, RM.cloth);
-  A.flags.earsLow = 0.35;
+/**
+ * Cloth shell over the skull with an oval face opening (head space; the skull is centred at (0, 0.165, 0)).
+ * The sphere is cut by a cone around `face` (half-angle `open`); vertices on kept triangles that fall inside the cone
+ * are slid onto its rim, so the opening edge is a clean oval rather than a grid staircase.
+ * @returns {{ geo: THREE.BufferGeometry, rim: THREE.Vector3[] }} geometry (indexed, outward normals) + rim points
+ */
+export function hoodShellGeometry({ radii = [0.215, 0.19, 0.2], center = [0, 0.175, -0.012], face = [0, -0.3, 1], open = 1.05, thetaEnd = Math.PI * 0.8, segs = [40, 28] } = {}) {
+  const g = new THREE.SphereGeometry(1, segs[0], segs[1], 0, Math.PI * 2, 0, thetaEnd);
+  const d = new THREE.Vector3(...face).normalize(), cosO = Math.cos(open), sinO = Math.sin(open);
+  const pos = g.attributes.position, idx = g.index.array, n = pos.count;
+  const u = new THREE.Vector3(), perp = new THREE.Vector3();
+  const inside = new Uint8Array(n);
+  for (let i = 0; i < n; i++) { u.fromBufferAttribute(pos, i); inside[i] = u.dot(d) > cosO ? 1 : 0; }
+  const keep = [];
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = idx[i], b = idx[i + 1], c = idx[i + 2];
+    if (inside[a] && inside[b] && inside[c]) continue;
+    keep.push(a, b, c);
+  }
+  for (let i = 0; i < n; i++) {
+    if (!inside[i]) continue;
+    u.fromBufferAttribute(pos, i);
+    perp.copy(u).addScaledVector(d, -u.dot(d));
+    if (perp.lengthSq() < 1e-8) continue;
+    perp.normalize();
+    u.copy(d).multiplyScalar(cosO).addScaledVector(perp, sinO);
+    pos.setXYZ(i, u.x, u.y, u.z);
+  }
+  g.setIndex(keep);
+  g.scale(...radii).translate(...center);
+  g.computeVertexNormals();
+  // rim: the cut circle, restricted to the part above the shell's bottom edge
+  const e1 = new THREE.Vector3(0, 1, 0).addScaledVector(d, -d.y).normalize(), e2 = new THREE.Vector3().crossVectors(d, e1);
+  const rim = [], yMin = Math.cos(thetaEnd) + 0.02;
+  for (let k = 0; k <= 64; k++) {
+    const t = (k / 64) * Math.PI * 2;
+    u.copy(d).multiplyScalar(cosO).addScaledVector(e1, sinO * Math.cos(t)).addScaledVector(e2, sinO * Math.sin(t));
+    if (u.y < yMin) continue;
+    rim.push(new THREE.Vector3(u.x * radii[0] + center[0], u.y * radii[1] + center[1], u.z * radii[2] + center[2]));
+  }
+  return { geo: g, rim };
 }
 
-/** White coif / wimple (Clover). */
-export function coif(A, { color = '#DDD6CA' } = {}) {
-  const c = C(color);
-  const g = new THREE.SphereGeometry(0.212, 32, 20, Math.PI * 0.18, Math.PI * 1.64, 0, Math.PI * 0.82).scale(1.12, 1.02, 1.0);
-  both(A, 'head', g, mat([0, 0.15, -0.01], [0, Math.PI, 0]), c, RM.cloth);
-  A.add('chest', new THREE.CylinderGeometry(0.12, 0.2, 0.08, 24, 1, true), { m: mat([0, 0.19, 0.0]), color: c, rmse: RM.cloth });
-  A.flags.earsLow = 0.5;
+/** Rolled hem along a hood rim (TubeGeometry; open arc when the rim is cut by the shell's bottom edge). */
+function rimTube(rim, r = 0.012) {
+  if (rim.length < 4) return null;
+  const closed = rim[0].distanceTo(rim[rim.length - 1]) < 0.03;
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim, closed), Math.max(24, rim.length * 2), r, 8, closed);
+}
+
+/** Drooping pointed tip (Sage's hood): a cone bent back and down, base at the origin, axis +Y before bending. */
+export function hoodTipGeometry({ r = 0.085, h = 0.3, bend = 0.16, droop = 0.05 } = {}) {
+  const tip = new THREE.ConeGeometry(r, h, 18, 10, true).translate(0, h / 2, 0);
+  const p = tip.attributes.position;
+  for (let i = 0; i < p.count; i++) { const t = p.getY(i) / h; p.setZ(i, p.getZ(i) - t * t * bend); p.setY(i, p.getY(i) - t * t * t * droop); }
+  tip.computeVertexNormals();
+  return tip;
+}
+
+/** Short capelet over the shoulders (chest space) with a leaf-cut (zigzag) hem. */
+function capeletGeometry(w, { leaves = 9, depth = 0.03, prof = [[0.095, 0.24], [0.15, 0.218], [0.2, 0.175], [0.226, 0.12], [0.238, 0.07]] } = {}) {
+  const g = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 48);
+  const p = g.attributes.position, yMin = prof[prof.length - 1][1];
+  for (let i = 0; i < p.count; i++) {
+    const y = p.getY(i);
+    if (Math.abs(y - yMin) > 1e-4) continue;
+    const a = Math.atan2(p.getX(i), p.getZ(i));
+    const k = Math.abs(Math.sin(a * leaves * 0.5));
+    p.setY(i, y - depth * (1 - k) - (Math.cos(a) > 0 ? 0 : 0.015));     // points of the leaves; a little longer at the back
+  }
+  g.scale(1.04 * w, 1, 1.02);
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Pointed leaf-green hood (Sage, art.md §7): face-framing hood with ears poking through, a drooping tip, leaf capelet. */
+export function hood(A, { color = '#5E7F3E', lining = null } = {}) {
+  const c = C(color), dark = mixRgb(c, [0, 0, 0], 0.35), inner = lining ? C(lining) : mixRgb(c, [0, 0, 0], 0.5);
+  const { geo, rim } = hoodShellGeometry({ radii: [0.212, 0.188, 0.198], center: [0, 0.172, -0.014], face: [0, -0.32, 1], open: 1.08, thetaEnd: Math.PI * 0.74 });
+  // the fold shade deepens toward the opening so the face reads framed
+  A.add('head', geo, { color: (v, nn) => mixRgb(c, dark, smoothstep(0.2, 0.9, nn.z) * 0.35), rmse: RM.cloth });
+  A.add('head', flipShell(geo), { color: inner, rmse: RM.cloth });
+  const tube = rimTube(rim, 0.013);
+  if (tube) A.add('head', tube, { color: dark, rmse: RM.cloth });
+  const tip = hoodTipGeometry();
+  both(A, 'head', tip, mat([0, 0.33, -0.06], [-0.38, 0, 0]), (v) => mixRgb(c, dark, smoothstep(0.05, 0.3, v.y) * 0.3), RM.cloth);
+  const cap = capeletGeometry(A.w);
+  both(A, 'chest', cap, mat([0, -0.005, -0.004]), (v, nn, lp) => mixRgb(c, dark, smoothstep(0.1, 0.05, lp.y) * 0.6), RM.cloth);
+  A.flags.earsLow = 0.2;
+}
+
+/** White coif (Clover): a soft cap framing the face, ears out, a short veil down the back, collar left visible. */
+export function coif(A, { color = '#EDE6DA' } = {}) {
+  const c = C(color), shade = mixRgb(c, [0.35, 0.3, 0.28], 0.25);
+  const { geo, rim } = hoodShellGeometry({ radii: [0.208, 0.186, 0.194], center: [0, 0.168, -0.01], face: [0, -0.38, 1], open: 1.12, thetaEnd: Math.PI * 0.72 });
+  A.add('head', geo, { color: (v, nn) => mixRgb(c, shade, smoothstep(0.0, -0.8, nn.y) * 0.4), rmse: RM.cloth });
+  A.add('head', flipShell(geo), { color: shade, rmse: RM.cloth });
+  const tube = rimTube(rim, 0.011);
+  if (tube) A.add('head', tube, { color: C('#F7C6D9'), rmse: RM.cloth });   // pink-ribbon trim (her blossom colour)
+  // veil: back half of a flared skirt hanging from the nape over the shoulder blades
+  const veil = new THREE.CylinderGeometry(0.13, 0.215, 0.19, 32, 4, true, Math.PI - 1.75, 3.5);
+  const vp = veil.attributes.position;
+  for (let i = 0; i < vp.count; i++) { const y = vp.getY(i); if (y < -0.09) vp.setY(i, y - 0.012 * Math.sin(Math.atan2(vp.getX(i), vp.getZ(i)) * 6) ** 2); }
+  veil.computeVertexNormals();
+  both(A, 'chest', veil, mat([0, 0.16, -0.012]), (v, nn, lp) => mixRgb(c, shade, smoothstep(0.0, -0.09, lp.y) * 0.5), RM.cloth);
+  A.flags.earsLow = 0.25;
 }
 
 /** Scarf (Pip): neck wrap + two long trailing ribbons that sway. */
@@ -114,8 +211,8 @@ export function scarf(A, { color = '#C2353B', length = 0.5 } = {}) {
 /** Brass bell collar (Clover). */
 export function bellCollar(A, { color = '#B0503C' } = {}) {
   A.add('chest', new THREE.TorusGeometry(0.098, 0.012, 8, 32), { m: mat([0, 0.19, 0.012], [Math.PI / 2 + 0.2, 0, 0], [1.1, 1, 0.85]), color: C(color), rmse: RM.leather });
-  A.add('chest', new THREE.SphereGeometry(0.025, 14, 10), { m: mat([0, 0.15, 0.115]), color: C(PAL.brass), rmse: RM.brass });
-  A.add('chest', new THREE.BoxGeometry(0.03, 0.004, 0.004), { m: mat([0, 0.142, 0.138]), color: C('#4A3418'), rmse: RM.nose });
+  A.add('chest', new THREE.SphereGeometry(0.034, 16, 12), { m: mat([0, 0.148, 0.122]), color: C(PAL.brass), rmse: RM.brass });
+  A.add('chest', new THREE.BoxGeometry(0.04, 0.005, 0.005), { m: mat([0, 0.138, 0.154]), color: C('#4A3418'), rmse: RM.nose });
 }
 
 /** Herb / mail satchel on a cross strap. */
@@ -292,11 +389,20 @@ export function towerShield(A, { color = '#3F6FB5', rim = '#8C6A4A', crest = '#D
   }
 }
 
-/** Short bow held in the left paw (Sage) and a quiver on the back. */
-export function shortBow(A, { wood = '#7A5230' } = {}) {
-  const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(0, 0.22, 0), new THREE.Vector3(0, 0, 0.12), new THREE.Vector3(0, -0.22, 0));
-  A.add('pawL', new THREE.TubeGeometry(curve, 20, 0.008, 6, false), { m: mat([0, -0.04, 0.02]), color: C(wood), rmse: RM.wood });
-  A.add('pawL', new THREE.CylinderGeometry(0.0015, 0.0015, 0.44, 4), { m: mat([0, -0.04, 0.02]), color: C('#E9E2D2'), rmse: RM.cloth });
+/** Short recurve bow held upright in the left paw (Sage): two limbs, a leather grip wrap and a taut string. */
+export function shortBow(A, { wood = '#7A5230', grip = '#4A2E1F' } = {}) {
+  const half = 0.2, belly = 0.05, curl = 0.025;
+  const pts = [];
+  for (let k = 0; k <= 16; k++) {
+    const t = k / 16 * 2 - 1, y = t * half;                                   // -1..1 along the bow
+    const z = belly * (1 - t * t) - curl * Math.max(0, Math.abs(t) - 0.75) / 0.25;   // limbs bow forward, tips recurve
+    pts.push(new THREE.Vector3(0, y, z));
+  }
+  const m = mat([0, -0.035, 0.03], [0.12, 0, 0]);
+  A.add('pawL', new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 32, 0.0105, 7, false), { m, color: C(wood), rmse: RM.wood });
+  A.add('pawL', new THREE.CylinderGeometry(0.014, 0.014, 0.06, 10), { m: m.clone().multiply(mat([0, 0, belly])), color: C(grip), rmse: RM.leather });
+  for (const s of [1, -1]) A.add('pawL', new THREE.SphereGeometry(0.009, 8, 6), { m: m.clone().multiply(mat([0, s * half, -curl])), color: C(PAL.brass), rmse: RM.brass });
+  A.add('pawL', new THREE.CylinderGeometry(0.0018, 0.0018, half * 2, 4), { m: m.clone().multiply(mat([0, 0, -curl])), color: C('#E9E2D2'), rmse: RM.cloth });
 }
 export function quiver(A, { color = '#6B4429' } = {}) {
   A.add('chest', new THREE.CylinderGeometry(0.04, 0.035, 0.24, 14), { m: mat([0.06, 0.08, -0.17], [0.35, 0, -0.4]), color: C(color), rmse: RM.leather });

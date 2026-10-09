@@ -190,7 +190,7 @@ export class HolyFX {
     const q = this.ctx.quality ?? {};
     const count = (q.particles ?? 2000) < 1000 ? 80 : 160;
     for (let i = 0; i < 3; i++) { const f = new SparkleField(count, this.rng); this.fields.push(f); scene.add(f.points); }
-    for (let i = 0; i < 8; i++) { const a = new GoldArc(); this.arcs.push(a); scene.add(a.mesh); }
+    for (let i = 0; i < 12; i++) { const a = new GoldArc(); this.arcs.push(a); scene.add(a.mesh); }
     // one persistent point light (intensity 0 when idle): adding / removing lights at runtime recompiles every material
     this.light = new THREE.PointLight(HOLY_LIGHT.color, 0, HOLY_LIGHT.distance, HOLY_LIGHT.decay);
     this.light.name = 'fx.holy.light';
@@ -239,8 +239,9 @@ export class HolyFX {
   goldenOn(pos) {
     this.arc({ x: pos.x, y: pos.y + 0.06, z: pos.z, ring: true, r0: 0.3, r1: PLAYER.golden.staggerRadius ?? 8, thick: 0.4, life: 0.8, grow: 0.7, intensity: 1.4 });
     _p.set(pos.x, pos.y + 0.8, pos.z);
-    this.particles.burst(_p, { additive: true, n: 36, shape: SHAPE.STAR4, color: '#FFF1C4', intensity: 2.8, size: [0.18, 0.3], sizeEnd: 0.3,
-      life: [0.8, 1.3], speed: [1.5, 4], spread: Math.PI, gravity: -1.2, drag: 1.5, fade: FADE.TWINKLE, jitter: 0.3 });
+    // mostly upward and outward along the ground: the Golden Hour camera is close, nothing should fly into the lens
+    this.particles.burst(_p, { additive: true, n: 36, shape: SHAPE.STAR4, color: '#FFF1C4', intensity: 2.4, size: [0.12, 0.22], sizeEnd: 0.3,
+      life: [0.8, 1.3], speed: [0.8, 2.2], dir: _q.set(0, 1, 0), spread: 1.1, gravity: -1.0, drag: 1.5, fade: FADE.TWINKLE, jitter: 0.35 });
   }
 
   /**

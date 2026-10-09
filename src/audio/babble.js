@@ -54,6 +54,11 @@ export const SPEAKER_ALIASES = {
   earl: 'earlgrey', earlgrey: 'earlgrey', sirearlgrey: 'earlgrey',
   warchiefcacklejaw: 'cacklejaw', captaingrizzlechop: 'grizzlechop', sirbrutus: 'brutus', lordbarkus: 'barkus',
   barkusgrimjaw: 'barkus', lordbarkusgrimjaw: 'barkus', pilfer: 'pilfer', poststealer: 'pilfer',
+  // M2 speakers (§6, §16.4): display names and cutscene ids
+  princesssnowpaw: 'snowpaw', snowpaw: 'snowpaw', sirmarmalade: 'marmalade', marmaladethebaker: 'marmalade',
+  grizzle: 'grizzlechop', grizzlechop: 'grizzlechop', bossgrizzlechop: 'grizzlechop', bosscacklejaw: 'cacklejaw',
+  cacklejaw: 'cacklejaw', snickerpack: 'hyena', raider: 'hyena', hyenaraider: 'hyena', squiresage: 'sage', squireclover: 'clover',
+  squiremochi: 'mochi', squirepip: 'pip', pipthescout: 'pip', tofuthesmith: 'tofu', coothepigeon: 'coo', pigeon: 'coo',
   narrator: 'none', caption: 'none', system: 'none', tallbert: 'none', sirtallbert: 'none', statue: 'none',
 };
 

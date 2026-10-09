@@ -23,6 +23,18 @@
 // Lens test: short segments from the camera through a grid of the view (~2 m deep) vs the boxes only, so a fence
 // rail / post right in front of the lens fades even when the line to her slips between its rails.
 // Tests run at CHECK_HZ; the fade itself animates every frame.
+//
+// Solid occluders (M2: town houses, the castle, the Bell Tower, statues, boss-arena pillars): props whose colliders
+// DO stop the spring arm, but which still fade when they hide her from the lens (eaves and roofs overhang their
+// footprint collider; lock-on / boss / cutscene framings look past corners). Registered by
+//   object.userData.camFade = 'solid'          Mesh / Group / InstancedMesh / BatchedMesh (all instances)
+//   batched.userData.camFadeSolidIds = ids     BatchedMesh: only these instance ids
+//   scanSolids(root, footprints)               automatically: every untagged static prop (batch instance or mesh)
+//                                              at least SOLID_MIN_H tall standing on a solid collider footprint;
+//                                              smaller props inside its box join its unit (a house and its chimney)
+//   object.userData.camOccluder = false        never auto-register this object / batch
+// Solid units never make their colliders camera-transparent (covers() ignores them), and their lens test is
+// triangle-accurate (the camera pressed against a wall is inside the house's box but must not fade it).
 import * as THREE from 'three';
 
 export const FADE_NAME = /(^|[^a-z])(tree|trees|pine|oak|birch|willow|fir|spruce|trunk|leaves|leaf|foliage|canopy|hedge)([^a-z]|$)/i;
@@ -33,6 +45,10 @@ export const PRECISE_RADIUS = 1.5;
 export const CHECK_HZ = 20;
 /** Skip the triangle refinement for meshes heavier than this (box test only). */
 const PRECISE_MAX_TRIS = 40000;
+/** auto solid occluders: at least this tall (m): taller than her eye line (crates, low walls and rocks stay solid) */
+export const SOLID_MIN_H = 1.8;
+/** auto solid occluders: largest prop footprint (m²) considered (terrain, water, grass are far bigger) */
+const SOLID_MAX_AREA = 1600;
 
 const _m = new THREE.Matrix4(), _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -125,7 +141,7 @@ function instanceFilter(obj) {
 
 export class OccluderFader {
   /** @param {{ minOpacity?: number, speed?: number, margin?: number, maxProxies?: number, checkHz?: number }} [opts] */
-  constructor({ minOpacity = 0.3, speed = 7, margin = 0.15, maxProxies = 12, checkHz = CHECK_HZ } = {}) {
+  constructor({ minOpacity = 0.3, speed = 7, margin = 0.15, maxProxies = 16, checkHz = CHECK_HZ } = {}) {
     this.minOpacity = minOpacity; this.speed = speed; this.margin = margin; this.maxProxies = maxProxies;
     this.checkInterval = checkHz > 0 ? 1 / checkHz : 0;
     /** @type {any[]} registered units (one per tagged mesh / group / instance) */
@@ -145,9 +161,13 @@ export class OccluderFader {
 
   get count() { return this.units.length; }
   get fadedCount() { let n = 0; for (const u of this.active) if (u.f > 0.05) n++; return n; }
+  /** registered solid occluder units (houses, towers, statues, pillars) */
+  get solidCount() { let n = 0; for (const u of this.units) if (u.solid) n++; return n; }
+  /** solid occluder units currently faded */
+  get fadedSolidCount() { let n = 0; for (const u of this.active) if (u.solid && u.f > 0.05) n++; return n; }
 
   /** Register `obj` (and, for groups, all its meshes as one unit). Static props only (bounds are cached). */
-  add(obj, parentForProxies = null) {
+  add(obj, parentForProxies = null, { solid = false } = {}) {
     if (!obj || this._roots.has(obj)) return 0;
     if (parentForProxies) this._proxyParent = parentForProxies;
     obj.updateWorldMatrix(true, true);
@@ -165,6 +185,7 @@ export class OccluderFader {
       });
       if (meshes.length) this._addUnit(obj, meshes);
     }
+    if (solid) for (let i = before; i < this.units.length; i++) this.units[i].solid = true;
     if (this.units.length > before) { this._roots.add(obj); this._aabbs = null; }
     return this.units.length - before;
   }
@@ -197,6 +218,16 @@ export class OccluderFader {
     const visit = (o, named) => {
       const ud = o.userData;
       if (ud?.camFade === false || ud?.cameraOwned) return;
+      if (ud?.camFade === 'solid') { n += this.add(o, null, { solid: true }); return; }
+      if (ud?.camFadeSolidIds != null && o.isBatchedMesh) {
+        const ids = ud.camFadeSolidIds instanceof Set ? ud.camFadeSolidIds : new Set(ud.camFadeSolidIds);
+        const before = this.units.length;
+        o.updateWorldMatrix(true, false);
+        this._addBatched(o, o, (i) => ids.has(i));
+        for (let i = before; i < this.units.length; i++) this.units[i].solid = true;
+        n += this.units.length - before; this._aabbs = null;
+        if (ud.camFadeIds == null && typeof ud.camFade !== 'function' && ud.camFade !== true) return;
+      }
       if (ud?.camFade === true || ud?.camFadeIds != null || (typeof ud?.camFade === 'function' && (o.isBatchedMesh || o.isInstancedMesh))) { n += this.add(o); return; }
       if (o.isBatchedMesh) return;                                   // untagged batch: may hold houses, fences...
       const isNamed = named || FADE_NAME.test(o.name ?? '');
@@ -221,6 +252,7 @@ export class OccluderFader {
       this._aabbs = [];
       const m = this.margin;
       for (const u of this.units) for (const p of u.parts) {
+        if (u.solid) continue;                                   // solid occluders keep blocking the arm
         const b = p.box.clone().applyMatrix4(p.world);           // back to the prop's own extent (the box has the fade margin)
         b.min.x += m; b.min.z += m; b.max.x -= m; b.max.z -= m; b.max.y -= m;
         if (b.max.x < b.min.x) b.min.x = b.max.x = (b.min.x + b.max.x) / 2;
@@ -274,7 +306,7 @@ export class OccluderFader {
   }
 
   _newUnit(root) {
-    return { root, parts: [], center: new THREE.Vector3(), radius: 0, f: 0, hit: false, precise: false, _spheres: [] };
+    return { root, parts: [], center: new THREE.Vector3(), radius: 0, f: 0, hit: false, precise: false, solid: false, _spheres: [] };
   }
 
   _finishUnit(u) {
@@ -318,9 +350,8 @@ export class OccluderFader {
     }
   }
 
-  _addBatched(bm, root) {
+  _addBatched(bm, root, want = instanceFilter(bm)) {
     if (typeof bm.getGeometryIdAt !== 'function') return;
-    const want = instanceFilter(bm);
     const boxes = new Map();
     for (const i of batchedIds(bm)) {
       if (!want(i)) continue;
@@ -368,15 +399,16 @@ export class OccluderFader {
    *   any fadeable whose (margin-grown) box they touch fades, box test only, so a fence rail or post right in front of
    *   the lens fades even when the sight line to the subject slips between its rails
    * @param {number} [nLens]
+   * @param {boolean} [solidOnly] only solid occluders may fade (a medium / far shot: trees stay, a house never hides her)
    */
-  update(dt, camPos, targets, nTargets = targets.length, lens = null, nLens = lens ? lens.length : 0) {
+  update(dt, camPos, targets, nTargets = targets.length, lens = null, nLens = lens ? lens.length : 0, solidOnly = false) {
     if (!this.units.length) return;
     this._checkT -= dt;
     const check = this._checkT <= 0;
     if (check) this._checkT = this.checkInterval;
     const k = 1 - Math.exp(-this.speed * dt);
     for (const u of this.units) {
-      if (check) u.hit = this.enabled && (this._occludes(u, camPos, targets, nTargets) || this._nearLens(u, camPos, lens, nLens));
+      if (check) u.hit = this.enabled && (!solidOnly || u.solid) && (this._occludes(u, camPos, targets, nTargets) || this._nearLens(u, camPos, lens, nLens));
       const hit = u.hit;
       if (!hit && u.f <= 0) continue;
       const target = hit ? 1 : 0;
@@ -412,10 +444,99 @@ export class OccluderFader {
       for (const part of u.parts) {
         _b.copy(camPos).applyMatrix4(part.inv);
         _c.copy(p).applyMatrix4(part.inv);
-        if (segmentHitsBox(_b, _c, part.box)) return true;
+        if (!segmentHitsBox(_b, _c, part.box)) continue;
+        // solid occluders: the lens is often inside a house's box (pressed against its wall): real faces only
+        if (!u.solid || !u.precise || this._segmentHitsTriangles(part, camPos, p)) return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Auto-register solid occluders under `root` (see the header): every untagged BatchedMesh instance and plain Mesh
+   * at least `minHeight` tall whose world box stands on one of `footprints` (solid static collider records with
+   * minX/maxX/minZ/maxZ/y0/y1, e.g. physics toRecord()) becomes a solid unit; smaller untagged props whose box lies
+   * inside such a box join that unit. Already registered parts and `skip(obj, instanceId)` are left alone.
+   * @param {THREE.Object3D} root @param {{minX:number,maxX:number,minZ:number,maxZ:number,y0:number,y1:number,src?:any}[]} footprints
+   * @param {{minHeight?: number, skip?: (obj: THREE.Object3D, id: number) => boolean, proxyParent?: THREE.Object3D}} [opts]
+   * @returns {{units: number, matched: Set<any>}} new units and the footprints (their `src`, else the record) used
+   */
+  scanSolids(root, footprints, { minHeight = SOLID_MIN_H, skip = null, proxyParent = null } = {}) {
+    const matched = new Set();
+    if (!root || !footprints?.length) return { units: 0, matched };
+    if (proxyParent) this._proxyParent = proxyParent;
+    root.updateWorldMatrix(true, true);
+    const taken = new Set();
+    for (const u of this.units) for (const p of u.parts) taken.add(p.kind === 'batch' || p.kind === 'inst' ? `${p.mesh.id}:${p.index}` : p.mesh.id);
+    // 1. candidates: world boxes of batch instances and plain meshes
+    const cands = [];
+    const boxes = new Map();
+    const visit = (o) => {
+      const ud = o.userData ?? {};
+      if (ud.cameraOwned || ud.camFade === false || ud.camOccluder === false || o.visible === false) return;
+      if (o.isBatchedMesh && typeof o.getGeometryIdAt === 'function') {
+        boxes.clear();
+        for (const i of batchedIds(o)) {
+          if (taken.has(`${o.id}:${i}`) || skip?.(o, i)) continue;
+          let geoId;
+          try { geoId = o.getGeometryIdAt(i); } catch { continue; }
+          if (!(geoId >= 0)) continue;
+          let lb = boxes.get(geoId);
+          if (lb === undefined) { lb = o.getBoundingBoxAt(geoId, new THREE.Box3()); boxes.set(geoId, lb); }
+          if (!lb || lb.isEmpty()) continue;
+          o.getMatrixAt(i, _m);
+          const world = _m.clone().premultiply(o.matrixWorld);
+          cands.push({ kind: 'batch', obj: o, id: i, geoId, lb: lb.clone(), world, aabb: lb.clone().applyMatrix4(world), unit: null, area: 0 });
+        }
+        return;
+      }
+      if (o.isMesh && !o.isInstancedMesh && !o.isSkinnedMesh && !taken.has(o.id) && !skip?.(o, -1) && o.geometry?.attributes?.position) {
+        const g = o.geometry;
+        if (!g.boundingBox) g.computeBoundingBox();
+        if (!g.boundingBox.isEmpty()) cands.push({ kind: 'mesh', obj: o, id: -1, lb: g.boundingBox, world: o.matrixWorld, aabb: g.boundingBox.clone().applyMatrix4(o.matrixWorld), unit: null, area: 0 });
+      }
+      for (const c of o.children) visit(c);
+    };
+    visit(root);
+    // 2. main props: tall, standing on a solid footprint that covers a good part of their ground area
+    const area = (b) => Math.max(0, b.max.x - b.min.x) * Math.max(0, b.max.z - b.min.z);
+    const mains = [];
+    for (const c of cands) {
+      const b = c.aabb, a = area(b);
+      if (b.max.y - b.min.y < minHeight || a <= 0 || a > SOLID_MAX_AREA) continue;
+      for (const f of footprints) {
+        const fx = (f.minX + f.maxX) / 2, fz = (f.minZ + f.maxZ) / 2;
+        if (fx < b.min.x - 0.3 || fx > b.max.x + 0.3 || fz < b.min.z - 0.3 || fz > b.max.z + 0.3) continue;
+        const fa = Math.max(0, f.maxX - f.minX) * Math.max(0, f.maxZ - f.minZ);
+        if (fa < 0.2 * a || fa > 2.5 * a) continue;                       // a crate under a tree / a wall past a post
+        if (Number.isFinite(f.y1) && f.y1 < b.min.y + 1.0) continue;     // a low curb under a tall thing
+        matched.add(f.src ?? f);
+        if (!c.unit) { c.unit = this._newUnit(root); c.unit.solid = true; c.area = a; mains.push(c); }
+      }
+    }
+    if (!mains.length) return { units: 0, matched };
+    mains.sort((x, y) => y.area - x.area);
+    // 3. small untagged props inside a main prop's box join it (chimney, sign, roof parts of a multi-part model)
+    for (const c of cands) {
+      if (c.unit) continue;
+      const b = c.aabb;
+      for (const m of mains) {
+        const M = m.aabb;
+        if (b.min.x >= M.min.x - 0.25 && b.max.x <= M.max.x + 0.25 && b.min.z >= M.min.z - 0.25 && b.max.z <= M.max.z + 0.25
+          && b.min.y >= M.min.y - 0.5 && b.max.y <= M.max.y + 0.5) { c.unit = m.unit; break; }
+      }
+    }
+    for (const c of cands) {
+      if (!c.unit) continue;
+      if (c.kind === 'batch') {
+        const part = this._part(c.unit, c.obj, c.lb, c.world, this._view(c.obj, c.geoId));
+        if (part) { part.kind = 'batch'; part.index = c.id; part.geoId = c.geoId; }
+      } else this._part(c.unit, c.obj, c.lb, c.world, c.obj.geometry);
+    }
+    let n = 0;
+    for (const m of mains) if (this._finishUnit(m.unit)) n++;
+    if (n) { this._roots.add(root); this._aabbs = null; }
+    return { units: n, matched };
   }
 
   /** Triangle-accurate test of the world segment a → b against a part's geometry (any face side). */

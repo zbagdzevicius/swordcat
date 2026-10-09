@@ -36,6 +36,14 @@ async function fontAudit(t, label) {
   t.assert(bad.length === 0, `${label}: text under 16 px: ${bad.join('; ')}`);
 }
 
+/** Focus the item of the top menu screen whose text matches `re` (keyboard nav is covered elsewhere; this is load-proof). */
+const focusItem = (t, re) => inPage(t, (src) => {
+  const m = window.__GAME__.ctx.ui.menus, s = m.top, rx = new RegExp(src);
+  const i = s.items.findIndex((it) => rx.test(it.el.textContent));
+  if (i >= 0) m._focus(s, i, false);
+  return i;
+}, re);
+
 /** Freeze the CSS animations under `sel` for a screenshot (page.screenshot can take > 1 s under GPU load). */
 const freezeAnims = (t, sel, on) => inPage(t, ([s, o]) => {
   for (const e of document.querySelectorAll(`${s}, ${s} *`)) e.style.animationPlayState = o ? 'paused' : '';
@@ -71,7 +79,7 @@ export default [
         window.__uiBoss = boss;
         ctx.bus.emit(E.BOSS_START, { boss, id: 'grizzlechop', name: 'CAPTAIN GRIZZLECHOP', maxHp: 1000, phases: [1, 0.65, 0.35], dizzyMax: 100 });
         ctx.bus.emit(E.BOSS_DIZZY, { boss, value: 55, max: 100, dizzy: false });
-        ctx.bus.emit(E.TOAST, { text: ctx.strings.t('toast.kitten', { n: 1 }), key: 'toast.kitten' });
+        ctx.bus.emit(E.TOAST, { text: ctx.strings.t('toast.kitten', { n: 1, max: 3 }), key: 'toast.kitten' });
         ctx.bus.emit(E.ITEM_PICKUP, { item: 'letter', id: 'l1', amount: 1, position: ctx.player.pos.clone() });
         ctx.ui.hint('tut.combo', { step: 3, total: 8 });
         ctx.state.companions.unlocked = ['mochi'];
@@ -221,8 +229,14 @@ export default [
       // Letters
       await t.page.keyboard.press('ArrowDown'); await t.wait(120);
       await t.page.keyboard.press('Enter'); await t.wait(500);
-      const let_ = await inPage(t, () => document.querySelectorAll('.letter-card.is-found').length);
-      t.assert(let_ === 2, `letters found cards ${let_}`);
+      const let_ = await inPage(t, () => ({ found: document.querySelectorAll('.lv-tab.is-found').length, text: document.querySelector('.lv-text')?.textContent ?? '' }));
+      t.assert(let_.found === 2, `letters found tabs ${let_.found}`);
+      t.assert(/Mum/.test(let_.text), `letter viewer opens on the first found letter (${let_.text.slice(0, 40)})`);
+      await t.page.keyboard.press('ArrowDown'); await t.wait(350);
+      await t.page.keyboard.press('ArrowDown'); await t.wait(500);
+      const l3 = await inPage(t, () => document.querySelector('.lv-text')?.textContent ?? '');
+      t.assert(/NAYSAYER/.test(l3), `focusing letter 3 shows it in the viewer (${l3.slice(0, 40)})`);
+      await fontAudit(t, 'letters');
       await shot(t, '09-letters');
       await t.page.keyboard.press('Escape'); await t.wait(300);
       // Settings: change master volume with ArrowRight, toggle reduce flashes
@@ -376,6 +390,189 @@ export default [
       t.assert(!ng.title, 'title closed after New Game');
       t.assert(ng.diff === 'kitten', `difficulty set (${ng.diff})`);
       await inPage(t, () => { const g = window.__GAME__; g.story.skip(); g.ctx.state.difficulty = 'knight'; g.ctx.bus.emit(g.E.SETTINGS_CHANGED, { key: 'difficulty', value: 'knight' }); g.setMode('play'); });
+    },
+  },
+  {
+    // M2: hub stations (§13.3) — every shop panel, the two-press purchase flow (fish, state, save request), equipping a
+    // skin / cape, the Quest Board (§12.5) and travel through it, the Lookout and the Barracks.
+    name: 'ui:hub', order: 46, level: 'town', spawn: 'hub', timeout: 360000,
+    async run(t) {
+      await inPage(t, () => {
+        const g = window.__GAME__, st = g.ctx.state;
+        g.god(true);
+        for (const f of ['prologue.done', 'meadow.done', 'forest.done', 'town.free']) g.story.flag(f, true);
+        st.levels = { meadow: { cleared: true, bestRank: 'pawsome', bestTime: 812 }, forest: { cleared: true, bestRank: 'purrfect', bestTime: 1034 } };
+        g.kittens(7); st.letters = ['l1', 'l2'];
+        st.fish = 500; st.shards = 1;
+        st.upgrades = { satchel: 0, sharp: 0, quickCharge: false, valorGain: false, waveReach: false };
+        st.cosmetics = { swords: ['borrowed', 'twig'], capes: ['cream', 'red'], sword: 'borrowed', cape: 'red' };
+        st.companions.unlocked = ['mochi', 'sage'];
+      });
+      // ---- Forge: Sharpness I, two presses
+      await t.clearEvents();
+      await inPage(t, () => { window.__shopClosed = false; window.__GAME__.ctx.ui.openShop('shop_forge').then(() => { window.__shopClosed = true; }); });
+      await t.wait(700);
+      const f0 = await inPage(t, () => ({ on: !!document.querySelector('.menu--shop.shop--forge.is-on'), rows: document.querySelectorAll('.shop-row').length,
+        mode: window.__GAME__.mode, purse: document.querySelector('.pu-n')?.textContent,
+        locked: document.querySelectorAll('.shop-row.row--locked').length, focus: document.querySelector('.shop-row.is-focus .sr-name')?.textContent }));
+      t.assert(f0.on && f0.rows === 8, `forge panel with 8 rows (${f0.rows})`);
+      t.assert(f0.mode === 'menu', `shop freezes the world (${f0.mode})`);
+      t.assert(f0.purse === '500', `purse shows 500 (${f0.purse})`);
+      t.assert(/Sharpness I/.test(f0.focus ?? ''), `focus on Sharpness (${f0.focus})`);
+      t.assert(f0.locked >= 3, `locked skins shown (${f0.locked})`);
+      await t.page.keyboard.press('Enter'); await t.wait(450);
+      const armed = await inPage(t, () => ({ armed: !!document.querySelector('.shop-row.is-armed'), fish: window.__GAME__.ctx.state.fish }));
+      t.assert(armed.armed && armed.fish === 500, 'first confirm arms the purchase (no fish spent yet)');
+      await fontAudit(t, 'forge');
+      await shot(t, '20-forge-armed');
+      await t.page.keyboard.press('Enter'); await t.wait(400);
+      const bought = await inPage(t, () => ({ fish: window.__GAME__.ctx.state.fish, sharp: window.__GAME__.ctx.state.upgrades.sharp,
+        purse: document.querySelector('.pu-n')?.textContent, save: window.__GAME__.events.includes('save:request'), name: document.querySelector('.shop-row.is-focus .sr-name')?.textContent }));
+      t.assert(bought.fish === 380 && bought.sharp === 1, `Sharpness I bought (fish ${bought.fish}, sharp ${bought.sharp})`);
+      t.assert(bought.purse === '380', `purse updated (${bought.purse})`);
+      t.assert(bought.save, 'purchase requests an autosave');
+      t.assert(/Sharpness II/.test(bought.name ?? ''), `row advances to the next tier (${bought.name})`);
+      // equip the Fishbone Sword (6+ kittens): sharp, borrowed, twig, fishbone
+      await t.page.keyboard.press('ArrowDown'); await t.wait(160);
+      t.assert(/Borrowed/.test(await inPage(t, () => document.querySelector('.shop-row.is-focus .sr-name')?.textContent ?? '')), 'ArrowDown moves the shop focus');
+      await focusItem(t, 'Fishbone');
+      t.log('forge done');
+      const fb = await inPage(t, () => document.querySelector('.shop-row.is-focus .sr-name')?.textContent);
+      t.assert(/Fishbone/.test(fb ?? ''), `focus on Fishbone (${fb})`);
+      await t.page.keyboard.press('Enter'); await t.wait(400);
+      t.assert((await inPage(t, () => window.__GAME__.ctx.state.cosmetics.sword)) === 'fishbone', 'Fishbone Sword equipped');
+      await t.wait(400);
+      await shot(t, '21-forge-skin');
+      await t.page.keyboard.press('Escape'); await t.wait(500);
+      const closed = await inPage(t, () => ({ closed: window.__shopClosed, mode: window.__GAME__.mode }));
+      t.assert(closed.closed && closed.mode === 'play', `Esc closes the shop and resumes (${closed.mode})`);
+      // ---- Bakery: Satchel I raises milkMax
+      const mm0 = await inPage(t, () => window.__GAME__.ctx.player.milkMax);
+      await inPage(t, () => { window.__GAME__.ctx.ui.openShop('bakery'); }); await t.wait(600);
+      await t.page.keyboard.press('Enter'); await t.wait(450); await t.page.keyboard.press('Enter'); await t.wait(400);
+      const bk = await inPage(t, () => ({ satchel: window.__GAME__.ctx.state.upgrades.satchel, milkMax: window.__GAME__.ctx.player.milkMax, fish: window.__GAME__.ctx.state.fish }));
+      t.assert(bk.satchel === 1 && bk.fish === 280, `Satchel I bought (${bk.satchel}, fish ${bk.fish})`);
+      t.assert(bk.milkMax > mm0, `milkMax rises ${mm0} → ${bk.milkMax}`);
+      await shot(t, '22-bakery');
+      await t.page.keyboard.press('Escape'); await t.wait(400);
+      // ---- Library: Holy Wave Reach is locked before Shard 2; a purchase without enough fish is refused
+      await inPage(t, () => { window.__GAME__.ctx.state.fish = 120; window.__GAME__.ctx.ui.openShop('library'); }); await t.wait(600);
+      const lib = await inPage(t, () => [...document.querySelectorAll('.shop-row.row--locked .sr-name')].map((e) => e.textContent));
+      t.assert(lib.some((n) => /Wave/.test(n)), `Holy Wave Reach locked without Shard 2 (${lib.join(',')})`);
+      await t.page.keyboard.press('Enter'); await t.wait(450); await t.page.keyboard.press('Enter'); await t.wait(300);
+      const lib2 = await inPage(t, () => ({ qc: window.__GAME__.ctx.state.upgrades.quickCharge, fish: window.__GAME__.ctx.state.fish }));
+      t.assert(lib2.qc === false && lib2.fish === 120, 'not enough fish: Quick Charge refused');
+      await fontAudit(t, 'library');
+      await shot(t, '23-library');
+      await t.page.keyboard.press('Escape'); await t.wait(400);
+      // ---- Wardrobe: buy + wear Order Blue (cream, red, memeWhite, blue)
+      await inPage(t, () => { window.__GAME__.ctx.state.fish = 200; window.__GAME__.ctx.ui.openShop('wardrobe'); }); await t.wait(600);
+      const wf = await inPage(t, () => document.querySelector('.shop-row.is-focus .sr-name')?.textContent);
+      await focusItem(t, 'Order Blue');
+      await t.page.keyboard.press('Enter'); await t.wait(450);
+      t.assert(await inPage(t, () => !!document.querySelector('.shop-row.is-armed .sr-name')?.textContent.includes('Order Blue')), 'Order Blue armed');
+      await t.page.keyboard.press('Enter'); await t.wait(500);
+      const wr = await inPage(t, () => ({ cape: window.__GAME__.ctx.state.cosmetics.cape, capes: window.__GAME__.ctx.state.cosmetics.capes, fish: window.__GAME__.ctx.state.fish }));
+      t.assert(wr.cape === 'blue' && wr.capes.includes('blue') && wr.fish === 120, `Order Blue bought and worn (${wr.cape}, fish ${wr.fish}, first focus ${wf})`);
+      await t.wait(300);
+      await shot(t, '24-wardrobe');
+      await t.page.keyboard.press('Escape'); await t.wait(400);
+      // ---- Lookout + Barracks
+      await inPage(t, () => { window.__GAME__.ctx.ui.openShop('lookout'); }); await t.wait(600);
+      t.assert((await inPage(t, () => document.querySelectorAll('.look-card').length)) === 6, 'lookout lists 6 regions');
+      await shot(t, '25-lookout');
+      await t.page.keyboard.press('Escape'); await t.wait(400);
+      await inPage(t, () => window.__GAME__.ctx.bus.emit(window.__GAME__.E.INTERACT, { target: { id: 'barracks_banner', kind: 'banner' } })); await t.wait(600);
+      t.assert(await inPage(t, () => !!document.querySelector('.shop--barracks.is-on') && document.querySelectorAll('.vigil-kit').length === 2), 'interacting with the banner opens the companion swap');
+      await t.page.keyboard.press('Escape'); await t.wait(400);
+      // ---- Quest Board: cards, Next, replay
+      await inPage(t, () => { window.__boardPick = 'pending'; window.__GAME__.ctx.ui.openQuestBoard({ onPick: (id, p) => { window.__boardPick = p; } }); });
+      await t.wait(700);
+      const qb = await inPage(t, () => ({ cards: document.querySelectorAll('.qcard').length, cleared: document.querySelectorAll('.qcard.is-cleared').length,
+        closed: document.querySelectorAll('.qcard.is-closed').length,
+        btn: document.querySelector('.board-next')?.textContent, focus: document.querySelector('.menu--board .is-focus')?.textContent }));
+      t.assert(qb.cards === 6 && qb.cleared === 2, `board: ${qb.cards} cards, ${qb.cleared} cleared`);
+      t.assert(qb.closed === 3, `here + 2 unreached cards closed (${qb.closed})`);
+      t.assert(/Chapter 4/.test(qb.btn ?? ''), `Next button names chapter 4 (${qb.btn})`);
+      t.assert(/Next/.test(qb.focus ?? ''), `board opens focused on Next (${qb.focus})`);
+      await fontAudit(t, 'board');
+      await shot(t, '26-quest-board');
+      await t.page.keyboard.press('ArrowUp'); await t.wait(200);
+      t.assert(await inPage(t, () => !!document.querySelector('.qcard.is-focus')), 'ArrowUp from Next reaches the cards');
+      await focusItem(t, 'Small Paws');
+      const foc = await inPage(t, () => document.querySelector('.qcard.is-focus .qc-title')?.textContent);
+      await t.page.keyboard.press('Enter'); await t.wait(500);
+      const pick = await inPage(t, () => ({ pick: window.__boardPick, mode: window.__GAME__.mode }));
+      t.assert(pick.pick && pick.pick.levelId === 'meadow' && pick.pick.replay === true, `board picks the meadow replay (focus ${foc}, ${JSON.stringify(pick.pick)})`);
+      t.assert(pick.mode === 'play', `board closes into play (${pick.mode})`);
+      // without onPick the ui travels: Next → gate (the town's first exit shows its results first)
+      await t.clearEvents();
+      await inPage(t, () => { window.__GAME__.ctx.ui.openQuestBoard(); }); await t.wait(600);
+      await t.page.keyboard.press('Enter');
+      const went = await t.waitForEvent('level:loaded', 60000);
+      const at = await inPage(t, () => window.__GAME__.ctx.levels.current?.id);
+      t.assert(went && at === 'gate', `Next travels to the gate (${at})`);
+      t.assert(await inPage(t, () => window.__GAME__.events.includes('level:results')), 'the town exit shows its results card');
+    },
+  },
+  {
+    // M2: boss bar (medallion, phase pips, Dizzy + crit label), The Line objective with milestones, results bests, the
+    // controls card, the language placeholder and settings reset.
+    name: 'ui:m2hud', order: 47, level: 'gate', spawn: 'start', timeout: 90000,
+    async run(t) {
+      await inPage(t, () => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E;
+        g.god(true);
+        const boss = { hp: 420, maxHp: 1200, alive: true, pos: ctx.player.pos.clone(), type: 'boss_cacklejaw' };
+        window.__uiBoss = boss;
+        ctx.bus.emit(E.BOSS_START, { boss, id: 'cacklejaw', name: 'WARCHIEF CACKLEJAW', maxHp: 1200, phases: [1, 0.6, 0.3], dizzyMax: 100 });
+        ctx.bus.emit(E.BOSS_DIZZY, { boss, value: 100, max: 100, dizzy: true });
+        ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 64, max: 100, textKey: 'obj.line', frozen: false, done: false, marks: [0.2, 0.45, 0.7, 0.85] });
+      });
+      await t.wait(900);
+      const h = await inPage(t, () => ({ boss: !!document.querySelector('.hud-boss.is-on .boss-face svg'), dizzy: document.querySelector('.dizzy-lbl')?.textContent,
+        obj: document.querySelector('.obj-txt')?.textContent, marks: document.querySelectorAll('.obj-marks i').length, gold: document.querySelectorAll('.obj-marks i.f').length }));
+      t.assert(h.boss, 'boss bar with a medallion portrait');
+      t.assert(/DIZZY/.test(h.dizzy ?? ''), `dizzy label (${h.dizzy})`);
+      t.assert(/64%/.test(h.obj ?? ''), `The Line text (${h.obj})`);
+      t.assert(h.marks === 4 && h.gold === 2, `line milestones ${h.gold}/${h.marks}`);
+      await fontAudit(t, 'm2hud');
+      await shot(t, '27-boss-line');
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.OBJECTIVE, { id: 'line', value: 64, max: 100, textKey: 'obj.line', frozen: true, done: false }); });
+      await t.wait(200);
+      t.assert(await inPage(t, () => document.querySelector('.hud-obj')?.classList.contains('is-frozen')), 'frozen objective styled');
+      await inPage(t, () => { window.__uiBoss.alive = false; });   // the bar leaves by itself (no boss:defeated: that would start CS-09)
+      // results against a previous best → ribbons + best line
+      await inPage(t, () => {
+        const ui = window.__GAME__.ctx.ui;
+        ui._levelStart = { id: 'gate', rec: { cleared: true, bestRank: 'purrfect', bestTime: 1500 } };
+        ui.results.autoContinue = false;
+        ui.showResults({ levelId: 'gate', time: 1320, kittens: 3, kittensTotal: 3, letter: true, fish: 210, lives: 9, livesLost: 0, rank: 'pawsome' });
+      });
+      await t.wait(2600);
+      const rb = await inPage(t, () => ({ r: [...document.querySelectorAll('.res-ribbon')].map((e) => e.textContent), best: document.querySelector('.res-best')?.textContent }));
+      t.assert(rb.r.length === 2, `results ribbons: ${rb.r.join(', ')}`);
+      t.assert(/22:00|Paw-some/.test(rb.best ?? ''), `best line (${rb.best})`);
+      await shot(t, '28-results-best');
+      await t.page.keyboard.press('Enter'); await t.wait(400);
+      await inPage(t, () => { window.__GAME__.ctx.ui.results.autoContinue = true; });
+      // settings: language placeholder, controls card, reset to defaults
+      await inPage(t, () => { window.__GAME__.ctx.state.settings.shake = 0.3; window.__GAME__.ctx.ui.pause(); window.__GAME__.ctx.ui.menus.openSettings(); });
+      await t.wait(500);
+      t.assert(await inPage(t, () => !!document.querySelector('.srow--lang')), 'language placeholder row');
+      await inPage(t, () => window.__GAME__.ctx.ui.menus.openControls()); await t.wait(500);
+      t.assert((await inPage(t, () => document.querySelectorAll('.ctl-row').length)) >= 13, 'controls card rows');
+      await fontAudit(t, 'controls');
+      await shot(t, '29-controls');
+      await t.page.keyboard.press('Escape'); await t.wait(300);
+      await inPage(t, () => { const s = window.__GAME__.ctx.ui.menus.top; s.items.find((it) => /Reset/.test(it.el.textContent)).activate(); });
+      await t.wait(400);
+      await inPage(t, () => { const s = window.__GAME__.ctx.ui.menus.top; s.items[0].activate(); });   // "Yes"
+      await t.wait(300);
+      t.assert((await inPage(t, () => window.__GAME__.ctx.state.settings.shake)) === 1, 'reset restores shake to 100%');
+      await inPage(t, () => window.__GAME__.ctx.ui.resume()); await t.wait(400);
+      const endMode = await inPage(t, () => window.__GAME__.mode + ' ' + window.__GAME__.ctx.ui.menus.stack.map((x) => x.id).join('/'));
+      t.assert(/^play/.test(endMode), `back to play (${endMode})`);
     },
   },
 ];

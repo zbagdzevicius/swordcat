@@ -69,6 +69,7 @@ export class MemeCamTrigger {
   /** Meme Cam must not interrupt: the tutorial is running, she is on the practice field, or near a kitten's Stand zone. */
   suppressed() {
     const p = this.player, ctx = p.ctx;
+    if (p.golden || p.goldenActivating) return true;                     // never mid Golden Hour
     if (ctx.story?.tutorial?.active) return true;
     if (ctx.levels?.current?.id === 'meadow' && inPractice(p.pos.x, p.pos.z)) return true;
     let kittens = [];
@@ -86,6 +87,7 @@ export class MemeCamTrigger {
   canIdleTrigger() {
     const ctx = this.player.ctx, cfg = PLAYER.memeCam;
     if (ctx.levels?.current?.indoor) return false;
+    if (ctx.levels?.current?.arenas?.some?.((a) => a.locked)) return false;   // never mid-fight (requests/world.md)
     const fog = ctx.env?.fogDensity ?? ctx.scene?.fog?.density ?? 0;
     if (fog < cfg.minFog) return false;
     return !this._enemyWithin(cfg.noEnemyRadius, true);

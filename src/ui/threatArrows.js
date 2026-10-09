@@ -45,7 +45,7 @@ export class ThreatArrows {
     this.radius = TELEGRAPH.arrowRadius ?? 15;
     this.arrows = [];
     for (let i = 0; i < this.max; i++) {
-      const a = el('div', 'ui-arrow', { html: chevron(), parent: this.root });
+      const a = el('div', 'ui-arrow', { html: chevron() + '<i class="arrow-pat"></i>', parent: this.root });
       this.arrows.push(a);
     }
     /** kitten pings: { pos: Vector3, t } */
@@ -79,6 +79,9 @@ export class ThreatArrows {
     const ctx = this.ctx, cam = ctx.camera, p = ctx.player;
     const w = window.innerWidth, h = window.innerHeight;
     const cand = this._cand; cand.length = 0;
+    const set = ctx.state?.settings;
+    this.patterns = !!set?.patterns;
+    flag(this.root, 'is-calm', !!set?.reduceFlashes);
     for (const [id, tl] of this.tells) {
       tl.t += dt;
       const a = tl.actor;
@@ -101,6 +104,9 @@ export class ThreatArrows {
       const col = ARROW_COLORS[c.kind] ?? '#FFFFFF';
       if (e._col !== col) { e._col = col; e.style.color = col; }
       flag(e, 'is-red', c.kind === 'red');
+      // §14.4 accessibility: the optional pattern overlay (stripes for red, dots for gold) and no pulsing with reduce flashes
+      flag(e, 'pat-stripes', this.patterns && (c.kind === 'red' || c.kind === 'aoe'));
+      flag(e, 'pat-dots', this.patterns && c.kind === 'gold');
       place(e, ep.x, ep.y, ` rotate(${(ep.angle * 180 / Math.PI).toFixed(1)}deg) scale(${(1.25 - Math.min(1, c.d / this.radius) * 0.45).toFixed(2)})`);
     }
     // kitten pings (3 s)

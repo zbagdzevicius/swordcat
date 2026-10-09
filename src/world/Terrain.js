@@ -124,6 +124,8 @@ export class Terrain {
       const dx = Math.max(x0 - x, 0, x - x1), dz = Math.max(z0 - z, 0, z - z1), d = Math.hypot(dx, dz);
       if (d < f) h = h + (k.h - h) * (1 - d / f);
     }
+    // a level's own final shaping (the gate: tidal sea bed, causeway deck, shores, the stair ledge)
+    if (typeof this.def.shape === 'function') h = this.def.shape(x, z, h, this);
     return h;
   }
 
@@ -151,6 +153,7 @@ export class Terrain {
       }
       const patch = valueNoise(x * 0.07, z * 0.07, this.seed + 21);
       dens *= 0.75 + 0.25 * smooth(0.18, 0.4, patch);          // a few thinner, mossy patches
+      if (typeof this.def.grassMask === 'function') dens *= Math.max(0, Math.min(1, this.def.grassMask(x, z, hgt[i])));
       this.density[i] = dens;
       const tall = valueNoise(x * 0.11, z * 0.11, this.seed + 33);
       this.hmul[i] = 0.85 + 0.9 * smooth(0.62, 0.85, tall) + 0.25 * (valueNoise(x * 0.9, z * 0.9, this.seed + 34) - 0.5);
@@ -232,6 +235,7 @@ export class Terrain {
     if (pwgt > 0) { _c.setRGB(this.paint[o], this.paint[o + 1], this.paint[o + 2]); out.lerp(_c, pwgt); }
     // very slight darkening in hollows (cheap AO)
     const h = this.heightfield.h[i];
+    if (typeof this.def.groundColor === 'function') this.def.groundColor(x, z, h, out);
     out.multiplyScalar(0.92 + 0.08 * smooth(-1.5, 1.5, h));
     return out;
   }

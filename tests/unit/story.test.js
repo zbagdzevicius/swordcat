@@ -23,6 +23,7 @@ import { CS03_MARKS, NET } from '../../src/story/cutscenes/cs03.js';
 import { titlePulse, TITLE_PULSE } from '../../src/story/cutscenes/cs00.js';
 import { glyphs, revealHtml, visibleLength } from '../../src/story/Overlay.js';
 import { say, along, unit, yawOf } from '../../src/story/cutscenes/lib.js';
+import { CUES } from '../../src/audio/cues.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -31,7 +32,7 @@ const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 test('strings: t / has / fill / text / speakerName; missing keys come back as the key', () => {
   assert.equal(t('cs03.1'), 'Day one of rescuing everyone. Morale: high.');
   assert.equal(t('nope.key'), 'nope.key');
-  assert.equal(t('toast.kitten', { n: 3 }), 'Lost kitten found! (3/18)');
+  assert.equal(t('toast.kitten', { n: 2, max: 3 }), 'Lost kitten found! (2/3)');   // M2: the level count, like the HUD
   assert.equal(fill('{a}-{b}', { a: 1 }), '1-{b}');
   assert.ok(has('ch.prologue') && !has('ch.zzz'));
   assert.equal(text('cs01.caption'), 'Meow Island. The eve of Knighting Day.');
@@ -53,6 +54,8 @@ test('U14: with HOMAGE_LINES = false no homage text is reachable', () => {
 });
 
 /** Flags (§19.7) and other dotted names that are not strings keys. */
+/** Files whose dotted ids are sound ids, not strings keys (audio's cue sheets `cs09.roar`, shop sounds `shop.open`…). */
+const CUE_FILES = { has: (rel) => rel.startsWith('src/audio/') };
 const NOT_KEYS = /^(prologue|meadow|forest|town|gate|bog|keep|ending|seen|story)\.(armour|tutorial|done|pudding|mochi|sage|camp|boss|marmalade|letters|tofu|earlgrey|clover|free|pip|pin|line|pearl|keys|brutus|seen|card|gate)\b/;
 const KEY_RE = /['"`]((?:tut|obj|prompt|toast|bark|kitten|hub|letter|ch|region|name|menu|pause|settings|results|life|gameover|loading|meme|ach|shop|board|difficulty|vigil|hud|credits|title|game|newgame|memecam|rotate|cs\d\d[a-z]?|g\d\d|d\d\d|grizzlechop|cacklejaw|pilfer|brutus|barkus|postcredits|ending)\.[\w.]*\w)['"`]/g;
 
@@ -62,9 +65,9 @@ test('U14: every strings key used anywhere in src/ exists in strings.js', () => 
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (p.endsWith('.js')) for (const m of fs.readFileSync(p, 'utf8').matchAll(KEY_RE)) {
+      else if (p.endsWith('.js') && !CUE_FILES.has(path.relative(ROOT, p).split(path.sep).join('/'))) for (const m of fs.readFileSync(p, 'utf8').matchAll(KEY_RE)) {
         const k = m[1];
-        if (!has(k) && !NOT_KEYS.test(k)) missing.push(`${path.relative(ROOT, p)}: ${k}`);
+        if (!has(k) && !NOT_KEYS.test(k) && !CUES[k]) missing.push(`${path.relative(ROOT, p)}: ${k}`);
       }
     }
   };
@@ -94,7 +97,7 @@ test('U13: registry ids match, only known step types, every say key exists, ever
     for (const k of Object.keys(def.end)) assert.ok(END_KEYS.includes(k), `${id}: end key ${k}`);
     walkSteps(def.steps, (s, p) => {
       assert.ok(s && STEP_TYPES.includes(s.t), `${id} ${p}: step type ${s?.t}`);
-      if (s.t === 'say') { assert.ok(has(s.key), `${id} ${p}: say key ${s.key}`); assert.ok(typeof s.who === 'string', `${id} ${p}: who`); }
+      if (s.t === 'say') { assert.ok(has(s.key), `${id} ${p}: say key ${s.key}`); assert.ok(typeof s.who === 'string' || typeof s.who === 'function', `${id} ${p}: who`); }
       if (s.t === 'ui') {
         for (const f of ['caption', 'press']) if (typeof s[f] === 'string') assert.ok(has(s[f]), `${id} ${p}: ${f} ${s[f]}`);
         if (s.title?.text) assert.ok(has(s.title.text), `${id} ${p}: title`);
@@ -109,7 +112,7 @@ test('U13: every scene turns the letterbox off and hands the camera back (ambien
   for (const [id, def] of ALL) {
     assert.notEqual(def.end.ui?.letterbox, true, `${id}: letterbox stays on`);
     if (def.kind === 'ambient') { assert.equal(def.end.cam, false, `${id}: ambient leaves the camera alone`); continue; }
-    assert.ok(def.end.cam === 'follow' || (def.end.cam === false && def.end.play), `${id}: camera handback (end.cam ${def.end.cam})`);
+    assert.ok(def.end.cam === 'follow' || def.end.cam?.mode === 'follow' || (def.end.cam === false && def.end.play), `${id}: camera handback (end.cam ${def.end.cam})`);
     for (const k of def.end.toasts ?? []) assert.ok(has(k), `${id}: toast ${k}`);
   }
 });
@@ -134,8 +137,8 @@ test('placeholders: later-milestone scenes apply their §5.4 end state; boss sce
     assert.equal(def.id, id); assert.ok(def.placeholder); assert.equal(def.end.cam, 'follow');
     for (const [k, v] of Object.entries(row.flags ?? {})) assert.equal(def.end.flags[k], v);
   }
-  assert.equal(placeholderScene('cs05').end.shards, 1);
-  assert.equal(placeholderScene('cs09').end.play, 'cs10');
+  for (const id of ['cs05', 'cs09', 'cs10', 'd02', 'cs04', 'd03', 'cs06', 'cs07', 'd06', 'cs08', 'g02']) assert.ok(!PLACEHOLDER_ENDS[id], `${id} is authored (M2)`);
+  assert.equal(placeholderScene('cs12').end.flags['bog.done'], true);
   assert.equal(typeof placeholderScene('cs15').end.call, 'function');
   assert.deepEqual(BOSS_SCENES, { grizzlechop: 'cs05', cacklejaw: 'cs09', brutus: 'd05' });
 });
@@ -304,17 +307,16 @@ test('StoryManager: play() while a scene runs queues the next one; end.play chai
   ctx.bus.on(E.CUTSCENE_START, (p) => order.push(p.id));
   story.registry = { ...story.registry, q1: { id: 'q1', steps: [{ t: 'wait', dur: 0.2 }], end: { cam: 'follow' } } };
   story.play('q1');
-  story.play('cs05');                                 // placeholder, queued
+  story.play('cs11');                                 // placeholder, queued
   await run(ctx, story, 0.25);
-  assert.deepEqual(order, ['q1', 'cs05']);
+  assert.deepEqual(order, ['q1', 'cs11']);
   await run(ctx, story, 0.4);
-  assert.equal(ctx.state.getFlag('forest.boss'), true);
-  assert.equal(ctx.state.shards, 1);
-  // CS-09 placeholder chains CS-10
-  story.play('cs09');
+  assert.equal(ctx.state.getFlag('bog.pearl'), true);
+  // CS-15 placeholder chains CS-16
+  story.play('cs15');
   await run(ctx, story, 1.0);
-  assert.ok(order.includes('cs09') && order.includes('cs10'), `chained (${order})`);
-  assert.equal(ctx.state.getFlag('gate.done'), true);
+  assert.ok(order.includes('cs15') && order.includes('cs16'), `chained (${order})`);
+  assert.equal(ctx.state.getFlag('ending.seen'), true);
   assert.equal(ctx.game.mode, 'play');
   // a boss defeat starts its scene
   ctx.bus.emit(E.BOSS_DEFEATED, { id: 'boss_grizzlechop' });
@@ -500,13 +502,14 @@ test('every cutscene sfx id resolves in the audio manifest / SFX map', async () 
   const { default: manifest } = await import('../../src/audio/assets.manifest.js');
   const { buildIndex, resolveId } = await import('../../src/audio/ids.js');
   const { SFX } = await import('../../src/audio/sfxMap.js');
+  const { CUES } = await import('../../src/audio/cues.js');
   const index = buildIndex(manifest);
   const PROCEDURAL = new Set(['laugh', 'laughChorus', 'bell', 'sunbell', 'bellClunk', 'heartbeat', 'march', 'shimmer']);   // AudioManager.js header
   const bad = [];
   for (const [id, def] of Object.entries(CUTSCENES)) {
     walkSteps(def.steps, (s, p) => {
       if (s?.t !== 'sfx' || typeof s.id !== 'string') return;
-      if (!PROCEDURAL.has(s.id) && !SFX[s.id] && !resolveId(s.id, index, () => 0)) bad.push(`${id} ${p}: ${s.id}`);
+      if (!PROCEDURAL.has(s.id) && !SFX[s.id] && !CUES[s.id] && !resolveId(s.id, index, () => 0)) bad.push(`${id} ${p}: ${s.id}`);
     });
   }
   assert.deepEqual(bad, []);
@@ -529,4 +532,234 @@ test('§6.6: tut.riposte hint waits for a melee parry (a reflected bolt has no r
   assert.ok(!h.when(ctx, { projectile: {}, perfect: true }), 'bolt reflect must not trigger');
   assert.ok(h.when(ctx, { attacker: {}, perfect: true }), 'melee parry triggers');
   assert.ok(!h.when({ state: { getFlag: () => false } }, { attacker: {} }), 'not before prologue.done');
+});
+
+// ====================================================================================================== M2: Acts I–II
+import { spoonRows, spoonSpeakers, arcPoint } from '../../src/story/cutscenes/cast.js';
+import { QUESTS, currentQuest, nextLevel, levelAvailable, levelCards, nextLabel } from '../../src/story/quests.js';
+import { hubLine, hubCandidates, missingKittens, HUB_LINES } from '../../src/story/dialogue/hub.js';
+import { lineBeat, LINE_BEATS } from '../../src/story/StoryManager.js';
+import { KITTEN_IDS } from '../../src/core/config.js';
+
+const M2_FLAGS = {
+  d02: { 'forest.sage': true }, cs04: { 'forest.camp': true }, cs05: { 'forest.boss': true }, d03: { 'town.marmalade': true },
+  cs06: { 'town.letters': true }, d04tofu: { 'town.tofu': true }, d04earlgrey: { 'town.earlgrey': true }, d04clover: { 'town.clover': true },
+  cs07: { 'town.free': true }, d06: { 'gate.pip': true }, cs08: { 'gate.spoons': true }, g02: { 'gate.leap': true }, cs09: { 'gate.boss': true },
+  cs10: { 'gate.done': true }, gate_pin: { 'gate.pin': true }, gate_open: { 'gate.line': true }, gate_yard: { 'gate.yard': true },
+};
+
+test('M2: CS-04…CS-10, D-02…D-06, G-02 are authored and set their §19.7 flags; shards, unlocks, chains', () => {
+  for (const [id, flags] of Object.entries(M2_FLAGS)) {
+    const def = CUTSCENES[id];
+    assert.ok(def, `${id} authored`);
+    for (const [k, v] of Object.entries(flags)) assert.equal(def.end.flags?.[k], v, `${id}: ${k}`);
+  }
+  assert.equal(CUTSCENES.cs05.end.shards, 1);
+  assert.equal(CUTSCENES.cs09.end.shards, 2);
+  assert.deepEqual(CUTSCENES.cs09.end.unlock, [{ kind: 'ability', id: 'golden' }]);
+  assert.equal(CUTSCENES.cs09.end.play, 'cs10');
+  assert.deepEqual(CUTSCENES.cs07.end.unlock, [{ kind: 'cape', id: 'red' }]);
+  assert.equal(CUTSCENES.cs07.results, 'town', 'town ends in CS-07: results, no load');
+  assert.equal(CUTSCENES.cs07.end.load, undefined);
+  assert.equal(typeof CUTSCENES.cs10.end.load, 'function', 'CS-10 loads town only when skipped before its own load');
+  assert.equal(CUTSCENES.cs10.end.player.spawn, 'hub');
+  assert.equal(CUTSCENES.cs10.end.env, 'hub_grey');
+  assert.equal(CUTSCENES.cs04.end.env, 'forest_night');
+  assert.equal(CUTSCENES.g02.letterbox, false, 'G-02 has no letterbox');
+  assert.equal(CUTSCENES.d03.end.objective.id, 'chase');
+  for (const id of ['d02', 'd03', 'd04tofu', 'd04earlgrey', 'd04clover', 'd06', 'gate_yard']) assert.equal(CUTSCENES[id].kind, 'dialog', id);
+  for (const id of ['gate_back', 'gate_pin', 'gate_open']) assert.equal(CUTSCENES[id].kind, 'ambient', id);
+  // never-cut CS-08: its five shots in order
+  const presets = []; walkSteps(CUTSCENES.cs08.steps, (s) => { if (s.t === 'cam' && s.preset) presets.push(s.preset); });
+  assert.deepEqual(presets.slice(0, 5), ['MEME_LOOP', 'REVERSE_HORDE', 'ECU_EYES', 'PULLBACK', 'TWO_SHOT_LOW']);
+});
+
+test('CS-08: spoon kittens — max(3, rescued) capped at 18, rows of 6 at 1 m, 2.5 m behind her; villagers fill in', () => {
+  const none = spoonRows([], [0, 10], Math.PI);
+  assert.equal(none.length, 3);
+  assert.ok(none.every((r) => r.kittenId === null && r.npc.startsWith('villager_')), 'never a kitten that is still lost');
+  for (const r of none) assert.ok(r.at[1] > 10 + 2.4, `behind her (she faces −Z): ${r.at}`);
+  assert.ok(Math.abs(none[0].at[1] - 12.5) < 1e-9, 'first row 2.5 m behind');
+  const five = spoonRows(['biscuit', 'noodle', 'nope', 'button', 'pickles', 'pebble'], [0, 10], Math.PI);
+  assert.equal(five.length, 5, 'unknown ids are ignored');
+  assert.deepEqual(five.slice(0, 2).map((r) => r.kittenId), ['biscuit', 'noodle']);
+  const all = spoonRows([...KITTEN_IDS, ...KITTEN_IDS], [0, 10], Math.PI);
+  assert.equal(all.length, 18, 'capped at 18');
+  const rows = new Map(); for (const r of all) rows.set(r.row, (rows.get(r.row) ?? 0) + 1);
+  assert.deepEqual([...rows.values()], [6, 6, 6]);
+  const r0 = all.filter((r) => r.row === 0).map((r) => r.at[0]).sort((a, b) => a - b);
+  for (let i = 1; i < r0.length; i++) assert.ok(Math.abs(r0[i] - r0[i - 1] - 1.0) < 1e-9, '1.0 m spacing');
+  assert.ok(Math.abs(all.find((r) => r.row === 1).at[1] - 13.5) < 1e-9, 'rows 1 m apart');
+  const sp = spoonSpeakers(five);
+  assert.deepEqual(sp.map((s) => s.name), ['name.biscuit', 'name.noodle']);
+  assert.equal(spoonSpeakers(none)[0].name, 'name.villager');
+  const p = arcPoint({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, 0.5, 2);
+  assert.ok(Math.abs(p.x - 5) < 1e-9 && Math.abs(p.y - 2) < 1e-9, 'arc peaks at h mid-way');
+});
+
+/** A GameState-like with flags. */
+const fstate = (flags = {}, extra = {}) => ({ flags: { ...flags }, getFlag(k) { return this.flags[k]; }, kittens: [], letters: [], levels: {}, ...extra });
+
+test('quests: the current step follows the flags level by level; Quest Board next level and cards', () => {
+  assert.equal(currentQuest(fstate(), 'meadow').id, 'prologue');
+  assert.equal(currentQuest(fstate({ 'prologue.done': true }), 'meadow').id, 'meadow.follow');
+  assert.equal(currentQuest(fstate({ 'prologue.done': true, 'meadow.pudding': 'netted' }), 'meadow').id, 'meadow.pudding');
+  const forest = fstate({ 'prologue.done': true, 'meadow.pudding': true, 'meadow.mochi': true, 'meadow.done': true });
+  assert.equal(currentQuest(forest, 'forest').id, 'forest.sage');
+  forest.flags['forest.sage'] = true; assert.equal(currentQuest(forest, 'forest').id, 'forest.camp');
+  forest.flags['forest.camp'] = true; assert.equal(currentQuest(forest, 'forest').id, 'forest.mill');
+  const hub = fstate({ 'meadow.done': true, 'forest.done': true, 'town.marmalade': true, 'town.letters': true, 'town.clover': true, 'town.earlgrey': true, 'town.free': true, 'town.done': true });
+  assert.equal(currentQuest(hub, 'town').id, 'hub-gate');
+  assert.ok(currentQuest(hub, 'town').text.length > 3);
+  assert.equal(nextLevel(fstate()), 'meadow');
+  assert.equal(nextLevel(hub), 'gate');
+  assert.equal(nextLevel(fstate({ 'town.free': true, 'meadow.done': true, 'forest.done': true })), 'gate', 'town counts as done at town.free');
+  assert.equal(levelAvailable(hub, 'gate'), true);
+  assert.equal(levelAvailable(fstate({ 'forest.done': true }), 'gate'), false, 'the gate needs town.free');
+  assert.equal(levelAvailable(hub, 'bog'), false);
+  const cards = levelCards({ ...hub, kittens: ['biscuit', 'noodle'], letters: ['l1'], levels: { meadow: { cleared: true, bestRank: 'pawsome' } } });
+  assert.equal(cards.length, 6);
+  assert.deepEqual([cards[0].kittens, cards[0].kittensMax, cards[0].letter, cards[0].bestRank], [2, 3, true, 'pawsome']);
+  assert.equal(cards.find((c) => c.next).id, 'gate');
+  assert.equal(nextLabel(hub), 'Next: Where I Stand');
+  for (const q of QUESTS) assert.ok(has(q.textKey), q.textKey);
+});
+
+test('§6.5 hub lines: two per station, no repeat in a row; Marmalade in bed after L4; Pip counts the missing kittens', () => {
+  for (const keys of Object.values(HUB_LINES)) for (const k of keys) assert.ok(has(k), k);
+  const st = fstate({ 'town.free': true });
+  const a = hubLine('tofu', st, () => 0), b = hubLine('tofu', st, () => 0, a.key);
+  assert.notEqual(a.key, b.key, 'never the same line twice in a row');
+  assert.equal(hubLine('marmalade', fstate({ 'gate.done': true }), () => 0.9).key, 'hub.marmalade.bed');
+  assert.notEqual(hubLine('marmalade', st, () => 0).key, 'hub.marmalade.bed');
+  const pip = hubLine('pip', { ...st, kittens: ['biscuit', 'noodle', 'button', 'pickles'] }, () => 0);
+  assert.equal(pip.key, 'hub.pip.1');
+  assert.ok(/^2 kittens still out in Whiskerwood/.test(pip.text), pip.text);
+  assert.deepEqual(missingKittens({ kittens: [...KITTEN_IDS] }), null);
+  assert.equal(hubCandidates('pip', { ...st, kittens: [...KITTEN_IDS] })[0].key, 'hub.pip.2');
+  assert.equal(hubLine('biscuit', st).key, 'kitten.biscuit', 'a rescued kitten says its own line');
+  assert.ok(HUB_LINES.villager.includes(hubLine('villager_7', st, () => 0.5).key));
+  assert.equal(hubLine('nobody_at_all_x', st), null);
+});
+
+test('The Line beats: 70% → CS-08 (pre-roll waits for ≤ 2 alive / no telegraph, ≤ 10 s), 85% → G-02, 100% → the gate test', async () => {
+  assert.equal(lineBeat(0.69, () => false), null);
+  assert.equal(lineBeat(0.70, () => false).id, 'cs08');
+  assert.equal(lineBeat(0.9, (b) => b.id === 'cs08').id, 'g02');
+  assert.equal(LINE_BEATS.length, 2);
+  const { ctx, story } = storyCtx();
+  story.fastDialog = true;
+  ctx.levels.current.id = 'gate';
+  const foes = [0, 1, 2].map(() => ({ alive: true, faction: 'enemy', pos: new THREE.Vector3() }));
+  ctx.enemies = { list: foes, despawn(e) { const i = foes.indexOf(e); if (i >= 0) foes.splice(i, 1); } };
+  await story.init();
+  const started = [];
+  ctx.bus.on(E.CUTSCENE_START, (p) => started.push(p.id));
+  ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 70, max: 100 });
+  assert.equal(story.preroll?.id, 'cs08');
+  await run(ctx, story, 0.5);
+  assert.deepEqual(started, [], '3 alive: CS-08 waits');
+  foes.pop();
+  await run(ctx, story, 0.1);
+  assert.deepEqual(started, ['cs08'], '≤ 2 alive: CS-08 starts');
+  ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 71, max: 100 });
+  story.play('cs08');                                     // world's own request is merged
+  await run(ctx, story, 3);
+  story.skipAll();
+  await run(ctx, story, 0.2);
+  assert.equal(started.filter((s) => s === 'cs08').length, 1, 'one CS-08');
+  assert.equal(ctx.state.getFlag('gate.spoons'), true);
+  ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 86, max: 100 });
+  await run(ctx, story, 0.1);
+  assert.equal(started.at(-1), 'g02');
+  story.skipAll(); await run(ctx, story, 0.2);
+  ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 100, max: 100, done: true });
+  await run(ctx, story, 0.1);
+  assert.equal(started.at(-1), 'gate_open');
+  // the pre-roll gives up waiting after 10 s
+  const s2 = storyCtx(); s2.ctx.levels.current.id = 'gate';
+  s2.ctx.enemies = { list: [1, 2, 3, 4].map(() => ({ alive: true, faction: 'enemy', pos: new THREE.Vector3() })), despawn() {} };
+  await s2.story.init();
+  s2.ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 0.75, max: 1 });
+  await run(s2.ctx, s2.story, 9.8);
+  assert.equal(s2.story.playingId, null);
+  await run(s2.ctx, s2.story, 0.4);
+  assert.equal(s2.story.playingId, 'cs08');
+});
+
+test('M2 beats: bakery clear → D-03; post bag returned → CS-06; D-04 picks the next rescue; CS-09 → CS-10 → the hub', async () => {
+  const { ctx, story } = storyCtx();
+  story.fastDialog = true;
+  ctx.levels.current.id = 'town';
+  await story.init();
+  const started = [], quests = [];
+  ctx.bus.on(E.CUTSCENE_START, (p) => started.push(p.id));
+  ctx.bus.on(E.QUEST_UPDATE, (p) => quests.push(p));
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'bakery' });
+  assert.equal(story.playingId, 'd03');
+  await run(ctx, story, 12);
+  assert.equal(ctx.state.getFlag('town.marmalade'), true);
+  assert.ok(ctx.objectives.started.some(([id]) => id === 'chase'), 'the chase objective');
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'bakery' });
+  assert.equal(story.playingId, null, 'once');
+  ctx.bus.emit(E.ITEM_RETURNED, { item: 'post_bag', amount: 1 });
+  assert.equal(story.playingId, 'cs06');
+  story.skipAll(); await run(ctx, story, 0.3);
+  assert.equal(ctx.state.getFlag('town.letters'), true);
+  assert.ok(quests.some((q) => q.questId === 'town.chase' && q.state === 'done'), 'quest:update done');
+  assert.equal(story.quest.id, 'town.rescue');
+  story.play('d04'); assert.equal(story.playingId, 'd04tofu');
+  story.skipAll(); await run(ctx, story, 0.2);
+  story.play('d04'); assert.equal(story.playingId, 'd04earlgrey');
+  story.skipAll(); await run(ctx, story, 0.2);
+  ctx.levels.current.id = 'gate';
+  ctx.levels.results = () => ({ levelId: 'gate', time: 1, kittens: 0, letter: false, fish: 0, lives: 9, rank: 'pawsome' });
+  const results = [];
+  ctx.bus.on(E.LEVEL_RESULTS, (p) => results.push(p.levelId));
+  ctx.bus.emit(E.BOSS_DEFEATED, { id: 'boss_cacklejaw' });
+  assert.equal(story.playingId, 'cs09');
+  story.skipAll(); await run(ctx, story, 0.5);
+  assert.equal(ctx.state.shards, 2);
+  assert.ok(started.includes('cs10'), 'CS-10 follows');
+  story.skipAll(); await run(ctx, story, 0.5);
+  assert.equal(ctx.state.getFlag('gate.done'), true);
+  assert.deepEqual(ctx.levels.loaded, ['town', 'hub'], 'skipped CS-10 still lands in the hub');
+  assert.deepEqual(results, ['gate'], 'the Chapter 4 results card');
+  assert.equal(ctx.state.levels.gate.cleared, true);
+});
+
+test('runner (M2): dynamic `who` / `name`, `{anchor, or}` points, end.load as a function, the letter card', async () => {
+  const { ctx, story } = storyCtx();
+  await story.init();
+  const lines = [];
+  ctx.bus.on(E.DIALOG_LINE, (p) => lines.push([p.speaker, p.name]));
+  story.fastDialog = true;
+  story.registry = { ...story.registry, t9: { id: 't9', steps: [
+    { t: 'actor', id: 'swordcat', moveTo: { anchor: 'nope', or: [3, 0] }, speed: 6 },
+    { t: 'say', who: () => 'biscuit', name: () => 'name.biscuit', key: 'cs08.4' },
+    { t: 'ui', letter: { key: 'letter.marmalade', title: 'letter.marmalade.title' } },
+    { t: 'wait', dur: 0.4 },
+  ], end: { cam: 'follow', load: async () => ({ level: 'town', spawn: 'hub' }) } } };
+  story.play('t9');
+  await run(ctx, story, 0.9);
+  assert.equal(story.cinema.letterOn?.text, t('letter.marmalade'));
+  await run(ctx, story, 1.5);
+  assert.ok(Math.hypot(ctx.player.pos.x - 3, ctx.player.pos.z) < 0.2, 'fallback point used');
+  assert.deepEqual(lines[0], ['biscuit', 'Biscuit']);
+  assert.deepEqual(ctx.levels.loaded, ['town', 'hub']);
+  assert.equal(story.cinema.letterOn, null, 'the card never outlives its scene');
+});
+
+test('every M2 scene runs start to end (and skip) in a bare ctx without throwing; she is released', async () => {
+  for (const id of Object.keys(M2_FLAGS)) {
+    const { ctx, story } = storyCtx();
+    story.fastDialog = true;
+    await story.init();
+    story.play(id);
+    await run(ctx, story, id === 'cs10' ? 2 : 1);
+    for (let k = 0; k < 3 && story.isPlaying; k++) { story.skipAll(); await run(ctx, story, 0.3); }   // CS-09 chains CS-10
+    assert.equal(story.isPlaying, false, `${id} ended`);
+    assert.equal(ctx.player.scripted, false, `${id}: player released`);
+    for (const [k, v] of Object.entries(M2_FLAGS[id])) assert.equal(ctx.state.getFlag(k), v, `${id}: ${k}`);
+  }
 });

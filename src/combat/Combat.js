@@ -105,6 +105,7 @@ export class Combat {
     this._offs.push(
       bus.on(E.LEVEL_UNLOAD, () => this.clear()),
       bus.on(E.CUTSCENE_START, () => this.projectiles.clear()),
+      bus.on(E.LEVEL_LOADED, () => this.projectiles.warm()),   // compile projectile shaders under the veil
     );
   }
 

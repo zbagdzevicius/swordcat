@@ -25,10 +25,14 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import manifest, { levels as manifestLevels } from './assets.manifest.js';
 import { MIX, DUCK, MEME } from './mix.js';
-import { SFX, bindSfx, FOOTSTEP, LEVEL_SURFACE, STEP_CADENCE, TELEGRAPH_SFX, enemyVoiceFor, actorTypeId } from './sfxMap.js';
-import { MusicDirector, TRACKS, MUSIC_RULES, AMBIENCE } from './musicMap.js';
+import { SFX, bindSfx, FOOTSTEP, LEVEL_SURFACE, STEP_CADENCE, TELEGRAPH_SFX, enemyVoiceFor, actorTypeId, SHOP_SFX, STATION_SFX,
+  objectiveSfxFor, SFX_ALIASES } from './sfxMap.js';
+import { MusicDirector, TRACKS, MUSIC_RULES, AMBIENCE, levelMusic, bossMusicFor } from './musicMap.js';
+import { AMBIENT_LAYERS, activeLayers, nextWait, layerPos } from './ambience.js';
+import { birdPlan, hootPlan, playChirps, cricketData, crackleData, rumbleData, playData, BIRDS } from './nature.js';
+import { CUES, partOpts } from './cues.js';
 import { MusicPlayer } from './MusicPlayer.js';
-import { Wind, strikeBell, laughPlan, laughLength, LAUGH, Shimmer, HEART, heartbeatPlan, MARCH } from './procedural.js';
+import { Wind, strikeBell, tollPlan, laughPlan, laughLength, LAUGH, Shimmer, HEART, heartbeatPlan, MARCH } from './procedural.js';
 import { BABBLE, babblePlan, voiceFor, speakerKey } from './babble.js';
 import { bakeZzfx } from './sfxDefs.js';
 import { buildIndex, resolveId, isMusicPath } from './ids.js';
@@ -47,6 +51,9 @@ const sliderGain = (v) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 1)) *
 /** `{ name, stop(fade) }` handle for procedural layers (cutscene `sfx` steps keep and stop them like file sounds). */
 const procHandle = (name, stop, extra) => ({ name, ...extra, stop: (fade) => { try { stop(fade); } catch { /* gone */ } } });
 const volOf = (o) => o.volume ?? o.vol;
+const AMBIENT_LIST = (levelId) => AMBIENT_LAYERS[levelId] ?? [];
+/** ambience layers that run as one continuous bed (vs. timed one-shots) */
+const isBed = (l) => l.kind === 'loop' || l.kind === 'crickets' || l.kind === 'crackle';
 
 /**
  * Procedural ids accepted by play2D / play3D (cutscene `sfx` steps name them like files). Every entry returns a
@@ -78,6 +85,17 @@ const PROCEDURAL = {
     am.shimmer(on);
     return on ? procHandle('shimmer', () => am.shimmer(false)) : null;
   },
+  // ---- M2 (nature.js / the bells): looped beds return a handle to stop them
+  campfire: (am, at, o) => am.campfire(at, { volume: volOf(o) ?? 1 }),
+  crackle: (am, at, o) => am.campfire(at, { volume: volOf(o) ?? 1 }),
+  crickets: (am, at, o) => am.crickets({ volume: volOf(o) ?? 0.05 }),
+  birds: (am, at, o) => am.birds(at, { volume: volOf(o) ?? 1, kind: o.kind }),
+  owl: (am, at, o) => am.owl(at, { volume: volOf(o) ?? 0.15 }),
+  rumble: (am, at, o) => am.rumble({ dur: o.dur ?? 4, volume: volOf(o) ?? 1 }),
+  handbell: (am, at, o) => am.bell({ ...o, volume: volOf(o) ?? 1, profile: 'handbell', pos: at ?? o.pos }),
+  shopBell: (am, at, o) => am.bell({ ...o, volume: volOf(o) ?? 1, profile: 'handbell', pos: at ?? o.pos }),
+  toll: (am, at, o) => am.bell({ ...o, volume: volOf(o), strikes: o.strikes ?? 3, pos: at ?? o.pos }),
+  kittenCheer: (am, at, o) => am.kittenCheer(at, { volume: volOf(o) ?? 1, count: o.count }),
 };
 
 /** Files to keep decoded for a level: the manifest's '*' subset + that level's subset (+ buffered music). */
@@ -175,6 +193,18 @@ export class AudioManager {
     this._unlocking = null;
     this._hiddenSuspend = false;
     this._wantMeter = false;
+    /** M2: objective:progress mirror { id → {value, max, frozen, done, textKey} } (holds, objective sounds, ambience) */
+    this.objectives = new Map();
+    /** M2: active ambience layers { id → { layer, handle, t } } (ambience.js) */
+    this.amb = new Map();
+    this._ambT = 0;
+    this._flagSig = '';
+    /** generated buffers (crickets, crackle) per AudioContext */
+    this._gen = new Map();
+    /** short-lived panners / procedural one-shots pruned in render() */
+    this.oneshots = new Set();
+    /** delayed cue parts: [{ at (this.time), fn }] */
+    this._pending = [];
   }
 
   /** Music track the director wants right now (id or null). */
@@ -192,7 +222,10 @@ export class AudioManager {
     on(E.LEVEL_LOADED, ({ id, level }) => this._levelLoaded(id, level));
     on(E.ARENA_LOCK, ({ id }) => this.director.arenaLock(id));
     on(E.ARENA_CLEAR, ({ id }) => this.director.arenaClear(id));
-    on(E.BOSS_START, () => this.director.bossStart());
+    on(E.BOSS_START, (p) => this._bossStart(p));
+    on(E.OBJECTIVE, (p) => this._objective(p));
+    on(E.FLAG_SET, () => { this._flagSig = ''; });
+    on(E.UNLOCK, () => { if (this._mode !== 'cutscene' && this.gate('unlock', 1)) this.play2D('unlock'); });
     on(E.BOSS_DEFEATED, () => this.director.bossDefeated());
     on(E.ENEMY_ALERTED, ({ enemy }) => { if (enemy) this.alerted.add(enemy); });
     on(E.ENEMY_DIED, ({ enemy }) => this.alerted.delete(enemy));
@@ -283,8 +316,14 @@ export class AudioManager {
     this.wind = new Wind(ac, world, this.rand);
     this.shim = new Shimmer(ac, player);
     ac.onstatechange = () => {
-      if (ac.state !== 'running' || this.ac !== ac) return;
-      if (!this.ready) this.unlock(); else this.musicPlayer?.resume();
+      if (this.ac !== ac) return;
+      const st = ac.state;
+      if (st === 'running') { if (!this.ready) this.unlock(); else this.musicPlayer?.resume(); return; }
+      // a device / renderer error can drop a running context to 'suspended' / 'interrupted' (try to resume now; if
+      // the browser refuses, the gesture listener retries on the next key / click) or close it for good ('closed':
+      // tear the graph down and build a fresh context on the next gesture). Our own hidden-tab suspend is left alone.
+      if (st === 'closed') this._recoverClosed();
+      else if (this.unlocked && !this._hiddenSuspend) ac.resume().catch(() => {});
     };
     this._applyVolumes(0);
     this._applyDucks(0);
@@ -296,7 +335,7 @@ export class AudioManager {
     // music requested before the unlock fades in now (CS-00: "fades in over 2 s")
     this.director.take();
     if (this.director.target) this.musicPlayer.play(this.director.target, MUSIC_RULES.titleFade);
-    if (this.levelId) this._setAmbience(this.levelId);
+    if (this.levelId) { this._setAmbience(this.levelId); this._ambRefresh(); }
     // files fetched before the unlock (level preloads) decode in the background; the zzfx bake is quick
     for (const p of this._fetched) this._decode(p);
     const m = await bakeZzfx(this.ac);
@@ -311,7 +350,9 @@ export class AudioManager {
     }
     // music director (§16.1)
     if ((this._threatT -= dt) <= 0) { this._threatT = 0.25; this._threat = this._computeThreat(); this._syncArenas(); }
+    if ((this._ambT -= dt) <= 0) { this._ambT = 0.5; this._checkFlags(); }
     this.director.tick(dt, { mode, threat: this._threat, zone: this._zoneTrack() });
+    if (mode !== 'menu') this._ambTick(dt);
     if (mode === 'play' || mode === 'memecam') {
       this._lowHp(dt);
       this._autoSteps(dt);
@@ -343,6 +384,13 @@ export class AudioManager {
     if (this.bells.size) {
       for (const b of this.bells) if (now > b.endAt + 0.5) { this.bells.delete(b); try { b.panner?.disconnect(); } catch { /* gone */ } }
     }
+    if (this._pending.length) {
+      const due = this._pending.filter((p) => p.at <= this.time);
+      if (due.length) { this._pending = this._pending.filter((p) => p.at > this.time); for (const p of due) { try { p.fn(); } catch (e) { console.warn('[audio] cue part', e); } } }
+    }
+    if (this.oneshots.size) {
+      for (const o of this.oneshots) if (now > o.endAt + 0.5) { this.oneshots.delete(o); try { o.panner?.disconnect(); } catch { /* gone */ } }
+    }
     this._babbleTick(dt);
     this._chorusTick(dt);
     this._marchTick(dt);
@@ -357,24 +405,44 @@ export class AudioManager {
     for (const off of this._dom) off();
     this._dom.length = 0;
     this.meter?.dispose(); this.meter = null;
+    this._teardownGraph();
+    this.telegraphs.clear(); this.alerted.clear(); this.loops.clear(); this.bells.clear(); this.amb.clear(); this.objectives.clear();
+    this._pending.length = 0;
+    this.log.length = 0; this.recent.length = 0;
+  }
+
+  /** Stop every voice and disconnect the whole WebAudio graph (dispose, or a closed context). */
+  _teardownGraph() {
     if (this.ready || this.ac) {
-      this.stopAll(0);
+      try { this.stopAll(0); } catch { /* closed context */ }
       this.musicPlayer?.dispose();
-      this.wind?.stop();
+      try { this.wind?.stop(); } catch { /* closed context */ }
       this.shim?.dispose();
-      for (const v of [...this.voices2D, ...this.voices3D]) v.panner?.disconnect();
+      for (const v of [...this.voices2D, ...this.voices3D]) { try { v.panner?.disconnect(); } catch { /* gone */ } }
       try { this.listener?.removeFilter?.(); } catch { /* already detached */ }
       for (const [k, node] of Object.entries(this.bus ?? {})) { if (k !== 'master') { try { node.disconnect(); } catch { /* gone */ } } }
       for (const a of Object.values(this.analysers ?? {})) { try { a.disconnect(); } catch { /* gone */ } }
       this.listener?.parent?.remove(this.listener);
       if (this.ac) this.ac.onstatechange = null;
     }
-    this.telegraphs.clear(); this.alerted.clear(); this.loops.clear(); this.bells.clear();
-    this.log.length = 0; this.recent.length = 0;
+    this.loops.clear(); this.amb.clear(); this.oneshots.clear(); this._gen.clear(); this._pending.length = 0;
     this.buffers.clear(); this._decoding.clear();
     this.bus = null; this.analysers = null; this.listener = null; this.musicPlayer = null; this.wind = null; this.shim = null;
     this.voices2D = []; this.voices3D = [];
     this.ac = null; this.ready = false; this.unlocked = false;
+  }
+
+  /**
+   * The AudioContext was closed under us (device lost). Drop the dead graph and give three a fresh context; the next
+   * user gesture runs unlock() → _build() → _firstRun() (music director target, ambience and wind come back).
+   */
+  _recoverClosed() {
+    console.warn('[audio] AudioContext closed; rebuilding on the next user gesture');
+    this._teardownGraph();
+    try {
+      const Ctor = typeof window !== 'undefined' ? (window.AudioContext || window.webkitAudioContext) : null;
+      if (Ctor) THREE.AudioContext.setContext(new Ctor());
+    } catch (e) { console.warn('[audio] could not create a new AudioContext', e?.message ?? e); }
   }
 
   // =============================================================================================== settings, ducks
@@ -538,11 +606,12 @@ export class AudioManager {
   play3D(id, pos, opts = {}) { return this._play(id, pos ?? null, opts ?? {}); }
 
   _play(id, at, opts) {
-    const name = String(id ?? '');
+    const name = SFX_ALIASES[id] ?? String(id ?? '');
     if (!name) return null;
     this._note(at != null ? '3d' : '2d', name);
     const proc = PROCEDURAL[name];
     if (proc) return proc(this, at, opts);
+    if (CUES[name]) return this.cue(name, at, opts);
     // an endless loop (cutscene purr, ambience) runs outside the voice pools so a burst of one-shots never steals it
     if (opts.loop && !(opts.dur > 0)) {
       return this.loop(name, { volume: volOf(opts) ?? 1, rate: opts.rate ?? 1, at, bus: opts.bus ?? (at != null ? 'world' : 'player'),
@@ -776,6 +845,10 @@ export class AudioManager {
     for (const b of this.bells) b.stop(fade || 0.005);
     this.bells.clear();
     this.stopBabble(); this.stopLaughs(); this.march(false);
+    for (const st of this.amb.values()) st.handle?.stop?.(fade || 0.005);
+    for (const st of this.amb.values()) st.handle = null;
+    for (const o of this.oneshots) o.stop?.(fade || 0.005);
+    this._pending.length = 0;
     this.telegraphs.clear();
   }
 
@@ -795,7 +868,7 @@ export class AudioManager {
   _applyMusicChanges() {
     const ch = this.director.take();
     if (!ch) return;
-    if (ch.track !== undefined) this.musicPlayer.play(ch.track, ch.fade);
+    if (ch.track !== undefined) this.musicPlayer.play(ch.track, ch.fade, this.director.gainFor(ch.track));
     if (ch.sting) this._sting(ch.sting);
   }
 
@@ -835,6 +908,7 @@ export class AudioManager {
     if (!zones?.length || !p) return null;
     for (const z of zones) {
       const at = z.at ?? z.center; if (!at) continue;
+      if (z.when && !this._cond(z.when)) continue;
       const x = Array.isArray(at) ? at[0] : at.x, zz = Array.isArray(at) ? at[1] : at.z;
       if ((p.x - x) ** 2 + (p.z - zz) ** 2 <= (z.r ?? 8) ** 2) return z.track ?? null;
     }
@@ -850,6 +924,8 @@ export class AudioManager {
       this.endCharge(0.05);
     }
     this.ambience = null;
+    this._ambStopAll(1);
+    this.objectives.clear(); this._pending.length = 0;
     this.telegraphs.clear(); this.alerted.clear();
     this._threat = false;
     if (nextId) this.evict(nextId);
@@ -873,9 +949,11 @@ export class AudioManager {
     const m = level?.music ?? level?.def?.music ?? null;
     // meadow's night tutorial keeps the CS-01 bards' tale (`music.prologue`) until CS-02 sets prologue.done
     const prologue = !!m?.prologue && !this.ctx.state?.getFlag?.('prologue.done');
-    this.director.setLevel(id, m, { prologue });
+    this._levelMusicDef = m;
+    this.director.setLevel(id, m, { prologue, cond: (c) => this._cond(c) });
+    this._flagSig = this._flagSignature();
     this.surface = level?.surface ?? LEVEL_SURFACE[id] ?? 'grass';
-    if (this.ready) this._setAmbience(id);
+    if (this.ready) { this._setAmbience(id); this._ambRefresh(); }
   }
 
   _setAmbience(id) {
@@ -995,26 +1073,304 @@ export class AudioManager {
   }
 
   /**
-   * The Sunbell (§16.3): additive partials with exponential decay + impact/metal_ringing at rate 0.5, vol 0.3.
-   * @param {{damped?: boolean, volume?: number, pos?: any, base?: number}} [opts]  damped = CS-02 "clunk"
+   * The Sunbell (§16.3): additive partials with exponential decay + impact/metal_ringing at rate 0.5, vol 0.3, and the
+   * hammer's clank. `strikes` > 1 tolls it (tollPlan); `profile: 'handbell'` is the small shop-counter bell (no layer).
+   * @param {{damped?: boolean, volume?: number, pos?: any, base?: number, profile?: string, strikes?: number,
+   *          interval?: number, strike?: boolean}} [opts]  damped = CS-02 "clunk"
    */
   bell(opts = {}) {
-    const damped = !!opts.damped;
-    this._note('bell', damped ? 'clunk' : 'sunbell');
+    const damped = !!opts.damped, profile = opts.profile ?? 'sunbell';
+    this._note('bell', profile === 'handbell' ? 'handbell' : damped ? 'clunk' : (opts.strikes > 1 ? 'toll' : 'sunbell'));
     if (!this.ready) return null;
-    const ac = this.ac;
-    let dest = this.bus.world, panner = null;
+    const ac = this.ac, big = profile === 'sunbell';
+    let dest = profile === 'handbell' && opts.pos == null ? this.bus.ui : this.bus.world, panner = null;
     if (opts.pos != null && this._posOf(opts.pos, _v)) {
-      panner = ac.createPanner(); panner.distanceModel = 'inverse'; panner.refDistance = 30; panner.rolloffFactor = 1;
+      panner = ac.createPanner(); panner.distanceModel = 'inverse'; panner.refDistance = big ? 30 : 4; panner.rolloffFactor = 1;
       this._setPannerPos(panner, _v, 0); panner.connect(this.bus.world); dest = panner;
     }
-    const h = strikeBell(ac, dest, { damped, volume: opts.volume ?? 1, base: opts.base, detune: () => (this.rand() * 2 - 1) * 3 });
-    const layer = damped ? 'bellClunkLayer' : 'bellLayer';
-    if (panner) this.play3D(layer, opts.pos, { volume: opts.volume ?? 1 }); else this.play2D(layer, { volume: opts.volume ?? 1, bus: 'world' });
-    const handle = { ...h, panner, stop: (fade) => { h.stop(fade); this.bells.delete(handle); } };
+    const vol = opts.volume ?? 1, plan = tollPlan(Math.max(1, opts.strikes ?? 1), opts.interval ?? 2.4);
+    const hs = plan.map((s) => strikeBell(ac, dest, { damped, volume: vol * s.gain, base: opts.base, profile, strike: opts.strike ?? true,
+      when: ac.currentTime + s.t, rand: this.rand, detune: () => (this.rand() * 2 - 1) * 3 }));
+    if (big) {
+      const layer = damped ? 'bellClunkLayer' : 'bellLayer';
+      if (panner) this.play3D(layer, opts.pos, { volume: vol }); else this.play2D(layer, { volume: vol, bus: 'world' });
+    }
+    const handle = { name: plan.length > 1 ? 'toll' : (big ? 'bell' : 'handbell'), strikes: plan.length, panner,
+      endAt: Math.max(...hs.map((h) => h.endAt)),
+      stop: (fade) => { for (const h of hs) h.stop(fade); this.bells.delete(handle); } };
     this.bells.add(handle);                                   // pruned in render() once rung out
-    this.started.bell = (this.started.bell ?? 0) + 1;
+    this.started.bell = (this.started.bell ?? 0) + plan.length;
     return handle;
+  }
+
+  // =============================================================================================== M2: cues, shops, flags
+  /**
+   * A cutscene cue sheet (cues.js): every part starts `delay` s after the cue (real time) at the cue's `at` (or its
+   * own). Returns one `{ name, stop(fade) }` handle for the whole cue (null if the id is unknown).
+   * @param {string} name @param {any} [at] @param {{volume?: number, vol?: number}} [opts]  volume scales every part
+   */
+  cue(name, at = null, opts = {}) {
+    const parts = CUES[name];
+    if (!parts) return null;
+    const mul = volOf(opts ?? {}) ?? 1, handles = [];
+    const h = { name, dead: false, parts: parts.length, stop: (fade = 0.2) => { h.dead = true; for (const x of handles) x?.stop?.(fade); } };
+    const fire = (p) => {
+      if (h.dead) return;
+      const o = partOpts(p), v = volOf(o);
+      const po = { ...o, ...(v != null || mul !== 1 ? { volume: (v ?? 1) * mul } : {}) };
+      delete po.vol;
+      const where = p.at ?? at;
+      handles.push(where != null ? this._play(p.id, where, po) : this._play(p.id, null, po));
+    };
+    for (const p of parts) {
+      if ((p.delay ?? 0) > 0) this._pending.push({ at: this.time + p.delay, fn: () => fire(p) });
+      else fire(p);
+    }
+    return h;
+  }
+
+  /**
+   * Hub shop / Quest Board feedback (§13.3): `action` ∈ SHOP_SFX keys (open, close, hover, select, buy, coin, denied,
+   * equip, equipSword, equipCape). `open` also dings the counter bell; `buy` adds the station's flavour
+   * (bakery bottle, forge anvil, library pages, wardrobe twirl, barracks banner, Quest Board pin).
+   * @param {string} action @param {{station?: string, at?: any}} [opts]
+   */
+  shop(action, { station = null, at = null } = {}) {
+    const name = SHOP_SFX[action] ?? (SFX[action] ? action : null);
+    this._note('shop', `${action}${station ? ':' + station : ''}`);
+    if (!name) return null;
+    const h = this.play2D(name);
+    if (action === 'open' && station !== 'questboard' && station !== 'quest') this.bell({ profile: 'handbell', volume: 0.8, pos: at ?? null });
+    if (action === 'buy' && station && STATION_SFX[station]) this.play2D(STATION_SFX[station], { delay: 0.12 });
+    return h;
+  }
+
+  /** boss:start → the boss's track (BOSS_MUSIC; snaps in within 0.3 s) + its fog-wall stinger. */
+  _bossStart({ boss, id } = {}) {
+    const row = bossMusicFor(id ?? actorTypeId(boss));
+    this.director.bossStart(row.track ?? null);
+    if (row.intro && this.gate('bossIntro:' + (id ?? actorTypeId(boss)), 2)) this.play2D(row.intro);
+    if (this.ready) this._applyMusicChanges();
+  }
+
+  /** GameState.cond (flags), false without state. */
+  _cond(expr) {
+    const st = this.ctx.state;
+    if (typeof st?.cond === 'function') { try { return !!st.cond(expr); } catch { return false; } }
+    return expr == null || expr === '' || expr === true;
+  }
+
+  /** Values of every flag the level's music / ambience conditions read (cheap change detection). */
+  _flagSignature() {
+    const keys = new Set();
+    const scan = (c) => { for (const k of String(c ?? '').split(/\|\||&&/)) { const t = k.trim().replace(/^!+/, '').trim(); if (t && !t.startsWith('obj')) keys.add(t); } };
+    for (const row of this.director.level?.byFlag ?? []) scan(Array.isArray(row) ? row[0] : row?.when);
+    for (const l of AMBIENT_LIST(this.levelId)) scan(l.when);
+    for (const z of this.director.level?.zones ?? []) if (z.when) scan(z.when);
+    return [...keys].map((k) => `${k}=${this._cond(k) ? 1 : 0}`).join(',');
+  }
+
+  /** A flag changed: re-resolve the level's explore track (forest night, hub gold / grey) and the ambience layers. */
+  _checkFlags() {
+    if (!this.levelId) return;
+    const sig = this._flagSignature();
+    if (sig === this._flagSig) return;
+    this._flagSig = sig;
+    const lm = levelMusic(this.levelId, this._levelMusicDef ?? null, { cond: (c) => this._cond(c) });
+    // meadow keeps its legacy prologue rule until the CS-02 reload
+    if (!this._levelMusicDef?.prologue || this._cond('prologue.done')) this.director.setExplore(lm.explore);
+    this._ambRefresh();
+  }
+
+  /** objective:progress → music holds (The Line), the objective's sounds, and objective-driven ambience. */
+  _objective(p) {
+    if (!p?.id) return;
+    const prev = this.objectives.get(p.id) ?? null;
+    // `frozen` = frozen || paused (world): `held` is the real freeze (Pilfer has the pin), not an enemy at the winch
+    const cur = { id: p.id, value: +p.value || 0, max: +p.max || 1, frozen: !!p.frozen, held: !!p.frozen && !p.paused, done: !!p.done,
+      textKey: p.textKey ?? prev?.textKey ?? null };
+    this.objectives.set(p.id, cur);
+    const holds = this.director.level?.holds ?? {};
+    const track = holds[p.id] ?? (cur.textKey ? holds[cur.textKey] : undefined);
+    if (track) { if (cur.done) this.director.release(p.id); else this.director.hold(p.id, track); }
+    const row = objectiveSfxFor(cur);
+    if (row && prev) {
+      if (row.tick && cur.max <= 20 && Math.floor(cur.value) > Math.floor(prev.value) && !cur.done) this.play2D(row.tick);
+      if (row.freeze && cur.held && !prev.held) this.play3D(row.freeze, [0, 1, 41]);
+      if (row.resume && !cur.held && prev.held && !cur.done) this.play3D(row.resume, [0, 1, 41]);
+    }
+    if (row && cur.done && !prev?.done) {
+      if (row.done) this.play2D(row.done);
+      for (const [name, delay, at] of row.doneSeq ?? []) {
+        if (delay > 0) this._pending.push({ at: this.time + delay, fn: () => this.play3D(name, at) }); else this.play3D(name, at);
+      }
+    }
+    if (this.ready) this._applyMusicChanges();
+    this._ambRefresh();
+  }
+
+  /** Is objective `id` (id, or textKey `obj.<id>`) running (and not frozen unless `any`)? */
+  _objRunning(id, any = false) {
+    for (const o of this.objectives.values()) {
+      if (o.id !== id && o.textKey !== 'obj.' + id) continue;
+      if (!o.done && (any || !o.frozen)) return true;
+    }
+    return false;
+  }
+
+  // =============================================================================================== M2: ambience
+  /** Start / stop the ambience layers (ambience.js) to match the flags and objectives now. */
+  _ambRefresh() {
+    if (!this.levelId) return;
+    const want = activeLayers(this.levelId, (c) => this._cond(c), (id, any) => this._objRunning(id, any));
+    const ids = new Set(want.map((l) => l.id));
+    for (const [id, st] of [...this.amb]) if (!ids.has(id)) { st.handle?.stop?.(1.5); this.amb.delete(id); }
+    for (const l of want) {
+      if (this.amb.has(l.id)) {
+        const st = this.amb.get(l.id);
+        if (!st.handle && this.ready && isBed(l)) st.handle = this._ambStart(l);      // rebuilt after stopAll / unlock
+        continue;
+      }
+      const st = { layer: l, handle: null, t: nextWait(l.every ?? [1, 2], this.rand) * 0.5 };
+      if (this.ready && isBed(l)) st.handle = this._ambStart(l);
+      this.amb.set(l.id, st);
+    }
+  }
+
+  _ambStart(l) {
+    if (l.kind === 'loop') return this.loop(l.sound, { volume: l.vol ?? 1, rate: l.rate ?? 1, at: l.at ?? null, fadeIn: 2, bus: 'world' });
+    if (l.kind === 'crickets') return this.crickets({ volume: l.vol ?? 0.05 });
+    if (l.kind === 'crackle') return this.campfire(l.at ?? null, { volume: l.vol ?? 1 });
+    return null;
+  }
+
+  _ambStopAll(fade = 1) {
+    for (const st of this.amb.values()) st.handle?.stop?.(fade);
+    this.amb.clear();
+  }
+
+  /** Timed layers (scatter, birds, owl, laughs). */
+  _ambTick(dt) {
+    if (!this.ready || !this.amb.size) return;
+    for (const st of this.amb.values()) {
+      const l = st.layer;
+      if (isBed(l) || (st.t -= dt) > 0) continue;
+      st.t = nextWait(l.every ?? [2, 5], this.rand);
+      this._cameraPos(_cam);
+      const pos = layerPos(l, this.rand, _cam);
+      if (l.kind === 'birds') this.birds(pos, { volume: l.vol ?? 1 });
+      else if (l.kind === 'owl') this.owl(pos, { volume: l.vol ?? 0.12 });
+      else if (l.kind === 'laughs') this.laugh(pos, { volume: l.vol ?? 1, rate: 0.95 + this.rand() * 0.25 });
+      else if (l.kind === 'scatter') {
+        const [n, gap] = l.burst ?? [1, 0];
+        const count = Math.max(1, Math.round(n * (0.6 + this.rand() * 0.6)));
+        const snd = l.sounds[Math.floor(this.rand() * l.sounds.length) % l.sounds.length];
+        for (let i = 0; i < count; i++) {
+          const r = l.rate ? l.rate[0] + this.rand() * (l.rate[1] - l.rate[0]) : 1;
+          this.play3D(snd, pos, { volume: l.vol ?? 1, rate: r, rateVar: 0.02, delay: i * gap });
+        }
+      }
+    }
+  }
+
+  /** Positional output node at `at` (null → the world bus) for procedural one-shots; pruned by render() after `life`. */
+  _spot(at, life, refDistance = MIX.refDistance) {
+    if (at == null || !this._posOf(at, _v)) return { dest: this.bus.world, panner: null };
+    this._cameraPos(_cam);
+    if (_cam.distanceToSquared(_v) > (MIX.maxDistance + 5) ** 2) return null;
+    const p = this.ac.createPanner();
+    p.distanceModel = MIX.distanceModel; p.refDistance = refDistance; p.rolloffFactor = MIX.rolloff; p.maxDistance = MIX.maxDistance;
+    this._setPannerPos(p, _v, 0); p.connect(this.bus.world);
+    if (Number.isFinite(life)) this.oneshots.add({ panner: p, endAt: this.ac.currentTime + life, stop: () => {} });
+    return { dest: p, panner: p };
+  }
+
+  _genBuf(key, make) {
+    let b = this._gen.get(key);
+    if (!b) {
+      const data = make(this.ac.sampleRate, this.rand);
+      b = this.ac.createBuffer(1, data.length, this.ac.sampleRate); b.getChannelData(0).set(data);
+      this._gen.set(key, b);
+    }
+    return b;
+  }
+
+  /** A looping procedural bed as a loops-set handle (stopped by stopAll / level changes like file loops). */
+  _bed(name, buf, at, { volume = 1, filter = null, fadeIn = 1.5 } = {}) {
+    const spot = this._spot(at, Infinity, 2.5);
+    if (!spot) return null;
+    const p = playData(this.ac, spot.dest, buf, { loop: true, volume, filter, fadeIn });
+    const handle = { name, src: p.src, out: p.out, panner: spot.panner, follow: this._followOf(at), dead: false,
+      stop: (fade = 0.6) => { handle.dead = true; this.loops.delete(handle); p.stop(fade); if (spot.panner) this.oneshots.add({ panner: spot.panner, endAt: this.ac.currentTime + fade, stop: () => {} }); },
+      setVolume: (v, fade = 0.5) => p.setVolume(v, fade) };
+    this.loops.add(handle);
+    this.started[name] = (this.started[name] ?? 0) + 1;
+    return handle;
+  }
+
+  /** The campfire / bakery oven crackle (procedural loop; positional with `at`). */
+  campfire(at = null, { volume = 1 } = {}) {
+    this._note('proc', 'campfire');
+    if (!this.ready) return null;
+    return this._bed('campfire', this._genBuf('crackle', (sr, r) => crackleData(sr, r)), at, { volume: volume * 0.5, filter: { type: 'lowpass', freq: 5200 } });
+  }
+
+  /** Forest-night crickets (procedural 2D loop on the world bus). */
+  crickets({ volume = 0.05 } = {}) {
+    this._note('proc', 'crickets');
+    if (!this.ready) return null;
+    return this._bed('crickets', this._genBuf('crickets', (sr, r) => cricketData(sr, r)), null, { volume, fadeIn: 2.5 });
+  }
+
+  /** One birdsong phrase at `at` (procedural; around the listener when no position). */
+  birds(at = null, { volume = 1, kind } = {}) {
+    this._note('proc', 'birds');
+    if (!this.ready) return null;
+    const plan = birdPlan(this.rand, { kind });
+    const spot = this._spot(at, 3, 5);
+    if (!spot) return null;
+    const end = playChirps(this.ac, spot.dest, plan, { volume: volume * BIRDS.vol });
+    this.started.birds = (this.started.birds ?? 0) + 1;
+    return { name: 'birds', notes: plan.length, endAt: end, stop: () => {} };
+  }
+
+  /** The owl's "hoo … hoo-hoo" (forest night). */
+  owl(at = null, { volume = 0.15 } = {}) {
+    this._note('proc', 'owl');
+    if (!this.ready) return null;
+    const spot = this._spot(at, 3, 8);
+    if (!spot) return null;
+    const end = playChirps(this.ac, spot.dest, hootPlan(this.rand), { volume });
+    this.started.owl = (this.started.owl ?? 0) + 1;
+    return { name: 'owl', endAt: end, stop: () => {} };
+  }
+
+  /** A low swell of brown noise (CS-10 the Gloom rolls in; the CS-09 crowd's roar). 2D on the world bus. */
+  rumble({ dur = 4, volume = 1 } = {}) {
+    this._note('proc', 'rumble');
+    if (!this.ready) return null;
+    const p = playData(this.ac, this.bus.world, rumbleData(this.ac.sampleRate, this.rand, Math.max(0.5, dur)), { volume: volume * 0.8, filter: { type: 'lowpass', freq: 160, q: 0.7 } });
+    const h = { name: 'rumble', endAt: p.endAt, stop: (f) => p.stop(f) };
+    this.oneshots.add({ panner: null, endAt: p.endAt, stop: (f) => p.stop(f) });
+    this.started.rumble = (this.started.rumble ?? 0) + 1;
+    return h;
+  }
+
+  /** Kittens cheering (CS-07, CS-10): a scatter of mews and chirps around `at` over ~1.4 s. */
+  kittenCheer(at = null, { volume = 1, count = 7 } = {}) {
+    this._note('proc', 'kittenCheer');
+    if (!this.ready) return null;
+    const c = new THREE.Vector3();
+    const has = at != null && this._posOf(at, c);
+    const ids = ['cat/kitten_mew_01', 'cat/meow_baby_01', 'cat/cute_creature_0x'];
+    const hs = [];
+    for (let i = 0; i < Math.max(1, count | 0); i++) {
+      const id = ids[Math.floor(this.rand() * ids.length) % ids.length];
+      const o = { volume: 0.55 * volume, rate: 1.15 + this.rand() * 0.45, rateVar: 0, delay: this.rand() * 1.4 };
+      if (has) hs.push(this.play3D(id, [c.x + (this.rand() - 0.5) * 6, c.y + 0.5, c.z + (this.rand() - 0.5) * 6], o));
+      else hs.push(this.play2D(id, { ...o, bus: 'world' }));
+    }
+    return { name: 'kittenCheer', count: hs.length, stop: (f) => { for (const h of hs) h?.stop?.(f); } };
   }
 
   /** zzfx lub-dub heartbeat(s) (§16.3; Still Standing, low HP). */
@@ -1192,6 +1548,8 @@ export class AudioManager {
       levels: { master: this.level('master'), music: this.level('music'), sfx: this.level('sfx') },
       babble: this.babbleState ? { speaker: this.babbleState.speaker, blips: this.babbleState.blips, total: this.babbleState.plan.length } : null,
       chorus: this.chorus ? this.chorus.emitters.length : 0, marching: !!this.marching, surface: this.surface,
+      ambience: [...this.amb.keys()], objectives: [...this.objectives.values()].map((o) => ({ id: o.id, value: +o.value.toFixed(1), frozen: o.frozen, done: o.done })),
+      holds: [...this.director.holds.keys()], explore: this.director.level?.explore ?? null, pending: this._pending.length,
       telegraphs: this.telegraphs.size, recent: this.recent.slice(-12), counts: { ...this.counts }, started: { ...this.started },
     };
   }

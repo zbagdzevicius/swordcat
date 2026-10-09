@@ -200,3 +200,42 @@ test('parseParams: ?test fixes the seed; level/spawn/quality pass through', () =
   assert.equal(q.debug, true); assert.equal(q.seed, 99); assert.equal(q.level, 'forest'); assert.equal(q.spawn, 'boss'); assert.equal(q.quality, 'low');
   assert.equal(parseParams('?test=0').test, false);
 });
+
+// ---- M2 integration (core): adopted tuning tables, disposeInstance, token share
+import * as CONFIG from '../../src/core/config.js';
+import { COMBAT as COMBAT_RE } from '../../src/combat/attacks.js';
+import { TUNING as ENEMY_TUNING_RE } from '../../src/enemies/tuning.js';
+import { PHYSICS_DEFAULTS } from '../../src/physics/Physics.js';
+import { disposeInstance } from '../../src/core/Assets.js';
+
+test('M2 config: COMBAT / ENEMY_TUNING / PHYSICS live in config; the area modules re-export the same objects', () => {
+  assert.equal(COMBAT_RE, CONFIG.COMBAT);
+  assert.equal(ENEMY_TUNING_RE, CONFIG.ENEMY_TUNING);
+  assert.equal(PHYSICS_DEFAULTS, CONFIG.PHYSICS);
+  assert.ok(Object.isFrozen(CONFIG.COMBAT) && Object.isFrozen(CONFIG.ENEMY_TUNING) && Object.isFrozen(CONFIG.PHYSICS));
+  assert.equal(CONFIG.COMBAT.antiMultiHit, 0.12);
+  assert.equal(CONFIG.ENEMY_TUNING.windupMin, 0.45);
+  assert.equal(CONFIG.PHYSICS.walkableNormalY, 0.7);
+  for (const k of ['splashReturnDist', 'splashClearRadius', 'splashCooldown', 'splashLockMin', 'splashLockMax', 'comboGrace'])
+    assert.equal(typeof CONFIG.PLAYER[k], 'number', `PLAYER.${k}`);
+});
+
+test('M2 Assets.disposeInstance: frees cloned skeletons and owned material clones only, detaches', () => {
+  const root = new THREE.Group(), parent = new THREE.Group();
+  parent.add(root);
+  const bone = new THREE.Bone();
+  const shared = new THREE.MeshBasicMaterial(), owned = new THREE.MeshBasicMaterial();
+  owned.userData.assetOwned = true;
+  const sk = new THREE.SkinnedMesh(new THREE.BufferGeometry(), owned);
+  sk.add(bone); sk.bind(new THREE.Skeleton([bone]));
+  const plain = new THREE.Mesh(new THREE.BufferGeometry(), shared);
+  root.add(sk, plain);
+  let skDisposed = 0, ownedDisposed = 0, sharedDisposed = 0;
+  sk.skeleton.dispose = () => { skDisposed++; };
+  owned.addEventListener('dispose', () => ownedDisposed++);
+  shared.addEventListener('dispose', () => sharedDisposed++);
+  disposeInstance(root);
+  assert.equal(skDisposed, 1); assert.equal(ownedDisposed, 1); assert.equal(sharedDisposed, 0);
+  assert.equal(root.parent, null);
+  disposeInstance(null);   // no-op
+});

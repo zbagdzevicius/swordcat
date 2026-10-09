@@ -2,10 +2,14 @@
 //   spawn(type, pos, opts) → Enemy;  spawnWave(list, points) → Enemy[];  despawn(e);  list;  boss
 // plus helpers other areas may use: alertNear(pos, r), count(filter?), byType(type), clear().
 //
-// Types (resolveEnemyDef): the type files in types/ and scripted/ (rat_pike, rat_xbow, crow, hyena; the CS-02 cast
-// cacklejaw, pilfer, barkus_silhouette), base versions of the M2/M3 rows (spider, stealer, pug, warhound, bat, hornet),
-// 'bonehead:<minion|warrior|rogue|mage>', 'jelly' / 'jelly_l|m|s|giant', bosses 'boss_<key>' (BOSSES + BOSS_MODELS),
-// any other Appendix A ENEMIES key, and a generic grunt (with a warning) for unknown ids.
+// Types (resolveEnemyDef): the type files in types/ and scripted/ (rat_pike, rat_xbow, crow, hyena, spider, stealer,
+// pug, the Gloomjelly sizes 'jelly' / 'jelly_l|m|s|giant'; bosses boss_grizzlechop, boss_cacklejaw and Cacklejaw's
+// shadow clone; the CS-02 cast cacklejaw, pilfer, barkus_silhouette; Pilfer's town chase `pilfer_chase`), base
+// versions of the M3 rows (warhound, bat, hornet), 'bonehead:<minion|warrior|rogue|mage>', the other bosses
+// 'boss_<key>' (BOSSES + BOSS_MODELS), any other Appendix A ENEMIES key, and a generic grunt (with a warning).
+//
+// M2 services: `webs` (spider web patches: add / cut / clear), `pilferChase(opts)`, `joinArena(e, id)`, the hyena
+// pack's "behind" flank slot (claimBehind / releaseBehind), the Line's `pinThief`.
 //
 // Rules owned here:
 //   - §8.3 arena budget: at most `quality.maxEnemies` (8; 6 on Low) AI enemies alive in one fight. A fight = the
@@ -19,33 +23,39 @@
 //   - Everything is cleared on level:unload.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { ENEMIES, BOSSES, BOSS_MODELS, MODEL_FIT, PLAYER, GRAVITY } from '../core/config.js';
+import { ENEMIES, PLAYER, GRAVITY } from '../core/config.js';
 import { Enemy, visualDt } from './Enemy.js';
 import { Boss } from './Boss.js';
-import { TUNING, rangeOf } from './tuning.js';
-import { CLIP_MAPS, rigFor } from './clipMaps.js';
+import { TUNING, M2, rangeOf } from './tuning.js';
 import ratPike from './types/rat_pike.js';
 import ratXbow from './types/rat_xbow.js';
 import crow from './types/crow.js';
 import hyena from './types/hyena.js';
-import { GENERIC, boneheadDef, jellyDef, animsFor } from './types/generic.js';
+import spider from './types/spider.js';
+import stealer from './types/stealer.js';
+import pug from './types/pug.js';
+import { JELLY_TYPES } from './types/jelly.js';
+import bossGrizzlechop from './types/boss_grizzlechop.js';
+import bossCacklejaw, { CACKLEJAW_CLONE } from './types/boss_cacklejaw.js';
+import { GENERIC, boneheadDef, animsFor } from './types/generic.js';
 import { dressKayKit } from './types/kaykitGear.js';
-import { dressRat, ratBody } from './types/ratGear.js';
-import cacklejaw, { CACKLEJAW_HIDE, CACKLEJAW_LOOK } from './scripted/Cacklejaw.js';
-import pilfer from './scripted/Pilfer.js';
+import cacklejaw from './scripted/Cacklejaw.js';
+import pilfer, { PILFER_CHASE } from './scripted/Pilfer.js';
 import barkusSilhouette from './scripted/BarkusSilhouette.js';
+import { bossDef } from './bossBase.js';
+import { WebPatches } from './WebPatches.js';
+import { tickSlow } from './status.js';
 
 /** Every hand-written type (Appendix B.3 shape). */
 export const TYPES = Object.freeze({
-  rat_pike: ratPike, rat_xbow: ratXbow, crow, hyena, ...GENERIC,
-  cacklejaw, pilfer, barkus_silhouette: barkusSilhouette,
+  rat_pike: ratPike, rat_xbow: ratXbow, crow, hyena, ...GENERIC, spider, stealer, pug, ...JELLY_TYPES,
+  boss_grizzlechop: bossGrizzlechop, boss_cacklejaw: bossCacklejaw, cacklejaw_clone: CACKLEJAW_CLONE,
+  cacklejaw, pilfer, pilfer_chase: PILFER_CHASE, barkus_silhouette: barkusSilhouette,
 });
 
-/** Base boss looks until the boss type files (M2/M3) replace them: the §11 builds on the shared rigs. */
+/** Base boss looks until the M3 boss type files replace them: the §11 builds on the shared rigs. */
 const KNIGHT_PROPS = ['1H_Sword', '1H_Sword_Offhand', '2H_Sword', 'Badge_Shield', 'Rectangle_Shield', 'Round_Shield', 'Spike_Shield'];
 const BOSS_LOOKS = {
-  grizzlechop: { body: ratBody(2), build: (e, m) => dressRat(e, m, { helm: true, buckler: true }) },
-  cacklejaw: { hide: CACKLEJAW_HIDE, build: (e, m) => dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' }) },
   brutus: { hide: ['Knight_Head', '1H_Sword', '1H_Sword_Offhand', 'Badge_Shield', 'Round_Shield', 'Spike_Shield'], show: ['2H_Sword', 'Rectangle_Shield', 'Knight_Helmet'],
     build: (e, m) => dressKayKit(e, m, { look: 'brutus', headNode: 'Knight_Head', expression: 'neutral', plate: false }) },
   barkus: { hide: ['Knight_Head', 'Knight_Helmet', ...KNIGHT_PROPS], show: ['Knight_Cape'], tint: { Knight_Cape: '#22242A' },
@@ -65,20 +75,11 @@ export function resolveEnemyDef(type) {
   const t = String(type ?? '');
   if (TYPES[t]) return { ...TYPES[t], id: t };
   if (t === 'bonehead' || t.startsWith('bonehead:')) return boneheadDef(t.split(':')[1] ?? 'minion');
-  if (t === 'jelly' || /^jelly_(l|m|s|giant)$/i.test(t)) return jellyDef(t === 'jelly' ? 'jelly_l' : t);
+  if (/^jelly_(l|m|s|giant)$/i.test(t)) return { ...TYPES[t.toLowerCase()], id: t };
   if (t.startsWith('boss_')) {
-    const key = t.slice(5), b = BOSSES[key], m = BOSS_MODELS[key];
-    if (b) {
-      const h = m ? (MODEL_FIT[m.model]?.uses?.[m.role] ?? b.fit?.h ?? 2) : (b.fit?.h ?? 2);
-      const look = BOSS_LOOKS[key] ?? {};
-      const rig = m ? rigFor(m.model) : null;
-      return {
-        radius: Math.max(0.5, h * 0.22), height: h, mass: 4, sight: 30, fov: 6.28, leash: 60, walk: 2.0, run: 3.5,
-        anims: rig ? { ...CLIP_MAPS[rig].roles } : {}, smallHeart: false,
-        ...b, ...look, hp: Array.isArray(b.hp) ? b.hp[0] : b.hp, model: m?.model, role: m?.role, fit: m?.role ?? b.fit,
-        id: t, key, boss: true,
-      };
-    }
+    const key = t.slice(5);
+    const d = bossDef(key, BOSS_LOOKS[key] ?? {});
+    if (d) return d;
   }
   if (ENEMIES[t]) {
     const row = ENEMIES[t];
@@ -120,15 +121,63 @@ export class EnemyManager {
     this.debris = [];
     this._iter = [];
     this._offs = [];
+    /** spider web patches (WebPatches): add(pos, {r, life}) / cut(w) / clear() / list */
+    this.webs = new WebPatches(ctx);
+    /** the hyena pack's "behind" flank slot holder (§10.3 pack flank) */
+    this.behind = null;
+    /** The Line: the stealer currently holding the winch pin (one at a time) */
+    this.pinThief = null;
+    /** prewarm stand-ins kept (materials alive) until the level unloads */
+    this._warmKeep = [];
   }
 
   async init() {
     const bus = this.ctx.bus;
+    this.webs.init();
     this._offs.push(
       bus.on(E.LEVEL_UNLOAD, () => this.clear()),
       bus.on(E.CUTSCENE_START, () => this.interruptAll()),
       bus.on(E.PLAYER_MEOW, (p) => this.onMeow(p?.position ?? this.ctx.player?.pos)),
+      // hyena Gloat (§10.3): an enemy that lands a hit on her (not blocked / parried; god mode still counts) hears about it
+      bus.on(E.HIT, (h) => {
+        const a = h?.attacker;
+        if (!a || h.blocked || h.parried || (h.result !== 'hit' && h.result !== 'break') || a.faction !== 'enemy' || typeof a.onDealtHit !== 'function') return;
+        if (h.target !== this.ctx.player) return;
+        a.onDealtHit(h);
+      }),
     );
+  }
+
+  // ------------------------------------------------------------------ M2 services
+  /** Pack flank: take the "behind" slot (one flanker at a time). */
+  claimBehind(e) {
+    const b = this.behind;
+    if (b && b !== e && b.alive && !b.disposed && b.flanker) return false;
+    this.behind = e;
+    return true;
+  }
+
+  releaseBehind(e) { if (this.behind === e) this.behind = null; }
+
+  /** Put `e` in arena `id`'s fight (its alive count / wave clear): boss adds, jelly splits, clones. */
+  joinArena(e, id) {
+    if (!e || !id) return false;
+    const a = this.ctx.levels?.current?.arena?.(id) ?? this.ctx.levels?.arena?.(id);
+    if (!a || !Array.isArray(a.enemies) || a.enemies.includes(e)) return false;
+    a.enemies.push(e);
+    return true;
+  }
+
+  /**
+   * §12.5 Pilfer's town chase: spawn Pilfer (actor id 'pilfer') at the path start running `chase_0..5` (or `path`).
+   * Returns { pilfer, done } — `done` resolves { dropped: true } when 3 hits make him drop the bag (`item:returned`
+   * {item: 'post_bag'} is emitted then; story plays CS-06). `onDrop(pilfer)` is called at that moment too.
+   * @param {{path?: any[], onDrop?: Function, id?: string}} [opts]
+   */
+  pilferChase(opts = {}) {
+    const start = opts.path?.[0] ?? 'chase_0';
+    const e = this.spawn('pilfer_chase', start, { id: opts.id ?? 'pilfer', path: opts.path ?? null, onDrop: opts.onDrop ?? null, noCap: true });
+    return { pilfer: e, done: e.done ?? Promise.resolve({ dropped: false }) };
   }
 
   /** Current §8.3 budget (quality preset: 8, Low 6). */
@@ -175,6 +224,7 @@ export class EnemyManager {
    */
   spawn(type, pos, opts = {}) {
     const ctx = this.ctx;
+    if (type === 'pilfer' && opts.chase) type = 'pilfer_chase';
     const def = resolveEnemyDef(type);
     if (def.unknown) console.warn(`[enemies] unknown type "${type}" (generic stand-in)`);
     const p = new THREE.Vector3();
@@ -247,6 +297,46 @@ export class EnemyManager {
     return out;
   }
 
+  /**
+   * World request (shader warm-up): build hidden-from-the-game, dressed stand-ins of `list` ([{ type, opts }]) on a
+   * ring around `at` — not in `list`, not registered as actors, no `enemy:spawned`, AI off, the alert "!" showing —
+   * and resolve to a cleanup function once their models are dressed (bounded wait). Cleanup takes them out of the
+   * scene; their materials stay alive (programs kept) until the level unloads. Bosses build as plain stand-ins (no
+   * boss:start).
+   * @param {{type: string, opts?: object}[]} list @param {{x: number, y?: number, z: number}} at
+   * @returns {Promise<() => void>}
+   */
+  async prewarm(list, at) {
+    const ctx = this.ctx, made = [], n = Math.max(1, list?.length ?? 0), W = M2.prewarm;
+    (list ?? []).forEach(({ type, opts } = {}, i) => {
+      try {
+        const def = resolveEnemyDef(type);
+        if (def.unknown) return;
+        const a = (i / n) * Math.PI * 2;
+        const pos = new THREE.Vector3(at.x + Math.sin(a) * W.ring, at.y ?? 0, at.z + Math.cos(a) * W.ring);
+        const e = new Enemy(ctx, { ...def, boss: false }, { ...(opts ?? {}), pos, facing: a + Math.PI, ai: false });
+        e.ai = false; e.hurtable = false; e.tags.add('warm');
+        e.object3d.name = `warm:${def.id}`;
+        ctx.scene?.add(e.object3d);
+        e.loadVisual();
+        made.push(e);
+      } catch (err) { console.warn(`[enemies] prewarm ${type} failed`, err); }
+    });
+    const ready = (e) => e.disposed || (e.def.model && !e.def.procedural ? !!e.anim : !!e.visual);
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    while (made.length && !made.every(ready) && now() - t0 < W.timeout) await new Promise((res) => setTimeout(res, 30));
+    for (const e of made) {
+      e.bangT = TUNING.bang.dur;
+      try { e.render(1, 1 / 60); } catch { /* not dressed in time */ }
+      e.object3d.traverse((o) => { if (o.isMesh && !o.userData.sharedProp) o.castShadow = true; });
+    }
+    return () => {
+      for (const e of made) { e.object3d.removeFromParent(); this._warmKeep.push(e); }
+      made.length = 0;
+    };
+  }
+
   /** Remove an enemy for good (idempotent). */
   despawn(e) {
     if (!e) return;
@@ -267,6 +357,10 @@ export class EnemyManager {
     for (const d of this.debris) d.obj.removeFromParent();
     this.debris.length = 0;
     this.boss = null;
+    this.behind = null;
+    this.pinThief = null;
+    this.webs.clear();
+    for (const e of this._warmKeep.splice(0)) if (!e.disposed) e.dispose();
   }
 
   /** Pack alert: idle / patrolling enemies within `r` of `pos` join the fight after a short, staggered beat. */
@@ -275,6 +369,7 @@ export class EnemyManager {
     for (const e of this.list) {
       if (e === from || !e.alive || e.dormant || e.alerted || !e.ai || e.scripted) continue;
       if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) > r) continue;
+      this.wakeUp(e);
       e.wake(rangeOf(this.ctx.rng, TUNING.groupAlertDelay));
     }
   }
@@ -284,8 +379,10 @@ export class EnemyManager {
     if (!pos) return;
     const r = PLAYER.meow.aggroRadius;
     for (const e of this.list) {
+      if (e.alive && !e.dormant && e.def.onMeow) e.def.onMeow(e, pos);     // B2 P3: only the real Cacklejaw answers
       if (!e.alive || e.dormant || e.alerted || !e.ai || e.scripted) continue;
       if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) > r) continue;
+      this.wakeUp(e);
       e.facing = Math.atan2(pos.x - e.pos.x, pos.z - e.pos.z);
       e.alert();
     }
@@ -301,7 +398,7 @@ export class EnemyManager {
    * away from the hit, bounces once, then shrinks away. Visual only.
    * @param {THREE.Object3D} obj @param {Enemy} e @param {THREE.Vector3|null} [dir]
    */
-  spawnDebris(obj, e, dir = null) {
+  spawnDebris(obj, e, dir = null, o = {}) {
     const scene = this.ctx.scene;
     if (!obj || !scene) return;
     obj.updateWorldMatrix(true, false);
@@ -312,11 +409,11 @@ export class EnemyManager {
     scene.add(obj);
     const h = TUNING.helmet, rng = this.ctx.rng;
     const dx = dir?.x ?? rng.range(-1, 1), dz = dir?.z ?? rng.range(-1, 1), dl = Math.hypot(dx, dz) || 1;
-    const side = h.side * (0.7 + rng() * 0.6), a = rng.range(-0.5, 0.5);
+    const side = (o.side ?? h.side) * (0.7 + rng() * 0.6), a = rng.range(-0.5, 0.5);
     const vx = (dx / dl) * Math.cos(a) - (dz / dl) * Math.sin(a), vz = (dz / dl) * Math.cos(a) + (dx / dl) * Math.sin(a);
-    const vel = new THREE.Vector3(vx * side, h.up * (0.85 + rng() * 0.3), vz * side);
+    const vel = new THREE.Vector3(vx * side, (o.up ?? h.up) * (0.85 + rng() * 0.3), vz * side);
     const axis = new THREE.Vector3(rng.range(-1, 1), rng.range(0.2, 1), rng.range(-1, 1)).normalize();
-    this.debris.push({ obj, vel, axis, spin: h.spin * (0.8 + rng() * 0.4), t: 0, life: h.life, base, bounced: false });
+    this.debris.push({ obj, vel, axis, spin: (o.spin ?? h.spin) * (0.8 + rng() * 0.4), t: 0, life: o.life ?? h.life, base, bounced: false, flutter: !!o.flutter });
   }
 
   _updateDebris(dt) {
@@ -388,6 +485,43 @@ export class EnemyManager {
     }
   }
 
+  /**
+   * World request (§18 budget): a pre-placed enemy that isn't in a fight and is far from her (and from the camera)
+   * sleeps — no AI, no mixer, no draw — until she comes near (hysteresis), it is alerted (pack / Meow) or a cutscene
+   * takes it. Arena / boss / runner spawns never sleep.
+   * Pure decision; exported via the class for tests.
+   */
+  shouldSleep(e, p) {
+    if (!p?.pos || e.alerted || e.scripted || !e.ai || e.def.boss || e.bossAdd || e.objectiveRunner || e.stateName === 'die'
+      || e.spawnOpts?.arena || e.tags.has('cutscene') || e.wakeT > 0) return false;
+    let d = Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
+    const cam = this.ctx.camera?.position;                     // a cutscene / shot camera near it keeps it awake too
+    if (cam) d = Math.min(d, Math.hypot(e.pos.x - cam.x, e.pos.z - cam.z));
+    const S = M2.sleep;
+    return e.asleep ? d > S.dist - S.hysteresis : d > S.dist;
+  }
+
+  _sleepCheck(e, dt) {
+    if ((e._sleepT = (e._sleepT ?? 0) - dt) > 0) return e.asleep;
+    e._sleepT = M2.sleep.every;
+    const want = this.shouldSleep(e, this.ctx.player);
+    if (want !== !!e.asleep) {
+      e.asleep = want;
+      e.object3d.visible = !want;
+      if (want) { e.vel.set(0, 0, 0); e.endTelegraph(); e.releaseToken(); }
+      else e.snap();
+    }
+    return e.asleep;
+  }
+
+  /** Wake a sleeping enemy now (an alert reached it). */
+  wakeUp(e) {
+    if (!e?.asleep) return;
+    e.asleep = false; e._sleepT = M2.sleep.every;
+    e.object3d.visible = true;
+    e.snap();
+  }
+
   update(dt) {
     const g = this.ctx.game;
     if (this.pending.length) this._drainPending();
@@ -397,18 +531,26 @@ export class EnemyManager {
     for (let i = 0; i < it.length; i++) {
       const e = it[i];
       if (e.disposed || e.dormant || !g.simActive(e)) continue;
+      if (this._sleepCheck(e, dt)) continue;
       e.update(dt);
     }
     it.length = 0;
+    if (g.mode === 'play' || g.mode === undefined) {
+      this.webs.update(dt);
+      tickSlow(this.ctx.player, dt);                          // spider slows until the player owns applySlow
+    }
   }
 
   render(alpha, dt) {
-    for (let i = 0; i < this.list.length; i++) { const e = this.list[i]; if (!e.dormant) e.render(alpha, dt); }
-    this._updateDebris(visualDt(this.ctx, dt));
+    for (let i = 0; i < this.list.length; i++) { const e = this.list[i]; if (!e.dormant && !e.asleep) e.render(alpha, dt); }
+    const vdt = visualDt(this.ctx, dt);
+    this._updateDebris(vdt);
+    this.webs.render(vdt);
   }
 
   dispose() {
     this.clear();
+    this.webs.dispose();
     for (const off of this._offs) off?.();
     this._offs.length = 0;
   }

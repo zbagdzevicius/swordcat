@@ -194,7 +194,8 @@ export class LevelManager {
   /** Fallback warm-up stand-ins through the public spawn API: frozen (ai off), uncapped, visible, alert "!" shown. */
   async _prewarmEnemies(types, pp, out) {   // types: [{ type, opts }]
     const ctx = this.ctx, list = [];
-    types = types.filter(({ type: t }) => !BOSSES?.[t] && !String(t).startsWith('bonehead'));   // bosses start fights; bones: tutorial hint
+    // bosses start fights (boss:start → the HUD bar) and their arenas; bones: tutorial hint
+    types = types.filter(({ type: t }) => !BOSSES?.[t] && !String(t).startsWith('boss_') && !String(t).startsWith('bonehead'));
     types.forEach(({ type: t, opts }, i) => {
       const a = (i / Math.max(1, types.length)) * Math.PI * 2, x = pp.x + Math.sin(a) * 2.5, z = pp.z + Math.cos(a) * 2.5;
       try {
@@ -282,6 +283,14 @@ export class LevelManager {
   }
 
   setDawnstone(on) { this.current?.setDawnstone?.(on); }
+
+  /** Light a Vigil Stone now (story: CS-04 lights vigil_3); it becomes the respawn / Continue point. */
+  activateVigil(id, { silent = false } = {}) {
+    const v = this.current?.vigils?.find((x) => x.id === id);
+    if (!v) return false;
+    v.activate({ silent });
+    return true;
+  }
 
   /** Use an interactable now (story / tests). */
   interact(id) { return this.current?.interact?.(id) ?? false; }

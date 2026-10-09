@@ -106,6 +106,14 @@ const CSS = `
 .st-tut .num{position:absolute;left:12px;top:50%;width:36px;height:36px;margin-top:-18px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;
   background:radial-gradient(circle at 38% 32%,#F7A9BE,#E07895 55%,#B84E6E);box-shadow:0 2px 0 #8E3552}
 .st-tut.ok{box-shadow:0 6px 16px #0005,inset 0 0 0 2px #E9C46A,0 0 0 3px #F5D06B}
+.st-letter{position:absolute;inset:0;z-index:15;display:grid;place-items:center;opacity:0;transition:opacity 1.1s ease;background:radial-gradient(ellipse at 50% 50%,#0000 40%,#000a 100%)}
+.st-letter.on{opacity:1}
+.st-letter .pg{position:relative;width:min(640px,86vw);padding:44px 56px 50px;border-radius:4px;transform:rotate(-1.2deg);
+  background:radial-gradient(ellipse at 40% 35%,#F6E7C2 0%,#E9D3A0 60%,#D2B47A 100%);box-shadow:0 14px 40px #000a,inset 0 0 60px #A47C3E66,inset 0 0 0 2px #C9A86A55}
+.st-letter .lb{font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:13px;letter-spacing:.3em;text-transform:uppercase;color:#8E5F1C;margin-bottom:6px}
+.st-letter .tt{font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:clamp(18px,2vw,24px);color:#5A3A1A;margin-bottom:16px}
+.st-letter .tx{font-family:StoryUncial,"Uncial Antiqua",Georgia,serif;font-size:clamp(19px,2.2vw,28px);line-height:1.55;color:#3B2414;white-space:pre-wrap}
+.st-letter .st-seal{opacity:1;transform:rotate(-12deg) scale(.8);right:-14px;bottom:-14px}
 .st-skip{position:absolute;right:28px;bottom:calc(10% + 18px);z-index:14;display:flex;align-items:center;gap:8px;opacity:0;transition:opacity .2s;
   font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:14px;letter-spacing:.12em;color:#F4E7C9;text-shadow:0 1px 0 #000a}
 .st-root.nolb .st-skip{bottom:28px}
@@ -176,6 +184,7 @@ export class Overlay {
       <div class="st-tut"><div class="num"></div><div class="hd"></div><div class="tx"></div></div>
       <div class="st-prompt"><div class="txt"></div><svg class="st-ring" viewBox="0 0 86 86"><circle class="bg" cx="43" cy="43" r="36"/><circle class="fg" cx="43" cy="43" r="36"/></svg></div>
       <div class="st-dlg"><div class="st-scroll"><div class="st-port"></div><div class="st-body"><div class="st-name"></div><div class="st-text"></div></div><div class="st-next"></div></div></div>
+      <div class="st-letter"><div class="pg"><div class="lb"></div><div class="tt"></div><div class="tx"></div><div class="st-seal"></div></div></div>
       <div class="st-skip"><svg viewBox="0 0 34 34"><circle class="bg" cx="17" cy="17" r="13"/><circle class="fg" cx="17" cy="17" r="13"/></svg><span></span></div>
       <div class="st-fade"></div>`;
     host.appendChild(root);
@@ -186,6 +195,7 @@ export class Overlay {
       tut: q('.st-tut'), tutNum: q('.st-tut .num'), tutHd: q('.st-tut .hd'), tutTx: q('.st-tut .tx'),
       prompt: q('.st-prompt'), promptTxt: q('.st-prompt .txt'), ring: q('.st-ring .fg'), ringSvg: q('.st-ring'),
       dlg: q('.st-dlg'), port: q('.st-port'), name: q('.st-name'), text: q('.st-text'),
+      letter: q('.st-letter'), letLb: q('.st-letter .lb'), letTt: q('.st-letter .tt'), letTx: q('.st-letter .tx'),
       skip: q('.st-skip'), skipRing: q('.st-skip .fg'), skipTxt: q('.st-skip span'), fade: q('.st-fade'),
     };
     this.el.ring.style.strokeDasharray = `${RING_C}`; this.el.ring.style.strokeDashoffset = `${RING_C}`;
@@ -253,6 +263,14 @@ export class Overlay {
     if (!(this.fade.dur > 0)) { this.fade.a = this.fade.to; el.style.opacity = String(this.fade.a); }
   }
 
+  /** The parchment letter card: `{ label, title, text }` or null. */
+  letter(c) {
+    const el = this.el.letter; if (!el) return;
+    if (!c) { el.classList.remove('on'); return; }
+    this.el.letLb.textContent = c.label ?? ''; this.el.letTt.textContent = c.title ?? ''; this.el.letTx.textContent = c.text ?? '';
+    el.classList.add('on');
+  }
+
   skipRing(p, label) {
     const el = this.el.skip; if (!el) return;
     const on = p > 0.001;
@@ -308,7 +326,7 @@ export class Overlay {
 
   clear() {
     if (!this.root) return;
-    this.caption(null); this.title(null); this.press(false); this.chapter(null); this.dialog(null); this.skipRing(0);
+    this.caption(null); this.title(null); this.press(false); this.chapter(null); this.dialog(null); this.skipRing(0); this.letter(null);
     this.el.prompt.classList.remove('on');
   }
 

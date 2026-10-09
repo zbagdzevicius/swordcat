@@ -261,7 +261,10 @@ const SETPIECES = {
     // rails; statue and mark are 1.5 m further north (still 2.5 m apart).
     const plinth = kit.place(kit.proc('tallbert_plinth', plinthParts), 4, -55.5, { yaw: Math.PI, collider: 'box', jitter: 0 });
     if (knight && plinth) {
-      kit.place(knight, 4, -55.5, { fit: 'tallbert', yaw: Math.PI, y: plinth.top - 0.02, collider: 'circle', shrink: 0.45, jitter: 0, clear: false, occupy: 1.6 });
+      const k = kit.place(knight, 4, -55.5, { fit: 'tallbert', yaw: Math.PI, y: plinth.top - 0.02, collider: false, jitter: 0, clear: false, occupy: 1.6 });
+      // the knight's own footprint centre followed the sword's box (~1.9 m in front of the plinth, over g01_mark,
+      // requests/story.md): a body circle on the plinth instead, from the plinth top to the helm
+      if (k) kit.collider({ x: 4, z: -55.5, r: 0.75, y0: plinth.top - 0.1, y1: k.top, walkable: false });
       kit.anchor('tallbert', 4, -55.5, undefined, Math.PI);
     }
     kit.anchor('g01_mark', 4, -58, undefined, Math.PI);
@@ -502,7 +505,7 @@ export default defineLevel({
       spawns: [['rat_pike', 2, [-14, -42], 4], ['rat_pike', 2, [-24, -32], 2], ['rat_xbow', 1, CROSSROADS_PERCH, 0, { y: 1.2 }]] },
     { id: 'noodle', kind: 'kitten', kittenId: 'noodle', at: [-30, -26], hide: 'meow', prop: 'barrel', onlyIf: 'prologue.done' },
     { id: 'letter_1', kind: 'letter', letterId: 'l1', at: [-18, -24] },
-    { id: 'stones', kind: 'arena', at: [-20, -4], r: 12, props: 'stoneRing8',
+    { id: 'stones', kind: 'arena', at: [-20, -4], r: 12, props: 'stoneRing8', stones: STONES_TALL.slice(1, 6),   // same 5 templates as the scatter: 5 fade sets, not 8
       waves: [[['rat_pike', 3]], [['rat_pike', 3], ['rat_xbow', 1]]] },
     { id: 'button', kind: 'kitten', kittenId: 'button', at: [-20, -4], hide: 'stand', standTime: 3.0, zoneR: 1.2, needClear: 'stones', onlyIf: 'prologue.done' },
     { id: 'vigil_2', kind: 'checkpoint', at: [-12, 8] },
@@ -522,7 +525,7 @@ export default defineLevel({
       waves: [[['rat_pike', 3], ['rat_xbow', 1]], [['rat_pike', 3], ['rat_xbow', 2]], [['rat_pike', 4], ['crow', 2]]] },
     // gated on Mochi: the forest expects her in the party (§12.3); reaching the exit early nudges her back to the cage
     { id: 'exit', kind: 'exit', at: [30, 92], size: [8, 2], to: 'forest', spawnId: 'start', when: (s, c) => !mochiCaged(c),
-      blocked: { text: 'Mochi is still caged at the Old Bridge!' } },   // → strings key once story adds it (requests/world.md)
+      blocked: { toast: 'toast.exit.mochi', text: 'Mochi is still caged at the Old Bridge!' } },
     // the tutorial cow (practice field): Meow → moo, wake, walk 6 m east, reveals Pearl (story)
     { id: 'practice_cow', kind: 'setpiece', at: [12, -72],
       placed: [{ id: 'cow_practice', model: M.cow, at: [12, -72], fit: { h: 1.6 }, yaw: -Math.PI / 2, clip: 'Idle_Headlow', meowWakes: true, walkTo: [18, -72], kind: 'cow', radius: 0.9 }] },
@@ -530,7 +533,7 @@ export default defineLevel({
   setpieces: SETPIECES,
   water: [{ kind: 'stream', pts: [[-100, 60.5], [-70, 63], [-40, 61], [-10, 62.8], [14, 61.4], [30, 62], [46, 62.6], [70, 60.8], [100, 62.5]], width: 8, y: -0.4, deep: true }],
   scatter: [
-    { model: STONES_TALL.slice(1, 6), n: 30, fit: { h: [1.5, 3] }, minDistFromPath: 5, minDist: 2.5 },
+    { model: STONES_TALL.slice(1, 6), n: 30, fit: { h: [1.5, 3] }, minDistFromPath: 5, minDist: 2.5, fade: true },
     { model: M.oak, n: 25, fit: { h: [8, 12] }, minDistFromPath: 10, minDist: 6, tree: true },
     { model: [M.treeDefault, M.treeDetailed], n: 22, fit: { h: [7, 11] }, minDistFromPath: 12, minDist: 7, tree: true },
     { model: M.hay, n: 12, fit: { h: 1.0 }, minDistFromPath: 3, minDist: 3, tpl: HAY },

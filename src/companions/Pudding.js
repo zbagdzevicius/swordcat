@@ -15,6 +15,7 @@ import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
 import { damp, dampAngle, clamp01, easeInOutSine, lerp } from '../core/math.js';
 import { visualDt } from '../characters/index.js';
+import { disposeInstance } from '../core/Assets.js';
 
 export const PUDDING_MODEL = 'models/creatures/monsters-flying/Dragon_Evolved.glb';
 export const PUDDING = {
@@ -451,6 +452,7 @@ export class Pudding extends ScriptedActorMixin(Actor) {
     this.disposed = true;
     this._disposeNet();
     this.anim?.dispose();
+    if (this.object3d) disposeInstance(this.object3d, { detach: false });   // bone texture + cloned materials
     super.dispose();
   }
 }

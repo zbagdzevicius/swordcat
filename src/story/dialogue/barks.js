@@ -19,6 +19,10 @@ export const ENEMY_GATE = Object.freeze({ gap: 2.5, noRepeat: 20, chance: 0.35, 
 export const ENCOUNTER_GAP = 12;
 /** Her answer to a rescued kitten waits for the kitten's own line (s). */
 export const KITTEN_REPLY_DELAY = 1.8;
+/** ...and is dropped when she is farther than this from the kitten by then (m). */
+export const KITTEN_REPLY_RANGE = 10;
+/** A speaker that moves farther than this in one rendered frame (teleport, respawn) drops its bubble (m). */
+export const BUBBLE_JUMP = 4;
 /** The sneeze bark's own minimum spacing (§6.1: 1 per 90 s). */
 export const SNEEZE_GAP = 90;
 
@@ -158,7 +162,12 @@ export class BarkDirector {
     on(E.PLAYER_VALOR, (p) => { if (p?.reason === 'respawn') this._afterRespawn(); });
     on(E.CHECKPOINT, () => { this.lowHpArmed = true; });
     on(E.PLAYER_MILK, (p) => { if (p?.phase === 'start') this.clem('milk'); });
-    on(E.KITTEN_RESCUED, () => this.later(KITTEN_REPLY_DELAY, () => this.clem('kitten')));
+    // her reply only while the kitten is still beside her (a teleport / respawn / vigil warp in the 1.8 s cancels it)
+    on(E.KITTEN_RESCUED, (p) => this.later(KITTEN_REPLY_DELAY, () => {
+      const k = p?.kittenId ? this.ctx.actors?.get?.(p.kittenId) : null;
+      if (k?.pos && !near(k.pos, this.ctx.player?.pos, KITTEN_REPLY_RANGE)) return;
+      this.clem('kitten');
+    }));
     on(E.ARENA_CLEAR, () => this.later(0.8, () => this.clem('arena')));
     on(E.ENEMY_CHOKE, (p) => this.enemy(p?.enemy, 'choke'));
     on(E.ENEMY_JEER, (p) => { if (p?.on) this.enemy(p.enemy, 'gloat'); });
@@ -340,6 +349,12 @@ export class BarkDirector {
     const g = this.ctx.game, dt = g?.hitstopT > 0 ? 0 : frameDt;
     for (const [actor, b] of this.bubbles) {
       if (!actor.object3d?.parent || actor.alive === false && !b.sprite.visible) { this._drop(actor, b); continue; }
+      // a teleport / respawn / level warp: the line belonged to where she was (STATUS M1 "lingering bark")
+      const p = actor.pos;
+      if (p) {
+        if (b.last && b.sprite.visible && b.last.distanceToSquared(p) > BUBBLE_JUMP * BUBBLE_JUMP) b.sprite.hide?.();
+        (b.last ??= new THREE.Vector3()).copy(p);
+      }
       b.sprite.update?.(dt);
     }
     for (let i = this.loose.length - 1; i >= 0; i--) {

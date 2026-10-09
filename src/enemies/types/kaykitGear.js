@@ -5,19 +5,18 @@
 import * as THREE from 'three';
 import { attachAligned, bone, keepUpright, mountNative, posIn, tintAll } from '../rig.js';
 
+import * as CHARS from '../../characters/index.js';
+
 /**
- * The characters area's public API, loaded on first use: rats and crows never wait for (or break with) it, and
- * importing src/enemies stays light under node.
+ * The characters area's public API. Imported statically (core, M2): companions and the player already pull it into
+ * the main chunk, so a dynamic import only produced Vite's INEFFECTIVE_DYNAMIC_IMPORT warning. The async signature
+ * stays so callers need no change.
  * @returns {Promise<typeof import('../../characters/index.js')>}
  */
-export function characters() {
-  return (_chars ??= import('../../characters/index.js').then((m) => (_charsMod = m)));
-}
-let _chars = null;
-let _charsMod = null;
+export function characters() { return Promise.resolve(CHARS); }
 
-/** The characters module if it has already loaded (sync access for ScriptedActor prop toggles), else null. */
-export function loadedCharacters() { return _charsMod; }
+/** The characters module (sync access for ScriptedActor prop toggles). */
+export function loadedCharacters() { return CHARS; }
 
 /** Carried-cage scale for a 1.35 m hyena (the cage hangs from the left fist, its floor just above the grass). */
 const CAGE_SCALE = 0.62;

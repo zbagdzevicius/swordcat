@@ -13,9 +13,12 @@
 import css from './ui.css?inline';
 import fontsCss from './fonts.css?inline';
 import { E } from '../core/events.js';
-import { PLAYER } from '../core/config.js';
+import { PLAYER, KITTEN_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
+
+/** kitten id → the level it is lost in */
+const KITTEN_LEVEL = Object.fromEntries(Object.entries(KITTENS_BY_LEVEL).flatMap(([lvl, ids]) => ids.map((id) => [id, lvl])));
 import { el, flag, setVar, hasDom } from './dom.js';
-import { tx } from './text.js';
+import { tx, levelKittens, UI_STRINGS } from './text.js';
 import { loadFonts } from './fonts.js';
 import { Hud } from './hud.js';
 import { Dialog } from './dialog.js';
@@ -26,6 +29,8 @@ import { Toasts } from './toasts.js';
 import { Prompts } from './prompts.js';
 import { ThreatArrows } from './threatArrows.js';
 import { TouchControls } from './touch.js';
+import { openShop as buildShop, stationId } from './shops.js';
+import { openQuestBoard as buildBoard, HUB_LEVEL } from './questBoard.js';
 
 export const UI_TIMING = Object.freeze({ skipHold: 1.0, skipRingAfter: 0.12, pauseTap: 0.3, tutorialTap: 0.35, gameOverDelay: 1.4, vigilDelay: 0.9 });
 
@@ -150,14 +155,22 @@ export class UI {
     const ctx = this.ctx, bus = ctx.bus, on = (n, f) => this._offs.push(bus.on(n, f));
     const T = (k, v) => tx(ctx, k, v);
     on(E.TOAST, (p) => this.toast(p?.text ?? (p?.key ? T(p.key, p.vars) : ''), { icon: p?.icon, key: p?.key }));
-    on(E.KITTEN_RESCUED, () => this.toast(T('toast.kitten', { n: Math.max(1, ctx.state?.kittens?.length ?? 1) }), { key: 'toast.kitten' }));
+    // M2 (STATUS known issue): the toast counts the level's kittens like the HUD, Results and Quest Board (n/3);
+    // `{total}` (the whole game, n/18) stays available to the string.
+    on(E.KITTEN_RESCUED, (p) => {
+      const lvl = KITTEN_LEVEL[p?.kittenId ?? p?.id] ?? ctx.levels?.current?.id;
+      const k = levelKittens(ctx.state, lvl);
+      const total = Math.max(1, ctx.state?.kittens?.length ?? 1);
+      const vars = k.max ? { n: Math.max(1, k.n), max: k.max, total } : { n: total, max: KITTEN_IDS.length, total };
+      this.toast(T('toast.kitten', vars), { key: 'toast.kitten' });
+    });
     on(E.ITEM_PICKUP, (p) => {
       if (p?.item === 'letter') this.toast(T('toast.letter', { title: T(`letter.${p.id}.title`) }), { key: 'toast.letter' });
       else if (p?.item === 'heartBell') this.toast(T('toast.heartbell'), { key: 'toast.heartbell' });
     });
     on(E.UNLOCK, (p) => {
       if (!p || (p.kind === 'cape' && p.id === 'memeWhite')) return;     // the Meme Cam trigger toasts that one itself
-      const name = ctx.strings?.has?.(`${p.kind}.${p.id}`) ? T(`${p.kind}.${p.id}`) : titleCaseId(p.id);
+      const name = ctx.strings?.has?.(`${p.kind}.${p.id}`) ? T(`${p.kind}.${p.id}`) : UI_STRINGS[`ui.${p.kind}.${p.id}`] ? T(`ui.${p.kind}.${p.id}`) : titleCaseId(p.id);
       if (p.kind === 'skin') this.toast(T('toast.skin', { name }), { key: 'toast.skin' });
       else if (p.kind === 'cape') this.toast(T('toast.cape', { name }), { key: 'toast.cape' });
     });
@@ -204,6 +217,20 @@ export class UI {
       if (p?.prev === 'menu' && p.mode !== 'menu' && this.menus.paused && !this._modeBusy) this.menus.popLayer('pause');
     });
     on(E.INPUT_DEVICE, (p) => this._device(p?.device));
+    // hub stations (§12.5): world's interactables of kind 'shop' / 'board' (or the station ids themselves) open the
+    // panels. world may also call ui.openShop / openQuestBoard from its own use(); the second call is a no-op.
+    on(E.INTERACT, (p) => this._onInteract(p?.target));
+    on(E.LEVEL_LOADED, (p) => { this._levelStart = { id: p?.id, rec: { ...(ctx.state?.levels?.[p?.id] ?? {}) } }; });
+  }
+
+  _onInteract(t) {
+    if (!t || this.busy) return;
+    const kind = String(t.kind ?? '').toLowerCase();
+    if (/^(board|questboard|quest_board|quest)$/.test(kind) || /quest.?board/i.test(String(t.id ?? ''))) { this.openQuestBoard(); return; }
+    if (/^(shop|station|stall|banner|barracks|lookout)$/.test(kind)) {
+      const st = stationId(t.station ?? t.id) ?? stationId(kind);
+      if (st) this.openShop(st);
+    }
   }
 
   _device(d) {
@@ -227,7 +254,10 @@ export class UI {
   showResults(payload) {
     if (!this.results) return Promise.resolve();
     this._takeMode('cutscene');
-    return this.results.show(payload);
+    // §14.3 results per level: compare with the record as it stood when the level started (world writes the new best
+    // into state.levels before it calls us)
+    const lvl = payload?.levelId, before = this._levelStart?.id === lvl ? this._levelStart.rec : null;
+    return this.results.show(payload, { prev: before });
   }
 
   /** Queue a toast (§14.3: queue of 3, 2.5 s each). */
@@ -292,6 +322,55 @@ export class UI {
     this._freeze();
     this.menus.openVigil();
   }
+
+  /**
+   * Hub station panel (§13.3 / §14.3): 'bakery' | 'forge' | 'library' | 'wardrobe' | 'lookout' | 'barracks' (world ids such
+   * as 'shop_forge' or the keeper's name also work). Freezes the world; resolves when the panel closes.
+   */
+  openShop(id) {
+    const st = stationId(id);
+    if (!this.menus || !st) return Promise.resolve();
+    if (this.menus.has(`shop:${st}`)) return this._shopP ?? Promise.resolve();
+    if (this.busy) return Promise.resolve();
+    this._freeze();
+    this._shopP = buildShop(this.menus, st).finally(() => { this._shopP = null; });
+    return this._shopP;
+  }
+
+  /**
+   * Quest Board (§12.5, §14.3). Resolves with { levelId, replay } or null. Unless `onPick` is given (world travels
+   * itself; return false to stay), the ui travels: the town's first exit goes through `levels.exit` (results card,
+   * `town.done`), everything else is `levels.load(id, 'start')`.
+   */
+  openQuestBoard({ onPick = null } = {}) {
+    if (!this.menus) return Promise.resolve(null);
+    if (this.menus.has('board')) return this._boardP ?? Promise.resolve(null);
+    if (this.busy) return Promise.resolve(null);
+    this._freeze();
+    this._boardP = buildBoard(this.menus).then(async (pick) => {
+      this._boardP = null;
+      if (pick) {
+        this.ctx.bus.emit(E.SAVE_REQUEST, { reason: 'board' });
+        if (onPick) { try { await onPick(pick.levelId, pick); } catch (e) { console.warn('[ui] board onPick failed', e); } }
+        else this.travel(pick.levelId);
+      }
+      return pick;
+    });
+    return this._boardP;
+  }
+
+  /** Leave for a level from the hub (Quest Board): the first town exit shows its results; replays load directly. */
+  travel(levelId) {
+    const ctx = this.ctx, lv = ctx.levels;
+    if (!lv || !levelId) return Promise.resolve();
+    const cur = lv.current?.id;
+    if (cur === HUB_LEVEL && !ctx.state?.cond?.(`${HUB_LEVEL}.done`) && typeof lv.exit === 'function') return lv.exit(levelId, 'start');
+    if (typeof ctx.story?.travel === 'function') return ctx.story.travel(levelId, 'start');
+    return lv.load?.(levelId, 'start');
+  }
+
+  /** Close a station / board panel (back, the Close button). */
+  closeShop() { if (this.menus?.paused) this.resume(); }
 
   vigilRest() {
     this.ctx.bus.emit(E.SAVE_REQUEST, { reason: 'vigil' });

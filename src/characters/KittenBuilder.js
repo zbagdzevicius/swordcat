@@ -98,7 +98,7 @@ export class Kitten {
     const acc = (cfg.accessories || []).map((a) => (typeof a === 'string' ? { id: a } : a));
     const earsLowHint = acc.some((a) => ['potHelm', 'plumedHelm', 'bucketHelm', 'jesterHat', 'bakerHat'].includes(a.id)) ? 0.9
       : acc.some((a) => ['wizardHat', 'strawHat', 'nightcap', 'sergeantCap'].includes(a.id)) ? 0.6
-        : acc.some((a) => ['coif'].includes(a.id)) ? 0.5 : acc.some((a) => a.id === 'hood') ? 0.35 : 0;
+        : acc.some((a) => ['coif'].includes(a.id)) ? 0.25 : acc.some((a) => a.id === 'hood') ? 0.2 : 0;
 
     // ---- skeleton
     const { P, R, curve } = restPose(w, earsLowHint);
@@ -146,6 +146,10 @@ export class Kitten {
       const bc = rgb(this.coat.base), dark = 0.2126 * bc[0] + 0.7152 * bc[1] + 0.0722 * bc[2] < 0.05;
       // (and a softer rim: on the outermost shells it drew a pale ring around the dark fringe, a "doubled" outline)
       if (dark) Object.assign(fo, { len: fo.len * 0.75, fringe: 0.55, edgeStart: 0.0, edgeFade: 0.85, rim: fo.rim * 0.5 });
+      // ...and more fill (M2: Mochi's face and body read almost black in D-01 under day fog): a stronger ambient /
+      // hemisphere term and lighter roots so the tuxedo keeps its form; `cfg.fur.ambMul` overrides
+      if (dark) Object.assign(fo, { ambMul: 2.4, rootDark: 0.92, sheen: 0.09 });
+      for (const key of ['ambMul', 'sheen']) if (cfg.fur?.[key] !== undefined) fo[key] = cfg.fur[key];
       for (const key of ['fringe', 'edgeStart', 'edgeFade']) if (cfg.fur?.[key] !== undefined) fo[key] = cfg.fur[key];
       this.furMat = makeFurMaterial(fo);
       this.furMatBaked = makeFurMaterial({ ...fo, baked: true });
@@ -329,7 +333,7 @@ export class Kitten {
     this.time = this.rnd() * 10;
     this.holy = 0;
     this.expr = cfg.expression || 'neutral';
-    this.emotes = { earsFlat: 0, tailPuff: 0, nod: 0, shake: 0, meow: 0, sneeze: 0 };
+    this.emotes = { earsFlat: 0, tailPuff: 0, nod: 0, shake: 0, meow: 0, sneeze: 0, wave: 0, throw: 0 };
     this.earTwitch = { L: 0, R: 0, next: 2 + this.rnd() * 4 };
     this.springs = { head: new Spring(90, 12), tail: new Spring(40, 6) };
     this.idleLife = true;
@@ -338,7 +342,7 @@ export class Kitten {
     this.poseName = null;
     this.drag = new THREE.Vector3();
     this.setExpression(this.expr, true);
-    this.setPose(cfg.pose || 'idle', { blend: 0 });
+    this.setPose(cfg.pose || 'idle', { blend: 0, expression: !cfg.expression });   // the config's own expression wins at build
     for (const pr of cfg.props || []) this.setProp(pr, true);
     this.animate(0);
     this.root.updateMatrixWorld(true);
@@ -735,7 +739,11 @@ export class Kitten {
     this._earMood = name === 'sad' || name === 'faint' ? -0.35 : name === 'angry' ? -0.25 : name === 'surprised' ? 0.15 : name === 'sleep' ? -0.15 : 0;
     return this;
   }
-  /** Emotes (GAME_DESIGN §19.4): 'earsFlat' | 'tailPuff' | 'blink' | 'nod' | 'shake' | 'meow' | 'sneeze' | 'bowBounce'. */
+  /**
+   * Emotes (GAME_DESIGN §19.4): 'earsFlat' | 'tailPuff' | 'blink' | 'nod' | 'shake' | 'meow' | 'sneeze' | 'bowBounce',
+   * plus M2 'wave' (1.2 s paw wave; the 'wave' pose waves continuously) and 'throw' (0.5 s overarm lob for the Spoon
+   * Brigade, §9.3; the spoon leaves the paw at EMOTE_RELEASE.throw of the way through).
+   */
   emote(name) {
     switch (name) {
       case 'earsFlat': this.emotes.earsFlat = 0.45; break;
@@ -746,6 +754,8 @@ export class Kitten {
       case 'meow': this.emotes.meow = 0.6; break;
       case 'sneeze': this.emotes.sneeze = 0.5; break;
       case 'bowBounce': this.bow?.userData.bounce(1); break;
+      case 'wave': this.emotes.wave = EMOTE_DUR.wave; break;
+      case 'throw': this.emotes.throw = EMOTE_DUR.throw; break;
       default: break;
     }
     return this;
@@ -877,6 +887,24 @@ export class Kitten {
       const sign = s === 'L' ? -1 : 1;
       J['ear' + s].quaternion.multiply(E(-0.7 * flat + this._earMood * 0.8 - tw * 0.3, 0, sign * (0.6 * flat - this._earMood * 0.6 + tw)));
     }
+    // waving: the 'wave' pose waves on its own; the emote raises the paw and waves whatever the pose
+    if (this.poseName === 'wave' || em.wave > 0) {
+      const w = Math.sin(t * 9) * 0.35;
+      if (this.poseName !== 'wave') {
+        const up = Math.min(1, em.wave / 0.15, (EMOTE_DUR.wave - em.wave) / 0.15);
+        J.shoulderR.quaternion.multiply(E(-0.25 * up, 0, -2.3 * up));
+      }
+      J.shoulderR.quaternion.multiply(E(0, 0, w * 0.3));
+      J.elbowR.quaternion.multiply(E(w * 0.5, 0, 0));
+    }
+    // overarm throw: wind up behind the head, snap forward at the release, follow through
+    if (em.throw > 0) {
+      const k = 1 - em.throw / EMOTE_DUR.throw, rel = EMOTE_RELEASE.throw;
+      const back = smoothstep(0, rel, k), fwd = smoothstep(rel, rel + 0.2, k), settle = smoothstep(0.75, 1, k);
+      J.shoulderR.quaternion.multiply(E((-2.8 * back + 2.0 * fwd) * (1 - settle), 0, -0.3 * back * (1 - settle)));
+      J.elbowR.quaternion.multiply(E(-1.2 * back * (1 - fwd), 0, 0));
+      J.chest.quaternion.multiply(E(0.12 * fwd * (1 - settle), (0.35 * back - 0.6 * fwd) * (1 - settle), 0));
+    }
     // emotes
     if (em.nod > 0) J.head.quaternion.multiply(E(Math.sin((1 - em.nod / 0.6) * Math.PI * 2) * 0.22, 0, 0));
     if (em.shake > 0) J.head.quaternion.multiply(E(0, Math.sin((1 - em.shake / 0.7) * Math.PI * 4) * 0.25, 0));
@@ -907,6 +935,7 @@ export class Kitten {
     // parents first: the actor root may have been teleported / turned this frame (level load, respawn), and the cape
     // pins + colliders read the joints' matrixWorld (requests/player.md: the cloth re-initialised on the wrong side)
     this.root.updateWorldMatrix(true, true);
+    if (this.sword && this.sword.skin === 'toobig' && this.sword.group.parent) this._dragTip();
     if (tickFurTime(dt, o.frameId)) { CAPE_TIME.value += dt; envTick(); }
     if (this.furMat) {
       const vel = o.velocity;
@@ -927,16 +956,86 @@ export class Kitten {
     return this;
   }
 
+  /**
+   * "Even More Too Big" (GAME_DESIGN §13.4): the 1.6 m claymore's tip drags on the ground (visual only). When a pose
+   * would push the tip below her feet, the blade pivots about the crossguard until the tip rests on the ground plane.
+   */
+  _dragTip(floor = DRAG_TIP_FLOOR) {
+    const g = this.sword.group, root = this.root;
+    this.sword.tip.getWorldPosition(_dtA); root.worldToLocal(_dtA);
+    if (_dtA.y >= floor) return false;
+    g.getWorldPosition(_dtO); root.worldToLocal(_dtO);
+    if (_dtO.y <= floor + 0.02) return false;                             // lying poses: the guard itself is low
+    _dtD.subVectors(_dtA, _dtO);
+    const L = _dtD.length(); if (L < 1e-4) return false;
+    _dtD.divideScalar(L);
+    const want = Math.max(-1, Math.min(1, (floor - _dtO.y) / L));
+    const ang = Math.asin(want) - Math.asin(Math.max(-1, Math.min(1, _dtD.y)));
+    _dtK.crossVectors(_dtD, _UP);
+    if (_dtK.lengthSq() < 1e-8) return false;
+    _dtK.transformDirection(root.matrixWorld);                             // root-local axis → world (normalised)
+    _dtQ.setFromAxisAngle(_dtK, ang);
+    g.parent.getWorldQuaternion(_dtP);
+    // local' = P⁻¹ · R · P · local
+    g.quaternion.premultiply(_dtP).premultiply(_dtQ).premultiply(_dtP.invert());
+    g.updateMatrixWorld(true);
+    return true;
+  }
+
   /** animate + simulate. */
   update(dt, o = {}) { this.animate(dt, o); return this.simulate(dt, o); }
 
   /** Snap secondary motion (cape) after a teleport / cut. */
   snap() { this.cape?.snap(); return this; }
 
+  /**
+   * Objects whose shader programs are first needed mid-fight (requests/fx.md + player.md: the first Holy charge /
+   * Golden Hour compiled the aura hull, the blade streak and the Dawnblade sparkles on the spot).
+   */
+  warmObjects() {
+    const out = [...(this.auraMeshes || [])];
+    if (this.sword) { out.push(this.sword.streak); if (this.sword.sparkles) out.push(this.sword.sparkles); }
+    return out.filter((o) => o && o.geometry);
+  }
+  /**
+   * Shader warm-up, part 1 (call right before the frame renders): every hidden warm object is shown for this one
+   * frame with an empty draw range, so the real renderer (level fog + lights, the composer's render target) builds
+   * its program now while nothing is drawn. `warmEnd()` (after the frame) restores them. Returns the count.
+   */
+  warmBegin() {
+    const S = (this._warmSaved ??= []);
+    if (S.length) return 0;
+    let n = 0;
+    for (const o of this.warmObjects()) {
+      if (o.visible) continue;
+      const g = o.geometry;
+      S.push(o, g.drawRange.start, g.drawRange.count, o.frustumCulled);
+      g.setDrawRange(0, 0); o.frustumCulled = false; o.visible = true; n++;
+    }
+    if (n) this.warmups = (this.warmups ?? 0) + 1;
+    return n;
+  }
+  /** Shader warm-up, part 2: restore what warmBegin() changed (idempotent). */
+  warmEnd() {
+    const S = this._warmSaved;
+    if (!S?.length) return;
+    for (let i = 0; i < S.length; i += 4) {
+      const o = S[i];
+      o.geometry.setDrawRange(S[i + 1], S[i + 2]); o.frustumCulled = S[i + 3];
+      o.visible = false;
+    }
+    S.length = 0;
+    // the real state may have changed in between (setHoly during the warm frame): re-apply it
+    if (this.auraMeshes) for (const m of this.auraMeshes) m.visible = this.holy > 0.01;
+    const st = this.sword?.streak;
+    if (st) st.visible = st.material.uniforms.uI.value > 0.01;
+  }
+
   /** Draw-call estimate for budgets (meshes that render). */
   drawCalls() { let n = 0; this.root.traverseVisible((c) => { if (c.isMesh || c.isLine) n++; }); return n; }
 
   dispose() {
+    this.warmEnd();
     this.headFur?.dispose(); this.bibFur?.dispose(); this.tailFur?.dispose();
     this.kitMesh.geometry.dispose(); this.tuftMesh?.geometry.dispose();
     this.cape?.dispose(); this.sword?.dispose(); this.eyes?.dispose();
@@ -951,6 +1050,13 @@ export class Kitten {
     this.root.removeFromParent();
   }
 }
+
+const DRAG_TIP_FLOOR = 0.012;
+/** M2 emote lengths (s) and the throw's release point (fraction of the emote where the spoon leaves the paw). */
+export const EMOTE_DUR = Object.freeze({ wave: 1.2, throw: 0.5 });
+export const EMOTE_RELEASE = Object.freeze({ throw: 0.42 });
+const _dtA = new THREE.Vector3(), _dtO = new THREE.Vector3(), _dtD = new THREE.Vector3(), _dtK = new THREE.Vector3();
+const _dtQ = new THREE.Quaternion(), _dtP = new THREE.Quaternion(), _UP = new THREE.Vector3(0, 1, 0);
 
 // ------------------------------------------------------------------ shared small materials
 

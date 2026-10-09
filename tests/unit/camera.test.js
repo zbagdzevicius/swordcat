@@ -15,10 +15,11 @@ import { PRESETS, PRESET_NAMES, localToWorld, worldToLocal, memeSway, handheld, 
 import { CamPose, blendPose, applyPose, resolveEase } from '../../src/camera/pose.js';
 import { CameraShake } from '../../src/camera/CameraShake.js';
 import { relYaw, pickLockTarget, switchLockTarget, nearestLockTarget, handoverLockTarget, acquireLockTarget, LOCK_FALLBACK_RANGE, FlickDetector, StickFlick } from '../../src/camera/LockOn.js';
-import { segmentHitsBox, distSqPointSegment, OccluderFader } from '../../src/camera/Occluders.js';
-import { CutsceneCamera, normalizeShot } from '../../src/camera/CutsceneCamera.js';
+import { segmentHitsBox, distSqPointSegment, OccluderFader, SOLID_MIN_H } from '../../src/camera/Occluders.js';
+import { CutsceneCamera, normalizeShot, bezier2, shotScale } from '../../src/camera/CutsceneCamera.js';
 import { MemeCam } from '../../src/camera/MemeCam.js';
-import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, ARM_GOOD, HANDOVER_RATE, FADE_MAX_DIST, FADE_COLLIDERS, LOCK_SEP, LOCK_BIAS_MAX, COMBAT_PITCH, COMBAT_LIFT, lockYawBias, lockScreenSep, lockSepGoal } from '../../src/camera/FollowCamera.js';
+import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, ARM_GOOD, HANDOVER_RATE, FADE_MAX_DIST, FADE_COLLIDERS, LOCK_SEP, LOCK_BIAS_MAX, COMBAT_PITCH, COMBAT_LIFT, lockYawBias, lockScreenSep, lockSepGoal,
+  bossBearing, bossFrameYaw, bossLift, BOSS_EDGE, BOSS_LOOK_GRACE, SOLID_COLLIDERS, BOSS_PASS } from '../../src/camera/FollowCamera.js';
 import manifest from '../../src/camera/assets.manifest.js';
 
 const { CAMERA, PLAYER } = config;
@@ -72,7 +73,7 @@ const frames = (cam, n, dt = 1 / 60) => { for (let i = 0; i < n; i++) cam.render
 test('§5.2 presets: every preset exists with the spec placements', () => {
   for (const n of ['MEME_LOOP', 'REVERSE_HORDE', 'PULLBACK', 'SELFIE', 'WHIP_FALL', 'CRANE_DOWN', 'ECU_EYES', 'TWO_SHOT_LOW', 'HERO_LOW', 'FLIGHT_ORBIT'])
     assert.ok(PRESETS[n], `preset ${n}`);
-  assert.equal(PRESET_NAMES.length, 10);
+  assert.equal(PRESET_NAMES.length, 17);
   const M = PRESETS.MEME_LOOP;
   assert.deepEqual([...M.pos], [0.06, 0.68, 1.9]); assert.deepEqual([...M.look], [0.03, 0.9, 0]);
   assert.equal(M.fov, 38); assert.equal(M.sway, 0.005); assert.equal(M.loop, 3.8); assert.equal(MEME_PERIOD, PLAYER.memeCam.loop);
@@ -900,4 +901,160 @@ test('Lock hand-over: prefers a target in front of the camera; the orbit turn is
   assert.ok(maxStep <= HANDOVER_RATE / 60 + 1e-6, `max ${(maxStep * 60).toFixed(2)} rad/s`);
   const want = Math.atan2(0.3, -2.5) + Math.PI + cam.lockBias;
   assert.ok(Math.abs(Math.atan2(Math.sin(cam.yaw - want), Math.cos(cam.yaw - want))) < 0.05, 'arrives on the new target');
+});
+
+// ---------------------------------------------------------------- M2: presets, rails, boss framing, solid occluders
+test('M2 presets: WIDE / MEDIUM / TWO_SHOT / LOW_BEHIND / PUSH_OUT / ECU_BLADE / BOSS_INTRO', () => {
+  for (const n of ['WIDE', 'MEDIUM', 'TWO_SHOT', 'LOW_BEHIND', 'PUSH_OUT', 'ECU_BLADE', 'BOSS_INTRO']) {
+    const P = PRESETS[n];
+    assert.ok(P && Object.isFrozen(P), n);
+    assert.ok(Array.isArray(P.pos) && Array.isArray(P.look) && (typeof P.fov === 'number' || Array.isArray(P.fov)), `${n} placement`);
+  }
+  assert.ok(PRESETS.LOW_BEHIND.pos[2] < 0 && PRESETS.LOW_BEHIND.pos[1] < 0.5, 'LOW_BEHIND: low, behind her');
+  assert.ok(PRESETS.LOW_BEHIND.look[1] > 2, 'LOW_BEHIND looks up');
+  assert.equal(PRESETS.PUSH_OUT.kind, 'rail');
+  assert.ok(PRESETS.WIDE.pos[2] > 6, 'WIDE is wide');
+  assert.equal(PRESETS.TWO_SHOT.lookMid, 0.8);
+  assert.equal(PRESETS.BOSS_INTRO.scale, 'height');
+  assert.equal(normalizeShot({ preset: 'PUSH_OUT' }).mode, 'rail');
+  assert.equal(normalizeShot({ preset: 'WIDE' }).mode, 'cut');
+});
+
+test('PULLBACK (CS-08) rail: low dolly, then crane up through `via`; ends exactly at (0, 4, 14)', () => {
+  const a = new THREE.Vector3(0, 0, 0), c = new THREE.Vector3(0, 1, 5), b = new THREE.Vector3(0, 4, 10), o = new THREE.Vector3();
+  nearV(bezier2(a, c, b, 0, o), [0, 0, 0]); nearV(bezier2(a, c, b, 1, o), [0, 4, 10]); nearV(bezier2(a, c, b, 0.5, o), [0, 1.5, 5]);
+  const n = normalizeShot({ preset: 'PULLBACK' });
+  assert.deepEqual([...n.via], [...PRESETS.PULLBACK.via]); assert.equal(n.collide, true);
+  assert.equal(normalizeShot({ preset: 'PULLBACK', to: [0, 2, 6] }).via, null, 'an overridden rail drops the preset control point');
+  const ctx = makeCtx();
+  const cc = new CutsceneCamera(ctx);
+  cc.start({ preset: 'PULLBACK', anchor: 'swordcat' }, new CamPose());
+  for (let i = 0; i < 180; i++) cc.update(1 / 60);                   // half way
+  const linY = (0.68 + 4) / 2;
+  assert.ok(cc.pose.pos.y < linY - 0.3, `mid-rail height ${cc.pose.pos.y.toFixed(2)} stays low (linear ${linY})`);
+  assert.ok(cc.pose.pos.z > 5, `mid-rail distance ${cc.pose.pos.z.toFixed(2)}: the dolly leads`);
+  for (let i = 0; i < 200; i++) cc.update(1 / 60);
+  nearV(cc.pose.pos, [0, 4, 14], 1e-9); near(cc.pose.fov, 50);
+});
+
+test('collide shots: the lens is pulled to her side of a wall (castFn); scale: height scales placements', () => {
+  const ctx = makeCtx();
+  const cc = new CutsceneCamera(ctx);
+  let calls = 0;
+  cc.castFn = (o, d, max, r) => { calls++; assert.equal(r, 0.2); return 3; };
+  cc.start({ anchor: 'swordcat', pos: [0, 0.75, 6], look: [0, 0.75, 0], collide: true, mode: 'cut' }, new CamPose());
+  assert.ok(calls > 0);
+  nearV(cc.pose.pos, [0, 0.75, 2.95], 1e-9, 'pulled in to hit - 0.05');
+  cc.castFn = () => -1;
+  cc.update(1 / 60);
+  nearV(cc.pose.pos, [0, 0.75, 6], 1e-9, 'clear: authored placement');
+  const boss = new Actor(ctx, { faction: 'enemy', height: 2.2 });
+  boss.pos.set(10, 0, 0); boss.object3d.position.copy(boss.pos); boss.facing = 0;
+  ctx.actors.register(boss, 'boss_cacklejaw');
+  assert.equal(shotScale('height', { height: 2.2 }), 2.2); assert.equal(shotScale(null, { height: 2.2 }), 1); assert.equal(shotScale(1.5, null), 1.5);
+  cc.start({ preset: 'BOSS_INTRO', anchor: 'boss_cacklejaw' }, new CamPose());
+  const P = PRESETS.BOSS_INTRO;
+  nearV(cc.pose.pos, [10 + P.pos[0] * 2.2, P.pos[1] * 2.2, P.pos[2] * 2.2], 1e-9);
+  nearV(cc.pose.look, [10, P.look[1] * 2.2, 0], 1e-9);
+});
+
+const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+test('Boss framing: bearing / assist yaw keep the boss within BOSS_EDGE; tall-boss lift', () => {
+  const yaw = 0, d = 6;                          // yaw 0: the camera sits at +Z of her, looking toward -Z
+  near(bossBearing(0, 0, 0, -10, yaw, d), 0, 1e-9, 'boss straight ahead');
+  const off = bossBearing(0, 0, 10, 0, yaw, d);
+  assert.ok(Math.abs(off) > BOSS_EDGE, `boss to the side is off-screen (${off.toFixed(2)})`);
+  const g = bossFrameYaw(0, 0, 10, 0, yaw, d);
+  assert.ok(Math.abs(bossBearing(0, 0, 10, 0, g, d)) <= BOSS_EDGE + 1e-3, 'goal puts him at the edge');
+  assert.ok(Math.abs(wrapA(g - yaw)) < Math.abs(wrapA(Math.atan2(10, 0) + Math.PI - yaw)), 'only as far as needed');
+  assert.equal(bossFrameYaw(0, 0, 0, -10, yaw, d), yaw, 'already framed: unchanged');
+  const g2 = bossFrameYaw(0, 0, 0, 12, yaw, d);  // behind the camera
+  assert.ok(Math.abs(bossBearing(0, 0, 0, 12, g2, d)) <= BOSS_EDGE + 1e-3);
+  near(bossLift(1.6, 2), 0); near(bossLift(2.2, 2), 0.21, 1e-9); near(bossLift(3.0, 2), 0.3); near(bossLift(2.2, 8), 0);
+});
+
+test('FollowCamera boss assist: an off-screen boss is brought into frame after the look grace; arena walls pass', async () => {
+  const { ctx, cam } = await makeCam();
+  const boss = enemyAt(ctx, 9, 0, 2.2);
+  boss.alive = true; boss.hp = 700;
+  ctx.enemies.boss = boss;
+  ctx.bus.emit(E.BOSS_START, { id: 'boss_cacklejaw' });
+  assert.equal(cam.modeName, 'boss');
+  ctx.input.lookIdleTime = 0;
+  frames(cam, 2);
+  const y0 = cam.yaw;
+  ctx.input.lookIdleTime = BOSS_LOOK_GRACE + 1;
+  frames(cam, 240);
+  assert.notEqual(cam.yaw, y0);
+  const b = bossBearing(ctx.player.pos.x, ctx.player.pos.z, 9, 0, cam.yaw, cam.distance);
+  assert.ok(Math.abs(b) <= BOSS_EDGE + 0.03, `boss bearing ${b.toFixed(3)} after the assist`);
+  assert.ok(Math.abs(cam.bossAssist) < 0.03, 'assist settled');
+  assert.equal(camTransparent({ x: 0, z: 0, r: 12.4, kind: 'ring', arenaWall: 'mill' }), true, 'fog wall ring: arm passes');
+  assert.equal(camTransparent({ x: 0, z: 0, r: 12.4, kind: 'ring' }), false, 'other rings still block');
+});
+
+function solidLevel() {
+  const root = new THREE.Group(); root.name = 'props';
+  const mat = new THREE.MeshStandardMaterial();
+  const bm = new THREE.BatchedMesh(8, 4000, 12000, mat);
+  const houseG = bm.addGeometry(new THREE.BoxGeometry(6, 7, 6).translate(0, 3.5, 0));
+  const chimneyG = bm.addGeometry(new THREE.BoxGeometry(0.6, 1.5, 0.6).translate(0, 0.75, 0));
+  const crateG = bm.addGeometry(new THREE.BoxGeometry(0.8, 0.8, 0.8).translate(0, 0.4, 0));
+  const pillarG = bm.addGeometry(new THREE.CylinderGeometry(0.8, 0.8, 2.5, 12).translate(0, 1.25, 0));
+  const house = bm.addInstance(houseG); bm.setMatrixAt(house, new THREE.Matrix4().makeTranslation(0, 0, 10));
+  const chim = bm.addInstance(chimneyG); bm.setMatrixAt(chim, new THREE.Matrix4().makeTranslation(1.5, 5.4, 11));
+  const crate = bm.addInstance(crateG); bm.setMatrixAt(crate, new THREE.Matrix4().makeTranslation(5, 0, 0));
+  const pillar = bm.addInstance(pillarG); bm.setMatrixAt(pillar, new THREE.Matrix4().makeTranslation(-8, 0, 0));
+  root.add(bm);
+  const cols = {
+    house: { x: 0, z: 10, hx: 2.55, hz: 2.55, y0: -0.6, y1: 7 },
+    crate: { minX: 4.6, maxX: 5.4, minZ: -0.4, maxZ: 0.4, y0: -0.6, y1: 0.8 },
+    pillar: { x: -8, z: 0, r: 0.8, y0: -0.6, y1: 2.5 },
+  };
+  return { root, bm, cols, ids: { house, chim, crate, pillar } };
+}
+
+test('Solid occluders (town houses, pillars): auto-registered from footprints; keep blocking; fade when they hide her', async () => {
+  const { ctx, cam } = await makeCam();
+  const { root, bm, cols, ids } = solidLevel();
+  const level = { root: new THREE.Group(), groups: { props: root }, colliders: { boxes: [cols.house, cols.crate], circles: [cols.pillar], segments: [] }, actors: [] };
+  level.root.add(root); ctx.scene.add(level.root);
+  ctx.bus.emit(E.LEVEL_LOADED, { level });
+  assert.equal(cam.solidOccluders, 2, 'house (+ chimney) and pillar; the crate is too low');
+  assert.ok(SOLID_MIN_H >= 1.6);
+  assert.ok(SOLID_COLLIDERS.has(cols.house) && SOLID_COLLIDERS.has(cols.pillar) && !SOLID_COLLIDERS.has(cols.crate));
+  assert.ok(BOSS_PASS.has(cols.pillar) && !BOSS_PASS.has(cols.house), 'only slender solids pass in boss fights');
+  assert.equal(camTransparent(cols.house), false, 'a house still stops the arm');
+  assert.equal(cam._transparent(cols.pillar), false, 'pillar blocks outside boss fights');
+  cam.bossActive = true;
+  assert.equal(cam._transparent(cols.pillar), true, 'pillar passes in a boss fight');
+  cam.bossActive = false;
+  const house = cam._fader.units.find((u) => u.solid && u.parts.some((p) => p.index === ids.house));
+  assert.ok(house && house.parts.some((p) => p.index === ids.chim), 'the chimney joins the house unit');
+  const f = cam._fader, subj = [new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(0, 1, 0)];
+  for (let i = 0; i < 30; i++) f.update(1 / 30, new THREE.Vector3(0, 3, 16), subj, 2);
+  assert.ok(house.f > 0.9 && f.fadedSolidCount >= 1, 'camera beyond the house, her in front: it fades');
+  assert.equal(bm.getVisibleAt(ids.house), false, 'source hidden while the proxy draws it');
+  const lens = [new THREE.Vector3(0, 3, 4.5)];
+  for (let i = 0; i < 60; i++) f.update(1 / 30, new THREE.Vector3(0, 3, 6.95), subj, 2, lens, 1);
+  assert.equal(house.f, 0, 'camera pressed against the near wall, facing her: stays solid');
+  assert.equal(bm.getVisibleAt(ids.house), true);
+  assert.equal(f.covers(-2.55, 2.55, 7.45, 12.55, 7), false, 'solid units never make their colliders transparent');
+});
+
+test('Solid occluders: explicit tags (camFade "solid", camFadeSolidIds) and camOccluder:false opt-out', () => {
+  const f = new OccluderFader();
+  const scene = new THREE.Scene();
+  const { root, bm, ids } = solidLevel();
+  bm.userData.camFadeSolidIds = [ids.house];
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(3, 16, 3), new THREE.MeshStandardMaterial());
+  tower.userData.camFade = 'solid'; root.add(tower);
+  scene.add(root);
+  assert.equal(f.scan(root, scene), 2);
+  assert.equal(f.solidCount, 2);
+  const f2 = new OccluderFader();
+  const lvl = solidLevel();
+  lvl.bm.userData.camOccluder = false;
+  const res = f2.scanSolids(lvl.root, [{ minX: -2.55, maxX: 2.55, minZ: 7.45, maxZ: 12.55, y0: -0.6, y1: 7 }]);
+  assert.equal(res.units, 0);
 });

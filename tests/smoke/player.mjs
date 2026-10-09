@@ -9,6 +9,9 @@
 //   player:lives     Still Standing at 1 HP, then a faint (player:lifeLost, 8 lives) and the respawn at full HP;
 //                    Milk Break heals 4; Meow
 //   player:memecam   §19.9.5: idle(16) → Meme Cam (camera:meme, mode memecam, Oath) → memecam.png + blank check; W exits
+//   player:upgrades  M2 §13.3: satchel II → milkMax 4 (filled), Valor Gain ×1.25, Sharpness III ×1.5, Quick Charge tier 2 < 1.05 s
+//   player:standing  M2 §7.3: Standing Ground pays through a block; stops when the rat targets a companion → standing-ground.png
+//   player:cosmetics M2 §13.4/§13.5: six skin + cape pairs → look-skin-*.png; Even More Too Big tip on the ground / trailing
 //   player:look      studio gallery: idle, Big Swoosh, the Stand, Golden Hour Oath, run (SMOKE_PLAYER_LOOK=full: every
 //                    pose / swing — slash1-3, bright, riposte, jump, pounce, sip, charge, holy, hurt, faint)
 import fs from 'node:fs';
@@ -500,6 +503,117 @@ export default [
       await t.frames(30);
       if (full) await pose(t, 'faint', 'const p = g.ctx.player; p.god = false; p.hp = 0; p.alive = false; p.onDeath()', 'p.state === "dead" && p.stateT > 1.2');
       if (full) await t.G(() => window.__GAME__.__pl.until((p) => p.alive, 5000));
+    },
+  },
+  // ------------------------------------------------------------------ M2: shop upgrades (§13.3)
+  {
+    name: 'player:upgrades', order: 27, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await install(t);
+      const r = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, u = ctx.state.upgrades;
+        const saved = { ...u };
+        g.__plUpg = saved;
+        p.milk = 1;
+        Object.assign(u, { satchel: 2, sharp: 3, quickCharge: true, valorGain: true, waveReach: true });
+        return true;
+      });
+      t.assert(r, 'upgrades set');
+      await simWait(t, 0.1);
+      const s = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player;
+        p.setValor(0); p.addValor(20, 'test');
+        return { milkMax: p.milkMax, milk: p.milk, valor: p.valor, gainMul: p.valorState.gainMul, dealt: ctx.combat.dealtMul?.(p) ?? null,
+          t1: p.tier1Time(), t2: p.tier2Time() };
+      });
+      t.assert(s.milkMax >= 4, `Bigger Satchel II: milkMax ${s.milkMax} (expected ≥ 4)`);
+      t.assert(s.milk >= 3, `the bought slots come filled (milk ${s.milk})`);
+      t.assert(Math.abs(s.valor - 25) < 1e-6, `Valor Gain: +20 → ${s.valor} (expected 25)`);
+      t.assert(s.dealt === null || Math.abs(s.dealt - 1.5) < 1e-6, `Sharpness III: dealtMul ${s.dealt}`);
+      t.assert(Math.abs(s.t1 - 0.45) < 1e-6 && Math.abs(s.t2 - 0.85) < 1e-6, `Quick Charge tiers ${s.t1} / ${s.t2}`);
+      // Quick Charge in play: Shard 1 + Valor 50, tier 2 after ~0.85 s of holding J
+      await t.G(() => { const g = window.__GAME__; g.player.setShards(1); g.player.setValor(60); return true; });
+      await t.page.keyboard.down('KeyJ');
+      const tier2 = await until(t, 'p.state === "charge" && p.chargeTier === 2', 6000);
+      const ct = await t.G(() => window.__GAME__.ctx.player.chargeT);
+      await t.page.keyboard.up('KeyJ');
+      t.assert(tier2 && ct < 1.05, `Quick Charge: tier 2 at chargeT ${ct.toFixed(2)} (base 1.10)`);
+      await until(t, 'p.state === "move"', 4000);
+      await t.G(() => { const g = window.__GAME__; Object.assign(g.ctx.state.upgrades, g.__plUpg); return true; });
+      await simWait(t, 0.1);
+      const back = await t.G(() => window.__GAME__.ctx.player.milkMax);
+      t.log(`satchel → milkMax ${s.milkMax}, Valor ×${s.gainMul}, sharp ×${s.dealt}, quick tier 2 at ${ct.toFixed(2)} s; restored milkMax ${back}`);
+    },
+  },
+
+  // ------------------------------------------------------------------ M2: Standing Ground (§7.3)
+  {
+    name: 'player:standing', order: 27.2, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await install(t);
+      await t.G(() => {
+        const g = window.__GAME__, pl = g.__pl, ctx = g.ctx;
+        ctx.player.setValor(0);
+        const e = pl.rat(0, 3.0);
+        e.alerted = true; e.stateName = 'chase';
+        g.__plRat = e;
+        return true;
+      });
+      await clearEv(t);
+      await t.page.keyboard.down('KeyL');
+      const paying = await until(t, 'p.standingGround && p.valor >= 2', 8000);
+      // a block in the middle of it: the pushback must not un-plant her
+      const v0 = await t.G(() => window.__GAME__.ctx.player.valor);
+      await t.G(() => { const g = window.__GAME__; g.__plRat.pos.set(g.ctx.player.pos.x + Math.sin(g.ctx.player.facing) * 1.2, g.ctx.player.pos.y, g.ctx.player.pos.z + Math.cos(g.ctx.player.facing) * 1.2); g.ctx.player.guardState.guardT = 1; return g.__pl.poke(g.__plRat); });
+      await simWait(t, 0.5);
+      const after = await ps(t);
+      const sg = await t.G(() => window.__GAME__.ctx.player.standingGround);
+      await shot(t, 'player/standing-ground');
+      // the token goes to a companion for good: the payout stops
+      await t.G(() => { const g = window.__GAME__, e = g.__plRat; e.targetActor = () => ({ id: 'mochi' }); return true; });
+      const stops = await until(t, '!p.standingGround', 4000);
+      await t.page.keyboard.up('KeyL');
+      await t.G(() => { const g = window.__GAME__; g.ctx.enemies.despawn?.(g.__plRat); return true; });
+      t.assert(paying, 'Standing Ground: no Valor while planted in the Stand near an alerted rat');
+      t.assert(after.valor > v0 && sg, `still paying after a block (Valor ${v0.toFixed(1)} → ${after.valor.toFixed(1)}, standing ${sg})`);
+      t.assert(stops, 'an enemy targeting a companion does not count');
+      t.log(`Valor ${v0.toFixed(1)} → ${after.valor.toFixed(1)} through a block; grit ${after.grit}`);
+    },
+  },
+
+  // ------------------------------------------------------------------ M2: sword skins + capes (§13.4, §13.5)
+  {
+    name: 'player:cosmetics', order: 27.4, level: 'meadow', spawn: 'start', timeout: 300000,
+    async run(t) {
+      await install(t);
+      await t.G(() => { const g = window.__GAME__; g.__plCos = { ...g.ctx.state.cosmetics }; return true; });
+      const looks = [['twig', 'blue'], ['fishbone', 'memeWhite'], ['baguette', 'green'], ['diamond', 'midnight'], ['dawnblade', 'gold'], ['toobig', 'red']];
+      for (const [sword, cape] of looks) {
+        await t.G(([s, c]) => { const cos = window.__GAME__.ctx.state.cosmetics; cos.sword = s; cos.cape = c; return true; }, [sword, cape]);
+        const ok = await until(t, `p.model.k?.sword?.skin === "${sword}" && p.model.capeApplied === "${cape}" && (!${sword === 'diamond' || sword === 'toobig'} || p.model.k.sword.group.getObjectByName("swordModel"))`, 15000);
+        t.assert(ok, `skin ${sword} + cape ${cape} not applied`);
+        await simWait(t, 0.4);
+        await pose(t, `skin-${sword}`, '', 'true', [[1.7, 0.8, 1.9], [0, 0.45, 0.25], 38]);
+      }
+      // Even More Too Big: the tip rests on the ground (idle) and drags behind her (running)
+      const tip = await t.G(() => {
+        const p = window.__GAME__.ctx.player, k = p.model.k, v = new window.__GAME__.THREE.Vector3();
+        k.sword.tip.getWorldPosition(v);
+        return { tipY: v.y - p.pos.y, dragW: p.model.dragW };
+      });
+      t.assert(tip.dragW > 0.9 && Math.abs(tip.tipY) < 0.12, `toobig tip at ${tip.tipY.toFixed(3)} m above her feet (dragW ${tip.dragW.toFixed(2)})`);
+      await pose(t, 'skin-toobig-run', 'g.ctx.input.setVirtualMove(0, 1)', 'Math.hypot(p.vel.x, p.vel.z) > 5.3', [[-2.4, 1.1, -1.2], [0, 0.35, -0.5], 40]);
+      const runTip = await t.G(() => {
+        const p = window.__GAME__.ctx.player, v = new window.__GAME__.THREE.Vector3();
+        p.model.k.sword.tip.getWorldPosition(v);
+        const dx = v.x - p.pos.x, dz = v.z - p.pos.z;
+        return { y: v.y - p.pos.y, behind: -(dx * Math.sin(p.facing) + dz * Math.cos(p.facing)) };
+      });
+      t.assert(Math.abs(runTip.y) < 0.2 && runTip.behind > 0.4, `running: the toobig tip trails behind on the ground (y ${runTip.y.toFixed(2)}, behind ${runTip.behind.toFixed(2)} m)`);
+      await t.G(() => { const g = window.__GAME__; g.ctx.input.setVirtualMove(0, 0); g.ctx.input.setDevice('kbm'); Object.assign(g.ctx.state.cosmetics, g.__plCos); return true; });
+      const back = await until(t, 'p.model.k?.sword?.skin === "borrowed"', 8000);
+      t.assert(back, 'the Borrowed Blade comes back');
+      t.log(`toobig tip y ${tip.tipY.toFixed(3)} m`);
     },
   },
 ];

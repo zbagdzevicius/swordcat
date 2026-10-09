@@ -112,6 +112,26 @@ export function resolveFit(path, fit, rng = Math.random) {
  * @property {string} path
  */
 
+/**
+ * Free what a `ctx.assets.model()` instance owns on the GPU (core, M2; requests/enemies.md): every cloned skeleton's
+ * bone texture (SkeletonUtils clones get their own Skeleton; three never frees it on its own) and the per-instance
+ * material clones made by `tint` / `cloneMaterials` (tagged `userData.assetOwned`, or any material you tag with it).
+ * Shared GLTF geometry / textures / materials are never touched. Safe to call twice. Detaches `root` when `detach`.
+ * @param {THREE.Object3D|null|undefined} root @param {{ detach?: boolean, materials?: boolean }} [opts]
+ */
+export function disposeInstance(root, { detach = true, materials = true } = {}) {
+  if (!root) return;
+  const skeletons = new Set(), mats = new Set();
+  root.traverse((o) => {
+    if (o.isSkinnedMesh && o.skeleton) skeletons.add(o.skeleton);
+    if (!materials || !o.material) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m?.userData?.assetOwned) mats.add(m);
+  });
+  for (const sk of skeletons) sk.dispose();
+  for (const m of mats) m.dispose();
+  if (detach) root.removeFromParent();
+}
+
 export class Assets {
   constructor(ctx) {
     this.ctx = ctx;
@@ -214,6 +234,7 @@ export class Assets {
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       const cloned = mats.map((m) => {
         const c = m.clone();
+        c.userData.assetOwned = true;          // a per-instance clone: disposeInstance() frees it
         if (want != null && c.color) c.color.multiply(new THREE.Color(want));
         return c;
       });
@@ -235,6 +256,9 @@ export class Assets {
   }
 
   /** Cached equirectangular HDR (Radiance .hdr; three r180+ HDRLoader). */
+  /** Instance form of the module's `disposeInstance(root, opts)` (skeleton bone textures + owned material clones). */
+  disposeInstance(root, opts) { disposeInstance(root, opts); }
+
   hdr(path) {
     const p = normalizeAssetPath(path);
     return this._cached('hdr:' + p, async () => {

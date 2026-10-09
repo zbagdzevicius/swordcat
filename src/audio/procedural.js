@@ -116,10 +116,26 @@ export const BELL = {
   clunkLayer: { name: 'bellClunk' },
 };
 
-/** Partials of the Sunbell: [{ freq, amp, tau }]. */
-export function bellPartials({ base = BELL.base, damped = false } = {}) {
-  const t0 = damped ? BELL.tauDamped : BELL.tau;
-  return BELL.ratios.map((r, i) => ({ freq: base * r, amp: BELL.amps[i], tau: t0 / Math.sqrt(r) }));
+/**
+ * Bell profiles (same additive model, different metal): the Sunbell (§16.3) and the small brass shop-counter bell the
+ * hub stations ring when you step up (§13.3). `strike` = a short band-passed noise "clank" at the hammer hit.
+ */
+export const BELL_PROFILES = {
+  sunbell:  { base: 196, ratios: BELL.ratios, amps: BELL.amps, tau: BELL.tau, tauDamped: BELL.tauDamped, gain: BELL.gain,
+              strike: { freq: 1800, q: 1.2, dur: 0.05, gain: 0.35 } },
+  // a hand bell: brighter, fewer low partials, rings ~1.5 s
+  handbell: { base: 1318.5, ratios: [1, 2.32, 4.25, 6.63], amps: [1, 0.45, 0.25, 0.12], tau: 0.9, tauDamped: 0.12, gain: 0.16,
+              strike: { freq: 5200, q: 2, dur: 0.012, gain: 0.25 } },
+};
+
+/**
+ * Partials of a bell: [{ freq, amp, tau }] (`profile` 'sunbell' by default; §16.3 τ = 6 s / √ratio).
+ * @param {{base?: number, damped?: boolean, profile?: string}} [opts]
+ */
+export function bellPartials({ base, damped = false, profile = 'sunbell' } = {}) {
+  const P = BELL_PROFILES[profile] ?? BELL_PROFILES.sunbell;
+  const b = base ?? P.base, t0 = damped ? P.tauDamped : P.tau;
+  return P.ratios.map((r, i) => ({ freq: b * r, amp: P.amps[i], tau: t0 / Math.sqrt(r) }));
 }
 
 /** Seconds until every partial has decayed by `nTau` time constants (capped). */
@@ -127,16 +143,25 @@ export function bellDuration(opts = {}) {
   return Math.min(BELL.maxDur, Math.max(...bellPartials(opts).map((p) => p.tau)) * 7);
 }
 
+/** Toll schedule: strike times (s) for `strikes` blows `interval` apart, alternating a slightly softer swing back. */
+export function tollPlan(strikes = 3, interval = 2.4) {
+  const out = [];
+  for (let i = 0; i < Math.max(1, strikes | 0); i++) out.push({ t: i * interval, gain: i % 2 ? 0.85 : 1 });
+  return out;
+}
+
 /**
- * Strike the Sunbell: additive sines with exponential decay into `dest`. Returns { stop(fade), endAt }.
+ * Strike a bell: additive sines with exponential decay into `dest` (+ the hammer transient when `strike`). Returns { stop(fade), endAt }.
  * @param {BaseAudioContext} ac @param {AudioNode} dest
- * @param {{base?: number, damped?: boolean, volume?: number, when?: number, detune?: () => number}} [opts]
+ * @param {{base?: number, damped?: boolean, volume?: number, when?: number, detune?: () => number, profile?: string,
+ *          strike?: boolean, rand?: () => number}} [opts]
  */
-export function strikeBell(ac, dest, { base = BELL.base, damped = false, volume = 1, when = 0, detune = null } = {}) {
+export function strikeBell(ac, dest, { base, damped = false, volume = 1, when = 0, detune = null, profile = 'sunbell', strike = false, rand = Math.random } = {}) {
+  const P = BELL_PROFILES[profile] ?? BELL_PROFILES.sunbell;
   const t = Math.max(ac.currentTime, when || ac.currentTime);
-  const out = ac.createGain(); out.gain.value = BELL.gain * volume; out.connect(dest);
-  const dur = bellDuration({ base, damped }), oscs = [];
-  for (const p of bellPartials({ base, damped })) {
+  const out = ac.createGain(); out.gain.value = P.gain * volume; out.connect(dest);
+  const dur = bellDuration({ base, damped, profile }), oscs = [], extra = [];
+  for (const p of bellPartials({ base, damped, profile })) {
     const o = ac.createOscillator(); o.type = 'sine';
     o.frequency.value = p.freq; if (detune) o.detune.value = detune();
     const g = ac.createGain();
@@ -147,13 +172,23 @@ export function strikeBell(ac, dest, { base = BELL.base, damped = false, volume 
     o.start(t); o.stop(t + Math.min(dur, p.tau * 7) + 0.05);
     oscs.push(o);
   }
+  if (strike && P.strike) {
+    const S = P.strike, n = Math.max(32, Math.round(ac.sampleRate * S.dur));
+    const buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (rand() * 2 - 1) * (1 - i / n) ** 2;
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = S.freq; f.Q.value = S.q;
+    const g = ac.createGain(); g.gain.value = S.gain * (damped ? 1.4 : 1) / P.gain;
+    src.connect(f); f.connect(g); g.connect(out);
+    src.start(t); extra.push(src);
+  }
   oscs[0].onended = () => { try { out.disconnect(); } catch { /* gone */ } };
   return {
     endAt: t + dur,
     stop(fade = 0.1) {
       const n = ac.currentTime;
       out.gain.cancelScheduledValues(n); out.gain.setValueAtTime(out.gain.value, n); out.gain.linearRampToValueAtTime(0, n + fade);
-      for (const o of oscs) { try { o.stop(n + fade + 0.02); } catch { /* stopped */ } }
+      for (const o of [...oscs, ...extra]) { try { o.stop(n + fade + 0.02); } catch { /* stopped */ } }
     },
   };
 }

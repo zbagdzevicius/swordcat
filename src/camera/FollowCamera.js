@@ -27,6 +27,18 @@
 // When the arm would be cut below ARM_SHORT (a low wall, standing stone or cart right behind her) the boom lifts its
 // pitch over the obstacle and / or swings to the nearest clear side instead (see _avoid; `cam.avoid = false` disables).
 // Everything runs in render() with the interpolated player position (no 120 Hz jitter); input edges in update().
+//
+// M2 additions:
+// - Boss framing (B1 Grizzlechop, B2 Cacklejaw, later bosses): the 6.0 m arm (or `boss.camDist`), and while not
+//   locked a soft "boss assist" that orbits just enough to keep the boss inside BOSS_EDGE of the screen centre once
+//   the player stops steering the view (BOSS_LOOK_GRACE); it replaces auto-follow during the fight. Tall bosses
+//   (> 1.6 m) lift the look point a little when close (bossLift). Arena fog walls never pull the arm in, and in boss
+//   fights slender solid props (millstone pillars, posts; footprint ≤ BOSS_PASS_R) let the arm through and fade.
+// - Solid occluders (town / hub buildings, towers, statues, pillars): auto-registered on level load from the props
+//   group + the level's solid colliders (OccluderFader.scanSolids; world may tag `camFade: 'solid'` instead). They
+//   still stop the spring arm, but fade whenever they hide her (overhanging eaves, corners in lock / boss framing,
+//   cutscene shots).
+// - Cutscene shots: `collide` rails (PULLBACK) use this camera's arm cast; `scale: 'height'` presets (BOSS_INTRO).
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { CAMERA, PLAYER, JUICE } from '../core/config.js';
@@ -37,7 +49,7 @@ import { CamPose, blendPose, applyPose, resolveEase } from './pose.js';
 import { CutsceneCamera, SHOT_MODES } from './CutsceneCamera.js';
 import { MemeCam } from './MemeCam.js';
 import { acquireLockTarget, RECENT_ATTACKER_TIME, handoverLockTarget, switchLockTarget, lockable, FlickDetector, StickFlick, LockMarker } from './LockOn.js';
-import { OccluderFader } from './Occluders.js';
+import { OccluderFader, SOLID_MIN_H } from './Occluders.js';
 import { PRESETS, localToWorld } from './presets.js';
 import { toRecord } from '../physics/StaticColliders.js';
 
@@ -80,8 +92,6 @@ const ENGAGED = new Set(['alert', 'chase', 'windup', 'strike', 'recover', 'circl
 const ARM_MIN = 0.8, ARM_MARGIN = 0.3, ARM_RADIUS = 0.2;
 /** what the spring arm and the lock-on line of sight test: terrain + architecture + static props (thin ones skipped) */
 const ARM_OPTS = Object.freeze({ terrain: true, mesh: true, statics: true });
-/** same, for a physics that supports `opts.ignore(src)` (and says so with `physics.castIgnore = true`) */
-const ARM_OPTS_IGNORE = Object.freeze({ terrain: true, mesh: true, statics: true, ignore: (src) => camTransparent(src) });
 /** static circles up to this radius (trunks, posts, pillars of a fence) never pull the camera in (m) */
 export const THIN_RADIUS = 0.6;
 /** segment colliders (fences, thin walls) up to this half-thickness are skipped too (m) */
@@ -118,6 +128,9 @@ const HANDOVER_EASE = 0.3;
 const HANDOVER_MAX_T = 2.5;
 /** tree fade only while the camera is this close to its subject (m): follow / lock / boss arms, close shots */
 export const FADE_MAX_DIST = 9;
+/** solid occluders (houses, towers) fade up to this camera-to-subject distance (m): a house never hides her in a
+ *  medium cutscene shot either; only far establishing shots keep them solid */
+export const SOLID_FADE_MAX_DIST = 18;
 /** Meme Cam: rotations of the MEME_LOOP framing around her (rad) tried in order until the lens has a clear view */
 export const MEME_YAWS = Object.freeze([0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05]);
 /** Meme Cam view test: everything solid counts (a fence or trunk 1 m in front of her face spoils the shot too) */
@@ -134,6 +147,55 @@ export const MEME_EYE_Y = PRESETS.ECU_EYES.look[1];
  */
 export const FADE_COLLIDERS = new WeakSet();
 
+/** Static colliders matched to a solid occluder (a house, tower, statue or pillar that fades when it hides her). */
+export const SOLID_COLLIDERS = new WeakSet();
+/** Solid-occluder colliders slender enough (footprint half-size ≤ BOSS_PASS_R m) that a boss-fight arm passes them. */
+export const BOSS_PASS = new WeakSet();
+export const BOSS_PASS_R = 1.0;
+/** boss assist: keep the boss within this angle (rad) of the screen centre (horizontal) */
+export const BOSS_EDGE = 0.35;
+/** boss assist: starts this long (s) after the player's last look input */
+export const BOSS_LOOK_GRACE = 0.8;
+/** boss assist: orbit damping rate (1/s) */
+export const BOSS_YAW_RATE = 2.2;
+/** boss assist: no assist while the boss is this close (m, horizontal): he fills the frame anyway */
+const BOSS_NEAR = 1.2;
+
+/**
+ * Signed horizontal angle (rad) of point (bx, bz) off the view axis of a follow camera orbiting (px, pz) at `yaw`,
+ * `dist` m (looking at the pivot).
+ */
+export function bossBearing(px, pz, bx, bz, yaw, dist) {
+  const cx = px + Math.sin(yaw) * dist, cz = pz + Math.cos(yaw) * dist;
+  return wrapAngle(Math.atan2(bx - cx, bz - cz) - Math.atan2(px - cx, pz - cz));
+}
+
+/**
+ * Orbit yaw closest to `yaw` that shows the boss within `edge` rad of the view axis: `yaw` itself when he already is,
+ * else bisection along the short arc toward "straight behind her, facing him" (where his bearing is 0).
+ */
+export function bossFrameYaw(px, pz, bx, bz, yaw, dist, edge = BOSS_EDGE) {
+  if (Math.abs(bossBearing(px, pz, bx, bz, yaw, dist)) <= edge) return yaw;
+  const behind = Math.atan2(bx - px, bz - pz) + Math.PI;
+  const delta = wrapAngle(behind - yaw);
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) / 2;
+    if (Math.abs(bossBearing(px, pz, bx, bz, yaw + delta * mid, dist)) <= edge) hi = mid; else lo = mid;
+  }
+  return yaw + delta * hi;
+}
+
+/**
+ * Look-point lift (m) for a tall boss close to her, so his head stays in frame: 0.35 m per metre above 1.6 m (max
+ * 0.3 m), fading out between 3 and 7 m.
+ * @param {number} height boss height (m) @param {number} d horizontal distance to her (m)
+ */
+export function bossLift(height, d) {
+  const h = Math.min(0.3, Math.max(0, ((height ?? 1.6) - 1.6) * 0.35));
+  return h * clamp((7 - d) / 4, 0, 1);
+}
+
 /**
  * Should the camera ignore this static collider (it fades instead / is too thin to matter)?
  * Collider descriptions (physics/StaticColliders) may carry `cam: false` (always skip) / `cam: true` (always block);
@@ -142,6 +204,7 @@ export const FADE_COLLIDERS = new WeakSet();
  */
 export function camTransparent(src) {
   if (!src || typeof src !== 'object') return false;
+  if (src.arenaWall) return true;                                     // arena fog walls (mist): never pull the arm in
   if (src.cam === false || src.camFade === true || FADE_COLLIDERS.has(src)) return true;
   if (src.cam === true) return false;
   if (src.ax !== undefined || Array.isArray(src.a)) return (src.r ?? 0.1) <= THIN_SEGMENT;                // segment
@@ -295,7 +358,19 @@ export class FollowCamera {
     this._avoidDp = 0;
     /** dead-target hand-over in progress: seconds since it (-1 = none) */
     this._handoverT = -1;
+    /** boss assist: the yaw correction (rad) it is steering toward this frame (0 = the boss is in frame / no assist) */
+    this.bossAssist = 0;
+    /** solid occluders registered for the current level (houses, towers, statues, pillars) */
+    this.solidOccluders = 0;
     this._offs = [];
+    // the arm cast for a physics that honours opts.ignore: camera-transparent statics, plus slender solids in boss fights
+    this._armOptsIgnore = Object.freeze({ terrain: true, mesh: true, statics: true, ignore: (src) => this._transparent(src) });
+    this._cut.castFn = (o, d, max, r) => this._cast(o, d, max, r);
+  }
+
+  /** Is this static collider see-through for the arm right now (camTransparent + boss-fight slender solids)? */
+  _transparent(src) {
+    return camTransparent(src) || (this.bossActive && !!src && typeof src === 'object' && BOSS_PASS.has(src));
   }
 
   // ------------------------------------------------------------------ system contract
@@ -568,6 +643,12 @@ export class FollowCamera {
     this.modeName = this.lockTarget ? 'lock' : this.bossActive ? 'boss' : 'follow';
   }
 
+  /** The live boss (enemies.boss while alive), or null. */
+  _liveBoss() {
+    const b = this.ctx.enemies?.boss;
+    return b && b.alive !== false && !b.dead && (b.pos || b.object3d) ? b : null;
+  }
+
   _setBoss(on) {
     this.bossActive = !!on;
     this._syncGameplayMode();
@@ -617,7 +698,53 @@ export class FollowCamera {
     this._fader.clear();
     if (level?.root) this._fader.scan(level.root, this.ctx.scene);
     this._markFadeColliders(level);
+    this._scanSolids(level);
     if (GAMEPLAY.has(this.modeName)) this.snapBehind();
+  }
+
+  /**
+   * Register the level's solid occluders (see OccluderFader.scanSolids): props in the level's props group (never the
+   * actors) standing on solid static colliders at least SOLID_MIN_H tall. Breakable / moving prop visuals (PropActors'
+   * batch handles) are skipped. Marks the matched colliders (SOLID_COLLIDERS, slender ones BOSS_PASS).
+   * @param {any} [level] defaults to the current level
+   */
+  _scanSolids(level = this.ctx.levels?.current) {
+    this.solidOccluders = 0;
+    const cols = level?.colliders, root = level?.groups?.props ?? level?.root;
+    if (!cols || !root) return 0;
+    const feet = [];
+    for (const key of ['boxes', 'circles']) {
+      for (const c of cols[key] ?? []) {
+        if (!c || typeof c !== 'object' || camTransparent(c) || c.arenaWall) continue;
+        const r = toRecord(c);
+        if (!r || r.kind === 2) continue;                                  // rings (inside walls)
+        if (Number.isFinite(r.y1) && Number.isFinite(r.y0) && r.y1 - r.y0 < SOLID_MIN_H) continue;
+        feet.push(r);
+      }
+    }
+    if (!feet.length) return 0;
+    // batch instances that belong to PropActors (breakables, doors, cages) move or vanish: never part of a unit
+    const skipIds = new Map();
+    for (const a of level.actors ?? []) {
+      const v = a?.visual;
+      if (!v?.batch?.mesh || !v.handle) continue;
+      const id = v.batch.items?.[v.handle.index]?.id;
+      if (id == null) continue;
+      let set = skipIds.get(v.batch.mesh);
+      if (!set) skipIds.set(v.batch.mesh, set = new Set());
+      set.add(id);
+    }
+    const skip = (obj, id) => (id >= 0 ? !!skipIds.get(obj)?.has(id) : false);
+    let res;
+    try { res = this._fader.scanSolids(root, feet, { skip, proxyParent: this.ctx.scene }); } catch (e) { console.warn('[camera] solid occluder scan failed', e); return 0; }
+    for (const src of res.matched) {
+      if (!src || typeof src !== 'object') continue;
+      SOLID_COLLIDERS.add(src);
+      const r = toRecord(src);
+      if (r && Math.max(r.maxX - r.minX, r.maxZ - r.minZ) / 2 <= BOSS_PASS_R) BOSS_PASS.add(src);
+    }
+    this.solidOccluders = this._fader.solidCount;
+    return res.units;
   }
 
   /**
@@ -679,7 +806,7 @@ export class FollowCamera {
     if (!ph?.raycast) return -1;
     const sphere = radius > 0 && typeof ph.sphereCast === 'function';
     // physics that honours opts.ignore(src) (requests/camera.md) does it in one exact cast
-    const opts = ph.castIgnore === true ? ARM_OPTS_IGNORE : ARM_OPTS;
+    const opts = ph.castIgnore === true ? this._armOptsIgnore : ARM_OPTS;
     _castOrg.copy(origin);
     let travelled = 0, thinAt = -1;
     for (let i = 0; i <= MAX_SKIPS; i++) {
@@ -688,7 +815,7 @@ export class FollowCamera {
       _ray.set(_castOrg, dir);
       const hit = sphere ? ph.sphereCast(_ray, radius, rem, opts) : ph.raycast(_ray, rem, opts);
       if (!hit) return -1;
-      if (hit.kind !== 'static' || !camTransparent(hit.object)) {
+      if (hit.kind !== 'static' || !this._transparent(hit.object)) {
         // restarted inside a solid right behind a thin prop: its surface is somewhere in the skipped stretch;
         // stop at the thin prop (conservative: never inside the wall)
         if (thinAt >= 0 && hit.distance < 1e-3) return thinAt;
@@ -748,7 +875,8 @@ export class FollowCamera {
     const sp = Math.hypot(p.vel?.x ?? 0, p.vel?.z ?? 0);
 
     // ---- arm length: follow 3.6 / lock 4.5 / boss 6.0, eased over CAMERA.ease; charge push-in; golden punch-in
-    const base = this.bossActive ? CAMERA.bossDist : t ? CAMERA.lockDist : CAMERA.dist;
+    const boss = this.bossActive ? this._liveBoss() : null;
+    const base = this.bossActive ? (boss?.camDist > 0 ? boss.camDist : CAMERA.bossDist) : t ? CAMERA.lockDist : CAMERA.dist;
     const D = this._dist;
     if (base !== D.to) { D.from = this._snap ? base : this.distance; D.to = base; D.t = this._snap ? CAMERA.ease : 0; }
     D.t = Math.min(CAMERA.ease, D.t + dt);
@@ -765,7 +893,9 @@ export class FollowCamera {
     const engaged = t || this._threat ? 1 : 0;
     this._combatW = this._snap ? engaged : damp(this._combatW, engaged, engaged > this._combatW ? 3 : 1.2, dt);
     const cw = this._combatW * (1 - g);
-    const lift = COMBAT_LIFT * cw;
+    const bp = boss ? (boss.object3d?.position ?? boss.pos) : null;
+    const bossD = bp ? Math.hypot(bp.x - ppos.x, bp.z - ppos.z) : Infinity;
+    const lift = COMBAT_LIFT * cw + (bp ? bossLift(boss.height, bossD) * (1 - g) : 0);
     const shoulder = t ? SHOULDER * (want / CAMERA.lockDist) : COMBAT_SHOULDER * cw;
 
     // ---- pivot (head height), smoothed: XZ fast, Y slow so jumps don't bob the view
@@ -796,11 +926,20 @@ export class FollowCamera {
     } else {
       this.lockBias = 0;
       this._handoverT = -1;
+      if (!bp) this.bossAssist = 0;
       if (this._recenter) {
         const w = (p.facing ?? 0) + Math.PI;
         this.yaw = dampAngle(this.yaw, w, 10, dt);
         this.pitch = damp(this.pitch, DEFAULT_PITCH, 8, dt);
         if (Math.abs(wrapAngle(this.yaw - w)) < 0.02) this._recenter = false;
+      } else if (bp && lookOk && bossD > BOSS_NEAR) {
+        // boss assist (replaces auto-follow in the fight): orbit just enough to keep him on screen
+        this.bossAssist = 0;
+        if (lookIdle > BOSS_LOOK_GRACE && !this._avoidActive) {
+          const goal = bossFrameYaw(ppos.x, ppos.z, bp.x, bp.z, this.yaw, want);
+          this.bossAssist = wrapAngle(goal - this.yaw);
+          this.yaw = this._snap ? goal : dampAngle(this.yaw, goal, BOSS_YAW_RATE, dt);
+        }
       } else if (lookOk && sp > 0.5 && lookIdle > CAMERA.autoFollowAfter && !this._avoidActive) {
         const w = (p.facing ?? 0) + Math.PI;
         const off = Math.abs(wrapAngle(w - this.yaw));               // 0 = camera already behind her
@@ -1002,7 +1141,8 @@ export class FollowCamera {
       const near = d2 <= FADE_MAX_DIST * FADE_MAX_DIST;
       // lens segments: never deeper than most of the way to her (props behind her are not in the way)
       const nLens = near ? this._lensPoints(cam, Math.min(LENS_FADE_DIST, 0.85 * Math.sqrt(d2))) : 0;
-      this._fader.update(dt, cam.position, _subjects, near ? 2 : 0, _lens, nLens);
+      const nearSolid = d2 <= SOLID_FADE_MAX_DIST * SOLID_FADE_MAX_DIST;
+      this._fader.update(dt, cam.position, _subjects, near || nearSolid ? 2 : 0, _lens, nLens, !near);
     }
     this._marker.update(GAMEPLAY.has(this.modeName) ? this.lockTarget : null, cam, dt, this.showLockMarker);
   }

@@ -12,6 +12,8 @@ export const SWORD_PTS = Object.freeze({ pommel: -0.132, gripTop: -0.012, gripMi
 
 /** The nine contract poses (GAME_DESIGN §19.4) + extras ('ready', 'guard', 'selfie_sit', 'cheer', 'walkHold', 'hug'). */
 export const POSE_NAMES = Object.freeze(['vigil', 'oath', 'sip', 'selfie', 'faint', 'kneel', 'sit', 'sleep', 'idle']);
+/** Extra poses beyond the contract nine (M1 extras + M2 activity poses). */
+export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
 
 export const POSES = {
   // ref2: sword planted point-down, both gauntlets stacked on the pommel, head straight, eyes on the camera.
@@ -138,9 +140,71 @@ export const POSES = {
     arms: { L: { fk: { shoulder: [-1.25, 0.2, 0.35], elbow: [-0.9, 0.6, 0] } }, R: { fk: { shoulder: [-1.25, -0.2, -0.35], elbow: [-0.9, -0.6, 0] } } },
     expr: 'happy',
   },
+  // ---- M2 activity / companion poses (§12.5 hub spots, §3.3 companions, §9.3 Spoon Brigade). The sword (if any) is
+  // stuck in the ground beside her, like 'hug'.
+  // Waving (Waffles on the balcony, Clover greeting): right paw high; the wave itself is the 'wave' emote / idle life.
+  wave: {
+    joints: { chest: [-0.04, 0.08, 0], head: [-0.08, 0.12, -0.08], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
+    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
+    arms: { R: { fk: { shoulder: [-0.25, 0, -2.5], elbow: [-0.5, 0, 0] } }, L: { fk: { shoulder: [0.05, 0, 0.12], elbow: [-0.25, 0, 0] } } },
+    tail: [[0, 0.3, 0], [0, 0.25, 0], [0, 0.2, 0], [0, 0.15, 0], [0, 0.1, 0], [0, 0, 0]],
+    expr: 'happy',
+  },
+  // Reading (Juniper in the library, Earl Grey): sitting, book held in both paws in the lap, head bowed over it.
+  read: {
+    body: { p: [0, -0.165, -0.02] },
+    joints: { hips: [-0.18, 0, 0], chest: [0.16, 0, 0], head: [0.32, 0, 0], thighL: [-1.5, 0.15, 0.1], thighR: [-1.5, -0.15, -0.1], kneeL: [0.25, 0, 0], kneeR: [0.25, 0, 0], footL: [-0.3, 0.2, 0], footR: [-0.3, -0.2, 0] },
+    sword: { mode: 'root', pommel: [-0.25, 0.47, 0.07], dir: [-0.12, -1, 0.04], face: [0.3, 0, 1] },
+    arms: {
+      R: { paw: [-0.065, 0.3, 0.2], pole: [-1, -0.3, -0.3], twist: [-0.9, 0, 0.3] },
+      L: { paw: [0.065, 0.3, 0.2], pole: [1, -0.3, -0.3], twist: [-0.9, 0, -0.3] },
+    },
+    tail: [[0.0, 0.7, 0], [0, 0.5, 0], [0, 0.45, 0], [0, 0.4, 0], [0, 0.3, 0], [0, 0.2, 0]],
+    expr: 'neutral',
+  },
+  // Fishing on the fountain rim (Biscuit, Pebble): sitting, the rod held out in both paws.
+  fish: {
+    body: { p: [0, -0.165, -0.02] },
+    joints: { hips: [-0.18, 0, 0], chest: [0.06, 0, 0], head: [0.12, 0, 0], thighL: [-1.5, 0.15, 0.1], thighR: [-1.5, -0.15, -0.1], kneeL: [0.6, 0, 0], kneeR: [0.6, 0, 0], footL: [0, 0.2, 0], footR: [0, -0.2, 0] },
+    sword: { mode: 'root', pommel: [-0.25, 0.47, 0.07], dir: [-0.12, -1, 0.04], face: [0.3, 0, 1] },
+    arms: {
+      R: { paw: [-0.03, 0.31, 0.21], pole: [-1, -0.3, -0.3], twist: [-0.3, 0, 0.3] },
+      L: { paw: [0.03, 0.34, 0.24], pole: [1, -0.3, -0.3], twist: [-0.3, 0, -0.3] },
+    },
+    tail: [[0.0, 0.7, 0], [0, 0.5, 0], [0, 0.45, 0], [0, 0.4, 0], [0, 0.3, 0], [0, 0.2, 0]],
+    expr: 'happy',
+  },
+  // Sage's draw: bow arm (left) straight out at the target, right paw drawn back to the cheek, body side-on.
+  aim: {
+    joints: { hips: [0, 0.35, 0], chest: [0, 0.45, 0], head: [-0.02, -0.7, 0], thighL: [-0.15, 0.2, 0.12], thighR: [0.15, -0.1, -0.08], footL: [0, 0.4, 0], footR: [0, -0.2, 0] },
+    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
+    arms: {
+      L: { paw: [0.2, 0.47, 0.28], pole: [1, -1, 0], twist: [0, 0, -1.2] },
+      R: { paw: [0.0, 0.52, 0.06], pole: [-1, -0.2, -0.6], twist: [0, 0, 0.4] },
+    },
+    tail: [[0, -0.2, 0], [0, -0.15, 0], [0, -0.1, 0], [0, -0.05, 0], [0, 0, 0], [0, 0, 0]],
+    expr: 'determined',
+  },
+  // Clover's heal: flower staff raised high in the right paw, left paw out, chin up.
+  heal: {
+    joints: { chest: [-0.1, 0, 0], head: [-0.22, 0, 0], thighL: [0, 0.05, 0.06], thighR: [0, -0.05, -0.06], footL: [0, 0.3, 0], footR: [0, -0.3, 0] },
+    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
+    arms: { R: { fk: { shoulder: [-2.2, 0, -0.35], elbow: [-0.3, 0, 0] } }, L: { fk: { shoulder: [-0.7, 0, 0.7], elbow: [-0.4, 0, 0] } } },
+    tail: [[0, 0.2, 0], [0, 0.2, 0], [0, 0.15, 0], [0, 0.1, 0], [0, 0.05, 0], [0, 0, 0]],
+    expr: 'happy',
+  },
+  // Spoon Brigade ready stance behind the Line: spoon held up and back, ready to lob (the throw is the 'throw' emote).
+  spoonReady: {
+    joints: { chest: [0.04, -0.15, 0], head: [-0.04, 0.12, 0], thighL: [-0.12, 0.1, 0.08], thighR: [0.12, -0.1, -0.08], footL: [0, 0.35, 0], footR: [0, -0.3, 0] },
+    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
+    arms: { R: { fk: { shoulder: [-1.9, 0, -0.5], elbow: [-1.2, 0, 0] } }, L: { fk: { shoulder: [-0.6, 0, 0.4], elbow: [-0.6, 0, 0] } } },
+    tail: [[0, 0.2, 0], [0, 0.2, 0], [0, 0.15, 0], [0, 0.1, 0], [0, 0.05, 0], [0, 0, 0]],
+    expr: 'determined',
+  },
 };
 // derived poses
 POSES.guard = POSES.vigil;
+POSES.nap = POSES.sleep;
 POSES.selfie_sit = { ...POSES.sit, arms: POSES.selfie.arms, sword: POSES.sit.sword, joints: { ...POSES.sit.joints, chest: [0.0, -0.12, 0.04], head: POSES.selfie.joints.head }, expr: 'happy' };
 
 // ------------------------------------------------------------------ IK

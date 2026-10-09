@@ -19,7 +19,7 @@ import { Lives } from './Lives.js';
 import { SafeGround } from './SafeGround.js';
 import { MemeCamTrigger } from './MemeCamTrigger.js';
 import { STATES } from './PlayerStates.js';
-import { TUNING, PASSIVE_ENEMY_STATES } from './tuning.js';
+import { TUNING, threatens } from './tuning.js';
 import { SwordcatModel } from './SwordcatModel.js';
 
 const _v = new THREE.Vector3(), _dir = new THREE.Vector3();
@@ -70,7 +70,9 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.respawnPoint = { pos: new THREE.Vector3(), facing: 0 };
     /** jeering enemies (enemy:jeer on/off) */
     this.jeerers = new Set();
-    this.inJeer = false; this.threatened = false;
+    this.inJeer = false; this.threatened = false; this.threatT = 0;
+    /** last applied shop upgrades (§13.3: satchel, Valor Gain); applyUpgrades() re-reads state.upgrades on change */
+    this._upgSatchel = -1; this._upgValorGain = null;
     this.inShallow = false;
     /** visual-only fields the model consumes: squash cue, hurt blink timer (i-frames after a hurt / respawn) */
     this.squashEvent = null;
@@ -104,6 +106,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   // ------------------------------------------------------------------ lifecycle
   async init() {
     const ctx = this.ctx, st = ctx.state, bus = ctx.bus;
+    this.applyUpgrades();
     this._recomputeMax();
     this.hp = Math.min(st?.hp ?? this.maxHp, this.maxHp) || this.maxHp;
     this.milk = Math.min(st?.milk ?? PLAYER.milk.start, this.milkMax);
@@ -126,6 +129,7 @@ export class Player extends ScriptedActorMixin(Actor) {
       bus.on(E.GAME_MODE, (p) => this._onMode(p)),
       bus.on(E.CUTSCENE_START, () => this.memeCamTrigger.reset()),
       bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'difficulty') this.livesState.setDifficulty(ctx.state.difficultyCfg); }),
+      bus.on(E.SAVE_LOADED, () => { this._upgSatchel = -1; this._upgValorGain = null; this.applyUpgrades(); }),
     );
     await this.model.init();
   }
@@ -358,6 +362,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     }
     if (this.riposteT <= 0) this.riposteTarget = null;
     this.valorState.update(dt);
+    this.applyUpgrades();
     if (this.guardState.update(dt)) this.ctx.bus.emit(E.PLAYER_GRIT, { value: this.guardState.grit, max: this.guardState.gritMax, broken: false });
   }
 
@@ -400,9 +405,13 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.alive && (deep || this.pos.y < TUNING.pitY)) this._splash();
     this.safeGround.update(dt, this.pos, this.alive && this.onGround && !deep && this.state !== 'dodge' && this.state !== 'pounce');
     // ---- threats, Standing Ground and Jeer (§7.3, §7.4)
-    this._scanThreats();
+    this._scanThreats(dt);
     if (this.alive) {
-      const d = this.valorState.standTick(dt, { guarding: this.state === 'guard', speed: Math.hypot(this.vel.x, this.vel.z), threatened: this.threatened, inJeer: this.inJeer });
+      // "planted" = she isn't walking in the Stand: a block's pushback (0.4 m) and its brake-out are not her moving,
+      // so she stays planted through the hits she is standing against. With the stick held, her real speed counts.
+      const m = this.ctx.input?.move, stick = m ? Math.hypot(m.x, m.y) : 0;
+      const speed = this.pushT > 0 || stick < 0.1 ? 0 : Math.hypot(this.vel.x, this.vel.z);
+      const d = this.valorState.standTick(dt, { guarding: this.state === 'guard', speed, threatened: this.threatened, inJeer: this.inJeer });
       if (d !== 0) this._valorAccumulate(d, d > 0 ? 'stand' : 'jeer');
     }
     // ---- Golden Hour clock (§7.5)
@@ -427,21 +436,22 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.zoomies && this.stepCount % TUNING.zoomiesDustEvery === 0) ctx.bus.emit(E.BURST, { kind: 'dust', position: this.pos.clone() });
   }
 
-  _scanThreats() {
+  /**
+   * Standing Ground threat (§7.3: an alerted enemy within 6 m that is targeting her; `threatens()` in tuning.js) with a
+   * short grace so a token flicker / wind-up turn doesn't stall the payout, plus the Jeer aura test (§7.4).
+   */
+  _scanThreats(dt = 0) {
     const list = this.ctx.enemies?.list;
     let threatened = false, jeer = false;
     const R = PLAYER.standingGround.radius;
-    if (list) for (const e of list) {
-      if (!e.alive) continue;
-      const d = Math.hypot(e.pos.x - this.pos.x, e.pos.z - this.pos.z);
-      if (!threatened && d <= R && e.alerted && !PASSIVE_ENEMY_STATES.includes(e.stateName)) threatened = true;
-    }
+    if (list) for (const e of list) if (threatens(e, this, R)) { threatened = true; break; }
+    this.threatT = threatened ? TUNING.threatGrace : Math.max(0, this.threatT - dt);
     for (const e of this.jeerers) {
       if (!e.alive) { this.jeerers.delete(e); continue; }
       const r = e.def?.jeer?.r ?? JEER_R;
       if (Math.hypot(e.pos.x - this.pos.x, e.pos.z - this.pos.z) <= r) { jeer = true; break; }
     }
-    this.threatened = threatened; this.inJeer = jeer;
+    this.threatened = threatened || this.threatT > 0; this.inJeer = jeer;
   }
 
   _syncState() {
@@ -623,8 +633,8 @@ export class Player extends ScriptedActorMixin(Actor) {
   // ---- charge (§7.2)
   tier1Time() { return this.ctx.state?.upgrades?.quickCharge ? ECONOMY.shops.quickCharge.tier1 : PLAYER.charge.tier1; }
   tier2Time() {
-    if (this.golden) return PLAYER.golden.holyChargeTime;
-    return this.ctx.state?.upgrades?.quickCharge ? ECONOMY.shops.quickCharge.tier2 : PLAYER.charge.tier2;
+    const t2 = this.ctx.state?.upgrades?.quickCharge ? ECONOMY.shops.quickCharge.tier2 : PLAYER.charge.tier2;
+    return this.golden ? Math.min(t2, PLAYER.golden.holyChargeTime) : t2;
   }
   canHoly() {
     return this.shards >= (ATTACKS.holy.minShards ?? 1) && (this.golden || this.valorState.canSpend(PLAYER.charge.holyMinValor));
@@ -905,6 +915,28 @@ export class Player extends ScriptedActorMixin(Actor) {
       default: break;
     }
     this._syncState();
+  }
+
+  /**
+   * Shop upgrades the player owns the effect of (§13.3): Bigger Satchel (milk capacity 2 → 3 → 4; a freshly bought
+   * slot comes filled) and Valor Gain (+25 % on every Valor gain). Sharpness, Holy Wave Reach (combat) and Quick
+   * Charge (read live by tier1Time / tier2Time) need nothing here. Cheap: called every step, acts only on a change of
+   * `state.upgrades` (ui's shops write it; a loaded save replaces it). ui may also call it right after a purchase.
+   */
+  applyUpgrades() {
+    const u = this.ctx.state?.upgrades;
+    const vg = !!u?.valorGain, satchel = Math.max(0, Math.floor(+u?.satchel || 0));
+    if (vg !== this._upgValorGain) {
+      this._upgValorGain = vg;
+      this.valorState.gainMul = vg ? (ECONOMY.shops.valorGain?.mul ?? 1) : 1;
+    }
+    if (satchel !== this._upgSatchel) {
+      const first = this._upgSatchel < 0, before = this.milkMax;
+      this._upgSatchel = satchel;
+      this._recomputeMax();
+      if (!first && this.milkMax > before) this.milk = Math.min(this.milkMax, this.milk + (this.milkMax - before));
+      this._syncState();
+    }
   }
 
   /** maxHp from Heart Bells (start 8 + 2 per bell, ≤ 14); milkMax from the satchel + Mochi (§7.6). */

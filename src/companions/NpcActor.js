@@ -10,6 +10,7 @@ import { damp, dampAngle, wrapAngle } from '../core/math.js';
 import { catConfig, villagerConfig, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
+import { disposeInstance } from '../core/Assets.js';
 
 /** GLB-backed NPCs (everything else is a procedural cat). Clip names are clip set S1 (ASSETS.md). */
 export const NPC_GLB = {
@@ -151,6 +152,7 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
     this.anim?.dispose();
     this.visual?.dispose();
     this.bubble.dispose();
+    if (this.object3d) disposeInstance(this.object3d, { detach: false });   // GLB NPCs (Coo): bone texture
     super.dispose();
   }
 }

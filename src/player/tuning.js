@@ -40,6 +40,8 @@ const DEFAULTS = {
   bumpStunMul: 0.5,          // a 0-damage knock (tutorial dummy / sack) stuns for half of PLAYER.hurt.stun
   hurtFlash: 0.12,           // s of the white flash on her mesh when a hit lands (before the 15 Hz blink)
   standCapeWind: 1.8,        // §7.3 Standing Ground: "her cape billows harder" (cape wind ×)
+  threatGrace: 0.4,          // s a Standing Ground threat keeps counting after it stops (a token handed to a companion,
+                             //   a wind-up turn, a hop back): the payout doesn't stutter in a real fight
 
   // ---- ambient behaviours (§7.7) ----
   tailPuffHeight: 2.0,       // tail puff when an enemy taller than 2 m alerts
@@ -55,4 +57,23 @@ const DEFAULTS = {
 export const TUNING = Object.freeze(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, typeof PLAYER?.[k] === 'number' ? PLAYER[k] : DEFAULTS[k]])));
 
 /** Enemy states that count as "targeting her" for Standing Ground (§7.3). */
-export const PASSIVE_ENEMY_STATES = Object.freeze(['idle', 'patrol', 'return', 'die', 'dead', 'stagger', 'flee', 'sleep']);
+export const PASSIVE_ENEMY_STATES = Object.freeze(['idle', 'patrol', 'return', 'die', 'dead', 'stagger', 'flee', 'sleep',
+  // M2 types / bosses: dizzy bosses, napping or hidden enemies, a Bonehead pile, a Stealer running off with the loot
+  'dizzy', 'nap', 'hidden', 'hide', 'dormant', 'caged', 'scattered', 'reassemble', 'pile', 'escape', 'steal', 'intro']);
+
+/**
+ * Standing Ground threat test (§7.3): an alerted, active enemy within `r` (XZ) that is targeting her — not one whose
+ * attack token went to a companion or that is taunted by Mochi's Shield Wall (`enemy.targetActor()`), not a hidden /
+ * dormant one. Pure (node-safe).
+ */
+export function threatens(e, player, r) {
+  if (!e || !e.alive || !e.alerted || e.hidden || e.dormant || !e.pos) return false;
+  if (PASSIVE_ENEMY_STATES.includes(e.stateName)) return false;
+  if (Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z) > r) return false;
+  if (typeof e.targetActor === 'function') {
+    let t;
+    try { t = e.targetActor(); } catch { t = player; }
+    if (t !== player) return false;
+  }
+  return true;
+}

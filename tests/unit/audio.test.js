@@ -25,6 +25,12 @@ import { TRACKS, LEVEL_MUSIC, CONTEXT_MUSIC, MUSIC_RULES, MusicDirector, trackId
 import { ZZFX_DEFS, zzfxDuration } from '../../src/audio/sfxDefs.js';
 import { MIX, DUCK, MEME } from '../../src/audio/mix.js';
 import { AudioManager } from '../../src/audio/AudioManager.js';
+import { AMBIENT_LAYERS, ambienceFileIds, layerActive, activeLayers, layerPos, nextWait } from '../../src/audio/ambience.js';
+import { CUES, cueFileIds, partOpts } from '../../src/audio/cues.js';
+import { birdPlan, hootPlan, chirpLength, cricketData, crackleData, rumbleData, CRICKETS } from '../../src/audio/nature.js';
+import { BOSS_MUSIC, bossMusicFor } from '../../src/audio/musicMap.js';
+import { SHOP_SFX, STATION_SFX, OBJECTIVE_SFX, objectiveSfxFor } from '../../src/audio/sfxMap.js';
+import { BELL_PROFILES, tollPlan } from '../../src/audio/procedural.js';
 import { fakeCtx } from './_fakeCtx.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -52,7 +58,8 @@ test('manifest: every path exists on disk, is unique, sorted, audio-only; levels
 });
 
 test('manifest: every sound id the audio maps name resolves to a listed file (regenerate the manifest when this fails)', () => {
-  const ids = [...sfxFileIds(), ...babbleFileIds(), ...proceduralFileIds(), ...musicFiles(), ...Object.values(AMBIENCE).map((a) => a.id)];
+  const ids = [...sfxFileIds(), ...babbleFileIds(), ...proceduralFileIds(), ...musicFiles(), ...Object.values(AMBIENCE).map((a) => a.id),
+    ...ambienceFileIds(), ...cueFileIds()];
   const unresolved = ids.filter((id) => expandId(id, INDEX).length === 0);
   assert.deepEqual(unresolved, [], 'ids with no file in src/audio/assets.manifest.js');
   // and nothing in the manifest is dead weight: each listed file is reachable from some id
@@ -946,5 +953,292 @@ test('fake WebAudio: cutscene loops run outside the voice pools and follow; proc
     const bell = am.play3D('bellClunk', [0, 3, 10], { vol: 0.5 });
     assert.ok(bell && typeof bell.stop === 'function' && am.bells.has(bell));
     void ctx;
+  } finally { restore(); }
+});
+
+// ================================================================================================ M2 (Acts I–II)
+const SPEC_M2 = [
+  // §12.6 / §5.4 audio named for the gate, CS-05, CS-08 … CS-10
+  'creature/c80_howl', 'world/metal_open_01', 'world/metal_close_01', 'pickup/powerup_rise05', 'magic/magic1', 'pickup/powerup_rise07',
+  'jingles/jingles_STEEL03', 'creature/creature_roar_03', 'creature/c80_roar_02', 'cat/cat_purrsleepy_loop', 'world/wood_hit_01',
+  'music/battle_theme_a', 'music/dark_forest_creepy', 'music/story_lament_warriors_soul', 'music/tavern_old_tower_inn',
+];
+
+test('M2 manifest: spec files resolve; forest / town / gate subsets preload their new sounds', () => {
+  assert.deepEqual(SPEC_M2.filter((id) => expandId(id, INDEX).length === 0), []);
+  const pre = (lvl) => new Set([...manifestLevels['*'], ...manifestLevels[lvl]]);
+  const has = (lvl, ...ids) => { for (const id of ids) assert.ok(expandId(id, INDEX).every((p) => pre(lvl).has(p)), `${id} preloads for ${lvl}`); };
+  has('forest', 'world/loop_water_01', 'creature/c80_bug_01', 'ui/pluck_002', 'impact/cloth');
+  has('town', 'pickup/handleCoins', 'impact/metal_hit_01', 'magic/spell_fire_01', 'ui/error_003', 'world/doorOpen_1');
+  has('gate', 'creature/c80_howl', 'world/metal_open_01', 'world/metalLatch', 'creature/c80_monster_01', 'impact/metal_small2');
+  has('meadow', 'jingles/jingles_NES07');                    // objective jingle is global
+});
+
+test('M2 sfx: shop, objective, burst and cue tables only name defined sounds', () => {
+  for (const n of Object.values(SHOP_SFX)) assert.ok(SFX[n], `shop ${n}`);
+  for (const n of Object.values(STATION_SFX)) assert.ok(SFX[n], `station ${n}`);
+  for (const [k, row] of Object.entries(OBJECTIVE_SFX)) {
+    for (const f of ['tick', 'done', 'freeze', 'resume']) if (row[f]) assert.ok(SFX[row[f]], `${k}.${f}`);
+    for (const [n] of row.doneSeq ?? []) assert.ok(SFX[n], `${k} doneSeq ${n}`);
+  }
+  for (const n of Object.values(BURST_SFX)) assert.ok(SFX[n], `burst ${n}`);
+  assert.equal(objectiveSfxFor({ id: 'line', textKey: 'obj.line' }), OBJECTIVE_SFX['obj.line']);
+  assert.equal(objectiveSfxFor({ id: 'lanterns' }), OBJECTIVE_SFX['obj.lanterns']);
+  assert.equal(objectiveSfxFor({ id: 'free_kitten', textKey: 'obj.kitten' }), null, 'rescues stay silent (their own jingles)');
+  assert.equal(MATERIAL_HIT.cheese.light[0], 'hitCheese');
+  // every cue part is an SFX name, another cue, a procedural id or a file
+  const proc = new Set(['laugh', 'laughChorus', 'bell', 'bellClunk', 'heartbeat', 'march', 'shimmer', 'campfire', 'crackle', 'crickets', 'birds',
+    'owl', 'rumble', 'handbell', 'shopBell', 'toll', 'kittenCheer']);
+  for (const [name, parts] of Object.entries(CUES)) {
+    assert.match(name, /^(cs0[4-9]|cs10|d0[2-6]|g02|line)\./, name);
+    for (const p of parts) assert.ok(SFX[p.id] || CUES[p.id] || proc.has(p.id) || expandId(p.id, INDEX).length, `${name}: ${p.id}`);
+  }
+  assert.deepEqual(partOpts({ id: 'x', delay: 1, at: 'y', vol: 0.5, rate: 2 }), { vol: 0.5, rate: 2 });
+  for (const cs of ['cs04', 'cs05', 'cs06', 'cs07', 'cs08', 'cs09', 'cs10']) assert.ok(Object.keys(CUES).some((k) => k.startsWith(cs + '.')), `${cs} has cues`);
+});
+
+test('M2 music: level defaults — forest night, town hub states + bakery zone, gate low approach and The Line hold', () => {
+  const cond = (flags) => (c) => new Set(flags).has(String(c).replace(/^!/, '')) !== String(c).startsWith('!');
+  assert.equal(levelMusic('forest', null, { cond: cond([]) }).explore, 'field_of_dreams');
+  assert.equal(levelMusic('forest', null, { cond: cond(['forest.camp']) }).explore, 'dark_forest_creepy');
+  assert.equal(levelMusic('forest', null, { cond: cond(['forest.camp']) }).alias, 'field_of_dreams', 'LevelManager day request maps to night');
+  assert.equal(levelMusic('town', null, { cond: cond([]) }).explore, 'village_town_theme');
+  assert.equal(levelMusic('town', null, { cond: cond(['town.free']) }).explore, 'village_bards_tale');
+  assert.equal(levelMusic('town', null, { cond: cond(['town.free', 'gate.done']) }).explore, 'story_lament_warriors_soul');
+  assert.equal(levelMusic('town', null, { cond: cond(['town.free', 'gate.done', 'ending.seen']) }).explore, 'village_bards_tale');
+  // the world's town def (no byFlag) still gets the audio defaults; its own byFlag would win
+  assert.equal(levelMusic('town', { explore: 'village_town_theme' }, { cond: cond(['town.free']) }).explore, 'village_bards_tale');
+  assert.equal(levelMusic('town', { explore: 'village_town_theme', byFlag: [['town.free', 'castle_kings_feast']] }, { cond: cond(['town.free']) }).explore, 'castle_kings_feast');
+  const town = levelMusic('town', null);
+  assert.deepEqual(town.zones[0].at, [-26, -20]); assert.equal(town.zones[0].r, 8); assert.equal(town.zones[0].track, 'tavern_old_tower_inn');
+  const gate = levelMusic('gate', { explore: 'village_town_theme', combat: 'battle_theme_a' });
+  assert.ok(gate.gains.village_town_theme < 1, 'gate approach plays low');
+  assert.equal(gate.holds.line, 'battle_theme_a');
+  assert.equal(bossMusicFor('boss_grizzlechop').track, 'boss_epic_battle_loop');
+  assert.equal(bossMusicFor('cacklejaw').intro, 'bossIntroB2');
+  assert.equal(bossMusicFor('nobody'), BOSS_MUSIC.default);
+  for (const r of Object.values(BOSS_MUSIC)) { assert.ok(SFX[r.intro] && SFX[r.phase]); if (r.track) assert.ok(TRACKS[r.track]); }
+});
+
+test('M2 MusicDirector: a flag changes the explore track on the next calm tick; holds keep battle_theme_a between waves', () => {
+  const d = new MusicDirector();
+  const flags = new Set();
+  const cond = (c) => flags.has(c);
+  d.setLevel('town', { explore: 'village_town_theme' }, { cond });
+  d.request('village_town_theme'); d.take();
+  assert.equal(d.target, 'village_town_theme');
+  flags.add('town.free');
+  assert.ok(d.setExplore(levelMusic('town', null, { cond }).explore));
+  d.tick(0.1, { mode: 'cutscene' });
+  assert.equal(d.target, 'village_town_theme', 'never mid-cutscene');
+  d.tick(0.1, { mode: 'play' });
+  assert.equal(d.target, 'village_bards_tale', 'hub gold crossfades in');
+  assert.equal(d.request('village_town_theme'), 'village_bards_tale', 'stale requests read as the new explore track');
+  // bakery zone wins while calm
+  d.tick(0.1, { mode: 'play', zone: 'tavern_old_tower_inn' });
+  assert.equal(d.target, 'tavern_old_tower_inn');
+  d.tick(0.1, { mode: 'play', zone: null });
+  assert.equal(d.target, 'village_bards_tale');
+
+  // gate: The Line holds battle_theme_a; no fanfare per wave; silence in CS-08 comes back as the held track
+  d.setLevel('gate', { explore: 'village_town_theme', combat: 'battle_fast_fight_loop' });
+  d.request('village_town_theme'); d.take();
+  assert.ok(d.gainFor('village_town_theme') < 1 && d.gainFor('battle_theme_a') === 1);
+  d.hold('line', 'battle_theme_a');
+  assert.equal(d.target, 'battle_theme_a');
+  d.arenaLock('w1'); d.arenaClear('w1'); d.take();
+  for (let i = 0; i < 400; i++) d.tick(1 / 60, { mode: 'play' });
+  assert.equal(d.target, 'battle_theme_a', 'held between waves');
+  assert.equal(d.take()?.sting ?? null, null, 'no victory sting for a wave inside the Line');
+  d.request(null, 0.5, { mode: 'cutscene' });              // CS-08 "music cut; wind only"
+  assert.equal(d.target, null);
+  d.tick(0.1, { mode: 'play' });
+  assert.equal(d.target, 'battle_theme_a', 'back into the held fight track');
+  d.release('line');
+  for (let i = 0; i < 300; i++) d.tick(1 / 60, { mode: 'play' });
+  assert.equal(d.target, 'village_town_theme', 'explore 4 s after the Line is done');
+  // B2 on the causeway: the boss track snaps in; defeat → fanfare
+  d.bossStart('boss_epic_battle_loop');
+  assert.equal(d.target, 'boss_epic_battle_loop'); assert.equal(d.fade, MUSIC_RULES.bossSnap);
+  d.take(); d.bossDefeated();
+  assert.equal(d.take().sting, 'victory_fanfare');
+});
+
+test('M2 ambience: layer conditions, positions and the forest / town / gate tables', () => {
+  const flags = new Set();
+  const cond = (c) => flags.has(c);
+  const objs = new Set();
+  const obj = (id) => objs.has(id);
+  assert.ok(layerActive('town.free && !gate.done || ending.seen', (c) => ({ 'town.free': true, 'gate.done': true, 'ending.seen': true })[c], obj));
+  assert.ok(!layerActive('town.free && !gate.done || ending.seen', (c) => ({ 'town.free': true, 'gate.done': true })[c], obj));
+  assert.ok(layerActive('!forest.camp', cond, obj));
+  const ids = (lvl) => activeLayers(lvl, cond, obj).map((l) => l.id).sort();
+  assert.deepEqual(ids('forest'), ['birds', 'leaves', 'stream']);
+  flags.add('forest.camp');
+  assert.deepEqual(ids('forest'), ['campfire', 'crickets', 'owl', 'stream']);
+  assert.deepEqual(ids('town'), ['rats']);
+  flags.add('town.free');
+  assert.deepEqual(ids('town'), ['birds', 'forge', 'fountain', 'kittens', 'oven']);
+  flags.add('gate.done');
+  assert.ok(!ids('town').includes('birds'), 'the grey hub has no birdsong');
+  assert.ok(!ids('gate').includes('winch'));
+  objs.add('line');
+  assert.ok(ids('gate').includes('winch') && ids('gate').includes('pin'), 'The Line runs the winch');
+  flags.add('gate.boss');
+  assert.ok(!ids('gate').includes('horde'));
+  const rand = createRng(3).fork('t');
+  assert.deepEqual(layerPos({ at: [1, 2, 3] }, rand), [1, 2, 3]);
+  const p = layerPos({ area: { at: [10, 20], r: 5 } }, rand);
+  assert.ok(Math.hypot(p[0] - 10, p[2] - 20) <= 5);
+  const q = layerPos({ around: 20 }, rand, { x: 0, y: 0, z: 0 });
+  const r = Math.hypot(q[0], q[2]); assert.ok(r >= 6 && r <= 20);
+  const w = nextWait([2, 4], rand); assert.ok(w >= 2 && w <= 4);
+  for (const id of ambienceFileIds()) assert.ok(expandId(id, INDEX).length, id);
+  for (const list of Object.values(AMBIENT_LAYERS)) for (const l of list) assert.ok(['loop', 'scatter', 'birds', 'owl', 'crickets', 'crackle', 'laughs'].includes(l.kind), l.id);
+});
+
+test('M2 nature + bells: bird / owl plans, cricket / crackle / rumble buffers, hand bell and toll', () => {
+  const rand = createRng(9).fork('n');
+  for (const kind of ['tweet', 'trill', 'warble', 'peep']) {
+    const plan = birdPlan(rand, { kind });
+    assert.ok(plan.length >= 2, kind);
+    for (const n of plan) assert.ok(n.f0 > 1000 && n.f1 > 1000 && n.dur > 0 && n.dur < 0.2 && n.gain > 0 && n.gain <= 1);
+    assert.ok(chirpLength(plan) < 2);
+  }
+  const hoot = hootPlan(rand);
+  assert.equal(hoot.length, 3); assert.ok(hoot.every((n) => n.f0 < 500));
+  const cr = cricketData(8000, rand);
+  assert.equal(cr.length, 8000 * CRICKETS.sec);
+  const peak = (a) => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  assert.ok(close(peak(cr), CRICKETS.peak, 1e-3));
+  const fire = crackleData(8000, rand);
+  assert.ok(peak(fire) <= 0.81 && peak(fire) > 0.5);
+  const rum = rumbleData(8000, rand, 2, 0.5);
+  assert.ok(Math.abs(rum[0]) < 1e-3 && Math.abs(rum[rum.length - 1]) < 0.01, 'the swell starts and ends silent');
+  assert.equal(bellPartials({ profile: 'handbell' }).length, BELL_PROFILES.handbell.ratios.length);
+  assert.ok(bellDuration({ profile: 'handbell' }) < 8 && bellDuration({ profile: 'handbell' }) > 1);
+  assert.equal(bellPartials()[1].freq, 196, 'the Sunbell keeps §16.3');
+  assert.deepEqual(tollPlan(3, 2).map((s) => s.t), [0, 2, 4]);
+});
+
+test('M2 fake WebAudio: town flags crossfade the hub music, the bakery zone, hub ambience, shops, cues', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    ctx.player = { pos: new THREE.Vector3(0, 0, -46), alive: true, hp: 6, vel: new THREE.Vector3() };
+    ctx.bus.emit(E.LEVEL_LOADED, { id: 'town', level: { music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop' } } });
+    am.music('village_town_theme');
+    am.render(0, 1 / 60);
+    assert.equal(am.musicPlayer.current, 'village_town_theme');
+    assert.deepEqual([...am.amb.keys()], ['rats']);
+    const step = (sec) => { for (let t = 0; t < sec; t += 1 / 30) { ac.currentTime += 1 / 30; am.update(1 / 30); am.render(0, 1 / 30); } };
+    ctx.state.setFlag('town.free', true);
+    ctx.bus.emit(E.FLAG_SET, { key: 'town.free', value: true });
+    step(1);
+    assert.equal(am.musicPlayer.current, 'village_bards_tale', 'hub gold');
+    assert.ok(['fountain', 'kittens', 'forge', 'oven', 'birds'].every((k) => am.amb.has(k)), [...am.amb.keys()].join());
+    assert.ok([...am.loops].some((h) => h.name === 'world/loop_water_01') && [...am.loops].some((h) => h.name === 'campfire'), 'fountain + oven beds');
+    // the timed layers fire (forge anvil / kittens / birds)
+    step(12);
+    assert.ok((am.started.birds ?? 0) > 0, 'birdsong');
+    assert.ok(am.log.some((l) => /metal_hit|rpg_metal/.test(l)), 'the forge rings');
+    // bakery zone
+    ctx.player.pos.set(-25, 0, -19); step(0.6);
+    assert.equal(am.musicPlayer.current, 'tavern_old_tower_inn');
+    ctx.player.pos.set(0, 0, -46); step(0.6);
+    assert.equal(am.musicPlayer.current, 'village_bards_tale');
+    // hub grey (after CS-10)
+    ctx.state.setFlag('gate.done', true); step(1);
+    assert.equal(am.musicPlayer.current, 'story_lament_warriors_soul');
+    assert.ok(!am.amb.has('birds'));
+    // shops
+    const osc0 = ac.count('osc');
+    am.shop('open', { station: 'forge' });
+    assert.ok(ac.count('osc') - osc0 === BELL_PROFILES.handbell.ratios.length, 'the counter bell');
+    am.shop('buy', { station: 'forge' });
+    assert.ok(am.counts['shop.buy'] === 1 && am.counts['shop.anvil'] === 1);
+    am.shop('denied');
+    assert.equal(am.counts['shop.denied'], 1);
+    // cue with delayed parts + one handle
+    const h = am.play2D('cs06.fan');
+    assert.ok(h && h.parts === 3);
+    step(0.6);
+    assert.ok(am.counts.letterFan >= 3, `fan ${am.counts.letterFan}`);
+    const camp = am.play3D('cs04.camp', [6, 0, 40]);
+    assert.ok([...am.loops].filter((x) => x.name === 'campfire').length >= 2 && [...am.loops].some((x) => x.name === 'crickets'));
+    camp.stop(0.1);
+    assert.ok(![...am.loops].some((x) => x.name === 'crickets'), 'the cue handle stops its beds');
+    const toll = am.play3D('toll', [0, 14, 50], { strikes: 3 });
+    assert.equal(toll.strikes, 3);
+    const rum = am.play2D('rumble', { dur: 2 });
+    assert.ok(rum?.name === 'rumble');
+    const cheer = am.play3D('kittenCheer', [0, 0, 8]);
+    assert.ok(cheer.count >= 5);
+    ctx.bus.emit(E.LEVEL_LOADING, { id: 'gate' });
+    assert.equal(am.amb.size, 0, 'level change drops the ambience');
+  } finally { restore(); }
+});
+
+test('M2 fake WebAudio: The Line — hold music, winch ambience, freeze / resume sounds, portcullis on done; boss stingers', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    ctx.player = { pos: new THREE.Vector3(0, 0, 12), alive: true, hp: 6, vel: new THREE.Vector3() };
+    ctx.bus.emit(E.LEVEL_LOADED, { id: 'gate', level: { music: { explore: 'village_town_theme', combat: 'battle_theme_a', boss: 'boss_epic_battle_loop' } } });
+    am.music('village_town_theme');
+    const step = (sec) => { for (let t = 0; t < sec; t += 1 / 30) { ac.currentTime += 1 / 30; am.update(1 / 30); am.render(0, 1 / 30); } };
+    step(0.2);
+    const deck = am.musicPlayer.decks[am.musicPlayer.active];
+    assert.equal(deck.track, 'village_town_theme');
+    assert.ok(deck.gain.gain.goal < trackGain(TRACKS.village_town_theme) * 0.9, 'gate approach low');
+    const obj = (value, extra = {}) => ctx.bus.emit(E.OBJECTIVE, { id: 'line', value, max: 100, textKey: 'obj.line', frozen: false, done: false, ...extra });
+    obj(0);
+    step(0.5);
+    assert.equal(am.musicPlayer.current, 'battle_theme_a');
+    assert.ok(am.amb.has('winch'));
+    step(8);
+    assert.equal(am.musicPlayer.current, 'battle_theme_a', 'held with no enemy around');
+    assert.ok(am.log.some((l) => /chain_0/.test(l)), 'winch chains');
+    obj(10, { frozen: true, paused: true });                // an enemy at the winch pauses the repair: no freeze clunk
+    assert.equal(am.counts.repairFreeze, undefined);
+    obj(10);
+    assert.equal(am.counts.repairResume, undefined);
+    obj(21, { frozen: true });
+    assert.equal(am.counts.repairFreeze, 1);
+    step(0.5);
+    assert.ok(!am.amb.has('winch'), 'the winch stops while Pilfer has the pin');
+    obj(21);
+    assert.equal(am.counts.repairResume, 1);
+    obj(100, { done: true });
+    assert.equal(am.counts.portcullisOpen, undefined, 'the portcullis test is the story cue, not automatic');
+    am.play3D('line.portcullis', [0, 1, 47]);
+    assert.equal(am.counts.portcullisOpen, 1);
+    step(3);
+    assert.equal(am.counts.portcullisClose, 1, 'the portcullis test closes 2.6 s later');
+    am.play3D('fire/fire_ignite', [0, 2, 0]);
+    assert.equal(am.counts.lanternLight, 1, 'legacy lantern id aliases');
+    step(5);
+    assert.equal(am.musicPlayer.current, 'village_town_theme');
+    // B2
+    const boss = { def: { id: 'boss_cacklejaw' }, pos: new THREE.Vector3(0, 0, 0) };
+    ctx.bus.emit(E.BOSS_START, { boss, id: 'boss_cacklejaw' });
+    am.render(0, 1 / 60);
+    assert.equal(am.musicPlayer.current, 'boss_epic_battle_loop');
+    assert.equal(am.counts.bossIntroB2, 1);
+    ctx.bus.emit(E.BOSS_DEFEATED, { boss, id: 'boss_cacklejaw' });
+    am.render(0, 1 / 60);
+    assert.equal(am.director.boss, false);
+    // forest night: B1 + the night switch
+    ctx.bus.emit(E.LEVEL_LOADING, { id: 'forest' });
+    ctx.bus.emit(E.LEVEL_LOADED, { id: 'forest', level: { music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' } } });
+    am.music('field_of_dreams'); step(0.2);
+    assert.ok(am.amb.has('birds') && am.amb.has('stream'));
+    ctx.state.setFlag('forest.camp', true); step(1);
+    assert.equal(am.musicPlayer.current, 'dark_forest_creepy');
+    assert.ok(am.amb.has('crickets') && am.amb.has('campfire') && !am.amb.has('birds'));
+    ctx.bus.emit(E.BOSS_START, { boss: { def: { id: 'boss_grizzlechop' } }, id: 'boss_grizzlechop' });
+    am.render(0, 1 / 60);
+    assert.equal(am.counts.bossIntroB1, 1);
+    assert.equal(am.musicPlayer.current, 'boss_epic_battle_loop');
   } finally { restore(); }
 });

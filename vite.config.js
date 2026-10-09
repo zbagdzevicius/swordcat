@@ -8,6 +8,18 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
     assetsInlineLimit: 0,
     assetsDir: 'bundle',            // hashed JS/CSS never mix with the copied dist/assets/ library (R17)
+    rolldownOptions: {
+      output: {
+        // three.js (core + addons) in its own long-cached vendor chunk; the game code stays in `index`, levels
+        // (src/world/levels/*) are already lazy chunks via LevelManager's dynamic imports.
+        codeSplitting: {
+          groups: [
+            // lil-gui / stats stay lazy (?debug only)
+            { name: 'three', test: /node_modules[\/]three[\/](?!examples[\/]jsm[\/]libs[\/])/, priority: 20 },
+          ],
+        },
+      },
+    },
   },
   // SMOKE_NOHMR=1 npx vite --port <p> --strictPort : no HMR / file watching, so other agents' saves cannot
   // full-reload a page mid-smoke (changed files are still served fresh on the next page load).

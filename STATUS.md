@@ -1,7 +1,7 @@
 # SWORDCAT: Nine Lives of Meow Island — Status
 
 Milestones **M0 (core engine)** and **M1 (meadow vertical slice)** are done (GAME_DESIGN §19.10).
-`npm run check` (build, then 442 unit tests, then 111 Playwright smoke blocks) passes.
+`npm run check` (build, then 445 unit tests, then 111 Playwright smoke blocks) passes.
 
 ## Implemented
 - **Core:** Game loop, fixed-step systems, EventBus with the frozen event catalog, GameState, Assets (GLTF cache, `fitToHeight`, MODEL_FIT), Input (KBM, gamepad, touch), PostFX (MSAA, bloom, NaN-safe, quality tiers), ScriptedActor, the Appendix A config, and the `?test` / `?debug` hooks (`window.__GAME__`, lil-gui, stats). The asset prune step keeps `dist/` at about 76 MB.
@@ -23,7 +23,7 @@ Milestones **M0 (core engine)** and **M1 (meadow vertical slice)** are done (GAM
 npm install
 npm run dev            # http://localhost:5173/  (add ?debug for lil-gui + stats, ?test for hooks)
 npm run build          # dist/ (pruned assets)
-npm run test:unit      # node --test, 442 tests
+npm run test:unit      # node --test, 445 tests
 npm run smoke          # Playwright smoke against vite preview :4173 (needs a build); screenshots → tests/shots/
 npm run check          # all three
 ```
@@ -49,15 +49,18 @@ Smoke options: `SMOKE_URL=http://localhost:<port>/` (use your own dev server), `
 On touch devices: a floating joystick on the left 45% of the screen, drag on the right side to look, and on-screen buttons.
 
 ## Known issues
-- **Toast count mismatch:** the "Lost kitten found (1/18)" toast counts the whole game, while the HUD shows the meadow (1/3). Pick one wording.
-- **Lingering bark:** a companion bark ("You're safe now…") can stay above her head long after the rescue (seen at Stones and the Old Bridge).
-- **Camera inside stones:** at the Standing Stones the follow camera can sit inside a stone, and a flat grey face fills part of the frame. The occluder fade does not cover the stone meshes.
-- **Mochi too dark:** Mochi's face and body read almost black in D-01 under day fog (tuxedo material). It needs more fill or rim light.
 - **Old Bridge clipping:** the bridge deck is only ~0.3 m above the meadow and the stream bed is −1.5 m. Teleport hooks have to use `physics.topAt` over deep water, and the slice smoke does this.
 - **Smoke run time:** the full smoke takes about 20 minutes on Iris Xe, and a few blocks are timing-sensitive under load. The crow peck block now freezes the simulation on peck entry.
-- **Large bundle:** the main bundle is about 1.5 MB minified, and `characters/index.js` is both statically and dynamically imported (Vite warning).
-- **Pending requests:** `requests/*.md` lists requests between areas that have not been acted on yet. Read them before M2.
+- **Bundle:** `index` (game code) is ~1.19 MB minified and `three` ~0.82 MB (its own long-cached chunk); levels, lil-gui, stats and zzfx load lazily.
+- **Pending requests:** `requests/*.md` now lists only the open requests between areas; `requests/RESOLVED.md` lists what the M2 integration pass applied.
 - **Stub levels:** forest, town, gate, bog and keep are dressed stubs. They have no objectives, enemies or story.
+
+## Fixed in the M2 integration pass (2026-10-09)
+- Camera inside the Standing Stones: ring stones (and the meadow's scattered tall stones) are camera-fadeable instanced props now (`fade: true`), so the follow camera fades a stone it is behind or inside instead of showing a flat grey face. Every `fade: true` prop collider carries `camFade: true`.
+- Mochi too dark: dark coats get a sky-sheen fill in the fur shader (`uSheen`), more ambient, lighter roots, and Mochi's coat is a soft charcoal.
+- Lingering bark: her "You're safe now…" reply is dropped if she is > 10 m from the kitten when it fires, any party bubble hides when its speaker teleports, and a caged companion only barks at arena waves within 25 m of her.
+- Kitten count: the toast now counts the level like the HUD, Results and Quest Board ("Lost kitten found! (1/3)"; `{total}` is still available).
+- `characters/index.js` static + dynamic import warning: gone (enemies import it statically).
 
 ## Next: M2 (Acts I–II, GAME_DESIGN §19.10)
 1. Build out `forest`, `town` (with the hub) and `gate`: objectives (ropes, lanterns, The Line), the hub and the Quest Board.
@@ -65,5 +68,5 @@ On touch devices: a floating joystick on the left 45% of the screen, drag on the
 3. Companions: Sage, Clover, the hub kittens and the Spoon Brigade.
 4. Story: CS-04 to CS-10, D-02 to D-04, D-06 and G-02.
 5. UI: shops, the Quest Board, the objective bar and threat arrows. Player: finish Golden Hour.
-6. Fix the known issues above, especially the occluder fade on stones and the toast and HUD kitten counts.
+6. Keep the M1 slice green (`slice:meadow`).
 7. Exit criteria: every level boots in smoke, B1 and B2 can be beaten with `god`, The Line completes in smoke, the hub shops work, and U5–U12 pass.

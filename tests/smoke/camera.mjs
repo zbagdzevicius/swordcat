@@ -576,4 +576,164 @@ export default [
       t.log(`shake: ${(r.angle * 180 / Math.PI).toFixed(2)}° offset at trauma ${r.trauma.toFixed(2)}; light hit ${(light * 100).toFixed(1)} cm`);
     },
   },
+  // ---------------------------------------------------------------- M2: bosses, CS-08 rail, town occlusion
+  {
+    name: 'camera:boss-frame', order: 44.2, level: 'forest', spawn: 'boss', timeout: 180000,
+    async run(t) {
+      shotDir(t);
+      // B1 (forest mill) and B2 (gate causeway): 6.0 m arm; the boss assist brings an off-screen boss into frame
+      for (const L of [{ level: 'forest', id: 'B1' }, { level: 'gate', id: 'B2' }]) {
+        if (L.level !== 'forest') await t.loadLevel(L.level, 'boss');
+        await t.G(() => window.__GAME__.god(true));
+        await t.G(() => window.__GAME__.startBoss());
+        const started = await t.waitForEvent('boss:start', 25000);
+        t.assert(started, `${L.id}: startBoss() did not emit boss:start`);
+        if (!started) continue;
+        await until(t, 'c.ctx.enemies.boss && Math.abs(c.distance - (c.ctx.enemies.boss.camDist || 6.0)) < 0.01', 8000);
+        // put the boss 7 m to her right, freeze his AI, swing the camera so he is off screen
+        const r0 = await t.G(async () => {
+          const g = window.__GAME__, ctx = g.ctx, c = ctx.cam, b = ctx.enemies.boss, p = ctx.player;
+          if (!b) return null;
+          b.ai = false;
+          const f = p.facing, x = p.pos.x - Math.cos(f) * 7, z = p.pos.z + Math.sin(f) * 7;   // her right = −X local
+          b.pos.set(x, ctx.physics.heightAt(x, z), z); b.object3d.position.copy(b.pos);
+          b.vel?.set?.(0, 0, 0);
+          c.yaw = f + Math.PI;                                    // straight behind her: the boss is at ~90°
+          await g.waitFrames(2);
+          return { dist: c.distance, mode: c.modeName, h: b.height };
+        });
+        t.assert(r0 && (r0.mode === 'boss' || r0.mode === 'lock'), `${L.id}: cam mode ${r0?.mode}`);
+        const ok = await until(t, `(() => { const b = c.ctx.enemies.boss, p = c.ctx.player.pos, cam = c.ctx.camera.position;
+          const f = Math.atan2(p.x - cam.x, p.z - cam.z), a = Math.atan2(b.pos.x - cam.x, b.pos.z - cam.z);
+          return Math.abs(Math.atan2(Math.sin(a - f), Math.cos(a - f))) <= 0.40; })()`, 15000);
+        t.assert(ok, `${L.id}: boss assist did not bring the boss into frame`);
+        const s = await camState(t);
+        const onScreen = await t.G(() => {
+          const g = window.__GAME__, b = g.ctx.enemies.boss, v = b.object3d.position.clone(); v.y += b.height * 0.6;
+          v.project(g.ctx.camera);
+          return [v.x, v.y];
+        });
+        t.assert(Math.abs(onScreen[0]) < 0.95 && Math.abs(onScreen[1]) < 0.95, `${L.id}: boss chest off screen (${fmt(onScreen)})`);
+        t.assert(Math.abs(s.distance - 6.0) < 0.6, `${L.id}: arm ${s.distance.toFixed(2)}`);
+        await t.shot(`camera/boss-${L.id}`, { freeze: true });
+        // BOSS_INTRO reveal (height-scaled) on the boss
+        await t.setMode('cutscene');
+        await t.G(() => { const g = window.__GAME__; g.ctx.cam.shot({ preset: 'BOSS_INTRO', anchor: g.ctx.enemies.boss, mode: 'cut' }); });
+        await t.frames(4);
+        const intro = await t.G(() => {
+          const g = window.__GAME__, b = g.ctx.enemies.boss, v = b.object3d.position.clone(); v.y += b.height * 0.8;
+          v.project(g.ctx.camera);
+          return { head: [v.x, v.y], mode: g.ctx.cam.modeName };
+        });
+        t.assert(intro.mode === 'preset' && Math.abs(intro.head[0]) < 0.9 && Math.abs(intro.head[1]) < 0.95, `${L.id}: BOSS_INTRO head ${fmt(intro.head)}`);
+        await t.shot(`camera/boss-intro-${L.id}`, { freeze: true });
+        await t.setMode('play');
+        await t.G(() => { const g = window.__GAME__; g.ctx.cam.mode('follow', { blend: false }); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); g.god(false); });
+        await t.frames(4);
+        t.log(`${L.id}: assist framed the boss at (${fmt(onScreen)}), arm ${s.distance.toFixed(2)}, intro head (${fmt(intro.head)})`);
+      }
+    },
+  },
+  {
+    name: 'camera:pullback-cs08', order: 45.5, level: 'gate', spawn: 'start', timeout: 180000,
+    async run(t) {
+      shotDir(t);
+      // CS-08 shot 4 at the Line marker (0, +10), facing the fog (south): the rescued kittens stand in rows behind her
+      await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE;
+        for (const e of [...(ctx.enemies?.list ?? [])]) ctx.enemies.despawn(e);
+        ctx.player.teleport({ pos: new THREE.Vector3(0, ctx.physics.heightAt(0, 10), 10), facing: Math.PI });
+        await g.waitFrames(5);
+      });
+      await t.setMode('cutscene');
+      await t.G(() => window.__GAME__.ctx.cam.shot({ preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut' }));
+      await t.frames(5);
+      await t.shot('camera/cs08-meme', { freeze: true });
+      await t.G(() => { window.__camShot = window.__GAME__.ctx.cam.shot({ preset: 'PULLBACK', anchor: 'swordcat' }); });
+      await until(t, 'c._cut.t >= 3.0', 20000);
+      const mid = await camState(t);
+      await t.shot('camera/cs08-pullback-mid', { freeze: true });
+      await t.G(async () => { await window.__camShot; delete window.__camShot; });
+      await t.frames(2);
+      const end = await camState(t);
+      await t.shot('camera/cs08-pullback-end', { freeze: true });
+      t.assert(mid.local[1] < 2.6, `mid-rail height ${mid.local[1].toFixed(2)} m: the dolly leads, the crane comes last`);
+      t.assert(dist3(end.local, [0, 4, 14]) < 0.3 || end.dist < 14, `PULLBACK end ${fmt(end.local)}`);
+      t.assert(Math.abs(end.fov - 50) < 0.3, `PULLBACK fov ${end.fov.toFixed(1)}`);
+      t.assert(end.pos[1] >= end.ground + 0.1, 'rail below the terrain');
+      // her (and the rows 2.5–4.5 m behind her) are inside the final frame
+      const frame = await t.G(() => {
+        const g = window.__GAME__, p = g.ctx.player, f = p.facing, out = [];
+        for (const [lx, lz] of [[0, 0], [-2.5, -2.5], [2.5, -2.5], [-2.5, -4.5], [2.5, -4.5]]) {
+          const v = new g.THREE.Vector3(p.pos.x + lx * Math.cos(f) + lz * Math.sin(f), p.pos.y + 0.4, p.pos.z - lx * Math.sin(f) + lz * Math.cos(f)).project(g.ctx.camera);
+          out.push([v.x, v.y]);
+        }
+        return out;
+      });
+      for (const [x, y] of frame) t.assert(Math.abs(x) < 0.95 && Math.abs(y) < 0.95, `brigade point off screen (${x.toFixed(2)}, ${y.toFixed(2)})`);
+      await t.setMode('play');
+      await t.G(() => window.__GAME__.ctx.cam.mode('follow', { blend: false }));
+      t.log(`CS-08 rail: mid ${fmt(mid.local)}, end ${fmt(end.local)}, fov ${end.fov.toFixed(1)}`);
+    },
+  },
+  {
+    name: 'camera:town-occlusion', order: 46.8, level: 'town', spawn: 'hub', timeout: 180000,
+    async run(t) {
+      shotDir(t);
+      const info = await t.G(() => {
+        const c = window.__GAME__.ctx.cam;
+        return { solids: c.solidOccluders, units: c._fader.count };
+      });
+      t.assert(info.solids >= 6, `town: only ${info.solids} solid occluders registered (houses, castle, tower)`);
+      await t.shot('camera/town-follow', { freeze: true });
+      // a house between the lens and her: stand 2 m in front of the nearest house, frame her from beyond it
+      const r = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, c = ctx.cam, f = c._fader;
+        const p0 = ctx.player.pos;
+        let best = null;
+        for (const u of f.units) {
+          if (!u.solid || u.radius < 3 || u.radius > 9) continue;
+          const d = Math.hypot(u.center.x - p0.x, u.center.z - p0.z);
+          if (!best || d < best.d) best = { u, d };
+        }
+        if (!best) return null;
+        const u = best.u, box = new THREE.Box3();
+        for (const pt of u.parts) box.union(pt.box.clone().applyMatrix4(pt.world));
+        // walk out of the house (from its centre toward the hub) until the ground is free
+        const dir = new THREE.Vector3(p0.x - u.center.x, 0, p0.z - u.center.z).normalize();
+        const size = box.getSize(new THREE.Vector3());
+        const out = Math.max(size.x, size.z) / 2 + 1.5;
+        const x = u.center.x + dir.x * out, z = u.center.z + dir.z * out;
+        ctx.player.teleport({ pos: new THREE.Vector3(x, ctx.physics.heightAt(x, z), z), facing: Math.atan2(dir.x, dir.z) });
+        await g.waitFrames(30);
+        // lens beyond the house on the far side, 3 m above its roof line, looking at her
+        const back = Math.max(size.x, size.z) / 2 + 1.0;
+        const cx = u.center.x - dir.x * back, cz = u.center.z - dir.z * back, cy = box.min.y + (box.max.y - box.min.y) * 0.6;
+        g.setMode('cutscene');
+        const pp = ctx.player.object3d.position, fc = ctx.player.facing, co = Math.cos(fc), s = Math.sin(fc);
+        const dx = cx - pp.x, dz = cz - pp.z;
+        c.shot({ anchor: 'swordcat', mode: 'cut', pos: [dx * co - dz * s, cy - pp.y, dx * s + dz * co], look: [0, 0.6, 0], fov: 40 });
+        await g.waitFrames(40);
+        const subj = [pp.clone().setY(pp.y + 0.5), pp.clone().setY(pp.y + 1.05)];
+        const dbg = { cam: ctx.camera.position.toArray().map((v) => +v.toFixed(2)), her: pp.toArray().map((v) => +v.toFixed(2)), center: u.center.toArray().map((v) => +v.toFixed(2)),
+          r: u.radius, parts: u.parts.length, precise: u.precise, box: [box.min.toArray(), box.max.toArray()].flat().map((v) => +v.toFixed(1)),
+          occ: f._occludes(u, ctx.camera.position, subj, 2), hit: u.hit, f: u.f, d2: ctx.camera.position.distanceTo(subj[0]), mode: c.modeName };
+        return { faded: f.fadedSolidCount, d: best.d, top: box.max.y, dbg };
+      });
+      t.assert(r, 'no house-sized solid occluder near the hub spawn');
+      if (!r) return;
+      t.assert(r.faded >= 1, `a house hiding her did not fade (faded solids ${r.faded}) ${JSON.stringify(r.dbg)}`);
+      await t.shot('camera/town-house-fade', { freeze: true });
+      await t.setMode('play');
+      await t.G(() => window.__GAME__.ctx.cam.mode('follow', { blend: false }));
+      // back to follow: the arm still collides with houses (never inside / behind a wall), she stays on screen
+      await t.G(async () => { const g = window.__GAME__; g.ctx.cam.yaw = g.ctx.player.facing + Math.PI; await g.waitFrames(60); });
+      const s = await camState(t);
+      const chest = await t.G(() => { const g = window.__GAME__, v = g.ctx.player.object3d.position.clone(); v.y += 0.35; v.project(g.ctx.camera); return [v.x, v.y]; });
+      t.assert(Math.abs(chest[0]) < 0.95 && Math.abs(chest[1]) < 0.95, `town follow: her chest off screen ${fmt(chest)}`);
+      t.assert(s.dist >= 0.75, `arm ${s.dist.toFixed(2)}`);
+      await t.shot('camera/town-follow-wall', { freeze: true });
+      t.log(`town: ${info.solids} solid occluders; house fade ok (faded ${r.faded}); follow facing the house: arm ${s.dist.toFixed(2)} m, faded now ${s.faded}`);
+    },
+  },
 ];

@@ -13,6 +13,31 @@ export const COMPANION_IDS = Object.freeze(['mochi', 'sage', 'clover']);
 /** Flag set by each join scene (§19.7: `meadow.mochi` D-01, `forest.sage` D-02, `town.clover` D-04). */
 export const JOIN_FLAGS = Object.freeze({ 'meadow.mochi': 'mochi', 'forest.sage': 'sage', 'town.clover': 'clover' });
 
+/**
+ * Service kittens rescued in M2 (§3.4: D-03 Marmalade, D-04 Tofu / Earl Grey, D-06 Pip): rescued like lost kittens
+ * (hide, cage, contact) but they play their scene instead of joining the kitten count. Flag each scene's end sets.
+ */
+export const SERVICE_FLAGS = Object.freeze({ marmalade: 'town.marmalade', tofu: 'town.tofu', earlgrey: 'town.earlgrey', pip: 'gate.pip' });
+export const SERVICE_IDS = Object.freeze(Object.keys(SERVICE_FLAGS));
+/** The scene each service rescue plays (story's cutscene ids; placeholders until story authors them). */
+export const SERVICE_SCENES = Object.freeze({ marmalade: 'd03', tofu: 'd04tofu', earlgrey: 'd04earlgrey', pip: 'd06' });
+/** The scene each caged squire plays when freed (§5.4 D-01, D-02, D-04 Clover). */
+export const JOIN_SCENES = Object.freeze({ mochi: 'd01', sage: 'd02', clover: 'd04clover' });
+
+/**
+ * Next companion in the swap cycle (§9.1: swap at any Vigil Stone or the hub Barracks banner): the unlocked ids in
+ * COMPANION_IDS order, starting after `current`. Returns null when there is nothing to swap to. Pure.
+ * @param {string[]} unlocked @param {string|null} current @param {number} [dir] +1 next, −1 previous
+ */
+export function nextCompanion(unlocked, current, dir = 1) {
+  const ids = COMPANION_IDS.filter((id) => unlocked?.includes?.(id));
+  if (!ids.length) return null;
+  const i = ids.indexOf(current);
+  if (i < 0) return ids[0];
+  if (ids.length < 2) return null;
+  return ids[(i + (dir < 0 ? ids.length - 1 : 1)) % ids.length];
+}
+
 /** Side of the player each companion prefers (+1 = her left, −1 = her right). */
 export const FOLLOW_SIDE = Object.freeze({ mochi: 1, sage: -1, clover: 1 });
 

@@ -10,8 +10,9 @@
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
 import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS } from '../core/config.js';
 import { el, flag, setText, setVar, pulse } from './dom.js';
-import { tx, esc } from './text.js';
-import { SETTINGS, SETTING_GROUPS, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac } from './settings.js';
+import { tx, esc, actionGlyph } from './text.js';
+import { SETTINGS, SETTING_GROUPS, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS } from './settings.js';
+import { defaultState } from '../core/GameState.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 
@@ -125,7 +126,7 @@ export class Menus {
     s.ptrAt = this._ptr ? { x: this._ptr.x, y: this._ptr.y } : null;
     this._focus(s, s.nav.index, false);
     this._inputGuard = 1;            // the edge that opened this screen must not also activate its first item
-    requestFrame(() => flag(s.el, 'is-on', true));
+    requestFrame(() => { if (this.top === s) flag(s.el, 'is-on', true); });   // a screen pushed on top meanwhile keeps this one hidden
     this._sync();
     if (sound) this.sfx(sound);
     return s;
@@ -170,6 +171,7 @@ export class Menus {
     s.items.forEach((it, k) => flag(it.el, 'is-focus', k === s.nav.index));
     const cur = s.nav.current;
     if (cur?.el?.scrollIntoView && s.scroll) cur.el.scrollIntoView({ block: 'nearest' });
+    s.onFocus?.(cur);
     if (sound) this.sfx('ui.click');
   }
 
@@ -203,7 +205,7 @@ export class Menus {
       if (r.t <= 0) { r.t = NAV.repeatEvery; return true; }
       return false;
     };
-    if (fire('v', v)) { if (s.nav.move(v * (s.cols ?? 1))) this._focus(s, s.nav.index); }
+    if (fire('v', v)) { const step = s.vstep ? s.vstep(s.nav.index, v) : (s.cols ?? 1); if (s.nav.move(v * step)) this._focus(s, s.nav.index); }
     const cur = s.nav.current;
     if (fire('h', h)) {
       if (cur?.adjust) cur.adjust(h);
@@ -357,9 +359,35 @@ export class Menus {
     for (const def of SETTINGS) {
       if (def.group !== group) { group = def.group; el('div', 'srow-group', { parent: body, text: SETTING_GROUPS[group] ?? group }); }
       items.push(this._settingRow(body, def));
+      if (def.key === 'quality') {          // §14.3 language placeholder [STRETCH]: shown, not changeable yet
+        const row = el('div', 'mi srow srow--choice is-disabled srow--lang', { parent: body });
+        row.innerHTML = `<span class="srow-lbl">${esc(tx(ctx, 'ui.settings.language'))}</span><div class="srow-ctl"><span class="ch"><span class="ch-val">${esc(tx(ctx, 'ui.settings.languageVal'))}</span></span></div>`;
+        items.push({ el: row, disabled: true });
+      }
     }
+    el('div', 'srow-group', { parent: body, text: tx(ctx, 'ui.settings.controls') });
+    items.push(this._button(body, tx(ctx, 'ui.settings.controls'), () => this.openControls(), { cls: 'btn--plain' }));
+    items.push(this._button(body, tx(ctx, 'ui.settings.reset'), () => this.openConfirm(tx(ctx, 'ui.settings.resetConfirm'), () => {
+      resetSettings(ctx, defaultState().settings);
+      if (this.top) this._refresh(this.top);
+    }), { cls: 'btn--plain' }));
     items.push(this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }));
     this.push(this._wire({ id: 'settings', el: e, items, layer, scroll: true }));
+  }
+
+  /** Controls card (§15): every action with its glyph on keyboard, gamepad and touch; the active device is highlighted. */
+  openControls() {
+    const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
+    const layer = this.top?.layer ?? 'modal';
+    const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}`);
+    const tbl = el('div', 'ctl-table menu-scroll', { parent: body });
+    let html = `<div class="ctl-row ctl-head"><span></span>${['kbm', 'pad', 'touch'].map((d) => `<span class="${d === dev ? 'is-dev' : ''}">${d === 'kbm' ? I.keyboardIco() : d === 'pad' ? I.padIco() : I.touchIco()}</span>`).join('')}</div>`;
+    for (const [act, label] of CONTROL_ROWS) {
+      html += `<div class="ctl-row"><span class="ctl-lbl">${esc(label)}</span>${['kbm', 'pad', 'touch'].map((d) => `<span class="${d === dev ? 'is-dev' : ''}"><kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${esc(actionGlyph(act, d))}</kbd></span>`).join('')}</div>`;
+    }
+    tbl.innerHTML = html;
+    const items = [this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' })];
+    this.push(this._wire({ id: 'controls', el: e, items, layer }));
   }
 
   _settingRow(parent, def) {
@@ -464,18 +492,39 @@ export class Menus {
     this.push(this._wire({ id: 'kittens', el: e, items, layer: this.top?.layer ?? 'pause', cols: 1, scroll: true }));
   }
 
-  openLetters() {
+  /** §6.7 / §14.3 Pause → Letters: a two-pane letter viewer (envelopes on the left, the open letter on the right). */
+  openLetters(focusId = null) {
     const ctx = this.ctx;
+    const cards = letterCards(ctx);
     const { e, body } = this._panel('letters', tx(ctx, 'pause.letters'), 'menu--wide');
-    body.classList.add('menu-scroll');
-    const items = letterCards(ctx).map((c, i) => {
-      const card = el('div', `mi letter-card${c.found ? ' is-found' : ''}`, { parent: body });
-      card.innerHTML = `<div class="lc-seal">${I.waxSeal(c.found ? I.PINK_DEEP : '#9A8B7C', c.found ? 'paw' : 'none')}</div>`
-        + `<div class="lc-body"><div class="lc-title">${i + 1}. ${esc(c.title)}</div>${c.found ? `<div class="lc-text">${esc(c.text)}</div>` : ''}</div>`;
-      return { el: card };
+    const wrap = el('div', 'lv', { parent: body });
+    const list = el('div', 'lv-list', { parent: wrap });
+    const sheet = el('div', 'lv-sheet', { parent: wrap });
+    sheet.innerHTML = '<div class="lv-paper"><div class="lv-num"></div><div class="lv-title"></div><div class="lv-text"></div><div class="lv-from"></div>'
+      + `<div class="lv-seal"></div></div>`;
+    const num = sheet.querySelector('.lv-num'), ttl = sheet.querySelector('.lv-title'), txt = sheet.querySelector('.lv-text');
+    const from = sheet.querySelector('.lv-from'), seal = sheet.querySelector('.lv-seal'), paper = sheet.querySelector('.lv-paper');
+    const show = (c, i) => {
+      if (!c || paper._id === c.id) return;
+      paper._id = c.id;
+      flag(paper, 'is-found', c.found);
+      setText(num, `${i + 1} / ${cards.length}`);
+      setText(ttl, c.found ? c.title : tx(ctx, 'pause.missing'));
+      setText(txt, c.found ? c.text : tx(ctx, 'ui.letters.none'));
+      setText(from, c.found ? tx(ctx, 'ui.letters.from', { region: tx(ctx, `region.${c.level}`) }) : '');
+      seal.innerHTML = I.waxSeal(c.found ? I.PINK_DEEP : '#9A8B7C', c.found ? 'paw' : 'none');
+      pulse(paper, 'is-flip');
+    };
+    const items = cards.map((c, i) => {
+      const tab = el('div', `mi lv-tab${c.found ? ' is-found' : ''}`, { parent: list });
+      tab.innerHTML = `<span class="lt-env">${I.letter(c.found)}</span><span class="lt-txt"><b>${i + 1}.</b> ${esc(c.found ? c.title : tx(ctx, 'pause.missing'))}</span>`;
+      return { el: tab, letter: c, idx: i, activate: () => { show(c, i); pulse(paper, 'is-flip'); this.sfx('ui.page'); } };
     });
     items.push(this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }));
-    this.push(this._wire({ id: 'letters', el: e, items, layer: this.top?.layer ?? 'pause', scroll: true }));
+    const first = Math.max(0, focusId ? cards.findIndex((c) => c.id === focusId) : cards.findIndex((c) => c.found));
+    const s = { id: 'letters', el: e, items, layer: this.top?.layer ?? 'pause', scroll: true, focus: first };
+    s.onFocus = (it) => { if (it?.letter) show(it.letter, it.idx); };
+    this.push(this._wire(s));
   }
 
   openConfirm(text, yes, no = null) {

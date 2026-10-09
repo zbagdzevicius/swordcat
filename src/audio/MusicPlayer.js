@@ -46,13 +46,14 @@ export class MusicPlayer {
 
   /**
    * Crossfade to `trackId` (null = fade out). Same track already live → only the volume is re-targeted.
-   * @param {string|null} trackId @param {number} [fade]
+   * @param {string|null} trackId @param {number} [fade] @param {number} [mul]  per-level gain (gate approach: low)
    */
-  play(trackId, fade = 1.5) {
+  play(trackId, fade = 1.5, mul = 1) {
     const def = trackId ? TRACKS[trackId] : null;
+    const level = def ? trackGain(def) * (Number.isFinite(mul) ? Math.max(0, mul) : 1) : 0;
     if (trackId && !def) { console.warn(`[audio] unknown music track "${trackId}"`); return; }
     const cur = this.decks[this.active];
-    if (def && cur.track === trackId) { cur.stopAt = 0; this._ramp(cur.gain.gain, trackGain(def), fade); this.current = trackId; return; }
+    if (def && cur.track === trackId) { cur.stopAt = 0; this._ramp(cur.gain.gain, level, fade); this.current = trackId; return; }
     // fade the live deck out
     if (cur.track) { this._ramp(cur.gain.gain, 0, fade); cur.stopAt = this.ac.currentTime + fade + 0.05; }
     this.current = trackId;
@@ -60,7 +61,7 @@ export class MusicPlayer {
     const next = this.decks[this.active ^ 1];
     this.active ^= 1;
     if (next.track === trackId && next.stopAt) {          // it was still fading out: bring it back, no restart
-      next.stopAt = 0; this._ramp(next.gain.gain, trackGain(def), fade); return;
+      next.stopAt = 0; this._ramp(next.gain.gain, level, fade); return;
     }
     this._stopDeck(next);
     next.track = trackId; next.stopAt = 0; next.startedAt = this.ac.currentTime;
@@ -72,7 +73,7 @@ export class MusicPlayer {
         const s = this.ac.createBufferSource(); s.buffer = buf; s.loop = def.loop !== false;
         s.connect(next.gain); s.start(this.ac.currentTime, Math.min(def.offset ?? 0, buf.duration - 0.01));
         next.src = s;
-        if (!next.stopAt) this._ramp(next.gain.gain, trackGain(def), fade);
+        if (!next.stopAt) this._ramp(next.gain.gain, level, fade);
       });
     } else {
       const el = this._element(next);
@@ -83,7 +84,7 @@ export class MusicPlayer {
         if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
       }
       el.play().catch(() => { /* aborted by a newer request, or autoplay pending: retried on unlock */ });
-      this._ramp(next.gain.gain, trackGain(def), fade);
+      this._ramp(next.gain.gain, level, fade);
     }
   }
 

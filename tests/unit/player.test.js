@@ -676,3 +676,100 @@ test('Player: deep water — splash returns her ≥ 3 m away facing away, ignore
   assert.ok(p.alive); assert.equal(lifeLost, 0);
   assert.equal(r.count(E.PLAYER_DAMAGED), 2, '−1 per splash outside the cooldown, never the killing blow');
 });
+
+// ================================================================== M2: upgrades, Standing Ground tuning, cosmetics
+import { threatens, PASSIVE_ENEMY_STATES } from '../../src/player/tuning.js';
+import { equippedSword, equippedCape } from '../../src/player/SwordcatModel.js';
+import { ECONOMY } from '../../src/core/config.js';
+
+test('M2 upgrades: Valor Gain +25 % on every gain; Bigger Satchel 2 → 3 → 4 (the new slot comes filled); a save swap re-reads', async () => {
+  const r = await rig(), { p, ctx } = r;
+  p.addValor(20, 'test'); assert.equal(p.valor, 20);
+  ctx.state.upgrades.valorGain = true; r.step();
+  assert.equal(p.valorState.gainMul, ECONOMY.shops.valorGain.mul);
+  p.setValor(0); p.addValor(20, 'test'); near(p.valor, 25, 1e-9, 'valorGain ×1.25');
+  p.addValor(-10, 'test'); near(p.valor, 15, 1e-9, 'drains are not scaled');
+  assert.equal(p.milkMax, PLAYER.milk.start);
+  p.milk = 1;
+  ctx.state.upgrades.satchel = 1; r.step();
+  assert.equal(p.milkMax, ECONOMY.shops.satchel.max[0]); assert.equal(p.milk, 2, 'bought slot filled');
+  ctx.state.upgrades.satchel = 2; r.step();
+  assert.equal(p.milkMax, ECONOMY.shops.satchel.max[1]); assert.equal(ctx.state.milkMax, p.milkMax, 'state synced');
+  ctx.state.upgrades = { satchel: 0, sharp: 0, quickCharge: false, valorGain: false, waveReach: false };
+  ctx.bus.emit(E.SAVE_LOADED, {});
+  assert.equal(p.milkMax, PLAYER.milk.start); assert.ok(p.milk <= p.milkMax); assert.equal(p.valorState.gainMul, 1);
+});
+
+test('M2 upgrades: Quick Charge tiers 0.45 / 0.85 s; Golden Hour tier 2 at 0.5 s either way', async () => {
+  const r = await rig(), { p, ctx } = r;
+  near(p.tier1Time(), PLAYER.charge.tier1); near(p.tier2Time(), PLAYER.charge.tier2);
+  ctx.state.upgrades.quickCharge = true;
+  near(p.tier1Time(), ECONOMY.shops.quickCharge.tier1); near(p.tier2Time(), ECONOMY.shops.quickCharge.tier2);
+  p.golden = true; near(p.tier2Time(), PLAYER.golden.holyChargeTime); p.golden = false;
+  // holding ⚔ with Shard 1 + Valor 50 reaches tier 2 after 0.85 s
+  ctx.state.shards = 1; p.setValor(60);
+  r.press('attack'); r.seconds(0.9);
+  assert.equal(p.state, 'charge'); assert.equal(p.chargeTier, 2);
+  r.release('attack'); r.step();
+  assert.equal(p.swing?.def.id, 'holy');
+});
+
+test('M2 Standing Ground: threatens() — alerted, active, within 6 m and targeting her (not a companion / taunt / hidden)', () => {
+  const pl = { pos: new THREE.Vector3(0, 0, 0) };
+  const mk = (o = {}) => ({ alive: true, alerted: true, stateName: 'chase', pos: new THREE.Vector3(0, 0, 3), ...o });
+  assert.equal(threatens(mk(), pl, 6), true);
+  assert.equal(threatens(mk({ pos: new THREE.Vector3(0, 0, 6.1) }), pl, 6), false, 'out of range');
+  assert.equal(threatens(mk({ alerted: false }), pl, 6), false);
+  assert.equal(threatens(mk({ alive: false }), pl, 6), false);
+  assert.equal(threatens(mk({ hidden: true }), pl, 6), false);
+  for (const s of ['idle', 'patrol', 'flee', 'stagger', 'dizzy', 'sleep']) {
+    assert.ok(PASSIVE_ENEMY_STATES.includes(s)); assert.equal(threatens(mk({ stateName: s }), pl, 6), false, s);
+  }
+  assert.equal(threatens(mk({ targetActor: () => pl }), pl, 6), true);
+  assert.equal(threatens(mk({ targetActor: () => ({ id: 'mochi' }) }), pl, 6), false, 'token went to a companion');
+  assert.equal(threatens(mk({ targetActor: () => null }), pl, 6), false);
+});
+
+test('M2 Standing Ground: block pushback keeps her planted; a brief token flicker does not stall the payout', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const e = r.enemy(2.5, 0);
+  let target = p;
+  e.targetActor = () => target;
+  const list = [e];
+  Object.defineProperty(ctx.enemies, 'list', { get: () => list, configurable: true });
+  r.press('guard');
+  r.seconds(1.0 + 0.5);
+  assert.ok(p.standingGround, 'paying after 1 s planted');
+  const v0 = p.valor;
+  // a block mid-Stand: pushback velocity must not reset the 1 s planted timer
+  p.pushT = TUNING.blockPushT; p.vel.set(0, 0, -2.4);
+  r.step(6);
+  assert.ok(p.valor > v0, `still paying through the pushback (${v0} → ${p.valor})`);
+  // the token goes to a companion for 0.2 s: grace covers it
+  target = { id: 'mochi' }; const v1 = p.valor; r.seconds(0.2); target = p;
+  assert.ok(p.valor > v1, 'grace keeps the payout going');
+  // a long time targeting someone else stops it
+  target = { id: 'mochi' }; r.seconds(1.0);
+  assert.equal(p.standingGround, false);
+  r.release('guard');
+});
+
+test('M2 Meme Cam never starts during Golden Hour', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.state.shards = 2; p.setValor(100);
+  r.tap('golden');
+  assert.equal(p.golden, true);
+  assert.equal(p.memeCamTrigger.suppressed(), true);
+});
+
+test('M2 cosmetics: equipped sword / cape fall back to the Borrowed Blade / Faded Cream; a story override wins', () => {
+  assert.equal(equippedSword({ sword: 'toobig' }), 'toobig');
+  assert.equal(equippedSword({ sword: 'baguette' }), 'baguette');
+  assert.equal(equippedSword({ sword: 'lightsaber' }), 'borrowed');
+  assert.equal(equippedSword(null), 'borrowed');
+  for (const c of ['cream', 'red', 'memeWhite', 'blue', 'green', 'midnight', 'gold']) assert.equal(equippedCape({ cape: c }), c);
+  assert.equal(equippedCape({ cape: 'toString' }), 'cream');
+  assert.equal(equippedCape({ cape: 'nope' }), 'cream');
+  assert.equal(equippedCape({ cape: 'cream' }, 'red'), 'red');
+  assert.equal(equippedCape(undefined), 'cream');
+});

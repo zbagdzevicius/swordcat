@@ -10,6 +10,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
+import { disposeInstance } from '../core/Assets.js';
 import { E } from '../core/events.js';
 import { ATTACKS, PLAYER, TELEGRAPH } from '../core/config.js';
 import { dampAngle, wrapAngle } from '../core/math.js';
@@ -413,6 +414,8 @@ export class Critter extends ScriptedActorMixin(Actor) {
     // the merged SkinnedMesh is ours (not template geometry); Actor.dispose detaches object3d before the level's
     // disposeOwned(root) walk, so free it here
     if (this.merged) { this.merged.geometry?.dispose(); this.merged.material?.dispose(); this.merged = null; }
+    // cloned skeletons' bone textures + tinted material clones (leaked +2 textures per meadow reload, requests/enemies.md)
+    if (this.object3d) disposeInstance(this.object3d, { detach: false });
     this.ctx.actors?.unregister(this);
     super.dispose();
   }

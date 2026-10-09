@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
 import { damp, clamp, lerp, easeSwing, easeOutCubic, easeInOutSine, wrapAngle, Spring } from '../core/math.js';
-import { KittenView, MEME_CAPE, visualDt, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, POSES, mulberry32 } from '../characters/index.js';
+import { KittenView, MEME_CAPE, visualDt, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, POSES, mulberry32, SWORD_SKINS, CAPES } from '../characters/index.js';
 import { TUNING } from './tuning.js';
 
 // ------------------------------------------------------------------ visual swing profiles (look only; hit arcs are config)
@@ -31,6 +31,12 @@ const VIS = {
 };
 /** Running carry (look only): both paws low on the grip, blade forward-up and out to her right so the face stays clear. */
 const CARRY = { a: -0.55, e: 0.55, reach: 0.9, h: 0.40, bob: 0.07, minSpeed: 2.2 };
+/**
+ * "Even More Too Big" (§13.4: the tip drags on the ground, visual only): any blade at least `minLength` long rests its
+ * tip on the ground while she stands (forward-right, `idleA`) and trails it behind her while she runs (`runA`). The
+ * elevation is solved so the tip just touches y 0; `sink` pushes it a hair into the grass so it reads as dragging.
+ */
+const DRAG = { minLength: 1.4, idleA: -0.5, runA: -2.3, h: 0.36, reach: 0.95, twist: 0.05, sink: 0.015 };
 /** Tumble look: pivot height (H), hop at the upside-down moment (H), ball squash. */
 const ROLL = { pivot: 0.42, lift: 0.3, ball: 0.14 };
 /** Upper-body pitch (rad, + = forward) during a swing: lean back on the wind-up, into the strike, settle after. */
@@ -42,6 +48,18 @@ const SWING_POSE_BLEND = 0.06;
 const POSE_BLEND = { vigil: PLAYER.guard.enter, oath: 0.14, ready: 0.14, idle: 0.35, faint: 0.35, sip: 0.12, kneel: 0.08 };
 const SWING_IDS = new Set(Object.keys(VIS));
 const SWORD_GLB = { diamond: 'models/weapons/quaternius/Sword_Diamond.glb', toobig: 'models/weapons/quaternius/Claymore.glb' };
+
+/** The sword skin to show (§13.4): `state.cosmetics.sword` when it is a known skin, else the Borrowed Blade. */
+export function equippedSword(cos) {
+  const id = cos?.sword;
+  return typeof id === 'string' && SWORD_SKINS.includes(id) ? id : 'borrowed';
+}
+
+/** The cape to show (§13.5): a story override, else `state.cosmetics.cape`, when it is a known cape; else Faded Cream. */
+export function equippedCape(cos, override = null) {
+  const id = override || cos?.cape;
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(CAPES, id) ? id : 'cream';
+}
 
 // ------------------------------------------------------------------ temporaries (no per-frame allocation)
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler();
@@ -81,6 +99,8 @@ export class SwordcatModel {
     this.scriptPose = null; this.scriptPoseExpr = true;
     this.outfit = 'armour';
     this.capeApplied = null; this.swordApplied = null; this._cosmeticT = 0;
+    /** shader warm-up frames left (first Holy charge / Golden Hour programs; requests/player.md) */
+    this._warm = 0; this._warmSaved = [];
     // secondary motion
     this.squash = new Spring(320, 11);
     this.earSpring = new Spring(140, 9); this.tailSpring = new Spring(60, 7); this.headSpring = new Spring(160, 14);
@@ -90,7 +110,7 @@ export class SwordcatModel {
     this.flash = 0; this.flashLast = -1; this.stepOff = 0; this.stepSeen = 0; this.meme = false;
     // sword driver
     this.sw = { w: 0, a: 0, e: 0, reach: 1, h: 0.5, spin: 0, hop: 0, armW: 0 };
-    this.carryW = 0;
+    this.carryW = 0; this.dragW = 0;
     this.sw.twist = 0; this.sw.lean = 0;
     /** scripted visual swing / clip: { def, vis, t, speed, dur, resolve, kind } */
     this.clip = null;
@@ -118,15 +138,20 @@ export class SwordcatModel {
         else if (h?.attacker === this.player && !h.blocked) this._squashTo(h.killed ? -0.1 : -0.05);
       }),
       bus.on(E.PLAYER_SPAWNED, () => this.snap()),
+      bus.on(E.LEVEL_LOADED, () => { this._warm = 1; }),
+      bus.on(E.QUALITY, () => { this._warm = 1; }),
+      ctx.game?.addFrameHook?.(() => this._warmEnd()) ?? (() => {}),
     );
+    this._warm = 1;
     this.sneezeNext = TUNING.sneezeEvery * (0.6 + 0.8 * this.rand());
   }
 
   _config() {
-    const st = this.ctx.state, cos = st?.cosmetics ?? {};
-    const sword = typeof cos.sword === 'string' && !SWORD_GLB[cos.sword] ? cos.sword : 'borrowed';
+    const cos = this.ctx.state?.cosmetics;
+    const want = equippedSword(cos);
+    const sword = SWORD_GLB[want] ? 'borrowed' : want;              // GLB skins are swapped in once loaded
     const o = this.outfit;
-    return swordcatConfig({ cape: cos.cape || 'cream', sword, armour: o === 'armour', bow: o !== 'tunic' });
+    return swordcatConfig({ cape: equippedCape(cos, this.capeOverride), sword, armour: o === 'armour', bow: o !== 'tunic' });
   }
 
   _build() {
@@ -137,7 +162,7 @@ export class SwordcatModel {
       const k = this.k = this.view.kitten;
       if (this.meme) this.view.setMemeCam(true);
       this.poseName = null; this.expr = null;
-      this.capeApplied = this.ctx.state?.cosmetics?.cape ?? 'cream';
+      this.capeApplied = equippedCape(this.ctx.state?.cosmetics, this.capeOverride);
       this.swordApplied = k.sword?.skin ?? null;
       for (const name of this._props) k.setProp(name, true);
       this.ready = true;
@@ -171,6 +196,7 @@ export class SwordcatModel {
   }
 
   dispose() {
+    this._warmEnd();
     for (const off of this._offs) off();
     this._offs.length = 0;
     if (this.clip?.resolve) this.clip.resolve();
@@ -184,13 +210,13 @@ export class SwordcatModel {
   /** Wardrobe / unlocks change `state.cosmetics`: apply cape and sword skin (checked twice a second). */
   _applyCosmetics(force = false) {
     const k = this.k, cos = this.ctx.state?.cosmetics;
-    if (!k || !cos) return;
-    const capeWant = this.capeOverride || cos.cape;
+    if (!k || (!cos && !this.capeOverride)) return;
+    const capeWant = equippedCape(cos, this.capeOverride);
     if (this.outfit === 'armour' && (force || capeWant !== this.capeApplied)) {
       this.capeApplied = capeWant;
-      if (capeWant) k.setCape(capeWant);
+      k.setCape(capeWant);                                           // an existing hero cape restyles in place
     }
-    const want = cos.sword || 'borrowed';
+    const want = equippedSword(cos);
     if (this.outfit === 'armour' && (force || want !== this.swordApplied)) {
       this.swordApplied = want;
       if (SWORD_GLB[want]) {
@@ -307,6 +333,7 @@ export class SwordcatModel {
     p.object3d.updateWorldMatrix(true, false);
     this.view.simulate({ velocity: p.attachedTo ? _zero : p.vel, airborne: !p.onGround && !p.attachedTo });
     this._blinkAndBlob(dt);
+    if (this._warm > 0 && this.holyVis < 0.005) { this._warm--; this._warmBegin(); }
   }
 
   /** Which kitten pose the gameplay state shows. */
@@ -612,8 +639,13 @@ export class SwordcatModel {
     const prof = this._prof || (this._prof = { a: 0, e: 0, c: 0, reach: 1, h: 0.5, spin: 0, hop: 0, twist: 0, lean: 0 });
     const active = !!src && !!g && g.visible;
     const p = this.player;
-    const carry = !active && !!g && g.visible && this.poseName === 'ready' && p.onGround && (p.state === 'move' || p.scripted) &&
-      Math.hypot(p.vel.x, p.vel.z) > CARRY.minSpeed;
+    const sp = Math.hypot(p.vel.x, p.vel.z);
+    const drag = !active && !!g && g.visible && (k.sword?.length ?? 1) >= DRAG.minLength && p.onGround &&
+      (this.poseName === 'ready' || this.poseName === 'idle') && (p.state === 'move' || p.state === 'land' || (p.scripted && !this.scriptPose));
+    this.dragW = damp(this.dragW, drag ? 1 : 0, drag ? 8 : 12, dt);
+    if (this.dragW < 0.002) this.dragW = 0;
+    const carry = !drag && !active && !!g && g.visible && this.poseName === 'ready' && p.onGround && (p.state === 'move' || p.scripted) &&
+      sp > CARRY.minSpeed;
     this.carryW = damp(this.carryW, carry ? 1 : 0, carry ? 6 : 10, dt);
     if (this.carryW < 0.002) this.carryW = 0;
     if (active) {
@@ -630,15 +662,22 @@ export class SwordcatModel {
       sw.spin = damp(wrapAngle(sw.spin), 0, 12, dt);
       sw.hop = damp(sw.hop, 0, 14, dt);
       if (Math.abs(sw.spin) < 1e-4) sw.spin = 0;
-      if (this.carryW > 0) {                              // running carry: ease (a, e) there; a little bob per step
+      if (this.dragW > 0) {                               // too-big blade: tip on the ground, trailing behind at a run
+        const k1 = sw.w < 0.02 && this.dragW < 0.05 ? 1 : 1 - Math.exp(-12 * dt);
+        const run = easeInOutSine(clamp(sp / PLAYER.run, 0, 1));
+        const tipLen = (k.sword?.tip?.position.y ?? (k.sword.length - 0.15)) - SWORD_PTS.gripMid;
+        const e = -Math.asin(clamp((DRAG.h + DRAG.sink) / Math.max(0.3, tipLen), 0, 0.95));
+        sw.a = lerp(sw.a, lerp(DRAG.idleA, DRAG.runA, run), k1); sw.e = lerp(sw.e, e, k1);
+        sw.reach = lerp(sw.reach, DRAG.reach, k1); sw.h = lerp(sw.h, DRAG.h, k1);
+      } else if (this.carryW > 0) {                       // running carry: ease (a, e) there; a little bob per step
         const k1 = sw.w < 0.02 && this.carryW < 0.05 ? 1 : 1 - Math.exp(-14 * dt);
         const bob = Math.sin(p.gait * Math.PI * 2) * CARRY.bob * this.gaitAmp;
         sw.a = lerp(sw.a, CARRY.a, k1); sw.e = lerp(sw.e, CARRY.e + bob, k1);
         sw.reach = lerp(sw.reach, CARRY.reach, k1); sw.h = lerp(sw.h, CARRY.h + bob * 0.2, k1);
       }
-      sw.twist = damp(sw.twist, this.carryW > 0 ? 0.2 : 0, 10, dt); sw.lean = damp(sw.lean, 0, 10, dt);
+      sw.twist = damp(sw.twist, this.dragW > 0 ? DRAG.twist : this.carryW > 0 ? 0.2 : 0, 10, dt); sw.lean = damp(sw.lean, 0, 10, dt);
     }
-    const wAll = Math.max(sw.w, this.carryW);
+    const wAll = Math.max(sw.w, this.carryW, this.dragW);
     if (wAll <= 0.001 || !g || !g.visible || !g.parent) return;
     const w = easeInOutSine(wAll);
     // body follows the blade: chest / hips twist toward the sword side, lean into the strike (the IK below adapts)
@@ -711,6 +750,38 @@ export class SwordcatModel {
       _W.copy(targetChest).sub(_v.copy(_centre).applyQuaternion(_rot));
     }
     sh.quaternion.slerp(_qS, weight); el.quaternion.slerp(_qE, weight); pw.quaternion.slerp(_qP, weight);
+  }
+
+  // ------------------------------------------------------------------ shader warm-up
+  /**
+   * First Holy charge / Golden Hour used to compile the hero's aura hull and blade streak programs mid-fight
+   * (requests/player.md). On level load / quality change, show them for one frame with an empty draw range: the real
+   * renderer (level fog, lights, the composer's target) builds the programs now and nothing is drawn. The frame hook
+   * restores them after the frame.
+   */
+  _warmBegin() {
+    const k = this.k, S = this._warmSaved;
+    if (!k) return;
+    const objs = [...(k.auraMeshes ?? []), k.sword?.streak].filter(Boolean);
+    for (const o of objs) {
+      if (o.visible || !o.parent || !o.geometry) continue;
+      const g = o.geometry;
+      S.push(o, g.drawRange.start, g.drawRange.count);
+      g.setDrawRange(0, 0);
+      o.visible = true;
+    }
+    if (S.length) this.warmups = (this.warmups ?? 0) + 1;
+  }
+
+  _warmEnd() {
+    const S = this._warmSaved;
+    if (!S?.length) return;
+    for (let i = S.length - 3; i >= 0; i -= 3) {
+      const o = S[i];
+      o.visible = false;
+      o.geometry.setDrawRange(S[i + 1], S[i + 2]);
+    }
+    S.length = 0;
   }
 
   // ------------------------------------------------------------------ glow, blink, blob

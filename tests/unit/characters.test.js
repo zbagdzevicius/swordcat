@@ -658,3 +658,220 @@ test('tuft wisps render in a single pass (no per-draw program re-resolve from tr
   assert.ok(m.transparent && m.depthWrite === false && m.alphaTest > 0);
   assert.equal(m.forceSinglePass, true, 'transparent+DoubleSide without forceSinglePass draws twice and flips needsUpdate every draw');
 });
+
+// ================================================================== M2 (Acts I–II)
+
+test('M2: hub residents and the Spoon Brigade resolve through catConfig (cheap tier, activity pose / props)', () => {
+  for (const id of C.KITTEN_IDS) {
+    const hub = C.catConfig('hub_' + id), sp = C.catConfig('spoon_' + id);
+    assert.ok(hub && sp, id);
+    assert.equal(hub.tier, 'lite'); assert.equal(sp.tier, 'lite');
+    assert.equal(hub.id, 'hub_' + id); assert.equal(sp.id, 'spoon_' + id);
+    assert.ok(C.HUB_ACTIVITY[id], `§12.5 activity for ${id}`);
+    assert.equal(hub.pose, C.HUB_ACTIVITY[id].pose);
+    assert.equal(sp.pose, 'spoonReady');
+    assert.ok(sp.props.some((p) => p.startsWith('spoon')) && sp.props.some((p) => p === 'pot_helm' || p === 'colander'));
+    assert.deepEqual(hub.coat, C.lostKittenConfig(id).coat, 'same coat as the lost kitten (they are the same cats)');
+  }
+  assert.equal(C.catConfig('spoon:tater:1').props[0], 'colander');
+  assert.equal(C.catConfig('hub:juniper').props[0], 'book@upsidedown');
+  assert.equal(C.catConfig('spoon_nobody'), null);
+  assert.equal(C.catConfig(42), null);
+});
+
+test('M2: every activity pose and prop named in HUB_ACTIVITY exists', () => {
+  const poses = new Set([...C.POSE_NAMES, ...C.EXTRA_POSE_NAMES]);
+  for (const [id, a] of Object.entries(C.HUB_ACTIVITY)) {
+    assert.ok(poses.has(a.pose) && C.POSES[a.pose], `${id}: pose ${a.pose}`);
+    if (a.prop) assert.ok(C.PROP_NAMES.includes(a.prop.split('@')[0]), `${id}: prop ${a.prop}`);
+    for (const w of a.world ?? []) assert.ok(C.PROP_NAMES.includes(w), `${id}: world prop ${w}`);
+  }
+  for (const n of C.EXTRA_POSE_NAMES) assert.ok(C.POSES[n], n);
+});
+
+test('M2: Sage, Clover, Tofu, Earl Grey, Pip and Marmalade build with their silhouette props', () => {
+  const want = { sage: ['hood', 'shortBow', 'quiver'], clover: ['coif', 'bellCollar', 'flowerStaff'], tofu: ['apron'], earlgrey: ['wizardHat', 'glasses', 'floatingBook'], pip: ['scarf', 'dagger'], marmalade: ['plumedHelm', 'eyepatch'] };
+  for (const [id, acc] of Object.entries(want)) {
+    const ids = C.CATS[id].accessories.map((a) => (typeof a === 'string' ? a : a.id));
+    for (const a of acc) assert.ok(ids.includes(a), `${id} wears ${a}`);
+    const k = C.buildKitten(C.CATS[id]);
+    assert.equal(k.root.name, 'kitten:' + id);
+    assert.ok(k.drawCalls() <= 16, `${id}: ${k.drawCalls()} draw calls`);
+    k.dispose();
+  }
+});
+
+test('M2: the hood / coif shell opens toward the face (eyes uncovered) and covers crown + back', async () => {
+  const { hoodShellGeometry } = await import('../../src/characters/Accessories.js');
+  for (const o of [{ radii: [0.212, 0.188, 0.198], center: [0, 0.172, -0.014], face: [0, -0.32, 1], open: 1.08, thetaEnd: Math.PI * 0.74 },
+    { radii: [0.208, 0.186, 0.194], center: [0, 0.168, -0.01], face: [0, -0.38, 1], open: 1.12, thetaEnd: Math.PI * 0.72 }]) {
+    const g = hoodShellGeometry(o);
+    const p = g.geo.attributes.position, idx = g.geo.index.array;
+    const a = v(), b = v(), c = v();
+    for (let i = 0; i < idx.length; i += 3) {
+      a.fromBufferAttribute(p, idx[i]); b.fromBufferAttribute(p, idx[i + 1]); c.fromBufferAttribute(p, idx[i + 2]);
+      const m = a.add(b).add(c).divideScalar(3);
+      const overEyes = m.z > 0.1 && Math.abs(m.y - 0.158) < 0.05 && Math.abs(m.x) < 0.11;   // eyes at (±0.074, 0.158, 0.118)
+      assert.ok(!overEyes, `shell triangle over the eyes at ${m.toArray().map((x) => x.toFixed(3))}`);
+    }
+    let top = false, back = false;
+    for (let i = 0; i < p.count; i++) { if (p.getY(i) > 0.35) top = true; if (p.getZ(i) < -0.18) back = true; }
+    assert.ok(top && back, 'covers the crown and the back of the head');
+    assert.ok(g.rim.length > 16, 'a rim curve frames the face');
+  }
+});
+
+test('M2: Spoon Brigade / hub cats are cheap (sheen fur, few draw calls); the spoon is in the right fist', () => {
+  for (const id of ['spoon_tater', 'spoon_mittens', 'hub_biscuit', 'hub_pickles']) {
+    const k = C.buildKitten(C.catConfig(id));
+    assert.ok(k.lite, `${id} lite`);
+    assert.ok(k.drawCalls() <= 7, `${id}: ${k.drawCalls()} calls`);
+    if (id.startsWith('spoon')) {
+      assert.equal(k.props.spoon?.parent, k.rig.pawR, 'spoon in the right paw');
+      assert.equal(k.poseName, 'spoonReady');
+    }
+    k.dispose();
+  }
+});
+
+test('M2: wave / throw emotes animate the right arm and settle back', () => {
+  const k = C.buildKitten(C.catConfig('spoon_tater'));
+  k.update(0.016);
+  const rest = k.rig.shoulderR.quaternion.clone();
+  k.emote('throw');
+  let maxDev = 0;
+  for (let i = 0; i < 40; i++) { k.update(1 / 60); maxDev = Math.max(maxDev, k.rig.shoulderR.quaternion.angleTo(rest)); }
+  assert.ok(maxDev > 1.0, `throw winds the arm up (${maxDev.toFixed(2)} rad)`);
+  assert.ok(k.rig.shoulderR.quaternion.angleTo(rest) < 0.15, 'throw settles back into the stance');
+  assert.ok(C.EMOTE_RELEASE.throw > 0 && C.EMOTE_RELEASE.throw < 1 && C.EMOTE_DUR.throw > 0);
+  k.emote('wave');
+  k.update(0.3);
+  assert.ok(k.emotes.wave > 0);
+  k.dispose();
+});
+
+test('M2: new props build as cheap meshes with mounts; cheese gear follows the §11.2 sizes', () => {
+  for (const n of ['book', 'fishing_rod', 'bread_basket', 'teacup', 'hammer', 'butterfly', 'feathered_hat', 'cheese_shield', 'cheese_wheel', 'cheese_wheel_giant', 'cheese_wedge']) {
+    assert.ok(C.PROP_NAMES.includes(n), n);
+    const o = C.buildProp(n);
+    assert.ok(o?.isObject3D, n);
+    let meshes = 0; o.traverse((c) => { if (c.isMesh) meshes++; });
+    assert.ok(meshes >= 1 && meshes <= 3, `${n}: ${meshes} meshes`);
+  }
+  const sh = C.buildProp('cheese_shield'); sh.geometry.computeBoundingBox();
+  const bs = sh.geometry.boundingBox;
+  assert.ok(Math.abs((bs.max.x - bs.min.x) / 2 - 0.45) < 0.03, 'cheese shield r 0.45');
+  const gw = C.buildProp('cheese_wheel_giant');
+  assert.equal(gw.userData.radius, 0.8); assert.equal(gw.userData.width, 0.6);
+  const before = gw.rotation.x; gw.userData.roll(0.8); assert.ok(Math.abs(gw.rotation.x - before - 1) < 1e-9, 'rolls one radian per radius travelled');
+  const col = sh.geometry.attributes.color; let mn = 9, mx = 0;
+  for (let i = 0; i < col.count; i++) { mn = Math.min(mn, col.getX(i)); mx = Math.max(mx, col.getX(i)); }
+  assert.ok(mx - mn > 0.2, 'cheese holes / rind shading');
+  const hat = C.buildProp('feathered_hat', { size: 0.84 }); hat.geometry.computeBoundingBox();
+  assert.ok(hat.geometry.boundingBox.max.x - hat.geometry.boundingBox.min.x > 0.7, 'feathered hat scales with size');
+  const k = C.buildKitten(C.CATS.earlgrey);
+  k.setProp('book@upsidedown', true);
+  assert.equal(k.props.book.parent, k.rig.pawL);
+  assert.ok(Math.abs(k.props.book.rotation.z - Math.PI) < 1e-6);
+  k.dispose();
+});
+
+test('M2: all 7 sword skins and 7 capes (§13.4 / §13.5); the bow stays pink on the left ear', () => {
+  assert.deepEqual([...C.SWORD_SKINS], ['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'cream' }));
+  for (const s of C.SWORD_SKINS) { k.setSword(s); assert.equal(k.sword.skin, s); }
+  k.setSword('dawnblade');
+  assert.ok(k.sword.sparkles?.isPoints, 'Dawnblade has sparkles');
+  assert.equal(k.sword.sparkles.geometry.attributes.position.count, 20, '20 sparkles (§13.4)');
+  assert.ok(k.sword.bladeMat.emissiveIntensity > 1, 'permanent gold emissive');
+  const spec = { red: '#A3202C', memeWhite: '#F2EFE8', blue: '#3F6FB5', green: '#5E7F3E', midnight: '#22242A', gold: '#D9B26A' };
+  for (const id of ['cream', ...Object.keys(spec)]) {
+    assert.ok(C.CAPES[id], id);
+    if (spec[id]) assert.equal(C.CAPES[id].color.toUpperCase(), spec[id], `${id} colour per §13.3/§13.5`);
+    k.setCape(id);
+    assert.equal(k.capeStyle, id);
+    assert.equal(k.bow.parent, k.rig.earL);
+    assert.ok(k.bow.visible);
+  }
+  assert.equal(C.swordcatConfig({ cape: 'red' }).bow.color, C.PAL.bow);
+  k.dispose();
+});
+
+/** A fake GLB sword: wide guard at y 0, blade along `dir` (±1), grip on the other side. */
+function fakeSword(dir, blade = 0.7, grip = 0.2) {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, blade, 0.02).translate(0, dir * blade / 2, 0)));
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.04)));
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.03, grip, 0.03).translate(0, -dir * grip / 2, 0)));
+  return g;
+}
+
+test('M2: GLB sword skins mount at their own crossguard and auto-orient (tip up)', () => {
+  const sw = C.buildSword('diamond', { model: fakeSword(-1) });      // built tip-DOWN: exercises the auto flip
+  sw.group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(sw.group.getObjectByName('swordModel'));
+  assert.ok(box.max.y > 0.6, `blade points up (max y ${box.max.y.toFixed(2)})`);
+  assert.ok(box.min.y > -0.3 && box.min.y < -0.05, `grip hangs below the origin (min y ${box.min.y.toFixed(2)})`);
+  assert.ok(Math.abs(sw.tip.position.y - box.max.y) < 0.05, 'tip anchor at the model tip (trail / hit point)');
+});
+
+test('M2: Even More Too Big drags its tip on the ground instead of sinking into it', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  k.setSword({ skin: 'toobig', model: fakeSword(1, 1.2, 0.3) });
+  k.setPose('idle', { blend: 0 });
+  for (let i = 0; i < 3; i++) k.update(1 / 60);
+  k.root.updateMatrixWorld(true);
+  const tip = k.sword.tip.getWorldPosition(v());
+  assert.ok(tip.y >= 0 && tip.y < 0.05, `tip on the ground (y ${tip.y.toFixed(3)})`);
+  k.dispose();
+});
+
+test('M2: shader warm-up shows hidden aura / streak with an empty draw range for one frame, then restores', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const objs = k.warmObjects();
+  assert.ok(objs.length >= 3, 'aura head + body + blade streak');
+  assert.ok(objs.every((o) => !o.visible));
+  assert.equal(k.warmBegin(), objs.length);
+  assert.ok(objs.every((o) => o.visible && o.geometry.drawRange.count === 0 && !o.frustumCulled));
+  assert.equal(k.warmBegin(), 0, 'idempotent until warmEnd');
+  k.warmEnd();
+  assert.ok(objs.every((o) => !o.visible && o.geometry.drawRange.count === Infinity));
+  k.warmBegin(); k.setHoly(1); k.warmEnd();
+  assert.ok(k.auraMeshes.every((m) => m.visible) && k.sword.streak.visible, 'holy turned on during the warm frame survives the restore');
+  assert.equal(k.warmups, 2);
+  k.dispose();
+});
+
+test('M2: KittenView warms after build / level load / quality change, only when a frame hook can restore it', () => {
+  const bus = new EventBus();
+  const hooks = new Set();
+  const ctx = { bus, game: { frameCount: 0, addFrameHook: (fn) => { hooks.add(fn); return () => hooks.delete(fn); }, hitstopT: 0, mode: 'play' } };
+  const view = new C.KittenView(ctx, C.swordcatConfig({ cape: 'red' }));
+  const frame = () => { ctx.game.frameCount++; view.render(1 / 60); for (const h of hooks) h(1 / 60); };
+  frame(); frame(); frame();
+  assert.equal(view.kitten.warmups, 2, 'two warm frames after build');
+  assert.ok(view.kitten.auraMeshes.every((m) => !m.visible), 'restored after the frame');
+  bus.emit(E.LEVEL_LOADED, { id: 'meadow' });
+  frame(); frame(); frame();
+  assert.equal(view.kitten.warmups, 4);
+  view.dispose();
+  assert.equal(hooks.size, 0, 'frame hook removed on dispose');
+  const tool = new C.KittenView(null, 'mochi');
+  tool.render(1 / 60);
+  assert.ok(!tool.kitten.warmups, 'no ctx / frame hook: never warms');
+  tool.dispose();
+});
+
+test('M2: fur distance LOD — full shells in close-ups, fewer at the follow camera, none past ~8 m', () => {
+  const L = C.Kitten.lib.FUR_LOD;
+  assert.ok(L.far <= 8.5 && L.near < 3.6 && L.min >= 1);
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  k.setFurShells(16);
+  const cam = new THREE.PerspectiveCamera();
+  const at = (d) => { cam.position.set(0, 0.8, d); cam.updateMatrixWorld(); k.root.updateMatrixWorld(true); k.headFur._lod(cam); return k.headFur._lodN; };
+  assert.equal(at(1.5), 16);
+  const follow = at(3.6);
+  assert.ok(follow < 16 && follow >= 10, `follow camera ${follow}`);
+  assert.equal(at(9), 0);
+  k.dispose();
+});

@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep } from './util.js';
 import { own, kitMaterial, RM } from './materials.js';
+import { FUR_TIME } from './Fur.js';
 
 export const SWORD = Object.freeze({ blade: 0.85, gripLen: 0.11, guardW: 0.21, pommelY: -0.132, gripY: -0.055 });
 export const SWORD_SKINS = Object.freeze(['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
@@ -41,6 +42,49 @@ export function makeStreak(len = 1.0, width = STREAK.width) {
   const mesh = new THREE.Mesh(g, m);
   mesh.name = 'holyStreak'; mesh.frustumCulled = false; mesh.visible = false; mesh.renderOrder = 5;
   return mesh;
+}
+
+/** Dawnblade sparkles (GAME_DESIGN §13.4: 20 sparkles, ref1): additive twinkling points drifting up the blade. */
+export const DAWN_SPARKLES = Object.freeze({ count: 20, color: '#FFE7A6', size: 0.05 });
+let _sparkMat = null;
+function sparkleMaterial() {
+  if (_sparkMat) return _sparkMat;
+  _sparkMat = own(new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    uniforms: { uTime: FUR_TIME, uColor: { value: new THREE.Color(DAWN_SPARKLES.color) }, uSize: { value: DAWN_SPARKLES.size }, uPR: { value: 1 } },
+    vertexShader: /* glsl */`uniform float uTime, uSize, uPR; attribute float aPhase; varying float vA;
+      void main(){ vec3 p = position;
+        float life = fract(uTime * 0.22 + aPhase);
+        p.y += life * 0.12; p.x += sin(uTime * 1.3 + aPhase * 17.0) * 0.012; p.z += cos(uTime * 1.1 + aPhase * 11.0) * 0.012;
+        float tw = 0.5 + 0.5 * sin(uTime * (4.0 + aPhase * 5.0) + aPhase * 40.0);
+        vA = sin(life * 3.14159) * (0.35 + 0.65 * tw);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float sc = length(modelMatrix[0].xyz);
+        gl_PointSize = clamp(uSize * sc * 900.0 / max(-mv.z, 0.05), 1.0, 48.0) * (0.6 + 0.4 * tw);
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: /* glsl */`uniform vec3 uColor; varying float vA;
+      void main(){ vec2 c = gl_PointCoord - 0.5; float d = length(c);
+        float core = pow(max(smoothstep(0.5, 0.0, d), 0.0), 3.0);
+        float star = max(0.0, 1.0 - abs(c.x) * 14.0) * smoothstep(0.5, 0.0, abs(c.y)) + max(0.0, 1.0 - abs(c.y) * 14.0) * smoothstep(0.5, 0.0, abs(c.x));
+        gl_FragColor = vec4(uColor * (core + star * 0.6) * vA * 2.2, 1.0); }`,
+  }));
+  return _sparkMat;
+}
+/** 20 sparkle points along a blade of length `len` (sword space), seeded so every Dawnblade twinkles the same. */
+export function makeBladeSparkles(len = 0.85, count = DAWN_SPARKLES.count) {
+  const g = new THREE.BufferGeometry(), pos = new Float32Array(count * 3), ph = new Float32Array(count);
+  let a = 0x2F6B;
+  const rnd = () => { a = (a * 16807) % 2147483647; return a / 2147483647; };
+  for (let i = 0; i < count; i++) {
+    pos[i * 3] = (rnd() - 0.5) * 0.08; pos[i * 3 + 1] = 0.04 + rnd() * (len - 0.1); pos[i * 3 + 2] = (rnd() - 0.5) * 0.05;
+    ph[i] = rnd();
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, len / 2, 0), len);
+  const pts = new THREE.Points(g, sparkleMaterial());
+  pts.name = 'dawnSparkles'; pts.renderOrder = 5;
+  return pts;
 }
 
 /** Blade material per sword instance (emissive tracks Valor and the holy charge). */
@@ -151,7 +195,7 @@ function baguetteBlade(gbBlade, gbHilt) {
 export function buildSword(skin = 'borrowed', o = {}) {
   const group = new THREE.Group(); group.name = 'sword:' + skin;
   const gbBlade = new GeoBuilder(), gbHilt = new GeoBuilder();
-  let kind = 'metal', length = 1.0, baseGlow = 0;
+  let kind = 'metal', length = 1.0, baseGlow = 0, modelTop = null;
   switch (skin) {
     case 'twig': twigBlade(gbBlade, gbHilt); kind = 'wood'; break;
     case 'fishbone': fishboneBlade(gbBlade, gbHilt); kind = 'bone'; break;
@@ -167,13 +211,18 @@ export function buildSword(skin = 'borrowed', o = {}) {
   hiltMesh.name = 'hilt'; hiltMesh.castShadow = true; hiltMesh.visible = !gbHilt.empty;
   group.add(blade, hiltMesh);
   if (o.model) {
-    const m = mountModel(o.model, { length: o.modelLength ?? (skin === 'toobig' ? 1.6 : 1.0), flip: o.flip });
+    const m = mountModel(o.model, { length: o.modelLength ?? (skin === 'toobig' ? 1.6 : 1.0), flip: o.flip ?? 'auto' });
+    if (skin === 'toobig') restyleClaymore(m);
     group.add(m); length = o.modelLength ?? (skin === 'toobig' ? 1.6 : 1.0);
+    modelTop = m.userData.top - 0.01;
   }
   const streak = makeStreak(Math.max(1.0, length * 0.95));
   group.add(streak);
-  const tip = new THREE.Object3D(); tip.name = 'swordTip'; tip.position.set(0, length - 0.15 + (skin === 'twig' ? 0.02 : 0), 0);
-  const mid = new THREE.Object3D(); mid.name = 'swordMid'; mid.position.set(0, (length - 0.15) * 0.5, 0);
+  const sparkles = skin === 'dawnblade' ? makeBladeSparkles(SWORD.blade) : null;
+  if (sparkles) group.add(sparkles);
+  const top = modelTop ?? length - 0.15 + (skin === 'twig' ? 0.02 : 0);
+  const tip = new THREE.Object3D(); tip.name = 'swordTip'; tip.position.set(0, top, 0);
+  const mid = new THREE.Object3D(); mid.name = 'swordMid'; mid.position.set(0, top * 0.5, 0);
   const grip = new THREE.Object3D(); grip.name = 'swordGrip'; grip.position.set(0, SWORD.gripY, 0);
   const pommel = new THREE.Object3D(); pommel.name = 'swordPommel'; pommel.position.set(0, SWORD.pommelY, 0);
   group.add(tip, mid, grip, pommel);
@@ -185,31 +234,87 @@ export function buildSword(skin = 'borrowed', o = {}) {
   };
   apply();
   return {
-    group, blade, bladeMat, hilt: hiltMesh, streak, tip, mid, grip, pommel, length, skin,
+    group, blade, bladeMat, hilt: hiltMesh, streak, sparkles, tip, mid, grip, pommel, length, skin,
     /** Holy charge 0..1 (art.md §4.3 ramp: emissive 0 → 4, streak). */
     setCharge(c) { charge = Math.max(0, Math.min(1, c)); apply(); },
     /** Valor glow 0..1 (GAME_DESIGN §7.4: emissive 0 → 0.6). */
     setValorGlow(v) { valor = Math.max(0, Math.min(1, v)); apply(); },
-    dispose() { blade.geometry.dispose(); hiltMesh.geometry.dispose(); streak.geometry.dispose(); bladeMat.dispose(); },
+    dispose() { blade.geometry.dispose(); hiltMesh.geometry.dispose(); streak.geometry.dispose(); sparkles?.geometry.dispose(); bladeMat.dispose(); },
   };
 }
 
+/**
+ * True when a sword model (long axis already +Y) has its crossguard in the upper half, i.e. the tip points down.
+ * The guard is the widest cross-section and always sits near the grip end.
+ */
+export function guardInUpperHalf(obj) { return guardHeight(obj).frac >= 0.5; }
+
+/**
+ * Height of the crossguard (widest cross-section) of a sword model whose long axis is +Y, in the parent's space.
+ * @returns {{ y: number, frac: number, min: number, max: number }}
+ */
+export function guardHeight(obj) {
+  obj.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(obj), y0 = box.min.y, h = Math.max(1e-6, box.max.y - box.min.y);
+  const bins = new Float32Array(24), v = new THREE.Vector3();
+  obj.traverse((c) => {
+    if (!c.isMesh || !c.geometry?.attributes?.position) return;
+    const p = c.geometry.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(c.matrixWorld);
+      const b = Math.min(23, Math.max(0, Math.floor(((v.y - y0) / h) * 24)));
+      bins[b] = Math.max(bins[b], Math.hypot(v.x - (box.max.x + box.min.x) / 2, v.z - (box.max.z + box.min.z) / 2));
+    }
+  });
+  let best = 0; for (let i = 1; i < 24; i++) if (bins[i] > bins[best]) best = i;
+  const frac = (best + 0.5) / 24;
+  return { y: y0 + frac * h, frac, min: box.min.y, max: box.max.y };
+}
+
+/**
+ * "Even More Too Big" is Sir Brutus's claymore in her paws: the Quaternius model's red-lacquered parts become polished
+ * steel and the dark steel a touch lighter, so it reads as a (comically huge) knight's sword, not Barkus's cleaver.
+ * Materials are cloned and tagged `userData.assetOwned` (core disposeInstance frees them; shared GLTF data untouched).
+ */
+export function restyleClaymore(obj) {
+  const map = new Map();
+  obj.traverse((c) => {
+    if (!c.isMesh) return;
+    const swap = (m) => {
+      if (map.has(m)) return map.get(m);
+      const n = m.clone(); n.userData.assetOwned = true;
+      if (/red/i.test(m.name)) { n.color?.set(PAL.blade); n.metalness = 0.95; n.roughness = 0.22; }
+      else if (/steel/i.test(m.name)) { n.color?.set(PAL.steelDark); n.metalness = 0.8; n.roughness = 0.35; }
+      map.set(m, n); return n;
+    };
+    c.material = Array.isArray(c.material) ? c.material.map(swap) : swap(c.material);
+  });
+  return obj;
+}
+
 /** Align a GLB sword (Sword_Diamond, Claymore) to sword space: long axis → +Y, grip end at the pommel. */
-export function mountModel(model, { length = 1.0, flip = false } = {}) {
+export function mountModel(model, { length = 1.0, flip = 'auto' } = {}) {
   const holder = new THREE.Group(); holder.name = 'swordModel';
   const box = new THREE.Box3().setFromObject(model);
   const size = box.getSize(new THREE.Vector3());
   const axis = size.x >= size.y && size.x >= size.z ? 'x' : size.z >= size.y ? 'z' : 'y';
   const inner = new THREE.Group(); inner.add(model);
   if (axis === 'x') inner.rotation.z = Math.PI / 2; else if (axis === 'z') inner.rotation.x = -Math.PI / 2;
-  if (flip) inner.rotation.z += Math.PI;
   holder.add(inner); holder.updateMatrixWorld(true);
+  if (flip === 'auto') flip = guardHeight(holder).frac >= 0.5;
+  if (flip) { inner.rotation.z += Math.PI; holder.updateMatrixWorld(true); }
   const b2 = new THREE.Box3().setFromObject(inner);
   const s = length / Math.max(1e-6, b2.max.y - b2.min.y);
   inner.scale.multiplyScalar(s); holder.updateMatrixWorld(true);
   const b3 = new THREE.Box3().setFromObject(inner);
-  inner.position.y += SWORD.pommelY - b3.min.y;
+  // the model's own crossguard goes on the sword origin (her paws grip just below it, like the Borrowed Blade);
+  // a guard that would leave less than the Borrowed Blade's grip below it falls back to pommel alignment
+  const gd = guardHeight(holder);
+  const dy = gd.y - b3.min.y >= -SWORD.pommelY * 0.8 && gd.frac < 0.5 ? -gd.y : SWORD.pommelY - b3.min.y;
+  inner.position.y += dy;
   inner.position.x -= (b3.max.x + b3.min.x) / 2; inner.position.z -= (b3.max.z + b3.min.z) / 2;
+  holder.updateMatrixWorld(true);
+  holder.userData.top = b3.max.y + dy;
   model.traverse((c) => { if (c.isMesh) c.castShadow = true; });
   return holder;
 }

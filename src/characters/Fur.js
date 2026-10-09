@@ -22,8 +22,12 @@ let _custom = { hero: 16, kitten: 10, npc: 0 };
 const _parts = new Set();
 /** Max shells a part is allocated for (so quality can be raised later without rebuilding). */
 export const MAX_SHELLS = 24;
-/** Distance LOD (art.md §3 table: far LOD beyond ~12 units): full shells inside `near`, base layer only beyond `far`. */
-export const FUR_LOD = { near: 5, far: 12, min: 4 };
+/**
+ * Distance LOD (art.md §3 far LOD; §18 budget, requests/world.md M2): full shells inside `near` (close-ups, Meme Cam),
+ * a linear ramp down to `min` shells, then the base layer only beyond `far` (shells off past ~8 m). The follow camera
+ * (CAMERA.dist 3.6 m) draws ~13 of 16 hero shells, lock-on (4.5 m) ~10, boss framing (6 m) ~6.
+ */
+export const FUR_LOD = { near: 2.6, far: 8, min: 4 };
 const _lodV = new THREE.Vector3();
 
 /** Current fur quality name. */
@@ -198,7 +202,7 @@ export function coatColor(coat, region, p, o = {}) {
   }
   // ---- age (grey muzzle) and soot smudge
   if (coat.muzzle && (region === 'head' || region === 'muzzle')) c = mixRgb(c, rgb(coat.muzzle), smoothstep(0.09, 0.05, _d3(p, FACE.muzzle)) * 0.85);
-  if (coat.smudge && region === 'head') {
+  if (coat.smudge && (region === 'head' || region === 'cheek' || region === 'muzzle')) {
     const s = coat.smudge; c = mixRgb(c, rgb(s.color || '#3A3634'), smoothstep(s.r || 0.03, (s.r || 0.03) * 0.4, _d3(p, s.at)) * 0.85);
   }
   // gentle large-scale value variation so flat coats read as fur
@@ -269,6 +273,7 @@ void main() {
 
 const FUR_FRAG = /* glsl */`
 uniform sampler2D uStrands;
+uniform float uSheen;
 uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade, uEdgeStart, uFringe;
 uniform vec3 uTipTint, uRimColor, uHolyColor;
 varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
@@ -331,6 +336,9 @@ void main() {
   float rim = pow(1.0 - saturate(dot(N, V)), 3.0) * (0.35 + 0.65 * vH);
   vec3 rimCol = mix(uRimColor * uRimStrength, uHolyColor * 1.05, uHoly);
   vec3 col = albedo * (irr * uAmbMul + direct * uSunMul) * RECIPROCAL_PI + rim * rimCol;
+  // sky sheen (dark coats only, uSheen > 0): black fur reflects the overcast sky as a soft grey-blue gloss that keeps
+  // its form readable under day fog (Mochi read as a black hole, STATUS M1); stronger toward the strand tips
+  col += irr * (uSheen * (0.45 + 0.55 * vH)) * RECIPROCAL_PI;
   col += albedo * uHolyColor * uHoly * 0.07 + vec3(uFlash);   // stays ginger under the glow (ref1)
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
@@ -350,7 +358,7 @@ export function makeFurMaterial(o = {}) {
       uGravity: { value: new THREE.Vector3(0, -1, 0) }, uDrag: { value: new THREE.Vector3() },
       uTipTint: { value: new THREE.Color(o.tipTint ?? PAL.furGingerLight).multiplyScalar(0.18) },
       uRimColor: { value: new THREE.Color('#FFE9D2') }, uRimStrength: { value: o.rim ?? 0.3 },
-      uHoly: { value: 0 }, uAmbMul: { value: o.ambMul ?? 1.55 }, uSunMul: { value: o.sunMul ?? 1.0 },
+      uHoly: { value: 0 }, uSheen: { value: o.sheen ?? 0 }, uAmbMul: { value: o.ambMul ?? 1.55 }, uSunMul: { value: o.sunMul ?? 1.0 },
       uRootDark: { value: o.rootDark ?? 0.82 }, uDensityBoost: { value: o.density ?? 1.5 }, uFlash: { value: 0 },
       uComb: { value: o.comb ?? 1.6 }, uStretch: { value: o.stretch ?? 0.65 },
       uCells: { value: STRANDS.cells }, uStreak: { value: o.streak ?? 0.09 }, uEdgeFade: { value: o.edgeFade ?? 0.35 },

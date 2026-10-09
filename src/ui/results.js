@@ -29,6 +29,26 @@ export function resultRows(ctx, p) {
   };
 }
 
+const RANK_ORDER = ['mewtiful', 'purrfect', 'pawsome'];
+
+/**
+ * §14.3 results per level: this run against the level's record as it stood when the level started (`prev` =
+ * state.levels[id] snapshot, or null when unknown). Pure.
+ * @returns {{ first: boolean, newTime: boolean, newRank: boolean, bestTime: number|null, bestRank: string|null }}
+ */
+export function resultBest(p, prev) {
+  const r = p ?? {}, rank = RANK_KEYS[r.rank] ? r.rank : rankFor(r.livesLost ?? 0);
+  const time = Number.isFinite(r.time) && r.time > 0 ? r.time : null;
+  if (!prev) return { first: false, newTime: false, newRank: false, bestTime: time, bestRank: rank };
+  const first = !prev.cleared;
+  const pt = Number.isFinite(prev.bestTime) && prev.bestTime > 0 ? prev.bestTime : null;
+  const newTime = !first && time != null && pt != null && time < pt - 0.5;
+  const newRank = !first && !!prev.bestRank && RANK_ORDER.indexOf(rank) > RANK_ORDER.indexOf(prev.bestRank);
+  const bestTime = pt == null ? time : time == null ? pt : Math.min(pt, time);
+  const bestRank = !prev.bestRank || RANK_ORDER.indexOf(rank) > RANK_ORDER.indexOf(prev.bestRank) ? rank : prev.bestRank;
+  return { first, newTime, newRank, bestTime, bestRank };
+}
+
 export class Results {
   /** @param {any} ctx @param {HTMLElement} parent @param {{ onClose?: () => void, sfx?: (id: string) => void }} hooks */
   constructor(ctx, parent, hooks = {}) {
@@ -43,9 +63,12 @@ export class Results {
   }
 
   /** Show the screen; resolves when the player continues. */
-  show(payload) {
+  show(payload, { prev = null } = {}) {
     if (this.open) this.close();
-    const ctx = this.ctx, d = resultRows(ctx, payload);
+    const ctx = this.ctx, d = resultRows(ctx, payload), b = resultBest(payload, prev);
+    const ribbons = [b.first && 'ui.results.first', b.newTime && 'ui.results.newBest', b.newRank && 'ui.results.newRank'].filter(Boolean)
+      .map((k) => `<span class="res-ribbon">${esc(tx(ctx, k))}</span>`).join('');
+    const bestLine = prev && prev.cleared && b.bestTime != null ? `<div class="res-best">${esc(tx(ctx, 'ui.results.best', { time: formatTime(b.bestTime), rank: tx(ctx, RANK_KEYS[b.bestRank]) }))}</div>` : '';
     const icons = { time: I.sun('#D9B26A'), kittens: I.catHead({ fur: '#E3C9A2', deep: '#C9A47A', bow: false, eyes: '#5E8FA8' }), letter: I.letter(!!payload?.letter), fish: I.fish(), lives: I.catHead() };
     const region = payload?.levelId ? tx(ctx, `region.${payload.levelId}`) : '';
     let rows = '';
@@ -53,8 +76,8 @@ export class Results {
       rows += `<div class="res-row${r.good ? ' is-good' : ''}" style="--i:${i}"><span class="res-ico">${icons[r.id] ?? ''}</span><span class="res-lbl">${esc(r.label)}</span><span class="res-val">${esc(r.value)}</span></div>`;
     });
     this.root.innerHTML = `<div class="panel res-panel"><div class="res-head"><div class="res-title">${esc(tx(ctx, 'results.title'))}</div><div class="res-region">${esc(region)}</div></div>`
-      + `<div class="res-rows">${rows}</div>`
-      + `<div class="res-rank"><span class="res-rank-lbl">${esc(tx(ctx, 'results.rank'))}</span><div class="res-stamp res-stamp--${d.rank}">${I.waxSeal(d.rank === 'pawsome' ? '#D9668A' : d.rank === 'purrfect' ? '#C28A3A' : '#8E7AB5', 'paw')}<span>${esc(d.rankText)}</span></div></div>`
+      + (ribbons ? `<div class="res-ribbons">${ribbons}</div>` : '') + `<div class="res-rows">${rows}</div>`
+      + `<div class="res-rank"><span class="res-rank-lbl">${esc(tx(ctx, 'results.rank'))}</span><div class="res-stamp res-stamp--${d.rank}">${I.waxSeal(d.rank === 'pawsome' ? '#D9668A' : d.rank === 'purrfect' ? '#C28A3A' : '#8E7AB5', 'paw')}<span>${esc(d.rankText)}</span></div></div>${bestLine}`
       + `<button class="btn btn--candy res-next" type="button">${esc(tx(ctx, 'results.next'))}</button></div>`;
     this.rows = [...this.root.querySelectorAll('.res-row')];
     this.stamp = this.root.querySelector('.res-stamp');

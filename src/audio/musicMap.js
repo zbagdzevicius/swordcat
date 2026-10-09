@@ -42,15 +42,47 @@ export const MUSIC_MAX_BOOST = 3.16;
 export const trackGain = (def) => (def?.vol ?? 1) *
   (Number.isFinite(def?.meanDb) ? Math.min(MUSIC_MAX_BOOST, 10 ** ((MUSIC_TARGET_DB - def.meanDb) / 20)) : 1);
 
-/** Per-level defaults (used when the level def has no `music`; the level's own `music` wins). */
+/**
+ * Per-level defaults (used when the level def has no `music`; the level's own fields win field by field).
+ *  - `byFlag`  [cond, track] rows (GameState.cond syntax): the first row that holds is the explore track (forest night,
+ *              the town hub states). Re-evaluated live: a flag set mid-level crossfades the explore music.
+ *  - `zones`   [{ at: [x, z], r, track, when? }] music zones (the town Bakery radius, §16.1)
+ *  - `gains`   per-track deck gain multipliers on this level (§16.1 "gate approach (low)")
+ *  - `holds`   objective id or textKey → combat track held while that objective runs (The Line: battle_theme_a for the
+ *              whole 4 minutes, between waves too; "Arena combat (all levels except the gate waves)")
+ */
 export const LEVEL_MUSIC = {
   meadow: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },
-  forest: { explore: 'field_of_dreams', night: 'dark_forest_creepy', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },
-  town:   { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', zones: [] },
-  gate:   { explore: 'village_town_theme', combat: 'battle_theme_a', boss: 'boss_epic_battle_loop' },
-  bog:    { explore: 'cave_theme', combat: 'battle_fast_fight_loop' },
-  keep:   { explore: 'cave_theme', combat: 'battle_theme_a', boss: 'boss_epic_battle_loop' },
+  forest: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
+    byFlag: [['forest.camp', 'dark_forest_creepy']] },                     // CS-04 Lantern Night onwards (§12.4)
+  town: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
+    // §12.5: occupied → hub gold (town.free) → hub grey (gate.done) → ending gold (ending.seen)
+    byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'story_lament_warriors_soul'], ['town.free', 'village_bards_tale']],
+    zones: [{ id: 'bakery', at: [-26, -20], r: 8, track: 'tavern_old_tower_inn' }] },
+  gate: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
+    gains: { village_town_theme: 0.6 }, holds: { line: 'battle_theme_a', 'obj.line': 'battle_theme_a' } },
+  bog: { explore: 'cave_theme', combat: 'battle_fast_fight_loop' },
+  keep: { explore: 'cave_theme', combat: 'battle_theme_a', boss: 'boss_epic_battle_loop' },
 };
+
+/**
+ * Boss music + stingers (§11, §16.1 "Bosses and Brutus: boss_epic_battle_loop, snaps in within 0.3 s at the fog wall").
+ * `intro` = SFX played as the track snaps in; `phase` = SFX on each boss:phase; `rate` the boss track has no variants,
+ * so B1 / B2 differ by their stingers and voices.
+ */
+export const BOSS_MUSIC = {
+  boss_grizzlechop: { track: 'boss_epic_battle_loop', intro: 'bossIntroB1', phase: 'bossPhase' },
+  boss_cacklejaw:   { track: 'boss_epic_battle_loop', intro: 'bossIntroB2', phase: 'bossPhase' },
+  boss_brutus:      { track: 'boss_epic_battle_loop', intro: 'bossIntro', phase: 'bossPhase' },
+  boss_barkus:      { track: 'boss_epic_battle_loop', intro: 'bossIntro', phase: 'bossPhase' },
+  default:          { track: null, intro: 'bossIntro', phase: 'bossPhase' },
+};
+
+/** BOSS_MUSIC row for a boss type id ('boss_grizzlechop', 'grizzlechop', 'boss_cacklejaw:b2'). */
+export function bossMusicFor(id) {
+  const k = String(id ?? '').toLowerCase().split(':')[0];
+  return BOSS_MUSIC[k] ?? BOSS_MUSIC['boss_' + k] ?? BOSS_MUSIC.default;
+}
 
 /** Named contexts other areas may ask for (`ctx.audio.music(CONTEXT_MUSIC.title)`). */
 export const CONTEXT_MUSIC = {
@@ -92,23 +124,39 @@ export function trackId(track) {
 }
 
 /**
- * Track ids that the director can choose for a level. A level's `music.prologue` track (meadow: the bards' tale that
- * CS-01 fades in, carried through the night tutorial) replaces its explore track while `opts.prologue` is true (flag
- * `prologue.done` unset); requests for the day explore track are then read as the prologue track (`alias`).
+ * Track ids that the director can choose for a level. The explore track is the first `byFlag` row whose condition
+ * holds (`opts.cond(expr)`, GameState.cond), else `explore`. A level's legacy `music.prologue` track (meadow: the
+ * bards' tale CS-01 fades in) replaces it while `opts.prologue` is true. When the resolved track differs from the
+ * plain `explore` (the "day" track LevelManager announces on load), requests for the day track are read as the
+ * resolved one (`alias`).
  * @param {string|null} levelId @param {object|null} def  the level's `music` block
- * @param {{prologue?: boolean}} [opts]
+ * @param {{prologue?: boolean, cond?: (expr: string) => boolean}} [opts]
  */
-export function levelMusic(levelId, def, { prologue = false } = {}) {
+export function levelMusic(levelId, def, { prologue = false, cond = null } = {}) {
   const fb = LEVEL_MUSIC[levelId] ?? {};
   const m = def && typeof def === 'object' ? def : {};
   const day = trackId(m.explore) ?? trackId(fb.explore);
+  const byFlag = Array.isArray(m.byFlag) ? m.byFlag : (fb.byFlag ?? []);
+  let flagged = null;
+  if (typeof cond === 'function') {
+    for (const row of byFlag) {
+      const [c, t] = Array.isArray(row) ? row : [row?.when, row?.track];
+      let ok = false; try { ok = !!cond(c); } catch { ok = false; }
+      if (ok && trackId(t)) { flagged = trackId(t); break; }
+    }
+  }
   const pro = prologue ? trackId(m.prologue) : null;
+  const explore = pro ?? flagged ?? day;
   return {
-    explore: pro ?? day,
-    alias: pro && day && pro !== day ? day : null,
+    explore,
+    day,
+    alias: explore && day && explore !== day ? day : null,
     combat: trackId(m.combat) ?? trackId(fb.combat) ?? 'battle_fast_fight_loop',
     boss: trackId(m.boss) ?? trackId(fb.boss) ?? 'boss_epic_battle_loop',
     zones: Array.isArray(m.zones) ? m.zones : (fb.zones ?? []),
+    byFlag,
+    gains: { ...(fb.gains ?? {}), ...(m.gains ?? {}) },
+    holds: { ...(fb.holds ?? {}), ...(m.holds ?? {}) },
   };
 }
 
@@ -118,8 +166,12 @@ export function levelMusic(levelId, def, { prologue = false } = {}) {
  *  - `request(track, fade)`  explicit requests (E.MUSIC, cutscene `music` steps, ctx.audio.music). Explore/story/results
  *    tracks become the `base`; combat/boss tracks force that state; `null` silences now (base kept; restored when
  *    play resumes after a cutscene); stings play over the ducked music.
- *  - `tick(dt, {mode, threat, zone})`  combat starts on a locked arena or a threat; explore resumes `calmDelay`
- *    seconds after the last threat. Only evaluated in play / memecam (cutscenes keep their music).
+ *  - `tick(dt, {mode, threat, zone})`  combat starts on a locked arena, a threat or a held objective (The Line);
+ *    explore resumes `calmDelay` seconds after the last threat. Only evaluated in play / memecam (cutscenes keep
+ *    their music).
+ *  - `setExplore(track)`  the level's explore track changed under a flag (forest night, hub gold / grey): the base
+ *    follows, and the music crossfades the next time play is calm.
+ *  - `hold(id, track)` / `release(id)`  an objective keeps the fight music up (`LEVEL_MUSIC.gate.holds`).
  */
 export class MusicDirector {
   constructor() {
@@ -134,7 +186,11 @@ export class MusicDirector {
     this.forced = null;
     this.calmT = 0;
     this.arenas = new Set();
+    /** @type {Map<string, string>} objective id → combat track held while it runs */
+    this.holds = new Map();
     this.level = levelMusic(null, null);
+    /** explore tracks this level used before a flag changed it (a target still on one of them crossfades on) */
+    this.stale = new Set();
     this.restorePending = false;
     /** @type {string|null} one-shot sting to start (consumed by take()) */
     this.sting = null;
@@ -148,18 +204,50 @@ export class MusicDirector {
     this.target = track; this.fade = fade; this.version++;
   }
 
+  /** Deck gain multiplier for a track on this level (`LEVEL_MUSIC.gate.gains`: the gate approach plays low). */
+  gainFor(track) {
+    const g = track ? this.level?.gains?.[track] : undefined;
+    return Number.isFinite(g) ? g : 1;
+  }
+
+  /** The combat track right now: an explicit request, else the newest objective hold, else the level's. */
+  get combatTrack() {
+    if (this.forced) return this.forced;
+    let held = null;
+    for (const t of this.holds.values()) held = t;
+    return held ?? this.level.combat;
+  }
+
   /**
    * New level: dynamic state resets; its explore track arrives through E.MUSIC.
-   * @param {string|null} levelId @param {object|null} def @param {{prologue?: boolean}} [opts]  see levelMusic()
+   * @param {string|null} levelId @param {object|null} def @param {{prologue?: boolean, cond?: Function}} [opts]  see levelMusic()
    */
   setLevel(levelId, def, opts) {
     this.level = levelMusic(levelId, def, opts);
     this.combat = false; this.boss = false; this.forced = null; this.calmT = 0; this.arenas.clear(); this.zone = null;
+    this.holds.clear(); this.stale.clear();
+  }
+
+  /**
+   * A flag changed the level's explore track (levelMusic re-resolved by the caller). Requests for any earlier explore
+   * track now mean the new one; the switch itself happens in tick() once play is calm (never mid-cutscene).
+   * @param {string|null} track @returns {boolean} changed
+   */
+  setExplore(track) {
+    const id = trackId(track);
+    const prev = this.level.explore;
+    if (!id || id === prev) return false;
+    if (prev) this.stale.add(prev);
+    if (this.level.day && this.level.day !== id) this.stale.add(this.level.day);
+    this.stale.delete(id);
+    this.level = { ...this.level, explore: id, alias: this.level.day && this.level.day !== id ? this.level.day : null };
+    if (this.base == null || this.stale.has(this.base)) this.base = id;
+    return true;
   }
 
   request(track, fade = MUSIC_RULES.crossfade, { mode = 'play' } = {}) {
     let id = trackId(track);
-    if (id && id === this.level.alias) id = this.level.explore;      // the day track asked for during the prologue
+    if (id && (id === this.level.alias || this.stale.has(id))) id = this.level.explore;   // an old explore track asked for
     if (!id) {
       // silence: inside a cutscene/dialogue the level music comes back when play resumes; in play it stays silent
       this._set(null, fade); this.restorePending = mode === 'cutscene' || mode === 'dialog'; this.forced = null;
@@ -184,11 +272,33 @@ export class MusicDirector {
   }
 
   arenaLock(id) { this.arenas.add(id ?? 'arena'); }
-  arenaClear(id) { if (this.arenas.delete(id ?? 'arena') || this.arenas.size === 0) this.sting = 'victory_fanfare'; }
+  arenaClear(id) {
+    const had = this.arenas.delete(id ?? 'arena');
+    // a wave set inside a held objective (The Line) is not a win: no fanfare until the objective itself is done
+    if ((had || this.arenas.size === 0) && !this.holds.size && !this.boss) this.sting = 'victory_fanfare';
+  }
 
-  bossStart() { this.boss = true; this._set(this.level.boss, MUSIC_RULES.bossSnap); }
+  /**
+   * Hold the fight music while an objective runs (The Line). Switches at once unless a cutscene silenced the music
+   * (then it comes back as this track when play resumes) or an explicit combat request is on.
+   * @param {string} id @param {string} track
+   */
+  hold(id, track) {
+    const t = trackId(track);
+    if (!id || !t || this.holds.get(id) === t) return;
+    this.holds.set(id, t);
+    if (this.boss) return;
+    this.combat = true; this.calmT = 0;
+    if (!this.forced && !(this.target === null && this.restorePending)) this._set(t, MUSIC_RULES.combatFade);
+  }
+
+  /** The objective finished (or was dropped): the calm timer takes the music back to explore. */
+  release(id) { this.holds.delete(id); }
+
+  /** @param {string} [track] the boss's own track (BOSS_MUSIC), else the level's */
+  bossStart(track) { this.boss = true; this._set(trackId(track) ?? this.level.boss, MUSIC_RULES.bossSnap); }
   bossDefeated() {
-    this.boss = false; this.combat = false; this.forced = null; this.arenas.clear(); this.calmT = 0;
+    this.boss = false; this.combat = false; this.forced = null; this.arenas.clear(); this.calmT = 0; this.holds.clear();
     this._set(null, 0.5); this.restorePending = true; this.sting = 'victory_fanfare';
   }
 
@@ -198,15 +308,19 @@ export class MusicDirector {
    */
   tick(dt, { mode = 'play', threat = false, zone = null } = {}) {
     if (mode !== 'play' && mode !== 'memecam') return;
+    if (this.base && this.stale.has(this.base)) this.base = this.level.explore;
+    const fight = this.arenas.size > 0 || threat || this.holds.size > 0;
     if (this.restorePending && this.target == null && !this.boss) {
       this.restorePending = false;
-      if (this.base) this._set(this.base, MUSIC_RULES.restoreFade);
+      // back from a cutscene's silence: into the fight if one is still on (a held objective), else to explore
+      if (fight) { this.combat = true; this.calmT = 0; this._set(this.combatTrack, MUSIC_RULES.combatFade); }
+      else if (this.base) { this.combat = false; this.forced = null; this._set(zone ?? this.base, MUSIC_RULES.restoreFade); }
     }
     if (this.boss) return;
-    const fight = this.arenas.size > 0 || threat;
     if (fight) {
       this.calmT = 0;
-      if (!this.combat) { this.combat = true; this._set(this.forced ?? this.level.combat, MUSIC_RULES.combatFade); }
+      if (!this.combat) { this.combat = true; this._set(this.combatTrack, MUSIC_RULES.combatFade); }
+      else if (this.holds.size && !this.forced && this.target !== null && this.target !== this.combatTrack) this._set(this.combatTrack, MUSIC_RULES.combatFade);
       return;
     }
     if (this.combat) {
@@ -219,6 +333,7 @@ export class MusicDirector {
     }
     const want = zone ?? this.base;
     if (zone !== this.zone) { this.zone = zone; if (this.target !== null || zone) this._set(want, MUSIC_RULES.crossfade); }
+    else if (this.target !== null && this.stale.has(this.target)) this._set(want, MUSIC_RULES.crossfade);   // a flag changed the explore track
   }
 
   /** The pending change since the last take(): { track, fade, sting } or null. */
@@ -231,7 +346,7 @@ export class MusicDirector {
 
   reset() {
     this.base = null; this.target = null; this.combat = false; this.boss = false; this.forced = null; this.calmT = 0;
-    this.arenas.clear(); this.restorePending = false; this.sting = null; this.zone = null; this.version++;
+    this.arenas.clear(); this.holds.clear(); this.stale.clear(); this.restorePending = false; this.sting = null; this.zone = null; this.version++;
   }
 }
 

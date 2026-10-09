@@ -11,6 +11,8 @@
 //   fx:horde       CS-02's 40 silhouettes march horde_a → horde_b in the fog, part around her, then flee
 //   fx:dizzy       boss Dizzy stars + gold "!", the hurt vignette and the low-HP pulse
 //   fx:gallery     every burst kind frozen in front of her (art review)
+//   fx:m2-*        M2: slams / shockwaves / cracks, jelly split + pop, web patches, jeer fog, theft + stealer poof,
+//                  Golden Hour rays + Sunburst, lanterns (forest, pooled lights), The Line repair (gate), shop sparkle
 //
 // Robust under load (other agents share the GPU / CPU): every moment worth a screenshot is frozen in SIM time by an
 // in-page bus listener (`__fxFreeze`: time scale 0 a fixed sim delay after the event), and every wait polls a condition
@@ -113,11 +115,240 @@ async function prepare(t, at = [-4, -50, 0]) {
     g.god(true);
     g.ctx.game.setTimeScale(1);
     g.ctx.input.setDevice?.('kbm');
-    g.__fxPlace(...at);
+    if (at) g.__fxPlace(...at);
     return true;
   }, [SPAWN.toString(), PLACE.toString(), FREEZE.toString(), at]);
   await t.frames(30);
 }
+
+// ================================================================== M2 blocks (fx:m2-*)
+/** Page-side: freeze the sim and step the given fx sub-systems by `sec` (deterministic, load-proof screenshots). */
+const STEP = (sec) => {
+  const g = window.__GAME__, fx = g.ctx.fx, n = Math.round(sec * 60), dt = 1 / 60;
+  g.ctx.game.setTimeScale(0);
+  for (let i = 0; i < n; i++) {
+    const t = (g.ctx.game.realTime ?? 0) + i * dt;
+    fx.particles.update(dt); fx.holyFx.render(dt, dt); fx.shock.render(dt, t); fx.webs.render(dt); fx.sunRays.render(dt, t);
+    fx.marks.begin(); fx.lanterns.render(dt, t); fx.encounters.render(dt, t); fx.marks.end();
+  }
+  return true;
+};
+
+/** Page-side: a point `a` m ahead and `b` m to the side of her, on the ground (+ y). */
+const AHEAD = (a, b, y = 0) => {
+  const g = window.__GAME__, ctx = g.ctx, p = ctx.player, f = p.facing;
+  const v = new g.THREE.Vector3(p.pos.x + Math.sin(f) * a + Math.cos(f) * b, 0, p.pos.z + Math.cos(f) * a - Math.sin(f) * b);
+  v.y = ctx.physics.heightAt(v.x, v.z) + y;
+  return v;
+};
+
+async function prepM2(t, at) {
+  await prepare(t, at);
+  await t.G(([step, ahead]) => {
+    const g = window.__GAME__;
+    g.__fxStep = new Function(`return (${step})`)();     // eslint-disable-line no-new-func
+    g.__fxAhead = new Function(`return (${ahead})`)();   // eslint-disable-line no-new-func
+    return true;
+  }, [STEP.toString(), AHEAD.toString()]);
+}
+
+/** Hide / show the DOM UI (level-start boss cards and objective cards cover the world on the M2 stub levels). */
+const hideUi = (t, on) => t.G((v) => { const r = document.querySelector('.ui-root'); if (r) r.style.visibility = v ? 'hidden' : ''; return true; }, on);
+
+async function stepShot(t, sec, name) {
+  await t.G((s) => window.__GAME__.__fxStep(s), sec);
+  await t.frames(2);
+  return t.shot(name);
+}
+
+export const M2_BLOCKS = [
+  {
+    // pug_slam red shockwave ring, Laugh Quake purple ring, Grizzlechop's crack line, a boss slam thud
+    name: 'fx:m2-slams', order: 58, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await prepM2(t, [-4, -50, 0]);
+      const o = await t.G(() => {
+        const g = window.__GAME__, fx = g.ctx.fx, A = g.__fxAhead;
+        g.ctx.game.setTimeScale(0);
+        const pug = fx.shockwave(A(4.5, -2.2), { r: 2.5, dur: 0.4, color: 'red' });
+        const quake = fx.shockwave(A(9, 2.5), { r: 7, speed: 8, color: 'jeer' });
+        fx.burst('slam', A(5, 3.2), { r: 2.5, shockwave: false, crack: { length: 4 }, dir: { x: -1, z: 0.2 } });
+        return { pug, quake, s: fx.stats().m2 };
+      });
+      t.assert(Math.abs(o.pug.dur - 0.4) < 1e-6 && Math.abs(o.quake.dur - (7 - o.quake.r0) / 8) < 1e-6, `shock timing ${JSON.stringify(o)}`);
+      t.assert(o.s.shocks === 2 && o.s.cracks === 1, `m2 ${JSON.stringify(o.s)}`);
+      await stepShot(t, 0.2, 'fx/m2-slams-a');
+      await stepShot(t, 0.25, 'fx/m2-slams-b');
+      await resume(t);
+      const s = await until(t, (x) => x.m2.shocks === 0 && x.m2.cracks === 0, 8000);
+      t.assert(!!s, 'shockwaves / cracks never finished');
+    },
+  },
+  {
+    // jelly split vs holy pop, web patches (one cut), the web glob splat, the stealer smoke bomb, jeer fog on a hyena stand-in
+    name: 'fx:m2-creatures', order: 58.5, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepM2(t, [-4, -50, 0]);
+      const s0 = await t.G(() => {
+        const g = window.__GAME__, fx = g.ctx.fx, A = g.__fxAhead;
+        g.ctx.game.setTimeScale(0);
+        fx.burst('jellySplit', A(4, 2.2), { scale: 1.35 });
+        fx.burst('jellyPop', A(4, -2.2), { scale: 1.35 });
+        g.__fxWebs = [fx.webPatch(A(6.5, 2.4)), fx.webPatch(A(6.5, 0)), fx.webPatch(A(6.5, -2.4), { life: Infinity })];
+        fx.burst('web', A(3, 0, 0.6));
+        fx.burst('stealerPoof', A(8.5, 1.5));
+        return fx.stats().m2;
+      });
+      t.assert(s0.webs === 3, `webs ${s0.webs}`);
+      await stepShot(t, 0.12, 'fx/m2-creatures-a');
+      await t.G(() => { window.__GAME__.__fxWebs[1].cut(); return true; });
+      await stepShot(t, 0.15, 'fx/m2-creatures-cut');
+      // jeer fog: a rat stands in for a hyena (enemies own the real jeer); fx draws the aura from enemy:jeer
+      await resume(t);
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx;
+        ctx.fx.particles.clear();
+        const e = g.__fxSpawn('rat_pike', 0.35, 6, false);
+        g.__fxJeer = e;
+        ctx.bus.emit(g.E.ENEMY_JEER, { enemy: e, on: true });
+        return true;
+      });
+      const sj = await until(t, (x) => x.m2.jeers === 1 && x.particles > 20, 8000);
+      t.assert(!!sj, 'jeer fog never built up');
+      await t.wait(700);
+      await t.shot('fx/m2-jeer', { freeze: true });
+      // theft: the loot arcs from her to the thief; a despawn with the loot is the smoke bomb
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, e = g.__fxJeer;
+        ctx.bus.emit(g.E.ENEMY_JEER, { enemy: e, on: false });
+        ctx.bus.emit(g.E.ITEM_STOLEN, { thief: e, item: 'fish', amount: 25 });
+        ctx.game.setTimeScale(0);
+        return true;
+      });
+      await stepShot(t, 0.22, 'fx/m2-theft');
+      await resume(t);
+      const before = (await stats(t)).m2.counts.vanishes;
+      await t.G(() => { const g = window.__GAME__; g.ctx.enemies.despawn(g.__fxJeer); return true; });
+      const sv = await until(t, (x) => x.m2.counts.vanishes > before && x.m2.thieves === 0, 5000);
+      t.assert(!!sv, 'stealer vanish poof missing');
+      const end = await until(t, (x) => x.m2.webs === 1, 12000);
+      t.assert(!!end, 'timed web patches did not expire (the permanent one must stay)');
+      await t.G(() => { for (const w of window.__GAME__.__fxWebs) w.remove(); return true; });
+    },
+  },
+  {
+    // Golden Hour: the rays open behind her, hold, and the Sunburst flares out at the end
+    name: 'fx:m2-golden', order: 59, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepM2(t, [-4, -50, 0]);
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx;
+        ctx.state.shards = 2; ctx.player.setValor?.(100);
+        ctx.player.startGolden();
+        return true;
+      });
+      const s1 = await until(t, (x) => x.m2.sunRays === 'open', 5000);
+      t.assert(!!s1, 'rays did not open on player:golden');
+      await t.wait(350);
+      await t.shot('fx/m2-golden-open', { freeze: true });
+      await t.wait(1800);
+      await t.shot('fx/m2-golden-hold', { freeze: true });
+      const bursts0 = (await stats(t)).m2.sunBursts;
+      await t.G(() => { window.__GAME__.ctx.player.goldenT = 0.05; return true; });
+      const sb = await until(t, (x) => x.m2.sunBursts > bursts0, 8000);
+      t.assert(!!sb, 'no Sunburst rays at the end of Golden Hour');
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(0));
+      await t.G(() => window.__GAME__.__fxStep(0.18));
+      await t.frames(2);
+      await t.shot('fx/m2-sunburst');
+      await resume(t);
+      const off = await until(t, (x) => x.m2.sunRays === null, 6000);
+      t.assert(!!off, 'rays did not close after Golden Hour');
+    },
+  },
+  {
+    // CS-04 / Lantern Alley: pooled lights on a lantern level, 2 real lights for 4 lit lanterns, ignition, night
+    name: 'fx:m2-lanterns', order: 59.5, level: 'forest', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepM2(t, null);
+      const s0 = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, fx = ctx.fx, A = g.__fxAhead;
+        ctx.bus.emit(g.E.ENV_SET, { preset: 'forest_night', dur: 0 });
+        const o = { light: true };
+        g.__fxLan = [fx.lantern(A(3, 1.4, 1.1), o), fx.lantern(A(5, -1.6, 1.1), o), fx.lantern(A(9, 2.5, 1.1), { light: true, lit: false }), fx.lantern(A(20, 0, 1.1), o)];
+        g.__fxLan[2].light();
+        return fx.stats().m2;
+      });
+      t.assert(s0.lanternLights === 2, `light-casting lanterns should pool 2 lights, got ${s0.lanternLights}`);
+      const s1 = await until(t, (x) => x.m2.lanternLightsOn === 2 && x.m2.lanternsLit === 4, 6000);
+      t.assert(!!s1, 'lantern lights not assigned');
+      await t.wait(800);
+      const L = await t.G(() => { const c = window.__GAME__.ctx; return { her: c.player.pos.toArray(), lights: c.fx.lanterns.pool.map((s) => [s.light.position.toArray().map((v) => +v.toFixed(2)), +s.light.intensity.toFixed(2), s.light.parent?.type ?? null]),
+        nLights: (() => { let n = 0; c.scene.traverse((o) => { if (o.isPointLight) n++; }); return n; })() }; });
+      t.log(`lanterns ${JSON.stringify(L)}`);
+      await hideUi(t, true);
+      await t.shot('fx/m2-lanterns', { freeze: true });
+      await hideUi(t, false);
+      await t.G(() => { for (const l of window.__GAME__.__fxLan) l.remove(); window.__GAME__.ctx.bus.emit(window.__GAME__.E.ENV_SET, { preset: 'forest_day', dur: 0 }); return true; });
+    },
+  },
+  {
+    // The Line: repair sparkles at the gate winch, a milestone ring, the stall, the 100% flare
+    name: 'fx:m2-line', order: 60, level: 'gate', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepM2(t, [1.5, 35.5, 0]);
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx;
+        g.__fxLineP = 12;
+        g.__fxLineOff = ctx.game.addFrameHook(() => {
+          if (g.__fxLineHold) return;
+          g.__fxLineP = Math.min(99, g.__fxLineP + 0.08);
+          ctx.bus.emit(g.E.OBJECTIVE, { id: 'line', value: g.__fxLineP, max: 100, textKey: 'obj.line' });
+        });
+        return true;
+      });
+      const s1 = await until(t, (x) => x.m2.counts.repairSparks > 6 && x.m2.line.active, 10000);
+      t.assert(!!s1, 'no repair sparks');
+      t.assert(Math.abs(s1.m2.line.site[0]) < 0.01 && Math.abs(s1.m2.line.site[2] - 41) < 0.01, `site ${s1.m2.line.site}`);
+      await hideUi(t, true);
+      const where = await t.G(() => { const g = window.__GAME__, c = g.ctx; g.__fxPlace(1.2, 34.5, 0.1); return { p: c.player.pos.toArray(), cam: c.camera.position.toArray(), boss: !!c.enemies.boss, mode: c.game.mode }; });
+      t.log(`line: her ${JSON.stringify(where)}`);
+      await t.frames(20);
+      await t.shot('fx/m2-line-repair', { freeze: true });
+      const sm = await until(t, (x) => x.m2.counts.milestones >= 1, 15000);
+      t.assert(!!sm, 'no 10% milestone ring');
+      await t.G(() => { const g = window.__GAME__; g.__fxLineHold = true; g.ctx.bus.emit(g.E.OBJECTIVE, { id: 'line', value: g.__fxLineP, max: 100, frozen: true }); return true; });
+      t.assert((await stats(t)).m2.counts.stalls >= 1, 'no stall puff');
+      await t.G(() => { const g = window.__GAME__; g.__fxLineOff(); g.ctx.bus.emit(g.E.OBJECTIVE, { id: 'line', value: 100, max: 100, done: true }); return true; });
+      await t.wait(250);
+      await t.shot('fx/m2-line-done', { freeze: true });
+      await hideUi(t, false);
+      t.assert((await stats(t)).m2.counts.repairDone === 1, 'no 100% flare');
+    },
+  },
+  {
+    // shop purchase sparkle: the DOM burst over an item card + the world coins at her
+    name: 'fx:m2-shop', order: 60.5, level: 'meadow', spawn: 'start', timeout: 90000,
+    async run(t) {
+      await prepM2(t, [-4, -50, 0]);
+      const r = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx;
+        const card = document.createElement('div');
+        card.id = 'fx-smoke-card';
+        card.style.cssText = 'position:fixed;left:50%;top:45%;width:180px;height:120px;margin:-60px 0 0 -90px;background:#F4E7C9;border:4px solid #3A2A1F;border-radius:14px;z-index:40;';
+        document.body.appendChild(card);
+        const ok = ctx.fx.purchase({ el: card, at: ctx.player });
+        return { ok, live: ctx.fx.shop.live };
+      });
+      t.assert(r.ok && r.live >= 10, `shop sparkle ${JSON.stringify(r)}`);
+      await t.wait(380);
+      await t.shot('fx/m2-shop');
+      const gone = await untilPage(t, '(g) => g.ctx.fx.shop.live === 0', 5000);
+      t.assert(!!gone, 'sparkle spans not cleaned up');
+      await t.G(() => { document.getElementById('fx-smoke-card')?.remove(); return true; });
+    },
+  },
+];
 
 export default [
   {
@@ -465,4 +696,5 @@ export default [
       t.log(`cam→her ${w.cam.toFixed(2)} m, wall focus ${w.focus?.[0]?.toFixed(2)}, rat cam distance ~${(r.d - Math.max(1.2, r.d - 1.6)).toFixed(2)}`);
     },
   },
+  ...M2_BLOCKS,
 ];

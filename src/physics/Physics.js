@@ -32,6 +32,7 @@
 // (`slideSpeed`), so an actor steering into a bank can't hang on it; separation shoves are swept too. Gravity is
 // integrated exactly for constant acceleration (jump apex = v²/2g: 1.245 m for the player, §7.1).
 import * as THREE from 'three';
+import { PHYSICS } from '../core/config.js';
 import { StaticColliders } from './StaticColliders.js';
 import { MeshCollider } from './MeshCollider.js';
 import { PhysicsDebug } from './PhysicsDebug.js';
@@ -40,18 +41,8 @@ import { PhysicsDebug } from './PhysicsDebug.js';
  * Engine tunables. GAME_DESIGN §7.1 / tech.md §5 numbers; `config.PHYSICS` (if core adds it) overrides these,
  * `config.PLAYER.stepUp` / `terminalFall` are the actor defaults.
  */
-export const PHYSICS_DEFAULTS = Object.freeze({
-  walkableNormalY: 0.7,    // §7.1: slopes steeper than normal.y 0.7 slide
-  steepFaceTol: 0.05,      // terrain: a rendered triangle steeper than walkableNormalY - this is always too steep (cliff
-                           // banks: no standing on the smoothed foot of a cliff); between the two the smoothed slope decides
-  groundSnap: 0.3,         // tech.md §5: stick to downhill slopes / step down
-  skin: 0.02,              // resting-contact tolerance (m)
-  substep: 0.5,            // max motion per sub-step as a fraction of the collision radius
-  maxSubsteps: 24,         // (r 0.32: tunnel-free up to ~230 m/s; faster motion is clamped to that)
-  deepWater: 0.5,          // water deeper than this (m) is "deep" unless the water entry says deep: true/false
-  ceilingNormalY: -0.2,
-  edgeSlip: 2.0,           // m/s: a grounded actor resting on a ledge edge (capsule rim) rolls off it at this speed
-});
+export const PHYSICS_DEFAULTS = PHYSICS;   // config.PHYSICS (core, M2); ctx.config.PHYSICS still overrides per ctx
+
 
 const _n = new THREE.Vector3();
 const _n2 = new THREE.Vector3();

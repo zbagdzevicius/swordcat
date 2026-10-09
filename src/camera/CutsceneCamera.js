@@ -4,7 +4,8 @@
 //   cut       jump to the framing and hold it (it keeps tracking the anchor's position; yaw frozen at the cut)
 //   blend     FollowCamera glides from the current pose to the framing over `dur` (cylindrical arc, `ease`)
 //   rail      `path` (level anchor names / [x,y,z] world points → centripetal CatmullRom), or pos → `to` in the
-//             anchor frame; the look goes look → `lookTo`; over `dur` with `ease`; FOV may animate [from, to]
+//             anchor frame (through the control point `via` when given: a quadratic Bézier, e.g. PULLBACK's crane-up);
+//             the look goes look → `lookTo`; over `dur` with `ease`; FOV may animate [from, to]
 //   orbit     around the anchor at `r`, `h`, `degPerSec` (or `orbit: {r, h, degPerSec}`); starts at the preset's
 //             `pos` angle, else where the camera is now
 //   handheld  the framing (or the current one when no pos/look) + smooth noise (`noise` m, default 0.02)
@@ -13,6 +14,9 @@
 // Positions are anchor-local (§5.2: the anchor faces +Z, feet at the origin, +X = her left). `look` may also be
 // an actor id / level anchor name ("long lens on anchor bell_far"). Timelines advance in SIM time (they slow
 // with `time` steps and freeze in the pause menu); the promise from start() resolves after `dur`.
+// Options on any shot: `scale: 'height'` (or a number) scales the anchor-local placements by the anchor's height (a
+// boss reveal frames a 1.6 m rat and a 2.2 m hyena alike); `collide: true` keeps the lens on her side of solid
+// architecture (a sphere cast from the subject's chest, like the spring arm; needs `castFn`, which FollowCamera sets).
 import * as THREE from 'three';
 import { CAMERA } from '../core/config.js';
 import { clamp01, lerp, EASES } from '../core/math.js';
@@ -29,6 +33,9 @@ const _warned = new Set();
 const warnOnce = (msg) => { if (_warned.has(msg)) return; _warned.add(msg); console.warn(msg); };
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _d = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+const _c = new THREE.Vector3(), _o = new THREE.Vector3();
+/** lens sphere radius of the `collide` cast (m) */
+const COLLIDE_R = 0.2;
 const _n = { x: 0, y: 0, z: 0 }, _s = { x: 0, y: 0, z: 0 }, _arr = [0, 0, 0];
 
 /**
@@ -52,6 +59,8 @@ export function normalizeShot(step = {}) {
   if (mode === 'whip') { if (s.yaw != null) whip.yaw = s.yaw; if (s.fovAdd != null) whip.fovAdd = s.fovAdd; if (s.dur != null) whip.dur = s.dur; }
   if (mode === 'fall') { if (s.roll != null) fall.roll = s.roll; if (s.y != null) fall.y = s.y; if (s.dur != null) fall.dur = s.dur; }
   const orbitSrc = s.orbit ?? P?.orbit ?? {};
+  // the preset's rail control point only belongs to the preset's own rail (an overridden pos / to drops it)
+  const via = s.via !== undefined ? s.via : (s.pos == null && s.to == null ? P?.via ?? null : null);
   const orbit = { r: s.r ?? orbitSrc.r ?? 3, h: s.h ?? orbitSrc.h ?? 1.2, degPerSec: s.degPerSec ?? orbitSrc.degPerSec ?? 8 };
   let dur = s.dur ?? P?.dur;
   if (mode === 'whip') dur = whip.dur;
@@ -67,6 +76,9 @@ export function normalizeShot(step = {}) {
     pos: s.pos ?? P?.pos ?? null, look: s.look ?? P?.look ?? null,
     to: s.to ?? P?.to ?? null, lookTo: s.lookTo ?? P?.lookTo ?? null,
     path: s.path ?? null,
+    via,
+    collide: s.collide ?? P?.collide ?? false,
+    scale: s.scale ?? P?.scale ?? null,
     fov: s.fov ?? P?.fov ?? null,
     dur: Math.max(0, dur),
     ease: resolveEase(s.ease ?? P?.ease),
@@ -80,6 +92,21 @@ export function normalizeShot(step = {}) {
     yawOffset: (mode === 'whip' || mode === 'whipfall') ? 0 : (s.yaw ?? 0),
     orbit, whip, fall,
   };
+}
+
+/**
+ * Quadratic Bézier a → (control c) → b at k, into `out` (`out` may alias none of the inputs).
+ * @param {THREE.Vector3} a @param {THREE.Vector3} c @param {THREE.Vector3} b @param {number} k @param {THREE.Vector3} out
+ */
+export function bezier2(a, c, b, k, out) {
+  const u = 1 - k, wa = u * u, wc = 2 * u * k, wb = k * k;
+  return out.set(a.x * wa + c.x * wc + b.x * wb, a.y * wa + c.y * wc + b.y * wb, a.z * wa + c.z * wc + b.z * wb);
+}
+
+/** Placement scale of a shot: `'height'` → the anchor's height (≥ 0.3), a number → itself, else 1. */
+export function shotScale(scale, frame) {
+  if (scale === 'height') return Math.max(0.3, frame?.height ?? 1);
+  return typeof scale === 'number' && scale > 0 ? scale : 1;
 }
 
 /** Resolved anchor frame (origin = feet, yaw = facing). */
@@ -137,6 +164,14 @@ export class CutsceneCamera {
     this._orbitAng0 = 0;
     this._yaw0 = 0;
     this._resolve = null;
+    /** anchor-local placement scale of the running shot (`scale: 'height'` → the anchor's height) */
+    this._k = 1;
+    /**
+     * Optional obstacle cast for `collide` shots: (origin, unitDir, maxDist, radius) → hit distance or −1.
+     * FollowCamera wires its spring-arm cast here (terrain + architecture + solid props, thin / fading props skipped).
+     * @type {null | ((o: THREE.Vector3, d: THREE.Vector3, max: number, r: number) => number)}
+     */
+    this.castFn = null;
   }
 
   get active() { return !!this.shot; }
@@ -161,6 +196,7 @@ export class CutsceneCamera {
     this.from.copy(fromPose);
     resolveFrame(this.ctx, s.anchor, this.frame);
     this._yaw0 = this.frame.yaw + s.yawOffset;
+    this._k = shotScale(s.scale, this.frame);
     this._curve = null;
     if (s.mode === 'rail' && s.path) this._buildPath(s);
     if (s.mode === 'orbit') {
@@ -211,6 +247,7 @@ export class CutsceneCamera {
       default: this._staticPose(out);
     }
     out.fov = this._fov(k);
+    if (s.collide) this._collide(out);
     this._addMotion(out);
     // safety net: an anchor-relative low shot on a slope (HERO_LOW at 0.35 m) or a rail over a hill never dips
     // into the terrain (the look point stays: the subject keeps its place in the frame)
@@ -229,8 +266,9 @@ export class CutsceneCamera {
   _point(spec, out, fallback, lookHeight = 0.75) {
     if (spec == null) return out.copy(fallback);
     if (Array.isArray(spec)) {
-      if (spec.length >= 3) return localToWorld(spec, this.frame.pos, this._yaw0, out);
-      _arr[0] = spec[0]; _arr[1] = 0.8; _arr[2] = spec[1];
+      const k = this._k;
+      if (spec.length >= 3) { _arr[0] = spec[0] * k; _arr[1] = spec[1] * k; _arr[2] = spec[2] * k; return localToWorld(_arr, this.frame.pos, this._yaw0, out); }
+      _arr[0] = spec[0] * k; _arr[1] = 0.8 * k; _arr[2] = spec[1] * k;
       return localToWorld(_arr, this.frame.pos, this._yaw0, out);
     }
     resolveFrame(this.ctx, spec, this.targetFrame, false);
@@ -290,10 +328,26 @@ export class CutsceneCamera {
     }
     this._point(s.pos, _v, this.from.pos);
     this._point(s.to ?? s.pos, _w, _v);
-    out.pos.lerpVectors(_v, _w, k);
+    if (Array.isArray(s.via) && s.via.length >= 3) {
+      this._point(s.via, _c, _v);
+      bezier2(_v, _c, _w, k, out.pos);
+    } else out.pos.lerpVectors(_v, _w, k);
     this._point(s.look, _v, this.from.look);
     this._point(s.lookTo ?? s.look, _w, _v);
     out.look.lerpVectors(_v, _w, k);
+  }
+
+  /** `collide` shots: pull the lens in front of solid architecture between the subject's chest and the lens. */
+  _collide(out) {
+    if (typeof this.castFn !== 'function') return;
+    const f = this.frame;
+    _o.copy(f.pos); _o.y += (f.height ?? 1) * 0.75;
+    _d.subVectors(out.pos, _o);
+    const len = _d.length();
+    if (len < 0.4) return;
+    _d.multiplyScalar(1 / len);
+    const hit = this.castFn(_o, _d, len + COLLIDE_R, COLLIDE_R);
+    if (hit >= 0 && hit < len) out.pos.copy(_o).addScaledVector(_d, Math.max(0.3, hit - 0.05));
   }
 
   _orbitPose(out) {

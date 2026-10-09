@@ -13,7 +13,8 @@
 // Zone options: `lockOn: '<cutsceneId>:end'` (no auto-lock; locks when that cutscene ends, e.g. the glade after CS-03),
 // `autoLockWhen` (cond string / fn: auto-lock re-arms on reloads, e.g. meadow.pudding === 'netted'), `boss` (enemy
 // type spawned at the centre), `waves: [[[type, n, opts?], ...], ...]`, `restoreUnless` (cond: never restore the
-// saved clear while it holds, e.g. the glade while Pudding is still netted).
+// saved clear while it holds, e.g. the glade while Pudding is still netted), `clearedWhen` (cond: start cleared, e.g. the
+// town's arenas once `town.free`).
 // Saved clears: clear() sets the flag `<level>.cleared.<arenaId>` (the open-zone convention). On load, restore()
 // starts the arena cleared (no trigger, no waves, no events) when that flag is set, or when its `rescue` is done
 // (the bridge once Mochi is rescued).
@@ -85,6 +86,7 @@ export class Arena {
     const st = this.ctx.state, z = this.zone;
     if (z.restoreUnless != null && condOk(this.ctx, z.restoreUnless)) return false;
     if (st?.getFlag?.(this.flag)) return true;
+    if (z.clearedWhen != null && condOk(this.ctx, z.clearedWhen)) return true;     // the town once it is free (hub mode)
     const r = z.rescue;
     if (r && ((r.flag && st?.getFlag?.(r.flag)) || st?.companions?.unlocked?.includes?.(r.companion))) return true;
     return false;
@@ -100,8 +102,10 @@ export class Arena {
     this.cleared = true; this.locked = false; this.wave = this.waves.length;
     const c = this.ctx;
     try { c.objectives?.cleared?.add?.(this.id); } catch { /* optional */ }
-    try { c.companions?.cleared?.add?.(this.id); } catch { /* optional (requests/world.md: companions.markCleared) */ }
-    if (typeof c.companions?.markCleared === 'function') { try { c.companions.markCleared(this.id); } catch { /* optional */ } }
+    try {
+      if (typeof c.companions?.markCleared === 'function') c.companions.markCleared(this.id);
+      else c.companions?.cleared?.add?.(this.id);
+    } catch { /* optional */ }
     return true;
   }
 
@@ -217,13 +221,20 @@ export class Arena {
     const pts = this.spawnPoints(3);
     let k = 0;
     for (const [type, n = 1, extra] of list) for (let i = 0; i < n; i++) {
-      const base = pts[k % pts.length];
-      const ring = Math.floor(k / pts.length), a = k * 2.399;
-      k++;
-      _v.set(base.x + Math.sin(a) * 1.1 * ring, 0, base.z + Math.cos(a) * 1.1 * ring);
+      // `extra.at`: 'center' (the town square's giant jelly rises from the fountain) or [x, z]; else the ring points
+      const at = extra?.at === 'center' ? [this.center.x, this.center.z] : Array.isArray(extra?.at) ? extra.at : null;
+      if (at) _v.set(at[0] + (i ? Math.sin(i * 2.399) * 1.2 : 0), 0, at[1] + (i ? Math.cos(i * 2.399) * 1.2 : 0));
+      else {
+        const base = pts[k % pts.length];
+        const ring = Math.floor(k / pts.length), a = k * 2.399;
+        k++;
+        _v.set(base.x + Math.sin(a) * 1.1 * ring, 0, base.z + Math.cos(a) * 1.1 * ring);
+      }
       _v.y = this.heightAt(_v.x, _v.z);
-      const facing = Math.atan2(this.center.x - _v.x, this.center.z - _v.z);
-      const e = this.ctx.enemies?.spawn?.(type, _v.clone(), { facing, arena: this.id, alerted: true, ...(extra ?? {}) });
+      const pp = this.ctx.player?.pos;
+      const facing = at && pp ? Math.atan2(pp.x - _v.x, pp.z - _v.z) : Math.atan2(this.center.x - _v.x, this.center.z - _v.z);
+      const { at: _at, ...opts } = extra ?? {};
+      const e = this.ctx.enemies?.spawn?.(type, _v.clone(), { facing, arena: this.id, alerted: true, ...opts });
       if (e) this.enemies.push(e);
       this.ctx.bus.emit(E.BURST, { kind: String(type).startsWith('bonehead') ? 'spawnBones' : 'spawn', position: _v.clone() });
     }
@@ -254,8 +265,15 @@ export class Arena {
     }
     this.locked = false; this._waitT = 0;
     this._dropWall();
-    const explore = this.level?.music?.explore;
+    const explore = this._explore();
     if (explore) this.ctx.bus.emit(E.MUSIC, { track: explore, fade: 1.5 });
+  }
+
+  /** The level's explore track now (its byFlag pick, e.g. the town hub's), else `explore`. */
+  _explore() {
+    const m = this.level?.music;
+    if (!m) return null;
+    return this.ctx.levels?.pickMusic?.(m) ?? m.explore ?? null;
   }
 
   aliveCount() {
@@ -267,7 +285,7 @@ export class Arena {
 
   update(dt) {
     if (this._exploreT > 0 && (this._exploreT -= dt) <= 0) {
-      const explore = this.level?.music?.explore;
+      const explore = this._explore();
       if (explore) this.ctx.bus.emit(E.MUSIC, { track: explore, fade: 1.5 });
     }
     if (!this.locked || this.cleared) return;

@@ -415,3 +415,187 @@ test('touch: tap-to-lock picks the enemy nearest the tap within tapPickPx, skipp
   assert.equal(pickTapTarget([], proj, 0, 0), null);
   assert.ok(TOUCH.tapPx <= 12 && TOUCH.tapMs <= 300);
 });
+
+// ====================================================================================================== M2: shops (§13.3–§13.5)
+import { STATIONS, SKINS, CAPE_IDS, stationId, itemState, shopRows, canBuy, purchase, equip, skinUnlocked, capeUnlocked, lookoutRows, chipText, keeperLine } from '../../src/ui/shops.js';
+import { questCards, nextLevel, HUB_LEVEL } from '../../src/ui/questBoard.js';
+import { resultBest } from '../../src/ui/results.js';
+import { resetSettings, CONTROL_ROWS } from '../../src/ui/settings.js';
+import { swordArt, capeMannequin, itemIcon } from '../../src/ui/shopArt.js';
+import { ECONOMY, KITTENS_BY_LEVEL } from '../../src/core/config.js';
+import { defaultState } from '../../src/core/GameState.js';
+
+const shopCtx = (patch = {}) => {
+  const ctx = fakeCtx({ systems: false });
+  const st = ctx.state;
+  st.fish = 1000;
+  Object.assign(st, patch);
+  const saves = [];
+  ctx.bus.on(E.SAVE_REQUEST, (p) => saves.push(p));
+  return { ctx, st, saves };
+};
+
+test('shops: stations, ids and the §13.3 catalogue', () => {
+  assert.deepEqual(Object.keys(STATIONS).sort(), ['bakery', 'barracks', 'forge', 'library', 'lookout', 'wardrobe']);
+  for (const [w, id] of [['shop_forge', 'forge'], ['station-bakery', 'bakery'], ['tofu', 'forge'], ['pearl', 'wardrobe'], ['barracks_banner', 'barracks'], ['library', 'library'], ['nope', null]]) assert.equal(stationId(w), id, w);
+  assert.deepEqual(SKINS, ['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
+  for (const c of CAPE_IDS) assert.ok(ECONOMY.capes[c] != null, c);
+  for (const s of SKINS) assert.ok(ECONOMY.skins[s] != null, s);
+  const { ctx } = shopCtx();
+  for (const st of ['bakery', 'forge', 'library', 'wardrobe']) for (const r of shopRows(ctx.state, st)) {
+    assert.ok(tx(ctx, r.nameKey, r.nameVars) !== r.nameKey, `name ${r.nameKey}`);
+    assert.ok(tx(ctx, r.descKey, r.descVars) !== r.descKey, `desc ${r.descKey}`);
+    if (r.lockKey) assert.ok(tx(ctx, r.lockKey, r.lockVars) !== r.lockKey, `lock ${r.lockKey}`);
+  }
+});
+
+test('shops: tiered upgrades cost and cap per Appendix A (satchel 100/200, sharp 120/240/400)', () => {
+  const { ctx, st, saves } = shopCtx();
+  assert.equal(itemState(st, 'satchel').cost, 100);
+  assert.equal(purchase(ctx, 'satchel').ok, true);
+  assert.equal(st.upgrades.satchel, 1); assert.equal(st.fish, 900);
+  assert.equal(itemState(st, 'satchel').cost, 200);
+  assert.equal(tx(ctx, itemState(st, 'satchel').nameKey, itemState(st, 'satchel').nameVars), 'Bigger Satchel II');
+  purchase(ctx, 'satchel');
+  assert.equal(itemState(st, 'satchel').status, 'maxed');
+  assert.deepEqual(purchase(ctx, 'satchel'), { ok: false, reason: 'owned', cost: 0 });
+  st.fish = 2000;
+  const costs = [];
+  for (let i = 0; i < 5 && itemState(st, 'sharp').status === 'buy'; i++) { costs.push(itemState(st, 'sharp').cost); purchase(ctx, 'sharp'); }
+  assert.deepEqual(costs, [120, 240, 400]);
+  assert.equal(st.upgrades.sharp, 3);
+  assert.equal(st.fish, 2000 - 760);
+  assert.equal(saves.length, 5);
+  assert.ok(saves.every((p) => p.reason === 'shop'), 'every purchase autosaves (§19.7)');
+});
+
+test('shops: refusal when poor, Wave Reach needs Shard 2, booleans buy once', () => {
+  const { ctx, st, saves } = shopCtx({ fish: 149, shards: 1 });
+  assert.deepEqual(canBuy(st, 'valorGain'), { ok: false, reason: 'poor' });
+  assert.equal(purchase(ctx, 'valorGain').ok, false);
+  assert.equal(st.fish, 149); assert.equal(saves.length, 0);
+  assert.equal(itemState(st, 'waveReach').status, 'locked');
+  st.fish = 1000; st.shards = 2;
+  assert.equal(itemState(st, 'waveReach').status, 'buy');
+  assert.equal(purchase(ctx, 'waveReach').cost, ECONOMY.shops.waveReach.cost);
+  assert.equal(st.upgrades.waveReach, true);
+  assert.equal(itemState(st, 'waveReach').status, 'maxed');
+  purchase(ctx, 'quickCharge');
+  assert.equal(st.upgrades.quickCharge, true);
+});
+
+test('shops: purchase nudges the player (satchel milkMax, valor gain multiplier)', () => {
+  const { ctx, st } = shopCtx();
+  let recomputed = 0;
+  ctx.player = { milk: 2, milkMax: 2, recomputeMax() { recomputed++; this.milkMax = 3; }, valorState: { gainMul: 1 } };
+  purchase(ctx, 'satchel');
+  assert.equal(recomputed, 1); assert.equal(ctx.player.milk, 3, 'the new bottle comes full');
+  purchase(ctx, 'valorGain');
+  assert.equal(ctx.player.valorState.gainMul, ECONOMY.shops.valorGain.mul);
+  assert.equal(st.milkMax, 3);
+});
+
+test('shops: skins unlock by kittens / flags, equip writes cosmetics and autosaves', () => {
+  const { ctx, st, saves } = shopCtx();
+  st.kittens = ['a', 'b', 'c', 'd', 'e'];
+  assert.equal(skinUnlocked(st, 'twig'), true);
+  assert.equal(skinUnlocked(st, 'fishbone'), false);
+  assert.equal(itemState(st, 'skin:fishbone').lockKey, 'ui.shop.need.kittens');
+  assert.equal(equip(ctx, 'skin:fishbone'), false);
+  st.kittens.push('f');
+  assert.equal(itemState(st, 'skin:fishbone').status, 'owned');
+  assert.equal(equip(ctx, 'skin:fishbone'), true);
+  assert.equal(st.cosmetics.sword, 'fishbone');
+  assert.ok(st.cosmetics.swords.includes('fishbone'), 'condition-unlocked skin joins the owned list');
+  assert.equal(itemState(st, 'skin:fishbone').status, 'equipped');
+  assert.equal(equip(ctx, 'skin:fishbone'), false, 'already equipped');
+  assert.equal(skinUnlocked(st, 'toobig'), false);
+  st.setFlag?.('keep.brutus', true); if (!st.setFlag) st.flags['keep.brutus'] = true;
+  assert.equal(skinUnlocked(st, 'toobig'), true);
+  assert.equal(saves.length, 1);
+});
+
+test('shops: capes: start / flag / meme cam / 80-fish buys; the bow is never a cape', () => {
+  const { ctx, st } = shopCtx({ fish: 100 });
+  assert.equal(capeUnlocked(st, 'cream'), true);
+  assert.equal(itemState(st, 'cape:red').status, 'locked');
+  assert.equal(itemState(st, 'cape:memeWhite').lockKey, 'ui.shop.need.memeCam');
+  st.memeCamSeen = 1;
+  assert.equal(itemState(st, 'cape:memeWhite').status, 'owned');
+  const blue = itemState(st, 'cape:blue');
+  assert.equal(blue.status, 'buy'); assert.equal(blue.cost, ECONOMY.shops.cape);
+  assert.equal(purchase(ctx, 'cape:blue').ok, true);
+  assert.equal(st.cosmetics.cape, 'blue', 'a bought cape is worn at once');
+  assert.equal(st.fish, 20);
+  assert.equal(canBuy(st, 'cape:green').reason, 'poor');
+  assert.equal(itemState(st, 'cape:gold').status, 'locked');
+  assert.ok(!CAPE_IDS.includes('bow'));
+  assert.equal(chipText(ctx, itemState(st, 'cape:green')), '80');
+  assert.equal(chipText(ctx, itemState(st, 'cape:green'), true), 'Buy?');
+  assert.equal(chipText(ctx, itemState(st, 'cape:blue')), tx(ctx, 'shop.equipped'));
+});
+
+test('shops: lookout rows, keeper lines', () => {
+  const { ctx, st } = shopCtx();
+  st.kittens = [...KITTEN_IDS.slice(0, 4)];
+  const rows = lookoutRows(ctx);
+  assert.equal(rows.length, LEVEL_IDS.length);
+  assert.equal(rows.reduce((a, r) => a + r.n, 0), 4);
+  assert.ok(rows.every((r) => r.missing === r.max - r.n));
+  const line = keeperLine(ctx, 'pip', () => 0);
+  assert.ok(line.length > 0 && !line.includes('{'), line);
+  st.flags['gate.done'] = true;
+  assert.equal(keeperLine(ctx, 'marmalade', () => 0), tx(ctx, 'hub.marmalade.bed'));
+});
+
+test('shop art: every skin, cape and icon draws; the bow on the mannequin is pink', () => {
+  for (const s of SKINS) assert.match(swordArt(s), /^<svg class="art-sword"/);
+  for (const c of CAPE_IDS) { const svg = capeMannequin(c); assert.match(svg, /cape-sway/); assert.ok(svg.includes('#F2A2B8'), `${c}: pink bow`); }
+  for (const k of ['satchel', 'sharp', 'quickCharge', 'valorGain', 'waveReach', 'lock', 'spyglass']) assert.match(itemIcon(k), /<svg/);
+});
+
+// ====================================================================================================== M2: Quest Board (§12.5)
+test('quest board: next level, card states, hub never a destination', () => {
+  const ctx = fakeCtx({ systems: false }), st = ctx.state;
+  assert.equal(nextLevel(st), 'meadow');
+  st.flags['meadow.done'] = true; st.flags['forest.done'] = true;
+  assert.equal(nextLevel(st), 'gate', 'the hub (town) is skipped');
+  st.levels = { meadow: { cleared: true, bestRank: 'pawsome', bestTime: 700 } };
+  st.letters = ['l1'];
+  st.kittens = [...KITTENS_BY_LEVEL.meadow.slice(0, 2)];
+  const cards = questCards(ctx, HUB_LEVEL);
+  assert.equal(cards.length, 6);
+  const m = cards[0];
+  assert.deepEqual([m.cleared, m.open, m.letter, m.bestRank, m.bestTime, m.kittens.n, m.kittens.max], [true, true, true, 'pawsome', 700, 2, 3]);
+  assert.equal(cards.find((c) => c.id === 'town').open, false);
+  assert.equal(cards.find((c) => c.id === 'town').here, true);
+  assert.equal(cards.find((c) => c.id === 'gate').next, true);
+  assert.equal(cards.find((c) => c.id === 'gate').open, true);
+  assert.equal(cards.find((c) => c.id === 'bog').open, false);
+  assert.match(cards[3].label, /4/);
+  for (const id of ['gate', 'bog', 'keep']) st.flags[`${id}.done`] = true;
+  assert.equal(nextLevel(st), null);
+});
+
+// ====================================================================================================== M2: results bests, settings extras
+test('results: per-level bests against the record at level start', () => {
+  const run = { levelId: 'forest', time: 600, livesLost: 0, rank: 'pawsome' };
+  assert.deepEqual(resultBest(run, { cleared: false }), { first: true, newTime: false, newRank: false, bestTime: 600, bestRank: 'pawsome' });
+  const b = resultBest(run, { cleared: true, bestTime: 700, bestRank: 'purrfect' });
+  assert.deepEqual([b.first, b.newTime, b.newRank, b.bestTime, b.bestRank], [false, true, true, 600, 'pawsome']);
+  const c = resultBest({ ...run, time: 900, rank: 'mewtiful' }, { cleared: true, bestTime: 700, bestRank: 'purrfect' });
+  assert.deepEqual([c.newTime, c.newRank, c.bestTime, c.bestRank], [false, false, 700, 'purrfect']);
+  assert.equal(resultBest(run, null).first, false, 'unknown record: no ribbons');
+});
+
+test('settings: reset to the §19.7 defaults (difficulty kept) and the controls card', () => {
+  const ctx = fakeCtx({ systems: false }), st = ctx.state;
+  const seen = [];
+  ctx.bus.on(E.SETTINGS_CHANGED, (p) => seen.push(p.key));
+  st.settings.shake = 0.2; st.settings.master = 0.1; st.difficulty = 'kitten';
+  const changed = resetSettings(ctx, defaultState().settings);
+  assert.deepEqual(changed.sort(), ['master', 'shake']);
+  assert.deepEqual(seen.sort(), ['master', 'shake']);
+  assert.equal(st.settings.shake, 1); assert.equal(st.difficulty, 'kitten');
+  for (const [act] of CONTROL_ROWS) for (const d of ['kbm', 'pad', 'touch']) assert.ok(actionGlyph(act, d), `${act}/${d}`);
+});

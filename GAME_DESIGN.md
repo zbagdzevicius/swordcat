@@ -948,7 +948,7 @@ Napping (any companion): "Just... resting my eyes..." · "Zzz." Waking: "I'm up!
 | `life.last` | "Last life!" |
 | `gameover.title` / options | "Time for a cat nap." / "Wake up (retry level)" · "Back to Pawsbury" |
 | `results.ranks` | By lives lost in the level, so it works on every difficulty (Kitten has no life counter): "Paw-some" (0–1 lost) · "Purr-fect" (2–4) · "Mew-tiful" (5 or more). On Knight this equals 8–9 / 5–7 / 1–4 lives left. |
-| `toast.kitten` | "Lost kitten found! ({n}/18)" |
+| `toast.kitten` | "Lost kitten found! ({n}/{max})" — this level's count, like the HUD n/3 (M2 fix; `{total}` = n/18) |
 | `toast.letter` | "Letter found: {title}" |
 | `toast.heartbell` | "Heart Bell! +1 heart" |
 | `toast.stolen` / `toast.returned` | "The Post Stealer took {n} fish!" / "Post returned! +5 fish" |

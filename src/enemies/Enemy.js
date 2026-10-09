@@ -5,14 +5,24 @@
 // (emits combat:telegraph; auto-ended on strike / stagger / death), stagger(sec), onParried(), onBlocked(), plus the
 // ScriptedActor API (core/ScriptedActor.js mixin; visual hooks playClip / onPose / onEmote / onProp below).
 // Types (types/*.js, Appendix B.3) add data, `anims`, a `build(e, model)` dresser and state overrides.
+// Optional type hooks (all duck-typed on the def; M2):
+//   init(e) · tick(e, dt) (every sim step) · render(e, dt) · pulse(e) → [sx, sy, sz] (squash / abdomen pulse)
+//   gait(e, speed, dt) (skitter bursts) · canUse(e, attack, d) · whileWaiting(e, p, d, dt) (tokenless: jeer)
+//   approachPoint(e, p, keep, out) (flank) · readyToAttack(e, p, atk, d) · startAttack(e, atk) (giggle first)
+//   onHit(e, hit) · onHitWhile: { <state>: 'choke' } · onChoke(e) · onDealtHit(e, combatHit) (gloat)
+//   onDashHit(e, target, result, def) (snatch) · onParried(e, by, {gold}) / onBlocked(e, by, def) → true = handled
+//   onDeath(e, hit) (jelly split) · died(e) → extra enemy:died fields · onLethal(e, info) → true = survive
+//   onRunnerArrive(e, dt) (The Line) · projectileOpts(e, def) (web glob) · dieDur(e) · onDispose(e)
+// Moves with their own state: an attack def with `state: '<name>'`, or a state with `attacking: true` named like
+// the attack id (moves.js CHAIN_STATE for combos). Multi-telegraph moves use telegraphExtra (all end together).
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
-import { ATTACKS, PLAYER, TELEGRAPH } from '../core/config.js';
+import { ATTACKS, PLAYER, TELEGRAPH, COMPANIONS } from '../core/config.js';
 import { damp, dampAngle, wrapAngle, clamp } from '../core/math.js';
-import { TUNING, rangeOf } from './tuning.js';
+import { TUNING, M2, rangeOf } from './tuning.js';
 import { clipKey, clipsFor, isSpec, specDuration } from './clipMaps.js';
 import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright } from './rig.js';
 
@@ -120,6 +130,7 @@ export const BASE_STATES = {
     enter(e) { e.idleFor = rangeOf(e.ctx.rng, TUNING.idleTime); },
     update(e, dt) {
       e.brake(dt);
+      if (e.objectiveRunner && e.ai && e.runnerGoal()) { e.alerted = true; return e.setState('chase'); }
       if (e.checkWake(dt) || e.sees) return e.alert();
       if (!e.perched && e.patrolRadius > 0 && e.stateT > e.idleFor) e.setState('patrol');
     },
@@ -132,7 +143,7 @@ export const BASE_STATES = {
     },
     update(e, dt) {
       if (e.checkWake(dt) || e.sees) return e.alert();
-      const left = e.steerTo(e.goal.x, e.goal.z, e.def.walk ?? 1.5, dt);
+      const left = e.steerTo(e.goal.x, e.goal.z, e.gait(e.def.walk ?? 1.5, dt), dt);
       e.faceVel(dt, TUNING.turnRate);
       if (left < TUNING.arrive || e.stateT > TUNING.patrolTimeout) e.setState('idle');
     },
@@ -181,7 +192,7 @@ export const BASE_STATES = {
       const def = e.attack?.def ?? MELEE_FALLBACK;
       e.swing = def.arc ? e.ctx.combat.beginSwing(e, def) : null;
       e.dashHit = false;
-      if (def.projectile) e.fireProjectile(def);
+      if (def.projectile) e.fireProjectile(def, e.def.projectileOpts?.(e, def));
       e.followUp = null;
       const fu = e.def.followUp;
       if (fu && e.attack?.id !== fu.id && ATTACKS[fu.id] && e.ctx.rng.chance(fu.chance ?? 0)) e.followUp = { id: fu.id, def: ATTACKS[fu.id], range: e.attack.range, cooldown: e.attack.cooldown, kind: e.attack.kind };
@@ -265,7 +276,7 @@ export const BASE_STATES = {
       if (p) _d.set(e.pos.x - p.pos.x, 0, e.pos.z - p.pos.z); else _d.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
       if (_d.lengthSq() < 1e-6) _d.set(0, 0, 1);
       _d.normalize();
-      e.ctx.bus.emit(E.ENEMY_DIED, { enemy: e, type: e.def.id, position: e.deathAt.clone(), fish, smallHeart, height: e.height });
+      e.ctx.bus.emit(E.ENEMY_DIED, { enemy: e, type: e.def.id, position: e.deathAt.clone(), fish, smallHeart, height: e.height, ...(e.def.died?.(e) ?? null) });
       // §8.2 Kill: the poof (fx adds the faction debris by `type`); our own helmet spins off below, so fx's
       // generic helmet pop is switched off with `helmet: false`
       e.ctx.bus.emit(E.BURST, { kind: 'poof', position: e.pos.clone(), type: e.def.id, height: e.height, dir: _d.clone(), helmet: false, count: 12 });
@@ -322,6 +333,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.states = { ...BASE_STATES, ...(def.states ?? {}) };
     this.stateName = ''; this.state = null; this.stateT = 0;
     this.alerted = false; this.sees = false; this.wakeT = 0;
+    /** §9.1 token share: the companion this token's attack goes for (null = her) */
+    this.shareTarget = null;
     this.thinkT = (this.id % 6) * (TUNING.thinkEvery / 6);
     this.goal = new THREE.Vector3();
     /** @type {{id: string, def: any, range: number, minRange?: number, cooldown?: number, kind: string}|null} */
@@ -385,6 +398,9 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     // Mochi's Shield Wall taunt (§9; requests/companions.md): the taunter while it lasts and he is awake
     const tb = this.tauntedBy;
     if (tb && this.tauntT > 0 && tb.alive !== false && !((tb.napT ?? 0) > 0) && tb.pos) return tb;
+    // §9.1 token share: this attack token went to a nearby awake companion (COMPANIONS.tokenShare of the grants)
+    const st = this.shareTarget;
+    if (st && st.alive !== false && !((st.napT ?? 0) > 0) && st.pos && this.hasToken()) return st;
     return p;
   }
 
@@ -410,13 +426,13 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     return ph.lineOfSight(_v, _d);
   }
 
-  /** Fire `def`'s projectile from chest height toward her chest (or straight ahead). */
-  fireProjectile(def) {
+  /** Fire `def`'s projectile from chest height toward her chest (or straight ahead); `opts` → combat.spawnProjectile. */
+  fireProjectile(def, opts = undefined) {
     const p = this.targetActor(), y0 = this.pos.y + this.height * 0.6;
     _v.set(this.pos.x + Math.sin(this.facing) * this.radius, y0, this.pos.z + Math.cos(this.facing) * this.radius);
     if (p) _d.set(p.pos.x - _v.x, p.pos.y + p.height * 0.55 - y0, p.pos.z - _v.z); else _d.set(Math.sin(this.facing), 0, Math.cos(this.facing));
     if (_d.lengthSq() < 1e-6) _d.set(Math.sin(this.facing), 0, Math.cos(this.facing));
-    return this.ctx.combat.spawnProjectile(def, this, _v.clone(), _d.normalize().clone());
+    return this.ctx.combat.spawnProjectile(def, this, _v.clone(), _d.normalize().clone(), opts);
   }
 
   /** Contact check for dash attacks: one hit when her cylinder touches our front. */
@@ -427,7 +443,10 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (d > this.radius + p.radius + 0.25 || Math.abs(p.pos.y - this.pos.y) > Math.max(this.height, p.height)) return;
     if (d > 1e-3 && (dx * Math.sin(this.facing) + dz * Math.cos(this.facing)) / d < 0.2) return;
     this.dashHit = true;
-    this.ctx.combat.applyHit(this, p, def);
+    const r = this.ctx.combat.applyHit(this, p, def);
+    if (r === 'none') { this.dashHit = false; return r; }      // her i-frames: the dash may still catch her
+    this.def.onDashHit?.(this, p, r, def);
+    return r;
   }
 
   /** Sage's volley grounds flyers (COMPANIONS.sage.groundFlyers); no-op for walkers. */
@@ -435,6 +454,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   /** Leash: too far from the player or from home → return. */
   leashBroken() {
+    if (this.objectiveRunner || this.def.boss || this.bossAdd) return false;
     const leash = this.def.leash ?? 18;
     return this.distToPlayer() > leash || Math.hypot(this.pos.x - this.home.x, this.pos.z - this.home.z) > leash * 1.5;
   }
@@ -683,13 +703,14 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   /** Difficulty × boss-phase windup multiplier. */
   windupMul() { return (this.ctx.state?.difficultyCfg?.windup ?? 1) * (this.phaseWindupMul ?? 1); }
 
-  /** Attack-def lookup: Appendix A ATTACKS, then the type's own `moves`. */
-  attackDef(id) { return ATTACKS[id] ?? this.def.moves?.[id] ?? null; }
+  /** Attack-def lookup: the type's own `moves` (a refined row, e.g. the dodge-only snatch), then Appendix A ATTACKS. */
+  attackDef(id) { return this.def.moves?.[id] ?? ATTACKS[id] ?? null; }
 
   /** Weighted pick from def.attacks (seeded) among those usable at distance `d`; kept until used. */
   pickAttack(d = this.distToPlayer()) {
     if (this.attackChoice && this.stateName === 'chase') return this.attackChoice;
-    const list = (this.def.attacks ?? []).filter((a) => (this.attackCd[a.id] ?? 0) <= 0 && (a.minRange == null || d >= a.minRange * 0.8) && (!a.when || a.when(this)));
+    const list = (this.def.attacks ?? []).filter((a) => (this.attackCd[a.id] ?? 0) <= 0 && (a.minRange == null || d >= a.minRange * 0.8)
+      && (!a.when || a.when(this)) && (!this.def.canUse || this.def.canUse(this, a, d)));
     if (!list.length) return null;
     let total = 0; for (const a of list) total += a.weight ?? 1;
     let r = this.ctx.rng() * total, pick = list[0];
@@ -702,11 +723,87 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   get tokens() { return this.ctx.combat?.tokens ?? null; }
   hasToken() { return !!this.tokens?.has?.(this); }
-  acquireToken(kind) { const t = this.tokens; return t ? t.acquire(this, kind) : true; }
-  releaseToken() { this.tokens?.release?.(this); }
+  acquireToken(kind) {
+    const t = this.tokens;
+    if (!t) return true;
+    const had = !!t.has?.(this);
+    const ok = t.acquire(this, kind);
+    if (ok && !had) this._rollTokenShare();
+    return ok;
+  }
+  releaseToken() { this.tokens?.release?.(this); this.shareTarget = null; this.releaseBehind(); }
 
-  /** Start the windup for `atk` (token already held). */
-  beginAttack(atk) { this.attack = atk; this.attackChoice = null; this.setState('windup'); }
+  /** Give back the pack's "behind" flank slot (hyena flankers). */
+  releaseBehind() {
+    if (!this.flanker) return;
+    this.flanker = false;
+    this.ctx.enemies?.releaseBehind?.(this);
+  }
+
+  /**
+   * GAME_DESIGN §9.1 (requests/companions.md): when an attack token is granted and an awake companion is within
+   * COMPANIONS.engage of her, this attack goes for the companion instead COMPANIONS.tokenShare of the time.
+   */
+  _rollTokenShare() {
+    this.shareTarget = null;
+    const comps = this.ctx.companions?.active, p = this.ctx.player;
+    if (!comps?.length || !p?.pos || this.isBoss || this.def?.boss) return;
+    const R = COMPANIONS.engage ?? 6, rng = this.ctx.rng ?? Math.random;
+    for (const c of comps) {
+      if (!c?.pos || c.alive === false || (c.napT ?? 0) > 0 || c.scripted || c.hurtable === false) continue;
+      if (Math.hypot(c.pos.x - p.pos.x, c.pos.z - p.pos.z) > R) continue;
+      if (rng() < (COMPANIONS.tokenShare ?? 0.2)) this.shareTarget = c;
+      return;
+    }
+  }
+
+  /**
+   * Start `atk` (token already held): the windup, or the move's own state when the type has one (`def.state` names it,
+   * or a state with the attack's id exists: boss moves, chains).
+   */
+  beginAttack(atk) {
+    this.attack = atk; this.attackChoice = null;
+    const st = atk?.def?.state ?? (this.states[atk?.id]?.attacking ? atk.id : null);
+    this.setState(st && this.states[st] ? st : 'windup');
+  }
+
+  /** Locomotion speed for this step (types with a gait: the spider's skitter bursts). */
+  gait(speed, dt) { return this.def.gait ? this.def.gait(this, speed, dt) : speed; }
+
+  // ------------------------------------------------------------------ objective runners (§12.6 The Line)
+  /** Where an objective runner heads (spawn opts `goal`, else the level's `winch` anchor); null = none. */
+  runnerGoal() {
+    if (!this.objectiveRunner) return null;
+    if (this._goal !== undefined) return this._goal;
+    const g = this.spawnOpts?.goal ?? 'winch';
+    const out = new THREE.Vector3();
+    let ok = false;
+    if (typeof g === 'string') { const a = this.ctx.levels?.anchor?.(g); if (a?.pos) { out.copy(a.pos); ok = true; } }
+    else if (Array.isArray(g)) { out.set(g[0], 0, g[g.length - 1]); ok = true; }
+    else if (g && typeof g.x === 'number') { out.set(g.x, g.y ?? 0, g.z); ok = true; }
+    this._goal = ok ? out : null;
+    return this._goal;
+  }
+
+  /**
+   * Runner step: path straight for the goal and hold it (fight only if she is within M2.runner.fightWithin).
+   * Returns true when it handled this step.
+   */
+  runnerStep(dt) {
+    const g = this.runnerGoal();
+    if (!g) return false;
+    const p = this.targetActor();
+    if (p && this.distToTarget() <= M2.runner.fightWithin) return false;
+    if (this.hasToken() && !this.attack) this.releaseToken();
+    const left = this.steerTo(g.x, g.z, this.gait(this.def.run ?? 3.5, dt), dt);
+    if (left > M2.runner.arrive) this.faceVel(dt, TUNING.chaseTurnRate);
+    else {
+      this.brake(dt);
+      if (p) this.faceTo(p.pos, dt, TUNING.turnRate);
+      this.def.onRunnerArrive?.(this, dt);
+    }
+    return true;
+  }
 
   /** End of recover: free the token, start cooldowns, back to the chase. */
   finishAttack() {
@@ -720,6 +817,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   /** Melee chase (tech.md §10 + §8.3): take a token near range, close in, attack; without a token orbit at 1.4× range. */
   chaseMelee(dt) {
+    if (this.objectiveRunner && this.runnerStep(dt)) return;
     const p = this.targetActor();
     if (!p) { this.releaseToken(); return this.setState('return'); }
     if (this.leashBroken()) return this.setState('return');
@@ -730,20 +828,26 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (!has && atk && this.cooldownT <= 0 && d <= orbitR + 1.5) has = this.acquireToken(atk.kind);
     if (has && atk) {
       this.tokenT += dt;
-      if (d <= range && (atk.minRange == null || d >= atk.minRange) && this.cooldownT <= 0) return this.beginAttack(atk);
-      if (this.tokenT > 4) { this.releaseToken(); this.tokenT = 0; this.cooldownT = 1; }      // don't hog a token we can't use
+      if (d <= range && (atk.minRange == null || d >= atk.minRange) && this.cooldownT <= 0 && (!this.def.readyToAttack || this.def.readyToAttack(this, p, atk, d))) {
+        return this.def.startAttack ? this.def.startAttack(this, atk) : this.beginAttack(atk);
+      }
+      if (this.tokenT > (this.def.tokenHold ?? 4)) { this.releaseToken(); this.tokenT = 0; this.cooldownT = 1; }      // don't hog a token we can't use
       const keep = Math.max(0.2, range * 0.8, this.frontReach(p));
-      _d.set(this.pos.x - p.pos.x, 0, this.pos.z - p.pos.z);
-      const dl = _d.length() || 1;
-      this.steerTo(p.pos.x + (_d.x / dl) * keep, p.pos.z + (_d.z / dl) * keep, this.def.run ?? 3.5, dt);
+      if (!this.def.approachPoint?.(this, p, keep, _v)) {
+        _d.set(this.pos.x - p.pos.x, 0, this.pos.z - p.pos.z);
+        const dl = _d.length() || 1;
+        _v.set(p.pos.x + (_d.x / dl) * keep, 0, p.pos.z + (_d.z / dl) * keep);
+      }
+      this.steerTo(_v.x, _v.z, this.gait(this.def.run ?? 3.5, dt), dt);
     } else {
+      if (this.def.whileWaiting?.(this, p, d, dt)) return;
       // wait for a token: orbit the player at 1.4× attack range, drifting around her
       this.orbitT -= dt;
       if (this.orbitT <= 0) { this.orbitT = rangeOf(this.ctx.rng, TUNING.orbitRepick); this.orbitDir = this.ctx.rng.sign(); }
       const cur = Math.atan2(this.pos.x - p.pos.x, this.pos.z - p.pos.z);
       const a = cur + this.orbitDir * TUNING.orbitDrift;
       const fast = d > orbitR + 2;
-      this.steerTo(p.pos.x + Math.sin(a) * orbitR, p.pos.z + Math.cos(a) * orbitR, fast ? (this.def.run ?? 3.5) : (this.def.walk ?? 1.6), dt);
+      this.steerTo(p.pos.x + Math.sin(a) * orbitR, p.pos.z + Math.cos(a) * orbitR, this.gait(fast ? (this.def.run ?? 3.5) : (this.def.walk ?? 1.6), dt), dt);
     }
     this.faceTo(p.pos, dt, TUNING.chaseTurnRate);
   }
@@ -757,21 +861,50 @@ export class Enemy extends ScriptedActorMixin(Actor) {
    */
   telegraph(kind, desc = {}) {
     this.endTelegraph();
-    const id = teleId++;
+    const id = this._emitTelegraph(kind, desc);
     this.telegraphId = id;
+    return id;
+  }
+
+  /**
+   * An extra telegraph alongside the main one (decals with a glint: a lane + the red "!!", 5 cheese-bomb circles).
+   * Ended by endTelegraph() (all of them) or endTelegraphId(id). `desc` extras (w, l, angle, inner, follow, target)
+   * pass through to fx (fx/Telegraphs normalizeTelegraph).
+   */
+  telegraphExtra(kind, desc = {}) {
+    const id = this._emitTelegraph(kind, desc);
+    (this._extraTele ??= new Set()).add(id);
+    return id;
+  }
+
+  _emitTelegraph(kind, desc) {
+    const id = teleId++;
     if (!desc.pos) this.updateTell();
     this.ctx.bus.emit(E.TELEGRAPH, {
-      id, actor: this, kind, shape: desc.shape ?? defaultShape(kind),
+      ...desc, id, actor: this, kind, shape: desc.shape ?? defaultShape(kind),
       pos: desc.pos ?? this.tellPos, dir: desc.dir ?? this.tellDir,
       size: desc.size ?? desc.r ?? 1, duration: desc.duration ?? 0.5,
     });
     return id;
   }
 
+  /** End one telegraph (main or extra) by id. */
+  endTelegraphId(id) {
+    if (id == null) return;
+    if (id === this.telegraphId) { this.telegraphId = null; this.ctx.bus.emit(E.TELEGRAPH_END, { id }); return; }
+    if (this._extraTele?.delete(id)) this.ctx.bus.emit(E.TELEGRAPH_END, { id });
+  }
+
+  /** End the main telegraph and every extra one. */
   endTelegraph() {
-    if (this.telegraphId == null) return;
-    this.ctx.bus.emit(E.TELEGRAPH_END, { id: this.telegraphId });
-    this.telegraphId = null;
+    if (this.telegraphId != null) {
+      this.ctx.bus.emit(E.TELEGRAPH_END, { id: this.telegraphId });
+      this.telegraphId = null;
+    }
+    if (this._extraTele?.size) {
+      for (const id of this._extraTele) this.ctx.bus.emit(E.TELEGRAPH_END, { id });
+      this._extraTele.clear();
+    }
   }
 
   /** Refresh the live glint position (weapon tip, else head height) and facing direction. */
@@ -803,6 +936,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   /** §7.3: a parry staggers 1.2 s (elites 0.8 s; gold glint 2.0 s or the attack's goldStagger). */
   onParried(byActor, { gold = false } = {}) {
     if (!this.alive) return;
+    if (this.def.onParried?.(this, byActor, { gold }) === true) return;     // the type handled it (pug shield break)
     const g = PLAYER.guard, elite = this.maxPoise >= g.eliteMinPoise;
     const sec = gold ? (this.attack?.def?.goldStagger ?? this.def.goldStagger ?? g.goldParryStagger)
       : (this.attack?.def?.parriedStun ?? (elite ? g.eliteParryStagger : g.parryStagger));
@@ -811,6 +945,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   /** The player blocked our hit: recoil a step. */
   onBlocked(byActor, def) {
+    if (this.def.onBlocked?.(this, byActor, def) === true) return;
     this.vel.x -= Math.sin(this.facing) * TUNING.blockRecoil; this.vel.z -= Math.cos(this.facing) * TUNING.blockRecoil;
   }
 
@@ -824,6 +959,9 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (this.roleSpec('hit')) this.hitReactT = TUNING.hitReact; else this.squashT = TUNING.squash.dur;
     if (!this.alive || this.scripted || !this.ai) return;
     this.def.onHit?.(this, hit);
+    if (!this.alive || this.disposed) return;
+    // Appendix B.3 `onHitWhile`: a hit during a gloat / jeer / laugh windup chokes it
+    if (this.def.onHitWhile?.[this.stateName] === 'choke' && !this.chokeLock) { this.choke(); return; }
     if (!this.alerted || this.stateName === 'idle' || this.stateName === 'patrol' || this.stateName === 'return') {
       this.alerted = true;
       if (this.staggerT <= 0) { this.ctx.bus.emit(E.ENEMY_ALERTED, { enemy: this }); this.ctx.enemies?.alertNear?.(this.pos, TUNING.groupAlertRadius, this); this.setState('chase'); }
@@ -831,9 +969,28 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (this.def.fleeBelow && !this.fled && this.hp > 0 && this.hp / this.maxHp <= this.def.fleeBelow && this.staggerT <= 0) this.setState('flee');
   }
 
-  onDeath(hit) { this.alive = false; this.setState('die'); }
+  onDeath(hit) { this.alive = false; this.def.onDeath?.(this, hit); this.setState('die'); }
 
-  dieDur() { return this.def.scamper ? TUNING.die.scamperDur : TUNING.die.dur; }
+  /** Combat's lethal hook: true = survive (the type set its own hp; Pilfer's chase can't be defeated). */
+  onLethal(info) { return this.def.onLethal?.(this, info) === true; }
+
+  /**
+   * §10.3 choke ("hrk!"): stagger (def.gloat.chokeStagger, 1.0 s), `enemy:choke` (the player adds +10 Valor, fx and
+   * audio react). Types refine it with `def.onChoke` (bosses: Dizzy to full, a bark).
+   */
+  choke() {
+    if (!this.alive) return;
+    this.endTelegraph(); this.releaseToken(); this.attack = null; this.swing = null;
+    const g = this.def.gloat, sec = (typeof g === 'object' ? g?.chokeStagger : null) ?? 1.0;
+    this.ctx.bus.emit(E.ENEMY_CHOKE, { enemy: this });
+    if (this.def.onChoke?.(this) === true) return;
+    this.stagger(sec);
+  }
+
+  /** Combat landed one of our hits on her (EnemyManager relays `combat:hit`): the hyena's Gloat starts here. */
+  onDealtHit(h) { if (this.alive && this.ai && !this.scripted) this.def.onDealtHit?.(this, h); }
+
+  dieDur() { return this.def.dieDur ? this.def.dieDur(this) : this.def.scamper ? TUNING.die.scamperDur : TUNING.die.dur; }
 
   /** §10.1: the helmet spins off, away from the hit (EnemyManager animates the debris). */
   dropHelmet(dir = null) {
@@ -852,6 +1009,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.cooldownT = Math.max(0, this.cooldownT - dt);
     if (this.tauntT > 0 && (this.tauntT -= dt) <= 0) { this.tauntT = 0; this.tauntedBy = null; }   // Shield Wall refreshes it every step
     for (const k in this.attackCd) if (this.attackCd[k] > 0) this.attackCd[k] -= dt;
+    this.def.tick?.(this, dt);
     if (this.scripted || this.attachedTo) {
       this.scriptedStep(dt);
       if (!this.attachedTo) this.move(dt);
@@ -1117,7 +1275,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       if (left < TUNING.die.shrink) k = Math.max(0.001, left / TUNING.die.shrink);
     }
     const sxz = 1 / Math.sqrt(sy);
-    v.scale.set(base * sxz * k, base * sy * k, base * sxz * k);
+    const pl = this.def.pulse ? this.def.pulse(this) : null;          // [sx, sy, sz] multipliers (abdomen pulse, jelly squash)
+    v.scale.set(base * sxz * k * (pl?.[0] ?? 1), base * sy * k * (pl?.[1] ?? 1), base * sxz * k * (pl?.[2] ?? 1));
     // stagger wobble
     if (this.wobbleT > 0) {
       this.wobbleT -= dt;

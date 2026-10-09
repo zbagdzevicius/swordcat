@@ -87,6 +87,16 @@ const kitten = (t, id) => t.G((kid) => {
   return k ? { st: k.stateName, hidden: k.hidden, rescued: k.rescued, pos: k.pos.toArray(), hide: k.hide, perchY: k.perchY } : null;
 }, id);
 
+/** Snapshot the save state (M2 blocks set flags / kittens; later blocks of other areas must not see them). */
+const snapState = (t) => t.G(() => { const c = window.__GAME__.ctx; return { save: JSON.stringify(c.state.toJSON()), active: c.companions.active.map((x) => x.kittenId) }; });
+const restoreState = (t, s) => t.G((v) => {
+  const c = window.__GAME__.ctx;
+  try { c.state.reset(JSON.parse(v.save)); } catch (e) { return String(e); }
+  try { c.companions.setActive(v.active); } catch { /* level gone */ }
+  window.__GAME__.game.setTimeScale?.(1);
+  return true;
+}, s);
+
 export default [
   {
     name: 'companions:follow', order: 70, level: 'meadow', spawn: 'start', timeout: 120000,
@@ -592,6 +602,319 @@ export default [
         t.assert(r.left >= -1 && r.right <= 1, `bubble clipped at the ${side} edge: ${r.left.toFixed(3)}..${r.right.toFixed(3)}`);
       }
       follow(t);
+    },
+  },
+  // ------------------------------------------------------------------ M2 (Acts I–II)
+  {
+    name: 'companions:sage-clover', order: 80, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      try {
+        await stage(t);
+        // Sage: Volley at a crow + a rat (§9.2), basic shots from range
+        await t.G(() => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi', 'sage', 'clover']; c.companions.setActive(['sage']); });
+        await t.wait(1200);
+        t.assert(await spawnAhead(t, 'crow', 6, 1.5), 'crow spawn failed');
+        t.assert(await spawnAhead(t, 'rat_pike', 4.5, -1.2), 'rat spawn failed');
+        await t.wait(600);
+        await t.tap('KeyQ', 1, 50);
+        const used = await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.abilities >= 1, null, { sim: 3 });
+        t.assert(used, 'Q did not fire Sage\'s Volley');
+        t.assert(await t.G(() => window.__GAME__.lastEvent?.('companion:ability')?.ability ?? window.__GAME__.ctx.companions.active[0].cfg.ability) === 'volley', 'not a volley');
+        await t.wait(250);
+        await freeze(t, true);
+        await frame(t, [2.6, 1.3, -2.4], [0, 0.9, 3], 52);
+        await t.wait(250);
+        await shot(t, 'companions/sage-volley');
+        await freeze(t, false);
+        await follow(t);
+        const hits = await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.hits >= 3, null, { sim: 4 });
+        t.assert(hits, 'Volley arrows did not land');
+        await clearEnemies(t);
+        // §9.1 swap (ui's Vigil Stone menu / Barracks panel): swapTo with its flourish + toast (Sage → Clover)
+        await stage(t);
+        await t.wait(500);
+        const sw = await t.G(() => window.__GAME__.ctx.companions.swapTo('clover'));
+        t.assert(sw === 'clover', `swapTo returned ${sw}`);
+        await t.wait(300);
+        const now = await t.G(() => window.__GAME__.ctx.companions.active[0]?.kittenId);
+        t.assert(now === 'clover', `swapped to ${now}, expected clover`);
+        t.assert((await t.events()).includes('ui:toast'), 'no swap toast');
+        await t.wait(900);
+        await shot(t, 'companions/swap-clover');
+        // Clover: Purr of Mending heals 4 over 3 s
+        const hp0 = await t.G(() => { const p = window.__GAME__.ctx.player; p.hp = Math.max(1, p.maxHp - 5); return p.hp; });
+        await t.tap('KeyQ', 1, 50);
+        await t.wait(1500);
+        await shot(t, 'companions/clover-mend');
+        const healed = await until(t, (h) => window.__GAME__.ctx.player.hp >= h + 4, hp0, { sim: 5 });
+        t.assert(healed, `Clover's mend did not heal 4 (hp ${await t.G(() => window.__GAME__.ctx.player.hp)} from ${hp0})`);
+      } finally { await restoreState(t, saved); }
+    },
+  },
+  {
+    name: 'companions:forest-sage', order: 81, level: 'forest', spawn: 'start', timeout: 180000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      try {
+        const ks = await t.G(() => window.__GAME__.ctx.companions.kittens.map((k) => k.kittenId));
+        for (const id of ['pickles', 'pebble', 'sprout', 'sage']) t.assert(ks.includes(id), `forest: ${id} not placed (${ks.join(', ')})`);
+        await t.G(() => { const c = window.__GAME__.ctx; c.companions.setActive(['mochi']); c.player.god = true; });
+        await put(t, 18, -3.2, Math.PI);
+        await clearEnemies(t);
+        await t.wait(1500);
+        await clearEnemies(t);
+        await frame(t, [2.2, 1.1, -1.6], [0, 2.6, 5.5], 55);
+        await t.wait(500);
+        await shot(t, 'companions/forest-sage-hanging');
+        await follow(t);
+        // cut the treetop ropes (ours, or the level's objective) → the cage lowers → D-02 → Sage takes the slot
+        const how = await t.G(() => {
+          const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'sage');
+          if (!k) return 'none';
+          if (k.ropePosts?.length) return 'posts';
+          return c.companions.lowerCage('sage') ? 'lowered' : 'stuck';
+        });
+        t.assert(how === 'posts' || how === 'lowered', `Sage's cage cannot come down (${how})`);
+        if (how === 'posts') {
+          for (let i = 0; i < 12; i++) {
+            const left = await t.G(() => {
+              const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'sage');
+              const q = k?.ropePosts?.find((p) => !p.opened);
+              if (!q) return 0;
+              c.combat.applyHit(c.player, q, c.config.ATTACKS.slash3);
+              return k.ropePosts.filter((p) => !p.opened).length;
+            });
+            if (!left) break;
+            await t.wait(220);
+          }
+        }
+        await t.wait(900);
+        await freeze(t, true);
+        await frame(t, [2.2, 1.0, -1.4], [0, 1.4, 5.5], 55);
+        await t.wait(200);
+        await shot(t, 'companions/forest-sage-lowering');
+        await freeze(t, false);
+        const joined = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'sage'; }, null, { sim: 10, every: 250 });
+        t.assert(joined, 'Sage did not join after the cage came down');
+        t.assert(await t.G(() => window.__GAME__.ctx.state.companions.unlocked.includes('mochi')), 'Mochi should stay unlocked (Barracks)');
+        await t.G(() => window.__GAME__.setMode('play'));
+        await clearEnemies(t);
+        await put(t, 18, -3.2, Math.PI);
+        await t.wait(1800);
+        await t.G(() => {
+          const c = window.__GAME__.ctx, s = c.companions.active[0], p = c.player, f = p.facing;
+          if (s) { s.pos.set(p.pos.x + Math.sin(f) * 0.5 + Math.cos(f) * 1.0, p.pos.y, p.pos.z + Math.cos(f) * 0.5 - Math.sin(f) * 1.0); s.facing = f; s.snap(); s.visual?.snap(); }
+        });
+        await freeze(t, true);
+        await frame(t, [0.5, 1.0, 3.0], [0.5, 0.55, 0.2], 50);
+        await t.wait(250);
+        await shot(t, 'companions/forest-sage-joined');
+        await freeze(t, false);
+        await follow(t);
+        await t.G(() => { window.__GAME__.ctx.player.god = false; });
+        // Pebble behind the cracked boulder: a Bright Slash nearby reveals
+        await t.G(() => { const g = window.__GAME__, c = g.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'pebble'); if (k) { c.player.teleport({ pos: k.pos.clone().setZ(k.pos.z + 1.5), facing: Math.PI }); } });
+        await t.wait(300);
+        await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_SWING, { attackId: 'bright' }); });
+        const peb = await kitten(t, 'pebble');
+        t.assert(peb && !peb.hidden, 'Pebble was not revealed by a Bright Slash');
+      } finally { await restoreState(t, saved); }
+    },
+  },
+  {
+    name: 'companions:town-rescues', order: 82, level: 'town', spawn: 'start', timeout: 200000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      try {
+        const ks = await t.G(() => window.__GAME__.ctx.companions.kittens.map((k) => k.kittenId));
+        for (const id of ['waffles', 'toffee', 'muffin', 'marmalade', 'tofu', 'clover']) t.assert(ks.includes(id), `town: ${id} not placed (${ks.join(', ')})`);
+        await t.G(() => window.__GAME__.ctx.companions.setActive(['mochi']));
+        // Clover in the stocks (§12.5 square): locked until the Square clears, then E frees her → D-04 → joins
+        await put(t, 10, 11.2, 0);
+        await t.wait(1400);
+        await frame(t, [1.6, 1.0, 0.6], [0, 0.7, 2.8], 50);
+        await t.wait(400);
+        await shot(t, 'companions/town-clover-stocks');
+        await follow(t);
+        t.assert(!(await t.G(() => window.__GAME__.ctx.levels.current.interact('free_clover'))), 'stocks open before the Square is clear');
+        await t.G(() => window.__GAME__.ctx.companions.markCleared('square'));
+        t.assert(await t.G(() => window.__GAME__.ctx.levels.current.interact('free_clover')), 'E could not free Clover');
+        const clover = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'clover'; }, null, { sim: 8, every: 250 });
+        t.assert(clover, 'Clover did not join');
+        await t.G(() => window.__GAME__.setMode('play'));
+        // Tofu in the barrel stack: a knock reveals him → D-04 Tofu → flag
+        await put(t, 18, -12.4, Math.PI);
+        await t.wait(1400);
+        await shot(t, 'companions/town-barrels');
+        await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_SWING, { attackId: 'slash1' }); });
+        const tofu = await kitten(t, 'tofu');
+        t.assert(tofu && !tofu.hidden, 'the knock did not reveal Tofu');
+        await t.wait(500);
+        await t.G(() => { const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'tofu'); if (k) c.player.teleport({ pos: k.pos.clone(), facing: Math.PI }); });
+        const tf = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return !!g.ctx.state.getFlag('town.tofu'); }, null, { sim: 6, every: 250 });
+        t.assert(tf, 'town.tofu not set after D-04 Tofu');
+        await t.G(() => window.__GAME__.setMode('play'));
+        // Marmalade peeks out once Bakery Street clears → D-03
+        await put(t, -19.5, -18.6, -Math.PI / 2);
+        await t.G(() => window.__GAME__.ctx.companions.markCleared('bakery'));
+        await t.wait(1200);
+        await shot(t, 'companions/town-marmalade');
+        await t.G(() => { const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'marmalade'); if (k) c.player.teleport({ pos: k.pos.clone().setX(k.pos.x + 2.2), facing: -Math.PI / 2 }); });
+        const mm = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return !!g.ctx.state.getFlag('town.marmalade'); }, null, { sim: 6, every: 250 });
+        t.assert(mm, 'town.marmalade not set after D-03');
+        await t.G(() => window.__GAME__.setMode('play'));
+        // Earl Grey pops out of the giant Gloomjelly → D-04 Earl Grey
+        await put(t, 0, 2, 0);
+        await t.G(() => { const g = window.__GAME__, c = g.ctx; c.bus.emit(g.E.ENEMY_DIED, { enemy: { def: { id: 'jelly', releases: 'earlgrey' }, pos: new g.THREE.Vector3(0, 0, 5) }, type: 'jelly', position: new g.THREE.Vector3(0, c.physics.heightAt(0, 5), 5) }); });
+        await t.wait(1600);
+        await shot(t, 'companions/town-earlgrey');
+        const eg = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return !!g.ctx.state.getFlag('town.earlgrey'); }, null, { sim: 6, every: 250 });
+        t.assert(eg, 'town.earlgrey not set after the jelly popped');
+        await t.G(() => window.__GAME__.setMode('play'));
+        // Toffee on the statue top (y 2.5)
+        const tof = await kitten(t, 'toffee');
+        t.assert(tof && tof.perchY > 1.5, `Toffee perch ${tof?.perchY}`);
+      } finally { await restoreState(t, saved); }
+    },
+  },
+  {
+    name: 'companions:gate-wagon', order: 83, level: 'gate', spawn: 'start', timeout: 160000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      try {
+        const ks = await t.G(() => window.__GAME__.ctx.companions.kittens.map((k) => k.kittenId));
+        for (const id of ['tater', 'mittens', 'pip', 'socks']) t.assert(ks.includes(id), `gate: ${id} not placed (${ks.join(', ')})`);
+        const host = await t.G(() => { const k = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'tater'); return k ? { x: k.home.x, z: k.home.z, guests: k.guests.map((g) => g.kittenId) } : null; });
+        t.assert(host?.guests?.includes('mittens') && host.guests.includes('pip'), `war-wagon guests ${host?.guests}`);
+        await put(t, host.x, host.z + 2.6, Math.PI);
+        await t.wait(1500);
+        await frame(t, [1.4, 1.2, -1.3], [0, 0.8, 2.6], 50);
+        await t.wait(400);
+        await shot(t, 'companions/gate-wagon');
+        await follow(t);
+        for (let i = 0; i < 6; i++) {
+          const open = await t.G(() => {
+            const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'tater');
+            if (!k?.lock || k.lock.opened) return true;
+            c.combat.applyHit(c.player, k.lock, c.config.ATTACKS.slash1);
+            return k.lock.opened;
+          });
+          if (open) break;
+          await t.wait(250);
+        }
+        await t.wait(700);
+        await freeze(t, true);
+        await frame(t, [1.6, 1.1, -1.0], [0, 0.6, 2.4], 50);
+        await t.wait(200);
+        await shot(t, 'companions/gate-wagon-open');
+        await freeze(t, false);
+        const pip = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return !!g.ctx.state.getFlag('gate.pip'); }, null, { sim: 8, every: 250 });
+        t.assert(pip, 'gate.pip not set: D-06 did not run');
+        t.assert(await t.G(() => ['tater', 'mittens'].every((id) => window.__GAME__.ctx.state.kittens.includes(id))), 'Tater / Mittens not rescued');
+        await t.G(() => window.__GAME__.setMode('play'));
+      } finally { await restoreState(t, saved); }
+    },
+  },
+  {
+    name: 'companions:spoon-brigade', order: 84, level: 'gate', spawn: 'start', timeout: 160000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      try {
+        await t.G(() => {
+          const c = window.__GAME__.ctx;
+          for (const id of ['tater', 'mittens', 'socks', 'biscuit', 'noodle', 'button', 'pickles', 'pebble']) c.state.addKitten(id);
+          c.companions.setActive(['mochi']);
+        });
+        await put(t, 0, 10, Math.PI);
+        await t.wait(600);
+        await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.CUTSCENE_START, { id: 'cs08' }); });
+        const n = await t.G(() => window.__GAME__.ctx.companions.spoons.count);
+        t.assert(n === 8, `brigade size ${n}, expected 8`);
+        await t.wait(1500);
+        // the CS-08 pull-back: from behind the brigade, looking past her toward the horde
+        await frame(t, [0.6, 2.6, -7.5], [0, 0.6, 3], 55);
+        await t.wait(500);
+        await shot(t, 'companions/spoon-brigade');
+        await follow(t);
+        await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.CUTSCENE_END, { id: 'cs08' }); });
+        t.assert(await t.G(() => window.__GAME__.ctx.companions.spoons.armed), 'not armed after CS-08');
+        await t.G(() => { const g = window.__GAME__; for (const [x, z] of [[-1.5, 4], [1.8, 3]]) { const e = g.spawn('rat_pike', x, z); e?.alert?.(); } });
+        await t.G(() => { const p = window.__GAME__.ctx.player; p.god = true; });
+        const thrown = await until(t, () => window.__GAME__.ctx.companions.spoons.stats.thrown >= 3, null, { sim: 6 });
+        t.assert(thrown, 'no spoons thrown');
+        await t.wait(250);
+        await freeze(t, true);
+        await frame(t, [3.5, 2.2, -4.5], [0, 0.8, 4], 55);
+        await t.wait(200);
+        await shot(t, 'companions/spoon-throw');
+        await freeze(t, false);
+        const hit = await until(t, () => window.__GAME__.ctx.companions.spoons.stats.hits >= 2, null, { sim: 6 });
+        t.assert(hit, `spoons did not land (${JSON.stringify(await t.G(() => window.__GAME__.ctx.companions.spoons.stats))})`);
+        await follow(t);
+        await clearEnemies(t);
+        await t.G(() => { const p = window.__GAME__.ctx.player; p.god = false; });
+      } finally { await restoreState(t, saved); }
+    },
+  },
+  {
+    name: 'companions:hub', order: 85, level: null, timeout: 200000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      try {
+        await t.G(() => {
+          const c = window.__GAME__.ctx;
+          c.state.setFlag('town.free', true);
+          for (const id of ['biscuit', 'pebble', 'tater', 'mittens', 'toffee', 'waffles', 'socks', 'fennel', 'bramble', 'button', 'sprout']) c.state.addKitten(id);
+          c.state.companions.unlocked = ['mochi', 'sage'];
+          c.companions.setActive(['mochi']);
+        });
+        await t.loadLevel('town', 'hub');
+        await t.wait(1500);
+        const play = () => t.G(() => { const g = window.__GAME__; try { g.story.skipAll?.() ?? g.story.skip?.(); } catch { /* none */ } g.setMode('play'); });
+        await play();
+        const res = await t.G(() => { const h = window.__GAME__.ctx.companions.hub; return { active: h.active, n: h.residents.length, ids: h.residents.map((r) => r.npcId) }; });
+        t.assert(res.active, 'hub mode not entered');
+        t.assert(res.n >= 20 && res.n <= 26, `hub residents ${res.n}`);
+        for (const id of ['biscuit', 'tater', 'marmalade', 'tofu', 'earlgrey', 'snowpaw']) t.assert(res.ids.includes(id), `hub: ${id} missing`);
+        // the square: fishing on the fountain rim, tag round it, Toffee on the statue
+        await put(t, 0, -3.5, 0);
+        await t.wait(2500);
+        await frame(t, [0, 3.2, -4.5], [0, 0.6, 9], 55);
+        await t.wait(600);
+        await shot(t, 'companions/hub-square');
+        await follow(t);
+        const st = await t.state();
+        t.log(`hub: ${res.n} residents, scene calls ${st.calls}, tris ${st.tris}, frame calls ${st.frameCalls}`);
+        // §18 budget: what the residents cost (hub on vs off)
+        const off = await t.G(() => { const h = window.__GAME__.ctx.companions.hub; const rs = h.residents; h.lodT = 1e9; for (const r of rs) r.object3d.visible = false; return h.shown ?? rs.length; });
+        await t.wait(600);
+        const st0 = await t.state();
+        await t.G(() => { const h = window.__GAME__.ctx.companions.hub; h.lodT = 0; });
+        t.log(`hub residents cost: ${st.calls - st0.calls} scene calls for ${off} shown residents (town alone ${st0.calls})`);
+        t.assert(st.calls - st0.calls <= 85, `hub residents cost ${st.calls - st0.calls} scene calls (budget 85)`);
+        // lines on approach (Biscuit's rescue line)
+        await t.G(() => { const c = window.__GAME__.ctx, b = c.companions.hub.residents.find((r) => r.npcId === 'biscuit'); c.player.teleport({ pos: b.pos.clone().setX(b.pos.x + 1.4).setY(c.physics.heightAt(b.pos.x + 1.4, b.pos.z)), facing: -Math.PI / 2 }); });
+        const spoke = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') { g.story.skip?.(); g.setMode('play'); } return g.ctx.companions.hub.residents.find((r) => r.npcId === 'biscuit')?.talkAt > -1; }, null, { sim: 3 });
+        if (!spoke) t.log(JSON.stringify(await t.G(() => { const c = window.__GAME__.ctx, h = c.companions.hub, b = h.residents.find((r) => r.npcId === 'biscuit'), p = c.player;
+          return { mode: c.game.mode, b: b.pos.toArray(), p: p.pos.toArray(), talkAt: String(b.talkAt), gate: h.gate.lastAt, t: c.game.time, lines: b.lines, active: h.active }; })));
+        t.assert(spoke, 'Biscuit did not say her line');
+        await t.wait(500);
+        await frame(t, [1.8, 1.3, -1.2], [-1.2, 0.8, 0], 50);
+        await t.wait(300);
+        await shot(t, 'companions/hub-biscuit');
+        await follow(t);
+        await t.blankCheck('companions:hub');
+      } finally {
+        await restoreState(t, saved);
+        await t.loadLevel('meadow', 'start');
+      }
     },
   },
 ];

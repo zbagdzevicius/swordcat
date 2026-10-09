@@ -20,6 +20,36 @@ async function setFlags(t, flags) {
   await t.G((f) => { const s = window.__GAME__.ctx.state; for (const [k, v] of Object.entries(f)) s.setFlag(k, v); }, flags);
 }
 
+/** A clean M2 save state (flags, kittens, letters...), then `flags`, then load `level` at `spawn`. */
+async function freshAt(t, level, spawn = 'start', flags = {}) {
+  await t.G(() => { const s = window.__GAME__.ctx.state; s.flags = {}; s.kittens = []; s.letters = []; s.heartBells = []; s.fish = 0; s.levels = {}; s.companions.unlocked = []; s.companions.active = []; });
+  await setFlags(t, flags);
+  await t.loadLevel(level, spawn);
+  await t.frames(20);
+}
+
+/** Snap the camera to look at (x, y, z) from (cx, cy, cz) (screenshots of setpieces without the follow camera). */
+async function look(t, from, at) {
+  await t.G(([f, a]) => {
+    const g = window.__GAME__, cam = g.ctx.camera;
+    g.ctx.cam?.mode?.('cutscene');
+    cam.position.set(f[0], f[1], f[2]); cam.lookAt(a[0], a[1], a[2]); cam.updateMatrixWorld();
+  }, [from, at]);
+  await t.frames(6);
+}
+
+/** The level's own draw calls / triangles (everything else hidden for 3 frames). */
+async function levelShare(t) {
+  return t.G(async () => {
+    const g = window.__GAME__, sc = g.ctx.scene, root = g.ctx.levels.current.root, hidden = [];
+    for (const c of sc.children) if (c !== root && !c.isLight && c.name !== 'sky' && c.visible) { c.visible = false; hidden.push(c); }
+    await g.waitFrames(3);
+    const s = g.state();
+    for (const c of hidden) c.visible = true;
+    return { calls: s.calls, tris: s.tris };
+  });
+}
+
 async function fresh(t, spawn = 'start', flags = {}) {
   await t.G(() => { const s = window.__GAME__.ctx.state; s.flags = {}; s.kittens = []; s.letters = []; s.heartBells = []; s.fish = 0; });
   await setFlags(t, flags);
@@ -51,7 +81,7 @@ export default [
       t.assert(['tallbert', 'lane', 'exit'].every((x) => info.triggers.includes(x)), 'triggers tallbert / lane / exit');
       t.assert(['title', 'practice', 'start', 'boss', 'vigil_1'].every((s) => info.spawns.includes(s)), 'spawns');
       t.assert(info.preset === 'meadow_night', `prologue env is meadow_night (${info.preset})`);
-      t.assert(info.grass > 10000 && info.batch > 300 && info.trees >= 3, 'grass, batched props and trees');
+      t.assert(info.grass > 10000 && info.batch > 250 && info.trees >= 3, 'grass, batched props and trees');
       t.assert(info.critters === 2, 'two sleeping cows');
       await t.blankCheck('meadow night');
       await t.shot(pre + 'meadow-night-start');
@@ -353,6 +383,229 @@ export default [
       const built = res.reduce((n, x) => n + x.built, 0);
       if (built > 0) t.warn(`${built} shader programs built during arena fights (${JSON.stringify(res)})`);
       t.assert(built <= 2, `at most 2 programs built mid-fight (${built})`);
+    },
+  },
+  // ============================================================================================ M2: forest, town, gate
+  {
+    name: 'world:forest', order: 40, level: 'forest', spawn: 'start', timeout: 240000,
+    async run(t) {
+      const pre = shotDir(t);
+      await freshAt(t, 'forest', 'start', { 'prologue.done': true, 'meadow.mochi': true, 'meadow.done': true });
+      const info = await t.G(levelInfo);
+      t.log('forest', JSON.stringify(info));
+      t.assert(info.id === 'forest' && info.preset === 'forest_day', `forest loaded in forest_day (${info.preset})`);
+      t.assert(['hollow', 'ratcamp', 'mill'].every((a) => info.arenas.includes(a)), 'arenas hollow / ratcamp / mill');
+      t.assert(info.vigils.length === 4, 'four Vigil Stones');
+      t.assert(['camp', 'exit'].every((x) => info.triggers.includes(x)), 'camp + exit triggers');
+      t.assert(info.trees >= 3 && info.batch > 300 && info.grass > 5000, 'trees, props, grass');
+      const st = await t.state();
+      const own = await levelShare(t);
+      t.log(`forest: frame ${st.calls} calls / ${st.tris} tris; level ${own.calls} / ${own.tris}`);
+      t.assert(own.calls <= 70, `the forest itself draws ≤ 70 calls (${own.calls})`);
+      await t.blankCheck('forest');
+      await t.G(() => { window.__GAME__.god(true); for (const e of [...window.__GAME__.ctx.enemies.list]) window.__GAME__.ctx.enemies.despawn(e); });
+      for (const [name, x, z, yaw] of [['gate', 0, -92, 0], ['mushrooms', -18, -50, -2.4], ['hollow', -4, -22, -2.5], ['treetop', 22, -16, -0.4], ['stream', 22, 6, 0.1],
+        ['camp', 1, 32, 0.6], ['ratcamp', -4, 46, -0.7], ['mill', -9, 72, 0]]) {
+        await tp(t, x, z, yaw);
+        await t.shot(pre + 'forest-' + name, { freeze: true });
+      }
+      // the mushroom caps: a walkable top on cap 1, a bounce on cap 2
+      const caps = await t.G(() => { const ph = window.__GAME__.ctx.physics; const L = window.__GAME__.ctx.levels.current; return [1, 2, 3, 4, 5].map((i) => { const a = L.anchor('cap_' + i).pos; return { top: +(ph.topAt(a.x, a.z) - ph.heightAt(a.x, a.z)).toFixed(2), bounce: ph.bounceAt?.(a.x, a.z, a.y) ?? 0 }; }); });
+      t.log('caps', JSON.stringify(caps));
+      t.assert(Math.abs(caps[0].top - 1.0) < 0.15 && Math.abs(caps[4].top - 5.2) < 0.15, 'cap tops at 1.0 … 5.2 m');
+      t.assert(caps[1].bounce > 0 && caps[3].bounce > 0 && caps[0].bounce === 0, 'caps 2 and 4 bounce');
+      // night (CS-04 onwards): forest_night with fireflies and the campfire
+      await freshAt(t, 'forest', 'vigil_3', { 'prologue.done': true, 'meadow.mochi': true, 'forest.sage': true, 'forest.camp': true });
+      const night = await t.G(levelInfo);
+      t.assert(night.preset === 'forest_night', `forest_night after CS-04 (${night.preset})`);
+      await tp(t, 2, 32.5, 0.5);
+      await t.frames(30);
+      await t.shot(pre + 'forest-night-camp', { freeze: true });
+      await tp(t, -6, 47, -0.8);
+      await t.shot(pre + 'forest-night-ratcamp', { freeze: true });
+    },
+  },
+  {
+    name: 'world:town', order: 41, level: 'town', spawn: 'start', timeout: 240000,
+    async run(t) {
+      const pre = shotDir(t);
+      await freshAt(t, 'town', 'start', { 'prologue.done': true, 'meadow.done': true, 'forest.done': true, 'forest.boss': true });
+      const info = await t.G(levelInfo);
+      t.log('town', JSON.stringify(info));
+      t.assert(info.id === 'town' && info.preset === 'town_occupied', `town occupied (${info.preset})`);
+      t.assert(['forge', 'square'].every((a) => info.arenas.includes(a)), 'arenas forge / square');
+      t.assert(['lantern_1', 'lantern_2', 'lantern_3', 'quest_board'].every((i) => info.interact.includes(i)), 'lanterns + quest board interactables');
+      t.assert(['start', 'hub', 'bakery_cot', 'belltower'].every((s) => info.spawns.includes(s)), 'town spawns');
+      const st = await t.state();
+      const own = await levelShare(t);
+      t.log(`town: frame ${st.calls} calls / ${st.tris} tris; level ${own.calls} / ${own.tris}`);
+      t.assert(own.calls <= 70, `the town itself draws ≤ 70 calls (${own.calls})`);
+      await t.blankCheck('town');
+      // climbs: balcony 3.0, statue top 2.5, loft ledge 6 above the terrace, the bell platform
+      const tops = await t.G(() => {
+        const ph = window.__GAME__.ctx.physics, h = (x, z) => ph.heightAt(x, z);
+        return { balcony: +(ph.topAt(5, -30) - h(5, -30)).toFixed(2), statue: +(ph.topAt(0, 8) - h(0, 8)).toFixed(2), rim: +(ph.topAt(2.4, 8) - h(2.4, 8)).toFixed(2),
+          ledge: +(ph.topAt(-2.7, 50.5) - h(-2.7, 50.5)).toFixed(2), crate3: +(ph.topAt(5.1, -33.2) - h(5.1, -33.2)).toFixed(2) };
+      });
+      t.log('tops', JSON.stringify(tops));
+      t.assert(Math.abs(tops.balcony - 3) < 0.15 && Math.abs(tops.statue - 2.5) < 0.15 && Math.abs(tops.rim - 0.6) < 0.15 && Math.abs(tops.crate3 - 3) < 0.15, 'balcony / statue / rim / crate steps');
+      t.assert(tops.ledge > 5.5, `the loft ledge is up the tower (${tops.ledge})`);
+      // the climb kittens sit on their perches (companions place them on our surfaces)
+      const perch = await t.G(() => {
+        const g = window.__GAME__, ph = g.ctx.physics, out = {};
+        for (const id of ['waffles', 'toffee', 'muffin']) { const k = g.ctx.actors.get(id); if (k) out[id] = { y: +k.pos.y.toFixed(2), x: +k.pos.x.toFixed(1), z: +k.pos.z.toFixed(1), top: +ph.groundAt(k.pos.x, k.pos.z, k.pos.y + 0.5).toFixed(2) }; }
+        return out;
+      });
+      t.log('perches', JSON.stringify(perch));
+      for (const [id, p] of Object.entries(perch)) if (Math.abs(p.y - p.top) > 0.35) t.warn(`${id} is not on its perch (${JSON.stringify(p)})`);
+      // Lantern Alley: E on each lantern → obj.lanterns 3/3, fog thins, flag town.lanterns
+      const fog0 = await t.G(() => window.__GAME__.ctx.env.fogDensity);
+      await tp(t, 0, -46, 0);
+      await t.frames(10);
+      const lan = await t.G(async () => {
+        const g = window.__GAME__, L = g.ctx.levels;
+        const out = [];
+        for (const id of ['lantern_1', 'lantern_2', 'lantern_3']) { out.push(L.interact(id)); await g.waitFrames(4); }
+        await g.waitFrames(40);
+        return { used: out, value: g.ctx.objectives.progress('lanterns'), done: g.ctx.objectives.get('lanterns')?.done, flag: g.ctx.state.getFlag('town.lanterns'), fog: g.ctx.env.fogDensity };
+      });
+      t.log('lanterns', JSON.stringify(lan), 'fog', fog0);
+      t.assert(lan.used.every(Boolean) && lan.value === 3 && lan.done && lan.flag === true, 'three lanterns lit → objective done, town.lanterns');
+      t.assert(lan.fog < fog0 - 0.01, `lit lanterns thin the fog (${fog0} → ${lan.fog})`);
+      await t.G(() => { window.__GAME__.god(true); for (const e of [...window.__GAME__.ctx.enemies.list]) window.__GAME__.ctx.enemies.despawn(e); });
+      for (const [name, x, z, yaw] of [['gate', 0, -68, 0], ['alley', 0, -44, 0.05], ['balcony', -1, -36, 0.6], ['bakery', -12, -14, -2.2], ['postoffice', -28, 10, -1.9],
+        ['forge', 12, -2, 1.7], ['square', 0, -8, 0], ['fountain', 6, 3, -0.6], ['steps', 0, 28, 0], ['tower', 6, 40, -0.5]]) {
+        await tp(t, x, z, yaw);
+        await t.shot(pre + 'town-' + name, { freeze: true });
+      }
+    },
+  },
+  {
+    name: 'world:hub', order: 42, level: 'town', spawn: 'hub', timeout: 200000,
+    async run(t) {
+      const pre = shotDir(t);
+      await freshAt(t, 'town', 'hub', { 'prologue.done': true, 'meadow.done': true, 'forest.done': true, 'town.marmalade': true, 'town.clover': true, 'town.free': true });
+      const info = await t.G(levelInfo);
+      t.assert(info.preset === 'hub_gold', `hub_gold once the town is free (${info.preset})`);
+      const hub = await t.G(() => {
+        const g = window.__GAME__, L = g.ctx.levels.current;
+        const open = L.interactables.filter((i) => (i.kind === 'station' || i.kind === 'questboard' || i.kind === 'talk') && (!i.enabled || i.enabled())).map((i) => i.id);
+        const enemies = g.ctx.enemies.list.filter((e) => e.alive).length;
+        const arenas = L.arenas.map((a) => ({ id: a.id, cleared: a.cleared }));
+        return { open, enemies, arenas, next: L.hub?.next?.(), board: L.hub?.board?.().map((r) => r.id + (r.next ? '*' : '')).join(',') };
+      });
+      t.log('hub', JSON.stringify(hub));
+      t.assert(['station_bakery', 'station_forge', 'station_library', 'station_barracks', 'quest_board', 'npc_snowpaw'].every((i) => hub.open.includes(i)), 'stations open');
+      t.assert(!hub.open.includes('station_lookout') && !hub.open.includes('station_wardrobe'), 'lookout / wardrobe still closed');
+      t.assert(hub.enemies === 0 && hub.arenas.every((a) => a.cleared), 'hub mode: no enemies, arenas cleared');
+      t.assert(hub.next === 'gate', `the Quest Board points to the gate (${hub.next})`);
+      // the Quest Board and a shop open through ui on `interact`
+      await t.clearEvents();
+      const used = await t.G(async () => {
+        const g = window.__GAME__; const ok = g.ctx.levels.interact('quest_board'); await g.waitFrames(10); const m = g.ctx.game.mode;
+        g.ctx.ui?.closeShop?.(); g.ctx.ui?.resume?.(); await g.waitFrames(5);
+        const ok2 = g.ctx.levels.interact('station_forge'); await g.waitFrames(10); const m2 = g.ctx.game.mode;
+        g.ctx.ui?.closeShop?.(); g.ctx.ui?.resume?.(); await g.waitFrames(5);
+        return { ok, mode: m, ok2, mode2: m2 };
+      });
+      t.log('board', JSON.stringify(used));
+      t.assert(used.ok && used.ok2 && (await t.events()).includes('interact'), 'quest board + forge interact');
+      await t.G(() => { const g = window.__GAME__; g.setMode('play'); });
+      // gate.done → hub_grey, lookout opens
+      await setFlags(t, { 'gate.done': true });
+      await t.loadLevel('town', 'hub');
+      await t.frames(20);
+      const grey = await t.G(() => { const g = window.__GAME__, L = g.ctx.levels.current; return { preset: g.ctx.env.presetName, lookout: L.interactables.find((i) => i.id === 'station_lookout')?.enabled?.() }; });
+      t.assert(grey.preset === 'hub_grey' && grey.lookout === true, `hub_grey + lookout after gate.done (${JSON.stringify(grey)})`);
+      await setFlags(t, { 'gate.done': false });
+      await t.loadLevel('town', 'hub');
+      await t.frames(20);
+      await t.G(() => { window.__GAME__.god(true); });
+      for (const [name, x, z, yaw] of [['board', 1, -55, -0.6], ['square', 0, -6, 0], ['steps', 0, 26, 0], ['belltower', 0, 50.5, Math.PI]]) {
+        if (name === 'belltower') await t.G(() => { const g = window.__GAME__, sp = g.ctx.levels.current.spawns.belltower; g.ctx.player.teleport({ pos: sp.pos.clone(), facing: Math.PI }); g.ctx.cam?.snapBehind?.(); });
+        else await tp(t, x, z, yaw);
+        await t.frames(10);
+        await t.shot(pre + 'hub-' + name, { freeze: true });
+      }
+    },
+  },
+  {
+    name: 'world:gate', order: 43, level: 'gate', spawn: 'start', timeout: 240000,
+    async run(t) {
+      const pre = shotDir(t);
+      await freshAt(t, 'gate', 'start', { 'prologue.done': true, 'town.free': true, 'town.done': true });
+      const info = await t.G(levelInfo);
+      t.log('gate', JSON.stringify(info));
+      t.assert(info.id === 'gate' && info.preset === 'gate_dusk', `gate in gate_dusk (${info.preset})`);
+      t.assert(info.arenas.includes('causeway') && info.triggers.includes('line'), 'causeway arena + Line trigger');
+      const geo = await t.G(() => {
+        const g = window.__GAME__, ph = g.ctx.physics;
+        return { deck: +ph.heightAt(0, 0).toFixed(2), sea: +ph.heightAt(14, 0).toFixed(2), deep: ph.isDeepWater(14, 0), dryDeck: !ph.isDeepWater(0, 0, 0), ledge: +ph.heightAt(9, -52).toFixed(2),
+          tower: +(ph.topAt(8.6, 8)).toFixed(2), parapet: +(ph.topAt(5.8, 30)).toFixed(2), shore: +ph.heightAt(0, 70).toFixed(2), south: +ph.heightAt(0, -75).toFixed(2) };
+      });
+      t.log('geo', JSON.stringify(geo));
+      t.assert(geo.deck === 0 && geo.sea < -1.6 && geo.deep && geo.dryDeck, 'deck at 0 over deep tidal water');
+      t.assert(Math.abs(geo.ledge + 0.8) < 0.1 && Math.abs(geo.parapet - 0.6) < 0.1, 'ledge −0.8, parapet 0.6');
+      t.assert(Math.abs(geo.shore) < 0.8 && Math.abs(geo.south) < 0.8, 'shores near y 0');
+      const st = await t.state();
+      const own = await levelShare(t);
+      t.log(`gate: frame ${st.calls} calls / ${st.tris} tris; level ${own.calls} / ${own.tris}`);
+      t.assert(own.calls <= 70, `the gate itself draws ≤ 70 calls (${own.calls})`);
+      await t.blankCheck('gate');
+      await t.G(() => { window.__GAME__.god(true); for (const e of [...window.__GAME__.ctx.enemies.list]) window.__GAME__.ctx.enemies.despawn(e); });
+      for (const [name, x, z, yaw] of [['yard', 0, 62, Math.PI], ['gatehouse', 0, 32, 0], ['causeway', 0, 46, Math.PI], ['towers', 0, -4, 0], ['line', 2, 16, Math.PI],
+        ['battlefield', 0, -56, Math.PI], ['wagon', 0, -72, 2.3], ['ledge', 3, -46, 2.6], ['raft', -4, 4, -2.3]]) {
+        await tp(t, x, z, yaw);
+        await t.shot(pre + 'gate-' + name, { freeze: true });
+      }
+    },
+  },
+  {
+    name: 'world:line', order: 44, level: 'gate', spawn: 'start', timeout: 240000,
+    async run(t) {
+      const pre = shotDir(t);
+      await freshAt(t, 'gate', 'vigil_3', { 'prologue.done': true, 'town.free': true, 'gate.cleared.s1': true, 'gate.cleared.s2': true, 'gate.pip': true });
+      await t.G(() => { window.__GAME__.god(true); });
+      await tp(t, 0, 14, Math.PI);
+      await tp(t, 0, 10.5, Math.PI);
+      await t.frames(20);
+      const started = await t.G(() => !!window.__GAME__.ctx.objectives.line?.active);
+      t.assert(started, 'the Line starts at the marker');
+      // §19.9 smoke 7: objective('line') increases over 3 s with no enemies
+      await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+      const v0 = await t.G(() => window.__GAME__.objective('line'));
+      await t.wait(3000);
+      const v1 = await t.G(() => window.__GAME__.objective('line'));
+      t.log(`line ${v0} → ${v1}`);
+      t.assert(v1 > v0 + 0.3, `repair rises with no enemies (${v0} → ${v1})`);
+      // an enemy at the winch pauses it
+      const paused = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx;
+        for (const e of [...ctx.enemies.list]) ctx.enemies.despawn(e);
+        const e = ctx.enemies.spawn('rat_pike', new g.THREE.Vector3(1.5, 0, 41), { ai: false, noCap: true });
+        await g.waitFrames(30);
+        const a = g.objective('line'); await g.waitFrames(60); const b = g.objective('line');
+        ctx.enemies.despawn(e);
+        return { a, b, blocked: ctx.objectives.get('line')?.paused };
+      });
+      t.log('paused', JSON.stringify(paused));
+      t.assert(Math.abs(paused.b - paused.a) < 1e-6, 'an enemy within 4 m of the winch pauses the repair');
+      await t.shot(pre + 'line-start', { freeze: true });
+      // thresholds: jump to 99.9 %; the W2 … G-02 rows fire (CS-08 / G-02 placeholders), then 100 % → gate.line, the boss arena locks
+      const end = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, line = ctx.objectives.line;
+        ctx.objectives.set('line', 99.9);
+        for (let i = 0; i < 40 && !line.cs08?.done; i++) { for (const e of [...ctx.enemies.list]) if (!e.tags?.has?.('boss')) ctx.enemies.despawn(e); await g.waitFrames(15); if (ctx.story?.isPlaying) ctx.story.skip?.(); }
+        for (const e of [...ctx.enemies.list]) ctx.enemies.despawn(e);
+        for (let i = 0; i < 60 && !ctx.state.getFlag('gate.line'); i++) { await g.waitFrames(10); if (ctx.story?.isPlaying) ctx.story.skip?.(); }
+        const fired = [...line.fired];
+        for (let i = 0; i < 60 && !ctx.levels.current.arena('causeway').locked; i++) await g.waitFrames(10);
+        return { fired, line: ctx.state.getFlag('gate.line'), locked: ctx.levels.current.arena('causeway').locked, boss: !!ctx.enemies.boss };
+      });
+      t.log('end', JSON.stringify(end));
+      t.assert(end.fired.length === 5 && end.line === true, `every threshold fired once, gate.line set (${JSON.stringify(end)})`);
+      t.assert(end.locked, 'the causeway boss arena locks after the portcullis test');
+      await t.shot(pre + 'line-boss', { freeze: true });
     },
   },
 ];

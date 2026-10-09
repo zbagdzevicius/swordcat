@@ -282,12 +282,20 @@ export default [
       const br = await clearArena(t, 'bridge', 60);
       await must(br.cleared, `bridge arena cleared (${br.waves} waves)`);
       await tp(t, 28.2, 70.2, Math.atan2(1.8, 4.3));
-      const opened = await t.G(() => {
-        const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi');
-        if (!m?.lock) return false;
-        for (let i = 0; i < 8 && !m.lock.opened; i++) { m.lock.invulnT = 0; c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.slash1); }
-        return !!m.lock.opened;
-      });
+      // one blow at a time with ≥ 0.2 s of sim between them: the lock ticks its own anti-multi-hit invulnT, and
+      // resetting it here would hide a lock that never recovers (requests/companions.md)
+      let opened = false;
+      for (let i = 0; i < 8 && !opened; i++) {
+        const r = await t.G(() => {
+          const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi');
+          if (!m?.lock) return { opened: false, gone: true };
+          if (!m.lock.opened) c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.slash1);
+          return { opened: !!m.lock.opened, t: window.__GAME__.game.time };
+        });
+        if (r.gone) break;
+        opened = r.opened;
+        if (!opened) await until(t, (t0) => window.__GAME__.game.time - t0 >= 0.2, r.t, { sim: 2, every: 50 });
+      }
       await must(opened, 'her slashes open Mochi\'s cage');
       const d01 = await until(t, () => window.__GAME__.ctx.story.playingId === 'd01', null, { sim: 8 });
       t.assert(!!d01, 'D-01 plays when the cage opens');

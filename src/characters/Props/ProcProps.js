@@ -7,10 +7,14 @@ import { GeoBuilder, mat, rgb, mixRgb, smoothstep } from '../util.js';
 import { kitMaterial, RM } from '../materials.js';
 import { potHelmGeometry, flipShell } from '../Accessories.js';
 import { bowGeometry, bowMaterial } from '../Bow.js';
+import { M2_BUILDERS, M2_MOUNTS } from './M2Props.js';
 
 /** Contract prop names (GAME_DESIGN §19.4) + extras. */
 export const PROP_NAMES = Object.freeze(['milk_cup', 'lantern', 'spoon', 'letter', 'pot_helm',
-  'milk_bottle', 'colander', 'signpost', 'post_bag', 'cot', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cage', 'helmet']);
+  'milk_bottle', 'colander', 'signpost', 'post_bag', 'cot', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cage', 'helmet',
+  // M2: hub activity props (§12.5) and B1 Grizzlechop's gear (§11.2)
+  'book', 'fishing_rod', 'bread_basket', 'teacup', 'hammer', 'butterfly',
+  'feathered_hat', 'cheese_shield', 'cheese_wheel', 'cheese_wheel_giant', 'cheese_wedge']);
 
 /**
  * Where a kitten holds / wears each prop (joint + local transform). `name@at` variants override (e.g. letter@belt).
@@ -32,6 +36,7 @@ export const PROP_MOUNTS = {
   // CS-01 shot 7: Marmalade's old helm is far too big and slides down over her eyes; then she holds it and looks at it
   helmet: { joint: 'head', p: [0.004, 0.118, 0.012], r: [0.2, 0.06, 0.07] },
   'helmet@paw': { joint: 'pawL', p: [-0.05, -0.07, 0.11], r: [-1.35, 0.25, 0] },
+  ...M2_MOUNTS,
 };
 
 const mesh = (gb, name) => {
@@ -320,6 +325,7 @@ const BUILDERS = {
   milk_cup: milkCup, milk_bottle: milkBottle, lantern, spoon, letter, pot_helm: potHelm, colander, signpost,
   post_bag: postBag, cot, soup_bowl: soupBowl, jester_hat: jesterHatProp, postmaster_hat: postmasterHat, cage: buildCage,
   helmet: knightHelm,
+  ...M2_BUILDERS,
 };
 
 /**

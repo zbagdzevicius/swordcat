@@ -253,3 +253,24 @@ export function bowSvg() {
     + `<path d="M18.5 13 15 25M25.5 13 29 25" stroke="${PINK_DEEP}" stroke-width="3" stroke-linecap="round"/>`
     + `<ellipse cx="22" cy="13" rx="4.6" ry="5.2" fill="#E88AA6" stroke="${PINK_DEEP}" stroke-width="1.6"/></svg>`;
 }
+
+/** Device glyphs for the Controls card header. */
+export function keyboardIco() {
+  return `<svg class="ico-dev" viewBox="0 0 48 32" aria-hidden="true"><rect x="2" y="5" width="44" height="22" rx="4" fill="#FFFDF6" stroke="${INK}" stroke-width="2"/>`
+    + `<g fill="${INK}" opacity=".7">${[8, 15, 22, 29, 36].map((x) => `<rect x="${x}" y="10" width="4.5" height="4" rx="1"/><rect x="${x + 2}" y="16" width="4.5" height="4" rx="1"/>`).join('')}</g>`
+    + `<rect x="14" y="21.5" width="20" height="3" rx="1.4" fill="${PINK_DEEP}"/></svg>`;
+}
+export function padIco() {
+  return `<svg class="ico-dev" viewBox="0 0 48 32" aria-hidden="true"><path d="M12 6h24c6 0 10 6 10 14 0 6-3 9-6 9-4 0-6-6-9-6H17c-3 0-5 6-9 6-3 0-6-3-6-9C2 12 6 6 12 6Z" fill="#FFFDF6" stroke="${INK}" stroke-width="2"/>`
+    + `<path d="M12 12v8M8 16h8" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"/><circle cx="34" cy="13" r="2.3" fill="${PINK_DEEP}"/><circle cx="38.5" cy="17.5" r="2.3" fill="${GOLD}"/><circle cx="29.5" cy="17.5" r="2.3" fill="#5E8FA8"/><circle cx="34" cy="22" r="2.3" fill="#7FB04E"/></svg>`;
+}
+export function touchIco() {
+  return `<svg class="ico-dev" viewBox="0 0 48 32" aria-hidden="true"><rect x="6" y="2" width="36" height="28" rx="5" fill="#FFFDF6" stroke="${INK}" stroke-width="2"/>`
+    + `<circle cx="16" cy="20" r="5" fill="none" stroke="${INK}" stroke-width="1.8" opacity=".6"/><circle cx="33" cy="20" r="3.4" fill="${PINK_DEEP}"/><circle cx="36" cy="12" r="2.4" fill="${GOLD}"/></svg>`;
+}
+
+/** Dizzy meter glyph: a swirl with two little stars (boss bar, §14.2 gold Dizzy bar). */
+export function dizzyStars() {
+  return `<svg class="ico-dizzy" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 16c0-2 3-2 3 0 0 3.5-6 3.5-6 0 0-5 9-5 9 0 0 6.5-12 6.5-12 0 0-8 15-8 15 0" fill="none" stroke="#FFD34D" stroke-width="2.4" stroke-linecap="round"/>`
+    + `<path d="M5 6l1 2.4 2.4 1-2.4 1L5 13l-1-2.6-2.4-1 2.4-1ZM27 21l.9 2 2 .9-2 .9-.9 2.2-.9-2.2-2-.9 2-.9Z" fill="#FFF6DA" stroke="${GOLD_DEEP}" stroke-width=".8"/></svg>`;
+}

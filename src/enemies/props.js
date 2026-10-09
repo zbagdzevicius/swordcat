@@ -67,6 +67,7 @@ function mat(name) {
     case 'metal': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-metal', vertexColors: true, roughness: 0.55, metalness: 0.45 }); break;
     case 'cloth': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-cloth', vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide }); break;
     case 'gear': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-gear', vertexColors: true, roughness: 0.75, metalness: 0.15 }); break;
+    case 'cheese': MAT[name] = new THREE.MeshStandardMaterial({ name: 'enemy-cheese', vertexColors: true, roughness: 0.6, metalness: 0, emissive: '#2A1E08', emissiveIntensity: 0.25 }); break;
     case 'eyeRat': MAT[name] = new THREE.MeshBasicMaterial({ name: 'enemy-eye-rat', color: new THREE.Color(ENEMY_PAL.ratEye).multiplyScalar(1.6) }); break;
     case 'eyeCrow': MAT[name] = new THREE.MeshBasicMaterial({ name: 'enemy-eye-crow', color: new THREE.Color(ENEMY_PAL.crowEye).multiplyScalar(1.4) }); break;
     default: throw new Error(`[enemies] unknown prop material ${name}`);
@@ -118,17 +119,63 @@ const BUILD = {
     const plumes = [-0.35, 0, 0.35].map((a, i) => part(new THREE.ConeGeometry(0.026, i === 1 ? 0.1 : 0.08, 6), ENEMY_PAL.plume, { pos: [Math.sin(a) * 0.025, 0.075, -0.045], rot: [-0.9, 0, a], scale: [1, 1, 0.4] }));
     return merged([cap, nasal, ...plumes]);
   },
+  /** Pilfer's dropped crate (0.7 m wooden box with darker slats), origin at the bottom centre. */
+  crate() {
+    const S = 0.7, grain = (v) => (hash3(Math.floor(v.x * 18), Math.floor(v.y * 9), Math.floor(v.z * 18)) < 0.5 ? ENEMY_PAL.wood : '#8A684A');
+    const box = part(new THREE.BoxGeometry(S, S, S), grain, { pos: [0, S / 2, 0] });
+    const slats = [];
+    for (const y of [0.08, S - 0.08]) for (const [x, z, w, d] of [[0, S / 2, S + 0.02, 0.04], [0, -S / 2, S + 0.02, 0.04], [S / 2, 0, 0.04, S + 0.02], [-S / 2, 0, 0.04, S + 0.02]]) {
+      slats.push(part(new THREE.BoxGeometry(w, 0.1, d), ENEMY_PAL.woodDark, { pos: [x, y, z] }));
+    }
+    const cross = part(new THREE.BoxGeometry(0.06, S * 1.3, 0.03), ENEMY_PAL.woodDark, { pos: [0, S / 2, S / 2 + 0.01], rot: [0, 0, 0.78] });
+    return merged([box, ...slats, cross]);
+  },
+  /** A cosmetic letter (cream envelope with a red wax seal), flat in XZ. */
+  letter() {
+    const env = part(new THREE.BoxGeometry(0.2, 0.008, 0.13), '#F2E8D2');
+    const flap = part(new THREE.ConeGeometry(0.1, 0.07, 3), '#E6D9BC', { pos: [0, 0.006, 0.02], rot: [-Math.PI / 2, 0, Math.PI], scale: [1, 1, 0.08] });
+    const seal = part(new THREE.CylinderGeometry(0.018, 0.018, 0.01, 10), '#A3202C', { pos: [0, 0.01, 0] });
+    return merged([env, flap, seal]);
+  },
+  /** Grizzlechop's feathered captain's hat (§11.2: a cone plus 3 feather cards), origin at the brim centre. */
+  featherHat() {
+    const crown = part(new THREE.ConeGeometry(0.15, 0.26, 14, 1, true), (v) => (v.y < 0.03 ? '#B28B2E' : '#4A3828'), { pos: [0, 0.13, 0] });
+    const cap = part(new THREE.SphereGeometry(0.03, 8, 6), '#B28B2E', { pos: [0, 0.27, 0] });
+    const brim = part(new THREE.CylinderGeometry(0.27, 0.29, 0.025, 20), '#3E2E22', { pos: [0, 0.0, 0], scale: [1, 1, 0.82] });
+    const band = part(new THREE.CylinderGeometry(0.152, 0.152, 0.04, 14, 1, true), '#B28B2E', { pos: [0, 0.03, 0] });
+    const feather = (col, rx, rz, len) => part(new THREE.PlaneGeometry(0.07, len, 1, 4),
+      (v) => (Math.abs(v.x) < 0.006 ? '#EDE6D2' : col), { pos: [0.08, 0.13 + len * 0.42, -0.06], rot: [rx, 0, rz] });
+    return merged([crown, cap, brim, band, feather('#E8E2D0', -0.35, -0.35, 0.42), feather('#A3202C', -0.15, -0.6, 0.36), feather('#E8C35A', -0.55, -0.15, 0.32)]);
+  },
+  /** Cheese wheel (§11.2 #E8C35A with holes), rolling axis +X, radius 1 / width 1 (scale it), origin at the centre. */
+  cheeseWheel() {
+    const holes = (v) => {
+      const side = Math.abs(v.x) > 0.49;
+      const h = hash3(Math.floor(v.y * 5 + 7), Math.floor(v.z * 5 + 7), side ? 1 : Math.floor(v.x * 4));
+      if (!side) return h < 0.18 ? '#C99B3A' : '#DDB24A';
+      return h < 0.22 ? '#C99B3A' : '#E8C35A';
+    };
+    const body = part(new THREE.CylinderGeometry(1, 1, 1, 30, 2), holes, { rot: [0, 0, Math.PI / 2] });
+    const hub = [-1, 1].map((s) => part(new THREE.CylinderGeometry(0.16, 0.16, 0.04, 12), '#B98A30', { pos: [s * 0.5, 0, 0], rot: [0, 0, Math.PI / 2] }));
+    return merged([body, ...hub]);
+  },
+  /** A cheese wedge (snack / cheese bomb), ~0.18 m. */
+  cheeseWedge() {
+    const w = part(new THREE.CylinderGeometry(0.18, 0.18, 0.1, 3, 1, false, 0, 1.0),
+      (v) => (hash3(Math.floor(v.x * 30), Math.floor(v.y * 30), Math.floor(v.z * 30)) < 0.2 ? '#C99B3A' : '#E8C35A'), { pos: [0, 0.05, 0] });
+    return merged([w]);
+  },
   /** Two eye glints (spheres ±x), origin between the eyes. */
   eyes() {
     return merged([-1, 1].map((s) => part(new THREE.SphereGeometry(0.018, 8, 6), '#FFFFFF', { pos: [s * 0.055, 0, 0] })));
   },
 };
 
-const PROP_MAT = { kettleHelm: 'metal', spear: 'gear', buckler: 'gear', hood: 'cloth', crowHood: 'metal', eyes: 'eyeRat' };
+const PROP_MAT = { kettleHelm: 'metal', spear: 'gear', buckler: 'gear', hood: 'cloth', crowHood: 'metal', eyes: 'eyeRat', crate: 'gear', letter: 'cloth', featherHat: 'cloth', cheeseWheel: 'cheese', cheeseWedge: 'cheese' };
 
 /**
  * A new mesh for prop `name` (shared geometry/material; never dispose them per instance).
- * @param {'kettleHelm'|'spear'|'buckler'|'hood'|'crowHood'|'eyes'} name
+ * @param {'kettleHelm'|'spear'|'buckler'|'hood'|'crowHood'|'eyes'|'crate'|'letter'|'featherHat'|'cheeseWheel'|'cheeseWedge'} name
  * @param {{material?: string, castShadow?: boolean}} [opts]
  */
 export function makeProp(name, opts = {}) {

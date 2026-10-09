@@ -91,7 +91,8 @@ void main() {
   }
   float a = smoothstep( 0.3, 0.8, n );
   a *= sin( clamp( vUv.x, 0.0, 1.0 ) * 3.14159 );
-  a *= smoothstep( 0.0, 0.2, vUv.y ) * ( 1.0 - smoothstep( 0.42, 1.0, vUv.y ) );
+  // soft foot (bottom ~30%): where a card meets sloped ground it no longer cuts a hard line (requests/world.md)
+  a *= smoothstep( 0.0, 0.32, vUv.y ) * ( 1.0 - smoothstep( 0.45, 1.0, vUv.y ) );
   a *= uMaxA * vAlpha * smoothstep( uNear * 0.33, uNear, vCamDist );
   // walls: a card between the lens and Swordcat thins out so she never greys out on a bridge / arena edge
   if ( uFocus.y > 0.5 ) a *= mix( ${WALL.focusMin.toFixed(3)}, 1.0, smoothstep( uFocus.x - ${WALL.focusIn.toFixed(3)}, uFocus.x + ${WALL.focusOut.toFixed(3)}, vCamDist ) );

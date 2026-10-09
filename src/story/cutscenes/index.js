@@ -10,30 +10,33 @@ import cs03 from './cs03.js';
 import cs03b from './cs03b.js';
 import d01 from './d01.js';
 import tutpearl from './tutpearl.js';
+import d02 from './d02.js';
+import cs04 from './cs04.js';
+import cs05 from './cs05.js';
+import d03 from './d03.js';
+import cs06 from './cs06.js';
+import { d04tofu, d04earlgrey, d04clover, nextD04 } from './d04.js';
+import cs07 from './cs07.js';
+import d06 from './d06.js';
+import cs08 from './cs08.js';
+import g02 from './g02.js';
+import cs09 from './cs09.js';
+import cs10 from './cs10.js';
+import { gate_yard, gate_back, gate_pin, gate_open } from './gate.js';
 
-/** Authored scenes (M1: the prologue and Chapter 1). */
-export const CUTSCENES = Object.freeze({ cs00, cs01, g01, cs02, cs03, cs03b, d01, tutpearl });
+/** Authored scenes (M1: the prologue and Chapter 1; M2: Acts I–II, forest → town → gate). */
+export const CUTSCENES = Object.freeze({ cs00, cs01, g01, cs02, cs03, cs03b, d01, tutpearl,
+  d02, cs04, cs05, d03, cs06, d04tofu, d04earlgrey, d04clover, cs07, d06, cs08, g02, cs09, cs10,
+  gate_yard, gate_back, gate_pin, gate_open });
+
+/** Scene ids that the §5.4 table calls by a group name (`d04` = the next town rescue not done). */
+export const ALIASES = Object.freeze({ d04: (state) => nextD04(state) ?? 'd04clover' });
 
 /**
- * §5.4 `end` state of the scenes written in later milestones (M2 / M3). A placeholder still applies it (flags, shards,
+ * §5.4 `end` state of the scenes written in a later milestone (M3). A placeholder still applies it (flags, shards,
  * unlocks, chained scenes), so boss defeats, joins and the save keep working; it never loads another level.
  */
 export const PLACEHOLDER_ENDS = Object.freeze({
-  d02: { kind: 'dialog', flags: { 'forest.sage': true }, toasts: ['toast.sage'] },
-  cs04: { flags: { 'forest.camp': true }, env: 'forest_night' },
-  cs05: { flags: { 'forest.boss': true }, shards: 1, toasts: ['toast.holy'] },
-  d03: { kind: 'dialog', flags: { 'town.marmalade': true } },
-  cs06: { flags: { 'town.letters': true } },
-  d04: { kind: 'dialog' },
-  d04tofu: { kind: 'dialog', flags: { 'town.tofu': true } },
-  d04earlgrey: { kind: 'dialog', flags: { 'town.earlgrey': true } },
-  d04clover: { kind: 'dialog', flags: { 'town.clover': true }, toasts: ['toast.clover'] },
-  cs07: { flags: { 'town.free': true }, unlock: [{ kind: 'cape', id: 'red' }], toasts: ['toast.free', 'toast.shops', 'toast.hub'] },
-  d06: { kind: 'dialog', flags: { 'gate.pip': true } },
-  cs08: {},
-  g02: { letterbox: false },
-  cs09: { flags: { 'gate.boss': true }, shards: 2, unlock: [{ kind: 'ability', id: 'golden' }], toasts: ['toast.golden'], play: 'cs10' },
-  cs10: { flags: { 'gate.done': true } },
   cs11: { flags: { 'bog.pearl': true } },
   cs12: { flags: { 'bog.done': true } },
   cs13: { flags: { 'keep.gate': true } },

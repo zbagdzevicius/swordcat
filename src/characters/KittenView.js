@@ -54,6 +54,15 @@ export class KittenView {
     this._dt = 0;
     this._meme = false;
     this._offs = [];
+    // shader warm-up (requests/fx.md, player.md): the first frames, then every level load and quality change
+    this._warm = 2;
+    if (this.ctx?.bus?.on) {
+      this._offs.push(this.ctx.bus.on(E.LEVEL_LOADED, () => { this._warm = 2; }));
+      this._offs.push(this.ctx.bus.on(E.QUALITY, () => { this._warm = 2; }));
+    }
+    const hook = this.ctx?.game?.addFrameHook?.(() => this.kitten.warmEnd());
+    this._hooked = typeof hook === 'function';                     // no frame hook (tools): never warm (nothing restores)
+    if (this._hooked) this._offs.push(hook);
     const followMeme = o.memeCam ?? !!this.actor?.tags?.has?.('player');
     if (followMeme && this.ctx?.bus?.on) this._offs.push(this.ctx.bus.on(E.MEME_CAM, (p) => this.setMemeCam(!!p?.on)));
   }
@@ -90,6 +99,7 @@ export class KittenView {
     const cam = this.ctx?.cam, cape = this.kitten.cape;
     if (this._meme && cape && cam && cam.memeLooping !== false && Number.isFinite(cam.memeT)) cape.setSwayTime(cam.memeT - this._dt);
     this.kitten.simulate(this._dt, { velocity, airborne, wind: FUR_WIND.value, frameId: this.ctx?.game?.frameCount });
+    if (this._warm > 0 && this._hooked !== false) { this._warm--; this.kitten.warmBegin(); }
     return this;
   }
 
@@ -138,6 +148,7 @@ export class KittenView {
   }
 
   dispose() {
+    this.kitten.warmEnd();
     for (const off of this._offs.splice(0)) off();
     this.kitten.dispose();
   }

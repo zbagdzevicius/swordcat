@@ -41,7 +41,7 @@ void main() {
   mvPosition.xy += c * size;
   // never fill the lens: fade sprites that are almost touching the camera
   vCol = iCol;
-  vCol.a *= smoothstep( 0.15, 0.7, -mvPosition.z );
+  vCol.a *= smoothstep( 0.15, 0.7 + iPar.x * 2.5, -mvPosition.z );   // bigger sprites fade out further from the lens
   vShape = iPar.w;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>

@@ -47,7 +47,7 @@ export const E = Object.freeze({
   // ---- enemies / bosses ----
   ENEMY_SPAWNED: 'enemy:spawned',           // { enemy }
   ENEMY_ALERTED: 'enemy:alerted',           // { enemy }
-  ENEMY_DIED: 'enemy:died',                 // { enemy, type, position }
+  ENEMY_DIED: 'enemy:died',                 // { enemy, type, position, fish, smallHeart, height }  (fish / smallHeart already rolled: drop exactly these)
   ENEMY_JEER: 'enemy:jeer',                 // { enemy, on }
   ENEMY_CHOKE: 'enemy:choke',               // { enemy }
   ITEM_STOLEN: 'item:stolen',               // { thief, item, amount }
@@ -98,7 +98,7 @@ export const E = Object.freeze({
   MUSIC: 'audio:music',                     // { track, fade }
   SHAKE: 'fx:shake',                        // { trauma }      request → camera
   HITSTOP: 'fx:hitstop',                    // { seconds }     request → core Game.requestHitstop
-  BURST: 'fx:burst',                        // { kind, position, color?, count? }
+  BURST: 'fx:burst',                        // { kind, position, color?, count?, type?, height?, dir?, helmet? }  (poof: enemy type / height / dir; helmet false = the enemy spins its own)
 
   // ---- save ----
   SAVE_REQUEST: 'save:request',             // {}

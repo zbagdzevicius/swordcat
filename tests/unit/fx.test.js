@@ -576,3 +576,193 @@ test('mist walls: wider near-fade than the ambient field + player focus fade', (
   h.remove();
   assert.equal(mc.wallCount, 0);
 });
+
+// ------------------------------------------------------------------ M2: jelly, web, jeer, stealer, slams, Golden Hour, lanterns, The Line, shop
+import { shockRadius, shockAlpha, normalizeShock, slamColor, SLAM_COLORS } from '../../src/fx/Shockwaves.js';
+import { webAlpha, WEB } from '../../src/fx/WebPatches.js';
+import { sunRayEnvelope } from '../../src/fx/SunRays.js';
+import { lanternFlicker, nearestLanterns, LANTERN } from '../../src/fx/Lanterns.js';
+import { isLineObjective, repairPct, milestonesCrossed, lootCount, lobVelocity, JEER } from '../../src/fx/Encounters.js';
+import { sparkleLayout } from '../../src/fx/ShopSparkle.js';
+import { jellySize, popsSlime, JELLY_SCALE } from '../../src/fx/FX.js';
+
+test('M2 shockwaves: linear radius (pug_slam 2.5 m / 0.4 s, Laugh Quake 8 m/s to 7 m), alpha tail, options', () => {
+  assert.equal(shockRadius(0, 0.3, 2.5, 0.4), 0.3);
+  assert.ok(Math.abs(shockRadius(0.2, 0.3, 2.5, 0.4) - 1.4) < 1e-9);
+  assert.equal(shockRadius(1, 0.3, 2.5, 0.4), 2.5);
+  const q = normalizeShock({ r: 7, speed: 8, r0: 0 });
+  assert.ok(Math.abs(q.dur - (7 - q.r0) / 8) < 1e-9, 'speed wins over dur');
+  assert.equal(normalizeShock({}).height, 0.3);
+  assert.equal(normalizeShock({ r: 2.5 }).dur, 0.4);
+  assert.equal(shockAlpha(0.2, 0.4), 1);
+  assert.equal(shockAlpha(0.4 + 0.18, 0.4), 0);
+  assert.ok(shockAlpha(0.49, 0.4) > 0 && shockAlpha(0.49, 0.4) < 1);
+  assert.equal(slamColor('jeer'), SLAM_COLORS.jeer);
+  assert.equal(slamColor('#123456'), '#123456');
+  assert.equal(slamColor(null), SLAM_COLORS.red);
+});
+
+test('M2 web patches: fade in, hold 8 s, fade out; a cut tears it in 0.3 s', () => {
+  assert.equal(webAlpha(0, 8), 0);
+  assert.equal(webAlpha(1, 8), 1);
+  assert.ok(webAlpha(7.7, 8) < 1 && webAlpha(7.7, 8) > 0);
+  assert.equal(webAlpha(8, 8), 0);
+  assert.equal(webAlpha(100, Infinity), 1, 'level dressing stays');
+  assert.ok(webAlpha(2.3, 8, 2) < 1e-9);
+  assert.ok(webAlpha(2.1, 8, 2) > 0.5);
+  assert.equal(WEB.r, 1.0); assert.equal(WEB.life, 8);
+});
+
+test('M2 Golden Hour rays: open blooms to 2.4 m, holds ~1.7 m, sunburst flares to 7 m and ends at 0.6 s', () => {
+  assert.ok(Math.abs(sunRayEnvelope('open', 0.8).size - 2.4) < 1e-6);
+  assert.ok(sunRayEnvelope('open', 0.1).intensity > 0.25);
+  const h = sunRayEnvelope('hold', 3);
+  assert.ok(h.size > 1.5 && h.size < 1.9 && h.intensity > 0.1 && h.intensity < 0.4);
+  assert.ok(sunRayEnvelope('open', 5).size < 1.9, 'open settles into hold');
+  assert.ok(sunRayEnvelope('burst', 0.59).size > 6.5);
+  assert.equal(sunRayEnvelope('burst', 0.6), null);
+  assert.equal(sunRayEnvelope('close', 0.5), null);
+  assert.equal(sunRayEnvelope('nope', 0), null);
+});
+
+test('M2 lanterns: CS-04 light numbers, bounded flicker, nearest 2 lit lanterns get the real lights', () => {
+  assert.equal(LANTERN.color, '#FFC46B'); assert.equal(LANTERN.intensity, 1.5); assert.equal(LANTERN.distance, 6); assert.equal(LANTERN.lights, 2);
+  for (let t = 0; t < 20; t += 0.37) { const f = lanternFlicker(t, 3); assert.ok(f >= 0.82 && f <= 1.08); }
+  const list = [{ x: 0, z: 0, lit: true }, { x: 10, z: 0, lit: true }, { x: 1, z: 0, lit: false }, { x: 3, z: 0, lit: true }];
+  assert.deepEqual(nearestLanterns(list, 0.5, 0), [0, 3]);
+  assert.deepEqual(nearestLanterns(list, 9, 0, 1), [1]);
+  assert.deepEqual(nearestLanterns([], 0, 0), []);
+});
+
+test('M2 The Line / theft / jelly / shop helpers', () => {
+  assert.ok(isLineObjective('line')); assert.ok(isLineObjective('line_gate')); assert.ok(!isLineObjective('lanterns')); assert.ok(!isLineObjective(null));
+  assert.equal(repairPct({ value: 0.5, max: 1 }), 50);
+  assert.equal(repairPct({ value: 64 }), 64);
+  assert.equal(repairPct({ value: 140, max: 100 }), 100);
+  assert.deepEqual(milestonesCrossed(18, 31), [20, 30]);
+  assert.deepEqual(milestonesCrossed(31, 31), []);
+  assert.deepEqual(milestonesCrossed(95, 100), [], '100% is the done flare, not a milestone');
+  assert.equal(lootCount('fish', 50), 8); assert.equal(lootCount('fish', 5), 2); assert.equal(lootCount('milk', 1), 1);
+  const v = lobVelocity(3, 0, 4, 0.5, 9);
+  assert.ok(Math.abs(v.x * 0.5 - 3) < 1e-9 && Math.abs(v.z * 0.5 - 4) < 1e-9);
+  assert.ok(Math.abs(v.y * 0.5 - 0.5 * 9 * 0.25) < 1e-9, 'lands at the same height');
+  assert.equal(jellySize('jelly_giant'), 'GIANT'); assert.equal(jellySize('jelly_l'), 'L'); assert.equal(jellySize('jelly', { size: 'S' }), 'S');
+  assert.equal(jellySize('jelly'), 'M');
+  assert.ok(JELLY_SCALE.GIANT > JELLY_SCALE.L && JELLY_SCALE.L > JELLY_SCALE.S);
+  for (const id of ['bright', 'holy', 'holyWave', 'gleam', 'sunburst']) assert.ok(popsSlime({ attackId: id }), id);
+  assert.ok(!popsSlime({ attackId: 'slash1' })); assert.ok(popsSlime({ attackId: 'slash1', popsSlime: true }));
+  const lay = sparkleLayout(12, createRng(3), 70);
+  assert.equal(lay.length, 12);
+  assert.ok(lay.every((s) => Math.hypot(s.dx, s.dy + 10) <= 70 * 1.16));
+  assert.equal(JEER.color, '#B07CFF');
+});
+
+test('M2 FX service: jeer fog, theft, jelly, slams, webs, lanterns, The Line and Golden Hour from bus events', async () => {
+  const ctx = setupFx();
+  await ctx.fx.init();
+  const fx = ctx.fx;
+  const pl = actor(ctx, 'player', 0, 0, { height: 0.6 });
+  ctx.player = pl;
+  // jeer fog: on -> rings + puffs; choke -> off
+  const hy = actor(ctx, 'enemy', 4, 0, { height: 1.2 });
+  ctx.bus.emit(E.ENEMY_JEER, { enemy: hy, on: true });
+  await frames(ctx, 30);
+  let s = fx.stats();
+  assert.equal(s.m2.jeers, 1);
+  assert.ok(s.particles > 0);
+  ctx.bus.emit(E.ENEMY_CHOKE, { enemy: hy });
+  assert.equal(fx.stats().m2.jeers, 0);
+  // theft: loot flies to the thief, the thief is tracked, a despawn with the loot -> smoke poof
+  const th = actor(ctx, 'enemy', -3, 1, { height: 1.2 });
+  ctx.bus.emit(E.ITEM_STOLEN, { thief: th, item: 'fish', amount: 20 });
+  await frames(ctx, 2);
+  assert.equal(fx.stats().m2.thieves, 1);
+  ctx.scene.remove(th.object3d);
+  await frames(ctx, 1);
+  s = fx.stats();
+  assert.equal(s.m2.thieves, 0); assert.equal(s.m2.counts.vanishes, 1);
+  ctx.bus.emit(E.ITEM_RETURNED, { item: 'fish', amount: 20, bonus: 5 });
+  assert.equal(fx.stats().m2.counts.returns, 1);
+  // a thief that is beaten (enemy:died, then disposed) does not smoke-bomb
+  const th2 = actor(ctx, 'enemy', -2, 2, { height: 1.2 });
+  ctx.bus.emit(E.ITEM_STOLEN, { thief: th2, item: 'fish', amount: 10 });
+  ctx.bus.emit(E.ENEMY_DIED, { enemy: th2, type: 'stealer', position: th2.pos.clone(), fish: 0 });
+  th2.alive = false; ctx.scene.remove(th2.object3d);
+  await frames(ctx, 2);
+  assert.equal(fx.stats().m2.counts.vanishes, 1, 'no smoke bomb for a beaten thief');
+  ctx.bus.emit(E.ITEM_RETURNED, { item: 'fish', amount: 10, bonus: 5 });
+  assert.equal(fx.stats().m2.thieves, 0);
+  // jelly: a bright kill pops instead of splitting
+  const j1 = actor(ctx, 'enemy', 2, 2, { height: 0.8 });
+  ctx.bus.emit(E.HIT, { attacker: pl, target: j1, attackId: 'bright', damage: 40, killed: true, dir: new THREE.Vector3(0, 0, 1) });
+  ctx.bus.emit(E.ENEMY_DIED, { enemy: j1, type: 'jelly_l', position: j1.pos.clone(), fish: 0 });
+  assert.equal(fx._pops.get(j1), true);
+  for (const k of ['jellySplit', 'jellyPop', 'jellySlam', 'web', 'webCut', 'stealerPoof', 'purchase', 'lanternLight', 'shockwave', 'slam', 'crack']) {
+    assert.ok(BURST_KINDS.includes(k), k);
+    fx.burst(k, [1, 0, 1], { r: 2.5, crack: true });
+  }
+  // slams: a shockwave expands and finishes
+  const o = fx.shockwave([0, 0, 3], { r: 7, speed: 8, color: 'jeer' });
+  assert.ok(o && Math.abs(o.dur - (7 - o.r0) / 8) < 1e-9);
+  await frames(ctx, 2);
+  assert.ok(fx.stats().m2.shocks >= 1);
+  assert.ok(fx.stats().m2.cracks >= 1);
+  await frames(ctx, 90);
+  assert.equal(fx.stats().m2.shocks, 0);
+  // web patches: lay, cut, expire
+  const w = fx.webPatch([2, 0, -2], { r: 1 });
+  const w2 = fx.webPatch([3, 0, -2], { r: 1, life: 0.5 });
+  await frames(ctx, 2);
+  assert.equal(fx.stats().m2.webs, 2);
+  w.cut();
+  assert.equal(w.alive, false);
+  await frames(ctx, 40);
+  assert.equal(fx.stats().m2.webs, 0); assert.equal(w2.alive, false);
+  // lanterns: 3 lit, only 2 real lights, nearest first
+  const glowOnly = fx.lantern([2, 1.5, 2]);
+  assert.equal(fx.stats().m2.lanternLights, 0, 'glow-only lanterns add no lights');
+  glowOnly.remove();
+  const ls = [[0.5, 1.5, 0], [8, 1.5, 0], [30, 1.5, 0]].map((p) => fx.lantern(p, { light: true }));
+  await frames(ctx, 60);
+  s = fx.stats();
+  assert.equal(s.m2.lanterns, 3); assert.equal(s.m2.lanternLights, 2); assert.equal(s.m2.lanternLightsOn, 2);
+  const lit = fx.lanterns.pool.map((p) => p.owner?.pos.x).sort((a, b) => a - b);
+  assert.deepEqual(lit, [0.5, 8]);
+  ls[0].out();
+  await frames(ctx, 90);
+  assert.deepEqual(fx.lanterns.pool.map((p) => p.owner?.pos.x).sort((a, b) => a - b), [8, 30], 'the light moves to the next lantern');
+  const clem = actor(ctx, 'ally', 5, 5, { height: 0.6 });
+  const ign0 = fx.stats().m2.ignitions;
+  const lh = fx.lantern(clem, { lit: false });
+  lh.light();
+  assert.equal(fx.stats().m2.ignitions, ign0 + 1);
+  // The Line: progress -> sparks + milestones; frozen -> stall; 100% -> done
+  for (let i = 0; i < 30; i++) { ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 5 + i, max: 100 }); await frames(ctx, 2); }
+  s = fx.stats();
+  assert.ok(s.m2.counts.repairSparks > 3, `sparks ${s.m2.counts.repairSparks}`);
+  assert.ok(s.m2.counts.milestones >= 2);
+  assert.deepEqual(s.m2.line.site, [0, 0, 41]);
+  ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 40, max: 100, frozen: true });
+  assert.equal(fx.stats().m2.counts.stalls, 1);
+  ctx.bus.emit(E.OBJECTIVE, { id: 'line', value: 100, max: 100, done: true });
+  assert.equal(fx.stats().m2.counts.repairDone, 1);
+  // Golden Hour: rays open behind her, Sunburst flares
+  pl.golden = true;
+  ctx.bus.emit(E.PLAYER_GOLDEN, { on: true });
+  await frames(ctx, 10);
+  assert.equal(fx.stats().m2.sunRays, 'open');
+  pl.golden = false;
+  ctx.bus.emit(E.PLAYER_GOLDEN, { on: false });
+  fx.burst('sunburst', pl);
+  assert.equal(fx.stats().m2.sunBursts, 1);
+  // shop: counts without a DOM
+  assert.equal(fx.purchase({ x: 10, y: 10 }), false);
+  assert.equal(fx.stats().m2.shop, 1);
+  // level unload drops everything level-bound
+  ctx.bus.emit(E.LEVEL_UNLOAD, { id: 'gate' });
+  s = fx.stats();
+  assert.equal(s.m2.lanterns, 0); assert.equal(s.m2.webs, 0); assert.equal(s.m2.jeers, 0); assert.equal(s.m2.line.active, false);
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'meadow' });
+  assert.equal(fx.stats().m2.lanternLights, 0, 'pooled lantern lights dropped on a level without them');
+  fx.dispose();
+});

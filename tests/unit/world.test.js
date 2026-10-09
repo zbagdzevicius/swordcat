@@ -25,6 +25,13 @@ import { makeWheatClumpGeometry, WheatField } from '../../src/world/Wheat.js';
 import { LEVELS, rankFor, LevelManager, levelEnemyTypes } from '../../src/world/LevelManager.js';
 import { distToPolyline, fbm, fbmP, smoothPolyline, pointAlong, polylineLength } from '../../src/world/noise.js';
 import manifest, { levels as manifestLevels } from '../../src/world/assets.manifest.js';
+import { LINE_RULES, COUNTERS } from '../../src/world/Objectives.js';
+import { STATIONS, stationOpen, nextLevel, questBoard, HUB_KITTEN_SPOTS, SOUTH_GATE_EXIT } from '../../src/world/Hub.js';
+import { paveGeometry, worldBoxesGeometry, LightPool } from '../../src/world/Dressing.js';
+import { LINE } from '../../src/core/config.js';
+import forestDef, { MUSHROOM_CAPS, CAP_R, STUMPS, STUMP, MILL_PILLARS, TREETOP } from '../../src/world/levels/forest.js';
+import townDef, { LANTERNS, BALCONY, CRATE_STEPS, SQUARE, TOWER, CHASE } from '../../src/world/levels/town.js';
+import gateDef, { GATE, gateShape, PARAPETS } from '../../src/world/levels/gate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const loadDef = async (id) => (await LEVELS[id]()).default;
@@ -806,4 +813,464 @@ test('Env: the warm hero key light is on in the night presets only (art.md mood 
     const night = p.grade === 'night';
     assert.equal((toState(p).hero ?? 0) > 0, night, `${name}: hero light ${night ? 'on' : 'off'}`);
   }
+});
+
+// ============================================================================================== M2: Acts I–II
+/** A Line test rig: Objectives + LineController with fake enemies / story; `step(sec)` runs fixed steps. */
+async function lineRig() {
+  const ctx = fakeCtx({ systems: false });
+  ctx.enemies = fakeEnemies();
+  ctx.physics = { heightAt: () => 0 };
+  const played = [];
+  ctx.story = { isPlaying: false, play(id) { played.push(id); return Promise.resolve(); }, flag(k, v) { ctx.state.setFlag(k, v); ctx.bus.emit(E.FLAG_SET, { key: k, value: v }); } };
+  const ob = new Objectives(ctx); await ob.init();
+  const done = [];
+  const bus = spy(ctx);
+  const line = ob.startLine({ vec: (p) => new THREE.Vector3(p.x, p.y, p.z), onDone: () => done.push(1) });
+  const step = (sec) => { for (let i = 0; i < Math.round(sec * 60); i++) ob.update(1 / 60); };
+  return { ctx, ob, line, played, done, step, bus };
+}
+const lineEnemies = (ctx) => ctx.enemies.list.filter((e) => e.opts?.line);
+
+test('U10 The Line: repair runs at 100/240 % per second with nobody at the winch', async () => {
+  const { ctx, ob, step } = await lineRig();
+  ctx.enemies.killAll();                                         // W1 (0 %) spawned at the start: clear it out
+  assert.equal(LINE_RULES.rate, 100 / 240);
+  const v0 = ob.progress('line');
+  step(12);
+  assert.ok(near(ob.progress('line') - v0, 5, 1e-3), `12 s → +5 % (${ob.progress('line') - v0})`);
+  step(24);
+  assert.ok(near(ob.progress('line') - v0, 15, 1e-3), '36 s → +15 %');
+});
+
+test('U10 The Line: an enemy within 4 m (horizontal) of the winch pauses it; 4.5 m away does not', async () => {
+  const { ctx, ob, step } = await lineRig();
+  ctx.enemies.killAll();
+  const e = ctx.enemies.spawn('hyena', new THREE.Vector3(LINE.winch[0] + 2.4, 3, LINE.winch[1] + 2.4), {});   // 3.39 m away, 3 m up
+  const a = ob.progress('line'); step(2);
+  assert.equal(ob.progress('line'), a, 'paused');
+  assert.equal(ob.get('line').paused, true);
+  e.pos.set(LINE.winch[0] + 4.5, 0, LINE.winch[1]);
+  step(2);
+  assert.ok(ob.progress('line') > a + 0.8, 'resumes once it steps back');
+  ctx.enemies.despawn(e);
+});
+
+test('U10 The Line: every wave threshold fires once, in order, even when one step crosses several', async () => {
+  const { ctx, ob, line, step, played } = await lineRig();
+  assert.deepEqual([...line.fired], [0], 'W1 at 0 %');
+  const w1 = lineEnemies(ctx);
+  assert.equal(w1.length, 4, 'W1: 4 hyena');
+  assert.equal(w1.filter((e) => e.opts.objectiveRunner).length, 1, 'W1: 1 runner');
+  ctx.enemies.killAll();
+  ob.set('line', 50);                                            // crosses 20 % and 45 % in one jump
+  step(1 / 60);
+  assert.deepEqual([...line.fired], [0, 1, 2]);
+  const w2 = line.byWave[1], w3 = line.byWave[2];
+  assert.equal(w2.length, 5);
+  assert.equal(w2.filter((e) => e.type === 'stealer' && e.opts.objectiveRunner && e.opts.pinThief).length, 2, 'W2: both stealers run (pin thieves)');
+  assert.equal(w3.length, 8); assert.equal(w3.filter((e) => e.opts.objectiveRunner).length, 1);
+  for (const e of [...w2, ...w3]) assert.ok(LINE.lanes.some(([x]) => Math.abs(e.pos.x - x) < 1.3) && e.pos.z <= LINE.lanes[0][1] + 0.01, 'spawned on the lanes');
+  step(5);
+  assert.deepEqual([...line.fired], [0, 1, 2], 'no re-fire');
+  // 70 %: CS-08 waits for ≤ 2 alive and no live telegraph (≤ 10 s), despawns the leftovers, then W4 + the trickle
+  ctx.enemies.killAll();
+  for (let i = 0; i < 3; i++) ctx.enemies.spawn('hyena', new THREE.Vector3(0, 0, -50), { line: true });
+  line.byWave[2].push(...ctx.enemies.list);
+  ob.set('line', 70);
+  step(1 / 60);
+  assert.ok(line.fired.has(3) && !played.includes('cs08'), 'CS-08 waits while 3 are alive');
+  ctx.bus.emit(E.TELEGRAPH, { id: 77 });
+  ctx.enemies.despawn(ctx.enemies.list[0]);
+  step(2);
+  assert.ok(!played.includes('cs08'), 'and while a telegraph is live');
+  ctx.bus.emit(E.TELEGRAPH_END, { id: 77 });
+  step(1 / 60);
+  assert.ok(played.includes('cs08'), 'CS-08 plays once ≤ 2 are alive');
+  assert.equal(ctx.enemies.list.length, 0, 'leftovers despawned');
+  await Promise.resolve(); await Promise.resolve();
+  const w4 = line.byWave[3];
+  assert.deepEqual(w4.map((e) => e.type).sort(), ['hyena', 'hyena', 'hyena', 'hyena', 'hyena', 'hyena', 'pug']);
+  assert.equal(w4.filter((e) => e.opts.objectiveRunner).length, 2);
+  assert.equal(ctx.state.runtime.spoons, true, 'Spoon Brigade on');
+  ctx.enemies.killAll();
+  step(LINE.trickle.every + 0.1);
+  assert.equal(line.trickled.length, 2, 'the trickle: 2 hyena every 15 s');
+  ctx.enemies.killAll();
+  ob.set('line', 86); step(1 / 60);
+  assert.ok(played.includes('g02'), 'G-02 at 85 %');
+  assert.equal(played.filter((p) => p === 'cs08').length, 1);
+});
+
+test('U10 The Line: Pilfer takes the pin (freeze), a hit makes him drop it (resume, gate.pin)', async () => {
+  const { ctx, ob, line, step, bus } = await lineRig();
+  ctx.enemies.killAll();
+  ob.set('line', 21); step(1 / 60);
+  const thief = line.byWave[1].find((e) => e.opts.pinThief);
+  for (const e of [...ctx.enemies.list]) if (e !== thief) ctx.enemies.despawn(e);
+  thief.pos.set(LINE.winch[0] + 1, 0, LINE.winch[1] - 2);
+  step(1 / 60);
+  assert.equal(line.pin.state, 'stolen');
+  assert.equal(ob.get('line').frozen, true);
+  assert.equal(bus.last(E.ITEM_STOLEN)?.item, 'pin');
+  thief.pos.set(0, 0, 0);                                           // he runs off
+  const a = ob.progress('line'); step(1);
+  assert.equal(ob.progress('line'), a, 'frozen while he has it');
+  ctx.bus.emit(E.HIT, { attacker: {}, target: thief, damage: 10 });
+  assert.equal(line.pin.state, 'returned');
+  assert.equal(ob.get('line').frozen, false);
+  assert.equal(ctx.state.getFlag('gate.pin'), true);
+  assert.equal(bus.last(E.ITEM_RETURNED)?.item, 'pin');
+  step(1);
+  assert.ok(ob.progress('line') > a + 0.3, 'repair resumes');
+});
+
+test('U10 The Line: if Pilfer escapes (8 s), Pip brings the pin back 5 s after W2 is clear', async () => {
+  const { ctx, ob, line, step } = await lineRig();
+  ctx.enemies.killAll();
+  ob.set('line', 21); step(1 / 60);
+  const thief = line.byWave[1].find((e) => e.opts.pinThief);
+  thief.pos.set(LINE.winch[0], 0, LINE.winch[1] - 3);
+  step(1 / 60);
+  thief.pos.set(0, 0, -40);
+  step(LINE_RULES.pinEscape + 0.1);
+  assert.equal(line.pin.state, 'lost');
+  assert.ok(!ctx.enemies.list.includes(thief), 'he vanished into the fog');
+  assert.equal(ob.get('line').frozen, true);
+  step(3);
+  assert.equal(line.pin.state, 'lost', 'not while W2 still fights');
+  for (const e of line.byWave[1]) if (ctx.enemies.list.includes(e)) ctx.enemies.despawn(e);
+  step(LINE_RULES.pipReturn - 0.2);
+  assert.equal(line.pin.state, 'lost');
+  step(0.4);
+  assert.equal(line.pin.state, 'returned');
+  assert.equal(ob.get('line').frozen, false);
+});
+
+test('U10 The Line: dying keeps the progress and re-spawns only the current wave; 100 % → gate.line + onDone', async () => {
+  const { ctx, ob, line, step, done } = await lineRig();
+  ctx.enemies.killAll();
+  ob.set('line', 46); step(1 / 60);
+  for (const e of line.byWave[1]) if (ctx.enemies.list.includes(e)) ctx.enemies.despawn(e);     // W2 is beaten; W3 is the current wave
+  const n3 = line.byWave[2].length;
+  const v = ob.progress('line');
+  ctx.bus.emit(E.PLAYER_DIED, {});
+  assert.equal(ob.progress('line'), v, 'progress kept');
+  assert.equal(lineEnemies(ctx).length, 0, 'the current wave is cleared away');
+  ctx.bus.emit(E.PLAYER_SPAWNED, {});
+  step(LINE_RULES.respawnDelay + 0.1);
+  assert.equal(line.byWave[2].length, n3, 'the same wave comes back');
+  assert.equal(lineEnemies(ctx).length, n3);
+  assert.deepEqual([...line.fired], [0, 1, 2], 'no threshold fired again');
+  ctx.enemies.killAll();
+  ob.set('line', 100);
+  assert.equal(ob.get('line').done, true);
+  assert.equal(ctx.state.getFlag('gate.line'), true);
+  assert.equal(done.length, 1);
+});
+
+test('Objectives: counters (ropes, lanterns, keys) fill in max / text and set their flag when done', async () => {
+  const ctx = fakeCtx({ systems: false });
+  const ob = new Objectives(ctx); await ob.init();
+  for (const [id, row] of Object.entries(COUNTERS)) {
+    const o = ob.counter(id);
+    assert.equal(o.max, row.max); assert.equal(o.textKey, row.textKey);
+    ob.add(id, row.max);
+    assert.equal(ob.get(id).done, true);
+    if (row.flag) assert.equal(ctx.state.getFlag(row.flag), true, `${id} → ${row.flag}`);
+  }
+  assert.equal(ob.counter('lanterns'), ob.get('lanterns'), 'counter() does not restart a running objective');
+  ob.start('x', { max: 10, rate: 1 }); ob.block('x', true); for (let i = 0; i < 60; i++) ob.update(1 / 60);
+  assert.equal(ob.progress('x'), 0, 'blocked rate objective holds');
+});
+
+// ---------------------------------------------------------------------------------------------- U12 (M2): the three levels
+function tally(def) {
+  const t = {};
+  for (const z of def.zones) {
+    for (const [ty, n = 1] of z.spawns ?? []) t[ty] = (t[ty] ?? 0) + n;
+    for (const w of z.waves ?? []) for (const [ty, n = 1] of w) t[ty] = (t[ty] ?? 0) + n;
+  }
+  return t;
+}
+const Z = (def) => Object.fromEntries(def.zones.map((z) => [z.id, z]));
+
+test('U12 forest (§12.4): layout, caps, stumps, Treetop, Cheese Mill, 3 kittens + letter, enemy totals', () => {
+  const d = forestDef, z = Z(d);
+  assert.deepEqual([d.size, d.res, d.seed, d.hills.amp, d.pathWidth], [200, 200, 23, 3.0, 5]);
+  assert.equal(d.env.default, 'forest_day'); assert.deepEqual(d.env.byFlag[0], ['forest.camp', 'forest_night']);
+  for (const p of [[0, -85], [-20, -58], [-10, -30], [18, -8], [24, 18], [6, 40], [-10, 84]]) assert.ok(d.spine.some((q) => q[0] === p[0] && q[1] === p[1]), `spine ${p}`);
+  assert.deepEqual(d.spawns.start.slice(0, 2), [0, -92]); assert.ok(Math.hypot(d.spawns.boss[0] + 10, d.spawns.boss[1] - 70) < 1.2, 'boss spawn at the boss door');
+  // mushroom caps: heights, bounce, spacing; Heart Bell #1 on cap 5
+  assert.deepEqual(MUSHROOM_CAPS.map((c) => c.y), [1, 2, 3, 4, 5.2]);
+  assert.deepEqual(MUSHROOM_CAPS.map((c) => !!c.bounce), [false, true, false, true, false]);
+  for (let i = 1; i < 5; i++) { const g = Math.hypot(MUSHROOM_CAPS[i].at[0] - MUSHROOM_CAPS[i - 1].at[0], MUSHROOM_CAPS[i].at[1] - MUSHROOM_CAPS[i - 1].at[1]); assert.ok(g > 2.2 && g < 2.8, `cap gap ${g}`); }
+  assert.deepEqual(MUSHROOM_CAPS[4].at, [-24, -62]); assert.equal(CAP_R, 1.2);
+  assert.deepEqual([z.bell_1.kind, z.bell_1.at, z.bell_1.y], ['heartBell', [-24, -62], 5.2]);
+  // stumps: 6, gaps (edge to edge) ≤ 3.0 m and every hop within the 3.7 m jump reach; Letter #2 on stump 4
+  assert.equal(STUMPS.length, 6);
+  for (let i = 1; i < 6; i++) { const d = Math.hypot(STUMPS[i][0] - STUMPS[i - 1][0], STUMPS[i][1] - STUMPS[i - 1][1]); assert.ok(d - 2 * STUMP.r <= 3.0 && d <= 3.7, `stump hop ${d}`); }
+  assert.deepEqual([z.letter_2.letterId, z.letter_2.at], ['l2', [23, 19]]);
+  assert.ok(z.letter_2.yAbs >= STUMP.top);
+  // zones
+  assert.deepEqual([z.hollow.r, z.hollow.waves.length], [12, 2]);
+  assert.deepEqual([z.ratcamp.waves.length, z.mill.r, z.mill.boss, z.mill.at], [3, 12, 'boss_grizzlechop', [-10, 84]]);
+  assert.equal(MILL_PILLARS.length, 6);
+  for (const [x, zz] of MILL_PILLARS) assert.ok(near(Math.hypot(x + 10, zz - 84), BOSSES.grizzlechop.pillars.r, 0.02));
+  assert.deepEqual([z.camp.play, z.camp.r], ['cs04', 6]);
+  assert.deepEqual([z.exit.to, z.exit.spawnId, z.exit.at, z.exit.when], ['town', 'start', [-24, 94], 'forest.boss']);
+  assert.deepEqual(TREETOP.cage, [18, -8]);
+  const kittens = d.zones.filter((x) => x.kind === 'kitten');
+  assert.deepEqual(kittens.map((k) => [k.kittenId, k.hide]), [['pickles', 'meow'], ['pebble', 'break'], ['sprout', 'cage']]);
+  assert.equal(z.sprout.needClear, 'ratcamp');
+  assert.deepEqual(tally(d), { rat_pike: 19, rat_xbow: 5, crow: 4, spider: 8 });
+  for (const v of ['vigil_1', 'vigil_2', 'vigil_3', 'vigil_4']) assert.equal(z[v].kind, 'checkpoint');
+});
+
+test('U12 town (§12.5): streets, Lantern Alley, balcony, square, steps, tower ledge, hub spawns, enemy totals', () => {
+  const d = townDef, z = Z(d);
+  assert.deepEqual([d.size, d.res, d.seed, d.hills.amp, d.pathWidth, d.pathSurface], [140, 140, 31, 0.4, 6, 'stone']);
+  assert.deepEqual(d.env.byFlag.map((r) => r[1]), ['ending_gold', 'hub_grey', 'hub_gold']); assert.equal(d.env.default, 'town_occupied');
+  assert.deepEqual(d.spawns.start.slice(0, 2), [0, -66]); assert.deepEqual(d.spawns.hub.slice(0, 2), [0, -46]);
+  assert.deepEqual(d.spawns.bakery_cot, [-22, -20, -Math.PI / 2]); assert.deepEqual(d.spawns.belltower.slice(0, 2), [0, 50.5]);
+  assert.deepEqual(LANTERNS, [[-3, -40], [3, -34], [-3, -28]]);
+  assert.deepEqual([BALCONY.at, BALCONY.y], [[5, -30], 3]);
+  assert.deepEqual(CRATE_STEPS.map((c) => c[2]), [1, 2, 3]);
+  assert.deepEqual([SQUARE.at, SQUARE.r, SQUARE.rim, SQUARE.base, SQUARE.top], [[0, 8], 15, 0.6, 1.6, 2.5]);
+  assert.deepEqual([TOWER.ledge.at, TOWER.ledge.y], [[0, 50.5], 6]);
+  assert.equal(CHASE.length, 6); assert.deepEqual(CHASE[5], [-36, 4]);
+  assert.deepEqual(z.square.waves.at(-1), [['jelly_giant', 1, { at: 'center' }]]);
+  assert.equal(z.square.waves.length, 5);
+  assert.deepEqual([z.steps.play, z.steps.at, z.steps.r], ['cs07', [0, 34], 5]);
+  assert.deepEqual([z.letter_3.letterId, z.letter_3.at], ['l3', [28, -2]]);
+  const kittens = d.zones.filter((x) => x.kind === 'kitten');
+  assert.deepEqual(kittens.map((k) => [k.kittenId, k.hide]), [['waffles', 'climb'], ['toffee', 'climb'], ['muffin', 'climb']]);
+  assert.deepEqual(tally(d), { rat_pike: 17, pug: 6, stealer: 6, rat_xbow: 2, crow: 2, jelly_giant: 1 });
+  for (const zz of d.zones) if (zz.kind === 'open') assert.equal(zz.onlyIf, '!town.free', `${zz.id}: no enemies in hub mode`);
+  for (const zz of d.zones) if (zz.kind === 'arena') assert.equal(zz.clearedWhen, 'town.free', `${zz.id}: cleared in hub mode`);
+});
+
+test('U12 gate (§12.6): tidal shape, causeway, towers, Line marker, battlefield, 3 kittens + letter, B2 arena', () => {
+  const d = gateDef, z = Z(d);
+  assert.deepEqual([d.size, d.res, d.seed], [180, 120, 41]);
+  assert.equal(d.env.default, 'gate_dusk');
+  assert.deepEqual([d.water[0].kind, d.water[0].y, d.water[0].deep], ['plane', -1.2, true]);
+  assert.equal(gateShape(0, 0, 0.3), 0, 'deck');
+  assert.equal(gateShape(-5.9, -40, 0.3), 0);
+  assert.ok(gateShape(14, 0, 0.3) < -2, 'tidal water beyond the deck');
+  assert.equal(gateShape(8, -52, 0), -0.8, 'the stair ledge');
+  assert.ok(Math.abs(gateShape(0, 70, 0.2)) < 0.4 && Math.abs(gateShape(20, -80, 0.2)) < 0.4, 'shores at y ≈ 0');
+  assert.deepEqual([GATE.deck.z0 <= -60, GATE.deck.z1 >= 45, GATE.deck.x], [true, true, 6]);
+  assert.deepEqual(GATE.towers, [[-8.6, 8], [8.6, 8]]);
+  assert.deepEqual([GATE.winch, GATE.winchR, GATE.line], [[0, 41], 4, 10]);
+  for (const [a, b] of PARAPETS) assert.ok(b - a <= 18.0001, 'parapet runs ≤ 18 m (gaps every 20 m)');
+  assert.deepEqual([z.causeway.size, z.causeway.at, z.causeway.boss], [[12, 40], [0, 10], 'boss_cacklejaw']);
+  assert.ok(z.causeway.at[1] - z.causeway.size[1] / 2 === -10 && z.causeway.at[1] + z.causeway.size[1] / 2 === 30, 'fog walls at z −10 and +30');
+  assert.deepEqual(d.spawns.start.slice(0, 2), [0, 58]); assert.ok(near(d.spawns.start[2], Math.PI));
+  assert.deepEqual([z.vigil_1.at, z.vigil_3.at], [[-4, 56], [-4, -56]]);
+  assert.deepEqual([z.letter_4.letterId, z.letter_4.at], ['l4', [-14, -80]]);
+  assert.equal(z.bell_2.kind, 'heartBell');
+  const kittens = d.zones.filter((x) => x.kind === 'kitten');
+  assert.deepEqual(kittens.map((k) => [k.kittenId, k.hide]), [['tater', 'cage'], ['mittens', 'cage'], ['socks', 'climb']]);
+  assert.equal(z.mittens.opts.cageWith, 'tater');
+  assert.deepEqual(tally(d), { hyena: 5, rat_xbow: 2 }, 'S1 + S2 (the Line spawns the rest)');
+  assert.deepEqual([z.s1.at, z.s2.at], [[-8, -66], [10, -78]]);
+});
+
+test('Hub (§12.5): stations open by flag, Quest Board next chapter, kitten spots, South Gate exit', () => {
+  const st = fakeCtx({ systems: false }).state;
+  const open = () => STATIONS.filter((s) => stationOpen(s, st)).map((s) => s.id);
+  assert.deepEqual(open(), ['vigil']);
+  st.setFlag('town.free', true);
+  assert.deepEqual(open().sort(), ['bakery', 'barracks', 'forge', 'library', 'questboard', 'snowpaw', 'vigil']);
+  assert.equal(nextLevel(st), 'gate');
+  st.setFlag('gate.done', true);
+  assert.ok(open().includes('lookout') && !open().includes('wardrobe'));
+  assert.equal(nextLevel(st), 'bog');
+  st.setFlag('bog.done', true); st.setFlag('ending.seen', true);
+  assert.ok(open().includes('wardrobe') && open().includes('coo'));
+  st.setFlag('keep.done', true);
+  assert.equal(nextLevel(st), null);
+  assert.deepEqual(questBoard(st).map((r) => r.id), LEVEL_IDS);
+  st.flags = {}; st.setFlag('meadow.done', true); st.setFlag('forest.done', true); st.setFlag('town.done', true); st.kittens = ['biscuit', 'pickles', 'pebble'];
+  const b = questBoard(st);
+  assert.deepEqual(b.filter((r) => r.unlocked).map((r) => r.id), ['meadow', 'forest', 'town', 'gate']);
+  assert.equal(b.find((r) => r.next).id, 'gate');
+  assert.equal(b.find((r) => r.id === 'forest').kittens, 2);
+  assert.deepEqual(Object.keys(HUB_KITTEN_SPOTS).sort(), [...KITTEN_IDS].sort());
+  assert.deepEqual(SOUTH_GATE_EXIT, { at: [0, -63], size: [8, 2] });
+  assert.equal(STATIONS.find((s) => s.id === 'questboard').opens, 'town.free');
+});
+
+test('Dressing: paved ribbons follow the ground; world-UV boxes; the light pool follows the nearest lit sources', () => {
+  const g = paveGeometry({ lines: [{ pts: [[0, 0], [10, 0], [20, 5]], width: 4 }], discs: [[0, 20, 5]], heightAt: (x, z) => x * 0.1 + z * 0.05, lift: 0.03, rng: () => 0.5 });
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) assert.ok(near(p.getY(i), p.getX(i) * 0.1 + p.getZ(i) * 0.05 + 0.03, 1e-5));
+  for (let i = 0; i < g.attributes.normal.count; i++) assert.ok(g.attributes.normal.getY(i) > 0, 'normals up');
+  const b = worldBoxesGeometry([{ x0: 0, x1: 4, y0: -1, y1: 0, z0: 0, z1: 2 }], { tile: 2 });
+  const uv = b.attributes.uv, pp = b.attributes.position, n = b.attributes.normal;
+  for (let i = 0; i < uv.count; i++) if (n.getY(i) > 0.5) { assert.ok(near(uv.getX(i), pp.getX(i) / 2)); assert.ok(near(uv.getY(i), pp.getZ(i) / 2)); }
+  const parent = new THREE.Group(), pool = new LightPool(parent, 2);
+  const s = [pool.add({ pos: new THREE.Vector3(0, 1, 0) }), pool.add({ pos: new THREE.Vector3(5, 1, 0) }), pool.add({ pos: new THREE.Vector3(50, 1, 0), on: true })];
+  pool.update(new THREE.Vector3(40, 0, 0), 0);
+  assert.deepEqual(pool.lights.map((L) => L.position.x).sort((a, c) => a - c), [5, 50]);
+  s[2].on = false; pool.update(new THREE.Vector3(40, 0, 0), 0);
+  assert.deepEqual(pool.lights.map((L) => L.position.x).sort((a, c) => a - c), [0, 5]);
+  assert.equal(parent.children.length, 2, 'a fixed number of lights');
+});
+
+// ---------------------------------------------------------------------------------------------- headless M2 builds
+async function buildM2(id, flags = {}, spawn = 'start') {
+  const ctx = fakeCtx();
+  ctx.assets.gltf = async (p) => stubGltf(p);
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  const kittens = [];
+  ctx.companions = { spawnKitten: (kid, pos, hide, opts) => { kittens.push({ id: kid, pos, hide, opts }); return {}; }, clearLevel() {}, markCleared() {} };
+  for (const [k, v] of Object.entries(flags)) ctx.state.setFlag(k, v);
+  await ctx.objectives.init();
+  const L = await buildLevel(ctx, (await loadDef(id)));
+  ctx.levels = { current: L, pickEnv: () => null, anchor: (n) => L.anchor(n) };
+  L.activate(spawn);
+  return { ctx, L, enemies, kittens };
+}
+
+test('forest builds headless: arenas, vigils, caps (bounce colliders), stumps, the mill pillars, kittens, crates', async () => {
+  const { L, enemies, kittens } = await buildM2('forest');
+  assert.deepEqual(L.arenas.map((a) => a.id).sort(), ['hollow', 'mill', 'ratcamp']);
+  assert.deepEqual(L.vigils.map((v) => v.id), ['vigil_1', 'vigil_2', 'vigil_3', 'vigil_4']);
+  for (let i = 1; i <= 5; i++) assert.ok(L.anchor('cap_' + i), `cap_${i}`);
+  const caps = L.colliders.circles.filter((c) => c.cap);
+  assert.equal(caps.length, 5); assert.deepEqual(caps.filter((c) => c.bounce > 0).map((c) => c.cap), [2, 4]);
+  for (const c of caps) assert.ok(near(c.y1 - L.heightAt(c.x, c.z), MUSHROOM_CAPS[c.cap - 1].y, 0.25), `cap ${c.cap} top`);
+  assert.equal(L.colliders.circles.filter((c) => c.stump).length, 6);
+  assert.equal(L.bossPillars.length, 6);
+  assert.ok(L.isDeepWater(15, 18), 'the stream is deep');
+  assert.ok(!L.isDeepWater(STUMPS[0][0], STUMPS[0][1], STUMP.top), 'a stump top is dry');
+  assert.deepEqual(kittens.map((k) => k.id).sort(), ['pebble', 'pickles', 'sprout']);
+  assert.equal(enemies.list.length, 2 + 2 + 6, 'gate + mushroom patrols + treetop guards');
+  assert.ok(L.actors.some((a) => a.propId === 'hollow_boulder' && a.breaks === 'cracked'), 'the cracked boulder');
+  assert.ok(L.lightPool?.lights.length === 2, 'the light pool (campfire + rat-camp torches)');
+  assert.ok(L.trees.length >= 3);
+  assert.ok(L.triggers.some((t) => t.id === 'camp'));
+  L.dispose();
+});
+
+test('town builds headless: lanterns light the alley (objective, fog), hub mode drops the occupation', async () => {
+  let { ctx, L, enemies, kittens } = await buildM2('town');
+  assert.deepEqual(L.arenas.map((a) => a.id).sort(), ['forge', 'square']);
+  assert.ok(enemies.list.length >= 9, 'occupied: patrols in the streets');
+  assert.deepEqual(kittens.map((k) => k.id).sort(), ['muffin', 'toffee', 'waffles']);
+  assert.ok(L.pave?.isMesh, 'cobbled streets');
+  const ledge = L.colliders.boxes.find((b) => b.ledge), bal = L.colliders.boxes.find((b) => b.balcony);
+  assert.ok(near(ledge.y1 - L.heightAt(0, 50.5), TOWER.ledge.y, 0.3) && near(bal.y1 - L.heightAt(5, -30), BALCONY.y, 0.05));
+  const fog0 = ctx.env.contrib.size;
+  for (let i = 1; i <= 3; i++) assert.equal(L.interact('lantern_' + i), true);
+  assert.equal(ctx.objectives.get('lanterns')?.done, true);
+  assert.equal(ctx.state.getFlag('town.lanterns'), true);
+  assert.equal(ctx.env.contrib.size, fog0 + 3, 'each lantern thins the fog (−0.005)');
+  assert.equal(L.interact('lantern_1'), false, 'lit once');
+  assert.equal(L.interact('station_forge'), false, 'stations closed while occupied');
+  L.dispose();
+  ({ ctx, L, enemies } = await buildM2('town', { 'town.free': true, 'town.lantern.1': true }, 'hub'));
+  assert.equal(enemies.list.length, 0, 'hub: no enemies');
+  assert.ok(L.arenas.every((a) => a.cleared && !a.canAutoLock()));
+  assert.equal(L.interact('station_forge'), true);
+  assert.equal(L.interact('quest_board'), true);
+  assert.ok(L.triggers.some((t) => t.id === 'south_gate'));
+  assert.ok(ctx.env.contrib.has('lantern_1'), 'a lantern lit on an earlier visit stays lit');
+  L.dispose();
+});
+
+test('gate builds headless: the Line starts at the marker after S1 + S2, re-arms vigil_2; the B2 arena waits for gate.line', async () => {
+  const { ctx, L, kittens } = await buildM2('gate', { 'gate.cleared.s1': true, 'gate.cleared.s2': true });
+  assert.deepEqual(L.arenas.map((a) => a.id), ['causeway']);
+  assert.equal(L.arena('causeway').canAutoLock(), false);
+  assert.deepEqual(kittens.map((k) => k.id).sort(), ['mittens', 'socks', 'tater']);
+  assert.equal(kittens.find((k) => k.id === 'mittens').opts.cageWith, 'tater');
+  assert.ok(L.portcullis && L.raft, 'portcullis + raft');
+  assert.ok(L.colliders.boxes.filter((b) => b.parapet).length >= PARAPETS.length * 2);
+  assert.equal(L.heightAt(0, 0), 0); assert.ok(L.isDeepWater(20, 0));
+  ctx.player = { pos: new THREE.Vector3(0, 0, 20), alive: true, radius: 0.32, height: 1 };
+  L.update(1 / 60);
+  ctx.player.pos.set(0, 0, GATE.line);
+  L.update(1 / 60);
+  assert.equal(ctx.objectives.line?.active, true, 'the Line runs');
+  ctx.state.setFlag('gate.line', true);
+  assert.equal(L.arena('causeway').canAutoLock(), true);
+  ctx.objectives.dispose();
+  L.dispose();
+});
+
+test('U10 The Line: enemies may run the theft (item:stolen / item:returned) and story may start CS-08 itself', async () => {
+  const { ctx, ob, line, step, played } = await lineRig();
+  ctx.enemies.pinThief = null;                                   // enemies' stealer AI owns the theft
+  ctx.enemies.killAll();
+  ob.set('line', 21); step(1 / 60);
+  const thief = line.byWave[1].find((e) => e.opts.pinThief);
+  assert.deepEqual([thief.opts.look, thief.opts.id], ['pilfer', 'pilfer'], 'the first W2 stealer is Pilfer');
+  assert.equal(line.byWave[1].filter((e) => e.opts.id === 'pilfer').length, 1);
+  thief.pos.set(LINE.winch[0], 0, LINE.winch[1]);
+  step(1);
+  assert.equal(line.pin.state, 'home', 'no proximity theft when enemies own it');
+  ctx.bus.emit(E.ITEM_STOLEN, { thief, item: 'pin', amount: 1 });
+  assert.equal(line.pin.state, 'stolen'); assert.equal(ob.get('line').frozen, true);
+  ctx.bus.emit(E.ITEM_RETURNED, { item: 'pin', amount: 1 });
+  assert.equal(line.pin.state, 'returned'); assert.equal(ob.get('line').frozen, false);
+  // story starts CS-08 on its own: adopted (never played twice), W4 when it ends
+  ctx.enemies.killAll();
+  ob.set('line', 70); step(1 / 60);
+  ctx.bus.emit(E.CUTSCENE_START, { id: 'cs08' });
+  step(12);
+  assert.ok(!played.includes('cs08'), 'world does not replay a running CS-08');
+  ctx.bus.emit(E.CUTSCENE_END, { id: 'cs08' });
+  assert.equal(line.byWave[3].length, 7, 'W4 after the scene');
+  ctx.bus.emit(E.CUTSCENE_START, { id: 'g02' });
+  ob.set('line', 90); step(1);
+  assert.ok(!played.includes('g02'), 'G-02 already seen');
+});
+
+test('gate: the Line disc arms on gate.back (story) or both skirmish flags; never after gate.line', async () => {
+  const { LINE_WHEN } = await import('../../src/world/levels/gate.js');
+  const st = fakeCtx({ systems: false }).state;
+  assert.equal(st.cond(LINE_WHEN), false);
+  st.setFlag('gate.cleared.s1', true); assert.equal(st.cond(LINE_WHEN), false);
+  st.setFlag('gate.cleared.s2', true); assert.equal(st.cond(LINE_WHEN), true);
+  st.flags = {}; st.setFlag('gate.back', true); assert.equal(st.cond(LINE_WHEN), true);
+  st.setFlag('gate.line', true); assert.equal(st.cond(LINE_WHEN), false);
+});
+
+test('Arena: a wave row with `at: center` spawns at the arena centre (the town fountain jelly)', () => {
+  const ctx = fakeCtx({ systems: false });
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  ctx.player = { pos: new THREE.Vector3(0, 0, -10), alive: true };
+  const a = new Arena(ctx, { id: 'sq', at: [3, 8], r: 15, waves: [[['jelly_giant', 1, { at: 'center' }]]] });
+  a.lock();
+  assert.equal(enemies.list.length, 1);
+  const e = enemies.list[0];
+  assert.ok(near(e.pos.x, 3) && near(e.pos.z, 8), 'at the centre');
+  assert.equal(e.opts.at, undefined, 'the `at` option is not passed on');
+  assert.ok(e.opts.arena === 'sq' && e.opts.alerted === true);
+});
+
+test('town: CS-07 frees the town in place (occupiers leave, arenas count as cleared)', async () => {
+  const { ctx, L, enemies } = await buildM2('town');
+  const n = enemies.list.length;
+  assert.ok(n > 0);
+  L.arena('square').lock();
+  assert.ok(enemies.list.length > n, 'square wave 1 up');
+  ctx.state.setFlag('town.free', true);
+  ctx.bus.emit(E.FLAG_SET, { key: 'town.free', value: true });
+  assert.equal(enemies.list.length, 0, 'everyone left');
+  assert.ok(L.arenas.every((a) => a.cleared && !a.locked));
+  L.dispose();
+});
+
+test('LevelManager.activateVigil lights a Vigil Stone by id', () => {
+  const ctx = fakeCtx();
+  const lm = new LevelManager(ctx);
+  const lit = [];
+  lm.current = { vigils: [{ id: 'vigil_3', activate: (o) => lit.push(o) }] };
+  assert.equal(lm.activateVigil('vigil_3', { silent: true }), true);
+  assert.deepEqual(lit, [{ silent: true }]);
+  assert.equal(lm.activateVigil('nope'), false);
 });

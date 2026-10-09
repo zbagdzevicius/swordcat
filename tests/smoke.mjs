@@ -110,8 +110,17 @@ const G = async (fn, arg) => {
 /** The harness object every block receives. */
 const t = {
   page, browser, base, args: ARGS, shotsDir: SHOTS, G,
-  /** Screenshot to tests/shots/<name>.png (returns the path; Read it to review). */
-  async shot(name) { const p = path.join(SHOTS, `${name}.png`); await page.screenshot({ path: p }); return p; },
+  /**
+   * Screenshot to tests/shots/<name>.png (returns the path; Read it to review). `{ freeze: true }` holds the sim
+   * (time scale 0) while the screenshot is taken under GPU load, then restores the previous scale.
+   */
+  async shot(name, { freeze = false } = {}) {
+    const p = path.join(SHOTS, `${name}.png`);
+    if (!freeze) { await page.screenshot({ path: p }); return p; }
+    const prev = await G(() => { const g = window.__GAME__?.game; const s = g?.baseTimeScale ?? 1; g?.setTimeScale?.(0); return s; }).catch(() => 1);
+    try { await page.screenshot({ path: p }); } finally { await G((s) => window.__GAME__?.game?.setTimeScale?.(s), prev).catch(() => {}); }
+    return p;
+  },
   fail,
   assert(cond, msg) { if (!cond) fail(msg); return !!cond; },
   log: (...a) => console.log('   ', ...a),

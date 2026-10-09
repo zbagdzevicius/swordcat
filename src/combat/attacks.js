@@ -9,47 +9,16 @@
 //   - juice classification   `juiceKind`, `juiceFor` (GAME_DESIGN §8.2 rows)
 //   - derived defs            `reflectedDef`, `ringDef`, `variantDef` (cached; HIT events keep the base `id`)
 // Pure and node-safe (no three.js, no DOM).
-import { ATTACKS, PLAYER, JUICE, ECONOMY } from '../core/config.js';
+import { ATTACKS, PLAYER, JUICE, ECONOMY, COMBAT } from '../core/config.js';
 import { clamp01, lerp, easeSwing } from '../core/math.js';
 
 export { ATTACKS, easeSwing };
 
 /**
- * Combat tuning not covered by Appendix A. Every value is quoted from the spec it comes from.
- * (Requested as `config.COMBAT` in requests/combat.md; until then this is the single source.)
+ * Combat tuning not covered by Appendix A (tech.md §9 / GAME_DESIGN §7–§8). Lives in `config.COMBAT` since M2
+ * (requests/combat.md); re-exported here so every existing `import { COMBAT }` keeps working.
  */
-export const COMBAT = Object.freeze({
-  /** tech.md §9.3: an enemy's invulnT after taking a hit (anti multi-hit; the player uses PLAYER.hurt.iframes). */
-  antiMultiHit: 0.12,
-  /** tech.md §9.3 / GAME_DESIGN §10.3: poise break → stagger 0.6 s, poise refilled. */
-  poiseBreakStagger: 0.6,
-  /** tech.md §9.3: knockback lifts the target by min(3, k × 0.25) m/s. */
-  knockLiftMul: 0.25, knockLiftMax: 3,
-  /** §19.4: a block pushes the guard back by `PLAYER.guard.pushback × 6` m/s. */
-  pushbackVelMul: 6,
-  /** tech.md §9.2: point-blank radius added to the target radius; broad-phase query pad. */
-  pointBlank: 0.25, queryPad: 1.5,
-  /** Body-contact attacks with no `arc` (hyena_lunge, stealer_snatch dashes): reach past the attacker's radius, half-angle. */
-  contactReach: 0.45, contactHalfArc: Math.PI / 2,
-  /** AttackTokens: a waiting request older than this stops blocking newer requesters; a token held this long is reclaimed. */
-  tokenStale: 0.25, tokenMaxHold: 10,
-  /** Tokenless enemies orbit at 1.4× their attack range (GAME_DESIGN §8.3). */
-  orbitMul: 1.4,
-  /** The same auto-spawned projectile (holyWave / gleam) from one owner within this window is deduplicated. */
-  projectileDedupe: 0.1,
-  /** Reflected projectiles home on their original shooter when it lies within this half-angle of the flipped path. */
-  reflectAimCone: Math.PI / 3,
-  /** ...and keep curving toward it at up to this rate (rad/s) while it stays inside that cone (it may dodge). */
-  reflectHomingRate: 5,
-  /** Wave crescents (holyWave, gleam) ride the ground with their centre at max(height/2, waveHover) m. */
-  waveHover: 0.6,
-  /** Wave hit-shape thickness (m, along travel) and crescent height when a def has no `height` (× width). */
-  waveThickness: 0.35, waveHeightOfWidth: 0.4,
-  /** Fallback projectile numbers for defs that omit them. */
-  projectileSpeed: 12, projectileRange: 12, projectileRadius: 0.2,
-  /** Pooled projectiles alive at once (the oldest is recycled beyond this). */
-  maxProjectiles: 48,
-});
+export { COMBAT };
 
 /**
  * GAME_DESIGN §7.2 numbers that Appendix A leaves out (hitstop / shake of the projectile attacks).

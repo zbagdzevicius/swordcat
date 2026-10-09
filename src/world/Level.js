@@ -103,6 +103,7 @@ export class Level {
     this._loaded = [];     // fns run once after physics + player are placed (enemy / kitten spawns)
     this._updaters = [];   // fns(dt) run every fixed step while the level is active
     this._renderers = [];  // fns(alpha, dt) visual
+    this._timers = [];     // { t, fn } level-time callbacks (after())
     this._offs = [];
     this._time = 0;
     this._interact = null;
@@ -180,6 +181,8 @@ export class Level {
   }
 
   onLoaded(fn) { this._loaded.push(fn); }
+  /** Run `fn` after `sec` seconds of level play time (fixed steps; paused in cutscenes / menus). */
+  after(sec, fn) { this._timers.push({ t: Math.max(0, sec), fn }); }
   onUpdate(fn) { this._updaters.push(fn); }
   onRender(fn) { this._renderers.push(fn); }
   /** Bus subscription that lives as long as the level. */
@@ -211,6 +214,22 @@ export class Level {
     this.listen(E.PLAYER_LIFE_LOST, () => { this.run.runLost = (this.run.runLost ?? 0) + 1; });
     this.listen(E.PLAYER_MEOW, (p) => { const pos = p?.position ?? ctx.player?.pos; if (pos) for (const c of this.critters) c.hearMeow?.(pos); });
     this.listen(E.PLAYER_DIED, () => { for (const a of this.arenas) if (a.locked) a.reset(); });
+    // live mood (`def.moodLive`): a story flag that changes the env pick (town.free → hub_gold, forest.camp → night)
+    // tweens to it in place; during a cutscene it waits for the scene to end (the scene owns the look). Music follows
+    // the same `byFlag` rows on audio's side (musicMap re-evaluates them live).
+    if (this.def?.moodLive) {
+      const repick = () => { if (ctx.story?.isPlaying) return; this.repickMood(); };
+      this.listen(E.FLAG_SET, repick);
+      this.listen(E.CUTSCENE_END, () => this.repickMood());
+    }
+  }
+
+  /** Re-pick the env preset from the level's byFlag rows; tween to it when it changed. */
+  repickMood(dur = 3) {
+    const ctx = this.ctx, lv = ctx.levels;
+    if (!lv?.pickEnv || lv.current !== this) return;
+    const env = lv.pickEnv(this.env);
+    if (env && ctx.env && ctx.env.presetName !== env) ctx.env.preset(env, dur);
   }
 
   update(dt) {
@@ -236,6 +255,11 @@ export class Level {
     for (const a of this.actors) a.update(dt);
     for (const v of this.vigils) v.update(dt);
     for (const fn of this._updaters) fn(dt);
+    if (this._timers.length) {
+      const due = [];
+      for (let i = this._timers.length - 1; i >= 0; i--) { const tm = this._timers[i]; if ((tm.t -= dt) <= 0) { due.push(tm.fn); this._timers.splice(i, 1); } }
+      for (const fn of due.reverse()) { try { fn(this); } catch (e) { console.error(`[world] ${this.id}: timer failed`, e); } }
+    }
     this.pickups?.update(dt);
     this._updateInteract(alive ? p : null);
   }
@@ -319,6 +343,6 @@ export class Level {
     this.skyline?.dispose();
     this.waterMeshes?.dispose();
     this.terrain?.dataTexture?.dispose?.();
-    this.triggers.length = 0; this.interactables.length = 0; this._updaters.length = 0; this._renderers.length = 0;
+    this.triggers.length = 0; this.interactables.length = 0; this._updaters.length = 0; this._renderers.length = 0; this._timers.length = 0;
   }
 }

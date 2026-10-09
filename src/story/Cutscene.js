@@ -343,6 +343,11 @@ export class Cutscene {
       const y = ctx.physics?.heightAt?.(target[0], target[1]) ?? 0;
       return out.set(target[0], Number.isFinite(y) ? y : 0, target[1]);
     }
+    if (target.anchor != null) {                          // { anchor: 'camp', or: [x, z] }: a level anchor with a fallback
+      const an = ctx.levels?.anchor?.(target.anchor);
+      if (an?.pos) return out.copy(an.pos);
+      return target.or != null ? this.point(target.or, out) : null;
+    }
     if (target.object3d && target.pos) return out.copy(target.pos);
     if (typeof target.x === 'number' && typeof target.z === 'number') return out.set(target.x, target.y ?? 0, target.z);
     return null;
@@ -505,13 +510,16 @@ export class Cutscene {
     task.max = Infinity;
     task.hold = true;
     const ctx = this.ctx, host = this.host;
-    const who = step.who ?? 'swordcat';
+    // `who` / `name` may be functions (ctx, cs) → value: casts chosen at run time (CS-08's Kitten A / B)
+    const dyn = (v) => (typeof v === 'function' ? v(ctx, this) : v);
+    const who = dyn(step.who) ?? 'swordcat';
+    const nameKey = dyn(step.name);
     const speed = ctx.state?.settings?.dialogSpeed ?? 1;
     const textStr = stext(step.key, step.vars);
     const line = {
       id: this.id, key: step.key, who, text: textStr,
-      name: step.name ? stext(step.name) : speakerName(who),
-      portrait: step.portrait ?? who,
+      name: nameKey ? stext(nameKey) : speakerName(who),
+      portrait: dyn(step.portrait) ?? who,
       auto: Math.max(0, +step.auto || 0),
       t: 0, revealDur: revealTime(textStr.length, speed), revealed: 0, complete: false,
     };
@@ -866,6 +874,7 @@ export class Cutscene {
     // ui + camera handback (§5.1: letterbox off, HUD restored, 0.6 s blend; a skip cuts)
     host?.cinema?.apply?.({ letterbox: false, hud: true, fade: { alpha: 0, dur: skipped ? 0 : 0.5 }, ...(end.ui ?? {}), caption: null, title: null }, this, true);
     if (skipped) host?.cinema?.clear?.();
+    if (host?.cinema?.letterOn && !end.ui?.letter) host.cinema.letter?.(null);
     const camOpt = end.cam ?? 'follow';
     if (camOpt !== false) {
       const m = typeof camOpt === 'string' ? camOpt : camOpt.mode ?? 'follow';
@@ -873,8 +882,11 @@ export class Cutscene {
       try { ctx.cam?.mode?.(m, { blend }); } catch (e) { console.warn(e); }
     }
     // level change
-    if (end.load) {
-      try { await ctx.levels?.load?.(end.load.level, end.load.spawn ?? 'start'); } catch (e) { console.error(`[story] ${this.id}: end load failed`, e); }
+    // (a function may decide at run time and await things first, e.g. CS-10's results card when skipped early)
+    let load = end.load;
+    if (typeof load === 'function') { try { load = await load(ctx, this, skipped); } catch (e) { console.error(`[story] ${this.id}: end load failed`, e); load = null; } }
+    if (load?.level) {
+      try { await ctx.levels?.load?.(load.level, load.spawn ?? 'start'); } catch (e) { console.error(`[story] ${this.id}: end load failed`, e); }
     }
     if (end.player?.spawn) {
       const sp = ctx.levels?.anchor?.(end.player.spawn);

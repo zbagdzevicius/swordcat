@@ -25,7 +25,7 @@ import { ECONOMY } from '../core/config.js';
 import { Level, condOk } from './Level.js';
 import { Terrain } from './Terrain.js';
 import { Grass, GRASS_COLORS } from './Grass.js';
-import { PropBatch, templateFromObject, fitScale, trs, procTemplate } from './Props.js';
+import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial } from './Props.js';
 export { procTemplate };
 import { PropActor, Critter } from './PropActor.js';
 import { Pickups } from './Pickups.js';
@@ -34,6 +34,7 @@ import { VigilStone, VIGIL } from './VigilStone.js';
 import { WaterSet } from './Water.js';
 import { Silhouettes, makeGlowSprite } from './Sky.js';
 import { distToPolyline, inBox, pointAlong, polylineLength } from './noise.js';
+import { LightPool, Fireflies, paveRibbons } from './Dressing.js';
 
 /** Shared model paths (the level manifests list them). */
 /**
@@ -177,7 +178,8 @@ export class Kit {
   }
   actor(a, id) { return this.level.addActor(a, id); }
   anchor(name, x, z, y, facing = 0) { this.level.anchors[name] = { pos: new THREE.Vector3(x, y ?? this.h(x, z), z), facing }; }
-  spawn(name, x, z, facing = 0) { this.level.spawns[name] = { pos: new THREE.Vector3(x, this.h(x, z), z), facing }; }
+  /** A spawn point; `y` (absolute) for raised spawns (the town bell platform), else the ground. */
+  spawn(name, x, z, facing = 0, y = null) { this.level.spawns[name] = { pos: new THREE.Vector3(x, Number.isFinite(y) ? y : this.h(x, z), z), facing }; }
   trigger(t) { this.level.triggers.push({ fired: false, inside: false, once: true, ...t }); }
   interact(it) {
     const y = it.y ?? this.h(it.at[0], it.at[1]);
@@ -297,6 +299,7 @@ export class Kit {
     const color = o.color != null ? new THREE.Color(o.color) : (jit > 0 ? new THREE.Color(1, 1, 1).multiplyScalar(1 - jit + this.rng() * jit * 2) : null);
     let handle = null;
     if (o.tree || o.fade) this._addInst(tpl, m, color, !!o.tree);
+    else if (o.into) o.into.items.push({ geo: tpl.geometry, m, color });     // a merged architecture mesh (kit.merged)
     else handle = this.batch.add(tpl.geometry, m, { color, cull: o.cull });
     const parts = [];
     for (const p of tpl.parts) {
@@ -327,10 +330,44 @@ export class Kit {
     const top = o.height ?? (b.max.y - b.min.y) * sv[1];
     const base = { y0: y - 0.6, y1: y + top };
     if (o.walkable === false) base.walkable = false;
+    if (o.fade) base.camFade = true;            // fadeable props (fences, gate / lantern posts): fade, don't pull in
     if (o.tree) return [{ x, z, r: o.trunk ?? Math.max(0.22, Math.min(w, d) * 0.08), camFade: true, ...base }];   // camera: fade, don't pull in
     const kind = o.collider === 'circle' || o.collider === 'box' ? o.collider : (Math.max(w, d) / Math.max(0.01, Math.min(w, d)) > 1.6 ? 'box' : 'circle');
     if (kind === 'circle') return [{ x: cx, z: cz, r: Math.max(0.15, (w + d) / 4), ...base }];
     return [{ x: cx, z: cz, hx: w / 2, hz: d / 2, yaw, ...base }];
+  }
+
+  /**
+   * A merged architecture bucket: `place(tpl, x, z, { into: bucket })` collects instances; `bucket.build()` merges them
+   * into ONE mesh with `material` (default: the dressed-stone material, art.md §9.4) and adds it to the level.
+   * Castle towers, walls and terrace masonry read as cut stone instead of flat Kenney colours.
+   */
+  merged(name, material = null) {
+    const kit = this;
+    const bucket = {
+      name, items: [],
+      build() {
+        if (!this.items.length) return null;
+        const geos = this.items.map(({ geo, m, color }) => {
+          let g = geo.clone().applyMatrix4(m);
+          if (color && g.attributes.color) { const c = g.attributes.color; for (let i = 0; i < c.count; i++) c.setXYZ(i, c.getX(i) * color.r, c.getY(i) * color.g, c.getZ(i) * color.b); }
+          if (g.index) { const ng = g.toNonIndexed(); g.dispose(); g = ng; }
+          for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color') g.deleteAttribute(k);
+          return g;
+        });
+        const merged = mergeGeometries(geos, false);
+        for (const g of geos) g.dispose();
+        if (!merged) return null;
+        merged.computeBoundingSphere(); merged.computeBoundingBox();
+        const mat = material ?? makeStoneMaterial({ block: [0.9, 0.6], course: 0.42 });
+        mat.userData.owned = true;
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.name = 'merged:' + name; mesh.castShadow = true; mesh.receiveShadow = true;
+        kit.object(mesh);
+        return mesh;
+      },
+    };
+    return bucket;
   }
 
   /** Instanced (camera-fadeable) props: trees (with wind sway) and `fade` props such as the practice-field fence. */
@@ -365,7 +402,7 @@ export class Kit {
       if (inGap) { if (segStart !== null) { segs.push([segStart, (i) / n]); segStart = null; } continue; }
       if (segStart === null) segStart = i / n;
       const p = this.place(tpl, x, z, { scale: [sx, sc, sz], yaw, center: true, collider: false,
-        jitter: o.jitter ?? 0.05, clear: o.clear ?? 0.6, occupy: 0.4, tiltZ: (this.rng() - 0.5) * (o.wobble ?? 0.04), fade: o.fade });
+        jitter: o.jitter ?? 0.05, clear: o.clear ?? 0.6, occupy: 0.4, tiltZ: (this.rng() - 0.5) * (o.wobble ?? 0.04), fade: o.fade, into: o.into });
       if (p) pieces.push(p);
     }
     if (segStart !== null) segs.push([segStart, 1]);
@@ -418,6 +455,18 @@ export class Kit {
     }
     for (const s of Object.values(def.spawns ?? {})) this.block({ x: s[0], z: s[1], r: 2 });
 
+    // 3b. level lights (a fixed pool that follows the nearest lit flames) and fireflies
+    const focus = () => ctx.player?.object3d?.position ?? ctx.camera?.position ?? null;
+    if (def.lights) {
+      const pool = level.lightPool = new LightPool(level.groups.props, def.lights.n ?? def.lights, def.lights.opts ?? {});
+      level.animators.push({ render: (dt, t) => pool.update(focus(), t) });
+    }
+    if (def.fireflies) {
+      const ff = level.fireflies = new Fireflies(def.fireflies === true ? {} : def.fireflies);
+      level.groups.props.add(ff.points);
+      level.animators.push({ render: (dt, t) => { const f = focus(); ff.update(t, f, ctx.env, f ? f.y : 0); } });
+    }
+
     // 4. zones: setpieces + placed models first (they occupy space), then the gameplay parts
     for (const zn of def.zones ?? []) {
       if (zn.props) await this._setpiece(zn.props, zn);
@@ -425,6 +474,7 @@ export class Kit {
     }
     mark('setpieces');
     for (const zn of def.zones ?? []) this._zone(zn);
+    if (typeof def.decorate === 'function') { try { await def.decorate(this); } catch (e) { console.error(`[world] ${def.id}: decorate failed`, e); } }
 
     // 5. scatter, crates, fish lines, breadcrumbs
     for (const s of def.scatter ?? []) await this._scatter(s);
@@ -437,6 +487,20 @@ export class Kit {
     await this._farDressing();
     mark('far');
 
+    // paved streets carry no grass (cleared before the ground-data texture is built)
+    if (def.pave) {
+      const pv = def.pave, clearLine = (pts, w) => {
+        for (let i = 0; i < pts.length - 1; i++) {
+          const [ax, az] = pts[i], [bx, bz] = pts[i + 1], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 1.0));
+          for (let k = 0; k <= n; k++) this.clear(ax + (bx - ax) * k / n, az + (bz - az) * k / n, w / 2 + 0.3, 0);
+        }
+      };
+      clearLine(this.terrain.spine, (def.pathWidth ?? 6) + (pv.widen ?? 0.6));
+      for (const p of this.terrain.paths) clearLine(p.pts, p.width + (pv.widen ?? 0.6));
+      for (const e of pv.extra ?? []) clearLine(e.pts, e.width);
+      for (const [x, z, r] of pv.discs ?? []) this.clear(x, z, r + 0.3, 0);
+    }
+
     // 7. render outputs: ground, grass, water, props batch, trees
     // §18 budget: Low draws the ground at half resolution in one call; Med / High in 2 × 2 frustum-culled tiles
     const lowQ = ctx.quality?.id === 'low';
@@ -446,6 +510,17 @@ export class Kit {
     level.groups.terrain.add(out.mesh);
     /** ground tiles within this many metres of the camera draw full resolution (0 = no LOD tiles) */
     level.groundLod = out.mesh.isGroup && out.mesh.children.some((c) => c.userData.lod) ? 34 : 0;
+    // paved streets (town cobbles): textured ribbons along the spine, the side paths and `pave.extra`, plus plazas
+    if (def.pave) {
+      const pv = def.pave, rng = this.rng.fork('pave');
+      const lines = [{ pts: this.terrain.spine, width: (def.pathWidth ?? 6) + (pv.widen ?? 0.6) }, ...this.terrain.paths.map((p) => ({ pts: p.pts, width: p.width + (pv.widen ?? 0.6) })), ...(pv.extra ?? [])];
+      try {
+        const mesh = await paveRibbons(ctx, { lines, discs: pv.discs ?? [], heightAt: (x, z) => this.terrain.heightAt(x, z), texture: pv.texture, tint: pv.tint, tile: pv.tile ?? 2.6,
+          color: pv.color ?? '#FFFFFF', edge: pv.edge ?? '#9A9078', rng, name: 'pave:' + def.id });
+        if (mesh) { level.groups.terrain.add(mesh); level.pave = mesh; }
+      } catch (e) { console.warn(`[world] ${def.id}: paving failed`, e); }
+      mark('pave');
+    }
     if ((def.grass ?? this.biome.grass) !== false) {
       const g = def.grass ?? {};
       level.grass = new Grass({ ground: out.dataTexture, size: this.terrain.size, res: this.terrain.res, quality: ctx.quality,
@@ -460,7 +535,7 @@ export class Kit {
     mark('batch');
 
     // 8. spawns, anchors (+ fog_edge_0..7), checkpoints as spawns
-    for (const [id, s] of Object.entries(def.spawns ?? {})) this.spawn(id, s[0], s[1], s[2] ?? 0);
+    for (const [id, s] of Object.entries(def.spawns ?? {})) this.spawn(id, s[0], s[1], s[2] ?? 0, s[3]);
     if (!level.spawns.start) { const p = def.spine?.[0] ?? [0, 0]; this.spawn('start', p[0], p[1], 0); }
     for (const v of level.vigils) if (!level.spawns[v.id]) level.spawns[v.id] = { pos: v.spawn.pos.clone(), facing: v.spawn.facing };
     for (const [id, a] of Object.entries(def.anchors ?? {})) {
@@ -525,11 +600,12 @@ export class Kit {
       case 'open': this._open(zn); break;
       case 'kitten': this._kitten(zn); break;
       case 'letter':
-        this.onLoaded(() => { if (this.cond(zn.onlyIf)) level.pickups.placeLetter(zn.letterId ?? zn.id, zn.at[0], zn.at[1]); });
+        // `y` lifts it above the ground (a stump top, a ledge); `yAbs` puts it at an absolute height
+        this.onLoaded(() => { if (this.cond(zn.onlyIf)) this._lift(level.pickups.placeLetter(zn.letterId ?? zn.id, zn.at[0], zn.at[1]), zn); });
         this.clear(zn.at[0], zn.at[1], 0.7, 0.3);
         break;
       case 'heartBell':
-        this.onLoaded(() => { if (this.cond(zn.onlyIf)) { const it = level.pickups.placeHeartBell(zn.bellId ?? zn.id, zn.at[0], zn.at[1]); if (it && zn.y) { it.pos.y += zn.y; it.mesh.position.y += zn.y; } } });
+        this.onLoaded(() => { if (this.cond(zn.onlyIf)) this._lift(level.pickups.placeHeartBell(zn.bellId ?? zn.id, zn.at[0], zn.at[1]), zn); });
         this.clear(zn.at[0], zn.at[1], 0.8, 0.2);
         break;
       case 'exit':
@@ -560,13 +636,24 @@ export class Kit {
    */
   _hint(zn, h) {
     const { ctx, level } = this, flag = 'seen.' + h.key;
-    level.listen(h.on === 'telegraph' ? E.TELEGRAPH : E.ENEMY_ALERTED, (p) => {
+    const ev = h.on === 'telegraph' ? E.TELEGRAPH : h.on === 'jeer' ? E.ENEMY_JEER : E.ENEMY_ALERTED;
+    level.listen(ev, (p) => {
       const a = p?.actor ?? p?.enemy;
       const type = a?.def?.id ?? a?.type ?? null;
-      if ((h.type && type !== h.type) || !this.cond(zn.onlyIf) || ctx.state?.getFlag?.(flag)) return;
+      if ((h.type && type !== h.type) || (h.on === 'jeer' && p?.on === false) || !this.cond(zn.onlyIf) || ctx.state?.getFlag?.(flag)) return;
       ctx.state?.setFlag?.(flag, true);
-      ctx.bus.emit(E.TOAST, { text: ctx.strings?.t?.(h.key) ?? h.key, icon: 'hint', key: h.key });
+      const st = ctx.strings, text = st?.has?.(h.key) !== false && st?.t ? st.t(h.key) : (h.text ?? h.key);
+      ctx.bus.emit(E.TOAST, { text: text === h.key && h.text ? h.text : text, icon: 'hint', key: h.key });
     });
+  }
+
+  /** Raise a placed pickup by the zone's `y` (above the ground) or to `yAbs` (absolute). */
+  _lift(it, zn) {
+    if (!it) return;
+    const dy = Number.isFinite(zn.yAbs) ? zn.yAbs - it.pos.y : (zn.y ?? 0);
+    if (!dy) return;
+    it.pos.y += dy;
+    if (it.mesh) it.mesh.position.y += dy;
   }
 
   _fireTrigger(zn) {
@@ -620,7 +707,7 @@ export class Kit {
     this.onLoaded(() => {
       if (!this.cond(zn.onlyIf) || !ctx.enemies?.spawn) return;
       const st = ctx.state, flag = openZoneFlag(level.id ?? this.def.id, zn.id);
-      if (st?.getFlag?.(flag)) return;                                   // cleared on an earlier visit (saved)
+      if (st?.getFlag?.(flag)) { try { ctx.companions?.markCleared?.(zn.id); } catch { /* optional */ } return; }   // cleared on an earlier visit (saved)
       // loading at a Vigil Stone (Continue / reload): it is a safe spot, so groups near it stay away this load
       const sp = level.vigils.some((v) => v.id === level.spawnId) ? level.spawns[level.spawnId]?.pos : null;
       const mine = [];
@@ -634,12 +721,28 @@ export class Kit {
           if (e) { level.spawnedEnemies.push(e); mine.push(e); }
         }
       }
-      // every enemy of the zone down → `<level>.cleared.<zone>` (saved with the flags; skipped on later loads)
+      // every enemy of the zone down → `<level>.cleared.<zone>` (saved with the flags; skipped on later loads), then
+      // the zone's `clearPlay` scene (town bakery → D-03) and `onClear` hook
       if (mine.length) level.listen(E.ENEMY_DIED, (p) => {
-        if (!mine.includes(p?.enemy) || mine.some((e) => e.alive)) return;
+        if (!mine.includes(p?.enemy) || mine.some((e) => e.alive && ctx.enemies?.list?.includes?.(e) !== false)) return;
+        if (st?.getFlag?.(flag)) return;
         st?.setFlag?.(flag, true);
+        this._zoneCleared(zn);
       });
     });
+  }
+
+  /** An open zone's enemies are all down (now or on an earlier visit, when `again` is set). */
+  _zoneCleared(zn) {
+    const ctx = this.ctx;
+    try { ctx.companions?.markCleared?.(zn.id); } catch { /* optional: companions' appearOn / needClear */ }
+    if (zn.clearEvent) ctx.bus.emit(E.ARENA_CLEAR, { id: zn.id, open: true });     // story / audio treat it like an arena
+    try { zn.onClear?.(this.level, ctx); } catch (e) { console.error(`[world] zone ${zn.id} onClear failed`, e); }
+    if (zn.clearPlay && this.cond(zn.clearWhen)) {
+      const L = this.level;
+      const play = () => { if (!this.cond(zn.clearWhen)) return; if (!ctx.story?.isPlaying) ctx.story?.play?.(zn.clearPlay); else L.after(0.5, play); };
+      L.after(zn.clearDelay ?? 1.2, play);
+    }
   }
 
   _kitten(zn) {
@@ -652,7 +755,7 @@ export class Kit {
       const id = zn.kittenId ?? zn.id;
       if (!this.cond(zn.onlyIf) || ctx.state?.kittens?.includes?.(id) || !ctx.companions?.spawnKitten) return;
       const opts = { prop: zn.prop === 'cow' ? null : zn.prop, standTime: zn.standTime, needClear: zn.needClear, y: zn.y, facing: zn.facing,
-        zoneR: zn.zoneR, hits: zn.hits, cage: zn.cage, ribbon: zn.ribbon };
+        zoneR: zn.zoneR, hits: zn.hits, cage: zn.cage, ribbon: zn.ribbon, ...(zn.opts ?? {}) };
       for (const k of Object.keys(opts)) if (opts[k] == null) delete opts[k];
       ctx.companions.spawnKitten(id, [zn.at[0], this.h(zn.at[0], zn.at[1]), zn.at[1]], zn.hide ?? null, opts);
     });
@@ -685,7 +788,7 @@ export class Kit {
     return this.free(x, z, r);
   }
 
-  /** `scatter` entry: { model (path | paths), n, fit, minDistFromPath, minDist, area, tree, collider, tilt, sink, clump, jitter, edge }. */
+  /** `scatter` entry: { model (path | paths), n, fit, minDistFromPath, minDist, area, along: [min, max] (m beside the spine), tree, collider, tilt, sink, clump, jitter, edge }. */
   async _scatter(s) {
     const tpls = (await Promise.all([].concat(s.model).map((p) => this.tpl(p, s.tpl ? { ...s.tpl, key: (s.tpl.key ?? 'scatter') + ':' + p } : {})))).filter(Boolean);
     if (!tpls.length) return;
@@ -698,7 +801,11 @@ export class Kit {
       let x, z;
       if (s.area?.size) { x = s.area.at[0] + (rng() - 0.5) * s.area.size[0]; z = s.area.at[1] + (rng() - 0.5) * s.area.size[1]; }
       else if (s.area?.r) { const a = rng.angle(), rr = Math.sqrt(rng()) * s.area.r; x = s.area.at[0] + Math.sin(a) * rr; z = s.area.at[1] + Math.cos(a) * rr; }
-      else if (s.band) { const a = rng.angle(), rr = s.band[0] + rng() * (s.band[1] - s.band[0]); const k = Math.max(Math.abs(Math.sin(a)), Math.abs(Math.cos(a))); x = Math.sin(a) / k * rr; z = Math.cos(a) / k * rr; }
+      else if (s.along) {             // a band beside the spine (trees lining the forest path): [minDist, maxDist]
+        const Ls = this._spineLen ??= polylineLength(this.terrain.spine);
+        const [px, pz, yaw] = pointAlong(this.terrain.spine, rng() * Ls), side = rng.sign(), d = s.along[0] + rng() * (s.along[1] - s.along[0]);
+        x = px + Math.cos(yaw) * d * side; z = pz - Math.sin(yaw) * d * side;
+      } else if (s.band) { const a = rng.angle(), rr = s.band[0] + rng() * (s.band[1] - s.band[0]); const k = Math.max(Math.abs(Math.sin(a)), Math.abs(Math.cos(a))); x = Math.sin(a) / k * rr; z = Math.cos(a) / k * rr; }
       else { x = (rng() * 2 - 1) * half; z = (rng() * 2 - 1) * half; }
       const r = s.minDist ?? (isTree ? 2.5 : 1.2);
       if (!this._scatterOk(x, z, s, r)) continue;
@@ -706,7 +813,7 @@ export class Kit {
       const tilt = s.tilt ?? (isTree ? 0.03 : 0.08);
       const placed = this.place(tpl, x, z, { fit: s.fit, yaw: rng.angle(), tree: isTree, collider: s.collider ?? (s.noCollider ? false : 'auto'),
         tiltX: (rng() - 0.5) * tilt, tiltZ: (rng() - 0.5) * tilt, sink: s.sink ?? (isTree ? 0.15 : 0.05), jitter: s.jitter ?? 0.08, shrink: s.shrink,
-        occupy: r, clear: s.clear });
+        occupy: r, clear: s.clear, fade: s.fade });
       if (!placed) continue;
       made++;
       if (s.paint) this.paint(x, z, placed.radius * (s.paintR ?? 1.1), s.paint, s.paintW ?? 0.5);
@@ -734,7 +841,8 @@ export class Kit {
         clusterLeft = rng.int(1, 3);
       }
       const x = cx + (rng() - 0.5) * 1.6, z = cz + (rng() - 0.5) * 1.6;
-      if (!this._scatterOk(x, z, { edge: 8 }, 0.7)) { clusterLeft--; continue; }
+      const wl = level.waterLevelAt(x, z);
+      if (!this._scatterOk(x, z, { edge: 8 }, 0.7) || (wl !== null && wl > this.h(x, z) - 0.05)) { clusterLeft--; continue; }   // never in the water (gate)
       const path = rng.pick(models);
       const p = this.place(path, x, z, { fit: { h: fits[path] }, yaw: cyaw + (rng() - 0.5) * 0.8, collider: 'box', shrink: 0.95, jitter: 0.08, occupy: 0.7, cull: true });
       if (!p) { clusterLeft--; continue; }
@@ -882,6 +990,7 @@ export const SETPIECES = {
       const tpl = tpls[i % tpls.length];
       if (!tpl) continue;
       kit.place(tpl, x, z, { fit: zone.stoneFit ?? { h: 3.0 }, yaw: a + Math.PI / 2 + (kit.rng() - 0.5) * 0.4, collider: 'circle', shrink: 0.75,
+        fade: zone.stoneFade ?? true,   // M2: the follow camera fades a stone it is behind / inside (was a flat grey face)
         tiltX: (kit.rng() - 0.5) * 0.08, tiltZ: (kit.rng() - 0.5) * 0.08, sink: 0.15, jitter: 0.05 });
       kit.paint(x, z, 1.6, '#3B3A26', 0.35);
     }

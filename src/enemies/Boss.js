@@ -10,11 +10,19 @@
 //   - Death and retry: when she loses a life, the current phase restarts at full phase HP and the adds despawn.
 //   - Barkus: `hpFloor` (any phase row's) holds until freeShard() (the 3rd P3 `shardSlam` parry calls it); with the shard freed, reaching `rallyAt` plays
 //     CS-15 (`onRally.play`) instead of dying (CS-15's `end` emits boss:defeated).
+//   - Move runner (M2): a phase row's `moves` name the type's `moves` entries. A move with `chain` runs the shared combo
+//     state (moves.js CHAIN_STATE); a move whose id names a type state (or `state: '<name>'`) runs that state; anything
+//     else is a plain windup → strike attack def. Moves may carry `range`, `minRange`, `cooldown` and `when(e, d)`.
+//     Bosses never wait for attack tokens (they are the fight). `forceMove` makes the next pick a given move (a phase
+//     opener such as Grizzlechop's Wheel Ride).
+//   - Type hooks: onPhaseChange(e, i), onRestart(e), onChoke(e) (default: Dizzy to full — a lesson event, §11.1),
+//     onDefeat(e); `bark(key)` shows a §6.3 line over the boss (story's bark bubbles).
 import { Enemy } from './Enemy.js';
 import { Dizzy } from './Dizzy.js';
 import { E } from '../core/events.js';
 import { ATTACKS, DIZZY, PLAYER } from '../core/config.js';
-import { TUNING } from './tuning.js';
+import { TUNING, M2 } from './tuning.js';
+import { CHAIN_STATE } from './moves.js';
 import * as THREE from 'three';
 
 /** Phase index for HP fraction `frac` (pure; exported for tests). */
@@ -25,6 +33,7 @@ export function phaseFor(phases, frac) {
 }
 
 const BOSS_STATES = {
+  chain: CHAIN_STATE,
   phase: {
     anim: (e) => (e.roleSpec('cheer') ? ['cheer', { once: true }] : ['idle', null]),
     enter(e) { e.endTelegraph(); e.swing = null; e.releaseToken(); e.attack = null; },
@@ -64,14 +73,22 @@ export class Boss extends Enemy {
     this._dizzyEmitT = 0;
     this._offLife = null;
     this.phaseWindupMul = def.phases?.[0]?.windupMul ?? 1;
+    /** move id the next pick must return (phase openers) */
+    this.forceMove = null;
+    /** a short weaker "dizzy" (Wheel Ride: hits ×1.5 for 2.0 s) on top of the Dizzy meter */
+    this.critBoost = 1; this.critBoostT = 0;
   }
+
+  /** Bosses never queue for attack tokens: they are the fight (adds share the tokens). */
+  hasToken() { return true; }
+  acquireToken() { return true; }
 
   /** Dizzy meter value (0..dizzyMax). */
   get dizzy() { return this.meter?.value ?? 0; }
   set dizzy(v) { if (this.meter) this.meter.value = Math.max(0, Math.min(this.meter.max, v)); }
   get isDizzy() { return !!this.meter?.dizzy; }
   /** Crit multiplier Combat applies to hits on this boss (×2 while dizzy). */
-  get critMul() { return this.meter?.critMul ?? 1; }
+  get critMul() { return Math.max(this.meter?.critMul ?? 1, this.critBoostT > 0 ? this.critBoost : 1); }
   /** Combat's duck-typed name for the same multiplier (requests/combat.md). */
   get critTaken() { return this.critMul; }
 
@@ -119,6 +136,7 @@ export class Boss extends Enemy {
         this.attackChoice = null;
         this.invulnT = Math.max(this.invulnT, TUNING.boss.phaseInvuln);
         this.ctx.bus.emit(E.BOSS_PHASE, { boss: this, phase: i });
+        this.attackCd = {};                                   // a new phase opens with its full move set
         this.def.onPhaseChange?.(this, i);
         if (this.alive && !this.scripted && this.started && !this.isDizzy) this.setState('phase');
       }
@@ -134,22 +152,39 @@ export class Boss extends Enemy {
         const ev = evs[j], key = `${i}:${j}`;
         if (this._eventsFired.has(key) || frac > ev.at) continue;
         this._eventsFired.add(key);
-        if (ev.spawn) this.spawnAdds(ev.spawn);
+        if (ev.spawn) this.spawnAdds(ev.spawn, i);
         if (ev.env) this.ctx.env?.set?.(ev.env, ev.env.dur ?? 1);
       }
     }
   }
 
-  /** Spawn adds on a ring around the boss (they despawn on retry and defeat). */
-  spawnAdds(list) {
+  /**
+   * Spawn adds (they despawn on retry and defeat). The type may place them (`def.addsAt(e, type, k, phase)` →
+   * `{ pos, opts }`); else on a ring around the boss. Adds join the boss's arena (its alive count).
+   */
+  spawnAdds(list, phase = this.phase) {
     const pts = [], n = 6, r = TUNING.boss.addsRing;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + this.facing;
       pts.push(new THREE.Vector3(this.pos.x + Math.sin(a) * r, this.pos.y, this.pos.z + Math.cos(a) * r));
     }
-    const out = this.ctx.enemies?.spawnWave?.(list, pts) ?? [];
-    for (const a of out) { a.bossAdd = this; a.alerted = true; a.wake?.(0.2); }
+    const out = [];
+    const arena = this.spawnOpts?.arena;
+    for (const [type, cnt = 1, extra] of list) {
+      for (let k = 0; k < cnt; k++) {
+        const at = this.def.addsAt?.(this, type, k, phase);
+        const opts = { alerted: true, noCap: true, ...(arena ? { arena } : {}), ...(at?.opts ?? {}), ...(extra ?? {}) };
+        const e = at?.pos ? this.ctx.enemies?.spawn?.(type, at.pos, opts)
+          : this.ctx.enemies?.spawnWave?.([[type, 1, opts]], [pts[out.length % n]])?.[0];
+        if (!e) continue;
+        e.bossAdd = this; e.alerted = true; e.wake?.(0.2);
+        this.ctx.enemies?.joinArena?.(e, arena);
+        this.ctx.bus.emit(E.BURST, { kind: 'spawn', position: e.pos.clone() });
+        out.push(e);
+      }
+    }
     this.adds.push(...out);
+    this.def.onAdds?.(this, out, phase);
     return out;
   }
 
@@ -169,8 +204,10 @@ export class Boss extends Enemy {
     }
     this.despawnAdds();
     this.meter.reset();
+    this.critBoostT = 0; this.forceMove = null; this.attackCd = {};
     if (!this.shardFreed) this.shardParries = 0;
     this.endTelegraph(); this.swing = null; this.releaseToken(); this.attack = null; this.staggerT = 0;
+    this.def.onRestart?.(this);
     this.emitDizzy();
     if (!this.scripted) this.setState('idle');
   }
@@ -181,19 +218,40 @@ export class Boss extends Enemy {
     if (this.attackChoice && this.stateName === 'chase') return this.attackChoice;
     const row = this.def.phases?.[this.phase];
     if (!row?.moves?.length) return super.pickAttack(d);
-    const w = row.weights ?? row.moves.map(() => 1);
-    let total = 0; for (let i = 0; i < row.moves.length; i++) total += w[i] ?? 1;
-    if (total <= 0) return super.pickAttack(d);
-    let r = this.ctx.rng() * total, pick = row.moves[0];
-    for (let i = 0; i < row.moves.length; i++) { r -= w[i] ?? 1; if (r <= 0 && (w[i] ?? 1) > 0) { pick = row.moves[i]; break; } }
+    let pick = null;
+    if (this.forceMove && row.moves.includes(this.forceMove)) { pick = this.forceMove; this.forceMove = null; }
+    else {
+      const w = row.weights ?? row.moves.map(() => 1);
+      const ok = row.moves.map((m, i) => (w[i] ?? 1) > 0 && this.moveUsable(m, d));
+      let total = 0; for (let i = 0; i < row.moves.length; i++) if (ok[i]) total += w[i] ?? 1;
+      if (total <= 0) {                                   // everything cooling down: the first move without a cooldown
+        pick = row.moves.find((m) => !this.def.moves?.[m]?.cooldown && (w[row.moves.indexOf(m)] ?? 1) > 0) ?? row.moves[0];
+      } else {
+        let r = this.ctx.rng() * total;
+        for (let i = 0; i < row.moves.length; i++) { if (!ok[i]) continue; r -= w[i] ?? 1; if (r <= 0) { pick = row.moves[i]; break; } }
+        pick ??= row.moves.find((m, i) => ok[i]);
+      }
+    }
     const def = this.attackDef(pick);
-    this.attackChoice = { id: pick, def, range: def.range ?? def.arc?.range ?? TUNING.boss.fallbackRange, kind: def.projectile ? 'ranged' : 'melee' };
+    const range = def.range ?? def.arc?.range ?? def.chain?.[0]?.range ?? TUNING.boss.fallbackRange;
+    this.attackChoice = { id: pick, def, range, minRange: def.minRange, cooldown: def.cooldown, kind: def.projectile ? 'ranged' : 'melee' };
     return this.attackChoice;
   }
 
+  /** Is move `id` off cooldown and allowed now (its `when(e, d)`)? */
+  moveUsable(id, d = this.distToPlayer()) {
+    if ((this.attackCd[id] ?? 0) > 0) return false;
+    const m = this.def.moves?.[id];
+    return !m?.when || !!m.when(this, d);
+  }
+
+  /** Move def: the type's own `moves` entry (chains included), then ATTACKS, then a generic swing sized to the boss. */
   attackDef(id) {
     const own = this.def.moves?.[id];
-    if (own && !own.chain) return own;
+    if (own && (own.chain || own.state || this.states[id] || own.arc || own.projectile || own.speed)) {
+      if (own.chain && !own.state) return (this._chainDefs ??= new Map()).get(id) ?? this._chainDefs.set(id, { ...own, state: 'chain', id }).get(id);
+      return own;
+    }
     if (ATTACKS[id]) return ATTACKS[id];
     let m = this._moves.get(id);
     if (!m) {
@@ -244,6 +302,7 @@ export class Boss extends Enemy {
   /** §11.1: +35 per parry (full on a gold glint); a parried boss is briefly interrupted. */
   onParried(by, { gold = false } = {}) {
     if (!this.alive) return;
+    if (this.def.onParried?.(this, by, { gold }) === true) return;
     this.countShardParry();
     const res = this.meter.addParry(gold);                     // '' while already dizzy: nothing to report
     if (res !== 'dizzy') this.stagger(PLAYER.guard.eliteParryStagger);
@@ -268,12 +327,37 @@ export class Boss extends Enemy {
   onDeath(hit) {
     super.onDeath(hit);
     this.despawnAdds();
+    this.def.onDefeat?.(this);
     this.ctx.bus.emit(E.BOSS_DEFEATED, { boss: this, id: this.def.id });
+  }
+
+  /** §11.1 lesson event: a choke fills Dizzy (types add their bark through `onChoke`). */
+  choke() {
+    if (!this.alive) return;
+    this.endTelegraph(); this.swing = null; this.attack = null;
+    this.ctx.bus.emit(E.ENEMY_CHOKE, { enemy: this });
+    this.def.onChoke?.(this);
+    this.fillDizzy();
+    if (!this.isDizzy) this.stagger(PLAYER.guard.goldParryStagger);
+  }
+
+  /** A §6.3 line over the boss (story's BarkDirector bubble + babble); no-op without story. */
+  bark(key) {
+    if (!key) return false;
+    try { return !!this.ctx.story?.barks?.say?.(this, key, this.def.id); } catch (err) { console.warn('[boss] bark', err); return false; }
+  }
+
+  /** A short weaker dizzy: stagger `sec` with hits ×`mul` (Wheel Ride's end, §11.2). */
+  wobble(sec, mul = M2.boss.critBoost) {
+    this.critBoost = mul; this.critBoostT = sec;
+    this.stagger(sec);
+    this.wobbleT = Math.max(this.wobbleT, sec);
   }
 
   dieDur() { return TUNING.die.dur * 1.5; }
 
   update(dt) {
+    if (this.critBoostT > 0 && this.ctx.game.simActive(this)) this.critBoostT = Math.max(0, this.critBoostT - dt);
     if (this.meter && this.started && this.ctx.game.simActive(this) && !this.dormant) {
       const res = this.meter.update(dt);
       if (res === 'recovered') this.emitDizzy();
@@ -284,6 +368,7 @@ export class Boss extends Enemy {
 
   dispose() {
     this._offLife?.(); this._offLife = null;
+    this.def.onBossDispose?.(this);
     super.dispose();
   }
 }

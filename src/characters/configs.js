@@ -88,7 +88,8 @@ export const CATS = {
   // ---- companions (§3.3)
   mochi: {
     id: 'mochi', name: 'Mochi', tier: 'kitten', scale: 0.95, width: 1.1,
-    coat: { pattern: 'tuxedo', base: '#1E1F24', deep: '#121317', light: '#3A3C44', cream: '#E4DFD6', white: '#E4DFD6' },
+    coat: { pattern: 'tuxedo', base: '#2A2C34', deep: '#1A1B21', light: '#666B7A', cream: '#E4DFD6', white: '#E4DFD6' },
+    // M2: soft charcoal (art.md #1E1F24 read as a black hole under day fog, STATUS M1); the dark-coat fill does the rest
     eyes: eyeSet('#E5A93B'), fur: { rim: 0.8 },
     accessories: [{ id: 'tunic', color: '#2C5290', trim: '#1E3A66' }, { id: 'tabard', color: '#3F6FB5' }, 'potHelm', 'towerShield'],
     expression: 'happy', signature: '#3F6FB5',
@@ -111,7 +112,7 @@ export const CATS = {
   // ---- service kittens (§3.4)
   tofu: {
     id: 'tofu', name: 'Tofu', tier: 'kitten', scale: 0.86,
-    coat: { pattern: 'solid', base: '#E6E1D8', deep: '#CFC8BC', light: '#F2EEE8', cream: '#EAE6DF', smudge: { at: [-0.06, 0.12, 0.13], r: 0.035, color: '#4A4644' } },
+    coat: { pattern: 'solid', base: '#E6E1D8', deep: '#CFC8BC', light: '#F2EEE8', cream: '#EAE6DF', smudge: { at: [-0.085, 0.125, 0.125], r: 0.06, color: '#4A4644' } },
     eyes: eyeSet('#6FA8DC'),
     accessories: [{ id: 'apron', color: '#6B4429', big: true }],
     expression: 'surprised',
@@ -213,17 +214,72 @@ export function squireConfig(i, o = {}) {
   return c;
 }
 
-/** Spoon-brigade kitten (CS-08 / L4): lost-kitten look + pot helm or colander (props) and a spoon. */
+/**
+ * Spoon-brigade kitten (CS-08 pull-back / L4 §9.3): the rescued kitten's own look + a pot helm or colander and a
+ * spoon. Always the cheap tier ('lite': sheen fur, vertex-colour eyes, ~3–4 draw calls; R18) and the 'spoonReady'
+ * stance; `kitten.emote('throw')` lobs the spoon.
+ * @param {string} kittenId one of KITTEN_IDS
+ * @param {number} [i] index in the brigade (alternates pot helm / colander)
+ */
 export function spoonBrigadeConfig(kittenId, i = 0) {
-  const c = lostKittenConfig(kittenId);
+  const c = lostKittenConfig(kittenId, { tier: 'lite' });
+  c.id = 'spoon_' + kittenId;
   c.accessories = c.accessories.filter((a) => (typeof a === 'string' ? a : a.id) === 'tunic');
-  c.props = [i % 2 ? 'colander' : 'pot_helm', 'spoon'];
+  c.props = [i % 2 ? 'colander' : 'pot_helm', 'spoon@throw'];
+  c.pose = 'spoonReady';
+  c.expression = 'determined';
   return c;
 }
 
-/** Look up any cat config by id (named, old knight, lost kitten, squire, villager_<seed>). */
+/**
+ * Pawsbury activity per rescued kitten (GAME_DESIGN §12.5 table): the pose, the prop in paw (or `world` props
+ * companions place next to them), and the idle behaviour HubKittens animates. Pure data.
+ */
+export const HUB_ACTIVITY = Object.freeze({
+  biscuit: { pose: 'fish', prop: 'fishing_rod', note: 'fishing with a stick (idle bob)' },
+  noodle: { pose: 'sit', note: 'sitting, tail swish' },
+  button: { pose: 'idle', mirror: 'vigil', within: 4, note: 'copies the Vigil pose when Swordcat is within 4 m' },
+  pickles: { pose: 'nap', world: ['bread_basket'], note: 'napping in a bread basket' },
+  pebble: { pose: 'fish', prop: 'fishing_rod', note: 'fishing' },
+  sprout: { pose: 'sit', world: ['teacup'], every: 20, note: 'knocks a cup off the table every 20 s' },
+  waffles: { pose: 'wave', note: 'waving' },
+  toffee: { pose: 'vigil', prop: 'spoon', note: '"guarding"' },
+  muffin: { pose: 'sit', look: 'up', note: 'staring up at the bell' },
+  tater: { pose: 'idle', run: true, note: 'playing tag with Mittens' },
+  mittens: { pose: 'idle', run: true, note: 'playing tag with Tater' },
+  socks: { pose: 'nap', note: 'sunbeam nap' },
+  juniper: { pose: 'read', prop: 'book@upsidedown', note: 'reading upside down' },
+  bramble: { pose: 'idle', world: ['butterfly'], run: true, note: 'chasing a butterfly on a 3 m loop' },
+  fennel: { pose: 'nap', note: 'sunbeam nap' },
+  bean: { pose: 'idle', prop: 'hammer', note: 'handing Tofu tools' },
+  crumpet: { pose: 'sit', prop: 'letter', note: 'sorting letters with Coo' },
+  dumpling: { pose: 'vigil', prop: 'spoon', note: '"guarding" the banner' },
+});
+
+/**
+ * A rescued kitten living in Pawsbury (§3.5, §12.5): its lost-kitten look, happy, cheap tier (sheen fur; the hub can
+ * show up to 20 cats), with its activity pose / prop from HUB_ACTIVITY.
+ */
+export function hubKittenConfig(kittenId, o = {}) {
+  const c = lostKittenConfig(kittenId, { tier: o.tier ?? 'lite' });
+  const act = HUB_ACTIVITY[kittenId] ?? { pose: 'idle' };
+  c.id = 'hub_' + kittenId;
+  c.pose = act.pose;
+  c.props = act.prop ? [act.prop] : [];
+  c.expression = act.pose === 'nap' ? 'sleep' : 'happy';
+  c.activity = act;
+  return c;
+}
+
+/** Look up any cat config by id (named, old knight, lost kitten, squire, villager_<seed>, spoon_<kitten>, hub_<kitten>). */
 export function catConfig(id) {
+  if (typeof id !== 'string') return null;
   if (CATS[id]) return CATS[id];
+  // M2: 'spoon_<kitten>' / 'spoon:<kitten>[:i]' (Spoon Brigade), 'hub_<kitten>' / 'hub:<kitten>' (Pawsbury residents)
+  const sp = /^spoon[_:]([a-z]+)(?::(\d+))?$/.exec(id);
+  if (sp && KITTEN_IDS.includes(sp[1])) return spoonBrigadeConfig(sp[1], +(sp[2] ?? KITTEN_IDS.indexOf(sp[1])));
+  const hub = /^hub[_:]([a-z]+)$/.exec(id);
+  if (hub && KITTEN_IDS.includes(hub[1])) return hubKittenConfig(hub[1]);
   if (KITTEN_IDS.includes(id)) return lostKittenConfig(id);
   const sq = SQUIRE_IDS.indexOf(id); if (sq >= 0) return squireConfig(sq);
   if (id.startsWith('villager_')) return villagerConfig(id.slice(9));

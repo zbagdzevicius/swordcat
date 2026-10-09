@@ -332,6 +332,51 @@ async function setup() {
       setCam([0, 0.75, 2.4], [0, 0.6, 0], 35);
       break;
     }
+    case 'skins': {   // the 7 sword skins (GAME_DESIGN §13.4) on Swordcat in Vigil (?pose=idle for the dragging claymore)
+      const pose = params.get('pose') || 'vigil';
+      const glb = {};
+      for (const [id, path] of [['diamond', 'models/weapons/quaternius/Sword_Diamond.glb'], ['toobig', 'models/weapons/quaternius/Claymore.glb']]) glb[id] = (await loadGLB(path)).scene;
+      C.SWORD_SKINS.forEach((skin, i) => {
+        const k = add(C.swordcatConfig({ cape: 'red' }), [(i - 3) * 0.95, 0, 0], 0, pose);
+        k.setSword(glb[skin] ? { skin, model: glb[skin].clone(true) } : skin);
+      });
+      setCam([0, 0.75, 6.4], [0, 0.5, 0], 38);
+      break;
+    }
+    case 'capes': {   // the 7 capes (§13.5) from behind; the bow stays pink on every one
+      const ids = ['cream', 'red', 'memeWhite', 'blue', 'green', 'midnight', 'gold'];
+      ids.forEach((cape, i) => add(C.swordcatConfig({ cape }), [(i - 3) * 0.95, 0, 0], Math.PI + 0.35, 'idle'));
+      setCam([0, 0.8, 6.4], [0, 0.5, 0], 38);
+      break;
+    }
+    case 'm2cast': {  // M2 cast (Acts I–II)
+      const ids = (params.get('ids') || 'sage,clover,tofu,earlgrey,pip,marmalade').split(',');
+      ids.forEach((id, i) => add(C.catConfig(id), [(i - (ids.length - 1) / 2) * 0.9, 0, 0], 0, params.get('pose') || 'idle'));
+      setCam([0, 0.62, 3.2 + ids.length * 0.45], [0, 0.45, 0], 36);
+      break;
+    }
+    case 'm2poses': {  // M2 activity poses: Sage aims, Clover heals, Waffles waves, Juniper reads, Biscuit fishes, a spoon kitten
+      const rows = [
+        [C.CATS.sage, 'aim', []], [C.CATS.clover, 'heal', []], [C.hubKittenConfig('waffles'), null, []],
+        [C.hubKittenConfig('juniper'), null, []], [C.hubKittenConfig('biscuit'), null, []], [C.spoonBrigadeConfig('tater', 0), null, []],
+        [C.spoonBrigadeConfig('mittens', 1), null, []],
+      ];
+      rows.forEach(([cfg, pose], i) => { const k = add(cfg, [(i - 3) * 0.85, 0, 0], i === 0 ? -0.6 : 0, pose); if (cfg.id?.startsWith('spoon_') && i === 6) tickers.push((t) => { if (Math.floor(t * 60) % 120 === 0) k.emote('throw'); }); });
+      setCam([0, 0.7, 5.6], [0, 0.42, 0], 38);
+      break;
+    }
+    case 'm2props': {  // M2 props: hub activity props + Grizzlechop's gear
+      const names = ['book', 'fishing_rod', 'bread_basket', 'teacup', 'hammer', 'butterfly', 'feathered_hat', 'cheese_shield', 'cheese_wheel', 'cheese_wedge'];
+      names.forEach((n, i) => {
+        const p = C.buildProp(n); const x = (i % 5 - 2) * 0.55, z = -Math.floor(i / 5) * 0.9;
+        p.position.set(x, n === 'butterfly' ? 0.35 : n === 'cheese_shield' || n === 'cheese_wheel' ? 0.46 : n === 'feathered_hat' ? 0.25 : 0.02, z);
+        if (n === 'cheese_wheel') p.rotation.y = 0.6;
+        scene.add(p); if (p.userData.update) tickers.push((t, dt) => p.userData.update(dt));
+      });
+      const g = C.buildProp('cheese_wheel_giant'); g.position.set(1.9, 0.8, -1.9); g.rotation.y = 0.5; scene.add(g);
+      setCam([0, 1.2, 2.6], [0, 0.25, -0.6], 42);
+      break;
+    }
     default: add(C.SWORDCAT, [0, 0, 0], 0, 'vigil'); setCam([0, 0.5, 2.5], [0, 0.5, 0], 30);
   }
 }

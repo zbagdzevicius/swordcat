@@ -130,3 +130,25 @@ export function applySetting(ctx, key, value) {
   ctx.bus?.emit(E.SETTINGS_CHANGED, { key, value });
   return value;
 }
+
+/**
+ * Reset every §14.3 setting to the §19.7 defaults (difficulty is a save property, not a setting: kept). Writes each
+ * changed key through applySetting so audio / core / save react. Returns the keys that changed.
+ */
+export function resetSettings(ctx, defaults) {
+  const st = ctx?.state;
+  if (!st || !defaults) return [];
+  const changed = [];
+  for (const def of SETTINGS) {
+    if (def.key === 'difficulty' || !(def.key in defaults)) continue;
+    if (st.settings?.[def.key] !== defaults[def.key]) { applySetting(ctx, def.key, defaults[def.key]); changed.push(def.key); }
+  }
+  return changed;
+}
+
+/** The Controls card (§15.1–§15.3): [action, label key-or-text] rows; glyphs come from text.js per device. */
+export const CONTROL_ROWS = Object.freeze([
+  ['move', 'Move'], ['look', 'Camera'], ['attack', 'Attack · hold to charge'], ['guard', 'Stand · tap to parry'], ['dodge', 'Tumble'],
+  ['jump', 'Jump · ⚔ in the air: Pounce'], ['interact', 'Interact'], ['ability', 'Kitten ability'], ['milk', 'Milk Break'], ['meow', 'Meow'],
+  ['golden', 'Golden Hour'], ['lockon', 'Lock-on'], ['pause', 'Pause · hold to skip scenes'],
+]);

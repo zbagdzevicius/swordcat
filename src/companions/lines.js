@@ -10,18 +10,23 @@ export const BARKS = {
     kitten: ['bark.mochi.kitten'],
     idle: ['bark.mochi.idle'],
     caged: ['bark.mochi.caged.1', 'bark.mochi.caged.2'],
+    hello: ['bark.mochi.ability.1'],
   },
   sage: {
     ability: ['bark.sage.ability.1', 'bark.sage.ability.2'],
     combat: ['bark.sage.combat.1', 'bark.sage.combat.2'],
     kitten: ['bark.sage.kitten'],
     idle: ['bark.sage.idle'],
+    caged: ['bark.sage.caged.1'],
+    hello: ['bark.sage.hello'],
   },
   clover: {
     ability: ['bark.clover.ability.1', 'bark.clover.ability.2'],
     combat: ['bark.clover.combat.1', 'bark.clover.combat.2'],
     kitten: [],
     idle: ['bark.clover.idle'],
+    caged: ['bark.clover.caged.1'],
+    hello: ['bark.clover.hello'],
   },
   any: {
     nap: ['bark.companion.nap.1', 'bark.companion.nap.2'],
@@ -55,6 +60,12 @@ export const FALLBACK = {
   'bark.companion.nap.2': 'Zzz.',
   'bark.companion.wake': "I'm up! I'm up!",
   'bark.companion.mrrp': 'Mrrp!',
+  // M2: caged squires call out at arena waves; swap greetings (§9.1); the swap toast
+  'bark.sage.caged.1': 'Up here. Obviously.',
+  'bark.sage.hello': 'Ranger reporting. Quietly.',
+  'bark.clover.caged.1': 'Mind the rats, sweetpea!',
+  'bark.clover.hello': "Here I am, sweetpea. Snacks?",
+  'toast.swap': '{name} is with you!',
   // §6.4: said when rescued (also their hub line)
   'kitten.biscuit': 'Is the cow gone? Is it? Okay. Hi.',
   'kitten.noodle': 'I was being a barrel. It was going well.',

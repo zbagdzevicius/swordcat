@@ -1,81 +1,28 @@
-# Requests / notes from the audio area
+# Open requests from audio
 
-## How to use ctx.audio (M1, 2026-10-08) — story, ui, world, enemies, companions, player
-Frozen contract unchanged: `play2D(id, opts)`, `play3D(id, pos, opts)`, `music(track, fade)`, `laugh(pos, opts)`, `bell(opts)`,
-`unlock()`, `load(path)`. Everything below is additive. Nothing plays before the first user gesture (autoplay policy); requests
-made earlier are logged, music requested earlier starts (2 s fade) on the unlock.
+The API notes (M1 + M2) are in `docs/api/audio.md`. All requests below are optional: audio already works without them.
 
-### Sound ids (play2D / play3D)
-- An SFX name from `src/audio/sfxMap.js` (`'parry'`, `'kittenFound'`, `'ui.click'` …), a file id under `audio/sfx/`
-  (`'pickup/bubble2'`, `'creature/creature_roar_02'`), a GAME_DESIGN pattern (`'impact/chain_0x'`, `'sword/swish_01–13'`,
-  `'creature/c80_scream_01/02'`: a random existing variant), or a full path. Every file must be in `src/audio/assets.manifest.js`
-  (tell audio if you need one that isn't).
-- Procedural ids (for cutscene `sfx` steps): `'laugh'` (hyena laugh build; `{rate}` 0.85 Cacklejaw / 1.4 Pilfer),
-  `'laughChorus'` (`{count: 6, r: 18, dur}` around `pos`; CS-02 shot 3), `'bell'` (the Sunbell), `'bellClunk'` (damped, CS-02
-  shot 2), `'heartbeat'` (`{beats}`), `'march'` (`{on: true|false}`, the horde footsteps + chains around `pos`; CS-02 shots 4/8),
-  `'shimmer'` (`{on}`).
-- `pos`: a Vector3, `[x, y, z]`, an Actor or Object3D (the sound follows it), an actor id (`'swordcat'`, `'pudding'`) or a level
-  anchor name. No `pos` → 2D. opts: `vol`/`volume`, `rate`, `rateVar`, `delay`, `dur`, `offset`, `loop`.
-- Returns a handle `{ name, stop(fade) }` or null.
-- `load(path)` (the `ctx.assets.preload` hook) resolves once the bytes are fetched — level loads never wait on decoding;
-  `decode(id)` resolves the decoded AudioBuffer when you need it now. The manifest's `levels` subsets are preloaded per level
-  and `evict()` keeps only `'*'` + the current level decoded.
-- Music tracks are loudness-normalised (`TRACKS[id].meanDb` → `trackGain`); request them by id, never set deck gains.
+## To world (M2)
+- **Gate combat track:** `gate.js` sets `music.combat: 'battle_theme_a'`, so the Old Battlefield skirmishes play the
+  Line's theme. §16.1 says arena combat everywhere except the Line waves is `battle_fast_fight_loop`; audio holds
+  `battle_theme_a` for the Line by itself (objective `line`). Suggest `combat: 'battle_fast_fight_loop'` there.
+- **The Line:** LineController's objective `line` already drives the hold music, the winch ambience and the
+  freeze / resume sounds (a `freeze()` without `paused` is Pilfer's pin). The portcullis test sound is story's
+  `line.portcullis` cue (gate_open), so world needn't play `world/metal_open_01` / `metal_close_01` itself.
+- **Lantern ignite:** `town.js` plays `'fire/fire_ignite'`, which is not a file. Audio aliases it to `lanternLight`
+  for now; please call `ctx.audio.play3D('lanternLight', pos)` instead.
+- Optional `fx:burst` kinds with sounds: `boulder`, `web`, `rope_post`, `lantern`, `mailbag`, `letters`, `flour`, `bounce`
+  (mushroom caps 2 and 4), `stocks`, `fall` (off the causeway).
 
-### story (cutscene steps)
-- `{t: 'sfx', id, at, vol, rate}` → `ctx.audio.play3D(id, at, { vol, rate })` (or `play2D` without `at`).
-- `{t: 'music', track, fade}` → `ctx.audio.music(track, fade)`; `track: null` = silence (the level music comes back when play
-  resumes). Track ids (`'field_of_dreams'`), `'music/x.mp3'` paths and context names work: `'title'`, `'menu'`, `'knighting'`,
-  `'emotional'`, `'hubGold'`, `'hubGrey'`, `'credits'`, `'results'`, `'victory'`, `'ending'`. A combat/boss track (e.g. the CS-02
-  `battle_theme_a` sting, the CS-03 `end` `battle_fast_fight_loop`) puts the director in combat; explore returns 4 s after the
-  fight ends.
-- `say` → emit `dialog:line { speaker: who, text }` (babble §16.4 + the −6 dB music duck), `dialog:end` when the dialogue closes.
-  `speaker` may be the cutscene actor id or the display name.
-- `env` wind is read from `ctx.env.wind` every frame (no call needed).
+## To story (M2)
+- Use the cue ids in `docs/api/audio.md` for the CS-04 … CS-10 `sfx` steps (one id per beat; the step's `handle`
+  stops looping cues such as `cs04.camp` / `cs04.purr` / `cs09.purr`).
+- Set `forest.camp`, `town.free`, `gate.done` and `ending.seen` through `ctx.story.flag()`, as today: the explore music
+  and the ambience follow them.
 
-### ui
-- Call `ctx.audio.unlock()` from the title's "Press any key / Tap to start" handler (audio also self-unlocks on the first
-  pointer/key/touch). UI sounds: `ctx.audio.play2D('ui.click' | 'ui.select' | 'ui.confirm' | 'ui.back' | 'ui.bookOpen' |
-  'ui.bookClose' | 'ui.page' | 'ui.dialogOpen' | 'ui.stamp' | 'ui.error' | 'ui.toggle')`. `dialog:start` already plays the scroll.
-- Volume sliders: write `state.settings.master|music|sfx` (0..1) and emit `settings:changed {key, value}` (the contract);
-  `ctx.audio.setVolumes({...})` also works. `?mute` silences everything. `?debug` shows the audio meter (bottom-left);
-  `ctx.audio.showMeter(true)` anywhere.
+## To ui (M2)
+- Shops / Quest Board: call `ctx.audio.shop(action, { station })` (or `play2D('shop.*' | 'quest.*')`).
 
-### world
-- Optional `level.surfaceAt(x, z)` → `'grass' | 'stone' | 'wood' | 'mud' | 'sand' | 'snow' | 'water'` (the player passes it in
-  `actor:footstep`); until then each level has a default surface.
-- PropActor `kind`s with hit sounds: `dummy`, `sack` (straw), `wobble_knight` (armour), `crate`, `barrel`, `post` (wood),
-  `boulder` (stone), `cage`, `lock` (metal), `rope`. Breakables can also emit `fx:burst {kind: 'crate'|'barrel'|'wood'|'cage'|
-  'lock'|'splash'|'bones'|'slime'}` for their break sound.
-- Music zones (town Bakery radius, M2): `level.music.zones = [{ at: [x, z], r: 8, track: 'tavern_old_tower_inn' }]`.
-- Arena: keep emitting `arena:lock` / `arena:clear`; a reset (death inside, no clear) is detected from `arena.locked`.
-
-### enemies / companions
-- Optional `material` string on an actor (`'fur' | 'armour' | 'bone' | 'slime' | 'wood' | 'straw' | 'stone' | 'metal'`)
-  overrides the per-type hit sound. `combat:telegraph` `duration` times the parry/gold ting (0.25 s before the strike).
-- Scripted CS-02 hyenas: `enemy:jeer {enemy, on}` or `ctx.audio.laugh(actor, {rate})` makes one laugh (the voice follows it).
-
-### player
-- Please register the player in `ctx.actors` with id `'swordcat'` (cutscene `at: 'swordcat'`); audio falls back to
-  `ctx.player` for `'swordcat'`/`'player'` until then.
-
-## To core
-- Nothing required. Note for smoke runs: the dev server's HMR reloads the page whenever another agent saves a file, which kills
-  long smoke runs mid-block during parallel phases; audio runs its own server with `server.hmr: false, watch: null`.
-
-## M1 update (2026-10-08, resumed run) — additive, contract unchanged
-- **story**: every procedural id now returns a `{ name, stop(fade) }` handle (`laughChorus`, `march`, `shimmer`, `heartbeat`,
-  `bell`/`bellClunk`, `laugh`), so `sfx` steps with `handle` can stop them. `{loop: true}` without `dur` (e.g. the CS-01 purr
-  `cat/cat_purrsleepy_loop`) runs outside the 8 + 12 voice pools (never stolen), follows its `at` actor, and stops on its handle,
-  on `level:loading`, or via `stopAll`.
-- **world**: `music.prologue` in a level's `music` block (meadow: `village_bards_tale`) is honoured: while flag `prologue.done` is
-  unset it is the explore track, and LevelManager's `E.MUSIC {track: music.explore}` is read as it. The day track returns on the
-  CS-02 `end` reload. `level.surfaceAt()` → `'dirt'` (the lanes) now has its own step set (`footsteps/sand_*`, lighter); NPC/enemy
-  `actor:footstep` without `surface` asks `ctx.levels.current.surfaceAt(x, z)`. `world/creak2` (practice-field gate) preloads with
-  meadow.
-
-## To core (FYI, not audio)
-- Smoke on this machine: in headless Chromium (ANGLE-GL) `requestAnimationFrame` itself stops firing 5–20 s into a block while
-  page JS still answers, so `page.screenshot` times out and `fps ~ 0` is printed. Reproduced **without the audio unlock** (no
-  AudioContext created), and with the context suspended, so it is not caused by audio; likely GPU contention from the parallel
-  agents' browsers. The audio blocks retry a timed-out screenshot once and then only warn.
+## To enemies (M2)
+- `boss:start` / `boss:defeated` for B1 / B2 with `id: 'boss_grizzlechop' | 'boss_cacklejaw'` (stingers are keyed by id).
+  In this run the forest mill arena did not emit `boss:start` on `startBoss()`; the audio smoke emulates it until then.

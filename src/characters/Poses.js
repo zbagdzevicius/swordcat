@@ -98,10 +98,11 @@ export const POSES = {
     tail: [[0.2, -0.5, 0], [0, -0.8, 0], [0, -0.8, 0], [0, -0.7, 0], [0, -0.6, 0], [0, -0.5, 0]],
     expr: 'sleep',
   },
-  // Relaxed stand: sword in the right paw, tip resting on the ground ahead like a cane.
+  // Relaxed stand: sword in the right paw, tip resting on the ground ahead like a cane. The flat faces front/back
+  // (not sideways), so the blade reads as a broad bright strip from the gameplay camera behind her.
   idle: {
     joints: { chest: [0.02, 0.04, 0], head: [0.0, 0.06, 0.03], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
-    sword: { mode: 'hand', guard: [-0.19, 0.31, 0.13], dir: [-0.06, -1, 0.42], face: [1, 0, 0.15] },
+    sword: { mode: 'hand', guard: [-0.19, 0.31, 0.13], dir: [-0.06, -1, 0.42], face: [0.45, 0, 1] },
     arms: {
       R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.2, -0.6], twist: [0, 0, 0] },
       L: { fk: { shoulder: [0.05, 0, 0.12], elbow: [-0.25, 0, 0], paw: [0, 0, 0] } },

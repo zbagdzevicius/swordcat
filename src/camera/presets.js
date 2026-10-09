@@ -15,14 +15,17 @@ export const TAU = Math.PI * 2;
 export const MEME_PERIOD = PLAYER.memeCam.loop;
 
 export const PRESETS = Object.freeze({
-  /** [TREND V1] Chest-up medium close-up, slightly low, static. Handheld sway 0.005 m. Loop 3.8 s. */
-  MEME_LOOP: Object.freeze({ kind: 'static', pos: [0.06, 0.70, 1.15], look: [0.03, 0.82, 0], fov: 32, sway: 0.005, loop: MEME_PERIOD }),
+  /** [TREND V1] Chest-up medium close-up, slightly low, static. Handheld sway 0.005 m. Loop 3.8 s.
+   *  Tuned against research/videos/frames/x_GeckoTerminal_*_f1-f3: she fills ~1/3 of the frame height, the sword
+   *  tip stands well above her head, both gauntlets / pauldrons / the cape edges are in frame, the belt sits on the
+   *  bottom edge. */
+  MEME_LOOP: Object.freeze({ kind: 'static', pos: [0.06, 0.68, 1.9], look: [0.03, 0.9, 0], fov: 38, sway: 0.005, loop: MEME_PERIOD }),
   /** [V2] Low over-the-shoulder from behind her, cape in the foreground, looking along her facing at 25 m. */
   REVERSE_HORDE: Object.freeze({ kind: 'static', pos: [0.35, 0.55, -1.4], look: [0, 0.6, 25], fov: 38 }),
-  /** [V5] From MEME_LOOP, dolly to (0, 4.0, 14) over 6.0 s, FOV 32 → 50, ease in-out sine. `lookTo` lifts the
+  /** [V5] From MEME_LOOP, dolly to (0, 4.0, 14) over 6.0 s, FOV 38 → 50, ease in-out sine. `lookTo` lifts the
    *  framing so a giant behind her (Tallbert, the kittens of CS-08) is revealed above her head. */
-  PULLBACK: Object.freeze({ kind: 'rail', pos: [0.06, 0.70, 1.15], look: [0.03, 0.82, 0], to: [0, 4.0, 14], lookTo: [0, 1.6, -1.0],
-    dur: 6.0, fov: Object.freeze([32, 50]), ease: 'inOutSine' }),
+  PULLBACK: Object.freeze({ kind: 'rail', pos: [0.06, 0.68, 1.9], look: [0.03, 0.9, 0], to: [0, 4.0, 14], lookTo: [0, 1.6, -1.0],
+    dur: 6.0, fov: Object.freeze([38, 50]), ease: 'inOutSine' }),
   /** [V3] Facing her, roll 6°, handheld noise 0.015 m; her gauntlet edge in frame. */
   SELFIE: Object.freeze({ kind: 'static', pos: [0.25, 0.92, 0.45], look: [0, 0.82, 0], fov: 50, roll: 6 * DEG, noise: 0.015 }),
   /** [V3] From the current shot: yaw +120° in 0.18 s with FOV +15, then roll 90° and drop to y 0.12 over 0.35 s. */

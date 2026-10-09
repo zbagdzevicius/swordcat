@@ -48,12 +48,34 @@ export function setVar(e, name, v) {
   e.style.setProperty(name, s);
 }
 
-/** Restart a CSS animation class (remove, reflow, add). */
+/** Pending pulse restarts: element -> Set of classes to re-add (see pulse). */
+let _pulseQ = null;
+const _nextFrame = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 16));
+
+/**
+ * Restart a CSS animation class WITHOUT a forced reflow (pulses fire from bus handlers inside Game.step, where a
+ * synchronous layout costs ms on exactly the hit / hitstop frames). Not set yet: the class is just added. Already set:
+ * it is removed now and re-added two frames later (one rendered frame without it restarts the animation); every pulse
+ * queued in between shares one rAF chain.
+ */
 export function pulse(e, cls) {
   if (!e) return;
+  if (!e.classList.contains(cls)) {
+    if (_pulseQ?.get(e)?.has(cls)) return;      // already queued to restart
+    e.classList.add(cls);
+    return;
+  }
   e.classList.remove(cls);
-  void e.offsetWidth;   // reflow so the animation restarts
-  e.classList.add(cls);
+  if (!_pulseQ) {
+    _pulseQ = new Map();
+    _nextFrame(() => _nextFrame(() => {
+      const q = _pulseQ; _pulseQ = null;
+      for (const [node, set] of q) for (const c of set) node.classList.add(c);
+    }));
+  }
+  let set = _pulseQ.get(e);
+  if (!set) _pulseQ.set(e, (set = new Set()));
+  set.add(cls);
 }
 
 /** Translate an absolutely positioned element (px), skipping unchanged writes. */

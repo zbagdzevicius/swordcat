@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { distToPolyline, inBox } from './noise.js';
+import { Terrain } from './Terrain.js';
 
 const _v = new THREE.Vector3();
 const GROUPS = ['terrain', 'props', 'grass', 'water', 'skyline', 'dawnstone', 'pickups', 'actors'];
@@ -39,6 +40,30 @@ export function waterEntryLevel(w, x, z) {
     case 'disc': return Math.hypot(x - w.at[0], z - w.at[1]) <= w.r ? y : null;
     default: return y;           // a plane covering the level wherever the ground is lower
   }
+}
+
+/**
+ * The current attempt at a level, kept in the save so Continue / game-over Retry add to the same run (results time,
+ * lives lost, fish): `state.levels[id]` gets `runT0` (state.playtime at entry), `runLost` (lives lost) and `runFish0`
+ * (fish at entry). An existing record is continued; LevelManager.exit drops it for the level left and the level
+ * entered, so a normal entry always starts a fresh run. `scratch` (title backdrop): a throwaway record. Pure.
+ * @returns {{runT0:number, runLost:number, runFish0:number}}
+ */
+export function levelRun(state, id, scratch = false) {
+  const fresh = () => ({ runT0: state?.playtime ?? 0, runLost: 0, runFish0: state?.fish ?? 0 });
+  if (scratch || !state || !id) return fresh();
+  state.levels ??= {};
+  const rec = state.levels[id] ??= {};
+  if (!Number.isFinite(rec.runT0)) Object.assign(rec, fresh());
+  if (!Number.isFinite(rec.runLost)) rec.runLost = 0;
+  if (!Number.isFinite(rec.runFish0)) rec.runFish0 = state.fish ?? 0;
+  return rec;
+}
+
+/** Drop the run record of a level (it is finished, or about to be entered normally). Pure. */
+export function endLevelRun(state, id) {
+  const rec = state?.levels?.[id];
+  if (rec) { delete rec.runT0; delete rec.runLost; delete rec.runFish0; }
 }
 
 export class Level {
@@ -81,7 +106,9 @@ export class Level {
     this._offs = [];
     this._time = 0;
     this._interact = null;
-    this.startTime = 0; this.fishAtStart = 0; this.livesLost = 0;
+    this.startTime = 0; this.fishAtStart = 0;
+    /** the run record (state.levels[id] runT0 / runLost / runFish0; a scratch object on the title backdrop) */
+    this.run = { runT0: 0, runLost: 0, runFish0: 0 };
     this.exiting = false;
     this.disposed = false;
   }
@@ -120,6 +147,9 @@ export class Level {
     if (this.spine.length > 1 && distToPolyline(x, z, this.spine) < this.pathWidth * 0.42) return this.def.pathSurface ?? 'dirt';
     return this.def.surface ?? 'grass';
   }
+
+  /** Lives lost in this run (Continue / Retry included). */
+  get livesLost() { return this.run?.runLost ?? 0; }
 
   /** Anchor or spawn by name → { pos, facing } (null if unknown). */
   anchor(name) { return this.anchors[name] ?? this.spawns[name] ?? null; }
@@ -175,11 +205,10 @@ export class Level {
   activate(spawnId) {
     const ctx = this.ctx;
     this.spawnId = spawnId;
-    this.startTime = ctx.game?.time ?? 0;
-    this.fishAtStart = ctx.state?.fish ?? 0;
-    this.livesLost = 0;
+    this.run = levelRun(ctx.state, this.id, spawnId === 'title');
+    this.startTime = this.run.runT0; this.fishAtStart = this.run.runFish0;
     for (const fn of this._loaded.splice(0)) { try { fn(this); } catch (e) { console.error(`[world] ${this.id}: onLoaded failed`, e); } }
-    this.listen(E.PLAYER_LIFE_LOST, () => { this.livesLost++; });
+    this.listen(E.PLAYER_LIFE_LOST, () => { this.run.runLost = (this.run.runLost ?? 0) + 1; });
     this.listen(E.PLAYER_MEOW, (p) => { const pos = p?.position ?? ctx.player?.pos; if (pos) for (const c of this.critters) c.hearMeow?.(pos); });
     this.listen(E.PLAYER_DIED, () => { for (const a of this.arenas) if (a.locked) a.reset(); });
   }
@@ -250,6 +279,7 @@ export class Level {
     const center = p?.object3d?.position ?? cam?.position ?? _v.set(0, 0, 0);
     const vdt = ctx.game?.hitstopT > 0 ? 0 : dt;
     this.grass?.update(t, ctx.env, center, p && p.alive !== false ? p.object3d.position : null);
+    if (cam && this.groundLod) Terrain.updateGroundLod(this.groups.terrain, cam.position, this.groundLod);
     if (this.batch && cam) this.batch.cull(cam.position, this.cullDist(), dt);
     for (const a of this.animators) a.render(vdt, t);
     for (const a of this.actors) a.render(alpha, vdt);
@@ -280,6 +310,10 @@ export class Level {
     this.spawnedEnemies.length = 0;
     this.pickups?.dispose();
     this.grass?.dispose();
+    this.terrain?.dataTexture?.dispose?.();     // the grass ground-data texture (a uniform, not a material map)
+    this.wheat?.dispose?.();
+    // ground LOD tiles: both geometries (only one is attached at a time)
+    this.groups.terrain?.traverse?.((m) => { const L = m.userData?.lod; if (L) { L.full.dispose(); L.coarse.dispose(); } });
     this.batch?.dispose();
     for (const t of this.trees) { t.geometry.dispose(); t.material.dispose(); t.removeFromParent(); }
     this.skyline?.dispose();

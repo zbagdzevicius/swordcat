@@ -1,9 +1,10 @@
 // src/camera/LockOn.js  (owner: camera) — lock-on targeting (GAME_DESIGN §8.3, config PLAYER.lockOn):
-//   acquire: nearest hostile within `range` (12 m) and inside `cone` (100°) of camera forward;
+//   acquire: nearest hostile within `range` (12 m) and inside `cone` (100°) of camera forward; if the cone is empty,
+//            the hostile that hit her in the last 3 s, else the nearest hostile within 6 m in any direction;
 //   switch:  mouse flick > `flickPx` (40 px) within `flickTime` (0.15 s), the wheel (lockNext/lockPrev),
 //            or a right-stick flick past 0.7;
 //   break:   beyond `breakRange` (16 m) or `losTimeout` (1.5 s) without line of sight; a dead target hands
-//            over to the next one in range.
+//            over to the next one in range (preferring one within ±60° of the view; FollowCamera rate-limits the turn).
 // Pure selection helpers are exported for unit tests. The marker is a small gold gem over the target's head.
 import * as THREE from 'three';
 import { wrapAngle } from '../core/math.js';
@@ -52,6 +53,45 @@ export function nearestLockTarget(candidates, origin, range, exclude = null) {
     if (d <= bd) { bd = d; best = a; }
   }
   return best;
+}
+
+/** Dead-target hand-over prefers targets within this half-angle (rad, ±60°) of camera forward. */
+export const HANDOVER_HALF_CONE = Math.PI / 3;
+
+/**
+ * Hand-over when the locked target dies: the nearest valid target within `range` inside ±`halfCone` of camera
+ * forward (no orbit swing needed), else the nearest in any direction (the camera turns to it rate-limited).
+ * @param {any[]} candidates @param {{x:number,z:number}} origin @param {number} camYaw @param {number} range
+ * @param {any} [exclude] @param {number} [halfCone]
+ */
+export function handoverLockTarget(candidates, origin, camYaw, range, exclude = null, halfCone = HANDOVER_HALF_CONE) {
+  let best = null, bd = range;
+  for (const a of candidates) {
+    if (a === exclude || !lockable(a)) continue;
+    const d = Math.hypot(a.pos.x - origin.x, a.pos.z - origin.z);
+    if (d <= bd && Math.abs(relYaw(camYaw, origin, a.pos)) <= halfCone) { bd = d; best = a; }
+  }
+  return best ?? nearestLockTarget(candidates, origin, range, exclude);
+}
+
+/** Lock-on fallback when nothing is inside the cone: the nearest hostile within this radius (m), in any direction. */
+export const LOCK_FALLBACK_RANGE = 6;
+/** ...or the hostile that hit her within this many seconds (it is beside or behind her, hitting her). */
+export const RECENT_ATTACKER_TIME = 3;
+
+/**
+ * Acquire with a fallback (GAME_DESIGN §8.3 + review): the cone pick first; when the cone is empty, the hostile that
+ * attacked her recently (`recent`, if it is still a lockable candidate within `cfg.range`), else the nearest
+ * candidate within `fallbackRange` in any direction. Null when there is nothing (the caller recentres).
+ * @param {any[]} candidates @param {{x:number,z:number}} origin @param {number} camYaw
+ * @param {{range:number, cone:number}} cfg @param {any} [recent] @param {number} [fallbackRange]
+ */
+export function acquireLockTarget(candidates, origin, camYaw, cfg, recent = null, fallbackRange = LOCK_FALLBACK_RANGE) {
+  const inCone = pickLockTarget(candidates, origin, camYaw, cfg);
+  if (inCone) return inCone;
+  if (recent && lockable(recent) && candidates.includes(recent)
+    && Math.hypot(recent.pos.x - origin.x, recent.pos.z - origin.z) <= cfg.range) return recent;
+  return nearestLockTarget(candidates, origin, Math.min(fallbackRange, cfg.range));
 }
 
 /**

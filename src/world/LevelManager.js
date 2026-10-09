@@ -10,9 +10,11 @@
 // next level), results(), interact(id), spawnProp(name, at, opts) / despawnProp(obj) (story's placed props: signpost,
 // post bag, cot...), setDawnstone(on). Level triggers / interacts / arenas run inside Level.update (play mode only).
 import { E } from '../core/events.js';
-import { KITTENS_BY_LEVEL } from '../core/config.js';
+import { KITTENS_BY_LEVEL, BOSSES } from '../core/config.js';
 import { ENV_PRESETS } from './Env.js';
 import { buildProp } from '../characters/index.js';
+import { endLevelRun } from './Level.js';
+import { disposeInstanceMaterials } from '../enemies/rig.js';
 
 /** Dynamic import per level = Vite code-splits each level (§19.1 A1 ids). */
 export const LEVELS = {
@@ -30,6 +32,29 @@ export function rankFor(livesLost) {
   if (livesLost <= 4) return 'purrfect';
   return 'mewtiful';
 }
+
+/**
+ * Every enemy variant a level can put on screen (shader warm-up): arena waves + bosses, open-fight spawns and the
+ * level's `warm` rows ({ types, opts?, when? }: cutscene casts such as CS-02's caged hyenas, whose dressing differs).
+ * Pure; `cond(c)` evaluates a `when`. Deduplicated by type + opts.
+ * @returns {{type: string, opts: object}[]}
+ */
+export function levelEnemyWarm(def, cond = () => true) {
+  const out = new Map();
+  const add = (type, opts = {}) => { if (typeof type === 'string' && type) out.set(type + JSON.stringify(opts), { type, opts }); };
+  for (const z of def?.zones ?? []) {
+    if (z.kind === 'arena') { for (const w of z.waves ?? []) for (const [t] of w) add(t); if (z.boss) add(z.boss); }
+    if (z.kind === 'open') for (const [t] of z.spawns ?? []) add(t);
+  }
+  for (const w of def?.warm ?? []) if (w.when == null || cond(w.when)) for (const t of w.types ?? []) add(t, w.opts ?? {});
+  return [...out.values()];
+}
+
+/** The enemy type ids of levelEnemyWarm (pure). */
+export const levelEnemyTypes = (def, cond) => [...new Set(levelEnemyWarm(def, cond).map((w) => w.type))];
+
+/** Shader warm-up tuning: frames rendered under the veil, and the time allowed for the warm models to load. */
+export const PREWARM = Object.freeze({ frames: 2, loadTimeout: 6000 });
 
 /** Dispose level-owned GPU resources (never shared GLB template geometry). */
 export function disposeOwned(root) {
@@ -51,6 +76,8 @@ export class LevelManager {
     this._queue = Promise.resolve();
     this._props = new Set();
     this._offs = [];
+    /** @type {any[]} warm-up stand-in models kept (hidden, detached) until the level unloads */
+    this._warmKeep = [];
   }
 
   async init() {}
@@ -84,12 +111,8 @@ export class LevelManager {
       if (!level.spawns[spawnId]) console.warn(`[levels] ${id}: no spawn "${spawnId}", using start`);
       ctx.player?.teleport?.({ pos: sp.pos.clone(), facing: sp.facing });
       level.activate(level.spawns[spawnId] ? spawnId : 'start');
-      // height-fog patch + pre-compile shaders (no hitch on first view); compileAsync only with KHR_parallel_shader_compile
-      ctx.env?.patchScene?.();
-      try {
-        const r = ctx.renderer;
-        if (r?.extensions?.has?.('KHR_parallel_shader_compile')) await r.compileAsync(scene, ctx.camera); else r?.compile?.(scene, ctx.camera);
-      } catch (e) { console.warn('[levels] shader pre-compile failed', e); }
+      // shader warm-up under the loading veil (no hitch on first view, first arena lock or first wave)
+      await this._prewarm(level);
       this.loading = false;
       bus.emit(E.LEVEL_LOADED, { id, level, spawnId });
       const track = this.pickMusic(level.music);
@@ -101,12 +124,116 @@ export class LevelManager {
     }
   }
 
+  /**
+   * Build every shader program the level can need before play: one stand-in of each enemy type it can spawn (arena
+   * waves, open zones, cutscene casts; with the alert "!" sprite), a fog wall, and the spawn poofs, all placed around
+   * her inside the shadow frustum. Then pre-compile (compileAsync with KHR_parallel_shader_compile) and let
+   * PREWARM.frames real frames render under the veil, so the composer's target and the shadow-depth variants are
+   * built too. The stand-ins are despawned afterwards. Uses `enemies.prewarm(types, at)` when enemies provide it.
+   */
+  async _prewarm(level) {
+    const ctx = this.ctx, { scene } = ctx, r = ctx.renderer;
+    const warm = [];          // stand-in enemies (despawned at the end)
+    let wall = null, cleanup = null;
+    const shown = [];         // level objects made visible for the warm-up (hidden again at the end)
+    const unculled = [];      // objects drawn without frustum culling for the warm frames
+    try {
+      const types = levelEnemyWarm(level.def, (c) => !!ctx.state?.cond?.(c));
+      const pp = ctx.player?.pos ?? level.spawns.start?.pos;
+      if (pp && ctx.enemies && types.length) {
+        if (typeof ctx.enemies.prewarm === 'function') {
+          // contract (requests/world.md): prewarm([{ type, opts }], at) resolves to a cleanup function or to the
+          // stand-in enemies (despawned here)
+          const res = await ctx.enemies.prewarm(types, pp.clone());
+          if (typeof res === 'function') cleanup = res; else for (const e of [].concat(res ?? [])) if (e) warm.push(e);
+        } else await this._prewarmEnemies(types, pp, warm);
+      }
+      if (pp && level.arenas?.length && typeof ctx.fx?.mistRing === 'function') {
+        try { wall = ctx.fx.mistRing(pp.clone(), 3, { id: '__warm' }); } catch { wall = null; }
+      }
+      if (pp) for (const kind of ['spawn', 'spawnBones']) ctx.bus.emit(E.BURST, { kind, position: pp.clone().setY(pp.y - 2) });
+      // everything the level hides for now (distance-culled wheat, far setpieces, prologue-only props) is shown for
+      // the warm-up too, else its program is first built when she walks up to it
+      level.root.traverse((o) => { if (!o.visible) { o.visible = true; shown.push(o); } });
+      ctx.env?.patchScene?.();
+      // compile against the target the frame really renders into (the composer's linear half-float target on Med /
+      // High: a canvas-target compile builds sRGB + tone-mapped variants nothing ever uses)
+      try {
+        if (r?.compile) {
+          const prev = r.getRenderTarget?.() ?? null, target = ctx.postfx?.composer?.readBuffer ?? null;
+          r.setRenderTarget?.(target);
+          let pending = null;
+          try { pending = r.extensions?.has?.('KHR_parallel_shader_compile') && r.compileAsync ? r.compileAsync(scene, ctx.camera) : (r.compile(scene, ctx.camera), null); }
+          finally { r.setRenderTarget?.(prev); }
+          if (pending) await pending;
+        }
+      } catch (e) { console.warn('[levels] shader pre-compile failed', e); }
+      // real frames under the veil with culling off, so everything (off-screen setpieces too) is drawn once into the
+      // real targets, including the shadow pass (depth variants); skipped headless / when nothing renders
+      if (ctx.game?.addFrameHook && ctx.game.loop?.running === true) {
+        scene.traverse((o) => { if (o.frustumCulled) { o.frustumCulled = false; unculled.push(o); } });
+        await this._frames(PREWARM.frames);
+      }
+    } catch (e) {
+      console.warn('[levels] shader warm-up failed', e);
+    } finally {
+      for (const o of shown) o.visible = false;
+      for (const o of unculled) o.frustumCulled = true;
+      try { if (typeof wall?.remove === 'function') wall.remove(); else wall?.dispose?.(0); } catch { /* optional */ }
+      for (const e of warm) {
+        // keep each stand-in's dressed model (detached, never drawn) for the level's lifetime: its per-instance
+        // materials stay alive, so three keeps their programs instead of releasing them when the stand-in goes
+        // (a type whose only users were stand-ins, e.g. CS-02's hyenas, would otherwise recompile on first spawn)
+        try { if (e.visual) { const v = e.visual; v.removeFromParent(); v.visible = false; e.visual = null; this._warmKeep.push(v); } } catch { /* keep is optional */ }
+        try { ctx.enemies?.despawn?.(e); } catch (err) { console.warn('[levels] warm despawn', err); }
+      }
+      try { cleanup?.(); } catch (err) { console.warn('[levels] warm cleanup', err); }
+    }
+  }
+
+  /** Fallback warm-up stand-ins through the public spawn API: frozen (ai off), uncapped, visible, alert "!" shown. */
+  async _prewarmEnemies(types, pp, out) {   // types: [{ type, opts }]
+    const ctx = this.ctx, list = [];
+    types = types.filter(({ type: t }) => !BOSSES?.[t] && !String(t).startsWith('bonehead'));   // bosses start fights; bones: tutorial hint
+    types.forEach(({ type: t, opts }, i) => {
+      const a = (i / Math.max(1, types.length)) * Math.PI * 2, x = pp.x + Math.sin(a) * 2.5, z = pp.z + Math.cos(a) * 2.5;
+      try {
+        const e = ctx.enemies.spawn(t, [x, z], { ...opts, ai: false, noCap: true, facing: a + Math.PI, id: `__warm_${t}_${i}` });
+        if (e) { e.hurtable = false; e.tags?.add?.('warm'); list.push(e); out.push(e); }
+      } catch (err) { console.warn(`[levels] warm spawn ${t} failed`, err); }
+    });
+    if (!list.length) return;
+    // wait (bounded) for the models + dressing; then show the alert "!" for the warm frames
+    const t0 = performance.now();
+    // ready = dressed: GLB types get their Animator after def.build (beast heads, gear, cage prisoners)
+    const ready = (e) => e.disposed || (e.def?.model && !e.def?.procedural ? !!e.anim : !!e.visual);
+    while (performance.now() - t0 < PREWARM.loadTimeout && !list.every(ready)) await new Promise((res) => setTimeout(res, 30));
+    for (const e of list) {
+      e.object3d.visible = true;
+      e.bangT = 1;
+      try { e.render?.(1, 0); } catch { /* visual not ready */ }
+      e.object3d.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    }
+  }
+
+  /** Resolve after `n` rendered frames (bounded by a timeout so a stopped loop cannot hang a load). */
+  _frames(n) {
+    const game = this.ctx.game;
+    return new Promise((resolve) => {
+      let left = n, off = null;
+      const done = () => { off?.(); clearTimeout(timer); resolve(); };
+      const timer = setTimeout(done, 1500);
+      off = game.addFrameHook(() => { if (--left <= 0) done(); });
+    });
+  }
+
   _unload() {
     const ctx = this.ctx;
     if (!this.current) return;
     const old = this.current;
     ctx.bus.emit(E.LEVEL_UNLOAD, { id: old.id });
     for (const o of this._props) this.despawnProp(o);
+    for (const v of this._warmKeep.splice(0)) { try { disposeInstanceMaterials(v); } catch { /* already gone */ } }
     old.dispose?.();
     disposeOwned(old.root);
     for (const t of old.templates ?? []) { t.geometry?.dispose?.(); for (const p of t.parts ?? []) p.geometry?.dispose?.(); }
@@ -167,10 +294,10 @@ export class LevelManager {
     const letterIds = (L.def?.zones ?? []).filter((z) => z.kind === 'letter').map((z) => z.letterId ?? z.id);
     const lost = L.livesLost ?? 0;
     return {
-      levelId: L.id, time: Math.max(0, (ctx.game?.time ?? 0) - (L.startTime ?? 0)),
+      levelId: L.id, time: Math.max(0, (st?.playtime ?? 0) - (L.run?.runT0 ?? L.startTime ?? 0)),
       kittens: mine.filter((k) => st?.kittens?.includes?.(k)).length, kittensTotal: mine.length,
       letter: letterIds.some((l) => st?.letters?.includes?.(l)),
-      fish: Math.max(0, (st?.fish ?? 0) - (L.fishAtStart ?? 0)), lives: ctx.player?.lives ?? null, livesLost: lost, rank: rankFor(lost),
+      fish: Math.max(0, (st?.fish ?? 0) - (L.run?.runFish0 ?? L.fishAtStart ?? 0)), lives: ctx.player?.lives ?? null, livesLost: lost, rank: rankFor(lost),
     };
   }
 
@@ -191,6 +318,9 @@ export class LevelManager {
       const order = ['mewtiful', 'purrfect', 'pawsome'];
       st.levels[L.id] = { ...prev, cleared: true, bestRank: order.indexOf(res.rank) > order.indexOf(prev.bestRank ?? '') ? res.rank : (prev.bestRank ?? res.rank),
         bestTime: prev.bestTime ? Math.min(prev.bestTime, res.time) : res.time };
+      // the run is over; the next level is entered normally, so it starts a fresh run
+      endLevelRun(st, L.id);
+      if (to) endLevelRun(st, to);
     }
     ctx.bus.emit(E.LEVEL_EXIT, { to, spawnId });
     ctx.bus.emit(E.LEVEL_RESULTS, res);

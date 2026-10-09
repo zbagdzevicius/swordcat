@@ -2,7 +2,7 @@
 // objective done. Queue of 3; 2.5 s each." `ToastQueue` is the pure timing model (node-tested); `Toasts` renders it as
 // parchment ribbons under the objective line (top-centre) with an icon per kind.
 import { el, flag } from './dom.js';
-import { esc } from './text.js';
+import { glyphify } from './text.js';
 import * as I from './icons.js';
 
 export const TOAST = Object.freeze({ visible: 3, life: 2.5, fadeIn: 0.25, fadeOut: 0.35, dedupe: 0.6, maxQueue: 12 });
@@ -85,8 +85,9 @@ export function iconFor(key, icon) {
 }
 
 export class Toasts {
-  /** @param {HTMLElement} parent */
-  constructor(parent) {
+  /** @param {HTMLElement} parent @param {() => string} [device] current input device ('kbm' | 'pad' | 'touch') */
+  constructor(parent, device = () => 'kbm') {
+    this.device = device;
     this.q = new ToastQueue();
     this.root = el('div', 'ui-toasts', { parent });
     /** @type {Map<number, HTMLElement>} */
@@ -105,7 +106,7 @@ export class Toasts {
       let e = this.els.get(t.id);
       if (!e) {
         const ic = t.icon && ICONS[t.icon] ? `<span class="toast-ico">${ICONS[t.icon]()}</span>` : '';
-        e = el('div', 'ui-toast', { html: `${ic}<span class="toast-txt">${esc(t.text)}</span>`, parent: this.root });
+        e = el('div', 'ui-toast', { html: `${ic}<span class="toast-txt">${glyphify(t.text, this.device())}</span>`, parent: this.root });
         this.els.set(t.id, e);
       }
       if (t.t > t.life - this.q.cfg.fadeOut) flag(e, 'is-out', true);

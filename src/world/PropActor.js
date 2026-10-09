@@ -160,9 +160,19 @@ export class SwingingSack extends PropActor {
 }
 
 /**
+ * Wobble Knight reach (centre to her centre): it only glints / swings when she is within `swing` (so a telegraph
+ * always means the blow can land), and the strike connects up to `hit` (a step back during the windup, or the block
+ * pushback, does not make it swing at air). It leans into the strike so the padded arm visibly covers that reach.
+ */
+export const WOBBLE_REACH = Object.freeze({ swing: 2.4, hit: 2.8, face: 5, lean: 0.32, keep: 1.7, roam: 2.6, hop: 1.6 });
+
+/**
  * The Wobble Knight (tutorial steps 5–6): a spring dummy that turns to the player and swings ATTACKS.dummy_swing
- * every 2.0 s with a white parry glint. Parried → spins comically (parriedSpin). Blocked hits count for the tutorial
- * (story listens to combat:hit with attacker tag 'wobble_knight'). The first glint triggers a 0.25× slow-mo hint once.
+ * every 2.0 s with a white parry glint while she is within WOBBLE_REACH.swing. When she stands near but out of reach
+ * (a block pushes her back ~0.4 m) it hops on its spring base toward her (up to `roam` m from home, to `keep` m from
+ * her), and hops home when she leaves. Parried → spins comically
+ * (parriedSpin). Blocked hits count for the tutorial (story listens to combat:hit with attacker tag 'wobble_knight').
+ * The 0.25× slow-mo parry hint fires once, on the first glint while `hint()` holds (the tutorial's Parry step).
  */
 export class WobbleKnight extends PropActor {
   constructor(ctx, o) {
@@ -171,8 +181,11 @@ export class WobbleKnight extends PropActor {
     this.timer = o.delay ?? 1.0; this.phase = 'idle'; this.phaseT = 0;
     this.spinT = 0; this.spin = 0; this.arm = 0;
     this.active = o.active ?? (() => true);
+    /** may the one-time slow-mo parry hint fire now? (meadow: the tutorial's current step is 'parry') */
+    this.hint = o.hint ?? (() => true);
     this.mesh = o.mesh ?? null;  this.armPivot = o.armPivot ?? null;
-    this.hintDone = false; this.teleId = 0;
+    this.hintDone = false; this.teleId = 0; this.lean = 0;
+    this.home = this.pos.clone(); this.hopT = 0; this.hopping = false;
   }
 
   /** Combat calls this when the player parries the swing. */
@@ -185,19 +198,24 @@ export class WobbleKnight extends PropActor {
     super.update(dt);
     const p = this.ctx.player, d = this.atk;
     if (this.spinT > 0) { this.spinT -= dt; this.spin += dt * 14 * Math.max(0.2, this.spinT); return; }
-    const near = p?.alive && Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < 5 && this.active();
+    const dist = p?.alive ? Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) : Infinity;
+    const on = !!p?.alive && this.active();
+    const near = on && dist < WOBBLE_REACH.face, inReach = on && dist <= WOBBLE_REACH.swing;
     if (near) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 4, dt);
+    this._hop(dt, p, near, inReach);
     this.phaseT += dt;
+    const leanTo = this.phase === 'strike' ? WOBBLE_REACH.lean : this.phase === 'windup' ? -0.08 : 0;
+    this.lean += (leanTo - this.lean) * Math.min(1, dt * (this.phase === 'strike' ? 22 : 6));
     switch (this.phase) {
       case 'idle':
         this.arm *= Math.exp(-6 * dt);
-        if (!near) { this.timer = Math.min(this.timer, d.every); return; }
+        if (!inReach) { this.timer = Math.min(Math.max(this.timer, 0.35), d.every); return; }
         if ((this.timer -= dt) <= 0) {
           this.phase = 'windup'; this.phaseT = 0;
           this.teleId = ++_teleId;
           const dir = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
           this.ctx.bus.emit(E.TELEGRAPH, { id: this.teleId, actor: this, kind: d.telegraph, shape: 'glint', pos: this.pos.clone().setY(this.pos.y + 1.1), dir, size: 0.6, duration: d.windup });
-          if (!this.hintDone) { this.hintDone = true; this.ctx.game?.slowMo?.(0.25, 0.5); }
+          if (!this.hintDone && this.hint()) { this.hintDone = true; this.ctx.game?.slowMo?.(0.25, 0.5); }
         }
         break;
       case 'windup':
@@ -219,9 +237,31 @@ export class WobbleKnight extends PropActor {
     }
   }
 
+  /** Between swings: hop toward her when she is near but out of reach, home when she has left. */
+  _hop(dt, p, near, inReach) {
+    const R = WOBBLE_REACH;
+    let tx = this.home.x, tz = this.home.z;
+    if (near && this.phase === 'idle' && !inReach) {
+      const dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, d = Math.hypot(dx, dz) || 1;
+      tx = p.pos.x - (dx / d) * R.keep; tz = p.pos.z - (dz / d) * R.keep;
+      const hx = tx - this.home.x, hz = tz - this.home.z, hd = Math.hypot(hx, hz);
+      if (hd > R.roam) { tx = this.home.x + (hx / hd) * R.roam; tz = this.home.z + (hz / hd) * R.roam; }
+    } else if (near) { this.hopping = false; return; }          // in reach / mid-swing: stand
+    const mx = tx - this.pos.x, mz = tz - this.pos.z, md = Math.hypot(mx, mz);
+    this.hopping = md > 0.05;
+    if (!this.hopping) return;
+    const step = Math.min(md, R.hop * dt), nx = this.pos.x + (mx / md) * step, nz = this.pos.z + (mz / md) * step;
+    // never hop into a fence / wall (static colliders)
+    const ph = this.ctx.physics;
+    if (typeof ph?.blockedAt === 'function' && ph.blockedAt(nx, nz, this.radius * 0.8, this.pos.y + 0.2, this.pos.y + 1.0)) { this.hopping = false; return; }
+    this.pos.x = nx; this.pos.z = nz;
+    this.pos.y = this.ctx.physics?.heightAt?.(this.pos.x, this.pos.z) ?? this.home.y;
+    this.hopT += dt;
+  }
+
   _inArc(p) {
     const a = this.atk.arc, dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, dist = Math.hypot(dx, dz);
-    if (dist > a.range + p.radius) return false;
+    if (dist > Math.max(a.range + p.radius, WOBBLE_REACH.hit)) return false;
     const ang = wrapAngle(Math.atan2(dx, dz) - this.facing);
     return Math.abs(ang) <= Math.max(Math.abs(a.from), Math.abs(a.to)) + 0.3;
   }
@@ -230,7 +270,8 @@ export class WobbleKnight extends PropActor {
     if (!this.mesh) return;
     const tilt = Math.hypot(this.wob.x, this.wob.y);
     this.mesh.position.copy(this.pos);
-    this.mesh.rotation.set(this.wob.y * 0.8, this.facing + this.spin, -this.wob.x * 0.8, 'YXZ');
+    if (this.hopping) this.mesh.position.y += Math.abs(Math.sin(this.hopT * 9)) * 0.09;   // boing
+    this.mesh.rotation.set(this.wob.y * 0.8 + this.lean, this.facing + this.spin, -this.wob.x * 0.8, 'YXZ');
     if (tilt > 0.6) this.wob.multiplyScalar(0.6 / tilt);
     if (this.armPivot) this.armPivot.rotation.y = this.arm;
   }
@@ -300,7 +341,7 @@ export class Critter extends ScriptedActorMixin(Actor) {
     this.hurtable = false; this.fixed = true;
     this.path = o.model; this.fit = o.fit ?? { h: 1.6 }; this.clip = o.clip ?? 'Idle';
     this.meowWakes = !!o.meowWakes; this.walkTo = o.walkTo ?? null; this.onWake = o.onWake ?? null;
-    this.woke = false; this.anim = null; this.model = null;
+    this.woke = false; this.anim = null; this.model = null; this.merged = null;
     this.moo = o.moo ?? 'creature/animal_moo';
     if (o.pos) this.pos.copy(o.pos);
     this.facing = o.facing ?? 0;
@@ -314,7 +355,7 @@ export class Critter extends ScriptedActorMixin(Actor) {
       if (this.disposed) return;
       this.model = m;
       m.scene.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
-      try { mergeSkinnedMeshes(m.scene); } catch (e) { console.warn('[world] critter merge failed', e); }
+      try { this.merged = mergeSkinnedMeshes(m.scene); } catch (e) { console.warn('[world] critter merge failed', e); }
       this.object3d.add(m.root);
       this.anim = new Animator(m.scene, m.animations);
       this.anim.play(this.anim.pick(this.clip, 'Idle'));
@@ -369,6 +410,9 @@ export class Critter extends ScriptedActorMixin(Actor) {
   dispose() {
     this.disposed = true;
     this.anim?.dispose();
+    // the merged SkinnedMesh is ours (not template geometry); Actor.dispose detaches object3d before the level's
+    // disposeOwned(root) walk, so free it here
+    if (this.merged) { this.merged.geometry?.dispose(); this.merged.material?.dispose(); this.merged = null; }
     this.ctx.actors?.unregister(this);
     super.dispose();
   }

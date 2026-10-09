@@ -13,10 +13,12 @@ import { E } from '../../src/core/events.js';
 import { ATTACKS, ENEMIES, BOSSES, DIZZY, TELEGRAPH, DIFFICULTY, PLAYER, QUALITY } from '../../src/core/config.js';
 import { Dizzy } from '../../src/enemies/Dizzy.js';
 import { Boss, phaseFor } from '../../src/enemies/Boss.js';
-import { Enemy, windupFor, defaultShape } from '../../src/enemies/Enemy.js';
+import { Enemy, windupFor, defaultShape, segSegXZ } from '../../src/enemies/Enemy.js';
 import { resolveEnemyDef, TYPES, countsTowardCap } from '../../src/enemies/EnemyManager.js';
 import { CLIP_MAPS, clipNames, clipKey, isSpec, rigFor, clipsFor, subclip, specDuration } from '../../src/enemies/clipMaps.js';
 import { TUNING } from '../../src/enemies/tuning.js';
+import { diveTravel } from '../../src/enemies/types/crow.js';
+import { disposeInstanceMaterials } from '../../src/enemies/rig.js';
 import manifest, { levels as manifestLevels } from '../../src/enemies/assets.manifest.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -447,6 +449,7 @@ test('rat_xbow perched on a cart ({ y: 1.2 }): never leaves its perch, even when
 test('crow: circles 4 m up, immune to swords up there; shadow dive tracks 60% then freezes; lands and pecks (hittable)', async () => {
   const ctx = await world();
   const ev = record(ctx, E.TELEGRAPH);
+  const ends = record(ctx, E.TELEGRAPH_END);
   const e = ctx.enemies.spawn('crow', at(3, 6));
   assert.ok(e.flying && e.tags.has('flyer'));
   assert.ok(Math.abs(e.pos.y - ENEMIES.crow.fly.alt) < 1e-9, 'spawns at its altitude');
@@ -456,7 +459,8 @@ test('crow: circles 4 m up, immune to swords up there; shadow dive tracks 60% th
   step(ctx, 60 * 8, () => e.stateName === 'windup');
   assert.equal(e.stateName, 'windup');
   const tele = ev.find((x) => x.kind === 'shadow');
-  assert.ok(tele && tele.shape === 'shadow' && Math.abs(tele.duration - 1.0) < 1e-9 && tele.pos === e.diveTarget);
+  assert.ok(tele && tele.shape === 'shadow' && Math.abs(tele.duration - (1.0 + diveTravel(e))) < 1e-9 && tele.pos === e.diveTarget,
+    'the decal spans windup + dive travel, so it is full-size as the dive lands');
   let mid = null, frozen = null;
   step(ctx, 60 * 2, (i) => {
     p.pos.x += 0.04;
@@ -466,8 +470,14 @@ test('crow: circles 4 m up, immune to swords up there; shadow dive tracks 60% th
     return e.stateName !== 'windup';
   });
   assert.ok(mid && frozen && mid.distanceTo(frozen) > 0.1, 'tracks her for the first 60%');
-  step(ctx, 60 * 3, () => e.stateName === 'peck');
+  let endedInStrike = false;
+  step(ctx, 60 * 3, () => {
+    if (e.stateName === 'strike' && ends.some((x) => x.id === tele.id)) endedInStrike = true;
+    return e.stateName === 'peck';
+  });
   assert.equal(e.stateName, 'peck');
+  assert.equal(endedInStrike, false, 'the shadow stays up for the whole dive');
+  assert.ok(ends.some((x) => x.id === tele.id) && e.telegraphId == null, 'the shadow ends when the dive lands');
   assert.equal(e.grounded, true);
   assert.equal(e.resolveIncoming(ctx.player, ATTACKS.slash1, new THREE.Vector3()), 'hit', 'pecking crows are hittable');
   step(ctx, Math.ceil(60 * (ENEMIES.crow.peck + 0.1)));
@@ -593,4 +603,156 @@ test('assets.manifest: every enemy model / weapon path is listed; per-level list
   }
   for (const [lvl, list] of Object.entries(manifestLevels)) for (const p of list) assert.ok(set.has(p), `${lvl}: ${p}`);
   for (const p of manifest) assert.ok(fs.existsSync(path.join(ROOT, 'public', 'assets', p)), p);
+});
+
+// ============================================================================================ taunt (core, integration)
+test('Shield Wall taunt: targetActor is the awake taunter while tauntT runs, then the player again', async () => {
+  const ctx = await world();
+  const e = ctx.enemies.spawn('rat_pike', at(0, 4));
+  const mochi = { pos: at(3, 4), alive: true, napT: 0 };
+  assert.equal(e.targetActor(), ctx.player);
+  e.tauntedBy = mochi; e.tauntT = 0.5;
+  assert.equal(e.targetActor(), mochi);
+  assert.ok(Math.abs(e.distToTarget() - 3) < 1e-6, 'distance to the taunter');
+  mochi.napT = 2;
+  assert.equal(e.targetActor(), ctx.player, 'a napping taunter does not hold aggro');
+  mochi.napT = 0;
+  step(ctx, 40);
+  assert.equal(e.tauntT, 0, 'the taunt runs out without a refresh');
+  assert.equal(e.tauntedBy, null);
+  assert.equal(e.targetActor(), ctx.player);
+});
+
+test('dispose frees cloned skeletons (bone textures) and owned materials, not shared ones', () => {
+  const root = new THREE.Group();
+  const bone = new THREE.Bone();
+  const geo = new THREE.BoxGeometry();
+  const owned = new THREE.MeshStandardMaterial(); owned.userData.enemyOwned = true;
+  const shared = new THREE.MeshStandardMaterial();
+  const sm = new THREE.SkinnedMesh(geo, owned);
+  sm.add(bone); sm.bind(new THREE.Skeleton([bone]));
+  root.add(sm, new THREE.Mesh(geo, shared));
+  sm.skeleton.computeBoneTexture();
+  const tex = sm.skeleton.boneTexture;
+  let texFreed = 0, ownedFreed = 0, sharedFreed = 0, geoFreed = 0;
+  tex.addEventListener('dispose', () => texFreed++);
+  owned.addEventListener('dispose', () => ownedFreed++);
+  shared.addEventListener('dispose', () => sharedFreed++);
+  geo.addEventListener('dispose', () => geoFreed++);
+  disposeInstanceMaterials(root);
+  assert.equal(texFreed, 1, 'bone texture disposed');
+  assert.equal(sm.skeleton.boneTexture, null);
+  assert.equal(ownedFreed, 1); assert.equal(sharedFreed, 0); assert.equal(geoFreed, 0);
+});
+
+// ============================================================================================ water, arenas, long bodies
+/** A minimal locked disc arena (world's Arena shape: id, locked, cleared, center, r, contains, distanceTo, ring). */
+function fakeArena(id, cx, cz, r, { valid = () => true } = {}) {
+  const center = new THREE.Vector3(cx, 0, cz);
+  return {
+    id, locked: true, cleared: false, center, r, size: null,
+    contains(p, inset = 0) { return Math.hypot(p.x - cx, p.z - cz) <= r - inset; },
+    distanceTo(p) { return Math.max(0, Math.hypot(p.x - cx, p.z - cz) - r); },
+    ringPoints() { const out = []; for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; out.push(new THREE.Vector3(cx + Math.sin(a) * (r - 1.5), 0, cz + Math.cos(a) * (r - 1.5))); } return out; },
+    validPoint: valid,
+  };
+}
+function withArenas(ctx, ...arenas) {
+  ctx.levels.current = { arenas, arena: (id) => arenas.find((a) => a.id === id) ?? null };
+}
+
+test('segSegXZ: closest points between XZ segments (and points)', () => {
+  const o = {};
+  assert.equal(segSegXZ(0, 0, 0, 2, 1, 1, 1, 1, o), 1);
+  assert.deepEqual([o.ax, o.az, o.bx, o.bz], [0, 1, 1, 1]);
+  assert.equal(segSegXZ(0, 0, 2, 0, 1, -1, 1, 1, o), 0);                       // crossing
+  assert.ok(Math.abs(segSegXZ(0, 0, 0, 1, 3, 5, 3, 5, o) - (9 + 16)) < 1e-9);   // beyond the end → the endpoint
+});
+
+test('deep water: a crossbowman backing off / hopping from her on a stream bank never enters it; one knocked in is put back', async () => {
+  const ctx = await world();
+  ctx.physics.isDeepWater = (x, z) => z > 3.2 && z < 9;                         // the stream, just behind the rat
+  const e = ctx.enemies.spawn('rat_xbow', at(0, 2.4), { alerted: true });
+  let wet = 0, hops = 0;
+  step(ctx, 60 * 8, () => {
+    if (ctx.physics.isDeepWater(e.pos.x, e.pos.z)) wet++;
+    if (e.stateName === 'hop') hops++;
+    if (e.stateName === 'recover' || e.stateName === 'chase') { e.cooldownT = Math.max(e.cooldownT, 0.5); }
+  });
+  assert.equal(wet, 0, 'never steps or hops into the stream');
+  assert.ok(e.alive && e.pos.z < 3.2);
+  // knocked in anyway: back on its last dry footing within ~0.35 s
+  e.pos.set(0, -1.3, 5); e.snap();
+  step(ctx, 40);
+  assert.ok(!ctx.physics.isDeepWater(e.pos.x, e.pos.z), `rescued (at ${e.pos.x.toFixed(2)}, ${e.pos.z.toFixed(2)})`);
+});
+
+test('deep water safety net: an arena member stranded in deep water returns to a valid ring point, or is despawned (the wave clears)', async () => {
+  const ctx = await world();
+  ctx.physics.isDeepWater = (x, z) => Math.abs(z - 5) < 2;
+  const arena = fakeArena('bridge', 0, 0, 8);
+  withArenas(ctx, arena);
+  const e = ctx.enemies.spawn('rat_xbow', at(0, 5), { arena: 'bridge', alerted: true });
+  step(ctx, 40);
+  assert.ok(ctx.enemies.list.includes(e));
+  assert.ok(!ctx.physics.isDeepWater(e.pos.x, e.pos.z) && arena.contains(e.pos, 0), 'on a dry ring point inside its arena');
+  // far outside its locked arena (and no valid ring point left): despawned, so the arena sees it gone
+  const lone = fakeArena('pit', 30, 30, 6, { valid: () => false });
+  withArenas(ctx, arena, lone);
+  const f = ctx.enemies.spawn('rat_pike', at(50, 50), { arena: 'pit', alerted: true });
+  step(ctx, 5);
+  assert.ok(!ctx.enemies.list.includes(f), 'despawned');
+});
+
+test('foreign locked arena: open-zone crows do not alert on her inside it, drop a running chase, and stay outside the fog wall', async () => {
+  const ctx = await world();
+  const glade = fakeArena('glade', 0, 0, 9);
+  withArenas(ctx, glade);
+  const c = ctx.enemies.spawn('crow', at(16, 0), { patrolRadius: 0 });
+  step(ctx, 60 * 3);
+  assert.equal(c.alerted, false, 'no alert while she is walled off');
+  c.alert(); assert.equal(c.stateName, 'idle', 'alert() refuses too (Meow, pack alerts)');
+  // already chasing when the wall goes up → back home
+  glade.locked = false;
+  c.alerted = true; c.setState('chase');
+  glade.locked = true;
+  step(ctx, 30);
+  assert.equal(c.stateName, 'return');
+  // flies over the wall: kept outside it
+  c.pos.set(5, c.pos.y, 0);
+  step(ctx, 1);
+  assert.ok(Math.hypot(c.pos.x, c.pos.z) >= glade.r + 0.99, 'pushed back outside the ring');
+  // its own arena's members fight normally; open ground again once the arena clears
+  const m = ctx.enemies.spawn('rat_pike', at(3, 0), { arena: 'glade' });
+  step(ctx, 30);
+  assert.ok(m.alerted, 'arena members alert');
+  glade.locked = false; glade.cleared = true;
+  assert.equal(c.targetWalledOff(), false);
+});
+
+test('rat bodies: a 2.7 m rat collides by its spine capsule; the snout stops ~0.4 m from her centre (attacks still land)', async () => {
+  const ctx = await world();
+  const p = ctx.player;
+  const e = ctx.enemies.spawn('rat_pike', at(0, 4), { alerted: true });
+  const b = e.def.body;
+  assert.ok(b && b.front > 0.5 && b.back > 0.4, 'rat body capsule');
+  let minSnout = Infinity, minSpine = Infinity, hits = 0;
+  ctx.bus.on(E.HIT, (h) => { if (h?.target === p) hits++; });
+  const s = {};
+  step(ctx, 60 * 8, () => {
+    const sn = Math.hypot(e.pos.x + Math.sin(e.facing) * 0.74 - p.pos.x, e.pos.z + Math.cos(e.facing) * 0.74 - p.pos.z);
+    minSnout = Math.min(minSnout, sn);
+    const sp = e.spine(s);
+    minSpine = Math.min(minSpine, Math.sqrt(segSegXZ(sp.x0, sp.z0, sp.x1, sp.z1, p.pos.x, p.pos.z, p.pos.x, p.pos.z, {})) - sp.r - p.radius);
+  });
+  assert.ok(minSnout >= 0.4, `snout ${minSnout.toFixed(2)} m from her centre`);
+  assert.ok(minSpine >= -0.02, `capsule overlap ${minSpine.toFixed(3)}`);
+  assert.ok(hits >= 1, `its pokes still reach her (${hits} hits)`);
+  // she walks into its flank: the rat is shoved off her, not through her
+  e.setState('idle'); e.alerted = false; e.ai = false;
+  e.pos.set(0, 0, 0.5); e.facing = Math.PI / 2; e.snap();
+  e.ai = true; e.update(DT);
+  const sp = e.spine(s);
+  assert.ok(Math.sqrt(segSegXZ(sp.x0, sp.z0, sp.x1, sp.z1, p.pos.x, p.pos.z, p.pos.x, p.pos.z, {})) >= sp.r + p.radius - 1e-6);
+  assert.ok(resolveEnemyDef('boss_grizzlechop').body?.front > b.front, 'Grizzlechop (Rat.glb × 2) has a scaled body');
 });

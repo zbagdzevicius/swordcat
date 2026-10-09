@@ -8,7 +8,7 @@ import { ENEMIES, GRAVITY } from '../../core/config.js';
 import { CLIP_MAPS } from '../clipMaps.js';
 import { TUNING, rangeOf } from '../tuning.js';
 import { windupFor } from '../Enemy.js';
-import { dressRat } from './ratGear.js';
+import { dressRat, ratBody } from './ratGear.js';
 
 const _d = new THREE.Vector3();
 const _t = new THREE.Vector3();
@@ -28,6 +28,25 @@ function aimAt(e, p) {
   e.aimDir.normalize();
 }
 
+/**
+ * Hop-back direction (unit XZ, written into `out`) away from `p`, turned as little as needed so the whole 3 m arc
+ * lands on dry ground (never into the Old Bridge stream); null when every direction is deep (no hop then).
+ * @returns {THREE.Vector3|null}
+ */
+export function hopDir(e, p, dist, out) {
+  if (p) out.set(e.pos.x - p.pos.x, 0, e.pos.z - p.pos.z); else out.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
+  if (out.lengthSq() < 1e-6) out.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
+  out.normalize();
+  const ux = out.x, uz = out.z, reach = dist + e.radius + 0.3;
+  const dry = (x, z) => [0.35, 0.7, 1].every((k) => !e.deepAt(e.pos.x + x * reach * k, e.pos.z + z * reach * k, e.pos.y));
+  for (const t of HOP_TURNS) {
+    const c = Math.cos(t), s = Math.sin(t), rx = ux * c + uz * s, rz = -ux * s + uz * c;
+    if (dry(rx, rz)) return out.set(rx, 0, rz);
+  }
+  return null;
+}
+const HOP_TURNS = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5];
+
 const def = ENEMIES.rat_xbow;
 
 export default {
@@ -35,11 +54,12 @@ export default {
   id: 'rat_xbow',
   perchable: true,
   scamper: true,
+  body: ratBody(),                       // spine capsule: the 0.30 m row circle let its snout pass through her
   anims: { ...CLIP_MAPS.rat.roles, rat_bolt: { windup: { clip: 'Rat_Idle', speed: 0.5 }, strike: { clip: 'Rat_Attack', from: 0.35, to: 0.75, speed: 1.2 } } },
   build: (e, m) => dressRat(e, m, { hood: true, crossbow: def.weapon }),
   /** live aim telegraph: muzzle + frozen-after-lock direction */
   tell(e) { muzzle(e, e.tellPos); e.tellDir.copy(e.aimDir); },
-  init(e) { e.aimDir = new THREE.Vector3(0, 0, 1); e.strafeT = 0; e.strafeDir = 1; },
+  init(e) { e.aimDir = new THREE.Vector3(0, 0, 1); e.hopDir = new THREE.Vector3(0, 0, -1); e.strafeT = 0; e.strafeDir = 1; },
   states: {
     chase: {
       anim: 'move',
@@ -48,14 +68,17 @@ export default {
         if (!p) { e.releaseToken(); return e.setState('return'); }
         if (e.leashBroken() && !e.perched) return e.setState('return');
         const d = e.distToPlayer(), [near, far] = e.def.keep, hb = e.def.hopBack;
-        if (!e.perched && d < hb.within && (e.attackCd.hop ?? 0) <= 0) return e.setState('hop');
+        if (!e.perched && d < hb.within && (e.attackCd.hop ?? 0) <= 0) {
+          if (hopDir(e, p, hb.dist, e.hopDir)) return e.setState('hop');
+          e.attackCd.hop = 0.5;                                       // backed onto the bank: no hop, re-check soon
+        }
         const atk = e.pickAttack(d);
         if (atk && d <= atk.range && e.cooldownT <= 0 && (e.perched || d >= near * 0.5) && e.acquireToken(atk.kind)) return e.beginAttack(atk);
         if (e.perched) e.brake(dt);
         else {
           _d.set(e.pos.x - p.pos.x, 0, e.pos.z - p.pos.z);
           const dl = _d.length() || 1; _d.multiplyScalar(1 / dl);
-          if (d < near) e.steerTo(e.pos.x + _d.x * 3, e.pos.z + _d.z * 3, e.def.walk, dt);             // back off
+          if (d < near) e.steerTo(e.pos.x + _d.x * 3, e.pos.z + _d.z * 3, e.def.walk, dt);             // back off (steerTo turns it along a bank)
           else if (d > far) e.steerTo(p.pos.x + _d.x * (near + far) * 0.5, p.pos.z + _d.z * (near + far) * 0.5, e.def.run, dt);
           else {                                                                                       // strafe
             e.strafeT -= dt;
@@ -72,9 +95,8 @@ export default {
       enter(e) {
         e.releaseToken(); e.endTelegraph();
         const p = e.targetActor(), hb = e.def.hopBack;
-        if (p) _d.set(e.pos.x - p.pos.x, 0, e.pos.z - p.pos.z); else _d.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
-        if (_d.lengthSq() < 1e-6) _d.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
-        _d.normalize();
+        if (!hopDir(e, p, hb.dist, _d)) { e.attackCd.hop = 0.5; e.vel.set(0, e.vel.y, 0); e.hopCancel = true; return; }
+        e.hopCancel = false;
         const vy = 4.2, air = (2 * vy) / GRAVITY;
         e.vel.set(_d.x * (hb.dist / air), vy, _d.z * (hb.dist / air));
         e.onGround = false;
@@ -82,6 +104,7 @@ export default {
       },
       update(e, dt) {
         const p = e.targetActor();
+        if (e.hopCancel) { e.hopCancel = false; return e.setState(p ? 'chase' : 'return'); }
         if (p) e.faceTo(p.pos, dt, TUNING.turnRate);
         if (e.stateT > 0.15 && e.onGround) e.brake(dt, 14);
         if (e.stateT >= 0.6) e.setState(p ? 'chase' : 'return');

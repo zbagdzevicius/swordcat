@@ -25,6 +25,16 @@ const _s = new THREE.Vector3();
 
 const ground = (e, x = e.pos.x, z = e.pos.z) => e.ctx.physics?.heightAt?.(x, z) ?? 0;
 const altitude = (e) => e.pos.y - ground(e);
+/**
+ * The walkable surface at (x, z) at or below `fromY` (a bridge deck, a cart, a ledge), not the terrain under it:
+ * dives aim at her feet and pecks land on the deck, never in the stream below the Old Bridge.
+ */
+const standAt = (e, x, z, fromY) => {
+  const ph = e.ctx.physics;
+  return typeof ph?.groundAt === 'function' && Number.isFinite(fromY) ? ph.groundAt(x, z, fromY + 0.3) : ground(e, x, z);
+};
+/** Where a dive at `p` lands: her standing surface. */
+const diveY = (e, p) => standAt(e, p.pos.x, p.pos.z, p.pos.y);
 
 /** Steer in 3D toward (x, y, z) at `speed` (smoothed), with flock separation. Returns the distance left. */
 function flyTo(e, x, y, z, speed, dt, rate = 4) {
@@ -36,6 +46,12 @@ function flyTo(e, x, y, z, speed, dt, rate = 4) {
   e.vel.y = damp(e.vel.y, _d.y, rate, dt);
   e.vel.z = damp(e.vel.z, _d.z + sep.z * speed * 0.5, rate, dt);
   return d;
+}
+
+/** Expected dive time from the hover point (hoverDist out, alt + hoverUp up) to the decal centre at the dive speed. */
+export function diveTravel(e, a = DIVE) {
+  const C = TUNING.crow;
+  return Math.hypot(C.hoverDist, e.def.fly.alt + C.hoverUp) / (a.speed ?? DIVE.speed);
 }
 
 /** Circle (cx, cz) at radius r, altitude `alt` above the ground there. */
@@ -146,12 +162,13 @@ export default {
         e.windupDur = windupFor(a, e.windupMul());
         e.trackDur = e.windupDur * ((a.track ?? a.windup * 0.6) / a.windup);   // §8.1 shadow tracks the first 60%
         const p = e.targetActor();
-        if (p) e.diveTarget.set(p.pos.x, ground(e, p.pos.x, p.pos.z), p.pos.z); else e.diveTarget.set(e.pos.x, ground(e), e.pos.z);
-        e.telegraph('shadow', { shape: 'shadow', pos: e.diveTarget, dir: e.tellDir, size: a.r ?? 0.9, duration: e.windupDur });
+        if (p) e.diveTarget.set(p.pos.x, diveY(e, p), p.pos.z); else e.diveTarget.set(e.pos.x, ground(e), e.pos.z);
+        // the decal stays up through the dive (ended on landing), so it reaches full size as the beak arrives
+        e.telegraph('shadow', { shape: 'shadow', pos: e.diveTarget, dir: e.tellDir, size: a.r ?? 0.9, duration: e.windupDur + diveTravel(e, a) });
       },
       update(e, dt) {
         const p = e.targetActor();
-        if (p && e.stateT < e.trackDur) e.diveTarget.set(p.pos.x, ground(e, p.pos.x, p.pos.z), p.pos.z);
+        if (p && e.stateT < e.trackDur) e.diveTarget.set(p.pos.x, diveY(e, p), p.pos.z);
         // hover off to the side and above, beak toward the decal
         _d.set(e.pos.x - e.diveTarget.x, 0, e.pos.z - e.diveTarget.z);
         const dl = _d.length() || 1, hd = TUNING.crow.hoverDist;
@@ -163,7 +180,7 @@ export default {
     },
     strike: {
       anim: () => ['strike', { speed: 1.5 }],
-      enter(e) { e.endTelegraph(); e.dashHit = false; },
+      enter(e) { e.dashHit = false; },             // the shadow stays (frozen) until the dive lands: ended in peck
       update(e, dt) {
         const a = e.attack?.def ?? DIVE, t = e.diveTarget;
         _d.set(t.x - e.pos.x, t.y - e.pos.y, t.z - e.pos.z);
@@ -177,7 +194,7 @@ export default {
             e.dashHit = true; e.ctx.combat.applyHit(e, p, a);
           }
         }
-        if (d <= TUNING.crow.landDist || e.pos.y <= ground(e) + 0.02 || e.stateT > 3) {
+        if (d <= TUNING.crow.landDist || e.pos.y <= standAt(e, e.pos.x, e.pos.z, e.pos.y) + 0.02 || e.stateT > 3) {
           // the dive lands: an r 0.9 impact at the decal centre if the beak missed on the way in
           if (!e.dashHit && p && Math.hypot(p.pos.x - t.x, p.pos.z - t.z) <= (a.r ?? 0.9) + p.radius && p.pos.y <= t.y + 1.0) {
             e.dashHit = true; e.ctx.combat.applyHit(e, p, a);
@@ -189,9 +206,9 @@ export default {
     },
     peck: {
       anim: () => ['peck', { speed: 1.3 }],
-      enter(e) { e.grounded = true; e.releaseToken(); e.vel.set(0, 0, 0); e.pos.y = ground(e); },
+      enter(e) { e.grounded = true; e.endTelegraph(); e.releaseToken(); e.vel.set(0, 0, 0); e.pos.y = standAt(e, e.pos.x, e.pos.z, Math.max(e.pos.y, e.diveTarget.y)); },
       update(e, dt) {
-        e.brake(dt, 10); e.vel.y = 0; e.pos.y = ground(e);
+        e.brake(dt, 10); e.vel.y = 0; e.pos.y = standAt(e, e.pos.x, e.pos.z, e.pos.y);
         const p = e.targetActor();
         if (p) e.faceTo(p.pos, dt, 4);
         if (e.stateT >= e.peckDur) e.setState('recover');
@@ -213,7 +230,7 @@ export default {
       update(e, dt) {
         e.staggerT -= dt;
         e.brake(dt, 5);
-        if (e.grounded) { e.vel.y = 0; e.pos.y = ground(e); } else e.vel.y = damp(e.vel.y, -0.8, 4, dt);
+        if (e.grounded) { e.vel.y = 0; e.pos.y = standAt(e, e.pos.x, e.pos.z, e.pos.y); } else e.vel.y = damp(e.vel.y, -0.8, 4, dt);
         if (e.staggerT <= 0) { e.staggerT = 0; e.attack = null; e.grounded = false; e.setState(e.alive ? (e.targetActor() ? 'chase' : 'return') : 'die'); }
       },
     },

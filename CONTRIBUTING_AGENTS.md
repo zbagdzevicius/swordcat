@@ -22,6 +22,7 @@ Binding spec: `GAME_DESIGN.md` (§19 contracts, Appendix A/B), `research/tech.md
 
 ```bash
 npx vite --port 5314 --strictPort            # run in the background; kill it when you're done
+SMOKE_NOHMR=1 npx vite --port 5314 --strictPort   # same, no HMR / watch: other agents' saves can't reload a page mid-smoke
 # http://localhost:5314/?test=1&seed=1        test hooks, fixed seed, no save load, no pointer lock
 # ...?debug                                   Stats + renderer.info + lil-gui (quality, time scale, god, mode, bloom)
 # ...?level=forest&spawn=boss  ?quality=low|med|high

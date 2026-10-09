@@ -40,17 +40,27 @@ export class SafeGround {
   }
 
   /**
-   * Best position to return to: the most recent sample at least `minDist` (XZ) from `from`, else the latest.
-   * Writes into `out` ({x,y,z} or a Vector3) and returns true, or false when empty.
+   * Best position to return to: the most recent sample at least `minDist` (XZ) from `from` that passes `ok`
+   * (e.g. "no deep water nearby"); else the most recent one >= `minDist`; else the farthest sample from `from`
+   * that passes `ok` (or just the farthest). Without `from` it is the latest sample. Writes into `out`
+   * ({x,y,z} or a Vector3) and returns true, or false when empty.
+   * @param {{x:number,y:number,z:number}} out @param {{x:number,z:number}|null} [from] @param {number} [minDist]
+   * @param {((s:{x:number,y:number,z:number}) => boolean)|null} [ok]
    */
-  best(out, from = null, minDist = 0) {
+  best(out, from = null, minDist = 0, ok = null) {
     if (!this.count) return false;
     let pick = this.recent(0);
-    if (from && minDist > 0) {
+    if (from) {
+      const dist = (s) => Math.hypot(s.x - from.x, s.z - from.z);
+      let found = null, far = null, farD = -1, okFar = null, okFarD = -1;
       for (let i = 0; i < this.count; i++) {
-        const s = this.recent(i);
-        if (Math.hypot(s.x - from.x, s.z - from.z) >= minDist) { pick = s; break; }
+        const s = this.recent(i), d = dist(s), good = !ok || ok(s);
+        if (!found && good && d >= minDist) found = s;
+        if (d > farD) { far = s; farD = d; }
+        if (good && d > okFarD) { okFar = s; okFarD = d; }
       }
+      if (!found && ok) for (let i = 0; i < this.count && !found; i++) { const s = this.recent(i); if (dist(s) >= minDist) found = s; }
+      pick = found ?? okFar ?? far ?? pick;
     }
     out.x = pick.x; out.y = pick.y; out.z = pick.z;
     return true;

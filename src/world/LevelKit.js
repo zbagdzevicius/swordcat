@@ -36,6 +36,14 @@ import { Silhouettes, makeGlowSprite } from './Sky.js';
 import { distToPolyline, inBox, pointAlong, polylineLength } from './noise.js';
 
 /** Shared model paths (the level manifests list them). */
+/**
+ * Open-fight zones: loading at a Vigil Stone keeps spawn groups within `safeLoadR` m of it away for that load (the
+ * Continue spawn is never inside an aggro cluster); a zone whose enemies all fell is saved as cleared.
+ */
+export const OPEN_ZONE = Object.freeze({ safeLoadR: 17 });
+/** The flag that marks an open-fight zone cleared (pure). */
+export const openZoneFlag = (levelId, zoneId) => `${levelId}.cleared.${zoneId}`;
+
 export const KIT_MODELS = {
   obelisk: 'models/env/nature/statue_obelisk.glb',
   lantern: 'models/env/graveyard/lantern-candle.glb',
@@ -365,8 +373,11 @@ export class Kit {
     const cols = [];
     if (o.collider !== false) for (const [t0, t1] of segs) {
       const ax = a[0] + (b[0] - a[0]) * t0, az = a[1] + (b[1] - a[1]) * t0, bx = a[0] + (b[0] - a[0]) * t1, bz = a[1] + (b[1] - a[1]) * t1;
-      const y = Math.min(this.h(ax, az), this.h(bx, bz));
-      cols.push(this.collider({ ax, az, bx, bz, r: o.thick ?? 0.14, y0: y - 0.6, y1: y + h, walkable: o.walkable ?? false }));
+      // non-walkable runs block up to the higher end (on a climbing run the uphill fence must not be hoppable;
+      // requests/physics.md); walkable tops (drystone walls) sit on the lower end so she never floats
+      const ha = this.h(ax, az), hb = this.h(bx, bz), walk = o.walkable ?? false;
+      const y0 = Math.min(ha, hb), y = walk ? y0 : Math.max(ha, hb);
+      cols.push(this.collider({ ax, az, bx, bz, r: o.thick ?? 0.14, y0: y0 - 0.6, y1: y + h, walkable: walk }));
     }
     return { pieces, colliders: cols };
   }
@@ -418,7 +429,7 @@ export class Kit {
     // 5. scatter, crates, fish lines, breadcrumbs
     for (const s of def.scatter ?? []) await this._scatter(s);
     if (def.crates) this._crates(typeof def.crates === 'number' ? { n: def.crates } : def.crates);
-    if (def.fishLines?.length) this.onLoaded(() => { for (const [a, b, n] of def.fishLines) level.pickups.fishLine(a, b, n); });
+    if (def.fishLines?.length) this.onLoaded(() => { def.fishLines.forEach(([a, b, n], i) => level.pickups.fishLine(a, b, n, i)); });
     if (def.breadcrumbs) this._breadcrumbs(def.breadcrumbs);
     mark('scatter');
 
@@ -427,10 +438,14 @@ export class Kit {
     mark('far');
 
     // 7. render outputs: ground, grass, water, props batch, trees
-    const out = this.terrain.finalize();
+    // §18 budget: Low draws the ground at half resolution in one call; Med / High in 2 × 2 frustum-culled tiles
+    const lowQ = ctx.quality?.id === 'low';
+    const out = this.terrain.finalize(lowQ ? { step: 2, chunks: 1 } : { step: 1, chunks: 2, lod: ctx.quality?.id !== 'high' });
     mark('ground');
     this.terrain.dataTexture = out.dataTexture;
     level.groups.terrain.add(out.mesh);
+    /** ground tiles within this many metres of the camera draw full resolution (0 = no LOD tiles) */
+    level.groundLod = out.mesh.isGroup && out.mesh.children.some((c) => c.userData.lod) ? 34 : 0;
     if ((def.grass ?? this.biome.grass) !== false) {
       const g = def.grass ?? {};
       level.grass = new Grass({ ground: out.dataTexture, size: this.terrain.size, res: this.terrain.res, quality: ctx.quality,
@@ -497,6 +512,7 @@ export class Kit {
       case 'arena': {
         const a = new Arena(ctx, zn, (x, z) => this.h(x, z), level);
         level.arenas.push(a);
+        this.onLoaded(() => a.restore());       // before the rescue / kitten spawns below read the cleared state
         if (zn.interact) this._interactZone(zn.interact);
         if (zn.rescue) this._rescue(zn);
         break;
@@ -519,6 +535,16 @@ export class Kit {
       case 'exit':
         this.trigger({ id: zn.id, at: zn.at, size: zn.size ?? [8, 2], r: zn.r, when: zn.when, once: true,
           fire: () => ctx.levels?.exit?.(zn.to, zn.spawnId ?? 'start', zn) });
+        // a gated exit (`when`): reaching it early shows `blocked` ({ toast, text }) on every entry instead
+        if (zn.when != null && zn.blocked) {
+          this.trigger({ id: zn.id + ':blocked', at: zn.at, size: zn.size ?? [8, 2], r: zn.r, once: false,
+            when: (s, c) => !condOk(c, zn.when),
+            fire: () => {
+              const b = zn.blocked, st = ctx.strings;
+              const text = b.toast && (st?.has?.(b.toast) ?? false) ? st.t(b.toast) : (b.text ?? b.toast);
+              ctx.bus.emit(E.TOAST, { text, icon: b.icon ?? 'hint', key: zn.id + ':blocked' });
+            } });
+        }
         break;
       case 'interact': this._interactZone(zn); break;
       default: break;     // setpiece / platforming / objective zones: content comes from their builders
@@ -593,15 +619,26 @@ export class Kit {
     }
     this.onLoaded(() => {
       if (!this.cond(zn.onlyIf) || !ctx.enemies?.spawn) return;
+      const st = ctx.state, flag = openZoneFlag(level.id ?? this.def.id, zn.id);
+      if (st?.getFlag?.(flag)) return;                                   // cleared on an earlier visit (saved)
+      // loading at a Vigil Stone (Continue / reload): it is a safe spot, so groups near it stay away this load
+      const sp = level.vigils.some((v) => v.id === level.spawnId) ? level.spawns[level.spawnId]?.pos : null;
+      const mine = [];
       for (const [type, n = 1, at = zn.at, patrolR = 0, opts = {}] of zn.spawns ?? []) {
+        if (sp && Math.hypot(at[0] - sp.x, at[1] - sp.z) < OPEN_ZONE.safeLoadR) continue;
         for (let i = 0; i < n; i++) {
           const a = i * 2.399 + 0.7, rr = n > 1 ? Math.min(1.6, 0.6 + patrolR * 0.25) : 0;
           const x = at[0] + Math.sin(a) * rr, z = at[1] + Math.cos(a) * rr;
           const facing = this.rng.angle();
           const e = ctx.enemies.spawn(type, new THREE.Vector3(x, this.h(x, z), z), { facing, patrolRadius: patrolR, home: new THREE.Vector3(at[0], 0, at[1]), zone: zn.id, ...opts });
-          if (e) level.spawnedEnemies.push(e);
+          if (e) { level.spawnedEnemies.push(e); mine.push(e); }
         }
       }
+      // every enemy of the zone down → `<level>.cleared.<zone>` (saved with the flags; skipped on later loads)
+      if (mine.length) level.listen(E.ENEMY_DIED, (p) => {
+        if (!mine.includes(p?.enemy) || mine.some((e) => e.alive)) return;
+        st?.setFlag?.(flag, true);
+      });
     });
   }
 
@@ -703,12 +740,22 @@ export class Kit {
       if (!p) { clusterLeft--; continue; }
       const hasMilk = milkAt.has(made);
       const pos = new THREE.Vector3(x, p.y, z);
+      // broken on an earlier visit (saved bitmask `<level>.crates.<k>`): placed (keeps the layout) but gone
+      const bit = made % 30, cflag = `${this.def.id}.crates.${Math.floor(made / 30)}`;
+      if ((Number(ctx.state?.getFlag?.(cflag)) | 0) & (1 << bit)) {
+        this.batch.setVisible(p.handle, false);
+        for (const c of p.colliders) level.removeCollider(c);
+        made++; clusterLeft--;
+        continue;
+      }
       // hit sounds come from audio (combat:hit → the actor's `material`), the break crunch + splinters from the
       // `crate` / `barrel` burst (fx debris, audio crateBreak)
       const kind = path === KIT_MODELS.barrel ? 'barrel' : 'crate';
       const a = new PropActor(ctx, { id: `crate_${made}`, kind, hp: 1, radius: p.radius * 0.8, height: p.top - p.y, pos, wobble: 0.2,
         visual: { batch: this.batch, handle: p.handle, base: p.matrix },
         onBreak: (self) => {
+          const st = ctx.state;
+          if (st?.setFlag) st.setFlag(cflag, (Number(st.getFlag?.(cflag)) | 0) | (1 << bit));
           this.batch.setVisible(p.handle, false);
           for (const c of p.colliders) level.removeCollider(c);
           level.pickups.dropCrate(pos, { milk: hasMilk });
@@ -774,7 +821,8 @@ export class Kit {
     if (hpaths.length) {
       const tpls = (await Promise.all(hpaths.map((p) => this.tpl(p)))).filter(Boolean);
       const rng = this.rng.fork('horizon');
-      const n = hz.n ?? 70, [r0, r1] = hz.r ?? [level.half + 14, level.half + 60], [h0, h1] = hz.h ?? [9, 18];
+      // §18 budget: Low keeps 40 % of the tree line (it is a fogged silhouette band either way)
+      const n = Math.round((hz.n ?? 70) * (this.ctx.quality?.id === 'low' ? 0.4 : 1)), [r0, r1] = hz.r ?? [level.half + 14, level.half + 60], [h0, h1] = hz.h ?? [9, 18];
       const geos = [];
       for (let i = 0; i < n && tpls.length; i++) {
         const a = (i / n) * Math.PI * 2 + (rng() - 0.5) * 0.08, rr = r0 + rng() * (r1 - r0);

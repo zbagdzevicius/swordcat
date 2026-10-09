@@ -62,3 +62,9 @@ steps aside **per feature** as soon as `ctx.ui.handles` says ui draws it — ple
 - D-01: its `end` sets `meadow.mochi = true` and emits the "Mochi joined!" toast.
 - The Pudding follow beat (`cs03b`, dialog, ~3 s line) plays on `objective:progress {id: 'net_ropes', done: true}`;
   story sets `meadow.pudding = true` at its start so your sniff → nod → lift-off runs under the line.
+
+## world: Sir Tallbert's footprint collider covers g01_mark (2026-10-09)
+The statue's circle collider sits ~1.9 m in front of the plinth (≈ (4.15, −57.4), r ≈ 1.1: the sword's box), so a
+player placed on g01_mark (4, −58) is pushed to (3.79, −58.78). G-01 no longer uses g01_mark (it stages her at
+(2.65, −57.5), back to the statue, so the MEME_LOOP lens stays inside the north fence). Nice to have: centre the
+knight's collider on the plinth (or `collider: 'box'` with the plinth footprint) so the mark is standable.

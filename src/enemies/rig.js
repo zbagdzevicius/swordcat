@@ -90,12 +90,19 @@ export function flashMaterials(root, out = []) {
   return out;
 }
 
-/** Dispose per-instance materials under `root` (never shared prop materials or cached GLB geometry). */
+/**
+ * Dispose per-instance GPU resources under `root`: owned materials and the bone textures of SkeletonUtils-cloned
+ * skeletons (each clone gets its own Skeleton; its boneTexture is never freed otherwise). Never shared prop
+ * materials or cached GLB geometry.
+ */
 export function disposeInstanceMaterials(root) {
+  const skeletons = new Set();
   root.traverse((o) => {
+    if (o.isSkinnedMesh && o.skeleton) skeletons.add(o.skeleton);
     if (!o.isMesh || o.userData.sharedProp) return;
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m?.userData?.enemyOwned) m.dispose();
   });
+  for (const s of skeletons) s.dispose();
 }
 
 /** Mark the per-instance materials of a fresh model so dispose() frees them. */

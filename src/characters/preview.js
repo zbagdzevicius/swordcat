@@ -224,6 +224,32 @@ async function setup() {
       setCam([0.05, 0.8, 1.55], [-0.04, 0.9, 0], 34);
       break;
     }
+    case 'back': {
+      // gameplay follow view (behind, slightly above); ?pose=run&cape=cream
+      const k = add(C.swordcatConfig({ cape: params.get('cape') || 'cream' }), [0, 0, 0], +(params.get('yaw') || 0), params.get('pose') || 'idle');
+      // ?roll: the player's Tumble (body flips over a mid-height pivot, 0.4 s every 1 s); ?hunch=<rad>: chest pitched
+      // forward; ?freeze=<frame>: stop animating there (screenshots of a mid-roll frame)
+      if (params.has('roll') || params.has('hunch')) {
+        const J = k.rig.joints, ax = new THREE.Vector3(1, 0, 0), piv = new THREE.Vector3(0, 0.42, 0), q = new THREE.Quaternion();
+        const E = (x) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x, 0, 0));
+        const anim = k.animate.bind(k); let rt = 0;
+        k.animate = (dt, o) => {
+          anim(dt, o); rt += dt;
+          if (params.has('hunch')) J.chest.quaternion.multiply(E(+params.get('hunch') * Math.min(1, rt / 0.4)));
+          const u = (rt % 1) / 0.4;
+          if (params.has('roll') && rt > 0.5 && u < 1) {
+            const th = Math.PI * 2 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, u / 0.9))), tuck = Math.sin(u * Math.PI);
+            J.chest.quaternion.multiply(E(0.5 * tuck)); J.head.quaternion.multiply(E(0.45 * tuck));
+            q.setFromAxisAngle(ax, th); J.body.quaternion.premultiply(q);
+            J.body.position.sub(piv).applyQuaternion(q).add(piv); J.body.position.y += 0.3 * Math.sin(th * 0.5);
+          }
+          return k;
+        };
+      }
+      if (params.has('run')) { tickers.push((t, dt) => { k.root.position.z += dt * +params.get('run'); camera.position.z = k.root.position.z - 3.2; camera.lookAt(0, 0.55, k.root.position.z); }); }
+      setCam([0.0, 1.35, -3.2], [0, 0.55, 0], 45);
+      break;
+    }
     case 'mochi': {
       add(C.CATS.mochi, [0, 0, 0], 0.35, 'idle');
       setCam([0.2, 0.5, 2.3], [0, 0.45, 0], 32);
@@ -310,6 +336,11 @@ async function setup() {
   }
 }
 
+function applyCamOverride() {
+  const f = (k) => params.has(k) ? params.get(k).split(',').map(Number) : null;
+  const pos = f('campos'), look = f('camlook');
+  if (pos) setCam(pos, look || [0, 0.5, 0], params.has('camfov') ? +params.get('camfov') : null);
+}
 function applyHide() {
   const hide = (params.get('hide') || '').split(',').filter(Boolean);
   if (!hide.length) return;
@@ -324,7 +355,7 @@ function tick(ts) {
   t += dt; frame++;
   renderer.info.reset();
   scene.userData.grassMat.uniforms.uTime.value = t;
-  for (const k of kittens) k.update(dt, { frameId: frame });
+  if (!(params.has('freeze') && frame > +params.get('freeze'))) for (const k of kittens) k.update(dt, { frameId: frame });
   for (const f of tickers) f(t, dt);
   if (params.has('nopost')) renderer.render(scene, camera); else composer.render();
   const info = renderer.info.render;
@@ -335,4 +366,4 @@ function tick(ts) {
   requestAnimationFrame(tick);
 }
 renderer.info.autoReset = false;
-setup().then(() => { applyHide(); requestAnimationFrame(tick); }).catch((e) => { console.error(e); hud.textContent = 'ERROR ' + e.message; window.__PREVIEW__.error = String(e.stack || e); });
+setup().then(() => { applyCamOverride(); applyHide(); requestAnimationFrame(tick); }).catch((e) => { console.error(e); hud.textContent = 'ERROR ' + e.message; window.__PREVIEW__.error = String(e.stack || e); });

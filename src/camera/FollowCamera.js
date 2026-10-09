@@ -24,6 +24,8 @@
 // look input; lock-on frames the midpoint over her right shoulder at 4.5 m; boss arenas ease to 6.0 m over 0.6 s.
 // The arm collides with terrain, architecture and solid static props (houses, walls, statues, big rocks); thin
 // statics (trunks, posts, fences: see camTransparent) and colliders tagged `cam: false` are skipped: they fade.
+// When the arm would be cut below ARM_SHORT (a low wall, standing stone or cart right behind her) the boom lifts its
+// pitch over the obstacle and / or swings to the nearest clear side instead (see _avoid; `cam.avoid = false` disables).
 // Everything runs in render() with the interpolated player position (no 120 Hz jitter); input edges in update().
 import * as THREE from 'three';
 import { E } from '../core/events.js';
@@ -34,15 +36,46 @@ import { CameraShake } from './CameraShake.js';
 import { CamPose, blendPose, applyPose, resolveEase } from './pose.js';
 import { CutsceneCamera, SHOT_MODES } from './CutsceneCamera.js';
 import { MemeCam } from './MemeCam.js';
-import { pickLockTarget, nearestLockTarget, switchLockTarget, lockable, FlickDetector, StickFlick, LockMarker } from './LockOn.js';
+import { acquireLockTarget, RECENT_ATTACKER_TIME, handoverLockTarget, switchLockTarget, lockable, FlickDetector, StickFlick, LockMarker } from './LockOn.js';
 import { OccluderFader } from './Occluders.js';
 import { PRESETS, localToWorld } from './presets.js';
+import { toRecord } from '../physics/StaticColliders.js';
 
 const LOCK = PLAYER.lockOn;
 /** default orbit pitch (rad): slightly above her, looking a touch down the path ahead */
 export const DEFAULT_PITCH = 0.2;
 /** lateral offset over her right shoulder while locked (m, at lockDist) */
-export const SHOULDER = 0.55;
+export const SHOULDER = 0.9;
+/**
+ * Combat framing (an alerted hostile within COMBAT_RADIUS m, or a lock): the orbit pitch is raised to at least
+ * COMBAT_PITCH (rad) and the look point lifted COMBAT_LIFT (m) above her head, so she sits in the lower third and the
+ * sight line to a rat in melee range clears her silhouette (its wind-up stays visible).
+ */
+export const COMBAT_PITCH = 0.4;
+export const COMBAT_LIFT = 0.4;
+export const COMBAT_RADIUS = 4;
+/** unlocked combat: right-shoulder offset (m) so an enemy straight ahead of her is not hidden behind her body */
+export const COMBAT_SHOULDER = 0.6;
+/**
+ * lock-on: minimum horizontal screen separation (NDC units, 2 = full width; 0.32 = 205 px at 1280) of the target
+ * from her body, for targets 4 m+ away; it relaxes to LOCK_SEP_NEAR (154 px) at 1.2 m so a lunging rat doesn't
+ * swing the camera round to her side (see lockSepGoal)
+ */
+export const LOCK_SEP = 0.32;
+export const LOCK_SEP_NEAR = 0.24;
+/** @param {number} d horizontal distance her → target (m) @returns {number} separation goal (NDC) */
+export function lockSepGoal(d) { return LOCK_SEP_NEAR + (LOCK_SEP - LOCK_SEP_NEAR) * clamp((d - 1.2) / 2.8, 0, 1); }
+/** lock-on: largest yaw swing (rad) away from "straight behind her" used to reach LOCK_SEP */
+export const LOCK_BIAS_MAX = 1.0;
+/** her body point (below the head pivot, m) the lock separation is measured from */
+const BODY_DROP = 0.3;
+/** near-lens fade: fadeable props within this depth (m) in front of the lens fade (fence rails, posts, trunks) */
+export const LENS_FADE_DIST = 2.2;
+/** near-lens fade: the grid (NDC) the lens segments pass through */
+const LENS_GRID = Object.freeze([[0, 0], [-0.5, 0], [0.5, 0], [-0.95, 0], [0.95, 0], [0, -0.6], [0, 0.6], [0, -0.95], [0, 0.95],
+  [-0.5, -0.6], [0.5, -0.6], [-0.5, 0.6], [0.5, 0.6], [-0.95, -0.6], [0.95, -0.6], [-0.95, 0.6], [0.95, 0.6]]);
+/** enemy states that count as engaged even without the `alerted` flag */
+const ENGAGED = new Set(['alert', 'chase', 'windup', 'strike', 'recover', 'circle', 'attack', 'aim']);
 /** min/max spring-arm length (m) */
 const ARM_MIN = 0.8, ARM_MARGIN = 0.3, ARM_RADIUS = 0.2;
 /** what the spring arm and the lock-on line of sight test: terrain + architecture + static props (thin ones skipped) */
@@ -54,6 +87,35 @@ export const THIN_RADIUS = 0.6;
 /** segment colliders (fences, thin walls) up to this half-thickness are skipped too (m) */
 const THIN_SEGMENT = 0.2;
 const MAX_SKIPS = 6;
+/**
+ * Boom avoidance (a low wall, a standing stone or a cart right behind her): when the arm would be cut shorter than
+ * ARM_SHORT the camera looks for a clear boom instead of collapsing onto her head: it lifts the pitch over a low
+ * obstacle and / or swings the orbit to the nearest clear side (AVOID_CANDIDATES, cheapest first) until the arm is
+ * at least ARM_GOOD long (or `want`). Re-evaluated every AVOID_EVAL s; the pitch lift / yaw swing ease in.
+ */
+export const ARM_SHORT = 2.2;
+export const ARM_GOOD = 2.8;
+/** below this (m) the avoidance takes any candidate that is clearly longer, even short of ARM_GOOD */
+export const ARM_FLOOR = 1.8;
+const AVOID_EVAL = 0.1;
+/** highest orbit pitch the avoidance may reach (rad) */
+export const AVOID_PITCH_MAX = 1.15;
+/** largest yaw swing while locked (the target must stay in frame) */
+const AVOID_LOCK_YAW = 0.9;
+/** the player's own look input suppresses the yaw swing for this long (s): never fight the mouse / stick */
+const AVOID_LOOK_GRACE = 0.4;
+/** [yaw offset, pitch lift] candidates (rad), sorted by cost (a pitch lift is cheaper than a swing) */
+export const AVOID_CANDIDATES = (() => {
+  const c = [];
+  for (const dp of [0.15, 0.3, 0.45, 0.6, 0.8]) c.push([0, dp]);
+  for (const dy of [0.45, 0.9, 1.3]) for (const dp of [0, 0.3]) { c.push([dy, dp]); c.push([-dy, dp]); }
+  const cost = ([dy, dp]) => Math.abs(dy) * 0.8 + dp;
+  return Object.freeze(c.sort((a, b) => cost(a) - cost(b)).map((x) => Object.freeze(x)));
+})();
+/** dead-target hand-over: the lock orbit turns at most this fast (rad/s, eased in over HANDOVER_EASE s) */
+export const HANDOVER_RATE = Math.PI;
+const HANDOVER_EASE = 0.3;
+const HANDOVER_MAX_T = 2.5;
 /** tree fade only while the camera is this close to its subject (m): follow / lock / boss arms, close shots */
 export const FADE_MAX_DIST = 9;
 /** Meme Cam: rotations of the MEME_LOOP framing around her (rad) tried in order until the lens has a clear view */
@@ -61,6 +123,16 @@ export const MEME_YAWS = Object.freeze([0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05])
 /** Meme Cam view test: everything solid counts (a fence or trunk 1 m in front of her face spoils the shot too) */
 const MEME_CAST = Object.freeze({ terrain: true, mesh: true, statics: true });
 const MEME_LENS_R = 0.12;
+/** her eye height (m, the ECU_EYES look): the Meme Cam view test runs from her face to the lens */
+export const MEME_EYE_Y = PRESETS.ECU_EYES.look[1];
+
+/**
+ * Static colliders that are the footprint of a camera-fadeable prop (a `fade` prop set such as the practice-field
+ * fence, whose world colliders carry no camFade tag): found on level load by matching collider footprints against
+ * the registered fadeables (OccluderFader.covers). The camera fades those props instead of colliding into her.
+ * @type {WeakSet<object>}
+ */
+export const FADE_COLLIDERS = new WeakSet();
 
 /**
  * Should the camera ignore this static collider (it fades instead / is too thin to matter)?
@@ -70,7 +142,7 @@ const MEME_LENS_R = 0.12;
  */
 export function camTransparent(src) {
   if (!src || typeof src !== 'object') return false;
-  if (src.cam === false || src.camFade === true) return true;
+  if (src.cam === false || src.camFade === true || FADE_COLLIDERS.has(src)) return true;
   if (src.cam === true) return false;
   if (src.ax !== undefined || Array.isArray(src.a)) return (src.r ?? 0.1) <= THIN_SEGMENT;                // segment
   const isBox = src.minX !== undefined || src.hx !== undefined || src.w !== undefined || src.d !== undefined;
@@ -93,6 +165,53 @@ function exitDistance(src, o, d, radius, hitDist) {
   return hitDist + 2 * radius + 0.25;
 }
 
+/**
+ * Lock-on look point: `out` = pivot + half the way to the target (capped 2.2 m horizontally, -0.6..1.2 m vertically),
+ * lifted by `lift`.
+ */
+export function lockLookPoint(pivot, tgt, lift, out) {
+  out.subVectors(tgt, pivot).multiplyScalar(0.5);
+  const h = Math.hypot(out.x, out.z);
+  if (h > 2.2) { out.x *= 2.2 / h; out.z *= 2.2 / h; }
+  out.y = clamp(out.y, -0.6, 1.2) + lift;
+  return out.add(pivot);
+}
+
+const _sPos = new THREE.Vector3(), _sLook = new THREE.Vector3(), _sF = new THREE.Vector3(), _sR = new THREE.Vector3(), _sV = new THREE.Vector3();
+const _UP = new THREE.Vector3(0, 1, 0);
+
+/**
+ * Horizontal screen separation (NDC, target minus body; positive = target right of her) of the lock framing with
+ * orbit `yaw` / `pitch`, arm `dist`, right-shoulder offset `shoulder`, look lift `lift` and the horizontal half-FOV
+ * tangent `tanH`.
+ */
+export function lockScreenSep(pivot, body, tgt, yaw, pitch, dist, shoulder, lift, tanH) {
+  const cp = Math.cos(pitch);
+  _sPos.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp).multiplyScalar(dist).add(pivot);
+  _sPos.x += Math.cos(yaw) * shoulder; _sPos.z -= Math.sin(yaw) * shoulder;
+  lockLookPoint(pivot, tgt, lift, _sLook);
+  _sF.subVectors(_sLook, _sPos).normalize();
+  _sR.crossVectors(_sF, _UP).normalize();                            // three.js lookAt: camera +X = forward x up
+  const ndc = (p) => { _sV.subVectors(p, _sPos); const z = Math.max(0.05, _sV.dot(_sF)); return _sV.dot(_sR) / (z * tanH); };
+  return ndc(tgt) - ndc(body);
+}
+
+/**
+ * Smallest yaw bias (rad, >= 0: the camera swings further round to her right) for which the target sits at least
+ * `sep` NDC to the right of her body on screen (bisection; LOCK_BIAS_MAX if even that is not enough).
+ * `yaw0` is the orbit yaw straight behind her, facing the target.
+ */
+export function lockYawBias(pivot, body, tgt, yaw0, pitch, dist, shoulder, lift, tanH, sep = LOCK_SEP, maxBias = LOCK_BIAS_MAX) {
+  if (lockScreenSep(pivot, body, tgt, yaw0, pitch, dist, shoulder, lift, tanH) >= sep) return 0;
+  if (lockScreenSep(pivot, body, tgt, yaw0 + maxBias, pitch, dist, shoulder, lift, tanH) < sep) return maxBias;
+  let lo = 0, hi = maxBias;
+  for (let i = 0; i < 10; i++) {
+    const mid = (lo + hi) / 2;
+    if (lockScreenSep(pivot, body, tgt, yaw0 + mid, pitch, dist, shoulder, lift, tanH) >= sep) hi = mid; else lo = mid;
+  }
+  return hi;
+}
+
 const GAMEPLAY = new Set(['follow', 'lock', 'boss']);
 /** the player moving more than this between two rendered frames is a teleport (m²: 6 m) */
 const TELEPORT_SQ = 36;
@@ -102,6 +221,9 @@ const _dir = new THREE.Vector3(), _piv = new THREE.Vector3(), _right = new THREE
 const _org = new THREE.Vector3(), _lookPt = new THREE.Vector3(), _tgt = new THREE.Vector3(), _ray = new THREE.Ray();
 const _blendPivot = new THREE.Vector3(), _castOrg = new THREE.Vector3(), _sideOrg = new THREE.Vector3(), _losDir = new THREE.Vector3();
 const _subjects = [new THREE.Vector3(), new THREE.Vector3()];
+const _lens = LENS_GRID.map(() => new THREE.Vector3());
+const _body = new THREE.Vector3(), _tgtPt = new THREE.Vector3(), _q = new THREE.Vector3();
+const _cOrg = new THREE.Vector3(), _cDir = new THREE.Vector3(), _cRight = new THREE.Vector3();
 
 export class FollowCamera {
   constructor(ctx) {
@@ -155,6 +277,24 @@ export class FollowCamera {
     this._lockLook = new THREE.Vector3();
     /** pending safety handback after E.CUTSCENE_END: blend seconds, or −1 for none */
     this._handback = -1;
+    /** the hostile that last hit her (lock-on fallback when the cone is empty) and the seconds left to remember it */
+    this._attacker = null;
+    this._attackerT = 0;
+    /** an alerted hostile is within COMBAT_RADIUS (refreshed in update) and the eased combat-framing weight */
+    this._threat = false;
+    this._combatW = 0;
+    /** current lock yaw bias (rad, see lockYawBias) */
+    this.lockBias = 0;
+    /** boom avoidance (see ARM_SHORT): on/off, the eased pitch lift / lock yaw offset and the current choice */
+    this.avoid = true;
+    this._avoidPitch = 0;
+    this._avoidYaw = 0;
+    this._avoidActive = false;
+    this._avoidEvalT = 0;
+    this._avoidDy = 0;
+    this._avoidDp = 0;
+    /** dead-target hand-over in progress: seconds since it (-1 = none) */
+    this._handoverT = -1;
     this._offs = [];
   }
 
@@ -184,6 +324,8 @@ export class FollowCamera {
       bus.on(E.CUTSCENE_END, (p) => { if (this.modeName === 'preset' || this.modeName === 'cutscene') this._handback = p?.skipped ? 0 : CAMERA.ease; }),
       bus.on(E.CUTSCENE_START, () => { this._handback = -1; }),
       bus.on(E.GAME_MODE, (p) => { if (p?.mode === 'cutscene' || p?.mode === 'dialog') this.unlock(); }),
+      bus.on(E.HIT, (p) => { if (p && p.target === this.ctx.player) this._noteAttacker(p.attacker); }),
+      bus.on(E.PLAYER_DAMAGED, (p) => this._noteAttacker(p?.source)),
     );
     this._marker.build(this.ctx.scene);
     this._outPose.pos.copy(this.ctx.camera.position);
@@ -195,6 +337,7 @@ export class FollowCamera {
   /** Fixed step: input edges (lock-on, switch, recenter) and lock validation. */
   update(dt) {
     const ctx = this.ctx, input = ctx.input, gm = ctx.game?.mode;
+    if (this._attackerT > 0 && (this._attackerT -= dt) <= 0) this._attacker = null;
     if (gm === 'play' && GAMEPLAY.has(this.modeName)) {
       if (input.pressed('recenter')) this.recenter();
       if (input.pressed('lockon')) { if (this.lockTarget) this.unlock(); else if (!this.lock()) this.recenter(); }
@@ -202,6 +345,7 @@ export class FollowCamera {
       if (input.pressed('lockPrev')) this.switchLock(-1, true);
     }
     this._validateLock(dt);
+    this._threat = this._nearThreat();
     if (this.bossActive && !this._bossForced && ctx.enemies && !ctx.enemies.boss?.alive && !ctx.levels?.loading) this._setBoss(false);
   }
 
@@ -320,13 +464,22 @@ export class FollowCamera {
   lock(target = null) {
     const p = this.ctx.player;
     if (!p) return null;
-    const t = target && lockable(target) ? target : pickLockTarget(this._candidates(), p.pos, this.yaw, LOCK);
+    const t = target && lockable(target) ? target
+      : acquireLockTarget(this._candidates(), p.pos, this.yaw, LOCK, this._attackerT > 0 ? this._attacker : null);
     if (!t) return null;
     this.lockTarget = t;
     this._losT = 0;
     this._flick.reset();
     this._syncGameplayMode();
     return t;
+  }
+
+  /** Remember who just hit her (a projectile counts as its owner). */
+  _noteAttacker(att) {
+    const a = att?.isProjectile ? (att.owner ?? null) : att;
+    if (!a || a === this.ctx.player || !a.pos) return;
+    this._attacker = a;
+    this._attackerT = RECENT_ATTACKER_TIME;
   }
 
   unlock() {
@@ -345,7 +498,7 @@ export class FollowCamera {
   }
 
   /** Register / unregister a fadeable prop (static; see Occluders.js). */
-  addFadeable(obj) { return this._fader.add(obj, this.ctx.scene); }
+  addFadeable(obj) { const n = this._fader.add(obj, this.ctx.scene); if (n) this._markFadeColliders(); return n; }
   removeFadeable(obj) { this._fader.remove(obj); }
   /** Re-register a fadeable whose instances / matrices changed (e.g. a BatchedMesh that grew). */
   refreshFadeable(obj) { return this._fader.refresh(obj, this.ctx.scene); }
@@ -379,7 +532,7 @@ export class FollowCamera {
     if (!actor || !ph?.raycast) return 0;
     const P = PRESETS.MEME_LOOP, o = actor.object3d?.position ?? actor.pos, f = actor.facing ?? 0;
     const sphere = typeof ph.sphereCast === 'function';
-    _org.set(o.x, o.y + P.look[1], o.z);
+    _org.set(o.x, o.y + MEME_EYE_Y, o.z);
     for (const off of MEME_YAWS) {
       localToWorld(P.pos, o, f + off, _tgt);
       _losDir.subVectors(_tgt, _org);
@@ -394,6 +547,18 @@ export class FollowCamera {
   }
 
   // ------------------------------------------------------------------ internals
+  /** Is an alerted / engaged hostile within COMBAT_RADIUS of her? */
+  _nearThreat() {
+    const p = this.ctx.player;
+    const list = p && this.ctx.actors?.queryRadius?.(p.pos, COMBAT_RADIUS, hostileTo('player'));
+    if (!list) return false;
+    for (const a of list) {
+      if (a === p || a.alive === false || a.dead || (a.hp !== undefined && a.hp <= 0)) continue;
+      if (a.alerted || ENGAGED.has(a.stateName)) return true;
+    }
+    return false;
+  }
+
   _candidates() {
     return this.ctx.actors?.queryRadius?.(this.ctx.player.pos, Math.max(LOCK.range, LOCK.breakRange), hostileTo('player')) ?? [];
   }
@@ -440,6 +605,7 @@ export class FollowCamera {
   }
 
   _onLevelUnload() {
+    this._attacker = null; this._attackerT = 0;
     this.unlock();
     this._bossForced = false;
     this._setBoss(false);
@@ -450,7 +616,28 @@ export class FollowCamera {
     const level = p?.level ?? this.ctx.levels?.current;
     this._fader.clear();
     if (level?.root) this._fader.scan(level.root, this.ctx.scene);
+    this._markFadeColliders(level);
     if (GAMEPLAY.has(this.modeName)) this.snapBehind();
+  }
+
+  /**
+   * Tag (FADE_COLLIDERS) the level's static colliders that are footprints of registered fadeable props, so the spring
+   * arm passes them (and the fader fades the prop) instead of being pulled into her. Explicit `cam: true` blocks.
+   * @param {any} [level] defaults to the current level
+   */
+  _markFadeColliders(level = this.ctx.levels?.current) {
+    const cols = level?.colliders;
+    if (!cols || !this._fader.count) return 0;
+    let n = 0;
+    for (const key of ['boxes', 'circles', 'segments']) {
+      for (const c of cols[key] ?? []) {
+        if (!c || typeof c !== 'object' || c.cam === true || camTransparent(c)) continue;
+        const r = toRecord(c);
+        if (!r || r.kind === 2) continue;                                  // arena fog rings never
+        if (this._fader.covers(r.minX, r.maxX, r.minZ, r.maxZ, r.y1)) { FADE_COLLIDERS.add(c); n++; }
+      }
+    }
+    return n;
   }
 
   _validateLock(dt) {
@@ -459,8 +646,8 @@ export class FollowCamera {
     if (!p || !GAMEPLAY.has(this.modeName)) { this.unlock(); return; }
     const reg = this.ctx.actors?.has ? this.ctx.actors.has(t) : true;
     if (!reg || !lockable(t)) {
-      const next = nearestLockTarget(this._candidates(), p.pos, LOCK.range, t);
-      if (next) { this.lockTarget = next; this._losT = 0; } else this.unlock();
+      const next = handoverLockTarget(this._candidates(), p.pos, this.yaw, LOCK.range, t);
+      if (next) { this.lockTarget = next; this._losT = 0; this._handoverT = 0; } else this.unlock();
       return;
     }
     const d = Math.hypot(t.pos.x - p.pos.x, t.pos.z - p.pos.z);
@@ -559,21 +746,6 @@ export class FollowCamera {
     }
     const lookIdle = ctx.input?.lookIdleTime ?? 0;
     const sp = Math.hypot(p.vel?.x ?? 0, p.vel?.z ?? 0);
-    if (t) {
-      const want = Math.atan2(t.pos.x - p.pos.x, t.pos.z - p.pos.z) + Math.PI;
-      this.yaw = this._snap ? want : dampAngle(this.yaw, want, 8, dt);
-      this._recenter = false;
-    } else if (this._recenter) {
-      const want = (p.facing ?? 0) + Math.PI;
-      this.yaw = dampAngle(this.yaw, want, 10, dt);
-      this.pitch = damp(this.pitch, DEFAULT_PITCH, 8, dt);
-      if (Math.abs(wrapAngle(this.yaw - want)) < 0.02) this._recenter = false;
-    } else if (lookOk && sp > 0.5 && lookIdle > CAMERA.autoFollowAfter) {
-      const want = (p.facing ?? 0) + Math.PI;
-      const off = Math.abs(wrapAngle(want - this.yaw));               // 0 = camera already behind her
-      if (off < 2.3) this.yaw = dampAngle(this.yaw, want, 1.5 * Math.min(1, sp / 4), dt);   // not when running at the camera
-      this.pitch = damp(this.pitch, DEFAULT_PITCH, 0.8, dt);
-    }
 
     // ---- arm length: follow 3.6 / lock 4.5 / boss 6.0, eased over CAMERA.ease; charge push-in; golden punch-in
     const base = this.bossActive ? CAMERA.bossDist : t ? CAMERA.lockDist : CAMERA.dist;
@@ -589,6 +761,13 @@ export class FollowCamera {
     let fov = CAMERA.fov + (PLAYER.charge.camFov - CAMERA.fov) * this._chargeW;
     fov = lerp(fov, 36, g);
 
+    // ---- combat framing: raised pitch + lifted look point while a fight is on (locked, or an alerted hostile near)
+    const engaged = t || this._threat ? 1 : 0;
+    this._combatW = this._snap ? engaged : damp(this._combatW, engaged, engaged > this._combatW ? 3 : 1.2, dt);
+    const cw = this._combatW * (1 - g);
+    const lift = COMBAT_LIFT * cw;
+    const shoulder = t ? SHOULDER * (want / CAMERA.lockDist) : COMBAT_SHOULDER * cw;
+
     // ---- pivot (head height), smoothed: XZ fast, Y slow so jumps don't bob the view
     _piv.copy(ppos); _piv.y += lerp(CAMERA.pivotY, 0.85, g);
     if (this._snap) this.pivot.copy(_piv);
@@ -597,13 +776,48 @@ export class FollowCamera {
       this.pivot.y = damp(this.pivot.y, _piv.y, 8, dt);
       this.pivot.z = damp(this.pivot.z, _piv.z, 20, dt);
     }
+    const framePitch = () => this.pitch + Math.max(0, COMBAT_PITCH - this.pitch) * cw;
+    let baseYaw = this.yaw;
 
-    const cp = Math.cos(this.pitch);
-    _dir.set(Math.sin(this.yaw) * cp, Math.sin(this.pitch), Math.cos(this.yaw) * cp);
+    if (t) {
+      // lock: face the target, then swing round to her right until the target stands clear of her on screen
+      const tp = t.object3d?.position ?? t.pos;
+      _tgtPt.set(tp.x, tp.y + (t.height ?? 1) * 0.6, tp.z);
+      _body.copy(this.pivot); _body.y -= BODY_DROP;
+      const yaw0 = Math.atan2(tp.x - ppos.x, tp.z - ppos.z) + Math.PI;
+      const aspect = ctx.camera?.aspect > 0 ? ctx.camera.aspect : 16 / 9;
+      const tanH = Math.tan((aspectFov(fov, aspect) * Math.PI) / 360) * aspect;
+      const goal = lockSepGoal(Math.hypot(tp.x - ppos.x, tp.z - ppos.z));
+      const bias = lockYawBias(this.pivot, _body, _tgtPt, yaw0, framePitch(), want, shoulder, lift, tanH, goal);
+      this.lockBias = this._snap ? bias : damp(this.lockBias, bias, 6, dt);
+      baseYaw = yaw0 + this.lockBias;
+      this._lockYaw(baseYaw + this._avoidYaw, dt);
+      this._recenter = false;
+    } else {
+      this.lockBias = 0;
+      this._handoverT = -1;
+      if (this._recenter) {
+        const w = (p.facing ?? 0) + Math.PI;
+        this.yaw = dampAngle(this.yaw, w, 10, dt);
+        this.pitch = damp(this.pitch, DEFAULT_PITCH, 8, dt);
+        if (Math.abs(wrapAngle(this.yaw - w)) < 0.02) this._recenter = false;
+      } else if (lookOk && sp > 0.5 && lookIdle > CAMERA.autoFollowAfter && !this._avoidActive) {
+        const w = (p.facing ?? 0) + Math.PI;
+        const off = Math.abs(wrapAngle(w - this.yaw));               // 0 = camera already behind her
+        if (off < 2.3) this.yaw = dampAngle(this.yaw, w, 1.5 * Math.min(1, sp / 4), dt);   // not when running at the camera
+        this.pitch = damp(this.pitch, DEFAULT_PITCH, 0.8, dt);
+      }
+    }
+
+    // boom avoidance: a low wall / standing stone / cart behind her lifts the boom over it or swings it clear
+    const p0 = framePitch();
+    this._avoid(dt, t ? baseYaw : this.yaw, p0, want, shoulder, !!t, lookOk ? lookIdle : Infinity);
+    const pitch = p0 + Math.max(0, Math.min(this._avoidPitch, AVOID_PITCH_MAX - p0));
+    const cp = Math.cos(pitch);
+    _dir.set(Math.sin(this.yaw) * cp, Math.sin(pitch), Math.cos(this.yaw) * cp);
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));            // screen right (tech.md §8)
 
-    // lock: arm starts over her right shoulder; look at the midpoint (capped so she stays in frame)
-    const shoulder = t ? SHOULDER * (want / CAMERA.lockDist) : 0;
+    // lock / combat: the arm starts over her right shoulder
     _org.copy(this.pivot);
     if (shoulder > 0) _org.addScaledVector(_right, shoulder);
     const armOrigin = _tmp.copy(_org);
@@ -613,23 +827,89 @@ export class FollowCamera {
     const gy = (ctx.physics?.heightAt?.(out.pos.x, out.pos.z) ?? -Infinity) + 0.3;
     if (out.pos.y < gy) out.pos.y = gy;
 
-    if (t) {
-      const tp = t.object3d?.position ?? t.pos;
-      _lookPt.set(tp.x, tp.y + (t.height ?? 1) * 0.6, tp.z).sub(this.pivot).multiplyScalar(0.5);
-      const h = Math.hypot(_lookPt.x, _lookPt.z);
-      if (h > 2.2) { _lookPt.x *= 2.2 / h; _lookPt.z *= 2.2 / h; }
-      _lookPt.y = clamp(_lookPt.y, -0.6, 1.2);
-      out.look.copy(this.pivot).add(_lookPt);
-      if (this._snap) this._lockLook.copy(out.look);
-      else { this._lockLook.lerp(out.look, 1 - Math.exp(-10 * dt)); out.look.copy(this._lockLook); }
-    } else {
-      out.look.copy(this.pivot);
-      this._lockLook.copy(this.pivot);
-    }
+    if (t) lockLookPoint(this.pivot, _tgtPt, lift, out.look);
+    else { out.look.copy(this.pivot); out.look.y += lift; }
+    if (this._snap) this._lockLook.copy(out.look);
+    else { this._lockLook.lerp(out.look, 1 - Math.exp(-10 * dt)); out.look.copy(this._lockLook); }
     out.roll = 0;
     out.fov = fov;
     this._snap = false;
     return out;
+  }
+
+  /**
+   * Lock orbit yaw toward `goal`: damped; right after a dead-target hand-over the turn is rate-limited
+   * (HANDOVER_RATE, eased in) so the new target never snap-orbits the camera round her mid-combo.
+   */
+  _lockYaw(goal, dt) {
+    if (this._snap) { this.yaw = goal; this._handoverT = -1; return; }
+    let ny = dampAngle(this.yaw, goal, 8, dt);
+    if (this._handoverT >= 0) {
+      this._handoverT += dt;
+      const rate = HANDOVER_RATE * Math.min(1, 0.15 + this._handoverT / HANDOVER_EASE);
+      const m = rate * dt, d = wrapAngle(ny - this.yaw);
+      ny = this.yaw + clamp(d, -m, m);
+      if (Math.abs(wrapAngle(goal - ny)) < 0.05 || this._handoverT > HANDOVER_MAX_T) this._handoverT = -1;
+    }
+    this.yaw = ny;
+  }
+
+  /** Arm length for orbit (yaw, pitch) with the right-shoulder offset (candidate test of the boom avoidance). */
+  _armAt(yaw, pitch, want, shoulder) {
+    const cp = Math.cos(pitch);
+    _cDir.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp);
+    _cRight.set(Math.cos(yaw), 0, -Math.sin(yaw));
+    _cOrg.copy(this.pivot);
+    if (shoulder > 0) _cOrg.addScaledVector(_cRight, shoulder);
+    return this._armLength(_cOrg, _cDir, want, _cRight);
+  }
+
+  /**
+   * Boom avoidance (ARM_SHORT / AVOID_CANDIDATES): when the arm at the base orbit (`yaw`, `pitch`) is cut short,
+   * pick the cheapest candidate pitch lift / yaw swing whose arm reaches ARM_GOOD (else the longest one, if clearly
+   * longer), then ease this._avoidPitch toward its lift and swing the yaw (follow: this.yaw itself, unless the
+   * player is steering the view; lock: the this._avoidYaw offset, at most AVOID_LOCK_YAW).
+   */
+  _avoid(dt, yaw, pitch, want, shoulder, locked, lookIdle) {
+    const ph = this.ctx.physics;
+    if (!this.avoid || !ph?.raycast || want < ARM_SHORT) { this._avoidReset(); return; }
+    const good = Math.min(want, ARM_GOOD);
+    const base = this._armAt(yaw, pitch, want, shoulder);
+    const need = this._avoidActive ? good : ARM_SHORT;           // hysteresis: once avoiding, keep at it until good
+    const canYaw = locked || (lookIdle > AVOID_LOOK_GRACE && !this._recenter);
+    if (base >= need - 1e-3) {
+      this._avoidActive = false; this._avoidDy = 0; this._avoidDp = 0;
+    } else if (this._snap || !this._avoidActive || (this._avoidEvalT -= dt) <= 0) {      // newly short: at once
+      this._avoidEvalT = AVOID_EVAL;
+      let pick = null, best = null, bestLen = base + (base < ARM_FLOOR ? 0.15 : 0.3);
+      const prefer = Math.sign(this._avoidDy || this._avoidYaw) || 1;
+      for (let pass = 0; pass < 2 && !pick; pass++) {
+        for (const [dy, dp] of AVOID_CANDIDATES) {
+          // equal cost: the side we already swung to first (pass 0), the other side on pass 1
+          if (dy === 0 ? pass === 1 : (Math.sign(dy) === prefer) !== (pass === 0)) continue;
+          if (dy !== 0 && (!canYaw || (locked && Math.abs(dy) > AVOID_LOCK_YAW))) continue;
+          if (dp > 0 && pitch + dp > AVOID_PITCH_MAX + 1e-6) continue;
+          const len = this._armAt(yaw + dy, pitch + dp, want, shoulder);
+          if (len >= good - 1e-3) { pick = [dy, dp]; break; }
+          if (len > bestLen) { bestLen = len; best = [dy, dp]; }
+        }
+      }
+      pick ??= best;
+      if (pick) { this._avoidActive = true; this._avoidDy = pick[0]; this._avoidDp = pick[1]; }
+      else if (base >= ARM_SHORT - 1e-3) { this._avoidActive = false; this._avoidDy = 0; this._avoidDp = 0; }
+    }
+    const dp = this._avoidDp, dy = this._avoidDy;
+    this._avoidPitch = this._snap ? dp : damp(this._avoidPitch, dp, dp > this._avoidPitch ? 6 : 2, dt);
+    if (locked) this._avoidYaw = this._snap ? dy : damp(this._avoidYaw, dy, 3, dt);
+    else {
+      this._avoidYaw = 0;
+      if (dy !== 0 && canYaw) this.yaw = this._snap ? this.yaw + dy : dampAngle(this.yaw, this.yaw + dy, 3, dt);
+    }
+  }
+
+  _avoidReset() {
+    this._avoidActive = false; this._avoidDy = 0; this._avoidDp = 0;
+    this._avoidPitch = 0; this._avoidYaw = 0;
   }
 
   /** Golden Hour activation punch-in (0 → 1 → 0 over PLAYER.golden.activate). */
@@ -651,6 +931,22 @@ export class FollowCamera {
       dir = this._stick.push(sx);
     }
     if (dir) this.switchLock(dir, false);
+  }
+
+  /**
+   * End points of the near-lens fade segments: the LENS_GRID view directions, `depth` m deep (camera space z).
+   * @param {THREE.PerspectiveCamera} cam @param {number} depth @returns {number} how many points were written
+   */
+  _lensPoints(cam, depth) {
+    if (!(depth > 0.2)) return 0;
+    cam.updateMatrixWorld();
+    const tanV = Math.tan((cam.fov * Math.PI) / 360), tanH = tanV * (cam.aspect > 0 ? cam.aspect : 16 / 9);
+    for (let i = 0; i < LENS_GRID.length; i++) {
+      const [gx, gy] = LENS_GRID[i];
+      _q.set(gx * tanH * depth, gy * tanV * depth, -depth).applyMatrix4(cam.matrixWorld);
+      _lens[i].copy(_q);
+    }
+    return LENS_GRID.length;
   }
 
   // ------------------------------------------------------------------ per frame
@@ -702,8 +998,11 @@ export class FollowCamera {
       const h = this.modeName === 'preset' ? (this._cut.frame.height ?? 1) : (ctx.player?.height ?? 1);
       _subjects[0].copy(subj); _subjects[0].y += h * 0.5;
       _subjects[1].copy(subj); _subjects[1].y += h * 1.05;
-      const near = cam.position.distanceToSquared(_subjects[0]) <= FADE_MAX_DIST * FADE_MAX_DIST;
-      this._fader.update(dt, cam.position, _subjects, near ? 2 : 0);
+      const d2 = cam.position.distanceToSquared(_subjects[0]);
+      const near = d2 <= FADE_MAX_DIST * FADE_MAX_DIST;
+      // lens segments: never deeper than most of the way to her (props behind her are not in the way)
+      const nLens = near ? this._lensPoints(cam, Math.min(LENS_FADE_DIST, 0.85 * Math.sqrt(d2))) : 0;
+      this._fader.update(dt, cam.position, _subjects, near ? 2 : 0, _lens, nLens);
     }
     this._marker.update(GAMEPLAY.has(this.modeName) ? this.lockTarget : null, cam, dt, this.showLockMarker);
   }

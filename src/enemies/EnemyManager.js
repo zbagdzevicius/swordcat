@@ -30,7 +30,7 @@ import crow from './types/crow.js';
 import hyena from './types/hyena.js';
 import { GENERIC, boneheadDef, jellyDef, animsFor } from './types/generic.js';
 import { dressKayKit } from './types/kaykitGear.js';
-import { dressRat } from './types/ratGear.js';
+import { dressRat, ratBody } from './types/ratGear.js';
 import cacklejaw, { CACKLEJAW_HIDE, CACKLEJAW_LOOK } from './scripted/Cacklejaw.js';
 import pilfer from './scripted/Pilfer.js';
 import barkusSilhouette from './scripted/BarkusSilhouette.js';
@@ -44,7 +44,7 @@ export const TYPES = Object.freeze({
 /** Base boss looks until the boss type files (M2/M3) replace them: the §11 builds on the shared rigs. */
 const KNIGHT_PROPS = ['1H_Sword', '1H_Sword_Offhand', '2H_Sword', 'Badge_Shield', 'Rectangle_Shield', 'Round_Shield', 'Spike_Shield'];
 const BOSS_LOOKS = {
-  grizzlechop: { build: (e, m) => dressRat(e, m, { helm: true, buckler: true }) },
+  grizzlechop: { body: ratBody(2), build: (e, m) => dressRat(e, m, { helm: true, buckler: true }) },
   cacklejaw: { hide: CACKLEJAW_HIDE, build: (e, m) => dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' }) },
   brutus: { hide: ['Knight_Head', '1H_Sword', '1H_Sword_Offhand', 'Badge_Shield', 'Round_Shield', 'Spike_Shield'], show: ['2H_Sword', 'Rectangle_Shield', 'Knight_Helmet'],
     build: (e, m) => dressKayKit(e, m, { look: 'brutus', headNode: 'Knight_Head', expression: 'neutral', plate: false }) },
@@ -179,7 +179,14 @@ export class EnemyManager {
     if (def.unknown) console.warn(`[enemies] unknown type "${type}" (generic stand-in)`);
     const p = new THREE.Vector3();
     if (!toPos(ctx, pos, p)) p.copy(ctx.player?.pos ?? _v.set(0, 0, 0)).setY(NaN);
-    const ground = this._groundAt(p.x, p.z, Number.isFinite(p.y) ? p.y : undefined);
+    let ground = this._groundAt(p.x, p.z, Number.isFinite(p.y) ? p.y : undefined);
+    // a point on a bridge deck given at terrain height (arena ring points, level zones) would drop the feet into the
+    // stream under it: stand on the dry walkable top instead
+    const ph = ctx.physics;
+    if (!opts.y && typeof ph?.isDeepWater === 'function' && typeof ph.topAt === 'function' && ph.isDeepWater(p.x, p.z, ground)) {
+      const top = ph.topAt(p.x, p.z);
+      if (Number.isFinite(top) && top > ground && !ph.isDeepWater(p.x, p.z, top)) { ground = top; p.y = top; }
+    }
     if (opts.y) { if (!this.findPerch(p, opts.y)) p.y = ground + opts.y; }
     else p.y = Number.isFinite(p.y) ? Math.max(p.y, ground) : ground;
     const facing = opts.facing ?? (ctx.player ? Math.atan2(ctx.player.pos.x - p.x, ctx.player.pos.z - p.z) : 0);

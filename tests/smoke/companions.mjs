@@ -312,12 +312,19 @@ export default [
       await shot(t, 'companions/cage-cart');
       await t.G(() => window.__GAME__.ctx.bus.emit(window.__GAME__.E.ARENA_CLEAR, { id: 'smoke_bridge' }));
       await t.frames(2);
-      const hits = await t.G(() => {
+      // no invulnT resets: the lock must tick its own anti-multi-hit window between her blows
+      const hits = { out: [await t.G(() => {
         const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'mochi');
-        const out = [c.combat.applyHit(c.companions.active[0] ?? k, k.lock, { id: 'smoke', dmg: 50 })];   // not hers: immune
-        for (let i = 0; i < 4 && !k.lock.opened; i++) { k.lock.invulnT = 0; out.push(c.combat.applyHit(c.player, k.lock, c.config.ATTACKS.slash1)); }
-        return { out, opened: k.lock.opened };
-      });
+        return c.combat.applyHit(c.companions.active[0] ?? k, k.lock, { id: 'smoke', dmg: 50 });   // not hers: immune
+      })], opened: false };
+      for (let i = 0; i < 4 && !hits.opened; i++) {
+        await t.wait(250);
+        const r = await t.G(() => {
+          const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'mochi');
+          return { r: c.combat.applyHit(c.player, k.lock, c.config.ATTACKS.slash1), opened: k.lock.opened };
+        });
+        hits.out.push(r.r); hits.opened = r.opened;
+      }
       t.assert(hits.opened, `her hits did not open the 30 HP lock (${hits.out.join(', ')})`);
       t.assert(hits.out[0] === 'immune' || hits.out[0] === 'none', `a non-player hit on the lock resolved as ${hits.out[0]}`);
       await t.wait(300);
@@ -510,11 +517,20 @@ export default [
         await put(t, 28.2, 70.2, Math.atan2(1.8, 4.3));
         await t.wait(900);
         await shot(t, 'companions/meadow-cage');
-        const hits = await t.G(() => {
-          const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi'), out = [];
-          for (let i = 0; i < 6 && !m.lock.opened; i++) { m.lock.invulnT = 0; out.push(c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.slash1)); }
-          return { out, opened: m.lock.opened };
+        // real input: stand ~1 m from the lock facing it and press J (the lock ticks its own anti-multi-hit window)
+        await t.G(() => {
+          const g = window.__GAME__, c = g.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi'), L = m.lock.pos;
+          const dx = c.player.pos.x - L.x, dz = c.player.pos.z - L.z, d = Math.hypot(dx, dz) || 1, r = m.lock.radius + 0.9;
+          const px = L.x + (dx / d) * r, pz = L.z + (dz / d) * r;
+          c.player.teleport({ pos: new g.THREE.Vector3(px, c.physics.heightAt(px, pz), pz), facing: Math.atan2(L.x - px, L.z - pz) });
         });
+        await t.wait(300);
+        const hits = { out: [], opened: false };
+        for (let i = 0; i < 8 && !hits.opened; i++) {
+          await t.tap('KeyJ'); await t.wait(450);
+          const r = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { hp: m.lock.hp, opened: m.lock.opened }; });
+          hits.out.push(r.hp); hits.opened = r.opened;
+        }
         t.assert(hits.opened, `her slashes did not open the cage (${hits.out.join(', ')})`);
         const joined = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'mochi'; }, null, { sim: 8, every: 250 });
         t.assert(joined, 'Mochi did not join after the bridge cage opened');
@@ -534,6 +550,48 @@ export default [
           c.companions.setActive(c.state.companions?.active ?? []);
         });
       }
+    },
+  },
+  {
+    name: 'companions:bubble-edge', order: 79, level: 'meadow', spawn: 'start', timeout: 90000,
+    async run(t) {
+      shotDir(t);
+      await stage(t);
+      await t.G(() => window.__GAME__.ctx.companions.setActive(['mochi']));
+      await t.wait(1500);
+      // put Mochi near each screen edge (yaw the camera off him) with a long bark: the bubble must stay on screen
+      const LINE = "I'm not scared! Mochi is scared. Separate thing.";
+      for (const side of ['right', 'left']) {
+        await freeze(t, true);
+        const r = await t.G(async ([sd, line]) => {
+          const g = window.__GAME__, c = g.ctx, m = c.companions.active[0], cam = c.camera;
+          const p = c.player.pos, f = c.player.facing;
+          // Mochi 2.5 m ahead of her; camera 4 m behind, looking past him so he lands ~at the screen edge
+          const off = sd === 'right' ? 1 : -1;
+          m.pos.set(p.x + Math.sin(f) * 2.5, p.y, p.z + Math.cos(f) * 2.5);
+          m.object3d?.position.copy(m.pos);
+          try { c.cam.shot({ anchor: 'swordcat', pos: [0, 1.6, -4], look: [off * 4.6, 0.9, 2.5], fov: 50, mode: 'cut' }); } catch { /* camera mid-edit */ }
+          m.bubble.show(line, Infinity); m.bubble.update(0.5);           // frozen sim → vdt 0: finish the pop by hand
+          await new Promise((res) => setTimeout(res, 600));
+          const sp = m.bubble.sprite, b = m.bubble.body;
+          if (!sp || !b) return { err: 'no sprite' };
+          sp.updateWorldMatrix(true, false);
+          const a = new g.THREE.Vector3().setFromMatrixPosition(sp.matrixWorld).project(cam);
+          const e = cam.projectionMatrix.elements;
+          const W = new g.THREE.Vector3().setFromMatrixColumn(sp.matrixWorld, 0).length() * e[0];
+          const cw = m.bubble.canvas.width;
+          const left = a.x + (b.x / cw - sp.center.x) * W, right = a.x + ((b.x + b.w) / cw - sp.center.x) * W;
+          return { ax: a.x, left, right, cx: sp.center.x, tail: m.bubble.tailX };
+        }, [side, LINE]);
+        await t.wait(200);
+        await shot(t, 'companions/bubble-' + side);
+        await t.G(() => window.__GAME__.ctx.companions.active[0]?.bubble.hide());
+        await freeze(t, false);
+        t.assert(!r.err, `bubble-edge ${side}: ${r.err}`);
+        t.log(`bubble ${side}: anchor x ${r.ax.toFixed(2)}, rect ${r.left.toFixed(3)}..${r.right.toFixed(3)} (center ${r.cx.toFixed(2)}, tail ${r.tail})`);
+        t.assert(r.left >= -1 && r.right <= 1, `bubble clipped at the ${side} edge: ${r.left.toFixed(3)}..${r.right.toFixed(3)}`);
+      }
+      follow(t);
     },
   },
 ];

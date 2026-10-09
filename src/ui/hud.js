@@ -1,6 +1,6 @@
 // src/ui/hud.js  (owner: ui) — the §14.2 HUD: portrait (worried at HP ≤ 2, determined + glowing in Golden Hour),
 // hearts (half-hearts, wobble on hit, pulse at HP ≤ 2), Grit shields (flash in the Stand, cracked at 0), the sword-
-// shaped Valor meter (fills from the hilt; gold notch at 50; all gold with sparkles + the Golden Hour glyph at 100),
+// shaped Valor meter (fills from the hilt; gold notch at 50; all gold with sparkles + the Golden Hour glyph at 100 once Shard 2 is held),
 // lives (cat head + ×9, a ghost kitten floats up on a lost life), milk bottles (sip drains one), fish / kittens n/3 /
 // letter seal (pop on change), the companion portrait with its radial cooldown ring and "zzz", the boss bar (name
 // ribbon, red fill + white chip trail, phase pips, gold Dizzy bar), the objective line + bar, the lock-on reticle with
@@ -17,6 +17,7 @@ import * as I from './icons.js';
 
 const PIP_LIFE = 3.0;          // §14.2: the pip bar fades 3 s after the last hit
 const CHIP_HOLD = 0.55, CHIP_RATE = 0.45;
+export const HUD_SAVE_SEC = 1.8;  // the "Saved" seal stays up this long
 const _v = new THREE.Vector3();
 
 /** The sword-shaped Valor meter (viewBox 0 0 220 40). Blade 40 → 204 (tip 214). */
@@ -79,6 +80,10 @@ export class Hud {
     this.compRing = this.compEl.querySelector('.ring-fg');
     this.compFace = this.compEl.querySelector('.comp-face');
     this.compKey = this.compEl.querySelector('.comp-key');
+    // ---- bottom-right, above the companion: the "Saved" wax seal (§14.1; polls ctx.save.lastSave, requests/save.md)
+    this.saveEl = el('div', 'hud-save', { parent: root, html: `<span class="save-seal">${I.waxSeal(I.PINK_DEEP, 'paw')}</span><span class="save-txt"></span>` });
+    this.saveTxt = this.saveEl.querySelector('.save-txt');
+    this.saveT = 0;
     // ---- top-centre: boss bar + objective line
     const tc = el('div', 'hud-tc', { parent: root });
     this.bossEl = el('div', 'hud-boss', { parent: tc });
@@ -140,6 +145,14 @@ export class Hud {
   setMeme(on) { this.meme = on; flag(this.root, 'is-meme', on); }
 
   _pop(e) { pulse(e, 'is-pop'); }
+
+  /** Flash the "Saved" wax seal for HUD_SAVE_SEC. */
+  showSaved() {
+    setText(this.saveTxt, tx(this.ctx, 'toast.saved'));
+    this.saveT = HUD_SAVE_SEC;
+    flag(this.saveEl, 'is-on', true);
+    pulse(this.saveEl, 'is-stamp');
+  }
 
   // ------------------------------------------------------------------ events
   _milkEvent(p) {
@@ -271,6 +284,12 @@ export class Hud {
       const lid = levelLetterId(lvl), has = !!lid && (st.letters ?? []).includes(lid);
       if (v.letter !== has) { if (v.letter === false && has) this._pop(this.letterEl); v.letter = has; this.letterEl.firstChild.innerHTML = I.letter(has); flag(this.letterEl, 'is-found', has); }
     }
+    // save seal: a successful write since the last poll (the first poll only records the count)
+    const ls = ctx.save?.lastSave;
+    if (ls && Number.isFinite(ls.count)) {
+      if (v.saveN != null && ls.count !== v.saveN && ls.ok !== false) this.showSaved();
+      v.saveN = ls.count;
+    }
     // companion portrait + ring
     const c = ctx.companions?.active?.[0] ?? null;
     flag(this.compEl, 'is-on', !!c);
@@ -309,6 +328,8 @@ export class Hud {
     }
     flag(this.valorEl, 'is-half', vt >= PLAYER.valor.max * 0.5);
     flag(this.valorEl, 'is-full', full || this.golden);
+    // the sun glyph promises Golden Hour: only once it is possible (Shard 2, same check as the touch Golden button)
+    flag(this.valorEl, 'can-golden', this.golden || (full && (ctx.state?.shards ?? 0) >= 2));
     // a shine sweeps the blade while full
     if (full || this.golden) {
       this._shine = ((this._shine ?? 0) + dt * 0.8) % 1.6;
@@ -332,6 +353,7 @@ export class Hud {
       this._drawObjective();
     }
     if (this.stillT > 0) this.stillT -= dt;
+    if (this.saveT > 0 && (this.saveT -= dt) <= 0) flag(this.saveEl, 'is-on', false);
     this._renderWorld(dt, p);
   }
 

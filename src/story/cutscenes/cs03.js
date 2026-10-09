@@ -5,7 +5,7 @@
 //   3 WHIP_FALL: the camera falls and lands sideways in the grass; the dropped cup rolls into the foreground
 //   4 Pudding rises out of the fog and ROARS into the lens (shake 0.8, a wind spike); hold 1.2 s
 //   5 HERO_LOW, upright: she stands over her cup in the meme pose (Vigil → Oath); he is tangled in a hound net
-//   6 TWO_SHOT_LOW, her and his nose: "Is that... milk?" — he sips through the tiny straw with enormous care
+//   6 two-shots, her and his nose: "Is that... milk?" — he sips through the tiny straw with enormous care
 // end: `meadow.pudding` = 'netted' (world raises the 3 rope posts, companions keep him netted), objective net_ropes
 // 0/3 (needs the glade clear), the glade arena locks, music battle_fast_fight_loop.
 import { say, cam, wait, sfx, par, along, yawOf, r2 } from './lib.js';
@@ -25,10 +25,13 @@ export const VIEW_YAW = yawOf([NET[0] - SIT[0], NET[1] - SIT[1]]);
 export const FACE = VIEW_YAW - Math.PI - WHIP + Math.PI * 2;
 const VIEW = [Math.sin(VIEW_YAW), Math.cos(VIEW_YAW)];
 /** The selfie lens (her frame), where the fallen camera lies, and the cup's roll into its foreground. */
-const SELFIE_POS = [0.22, 0.6, 0.52];
+const SELFIE_POS = [0.3, 0.98, 0.8];
 const LENS = [SIT[0] + SELFIE_POS[0] * Math.cos(FACE) + SELFIE_POS[2] * Math.sin(FACE), SIT[1] - SELFIE_POS[0] * Math.sin(FACE) + SELFIE_POS[2] * Math.cos(FACE)];
 const CUP_FROM = along(SIT, [Math.sin(FACE), Math.cos(FACE)], 0.3).map(r2);
 const CUP_TO = along(LENS, VIEW, 0.5).map(r2);
+/** Upright over her cup with the net behind her (HERO_LOW looks at her front, so Pudding fills the background). */
+const HERO = along(SIT, [Math.sin(SIT_DIR_YAW), Math.cos(SIT_DIR_YAW)], 0.45).map(r2);
+const AWAY = yawOf([HERO[0] - NET[0], HERO[1] - NET[1]]);
 /** Where she stands to talk to his nose (he is ~6 m long, facing her). */
 const NOSE = [1.7, 20.2];
 
@@ -48,6 +51,34 @@ function rollCup(ctx, cs) {
   });
 }
 
+/**
+ * The fallen lens (wherever the WHIP_FALL actually landed): Pudding charges straight down its axis and stops with his
+ * jaws ROAR_D m from the glass, so they fill the sideways frame. Falls back to the net when there is no camera.
+ */
+const ROAR_D = 4.0, ROAR_RUN = 7;
+const _roar = { x: NET[0], z: NET[1], dx: 0, dz: -1 };
+function lensAxis(ctx) {
+  const c = ctx.camera;
+  if (!c?.getWorldDirection) return null;
+  const d = c.getWorldDirection(new c.position.constructor());
+  const l = Math.hypot(d.x, d.z);
+  if (l < 1e-3) return null;
+  return { x: c.position.x, z: c.position.z, dx: d.x / l, dz: d.z / l };
+}
+function roarStart(ctx, cs) {
+  const ax = lensAxis(ctx), a = cs.actor('pudding');
+  if (!ax || !a) { _roar.x = NET[0]; _roar.z = NET[1]; return; }
+  _roar.x = ax.x + ax.dx * ROAR_D; _roar.z = ax.z + ax.dz * ROAR_D; _roar.dx = ax.dx; _roar.dz = ax.dz;
+  const sx = _roar.x + ax.dx * ROAR_RUN, sz = _roar.z + ax.dz * ROAR_RUN;
+  a.pos.set(sx, ctx.physics?.heightAt?.(sx, sz) ?? a.pos.y, sz);
+  a.prevPos?.copy?.(a.pos);
+  a.facing = Math.atan2(-ax.dx, -ax.dz);
+}
+function roarIn(ctx, cs) {
+  const a = cs.actor('pudding');
+  return a?.moveTo?.([_roar.x, _roar.z], 6);
+}
+
 const roar = (rate = 0.8, vol = 0.9) => sfx('creature/creature_roar_01', 'pudding', { rate, vol });
 
 export default {
@@ -57,7 +88,7 @@ export default {
     { t: 'music', track: null, fade: 0.8 },
     // ---- 1 · Day one of rescuing everyone
     { t: 'actor', id: 'swordcat', at: SIT, facing: FACE, pose: 'selfie_sit', prop: 'milk_cup', expression: 'happy' },
-    cam('SELFIE', 'swordcat', { pos: SELFIE_POS, look: [0, 0.5, 0], fov: 50 }),
+    cam('SELFIE', 'swordcat', { pos: SELFIE_POS, look: [0, 0.62, 0], fov: 50 }),
     sfx('pickup/bubble2', 'swordcat'),
     say('swordcat', 'cs03.1', 2.6),
     sfx('pickup/bubble', 'swordcat', { vol: 0.8 }),
@@ -78,9 +109,10 @@ export default {
     ),
     { t: 'call', fn: rollCup },
     // ---- 4 · Pudding rises and ROARS into the lens
+    { t: 'call', fn: roarStart },
     { t: 'actor', id: 'pudding', visible: true },
     par(
-      { t: 'actor', id: 'pudding', moveTo: NET, speed: 5 },
+      { t: 'call', fn: roarIn },
       { t: 'actor', id: 'pudding', clip: 'Headbutt', once: true },
       sfx('creature/creature_roar_02', 'pudding', { vol: 1.2 }),
       sfx('creature/c80_roar_01', 'pudding', { rate: 0.8, vol: 1.0 }),
@@ -92,18 +124,20 @@ export default {
     // ---- 5 · upright: she stands over her cup; the hound net
     { t: 'flag', key: 'meadow.pudding', value: 'netted' },
     { t: 'actor', id: 'pudding', pose: 'netted', at: NET, facing: Math.PI },
-    { t: 'actor', id: 'swordcat', pose: 'vigil', expression: 'earnest' },
-    cam('HERO_LOW', 'swordcat', { fov: 42 }),
+    { t: 'actor', id: 'swordcat', at: HERO, facing: AWAY, pose: 'vigil', expression: 'earnest' },   // his netted bulk looms behind her
+    cam('HERO_LOW', 'swordcat', { pos: [-0.8, 0.35, 2.2], fov: 42 }),   // mirrored: the lens stays clear of the bale
     { t: 'call', fn: (ctx) => memeLook(ctx, true) },
     wait(1.3),
     { t: 'actor', id: 'swordcat', pose: 'oath', expression: 'determined' },
-    sfx('sword/sword_unsheathe4', 'swordcat', { vol: 0.8 }),
+    sfx('sword/sword_unsheathe3', 'swordcat', { vol: 0.8 }),
     wait(1.7),
     { t: 'call', fn: (ctx) => memeLook(ctx, false) },
     // ---- 6 · her and his nose
     { t: 'actor', id: 'swordcat', pose: 'idle', moveTo: NOSE, speed: 1.3 },
     { t: 'actor', id: 'swordcat', face: NET, faceDur: 0.3, prop: 'milk_cup' },
-    cam(null, 'swordcat', { pos: [1.55, 0.72, -0.85], look: [0.15, 1.05, 2.4], fov: 42 }),
+    // from her right, outside the dome at his eye height: her face 3/4 at the left third, his head at the right; the
+    // near rings fall above his brow and below his jaw
+    cam(null, 'swordcat', { pos: [-3.9, 1.4, 2.2], look: [-0.3, 0.88, 1.6], fov: 50 }),
     roar(0.8, 0.9),
     { t: 'actor', id: 'pudding', emote: 'nod' },
     say('pudding', 'cs03.3', 2.6),
@@ -115,7 +149,10 @@ export default {
     say('swordcat', 'cs03.6', 1.6),
     { t: 'actor', id: 'pudding', emote: 'shake' },
     say('pudding', 'cs03.7', 2.0),
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'pudding', pos: [1.9, 0.78, 0.9], lookMid: 1.0, fov: 38 }),
+    // two-shot from outside the dome on her left, level with his eye: his profile at the left third, her (3/4, facing
+    // him) at the right third. At this height the near rings project above his horns and below his jaw, so no rope
+    // crosses his eyes or mouth.
+    cam(null, 'swordcat', { pos: [3.94, 1.5, 2.8], look: [0.1, 1.05, 2.0], fov: 48 }),
     { t: 'actor', id: 'swordcat', expression: 'earnest' },
     say('swordcat', 'cs03.8', 1.2),
     { t: 'actor', id: 'pudding', clip: 'Yes', once: true, nowait: true },

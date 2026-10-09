@@ -19,10 +19,21 @@ const QUEUE = [[-6, -68.0], [-6.05, -68.9], [-5.95, -69.8], [-6.05, -70.7], [-5.
 const CLEM_Q = [-6, -73.5];
 const YARD = [[-2.4, -68.6], [-1.7, -69.7], [-2.9, -70.4], [-1.1, -70.9], [-2.2, -71.5], [-0.8, -69.4]];
 const SUN = [-1.8, -70.1];
+/** Flop marks in the sunbeam: a shallow arc across the closing wide's frame (camera at chart-local [3.6, 2.3, 9.4] ≈
+ *  world (−9.6, −75.4), looking at SUN), ~0.66 m apart so every kitten reads on its own; the ends curl toward the
+ *  lens. Each faces the camera with a little per-kitten variety. */
+const SUN_RIGHT = [-0.58, 0.81];   // screen-right on the ground plane for that shot
+const SUN_FWD = [0.81, 0.58];      // away from the lens
+export const SUN_MARKS = [0, 1, 2, 3, 4, 5].map((i) => {
+  const u = (i - 2.5) * 0.66, k = (i - 2.5) / 2.5;
+  const back = 0.35 - 0.55 * k * k + (i % 2 ? 0.12 : -0.12);
+  return [SUN[0] + SUN_RIGHT[0] * u + SUN_FWD[0] * back, SUN[1] + SUN_RIGHT[1] * u + SUN_FWD[1] * back];
+});
+const SUN_FACE = (i) => Math.atan2(-SUN_FWD[0], -SUN_FWD[1]) + (i - 2.5) * 0.12;
 const STEPS = [-8, -61.6];
 /** Pearl ties the bow from just behind Clem's left shoulder (she sits facing south, so her left is world −X). */
 const PEARL_TIE = [STEPS[0] - 0.42, STEPS[1] + 0.3];
-const BARN = { clem: [-13.3, -87.4], chest: [-12.85, -88.75], lantern: [-13.75, -88.3], helm: [-13.85, -87.0], mirror: [-13.3, -86.05] };
+const BARN = { clem: [-13.3, -87.4], chest: [-12.85, -88.75], lantern: [-13.75, -88.3], helm: [-13.85, -87.0], mirror: [-13.1, -85.05] };   // 1.25 m in front of where she dresses (clem + [0.3, 1.1])
 
 const squire = (i) => `squire_${i + 1}`;
 /** Walk squire i from the queue to the measuring spot, get measured (stamp, line), then into the yard. */
@@ -92,7 +103,8 @@ export default {
     { t: 'sfx', id: 'cat/cat_purrsleepy_loop', at: 'squire_1', loop: true, vol: 0.55, handle: 'purr' },
     par(
       ...[0, 1, 2, 3, 4, 5].map((i) => seq(
-        { t: 'actor', id: squire(i), moveTo: [SUN[0] + Math.cos(i * 1.05) * 0.95, SUN[1] + Math.sin(i * 1.05) * 0.85], speed: 2.4 },
+        { t: 'actor', id: squire(i), moveTo: SUN_MARKS[i], speed: 2.4 },
+        { t: 'actor', id: squire(i), face: SUN_FACE(i), faceDur: 0.25 },
         { t: 'actor', id: squire(i), pose: i % 2 ? 'sleep' : 'sit' })),
       { t: 'actor', id: 'whiskerbottom', face: 'sunpatch', faceDur: 0.6 },
       seq(wait(0.8), { t: 'actor', id: 'swordcat', expression: 'sad', moveTo: STEPS, speed: 1.4 }),
@@ -179,7 +191,8 @@ export default {
     wait(1.4),
     { t: 'spawn', id: 'mirror', build: buildMirror, at: BARN.mirror, facing: Math.PI },
     { t: 'actor', id: 'swordcat', pose: 'vigil', expression: 'earnest' },
-    cam(null, 'swordcat', { pos: [-0.38, 0.98, -1.05], look: [0.02, 0.78, 1.7], fov: 38, mode: 'rail', to: [-0.3, 0.94, -0.9], dur: 3.6, nowait: true }),
+    // over her right shoulder, wide enough of her that her reflection (a tiny knight) sits beside her head in the glass
+    cam(null, 'swordcat', { pos: [-0.72, 0.92, -0.92], look: [-0.12, 0.66, 1.25], fov: 40, mode: 'rail', to: [-0.62, 0.88, -0.78], dur: 3.6, nowait: true }),
     wait(1.6),
     say('swordcat', 'cs01.10', 2.4),
     wait(0.6),

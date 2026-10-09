@@ -416,21 +416,37 @@ export default [
         g.ctx.scene.add(mesh);
         window.__PHYS_TEST__ = { orig: hf, bank, mesh };
         ph.heightfield = bank;
-        // the grid samples the bank: depending on alignment, the triangles at its foot form a walkable ramp up to ~1 m
-        // high before the first clearly-too-steep triangle; one jump from its top is the most she may gain
-        // (the same goes for its top edge); steepA..steepB is the clearly-too-steep run between
+        // the grid samples the bank: depending on alignment, the triangles at its foot form small walkable ramps (up to
+        // ~0.35 m on a 1 m grid) whose height varies along the bank; one jump from the top of those she can stand on is
+        // the most she may gain (the same goes for its top edge). walkTop: the highest spot on the lower half of the
+        // bank, within 0.8 m either side of her path (the slide follows the triangles' normals, so she drifts), where
+        // her capsule fits — physics' walkable test under her feet and under its rim wherever the rim is above them;
+        // steepA..steepB is the clearly-too-steep run on her path
         let walkTop = 0, steepA = -1, steepB = -1;
-        const n = new T.Vector3();
+        const n = new T.Vector3(), r = g.ctx.player.radius ?? 0.32;
         for (let u = 0; u < 9; u += 0.02) {
           const x = p.x + fw[0] * u, z = p.z + fw[1] * u;
           const steep = bank.faceNormalAt(x, z, n).y < 0.65;
           if (steep) { if (steepA < 0) steepA = u; steepB = u; } else if (steepA >= 0) break;
-          if (steepA < 0) walkTop = Math.max(walkTop, bank.heightAt(x, z) - hf.heightAt(x, z));
+        }
+        const fits = (x, z) => {
+          if (ph._terrainSteep(x, z)) return false;
+          const y = bank.heightAt(x, z);
+          for (let i = 0; i < 16; i++) {
+            const qx = x + Math.cos(i * Math.PI / 8) * r, qz = z + Math.sin(i * Math.PI / 8) * r;
+            if (bank.heightAt(qx, qz) - y > 0.05 && ph._terrainSteep(qx, qz)) return false;
+          }
+          return true;
+        };
+        for (let u = 0; u < steepA + (steepB - steepA) / 2; u += 0.02) for (let v = -0.8; v <= 0.801; v += 0.05) {
+          const x = p.x + fw[0] * u - fw[1] * v, z = p.z + fw[1] * u + fw[0] * v;
+          if (fits(x, z)) walkTop = Math.max(walkTop, bank.heightAt(x, z) - hf.heightAt(x, z));
         }
         return { o: [p.x, p.y, p.z], k, walkTop, steepA, steepB };
       }, f);
       const restore = () => t.G(() => {
         const x = window.__PHYS_TEST__, ph = window.__GAME__.ctx.physics;
+        window.__GAME__.game.setTimeScale(1);
         if (!x) return;
         if (ph.heightfield === x.bank) ph.heightfield = x.orig;
         x.mesh.removeFromParent(); x.mesh.geometry.dispose(); x.mesh.material.dispose(); window.__PHYS_TEST__ = null;
@@ -453,28 +469,34 @@ export default [
         const maxRise = Math.max(...hr.map((r) => r[0])), under = hr.filter((r) => r[1] < -1e-3).length;
         const apex = 7.4 ** 2 / (2 * 22);
         t.assert(hop.length > 20 && Math.max(...hop.map((s) => along(s.pos))) > 1.5, `she never reached the bank (furthest ${Math.max(...hop.map((s) => along(s.pos))).toFixed(2)} m)`);
-        t.assert(maxRise < c.walkTop + apex + 0.15, `climbed the 60° bank by hopping: ${maxRise.toFixed(2)} m above the old ground (walkable foot ${c.walkTop.toFixed(2)} + one jump ${apex.toFixed(2)})`);
+        // every take-off is from ground she stood on (never from a slide on the face), and that ground is no higher
+        // than the walkable foot
+        const stood = Math.max(0, ...hr.filter((r, i) => hop[i].onGround).map((r) => r[0]));
+        t.assert(stood < c.walkTop + 0.05, `stood ${stood.toFixed(2)} m up the 60° bank (walkable foot ${c.walkTop.toFixed(2)})`);
+        t.assert(maxRise < stood + apex + 0.15, `climbed the 60° bank by hopping: ${maxRise.toFixed(2)} m above the old ground (highest ground stood on ${stood.toFixed(2)} + one jump ${apex.toFixed(2)})`);
         t.assert(under === 0, `${under} frames with her feet under the bank`);
         // 2. put her high on the steep run and hold W into it: she still slides down to its foot
         t.assert(c.steepB - c.steepA > 1, `setup: steep run ${c.steepA.toFixed(2)}..${c.steepB.toFixed(2)} m`);
         await t.G(([c, f]) => {
+          window.__GAME__.game.setTimeScale(0);
           const g = window.__GAME__, T = g.THREE, u = c.steepA + 0.7 * (c.steepB - c.steepA), x = c.o[0] + f[0] * u, z = c.o[2] + f[1] * u;
           g.ctx.player.teleport({ pos: new T.Vector3(x, window.__PHYS_TEST__.bank.heightAt(x, z) + 0.02, z), facing: Math.atan2(f[0], f[1]) });
         }, [c, f]);
-        // a still of her on the bank (time frozen; the collider overlay draws her orange while she isn't grounded)
-        await t.frames(2);
-        await t.G(() => { const g = window.__GAME__; g.game.setTimeScale(0); g.ctx.physics.setDebug(true); });
+        // a still of her on the bank (time frozen from the teleport on, so the recording below sees the whole slide;
+        // the collider overlay draws her orange while she isn't grounded)
+        await t.G(() => { const g = window.__GAME__; g.ctx.physics.setDebug(true); });
         try { await t.frames(3); await shot(t, 'cliff'); }
-        finally { await t.G(() => { const g = window.__GAME__; g.ctx.physics.setDebug(false); g.game.setTimeScale(1); }); }
+        finally { await t.G(() => window.__GAME__.ctx.physics.setDebug(false)); }
         await recStart(t);
+        await t.G(() => window.__GAME__.game.setTimeScale(1));
         await walkAlong(t, c.o, f, 1e9, 2.0);
         const sl = await recStop(t);
         const sr = await rise(sl);
         const end = sr[sr.length - 1], last = sl[sl.length - 1];
         t.assert(sl.some((s) => s.sl), 'never flagged sliding on the 60° bank');
-        t.assert(last.onGround && end[0] < c.walkTop + 0.05, `held on the bank while steering into it: ${end[0].toFixed(2)} m up at ${along(last.pos).toFixed(2)} m (walkable foot ${c.walkTop.toFixed(2)} m)`);
+        t.assert(last.onGround && end[0] < c.walkTop + 0.05 && along(last.pos) < c.steepA + 0.3, `held on the bank while steering into it: ${end[0].toFixed(2)} m up at ${along(last.pos).toFixed(2)} m (walkable foot ${c.walkTop.toFixed(2)} m, steep from ${c.steepA.toFixed(2)} m)`);
         t.assert(sr.every((r) => r[1] > -1e-3), 'feet under the bank while sliding');
-        t.log(`cliff: hopping topped out ${maxRise.toFixed(2)} m above the old ground (walkable foot ${c.walkTop.toFixed(2)} + jump ${apex.toFixed(2)}); from high on the bank she slid down to ${end[0].toFixed(2)} m in ${sl.findIndex((s) => s.onGround && !s.sl)} frames while steering into it`);
+        t.log(`cliff: hopping topped out ${maxRise.toFixed(2)} m above the old ground (stood at most ${stood.toFixed(2)}, walkable foot ${c.walkTop.toFixed(2)}, jump ${apex.toFixed(2)}); from high on the bank she slid down to ${end[0].toFixed(2)} m in ${sl.findIndex((s) => s.onGround && !s.sl)} frames while steering into it`);
       } finally { await restore(); }
     },
   },

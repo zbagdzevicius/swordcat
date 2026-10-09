@@ -193,6 +193,7 @@ export class Game {
     if (mode === 'menu') this._modeBeforeMenu = prev;
     this.mode = mode;
     if (mode === 'menu') this.ctx.input.exitPointerLock();
+    else if (prev === 'menu' && (mode === 'play' || mode === 'memecam')) this.ctx.input.relock?.();
     if (mode === 'menu' || prev === 'menu') this.ctx.bus.emit(E.GAME_PAUSE, { paused: mode === 'menu' });
     this.ctx.bus.emit(E.GAME_MODE, { mode, prev });
   }

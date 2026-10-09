@@ -11,7 +11,7 @@ export const SWORD_SKINS = Object.freeze(['borrowed', 'twig', 'fishbone', 'bague
 const easeIn = (t) => t * t;
 
 /** Blade outline (art.md §4.3). */
-function bladeShape(len = 0.85, w0 = 0.0275, w1 = 0.02, point = 0.09) {
+function bladeShape(len = 0.85, w0 = 0.033, w1 = 0.025, point = 0.1) {
   const s = new THREE.Shape();
   s.moveTo(-w0, 0); s.lineTo(-w1, len - point); s.lineTo(0, len); s.lineTo(w1, len - point); s.lineTo(w0, 0); s.closePath();
   return s;
@@ -59,9 +59,13 @@ function bladeMaterial(kind) {
 /** Borrowed Blade geometry pieces → { blade: BufferGeometry, hilt: GeoBuilder pieces }. */
 function borrowedBlade(gbBlade, gbHilt, o = {}) {
   const len = o.len ?? SWORD.blade;
-  const ex = new THREE.ExtrudeGeometry(bladeShape(len), { depth: 0.008, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.005, bevelSegments: 1, curveSegments: 1 });
+  // (a touch wider than art.md's first pass, with a wide bevel: from the gameplay follow camera, 3-4 m behind her,
+  // the blade must read as a bright line, not a hairline)
+  const ex = new THREE.ExtrudeGeometry(bladeShape(len), { depth: 0.008, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.0075, bevelSegments: 1, curveSegments: 1 });
   ex.computeBoundingBox(); const cz = (ex.boundingBox.max.z + ex.boundingBox.min.z) / 2; ex.translate(0, 0, -cz);
-  const bladeC = rgb(PAL.blade), edge = rgb('#F2F5F8');
+  // the honed edge is over-bright (linear > 1): the metal reflects the overcast sky ~1.5x, so the bevel glints even
+  // edge-on and from behind
+  const bladeC = rgb(PAL.blade), edge = rgb('#F2F5F8').map((c) => c * 1.5);
   gbBlade.add(ex, { color: (v, n) => (Math.abs(n.z) < 0.9 ? edge : bladeC), rmse: RM.steel });
   // fullers (dark inset), front and back, 60% of the blade from the guard
   for (const s of [1, -1]) gbBlade.add(new THREE.BoxGeometry(0.012, len * 0.6, 0.002), { matrix: mat([0, len * 0.3 + 0.02, s * 0.0085]), color: rgb('#6E747E'), rmse: RM.steelDark });

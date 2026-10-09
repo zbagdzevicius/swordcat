@@ -238,20 +238,40 @@ export class Terrain {
 
   /**
    * Build the render outputs. Returns { mesh, dataTexture, material }. Every created object is `userData.owned`.
+   * `step` (1 | 2 | 4): render every step-th heightfield vertex (§18 budget: Low draws the ground at half resolution;
+   * physics keeps the full grid). `chunks` (1 | 2 | 4 per side): split the ground into frustum-culled tiles (Med /
+   * High); tiles share their edge vertices exactly, so there are no seams. `lod`: tiles carry userData.lod
+   * { full, coarse, box } and Level swaps in the half-resolution geometry for tiles far from the camera
+   * (updateGroundLod). `mesh` is the Mesh (chunks 1) or a Group.
    */
-  finalize() {
-    const hf = this.heightfield, W = this.W;
-    const geo = hf.toGeometry();
-    const pos = geo.attributes.position, col = new Float32Array(pos.count * 3);
-    for (let i = 0; i < pos.count; i++) {
-      this._groundColor(i, pos.getX(i), pos.getZ(i), _a);
-      col[i * 3] = _a.r; col[i * 3 + 1] = _a.g; col[i * 3 + 2] = _a.b;
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  finalize({ step = 1, chunks = 1, lod = false } = {}) {
+    const hf = this.heightfield, W = this.W, res = this.res;
+    step = Math.max(1, step | 0); while (step > 1 && res % step) step--;
+    const cells = res / step;
+    chunks = Math.max(1, chunks | 0); while (chunks > 1 && cells % chunks) chunks--;
+    const per = cells / chunks;
+    lod = lod && chunks > 1 && per % 2 === 0;
     const material = makeGroundMaterial();
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.name = 'ground'; mesh.receiveShadow = true; mesh.castShadow = false;
-    mesh.userData.owned = true;
+    const tiles = [];
+    for (let cz = 0; cz < chunks; cz++) for (let cx = 0; cx < chunks; cx++) {
+      const ix0 = cx * per * step, iz0 = cz * per * step;
+      // `lod`: each tile also gets a half-resolution geometry for when the camera is far from it; the full one's
+      // odd edge vertices sit on the coarse edge, so neighbours at different detail never crack
+      const geo = this._groundGeometry(ix0, iz0, per, step, lod);
+      const m = new THREE.Mesh(geo, material);
+      m.name = 'ground'; m.receiveShadow = true; m.castShadow = false;
+      m.userData.owned = true;
+      if (lod) {
+        const coarse = this._groundGeometry(ix0, iz0, per / 2, step * 2);
+        m.userData.lod = { full: geo, coarse, box: geo.boundingBox.clone() };
+      }
+      tiles.push(m);
+    }
+    let mesh = tiles[0];
+    if (tiles.length > 1) {
+      mesh = new THREE.Group(); mesh.name = 'ground';
+      for (const t of tiles) mesh.add(t);
+    }
 
     // ground data texture for grass: R height, G density, B height multiplier, A dryness
     const data = new Uint16Array(W * W * 4), toHalf = THREE.DataUtils.toHalfFloat;
@@ -269,6 +289,63 @@ export class Terrain {
     tex.needsUpdate = true;
     tex.userData.owned = true;
     return { mesh, material, dataTexture: tex };
+  }
+
+  /**
+   * One ground tile: `n` × `n` cells of `step` heightfield cells each, starting at grid (ix0, iz0). Vertex order and
+   * triangle diagonals match Heightfield.toGeometry (PlaneGeometry rotated −90° about X), normals come from the full
+   * grid (central differences) so tiles and LODs shade identically, colours from the paint layer.
+   */
+  _groundGeometry(ix0, iz0, n, step, snapEdges = false) {
+    const hf = this.heightfield, W = this.W, cell = this.cell, half = this.half, h = hf.h;
+    const V = n + 1, pos = new Float32Array(V * V * 3), nor = new Float32Array(V * V * 3), col = new Float32Array(V * V * 3);
+    const H = (ix, iz) => h[Math.max(0, Math.min(W - 1, iz)) * W + Math.max(0, Math.min(W - 1, ix))];
+    for (let j = 0; j < V; j++) for (let k = 0; k < V; k++) {
+      const ix = ix0 + k * step, iz = iz0 + j * step, i = iz * W + ix, o = (j * V + k) * 3;
+      const x = ix * cell - half, z = iz * cell - half;
+      pos[o] = x; pos[o + 1] = h[i]; pos[o + 2] = z;
+      const dx = (H(ix + 1, iz) - H(ix - 1, iz)) / (2 * cell), dz = (H(ix, iz + 1) - H(ix, iz - 1)) / (2 * cell);
+      const l = Math.hypot(dx, 1, dz); nor[o] = -dx / l; nor[o + 1] = 1 / l; nor[o + 2] = -dz / l;
+      this._groundColor(i, x, z, _a);
+      col[o] = _a.r; col[o + 1] = _a.g; col[o + 2] = _a.b;
+    }
+    if (snapEdges) {
+      // odd vertices on the tile border → midpoint of their even neighbours (the half-resolution edge)
+      const y = (j, k) => pos[(j * V + k) * 3 + 1];
+      for (let k = 1; k < n; k += 2) for (const j of [0, n]) pos[(j * V + k) * 3 + 1] = (y(j, k - 1) + y(j, k + 1)) / 2;
+      for (let j = 1; j < n; j += 2) for (const k of [0, n]) pos[(j * V + k) * 3 + 1] = (y(j - 1, k) + y(j + 1, k)) / 2;
+    }
+    const idx = new (V * V > 65535 ? Uint32Array : Uint16Array)(n * n * 6);
+    let t = 0;
+    for (let j = 0; j < n; j++) for (let k = 0; k < n; k++) {
+      const a = j * V + k, b = (j + 1) * V + k, c = (j + 1) * V + k + 1, d = j * V + k + 1;
+      idx[t++] = a; idx[t++] = b; idx[t++] = d; idx[t++] = b; idx[t++] = c; idx[t++] = d;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.computeBoundingSphere(); g.computeBoundingBox();
+    g.userData.owned = true;
+    return g;
+  }
+
+  /**
+   * Ground LOD (finalize `lod`): every tile within `near` m of the camera (box distance, xz) draws its full geometry,
+   * the rest the coarse one. Returns the triangles drawn. Pure apart from swapping `mesh.geometry`.
+   */
+  static updateGroundLod(root, camPos, near = 30) {
+    let tris = 0;
+    root?.traverse?.((m) => {
+      const L = m.userData?.lod;
+      if (!L) return;
+      const b = L.box, dx = Math.max(b.min.x - camPos.x, 0, camPos.x - b.max.x), dz = Math.max(b.min.z - camPos.z, 0, camPos.z - b.max.z);
+      const g = Math.hypot(dx, dz) <= near ? L.full : L.coarse;
+      if (m.geometry !== g) m.geometry = g;
+      tris += g.index.count / 3;
+    });
+    return tris;
   }
 
   /** Grass density at (x, z) from the paint layer (nearest cell). */

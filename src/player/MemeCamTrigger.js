@@ -1,12 +1,18 @@
 // src/player/MemeCamTrigger.js  (owner: player) — GAME_DESIGN §7.8 Meme Cam.
 //   Idle trigger:   15 s with no input, on an outdoor level, no alerted enemy within 20 m, fog density ≥ 0.02.
 //   Manual trigger: hold the Stand 2.5 s while planted with no enemy within 12 m.
+//   Both are suppressed while the tutorial runs, on the practice field (the Wobble Knight's Stand drill), and near a
+//   hidden kitten's Stand zone (its reveal needs the Stand + the follow camera).
 //   Enter: game mode 'memecam' + camera 'meme' (the camera emits camera:meme); the player holds the Oath pose and
 //   the cape cross-fades to the looping sway (SwordcatModel). Any input exits (0.6 s blend back, camera side).
 //   First trigger: unlocks the Meme White cape and shows `toast.memecam`.
 // `fastForward(sec)` is the __GAME__.idle(sec) test hook. In ?test real idle time never counts (deterministic smoke).
 import { E } from '../core/events.js';
 import { PLAYER } from '../core/config.js';
+import { inPractice } from '../story/tutorial.js';
+
+/** Extra metres around a hidden kitten's Stand zone where Meme Cam stays off (its 3 s reveal must play in view). */
+const STAND_ZONE_MARGIN = 4;
 
 export class MemeCamTrigger {
   /** @param {import('./Player.js').Player} player */
@@ -40,6 +46,8 @@ export class MemeCamTrigger {
     }
     if (ctx.game.mode !== 'play') { this.idleT = 0; this.bonus = 0; this.standT = 0; return; }
 
+    if (this.suppressed()) { this.idleT = 0; this.bonus = 0; this.standT = 0; return; }
+
     // manual: hold the Stand planted for 2.5 s with no enemy within 12 m
     const planted = p.guarding && p.onGround && Math.hypot(p.vel.x, p.vel.z) < PLAYER.standingGround.maxSpeed + 0.05;
     if (!input.down('guard')) this._armed = true;
@@ -56,6 +64,22 @@ export class MemeCamTrigger {
     if (this.idleSeconds < cfg.idle) return;
     if (!this.canIdleTrigger()) return;
     this.enter('idle');
+  }
+
+  /** Meme Cam must not interrupt: the tutorial is running, she is on the practice field, or near a kitten's Stand zone. */
+  suppressed() {
+    const p = this.player, ctx = p.ctx;
+    if (ctx.story?.tutorial?.active) return true;
+    if (ctx.levels?.current?.id === 'meadow' && inPractice(p.pos.x, p.pos.z)) return true;
+    let kittens = [];
+    try { kittens = ctx.companions?.kittens ?? []; } catch { kittens = []; }
+    for (const k of kittens) {
+      if (k?.hide !== 'stand' || k.stateName !== 'hidden') continue;
+      const at = k.opts?.zoneAt ?? k.home ?? k.pos;
+      if (!at) continue;
+      if (Math.hypot(p.pos.x - at.x, p.pos.z - at.z) <= (k.opts?.zoneR ?? 1.2) + STAND_ZONE_MARGIN) return true;
+    }
+    return false;
   }
 
   /** Outdoor level, fog ≥ minFog, no alerted enemy within noEnemyRadius. */

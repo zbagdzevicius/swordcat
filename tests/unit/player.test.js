@@ -287,17 +287,31 @@ test('Player: the 3-hit combo chains in its windows (slash1 → slash2 → slash
   const r = await rig(), { p } = r;
   r.tap('attack');
   assert.equal(p.state, 'attack'); assert.equal(p.swing.def.id, 'slash1');
-  r.seconds(0.2); r.tap('attack');                         // buffered press inside 0.18–0.40
-  assert.equal(p.swing.def.id, 'slash2');
+  r.seconds(0.2); r.tap('attack');                         // press inside 0.18–0.40 queues the next swing…
+  assert.equal(p.swing.def.id, 'slash1', 'queued: slash1 is not cut off');
+  r.seconds(0.2);
+  assert.equal(p.swing.def.id, 'slash2', '…which starts when slash1 recovery ends (0.40 s)');
   r.seconds(0.2); r.tap('attack');
+  r.seconds(0.2);
   assert.equal(p.swing.def.id, 'slash3');
   const combos = r.events.filter((e) => e[0] === E.PLAYER_SWING).map((e) => e[1].combo);
   assert.deepEqual(combos, [1, 2, 3]);
   r.seconds(0.7);
   assert.equal(p.state, 'move'); assert.equal(p.swing, null);
   // a press after the window starts a fresh slash1
-  r.tap('attack'); r.seconds(0.45); r.tap('attack');
+  r.tap('attack'); r.seconds(0.4 + TUNING.comboGrace + 0.1); r.tap('attack');
   assert.equal(p.swing.def.id, 'slash1', 'late press → new combo');
+});
+
+test('Player: keyboard combo grace — presses ~0.45–0.55 s apart (just after each swing ends) still reach Big Swoosh', async () => {
+  for (const gap of [0.45, 0.55]) {
+    const r = await rig(), { p } = r;
+    const ids = [];
+    r.tap('attack'); ids.push(p.swing?.def.id);
+    r.seconds(gap - DT); r.tap('attack'); ids.push(p.swing?.def.id);
+    r.seconds(gap - DT); r.tap('attack'); ids.push(p.swing?.def.id);
+    assert.deepEqual(ids, ['slash1', 'slash2', 'slash3'], `gap ${gap}`);
+  }
 });
 
 test('Player: charge — release 0.35–0.60 → Big Swoosh; ≥ 0.60 → Bright Slash; tier 2 fizzles without Shard 1 / Valor 50', async () => {
@@ -516,4 +530,149 @@ test('Player: her hits give Valor (light cap 8 per swing) but cage locks / props
   assert.equal(p.valor, PLAYER.valor.lightPerSwingCap, 'a cage lock gives no Valor');
   hit({ tags: new Set(['prop']), pos: e.pos, alive: true }, 'slash3');
   assert.equal(p.valor, PLAYER.valor.lightPerSwingCap, 'a prop gives no Valor');
+});
+
+test('Player: mashing keeps the full Snip-Snap-Swoosh rhythm (each slash runs to its dur; ≈1.4 s total)', async () => {
+  const r = await rig(), { p } = r;
+  const starts = []; let t = 0, prevSerial = -1, endT = -1;
+  r.tap('attack'); t += 1 / 60;
+  for (let i = 0; i < 150; i++) {
+    if (p.swingSerial !== prevSerial) { starts.push([p.swing?.def.id, t]); prevSerial = p.swingSerial; }
+    if (p.state === 'move' && endT < 0 && starts.length) endT = t;
+    if (i % 6 === 0) r.tap('attack'); else r.step();
+    t += 1 / 60;
+  }
+  const ids = starts.map((s) => s[0]);
+  assert.deepEqual(ids.slice(0, 3), ['slash1', 'slash2', 'slash3']);
+  near(starts[1][1] - starts[0][1], ATTACKS.slash1.dur, 0.04, 'slash2 starts after slash1 dur');
+  near(starts[2][1] - starts[1][1], ATTACKS.slash2.dur, 0.04, 'slash3 starts after slash2 dur');
+  assert.ok(endT < 0 || endT - starts[0][1] >= 1.35, `combo length ${(endT - starts[0][1]).toFixed(2)} s`);
+});
+
+test('Player: Meme Cam stays off during the tutorial, on the practice field and near a Stand kitten zone', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const mt = p.memeCamTrigger;
+  // tutorial running
+  ctx.story = { tutorial: { active: true } };
+  mt.fastForward(30); r.step(2);
+  assert.equal(mt.active, false, 'idle trigger suppressed in tutorial');
+  r.press('guard'); r.seconds(3.5);
+  assert.equal(mt.active, false, 'manual trigger suppressed in tutorial'); assert.equal(p.guarding, true);
+  r.release('guard'); r.seconds(0.5);
+  ctx.story = { tutorial: { active: false } };
+  // practice field (meadow)
+  const prevLevels = ctx.levels;
+  ctx.levels = { ...(prevLevels ?? {}), current: { id: 'meadow', indoor: false } };
+  p.pos.set(0, 0, -86);
+  r.press('guard'); r.seconds(3.5);
+  assert.equal(mt.active, false, 'practice field: no manual Meme Cam by the Wobble Knight');
+  r.release('guard'); r.seconds(0.5);
+  ctx.levels = prevLevels;
+  p.pos.set(0, 0, 0);
+  // a hidden Stand kitten nearby
+  const prevComp = ctx.companions;
+  ctx.companions = { ...(prevComp ?? {}), kittens: [{ hide: 'stand', stateName: 'hidden', opts: { zoneAt: { x: 1, z: 1 }, zoneR: 1.2 }, home: { x: 1, z: 1 } }] };
+  r.press('guard'); r.seconds(3.5);
+  assert.equal(mt.active, false, 'Stand kitten zone: the reveal plays, not Meme Cam');
+  r.release('guard'); r.seconds(0.5);
+  ctx.companions = prevComp;
+  // nothing suppressing: the manual trigger still works
+  r.press('guard'); r.seconds(3.0);
+  assert.equal(mt.active, true, 'manual trigger otherwise'); assert.equal(mt.reason, 'manual');
+});
+
+test('Player: touch auto-combo taps — a tap ≤ 0.35 s after a Snip/Snap ends continues the chain; keyboard does not', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.input.setDevice('touch');
+  const ids = [];
+  r.tap('attack'); ids.push(p.swing?.def.id);
+  r.seconds(0.45); assert.equal(p.state, 'move', 'Snip ran out');
+  r.tap('attack'); ids.push(p.swing?.def.id);                // 0.05 s after the swing ended → Snap
+  r.seconds(0.45);
+  r.tap('attack'); ids.push(p.swing?.def.id);                // → Big Swoosh
+  assert.deepEqual(ids, ['slash1', 'slash2', 'slash3']);
+  r.seconds(1.2);
+  // past the grace → a fresh Snip
+  r.tap('attack'); r.seconds(0.4 + TUNING.autoComboGrace + 0.1); r.tap('attack');
+  assert.equal(p.swing?.def.id, 'slash1', 'late tap → new combo');
+  // a tap early in the swing (before combo[0]) still queues on touch
+  r.step(3); r.tap('attack'); r.seconds(0.45);
+  assert.equal(p.swing?.def.id, 'slash2', 'early tap queued');
+  // keyboard: only the short comboGrace applies — a tap 0.3 s after the swing ended restarts at slash1
+  const k = await rig();
+  k.tap('attack'); k.seconds(0.4 + 0.3); k.tap('attack');
+  assert.equal(k.p.swing?.def.id, 'slash1', 'keyboard grace is shorter than touch');
+});
+
+test('Player: a Stand re-entered with the button still held is a plain block (parry needs a fresh press)', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const e = r.enemy(1.2, 0);
+  r.press('guard'); r.seconds(0.5);
+  r.tap('attack'); assert.equal(p.state, 'attack');          // ⚔ out of the held Stand
+  r.seconds(0.6); assert.equal(p.state, 'guard', 'back into the held Stand');
+  assert.equal(ctx.combat.applyHit(e, p, ATTACKS.rat_poke), 'block', 'no fresh parry window');
+  r.release('guard'); r.seconds(0.5);
+  r.press('guard'); r.step(3);
+  assert.equal(ctx.combat.applyHit(e, p, ATTACKS.rat_poke), 'parry', 'a fresh press still parries');
+  // GuardState: start(sincePress) carries the press age; a held re-entry is no whiff either
+  const g = new GuardState(PLAYER);
+  g.start(Infinity); assert.equal(g.resolve(POKE, hitFrom(0), 0), 'block');
+  assert.equal(g.stop(), false, 'held re-entry released quickly is not a whiff');
+  g.start(0.1); g.update(0.04); assert.equal(g.resolve(POKE, hitFrom(0), 0), 'parry', '0.14 s after the press');
+});
+
+test('Guard: a Grit-exhaustion break refills Grit after the stagger (no chained breaks); red breaks keep Grit', () => {
+  const g = new GuardState();
+  g.start(1); g.guardT = 1; g.parryT = 1;
+  const POKE = { dmg: 1, poise: 1 };
+  assert.equal(g.resolve(POKE, hitFrom(0), 0), 'block');
+  assert.equal(g.resolve(POKE, hitFrom(0), 0), 'block');
+  assert.equal(g.resolve(POKE, hitFrom(0), 0), 'break');
+  assert.equal(g.lastBreakExhaust, true); assert.equal(g.grit, 0);
+  let t = 0; while (t < PLAYER.guard.breakStagger + 0.05) { g.update(DT); t += DT; }
+  assert.equal(g.grit, g.gritMax, 'full Grit after the break stagger');
+  assert.equal(g.resolve(POKE, hitFrom(0), 0), 'block', 'the next hit is a block again');
+  assert.equal(g.resolve({ dmg: 2, telegraph: 'red' }, hitFrom(0), 0), 'break');
+  assert.equal(g.lastBreakExhaust, false); assert.equal(g.grit, 2, 'red break: Grit untouched');
+});
+
+test('Player: a Grit-exhaustion break staggers with 0 damage; a red attack breaks for full damage', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const e = r.enemy(1.2, 0);
+  r.press('guard'); r.seconds(0.5);
+  const POKE = { ...ATTACKS.rat_poke, telegraph: undefined, unblockable: false };
+  const res = [];
+  for (let i = 0; i < 3; i++) { res.push(ctx.combat.applyHit(e, p, POKE)); r.seconds(0.05); }
+  assert.deepEqual(res, ['block', 'block', 'break']);
+  assert.equal(p.hp, p.maxHp, 'exhaustion break: no damage');
+  assert.equal(p.state, 'stagger');
+  r.seconds(1.0);
+  assert.equal(p.grit, PLAYER.guard.grit, 'Grit refilled after the stagger');
+  assert.equal(p.state, 'guard', 'back in the held Stand');
+  r.seconds(1.0);
+  const red = { ...ATTACKS.rat_poke, dmg: 2, telegraph: 'red' };
+  assert.equal(ctx.combat.applyHit(e, p, red), 'break');
+  assert.ok(p.hp < p.maxHp, 'red break deals damage');
+});
+
+test('Player: deep water — splash returns her ≥ 3 m away facing away, ignores held input, never costs a life', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const WATER_Z = 10;
+  ctx.physics.isDeepWater = (x, z) => z >= WATER_Z;
+  // walk north toward the water, laying down safe-ground samples
+  for (let z = 0; z < WATER_Z - 0.5; z += 0.25) { p.pos.set(0, 0, z); p.onGround = true; r.step(8); }
+  p.hp = 3;
+  let lifeLost = 0; ctx.bus.on(E.PLAYER_LIFE_LOST ?? 'player:lifeLost', () => lifeLost++);
+  ctx.input.move.x = 0; ctx.input.move.y = 1;      // stick held "forward"
+  for (let i = 0; i < 12; i++) {
+    p.pos.set(0, 0, WATER_Z + 0.5); p.onGround = true; r.step();      // she is in the water
+    assert.ok(p.pos.z <= WATER_Z - 3 + 1e-6, `returned ≥ 3 m from the water (z=${p.pos.z})`);
+    assert.ok(Math.cos(p.facing) < -0.9, 'faces away from the water');
+    r.seconds(0.3);
+    assert.ok(p.pos.z <= WATER_Z - 2.5, 'the held stick does not walk her back in');
+    r.seconds(0.7);
+  }
+  assert.equal(p.hp, 1, 'water floors at 1 HP');
+  assert.ok(p.alive); assert.equal(lifeLost, 0);
+  assert.equal(r.count(E.PLAYER_DAMAGED), 2, '−1 per splash outside the cooldown, never the killing blow');
 });

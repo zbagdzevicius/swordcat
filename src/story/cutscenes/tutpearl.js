@@ -4,15 +4,15 @@
 // (moveTo the barn door, despawn). This teaches "Meow finds hidden friends" before any kitten is lost. No letterbox.
 import { say, cam, wait } from './lib.js';
 
-/** The cow's sleeping spot (it has wandered off by now); Pearl was curled up behind it. */
-const HIDE = [12.6, -72.5];
+/** Curled up in the cow's lee, just south of where it slept: the woken cow ambles east past her, out of the shot. */
+const HIDE = [12.3, -73.9];
 
 export default {
   id: 'tutpearl', kind: 'dialog', skippable: true, prologue: true,
   steps: [
     { t: 'spawn', id: 'pearl', type: 'npc', at: HIDE, facing: -1.6, pose: 'sit' },
     { t: 'actor', id: 'swordcat', face: 'pearl', faceDur: 0.35, expression: 'surprised' },
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'pearl', pos: [1.8, 0.8, 1.6], fov: 40 }),
+    cam('TWO_SHOT_LOW', 'swordcat', { target: 'pearl', pos: [3.3, 0.85, 0.55], fov: 46 }),   // from the south: the cow stays behind them
     { t: 'fx', burst: 'sparkle', at: 'pearl', count: 8, color: '#FFD2DE' },
     { t: 'sfx', id: 'cat/meow_baby_01', at: 'pearl', vol: 0.8 },
     wait(0.5),

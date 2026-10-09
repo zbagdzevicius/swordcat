@@ -81,7 +81,11 @@ export class CageLock extends Actor {
     this.ctx.actors.unregister(this);
     this.owner.openCage();
   }
-  update() { if (!this.opened) this.hold(); }
+  /** Ticks the per-hit anti-multi-hit window (Combat sets `invulnT` on every hit; Actor subclasses own the countdown). */
+  update(dt = 0) {
+    this.invulnT = Math.max(0, (this.invulnT ?? 0) - dt);
+    if (!this.opened) this.hold();
+  }
   render() {}
 }
 

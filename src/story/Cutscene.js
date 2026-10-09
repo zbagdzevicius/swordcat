@@ -260,7 +260,11 @@ export class Cutscene {
       try { keep = this.tickers[i](dt, this) !== false; } catch (e) { console.warn(`[story] ${this.id}: ticker failed`, e); keep = false; }
       if (!keep) this.tickers.splice(i, 1);
     }
-    if (this.def.inputSkip != null && this.t >= this.def.inputSkip && this.host?.anyPressed?.()) { this.skip(); return true; }
+    if (this.def.inputSkip != null) {
+      // drain presses every step so input from before the scene / its first second never counts (G-01)
+      const fresh = !!this.host?.anyPressed?.();
+      if (fresh && this.t >= this.def.inputSkip) { this.skip(); return true; }
+    }
     if (this.root && !this.root.done) this.root.update(dt);
     if (this.root?.done && !this.finishing) this.finish(false);
     return !this.finished;

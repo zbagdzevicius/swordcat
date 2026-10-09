@@ -62,6 +62,8 @@ const KIND_NAMES = ['terrain', 'static', 'mesh'];
 const TERRAIN = 0, STATIC = 1, MESH = 2;
 const SNAP_NONE = 0, SNAP_FLOOR = 1, SNAP_EDGE = 2;
 const RIM_RISE = 0.05;           // terrain this far above the feet at the capsule's leading rim counts as "in the way"
+/** 16 horizontal unit directions (x, z pairs) for the capsule-rim probes */
+const RIM_DIRS = Array.from({ length: 32 }, (_, i) => (i & 1 ? Math.sin : Math.cos)((i >> 1) * Math.PI / 8));
 
 export class Physics {
   constructor(ctx) {
@@ -440,7 +442,8 @@ export class Physics {
     p.x += sx; p.y += sy; p.z += sz;
 
     // 1. too-steep terrain can't be walked (or slid) up
-    if (hf && !flying) this._blockSteepTerrain(a, x0, z0, y0);
+    //    and a body resting against a cliff face (feet on a walkable facet at its foot) is pushed off it down-slope
+    if (hf && !flying) { this._blockSteepTerrain(a, x0, z0, y0); this._pushOffSteep(a, capR); }
 
     // 2. props: sideways push-out; tops within reach are support. Wedged between props closer together than the
     //    actor is wide (a post beside a crate): cancel this sub-step's sideways move instead of ending up inside one.
@@ -557,6 +560,40 @@ export class Physics {
   }
 
   /**
+   * Capsule rim vs too-steep terrain, for an actor whose feet are not on a too-steep face (those slide instead): the
+   * terrain at the capsule's rim may not rise more than RIM_RISE above the feet onto a too-steep face. Otherwise the
+   * body would rest against the face and the feet hang on whatever walkable facet the grid leaves at its foot (a 60°
+   * bank on a 1 m grid leaves ramps up to ~0.35 m) — a perch to jump from. Pushed off down-slope, horizontally, until
+   * the rim clears it: the feet end at the face's foot, as the capsule-shaped body would.
+   */
+  _pushOffSteep(a, capR) {
+    const p = a.pos, hf = this.heightfield, r = Math.max(capR, a.radius ?? capR);
+    for (let it = 0; it < 4; it++) {
+      const feet = Math.max(p.y, hf.heightAt(p.x, p.z));
+      if (this._terrainSteep(p.x, p.z)) return;                          // on the face itself: the slide handles it
+      let best = 0, bx = 0, bz = 0;
+      for (let i = 0; i < RIM_DIRS.length; i += 2) {
+        const qx = p.x + RIM_DIRS[i] * r, qz = p.z + RIM_DIRS[i + 1] * r;
+        const ex = hf.heightAt(qx, qz) - feet - RIM_RISE;
+        if (ex <= 1e-4 || !this._terrainSteep(qx, qz)) continue;
+        const hl = Math.hypot(_n.x, _n.z);
+        if (hl < 1e-6) continue;
+        const ux = _n.x / hl, uz = _n.z / hl;                            // down-slope (horizontal)
+        // the face rises tan(slope) per metre toward the rim sample; pushing s down-slope lowers it by s·tan
+        const rate = (-(RIM_DIRS[i] * ux + RIM_DIRS[i + 1] * uz)) * (hl / Math.max(0.05, _n.y));
+        if (rate <= 1e-3) continue;
+        const s = Math.min(r, ex / rate + 1e-3);
+        if (s > best) { best = s; bx = ux; bz = uz; }
+      }
+      if (best <= 0) return;
+      p.x += bx * best; p.z += bz * best;
+      const v = a.vel, vin = v.x * bx + v.z * bz;
+      if (vin < 0) { v.x -= bx * vin; v.z -= bz * vin; }                 // no velocity into the face
+      a.wallHit = true;
+    }
+  }
+
+  /**
    * Is the terrain at (x, z) too steep to stand on or walk up? The rendered triangle there decides when it is clearly
    * walkable or clearly a cliff (normal.y < walkableNormalY - steepFaceTol); in between, the smoothed slope does (so a
    * lone steepish triangle on walkable ground is no trap, and the smoothed foot of a cliff is no ladder).
@@ -586,6 +623,11 @@ export class Physics {
     const want = Math.min(tf, Math.max(0, a.slideSpeed || 0) + C.gravity * (a.gravityMul ?? 1) * s * sdt);
     a.slideSpeed = want;
     if (vd < want) { const k = want - vd; v.x += dx * k; v.y += dy * k; v.z += dz * k; }
+    // and it moves down-slope now: a controller that resets its velocity into the bank every step (so the velocity
+    // above never gets to act) still loses ground, faster each step, instead of hanging on the face
+    const hd = want * sdt * ny;                                          // horizontal share of the slide this sub-step
+    const hl = Math.hypot(nx, nz);
+    if (hl > 1e-6) { a.pos.x += (nx / hl) * hd; a.pos.z += (nz / hl) * hd; }
   }
 
   /** Cancel the part of this sub-step's move (and of the velocity) that goes up the slope with normal _n. */

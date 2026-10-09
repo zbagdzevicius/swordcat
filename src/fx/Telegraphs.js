@@ -340,6 +340,13 @@ class AimLine {
   dispose() { this.mesh.removeFromParent(); this.geometry.dispose(); this.material.dispose(); }
 }
 
+/** Pure: how much of an actor's marks to keep given its camera distance `dA` vs the player's `dP` (unit-tested). */
+export function occluderFactor(dA, dP) {
+  if (!(dP > 0) || !(dA >= 0)) return 1;
+  const t = Math.min(1, Math.max(0, (dA - (dP - 2.5)) / 2));   // full by 0.5 m nearer than her, 0 by 2.5 m nearer
+  return t * t * (3 - 2 * t);
+}
+
 const _d = new THREE.Vector3(), _m = new THREE.Vector3(), _s = new THREE.Vector3();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _p = new THREE.Vector3(), _q = new THREE.Vector3();
 const _col = new THREE.Color(), _white = new THREE.Color('#FFFFFF');
@@ -557,13 +564,18 @@ export class Telegraphs {
     const flashAt = n.duration - 0.25;
     const flash = L.t > flashAt && L.t < flashAt + 0.14 ? Math.sin(((L.t - flashAt) / 0.14) * Math.PI) : 0;
     const glint = n.shape === 'glint';
+    // an attacker between the lens and Swordcat (flankers orbit wide): soften its marks so the glint's bloom
+    // doesn't blot out the heroine and her swing (marks are also screen-capped in Marks' vertex shader)
+    const occ = this._occluderFactor(A);
+    alpha *= 0.45 + 0.55 * occ;
+    const ki = 0.4 + 0.6 * occ;
     switch (n.kind) {
       case 'parry': {
         if (!glint && !A) break;
         this._glintPoint(L, _p);
         const tw = 0.85 + 0.15 * Math.sin(t * 18);
-        M.push(_p.x, _p.y, _p.z, (0.62 + 0.5 * flash) * popS * tw, MARK.STAR4, _white, 3.2 + 3 * flash, alpha, t * 0.8, pattern);
-        M.push(_p.x, _p.y, _p.z, 0.28 * popS, MARK.SOFT, _white, 2.0, alpha * 0.7);
+        M.push(_p.x, _p.y, _p.z, (0.62 + 0.5 * flash) * popS * tw, MARK.STAR4, _white, (3.2 + 3 * flash) * ki, alpha, t * 0.8, pattern);
+        M.push(_p.x, _p.y, _p.z, 0.28 * popS, MARK.SOFT, _white, 2.0 * ki, alpha * 0.7);
         this._headPoint(L, _q, 0.32 + 0.04 * Math.sin(t * 9));
         M.push(_q.x, _q.y, _q.z, 0.34 * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
         break;
@@ -572,15 +584,15 @@ export class Telegraphs {
         if (!glint && !A) break;
         this._glintPoint(L, _p);
         _col.copy(L.color);
-        M.push(_p.x, _p.y, _p.z, (0.9 + 0.5 * flash) * popS, MARK.STAR8, _col, 2.8 + 2.5 * flash, alpha, t * 1.1, pattern);
-        M.push(_p.x, _p.y, _p.z, 0.45 * popS, MARK.STAR4, _white, 2.4, alpha * 0.9, -t * 0.6, 0);
+        M.push(_p.x, _p.y, _p.z, (0.9 + 0.5 * flash) * popS, MARK.STAR8, _col, (2.8 + 2.5 * flash) * ki, alpha, t * 1.1, pattern);
+        M.push(_p.x, _p.y, _p.z, 0.45 * popS, MARK.STAR4, _white, 2.4 * ki, alpha * 0.9, -t * 0.6, 0);
         break;
       }
       case 'red': {
         const pulse = 0.75 + 0.25 * Math.sin(t * 22);
         if (glint || A) {
           this._glintPoint(L, _p);
-          M.push(_p.x, _p.y, _p.z, 0.95 * pulse * popS, MARK.SOFT, RED_GLOW, 2.6, alpha, 0, pattern);
+          M.push(_p.x, _p.y, _p.z, 0.95 * pulse * popS, MARK.SOFT, RED_GLOW, 2.6 * ki, alpha, 0, pattern);
         }
         if (A) {
           // body glow: a halo pushed behind the actor so its silhouette rims red
@@ -610,6 +622,18 @@ export class Telegraphs {
       }
       default: break;
     }
+  }
+
+  /**
+   * 1 = mark shown in full; → 0 as the actor sits nearer the camera than the player (it is between the lens and her).
+   * @param {object|null} A
+   */
+  _occluderFactor(A) {
+    const pl = this.ctx.player, cam = this.ctx.camera;
+    if (!A?.object3d || !pl?.object3d || A === pl || !cam) return 1;
+    const dA = actorWorldPos(A, _m).distanceTo(cam.position);
+    const dP = actorWorldPos(pl, _s).distanceTo(cam.position);
+    return occluderFactor(dA, dP);
   }
 
   /** A point at the actor's chest pushed `back` metres away from the camera (for silhouette halos). */

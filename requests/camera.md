@@ -54,3 +54,10 @@ The Meme Cam frames `MEME_LOOP` straight in front of her face. When a wall, fenc
 
 ## ui
 `ctx.cam.showLockMarker = false` hides the camera's gold lock gem, in case ui draws its own reticle.
+
+## world (LevelKit) — camFade on `fade:true` prop colliders (review: fence pulls the camera into her)
+LevelKit._footprint only sets `camFade: true` on tree colliders (LevelKit.js ~330). Please also set it when `o.fade`
+is true (practice-field fence, gate posts, lantern posts), same as trees. The camera now detects these defensively
+(FollowCamera._markFadeColliders matches level colliders against registered fadeable instances), so this is a
+robustness request, not a blocker. Also: G-01 end pose / 'start' spawn yaw should leave the follow camera on the
+open (non-fence) side.

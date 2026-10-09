@@ -21,9 +21,9 @@ import { registerMaterialPatcher, FUR_WIND } from '../characters/index.js';
 export const ENV_PRESETS = {
   meadow_day:     { fogColor: '#B7C0C3', fogDensity: 0.045, fogLow: '#9AA196', skyTop: '#C3CCD3', hemiSky: '#D5DDE3', hemiGround: '#4A5230', hemi: 1.1, sunColor: '#FFF2E0', sun: 1.4, sunElev: 0.95, sunAz: -0.7, grade: 'none', wind: 0.6, env: 0.45 },
   meadow_evening: { fogColor: '#D8CDB8', fogDensity: 0.020, fogLow: '#B5A88C', skyTop: '#E6D3B4', hemiSky: '#F0E6D6', hemiGround: '#5A4A36', hemi: 1.0, sunColor: '#FFD9A8', sun: 2.0, sunElev: 0.22, sunAz: -1.9, grade: 'none', wind: 0.5, env: 0.5 },
-  meadow_night:   { fogColor: '#8C97A6', fogDensity: 0.050, fogLow: '#6F7A84', skyTop: '#6E7C92', hemiSky: '#9FB0C8', hemiGround: '#2A3024', hemi: 0.7, sunColor: '#BFD3FF', sun: 0.6, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.4, env: 0.35 },
+  meadow_night:   { fogColor: '#8C97A6', fogDensity: 0.050, fogLow: '#6F7A84', skyTop: '#6E7C92', hemiSky: '#9FB0C8', hemiGround: '#2A3024', hemi: 0.7, sunColor: '#BFD3FF', sun: 0.6, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.4, env: 0.35, hero: 1 },
   forest_day:     { fogColor: '#8E9E8A', fogDensity: 0.060, fogLow: '#748466', skyTop: '#A9B7A9', hemiSky: '#B9C7B0', hemiGround: '#2C3A24', hemi: 1.1, sunColor: '#FFE7B8', sun: 1.8, sunElev: 0.95, sunAz: -0.5, grade: 'none', wind: 0.4, env: 0.45 },
-  forest_night:   { fogColor: '#3E4A3E', fogDensity: 0.055, fogLow: '#34402F', skyTop: '#2E3A40', hemiSky: '#5A6A78', hemiGround: '#1A2218', hemi: 0.6, sunColor: '#BFD3FF', sun: 0.5, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.3, env: 0.3 },
+  forest_night:   { fogColor: '#3E4A3E', fogDensity: 0.055, fogLow: '#34402F', skyTop: '#2E3A40', hemiSky: '#5A6A78', hemiGround: '#1A2218', hemi: 0.6, sunColor: '#BFD3FF', sun: 0.5, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.3, env: 0.3, hero: 1 },
   town_occupied:  { fogColor: '#A9A898', fogDensity: 0.040, fogLow: '#948F7C', skyTop: '#E9D9C0', hemiSky: '#F0E6D6', hemiGround: '#5A4A36', hemi: 1.0, sunColor: '#FFD9A8', sun: 1.4, sunElev: 0.6, sunAz: -0.9, grade: 'none', wind: 0.4, env: 0.45 },
   hub_gold:       { fogColor: '#D8CDB8', fogDensity: 0.025, fogLow: '#C2B396', skyTop: '#E9D9C0', hemiSky: '#F0E6D6', hemiGround: '#5A4A36', hemi: 1.0, sunColor: '#FFD9A8', sun: 2.0, sunElev: 0.35, sunAz: -1.6, grade: 'none', wind: 0.4, env: 0.5 },
   hub_grey:       { fogColor: '#9AA196', fogDensity: 0.050, fogLow: '#868E80', skyTop: '#B8B4AC', hemiSky: '#C9C2BA', hemiGround: '#3A3A30', hemi: 1.0, sunColor: '#E8E6C8', sun: 1.0, sunElev: 0.8, sunAz: -0.7, grade: 'grey', wind: 0.5, env: 0.4 },
@@ -32,14 +32,22 @@ export const ENV_PRESETS = {
   bog:            { fogColor: '#8F9A84', fogDensity: 0.070, fogLow: '#6F7B62', skyTop: '#9DA595', hemiSky: '#AEB8A2', hemiGround: '#2A3324', hemi: 1.0, sunColor: '#E8E6C8', sun: 1.0, sunElev: 0.8, sunAz: -0.6, grade: 'none', wind: 0.3, env: 0.4, fogFalloff: 1.2 },
   keep_storm:     { fogColor: '#4B3F42', fogDensity: 0.050, fogLow: '#5A3A30', skyTop: '#2E2A33', hemiSky: '#6B5E66', hemiGround: '#1E1A1A', hemi: 1.7, sunColor: '#C9B8C0', sun: 0.0, sunElev: 0.8, sunAz: 0.4, grade: 'none', wind: 1.0, env: 0.45 },
   keep_cellar:    { fogColor: '#4B3F42', fogDensity: 0.030, fogLow: '#3E3236', skyTop: '#2E2A33', hemiSky: '#6B5E66', hemiGround: '#1E1A1A', hemi: 1.4, sunColor: '#C9B8C0', sun: 0.0, sunElev: 0.8, sunAz: 0.4, grade: 'none', wind: 0.0, env: 0.3 },
-  sky_night:      { fogColor: '#3E4A63', fogDensity: 0.020, fogLow: '#3E4A63', skyTop: '#1E2638', hemiSky: '#7F8FB8', hemiGround: '#1A1E2A', hemi: 0.7, sunColor: '#BFD3FF', sun: 0.7, sunElev: 0.8, sunAz: 0.5, grade: 'night', wind: 1.2, env: 0.35 },
+  sky_night:      { fogColor: '#3E4A63', fogDensity: 0.020, fogLow: '#3E4A63', skyTop: '#1E2638', hemiSky: '#7F8FB8', hemiGround: '#1A1E2A', hemi: 0.7, sunColor: '#BFD3FF', sun: 0.7, sunElev: 0.8, sunAz: 0.5, grade: 'night', wind: 1.2, env: 0.35, hero: 1 },
   sky_sunrise:    { fogColor: '#E9D9C0', fogDensity: 0.006, fogLow: '#E9D9C0', skyTop: '#C9D6E2', hemiSky: '#F0E6D6', hemiGround: '#5A4A36', hemi: 1.1, sunColor: '#FFD9A8', sun: 2.2, sunElev: 0.25, sunAz: -1.6, grade: 'gold', wind: 1.0, env: 0.55 },
 };
 
-const NUM = ['fogDensity', 'hemi', 'sun', 'sunElev', 'sunAz', 'wind', 'env', 'fogFalloff'];
+const NUM = ['fogDensity', 'hemi', 'sun', 'sunElev', 'sunAz', 'wind', 'env', 'fogFalloff', 'hero'];
 const COL = ['fogColor', 'fogLow', 'skyTop', 'hemiSky', 'hemiGround', 'sunColor'];
 const FOG_MIN = 0.005, FOG_MAX = 0.12;
 const SHADOW_HALF = 20;
+/**
+ * Hero key light (art.md mood rule: the hero carries the warm saturation in every biome). At night the cool hemi /
+ * moon and the night grade turn her ginger fur chestnut-grey, so a small warm point light rides between her and the
+ * camera, scaled by the preset's `hero` (0 by day, 1 at night). Short range: it lights her (and the cast next to
+ * her) and leaves only a faint warm pool on the ground. Always in the scene (intensity 0 by day) so the light count,
+ * and with it every compiled shader program, never changes.
+ */
+export const HERO_LIGHT = Object.freeze({ color: '#FFC890', intensity: 4.4, distance: 4.0, decay: 1.6, up: 1.5, toCam: 1.5, side: 0.4 });
 
 const _c = new THREE.Color();
 const _v = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _f = new THREE.Vector3();
@@ -124,7 +132,10 @@ export class Env {
     Object.assign(sh.camera, { left: -SHADOW_HALF, right: SHADOW_HALF, top: SHADOW_HALF, bottom: -SHADOW_HALF, near: 1, far: 90 });
     sh.camera.updateProjectionMatrix();
     this.sunLight.castShadow = this.ctx.quality?.shadows !== false;
-    scene.add(this.hemiLight, this.sunLight, this.sunLight.target);
+    this.heroLight = new THREE.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.distance, HERO_LIGHT.decay);
+    this.heroLight.name = 'env:hero';
+    this.heroLight.castShadow = false;
+    scene.add(this.hemiLight, this.sunLight, this.sunLight.target, this.heroLight);
     this.sky = new SkyDome();
     scene.add(this.sky.mesh);
     this._unpatch = registerMaterialPatcher((m) => withHeightFog(m));
@@ -208,6 +219,7 @@ export class Env {
     if (bg?.isColor) bg.copy(c.fogColor); else this.ctx.scene.background = c.fogColor.clone();
     if (this.hemiLight) { this.hemiLight.color.copy(c.hemiSky); this.hemiLight.groundColor.copy(c.hemiGround); this.hemiLight.intensity = c.hemi; }
     if (this.sunLight) { this.sunLight.color.copy(c.sunColor); this.sunLight.intensity = c.sun; this.sunLight.visible = c.sun > 0.001; }
+    if (this.heroLight) this.heroLight.intensity = HERO_LIGHT.intensity * (c.hero || 0);
     HFOG.uFogLow.value.copy(c.fogLow);
     HFOG.uFogFalloff.value = c.fogFalloff || 0.6;
     if (this.sky) {
@@ -278,6 +290,7 @@ export class Env {
     // sun follows the player; the shadow frustum centre is snapped to shadow-map texels (no shimmer)
     const p = ctx.player?.object3d?.position ?? cam?.position;
     if (!p || !this.sunLight) return;
+    this._placeHero(p, cam);
     const dir = this.sunDir(_v);
     const texel = (SHADOW_HALF * 2) / this.sunLight.shadow.mapSize.x;
     _f.copy(dir).negate();
@@ -288,6 +301,17 @@ export class Env {
     tgt.copy(_r).multiplyScalar(a).addScaledVector(_u, b).addScaledVector(_f, d);
     this.sunLight.position.copy(tgt).addScaledVector(dir, 45);
     this.sunLight.target.updateMatrixWorld();
+  }
+
+  /** The hero key light: above her, a little toward the camera and to its right (a soft three-quarter key). */
+  _placeHero(p, cam) {
+    const L = this.heroLight;
+    if (!L) return;
+    if (!(L.intensity > 0)) return;            // stays visible at 0: an invisible light would change the light count
+    let dx = 0, dz = 1;
+    if (cam) { dx = cam.position.x - p.x; dz = cam.position.z - p.z; const d = Math.hypot(dx, dz); if (d > 1e-3) { dx /= d; dz /= d; } else { dx = 0; dz = 1; } }
+    const H = HERO_LIGHT;
+    L.position.set(p.x + dx * H.toCam - dz * H.side, p.y + H.up, p.z + dz * H.toCam + dx * H.side);
   }
 
   /** Height-fog patch every new fogged material in the scene before its first compile (cheap WeakSet walk). */
@@ -308,7 +332,7 @@ export class Env {
     for (const off of this._offs) off();
     this._offs.length = 0;
     this._unpatch?.();
-    this.hemiLight?.removeFromParent(); this.sunLight?.target.removeFromParent(); this.sunLight?.removeFromParent();
+    this.hemiLight?.removeFromParent(); this.sunLight?.target.removeFromParent(); this.sunLight?.removeFromParent(); this.heroLight?.removeFromParent();
     this.sunLight?.shadow.map?.dispose();
     this.sky?.dispose();
     this._envRT?.dispose?.(); this._pmrem?.dispose();

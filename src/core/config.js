@@ -42,6 +42,15 @@ export const PLAYER = {
   assist: { angle: Math.PI / 3, range: 3, touchAngle: Math.PI / 2, touchRange: 4, buffer: 0.2 },
   lockOn: { range: 12, cone: 1.745, breakRange: 16, losTimeout: 1.5, flickPx: 40, flickTime: 0.15 },
   smallHeart: { chance: 0.10, heal: 1, magnet: 3 },
+  // ---- core+ (additive; requests/player.md): design numbers from GAME_DESIGN prose that Appendix A does not list.
+  // src/player/tuning.js reads these (same names) and keeps its own values only as fallbacks.
+  faintDur: 2.2, respawnInvuln: 1.0, vigilPlant: 0.8, heartBellHp: 2,
+  walkStick: 0.5, zoomiesMinStick: 0.9, zoomiesTurnReset: 0.7, zoomiesDustEvery: 4, stepsPerMetre: 1.55,
+  pitY: -40, safeMinDist: 1.0, splashInvuln: 0.9,
+  lungeDamp: 20, hurtDamp: 6, blockPushT: 0.2, blockPushDamp: 5, autoStand: 0.5, goldenMinShards: 2,
+  combatStance: 3.0, bumpStunMul: 0.5, hurtFlash: 0.12, standCapeWind: 1.8,
+  tailPuffHeight: 2.0, tailPuffDur: 1.0, slowBlinkStill: 3.0, slowBlinkRadius: 3.0, slowBlinkCooldown: 12.0,
+  sneezeEvery: 90, sneezeMinFog: 0.06,
 };
 
 export const CAMERA = { dist: 3.6, lockDist: 4.5, bossDist: 6.0, ease: 0.6, fov: 45, pitch: [-0.35, 1.1],

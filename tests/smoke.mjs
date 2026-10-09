@@ -10,7 +10,8 @@
 //   export default [
 //     { name: 'player:combo', order: 20, level: 'meadow', spawn: 'start', timeout: 60000, async run(t) { ... } },
 //   ];
-// Before each block the harness skips any cutscene, sets mode 'play', turns god off, loads `level`/`spawn`
+// Before each block with a `level` the harness skips any cutscene, resets progress to the boot defaults (settings
+// kept), empties the party, despawns enemies, sets mode 'play', turns god off, loads `level`/`spawn`
 // (skip with `level: null`) and clears __GAME__.events. `reload: true` reloads the page first.
 // Any pageerror, console.error, failed request or HTTP ≥ 400 fails the run (attributed to the running block).
 import fs from 'node:fs';
@@ -143,6 +144,9 @@ async function boot() {
   await t.blankCheck('boot');
 }
 
+/** Keys a block may still hold down if it failed mid-way (released before the next block). */
+const HELD_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyC', 'KeyQ', 'Space', 'ShiftLeft', 'Escape'];
+
 const withTimeout = (p, ms) => {
   let id;
   return Promise.race([p, new Promise((_, rej) => { id = setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms); })]).finally(() => clearTimeout(id));
@@ -159,7 +163,23 @@ try {
     try {
       if (b.reload) { await page.reload(); await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: BOOT_TIMEOUT }); }
       if (b.level) {
-        await G(() => { const g = window.__GAME__; g.story.skip(); g.setMode('play'); g.god(false); });
+        // hermetic blocks: every block with a `level` starts from boot-like progress (default §19.7 state, settings
+        // kept, no party, no stray enemies, real-time sim, no held input), exactly as when it runs alone. Blocks
+        // that chain on purpose (story:title → story:cs01) use `level: null` and keep what the previous block left.
+        for (const k of HELD_KEYS) await page.keyboard.up(k).catch(() => {});
+        await G(() => {
+          const g = window.__GAME__, c = g.ctx;
+          g.story.skip();
+          if (Array.isArray(c.story?.queue)) c.story.queue.length = 0;
+          g.game.setTimeScale?.(1);
+          const settings = c.state.settings;
+          c.state.reset({ settings });
+          c.companions?.setActive?.([]);
+          for (const e of [...(c.enemies?.list ?? [])]) c.enemies.despawn?.(e);
+          c.input?.setVirtualMove?.(0, 0);
+          for (const a of ['guard', 'attack', 'jump', 'dodge']) { try { c.input?._release?.(a, 'v'); } catch { /* */ } }
+          g.setMode('play'); g.god(false);
+        });
         await t.loadLevel(b.level, b.spawn ?? 'start');
         await t.clearEvents();
       }

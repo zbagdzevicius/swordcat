@@ -569,6 +569,7 @@ export class SaveManager {
     const ok = this.write(this._compose(), { progress: true, savedAt: at });
     if (ok) { this.ctx.state.savedAt = at; this.committed = true; this._settingsDirty = false; }
     this.lastSave = { at, reason: reason ?? 'save', ok, count: this.lastSave.count + (ok ? 1 : 0) };
+    if (E.SAVE_WRITTEN) this.ctx.bus?.emit(E.SAVE_WRITTEN, { reason: this.lastSave.reason, savedAt: at, ok });
     return ok;
   }
 

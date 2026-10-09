@@ -21,6 +21,20 @@ async function until(t, fn, arg = null, { timeout = 30000, every = 120 } = {}) {
   return null;
 }
 
+/** Wait in-page (every frame) until dialogue line `key` is on screen, then freeze the sim right there (short lines
+ *  can come and go between two round-trip polls). The next `shot()` thaws it. */
+async function freezeOnLine(t, key, timeout = 30000) {
+  return t.page.evaluate(([k, ms]) => new Promise((resolve) => {
+    const g = window.__GAME__, t0 = performance.now();
+    const tick = () => {
+      if (g.ctx.story.line?.key === k) { setTimeout(() => { g.game.setTimeScale(0); resolve(true); }, 450); return; }
+      if (performance.now() - t0 > ms) { resolve(false); return; }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }), [key, timeout]);
+}
+
 /** Freeze the sim, take the shot, thaw. */
 async function shot(t, name) {
   await t.G(() => window.__GAME__.game.setTimeScale(0));
@@ -118,7 +132,7 @@ export default [
       if (await until(t, lineIs, 'cs01.3', { timeout: 30000 })) { await t.wait(700); await shot(t, '01d-cs01-chart'); }
       if (await until(t, sceneT, ['cs01', 0], { timeout: 1000 })) { /* keep going */ }
       const sunT = await until(t, () => window.__GAME__.ctx.story.current?.spawned?.some((r) => r.id === 'sunpatch') ? window.__GAME__.ctx.story.current.t : 0, null, { timeout: 30000 });
-      if (sunT) { await t.wait(4200); await shot(t, '01e-cs01-sunbeam'); }
+      if (sunT && await until(t, sceneT, ['cs01', sunT + 3.6], { timeout: 15000 })) await shot(t, '01e-cs01-sunbeam');   // scene time: wall time drifts under load
       if (await until(t, lineIs, 'cs01.6', { timeout: 30000 })) { await t.wait(400); await shot(t, '01f-cs01-bow'); }
       if (await until(t, lineIs, 'cs01.9', { timeout: 30000 })) { await t.wait(1500); await shot(t, '01g-cs01-pearl'); }
       const chest = await until(t, () => (window.__GAME__.ctx.story.cinema.captionText ?? '').startsWith('M.'), null, { timeout: 30000 });
@@ -154,12 +168,14 @@ export default [
       await shot(t, '02a-tutorial-move');
       // 1 move + look
       await t.hold('KeyW', 1400);
+      await t.hold('KeyD', 1200);                                  // the fence stops her ~2.5 m north: strafe along it
       await t.G(() => { const c = window.__GAME__.ctx.cam; c.yaw += 0.8; });
       const s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 });
+      if (!s2) t.log('tutorial diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, tu = g.ctx.story.tutorial, p = g.ctx.player; return { i: tu.log.i, moved: tu.log.moved, looked: tu.log.looked, active: tu.active, wait: tu.waitT, pend: tu.pending, pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, yaw: g.ctx.cam.yaw }; })));
       t.assert(!!s2, 'step 2 (jump) after moving and looking');
       // 2 jump the inner fence (z −87): walk at it and jump
       await tp(t, -10, -88.6, 0);
-      await t.page.keyboard.down('KeyW'); await t.wait(150); await t.page.keyboard.press('Space'); await t.wait(700); await t.page.keyboard.up('KeyW');
+      await t.page.keyboard.down('KeyW'); await t.wait(120); await t.page.keyboard.down('Space'); await t.wait(420); await t.page.keyboard.up('Space'); await t.wait(500); await t.page.keyboard.up('KeyW');   // a full (held) jump: a tap is cut short
       let s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 });
       if (!s) { t.warn('fence jump missed: placing her north of it'); await tp(t, -10, -85, 0); s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 }); }
       t.assert(!!s, 'step 3 (combo) after crossing the fence');
@@ -182,12 +198,22 @@ export default [
       t.assert(!!s, 'step 6 (parry) after two blocks');
       await shot(t, '02c-tutorial-parry');
       // 6 parry: raise the Stand on the white glint (poll the wobble knight's telegraph), retry a few swings
-      for (let k = 0; k < 6 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 7)); k++) {
-        await until(t, () => window.__GAME__.events.includes('combat:telegraph'), null, { timeout: 3500, every: 30 });
-        await t.clearEvents();
-        await t.wait(560 + k * 40);
-        await t.hold('KeyL', 350);
-        await t.wait(900);
+      // in-page timing (a round trip is too coarse for the 0.15 s window): raise the Stand ~0.07 s before the strike
+      for (let k = 0; k < 4 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 7)); k++) {
+        await t.page.evaluate(() => new Promise((resolve) => {
+          const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), inp = g.ctx.input, t0 = performance.now();
+          const tick = () => {
+            if (!wk || performance.now() - t0 > 6000) { resolve(false); return; }
+            if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.07) {
+              inp.setVirtual('guard', true);
+              setTimeout(() => { inp.setVirtual('guard', false); resolve(true); }, 350);
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          tick();
+        }));
+        await t.wait(700);
       }
       s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 7, { timeout: 2000 });
       if (!s) {
@@ -228,8 +254,12 @@ export default [
       await t.hold('KeyW', 1500);
       let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 5000 });
       if (!ok) { t.warn('walk did not reach the tallbert trigger: teleporting into it'); await tp(t, 0, -61, 0); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 5000 }); }
+      if (!ok) t.log('g01 diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, p = g.ctx.player, L = g.ctx.levels.current; return { pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, q: g.ctx.story.queue.length, flags: g.ctx.state.flags, trig: L.triggers.map((x) => [x.id, x.fired, x.inside]), loading: g.ctx.levels.loading, ev: g.events.slice(-25) }; })));
       t.assert(!!ok, 'G-01 plays at the north gate');
-      if (await until(t, sceneT, ['g01', 1.4], { timeout: 6000 })) await shot(t, '03a-g01-meme');
+      if (await until(t, sceneT, ['g01', 1.4], { timeout: 6000 })) {
+        await shot(t, '03a-g01-meme');
+        t.log('g01 meme lens', JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx.camera ?? g.ctx.cam?.camera; return { cam: c?.position?.toArray().map((v) => +v.toFixed(2)), her: g.ctx.player.pos.toArray().map((v) => +v.toFixed(2)) }; })));
+      }
       if (await until(t, sceneT, ['g01', 7.6], { timeout: 12000 })) await shot(t, '03b-g01-pullback');
       if (await until(t, lineIs, 'g01.1', { timeout: 8000 })) { await t.wait(500); await shot(t, '03c-g01-hello'); }
       const done = await until(t, ended, 'g01', { timeout: 15000 });
@@ -260,14 +290,18 @@ export default [
         ['04b-cs02-bell', sceneT, ['cs02', 8.6]],
         ['04c-cs02-bell-out', sceneT, ['cs02', 11.0]],
         ['04d-cs02-cackle', sceneT, ['cs02', 15.0]],
-        ['04e-cs02-horde', lineIs, 'cs02.1'],
+        ['04e-cs02-horde', 'line', 'cs02.1'],
         ['04f-cs02-trip', sceneT, ['cs02', 0]],
       ];
-      for (const [name, fn, arg] of beats.slice(0, 5)) { if (await until(t, fn, arg, { timeout: 30000 })) await shot(t, name); else t.warn(`missed beat ${name}`); }
+      for (const [name, fn, arg] of beats.slice(0, 5)) {
+        const ok2 = fn === 'line' ? await freezeOnLine(t, arg) : await until(t, fn, arg, { timeout: 30000 });
+        if (ok2) await shot(t, name); else t.warn(`missed beat ${name}`);
+      }
       const plantT = await until(t, () => { const p = window.__GAME__.ctx.player; return p.model?.scriptPose === 'faint' ? 1 : 0; }, null, { timeout: 15000 });
       if (plantT) { await t.wait(250); await shot(t, '04f-cs02-trip'); }
       if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'MEME_LOOP' && window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 25000 })) { await t.wait(1600); await shot(t, '04g-cs02-meme'); }
       if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'REVERSE_HORDE', null, { timeout: 15000 })) { await t.wait(3800); await shot(t, '04h-cs02-reverse-horde'); }
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'TWO_SHOT_LOW' && window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 15000 })) { await t.wait(1300); await shot(t, '04h2-cs02-two-shot'); }
       if (await until(t, lineIs, 'cs02.2', { timeout: 20000 })) { await t.wait(700); await shot(t, '04i-cs02-laugh'); }
       if (await until(t, lineIs, 'cs02.4', { timeout: 30000 })) { await t.wait(300); await shot(t, '04j-cs02-mine'); }
       if (await until(t, lineIs, 'cs02.5', { timeout: 15000 })) { await t.wait(600); await shot(t, '04k-cs02-crane'); }
@@ -278,10 +312,10 @@ export default [
       t.assert(!!done, 'CS-02 finished (meadow reloaded at start)');
       await t.wait(500);
       checkHandback(t, await t.G(afterScene), 'CS-02');
-      const st = await t.G(() => { const g = window.__GAME__; return { done: g.ctx.state.getFlag('prologue.done'), env: g.ctx.env.presetName, pos: g.ctx.player.pos.toArray(), cast: g.ctx.enemies.list.filter((e) => e.tags?.has('cutscene') || e.spawnOpts?.scripted).length }; });
+      const st = await t.G(() => { const g = window.__GAME__; return { done: g.ctx.state.getFlag('prologue.done'), env: g.ctx.env.presetName, pos: g.ctx.player.pos.toArray(), start: (() => { const sp = g.ctx.levels.current?.spawns?.start; return sp ? [sp.pos?.x ?? sp[0], sp.pos?.z ?? sp[1]] : [-4, -58]; })(), cast: g.ctx.enemies.list.filter((e) => e.tags?.has('cutscene') || e.spawnOpts?.scripted).length }; });
       t.assert(st.done === true, 'flag prologue.done');
       t.assert(st.env === 'meadow_day', `env meadow_day (${st.env})`);
-      t.assert(Math.hypot(st.pos[0] + 4, st.pos[2] + 58) < 2, 'at spawn start');
+      t.assert(Math.hypot(st.pos[0] - st.start[0], st.pos[2] - st.start[1]) < 2, `at spawn start (${st.pos.map((v) => v.toFixed(1))} vs ${st.start})`);
       t.assert(st.cast === 0, `CS-02 cast despawned (${st.cast} left)`);
       await shot(t, '04o-chapter1-card');
     },

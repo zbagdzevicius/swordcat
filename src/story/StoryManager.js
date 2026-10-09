@@ -187,7 +187,8 @@ export class StoryManager {
     on(E.LEVEL_LOADED, (p) => this._onLevelLoaded(p));
     on(E.LEVEL_LOADING, () => { this.barks.clear(); });
     if (HAS_DOM()) {
-      this._onGesture = () => {
+      this._onGesture = (e) => {
+        if (e?.repeat) return;                                       // a held key's auto-repeat is not a new press
         this._gestures++;
         if (this.title.active && this.title.t >= TITLE_ACCEPT_AFTER && !this.title.pressed) { try { ctx.audio?.unlock?.(); } catch { /* optional */ } }
       };

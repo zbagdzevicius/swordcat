@@ -125,16 +125,16 @@ export class UI {
     this.touchHost = document.getElementById('touch') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'touch' }));
     loadFonts((p) => ctx.assets.url(p)).catch(() => {});
     // boot save snapshot (Game loaded it into ctx.state before init; the boot level load overwrites levelId/spawnId)
+    // (requests/save.md: hasSave() / summary(), not load(): a settings-only record must not offer Continue)
     if (!ctx.params?.test) {
-      let saved = null;
-      try { saved = ctx.save?.load?.() ?? null; } catch { saved = null; }
-      if (saved) this.bootSave = { levelId: saved.levelId ?? 'meadow', spawnId: saved.spawnId ?? 'start' };
+      const sum = this.saveSummary();
+      if (sum) this.bootSave = { levelId: sum.levelId ?? 'meadow', spawnId: sum.spawnId ?? 'start' };
     }
     // layers, back to front
     this.arrows = new ThreatArrows(ctx, this.root);
     this.hud = new Hud(ctx, this.root);
     this.prompts = new Prompts(ctx, this.root);
-    this.toasts = new Toasts(this.hud.toastSlot);
+    this.toasts = new Toasts(this.hud.toastSlot, () => ctx.input?.device ?? 'kbm');
     this.dialog = new Dialog(ctx, this.root);
     this.overlay = new Cinema(ctx, this.root, { onHud: () => {}, rand: this.rand });
     this.results = new Results(ctx, this.root, { sfx: (id) => this.sfx(id), onClose: () => this._giveBackMode() });
@@ -253,7 +253,23 @@ export class UI {
   }
 
   // ------------------------------------------------------------------ flows
-  hasSave() { return !!(this.bootSave || this.resumePoint); }
+  /** A started game exists (main menu "Continue", New Game's "Skip the prologue?"): save's live answer, else the boot snapshot. */
+  hasSave() {
+    if (this.resumePoint) return true;
+    const sv = this.ctx.save;
+    if (typeof sv?.hasSave === 'function') { try { return !!sv.hasSave(); } catch { /* fall through */ } }
+    return !!this.bootSave;
+  }
+
+  /** save.summary() for the Continue card ({ levelId, kittens, playtime, ... }) or null. */
+  saveSummary() {
+    const sv = this.ctx.save;
+    try {
+      if (typeof sv?.summary === 'function') return sv.summary() ?? null;
+      const d = sv?.load?.();
+      return d && d.levelId ? { levelId: d.levelId, spawnId: d.spawnId, kittens: d.kittens?.length ?? 0, playtime: d.playtime ?? 0 } : null;
+    } catch { return null; }
+  }
 
   /** Pause menu (§14.3). */
   pause() {
@@ -278,8 +294,9 @@ export class UI {
   }
 
   vigilRest() {
-    this.ctx.bus.emit(E.SAVE_REQUEST, {});
-    this.toast(tx(this.ctx, 'toast.saved'), { key: 'toast.saved' });
+    this.ctx.bus.emit(E.SAVE_REQUEST, { reason: 'vigil' });
+    // the HUD's wax seal confirms a real write (save.lastSave); without that signal, say it with a toast
+    if (!this.ctx.save || !('lastSave' in this.ctx.save)) this.toast(tx(this.ctx, 'toast.saved'), { key: 'toast.saved' });
     this.resume();
   }
 
@@ -347,7 +364,9 @@ export class UI {
   /** Continue (§14.3): the save's level and Vigil Stone (or where Quit to Title left off). */
   async continueGame() {
     const ctx = this.ctx, story = ctx.story;
-    const at = this.resumePoint ?? this.bootSave ?? { levelId: ctx.state?.levelId ?? 'meadow', spawnId: 'start' };
+    const sum = this.resumePoint ? null : this.saveSummary();
+    const at = this.resumePoint ?? (sum?.levelId ? { levelId: sum.levelId, spawnId: sum.spawnId ?? 'start' } : null) ?? this.bootSave
+      ?? { levelId: ctx.state?.levelId ?? 'meadow', spawnId: 'start' };
     this.menus.closeAll();
     this._giveBackMode();
     if (typeof story?.continueGame === 'function') {

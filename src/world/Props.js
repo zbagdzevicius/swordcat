@@ -350,6 +350,7 @@ export class PropBatch {
     item.id = this.mesh.addInstance(this._geoId(item.geo));
     this.mesh.setMatrixAt(item.id, item.matrix);
     this.mesh.setColorAt(item.id, item.color ?? _col.setRGB(1, 1, 1));
+    if (item.hidden) this.mesh.setVisibleAt(item.id, false);     // hidden before the batch was built (broken crates)
   }
 
   /** Create the BatchedMesh (sized for everything added so far plus spare room). */

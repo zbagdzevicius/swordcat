@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { defineLevel } from '../LevelKit.js';
 import { PropActor, SwingingSack, WobbleKnight } from '../PropActor.js';
+import { WheatField } from '../Wheat.js';
 import { makeStoneMaterial } from '../Props.js';
 import { E } from '../../core/events.js';
 import { smoothPolyline, pointAlong, distToPolyline } from '../noise.js';
@@ -25,7 +26,6 @@ const M = {
   castle: 'models/env/village-kaykit/buildings/building_castle_red.glb',
   wall: 'models/env/graveyard/stone-wall.glb',
   hay: 'models/env/graveyard/hay-bale.glb',
-  wheat: 'models/env/nature/crops_wheatStageB.glb',
   bridge: 'models/env/castle/bridge-straight.glb',
   bridgePillar: 'models/env/castle/bridge-straight-pillar.glb',
   cart: 'models/env/town/cart-high.glb',
@@ -144,7 +144,8 @@ function wobbleBodyParts() {
 }
 function wobbleArmParts() {
   return [[cyl(0.05, 0.05, 0.42, 0, -0.42, 0, 6).rotateZ(Math.PI / 2).translate(0, 0, 0), C.burlap],
-    [box(0.07, 0.07, 0.95, 0.42, 0, 0.42), '#B89A6A'], [box(0.28, 0.05, 0.06, 0.42, 0, 0.0), C.woodDark]];
+    [box(0.07, 0.07, 1.55, 0.42, 0, 0.72), '#B89A6A'], [box(0.28, 0.05, 0.06, 0.42, 0, -0.04), C.woodDark],
+    [new THREE.SphereGeometry(0.1, 10, 8).scale(1, 1, 1.4).translate(0.42, 0, 1.52), C.burlap]];      // a long padded practice blade
 }
 
 // ---------------------------------------------------------------------------------------------- setpieces
@@ -175,7 +176,7 @@ const SETPIECES = {
     // the gate (procedural), closed until prologue.tutorial
     const posts = kit.proc('gate_posts', () => [[cyl(0.11, 0.13, 1.9, -2.15, 0, 0), C.woodDark], [cyl(0.11, 0.13, 1.9, 2.15, 0, 0), C.woodDark],
       [box(0.3, 0.1, 0.3, -2.15, 1.92, 0), C.wood], [box(0.3, 0.1, 0.3, 2.15, 1.92, 0), C.wood]]);
-    kit.place(posts, 0, z1, { collider: false, jitter: 0 });
+    kit.place(posts, 0, z1, { collider: false, jitter: 0, fade: true });     // the `start` camera sits just behind them
     for (const sx of [-2.15, 2.15]) kit.collider({ x: sx, z: z1, r: 0.16, y0: kit.h(sx, z1) - 0.5, y1: kit.h(sx, z1) + 1.9 });
     const leafTpl = kit.proc('gate_leaf', () => gateLeafParts(4.0));
     const leaf = kit.mesh(leafTpl, { name: 'practiceGate' });
@@ -227,13 +228,16 @@ const SETPIECES = {
     const sackRoot = new THREE.Group(); sackRoot.add(sackMesh); kit.object(sackRoot);
     const sackActor = new SwingingSack(ctx, { id: 'sack', pivot: new THREE.Vector3(8, kit.h(8, -84) + 2.62, -84), axis: 'x', amp: 0.75, mesh: sackRoot, breakable: false });
     kit.onLoaded(() => kit.actor(sackActor, null));
-    // Wobble Knight at (0, −86): swings every 2.0 s with a white glint (dummy_swing), spins when parried
+    // Wobble Knight at (0, −86): swings every 2.0 s with a white glint (dummy_swing) while she is within its reach,
+    // spins when parried
     const wk = new THREE.Group(); wk.name = 'wobbleKnight';
     wk.add(kit.mesh(kit.proc('wobble_body', wobbleBodyParts)));
     const arm = new THREE.Group(); arm.position.set(0.3, 1.0, 0.0); arm.add(kit.mesh(kit.proc('wobble_arm', wobbleArmParts))); wk.add(arm);
     kit.object(wk);
     kit.clear(0, -86, 0.9, 0.2);
-    const wkActor = new WobbleKnight(ctx, { id: 'wobble_knight', pos: new THREE.Vector3(0, kit.h(0, -86), -86), facing: 0, mesh: wk, armPivot: arm, delay: 1.0 });
+    // §5.4 step 6: the one-time slow-mo parry hint belongs to the Parry step (not the Stand step before it)
+    const parryHint = () => ctx.story?.tutorial?.active !== false && ctx.story?.tutorial?.log?.step?.id === 'parry';
+    const wkActor = new WobbleKnight(ctx, { id: 'wobble_knight', pos: new THREE.Vector3(0, kit.h(0, -86), -86), facing: 0, mesh: wk, armPivot: arm, delay: 1.0, hint: parryHint });
     kit.onLoaded(() => kit.actor(wkActor, 'wobble_knight'));
     // cracked boulder (−10, −84): only Bright / Holy (`breaks: ['cracked']`)
     const bp = kit.place(boulder, -10, -84, { fit: { h: 1.2 }, yaw: 0.4, collider: 'circle', shrink: 0.8, color: '#9A968C', jitter: 0 });
@@ -252,18 +256,20 @@ const SETPIECES = {
       rock.tags.add('cracked');
       kit.onLoaded(() => kit.actor(rock, null));
     }
-    // Sir Tallbert (4, −57), facing −Z, beside the lane, on a plinth
-    const plinth = kit.place(kit.proc('tallbert_plinth', plinthParts), 4, -57, { yaw: Math.PI, collider: 'box', jitter: 0 });
+    // Sir Tallbert (4, −55.5), facing −Z, beside the lane, on a plinth. §5.4 says (4, −57) with her mark at −59.5, but
+    // the field's north fence runs at z −60, so the MEME_LOOP camera (1.15 m in front of her face) sat behind the fence
+    // rails; statue and mark are 1.5 m further north (still 2.5 m apart).
+    const plinth = kit.place(kit.proc('tallbert_plinth', plinthParts), 4, -55.5, { yaw: Math.PI, collider: 'box', jitter: 0 });
     if (knight && plinth) {
-      kit.place(knight, 4, -57, { fit: 'tallbert', yaw: Math.PI, y: plinth.top - 0.02, collider: 'circle', shrink: 0.45, jitter: 0, clear: false, occupy: 1.6 });
-      kit.anchor('tallbert', 4, -57, undefined, Math.PI);
+      kit.place(knight, 4, -55.5, { fit: 'tallbert', yaw: Math.PI, y: plinth.top - 0.02, collider: 'circle', shrink: 0.45, jitter: 0, clear: false, occupy: 1.6 });
+      kit.anchor('tallbert', 4, -55.5, undefined, Math.PI);
     }
-    kit.anchor('g01_mark', 4, -59.5, undefined, Math.PI);
-    kit.block({ x: 4, z: -57, r: 3.4 });               // no crates / scatter crowding the statue (G-01 frames it)
-    kit.paint(4, -57, 2.4, '#4B4630', 0.35, 1.5);
+    kit.anchor('g01_mark', 4, -58, undefined, Math.PI);
+    kit.block({ x: 4, z: -55.5, r: 3.4 });               // no crates / scatter crowding the statue (G-01 frames it)
+    kit.paint(4, -55.5, 2.4, '#4B4630', 0.35, 1.5);
     // lantern glow on the barn corner post (warm at night)
     kit.place(kit.proc('lantern_post', () => [[cyl(0.06, 0.08, 2.2), C.woodDark], [box(0.5, 0.05, 0.05, 0.22, 2.1, 0), C.woodDark],
-      [box(0.16, 0.22, 0.16, 0.42, 1.88, 0), C.iron]]), -10.8, -89.2, { collider: 'circle', jitter: 0 });
+      [box(0.16, 0.22, 0.16, 0.42, 1.88, 0), C.iron]]), -12.2, -88.9, { collider: 'circle', jitter: 0, fade: true });   // clear of the `practice` spawn's camera
     // a few hay bales around the yard
     const hay = await kit.tpl(M.hay, HAY);
     for (const [x, z, y] of [[-17.5, -84, 0.3], [-16.6, -82.6, 1.4], [12.5, -66, 2.2], [17, -64, 0.2]]) kit.place(hay, x, z, { fit: { h: 0.9 }, yaw: y, collider: 'box' });
@@ -349,9 +355,13 @@ const SETPIECES = {
     kit.onFlag('meadow.pudding', (v) => { if (v === 'netted') spawnPosts(); });
   },
 
-  /** Crow Fields: ~600 wheat plants in patchy rows on both sides of the path, 4 hay bales (2 crossbow perches at 1.0 m). */
+  /**
+   * Crow Fields: ~600 swaying wheat clumps (Wheat.js: tapered stalks, seed heads, awns; height / lean / colour jitter)
+   * in patchy rows on both sides of the path, 4 hay bales (2 crossbow perches at 1.0 m), a scarecrow.
+   */
   async wheatField(kit, zone) {
-    const [wheat, hay] = await Promise.all([kit.tpl(M.wheat, { recolorMap: { woodInner: '#A89150', _defaultMat: '#6E7A3A' } }), kit.tpl(M.hay, HAY)]);
+    const ctx = kit.ctx, level = kit.level;
+    const hay = await kit.tpl(M.hay, HAY);
     const bales = [[16, 46, 0.2], [32, 34, 1.3], [9, 33, 2.4], [39, 49, 0.7]];
     for (const [x, z, yaw] of bales) {
       const p = kit.place(hay, x, z, { fit: { h: 1.0 }, yaw, collider: 'box', walkable: true, shrink: 0.95 });
@@ -359,11 +369,11 @@ const SETPIECES = {
     }
     kit.place(kit.proc('scarecrow', scarecrowParts), 21, 51, { yaw: -2.4, collider: 'circle', jitter: 0 });
     kit.occupy(21, 51, 1.2);
-    if (!wheat) return;
     const [cx, cz] = zone.at, [w, d] = zone.size;
     const rng = kit.rng.fork('wheat');
+    const field = new WheatField({ seed: 23 });
     let n = 0;
-    const max = zone.wheat ?? 600;
+    const max = zone.wheat ?? 600, keepEvery = ctx.quality?.id === 'low' ? 2 : 1;   // §18 budget: Low keeps every other clump
     const spine = kit.terrain.spine;
     for (let z = cz - d / 2 + 1; z < cz + d / 2 - 1 && n < max; z += 1.25) {
       for (let x = cx - w / 2 + 1; x < cx + w / 2 - 1 && n < max; x += 0.95) {
@@ -374,12 +384,18 @@ const SETPIECES = {
         if (patch < 0.15) continue;
         if (Math.hypot(px - 30, pz - 70) < 15 || Math.hypot(px - 2, pz - 18) < 16 || Math.hypot(px - 28, pz - 52) < 4) continue;
         if (pz > 55 || !kit.free(px, pz, 0.35)) continue;
-        kit.place(wheat, px, pz, { fit: { h: 0.9 + rng() * 0.25 }, yaw: rng.angle(), collider: false, clear: 0.55, clearTo: 0.25, occupy: false, jitter: 0.12,
-          tiltX: (rng() - 0.5) * 0.12, tiltZ: (rng() - 0.5) * 0.12 });
+        const h = 0.85 + rng() * 0.35, yaw = rng.angle(), tx = (rng() - 0.5) * 0.16, tz = (rng() - 0.5) * 0.16, tint = (rng() - 0.35) * 0.9;
+        if (n % keepEvery === 0) field.add(px, kit.h(px, pz) - 0.02, pz, { h: keepEvery > 1 ? h * 1.08 : h, yaw, tiltX: tx, tiltZ: tz, tint });
+        kit.clear(px, pz, 0.55, 0.25);
         kit.paint(px, pz, 0.8, '#4A4428', 0.55, 0.6);
         n++;
       }
     }
+    const mesh = field.build();
+    if (!mesh) return;
+    kit.object(mesh);
+    level.wheat = field;
+    level.animators.push({ render: (dt, t) => field.update(t ?? 0, ctx.env, ctx.player?.alive !== false ? ctx.player?.object3d?.position ?? null : null) });
   },
 
   /** Old Bridge (x = 30, z 57–67, 4 m wide) over the stream; Mochi's cage cart at (30, 74); reeds and lily pads. */
@@ -469,7 +485,7 @@ export default defineLevel({
   music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', prologue: 'village_bards_tale', byFlag: [['!prologue.done', 'village_bards_tale']] },
   spine: SPINE,
   paths: [{ pts: [[-22, -30], [-38, -27], [-56, -31], [-80, -28]], width: 3 }, { pts: [[-22, -30], [-9, -23], [8, -27], [30, -22]], width: 3 }],
-  spawns: { title: [0, -64, Math.PI], practice: [-10, -90, 0], start: [-4, -58, 0], boss: [30, 66, 0] },   // [x, z, yaw]; yaw 0 faces +Z
+  spawns: { title: [0, -64, Math.PI], practice: [-10, -90, 0], start: [-1.5, -54.5, -0.4], boss: [30, 66, 0] },   // [x, z, yaw]; yaw 0 faces +Z
   anchors: {
     bell_far: [-130, -20, 30], horde_a: [-40, -45], horde_b: [30, -55], crane_bell: [-60, -40, 25], crane_field: [0, -70, 3],
     pud_1: [20, 36], pud_2: [36, 50], pud_3: [40, 72], pud_4: [22, 84],
@@ -491,6 +507,7 @@ export default defineLevel({
     { id: 'button', kind: 'kitten', kittenId: 'button', at: [-20, -4], hide: 'stand', standTime: 3.0, zoneR: 1.2, needClear: 'stones', onlyIf: 'prologue.done' },
     { id: 'vigil_2', kind: 'checkpoint', at: [-12, 8] },
     { id: 'glade', kind: 'arena', at: [2, 18], r: 14, lockOn: 'cs03:end', autoLockWhen: (s) => s?.getFlag?.('meadow.pudding') === 'netted',
+      restoreUnless: (s) => s?.getFlag?.('meadow.pudding') === 'netted',     // the ropes fight re-arms until Pudding is free
       objective: { id: 'net_ropes', max: 3 }, props: 'picnicGlade',
       interact: { id: 'picnic', at: [0, 16], play: 'cs03', when: 'prologue.done && !meadow.pudding', prompt: 'prompt.picnic', r: 1.8 },
       waves: [[['rat_pike', 4]], [['rat_pike', 3], ['rat_xbow', 1]]] },
@@ -503,7 +520,9 @@ export default defineLevel({
     { id: 'bridge', kind: 'arena', at: [30, 70], r: 12, props: 'oldBridge',
       rescue: { companion: 'mochi', cage: MOCHI_CAGE, hp: 30, play: 'd01', flag: 'meadow.mochi', style: 'cart', facing: Math.PI },
       waves: [[['rat_pike', 3], ['rat_xbow', 1]], [['rat_pike', 3], ['rat_xbow', 2]], [['rat_pike', 4], ['crow', 2]]] },
-    { id: 'exit', kind: 'exit', at: [30, 92], size: [8, 2], to: 'forest', spawnId: 'start' },
+    // gated on Mochi: the forest expects her in the party (§12.3); reaching the exit early nudges her back to the cage
+    { id: 'exit', kind: 'exit', at: [30, 92], size: [8, 2], to: 'forest', spawnId: 'start', when: (s, c) => !mochiCaged(c),
+      blocked: { text: 'Mochi is still caged at the Old Bridge!' } },   // → strings key once story adds it (requests/world.md)
     // the tutorial cow (practice field): Meow → moo, wake, walk 6 m east, reveals Pearl (story)
     { id: 'practice_cow', kind: 'setpiece', at: [12, -72],
       placed: [{ id: 'cow_practice', model: M.cow, at: [12, -72], fit: { h: 1.6 }, yaw: -Math.PI / 2, clip: 'Idle_Headlow', meowWakes: true, walkTo: [18, -72], kind: 'cow', radius: 0.9 }] },
@@ -521,9 +540,12 @@ export default defineLevel({
     { model: [M.log, M.stump], n: 10, fit: { max: [0.8, 1.6] }, minDistFromPath: 4, minDist: 2.5 },
   ],
   crates: { n: 12, milk: 2 },
+  // shader warm-up (LevelManager._prewarm): CS-02's hyena cast, on top of the zone enemy types
+  warm: [{ types: ['hyena'], when: '!prologue.done' }, { types: ['hyena'], opts: { cage: 'pearl', word: 'GRUMBLER' }, when: '!prologue.done' },
+    { types: ['hyena'], opts: { cage: true, word: 'GRUMBLER' }, when: '!prologue.done' }],
   fishLines: [
-    [[0, -55], [-10, -42], 5], [[-20, -18], [-5, 10], 6], [[-12, -40], [-19, -33], 5], [[-21, -24], [-20, -14], 6], [[-8, 9], [-1, 14], 5],
-    [[6, 22], [16, 32], 7], [[18, 36], [25, 44], 6], [[27, 46], [29, 55], 6], [[30, 76], [30, 86], 7], [[-28, -30], [-40, -27], 6], [[-6, -24], [6, -27], 7],
+    [[0, -55], [-10, -42], 5], [[-20, -18], [-5, 10], 6], [[-10, -39], [-12, -31], 5], [[-21, -24], [-20, -14], 6], [[-8, 9], [-1, 14], 5],
+    [[6, 22], [16, 32], 7], [[18, 36], [25, 44], 6], [[26.5, 42.5], [28, 48.5], 6], [[30, 76], [30, 86], 7], [[-28, -30], [-40, -27], 6], [[-6, -24], [6, -27], 7],
   ],
   breadcrumbs: { from: [-6, -50], to: [-21, -32], n: 6 },
   skyline: [{ model: M.tower, at: [-130, -20], fit: { h: 30 }, yaw: 0.4 }, { model: M.castle, at: [-140, -6], fit: { h: 20 }, yaw: 0.2 }],
@@ -531,6 +553,6 @@ export default defineLevel({
   horizon: { n: 80 }, horizonFog: 0.84,
   grass: { height: 0.27 },
   // loaded by the setpieces above (listed for the manifest test and per-level preloading)
-  models: [M.fence, M.barn, M.windmill, M.target, M.boulder, M.knight, M.weaponrack, M.sack, M.wall, M.hay, M.wheat, M.bridge, M.bridgePillar, M.cart,
+  models: [M.fence, M.barn, M.windmill, M.target, M.boulder, M.knight, M.weaponrack, M.sack, M.wall, M.hay, M.bridge, M.bridgePillar, M.cart,
     M.lily, M.reeds, M.cow, ...STONES_TALL],
 });

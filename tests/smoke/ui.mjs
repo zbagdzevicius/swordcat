@@ -12,6 +12,35 @@ async function shot(t, name) {
   return t.shot(`ui/${name}`);
 }
 
+/** §14.1: no visible ui / touch text under 16 px (SVG illustration text excluded). */
+async function fontAudit(t, label) {
+  const bad = await inPage(t, () => {
+    const out = [];
+    for (const root of [document.getElementById('ui'), document.getElementById('touch')]) {
+      if (!root) continue;
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const e = n.parentElement;
+        if (!n.textContent.trim() || !e || e.closest('svg')) continue;
+        const r = e.getBoundingClientRect();
+        if (!r.width || !r.height || r.bottom < 0 || r.top > innerHeight) continue;
+        let vis = true;
+        for (let a = e; a; a = a.parentElement) { const cs = getComputedStyle(a); if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.05) { vis = false; break; } }
+        if (!vis) continue;
+        const fs = parseFloat(getComputedStyle(e).fontSize);
+        if (fs < 15.9) out.push(`${e.className || e.tagName} ${fs.toFixed(1)}px "${n.textContent.trim().slice(0, 24)}"`);
+      }
+    }
+    return [...new Set(out)].slice(0, 6);
+  });
+  t.assert(bad.length === 0, `${label}: text under 16 px: ${bad.join('; ')}`);
+}
+
+/** Freeze the CSS animations under `sel` for a screenshot (page.screenshot can take > 1 s under GPU load). */
+const freezeAnims = (t, sel, on) => inPage(t, ([s, o]) => {
+  for (const e of document.querySelectorAll(`${s}, ${s} *`)) e.style.animationPlayState = o ? 'paused' : '';
+}, [sel, on]);
+
 export default [
   {
     name: 'ui:hud', order: 40, level: 'meadow', spawn: 'start', timeout: 90000,
@@ -45,6 +74,9 @@ export default [
         ctx.bus.emit(E.TOAST, { text: ctx.strings.t('toast.kitten', { n: 1 }), key: 'toast.kitten' });
         ctx.bus.emit(E.ITEM_PICKUP, { item: 'letter', id: 'l1', amount: 1, position: ctx.player.pos.clone() });
         ctx.ui.hint('tut.combo', { step: 3, total: 8 });
+        ctx.state.companions.unlocked = ['mochi'];
+        try { ctx.companions.setActive(['mochi']); } catch (err) { console.warn('[ui smoke] setActive', err?.message); }
+        ctx.ui.hud.showSaved();
       });
       await t.wait(500);
       await inPage(t, () => { window.__uiBoss.hp = 420; });
@@ -54,6 +86,8 @@ export default [
         boss: !!document.querySelector('.hud-boss.is-on'), bossName: document.querySelector('.boss-name span')?.textContent,
         obj: document.querySelector('.hud-obj.is-on .obj-txt')?.textContent ?? '', toasts: document.querySelectorAll('.ui-toast').length,
         hint: document.querySelector('.ui-hint.is-on .hint-txt')?.innerHTML ?? '', fish: document.querySelector('.hud-fish .c-n')?.textContent,
+        comp: !!document.querySelector('.hud-comp.is-on .comp-face svg'), compN: window.__GAME__.ctx.companions?.active?.length ?? 0,
+        saved: document.querySelector('.hud-save.is-on .save-txt')?.textContent ?? '',
       }));
       t.assert(!s1.low, 'no low-HP pulse at 3 HP');
       t.assert(s1.full, 'valor meter is gold at 100');
@@ -62,6 +96,10 @@ export default [
       t.assert(s1.toasts >= 2, `toasts shown: ${s1.toasts}`);
       t.assert(/ui-key/.test(s1.hint), 'tutorial hint renders keycaps');
       t.assert(s1.fish === '42', `fish counter ${s1.fish}`);
+      t.assert(s1.comp || s1.compN === 0, `companion portrait shown for the active companion (${s1.compN})`);
+      if (!s1.compN) t.warn('companions.setActive(["mochi"]) gave no active companion; portrait not checked');
+      t.assert(/saved/i.test(s1.saved), `"Saved" wax seal ("${s1.saved}")`);
+      await fontAudit(t, 'HUD');
       await shot(t, '01-hud');
       // threat arrow: a red telegraph from an enemy behind her; interaction tag; story prompt with a filling ring
       const arrow = await inPage(t, () => {
@@ -93,6 +131,8 @@ export default [
         ctx.bus.emit(E.OBJECTIVE, { id: 'net_ropes', value: 3, max: 3, textKey: 'obj.ropes', frozen: false, done: true });
         ctx.ui.hint(null);
         if (window.__uiRat) ctx.enemies.despawn(window.__uiRat);
+        try { ctx.companions.setActive([]); } catch { /* ignore */ }
+        ctx.state.companions.unlocked = [];
       });
       await t.wait(200);
       const low = await inPage(t, () => !!document.querySelector('.hud-hearts.is-low'));
@@ -118,6 +158,7 @@ export default [
       await t.wait(3200);
       const done = await inPage(t, () => !!document.querySelector('.ui-dialog.is-complete'));
       t.assert(done, 'line completes and shows the paw');
+      await fontAudit(t, 'dialogue');
       await shot(t, '03-dialog');
       await inPage(t, () => {
         const g = window.__GAME__, ctx = g.ctx, E = g.E;
@@ -145,28 +186,36 @@ export default [
       await inPage(t, () => { const ui = window.__GAME__.ctx.ui; ui.cinema.apply({ letterbox: false, hud: true, caption: null }, null, true); ui.cinema.clear(); });
       // life lost card
       await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_LIFE_LOST, { lives: 8, gameOver: false }); });
-      await t.wait(350);
+      await t.wait(380);
+      await freezeAnims(t, '.cin-life', true);
       const life = await inPage(t, () => document.querySelector('.cin-life.is-on .life-txt')?.textContent ?? '');
       t.assert(/8/.test(life), `life lost card "${life}"`);
       await shot(t, '06-life-lost');
-      await t.wait(1400);
+      await freezeAnims(t, '.cin-life', false);
+      await t.wait(1600);
+      t.assert(!(await inPage(t, () => !!document.querySelector('.cin-life.is-on'))), 'life lost card clears after 1.5 s');
     },
   },
   {
     name: 'ui:menus', order: 42, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
       await inPage(t, () => { window.__GAME__.kittens(5); window.__GAME__.ctx.state.letters = ['l1', 'l3']; });
+      await t.page.mouse.move(640, 360);   // resting cursor mid-screen, where the pause buttons appear
       await t.page.keyboard.press('KeyP');
       await t.wait(500);
+      const f0 = await inPage(t, () => [...document.querySelectorAll('.menu--pause .mi')].findIndex((b) => b.classList.contains('is-focus')));
+      t.assert(f0 === 0, `pause opens focused on Resume despite the resting cursor (focus ${f0})`);
       const p = await inPage(t, () => ({ mode: window.__GAME__.mode, pause: !!document.querySelector('.menu--pause.is-on'), btns: document.querySelectorAll('.menu--pause .mi').length }));
       t.assert(p.mode === 'menu', `P pauses (mode ${p.mode})`);
       t.assert(p.pause && p.btns >= 5, `pause menu with ${p.btns} buttons`);
+      await fontAudit(t, 'pause');
       await shot(t, '07-pause');
       // Kittens grid
       await t.page.keyboard.press('ArrowDown'); await t.wait(120);
       await t.page.keyboard.press('Enter'); await t.wait(500);
       const kit = await inPage(t, () => ({ cells: document.querySelectorAll('.kit-cell').length, found: document.querySelectorAll('.kit-cell.is-found').length }));
       t.assert(kit.cells === 18 && kit.found === 5, `kittens grid ${kit.found}/${kit.cells}`);
+      await fontAudit(t, 'kittens');
       await shot(t, '08-kittens');
       await t.page.keyboard.press('Escape'); await t.wait(300);
       // Letters
@@ -186,6 +235,7 @@ export default [
       const after = await inPage(t, () => ({ master: window.__GAME__.ctx.state.settings.master, ev: window.__GAME__.emitted('settings:changed') }));
       t.assert(Math.abs(after.master - (before - 0.05)) < 1e-6, `master volume stepped ${before} → ${after.master}`);
       t.assert(after.ev, 'settings:changed emitted');
+      await fontAudit(t, 'settings');
       await shot(t, '10-settings');
       await inPage(t, () => { const g = window.__GAME__; g.ctx.state.settings.master = 0.8; });
       await t.page.keyboard.press('Escape'); await t.wait(300);
@@ -209,6 +259,8 @@ export default [
       await t.wait(600);
       t.assert(await inPage(t, () => !!document.querySelector('.menu--gameover.is-on') && window.__GAME__.mode === 'menu'), 'game over screen (world frozen)');
       await shot(t, '12-gameover');
+      const goBtns = await inPage(t, () => [...document.querySelectorAll('.menu--gameover .mi')].map((b) => b.textContent.trim()));
+      t.assert(goBtns.length === 2, `game over offers 2 options (${goBtns.join(' | ')})`);
       await t.clearEvents();
       await t.page.keyboard.press('Enter');
       const loaded = await t.waitForEvent('level:loaded', 30000);
@@ -231,6 +283,12 @@ export default [
         stamp: document.querySelector('.res-stamp span')?.textContent, mode: window.__GAME__.mode }));
       t.assert(r.on && r.rows === 5, `results rows ${r.rows}`);
       t.assert(r.stamp === 'Paw-some', `rank stamp "${r.stamp}"`);
+      await fontAudit(t, 'results');
+      const stampFit = await inPage(t, () => {
+        const p = document.querySelector('.res-panel').getBoundingClientRect(), s = document.querySelector('.res-stamp span').getBoundingClientRect();
+        return s.left >= p.left && s.right <= p.right && s.bottom <= p.bottom;
+      });
+      t.assert(stampFit, 'rank ribbon inside the results card');
       await shot(t, '13-results');
       await t.page.keyboard.press('Enter');
       await t.wait(400);
@@ -287,17 +345,22 @@ export default [
       const main = await inPage(t, () => [...document.querySelectorAll('.menu--main .btn-lbl')].map((b) => b.textContent));
       t.assert(main.includes('New Game') && main.includes('Settings') && main.includes('Credits'), `main menu: ${main.join(' · ')}`);
       await shot(t, '17-main-menu');
-      await t.page.keyboard.press('Enter');           // New Game (first item without a save)
+      // New Game (navigate by label: a stored save adds Continue above it)
+      const ngAt = main.indexOf('New Game');
+      for (let i = 0; i < ngAt; i++) { await t.page.keyboard.press('ArrowDown'); await t.wait(120); }
+      await t.page.keyboard.press('Enter');
       await t.wait(500);
       const diff = await inPage(t, () => document.querySelectorAll('.menu--newgame .btn--card').length);
       t.assert(diff === 3, 'difficulty cards: Kitten / Knight / Nine Lives');
       await shot(t, '18-new-game');
       await t.page.keyboard.press('Escape'); await t.wait(300);
-      await t.page.keyboard.press('ArrowDown'); await t.wait(120);
-      await t.page.keyboard.press('ArrowDown'); await t.wait(120);
+      for (let i = ngAt; i < main.indexOf('Credits'); i++) { await t.page.keyboard.press('ArrowDown'); await t.wait(120); }
       await t.page.keyboard.press('Enter'); await t.wait(700);  // Credits
       t.assert(await inPage(t, () => !!document.querySelector('.menu--credits.is-on')), 'credits open');
       await t.wait(1800);
+      await fontAudit(t, 'credits');
+      const crFit = await inPage(t, () => document.querySelector('.menu--credits .menu-panel').getBoundingClientRect().bottom <= innerHeight + 1);
+      t.assert(crFit, 'credits panel fits the viewport');
       await shot(t, '19-credits');
       await t.page.keyboard.press('Escape'); await t.wait(300);
       // New Game → Kitten: the ui starts the game (story.newGame, else the prologue load)

@@ -101,7 +101,7 @@ export function inPractice(x, z, cfg = PRACTICE) {
  * convention world uses for `tut.pounce` / `tut.reflect`). `when(ctx, payload)` filters the trigger event.
  */
 export const HINTS = Object.freeze([
-  { key: 'tut.riposte', on: E.PLAYER_PARRY, when: (ctx) => ctx.state?.getFlag?.('prologue.done') },
+  { key: 'tut.riposte', on: E.PLAYER_PARRY, when: (ctx, p) => ctx.state?.getFlag?.('prologue.done') && !p?.projectile },
   { key: 'tut.milk', on: E.PLAYER_DAMAGED, when: (ctx, p) => ctx.state?.getFlag?.('prologue.done') && (p?.hp ?? 99) <= 4 && (ctx.player?.milk ?? 0) > 0 },
   { key: 'tut.valor', on: E.ENEMY_ALERTED, when: (ctx) => ctx.state?.getFlag?.('prologue.done') && ctx.levels?.current?.id === 'meadow' },
   { key: 'tut.companion', on: E.COMPANION_CHANGED, when: (ctx, p) => (p?.active?.length ?? 0) > 0 },
@@ -200,7 +200,9 @@ export class Tutorial {
   }
 
   _fact(f) {
-    if (!this.active || this.pending || this.waitT > 0) return;
+    // facts count during the short pause between prompts too (a roll right after the combo still lands); the step
+    // only completes once its prompt is up (update()).
+    if (!this.active || this.pending) return;
     if (f.type === 'jumped') return;
     this.log.note(f);
   }

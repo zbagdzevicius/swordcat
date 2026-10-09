@@ -8,11 +8,22 @@ import { upload } from './Particles.js';
 
 export const MARK = Object.freeze({ SOFT: 0, STAR4: 2, STAR5: 3, RING: 4, STAR8: 10, EXCL: 20, EXCL2: 21, SWIRL: 22, HALO: 23 });
 
+/** Screen-space limits: a mark never covers more than `maxFrac` of the screen height, and fades in over `nearFade`
+ *  (view depth, m) so a glint / "!" on an enemy right in front of the lens never swallows the frame. */
+export const MARK_SCREEN = Object.freeze({ maxFrac: 0.06, nearFade: [0.35, 1.6] });
+
+/** CPU mirror of the vertex-shader cap (pure; unit-tested). `p11` = projectionMatrix[1][1]. */
+export function capMarkSize(size, depth, p11, aspect = 1, maxFrac = MARK_SCREEN.maxFrac) {
+  return Math.min(size, (2 * maxFrac * Math.max(1e-3, depth)) / (p11 * Math.max(1, aspect)));
+}
+
 const VERT = /* glsl */`
 attribute vec3 iPos;
 attribute vec4 iCol;
 attribute vec4 iPar;     // size, phase/rotation, shape, pattern (0 none, 1 stripes, 2 dots)
 attribute float iAspect; // height / width
+uniform float uMaxFrac;   // cap on a mark's projected height (fraction of the screen height)
+uniform vec2 uNearFade;   // view-depth range (m) over which marks fade in from the camera
 varying vec2 vUv;
 varying vec4 vCol;
 varying vec3 vPar;
@@ -22,12 +33,21 @@ void main() {
   vec2 corner = position.xy * 2.0;
   vUv = corner;
   float shape = iPar.z;
+  float size = iPar.x, fade = 1.0;
+  if ( projectionMatrix[2][3] < -0.5 ) {           // perspective: marks are world-sized, so cap them on screen
+    float depth = max( 1e-3, -mvPosition.z );
+    // halos and jeer rings are meant to read big (silhouette rims / shock rings): looser cap
+    float frac = ( shape > 22.5 || abs( shape - 4.0 ) < 0.5 ) ? uMaxFrac * 4.0 : uMaxFrac;
+    float capSize = 2.0 * frac * depth / ( projectionMatrix[1][1] * max( 1.0, iAspect ) );
+    size = min( size, capSize );
+    fade = smoothstep( uNearFade.x, uNearFade.y, depth );
+  }
   float rot = shape < 19.5 ? iPar.y : 0.0;   // "!", swirl and halo stay upright (the swirl spins in the fragment)
   float cs = cos( rot ), sn = sin( rot );
   vec2 c = vec2( cs * corner.x - sn * corner.y, sn * corner.x + cs * corner.y );
   c.y *= iAspect;
-  mvPosition.xy += c * iPar.x * 0.5;
-  vCol = iCol;
+  mvPosition.xy += c * size * 0.5;
+  vCol = vec4( iCol.rgb, iCol.a * fade );
   vPar = iPar.yzw;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
@@ -110,7 +130,8 @@ export class Marks {
     g.instanceCount = 0;
     this.geometry = g;
     this.material = new THREE.ShaderMaterial({
-      name: 'fx.marks', vertexShader: VERT, fragmentShader: FRAG, uniforms: fogUniforms(), fog: true,
+      name: 'fx.marks', vertexShader: VERT, fragmentShader: FRAG, fog: true,
+      uniforms: { ...fogUniforms(), uMaxFrac: { value: MARK_SCREEN.maxFrac }, uNearFade: { value: new THREE.Vector2(...MARK_SCREEN.nearFade) } },
       transparent: true, depthWrite: false, depthTest: true,
     });
     this.mesh = new THREE.Mesh(g, this.material);

@@ -21,6 +21,9 @@ const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade:
  *  armour: false for the prologue tunic (CS-01 shots 1–5); bow: false only before CS-01 shot 5
  *  sword: skin id ('borrowed' default)
  */
+/** Swordcat's cape drape (overrides CAPE_DEFAULTS). */
+export const SWORDCAT_CAPE = Object.freeze({ topW: 0.18, botW: 0.4, len: 0.4 });
+
 export function swordcatConfig({ cape = 'cream', armour = true, bow = true, sword = 'borrowed', tier = 'hero' } = {}) {
   return {
     id: 'swordcat', name: 'Clementine', tier, scale: 1, width: 1, headScale: 1.0,
@@ -31,6 +34,9 @@ export function swordcatConfig({ cape = 'cream', armour = true, bow = true, swor
     outfit: { armour: armour ? 'plate' : null },
     accessories: armour ? [] : [{ id: 'tunic', color: '#9C7B57', trim: '#6E5638' }],
     cape: armour && cape ? { style: cape } : null,
+    // narrower, shorter hero cape: from the gameplay (behind) view the pauldrons must stand clear of it and the
+    // back plate / belt show at its sides (art.md §1 silhouette: wide steel shoulder line, cape as a V frame)
+    capeDims: SWORDCAT_CAPE,
     sword: armour ? sword : null,
     expression: 'worried',
     holy: true,

@@ -99,3 +99,10 @@ Everything below is additive.
   `type, height, dir, helmet`.
 - `ENEMIES.crow.tint` `#17181C` is the intended feather colour; the Pigeon atlas is already blue-violet, so the crow
   multiplies it by `#4A4B58` (+ a faint violet emissive) to land on that colour with a legible beak and eyes.
+
+## Skeleton bone-texture leak (review finding) — for world / characters / companions / core
+Enemies now dispose cloned skeletons on despawn (`src/enemies/rig.js` `disposeInstanceMaterials`: every
+`SkinnedMesh.skeleton.dispose()` under the visual, after owned materials). The same leak remains outside enemies:
+Critter.dispose (world/PropActor.js), NpcActor / Companion / LostKitten disposal and KittenBuilder.dispose never call
+`skeleton.dispose()` on their SkeletonUtils clones (+2 textures per meadow reload). Suggest core add
+`Assets.disposeInstance(root)` (dispose skeletons + owned materials) and every area call it; enemies will switch to it.

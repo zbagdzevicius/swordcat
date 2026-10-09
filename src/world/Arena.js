@@ -3,7 +3,8 @@
 //     every 1.5 m + a physics ring collider; rectangles: 4 edge walls, edges over deep water get only the cards).
 //  2. Combat music (boss music for boss arenas).
 //  3. Waves: the next wave starts 1.5 s after alive ≤ 1, at the 3 of 6 ring points (r − 1.5) farthest from the
-//     player, with the spawn poof (Boneheads: spawnBones); arena:wave {id, wave, total}.
+//     player, with the spawn poof (Boneheads: spawnBones), already alerted (the ring points sit beyond sight range);
+//     arena:wave {id, wave, total}.
 //  4. Ring points over deep water, outside the bounds or inside static colliders are skipped.
 //  5. Clear: arena:clear, the wall dissolves, jingles/jingles_STEEL00, explore music returns 4 s after the last kill.
 //  6. Death inside resets it to wave 1 (reset()); a boss arena keeps its boss (enemies reset the phase) and drops
@@ -11,10 +12,20 @@
 //  7. Rectangular arenas (`size: [w, d]`): corners + long-side midpoints, four edge walls.
 // Zone options: `lockOn: '<cutsceneId>:end'` (no auto-lock; locks when that cutscene ends, e.g. the glade after CS-03),
 // `autoLockWhen` (cond string / fn: auto-lock re-arms on reloads, e.g. meadow.pudding === 'netted'), `boss` (enemy
-// type spawned at the centre), `waves: [[[type, n, opts?], ...], ...]`.
+// type spawned at the centre), `waves: [[[type, n, opts?], ...], ...]`, `restoreUnless` (cond: never restore the
+// saved clear while it holds, e.g. the glade while Pudding is still netted).
+// Saved clears: clear() sets the flag `<level>.cleared.<arenaId>` (the open-zone convention). On load, restore()
+// starts the arena cleared (no trigger, no waves, no events) when that flag is set, or when its `rescue` is done
+// (the bridge once Mochi is rescued).
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { condOk } from './Level.js';
+
+/** Metres outside a locked (non-boss) arena edge that count as having left the fight (teleported out). */
+const ARENA_LEAVE = 4;
+
+/** The flag that marks an arena cleared (pure; the same `<level>.cleared.<id>` convention as the open zones). */
+export const arenaFlag = (levelId, arenaId) => `${levelId}.cleared.${arenaId}`;
 
 export const ARENA = Object.freeze({ waveDelay: 1.5, exploreAfter: 4, ringInset: 1.5, triggerInset: 2, wallPad: 0.4, clearJingle: 'jingles/jingles_STEEL00' });
 const _v = new THREE.Vector3();
@@ -64,6 +75,34 @@ export class Arena {
       const ev = when === 'start' ? E.CUTSCENE_START : E.CUTSCENE_END;
       this._offs.push(ctx.bus.on(ev, (p) => { if (p?.id === csId && !this.cleared) this.lock(); }));
     }
+  }
+
+  /** The save flag for this arena (`<level>.cleared.<id>`). */
+  get flag() { return arenaFlag(this.level?.id ?? this.level?.def?.id ?? 'level', this.id); }
+
+  /** Was it cleared on an earlier visit (saved flag, or its rescue already done)? */
+  savedCleared() {
+    const st = this.ctx.state, z = this.zone;
+    if (z.restoreUnless != null && condOk(this.ctx, z.restoreUnless)) return false;
+    if (st?.getFlag?.(this.flag)) return true;
+    const r = z.rescue;
+    if (r && ((r.flag && st?.getFlag?.(r.flag)) || st?.companions?.unlocked?.includes?.(r.companion))) return true;
+    return false;
+  }
+
+  /**
+   * Level load: start cleared when savedCleared() (no trigger, no waves, no wall, no arena:clear event). The cleared
+   * id is handed to the systems that track clears per level (objectives, companions' needClear) without the event.
+   * @returns {boolean} restored
+   */
+  restore() {
+    if (this.cleared || !this.savedCleared()) return false;
+    this.cleared = true; this.locked = false; this.wave = this.waves.length;
+    const c = this.ctx;
+    try { c.objectives?.cleared?.add?.(this.id); } catch { /* optional */ }
+    try { c.companions?.cleared?.add?.(this.id); } catch { /* optional (requests/world.md: companions.markCleared) */ }
+    if (typeof c.companions?.markCleared === 'function') { try { c.companions.markCleared(this.id); } catch { /* optional */ } }
+    return true;
   }
 
   /** May the trigger disc lock it on entry? (lockOn arenas only via their cutscene or `autoLockWhen`.) */
@@ -132,7 +171,7 @@ export class Arena {
       const alive = this.enemies.find((e) => e.alive && this.ctx.enemies?.list?.includes(e));
       if (!alive) {
         const facing = p?.pos ? Math.atan2(p.pos.x - this.center.x, p.pos.z - this.center.z) : 0;
-        const e = this.ctx.enemies?.spawn?.(this.boss, this.center.clone(), { facing, arena: this.id });
+        const e = this.ctx.enemies?.spawn?.(this.boss, this.center.clone(), { facing, arena: this.id, alerted: true });
         if (e) this.enemies.push(e);
       }
     } else if (this.wave === 0) this._nextWave();
@@ -149,6 +188,22 @@ export class Arena {
     } else {
       const r = Math.max(1, this.r - 2.5);
       x = this.center.x + (dx / d) * r; z = this.center.z + (dz / d) * r;
+    }
+    // the nearest edge can be water or a wall (the Old Bridge arena spans the stream): walk the point in toward
+    // the centre, then around the ring, until it is dry, open ground
+    const q = new THREE.Vector3();
+    const dry = (px, pz) => this.validPoint(q.set(px, this.heightAt(px, pz), pz));
+    if (!dry(x, z)) {
+      let found = false;
+      const ox = x - this.center.x, oz = z - this.center.z;
+      for (let k = 0.85; k > 0.05 && !found; k -= 0.15) { if (dry(this.center.x + ox * k, this.center.z + oz * k)) { x = this.center.x + ox * k; z = this.center.z + oz * k; found = true; } }
+      const r = Math.hypot(ox, oz), a0 = Math.atan2(ox, oz);
+      for (let i = 1; i <= 12 && !found; i++) {
+        const a = a0 + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 6);
+        const px = this.center.x + Math.sin(a) * r, pz = this.center.z + Math.cos(a) * r;
+        if (dry(px, pz)) { x = px; z = pz; found = true; }
+      }
+      if (!found) { x = this.center.x; z = this.center.z; }
     }
     const pos = _v.set(x, this.heightAt(x, z), z).clone();
     const facing = Math.atan2(this.center.x - x, this.center.z - z);
@@ -168,7 +223,7 @@ export class Arena {
       _v.set(base.x + Math.sin(a) * 1.1 * ring, 0, base.z + Math.cos(a) * 1.1 * ring);
       _v.y = this.heightAt(_v.x, _v.z);
       const facing = Math.atan2(this.center.x - _v.x, this.center.z - _v.z);
-      const e = this.ctx.enemies?.spawn?.(type, _v.clone(), { facing, arena: this.id, ...(extra ?? {}) });
+      const e = this.ctx.enemies?.spawn?.(type, _v.clone(), { facing, arena: this.id, alerted: true, ...(extra ?? {}) });
       if (e) this.enemies.push(e);
       this.ctx.bus.emit(E.BURST, { kind: String(type).startsWith('bonehead') ? 'spawnBones' : 'spawn', position: _v.clone() });
     }
@@ -179,8 +234,9 @@ export class Arena {
     if (this.cleared) return this;
     this.cleared = true; this.locked = false;
     this._dropWall();
+    try { this.ctx.state?.setFlag?.(this.flag, true); } catch (e) { console.warn('[arena] clear flag', e); }   // saved with the flags
     this.ctx.bus.emit(E.ARENA_CLEAR, { id: this.id });
-    this.ctx.audio?.play2D?.(ARENA.clearJingle, { vol: 0.8 });
+    if (!this.ctx.audio?.director) this.ctx.audio?.play2D?.(ARENA.clearJingle, { vol: 0.8 });   // audio plays the §16.1 victory sting itself
     this._exploreT = ARENA.exploreAfter;
     for (const fn of this.onClear.splice(0)) { try { fn(this); } catch (e) { console.error('[arena] onClear', e); } }
     return this;
@@ -215,6 +271,10 @@ export class Arena {
       if (explore) this.ctx.bus.emit(E.MUSIC, { track: explore, fade: 1.5 });
     }
     if (!this.locked || this.cleared) return;
+    // moved far out of a locked fight (a teleport: debug hooks, a respawn without a death): leave the fight like a
+    // death does instead of dragging her back to the ring edge (which can be the stream at the Old Bridge)
+    const p = this.ctx.player;
+    if (p?.alive && p.pos && !this.boss && this.distanceTo(p.pos) > ARENA_LEAVE) { this.reset(); return; }
     this._keepInside();
     const alive = this.aliveCount();
     if (this.boss) { if (alive === 0 && this.enemies.length) this.clear(); return; }

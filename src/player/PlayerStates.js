@@ -123,8 +123,12 @@ export const STATES = {
       p.vel.z = damp(p.vel.z, Math.cos(p.facing) * lunge, TUNING.lungeDamp, dt);
       const recovering = s.t >= act[1];
       const preActive = s.t < act[0];
-      // combo: a (buffered) press inside the window → the next swing
-      if (def.next && def.combo && p.attackBuf > 0 && s.t >= def.combo[0] && s.t <= def.combo[1]) { p.startAttack(def.next); return; }
+      // combo: a (buffered) press inside the window QUEUES the next swing; it starts when this one's recovery ends
+      // (def.dur), so every slash sweeps its full arc and Snip–Snap–Swoosh keeps the designed ≈1.4 s rhythm (§7.2).
+      // Touch auto-combo (§14.4): a tap anywhere in the swing queues the next hit (no need to hit combo[0]).
+      const comboFrom = p.autoCombo() ? 0 : def.combo?.[0];
+      if (def.next && def.combo && p.attackBuf > 0 && s.t >= comboFrom && s.t <= def.combo[1]) { s.queued = true; p.attackBuf = 0; }
+      if (s.queued && s.t >= Math.max(def.dur ?? act[1], act[1])) { p.startAttack(def.next); return; }
       // cancels: Golden Hour any time before the active frames; Stand before/after them; Tumble / charge after.
       // A Stand already held when the swing started (⚔ out of the Stand, a Riposte, Auto-Stand) never cancels it:
       // only a fresh Stand press does (requests/combat.md); she drops back into the Stand when the swing ends.
@@ -139,7 +143,7 @@ export const STATES = {
       if (recovering && !def.noCancel && def.id !== 'holy' && p.chargeHeld() && p.attackHeldTime() >= PLAYER.charge.start && p.onGround) {
         p.endSwing(); p.setState('charge'); return;
       }
-      if (s.t >= (def.dur ?? act[1])) { p.endSwing(); p.setState('move'); }
+      if (s.t >= (def.dur ?? act[1])) { p.endSwing(); p.noteComboEnd(def); p.setState('move'); }
     },
     exit(p) { p.stateName = 'idle'; },
   },

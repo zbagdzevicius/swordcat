@@ -14,8 +14,8 @@
 // (everything in ONE skinned mesh, vertex-coloured eyes: villagers, hub residents, riders, spoon brigade).
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, roundedCone, hashString, mulberry32 } from './util.js';
-import { makeKitMaterial, kitMaterial, RM, own, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR } from './materials.js';
+import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32 } from './util.js';
+import { makeKitMaterial, kitMaterial, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR } from './materials.js';
 import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
 import { EyePair, EXPRESSIONS, eyePivotMatrix, ringGeometry } from './Eyes.js';
 import { buildBow } from './Bow.js';
@@ -126,7 +126,7 @@ export class Kitten {
       ...joints,
       tail: [0, 1, 2, 3, 4, 5].map((i) => joints['tail' + i]),
       armL: joints.shoulderL, armR: joints.shoulderR, legL: joints.thighL, legR: joints.thighR,
-      swordHand: joints.pawR, chestBind: bind.chest.clone(),
+      swordHand: joints.pawR, chestBind: bind.chest.clone(), bodyBind: bind.body.clone(),
     };
     rig.swordSocket = new THREE.Object3D(); rig.swordSocket.name = 'swordSocket'; joints.pawR.add(rig.swordSocket);
     rig.capeAnchor = new THREE.Object3D(); rig.capeAnchor.name = 'capeAnchor'; rig.capeAnchor.position.set(0, 0.2, -0.12); joints.chest.add(rig.capeAnchor);
@@ -141,6 +141,12 @@ export class Kitten {
     this.furMat = null; this.furMatBaked = null;
     if (!this.lite) {
       const fo = { len: cfg.fur?.len ?? 0.045, tiling: cfg.fur?.tiling ?? 4.8, rim: cfg.fur?.rim ?? 0.3, tipTint: this.coat.light || this.coat.base, density: cfg.fur?.density ?? 1.25 };
+      // dark coats (Mochi, Midnight cats): the soft outer shells read as a dark ghost halo against the bright fog
+      // close to the camera, so their silhouette fringe is pulled in and the outer shells fade earlier edge-on
+      const bc = rgb(this.coat.base), dark = 0.2126 * bc[0] + 0.7152 * bc[1] + 0.0722 * bc[2] < 0.05;
+      // (and a softer rim: on the outermost shells it drew a pale ring around the dark fringe, a "doubled" outline)
+      if (dark) Object.assign(fo, { len: fo.len * 0.75, fringe: 0.55, edgeStart: 0.0, edgeFade: 0.85, rim: fo.rim * 0.5 });
+      for (const key of ['fringe', 'edgeStart', 'edgeFade']) if (cfg.fur?.[key] !== undefined) fo[key] = cfg.fur[key];
       this.furMat = makeFurMaterial(fo);
       this.furMatBaked = makeFurMaterial({ ...fo, baked: true });
     }
@@ -216,13 +222,9 @@ export class Kitten {
 
     // ---- ears (kit) + tufts
     const earS = (cfg.ears?.size ?? 1) * 1.28;   // ref2: big, wide-set ears that clear the head fluff by ~0.08 H
-    for (const s of ['L', 'R']) {
-      // art.md §2.2: tall rounded cones, flattened front-to-back, tilted out ~30°; pink inner ear faces forward
-      const outer = roundedCone(0.07 * earS, 0.118 * earS, 20, 0.18, 0.84).scale(1, 1, 0.58);
-      A.add('ear' + s, outer, { m: mat([0, -0.02, 0]), color: (v, n, lp) => mixRgb(coatColor(coat, 'ear', lp), rgb(coat.light || coat.base), smoothstep(0.02, 0.12, lp.y) * 0.25), rmse: RM.furShort });
-      const inner = roundedCone(0.054 * earS, 0.094 * earS, 16, 0.18, 0.84).scale(1, 1, 0.36);
-      A.add('ear' + s, inner, { m: mat([0, -0.01, 0.024]), color: (v, n, lp) => mixRgb(rgb(cfg.earInner ?? PAL.earInner), rgb(coat.cream || coat.base), smoothstep(0.03, 0.11, lp.y) * 0.4), rmse: RM.skin });
-    }
+    // skinned shell-fur surfaces (ear backs + tail) share one FurPart / draw call
+    this._skinFurGB = this.lite ? null : new GeoBuilder({ skinned: true, fur: true });
+    this._ears(A, cfg, bind, boneIndex, earS);
     if (!this.lite && cfg.ears?.tufts !== false) this._tufts(tufts, bind, boneIndex, earS);
 
     // ---- bib, torso, limbs
@@ -270,6 +272,8 @@ export class Kitten {
       const sp = new GeoBuilder({ skinned: true });
       const head = new THREE.SphereGeometry(0.19, 14, 10).scale(1.22, 1.0, 1.0).translate(0, 0.16, 0);
       sp.add(head, { matrix: bind.head, bone: boneIndex.head });
+      // fur ears no longer cast from the kit mesh
+      for (const s of ['L', 'R']) sp.add(new THREE.ConeGeometry(0.06 * earS, 0.11 * earS, 6).scale(1, 1, 0.6).translate(0, 0.055 * earS - 0.02, -0.01), { matrix: bind['ear' + s], bone: boneIndex['ear' + s] });
       sp.add(new THREE.SphereGeometry(0.11, 10, 8).scale(1.05 * w, 0.8, 0.8).translate(0, 0.215, 0.05), { matrix: bind.chest, bone: boneIndex.chest });
       const tc = new THREE.TubeGeometry(this.tailCurve, 10, 0.07, 6, false), tpos = tc.attributes.position;
       const tT = new Float32Array(tpos.count); for (let i = 0; i < tpos.count; i++) tT[i] = Math.floor(i / 7) / 10;
@@ -400,14 +404,55 @@ export class Kitten {
     }
   }
 
+  /**
+   * Ears (art.md §2.2): cupped cones with a thick rounded rim. The pink inner bowl fades into a cream fringe and the
+   * coat colour by vertex gradient (no separate inner panel, so no hard edge), and on full-detail kittens the backs
+   * and rims are shell fur (skinned to the ear joints, so twitches carry the fur) that softens the silhouette.
+   */
+  _ears(A, cfg, bind, boneIndex, earS) {
+    const coat = this.coat, lite = this.lite;
+    const pink = rgb(cfg.earInner ?? PAL.earInner), cream = rgb(coat.cream || coat.light || coat.base), light = rgb(coat.light || coat.base);
+    const { geo, front, t, cup } = earGeometry(0.07 * earS, 0.118 * earS, { depth: 0.6, cup: 0.78, radial: lite ? 16 : 28, rows: lite ? 9 : 14 });
+    const color = (v, n, lp, i) => {
+      let c = mixRgb(coatColor(coat, 'ear', lp), light, smoothstep(0.02, 0.12, lp.y) * 0.25);
+      // cream furnishings on the front rim, fading back into the coat around the sides
+      c = mixRgb(c, cream, smoothstep(-0.05, 0.45, front[i]) * 0.55 * (1 - smoothstep(0.8, 1.0, t[i])));
+      // pink skin deep in the bowl, paling toward the tip and the rim
+      const pk = smoothstep(0.18, 0.62, cup[i]) * (1 - smoothstep(0.55, 0.9, t[i]));
+      return mixRgb(c, mixRgb(pink, cream, smoothstep(0.35, 0.8, t[i]) * 0.5), pk);
+    };
+    const rm = (v, n, lp, i) => (cup[i] > 0.4 ? RM.skin : RM.furShort);
+    for (const s of ['L', 'R']) {
+      const bone = 'ear' + s, m = _m.multiplyMatrices(bind[bone], mat([0, -0.02, 0])).clone();
+      if (lite || !this._skinFurGB) { A.add(bone, geo, { m: mat([0, -0.02, 0]), color, rmse: rm }); continue; }
+      // comb toward the ear tip (bind space), with a lean out of the bowl on the rim
+      const up = new THREE.Vector3(0, 1, 0).transformDirection(bind[bone]), fwd = new THREE.Vector3(0, 0, 1).transformDirection(bind[bone]);
+      this._skinFurGB.add(geo, {
+        matrix: m, bone: boneIndex[bone], color, rmse: rm,
+        // short fur on the back, a slightly longer fringe on the rim, none in the bowl; thinning at the very tip
+        fur: (v, n, lp, i) => [(1 - smoothstep(0.12, 0.45, cup[i])) * (1 - 0.5 * smoothstep(0.85, 1.0, t[i])), 0.42 + 0.22 * smoothstep(-0.1, 0.4, front[i])],
+        comb: (v, n, lp, i) => { const k = smoothstep(0, 0.5, front[i]) * 0.35; return [up.x - fwd.x * k, up.y - fwd.y * k, up.z - fwd.z * k]; },
+      });
+    }
+  }
+
   /** Ear tufts, cheek wisps, crown and bib fluff, tail-tip wisp (art.md §3.4). */
   _tufts(gb, bind, idx, earS) {
     const root = rgb(this.coat.cream ?? PAL.tuftRoot), tip = rgb(this.cfg.tuftTip ?? PAL.tuftTip);
     const baseC = rgb(this.coat.base);
     const rnd = mulberry32(hashString(this.cfg.id || 'kitten'));
     // cards face mostly forward (+Z, where the camera usually is) with a random twist, so they read broad-side
-    const card = (bone, at, dir, len, wid, color0 = root, color1 = tip, twist = 0.6) => {
-      const g = new THREE.PlaneGeometry(wid, len, 1, 3).translate(0, len / 2, 0);
+    // cards are tapered toward the tip and bend along their length (curl: sideways, bend: out of the card plane),
+    // so a few of them read as soft curved wisps rather than straight comb teeth
+    const card = (bone, at, dir, len, wid, color0 = root, color1 = tip, twist = 0.6, curl = (rnd() - 0.5) * 0.5, bend = 0.25 + rnd() * 0.25) => {
+      const g = new THREE.PlaneGeometry(wid, len, 1, 6).translate(0, len / 2, 0);
+      const gp = g.attributes.position;
+      for (let i = 0; i < gp.count; i++) {
+        const u = clamp(gp.getY(i) / len, 0, 1);   // (the bottom row can come out as -1e-17: pow() would NaN)
+        gp.setX(i, gp.getX(i) * (1 - 0.6 * Math.pow(u, 1.3)) + curl * len * u * u);
+        gp.setZ(i, bend * len * u * u);
+      }
+      g.computeVertexNormals();
       const up = new THREE.Vector3(...dir).normalize();
       const face = new THREE.Vector3((rnd() - 0.5) * twist, (rnd() - 0.5) * twist * 0.5, 1);
       const side = new THREE.Vector3().crossVectors(up, face);
@@ -424,7 +469,8 @@ export class Kitten {
     for (const [s, bone] of [[1, 'earL'], [-1, 'earR']]) {
       for (let i = 0; i < 4; i++) {
         const x = (i - 1.5) * 0.012 * earS;
-        card(bone, [x, 0.008 + rnd() * 0.016, 0.02], [x * 4.5 - s * 0.06, 1, 0.45 + rnd() * 0.25], (0.045 + rnd() * 0.03) * earS, 0.026, root, earTip);
+        // fan out of the bowl and curl outward over the rim
+        card(bone, [x, 0.008 + rnd() * 0.016, 0.012], [x * 4.5 - s * 0.06, 1, 0.45 + rnd() * 0.25], (0.045 + rnd() * 0.03) * earS, 0.03, root, earTip, 0.6, (i - 1.5) * 0.35 + (rnd() - 0.5) * 0.2, 0.35 + rnd() * 0.25);
       }
     }
     // cheek wisps: long fur sticking out sideways past the cheek ruff
@@ -517,10 +563,10 @@ export class Kitten {
       kit.add(tg, { color: (v, n, lp, i) => colorT(lp, tArr[i], under[i]), rmse: RM.fur, skin: (v, lp, i) => skinFor(tArr[i]) });
       kit.add(cap, { color: (v, n, lp) => colorT(lp, 1, 0), rmse: RM.fur, skin: () => skinFor(1) });
     } else {
-      const gb = new GeoBuilder({ skinned: true, fur: true });
+      const gb = this._skinFurGB;
       gb.add(tg, { color: (v, n, lp, i) => colorT(lp, tArr[i], under[i]), rmse: RM.fur, fur: (v, n, lp, i) => [1, 1.75 * (1 - 0.3 * tArr[i])], skin: (v, lp, i) => skinFor(tArr[i]), comb: [0.3, -0.6, -0.6] });
       gb.add(cap, { color: (v, n, lp) => colorT(lp, 1, 0), rmse: RM.fur, fur: [1, 1.3], skin: () => skinFor(1), comb: [0.6, 0, 0.2] });
-      this.tailFurGeo = gb.build();
+      this.tailFurGeo = gb.build(); this._skinFurGB = null;
     }
   }
 
@@ -547,6 +593,7 @@ export class Kitten {
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     const m = whiskerMaterial(o.color ?? PAL.whisker);
     const ls = new THREE.LineSegments(g, m); ls.name = 'whiskers'; ls.renderOrder = 2;
+    this.whiskerMesh = ls;
     return ls;
   }
 
@@ -893,8 +940,14 @@ export class Kitten {
     this.headFur?.dispose(); this.bibFur?.dispose(); this.tailFur?.dispose();
     this.kitMesh.geometry.dispose(); this.tuftMesh?.geometry.dispose();
     this.cape?.dispose(); this.sword?.dispose(); this.eyes?.dispose();
-    this.furMat?.dispose(); this.furMatBaked?.dispose();
-    if (this.kitMat !== kitMaterial()) this.kitMat.dispose();
+    this.swayCape?.geometry.dispose();
+    this.whiskerMesh?.geometry.dispose();
+    this.shadowProxy?.geometry.dispose();
+    for (const m of this.auraMeshes || []) m.geometry.dispose();
+    disown(this.auraMat); this.auraMat = null;
+    disown(this.furMat); disown(this.furMatBaked);
+    if (this.kitMat !== kitMaterial()) disown(this.kitMat);
+    this.skeleton?.dispose();
     this.root.removeFromParent();
   }
 }

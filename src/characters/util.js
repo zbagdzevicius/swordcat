@@ -200,6 +200,40 @@ export function roundedCone(r0, h, radial = 24, tipR = 0.3, tipFrac = 0.8) {
   return new THREE.LatheGeometry(pts, radial);
 }
 
+/**
+ * Cupped cat ear (art.md §2.2; review: "flat cardboard wedges"): a rounded cone, flattened front-to-back, whose front
+ * is pressed into a hollow so the ear has a thick rounded rim and a concave inner bowl. Lathe seam at the back.
+ * Returns the geometry plus per-vertex `front` (cos of the angle to +Z: 1 = middle of the bowl, < 0 = back of the
+ * ear), `t` (0 base .. 1 tip) and `cup` (0 on the rim .. 1 deep in the bowl) for colouring and fur masks.
+ * @param {number} r0 base radius  @param {number} h height  @param {{depth?: number, cup?: number, radial?: number, rows?: number}} [o]
+ */
+export function earGeometry(r0, h, o = {}) {
+  const depth = o.depth ?? 0.6, cupK = o.cup ?? 0.78, radial = o.radial ?? 28, rows = o.rows ?? 14;
+  const pts = [];
+  const tipR = 0.2, yc = h * 0.82, rc = r0 * tipR;
+  for (let i = 0; i <= rows; i++) {
+    const t = i / rows;
+    pts.push(new THREE.Vector2(THREE.MathUtils.lerp(r0, rc, Math.pow(t, 0.92)) * (1 + 0.06 * Math.sin(Math.PI * t)), yc * t));
+  }
+  for (let i = 1; i <= 6; i++) { const a = (i / 6) * Math.PI / 2; pts.push(new THREE.Vector2(Math.max(0.0001, rc * Math.cos(a)), yc + (h - yc) * Math.sin(a))); }
+  const g = new THREE.LatheGeometry(pts, radial, Math.PI);   // phiStart = PI: the seam sits at the back (-Z)
+  const P = g.attributes.position, n = P.count;
+  const front = new Float32Array(n), tArr = new Float32Array(n), cup = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+    const r = Math.hypot(x, z) || 1e-6, c = z / r;          // c = cos(angle from +Z)
+    const t = clamp(y / h, 0, 1);
+    // the bowl: the front middle is pushed back behind the ear's axis; the rim (|angle| ~ 60°) stays proud.
+    // It shallows toward the tip and the base (where it meets the head).
+    const bowl = c > 0 ? Math.pow(c, 3) : 0;
+    const k = cupK * smoothstep(0.0, 0.18, t) * (1 - smoothstep(0.72, 0.97, t));
+    P.setZ(i, r * (depth * c - k * bowl));
+    front[i] = c; tArr[i] = t; cup[i] = bowl * (k / Math.max(cupK, 1e-6));
+  }
+  g.computeVertexNormals();
+  return { geo: g, front, t: tArr, cup };
+}
+
 /** Pinch the inner end of a loop shape along x (art.md §2.6 bow loops). */
 export function pinchX(geo, width, minScale = 0.4) {
   const p = geo.attributes.position;

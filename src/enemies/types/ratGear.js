@@ -26,6 +26,13 @@ function matteFur(root) {
  * @param {import('../Enemy.js').Enemy} e @param {any} m ModelInstance from ctx.assets.model
  * @param {{helm?: boolean, hood?: boolean, spear?: boolean, buckler?: boolean, crossbow?: any, helmScale?: number}} gear
  */
+/**
+ * The quadruped Rat.glb fitted to h 0.8 is ~1.45 m nose to rump (2.7 m with the tail): its collision is a capsule
+ * along the spine instead of the 0.30 m row circle (Enemy.spine / resolveBody), measured in page from the skinned
+ * mesh (snout +0.74 m, rump -0.68 m, half-width 0.27 m). `k` scales it (Grizzlechop's fit is 1.6 m: k 2).
+ */
+export const ratBody = (k = 1) => Object.freeze({ front: 0.62 * k, back: 0.55 * k, r: 0.27 * k });
+
 export async function dressRat(e, m, gear) {
   const space = m.root, k = (m.size?.y ?? BASE_H) / BASE_H;
   recolor(m.scene, { Grey: ENEMY_PAL.ratFur, Pink: ENEMY_PAL.ratSkin });

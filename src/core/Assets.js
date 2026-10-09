@@ -116,7 +116,14 @@ export class Assets {
   constructor(ctx) {
     this.ctx = ctx;
     this.manager = new THREE.LoadingManager();
-    this.manager.onProgress = (url, n, total) => ctx?.bus?.emit(E.PROGRESS, { n, total });
+    // throttled: one per 100 ms, plus the last one of a batch (one per URL flooded the bus at boot)
+    let lastT = -1e9;
+    this.manager.onProgress = (url, n, total) => {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (n < total && now - lastT < 100) return;
+      lastT = now;
+      ctx?.bus?.emit(E.PROGRESS, { n, total });
+    };
     this.manager.onError = (url) => console.error(`[assets] failed to load ${url}`);
     /** @type {Map<string, Promise<any>>} */
     this.cache = new Map();

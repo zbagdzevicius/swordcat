@@ -5,7 +5,9 @@ import { E } from './events.js';
 import { KITTEN_IDS, MODEL_FIT, QUALITY } from './config.js';
 import { measure, resolveFit } from './Assets.js';
 
-const RING = 200;
+const RING = 200;            // §19.8
+/** High-frequency names kept out of the name ring (still in lastEvent). */
+const RING_SKIP = new Set([E.PROGRESS]);
 
 /** @param {import('./Game.js').Game} game */
 export function installDebug(game) {
@@ -17,9 +19,10 @@ export function installDebug(game) {
   /** last payload summary per event name (handy in smoke: lastEvent('cutscene:start').id) */
   const last = new Map();
   ctx.bus.tap((type, payload) => {
+    last.set(type, summarize(payload));
+    if (RING_SKIP.has(type)) return;
     events.push(type);
     if (events.length > RING) events.splice(0, events.length - RING);
-    last.set(type, summarize(payload));
   });
 
   const api = {

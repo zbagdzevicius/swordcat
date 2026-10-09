@@ -20,16 +20,24 @@ export const GRASS_COLORS = {
 
 const FLOWER_COLORS = ['#B5809E', '#E2E4DA', '#D6BA52', '#E2E4DA', '#A88BB5'];
 
-/** Blade: 7 verts / 5 tris, base at y 0, height 1, width 1, slight forward curve (scaled per instance in the shader). */
-export function makeBladeGeometry() {
+/** Blade rows [y, half width] per level of detail: 5 tris (7 verts) or 3 tris (5 verts). */
+const BLADE_ROWS = { 5: [[0, 0.5], [0.3, 0.42], [0.62, 0.28], [1, 0]], 3: [[0, 0.5], [0.45, 0.36], [1, 0]] };
+
+/**
+ * Blade: 7 verts / 5 tris (`tris` 5) or 5 verts / 3 tris (`tris` 3, the §18 budget blade), base at y 0, height 1,
+ * width 1, slight forward curve (scaled per instance in the shader).
+ */
+export function makeBladeGeometry(tris = 5) {
   const P = [], idx = [];
-  const rows = [[0, 0.5], [0.3, 0.42], [0.62, 0.28], [1, 0]];
+  const rows = BLADE_ROWS[tris] ?? BLADE_ROWS[5];
   for (let r = 0; r < rows.length; r++) {
     const [y, w] = rows[r], z = y * y * 0.18;
     if (w > 0) P.push(-w, y, z, w, y, z); else P.push(0, y, z);
   }
-  // rows 0-2 have 2 verts (0..5), tip = 6
-  idx.push(0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5, 4, 5, 6);
+  // each banded row adds a quad; the tip closes the last pair
+  const pairs = rows.length - 1;
+  for (let r = 0; r < pairs - 1; r++) { const a = r * 2; idx.push(a, a + 1, a + 2, a + 2, a + 1, a + 3); }
+  const t = (pairs - 1) * 2; idx.push(t, t + 1, t + 2);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(P.length).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
@@ -180,11 +188,11 @@ export function makeGrassMaterial(uniforms, { flower = false } = {}) {
 /**
  * One wrapping layer.
  * @param {{count:number, tile:number, bladeH:number, bladeW:number, fade:[number,number,number,number], seed:number,
- *          flower?:boolean, colors:{root:string,tip:string,dry:string}, ground: THREE.Texture, groundUV: THREE.Vector2, lean?:number}} o
+ *          flower?:boolean, tris?:3|5, colors:{root:string,tip:string,dry:string}, ground: THREE.Texture, groundUV: THREE.Vector2, lean?:number}} o
  */
 export function makeGrassLayer(o) {
   const n = Math.max(1, o.count | 0), rnd = mulberry32(o.seed >>> 0);
-  const base = o.flower ? makeFlowerGeometry() : makeBladeGeometry();
+  const base = o.flower ? makeFlowerGeometry() : makeBladeGeometry(o.tris ?? 5);
   const geo = new THREE.InstancedBufferGeometry();
   geo.index = base.index;
   for (const [k, a] of Object.entries(base.attributes)) geo.setAttribute(k, a);
@@ -236,9 +244,11 @@ export class Grass {
     this.group = new THREE.Group(); this.group.name = 'grass';
     this.layers = [];
     const nearTile = low ? 22 : 31;
-    if (nearCount > 0) this.layers.push(makeGrassLayer({ count: nearCount, tile: nearTile, bladeH: H, bladeW: 0.05, fade: [-1, 0, nearTile * 0.36, nearTile * 0.49], seed, colors, ground: o.ground, groundUV }));
+    // §18 budget: the 5-tri blade only on High; Med / Low near blades and every far clump use the 3-tri blade
+    const nearTris = q.id === 'high' ? 5 : 3;
+    if (nearCount > 0) this.layers.push(makeGrassLayer({ count: nearCount, tile: nearTile, bladeH: H, bladeW: 0.05, fade: [-1, 0, nearTile * 0.36, nearTile * 0.49], seed, colors, ground: o.ground, groundUV, tris: nearTris }));
     const farCount = low ? 0 : Math.round(nearCount * 0.33 * (o.far ?? 1));
-    if (farCount > 0) this.layers.push(makeGrassLayer({ count: farCount, tile: 96, bladeH: H * 1.35, bladeW: 0.2, fade: [nearTile * 0.3, nearTile * 0.44, 38, 47], seed: seed + 1, colors, ground: o.ground, groundUV, lean: 0.5 }));
+    if (farCount > 0) this.layers.push(makeGrassLayer({ count: farCount, tile: 96, bladeH: H * 1.35, bladeW: 0.2, fade: [nearTile * 0.3, nearTile * 0.44, 38, 47], seed: seed + 1, colors, ground: o.ground, groundUV, lean: 0.5, tris: 3 }));
     const fl = Math.round((low ? 120 : q.id === 'high' ? 700 : 480) * (o.flowers ?? 1));
     if (fl > 0) this.layers.push(makeGrassLayer({ count: fl, tile: 40, bladeH: H * 1.15, bladeW: 0.085, fade: [-1, 0, 14, 19.5], seed: seed + 2, colors, ground: o.ground, groundUV, flower: true, lean: 0.2 }));
     for (const l of this.layers) this.group.add(l.mesh);

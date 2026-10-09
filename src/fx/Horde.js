@@ -1,7 +1,7 @@
 // src/fx/Horde.js  (owner: fx) — GAME_DESIGN §18.3 "Horde silhouettes": a low-poly bipedal hyena silhouette (the
 // beast-head Barbarian read: hunched torso, snout, round ears, mane, tail; some carry spears or a cage on a shoulder
 // pole) drawn as ONE instanced draw call (40 on Med/High, 24 on Low) with a vertex-shader walk cycle, unlit dark
-// #2A2A2E, living inside the fog beyond 18 m (instances closer to the camera dissolve with a screen-door fade).
+// #2A2A2E, living inside the fog beyond 18 m (instances closer to the camera fade out with real alpha, sinking into the fog colour).
 //
 // Used by CS-02 (shot 4: the horde marches along the lane carrying cages; shot 8 REVERSE_HORDE; shot 10: it parts
 // around her like a river around a stone), CS-08 / `gate` (the horde in the fog bank at z −58 … −75) and CS-09 (it
@@ -146,7 +146,6 @@ attribute vec4 iB;      // cycle phase (rad), scale, alpha, variant (0 plain, 1 
 attribute vec4 iC;      // gait (0 shuffle … 1 march, >1 run), laugh, sway seed, 0
 uniform float uTime;
 varying float vAlpha;
-varying vec2 vDither;
 #include <fog_pars_vertex>
 mat3 rotX( float a ) { float c = cos( a ), s = sin( a ); return mat3( 1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c ); }
 mat3 rotZ( float a ) { float c = cos( a ), s = sin( a ); return mat3( c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0 ); }
@@ -190,7 +189,6 @@ void main() {
   vec4 mvPosition = viewMatrix * vec4( p, 1.0 );
   gl_Position = projectionMatrix * mvPosition;
   vAlpha = iB.z;
-  vDither = vec2( seed * 13.1, seed * 7.7 );
   #include <fog_vertex>
 }`;
 
@@ -199,15 +197,10 @@ uniform vec3 uColor;
 uniform float uFogMul;
 #include <fog_pars_fragment>
 varying float vAlpha;
-varying vec2 vDither;
-float fxBayer( vec2 p ) {
-  vec2 q = mod( floor( p ), 4.0 );
-  int i = int( q.x + q.y * 4.0 );
-  float m[16] = float[16]( 0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0 );
-  return ( m[i] + 0.5 ) / 16.0;
-}
 void main() {
-  if ( vAlpha < 0.999 && vAlpha <= fxBayer( gl_FragCoord.xy + vDither ) ) discard;
+  // Real alpha (not a screen-door): partially faded members (path ends, near-camera, flee, master fade) blend
+  // smoothly and also sink toward the fog colour, so they read as shapes dissolving into the mist.
+  if ( vAlpha < 0.004 ) discard;
   vec3 col = uColor;
 #ifdef USE_FOG
   #ifdef FOG_EXP2
@@ -216,9 +209,10 @@ void main() {
   #else
     float f = smoothstep( fogNear, fogFar / max( uFogMul, 0.05 ), vFogDepth );
   #endif
-  col = mix( col, fogColor, clamp( f, 0.0, 1.0 ) );
+  f = 1.0 - ( 1.0 - clamp( f, 0.0, 1.0 ) ) * ( 0.45 + 0.55 * vAlpha );
+  col = mix( col, fogColor, f );
 #endif
-  gl_FragColor = vec4( col, 1.0 );
+  gl_FragColor = vec4( col, vAlpha );
   ${OUTPUT}
 }`;
 
@@ -259,12 +253,15 @@ export class Horde {
     this.geometry = g;
     this.material = new THREE.ShaderMaterial({
       name: 'fx.horde', vertexShader: VERT, fragmentShader: FRAG, fog: true,
+      // blended so near-camera / edge members fade smoothly; depthWrite keeps each silhouette self-occluding
+      transparent: true, depthWrite: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color(HORDE.color) }, uTime: { value: 0 }, uFogMul: { value: HORDE.fogMul } },
     });
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.name = 'fx.horde';
     this.mesh.frustumCulled = false; this.mesh.matrixAutoUpdate = false; this.mesh.visible = false;
     this.mesh.castShadow = false; this.mesh.receiveShadow = false;
+    this.mesh.renderOrder = 0.5;   // first in the transparent queue: under fur (1), mist cards (4) and particles
     this.capacity = n;
     this.members = hordeLayout(n).map((l) => new Member(l));
     scene.add(this.mesh);

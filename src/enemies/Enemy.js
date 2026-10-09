@@ -16,9 +16,17 @@ import { TUNING, rangeOf } from './tuning.js';
 import { clipKey, clipsFor, isSpec, specDuration } from './clipMaps.js';
 import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright } from './rig.js';
 
-let teleId = 1;                         // telegraph ids (fx numbers its own from 1 000 000)
+let teleId = 1;
+/** States an open-zone enemy leaves (→ return) when she is walled off inside a locked arena it isn't part of. */
+const DISENGAGE = new Set(['alert', 'chase', 'windup', 'strike', 'recover', 'hop']);                         // telegraph ids (fx numbers its own from 1 000 000)
 const _d = new THREE.Vector3();
 const _v = new THREE.Vector3();
+const _spA = { x0: 0, z0: 0, x1: 0, z1: 0, r: 0 };
+const _spB = { x0: 0, z0: 0, x1: 0, z1: 0, r: 0 };
+/** A plain circle actor as a zero-length spine. */
+/** Feet probes look for the surface up to this far above the feet (≈ physics step-up). */
+const STEP_PROBE = 0.35;
+const pointSpine = (a, out) => { out.x0 = out.x1 = a.pos.x; out.z0 = out.z1 = a.pos.z; out.r = a.radius ?? 0.35; return out; };
 const WHITE = new THREE.Color(1, 1, 1);
 
 /** KayKit head meshes a beast head replaces (characters' attachBeastHead hides them after measuring). */
@@ -81,6 +89,29 @@ export function windupFor(def, mul = 1) {
   const lead = TELEGRAPH.minLead[def?.telegraph] ?? TUNING.windupMin;
   return Math.max(lead, TUNING.windupMin, (def?.windup ?? MELEE_FALLBACK.windup) * mul);
 }
+
+/**
+ * Closest points between XZ segments a0→a1 and b0→b1; returns the squared distance and writes the closest pair into
+ * `out` ({ax, az, bx, bz}). Pure; exported for tests. Zero-length segments are points.
+ */
+export function segSegXZ(a0x, a0z, a1x, a1z, b0x, b0z, b1x, b1z, out) {
+  const ux = a1x - a0x, uz = a1z - a0z, vx = b1x - b0x, vz = b1z - b0z, wx = a0x - b0x, wz = a0z - b0z;
+  const a = ux * ux + uz * uz, b = ux * vx + uz * vz, c = vx * vx + vz * vz, d = ux * wx + uz * wz, e = vx * wx + vz * wz;
+  let s = 0, t = 0;
+  if (a <= 1e-9 && c <= 1e-9) { s = 0; t = 0; }
+  else if (a <= 1e-9) { s = 0; t = clamp(e / c, 0, 1); }
+  else if (c <= 1e-9) { t = 0; s = clamp(-d / a, 0, 1); }
+  else {
+    const den = a * c - b * b;
+    s = den > 1e-9 ? clamp((b * e - c * d) / den, 0, 1) : 0;
+    t = (b * s + e) / c;
+    if (t < 0) { t = 0; s = clamp(-d / a, 0, 1); } else if (t > 1) { t = 1; s = clamp((b - d) / a, 0, 1); }
+  }
+  out.ax = a0x + ux * s; out.az = a0z + uz * s; out.bx = b0x + vx * t; out.bz = b0z + vz * t;
+  const dx = out.ax - out.bx, dz = out.az - out.bz;
+  return dx * dx + dz * dz;
+}
+const _seg = { ax: 0, az: 0, bx: 0, bz: 0 };
 
 /** Base states (tech.md §10 + §10.1). `def.states` entries are merged over these per type. */
 export const BASE_STATES = {
@@ -328,6 +359,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   /** Alert (with the "!" hop) unless already fighting. */
   alert() {
     if (!this.alive || this.scripted || !this.ai || this.dormant) return;
+    if (this.targetWalledOff()) return;
     if (this.stateName === 'idle' || this.stateName === 'patrol' || this.stateName === 'return') this.setState('alert');
   }
 
@@ -349,8 +381,15 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   /** The actor this enemy fights (the player while she's playable). */
   targetActor() {
     const p = this.ctx.player;
-    return p && p.alive && !p.scripted && p.hurtable !== false ? p : null;
+    if (!p || !p.alive || p.scripted || p.hurtable === false) return null;
+    // Mochi's Shield Wall taunt (§9; requests/companions.md): the taunter while it lasts and he is awake
+    const tb = this.tauntedBy;
+    if (tb && this.tauntT > 0 && tb.alive !== false && !((tb.napT ?? 0) > 0) && tb.pos) return tb;
+    return p;
   }
+
+  /** XZ distance to targetActor() (the player, or a taunting companion). */
+  distToTarget() { const t = this.targetActor(); return t ? Math.hypot(t.pos.x - this.pos.x, t.pos.z - this.pos.z) : this.distToPlayer(); }
 
   distToPlayer() { const p = this.ctx.player?.pos; return p ? Math.hypot(p.x - this.pos.x, p.z - this.pos.z) : Infinity; }
 
@@ -360,6 +399,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (!p) return false;
     const dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, d = Math.hypot(dx, dz), sight = this.def.sight ?? 10;
     if (d > sight) return false;
+    if (this.targetWalledOff(p)) return false;
     if (d < sight * TUNING.heardFrac) return true;
     const fov = this.def.fov ?? 2.09;
     if (fov < Math.PI * 2 - 0.05 && Math.abs(wrapAngle(Math.atan2(dx, dz) - this.facing)) > fov * 0.5) return false;
@@ -407,24 +447,221 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (d > 1e-4) { const s = Math.min(speed, d * 4); vx = (dx / d) * s; vz = (dz / d) * s; }
     this.separation(_v);
     vx += _v.x * speed * 0.6; vz += _v.z * speed * 0.6;
+    if (vx * vx + vz * vz > 1e-6) { _v.set(vx, 0, vz); this.dryStep(_v); vx = _v.x; vz = _v.z; }
     this.vel.x = damp(this.vel.x, vx, TUNING.steerDamp, dt); this.vel.z = damp(this.vel.z, vz, TUNING.steerDamp, dt);
     return d;
   }
 
-  /** Unit-ish push away from overlapping pack-mates (written into `out`). */
+  /** Unit-ish push away from overlapping pack-mates (written into `out`); long bodies (def.body) space by their spines. */
   separation(out) {
     out.set(0, 0, 0);
     const list = this.ctx.enemies?.list;
     if (!list) return out;
+    const sa = this.spine(_spA);
     for (let i = 0; i < list.length; i++) {
       const o = list[i];
       if (o === this || !o.alive || o.dormant || o.flying !== this.flying) continue;
-      const dx = this.pos.x - o.pos.x, dz = this.pos.z - o.pos.z, min = (this.radius + o.radius) * 1.6, d2 = dx * dx + dz * dz;
-      if (d2 >= min * min || d2 < 1e-8) continue;
-      const d = Math.sqrt(d2), w = (min - d) / min;
+      const sb = typeof o.spine === 'function' ? o.spine(_spB) : pointSpine(o, _spB);
+      const d2 = segSegXZ(sa.x0, sa.z0, sa.x1, sa.z1, sb.x0, sb.z0, sb.x1, sb.z1, _seg);
+      const min = (sa.r + sb.r) * 1.6;
+      if (d2 >= min * min) continue;
+      let dx = _seg.ax - _seg.bx, dz = _seg.az - _seg.bz, d = Math.sqrt(d2);
+      if (d < 1e-4) { dx = this.pos.x - o.pos.x; dz = this.pos.z - o.pos.z; d = Math.hypot(dx, dz); if (d < 1e-4) continue; }
+      const w = (min - Math.sqrt(d2)) / min;
       out.x += (dx / d) * w; out.z += (dz / d) * w;
     }
     return out;
+  }
+
+  /**
+   * The XZ collision spine: def.body = {front, back, r} (m along the facing; a quadruped rat), else the plain circle
+   * (a zero-length segment of `radius`). Written into `out` ({x0, z0, x1, z1, r}; x1/z1 = the front).
+   */
+  spine(out = {}) {
+    const b = this.def.body;
+    if (!b) return pointSpine(this, out);
+    const sx = Math.sin(this.facing), sz = Math.cos(this.facing);
+    out.x0 = this.pos.x - sx * b.back; out.z0 = this.pos.z - sz * b.back;
+    out.x1 = this.pos.x + sx * b.front; out.z1 = this.pos.z + sz * b.front;
+    out.r = b.r ?? this.radius;
+    return out;
+  }
+
+  /** Centre distance at which our capsule front (the snout) keeps TUNING.standoff off `a`'s collider (0: no body). */
+  frontReach(a) {
+    const b = this.def.body;
+    return b ? b.front + (b.r ?? this.radius) + (a?.radius ?? 0.35) + TUNING.standoff : 0;
+  }
+
+  /**
+   * Long bodies (def.body) vs her side (player, companions, Pudding): physics separates circles only, so a 2.7 m rat
+   * would walk its snout through her. Pushes THIS enemy out of their circles from the spine's closest point.
+   */
+  resolveBody() {
+    const b = this.def.body;
+    if (!b || !this.alive || this.dormant || this.flying || this.attachedTo) return;
+    const list = this.ctx.actors?.list;
+    if (!list) return;
+    const s = this.spine(_spA);
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (!a || a === this || a.faction === 'enemy' || a.faction === 'neutral' || a.alive === false || !a.pos || !(a.radius > 0)) continue;
+      if (a.ghost || a.noClip || a.attachedTo || a.collideActors === false) continue;
+      if (a.pos.y >= this.pos.y + this.height || this.pos.y >= a.pos.y + (a.height ?? 1)) continue;
+      const d2 = segSegXZ(s.x0, s.z0, s.x1, s.z1, a.pos.x, a.pos.z, a.pos.x, a.pos.z, _seg), min = s.r + a.radius;
+      if (d2 >= min * min) continue;
+      let dx = _seg.ax - a.pos.x, dz = _seg.az - a.pos.z, d = Math.sqrt(d2);
+      if (d < 1e-4) { dx = Math.cos(this.facing); dz = -Math.sin(this.facing); d = 1; }   // on the spine: step sideways
+      const push = min - Math.sqrt(d2), nx = dx / d, nz = dz / d;
+      if (this.deepAt(this.pos.x + nx * (push + this.radius), this.pos.z + nz * (push + this.radius), this.pos.y)) continue;
+      this.pos.x += nx * push; this.pos.z += nz * push;
+      s.x0 += nx * push; s.z0 += nz * push; s.x1 += nx * push; s.z1 += nz * push;
+      const vn = this.vel.x * nx + this.vel.z * nz;
+      if (vn < 0) { this.vel.x -= nx * vn; this.vel.z -= nz * vn; }
+    }
+  }
+
+  // ------------------------------------------------------------------ water + arenas
+  /**
+   * Deep water at (x, z)? With `fromY` (feet height): judged on the surface a walker at that height would stand on
+   * there (the stream beside a bridge deck is deep for a rat on the bank, the deck is dry for one on it); without,
+   * from the highest walkable surface there (bridge decks are dry).
+   */
+  deepAt(x, z, fromY) {
+    const ph = this.ctx.physics;
+    if (typeof ph?.isDeepWater !== 'function') return false;
+    if (typeof ph.waterLevelAt === 'function' && ph.level && ph.waterLevelAt(x, z) == null) return false;   // cheap: no water here
+    if (Number.isFinite(fromY) && typeof ph.groundAt === 'function') return !!ph.isDeepWater(x, z, ph.groundAt(x, z, fromY + STEP_PROBE));
+    return !!ph.isDeepWater(x, z);
+  }
+
+  /**
+   * Walkers never step into deep water: if the probe ahead of the planar velocity `v` is deep, turn `v` (same speed)
+   * by TUNING.water.turns until the probe is dry (a back-off on the bank becomes a strafe), else stop. Mutates `v`.
+   * @param {THREE.Vector3} v @returns {boolean} true when `v` was changed
+   */
+  dryStep(v) {
+    if (this.flying || this.def.noPhysics || this.def.fly) return false;
+    const sp = Math.hypot(v.x, v.z);
+    if (sp < 1e-4) return false;
+    const W = TUNING.water, look = this.radius + W.probe + sp * W.lookAhead, near = this.radius + 0.1;
+    const ux = v.x / sp, uz = v.z / sp;
+    // the whole stretch ahead must be dry (a far probe alone can see a bridge deck across a strip of stream)
+    const y = this.pos.y, mid = (near + look) * 0.5;
+    const dry = (dx, dz) => !this.deepAt(this.pos.x + dx * near, this.pos.z + dz * near, y)
+      && !this.deepAt(this.pos.x + dx * mid, this.pos.z + dz * mid, y)
+      && !this.deepAt(this.pos.x + dx * look, this.pos.z + dz * look, y);
+    if (dry(ux, uz)) return false;
+    for (const t of W.turns) {
+      const c = Math.cos(t), s = Math.sin(t), rx = ux * c + uz * s, rz = -ux * s + uz * c;
+      if (dry(rx, rz)) { v.x = rx * sp; v.z = rz * sp; return true; }
+    }
+    v.x = 0; v.z = 0;
+    return true;
+  }
+
+  /** No deep water within `r` of us (4 compass probes). */
+  dryAround(r) {
+    const x = this.pos.x, z = this.pos.z, y = this.pos.y;
+    return !this.deepAt(x + r, z, y) && !this.deepAt(x - r, z, y) && !this.deepAt(x, z + r, y) && !this.deepAt(x, z - r, y);
+  }
+
+  /** The Arena this enemy was spawned for (arena waves pass `arena: id`), or null. */
+  homeArena() {
+    const id = this.spawnOpts?.arena;
+    if (!id) return null;
+    const lv = this.ctx.levels;
+    return lv?.current?.arena?.(id) ?? lv?.arena?.(id) ?? null;
+  }
+
+  /** A locked arena (not ours) whose fog ring (grown by `pad`) holds `pos`, or null. */
+  foreignArenaAt(pos, pad = TUNING.foreignArena.pad) {
+    const list = this.ctx.levels?.current?.arenas;
+    if (!pos || !Array.isArray(list)) return null;
+    const mine = this.spawnOpts?.arena;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (a && a.locked && !a.cleared && a.id !== mine && typeof a.contains === 'function' && a.contains(pos, -pad)) return a;
+    }
+    return null;
+  }
+
+  /**
+   * She is fighting inside a locked arena we aren't part of (and we aren't trapped inside it with her): that fight
+   * is the arena's alone, so we don't alert on her and a running chase drops (Crow Fields crows vs the Picnic Glade).
+   */
+  targetWalledOff(t = this.targetActor()) {
+    if (!t?.pos) return false;
+    const a = this.foreignArenaAt(t.pos);
+    return !!a && !a.contains(this.pos, 0);
+  }
+
+  /** Flyers stay outside a foreign locked arena's fog wall (walkers are stopped by its physics ring). */
+  keepOutOfForeignArenas() {
+    if (!this.flying || this.perched || !this.alive || this.dormant) return;
+    const pad = TUNING.foreignArena.flyerPad;
+    const a = this.foreignArenaAt(this.pos, pad);
+    if (!a || !a.center) return;
+    const c = a.center, dx = this.pos.x - c.x, dz = this.pos.z - c.z;
+    let nx, nz;
+    if (a.size) {
+      const hw = a.size[0] / 2 + pad, hd = a.size[1] / 2 + pad;
+      if (hw - Math.abs(dx) < hd - Math.abs(dz)) { nx = Math.sign(dx) || 1; nz = 0; this.pos.x = c.x + nx * hw; }
+      else { nx = 0; nz = Math.sign(dz) || 1; this.pos.z = c.z + nz * hd; }
+    } else {
+      const d = Math.hypot(dx, dz), r = (a.r ?? 12) + pad;
+      nx = d > 1e-4 ? dx / d : 0; nz = d > 1e-4 ? dz / d : 1;
+      this.pos.x = c.x + nx * r; this.pos.z = c.z + nz * r;
+    }
+    const vn = this.vel.x * nx + this.vel.z * nz;
+    if (vn < 0) { this.vel.x -= nx * vn; this.vel.z -= nz * vn; }
+  }
+
+  /**
+   * Safety net: a walker that ends up in deep water (knockback, a slip off the bank) or an arena member well outside
+   * its locked arena goes back to its last dry footing / the nearest valid arena ring point, or is despawned (the
+   * arena then counts it gone, so the wave still clears: no softlock behind the fog wall).
+   */
+  checkStranded(dt) {
+    if (!this.alive || this.dormant || this.flying || this.def.noPhysics || this.def.fly || this.attachedTo || this.scripted) return;
+    const W = TUNING.water, ph = this.ctx.physics;
+    const deep = typeof ph?.isDeepWater === 'function' && !!ph.isDeepWater(this.pos.x, this.pos.z, this.pos.y);
+    const arena = this.homeArena();
+    const out = !!arena && arena.locked && !arena.cleared && typeof arena.distanceTo === 'function' && arena.distanceTo(this.pos) > W.arenaSlack;
+    if (!deep && !out) {
+      this._deepT = 0;
+      if (this.onGround && (this._dryT = (this._dryT ?? 0) - dt) <= 0) {
+        this._dryT = W.dryEvery;
+        // footing well clear of the water (not the wet edge of the bank), inside our locked arena
+        if ((!arena?.locked || arena.contains?.(this.pos, 0)) && this.dryAround(this.radius + 0.3)) (this._lastDry ??= new THREE.Vector3()).copy(this.pos);
+      }
+      return;
+    }
+    if (!out && (this._deepT = (this._deepT ?? 0) + dt) < W.rescueAfter) return;
+    this._deepT = 0;
+    this.rescue(arena);
+  }
+
+  /** Put a stranded walker back on dry, valid ground (see checkStranded); despawn it if there is none. */
+  rescue(arena = this.homeArena()) {
+    const locked = !!arena?.locked;
+    const ok = (p) => p && !this.deepAt(p.x, p.z, p.y) && (!locked || arena.contains?.(p, 0.5));
+    let to = ok(this._lastDry) ? this._lastDry.clone() : null, top = !to;
+    if (!to && arena && typeof arena.ringPoints === 'function') {
+      const pts = arena.ringPoints().filter((p) => (typeof arena.validPoint !== 'function' || arena.validPoint(p)) && !this.deepAt(p.x, p.z));
+      pts.sort((a, b) => Math.hypot(a.x - this.pos.x, a.z - this.pos.z) - Math.hypot(b.x - this.pos.x, b.z - this.pos.z));
+      if (pts[0]) to = pts[0].clone();
+    }
+    if (!to && !locked && this.home && !this.deepAt(this.home.x, this.home.z)) to = this.home.clone();
+    if (!to) { this.ctx.enemies?.despawn?.(this); return; }
+    if (top) {                                         // ring point / home: the dry walkable top there (a bridge deck)
+      const ph = this.ctx.physics, gy = typeof ph?.topAt === 'function' ? ph.topAt(to.x, to.z) : ph?.heightAt?.(to.x, to.z);
+      if (Number.isFinite(gy)) to.y = gy;
+    }
+    this.ctx.bus.emit(E.BURST, { kind: 'spawn', position: to.clone() });
+    this.pos.copy(to); this.vel.set(0, 0, 0);
+    this.snap();
+    if (this.stateName === 'hop') this.setState(this.targetActor() ? 'chase' : 'return');
   }
 
   brake(dt, rate = TUNING.steerDamp) { this.vel.x = damp(this.vel.x, 0, rate, dt); this.vel.z = damp(this.vel.z, 0, rate, dt); }
@@ -486,7 +723,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     const p = this.targetActor();
     if (!p) { this.releaseToken(); return this.setState('return'); }
     if (this.leashBroken()) return this.setState('return');
-    const d = this.distToPlayer();
+    const d = this.distToTarget();
     const atk = this.pickAttack(d);
     const range = atk?.range ?? 1.5, orbitR = range * TUNING.orbitMul;
     let has = this.hasToken();
@@ -495,7 +732,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       this.tokenT += dt;
       if (d <= range && (atk.minRange == null || d >= atk.minRange) && this.cooldownT <= 0) return this.beginAttack(atk);
       if (this.tokenT > 4) { this.releaseToken(); this.tokenT = 0; this.cooldownT = 1; }      // don't hog a token we can't use
-      const keep = Math.max(0.2, range * 0.8);
+      const keep = Math.max(0.2, range * 0.8, this.frontReach(p));
       _d.set(this.pos.x - p.pos.x, 0, this.pos.z - p.pos.z);
       const dl = _d.length() || 1;
       this.steerTo(p.pos.x + (_d.x / dl) * keep, p.pos.z + (_d.z / dl) * keep, this.def.run ?? 3.5, dt);
@@ -613,6 +850,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.stateT += dt;
     this.invulnT = Math.max(0, this.invulnT - dt);
     this.cooldownT = Math.max(0, this.cooldownT - dt);
+    if (this.tauntT > 0 && (this.tauntT -= dt) <= 0) { this.tauntT = 0; this.tauntedBy = null; }   // Shield Wall refreshes it every step
     for (const k in this.attackCd) if (this.attackCd[k] > 0) this.attackCd[k] -= dt;
     if (this.scripted || this.attachedTo) {
       this.scriptedStep(dt);
@@ -621,10 +859,16 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     }
     if (!this.ai) { this.brake(dt); this.move(dt); return; }
     this.thinkT -= dt;
-    if (this.thinkT <= 0) { this.thinkT += TUNING.thinkEvery; this.sees = this.canSee(); }
+    if (this.thinkT <= 0) {
+      this.thinkT += TUNING.thinkEvery; this.sees = this.canSee();
+      if (this.alerted && DISENGAGE.has(this.stateName) && !this.def.boss && this.targetWalledOff()) { this.interrupt(); this.setState('return'); }
+    }
     if (this.staggerT > 0 && this.alive && this.stateName !== 'stagger' && this.stateName !== 'die' && this.stateName !== 'flee' && !this.state.noStagger) this.setState('stagger');
     this.state.update?.(this, dt);
     this.move(dt);
+    this.resolveBody();
+    this.keepOutOfForeignArenas();
+    this.checkStranded(dt);
   }
 
   /** Integrate through physics (perched shooters stay put: knockback can't push them off their perch). */

@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const MEME = { pos: [0.06, 0.70, 1.15], fov: 32 };
+const MEME = { pos: [0.06, 0.68, 1.9], fov: 38 };
 
 /** Camera summary computed in the page (small JSON). */
 const camState = (t) => t.G(() => {
@@ -90,6 +90,7 @@ export default [
       await t.frames(20);
       const setup = await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, c = ctx.cam, cam = ctx.camera;
+        c.avoid = false;                    // the raw spring arm first (boom avoidance below)
         const d = new THREE.Vector3().subVectors(cam.position, c.pivot); d.y = 0; d.normalize();
         const at = (h) => ({ x: c.pivot.x + d.x * h, z: c.pivot.z + d.z * h });
         const w = at(3.0), gy = ctx.physics.heightAt(w.x, w.z);
@@ -107,6 +108,14 @@ export default [
       t.assert(!inside, 'camera ended inside the wall');
       await t.shot('camera/collision-wall');
       const wallDist = s.dist;
+      // boom avoidance on: a 2 m arm is too short, the orbit swings round the 1.6 m pillar to a clear side
+      await t.G(() => { window.__GAME__.ctx.input.lookIdleTime = 5; window.__GAME__.ctx.cam.avoid = true; });
+      await t.frames(60);
+      s = await camState(t);
+      t.assert(s.dist > 2.6, `boom avoidance: arm ${s.dist.toFixed(2)} m beside the pillar, expected > 2.6`);
+      const swungDist = s.dist;
+      await t.shot('camera/collision-wall-avoid');
+      await t.G(() => { window.__GAME__.ctx.cam.avoid = false; });
       await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, c = ctx.cam, cam = ctx.camera, k = window.__camSmoke;
         ctx.physics.removeCollider(k.wall); k.mesh.removeFromParent(); k.mesh.geometry.dispose(); k.mesh.material.dispose();
@@ -125,8 +134,9 @@ export default [
         const ctx = window.__GAME__.ctx, k = window.__camSmoke;
         ctx.physics.removeCollider(k.post); k.mesh.removeFromParent(); k.mesh.geometry.dispose(); k.mesh.material.dispose();
         delete window.__camSmoke;
+        window.__GAME__.ctx.cam.avoid = true;
       });
-      t.log(`wall: arm ${wallDist.toFixed(2)} m; thin post: arm ${s.dist.toFixed(2)} m`);
+      t.log(`wall: arm ${wallDist.toFixed(2)} m (avoidance: ${swungDist.toFixed(2)} m); thin post: arm ${s.dist.toFixed(2)} m`);
     },
   },
   {
@@ -145,7 +155,7 @@ export default [
       await t.frames(2);
       const a = await camState(t);
       t.assert(a.mode === 'meme', `cam mode ${a.mode}`);
-      t.assert(Math.abs(a.fov - MEME.fov) < 0.3, `meme fov ${a.fov.toFixed(1)}, expected 32`);
+      t.assert(Math.abs(a.fov - MEME.fov) < 0.3, `meme fov ${a.fov.toFixed(1)}, expected ${MEME.fov}`);
       const err = dist3(a.local, MEME.pos);
       t.assert(err < 0.02, `MEME_LOOP placement off by ${err.toFixed(3)} m (local ${fmt(a.local)})`);
       await t.shot('camera/meme');
@@ -221,6 +231,15 @@ export default [
       await until(t, 'Math.abs(c.distance - 4.5) < 0.01', 5000);
       s = await camState(t);
       t.assert(Math.abs(s.distance - 4.5) < 0.05, `lock distance ${s.distance.toFixed(2)}, expected 4.5`);
+      // the locked rat stands clear of her on screen (beside her, not hidden behind her head)
+      await t.frames(40);
+      const fr = await t.G(() => {
+        const g = window.__GAME__, c = g.ctx.cam, cam = g.ctx.camera, T = g.THREE, tg = c.lockTarget, p = g.ctx.player, W = window.innerWidth;
+        const px = (v) => (v.clone().project(cam).x * 0.5 + 0.5) * W;
+        return { W, tgt: px(new T.Vector3(tg.pos.x, tg.pos.y + (tg.height ?? 1) * 0.55, tg.pos.z)), head: px(new T.Vector3(p.pos.x, p.pos.y + 0.75, p.pos.z)), pitch: c._gamePose.pos.y - c.pivot.y };
+      });
+      const sepPx = Math.abs(fr.tgt - fr.head) * (1280 / fr.W);
+      t.assert(sepPx > 120, `locked target only ${sepPx.toFixed(0)} px from her head (at 1280 wide), expected > 120`);
       await t.shot('camera/lock');
       const first = s.lock;
       await t.page.mouse.move(640, 360);
@@ -241,7 +260,56 @@ export default [
       s = await camState(t);
       t.assert(s.lock === null && s.mode === 'follow', `lock did not break beyond 16 m (lock ${s.lock}, mode ${s.mode})`);
       await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); g.god(false); });
-      t.log(`locked ${first}, switched, handed over, broke at > 16 m (${ids.join(', ')})`);
+      t.log(`locked ${first} (${sepPx.toFixed(0)} px beside her), switched, handed over, broke at > 16 m (${ids.join(', ')})`);
+    },
+  },
+  {
+    name: 'camera:handover', order: 43.5, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      shotDir(t);
+      // the locked rat dies with one rat ahead-right and one behind her: the lock passes to the one in view, and when
+      // only the one behind is left the orbit turns to it at <= 180°/s (review: 124° in one 100 ms sample)
+      const r = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, c = ctx.cam;
+        g.god(true);
+        for (const e of [...(ctx.enemies?.list ?? [])]) ctx.enemies.despawn(e);
+        const p = ctx.player.pos, f = ctx.player.facing, s = Math.sin(f), co = Math.cos(f);
+        const at = (fw, left) => [p.x + s * fw + co * left, p.z + co * fw - s * left];
+        const a = g.spawn('rat_pike', ...at(4, 0)), side = g.spawn('rat_pike', ...at(5, -2.5)), behind = g.spawn('rat_pike', ...at(-3, 0.5));
+        for (const e of [a, side, behind]) e.ai = false;                   // passive (combat smoke idiom)
+        await g.waitFrames(5);
+        c.lock(a);
+        await g.waitFrames(60);
+        const steps = [], ids = [];
+        let maxStep = 0, prev = c.yaw;
+        const sample = async (n) => {
+          for (let i = 0; i < n; i++) {
+            await g.waitFrames(1);
+            const d = Math.abs(Math.atan2(Math.sin(c.yaw - prev), Math.cos(c.yaw - prev)));
+            maxStep = Math.max(maxStep, d); steps.push([d, performance.now()]); prev = c.yaw;
+          }
+        };
+        ctx.enemies.despawn(a); await sample(30); ids.push(c.lockTarget?.id ?? null);
+        ctx.enemies.despawn(side);
+        const t0 = performance.now(); await sample(90); const secs = (performance.now() - t0) / 1000;
+        ids.push(c.lockTarget?.id ?? null);
+        // the turn in any 100 ms (wall clock) window after the second hand-over
+        let win = 0;
+        for (let i = 30; i < steps.length; i++) {
+          let sum = 0;
+          for (let j = i; j < steps.length && steps[j][1] - steps[i][1] <= 100; j++) sum += steps[j][0];
+          win = Math.max(win, sum);
+        }
+        const out = { ids, want: [side.id, behind.id], win, secs };
+        for (const e of [...(ctx.enemies?.list ?? [])]) ctx.enemies.despawn(e);
+        g.god(false);
+        return out;
+      });
+      t.assert(r.ids[0] === r.want[0], `hand-over picked ${r.ids[0]}, expected the rat in view ${r.want[0]}`);
+      t.assert(r.ids[1] === r.want[1], `second hand-over picked ${r.ids[1]}, expected ${r.want[1]}`);
+      // 180°/s ≈ 18° per 100 ms (+ slack: a frame straddling the window edge, frame dt clamped at 0.1 s)
+      t.assert(r.win < 0.6, `orbit turned ${(r.win * 180 / Math.PI).toFixed(0)}° within 100 ms after the hand-over`);
+      t.log(`hand-over: in-view first, then behind; max ${(r.win * 180 / Math.PI).toFixed(0)}° per 100 ms`);
     },
   },
   {
@@ -272,8 +340,8 @@ export default [
     async run(t) {
       shotDir(t);
       await t.setMode('cutscene');
-      const STATIC = { MEME_LOOP: [0.06, 0.70, 1.15], REVERSE_HORDE: [0.35, 0.55, -1.4], SELFIE: [0.25, 0.92, 0.45], ECU_EYES: [0, 0.79, 0.35], TWO_SHOT_LOW: [1.6, 0.75, 1.6], HERO_LOW: [0.8, 0.35, 2.2] };
-      const FOV = { MEME_LOOP: 32, REVERSE_HORDE: 38, SELFIE: 50, ECU_EYES: 25, TWO_SHOT_LOW: 35, HERO_LOW: 40 };
+      const STATIC = { MEME_LOOP: MEME.pos, REVERSE_HORDE: [0.35, 0.55, -1.4], SELFIE: [0.25, 0.92, 0.45], ECU_EYES: [0, 0.79, 0.35], TWO_SHOT_LOW: [1.6, 0.75, 1.6], HERO_LOW: [0.8, 0.35, 2.2] };
+      const FOV = { MEME_LOOP: MEME.fov, REVERSE_HORDE: 38, SELFIE: 50, ECU_EYES: 25, TWO_SHOT_LOW: 35, HERO_LOW: 40 };
       for (const [name, want] of Object.entries(STATIC)) {
         await t.G((n) => window.__GAME__.ctx.cam.preset(n, 'swordcat', { mode: 'cut' }), name);
         await t.frames(4);
@@ -308,7 +376,7 @@ export default [
       t.assert(Math.abs(s.pos[1] - s.ground - 0.12) < 0.03, `WHIP_FALL height above ground ${(s.pos[1] - s.ground).toFixed(3)}, expected 0.12`);
       t.assert(Math.abs(s.fov - 65) < 0.5, `WHIP_FALL fov ${s.fov.toFixed(1)}, expected 65`);
       await t.shot('camera/whipfall');
-      // PULLBACK: MEME_LOOP → (0, 4, 14) over 6 s, FOV 32 → 50
+      // PULLBACK: MEME_LOOP → (0, 4, 14) over 6 s, FOV 38 → 50
       await t.G(() => { window.__camShot = window.__GAME__.ctx.cam.shot({ preset: 'PULLBACK', anchor: 'swordcat' }); });
       await until(t, 'c._cut.t >= 3.0', 20000);
       await t.shot('camera/pullback-mid');
@@ -399,6 +467,80 @@ export default [
     },
   },
   {
+    name: 'camera:fence', order: 46.5, level: 'meadow', spawn: 'practice', timeout: 150000,
+    async run(t) {
+      shotDir(t);
+      // just inside the practice field's north fence, facing into the field: the follow camera sits outside, the rails
+      // run across the lens. Every fence unit right in front of the lens (within ~2 m) must fade.
+      const r = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, c = ctx.cam;
+        g.god(true);
+        for (const e of [...(ctx.enemies?.list ?? [])]) ctx.enemies.despawn(e);
+        const x = 6, z = -61.3;
+        ctx.player.teleport({ pos: new THREE.Vector3(x, ctx.physics.heightAt(x, z), z), facing: Math.PI });
+        c.snapBehind();
+        await g.waitFrames(40);
+        const cam = ctx.camera, fd = c._fader, p = new THREE.Vector3(), cp = cam.position;
+        let near = 0, faded = 0;
+        for (const u of fd.units) {
+          if (!/fence/i.test(u.root?.name ?? '')) continue;
+          const part = u.parts[0];
+          const box = part.box.clone().applyMatrix4(part.world);
+          box.getCenter(p).applyMatrix4(cam.matrixWorldInverse);
+          if (box.distanceToPoint(cp) > 2.4 || p.z > 0) continue;            // within ~2 m in front of the lens (+ margin)
+          near++; if (u.f > 0.5) faded++;
+        }
+        return { near, faded, cam: cp.toArray(), n: fd.count };
+      });
+      await t.shot('camera/fence');
+      t.assert(r.near > 0, `no fence piece near the lens (camera ${fmt(r.cam)}, ${r.n} fade units)`);
+      t.assert(r.faded === r.near, `fence pieces at the lens left opaque: ${r.near - r.faded} of ${r.near}`);
+      await t.G(() => window.__GAME__.god(false));
+      t.log(`fence at the lens: ${r.faded}/${r.near} pieces faded`);
+    },
+  },
+  {
+    name: 'camera:obstacles', order: 46.7, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      shotDir(t);
+      // a low drystone wall, a standing stone and Mochi's cart right behind her: the boom lifts over / swings round
+      // the obstacle instead of collapsing onto her head (review: camera at 0.8-1.1 m, back of the head only)
+      const spots = [
+        { name: 'wall', x: -17.87, z: -40.78, facing: Math.atan2(0.73, 0.68) },
+        { name: 'stone', x: -20, z: 7.84, facing: 0 },
+        { name: 'cart', x: 31.8, z: 74, facing: Math.PI / 2 },
+      ];
+      await t.G(() => { const g = window.__GAME__; g.ctx.state.setFlag('prologue.done', true); g.god(true); });
+      for (const sp of spots) {
+        const r = await t.G(async (sp) => {
+          const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, c = ctx.cam;
+          for (const e of [...(ctx.enemies?.list ?? [])]) ctx.enemies.despawn(e);
+          ctx.player.teleport({ pos: new THREE.Vector3(sp.x, ctx.physics.heightAt(sp.x, sp.z), sp.z), facing: sp.facing });
+          c.recenter();
+          await g.waitFrames(90);
+          const cam = ctx.camera, pp = ctx.player.object3d.position;
+          const v = new THREE.Vector3(pp.x, pp.y + 0.35, pp.z).project(cam);          // her chest on screen
+          return { dist: cam.position.distanceTo(c.pivot), h: cam.position.y - pp.y, chestY: v.y, chestX: v.x, yaw: c.yaw, avoid: c._avoidPitch };
+        }, sp);
+        await t.shot(`camera/obstacle-${sp.name}`);
+        const after = await t.G(async () => {
+          const g = window.__GAME__, ctx = g.ctx, c = ctx.cam;
+          let min = Infinity;
+          for (let i = 0; i < 12; i++) {
+            for (let k = 0; k < 10; k++) { await g.waitFrames(1); min = Math.min(min, ctx.camera.position.distanceTo(c.pivot)); }
+          }
+          return { min };
+        });
+        t.assert(after.min >= 1.8, `${sp.name}: boom dipped to ${after.min.toFixed(2)} m over the next 2 s`);
+        t.log(`${sp.name}: min boom over 2 s ${after.min.toFixed(2)} m`);
+        t.assert(r.dist >= 1.8, `${sp.name}: boom collapsed to ${r.dist.toFixed(2)} m (min 1.8)`);
+        t.assert(Math.abs(r.chestY) < 0.95 && Math.abs(r.chestX) < 0.95, `${sp.name}: her chest is off screen (${r.chestX.toFixed(2)}, ${r.chestY.toFixed(2)})`);
+        t.log(`${sp.name}: boom ${r.dist.toFixed(2)} m, cam ${r.h.toFixed(2)} m over her, lift ${r.avoid.toFixed(2)} rad`);
+      }
+      await t.G(() => window.__GAME__.god(false));
+    },
+  },
+  {
     name: 'camera:shake', order: 47, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       await t.frames(5);
@@ -415,7 +557,23 @@ export default [
       t.assert(r.trauma > 0.5, `trauma ${r.trauma}`);
       t.assert(r.angle > 0.001, `shake did not rotate the camera (${r.angle})`);
       t.assert(r.after === 0, `trauma did not decay (${r.after})`);
-      t.log(`shake: ${(r.angle * 180 / Math.PI).toFixed(2)}° offset at trauma ${r.trauma.toFixed(2)}`);
+      // a light hit (§8.2 0.15) must still visibly jolt the view: peak displacement of the look point 3.6 m ahead
+      const light = await t.G(async () => {
+        const g = window.__GAME__, c = g.ctx.cam, cam = g.ctx.camera, THREE = g.THREE;
+        c.shaker.reset();
+        g.ctx.bus.emit(g.E.SHAKE, { trauma: 0.15 });
+        let peak = 0;
+        for (let i = 0; i < 12; i++) {
+          await g.waitFrames(1);
+          const want = c._outPose.look.clone().sub(c._outPose.pos).normalize();
+          const at = cam.position.clone().addScaledVector(cam.getWorldDirection(new THREE.Vector3()), 3.6);
+          const ideal = c._outPose.pos.clone().addScaledVector(want, 3.6);
+          peak = Math.max(peak, at.distanceTo(ideal));
+        }
+        return peak;
+      });
+      t.assert(light > 0.02, `light hit shake moved the view only ${(light * 100).toFixed(1)} cm at 3.6 m`);
+      t.log(`shake: ${(r.angle * 180 / Math.PI).toFixed(2)}° offset at trauma ${r.trauma.toFixed(2)}; light hit ${(light * 100).toFixed(1)} cm`);
     },
   },
 ];

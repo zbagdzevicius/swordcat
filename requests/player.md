@@ -79,3 +79,11 @@ for one frame would hide it. (The player smoke blocks wait on sim-side condition
   `__GAME__.events` (ring of 200) sometimes lost `player:*` names. tests/smoke/player.mjs now pauses the sim
   (`setTimeScale(0)`) around its own screenshots and records `player:*` / `camera:meme` / `combat:hit` with its own
   `bus.tap`. A harness-level "freeze during t.shot" and a larger ring would help every area.
+
+## To core / combat — review fixes (water, guard break, combo grace) (FYI, no action required)
+- New player-local tuning keys (src/player/tuning.js; config.PLAYER may adopt them, config wins): `splashReturnDist` 3.0,
+  `splashClearRadius` 2.0, `splashCooldown` 1.5, `splashLockMin` 0.5, `splashLockMax` 3.0, `comboGrace` 0.18.
+  Note config.PLAYER.safeMinDist (1.0) is no longer the splash return distance (max(safeMinDist, splashReturnDist) is used).
+- Combat: a Grit-exhaustion guard break now arrives with `player.damageTakenMul === 0` (set inside resolveIncoming,
+  cleared in onHit / next step), so Combat._damage deals 0 and keeps the 0.8 s break stagger. Red / unblockable breaks
+  are unchanged (full damage). If combat prefers an explicit contract, a `softBreak` flag on the result would do.

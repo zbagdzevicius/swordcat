@@ -501,10 +501,14 @@ test('ears clear the head fluff (ref2: big wide-set ears well above the fur); bo
   const k = C.buildKitten(C.swordcatConfig());
   k.setPose('idle', { blend: 0 }); k.update(1 / 60); k.root.updateMatrixWorld(true);
   const furLen = C.swordcatConfig().fur.len * 1.15;   // longest crown fur (headFurMask)
-  // ear tip: the highest kit vertex skinned to earL (kitten space = bind space here)
-  const pos = k.kitMesh.geometry.attributes.position, si = k.kitMesh.geometry.attributes.skinIndex, earIdx = C.BONE_NAMES.indexOf('earL');
+  // ear tip: the highest skin vertex skinned to earL (kitten space = bind space here). Full-detail ears are shell fur
+  // (the skinned fur part shared with the tail): only its base layer (aShell 0) is the ear surface.
+  const earIdx = C.BONE_NAMES.indexOf('earL');
   const tip = new THREE.Vector3(0, -Infinity, 0), p = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) if (si.getX(i) === earIdx && pos.getY(i) > tip.y) tip.fromBufferAttribute(pos, i);
+  for (const g of [k.kitMesh.geometry, k.tailFur?.mesh.geometry].filter(Boolean)) {
+    const pos = g.attributes.position, si = g.attributes.skinIndex, sh = g.attributes.aShell;
+    for (let i = 0; i < pos.count; i++) if (si.getX(i) === earIdx && (!sh || sh.getX(i) === 0) && pos.getY(i) > tip.y) tip.fromBufferAttribute(pos, i);
+  }
   // fur surface: head fur base vertices (head space → kitten space) + the fur length
   const hp = k.headFur.mesh.geometry.attributes.position, hm = k.rig.head.matrixWorld;
   let crown = -Infinity, below = -Infinity;
@@ -562,4 +566,95 @@ test('cape: no armour / leg pokes through the cloth in the standing, combat and 
     assert.ok(worst < 0.006, `${pose}: kit pokes ${(worst * 100).toFixed(1)} cm through the cape`);
     k.dispose();
   }
+});
+
+test('cape: a kitten running at a low frame rate (12 fps) keeps her cape trailing (pins slide through the sub-steps, no bunching)', () => {
+  const k = C.buildKitten(C.swordcatConfig());
+  const parent = new THREE.Group(); parent.add(k.root);
+  k.setPose('ready', { blend: 0 });
+  const vel = new THREE.Vector3(0, 0, 5.5), dt = 1 / 12;
+  for (let i = 0; i < 20; i++) k.update(1 / 60, { velocity: new THREE.Vector3() });
+  for (let i = 0; i < 60; i++) { parent.position.addScaledVector(vel, dt); k.update(dt, { velocity: vel }); }
+  // rows in kitten space: monotonic downward / backward, and the cloth keeps most of its length (a bunched cape
+  // collapses to the neckline height)
+  const sim = k.cape.sim, inv = k.root.matrixWorld.clone().invert(), P = new THREE.Vector3();
+  const row = (r) => { let y = 0, z = 0; for (let c = 0; c < sim.C; c++) { const i = (r * sim.C + c) * 3; P.set(sim.p[i], sim.p[i + 1], sim.p[i + 2]).applyMatrix4(inv); y += P.y; z += P.z; } return { y: y / sim.C, z: z / sim.C }; };
+  const top = row(0), mid = row(6), hem = row(sim.R - 1);
+  assert.ok(top.y - hem.y > 0.15, `hem hangs well below the neckline (${(top.y - hem.y).toFixed(3)})`);
+  assert.ok(mid.y < top.y && hem.y < mid.y, 'rows hang in order');
+  assert.ok(hem.z < top.z - 0.08, `the hem trails behind her (${(hem.z - top.z).toFixed(3)})`);
+  k.dispose();
+});
+
+test('Swordcat cape is narrower than the pauldron line; dark coats get a tighter fur fringe', () => {
+  assert.ok(C.swordcatConfig().capeDims.topW < 0.25 && C.swordcatConfig().capeDims.botW <= 0.45);
+  const mochi = C.buildKitten(C.CATS.mochi), ginger = C.buildKitten(C.swordcatConfig());
+  assert.ok(mochi.furMat.uniforms.uFringe.value < 1 && mochi.furMat.uniforms.uEdgeStart.value < ginger.furMat.uniforms.uEdgeStart.value);
+  assert.equal(ginger.furMat.uniforms.uFringe.value, 1);
+  mochi.dispose(); ginger.dispose();
+});
+
+test('dispose frees every geometry, the per-kitten materials and the bone texture', () => {
+  const k = C.buildKitten(C.swordcatConfig());
+  k.update(1 / 60);
+  const geos = new Set(), mats = new Set();
+  k.root.traverse((o) => { if (o.geometry) geos.add(o.geometry); });
+  for (const m of [k.auraMat, k.furMat, k.furMatBaked, k.kitMat]) if (m) mats.add(m);
+  const freed = new Set();
+  for (const g of geos) g.addEventListener('dispose', () => freed.add(g));
+  for (const m of mats) m.addEventListener('dispose', () => freed.add(m));
+  let skel = false; const sd = k.skeleton.dispose.bind(k.skeleton); k.skeleton.dispose = () => { skel = true; sd(); };
+  k.dispose();
+  for (const name of ['whiskers', 'shadowProxy', 'aura', 'kitBody', 'tufts', 'furTail', 'furHead', 'cape']) {
+    let found = false;
+    k.root.traverse((o) => { if (o.name === name && o.geometry) { found = true; assert.ok(freed.has(o.geometry), `${name} geometry disposed`); } });
+    assert.ok(found, `${name} present`);
+  }
+  for (const m of mats) assert.ok(freed.has(m), 'per-kitten material disposed');
+  assert.ok(skel, 'skeleton (bone texture) disposed');
+});
+
+test('cape never folds over her head: Tumble roll (body flips over) and a deep hunch keep the cloth behind the neckline', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const J = k.rig.joints, ax = new THREE.Vector3(1, 0, 0), piv = new THREE.Vector3(0, 0.42, 0), q = new THREE.Quaternion(), v = new THREE.Vector3();
+  const E = (x) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x, 0, 0));
+  assert.ok(k.rig.bodyBind, 'rig exposes the body bind matrix');
+  const overNeck = () => {
+    k.root.updateMatrixWorld(true);
+    const toBind = new THREE.Matrix4().multiplyMatrices(k.rig.chestBind, J.chest.matrixWorld.clone().invert());
+    const p = k.cape.sim.p, d = k.cape.d; let m = -Infinity;
+    for (let i = d.cols; i < k.cape.sim.N; i++) {
+      v.set(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]).applyMatrix4(toBind);
+      m = Math.max(m, ((v.y - d.anchorY) + C.CAPE_NECK.tilt * (v.z - d.anchorZ)) / Math.hypot(1, C.CAPE_NECK.tilt));
+    }
+    return m;
+  };
+  for (let i = 0; i < 60; i++) k.update(1 / 60);
+  // the player's Tumble: a full forward roll of the body joint about a mid-height pivot in 0.4 s while dashing
+  let worst = -Infinity;
+  for (let t = 0; t < 0.7; t += 1 / 60) {
+    k.animate(1 / 60);
+    if (t < 0.4) {
+      const u = t / 0.4, th = Math.PI * 2 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, u / 0.9))), tuck = Math.sin(u * Math.PI);
+      J.chest.quaternion.multiply(E(0.5 * tuck)); J.head.quaternion.multiply(E(0.45 * tuck));
+      q.setFromAxisAngle(ax, th); J.body.quaternion.premultiply(q);
+      J.body.position.sub(piv).applyQuaternion(q).add(piv); J.body.position.y += 0.3 * Math.sin(th * 0.5);
+    }
+    k.root.position.z += 6 / 60;
+    k.simulate(1 / 60, { velocity: new THREE.Vector3(0, 0, 6) });
+    worst = Math.max(worst, overNeck());
+  }
+  assert.ok(worst < C.CAPE_NECK.margin + 0.02, `roll: cloth stays off her head (${worst.toFixed(3)})`);
+  // a deep forward hunch held for a while (chest pitched past horizontal)
+  for (let i = 0; i < 90; i++) { k.animate(1 / 60); J.chest.quaternion.multiply(E(Math.min(1, i / 20) * 2.2)); k.simulate(1 / 60); }
+  assert.ok(overNeck() < C.CAPE_NECK.margin + 0.02, `hunch: cloth stays off her head (${overNeck().toFixed(3)})`);
+  k.dispose();
+});
+
+test('tuft wisps render in a single pass (no per-draw program re-resolve from transparent DoubleSide)', async () => {
+  const { tuftMaterial } = await import('../../src/characters/materials.js');
+  const m = tuftMaterial();
+  assert.equal(m.side, THREE.DoubleSide);
+  assert.ok(m.transparent && m.depthWrite === false && m.alphaTest > 0);
+  assert.equal(m.forceSinglePass, true, 'transparent+DoubleSide without forceSinglePass draws twice and flips needsUpdate every draw');
 });

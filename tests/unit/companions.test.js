@@ -26,10 +26,11 @@ import { CAGE_CART } from '../../src/companions/LostKitten.js';
 import { KittenView } from '../../src/characters/index.js';
 import { ShieldWall } from '../../src/companions/ShieldWall.js';
 import { BARKS, FALLBACK, lineText } from '../../src/companions/lines.js';
-import { wrapText } from '../../src/companions/Bubble.js';
+import { wrapText, clampShift } from '../../src/companions/Bubble.js';
 import manifest, { levels as manifestLevels } from '../../src/companions/assets.manifest.js';
 
 const DT = 1 / 60;
+const ANTI_MULTI_HIT = 0.12;            // combat/attacks.js COMBAT.antiMultiHit (Combat sets it on every landed hit)
 
 class FakePlayer extends Actor {
   constructor(ctx) {
@@ -84,6 +85,7 @@ function makeCtx({ anchors = {} } = {}) {
         if (r === 'immune') return r;
         if (r === 'block') { att.onBlocked?.(tgt, def); return r; }
         tgt.hp = Math.max(0, tgt.hp - (def.dmg ?? 0));
+        if (tgt.tags?.has('cage')) tgt.invulnT = Math.max(tgt.invulnT ?? 0, ANTI_MULTI_HIT);   // as Combat.js: the target ticks it down
         tgt.onHit({ attacker: att, def });
         if (tgt.hp <= 0) { tgt.alive = false; tgt.onDeath({ attacker: att, def }); }
         return r;
@@ -177,6 +179,18 @@ test('lines: every bark key has design text; wrapText keeps ≤ 3 lines', () => 
   assert.equal(lineText({ strings: { has: () => false, t: (k) => k } }, 'bark.mochi.idle'), 'Is it lunch? It feels like lunch.');
   assert.equal(lineText({ strings: { has: () => true, t: () => 'X' } }, 'bark.mochi.idle'), 'X');
   assert.ok(wrapText('a '.repeat(80), 10, 3).length <= 3);
+});
+
+test('bubble: clampShift keeps the bubble rect inside the screen margin (review r2: right-edge clipping)', () => {
+  const m = 0.05;
+  assert.deepEqual(clampShift(0, 0, -0.2, 0.2, 0, 0.3, m, m), { dx: 0, dy: 0 }, 'centred bubble untouched');
+  const right = clampShift(0.9, 0, -0.2, 0.2, 0, 0.3, m, m);
+  assert.ok(Math.abs(0.9 + 0.2 + right.dx - (1 - m)) < 1e-9, 'right edge pulled in to the margin');
+  const left = clampShift(-0.95, 0, -0.2, 0.2, 0, 0.3, m, m);
+  assert.ok(Math.abs(-0.95 - 0.2 + left.dx - (-1 + m)) < 1e-9, 'left edge pushed in');
+  const top = clampShift(0, 0.9, -0.2, 0.2, 0, 0.3, m, m);
+  assert.ok(Math.abs(0.9 + 0.3 + top.dy - (1 - m)) < 1e-9, 'top edge pulled down');
+  assert.ok(Math.abs(clampShift(0.5, 0, -1.5, 1.5, 0, 0.3, m, m).dx + 0.5) < 1e-9, 'oversized rect is centred');
 });
 
 test('assets manifest lists what the area loads; per-level subsets are listed too', () => {
@@ -374,7 +388,7 @@ test('§12.1 cage hide: 3 of her hits open it (others are immune); needClear kee
   assert.notEqual(lock.faction, 'enemy', 'not an enemy: lock-on, arenas and companions ignore it');
   const e = new FakeEnemy(ctx, 4, 4);
   assert.equal(ctx.combat.applyHit(e, lock, { dmg: 10 }), 'immune');
-  for (let i = 0; i < 3; i++) { ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }); lock.invulnT = 0; }
+  for (let i = 0; i < 3; i++) { assert.equal(ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }), 'hit'); step(ctx, 30); }
   assert.ok(lock.opened && !ctx.actors.has(lock));
   ctx.player.pos.set(3, 0, 1.5);
   step(ctx, 90);
@@ -422,7 +436,7 @@ test('D-01: Mochi caged (hp 30, after the arena) → join scene → active compa
   assert.equal(k.companion, true);
   assert.equal(ctx.actors.get('mochi'), k, 'the caged Mochi is the cutscene actor "mochi"');
   ctx.bus.emit(E.ARENA_CLEAR, { id: 'bridge' });
-  for (let i = 0; i < 3; i++) { ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); k.lock.invulnT = 0; }
+  for (let i = 0; i < 3; i++) { assert.equal(ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }), 'hit'); step(ctx, 30); }
   assert.ok(k.lock.opened);
   ctx.player.pos.set(30, 0, 71);
   step(ctx, 90);
@@ -565,6 +579,20 @@ test('§9.1 teleport: 4 s out of line of sight → back at her side, never into 
   assert.ok(dist(c, ctx.player) < 2.5);
 });
 
+test('cage lock ticks its anti-multi-hit window: repeated real swings keep landing (hp 30 lock opens in 3)', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const k = ctx.companions.spawnKitten('mochi', new THREE.Vector3(5, 0, 5), 'cage', { hp: 30 });
+  const lock = k.lock;
+  ctx.player.pos.set(5, 0, 3);
+  assert.equal(ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }), 'hit');
+  assert.ok(lock.invulnT > 0);
+  assert.equal(ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }), 'none', 'same-instant multi-hit is still filtered');
+  step(ctx, Math.ceil(ANTI_MULTI_HIT / DT) + 1);
+  assert.equal(lock.invulnT, 0, 'invulnT counts down to 0');
+  for (let i = 0; i < 2; i++) { assert.equal(ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }), 'hit'); step(ctx, 30); }
+  assert.ok(lock.opened, 'opened after 3 real swings');
+});
+
 test('cage lock: neutral + breakable + prop (lock-on / arenas ignore it); her reflected shots count, others are immune', () => {
   const ctx = makeCtx();
   const k = ctx.companions.spawnKitten('biscuit', new THREE.Vector3(2, 0, 2), 'cage');
@@ -582,7 +610,7 @@ test('D-01 cart: Mochi sits on the cart bed; the cart blocks walkers; the empty 
   assert.ok(Math.abs(k.perchY - CAGE_CART.bedY) < 1e-9 && Math.abs(k.pos.y - CAGE_CART.bedY) < 1e-9, 'on the bed');
   const col = [...ctx.physics.colliders][0];
   assert.ok(col && col.walkable === false && col.factions.includes('player') && !col.factions.includes('neutral'), 'cart collider');
-  for (let i = 0; i < 3 && !k.lock.opened; i++) { k.lock.invulnT = 0; ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); }
+  for (let i = 0; i < 3 && !k.lock.opened; i++) { ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); step(ctx, 30); }
   assert.ok(k.lock.opened);
   ctx.player.pos.set(30, 0, 71);
   step(ctx, 90);
@@ -621,7 +649,7 @@ test('D-01 on the level\'s cart (world passes the bed height `y`): bars only, no
   ctx.physics.blockedAt = (x, z, r) => (Math.abs(x - 30) < 1.2 + r && Math.abs(z - 74.5) < 1.2 + r) || Math.hypot(x - 30, z - 72.7) < 0.5 + r;
   ctx.bus.emit(E.ARENA_CLEAR, { id: 'bridge' });
   ctx.player.pos.set(30, 0, 70);
-  for (let i = 0; i < 3 && !k.lock.opened; i++) { k.lock.invulnT = 0; ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); }
+  for (let i = 0; i < 3 && !k.lock.opened; i++) { ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); step(ctx, 30); }
   assert.ok(k.lock.opened);
   let maxY = 0;
   step(ctx, 70, () => { maxY = Math.max(maxY, k.pos.y); });

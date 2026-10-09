@@ -49,10 +49,16 @@ export class Player extends ScriptedActorMixin(Actor) {
     // ---- input buffers and timers
     this.attackBuf = 0; this.dodgeBuf = 0; this.jumpBuf = 0; this.coyoteT = 0;
     this.lastGuardPress = -1; this.lastAttackPress = -1;
+    /** touch auto-combo (§14.4): the follow-up of the last naturally finished Snip / Snap and when it ended */
+    this.comboNext = null; this.comboEndT = -Infinity;
     this.guardToggle = false; this.chargeToggleRelease = false; this.milkPressed = false;
     this.dodgeCd = 0; this.dodgeDir = new THREE.Vector3(0, 0, 1); this.dodgeRewarded = false;
     this.riposteT = 0; this.riposteTarget = null; this.autoStandT = 0; this.pushT = 0;
     this.critT = 0; this.immuneT = 0; this.meowT = 0; this.meowCd = 0; this.combatT = 0;
+    /** splash (§7.1): move input ignored while > 0; repeat splashes free while splashCdT > 0 */
+    this.moveLockT = 0; this.splashCdT = 0;
+    /** set by resolveIncoming for a Grit-exhaustion break: Combat then deals 0 damage (damageTakenMul) */
+    this._softBreak = false;
     this.pounceReady = true; this.pouncePhase = 'hang'; this.landT = 0;
     this.jumping = false; this.jumpCutDone = false;
     this.zoomies = false; this.zoomT = 0; this.zoomHeading = 0;
@@ -89,7 +95,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   /** Standing Ground paying out right now (visuals / barks). */
   get standingGround() { return this.valorState.standing; }
   /** Combat hook (requests/combat.md): Golden Hour halves damage taken, rounded down (1-HP hits do nothing). */
-  get damageTakenMul() { return this.golden ? PLAYER.golden.takenMul : 1; }
+  get damageTakenMul() { return this._softBreak ? 0 : this.golden ? PLAYER.golden.takenMul : 1; }
   /** Combat hook: no knockback / stagger during Golden Hour (super armour) and its activation. */
   get superArmor() { return this.golden || this.state === 'golden'; }
   /** Unlimited lives (Kitten difficulty: the HUD hides the counter). */
@@ -204,6 +210,9 @@ export class Player extends ScriptedActorMixin(Actor) {
         ctx.bus.emit(E.PLAYER_GRIT, { value: g.grit, max: g.gritMax, broken: false });
         return 'block';
       case 'break':
+        // §7.3: only red / unblockable attacks deal full damage through a broken guard; a Grit-exhaustion break is
+        // the 0.8 s stagger with no damage (Combat reads damageTakenMul right after this hook).
+        this._softBreak = g.lastBreakExhaust;
         ctx.bus.emit(E.PLAYER_GRIT, { value: Math.max(0, g.grit), max: g.gritMax, broken: true });
         return 'break';
       default:
@@ -225,6 +234,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   /** Combat applied a hit (after damage, knockback, i-frames). `hit` = combat's info {dmg, broke, def, killed, ...}. */
   onHit(hit) {
     const ctx = this.ctx;
+    this._softBreak = false;
     const dmg = hit?.dmg ?? 0;
     if (this.hp > this.maxHp) this.hp = this.maxHp;
     ctx.bus.emit(E.PLAYER_DAMAGED, { amount: dmg, hp: this.hp, maxHp: this.maxHp, source: hit?.attacker ?? null, broke: !!hit?.broke });
@@ -282,6 +292,12 @@ export class Player extends ScriptedActorMixin(Actor) {
   /** Story: outfit for the prologue ('tunic' | 'tunic_bow' | 'armour'). */
   setOutfit(name) { this.model.setOutfit(name); }
 
+  /** Hold a face expression for story (null = back to the state's own face). requests/story.md */
+  setExpression(name) { this.model?.setExpressionOverride?.(name ?? null); }
+
+  /** Show cape `id` regardless of the equipped cosmetic (null = equipped). requests/story.md */
+  setCapeOverride(id) { this.model?.setCapeOverride?.(id ?? null); }
+
   // ------------------------------------------------------------------ state machine
   setState(name, arg) {
     if (!STATES[name]) { console.warn(`[player] unknown state ${name}`); return; }
@@ -332,7 +348,14 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.invulnT = Math.max(0, this.invulnT - dt);
     this.staggerT = Math.max(0, this.staggerT - dt);
     dec('dodgeCd'); dec('riposteT'); dec('autoStandT'); dec('pushT'); dec('critT'); dec('immuneT'); dec('meowT'); dec('meowCd'); dec('combatT');
-    dec('blinkT');
+    dec('blinkT'); dec('splashCdT');
+    this._softBreak = false;
+    if (this.moveLockT > 0) {
+      this.moveLockT = Math.max(0, this.moveLockT - dt);
+      // after the minimum lock, releasing the stick ends it (a still-held stick keeps her out of the water)
+      const m = this.ctx.input?.move;
+      if (this.moveLockT <= TUNING.splashLockMax - TUNING.splashLockMin && (!m || Math.hypot(m.x, m.y) < 0.2)) this.moveLockT = 0;
+    }
     if (this.riposteT <= 0) this.riposteTarget = null;
     this.valorState.update(dt);
     if (this.guardState.update(dt)) this.ctx.bus.emit(E.PLAYER_GRIT, { value: this.guardState.grit, max: this.guardState.gritMax, broken: false });
@@ -432,6 +455,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     const input = this.ctx.input;
     const yaw = this.ctx.cam?.yaw ?? Math.PI;
     // forward = (-sin yaw, 0, -cos yaw), screen-right = (cos yaw, 0, -sin yaw)  (tech.md §8; move.y+ = forward)
+    if (this.moveLockT > 0) { out.set(0, 0, 0); return 0; }      // after a splash (§7.1)
     const mx = input.move.x, my = input.move.y;
     out.set(-Math.sin(yaw) * my + Math.cos(yaw) * mx, 0, -Math.cos(yaw) * my - Math.sin(yaw) * mx);
     const l = out.length();
@@ -504,13 +528,29 @@ export class Player extends ScriptedActorMixin(Actor) {
     return this.riposteT > 0 && !!t && t.alive !== false && Math.hypot(t.pos.x - this.pos.x, t.pos.z - this.pos.z) <= PLAYER.guard.riposteRange;
   }
 
-  startGroundAttack() { this.startAttack(this.riposteReady() ? 'riposte' : 'slash1'); }
+  startGroundAttack() {
+    if (this.riposteReady()) { this.startAttack('riposte'); return; }
+    // §14.4 / §15.3 auto-combo taps: a tap shortly after a Snip / Snap ended continues the chain
+    // (§7.2) every device gets a short grace too, so a press in rhythm with the visible swing still chains
+    const grace = this.autoCombo() ? TUNING.autoComboGrace : TUNING.comboGrace;
+    const graceOk = this.comboNext && (this.ctx.game.time - this.comboEndT) <= grace + 1e-6;
+    this.startAttack(graceOk ? this.comboNext : 'slash1');
+  }
+
+  /** Touch assist "auto-combo taps": repeated taps continue the chain without needing the timing window. */
+  autoCombo() { return this.ctx.input?.device === 'touch' || this.ctx.state?.settings?.autoCombo === true; }
+
+  /** A chained swing ran to its end without a follow-up: remember the next hit for the auto-combo grace. */
+  noteComboEnd(def) {
+    if (def?.next && def.combo) { this.comboNext = def.next; this.comboEndT = this.ctx.game.time; }
+  }
 
   /** Start a swing by attack id (slash1-3, bright, holy, riposte, sunburst). */
   startAttack(id) {
     const ctx = this.ctx, def = ATTACKS[id];
     if (!def) return;
     if (this.swing) this.endSwing();
+    this.comboNext = null;
     // facing: riposte → the parried enemy; lock-on target; else a fresh stick direction redirects the swing
     const lock = this.lockTarget();
     if (id === 'riposte' && this.riposteTarget) this._faceActor(this.riposteTarget);
@@ -595,7 +635,9 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   // ---- the Stand
   startGuard() {
-    this.guardState.start();
+    // the parry window opens only on a real press: re-entering the Stand with the button held is a plain block
+    const now = this.ctx.game.time, held = this.lastGuardPress >= 0 ? now - this.lastGuardPress : Infinity;
+    this.guardState.start(held);
     this.zoomies = false; this.zoomT = 0;
     this.combatT = TUNING.combatStance;
     this.model.emote('earsFlat');                                         // §7.7 ear tell
@@ -728,26 +770,57 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._syncState();
   }
 
-  /** Deep water / pit: −1 HP, back to the last safe ground, no life lost (§7.1). */
+  /**
+   * Deep water / pit: −1 HP, back to the last safe ground, no life lost (§7.1). She is put back on a sample at least
+   * `splashReturnDist` from the splash, clear of deep water, facing away from it, with move input ignored until
+   * the stick is released (so a held stick can't walk her straight back in). Repeat splashes inside the cooldown or
+   * her i-frames cost nothing, and water never takes her below 1 HP.
+   */
   _splash() {
-    const ctx = this.ctx;
+    const ctx = this.ctx, phys = ctx.physics;
+    const sx = this.pos.x, sz = this.pos.z;
     ctx.bus.emit(E.BURST, { kind: 'splash', position: this.pos.clone() });
-    if (!this.safeGround.best(_v, this.pos, TUNING.safeMinDist)) _v.copy(this.respawnPoint.pos);
+    const clearR = TUNING.splashClearRadius;
+    const dry = typeof phys?.isDeepWater === 'function'
+      ? (p) => {
+        if (phys.isDeepWater(p.x, p.z, p.y)) return false;
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          if (phys.isDeepWater(p.x + Math.sin(a) * clearR, p.z + Math.cos(a) * clearR, p.y)) return false;
+        }
+        return true;
+      }
+      : null;
+    const minDist = Math.max(TUNING.safeMinDist, TUNING.splashReturnDist);
+    if (!this.safeGround.best(_v, this.pos, minDist, dry)) _v.copy(this.respawnPoint.pos);
     if (this.swing) this.endSwing();
     if (this.state === 'guard') this.stopGuard();
+    if (this.state === 'charge') this.cancelCharge();
+    // face away from the water
+    const ax = _v.x - sx, az = _v.z - sz;
+    if (Math.hypot(ax, az) > 0.1) this.facing = Math.atan2(ax, az);
     this.pos.copy(_v); this.vel.set(0, 0, 0); this.onGround = false;
     this.snap(); this.model.snap();
     this.setState('move');
-    this._envDamage(PLAYER.water.deepDamage, 'water');
+    this.moveLockT = TUNING.splashLockMax;
+    this.attackBuf = 0; this.dodgeBuf = 0; this.jumpBuf = 0;
+    if (!(this.splashCdT > 0 || this.invulnT > 0)) {
+      this.splashCdT = TUNING.splashCooldown;
+      this._envDamage(PLAYER.water.deepDamage, 'water', true);
+    }
     if (this.alive) this.invulnT = Math.max(this.invulnT, TUNING.splashInvuln);
   }
 
-  /** Damage that doesn't come through Combat (water, pits). Honours god, Golden Hour and Still Standing. */
-  _envDamage(n, source) {
+  /**
+   * Damage that doesn't come through Combat (water, pits). Honours god, Golden Hour and Still Standing.
+   * `nonLethal` floors her at 1 HP (§7.1 water / pits never cost a life).
+   */
+  _envDamage(n, source, nonLethal = false) {
     if (this.god || !this.alive || !(n > 0)) return;
     const diff = this.ctx.state?.difficultyCfg;
     let dmg = diff?.roundTaken ? Math.round(diff.roundTaken(n)) : n;
     if (this.golden) dmg = Math.floor(dmg * PLAYER.golden.takenMul);
+    if (nonLethal) dmg = Math.min(dmg, this.hp - 1);
     if (dmg <= 0) return;
     this.hp = Math.max(0, this.hp - dmg);
     if (this.hp <= 0) this.onLethal();
@@ -871,6 +944,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (!this.alive || this.state === 'dead') { this.alive = true; this.hurtable = true; }
     this.hp = this.maxHp;
     this.invulnT = 0; this.immuneT = 0; this.critT = 0; this.riposteT = 0; this.autoStandT = 0;
+    this.moveLockT = 0; this.splashCdT = 0; this._softBreak = false;
     this.guardState.reset();
     this.respawnPoint.pos.copy(this.pos); this.respawnPoint.facing = this.facing;
     this.safeGround.clear();

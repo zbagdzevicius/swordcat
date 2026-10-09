@@ -105,3 +105,56 @@ Additive (world):
 - `core:boot` fails now that real assets load: `Assets` emits `ui:progress` once per URL (195 of the 200 ring-buffer
   slots right after boot), so `game:ready` / `level:loaded` scroll out of `__GAME__.events`. Throttle `E.PROGRESS`
   (e.g. every 5 % or 100 ms, plus the last one) or keep `ui:progress` out of the ring buffer.
+
+## M1 review fixes (2026-10-09, world)
+- Meadow exit is gated on Mochi (`meadow.mochi` or `companions.unlocked` has mochi). Early arrival shows `ui:toast`
+  with key `exit:blocked` on every entry. **To story:** please add the string `toast.exit.mochi` ("Mochi is still caged
+  at the Old Bridge!"). Until then the zone passes that English text as `blocked.text`. Once the key exists, world will
+  switch it to `blocked.toast` (LevelKit already looks the key up through `ctx.strings`).
+- Arena waves (and arena bosses) now spawn with `alerted: true`. **To player:** `MemeCamTrigger.canIdleTrigger()`
+  should also return false while any arena is locked: `ctx.levels.current?.arenas?.some((a) => a.locked)`.
+- Open-fight zones: when every enemy of a zone is down, world sets the flag `<level>.cleared.<zoneId>` (for example
+  `meadow.cleared.crowfields`), which is saved with the flags. A cleared zone never respawns. When the level loads at a
+  Vigil Stone (Continue), spawn groups within 17 m of that stone stay away for that load. **To save:** nothing to do;
+  these are plain boolean flags.
+- Meadow spawn `start` moved to (−1.5, −54.5), yaw −0.4, so the first view of Chapter 1 no longer looks through the
+  practice-field fence and gate post. It stays clear of the `lane` trigger (cs02).
+- Wobble Knight: it only glints and swings when she is within 2.4 m, and the strike lands up to 2.8 m. Between swings
+  it hops toward her (up to 2.6 m from home) after a block pushback. The slow-mo parry hint now fires only while
+  `ctx.story.tutorial.log.step.id === 'parry'`.
+- §18 budget, world side: Med and Low use a 3-tri grass blade (High keeps 5). The ground is drawn in 2 × 2
+  frustum-culled tiles; on Med, tiles more than 34 m from the camera use half resolution. Low draws the whole ground at
+  half resolution in one call, with 40 % of the horizon tree line and half the wheat. Measured at meadow day, level
+  share only: Med 37 calls / 291k tris, Low 21 calls / 92k tris. Whole frame: Med 152 calls / 683k tris, Low 105 calls
+  / 235k tris. The rest of the overrun is outside world:
+  **To characters / player:** hero fur shells on Med, plus a shells-off LOD beyond about 8 m (furHead is 89.5k tris on
+  Med; kitBody + furTail are 89k even on Low).
+  **To enemies:** keep the 11 pre-placed Chapter 1 enemies that are not engaged dormant, with no mixer and no draw.
+- **To characters:** `tufts` SkinnedMesh on `kitten:swordcat` and `kitten:mochi` has NaN positions
+  (`computeBoundingSphere(): Computed radius is NaN`, three console errors per meadow load).
+
+## M1 review fixes, round 2 (2026-10-09, world)
+- Arena clears are saved: `arena:clear` sets the flag `<level>.cleared.<arenaId>` (e.g. `meadow.cleared.stones`), and
+  the bridge also counts as cleared once `meadow.mochi` is set (or Mochi is unlocked). On load such an arena starts
+  cleared with no `arena:clear` event. **To companions:** world adds the id to `ctx.companions.cleared` (the Set
+  `spawnKitten` reads for `needClear`) before the kittens spawn. Please add a public `markCleared(id)` that does the
+  same; world already calls it when it exists.
+- Placed fish lines and crates are saved: flags `<level>.fish.<lineIndex>` and `<level>.crates.<k>` hold bitmasks
+  (numbers) of the fish collected and the crates broken. **To save:** these are plain numeric flags, nothing to do.
+- Results run stats live in `state.levels[<level>]` as `runT0` (state.playtime at entry), `runLost` and `runFish0`.
+  Continue and game-over Retry carry on the same run. `levels.exit` removes them for the level it leaves and the level
+  it enters. **To save:** keep these numeric fields in the level records (sanitize already keeps primitives). **To
+  ui:** `level:results.time` is now playtime seconds since the level's normal entry.
+- Night hero light: Env has a warm point light (`env:hero`) at her, used by the night presets (`hero: 1`). It is
+  always in the scene (intensity 0 by day), so the light count, and with it the shader programs, never changes.
+- Shader warm-up: LevelManager warms every enemy variant the level can spawn (arena waves, open zones, `def.warm`
+  rows for cutscene casts), a fog wall and the spawn poofs. The compile now targets the composer's render target,
+  because a canvas-target compile only built sRGB / tone-mapped variants that were never used. Then 2 frames run under
+  the veil with frustum culling off, which also builds the shadow-depth variants. **To enemies:** please add
+  `prewarm(list, at)` with list `[{ type, opts }]`. It should build hidden, dressed stand-ins (alert "!" included)
+  without emitting `enemy:spawned`, and resolve to a cleanup function or to the stand-ins. Until then world uses
+  `spawn(type, pos, { ...opts, ai: false, noCap: true })`, skips bosses and boneheads, and keeps each stand-in's model
+  detached until unload so its programs stay alive.
+  **To combat:** the crossbow bolt's trail ShaderMaterial (`projectile:bolt`) is still compiled on the first shot
+  (1 program, the only one left mid-fight in the meadow). Please add the pooled projectile meshes to a warm-up like
+  FX `_warmBegin`, or expose them so world can warm them.

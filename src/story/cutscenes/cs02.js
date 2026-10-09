@@ -17,7 +17,7 @@
 //  13 wide behind her: she walks into the fog. SWORDCAT title card; Chapter 1 card after the load.
 // end: flag prologue.done; env meadow_day; load meadow spawn start; save.
 import { say, cam, wait, sfx, par, seq, along, unit, yawOf, r2 } from './lib.js';
-import { memeLook } from './rig.js';
+import { memeLook, fillLight } from './rig.js';
 
 /** The horde line (meadow anchors horde_a → horde_b) and where it crosses the lane. */
 const A = [-40, -45], B = [30, -55];
@@ -75,11 +75,13 @@ export default {
     { t: 'music', track: null, fade: 2.5 },
     { t: 'actor', id: 'swordcat', at: START, facing: LANE_YAW, pose: 'idle' },
     ...castSpawns,
+    // his close-up fill, parked dark now (adding a light recompiles shaders: do it under the opening, not mid-laugh)
+    { t: 'call', fn: (ctx, cs) => fillLight(cs, 'cacklejaw', { intensity: 0 }) },
 
     // ---- 1 · slow orbit; the wind dies; fog; far drums
     { t: 'cam', mode: 'orbit', anchor: 'swordcat', r: 3.2, h: 1.15, degPerSec: 9, look: [0, 0.75, 0], fov: 40, dur: 6, nowait: true },
-    { t: 'env', wind: 0.05, dur: 3 },
-    { t: 'env', fogDensity: 0.075, dur: 6 },
+    { t: 'env', wind: 0.05, dur: 3, nowait: true },
+    { t: 'env', fogDensity: 0.075, dur: 6, nowait: true },
     sfx('creature/c80_monster_0x', 'horde_a', { rate: 0.6, vol: 0.8 }),
     wait(3.0),
     sfx('creature/c80_monster_0x', 'horde_a', { rate: 0.55, vol: 0.9 }),
@@ -100,7 +102,7 @@ export default {
     // ---- 3 · cackling from everywhere
     cam(null, 'swordcat', { mode: 'handheld', pos: [0.95, 0.95, 1.45], look: [0, 0.78, 0], fov: 38, noise: 0.03 }),
     { t: 'actor', id: 'barkus_far', visible: false },
-    { t: 'sfx', id: 'laughChorus', at: 'swordcat', count: 6, r: 18, dur: 18, handle: 'chorus' },
+    { t: 'sfx', id: 'laughChorus', at: 'swordcat', count: 6, r: 18, dur: 18, handle: 'chorus', nowait: true },
     { t: 'actor', id: 'swordcat', emote: ['earsFlat', 'tailPuff'], expression: 'surprised' },
     wait(1.4),
     { t: 'actor', id: 'swordcat', face: BELL_YAW - 1.1, faceDur: 0.45 },
@@ -147,7 +149,7 @@ export default {
 
     // ---- 7 · THE MEME SHOT
     { t: 'actor', id: 'swordcat', pose: 'oath', expression: 'earnest' },
-    { t: 'env', wind: 1.0, dur: 0.8 },
+    { t: 'env', wind: 1.0, dur: 0.8, nowait: true },
     { t: 'call', fn: (ctx) => memeLook(ctx, true) },
     { t: 'cam', preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut' },
     wait(3.8),
@@ -163,13 +165,18 @@ export default {
     wait(1.4),
 
     // ---- 9 · Cacklejaw: snout to her nose, then the laugh
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'cacklejaw', pos: [1.9, 0.82, 0.6], fov: 38, lookMid: 0.95 }),
+    // pulled back and up so both heads (his hood ears to snout, her face) sit inside the frame; the lens stays inside
+    // the files' lane (they pass ±2.5 m from her) so no passing hyena fills it
+    cam('TWO_SHOT_LOW', 'swordcat', { target: 'cacklejaw', pos: [2.3, 0.85, 1.0], fov: 44, lookMid: 1.4 }),
     { t: 'actor', id: 'cacklejaw', pose: 'kneel' },
     wait(1.6),
     { t: 'actor', id: 'cacklejaw', pose: 'sneer' },
     { t: 'actor', id: 'swordcat', emote: 'blink' },
     wait(1.4),
-    cam(null, 'swordcat', { pos: [0.1, 0.72, 0.28], look: [0, 1.12, 1.45], fov: 34, noise: 0.006, mode: 'handheld' }),
+    // his face fills the frame (anchored on him: his local +Z points at her). The lens sits off her blade line and a
+    // warm fill from her side lifts his back-lit face out of the fog.
+    { t: 'call', fn: (ctx, cs) => fillLight(cs, 'cacklejaw', { intensity: 6 }) },
+    cam(null, 'cacklejaw', { pos: [0.7, 1.36, 2.15], look: [0, 1.5, 0.2], fov: 40, noise: 0.008, mode: 'handheld' }),
     { t: 'actor', id: 'cacklejaw', pose: 'laugh', emote: 'laugh' },
     sfx('laugh', 'cacklejaw', { rate: 0.85, vol: 1.4 }),
     { t: 'fx', shake: 0.12 },
@@ -177,9 +184,10 @@ export default {
     say('cacklejaw', 'cs02.3', 4.4),
     { t: 'actor', id: 'cacklejaw', clip: 'Cheer', nowait: true },
     wait(0.6),
+    { t: 'call', fn: (ctx, cs) => fillLight(cs, 'cacklejaw', { intensity: 0 }) },
 
     // ---- 10 · top-down crane: the river parts around the stone; Pilfer
-    { t: 'env', fogDensity: 0.05, dur: 1.2 },
+    { t: 'env', fogDensity: 0.05, dur: 1.2, nowait: true },
     { t: 'cam', anchor: 'swordcat', mode: 'rail', pos: [0.6, 3.2, 3.0], to: [0.25, 14, 1.1], look: [0, 0.4, 0.3], lookTo: [0, 0, 0.2], fov: [44, 40], dur: 10, ease: 'inOutSine', nowait: true },
     { t: 'fx', horde: true, at: 'swordcat', dir: [U[0], 0, U[1]], avoid: 'swordcat', avoidR: 3.4, near: 0, length: 46, laugh: 0.85 },
     { t: 'actor', id: 'cacklejaw', pose: 'laugh', moveTo: CACKLE.off, speed: 1.8, nowait: true },
@@ -199,8 +207,8 @@ export default {
     wait(2.6),
 
     // ---- 11 · the fog closes; silence; trembling paws; glistening eyes
-    { t: 'env', fogDensity: 0.095, dur: 3.0 },
-    { t: 'env', wind: 0.25, dur: 2 },
+    { t: 'env', fogDensity: 0.095, dur: 3.0, nowait: true },
+    { t: 'env', wind: 0.25, dur: 2, nowait: true },
     { t: 'fx', horde: false },
     { t: 'sfx', stop: 'chorus', fade: 1.2 },
     { t: 'sfx', stop: 'march', fade: 1.5 },
@@ -242,6 +250,7 @@ export default {
     wait(1.1),
   ],
   end: {
+    call: (ctx, cs, skipped, phase) => { if (phase === 'before') fillLight(cs, null); },
     flags: { 'prologue.done': true },
     env: 'meadow_day',
     actors: { swordcat: { prop: { helmet: false } } },

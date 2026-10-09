@@ -90,6 +90,38 @@ test('Input: edges latch until endStep; heldTime counts sim time and survives th
   assert.deepEqual(INPUT.pad.recenter, [11], 'R3 recentres');
 });
 
+test('Input: losing pointer lock mid-play opens the pause menu once; resume re-captures the mouse', () => {
+  const events = [];
+  const ui = { busy: false, pauses: 0, pause() { this.pauses++; this.busy = true; ctx.game.mode = 'menu'; } };
+  const ctx = { game: { mode: 'play' }, ui, levels: { loading: false }, bus: { emit: (n, p) => events.push([n, p]) } };
+  const inp = new Input(ctx);
+  inp.pointerLockEnabled = true;
+  let requested = 0; inp.requestPointerLock = () => { requested++; };
+  inp._onPointerLockChange(true);
+  assert.ok(inp.pointerLocked && inp.relockOnResume);
+  inp._press('attack', 'm:Mouse0');
+  inp._onPointerLockChange(false);                       // browser spent the Esc on leaving the lock
+  assert.ok(!inp.down('attack'), 'mouse buttons released');
+  inp._press('pause', 'k:Escape');                        // even if the Esc keydown leaks through ...
+  inp.update(1 / 60);
+  assert.equal(ui.pauses, 1, 'lock loss pauses');
+  assert.ok(!inp.pressed('pause'), '... it cannot close the menu it just opened');
+  inp.endStep(); inp.update(1 / 60);
+  assert.equal(ui.pauses, 1, 'latched once');
+  assert.deepEqual(events.map((e) => e[1].locked), [true, false]);
+  inp.relock(); assert.equal(requested, 1, 'resume re-requests the lock');
+  // no pause when the lock goes away during a cutscene / our own menu exit / ?test (lock disabled)
+  for (const mode of ['cutscene', 'dialog', 'menu']) {
+    ui.busy = false; ctx.game.mode = mode; inp._onPointerLockChange(true); inp._onPointerLockChange(false); inp.update(1 / 60);
+  }
+  assert.equal(ui.pauses, 1);
+  ctx.game.mode = 'play'; ctx.levels.loading = true; inp._onPointerLockChange(true); inp._onPointerLockChange(false); inp.update(1 / 60);
+  assert.equal(ui.pauses, 1, 'not while a level loads');
+  ctx.levels.loading = false; inp.pointerLockEnabled = false; inp._onPointerLockChange(false); inp.update(1 / 60);
+  assert.equal(ui.pauses, 1);
+  inp.device = 'pad'; inp.pointerLockEnabled = true; inp.relock(); assert.equal(requested, 1, 'no relock for pad players');
+});
+
 test('Input: radial dead zone rescales', () => {
   assert.deepEqual(deadZone(0.1, 0.05, 0.15), { x: 0, y: 0 });
   const d = deadZone(1, 0, 0.15); assert.ok(Math.abs(d.x - 1) < 1e-9);

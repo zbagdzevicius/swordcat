@@ -1,9 +1,11 @@
-// src/player/tuning.js  (owner: player) — design numbers the player needs that are NOT (yet) in core's
-// config.PLAYER. Each one is taken from GAME_DESIGN prose (section noted) or is a flow/feel constant.
-// Requested from core (requests/player.md) as additive `PLAYER.*` keys; once merged, read them from config.
-// Pure data; node-safe.
+// src/player/tuning.js  (owner: player) — design numbers the player needs beyond Appendix A (now also in
+// config.PLAYER). Each one is taken from GAME_DESIGN prose (section noted) or is a flow/feel constant.
+// Requested from core (requests/player.md) as additive `PLAYER.*` keys.
+// Pure data; node-safe. Core merged these into config.PLAYER (same names): config wins, the values below are the
+// fallbacks.
+import { PLAYER } from '../core/config.js';
 
-export const TUNING = Object.freeze({
+const DEFAULTS = {
   // ---- life cycle (§7.6) ----
   faintDur: 2.2,             // s curled up in the faint before the respawn (ghost kitten + "n lives left" play meanwhile)
   respawnInvuln: 1.0,        // s of i-frames (blinking) after a respawn
@@ -19,12 +21,19 @@ export const TUNING = Object.freeze({
   pitY: -40,                 // kill plane: below this she counts as fallen into a pit (§7.1 "Deep water or a pit")
   safeMinDist: 1.0,          // m: the safe-ground sample used after a splash is at least this far from the water
   splashInvuln: 0.9,         // s of i-frames after a splash (same as a hurt)
+  splashReturnDist: 3.0,     // m: after a splash she goes back to a sample >= 3 m from the splash point, clear of deep water
+  splashClearRadius: 2.0,    // m: a return sample must have no deep water within this radius (8 probes)
+  splashCooldown: 1.5,       // s: a second splash inside this window costs no HP (she is only put back again)
+  splashLockMin: 0.5,        // s: move input is ignored after a splash...
+  splashLockMax: 3.0,        // ...and keeps being ignored until the stick is released (safety cap)
 
   // ---- combat flow (§7.2 / §7.3) ----
   lungeDamp: 20,             // λ of the lunge velocity during a swing
   hurtDamp: 6,               // λ: knockback decays slower while stunned so it reads
   blockPushT: 0.2,           // s the block pushback (§7.3 0.4 m) is allowed to carry before the Stand brakes again
   blockPushDamp: 5,          // λ during that window
+  autoComboGrace: 0.35,      // §14.4 touch auto-combo: a tap ≤ 0.35 s after a Snip / Snap ends continues the chain
+  comboGrace: 0.18,          // §7.2 all devices: a press ≤ 0.18 s after a Snip / Snap ends still continues the chain
   autoStand: 0.5,            // §7.9 Auto-Stand assist: Stand held automatically for 0.5 s after a parry
   goldenMinShards: 2,        // §7.5 Golden Hour needs Shard 2 (unlocked in CS-09)
   combatStance: 3.0,         // s she keeps the sword raised ('ready') after combat activity before relaxing
@@ -41,7 +50,9 @@ export const TUNING = Object.freeze({
   sneezeEvery: 90,           // once per 90 s at random…
   sneezeMinFog: 0.06,        // …when fog ≥ 0.06
   alertRadius: 15,           // enemy alert radius that ends the Zoomies (= PLAYER.zoomiesClearRadius)
-});
+};
+
+export const TUNING = Object.freeze(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, typeof PLAYER?.[k] === 'number' ? PLAYER[k] : DEFAULTS[k]])));
 
 /** Enemy states that count as "targeting her" for Standing Ground (§7.3). */
 export const PASSIVE_ENEMY_STATES = Object.freeze(['idle', 'patrol', 'return', 'die', 'dead', 'stagger', 'flee', 'sleep']);

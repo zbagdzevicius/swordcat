@@ -20,7 +20,9 @@ export const PUDDING_MODEL = 'models/creatures/monsters-flying/Dragon_Evolved.gl
 export const PUDDING = {
   tint: '#E0503A', red: [8, 0.72], radius: 2.5, height: 3.5,
   /** CS-03 net (meadow glade): Pudding at (2,24), rope posts at (−2,24), (6,24), (2,28) (§12.3). */
-  net: { at: [2, 24], facing: Math.PI, posts: [[-2, 24], [6, 24], [2, 28]], dome: [2.6, 2.2, 3.2] },
+  net: { at: [2, 24], facing: Math.PI, posts: [[-2, 24], [6, 24], [2, 28]], dome: [2.9, 2.5, 3.2] },
+  /** Netted: hunched small under the dome (whole-model scale) with the wings folded in (Wing1 bone scale). */
+  netted: { scale: 0.78, wing: 0.42 },
   perch: { anchors: ['pud_1', 'pud_2', 'pud_3', 'pud_4'], approach: 12, firstMin: 14, speed: 9, arc: 6, duck: 0.45 },
   free: { sniff: 1.6, nod: 1.2, lift: 1.4, lean: 0.55 },
 };
@@ -405,9 +407,13 @@ export class Pudding extends ScriptedActorMixin(Actor) {
       const crouch = this.mode === 'netted' ? 1 : this.mode === 'perch' ? PUDDING.perch.duck
         : this.mode === 'free' && this._freeStep === 1 ? PUDDING.free.lean : 0;
       this._crouch = damp(this._crouch ?? crouch, crouch, 4, vdt);
+      const fold = this.mode === 'netted' || (this.mode === 'free' && this._freeStep === 0) ? 1 : 0;   // unfolds as the net drops
+      this._fold = damp(this._fold ?? fold, fold, 4, vdt);
       const breathe = this.mode === 'sleep' ? 1 + Math.sin(this.ctx.game.realTime * 1.3) * 0.015 : 1;
-      this.model.root.scale.set(1 + 0.06 * this._crouch, (1 - 0.22 * this._crouch) * breathe, 1 + 0.06 * this._crouch);
-      this.model.root.position.y = -0.35 * this._crouch;
+      const k = lerp(1, PUDDING.netted.scale, this._fold);
+      this.model.root.scale.set((1 + 0.06 * this._crouch) * k, (1 - 0.22 * this._crouch) * breathe * k, (1 + 0.06 * this._crouch) * k);
+      this.model.root.position.y = -0.35 * this._crouch * k;
+      this._foldWings(lerp(1, PUDDING.netted.wing, this._fold));
     }
     if (this.net) {
       if (this.netDrop >= 0) {
@@ -419,6 +425,18 @@ export class Pudding extends ScriptedActorMixin(Actor) {
         if (u >= 1) this._disposeNet();
       }
     }
+  }
+
+  /** Wings tucked in under the net: scale the wing roots (after the mixer, so it overrides this frame's pose). */
+  _foldWings(w) {
+    if (!this.model) return;
+    if (!this._wings) {
+      this._wings = [];
+      this.model.root.traverse((o) => { if (o.isBone && /^Wing1\.?[LR]$/.test(o.name)) this._wings.push(o); });
+    }
+    if (w >= 0.999 && !this._wingsFolded) return;
+    for (const b of this._wings) b.scale.setScalar(w);
+    this._wingsFolded = w < 0.999;
   }
 
   _disposeNet() {

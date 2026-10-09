@@ -416,6 +416,49 @@ export default [
     },
   },
 
+  // ------------------------------------------------------------------ combo rhythm under mashing (§7.2 ≈1.4 s)
+  {
+    name: 'player:combo-rhythm', order: 26.2, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await install(t);
+      await t.wait(300);
+      await clearEv(t);
+      // real J taps every 100 ms (sim time) for 1.8 s
+      await t.G(async () => {
+        const pl = window.__GAME__.__pl;
+        for (let i = 0; i < 18; i++) { await pl.tap('attack'); await pl.simWait(0.1); }
+        return true;
+      });
+      await until(t, 'p.state === "move"', 4000);
+      const sw = await t.G(() => window.__GAME__.__plEv.filter((e) => e.type === 'player:swing').map((e) => [e.attackId, e.t]));
+      t.log(`mash: ${sw.map(([id, tt]) => `${id}@${tt.toFixed(3)}`).join(' ')}`);
+      t.assert(sw.length >= 3 && sw[0][0] === 'slash1' && sw[1][0] === 'slash2' && sw[2][0] === 'slash3', `combo order ${sw.map((s) => s[0])}`);
+      const d1 = sw[1][1] - sw[0][1], d2 = sw[2][1] - sw[1][1];
+      t.assert(d1 >= 0.38 && d2 >= 0.38, `each slash runs to its 0.40 s end before the next (${d1.toFixed(3)}, ${d2.toFixed(3)})`);
+    },
+  },
+
+  // ------------------------------------------------------------------ Meme Cam stays off on the practice field
+  {
+    name: 'player:memecam-practice', order: 26.4, level: 'meadow', spawn: 'practice', timeout: 120000,
+    async run(t) {
+      await install(t);
+      await t.wait(300);
+      await clearEv(t);
+      await t.page.keyboard.down('KeyL');
+      await simWait(t, 4.0);
+      const st = await t.state();
+      const p = await ps(t);
+      await t.page.keyboard.up('KeyL');
+      t.log(`practice hold: mode ${st.mode}, player ${p.state}, guarding ${p.guarding}, pos ${p.pos.map((v) => v.toFixed(1))}`);
+      t.assert(st.mode === 'play' && p.guarding, `holding the Stand on the practice field must not start Meme Cam (mode ${st.mode}, ${p.state})`);
+      await t.G(() => { window.__GAME__.idle(16); return true; });
+      await simWait(t, 0.5);
+      const st2 = await t.state();
+      t.assert(st2.mode === 'play', `idle Meme Cam suppressed on the practice field (mode ${st2.mode})`);
+    },
+  },
+
   // ------------------------------------------------------------------ the pose / swing gallery (visual review)
   {
     name: 'player:look', order: 29, level: 'meadow', spawn: 'start', timeout: 300000,

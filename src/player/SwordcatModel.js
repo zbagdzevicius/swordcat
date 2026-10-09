@@ -185,9 +185,10 @@ export class SwordcatModel {
   _applyCosmetics(force = false) {
     const k = this.k, cos = this.ctx.state?.cosmetics;
     if (!k || !cos) return;
-    if (this.outfit === 'armour' && (force || cos.cape !== this.capeApplied)) {
-      this.capeApplied = cos.cape;
-      if (cos.cape) k.setCape(cos.cape);
+    const capeWant = this.capeOverride || cos.cape;
+    if (this.outfit === 'armour' && (force || capeWant !== this.capeApplied)) {
+      this.capeApplied = capeWant;
+      if (capeWant) k.setCape(capeWant);
     }
     const want = cos.sword || 'borrowed';
     if (this.outfit === 'armour' && (force || want !== this.swordApplied)) {
@@ -268,6 +269,7 @@ export class SwordcatModel {
       if (scripted) this.expr = null;
     }
     if (!p.scripted || !this.scriptPose) this._expression();
+    else if (this.exprOverride && this.expr !== this.exprOverride) { this.expr = this.exprOverride; k.setExpression(this.exprOverride); }
     this._propsForState();
     this.view.animate(frameDt);
 
@@ -345,8 +347,19 @@ export class SwordcatModel {
         else if (p.hp <= 2 && p.alive) x = 'worried';
         else if (p.golden || p.combatT > 0) x = 'determined';
     }
+    if (this.exprOverride) x = this.exprOverride;
     if (x !== this.expr) { this.expr = x; k.setExpression(x); }
   }
+
+  /** Story: hold a face expression (null = back to the state's own). */
+  setExpressionOverride(name) {
+    this.exprOverride = name || null;
+    this.expr = null;                                   // re-applied on the next render (scripted or not)
+    if (!name && this.player?.scripted) this.poseName = null;   // the scripted pose's own face comes back
+  }
+
+  /** Story (CS-00): show a cape id regardless of `state.cosmetics.cape` (null = the equipped one). */
+  setCapeOverride(id) { this.capeOverride = id || null; this._applyCosmetics(true); }
 
   /** Milk bottle in the paw while sipping (gameplay); cutscene props go through prop(). */
   _propsForState() {

@@ -142,8 +142,8 @@ test('placeholders: later-milestone scenes apply their §5.4 end state; boss sce
 
 // ====================================================================================================== pure runner helpers
 test('runner helpers: sampleKeys, revealTime, isInstant, layoutPoint, spawnKind, isCat', () => {
-  assert.equal(sampleKeys([0, 1], 0.5), 0.5);
-  assert.equal(sampleKeys([0, 0.15, 0], 0.5), 0.15);
+  assert.ok(Math.abs(sampleKeys([0, 1], 0.5) - 0.5) < 1e-9);
+  assert.ok(Math.abs(sampleKeys([0, 0.15, 0], 0.5) - 0.15) < 1e-9);
   assert.equal(sampleKeys(0.3, 0.9), 0.3);
   assert.equal(revealTime(30, 1), 1);
   assert.equal(revealTime(30, 2), 0.5);
@@ -493,4 +493,40 @@ test('Cutscene: an unknown step type warns once and is skipped; a throwing call 
   assert.ok(msgs.some((m) => m.includes('unknown step type')));
   assert.equal(story.isPlaying, false);
   assert.ok(new Cutscene(ctx, { id: 'x', steps: [] }, story).kind === 'cutscene');
+});
+
+// ====================================================================================== cutscene sfx ids resolve (audio)
+test('every cutscene sfx id resolves in the audio manifest / SFX map', async () => {
+  const { default: manifest } = await import('../../src/audio/assets.manifest.js');
+  const { buildIndex, resolveId } = await import('../../src/audio/ids.js');
+  const { SFX } = await import('../../src/audio/sfxMap.js');
+  const index = buildIndex(manifest);
+  const PROCEDURAL = new Set(['laugh', 'laughChorus', 'bell', 'sunbell', 'bellClunk', 'heartbeat', 'march', 'shimmer']);   // AudioManager.js header
+  const bad = [];
+  for (const [id, def] of Object.entries(CUTSCENES)) {
+    walkSteps(def.steps, (s, p) => {
+      if (s?.t !== 'sfx' || typeof s.id !== 'string') return;
+      if (!PROCEDURAL.has(s.id) && !SFX[s.id] && !resolveId(s.id, index, () => 0)) bad.push(`${id} ${p}: ${s.id}`);
+    });
+  }
+  assert.deepEqual(bad, []);
+});
+
+test('CS-01 sunbeam flop marks keep the squires apart', async () => {
+  const { SUN_MARKS } = await import('../../src/story/cutscenes/cs01.js');
+  assert.equal(SUN_MARKS.length, 6);
+  for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) {
+    const d = Math.hypot(SUN_MARKS[i][0] - SUN_MARKS[j][0], SUN_MARKS[i][1] - SUN_MARKS[j][1]);
+    assert.ok(d >= 0.6, `squires ${i + 1}/${j + 1} only ${d.toFixed(2)} m apart`);
+  }
+  for (const [x, z] of SUN_MARKS) assert.ok(Math.hypot(x + 1.8, z + 70.1) < 2.0, 'inside the 2.3 m sun patch');
+});
+
+test('§6.6: tut.riposte hint waits for a melee parry (a reflected bolt has no riposte)', () => {
+  const h = HINTS.find((x) => x.key === 'tut.riposte');
+  const ctx = { state: { getFlag: (k) => k === 'prologue.done' } };
+  assert.equal(h.on, E.PLAYER_PARRY);
+  assert.ok(!h.when(ctx, { projectile: {}, perfect: true }), 'bolt reflect must not trigger');
+  assert.ok(h.when(ctx, { attacker: {}, perfect: true }), 'melee parry triggers');
+  assert.ok(!h.when({ state: { getFlag: () => false } }, { attacker: {} }), 'not before prologue.done');
 });

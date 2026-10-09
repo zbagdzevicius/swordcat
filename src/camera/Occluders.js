@@ -20,6 +20,8 @@
 //                  (a view geometry sharing the batch's GPU buffers; views are never disposed for that reason).
 // Occlusion test: segment (camera → subject points) vs the unit's per-part oriented boxes; big units (canopies)
 // are refined against their real triangles so a wide canopy box doesn't fade a tree the line only passes under.
+// Lens test: short segments from the camera through a grid of the view (~2 m deep) vs the boxes only, so a fence
+// rail / post right in front of the lens fades even when the line to her slips between its rails.
 // Tests run at CHECK_HZ; the fade itself animates every frame.
 import * as THREE from 'three';
 
@@ -137,6 +139,8 @@ export class OccluderFader {
     this._views = new WeakMap();
     this._checkT = 0;
     this.enabled = true;
+    /** world AABBs of every registered part, built lazily by covers() (null = stale) @type {THREE.Box3[]|null} */
+    this._aabbs = null;
   }
 
   get count() { return this.units.length; }
@@ -161,7 +165,7 @@ export class OccluderFader {
       });
       if (meshes.length) this._addUnit(obj, meshes);
     }
-    if (this.units.length > before) this._roots.add(obj);
+    if (this.units.length > before) { this._roots.add(obj); this._aabbs = null; }
     return this.units.length - before;
   }
 
@@ -169,6 +173,7 @@ export class OccluderFader {
   remove(obj) {
     if (!this._roots.has(obj)) return;
     this._roots.delete(obj);
+    this._aabbs = null;
     for (let i = this.units.length - 1; i >= 0; i--) {
       const u = this.units[i];
       if (u.root !== obj) continue;
@@ -203,10 +208,38 @@ export class OccluderFader {
     return n;
   }
 
+  /**
+   * Is a static collider footprint (world AABB in XZ, top y1) the footprint of a registered fadeable part, i.e. it
+   * lies inside one part's world box (+ `slack` m), covers at least a quarter of its ground area (so a crate under a
+   * wide canopy doesn't count) and doesn't rise above it? Such colliders (fence rails, posts of
+   * a `fade` prop set) must not pull the camera in: the camera fades the prop instead (tech.md §8).
+   * @param {number} minX @param {number} maxX @param {number} minZ @param {number} maxZ @param {number} y1
+   * @param {number} [slack]
+   */
+  covers(minX, maxX, minZ, maxZ, y1, slack = 0.25) {
+    if (!this._aabbs) {
+      this._aabbs = [];
+      const m = this.margin;
+      for (const u of this.units) for (const p of u.parts) {
+        const b = p.box.clone().applyMatrix4(p.world);           // back to the prop's own extent (the box has the fade margin)
+        b.min.x += m; b.min.z += m; b.max.x -= m; b.max.z -= m; b.max.y -= m;
+        if (b.max.x < b.min.x) b.min.x = b.max.x = (b.min.x + b.max.x) / 2;
+        if (b.max.z < b.min.z) b.min.z = b.max.z = (b.min.z + b.max.z) / 2;
+        this._aabbs.push(b);
+      }
+    }
+    const area = Math.max(0, maxX - minX) * Math.max(0, maxZ - minZ);
+    for (const b of this._aabbs) {
+      if (minX >= b.min.x - slack && maxX <= b.max.x + slack && minZ >= b.min.z - slack && maxZ <= b.max.z + slack
+        && !(y1 > b.max.y + slack) && area >= 0.25 * (b.max.x - b.min.x) * (b.max.z - b.min.z)) return true;
+    }
+    return false;
+  }
+
   /** Restore every faded prop and forget all registrations (level unload). */
   clear() {
     for (const u of this.units) this._restore(u);
-    this.units.length = 0; this.active.clear(); this._roots.clear();
+    this.units.length = 0; this.active.clear(); this._roots.clear(); this._aabbs = null;
     for (const p of this._proxies) this._releaseProxy(p);
     this._checkT = 0;
   }
@@ -331,15 +364,19 @@ export class OccluderFader {
   /**
    * @param {number} dt @param {THREE.Vector3} camPos @param {THREE.Vector3[]} targets subject points (chest, head)
    * @param {number} [nTargets]
+   * @param {THREE.Vector3[]} [lens] end points of short "lens" segments (camera → a grid of points ~2 m into the view):
+   *   any fadeable whose (margin-grown) box they touch fades, box test only, so a fence rail or post right in front of
+   *   the lens fades even when the sight line to the subject slips between its rails
+   * @param {number} [nLens]
    */
-  update(dt, camPos, targets, nTargets = targets.length) {
+  update(dt, camPos, targets, nTargets = targets.length, lens = null, nLens = lens ? lens.length : 0) {
     if (!this.units.length) return;
     this._checkT -= dt;
     const check = this._checkT <= 0;
     if (check) this._checkT = this.checkInterval;
     const k = 1 - Math.exp(-this.speed * dt);
     for (const u of this.units) {
-      if (check) u.hit = this.enabled && this._occludes(u, camPos, targets, nTargets);
+      if (check) u.hit = this.enabled && (this._occludes(u, camPos, targets, nTargets) || this._nearLens(u, camPos, lens, nLens));
       const hit = u.hit;
       if (!hit && u.f <= 0) continue;
       const target = hit ? 1 : 0;
@@ -361,6 +398,21 @@ export class OccluderFader {
         _c.copy(p).applyMatrix4(part.inv);
         if (!segmentHitsBox(_b, _c, part.box)) continue;
         if (!u.precise || this._segmentHitsTriangles(part, camPos, p)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Does any lens segment (camera → lens[i]) touch one of the unit's part boxes? (no triangle refinement) */
+  _nearLens(u, camPos, lens, nLens) {
+    if (!lens || !nLens) return false;
+    for (let t = 0; t < nLens; t++) {
+      const p = lens[t];
+      if (distSqPointSegment(u.center, camPos, p) > u.radius * u.radius) continue;
+      for (const part of u.parts) {
+        _b.copy(camPos).applyMatrix4(part.inv);
+        _c.copy(p).applyMatrix4(part.inv);
+        if (segmentHitsBox(_b, _c, part.box)) return true;
       }
     }
     return false;

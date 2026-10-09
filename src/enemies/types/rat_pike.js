@@ -4,12 +4,13 @@
 // flees for 2 s ("Eek!"), then comes back. Defeat: helm spins off, poof, the rat scampers into the fog.
 import { ENEMIES } from '../../core/config.js';
 import { CLIP_MAPS } from '../clipMaps.js';
-import { dressRat } from './ratGear.js';
+import { dressRat, ratBody } from './ratGear.js';
 
 export default {
   ...ENEMIES.rat_pike,
   id: 'rat_pike',
   anims: { ...CLIP_MAPS.rat.roles },
   scamper: true,
+  body: ratBody(),                       // spine capsule: the 0.30 m row circle let its snout pass through her
   build: (e, m) => dressRat(e, m, { helm: true, spear: true, buckler: true }),
 };

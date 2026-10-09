@@ -97,6 +97,10 @@ export class Menus {
       const onKey = (e) => { if (this.titleActive && !this.stack.length && !e.repeat) this._titleGo(e); };
       const onPtr = (e) => { if (this.titleActive && !this.stack.length) this._titleGo(e); };
       window.addEventListener('keydown', onKey);
+      this._ptr = null;   // last known cursor position (hover arming compares against it when a screen opens)
+      const onMove = (e) => { this._ptr = { x: e.clientX, y: e.clientY }; };
+      window.addEventListener('pointermove', onMove, { capture: true, passive: true });
+      this._domOffs.push(() => window.removeEventListener('pointermove', onMove, { capture: true }));
       this.titleEl.addEventListener('pointerdown', onPtr);
       this._domOffs.push(() => window.removeEventListener('keydown', onKey));
     }
@@ -117,6 +121,8 @@ export class Menus {
     this.stack.push(s);
     this.root.appendChild(s.el);
     s.nav ??= new MenuNav(s.items, s.focus ?? 0);
+    s.hoverArmed = false;
+    s.ptrAt = this._ptr ? { x: this._ptr.x, y: this._ptr.y } : null;
     this._focus(s, s.nav.index, false);
     this._inputGuard = 1;            // the edge that opened this screen must not also activate its first item
     requestFrame(() => flag(s.el, 'is-on', true));
@@ -279,7 +285,19 @@ export class Menus {
 
   _wire(s) {
     s.items.forEach((it, i) => {
-      it.el.addEventListener('pointerenter', () => { if (this.top === s && s.nav.index !== i && !it.disabled) this._focus(s, i); });
+      // Hover focuses only after the pointer really moved since the screen opened: Chrome fires enter/move events for a
+      // panel that appears under a resting cursor (pointer lock releases it mid-screen), which would steal focus from
+      // the first item (Resume) and send a pad / keyboard confirm to the wrong screen.
+      it.el.addEventListener('pointermove', (e) => {
+        if (this.top !== s || it.disabled) return;
+        if (!s.hoverArmed) {
+          const at = s.ptrAt;
+          const moved = (e.movementX || 0) !== 0 || (e.movementY || 0) !== 0 || (at && (e.clientX !== at.x || e.clientY !== at.y));
+          if (!moved) return;
+          s.hoverArmed = true;
+        }
+        if (s.nav.index !== i) this._focus(s, i);
+      });
       it.el.addEventListener('click', (e) => {
         if (this.top !== s || it.disabled) { if (it.disabled) this.sfx('ui.error'); return; }
         if (e.target.closest?.('.ch-l')) { it.adjust?.(-1); return; }
@@ -299,7 +317,7 @@ export class Menus {
     const { e, body } = this._panel('main', '', 'menu--title');
     const items = [];
     const hasSave = this.ui.hasSave?.();
-    if (hasSave) items.push(this._button(body, tx(ctx, 'menu.continue'), () => this.ui.continueGame()));
+    if (hasSave) items.push(this._button(body, tx(ctx, 'menu.continue'), () => this.ui.continueGame(), { sub: continueSub(ctx, this.ui.resumePoint ?? this.ui.saveSummary?.()) }));
     items.push(this._button(body, tx(ctx, 'menu.newGame'), () => this.openNewGame()));
     items.push(this._button(body, tx(ctx, 'menu.settings'), () => this.openSettings()));
     items.push(this._button(body, tx(ctx, 'menu.credits'), () => this.openCredits()));
@@ -492,14 +510,16 @@ export class Menus {
     this.push(this._wire({ id: 'vigil', el: e, items, layer: 'pause', back: () => this.ui.resume() }), { sound: 'ui.bookOpen' });
   }
 
-  /** §14.3 Game over: "Time for a cat nap." Wake up (retry level) · Back to Pawsbury (once the town is free). */
+  /** §14.3 Game over: "Time for a cat nap." Wake up (retry level) · Back to Pawsbury (Quit to Title until the town is free). */
   openGameOver() {
     const ctx = this.ctx;
     const { e, body } = this._panel('gameover', '', 'menu--gameover');
     el('div', 'go-art', { parent: body, html: I.sleepingCat() });
     el('div', 'go-title', { parent: body, text: tx(ctx, 'gameover.title') });
     const items = [this._button(body, tx(ctx, 'gameover.retry'), () => this.ui.retry())];
+    // Back to Pawsbury once the town is free; before that (M1) Quit to Title so the player is never forced to retry.
     if (ctx.state?.cond?.('town.free')) items.push(this._button(body, tx(ctx, 'gameover.hub'), () => this.ui.toHub()));
+    else items.push(this._button(body, tx(ctx, 'pause.quit'), () => this.ui.quitToTitle(), { cls: 'btn--plain' }));
     const s = this._wire({ id: 'gameover', el: e, items, layer: 'pause', back: () => false });
     s.dark = true;
     this.push(s, { sound: null });
@@ -509,6 +529,14 @@ export class Menus {
 }
 
 /** LICENSES.md → simple credit HTML (headings, list items, table rows as "a — b — c"). Pure. */
+/** Continue button sub-line: "Purrdale Meadows · 5/18 kittens" from a save summary / resume point. Pure. */
+export function continueSub(ctx, sum) {
+  if (!sum?.levelId) return '';
+  const region = tx(ctx, `region.${sum.levelId}`);
+  const n = Array.isArray(sum.kittens) ? sum.kittens.length : Number.isFinite(sum.kittens) ? sum.kittens : ctx.state?.kittens?.length;
+  return Number.isFinite(n) ? `${region} · ${n}/${KITTEN_IDS.length}` : region;
+}
+
 export function licensesHtml(md) {
   const out = [];
   for (const raw of String(md ?? '').split(/\r?\n/)) {

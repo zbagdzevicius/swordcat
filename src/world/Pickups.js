@@ -13,9 +13,12 @@ const MAX_FISH = 240;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _v = new THREE.Vector3();
 const _silver = new THREE.Color('#D7DEE6'), _gold = new THREE.Color('#F2C94C');
 
+/** Save flag of a placed fish line (bitmask of the fish collected). Pure. */
+export const placedFishFlag = (levelId, key) => `${levelId}.fish.${key}`;
+
 /** Fish mesh (body + tail), ~0.32 m long, facing +Z, centred. */
 export function makeFishGeometry() {
-  const body = new THREE.SphereGeometry(0.1, 10, 7); body.scale(0.55, 0.85, 1.35);
+  const body = new THREE.SphereGeometry(0.1, 8, 6); body.scale(0.55, 0.85, 1.35);
   const tail = new THREE.ConeGeometry(0.09, 0.14, 4); tail.rotateX(-Math.PI / 2); tail.scale(0.35, 1.2, 1); tail.translate(0, 0, -0.17);
   const g = mergeSimple([body, tail]);
   body.dispose(); tail.dispose();
@@ -120,22 +123,32 @@ export class Pickups {
     this._offs = [ctx.bus.on(E.ENEMY_DIED, (p) => this._onEnemyDied(p))];
   }
 
-  /** Spawn `n` fish worth `value` each at `pos` (popping out with a little arc when `pop`). */
+  /** Spawn `n` fish worth `value` each at `pos` (popping out with a little arc when `pop`). Returns how many spawned. */
   spawnFish(pos, n = 1, { value = ECONOMY.fish.silver, pop = true } = {}) {
-    let live = 0;
+    let live = 0, made = 0;
     for (const it of this.items) if (it.alive && it.kind === 'fish') live++;
     for (let i = 0; i < n && live < MAX_FISH; i++, live++) {
       const a = this.rnd() * Math.PI * 2, sp = pop ? 1.2 + this.rnd() * 2 : 0;
       this.items.push({ kind: 'fish', value, gold: value >= ECONOMY.fish.gold, pos: new THREE.Vector3(pos.x, pos.y + (pop ? 0.6 : 0.35), pos.z),
         vel: new THREE.Vector3(Math.sin(a) * sp, pop ? 3.5 + this.rnd() * 2 : 0, Math.cos(a) * sp), air: pop, t: this.rnd() * 6, delay: pop ? 0.35 : 0, alive: true });
+      made++;
     }
+    return made;
   }
 
-  /** A line of `n` silver fish from a to b ([x, z]). */
-  fishLine(a, b, n) {
+  /**
+   * A line of `n` (≤ 31) silver fish from a to b ([x, z]). With a `key`, the fish collected are saved as a bitmask in
+   * the flag `<level>.fish.<key>` and stay gone on later loads (Continue / Retry never re-offer placed fish).
+   */
+  fishLine(a, b, n, key = null) {
+    const flag = key != null ? placedFishFlag(this.levelId, key) : null;
+    const mask = flag ? (Number(this.ctx.state?.getFlag?.(flag)) | 0) : 0;
     for (let i = 0; i < n; i++) {
+      if (flag && i < 31 && (mask & (1 << i))) continue;
       const t = n === 1 ? 0.5 : i / (n - 1), x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t;
-      this.spawnFish(new THREE.Vector3(x, this.heightAt(x, z), z), 1, { pop: false });
+      const made = this.spawnFish(new THREE.Vector3(x, this.heightAt(x, z), z), 1, { pop: false });
+      const it = made ? this.items[this.items.length - 1] : null;
+      if (it && flag && i < 31) { it.flag = flag; it.bit = i; }
     }
   }
 
@@ -236,6 +249,7 @@ export class Pickups {
       case 'fish':
         if (st) st.fish = (st.fish ?? 0) + it.value;
         this.collected.fish += it.value;
+        if (it.flag && st?.setFlag) st.setFlag(it.flag, (Number(st.getFlag?.(it.flag)) | 0) | (1 << it.bit));
         bus.emit(E.ITEM_PICKUP, { item: 'fish', amount: it.value, gold: it.gold, position });
         break;
       case 'heart': {

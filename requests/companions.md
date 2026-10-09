@@ -88,3 +88,10 @@ y 0 means "on the ground here" (terrain or a bridge deck).
 - Bursts we emit: `sparkle` (reveal, rescue, cage opening, Sage's kitten sense), `poof` (teleports, kittens going home),
   `heart` (slow blinks), `heal` (Clover). Barks call `ctx.audio.babble(kittenId | npcId, text)` (play / memecam only);
   Pudding plays `puddingRoar` and `cat/cat_purractive_loop` (rate 0.6) through `play3D(id, pudding)`.
+
+## → core: tests/smoke/slice.mjs Mochi cage step hides real-input regressions (2026-10-09)
+`slice.mjs` (~line 286) resets `m.lock.invulnT = 0` before each `applyHit`. CageLock now ticks its own `invulnT` in
+`update(dt)` (it never did, so after the first hit the lock was immune forever and D-01 never played). Please drop the
+reset and either swing with real input (stand ~1 m from `m.lock.pos`, facing it, `t.tap('KeyJ')` + ~450 ms per swing,
+3 swings for the 30 HP lock) or wait ≥ 0.15 s between `applyHit` calls, so the slice catches this class of bug.
+(companions' own smoke `companions:meadow` now opens the cage with real J presses: hp 20, 10, 0.)

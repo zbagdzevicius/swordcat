@@ -9,7 +9,7 @@
 //   pose(name, { hold = true })              'vigil','oath','sip','selfie','faint','kneel','sit','sleep','idle'
 //   play(clip, { once, speed, clampEnd }) → Promise
 //   emote(name)                              'earsFlat' | 'tailPuff' | 'blink' | 'nod' | 'shake' (no-op where unsupported)
-//   prop(name, on)                           'milk_cup' | 'lantern' | 'spoon' | 'letter' | 'pot_helm'
+//   prop(name, on, opts?)                        'milk_cup' | 'lantern' | 'spoon' | 'letter' | 'pot_helm'
 //   attach(toActor | null, bone?)            ride on another actor (Pudding); null detaches
 //
 // The owning update(dt) calls `this.scriptedStep(dt)` every fixed step while `scripted` (it also runs the
@@ -95,7 +95,7 @@ export function ScriptedActorMixin(Base) {
 
     emote(name) { this.onEmote?.(name); }
 
-    prop(name, on) { this.props[name] = !!on; this.onProp?.(name, !!on); }
+    prop(name, on, opts) { this.props[name] = !!on; this.onProp?.(name, !!on, opts); }
 
     attach(toActor, bone) {
       this.attachedTo = toActor ?? null; this.attachBone = toActor ? (bone ?? null) : null;

@@ -102,12 +102,14 @@ export const E = Object.freeze({
 
   // ---- save ----
   SAVE_REQUEST: 'save:request',             // {}
-  SAVE_LOADED: 'save:loaded',               // { data }
+  SAVE_LOADED: 'save:loaded',               // { data, reason?: 'new'|'continue'|'title' }  (core's boot emit has no reason)
+  SAVE_WRITTEN: 'save:written',             // { reason, savedAt, ok }  a save record was written (core+, for ui's seal)
 
   // ---- core+ (additive, core-owned) ----
   QUALITY: 'game:quality',                  // { name, preset }  active quality preset changed (also once at boot)
   SETTINGS_CHANGED: 'settings:changed',     // { key, value }   a state.settings entry changed (ui emits after writing state)
   INPUT_DEVICE: 'input:device',             // { device: 'kbm' | 'pad' | 'touch' }  last-used input device changed
+  INPUT_POINTER_LOCK: 'input:pointerLock',  // { locked }  core+: mouse capture gained / lost (lost mid-play → ui.pause())
 });
 
 /** Every known event string (EventBus warns on unknown names). */

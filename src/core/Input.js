@@ -35,6 +35,9 @@ export class Input {
     this.device = 'kbm';
     this.pointerLocked = false;
     this.pointerLockEnabled = true;     // Game turns this off in ?test
+    /** Re-capture the mouse when the pause menu closes (set once the lock was ever held). */
+    this.relockOnResume = false;
+    this._lockLost = false;
     this.padConnected = false;
     /** Seconds (sim) since any input activity / any look input (Meme Cam idle, camera auto-follow). */
     this.idleTime = 0; this.lookIdleTime = 0;
@@ -58,6 +61,7 @@ export class Input {
   async init() {}
   /** Fixed step: advance hold timers + idle timers. */
   update(dt) {
+    this._resolveLockLoss();
     for (const s of this.actions.values()) if (s.down) s.held += dt;
     if (this._activity) { this.idleTime = 0; this._activity = false; } else this.idleTime += dt;
     if (this._lookActivity) { this.lookIdleTime = 0; this._lookActivity = false; } else this.lookIdleTime += dt;
@@ -271,13 +275,7 @@ export class Input {
       this._wheelCooldown = INPUT.wheelRepeat;
       this.pulse(e.deltaY > 0 ? 'lockNext' : 'lockPrev');
     }, { passive: true });
-    on(document, 'pointerlockchange', () => {
-      this.pointerLocked = document.pointerLockElement === canvas;
-      if (!this.pointerLocked) for (const a of ['attack', 'guard', 'lockon']) {
-        const s = this.actions.get(a);
-        for (const src of [...s.sources]) if (src.startsWith('m:')) this._release(a, src);
-      }
-    });
+    on(document, 'pointerlockchange', () => this._onPointerLockChange(document.pointerLockElement === canvas));
     on(window, 'touchstart', () => this.setDevice('touch'), { passive: true });
     on(window, 'gamepadconnected', () => { this.padConnected = true; });
     on(window, 'gamepaddisconnected', () => this.releaseAll());
@@ -299,6 +297,45 @@ export class Input {
   }
 
   exitPointerLock() { if (typeof document !== 'undefined' && document.pointerLockElement) document.exitPointerLock(); }
+
+  /**
+   * Pointer lock gained / lost. Browsers spend the player's Esc on leaving the lock (Chrome does not even
+   * deliver that keydown), so a lock lost mid-play is treated as a pause request: it is latched here and
+   * resolved in the next fixed step (`_resolveLockLoss`), where mode / ui / story state is consistent.
+   * @param {boolean} locked
+   */
+  _onPointerLockChange(locked) {
+    const was = this.pointerLocked;
+    this.pointerLocked = locked;
+    if (locked) { this.relockOnResume = true; this._lockLost = false; }
+    else {
+      for (const a of ['attack', 'guard', 'lockon']) {
+        const s = this.actions.get(a);
+        for (const src of [...s.sources]) if (src.startsWith('m:')) this._release(a, src);
+      }
+      if (was && this.pointerLockEnabled) this._lockLost = true;
+    }
+    if (was !== locked) this.ctx?.bus?.emit(E.INPUT_POINTER_LOCK, { locked });
+  }
+
+  /** Fixed step: a pointer lock lost during play / memecam opens the pause menu (unless a screen, scene or load owns the moment). */
+  _resolveLockLoss() {
+    if (!this._lockLost) return;
+    this._lockLost = false;
+    const ctx = this.ctx, mode = ctx?.game?.mode;
+    if (mode !== 'play' && mode !== 'memecam') return;           // menu (our own exit), cutscene, dialog: nothing to do
+    if (ctx.levels?.loading || ctx.ui?.busy || typeof ctx.ui?.pause !== 'function') return;
+    ctx.ui.pause();
+    // the Esc that broke the lock may still arrive as a key edge this step: don't let it close the menu again
+    const p = this.actions.get('pause');
+    if (p) p.pressed = false;
+  }
+
+  /** Called by Game when leaving the pause menu back to play: re-capture the mouse if it was captured before. */
+  relock() {
+    if (!this.pointerLockEnabled || this.pointerLocked || !this.relockOnResume || this.device !== 'kbm') return;
+    this.requestPointerLock();
+  }
 
   /** Gamepad rumble (GAME_DESIGN §8.2: [weak, strong, ms]); silently ignored where unsupported. */
   rumble(weak, strong, ms) {

@@ -3,9 +3,13 @@
 //  • right cluster (64–88 px × settings.touchSize): big ⚔ (hold to charge; a ring fills), 🛡 Stand (hold), Tumble, Jump;
 //  • above it: the kitten-ability portrait (cooldown ring), Milk, a cat-face Meow; contextual "!" Interact while
 //    interact:available, a gold Golden Hour button at Valor 100 (with Shard 2);
+//  • a quick tap (< tapPx moved, < tapMs) locks onto the enemy nearest the tap on screen (within tapPickPx); tapping
+//    the locked enemy, or empty ground on the look side, unlocks (§15.3 "tap an enemy to lock on");
 //  • ❚❚ at the top centre (tap = pause, hold 1 s = skip a cutscene: the ui's skip ring reads the held `pause`);
 //  • shown when (pointer: coarse) matches or on the first touchstart; a "rotate" hint in portrait orientation.
+import * as THREE from 'three';
 import { INPUT, PLAYER } from '../core/config.js';
+import { hostileTo } from '../core/ActorRegistry.js';
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
 import { el, flag, setVar, place, setText } from './dom.js';
@@ -13,7 +17,27 @@ import { tx } from './text.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 
-export const TOUCH = Object.freeze({ stickR: 60, leftFrac: 0.45, deadZone: 0.08 });
+export const TOUCH = Object.freeze({ stickR: 60, leftFrac: 0.45, deadZone: 0.08, tapPx: 10, tapMs: 250, tapPickPx: 60, tapRange: 22 });
+
+/**
+ * Tap-to-lock pick. Pure. `cands` are actors; `project(a)` returns the actor's chest in CSS px {x, y} or null when off
+ * screen / behind the camera. Returns the candidate whose projection is nearest (sx, sy) within `maxPx`, or null.
+ * @template T @param {T[]} cands @param {(a: T) => ({x:number,y:number}|null)} project
+ * @param {number} sx @param {number} sy @param {number} [maxPx]
+ * @returns {T|null}
+ */
+export function pickTapTarget(cands, project, sx, sy, maxPx = TOUCH.tapPickPx) {
+  let best = null, bd = maxPx;
+  for (const a of cands) {
+    const p = project(a);
+    if (!p) continue;
+    const d = Math.hypot(p.x - sx, p.y - sy);
+    if (d <= bd) { bd = d; best = a; }
+  }
+  return best;
+}
+
+const _v = new THREE.Vector3();
 
 /** Joystick vector from a drag offset (px) → {x, y} in [-1, 1] (y+ = forward = drag up) and the clamped knob px. Pure. */
 export function stickVector(dx, dy, R = TOUCH.stickR) {
@@ -45,8 +69,8 @@ export class TouchControls {
     this.root = el('div', 'touch-root', { parent: host });
     this.base = el('div', 'stick-base', { parent: this.root, html: '<div class="stick-knob"></div>' });
     this.knob = this.base.firstChild;
-    this.stick = { id: null, ox: 0, oy: 0 };
-    this.look = { id: null, x: 0, y: 0 };
+    this.stick = { id: null, ox: 0, oy: 0, t0: 0, moved: 0 };
+    this.look = { id: null, x: 0, y: 0, sx: 0, sy: 0, t0: 0, moved: 0 };
     this.cluster = el('div', 'touch-cluster', { parent: this.root });
     this.btns = new Map();
     for (const b of BUTTONS) {
@@ -108,11 +132,11 @@ export class TouchControls {
     if (!this.enabled) this.enable(true);
     const W = window.innerWidth;
     if (e.clientX < W * TOUCH.leftFrac && this.stick.id === null) {
-      Object.assign(this.stick, { id: e.pointerId, ox: e.clientX, oy: e.clientY });
+      Object.assign(this.stick, { id: e.pointerId, ox: e.clientX, oy: e.clientY, t0: performance.now(), moved: 0 });
       place(this.base, e.clientX, e.clientY);
       place(this.knob, 0, 0);
       flag(this.base, 'is-on', true);
-    } else if (this.look.id === null) Object.assign(this.look, { id: e.pointerId, x: e.clientX, y: e.clientY });
+    } else if (this.look.id === null) Object.assign(this.look, { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t0: performance.now(), moved: 0 });
     try { this.root.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     // a tap anywhere advances dialogue
     const m = this.ctx.game?.mode;
@@ -125,16 +149,50 @@ export class TouchControls {
       const R = TOUCH.stickR * this._scale();
       const v = stickVector(e.clientX - this.stick.ox, e.clientY - this.stick.oy, R);
       place(this.knob, v.kx, v.ky);
+      this.stick.moved = Math.max(this.stick.moved ?? 0, Math.hypot(e.clientX - this.stick.ox, e.clientY - this.stick.oy));
       inp?.setVirtualMove(v.x, v.y);
     } else if (e.pointerId === this.look.id) {
       inp?.addLook((e.clientX - this.look.x) * INPUT.touchLookSens, (e.clientY - this.look.y) * INPUT.touchLookSens);
       this.look.x = e.clientX; this.look.y = e.clientY;
+      this.look.moved = Math.max(this.look.moved, Math.hypot(e.clientX - this.look.sx, e.clientY - this.look.sy));
     }
   }
 
   _up(e) {
-    if (e.pointerId === this.stick.id) { this.stick.id = null; flag(this.base, 'is-on', false); this.ctx.input?.setVirtualMove(0, 0); }
-    if (e.pointerId === this.look.id) this.look.id = null;
+    if (e.pointerId === this.stick.id) {
+      this.stick.id = null; flag(this.base, 'is-on', false); this.ctx.input?.setVirtualMove(0, 0);
+      // a quick tap on an enemy in the stick half still locks on (a miss there never unlocks: it was a stick nudge)
+      const moved = Math.max(this.stick.moved ?? 0, Math.hypot(e.clientX - this.stick.ox, e.clientY - this.stick.oy));
+      if (e.type === 'pointerup' && moved < TOUCH.tapPx && performance.now() - (this.stick.t0 ?? 0) < TOUCH.tapMs) this.tapLock(e.clientX, e.clientY, { unlockOnMiss: false });
+    }
+    if (e.pointerId === this.look.id) {
+      this.look.id = null;
+      const moved = Math.max(this.look.moved, Math.hypot(e.clientX - this.look.sx, e.clientY - this.look.sy));
+      if (e.type === 'pointerup' && moved < TOUCH.tapPx && performance.now() - this.look.t0 < TOUCH.tapMs) this.tapLock(e.clientX, e.clientY);
+    }
+  }
+
+  /**
+   * Tap-to-lock at screen point (clientX, clientY): lock the enemy nearest the tap; tapping the locked enemy or empty
+   * ground unlocks (unless `unlockOnMiss` is false). Only during play. Returns the new lock target (or null).
+   * @param {number} x @param {number} y @param {{ unlockOnMiss?: boolean }} [opts]
+   */
+  tapLock(x, y, { unlockOnMiss = true } = {}) {
+    const ctx = this.ctx, cam = ctx.cam, camera = ctx.camera, p = ctx.player;
+    if (ctx.game?.mode !== 'play' || !cam?.lock || !camera || !p?.pos) return null;
+    const rect = ctx.renderer?.domElement?.getBoundingClientRect?.() ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    let cands = ctx.actors?.queryRadius?.(p.pos, TOUCH.tapRange, hostileTo('player')) ?? null;
+    if (!cands) cands = (ctx.enemies?.list ?? []).filter((a) => a?.alive !== false);
+    cands = cands.filter((a) => a && a.alive !== false && a.hurtable !== false && !a.hidden && a.object3d?.visible !== false && a.pos);
+    const project = (a) => {
+      _v.set(a.pos.x, a.pos.y + (a.height ?? 1) * 0.55, a.pos.z).project(camera);
+      if (_v.z > 1 || _v.z < -1) return null;
+      return { x: rect.left + (_v.x + 1) * 0.5 * rect.width, y: rect.top + (1 - _v.y) * 0.5 * rect.height };
+    };
+    const t = pickTapTarget(cands, project, x, y, TOUCH.tapPickPx * Math.max(0.75, this._scale()));
+    if (!t) { if (unlockOnMiss) cam.unlock?.(); return null; }
+    if (t === cam.lockTarget) { cam.unlock?.(); return null; }
+    return cam.lock(t) ?? null;
   }
 
   _scale() { return this.ctx.state?.settings?.touchSize ?? 1; }
@@ -143,7 +201,9 @@ export class TouchControls {
   render(dt, vis) {
     if (!this.enabled) { flag(this.rotate, 'is-on', false); return; }
     const ctx = this.ctx, p = ctx.player;
-    setVar(this.host, '--ts', this._scale().toFixed(2));
+    const ts = this._scale().toFixed(2);
+    setVar(this.host, '--ts', ts);
+    setVar(document.body, '--ui-ts', ts);          // the HUD's top centre makes room for ❚❚
     flag(this.root, 'is-play', !!vis.play);
     flag(this.root, 'is-any', !!vis.any);
     if (!vis.play && (this.stick.id !== null)) this._release();

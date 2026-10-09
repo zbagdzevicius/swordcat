@@ -34,6 +34,15 @@ export const TUNING = Object.freeze({
   animFarDist: 40,                       // tech.md §11.1: mixers beyond this update every 2nd frame
   pending: true,                         // §8.3 arena budget: spawns beyond the cap wait dormant for a free slot
   capRadius: 30,                         // §8.3: unalerted enemies farther than this from a spawn are another fight
+  // walkers never path into deep water (the Old Bridge stream): a step whose probe point (radius + probe + speed × look
+  // ahead) is deep turns by the listed angles (rad) until dry, else stops; one that ends up in deep water anyway
+  // (knockback) for `rescueAfter` s, or an arena member more than `arenaSlack` m outside its locked arena, is put back
+  // on its last dry footing / the nearest valid arena ring point (else despawned: the wave can still clear)
+  water: { probe: 0.45, lookAhead: 0.3, turns: [0.6, -0.6, 1.2, -1.2, 1.75, -1.75, 2.4, -2.4], rescueAfter: 0.35, arenaSlack: 2, dryEvery: 0.2 },
+  // open-zone enemies leave a locked arena they don't belong to alone: no alert on her while she is inside it,
+  // a running chase drops back to `return`, and flyers are kept `flyerPad` m outside its fog wall
+  foreignArena: { pad: 0.5, flyerPad: 1.0 },
+  standoff: 0.35,                        // m between a long-bodied enemy's capsule front (its snout) and her collider
   perch: { search: 2.5, ring: 0.2, arc: 0.12, minFrac: 0.6, slack: 0.45 },   // `{ y }` spawns snap onto a nearby wall / cart top
 });
 

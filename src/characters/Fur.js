@@ -269,7 +269,7 @@ void main() {
 
 const FUR_FRAG = /* glsl */`
 uniform sampler2D uStrands;
-uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade;
+uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade, uEdgeStart, uFringe;
 uniform vec3 uTipTint, uRimColor, uHolyColor;
 varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
 varying float vH, vMask;
@@ -296,12 +296,13 @@ void main() {
     // expected coverage of a tapered strand field at this height (what a pixel covering many strands sees)
     float foot = length(fwidth(tp)) * uCells;
     // dense body for the inner half of the length, then a quick fade: a soft but defined fluffy edge (not a blur)
-    float vol = (1.0 - smoothstep(0.42, 0.86, vH)) * dens;
+    // (uFringe < 1 pulls that edge in: dark coats against the pale fog otherwise read as a smudgy dark halo)
+    float vol = (1.0 - smoothstep(0.42 * uFringe, 0.86 * uFringe, vH)) * dens;
     alpha = mix(sharp, vol, smoothstep(0.35, 1.25, foot)) * mix(1.0, 0.5, vH * vH);
     // edge-on, each outer shell's silhouette shows as a ring ("onion layers"): fade the outer shells there so the
     // silhouette turns into a soft fringe instead
     float ndv = abs(dot(normalize(vWN), normalize(cameraPosition - vWPos)));
-    alpha *= mix(1.0, smoothstep(0.02, uEdgeFade, ndv), smoothstep(0.35, 0.85, vH));
+    alpha *= mix(1.0, smoothstep(0.02, uEdgeFade, ndv), smoothstep(uEdgeStart, uEdgeStart + 0.5, vH));
     if (alpha < 0.06) discard;   // nearly invisible tips must not write depth over what is behind them
   }
   vec3 N = normalize(vWN);
@@ -353,6 +354,7 @@ export function makeFurMaterial(o = {}) {
       uRootDark: { value: o.rootDark ?? 0.82 }, uDensityBoost: { value: o.density ?? 1.5 }, uFlash: { value: 0 },
       uComb: { value: o.comb ?? 1.6 }, uStretch: { value: o.stretch ?? 0.65 },
       uCells: { value: STRANDS.cells }, uStreak: { value: o.streak ?? 0.09 }, uEdgeFade: { value: o.edgeFade ?? 0.35 },
+      uEdgeStart: { value: o.edgeStart ?? 0.35 }, uFringe: { value: o.fringe ?? 1 },
     }]),
     vertexShader: FUR_VERT, fragmentShader: FUR_FRAG,
   });

@@ -426,4 +426,43 @@ export default [
       t.assert(s.particles > 0, 'gallery particles');
     },
   },
+  {
+    // review fixes: a fog wall between the lens and her thins out (no grey-out); a flanker between the lens and her
+    // gets screen-capped, softened marks (no frame-filling glint)
+    name: 'fx:occlusion', order: 57.5, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await prepare(t);
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, f = p.facing;
+        const c = p.pos.clone().add(new g.THREE.Vector3(Math.sin(f), 0, Math.cos(f)).multiplyScalar(5.5));
+        g.__fxWall = ctx.fx.mistRing(c, 6.2);
+        return true;
+      });
+      t.assert(!!(await until(t, (x) => x.walls >= 1, 5000)), 'wall never rose');
+      await t.wait(1500);
+      const w = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, wall = ctx.scene.getObjectByName('fx.mist.wall');
+        return { cam: ctx.camera.position.distanceTo(ctx.player.pos), focus: wall?.material.uniforms.uFocus.value.toArray() ?? null };
+      });
+      await t.shot('fx/occl-wall');
+      t.assert(w.focus && w.focus[1] === 1 && w.focus[0] > 1, `wall focus uniform ${JSON.stringify(w.focus)}`);
+      await t.G(() => { window.__GAME__.__fxWall?.remove(); return true; });
+      const r = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, cam = ctx.camera.position;
+        // a rat right between the lens and her
+        const a = Math.atan2(cam.x - p.pos.x, cam.z - p.pos.z) - p.facing;
+        const d = Math.hypot(cam.x - p.pos.x, cam.z - p.pos.z);
+        const rat = g.__fxSpawn('rat_pike', a, Math.max(1.2, d - 1.6), false);
+        g.__fxIds = [ctx.fx.telegraph({ actor: rat, kind: 'parry', duration: 30 })];
+        return { d };
+      });
+      await t.wait(600);
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(0));
+      await t.frames(2);
+      await t.shot('fx/occl-marks');
+      await resume(t);
+      await t.G(() => { const g = window.__GAME__; for (const id of g.__fxIds) g.ctx.fx.telegraphEnd(id); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); return true; });
+      t.log(`cam→her ${w.cam.toFixed(2)} m, wall focus ${w.focus?.[0]?.toFixed(2)}, rat cam distance ~${(r.d - Math.max(1.2, r.d - 1.6)).toFixed(2)}`);
+    },
+  },
 ];

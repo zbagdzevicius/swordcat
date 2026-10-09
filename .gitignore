@@ -3,3 +3,4 @@ dist/
 research/videos/*.mp4
 research/videos/*.webm
 *.log
+tests/shots/

@@ -247,16 +247,34 @@ function bow(b) {
 }
 
 // ------------------------------------------------------------------ other species
+/** Pudding: matches the recoloured Dragon_Evolved model — rust-orange hide, red belly / mouth, blue-grey horns and
+ *  fangs, grey half-lidded sleepy eyes (§3.6 "huge, nervous"). */
 function dragonFace(o) {
-  const eye = (x) => `<ellipse cx="${x}" cy="48" rx="8" ry="9" fill="#FFD34D" stroke="${INK}" stroke-width="1.8"/><ellipse cx="${x}" cy="49" rx="2.4" ry="6.6" fill="#1A0E0A"/><circle cx="${x - 2.6}" cy="44.5" r="2" fill="#fff"/>`;
+  const HIDE = '#A4532A', HIDE_D = '#7A3A1C', HIDE_L = '#BE6A3C', BELLY = '#D2443C', HORN = '#9AA3B5', HORN_D = '#6E7688';
+  const wide = o.expression === 'surprised' || o.expression === 'worried';
+  const shut = o.expression === 'sleep';
+  const lidY = wide ? 39 : 47; // upper lid edge: half-lidded by default
+  const eye = (x, flip) => shut
+    ? `<path d="M${x - 9} 48q9 5 18 0" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>`
+    : `<ellipse cx="${x}" cy="48" rx="9" ry="8.5" fill="#D6D9E0" stroke="${INK}" stroke-width="1.8"/>`
+      + `<circle cx="${x + flip}" cy="${wide ? 47 : 50.5}" r="${wide ? 3.6 : 3.2}" fill="#3A3F4A"/><circle cx="${x + flip - 1.2}" cy="${wide ? 45.6 : 49.4}" r="1.1" fill="#fff"/>`
+      + `<path d="M${x - 10} ${lidY}Q${x} ${lidY - 3} ${x + 10} ${lidY}L${x + 10} 38Q${x} 33 ${x - 10} 38Z" fill="${HIDE}"/>`
+      + `<path d="M${x - 10} ${lidY}Q${x} ${lidY - 3} ${x + 10} ${lidY}" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>`;
   return '<circle cx="50" cy="50" r="50" fill="#CFC6B8"/>'
-    + `<path d="M28 30 18 6l18 16M72 30 82 6 64 22" fill="#F1E6CF" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
-    + `<path d="M50 18c22 0 36 14 36 32 0 10-4 16-10 22 4 8 2 22-26 24-28-2-30-16-26-24-6-6-10-12-10-22 0-18 14-32 36-32Z" fill="#C2353B" stroke="${INK}" stroke-width="2.2"/>`
-    + '<path d="M50 18v10M40 20l3 8M60 20l-3 8" stroke="#8E1B22" stroke-width="3" stroke-linecap="round"/>'
-    + `<ellipse cx="50" cy="78" rx="20" ry="13" fill="#E06A5A" stroke="${INK}" stroke-width="1.8"/>`
-    + `<ellipse cx="43" cy="74" rx="2.4" ry="1.6" fill="${INK}"/><ellipse cx="57" cy="74" rx="2.4" ry="1.6" fill="${INK}"/>`
-    + `<path d="M38 84q12 6 24 0" fill="none" stroke="${INK}" stroke-width="1.8" stroke-linecap="round"/><path d="M42 85l2 4 2-3.4M54 85l2 3.4 2-4" fill="#fff" stroke="${INK}" stroke-width="1"/>`
-    + eye(35) + eye(65) + (o.expression === 'happy' ? '<ellipse cx="26" cy="66" rx="5" ry="3" fill="#F28CA6" opacity=".5"/><ellipse cx="74" cy="66" rx="5" ry="3" fill="#F28CA6" opacity=".5"/>' : '');
+    // blue-grey horns sweeping up and out
+    + `<path d="M30 30 14 8c-2-3 2-5 4-3l18 18M70 30 86 8c2-3-2-5-4-3L64 23" fill="${HORN}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
+    + `<path d="M20 12 30 25M80 12 70 25" stroke="${HORN_D}" stroke-width="1.6" stroke-linecap="round"/>`
+    // head
+    + `<path d="M50 18c22 0 36 14 36 32 0 10-4 16-10 22 4 8 2 22-26 24-28-2-30-16-26-24-6-6-10-12-10-22 0-18 14-32 36-32Z" fill="${HIDE}" stroke="${INK}" stroke-width="2.2"/>`
+    + `<path d="M50 14l-4 8h8ZM39 18l-1 8 7-3ZM61 18l1 8-7-3Z" fill="${HIDE_D}" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"/>`
+    + `<ellipse cx="50" cy="32" rx="16" ry="6" fill="${HIDE_L}" opacity=".55"/>`
+    // snout + red mouth with grey fangs
+    + `<ellipse cx="50" cy="76" rx="21" ry="13" fill="${HIDE_L}" stroke="${INK}" stroke-width="1.8"/>`
+    + `<ellipse cx="43" cy="71" rx="2.4" ry="1.6" fill="${INK}"/><ellipse cx="57" cy="71" rx="2.4" ry="1.6" fill="${INK}"/>`
+    + `<path d="M34 79q16 ${wide ? 14 : 10} 32 0Z" fill="${BELLY}" stroke="${INK}" stroke-width="1.8" stroke-linejoin="round"/>`
+    + `<path d="M39 80l2 5 2.4-4.4M56.6 80.6l2.4 4.4 2-5" fill="${HORN}" stroke="${INK}" stroke-width="1"/>`
+    + eye(35, 1) + eye(65, -1)
+    + (o.expression === 'happy' ? '<ellipse cx="25" cy="62" rx="5" ry="3" fill="#F28CA6" opacity=".5"/><ellipse cx="75" cy="62" rx="5" ry="3" fill="#F28CA6" opacity=".5"/>' : '');
 }
 
 function hyenaFace(o, rogue) {

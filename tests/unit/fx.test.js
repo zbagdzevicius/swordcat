@@ -530,3 +530,49 @@ test('FX service: shader warm-up shows hidden fx objects for one frame with an e
   hook();
   ctx.fx.dispose();
 });
+
+// ---- review fixes: marks capped on screen; marks of an actor between lens and player softened; wall near-fade
+import { capMarkSize, MARK_SCREEN } from '../../src/fx/Marks.js';
+import { occluderFactor } from '../../src/fx/Telegraphs.js';
+import { WALL, MistCards } from '../../src/fx/MistCards.js';
+
+test('marks: projected size is capped at ~6% of the screen height', () => {
+  const cam = new THREE.PerspectiveCamera(55, 16 / 9, 0.1, 500);
+  const p11 = cam.projectionMatrix.elements[5];
+  const frac = (s, d, asp = 1) => (s * asp * p11) / d / 2;
+  // a 0.62 m parry glint 1.2 m from the lens would cover ~50% of the screen; capped to 6%
+  assert.ok(frac(0.62, 1.2) > 0.3);
+  assert.ok(Math.abs(frac(capMarkSize(0.62, 1.2, p11), 1.2) - MARK_SCREEN.maxFrac) < 1e-9);
+  // the tall "!" (aspect 1.25) is capped on its height
+  assert.ok(Math.abs(frac(capMarkSize(0.34, 0.8, p11, 1.25), 0.8, 1.25) - MARK_SCREEN.maxFrac) < 1e-9);
+  // at normal combat distance marks keep their authored size
+  assert.equal(capMarkSize(0.34, 9, p11, 1.25), 0.34);
+  assert.ok(MARK_SCREEN.nearFade[1] >= 1.5);
+});
+
+test('telegraph marks: an attacker nearer the camera than the player is softened', () => {
+  assert.equal(occluderFactor(9, 6), 1);          // behind her
+  assert.equal(occluderFactor(5.6, 6), 1);        // beside her
+  assert.equal(occluderFactor(3, 6), 0);          // between the lens and her
+  const mid = occluderFactor(4.5, 6);
+  assert.ok(mid > 0 && mid < 1);
+  assert.equal(occluderFactor(3, 0), 1);          // no player distance → untouched
+});
+
+test('mist walls: wider near-fade than the ambient field + player focus fade', () => {
+  const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera();
+  const player = new Actor({}, { height: 0.6 });
+  scene.add(player.object3d); player.object3d.position.set(0, 0, 6); camera.position.set(0, 1.5, 10);
+  const mc = new MistCards({ scene, camera, player, game: { realTime: 0 } });
+  mc.init(scene, 4);
+  const h = mc.ring([0, 0, 0], 6);
+  const wall = scene.getObjectByName('fx.mist.wall');
+  assert.ok(WALL.near >= 4 && WALL.focusMin < 0.3);
+  assert.equal(wall.material.uniforms.uNear.value, WALL.near);
+  mc.render(DT);
+  const f = wall.material.uniforms.uFocus.value;
+  assert.equal(f.y, 1);
+  assert.ok(Math.abs(f.x - camera.position.distanceTo(new THREE.Vector3(0, 0.5 * (player.height ?? 0.6), 6))) < 1e-6);
+  h.remove();
+  assert.equal(mc.wallCount, 0);
+});

@@ -191,6 +191,10 @@ export class ClothSim {
     // "behind her" half-space: a cape never wraps to the front of the body (fast turns, spins, spawn facing).
     // plane = { x, y, z (unit forward), d (= forward · root) }; planeMax[i] = how far forward particle i may go.
     this.plane = null;
+    // "off her head" half-space (chest frame, CAPE_NECK): no particle above / in front of the neckline, so hunched,
+    // tucked or upside-down poses (Tumble roll, flinch) never fold the cloth forward over her head.
+    // neck = { x, y, z (unit up+forward), d (= normal · neckline point), s (scale) }
+    this.neck = null;
     this.planeMax = new Float32Array(N);
     for (let i = 0; i < N; i++) {
       const row = Math.floor(i / C) / (R - 1);
@@ -256,13 +260,17 @@ export class ClothSim {
     }
   }
   collide() {
-    const p = this.p, N = this.N, S = this.spheres, gy = this.groundY, pl = this.plane;
+    const p = this.p, N = this.N, S = this.spheres, gy = this.groundY, pl = this.plane, nk = this.neck;
     for (let i = 0; i < N; i++) {
       if (this.pinned[i]) continue;
       const k = i * 3;
       if (pl) {
         const ahead = p[k] * pl.x + p[k + 1] * pl.y + p[k + 2] * pl.z - pl.d - this.planeMax[i] * pl.s;
         if (ahead > 0) { p[k] -= pl.x * ahead; p[k + 1] -= pl.y * ahead; p[k + 2] -= pl.z * ahead; }
+      }
+      if (nk) {
+        const ahead = p[k] * nk.x + p[k + 1] * nk.y + p[k + 2] * nk.z - nk.d - CAPE_NECK.margin * nk.s;
+        if (ahead > 0) { p[k] -= nk.x * ahead; p[k + 1] -= nk.y * ahead; p[k + 2] -= nk.z * ahead; }
       }
       for (let s = 0; s < S.length; s++) {
         const o = S[s];
@@ -272,18 +280,24 @@ export class ClothSim {
       if (p[k + 1] < gy) { p[k + 1] = gy; this.q[k] = THREE.MathUtils.lerp(this.q[k], p[k], 0.5); this.q[k + 2] = THREE.MathUtils.lerp(this.q[k + 2], p[k + 2], 0.5); }
     }
   }
-  /** Advance with an accumulator at 60 Hz (max 4 sub-steps). */
-  advance(dt, wind) {
+  /**
+   * Advance with an accumulator at 60 Hz (max 4 sub-steps). `onSub(f)` runs before each sub-step with the fraction
+   * f (0..1] of the frame it ends at, so callers can move pins / colliders smoothly through the frame: snapping the
+   * pins a whole frame ahead in the first sub-step injects a burst of velocity at the neckline every frame, and at
+   * 30-45 fps a running kitten's cape crumpled up against her back instead of trailing.
+   */
+  advance(dt, wind, onSub = null) {
     this.acc = Math.min(this.acc + dt, 4 / 60);
-    let n = 0;
-    while (this.acc >= 1 / 60 && n < 4) { this.step(1 / 60, wind); this.acc -= 1 / 60; n++; }
+    const n = Math.min(4, Math.floor(this.acc * 60 + 1e-6));
+    for (let s = 0; s < n; s++) { if (onSub) onSub((s + 1) / n); this.step(1 / 60, wind); this.acc -= 1 / 60; }
+    if (this.acc < 0) this.acc = 0;
     return n;
   }
 }
 
 // ------------------------------------------------------------------ hero cape (verlet + sway cross-fade)
 
-const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _inv = new THREE.Matrix4(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
+const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _inv = new THREE.Matrix4(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _bodyM = new THREE.Matrix4();
 /** Wind shelter (fractions of the wind magnitude, kitten frame): max forward push, constant backward trail. */
 export const CAPE_WIND = Object.freeze({ front: 0.12, trail: 0.3 });
 /**
@@ -292,6 +306,20 @@ export const CAPE_WIND = Object.freeze({ front: 0.12, trail: 0.3 });
  * `snapYaw`: a root rotation jump larger than this in one update re-drapes the cloth (teleports / cuts / spawns).
  */
 export const CAPE_FRONT = Object.freeze({ margin: 0.07, marginLow: 0.05, snapYaw: 1.2 });
+/**
+ * Head guard (kitten bind space, follows the chest): the cloth stays on the back side of a plane through the
+ * neckline (y = anchorY, z = anchorZ) whose normal points up and forward (0, 1, `tilt`), at most `margin` past it.
+ * Billowing straight back or hanging down is untouched; folding up/forward over the head (hunched hit, Tumble roll
+ * upside down) is not allowed, so from behind she never turns into a cloth sack (review r2/c00).
+ */
+export const CAPE_NECK = Object.freeze({ tilt: 1, margin: 0.02 });
+/**
+ * How much of the neckline's world motion the cloth feels as inertia (0 = carried rigidly, 1 = full world-space
+ * physics), horizontal and vertical. The run cycle bobs the chest ~±3 cm at ~4 Hz, which is about 1 g of vertical
+ * acceleration: with full inertia the cloth went weightless every stride and flapped up into a crumpled bag over
+ * her back. Starts, stops and turns still swing it; constant running trails it through the air drag (`trail`).
+ */
+export const CAPE_INERTIA = Object.freeze({ h: 0.55, v: 0.15, trail: 0.9 });
 
 /** Collision spheres in kitten space (art.md §5: torso, legs, tail root; plus pauldrons and tassets). */
 export const CAPE_COLLIDERS = Object.freeze([
@@ -370,31 +398,87 @@ export class HeroCape {
       c.w.x = _v.x; c.w.y = _v.y; c.w.z = _v.z; c.w.r = c.r * s;
     }
     this.sim.groundY = this.root.getWorldPosition(_w).y + 0.012 * this.root.scale.y;
-    // "behind her" plane from the root (body facing; leaning / lying poses keep their back to -Z)
-    const e = this.root.matrixWorld.elements, s = Math.hypot(e[8], e[9], e[10]) || 1;
+    // "behind her" plane from the body joint (root facing + the body roll: the Tumble flips her back over, and a
+    // root-only plane then held the cloth on the far side, over her head). Lying poses roll the body about Z, which
+    // keeps their back to -Z.
+    const bodyJ = this.rig.joints?.body;
+    const e = (bodyJ && this.rig.bodyBind ? _bodyM.multiplyMatrices(bodyJ.matrixWorld, _inv.copy(this.rig.bodyBind).invert()) : this.root.matrixWorld).elements;
+    const s = Math.hypot(e[8], e[9], e[10]) || 1;
     const pl = this.sim.plane || (this.sim.plane = { x: 0, y: 0, z: 1, d: 0, s: 1 });
     pl.x = e[8] / s; pl.y = e[9] / s; pl.z = e[10] / s; pl.s = s;
     pl.d = pl.x * e[12] + pl.y * e[13] + pl.z * e[14];
+    // neckline head guard (chest frame)
+    const nk = this.sim.neck || (this.sim.neck = { x: 0, y: 0, z: 0, d: 0, s: 1 });
+    _v.set(0, 1, CAPE_NECK.tilt).transformDirection(this._pinM);
+    nk.x = _v.x; nk.y = _v.y; nk.z = _v.z; nk.s = this._pinM.getMaxScaleOnAxis();
+    _v.set(0, this.d.anchorY, this.d.anchorZ).applyMatrix4(this._pinM);
+    nk.d = nk.x * _v.x + nk.y * _v.y + nk.z * _v.z;
+  }
+  /** Keep this frame's pin / collider / plane targets; `prev` too when there is nothing to interpolate from. */
+  _captureTargets(resetPrev) {
+    const sim = this.sim, S = sim.spheres, pl = sim.plane;
+    if (!this._pinT) {
+      this._pinT = new Float32Array(sim.pins.length); this._pinP = new Float32Array(sim.pins.length);
+      this._sphT = new Float32Array(S.length * 3); this._sphP = new Float32Array(S.length * 3);
+    }
+    this._pinT.set(sim.pins);
+    for (let i = 0; i < S.length; i++) { this._sphT[i * 3] = S[i].x; this._sphT[i * 3 + 1] = S[i].y; this._sphT[i * 3 + 2] = S[i].z; }
+    this._plT = pl ? pl.d : 0; this._nkT = sim.neck ? sim.neck.d : 0;
+    if (resetPrev) { this._pinP.set(this._pinT); this._sphP.set(this._sphT); this._plP = this._plT; this._nkP = this._nkT; this._pinCentre(this._pinT, this._cen || (this._cen = new THREE.Vector3())); }
+  }
+  _pinCentre(arr, out) {
+    const C = this.sim.C; out.set(0, 0, 0);
+    for (let c = 0; c < C; c++) { out.x += arr[c * 3]; out.y += arr[c * 3 + 1]; out.z += arr[c * 3 + 2]; }
+    return out.multiplyScalar(1 / C);
+  }
+  /** Sub-step hook: pins, colliders and the "behind her" plane slide from the last simulated frame to this one. */
+  _lerpTargets(f) {
+    const sim = this.sim, S = sim.spheres, P = sim.pins, a = this._pinP, b = this._pinT;
+    for (let i = 0; i < P.length; i++) P[i] = a[i] + (b[i] - a[i]) * f;
+    const sa = this._sphP, sb = this._sphT;
+    for (let i = 0; i < S.length; i++) {
+      S[i].x = sa[i * 3] + (sb[i * 3] - sa[i * 3]) * f; S[i].y = sa[i * 3 + 1] + (sb[i * 3 + 1] - sa[i * 3 + 1]) * f; S[i].z = sa[i * 3 + 2] + (sb[i * 3 + 2] - sa[i * 3 + 2]) * f;
+    }
+    if (sim.plane) sim.plane.d = this._plP + (this._plT - this._plP) * f;
+    if (sim.neck) sim.neck.d = this._nkP + (this._nkT - this._nkP) * f;
+    // carry the free cloth along with the non-inertial share of the neckline's motion (CAPE_INERTIA)
+    const c = this._pinCentre(P, _v), dx = c.x - this._cen.x, dy = c.y - this._cen.y, dz = c.z - this._cen.z;
+    this._cen.copy(c);
+    const kh = 1 - CAPE_INERTIA.h, kv = 1 - CAPE_INERTIA.v;
+    if (dx * dx + dy * dy + dz * dz < 0.25) {
+      const p = sim.p, q = sim.q, N = sim.N, cx = dx * kh, cy = dy * kv, cz = dz * kh;
+      // the air drag the world-space damping would have put on the carried share of the motion (scaled by `trail`),
+      // so a steady run still trails the cape behind her
+      const dr = (1 - sim.d.damping) * CAPE_INERTIA.trail;
+      for (let i = 0; i < N; i++) {
+        if (sim.pinned[i]) continue;
+        const k = i * 3;
+        p[k] += cx; p[k + 1] += cy; p[k + 2] += cz;
+        q[k] += cx * (1 + dr); q[k + 1] += cy; q[k + 2] += cz * (1 + dr);
+      }
+    }
   }
   update(dt, { wind = null, speed = 0 } = {}) {
     if (!this.rig.chestBind) return;
     this._updatePins();
+    let resetPrev = false;
     if (!this._initialised) {
       this.sim.reset((v) => v.applyMatrix4(this._pinM));
       for (let i = 0; i < 90; i++) this.sim.step(1 / 60, null);
-      this._initialised = true;
+      this._initialised = true; resetPrev = true;
       this.root.getWorldPosition(this._lastRootPos);    // the reset already placed the cloth: no teleport shift
     }
     // detect teleports: large root jumps shift the cloth instead of whipping it; a facing snap re-drapes it
     const pl = this.sim.plane;
     const yaw = Math.atan2(pl.x, pl.z);
     if (this._lastYaw !== undefined && Math.abs(Math.atan2(Math.sin(yaw - this._lastYaw), Math.cos(yaw - this._lastYaw))) > CAPE_FRONT.snapYaw) {
-      this.sim.reset((v) => v.applyMatrix4(this._pinM));
+      this.sim.reset((v) => v.applyMatrix4(this._pinM)); resetPrev = true;
     }
     this._lastYaw = yaw;
     const rp = this.root.getWorldPosition(_w);
-    if (this._lastRootPos.distanceToSquared(rp) > 1.0) this.sim.shift(rp.x - this._lastRootPos.x, rp.y - this._lastRootPos.y, rp.z - this._lastRootPos.z);
+    if (this._lastRootPos.distanceToSquared(rp) > 1.0) { this.sim.shift(rp.x - this._lastRootPos.x, rp.y - this._lastRootPos.y, rp.z - this._lastRootPos.z); resetPrev = true; }
     this._lastRootPos.copy(rp);
+    this._captureTargets(resetPrev);
     // wind in world space, but the body shelters the front: in the kitten's frame the forward (+Z) part is cut to
     // CAPE_WIND.front of the magnitude and a small backward trail is added, so a tail wind never wraps the cape
     // over her face or legs (it billows sideways / behind like the refs instead).
@@ -409,7 +493,8 @@ export class HeroCape {
         wv.applyQuaternion(_q.invert());
       }
     }
-    this.sim.advance(dt, wv);
+    if (this.sim.advance(dt, wv, this._onSub || (this._onSub = (f) => this._lerpTargets(f))) > 0) { this._pinP.set(this._pinT); this._sphP.set(this._sphT); this._plP = this._plT; this._nkP = this._nkT; }
+    else this._lerpTargets(1);
     // blend weight
     const sgn = Math.sign(this.wTarget - this.w);
     if (sgn) this.w = clamp(this.w + (sgn * dt) / this.blendDur, 0, 1);

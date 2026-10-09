@@ -223,6 +223,45 @@ test('cliff banks: no bunny-hopping up the smoothed foot; steering into a bank s
   assert.ok(w.onGround && !w.sliding, 'stands on it');
 });
 
+test('angled cliff banks: the body never rests against the face; steering into it slides to the foot at any angle', () => {
+  // a 60° bank 3.5 m tall at an angle to the 1 m grid (the grid leaves small walkable ramps at its foot)
+  const r = PLAYER.radius, apex = PLAYER.jumpV ** 2 / (2 * GRAVITY);
+  for (const ang of [0.25, 0.4, 0.75, 1.0, 1.2]) {
+    const fx = Math.sin(ang), fz = Math.cos(ang), k = Math.tan(Math.PI / 3);
+    const hf = Heightfield.fromFunction(80, 80, (x, z) => { const u = x * fx + z * fz; return u > 3 ? Math.min(3.5, (u - 3) * k) : 0; });
+    const { ph } = world({ hf });
+    const rimRise = (a) => {                                             // highest too-steep terrain at the capsule rim, above the feet
+      let m = -Infinity;
+      for (let i = 0; i < 16; i++) {
+        const qx = a.pos.x + Math.cos(i * Math.PI / 8) * r, qz = a.pos.z + Math.sin(i * Math.PI / 8) * r;
+        if (ph._terrainSteep(qx, qz)) m = Math.max(m, hf.heightAt(qx, qz) - a.pos.y);
+      }
+      return m;
+    };
+    // run at it, jumping whenever grounded: grounded spots never have the body inside the face, and no jump goes
+    // higher than one jump from ground she stood on
+    const a = actor(0, 0, 0, { onGround: true });
+    let stood = 0, top = 0;
+    run(ph, a, 4, (x, i) => { x.vel.x = fx * PLAYER.run; x.vel.z = fz * PLAYER.run; if (x.onGround && i % 20 === 0) { x.vel.y = PLAYER.jumpV; x.onGround = false; } },
+      (x) => {
+        top = Math.max(top, x.pos.y);
+        if (x.onGround) { stood = Math.max(stood, x.pos.y); assert.ok(rimRise(x) < 0.06, `${ang}: grounded with the body ${rimRise(x).toFixed(2)} m into the face`); }
+      });
+    assert.ok(stood < 0.4, `${ang}: stood ${stood.toFixed(2)} m up the bank`);
+    assert.ok(top < stood + apex + 0.02, `${ang}: hopped to ${top.toFixed(2)} (stood ${stood.toFixed(2)} + jump ${apex.toFixed(2)})`);
+    // dropped high on the face while steering straight into it every step: loses height every few steps, ends at the foot
+    const s = actor(fx * 4.4, 0, fz * 4.4);
+    s.pos.y = hf.heightAt(s.pos.x, s.pos.z) + 0.02;
+    let last = s.pos.y, stall = 0, maxStall = 0;
+    run(ph, s, 3, (x) => { x.vel.x = fx * PLAYER.run; x.vel.z = fz * PLAYER.run; }, (x) => {
+      if (x.onGround) return;
+      stall = x.pos.y < last - 1e-3 ? 0 : stall + 1; maxStall = Math.max(maxStall, stall); last = x.pos.y;
+    });
+    assert.ok(maxStall < 10, `${ang}: hung on the face for ${maxStall} steps`);
+    assert.ok(s.onGround && s.pos.y < 0.4 && s.pos.x * fx + s.pos.z * fz < 3.3, `${ang}: ended at y ${s.pos.y.toFixed(2)}, ${(s.pos.x * fx + s.pos.z * fz).toFixed(2)} m along`);
+  }
+});
+
 test('without a level: flat ground at 0; flying ignores gravity but stays above ground; noClip integrates only', () => {
   const ctx = fakeCtx();
   const ph = new Physics(ctx);

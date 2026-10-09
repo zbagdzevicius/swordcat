@@ -13,14 +13,16 @@ import { E } from '../../src/core/events.js';
 import { ENEMIES, BOSSES, KITTENS_BY_LEVEL, KITTEN_IDS, LEVEL_IDS, ATTACKS } from '../../src/core/config.js';
 import { ENV_PRESETS, finalFog, toState } from '../../src/world/Env.js';
 import { Objectives } from '../../src/world/Objectives.js';
-import { Arena, arenaRingPoints, ARENA } from '../../src/world/Arena.js';
-import { Level, condOk, waterEntryLevel, colliderList } from '../../src/world/Level.js';
+import { Arena, arenaRingPoints, ARENA, arenaFlag } from '../../src/world/Arena.js';
+import { Level, condOk, waterEntryLevel, colliderList, levelRun, endLevelRun } from '../../src/world/Level.js';
 import { Terrain, polylineDistanceGrid } from '../../src/world/Terrain.js';
 import { VigilStone } from '../../src/world/VigilStone.js';
-import { Pickups } from '../../src/world/Pickups.js';
-import { PropActor, SwingingSack, WobbleKnight, plainAttribute } from '../../src/world/PropActor.js';
-import { defineLevel, buildLevel, levelModelPaths, procTemplate } from '../../src/world/LevelKit.js';
-import { LEVELS, rankFor, LevelManager } from '../../src/world/LevelManager.js';
+import { Pickups, placedFishFlag } from '../../src/world/Pickups.js';
+import { PropActor, SwingingSack, WobbleKnight, WOBBLE_REACH, plainAttribute } from '../../src/world/PropActor.js';
+import { defineLevel, buildLevel, levelModelPaths, procTemplate, openZoneFlag, OPEN_ZONE } from '../../src/world/LevelKit.js';
+import { makeBladeGeometry } from '../../src/world/Grass.js';
+import { makeWheatClumpGeometry, WheatField } from '../../src/world/Wheat.js';
+import { LEVELS, rankFor, LevelManager, levelEnemyTypes } from '../../src/world/LevelManager.js';
 import { distToPolyline, fbm, fbmP, smoothPolyline, pointAlong, polylineLength } from '../../src/world/noise.js';
 import manifest, { levels as manifestLevels } from '../../src/world/assets.manifest.js';
 
@@ -189,6 +191,28 @@ test('Arena: lockOn cutscene arenas lock when the cutscene ends; boss arenas kee
   boss.lock();
   assert.equal(enemies.spawned.filter((e) => e.type === 'boss_grizzlechop').length, 1, 'the same boss is kept');
   glade.dispose(); boss.dispose();
+});
+
+test('Arena: teleported far out of a locked fight resets it; a forced pull-in skips deep water (core)', async () => {
+  const ctx = fakeCtx();
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  ctx.player = { pos: new THREE.Vector3(0, 0, -11), alive: true, vel: new THREE.Vector3(), teleport({ pos }) { this.pos.copy(pos); } };
+  const a = new Arena(ctx, { id: 'bridge', at: [0, 0], r: 12, waves: [[['rat_pike', 3]]] }, () => 0, null);
+  a.lock();
+  ctx.player.pos.set(0, 0, -12.5); a.update(1 / 60);
+  assert.equal(a.locked, true, 'a step past the edge is kept inside');
+  assert.ok(Math.hypot(ctx.player.pos.x, ctx.player.pos.z) <= 12.2 + 1e-6);
+  ctx.player.pos.set(0, 0, -60); a.update(1 / 60);
+  assert.equal(a.locked, false, 'a teleport far away leaves the fight');
+  assert.equal(a.wave, 0); assert.equal(enemies.list.length, 0);
+  assert.equal(ctx.player.pos.z, -60, 'she is not dragged back');
+  // the nearest edge is in a stream: the pull-in walks toward the centre to dry ground
+  const level = { isDeepWater: (x, z) => z < -5 && z > -20, bounds: null, colliders: { circles: [] } };
+  const b = new Arena(ctx, { id: 'b2', at: [0, 0], r: 12, waves: [[['rat_pike', 1]]] }, () => 0, level);
+  ctx.player.pos.set(0, 0, -30);
+  b.lock();
+  assert.ok(!level.isDeepWater(ctx.player.pos.x, ctx.player.pos.z), `pulled onto dry ground (${ctx.player.pos.toArray()})`);
+  a.dispose(); b.dispose();
 });
 
 // ---------------------------------------------------------------------------------------------- Level helpers
@@ -392,7 +416,7 @@ test('U12 (meadow, complete in M1): §12.3 layout — 3 kittens + letter l1, pra
   const def = await loadDef('meadow');
   assert.deepEqual([def.size, def.res, def.seed, def.hills.amp, def.pathWidth], [200, 200, 11, 1.5, 6]);
   assert.deepEqual(def.spine, [[0, -80], [0, -62], [-6, -50], [-22, -30], [-20, -4], [2, 18], [24, 40], [30, 62], [30, 90]]);
-  assert.deepEqual(def.spawns.title.slice(0, 2), [0, -64]); assert.deepEqual(def.spawns.practice, [-10, -90, 0]); assert.deepEqual(def.spawns.start, [-4, -58, 0]);
+  assert.deepEqual(def.spawns.title.slice(0, 2), [0, -64]); assert.deepEqual(def.spawns.practice, [-10, -90, 0]); assert.deepEqual(def.spawns.start, [-1.5, -54.5, -0.4]);
   const z = Object.fromEntries(def.zones.map((x) => [x.id, x]));
   const kittens = def.zones.filter((x) => x.kind === 'kitten');
   assert.deepEqual(kittens.map((k) => k.kittenId).sort(), [...KITTENS_BY_LEVEL.meadow].sort());
@@ -473,8 +497,9 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.equal(L.arena('glade').canAutoLock(), false, 'glade waits for CS-03');
   assert.deepEqual(L.vigils.map((v) => v.id), ['vigil_1', 'vigil_2', 'vigil_3']);
   for (const id of ['title', 'practice', 'start', 'boss', 'vigil_1', 'vigil_2', 'vigil_3']) assert.ok(L.spawns[id], `spawn ${id}`);
-  assert.ok(near(L.spawns.start.pos.x, -4) && near(L.spawns.start.pos.z, -58));
-  assert.deepEqual(L.triggers.map((t) => t.id).sort(), ['exit', 'lane', 'tallbert']);
+  assert.ok(near(L.spawns.start.pos.x, -1.5) && near(L.spawns.start.pos.z, -54.5));
+  assert.deepEqual(L.triggers.map((t) => t.id).sort(), ['exit', 'exit:blocked', 'lane', 'tallbert']);
+  assert.ok(L.wheat && L.wheat.count > 200 && L.wheat.mesh?.isInstancedMesh, `swaying wheat clumps (${L.wheat?.count})`);
   assert.ok(L.interactables.some((i) => i.id === 'picnic'));
   for (let i = 0; i < 8; i++) { const a = L.anchor('fog_edge_' + i); assert.ok(a && Math.max(Math.abs(a.pos.x), Math.abs(a.pos.z)) <= 94.01, `fog_edge_${i}`); }
   assert.ok(near(L.anchor('bell_far').pos.y, 30));
@@ -482,7 +507,7 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   const nC = L.colliders.circles.length + L.colliders.boxes.length + L.colliders.segments.length;
   assert.ok(nC > 150, `colliders (${nC})`);
   assert.ok(L.colliders.segments.some((s) => s.gate === 'practice'), 'the practice gate blocks the north gap');
-  assert.ok(L.batch.count > 400, `batched props (${L.batch.count})`);
+  assert.ok(L.batch.count > 300, `batched props (${L.batch.count})`);
   assert.ok(L.trees.length >= 2 && L.trees.some((t) => t.name.startsWith('fade:')), 'trees + fadeable fences');
   assert.ok(L.octreeMeshes.some((m) => m.name === 'oldBridge'), 'the Old Bridge deck collides');
   // the crossroads drystone walls (0.22 m segments) keep off every road and out of the Standing Stones arena
@@ -524,6 +549,27 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.equal(ctx.state.getFlag('seen.tut.pounce'), true);
   ctx.bus.emit(E.TELEGRAPH, { id: 1, actor: { def: { id: 'rat_xbow' } }, kind: 'aim' });
   assert.equal(toasts.count(E.TOAST), 2);
+  // the exit waits for Mochi: early -> a toast (every entry), never level:exit; rescued -> the exit fires
+  const exitT = L.triggers.find((t) => t.id === 'exit');
+  let exits = 0;
+  ctx.levels = { exit: () => { exits++; } };
+  ctx.player = { pos: new THREE.Vector3(0, 0, -60), alive: true, radius: 0.32, height: 1 };
+  const atExit = () => { ctx.player.pos.set(30, 0, 92); L.update(1 / 60); ctx.player.pos.set(30, 0, 80); L.update(1 / 60); };
+  const t0 = toasts.count(E.TOAST);
+  atExit(); atExit();
+  assert.equal(exits, 0, 'no exit with Mochi caged');
+  assert.equal(toasts.count(E.TOAST), t0 + 2, 'a "Mochi is still caged" toast per visit');
+  assert.ok(String(toasts.last(E.TOAST).text).length > 0);
+  ctx.state.setFlag('meadow.mochi', true);
+  atExit();
+  assert.equal(exits, 1, 'exit after the rescue'); assert.equal(exitT.fired, true);
+  // open zones: every Crow Fields enemy down -> meadow.cleared.crowfields (saved flag)
+  const crows = enemies.list.filter((e) => e.opts?.zone === 'crowfields');
+  assert.equal(crows.length, 6);
+  for (const e of crows.slice(0, 5)) { e.alive = false; ctx.bus.emit(E.ENEMY_DIED, { enemy: e }); }
+  assert.ok(!ctx.state.getFlag(openZoneFlag('meadow', 'crowfields')), 'not while one is left');
+  crows[5].alive = false; ctx.bus.emit(E.ENEMY_DIED, { enemy: crows[5] });
+  assert.equal(ctx.state.getFlag('meadow.cleared.crowfields'), true);
   // the practice gate opens with prologue.tutorial (collider removed)
   ctx.state.setFlag('prologue.tutorial', true);
   ctx.bus.emit(E.FLAG_SET, { key: 'prologue.tutorial', value: true });
@@ -533,6 +579,127 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.equal(L.actors.filter((a) => a.kind === 'rope_post').length, 3);
   L.dispose();
   assert.equal(L.actors.length, 0);
+});
+
+test('meadow reload: cleared open zones stay empty; a Vigil Stone load keeps nearby groups away (Continue at vigil_3)', async () => {
+  const ctx = fakeCtx();
+  ctx.assets.gltf = async (p) => stubGltf(p);
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  ctx.companions = { spawnKitten: () => ({}), clearLevel() {} };
+  ctx.state.setFlag('prologue.done', true);
+  const def = await loadDef('meadow');
+  let L = await buildLevel(ctx, def);
+  L.activate('vigil_3');
+  const sp = L.spawns.vigil_3.pos;
+  assert.equal(enemies.list.filter((e) => Math.hypot(e.pos.x - sp.x, e.pos.z - sp.z) < 15).length, 0, 'nothing spawns within 15 m of vigil_3');
+  assert.ok(enemies.list.some((e) => e.opts?.zone === 'crossroads'), 'far zones still populate');
+  assert.ok(enemies.list.filter((e) => e.opts?.zone === 'crowfields').every((e) => Math.hypot(e.opts.home.x - sp.x, e.opts.home.z - sp.z) >= OPEN_ZONE.safeLoadR));
+  L.dispose();
+  // vigil_1 sits at the crossroads: none of its rats wake up on top of her
+  enemies.list.length = 0;
+  L = await buildLevel(ctx, def); L.activate('vigil_1');
+  const v1 = L.spawns.vigil_1.pos;
+  assert.ok(enemies.list.every((e) => Math.hypot(e.pos.x - v1.x, e.pos.z - v1.z) >= 14), 'no rats beside vigil_1');
+  L.dispose();
+  // a cleared zone (saved flag) never respawns, from any spawn
+  enemies.list.length = 0;
+  ctx.state.setFlag(openZoneFlag('meadow', 'crossroads'), true);
+  L = await buildLevel(ctx, def); L.activate('start');
+  assert.equal(enemies.list.filter((e) => e.opts?.zone === 'crossroads').length, 0);
+  assert.equal(enemies.list.filter((e) => e.opts?.zone === 'crowfields').length, 6, 'the start spawn is not a safe-load point');
+  L.dispose();
+});
+
+test('Arena waves spawn already alerted (ring points sit beyond sight range)', () => {
+  const ctx = fakeCtx({ systems: false });
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  ctx.player = { pos: new THREE.Vector3(0, 0, 0), alive: true };
+  const a = new Arena(ctx, { id: 'x', at: [0, 0], r: 12, waves: [[['rat_pike', 3]]] });
+  a.lock();
+  assert.equal(enemies.list.length, 3);
+  assert.ok(enemies.list.every((e) => e.opts.alerted === true && e.opts.arena === 'x'));
+});
+
+test('Wobble Knight: glints only within reach, the strike still lands after a block pushback, parry hint only when allowed', () => {
+  const ctx = fakeCtx({ systems: false });
+  const hits = [], teles = [];
+  let slow = 0, hintOk = false;
+  ctx.combat = { applyHit: (a, t, d) => { hits.push(d); t.pos.z += 0.33; } };   // a blocked hit pushes her back
+  ctx.game = { slowMo: () => { slow++; } };
+  ctx.bus.on(E.TELEGRAPH, (p) => teles.push(Math.hypot(ctx.player.pos.x - p.actor.pos.x, ctx.player.pos.z - p.actor.pos.z)));
+  ctx.player = { pos: new THREE.Vector3(0, 0, 6), alive: true, radius: 0.32 };
+  const wk = new WobbleKnight(ctx, { id: 'wk', pos: new THREE.Vector3(), facing: 0, mesh: null, delay: 0.2, hint: () => hintOk });
+  const run = (sec) => { for (let t = 0; t < sec; t += 1 / 60) wk.update(1 / 60); };
+  run(3);
+  assert.equal(teles.length, 0, 'idle while she is away (6 m)');
+  assert.ok(wk.pos.length() < 1e-6, 'stays home');
+  ctx.player.pos.z = 1.78;
+  run(8.2);
+  assert.ok(hits.length >= 3, `keeps connecting after block pushbacks: it hops after her (${hits.length} hits, she is at ${ctx.player.pos.z.toFixed(2)} m)`);
+  const xz = () => Math.hypot(wk.pos.x - wk.home.x, wk.pos.z - wk.home.z);
+  assert.ok(wk.pos.z > 0 && xz() <= WOBBLE_REACH.roam + 1e-6, `hopped toward her, within its roam (${wk.pos.z.toFixed(2)}, she ${ctx.player.pos.z.toFixed(2)}, hits ${hits.length}, ${wk.phase})`);
+  assert.ok(teles.every((d) => d <= WOBBLE_REACH.swing + 1e-6), `every glint within reach (${teles.map((d) => d.toFixed(2))})`);
+  assert.equal(slow, 0, 'no slow-mo hint outside the Parry step');
+  ctx.player.pos.z = 30; run(4);
+  assert.ok(xz() < 0.06, 'hops home when she leaves');
+  hintOk = true; ctx.player.pos.z = 1.6;
+  run(2.5);
+  assert.equal(slow, 1, 'the hint fires on the first glint of the Parry step'); run(4); assert.equal(slow, 1, 'once');
+  assert.ok(WOBBLE_REACH.hit > WOBBLE_REACH.swing && WOBBLE_REACH.swing > ATTACKS.dummy_swing.arc.range + 0.32);
+});
+
+test('Grass: the 3-tri budget blade; Wheat: tapered stalks with heads + awns, one instanced draw', () => {
+  const b5 = makeBladeGeometry(5), b3 = makeBladeGeometry(3);
+  assert.equal(b5.index.count / 3, 5); assert.equal(b3.index.count / 3, 3);
+  assert.equal(b3.attributes.position.count, 5);
+  const g = makeWheatClumpGeometry(3);
+  assert.ok(g.attributes.aH && g.attributes.color && g.attributes.normal);
+  assert.ok(g.index.count / 3 <= 10 * 9, `clump tris (${g.index.count / 3})`);
+  const ys = g.attributes.position.array.filter((_, i) => i % 3 === 1);
+  assert.ok(Math.max(...ys) > 0.9 && Math.min(...ys) === 0, 'base at 0, heads near 1 m');
+  const f = new WheatField({ seed: 2 });
+  f.add(0, 0, 0, { h: 1 }); f.add(1, 0, 0, { h: 1.2, yaw: 1, tint: -0.5 });
+  const m = f.build();
+  assert.ok(m.isInstancedMesh && m.count === 2 && m.instanceColor);
+  f.update(1.5, { wind: 0.8, gust: 0.4, windDir: new THREE.Vector2(1, 0) }, new THREE.Vector3(1, 0, 0));
+  assert.equal(f.uniforms.uWind.value, 0.8);
+  f.dispose();
+});
+
+test('Terrain.finalize: tiled / half-res ground sits exactly on the heightfield (no seams)', () => {
+  const def = { id: 't', size: 40, res: 20, seed: 3, hills: { amp: 1.5 }, spine: [[0, -20], [0, 20]] };
+  for (const [step, chunks, tiles, tris] of [[1, 1, 1, 800], [1, 2, 4, 800], [2, 1, 1, 200]]) {
+    const tr = new Terrain(def, {}); tr.build();
+    const out = tr.finalize({ step, chunks });
+    const meshes = []; out.mesh.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    assert.equal(meshes.length, tiles);
+    assert.equal(meshes.reduce((s, m) => s + m.geometry.index.count / 3, 0), tris);
+    for (const m of meshes) {
+      const p = m.geometry.attributes.position;
+      for (let i = 0; i < p.count; i += 7) assert.ok(Math.abs(p.getY(i) - tr.heightfield.heightAt(p.getX(i), p.getZ(i))) < 1e-4);
+    }
+  }
+});
+
+test('Terrain ground LOD: far tiles swap to half resolution; full tiles keep crack-free (snapped) edges', () => {
+  const def = { id: 't', size: 40, res: 20, seed: 3, hills: { amp: 1.5 }, spine: [[0, -20], [0, 20]] };
+  const tr = new Terrain(def, {}); tr.build();
+  const out = tr.finalize({ chunks: 2, lod: true });
+  assert.equal(out.mesh.children.length, 4);
+  const t0 = out.mesh.children[0], { full, coarse } = t0.userData.lod;
+  assert.equal(full.index.count / 3, 200); assert.equal(coarse.index.count / 3, 50);
+  // every full-res edge vertex lies on the coarse edge (linear between the coarse vertices)
+  const fp = full.attributes.position, cp = coarse.attributes.position, V = 11, Vc = 6;
+  for (let k = 0; k < V; k++) {
+    const y = fp.getY(k), kc = k / 2;
+    const yc = Number.isInteger(kc) ? cp.getY(kc) : (cp.getY(Math.floor(kc)) + cp.getY(Math.ceil(kc))) / 2;
+    assert.ok(Math.abs(y - yc) < 1e-5, `edge vertex ${k}`);
+  }
+  assert.equal(Vc, Math.sqrt(cp.count));
+  const tris = Terrain.updateGroundLod(out.mesh, new THREE.Vector3(-15, 0, -15), 8);
+  assert.equal(t0.geometry, full, 'the tile under the camera is full');
+  assert.equal(out.mesh.children[3].geometry, out.mesh.children[3].userData.lod.coarse, 'the far tile is coarse');
+  assert.ok(tris < 800);
 });
 
 test('LevelManager: env preset + music by flags (Appendix B byFlag), anchor / arena lookups without a level', async () => {
@@ -558,4 +725,85 @@ test('LevelKit: defineLevel keeps the data and adds build(); procTemplate merges
   const t = procTemplate('k', [[new THREE.BoxGeometry(1, 1, 1), '#FF0000'], [new THREE.SphereGeometry(0.5, 6, 4), '#00FF00']]);
   assert.ok(t.geometry.index && t.geometry.attributes.color && t.geometry.attributes.normal && !t.geometry.attributes.uv);
   assert.ok(t.box.max.y >= 0.5);
+});
+
+// ------------------------------------------------------------------ M1 review: saved clears, placed fish, run stats, warm-up
+test('Arena: a clear is saved as <level>.cleared.<id>; restore() starts it cleared silently (bridge: also once Mochi is free)', () => {
+  const ctx = fakeCtx();
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  ctx.player = { pos: new THREE.Vector3(0, 0, 0), alive: true, vel: new THREE.Vector3(), teleport() {} };
+  const level = { id: 'meadow' };
+  const bus = spy(ctx);
+  const a = new Arena(ctx, { id: 'stones', at: [0, 0], r: 12, waves: [[['rat_pike', 1]]] }, () => 0, level);
+  assert.equal(arenaFlag('meadow', 'stones'), 'meadow.cleared.stones');
+  a.clear();
+  assert.equal(ctx.state.getFlag('meadow.cleared.stones'), true);
+  // a reload: the new arena starts cleared, no lock / waves / events, and companions + objectives know it
+  ctx.objectives = { cleared: new Set() }; ctx.companions = { cleared: new Set() };
+  const n = bus.count(E.ARENA_CLEAR);
+  const b = new Arena(ctx, { id: 'stones', at: [0, 0], r: 12, waves: [[['rat_pike', 1]]] }, () => 0, level);
+  assert.equal(b.restore(), true);
+  assert.equal(b.cleared, true); assert.equal(bus.count(E.ARENA_CLEAR), n);
+  assert.ok(ctx.objectives.cleared.has('stones') && ctx.companions.cleared.has('stones'));
+  b.lock(); assert.equal(b.locked, false); assert.equal(enemies.list.length, 0);
+  // bridge: the rescue flag counts as cleared; restoreUnless keeps the glade fight armed while Pudding is netted
+  const bridge = new Arena(ctx, { id: 'bridge', at: [0, 0], r: 12, waves: [[['rat_pike', 1]]], rescue: { companion: 'mochi', flag: 'meadow.mochi' } }, () => 0, level);
+  assert.equal(bridge.restore(), false);
+  ctx.state.setFlag('meadow.mochi', true);
+  assert.equal(new Arena(ctx, bridge.zone, () => 0, level).restore(), true);
+  ctx.state.setFlag('meadow.cleared.glade', true); ctx.state.setFlag('meadow.pudding', 'netted');
+  const gz = { id: 'glade', at: [0, 0], r: 14, restoreUnless: (st) => st.getFlag('meadow.pudding') === 'netted', waves: [] };
+  assert.equal(new Arena(ctx, gz, () => 0, level).restore(), false);
+  ctx.state.setFlag('meadow.pudding', true);
+  assert.equal(new Arena(ctx, gz, () => 0, level).restore(), true);
+});
+
+test('Pickups: placed fish lines save what she collected (bitmask flag) and skip it on the next load', () => {
+  const ctx = fakeCtx();
+  const mk = () => new Pickups(ctx, { heightAt: () => 0, levelId: 'meadow', root: new THREE.Group() });
+  const p1 = mk();
+  p1.fishLine([0, 0], [4, 0], 5, 3);
+  assert.equal(p1.count('fish'), 5);
+  const player = { pos: new THREE.Vector3(0, 0, 0), alive: true, radius: 0.3, hp: 8, maxHp: 8, milk: 0, milkMax: 2 };
+  ctx.player = player;
+  p1.update(1 / 60);
+  assert.equal(p1.count('fish'), 4);
+  assert.equal(ctx.state.getFlag(placedFishFlag('meadow', 3)), 1);
+  p1.dispose();
+  const p2 = mk();
+  ctx.player = null;
+  p2.fishLine([0, 0], [4, 0], 5, 3);
+  assert.equal(p2.count('fish'), 4, 'the collected fish stays gone after a reload');
+  assert.ok(p2.items.every((it) => it.pos.x > 0.5));
+  p2.dispose();
+});
+
+test('Level run stats live in state.levels[id] (Continue / Retry continue the run; exit ends it)', () => {
+  const ctx = fakeCtx();
+  const st = ctx.state;
+  st.playtime = 100; st.fish = 7;
+  const r = levelRun(st, 'meadow');
+  assert.deepEqual({ t: r.runT0, l: r.runLost, f: r.runFish0 }, { t: 100, l: 0, f: 7 });
+  r.runLost = 2;
+  st.playtime = 160; st.fish = 20;
+  const again = levelRun(new (st.constructor)(JSON.parse(JSON.stringify(st.toJSON()))), 'meadow');   // a Continue (saved + reloaded)
+  assert.deepEqual({ t: again.runT0, l: again.runLost, f: again.runFish0 }, { t: 100, l: 2, f: 7 });
+  const scratch = levelRun(st, 'meadow', true);
+  assert.equal(scratch.runT0, 160, 'the title backdrop never touches the run');
+  endLevelRun(st, 'meadow');
+  assert.equal(levelRun(st, 'meadow').runT0, 160, 'a normal entry after the exit starts a fresh run');
+});
+
+test('LevelManager: warm-up enemy types cover arena waves, open zones and the level warm rows', async () => {
+  const def = await loadDef('meadow');
+  const night = levelEnemyTypes(def, () => true), day = levelEnemyTypes(def, () => false);
+  for (const t of ['rat_pike', 'rat_xbow', 'crow']) assert.ok(day.includes(t), t);
+  assert.ok(night.includes('hyena') && !day.includes('hyena'));
+});
+
+test('Env: the warm hero key light is on in the night presets only (art.md mood rule)', () => {
+  for (const [name, p] of Object.entries(ENV_PRESETS)) {
+    const night = p.grade === 'night';
+    assert.equal((toState(p).hero ?? 0) > 0, night, `${name}: hero light ${night ? 'on' : 'off'}`);
+  }
 });

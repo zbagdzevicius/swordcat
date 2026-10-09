@@ -17,6 +17,8 @@ export function registerMaterialPatcher(fn) {
 const _all = new Set();
 /** Track + patch a material we own. */
 export function own(mat) { _all.add(mat); applyEnv(mat); for (const fn of _patchers) fn(mat); return mat; }
+/** Stop tracking + dispose a per-character material (shared materials must never be passed here). */
+export function disown(mat) { if (!mat) return; _all.delete(mat); mat.dispose(); }
 
 // ---- character environment map (art.md §4.1: the overcast PMREM is what makes the plate read as polished steel).
 // runtime.js builds it from the live Env colours; every lit material we own uses it instead of scene.environment.
@@ -122,12 +124,18 @@ export function tuftTexture() {
   const g = c.getContext('2d');
   g.clearRect(0, 0, W, H);
   let s = 11; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  for (let i = 0; i < 26; i++) {
-    const x0 = 6 + rnd() * (W - 12), len = H * (0.55 + rnd() * 0.45), bend = (rnd() - 0.5) * 18, w = 1.5 + rnd() * 2.8;
-    const grd = g.createLinearGradient(0, H, 0, H - len);
-    grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.75, 'rgba(255,255,255,0.85)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
-    g.strokeStyle = grd; g.lineWidth = w; g.lineCap = 'round';
-    g.beginPath(); g.moveTo(x0, H); g.quadraticCurveTo(x0 + bend * 0.3, H - len * 0.5, x0 + bend, H - len); g.stroke();
+  // tapered, curved strands whose alpha falls off toward the tip (a wisp, not a comb of straight lines)
+  g.lineCap = 'round';
+  for (let i = 0; i < 30; i++) {
+    const x0 = 8 + rnd() * (W - 16), len = H * (0.5 + rnd() * 0.48), bend = (rnd() - 0.5) * 30, w = 1.6 + rnd() * 3.0;
+    const P = (u) => { const a = 1 - u; return [a * a * x0 + 2 * a * u * (x0 + bend * 0.15) + u * u * (x0 + bend), H - len * u]; };
+    const N = 14;
+    for (let k = 0; k < N; k++) {
+      const u0 = k / N, u1 = (k + 1) / N, [ax, ay] = P(u0), [bx, by] = P(u1);
+      g.strokeStyle = `rgba(255,255,255,${(Math.pow(1 - u0, 1.4) * (0.75 + 0.25 * rnd())).toFixed(3)})`;
+      g.lineWidth = Math.max(0.6, w * Math.pow(1 - u0, 0.85));
+      g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+    }
   }
   _tuftTex = new THREE.CanvasTexture(c);
   _tuftTex.colorSpace = THREE.SRGBColorSpace;
@@ -147,5 +155,8 @@ export function tuftMaterial() {
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.16;');
   };
   _tuftMat.customProgramCacheKey = () => 'sc-tuft-v2';
+  // transparent + DoubleSide would make three draw back/front in two passes and flag needsUpdate before each
+  // (program re-resolve every draw, 2 draw calls). Alpha-tested, no depth writes: ordering within a card is moot.
+  _tuftMat.forceSinglePass = true;
   return _tuftMat;
 }

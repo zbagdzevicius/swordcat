@@ -9,6 +9,8 @@ export default defineConfig({
     assetsInlineLimit: 0,
     assetsDir: 'bundle',            // hashed JS/CSS never mix with the copied dist/assets/ library (R17)
   },
-  server: { port: 5173 },
+  // SMOKE_NOHMR=1 npx vite --port <p> --strictPort : no HMR / file watching, so other agents' saves cannot
+  // full-reload a page mid-smoke (changed files are still served fresh on the next page load).
+  server: process.env.SMOKE_NOHMR ? { port: 5173, hmr: false, watch: null } : { port: 5173 },
   preview: { port: 4173, strictPort: true },
 });

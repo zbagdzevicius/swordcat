@@ -14,11 +14,11 @@ import { Actor } from '../../src/core/Actor.js';
 import { PRESETS, PRESET_NAMES, localToWorld, worldToLocal, memeSway, handheld, MEME_PERIOD, DEG } from '../../src/camera/presets.js';
 import { CamPose, blendPose, applyPose, resolveEase } from '../../src/camera/pose.js';
 import { CameraShake } from '../../src/camera/CameraShake.js';
-import { relYaw, pickLockTarget, switchLockTarget, nearestLockTarget, FlickDetector, StickFlick } from '../../src/camera/LockOn.js';
+import { relYaw, pickLockTarget, switchLockTarget, nearestLockTarget, handoverLockTarget, acquireLockTarget, LOCK_FALLBACK_RANGE, FlickDetector, StickFlick } from '../../src/camera/LockOn.js';
 import { segmentHitsBox, distSqPointSegment, OccluderFader } from '../../src/camera/Occluders.js';
 import { CutsceneCamera, normalizeShot } from '../../src/camera/CutsceneCamera.js';
 import { MemeCam } from '../../src/camera/MemeCam.js';
-import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, FADE_MAX_DIST } from '../../src/camera/FollowCamera.js';
+import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, ARM_GOOD, HANDOVER_RATE, FADE_MAX_DIST, FADE_COLLIDERS, LOCK_SEP, LOCK_BIAS_MAX, COMBAT_PITCH, COMBAT_LIFT, lockYawBias, lockScreenSep, lockSepGoal } from '../../src/camera/FollowCamera.js';
 import manifest from '../../src/camera/assets.manifest.js';
 
 const { CAMERA, PLAYER } = config;
@@ -74,10 +74,10 @@ test('§5.2 presets: every preset exists with the spec placements', () => {
     assert.ok(PRESETS[n], `preset ${n}`);
   assert.equal(PRESET_NAMES.length, 10);
   const M = PRESETS.MEME_LOOP;
-  assert.deepEqual([...M.pos], [0.06, 0.70, 1.15]); assert.deepEqual([...M.look], [0.03, 0.82, 0]);
-  assert.equal(M.fov, 32); assert.equal(M.sway, 0.005); assert.equal(M.loop, 3.8); assert.equal(MEME_PERIOD, PLAYER.memeCam.loop);
+  assert.deepEqual([...M.pos], [0.06, 0.68, 1.9]); assert.deepEqual([...M.look], [0.03, 0.9, 0]);
+  assert.equal(M.fov, 38); assert.equal(M.sway, 0.005); assert.equal(M.loop, 3.8); assert.equal(MEME_PERIOD, PLAYER.memeCam.loop);
   assert.deepEqual([...PRESETS.REVERSE_HORDE.pos], [0.35, 0.55, -1.4]); assert.equal(PRESETS.REVERSE_HORDE.look[2], 25); assert.equal(PRESETS.REVERSE_HORDE.fov, 38);
-  assert.deepEqual([...PRESETS.PULLBACK.to], [0, 4.0, 14]); assert.equal(PRESETS.PULLBACK.dur, 6.0); assert.deepEqual([...PRESETS.PULLBACK.fov], [32, 50]);
+  assert.deepEqual([...PRESETS.PULLBACK.to], [0, 4.0, 14]); assert.equal(PRESETS.PULLBACK.dur, 6.0); assert.deepEqual([...PRESETS.PULLBACK.fov], [38, 50]);
   assert.deepEqual([...PRESETS.PULLBACK.pos], [...M.pos]);
   assert.deepEqual([...PRESETS.SELFIE.pos], [0.25, 0.92, 0.45]); assert.equal(PRESETS.SELFIE.fov, 50); near(PRESETS.SELFIE.roll, 6 * DEG); assert.equal(PRESETS.SELFIE.noise, 0.015);
   const W = PRESETS.WHIP_FALL;
@@ -150,18 +150,28 @@ test('applyPose: looks at the look point; roll rotates about the view axis', () 
 });
 
 // ---------------------------------------------------------------- shake
-test('CameraShake: trauma adds (clamped), decays linearly, offsets ∝ trauma², settings scale', () => {
+test('CameraShake: trauma adds (clamped), decays linearly, offsets ∝ trauma^1.5, settings scale, visible jolts', () => {
   const s = new CameraShake();
   s.add(0.7).add(0.7); assert.equal(s.trauma, 1);
   s.add(-1); s.add(NaN); assert.equal(s.trauma, 1);
-  s.step(0.25); near(s.trauma, 1 - 1.6 * 0.25, 1e-9);
+  s.step(0.25); near(s.trauma, 1 - s.decay * 0.25, 1e-9);
   const o = s.step(0.01);
-  assert.ok(Math.abs(o.roll) <= 0.06 * s.intensity + 1e-12);
-  s.step(1); assert.equal(s.trauma, 0); assert.deepEqual({ ...s.offset }, { pitch: 0, yaw: 0, roll: 0 });
-  s.add(1); const z = s.step(0.01, 0); assert.deepEqual({ ...z }, { pitch: 0, yaw: 0, roll: 0 }, 'shake setting 0 → no shake');
+  assert.ok(Math.abs(o.roll) <= s.max.roll * s.intensity + 1e-12);
+  s.step(2); assert.equal(s.trauma, 0); assert.deepEqual({ ...s.offset }, { pitch: 0, yaw: 0, roll: 0, x: 0, y: 0 });
+  s.add(1); const z = s.step(0.01, 0); assert.deepEqual({ ...z }, { pitch: 0, yaw: 0, roll: 0, x: 0, y: 0 }, 'shake setting 0 → no shake');
   const cam = new THREE.PerspectiveCamera(); const q0 = cam.quaternion.clone();
   s.reset(); s.add(0.8); s.apply(cam, 0.016);
   assert.ok(cam.quaternion.angleTo(q0) > 0, 'apply rotates the camera');
+  // §8.2 values must read on screen: peak view displacement (angle + thump at a 3.6 m arm) over the shake
+  const peak = (trauma) => {
+    const k = new CameraShake(); k.add(trauma); let m = 0;
+    for (let i = 0; i < 30; i++) { const q = k.step(1 / 60); m = Math.max(m, Math.hypot(q.pitch, q.yaw) + Math.hypot(q.x, q.y) / 3.6); }
+    return m * 180 / Math.PI;
+  };
+  const light = peak(0.15), heavy = peak(0.35);
+  assert.ok(light > 0.5 && light < 2, `light hit is a small jolt (${light.toFixed(2)}°)`);
+  assert.ok(heavy > 1.2 && heavy < 4, `heavy hit is a clear thump (${heavy.toFixed(2)}°)`);
+  assert.ok(peak(0.6) > heavy, 'holy > heavy');
 });
 
 // ---------------------------------------------------------------- lock-on
@@ -183,6 +193,20 @@ test('lock-on: nearest in 12 m inside the 100° cone of camera forward; switchin
   assert.equal(switchLockTarget([ahead, right, left], origin, yaw, right, 1, 12, true), left, 'wheel wraps');
   ahead.alive = false;
   assert.equal(nearestLockTarget(all, origin, 12, null), behind, 'hand-over ignores the cone');
+});
+
+test('lock-on fallback: cone first; else her recent attacker; else the nearest hostile within 6 m', () => {
+  const ctx = makeCtx();
+  const yaw = Math.PI, origin = new THREE.Vector3();
+  const side = enemyAt(ctx, 1.2, 0), behind = enemyAt(ctx, 0, -2.7), ahead = enemyAt(ctx, 0, 9), far = enemyAt(ctx, -7, -7);
+  assert.equal(LOCK_FALLBACK_RANGE, 6);
+  assert.equal(acquireLockTarget([side, behind, ahead], origin, yaw, PLAYER.lockOn), ahead, 'the cone wins even when farther');
+  assert.equal(acquireLockTarget([side, behind], origin, yaw, PLAYER.lockOn), side, 'empty cone → nearest beside her');
+  assert.equal(acquireLockTarget([side, behind], origin, yaw, PLAYER.lockOn, behind), behind, 'empty cone → the one hitting her');
+  assert.equal(acquireLockTarget([side, far], origin, yaw, PLAYER.lockOn, far), far, 'recent attacker within 12 m, beyond 6 m');
+  assert.equal(acquireLockTarget([far], origin, yaw, PLAYER.lockOn), null, 'nothing near and no attacker → null (recentre)');
+  side.alive = false;
+  assert.equal(acquireLockTarget([side], origin, yaw, PLAYER.lockOn, side), null, 'dead attacker is not acquired');
 });
 
 test('flick detectors: 40 px within 0.15 s; stick past 0.7 fires once', () => {
@@ -233,6 +257,49 @@ test('OccluderFader: a tree between the camera and her fades to CAMERA.treeFadeO
   fader.clear();
   inst.getMatrixAt(1, m); assert.equal(m.elements[0], 1, 'instance matrix restored on clear');
   assert.equal(fader.count, 0);
+});
+
+test('FollowCamera: Tab locks the enemy beside / behind her when the cone is empty; recent attacker preferred', async () => {
+  const { ctx, cam } = await makeCam();
+  const tab = () => { ctx.input._press('lockon', 'k:Tab'); cam.update(1 / 60); ctx.input.endStep(); ctx.input._release('lockon', 'k:Tab'); };
+  const pike = enemyAt(ctx, 1.2, 0.2), pike2 = enemyAt(ctx, -2.0, -1.8);
+  frames(cam, 2);
+  tab();
+  assert.equal(cam.lockTarget, pike, 'nearest within 6 m (beside her)'); assert.equal(cam.modeName, 'lock');
+  tab(); assert.equal(cam.lockTarget, null);
+  ctx.bus.emit(E.HIT, { attacker: pike2, target: ctx.player, damage: 1, blocked: true });
+  tab();
+  assert.equal(cam.lockTarget, pike2, 'the one that just hit her');
+  tab();
+  for (let i = 0; i < 200; i++) cam.update(1 / 60);          // > 3 s: forgotten
+  tab();
+  assert.equal(cam.lockTarget, pike, 'attacker memory expires after 3 s');
+});
+
+test('Fade-prop colliders (fade:true sets, e.g. the practice-field fence) do not pull the camera in', async () => {
+  const { ctx, cam } = await makeCam();
+  const root = new THREE.Group();
+  const geo = new THREE.BoxGeometry(2, 1.1, 0.12).translate(0, 0.55, 0);          // a 2 m fence rail piece
+  const fence = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial(), 2);
+  fence.setMatrixAt(0, new THREE.Matrix4().makeTranslation(0, 0, -2));
+  fence.setMatrixAt(1, new THREE.Matrix4().makeRotationY(0.6).setPosition(4, 0, -2));
+  fence.name = 'fade:fence'; fence.userData.camFade = true; root.add(fence);
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(3), new THREE.MeshStandardMaterial());
+  canopy.position.set(10, 4, 10); canopy.userData.camFade = true; root.add(canopy);
+  const railCol = { x: 0, z: -2, hx: 0.85, hz: 0.05, y0: -0.6, y1: 1.1 };
+  const yawCol = { x: 4, z: -2, hx: 0.85, hz: 0.05, yaw: 0.6, y0: -0.6, y1: 1.1 };
+  const crate = { minX: 9.5, maxX: 10.5, minZ: 9.5, maxZ: 10.5, y0: -0.6, y1: 1 };   // under the wide canopy
+  const house = { x: 0, z: -2, hx: 3, hz: 3, y0: -0.6, y1: 5 };
+  const pinned = { x: 0, z: -2, hx: 0.85, hz: 0.05, y1: 1.1, cam: true };
+  const level = { root, colliders: { circles: [], boxes: [railCol, yawCol, crate, house, pinned], segments: [], rings: [] } };
+  ctx.scene.add(root);
+  ctx.bus.emit(E.LEVEL_LOADED, { level });
+  assert.ok(cam._fader.count >= 3);
+  assert.equal(camTransparent(railCol), true, 'rail footprint → camera passes, the rail fades');
+  assert.equal(camTransparent(yawCol), true, 'yawed piece too');
+  assert.equal(FADE_COLLIDERS.has(crate), false, 'a crate under a wide canopy still blocks');
+  assert.equal(camTransparent(house), false, 'bigger / taller than the prop: blocks');
+  assert.equal(camTransparent(pinned), false, 'cam: true always blocks');
 });
 
 // ---------------------------------------------------------------- cutscene camera
@@ -291,13 +358,13 @@ test('CutsceneCamera: WHIP_FALL = yaw +120° with FOV +15 in 0.18 s, then roll 9
   near(cc.pose.look.y, cc.pose.pos.y, 1e-6, 'view levelled out on the grass');
 });
 
-test('CutsceneCamera: PULLBACK dollies MEME_LOOP → (0, 4, 14) over 6 s with FOV 32 → 50', () => {
+test('CutsceneCamera: PULLBACK dollies MEME_LOOP → (0, 4, 14) over 6 s with FOV 38 → 50', () => {
   const ctx = makeCtx();
   const cc = new CutsceneCamera(ctx);
   cc.start({ preset: 'PULLBACK', anchor: 'swordcat' }, new CamPose());
-  nearV(cc.pose.pos, [0.06, 0.70, 1.15], 1e-9); near(cc.pose.fov, 32);
+  nearV(cc.pose.pos, [0.06, 0.68, 1.9], 1e-9); near(cc.pose.fov, 38);
   for (let i = 0; i < 180; i++) cc.update(1 / 60);
-  near(cc.pose.fov, 41, 0.01, 'half way (in-out sine)');
+  near(cc.pose.fov, 44, 0.01, 'half way (in-out sine)');
   for (let i = 0; i < 200; i++) cc.update(1 / 60);
   nearV(cc.pose.pos, [0, 4, 14], 1e-9); near(cc.pose.fov, 50);
 });
@@ -331,7 +398,7 @@ test('MemeCam: MEME_LOOP framing in her frame; sample(t) === sample(t + 3.8)', (
   nearV(a.pos, b.pos.toArray(), 1e-12); nearV(a.look, b.look.toArray(), 1e-12);
   const ideal = localToWorld(PRESETS.MEME_LOOP.pos, ctx.player.pos, 0.4, new THREE.Vector3());
   assert.ok(a.pos.distanceTo(ideal) < 0.01, 'within the sway of the exact MEME_LOOP position');
-  assert.equal(a.fov, 32);
+  assert.equal(a.fov, 38);
   for (let i = 0; i < 240; i++) m.update(1 / 60);
   near(m.t, 4 - 3.8, 1e-6); assert.ok(m.phase >= 0 && m.phase < 1);
 });
@@ -378,8 +445,13 @@ test('FollowCamera: lock-on via input; camera yaws to face the target at 4.5 m; 
   assert.equal(cam.lockTarget, e); assert.equal(cam.modeName, 'lock');
   frames(cam, 90);
   near(cam.distance, CAMERA.lockDist, 1e-9);
-  const want = Math.atan2(2, 6) + Math.PI;
-  assert.ok(Math.abs(Math.atan2(Math.sin(cam.yaw - want), Math.cos(cam.yaw - want))) < 0.01, 'yaw faces the target');
+  const want = Math.atan2(2, 6) + Math.PI + cam.lockBias;
+  assert.ok(cam.lockBias >= 0 && cam.lockBias <= LOCK_BIAS_MAX);
+  assert.ok(Math.abs(Math.atan2(Math.sin(cam.yaw - want), Math.cos(cam.yaw - want))) < 0.01, 'yaw faces the target (+ framing bias)');
+  // the target stands clear of her on screen (right of her), never behind her head
+  const proj = (v) => v.clone().project(ctx.camera);
+  const sep = proj(new THREE.Vector3(2, 0.6, 6)).x - proj(new THREE.Vector3(0, CAMERA.pivotY - 0.3, 0)).x;
+  assert.ok(sep >= lockSepGoal(Math.hypot(2, 6)) - 0.02, `target ${sep.toFixed(3)} NDC right of her`);
   e.pos.set(0, 0, 17);
   cam.update(1 / 60);
   assert.equal(cam.lockTarget, null, 'broke at 16 m'); assert.equal(cam.modeName, 'follow');
@@ -404,7 +476,7 @@ test('FollowCamera: meme mode emits camera:meme on/off and glides into MEME_LOOP
   frames(cam, 100);
   const ideal = localToWorld(PRESETS.MEME_LOOP.pos, ctx.player.pos, 0, new THREE.Vector3());
   assert.ok(ctx.camera.position.distanceTo(ideal) < 0.01, 'held at MEME_LOOP');
-  near(ctx.camera.fov, 32, 1e-6);
+  near(ctx.camera.fov, 38, 1e-6);
   assert.ok(cam.memeT > 0 && cam.memeT < 3.8);
   cam.mode('follow');
   assert.deepEqual(got, [true, false]);
@@ -532,6 +604,7 @@ test('camTransparent: thin circles / segments / cam:false skip; boxes, big circl
 
 test('FollowCamera: spring arm collides with solid statics and skips thin ones (they fade instead)', async () => {
   const { ctx, cam } = await makeCam();
+  cam.avoid = false;                                   // raw spring-arm behaviour (boom avoidance tested below)
   const obstacles = [];
   staticPhysics(ctx, obstacles);
   frames(cam, 2);
@@ -570,10 +643,10 @@ test('FollowCamera: Meme Cam rotates the MEME_LOOP framing around her when a wal
   frames(cam, 160);
   const ideal = localToWorld(PRESETS.MEME_LOOP.pos, ctx.player.pos, off, new THREE.Vector3());
   assert.ok(ctx.camera.position.distanceTo(ideal) < 0.01, 'held at the rotated MEME_LOOP');
-  const eyes = new THREE.Vector3(0, PRESETS.MEME_LOOP.look[1], 0);
+  const eyes = new THREE.Vector3(0, PRESETS.ECU_EYES.look[1], 0);
   const dir = ctx.camera.position.clone().sub(eyes), len = dir.length();
   assert.equal(ctx.physics.sphereCast(new THREE.Ray(eyes, dir.normalize()), 0.12, len), null, 'the lens sees her face');
-  near(ctx.camera.fov, 32, 1e-6);
+  near(ctx.camera.fov, 38, 1e-6);
   // boxed in on every side: fall back to the spec framing
   obstacles.push({ c: new THREE.Vector3(0, 0.75, 0), r: 1.3, src: { minX: -2, maxX: 2, minZ: -2, maxZ: 2 } });
   assert.equal(cam.memeYawOffset(ctx.player), 0);
@@ -697,3 +770,134 @@ test('aspectFov keeps a 4:3 horizontal field on portrait screens', () => {
 });
 
 test('camera manifest: loads no files', () => { assert.deepEqual(manifest, []); });
+
+test('lock framing: lockYawBias puts close and far targets >= lockSepGoal (> 120 px at 1280) right of her body', () => {
+  const pivot = new THREE.Vector3(0, CAMERA.pivotY, 0), body = new THREE.Vector3(0, CAMERA.pivotY - 0.3, 0);
+  const tanH = Math.tan(22.5 * Math.PI / 180) * 16 / 9;
+  for (const d of [1.2, 1.6, 4, 8, 12]) {
+    const tgt = new THREE.Vector3(0, 0.5, d), yaw0 = Math.PI;
+    const goal = lockSepGoal(d);
+    const b = lockYawBias(pivot, body, tgt, yaw0, COMBAT_PITCH, CAMERA.lockDist, 0.9, COMBAT_LIFT, tanH, goal);
+    const sep = lockScreenSep(pivot, body, tgt, yaw0 + b, COMBAT_PITCH, CAMERA.lockDist, 0.9, COMBAT_LIFT, tanH);
+    assert.ok(sep >= goal - 1e-3 && goal * 640 > 120, `d ${d}: sep ${sep.toFixed(3)} (bias ${b.toFixed(3)})`);
+    assert.ok(b < LOCK_BIAS_MAX, `d ${d}: reachable`);
+  }
+});
+
+test('FollowCamera: an alerted hostile in melee range raises the pitch and lifts the look point', async () => {
+  const { ctx, cam } = await makeCam();
+  frames(cam, 30);
+  const y0 = ctx.camera.position.y;
+  const e = enemyAt(ctx, 0, 2);
+  e.alerted = true;
+  for (let i = 0; i < 120; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
+  const dy = ctx.camera.position.y - CAMERA.pivotY, h = Math.hypot(ctx.camera.position.x, ctx.camera.position.z);
+  assert.ok(Math.atan2(dy, h) > COMBAT_PITCH - 0.03, 'pitch raised toward COMBAT_PITCH');
+  assert.ok(ctx.camera.position.y > y0 + 0.5);
+  // the sight line to the rat's chest passes above her head
+  const c = ctx.camera.position, k = (0 - c.z) / (2 - c.z), yAtHer = c.y + (0.5 - c.y) * k;
+  assert.ok(yAtHer > 1.1, `sight line over her (${yAtHer.toFixed(2)} m)`);
+  e.alerted = false; e.pos.set(0, 0, 30);
+  for (let i = 0; i < 300; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
+  near(ctx.camera.position.y, y0, 0.05, 'eases back after the fight');
+});
+
+test('OccluderFader: a fadeable right in front of the lens fades even when the line to her misses it', () => {
+  const scene = new THREE.Scene();
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(3, 0.12, 0.08), new THREE.MeshStandardMaterial());
+  rail.position.set(0, 2.0, -1.5); rail.userData.camFade = true; scene.add(rail);   // above the sight line, 1.5 m from the lens
+  const f = new OccluderFader({ checkHz: 0 });
+  f.scan(scene, scene);
+  const camPos = new THREE.Vector3(0, 1.5, 0), her = [new THREE.Vector3(0, 0.5, -3.6)];
+  f.update(0.1, camPos, her, 1);
+  assert.equal(f.active.size, 0, 'not in the way of the sight line');
+  const lens = [new THREE.Vector3(0, 2.0, -2), new THREE.Vector3(1, 2.4, -2)];
+  for (let i = 0; i < 20; i++) f.update(0.05, camPos, her, 1, lens, 2);
+  assert.equal(f.active.size, 1, 'faded by the lens test');
+});
+
+/** Vertical cylinders { x, z, r, y1, src } (walls / standing stones / carts): sphere cast by marching the ray. */
+function pillarPhysics(ctx, pillars) {
+  const cast = (ray, radius, max) => {
+    const o = ray.origin, d = ray.direction, pt = new THREE.Vector3();
+    for (let t = 0; t <= max; t += 0.01) {
+      pt.copy(o).addScaledVector(d, t);
+      if (pt.y < radius) return { distance: t, kind: 'terrain', object: null, point: pt.clone(), normal: new THREE.Vector3(0, 1, 0) };
+      for (const c of pillars) {
+        if (Math.hypot(pt.x - c.x, pt.z - c.z) <= c.r + radius && pt.y <= c.y1 + radius)
+          return { distance: t, kind: 'static', object: c.src ?? c, point: pt.clone(), normal: new THREE.Vector3(0, 1, 0) };
+      }
+    }
+    return null;
+  };
+  ctx.physics.sphereCast = (ray, radius, max) => cast(ray, radius, max);
+  ctx.physics.raycast = (ray, max) => cast(ray, 0, max);
+}
+
+test('FollowCamera boom avoidance: a low wall right behind her lifts the boom over it (no collapse onto her head)', async () => {
+  const { ctx, cam } = await makeCam();
+  // a 1.1 m drystone wall 0.9 m behind her (she faces +Z, the camera sits at -Z)
+  pillarPhysics(ctx, [{ x: 0, z: -1.2, r: 0.4, y1: 1.1, src: { minX: -3, maxX: 3, minZ: -1.6, maxZ: -0.8 } }]);
+  cam.snapBehind();
+  for (let i = 0; i < 120; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
+  const d = ctx.camera.position.distanceTo(cam.pivot);
+  assert.ok(d >= ARM_GOOD - 0.05, `boom ${d.toFixed(2)} m`);
+  assert.ok(ctx.camera.position.y > 1.1 + 0.2, 'over the wall top');
+  assert.ok(ctx.camera.position.z < -1.6, 'still behind her');
+  near(cam.yaw, Math.PI, 0.05, 'no swing needed for a low wall');
+  // walking away from the wall: the lift eases back off
+  ctx.player.pos.z += 5; ctx.player.object3d.position.copy(ctx.player.pos);
+  for (let i = 0; i < 240; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
+  near(cam._avoidPitch, 0, 0.01, 'lift released');
+  near(ctx.camera.position.distanceTo(cam.pivot), CAMERA.dist, 0.03);
+});
+
+test('FollowCamera boom avoidance: a standing stone behind her swings the orbit to the clear side (>= 1.8 m)', async () => {
+  const { ctx, cam } = await makeCam();
+  // the stone-ring stone: r 0.94, 2.84 m tall, its face 0.9 m behind her
+  pillarPhysics(ctx, [{ x: 0, z: -1.84, r: 0.94, y1: 2.84 }]);
+  ctx.input.lookIdleTime = 5;
+  cam.snapBehind();
+  for (let i = 0; i < 150; i++) { cam.update(1 / 60); ctx.input.lookIdleTime += 1 / 60; cam.render(0, 1 / 60); }
+  const d = ctx.camera.position.distanceTo(cam.pivot);
+  assert.ok(d >= ARM_GOOD - 0.05, `boom ${d.toFixed(2)} m`);
+  const off = Math.abs(Math.atan2(Math.sin(cam.yaw - Math.PI), Math.cos(cam.yaw - Math.PI)));
+  assert.ok(off > 0.3 && off < 1.4, `swung ${off.toFixed(2)} rad to a side`);
+  // the player steering the view is never fought by the swing
+  const { ctx: c2, cam: k2 } = await makeCam();
+  pillarPhysics(c2, [{ x: 0, z: -1.84, r: 0.94, y1: 2.84 }]);
+  k2.snapBehind();
+  for (let i = 0; i < 60; i++) { c2.input.lookIdleTime = 0; k2.update(1 / 60); k2.render(0, 1 / 60); }
+  near(k2.yaw, Math.PI, 1e-6, 'no swing under look input');
+  assert.ok(c2.camera.position.distanceTo(k2.pivot) >= 0.8 - 1e-6);
+});
+
+test('Lock hand-over: prefers a target in front of the camera; the orbit turn is rate-limited (no snap behind her)', async () => {
+  assert.equal(handoverLockTarget([], { x: 0, z: 0 }, Math.PI, 12), null);
+  const { ctx, cam } = await makeCam();
+  const a = enemyAt(ctx, 0, 3);            // in front
+  const behind = enemyAt(ctx, 0.3, -2.5);   // nearer, but behind her
+  const side = enemyAt(ctx, 3, 5);          // in the forward cone, farther
+  frames(cam, 2);
+  cam.lock(a);
+  for (let i = 0; i < 90; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
+  a.alive = false;
+  cam.update(1 / 60);
+  assert.equal(cam.lockTarget, side, 'in-cone target preferred over the nearer one behind her');
+  side.alive = false;
+  const y0 = cam.yaw;
+  cam.update(1 / 60);
+  assert.equal(cam.lockTarget, behind, 'nothing in the cone: the nearest anywhere');
+  for (let i = 0; i < 6; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
+  let prev = cam.yaw, maxStep = 0;
+  const turned6 = Math.abs(Math.atan2(Math.sin(cam.yaw - y0), Math.cos(cam.yaw - y0)));
+  assert.ok(turned6 < 0.35, `first 100 ms turn ${turned6.toFixed(2)} rad`);
+  for (let i = 0; i < 240; i++) {
+    cam.update(1 / 60); cam.render(0, 1 / 60);
+    const st = Math.abs(Math.atan2(Math.sin(cam.yaw - prev), Math.cos(cam.yaw - prev)));
+    maxStep = Math.max(maxStep, st); prev = cam.yaw;
+  }
+  assert.ok(maxStep <= HANDOVER_RATE / 60 + 1e-6, `max ${(maxStep * 60).toFixed(2)} rad/s`);
+  const want = Math.atan2(0.3, -2.5) + Math.PI + cam.lockBias;
+  assert.ok(Math.abs(Math.atan2(Math.sin(cam.yaw - want), Math.cos(cam.yaw - want))) < 0.05, 'arrives on the new target');
+});

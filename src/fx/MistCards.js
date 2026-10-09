@@ -9,9 +9,12 @@
 import * as THREE from 'three';
 import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
 import { PLAYER } from '../core/config.js';
-import { groundY, toVec3, hash01 } from './util.js';
+import { groundY, toVec3, hash01, actorWorldPos } from './util.js';
 
-export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.62, rise: 0.8, dissolve: 1.5 });
+export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.62, rise: 0.8, dissolve: 1.5,
+  near: 5,          // camera near-fade (m): wall cards are tall and dense, the ambient 3 m is too short for them
+  focusIn: 0.5, focusOut: 1.2, focusMin: 0.08 });   // cards up to her depth (+ a margin) fade to focusMin
+
 export const AMBIENT = Object.freeze({ w: 8, h: 2.5, maxA: 0.22, radius: 34 });
 /** Ambient density per level id (× the quality count). */
 export const AMBIENT_DENSITY = Object.freeze({ meadow: 1, forest: 0.85, town: 0.45, gate: 1, bog: 1.3, keep: 0.6, sky: 0 });
@@ -63,6 +66,7 @@ void main() {
 const FRAG = /* glsl */`
 uniform vec3 uColor;
 uniform float uTime, uMaxA, uNear;
+uniform vec2 uFocus;      // x = player's camera distance, y = 1 to fade cards in front of her (walls)
 uniform vec2 uScroll;
 uniform vec2 uLoop;       // x = Meme Cam loop phase 0..1, y = loop weight 0..1
 uniform vec2 uLoopDrift;  // scroll distance per loop period
@@ -89,6 +93,8 @@ void main() {
   a *= sin( clamp( vUv.x, 0.0, 1.0 ) * 3.14159 );
   a *= smoothstep( 0.0, 0.2, vUv.y ) * ( 1.0 - smoothstep( 0.42, 1.0, vUv.y ) );
   a *= uMaxA * vAlpha * smoothstep( uNear * 0.33, uNear, vCamDist );
+  // walls: a card between the lens and Swordcat thins out so she never greys out on a bridge / arena edge
+  if ( uFocus.y > 0.5 ) a *= mix( ${WALL.focusMin.toFixed(3)}, 1.0, smoothstep( uFocus.x - ${WALL.focusIn.toFixed(3)}, uFocus.x + ${WALL.focusOut.toFixed(3)}, vCamDist ) );
   if ( a < 0.003 ) discard;
   vec3 col = mix( uColor, fxFogColor(), clamp( 0.3 + 0.55 * vUv.y, 0.0, 1.0 ) );
   col = mix( col, fxFogColor(), fxFog() );
@@ -118,7 +124,7 @@ export class CardSet {
     this.material = new THREE.ShaderMaterial({
       name, vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color('#9AA196') }, uTime: { value: 0 }, uMaxA: { value: maxA },
-        uNear: { value: 3 }, uScroll: { value: new THREE.Vector2() }, uLoop: { value: new THREE.Vector2() },
+        uNear: { value: 3 }, uFocus: { value: new THREE.Vector2() }, uScroll: { value: new THREE.Vector2() }, uLoop: { value: new THREE.Vector2() },
         uLoopDrift: { value: new THREE.Vector2() } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
     });
@@ -212,6 +218,7 @@ export class MistCards {
     const spacing = opts.spacing ?? WALL.spacing;
     const pts = rect ? rectCardPositions(c.x, c.z, rect[0], rect[1], spacing, opts.yaw ?? 0) : ringCardPositions(c.x, c.z, radius, spacing);
     const n = pts.length / 2, set = new CardSet(n, { name: 'fx.mist.wall', maxA: opts.alpha ?? WALL.maxA, renderOrder: 4 });
+    set.material.uniforms.uNear.value = WALL.near;
     const w = opts.width ?? WALL.w, h = opts.height ?? WALL.h;
     for (let i = 0; i < n; i++) {
       const x = pts[i * 2], z = pts[i * 2 + 1];
@@ -277,6 +284,8 @@ export class MistCards {
       }
     }
     // ---- walls
+    const pl = ctx.player, camPos = ctx.camera?.position;
+    const focus = pl?.object3d && camPos ? actorWorldPos(pl, _v).setY(_v.y + 0.5 * (pl.height ?? 0.6)).distanceTo(camPos) : 0;
     for (const w of this.walls) {
       w.t += dt;
       let a = Math.min(1, w.t / Math.max(0.01, w.rise));
@@ -284,6 +293,7 @@ export class MistCards {
       if (Math.abs(a - w.alpha) > 0.002) { w.alpha = a; w.set.setAlpha(a); }
       const u = w.set.material.uniforms;
       u.uColor.value.copy(_fogLow); u.uTime.value = time;
+      u.uFocus.value.set(focus, focus > 0 ? 1 : 0);
       w.set.scroll.set(time * 0.06 * this._speed, -time * 0.02 * this._speed);
       w.set.setLoop(this._loopPhase, this.loopW, 0.06 * this.speedMul, -0.02 * this.speedMul, period);
     }

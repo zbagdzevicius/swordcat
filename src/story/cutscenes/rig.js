@@ -87,3 +87,37 @@ export function buildSunPatch() {
   g.userData.dispose = () => { g.geometry.dispose(); g.material.map?.dispose(); g.material.dispose(); };
   return g;
 }
+
+/**
+ * A warm practical fill for one cast member's close-up (CS-02's Cacklejaw laugh is back-lit by the fog otherwise).
+ * `fillLight(cs, id, { intensity: 0 })` parks the light on the actor at scene start (adding a light recompiles the
+ * scene's shaders, so do it once, under a fade / establishing shot); later calls only change its intensity.
+ * `fillLight(cs, null)` removes every fill this scene added (call it from the scene's `end.call`).
+ * @param {any} cs the running Cutscene  @param {string|null} id spawned actor id
+ * @param {{ intensity?: number, color?: string, pos?: number[], distance?: number }} [o]
+ */
+export function fillLight(cs, id, o = {}) {
+  try {
+    cs._fills ??= new Map();
+    if (id == null) {
+      for (const l of cs._fills.values()) { l.parent?.remove(l); l.dispose?.(); }
+      cs._fills.clear();
+      return;
+    }
+    let l = cs._fills.get(id);
+    if (!l) {
+      const a = cs.actor?.(id);
+      const obj = a?.object3d ?? cs.spawned?.find((r) => r.id === id && r.obj?.isObject3D)?.obj;
+      if (!obj) return;
+      l = new THREE.PointLight(o.color ?? '#FFC98A', 0, o.distance ?? 3.2, 1.6);
+      l.name = `story:fill:${id}`;
+      l.castShadow = false;
+      const p = o.pos ?? [0.35, 1.55, 1.1];
+      l.position.set(p[0], p[1], p[2]);
+      obj.add(l);
+      cs._fills.set(id, l);
+    }
+    if (o.color) l.color.set(o.color);
+    if (o.intensity != null) l.intensity = o.intensity;
+  } catch (e) { console.warn('[story] fill light failed', e); }
+}

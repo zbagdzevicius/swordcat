@@ -49,8 +49,12 @@ const HELPERS = () => {
     follow() { ctx.cam.mode('follow', { blend: 0 }); },
     listen() {
       h.offs.push(ctx.bus.on(E.TELEGRAPH, (p) => {
-        h.tele.push({ kind: p.kind, shape: p.shape, type: p.actor?.def?.id, dur: p.duration });
+        h.tele.push({ id: p.id, kind: p.kind, shape: p.shape, type: p.actor?.def?.id, dur: p.duration, at: ctx.game.time, actor: p.actor });
         if (h.freezeKind === p.kind && h.freezeAt === Infinity) h.freezeAt = ctx.game.time + h.freezeDelay;
+      }));
+      h.offs.push(ctx.bus.on(E.TELEGRAPH_END, (p) => {
+        const t = h.tele.find((x) => x.id === p.id);
+        if (t && t.endAt == null) { t.endAt = ctx.game.time; t.endState = t.actor?.stateName; }
       }));
       h.offs.push(ctx.bus.on(E.ENEMY_ALERTED, () => {
         if (h.freezeKind === 'alert' && h.freezeAt === Infinity) h.freezeAt = ctx.game.time + h.freezeDelay;
@@ -297,10 +301,22 @@ export default [
         await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.ctx.cam.shot({ anchor: e, pos: [1.0, 1.2, -3.0], look: [0, -2.6, 3.2], mode: 'cut', fov: 62 }); }, id);
         await t.frames(3);
         await t.shot('enemies/crow-shadow');
-        await t.G(() => { const h = window.__GAME__.__en; h.follow(); h.thaw(); });
+        await t.G(() => window.__GAME__.__en.follow());
       }
-      const peck = await until(t, (rid) => window.__GAME__.ctx.enemies.list.find((x) => x.id === rid)?.stateName === 'peck', id, 6000);
+      // freeze the sim on the frame the peck starts (a slow page can otherwise poll past the 1.2 s peck)
+      await t.G((rid) => {
+        const g = window.__GAME__, h = g.__en, ctx = g.ctx;
+        h.thaw();
+        const off = ctx.game.addFrameHook(() => {
+          if (ctx.enemies.list.find((x) => x.id === rid)?.stateName === 'peck') { ctx.game.setTimeScale(0); h.frozen = true; off(); }
+        });
+        h.offs.push(off);
+      }, id);
+      const peck = await until(t, (rid) => window.__GAME__.__en.frozen && window.__GAME__.ctx.enemies.list.find((x) => x.id === rid)?.stateName === 'peck', id, 8000);
       t.assert(peck, 'crow dives, lands and pecks');
+      const sh = await t.G(() => { const x = window.__GAME__.__en.tele.find((q) => q.type === 'crow' && q.kind === 'shadow'); return x && { dur: x.dur, len: x.endAt - x.at, endState: x.endState }; });
+      if (sh) t.log(`crow shadow: duration ${sh.dur.toFixed(2)} s, shown ${sh.len?.toFixed(2)} s, ended in ${sh.endState}`);
+      t.assert(sh && sh.endState === 'peck', 'the shadow decal stays up until the dive lands');
       const r = await t.G((rid) => {
         const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid);
         const alt = e.pos.y - ctx.physics.heightAt(e.pos.x, e.pos.z);
@@ -310,6 +326,7 @@ export default [
       }, id);
       t.log(`pecking crow: alt ${r.alt.toFixed(2)} m, slash1 → ${r.res} (hp ${r.hp}/${r.max})`);
       t.assert(r.res === 'hit', 'a pecking crow is hittable');
+      await t.G(() => window.__GAME__.__en.thaw());
       if (peck) {
         await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.ctx.cam.shot({ anchor: e, pos: [1.2, 0.8, 2.0], look: [0, 0.2, 0], mode: 'cut', fov: 50 }); }, id);
         await t.wait(300);                              // past the 60 ms hit flash
@@ -342,6 +359,24 @@ export default [
       t.log(`budget: cap ${r.cap}; 10 spawns → ${r.active} active + ${r.pending} held; after 2 despawns → ${after.active} active + ${after.pending} held`);
       t.assert(r.active === r.cap && r.pending === 10 - r.cap, 'over-budget spawns are held dormant');
       t.assert(after.active === Math.min(8, r.cap) && after.pending === 0 && after.visible === 8, 'held spawns wake as slots free');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:leak', order: 45.5, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await prepare(t);
+      const counts = [];
+      for (let wave = 0; wave < 5; wave++) {
+        await t.G(() => { const h = window.__GAME__.__en; for (const [k, a] of [['rat_pike', 0.2], ['rat_xbow', -0.4], ['crow', 0.8], ['rat_pike', -0.9]]) h.spawn(k, a, 9, { passive: true }); });
+        await waitLoaded(t);
+        await t.frames(5);                               // rendered once: bone textures uploaded
+        await t.G(() => { const ctx = window.__GAME__.ctx; for (const e of [...ctx.enemies.list]) ctx.enemies.despawn(e); });
+        await t.frames(5);
+        counts.push(await t.G(() => window.__GAME__.ctx.renderer.info.memory.textures));
+      }
+      t.log(`textures after each spawn/despawn wave: ${counts.join(' → ')}`);
+      t.assert(counts[4] - counts[1] <= 1, 'despawned enemies free their GPU textures (skeleton bone textures)');
       await t.G(() => window.__GAME__.__en.done());
     },
   },

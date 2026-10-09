@@ -38,3 +38,35 @@ The M1 request files are archived word for word in `docs/api/<area>.md`, includi
 
 ## Still open
 See `requests/world.md` (enemies `prewarm`, dormant pre-placed enemies, hero fur cost, optional `postfx.setGrade`), `requests/fx.md` and `requests/player.md` (characters first-use shader stalls).
+
+# M2 integration pass (core, 2026-10-09, second part: Acts I–II wired end to end)
+
+The area M2 notes ("How to use …") moved from `requests/<area>.md` to the end of `docs/api/<area>.md`.
+
+## Requests applied
+| Change | Where | Asked by |
+|---|---|---|
+| `Player.applySlow(mul, sec, source)`, `isSlowed()`, `cleanse()` (Clover's mend), folded into `speedMul`; a tumble clears it and no slow lands mid-tumble. enemies' `status.js` fallback switches itself off. | player/Player.js | enemies |
+| The Jeer aura radius prefers `enemy.jeerR` (the B2 Jeer Duet's r 10) over `def.jeer.r`. | player/Player.js | enemies |
+| Public `player.recomputeMax()` (milkMax / maxHp). | player/Player.js | ui |
+| `config.ENEMY_TUNING.m2` adopted (the M2 prose numbers; `enemies/tuning.js` `M2` merges it). | core/config.js | enemies |
+| `events.js` JSDoc: `enemy:died` `releases` / `popped` / `size`; `item:stolen` / `item:returned` items (`fish`, `milk`, `pin`, `post_bag`), `thief`, `by`. No new names. | core/events.js | enemies |
+| Scripted, AI-less `grizzlechop` type (CS-05 stand-in when the defeated boss is gone). | enemies/scripted/Grizzlechop.js | story |
+| Strings `prompt.light`, `grizzlechop.cheese` ("MY CHEESE!" on the parried toss wheel), `toast.chase.restart` (Pilfer's chase restart now toasts). The forge hint uses `tut.pug`, the Lantern Alley lanterns `prompt.light`. | story/strings.js, world/levels/town.js, enemies | world, enemies |
+| fx calls from enemies: pug slam → `fx.shockwave` (red wall, same growth as the hit ring), Laugh Quake → `fx.shockwave` (jeer, 8 m/s to 7 m), Gloomjelly landing → `jellySlam`, web glob hit → `web`, cut web → `webCut`. | enemies/types/*.js, enemies/WebPatches.js | fx |
+| Standing Ground speeds the mist drift ×2 (Meme Cam keeps its own ×2). | fx/FX.js | player |
+| Shops: `audio.shop('open' | 'buy' | 'equip', {station})` and `fx.purchase({el})` on a purchase. | ui/shops.js | audio, fx |
+| Double toasts: story's `unlock()` no longer toasts (ui toasts `state:unlock` with the display name); the "Objective complete!" toast is dropped while the HUD objective bar shows it. | story/StoryManager.js, ui/UI.js | ui, world, companions |
+| A lit Vigil Stone prompts `prompt.swap` when a swap is possible (E opens the Vigil menu with the kitten swap). | world/VigilStone.js | companions |
+| CS-04 shows fx's lantern glow on her held lantern (`fx.lantern('swordcat')`). | story/cutscenes/cs04.js | fx |
+
+## Integration bugs fixed
+- **Soft-lock after a level-ending scene:** skipping CS-07 (or waiting out story's results timeout) left the game in mode `cutscene` with nothing playing. `levelResults` now restores the scene's mode only while the scene still runs, and the results card hands back `play` when it closes after its scene ended. (story/cutscenes/cast.js, ui/UI.js)
+- **Lost scene triggers:** a level trigger with `play` that fired while another scene was running dropped its scene for good (triggers fire once). It now always calls `story.play`, which queues it. (world/LevelKit.js)
+- **CS-04 hand-back camera inside Pudding:** she now ends the scene south of the fire facing up the path, so the follow camera no longer sits inside the sleeping dragon. (story/cutscenes/cs04.js)
+- **Cacklejaw read as a bear:** the Barbarian pelt hat sat over the hyena's eyes; `seatHat()` lifts it onto the beast head (B2, its clones' base and the CS-02 actor). (enemies/types/kaykitGear.js)
+- **§18 draw calls:** lost kittens and their cages / hiding props beyond what the fog lets through (max(40, 2 / fog density) m) are not drawn. Forest start 168 → 129 scene calls, town 110, gate 92 (Med). (companions/LostKitten.js)
+- Smoke races: `camera:boss-frame` waited on B1's `boss:start` for B2; `fx:m2-line` and `save:autosave` assumed session counters / save reasons that M2 changed.
+
+## New smoke: the M2 playthrough (`tests/smoke/flow.mjs`)
+`flow:forest` → `flow:town` → `flow:gate` play the §19.10 exit path through the real triggers (no `story.play` fallbacks): the meadow exit, Sage's rope posts cut by swings → D-02, the camp trigger → CS-04 (night), the mill arena → B1 fought down with real hits (god) → CS-05, the forest exit; Bakery Street → D-03 → Pilfer's chase (3 hits) → CS-06, Tofu's Meow → D-04, the three lanterns, the Square's 5 waves → the giant Gloomjelly → Earl Grey → D-04, Clover's stocks (E) → D-04, the steps → CS-07, a Satchel bought at the bakery station (E), the Quest Board (E) → travel to the gate; the war-wagon (3 blows) → D-06, the battlefield → "Back to the Line!", the marker → The Line (real repair, waves fought) → CS-08 → G-02 → 100 % → B2 fought down → CS-09 → CS-10 → the grey hub.

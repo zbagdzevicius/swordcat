@@ -40,6 +40,7 @@ import bossCacklejaw, { CACKLEJAW_CLONE } from './types/boss_cacklejaw.js';
 import { GENERIC, boneheadDef, animsFor } from './types/generic.js';
 import { dressKayKit } from './types/kaykitGear.js';
 import cacklejaw from './scripted/Cacklejaw.js';
+import grizzlechop from './scripted/Grizzlechop.js';
 import pilfer, { PILFER_CHASE } from './scripted/Pilfer.js';
 import barkusSilhouette from './scripted/BarkusSilhouette.js';
 import { bossDef } from './bossBase.js';
@@ -50,7 +51,7 @@ import { tickSlow } from './status.js';
 export const TYPES = Object.freeze({
   rat_pike: ratPike, rat_xbow: ratXbow, crow, hyena, ...GENERIC, spider, stealer, pug, ...JELLY_TYPES,
   boss_grizzlechop: bossGrizzlechop, boss_cacklejaw: bossCacklejaw, cacklejaw_clone: CACKLEJAW_CLONE,
-  cacklejaw, pilfer, pilfer_chase: PILFER_CHASE, barkus_silhouette: barkusSilhouette,
+  cacklejaw, grizzlechop, pilfer, pilfer_chase: PILFER_CHASE, barkus_silhouette: barkusSilhouette,
 });
 
 /** Base boss looks until the M3 boss type files replace them: the §11 builds on the shared rigs. */

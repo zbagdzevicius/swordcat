@@ -298,13 +298,15 @@ export function openShop(menus, station) {
             const r = purchase(ctx, itemId);
             if (r.ok) {
               menus.sfx('fish'); menus.sfx('ui.stamp');
+              try { ctx.audio?.shop?.('buy', { station }); } catch { /* audio optional */ }
+              try { ctx.fx?.purchase?.({ el: row }); } catch { /* fx optional */ }
               pulse(row, 'is-bought'); pulse(purse, 'is-spend');
               stampOn(row, tx(ctx, 'ui.shop.bought'));
               ui.hud?.poll?.(true);
             } else menus.sfx('ui.error');
             refreshAll();
           } else if (st.status === 'owned') {
-            if (equip(ctx, itemId)) { menus.sfx('ui.toggle'); pulse(row, 'is-bought'); ui.hud?.poll?.(true); }
+            if (equip(ctx, itemId)) { menus.sfx('ui.toggle'); try { ctx.audio?.shop?.('equip', { station }); } catch { /* audio optional */ } pulse(row, 'is-bought'); ui.hud?.poll?.(true); }
             refreshAll();
           } else if (st.status === 'locked') { menus.sfx('ui.error'); pulse(row, 'is-nope'); }
           else menus.sfx('ui.click');
@@ -322,6 +324,7 @@ export function openShop(menus, station) {
     s.refreshAll = refreshAll;
     refreshAll();
     menus.push(menus._wire(s), { sound: 'ui.bookOpen' });
+    try { ctx.audio?.shop?.('open', { station }); } catch { /* audio optional */ }
     s.onFocus?.(s.nav.current);
   });
 }

@@ -198,7 +198,7 @@ export class FX {
     on(E.LEVEL_LOADED, (p) => { this._onLevel(p?.id); this._warm = 1; });
     on(E.ENV_CHANGED, (p) => { if (this.levelId) this.ambient.set(motesFor(this.levelId, p?.grade ?? ctx.env?.grade)); });
     on(E.QUALITY, (p) => { this._applyQuality(p?.preset ?? ctx.quality); this._warm = 1; });
-    on(E.MEME_CAM, (p) => { this.mist.speedMul = p?.on ? (PLAYER.memeCam.mist ?? 2) : 1; });
+    on(E.MEME_CAM, (p) => { this._memeMist = !!p?.on; this.mist.speedMul = p?.on ? (PLAYER.memeCam.mist ?? 2) : 1; });
     if (ctx.levels?.current?.id) this._onLevel(ctx.levels.current.id);
     this.ready = true;
   }
@@ -466,6 +466,8 @@ export class FX {
     this.screen.golden = !!p?.golden && p.alive !== false;
     this.telegraphs.render(dt);
     this._dizzyMarks(dt);
+    // drift ×2 in Meme Cam; also ×2 while Standing Ground pays out (§7.3 "the mist speeds up around her")
+    this.mist.speedMul = this._memeMist ? (PLAYER.memeCam.mist ?? 2) : p?.standingGround && p.alive !== false ? 2 : 1;
     this.mist.render(dt);
     this.hordeFx.render(dt);
     this.ambient.render(dt);

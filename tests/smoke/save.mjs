@@ -173,7 +173,8 @@ export default [
         t.assert(await t.waitForEvent('level:loaded', 30000), 'forest did not load after the exit');
         await t.frames(5);
         const fin = await saveInfo(t);
-        t.assert(fin.reason === 'level' && fin.ok === true, `forest load: last save ${fin.reason}/${fin.ok}`);
+        // M2: story's quest step completes on the load too (quest:update done → a 'quest' save right after the 'level' one)
+        t.assert((fin.reason === 'level' || fin.reason === 'quest') && fin.ok === true, `forest load: last save ${fin.reason}/${fin.ok}`);
         t.log(`saves: ${fin.count}, last=${fin.reason}; record ${JSON.stringify(await readRec(t)).length} bytes`);
       } finally {
         await t.G(() => {

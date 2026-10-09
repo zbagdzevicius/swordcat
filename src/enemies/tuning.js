@@ -2,8 +2,8 @@
 // Appendix A doesn't carry. Since M2 the table lives in core/config.js as `ENEMY_TUNING` (enemies still own the
 // values; nothing there overrides an Appendix A value); `TUNING` re-exports it so existing imports keep working.
 //
-// M2 additions (`M2`, below) wait for core to merge them into `config.ENEMY_TUNING.m2` (requests/enemies.md); until
-// then these defaults apply and anything core adds under `ENEMY_TUNING.m2` overrides them key by key.
+// M2 additions (`M2`, below): core adopted them as `config.ENEMY_TUNING.m2` (the values below are the fallbacks and
+// match it); `ENEMY_TUNING.m2` overrides them key by key.
 import { ENEMY_TUNING } from '../core/config.js';
 export const TUNING = ENEMY_TUNING;
 

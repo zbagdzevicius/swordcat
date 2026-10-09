@@ -402,6 +402,35 @@ export const ENEMY_TUNING = Object.freeze({
   foreignArena: { pad: 0.5, flyerPad: 1.0 },
   standoff: 0.35,                        // m between a long-bodied enemy's capsule front (its snout) and her collider
   perch: { search: 2.5, ring: 0.2, arc: 0.12, minFrac: 0.6, slack: 0.45 },   // `{ y }` spawns snap onto a nearby wall / cart top
+  // M2 (§10.3 / §11 / §12 prose numbers; enemies/tuning.js `M2` merges this over its defaults, one level deep)
+  m2: {
+    // objective runners (§12.6 The Line): path straight for the goal (the winch), fight only if she is this close
+    runner: { fightWithin: 3, arrive: 1.4, hold: 0.6 },
+    // hyena pack (§10.3): flankers circle to her back (the "behind" slot), giggle, then attack
+    flank: { behindArc: 1.0, maxApproach: 3.0, keepMul: 0.9 },
+    jeer: { packRadius: 16, maxFogContrib: 3, duetR: 10, duetDur: 3.0 },
+    gloat: { laughVol: 0.9 },
+    // spider (§10.3): web patches that slow her; the abdomen pulses during the web windup
+    web: { maxPatches: 16, refresh: 0.25, cutRange: 0.6, cutArc: 1.2, fade: 0.6, pulse: 0.12 },
+    // stealer (§10.3): getaway to the nearest fog edge; the loot drops in front of it
+    stealer: { fogEdges: 8, snatchRecover: 0.4, dropSpread: 0.6, pinArrive: 1.6 },
+    // pug (§10.3): shield; the raised-shield guard clip plays when it stands its ground near her
+    pug: { guardWithin: 4.5, shieldBack: 0.5, slamBand: 0.5 },
+    // Gloomjelly (§10.3): hop timing; squash anticipation; children pop out on a little arc
+    jelly: { hopAir: 0.42, squash: 0.18, popUp: 4.0, wobble: 0.05, opacity: 0.66, wanderEvery: [1.5, 3.0] },
+    // Pilfer's town chase (§12.5): anchors chase_0..5, 3 stumbles drop the bag, too far behind restarts it
+    pilferChase: { anchors: 6, hits: 3, stumble: 0.6, tooFar: 25, lead: 7, waitLead: 12, arrive: 1.0, crates: [1, 3], letterEvery: 1.2 },
+    // world requests: far pre-placed enemies sleep (no AI / mixer / draw); prewarm stand-ins for the shader warm-up
+    sleep: { dist: 42, hysteresis: 4, every: 0.25 },
+    prewarm: { ring: 2.5, timeout: 8000 },
+    // bosses (§11.2-11.3)
+    boss: {
+      approachSlack: 0.3, wheelMount: 0.6, wheelLapGap: 0.45, wheelRideY: 1.45, wheelContact: 0.9, wheelArenaPad: 1.2,
+      tossSpeed: 7, tossR: 0.45, tossLife: 6, bombSpread: 2.6, bombFly: 1.0, snackMinDist: 3.5,
+      rushW: 2.4, rushPad: 1.0, quakeBand: 0.6, quakeHeight: 0.3, cloneRing: 4.5, laughEvery: [2.5, 4.0], meowQuiet: 2.0,
+      cloneTint: '#1B1C24', p3FogDur: 2.0, hatPop: true, critBoost: 1.5,
+    },
+  },
 });
 
 /** Physics engine tunables (GAME_DESIGN §7.1 / tech.md §5; owner: physics). */

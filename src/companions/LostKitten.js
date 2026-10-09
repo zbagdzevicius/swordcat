@@ -745,6 +745,32 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   // ------------------------------------------------------------------ render
 
+  /**
+   * §18 draw-call budget (core integration, M2): a kitten (and its cage / hiding prop) far beyond what the level's fog
+   * lets through is not drawn: d > max(40, 2 / fog density) from the camera (6 m hysteresis). Only the children /
+   * the prop root are toggled, so the gameplay `object3d.visible` logic is untouched.
+   */
+  _farCull() {
+    const cam = this.ctx.camera;
+    if (!cam?.position) return;
+    const fog = this.ctx.env?.fogDensity ?? this.ctx.scene?.fog?.density ?? 0;
+    const D = Math.max(40, fog > 1e-4 ? 2 / fog : 1e9);
+    const d = Math.hypot(cam.position.x - this.pos.x, cam.position.z - this.pos.z);
+    const far = this._far ? d > D - 6 : d > D;
+    if (far) {
+      // (also catches children added while far, e.g. a visual that finished loading)
+      this._farHidden ??= new Set();
+      for (const c of this.object3d.children) if (c.visible) { c.visible = false; this._farHidden.add(c); }
+      if (this.propRoot?.visible) { this.propRoot.visible = false; this._farProp = this.propRoot; }
+      this._far = true;
+    } else if (this._far) {
+      this._far = false;
+      for (const c of this._farHidden ?? []) c.visible = true;
+      this._farHidden = null;
+      if (this._farProp) { this._farProp.visible = true; this._farProp = null; }
+    }
+  }
+
   render(alpha, dt) {
     super.render(alpha);
     const vdt = visualDt(this.ctx, dt ?? 0);         // 0 in hitstop / the pause menu, × slow-mo
@@ -774,6 +800,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
       this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || this.flying });
     }
     this.bubble.update(vdt);
+    this._farCull();                                   // last: the visual's own update may re-show its root
   }
 
   /**
@@ -783,6 +810,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
   releaseDressing() {
     const root = this.propRoot;
     if (!root) return null;
+    if (this._farProp === root) { root.visible = true; this._farProp = null; }
     const d = { root, collider: this.cartCollider ?? null, cage: this.cage ?? null, colliders: [...(this.stackColliders ?? []), ...this.ropePosts.map((q) => q.collider).filter(Boolean)] };
     this.stackColliders = null; this._released = true;
     for (const q of this.ropePosts) { if (!q.opened) { q.opened = true; this.ctx.actors.unregister(q); } q.collider = null; }

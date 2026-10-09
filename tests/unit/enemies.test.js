@@ -1020,7 +1020,8 @@ test('spider: skitter bursts (5 m/s for 1.2 s, pause 1.0 s); the web glob slows 
   assert.equal(w.r, ATTACKS.spider_web.patch.r); assert.equal(w.life, ATTACKS.spider_web.patch.life);
   // a roll clears the slow; standing in the patch re-applies it
   const st0 = p.stateName;
-  p.stateName = 'dodge'; tickSlow(p, DT); assert.equal(isSlowed(p), false); p.stateName = st0;
+  if (typeof p.applySlow === 'function') { p.startDodge(); assert.equal(isSlowed(p), false, 'a tumble clears the slow'); p.setState?.('move'); }   // the player owns the slow (applySlow)
+  else { p.stateName = 'dodge'; tickSlow(p, DT); assert.equal(isSlowed(p), false); p.stateName = st0; }
   s.ai = false;
   p.pos.set(w.pos.x, w.pos.y, w.pos.z); p.onGround = true;
   ctx.enemies.webs._refreshT = 0; ctx.enemies.webs.update(DT);

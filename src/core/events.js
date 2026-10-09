@@ -47,11 +47,11 @@ export const E = Object.freeze({
   // ---- enemies / bosses ----
   ENEMY_SPAWNED: 'enemy:spawned',           // { enemy }
   ENEMY_ALERTED: 'enemy:alerted',           // { enemy }
-  ENEMY_DIED: 'enemy:died',                 // { enemy, type, position, fish, smallHeart, height }  (fish / smallHeart already rolled: drop exactly these)
+  ENEMY_DIED: 'enemy:died',                 // { enemy, type, position, fish, smallHeart, height, releases?, popped?, size? }  (fish / smallHeart already rolled: drop exactly these; releases 'earlgrey' = the giant Gloomjelly; popped = a popsSlime kill, no split; size = Gloomjelly L|M|S|GIANT)
   ENEMY_JEER: 'enemy:jeer',                 // { enemy, on }
   ENEMY_CHOKE: 'enemy:choke',               // { enemy }
-  ITEM_STOLEN: 'item:stolen',               // { thief, item, amount }
-  ITEM_RETURNED: 'item:returned',           // { item, amount, bonus }
+  ITEM_STOLEN: 'item:stolen',               // { thief, item: 'fish'|'milk'|'pin'|'post_bag', amount }
+  ITEM_RETURNED: 'item:returned',           // { item: 'fish'|'milk'|'pin'|'post_bag', amount, bonus, thief?, by? }  (by: 'pip' = Pip brought the Line pin back)
   BOSS_START: 'boss:start',                 // { boss, id, name, maxHp, phases, dizzyMax }
   BOSS_PHASE: 'boss:phase',                 // { boss, phase }  exactly once per threshold
   BOSS_DIZZY: 'boss:dizzy',                 // { boss, value, max, dizzy }

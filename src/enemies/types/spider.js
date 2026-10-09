@@ -8,6 +8,7 @@
 // It keeps ~4–6 m off her between webs (a ranged token), closing in for a bite when she's near.
 // Defeat: poof (dirt), it scampers away.
 import { ENEMIES, ATTACKS } from '../../core/config.js';
+import { E } from '../../core/events.js';
 import { CLIP_MAPS } from '../clipMaps.js';
 import { M2 } from '../tuning.js';
 import { applySlow } from '../status.js';
@@ -68,7 +69,10 @@ export default {
     return {
       onHit(p, tgt, result) {
         if (p.reflected || !tgt || tgt.faction !== 'player') return;
-        if (result === 'hit' || result === 'break') applySlow(tgt, WEB.slow ?? 0.5, WEB.slowDur ?? 2, 'web');
+        if (result === 'hit' || result === 'break') {
+          applySlow(tgt, WEB.slow ?? 0.5, WEB.slowDur ?? 2, 'web');
+          e.ctx.bus.emit(E.BURST, { kind: 'web', position: tgt.pos.clone().setY(tgt.pos.y + 0.4) });
+        }
       },
       onEnd(p, reason) {
         if (p.reflected || reason === 'eaten' || reason === 'recycled' || reason === 'killed') return;

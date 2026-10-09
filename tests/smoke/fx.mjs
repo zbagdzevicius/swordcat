@@ -297,6 +297,7 @@ export const M2_BLOCKS = [
     name: 'fx:m2-line', order: 60, level: 'gate', spawn: 'start', timeout: 150000,
     async run(t) {
       await prepM2(t, [1.5, 35.5, 0]);
+      const done0 = (await stats(t)).m2.counts.repairDone;      // the counters are per session (world:line may have run)
       await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx;
         g.__fxLineP = 12;
@@ -323,7 +324,7 @@ export const M2_BLOCKS = [
       await t.wait(250);
       await t.shot('fx/m2-line-done', { freeze: true });
       await hideUi(t, false);
-      t.assert((await stats(t)).m2.counts.repairDone === 1, 'no 100% flare');
+      t.assert((await stats(t)).m2.counts.repairDone === done0 + 1, 'no 100% flare');
     },
   },
   {

@@ -112,3 +112,29 @@ export function addHeldProp(e, m, name, handName, { down = 0, scale = 1 } = {}, 
   e.extraProps[name] = pivot;
   return pivot;
 }
+
+const _hb = new THREE.Box3(), _bb = new THREE.Box3(), _hv = new THREE.Vector3(), _hs = new THREE.Vector3();
+/**
+ * Seat a KayKit hat (Barbarian_Hat) on top of the bigger beast head (core integration, M2): the stock hat sits on
+ * the small KayKit skull, so over the hyena head it hid the eyes and read as a bear. Scales it a little and lifts it
+ * so its lowest point rests at `brim` (0 = head bottom … 1 = head top) of the beast head. Visual only.
+ * @param {any} e @param {any} m ModelInstance @param {{node?: string, brim?: number, scale?: number}} [o]
+ */
+export function seatHat(e, m, { node = 'Barbarian_Hat', brim = 0.6, scale = 1.15 } = {}) {
+  const hat = m?.scene?.getObjectByName?.(node), head = e?.dress?.head?.root;
+  if (!hat || !head) return false;
+  m.root.updateWorldMatrix(true, true);
+  _hb.setFromObject(hat); _bb.setFromObject(head);
+  if (_hb.isEmpty() || _bb.isEmpty()) return false;
+  hat.scale.multiplyScalar(scale);
+  m.root.updateWorldMatrix(true, true);
+  _hb.setFromObject(hat);
+  const wantY = _bb.min.y + (_bb.max.y - _bb.min.y) * brim, dy = wantY - _hb.min.y;
+  if (dy > 0 && hat.parent) {
+    // world-space lift → the hat parent's local space
+    hat.getWorldPosition(_hv); _hs.copy(_hv); _hs.y += dy;
+    hat.parent.worldToLocal(_hv); hat.parent.worldToLocal(_hs);
+    hat.position.add(_hs.sub(_hv));
+  }
+  return true;
+}

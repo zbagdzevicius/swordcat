@@ -584,21 +584,26 @@ export default [
       // B1 (forest mill) and B2 (gate causeway): 6.0 m arm; the boss assist brings an off-screen boss into frame
       for (const L of [{ level: 'forest', id: 'B1' }, { level: 'gate', id: 'B2' }]) {
         if (L.level !== 'forest') await t.loadLevel(L.level, 'boss');
+        await t.clearEvents();                                     // B1's boss:start must not satisfy B2's wait
         await t.G(() => window.__GAME__.god(true));
         await t.G(() => window.__GAME__.startBoss());
         const started = await t.waitForEvent('boss:start', 25000);
         t.assert(started, `${L.id}: startBoss() did not emit boss:start`);
         if (!started) continue;
-        await until(t, 'c.ctx.enemies.boss && Math.abs(c.distance - (c.ctx.enemies.boss.camDist || 6.0)) < 0.01', 8000);
+        await until(t, 'c.ctx.enemies.boss && c.ctx.enemies.boss.alive && Math.abs(c.distance - (c.ctx.enemies.boss.camDist || 6.0)) < 0.01', 8000);
         // put the boss 7 m to her right, freeze his AI, swing the camera so he is off screen
         const r0 = await t.G(async () => {
           const g = window.__GAME__, ctx = g.ctx, c = ctx.cam, b = ctx.enemies.boss, p = ctx.player;
           if (!b) return null;
           b.ai = false;
-          const f = p.facing, x = p.pos.x - Math.cos(f) * 7, z = p.pos.z + Math.sin(f) * 7;   // her right = −X local
+          const f = p.facing;
+          // B1's mill is round: the boss 7 m to her right, camera behind her. B2's causeway is only 12 m wide (a boss
+          // put 7 m to the side is pushed back next to her): the boss 7 m ahead, the camera swung 90° to the side.
+          const narrow = ctx.levels.current?.id === 'gate';
+          const x = narrow ? p.pos.x + Math.sin(f) * 7 : p.pos.x - Math.cos(f) * 7, z = narrow ? p.pos.z + Math.cos(f) * 7 : p.pos.z + Math.sin(f) * 7;
           b.pos.set(x, ctx.physics.heightAt(x, z), z); b.object3d.position.copy(b.pos);
           b.vel?.set?.(0, 0, 0);
-          c.yaw = f + Math.PI;                                    // straight behind her: the boss is at ~90°
+          c.yaw = f + Math.PI + (narrow ? Math.PI / 2 : 0);       // the boss is at ~90° off the view
           await g.waitFrames(2);
           return { dist: c.distance, mode: c.modeName, h: b.height };
         });

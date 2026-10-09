@@ -39,8 +39,14 @@ export class VigilStone {
     this.glow.visible = false;
     this.group.add(this.flame, this.glow);
     level.groups.props.add(this.group);
+    const stone = this;
     this.interactable = {
-      id: this.id, kind: 'vigil', pos: this.pos, r: VIGIL.radius + 0.35, prompt: 'tut.vigil',
+      id: this.id, kind: 'vigil', pos: this.pos, r: VIGIL.radius + 0.35,
+      // a lit stone swaps kittens (§9.1, companions listens to `interact` kind 'vigil') when a swap is possible
+      get prompt() {
+        const comp = stone.ctx.companions;
+        return stone.lit && typeof comp?.canSwap === 'function' && comp.canSwap() && stone.ctx.strings?.has?.('prompt.swap') ? 'prompt.swap' : 'tut.vigil';
+      },
       use: () => this.activate(),
     };
   }

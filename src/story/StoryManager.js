@@ -355,9 +355,8 @@ export class StoryManager {
     if (kind === 'cape') { const l = st.cosmetics.capes; fresh = !l.includes(id); if (fresh) l.push(id); }
     else if (kind === 'skin') { const l = st.cosmetics.swords; fresh = !l.includes(id); if (fresh) l.push(id); }
     if (!fresh) return;
+    // ui toasts `state:unlock` with the display name (requests/ui.md: a second toast here doubled it)
     this.ctx.bus.emit(E.UNLOCK, { kind, id });
-    const key = kind === 'cape' ? 'toast.cape' : kind === 'skin' ? 'toast.skin' : null;
-    if (key) this.ctx.bus.emit(E.TOAST, { text: tr(key, { name: id }), key, icon: kind });
   }
 
   /** Show the chapter card (§14.3: 3.0 s, the wax seal stamps with `ui/drop_002`). */

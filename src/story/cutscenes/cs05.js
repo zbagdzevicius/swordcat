@@ -79,9 +79,9 @@ export default {
     sfx('cs05.shardSink', 'swordcat'),
     { t: 'call', fn: shardToBlade, max: 2 },
     par(
-      { t: 'actor', id: 'swordcat', holy: [0, 0.85, 0.4], dur: 1.5 },
+      { t: 'actor', id: 'swordcat', holy: [0, 0.6, 0.3], dur: 1.5 },          // (integration: 0.85 / 0.6 bloom washed her face out at night)
       { t: 'fx', burst: 'sparkle', at: 'swordcat', count: 80, color: '#FFE3A3' },
-      { t: 'fx', bloomSpike: 0.6, bloomDur: 1.2 },
+      { t: 'fx', bloomSpike: 0.35, bloomDur: 1.0 },
       { t: 'env', contribute: { cs05: { fogAdd: -0.01 } } },
     ),
     { t: 'call', fn: toastOnce },

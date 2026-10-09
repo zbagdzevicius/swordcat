@@ -178,7 +178,8 @@ export class UI {
     on(E.ITEM_STOLEN, (p) => this.toast(p?.item === 'milk' ? T('toast.stolenMilk') : T('toast.stolen', { n: p?.amount ?? 0 }), { key: 'toast.stolen' }));
     on(E.ITEM_RETURNED, () => this.toast(T('toast.returned'), { key: 'toast.returned' }));
     const doneObj = new Set();
-    on(E.OBJECTIVE, (p) => { if (p?.done && !doneObj.has(p.id)) { doneObj.add(p.id); this.toast(T('toast.objective'), { key: 'toast.objective' }); } });
+    // the HUD objective bar already flashes "Objective complete!"; toast only when no bar can show it (no double toast)
+    on(E.OBJECTIVE, (p) => { if (p?.done && !doneObj.has(p.id)) { doneObj.add(p.id); if (!this.hud?.objEl) this.toast(T('toast.objective'), { key: 'toast.objective' }); } });
     on(E.CHECKPOINT, () => {
       this.toast(T('toast.checkpoint'), { key: 'toast.checkpoint' });
       if (!ctx.params?.test) this._after(UI_TIMING.vigilDelay, () => { if (!this.busy && ctx.game.mode === 'play') this.openVigil(); });
@@ -253,6 +254,7 @@ export class UI {
   /** Results screen (§14.3); resolves when the player continues. world's `levels.exit` awaits it. */
   showResults(payload) {
     if (!this.results) return Promise.resolve();
+    this._resultsInScene = this.ctx.game.mode === 'cutscene' && !!this.ctx.story?.isPlaying;
     this._takeMode('cutscene');
     // §14.3 results per level: compare with the record as it stood when the level started (world writes the new best
     // into state.levels before it calls us)
@@ -486,7 +488,9 @@ export class UI {
 
   _giveBackMode() {
     const g = this.ctx.game;
-    if (this._modeTaken && g.mode === 'cutscene' && !this.ctx.story?.isPlaying) g.setMode(this._modeTaken);
+    // a card shown during a scene that has ended meanwhile (story's results wait timed out / was skipped) hands back play
+    if (g.mode === 'cutscene' && !this.ctx.story?.isPlaying && !this.ctx.levels?.loading && !this.menus?.titleActive && (this._modeTaken || this._resultsInScene)) g.setMode(this._modeTaken ?? 'play');
+    this._resultsInScene = false;
     this._modeTaken = null;
   }
 

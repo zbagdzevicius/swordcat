@@ -97,7 +97,7 @@ class TossWheel {
   onParried() {
     const e = this.owner;
     this.shatter(true);
-    if (e.alive) { e.bark('grizzlechop.wheel'); e.stagger(3.0); e.wobbleT = 3.0; }
+    if (e.alive) { e.bark(e.ctx.strings?.has?.('grizzlechop.cheese') ? 'grizzlechop.cheese' : 'grizzlechop.wheel'); e.stagger(3.0); e.wobbleT = 3.0; }
   }
   onBlocked() { this.shatter(false); }
   shatter(big) {

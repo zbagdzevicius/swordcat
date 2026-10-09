@@ -773,3 +773,39 @@ test('M2 cosmetics: equipped sword / cape fall back to the Borrowed Blade / Fade
   assert.equal(equippedCape({ cape: 'cream' }, 'red'), 'red');
   assert.equal(equippedCape(undefined), 'cream');
 });
+
+// ================================================================== M2 integration: status slow (§10.3 web), jeer radius
+test('Player: applySlow (web) halves her speed for 2 s, a tumble or cleanse() clears it; jeerR overrides the aura radius', async () => {
+  const r = await rig(), { p } = r;
+  const base = p.speedMul;
+  p.applySlow(0.5, 2, 'web');
+  assert.ok(p.isSlowed());
+  near(p.speedMul, base * 0.5, 1e-9, 'speed ×0.5');
+  p.applySlow(0.8, 0.5, 'web');                           // a weaker, shorter slow never shortens / weakens it
+  near(p.speedMul, base * 0.5, 1e-9); near(p.slowT, 2, 1e-9);
+  r.seconds(1.0);
+  assert.ok(p.isSlowed() && p.slowT < 1.05 && p.slowT > 0.95, `ticks down (${p.slowT})`);
+  r.seconds(1.1);
+  assert.equal(p.isSlowed(), false, 'wears off after 2 s');
+  near(p.speedMul, base, 1e-9);
+  p.applySlow(0.5, 2, 'web');
+  r.input.move.y = 1; r.tap('dodge'); r.input.move.y = 0;
+  assert.equal(p.state, 'dodge');
+  assert.equal(p.isSlowed(), false, 'a tumble clears it');
+  p.applySlow(0.5, 2, 'web');                             // no slow lands mid-tumble
+  assert.equal(p.isSlowed(), false);
+  r.seconds(0.6);
+  p.applySlow(0.5, 2, 'web'); p.cleanse();
+  assert.equal(p.isSlowed(), false, "Clover's mend cleanses it");
+  // jeer aura: the duet's r 10 (enemy.jeerR) beats the def's 8
+  const e = r.enemy(9, 0);
+  e.pos.set(p.pos.x, 0, p.pos.z + 9);
+  e.def = { jeer: { r: 8 } };
+  r.ctx.bus.emit(E.ENEMY_JEER, { enemy: e, on: true });
+  p._scanThreats(DT);
+  assert.equal(p.inJeer, false, '9 m is outside r 8');
+  e.jeerR = 10;
+  p._scanThreats(DT);
+  assert.equal(p.inJeer, true, '…but inside the duet r 10');
+  assert.equal(typeof p.recomputeMax, 'function', 'public recomputeMax');
+});

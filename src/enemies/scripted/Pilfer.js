@@ -171,6 +171,7 @@ const RUN = {
 function restart(e) {
   const pts = e.chasePts, ctx = e.ctx, p = ctx.player;
   ctx.bus.emit(E.BURST, { kind: 'smoke', position: e.pos.clone(), count: 10 });
+  if (ctx.strings?.has?.('toast.chase.restart')) ctx.bus.emit(E.TOAST, { text: ctx.strings.t('toast.chase.restart'), key: 'toast.chase.restart' });
   e.pos.copy(pts[0]); e.vel.set(0, 0, 0); e.snap();
   e.chaseIdx = 1; e.chaseT = 0; e.pauseT = 0.6;
   if (p?.teleport) {

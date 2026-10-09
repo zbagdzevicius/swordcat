@@ -126,7 +126,10 @@ export default {
         e.swing = null; e.followUp = null;
         e.slamHit = new Set();
         e.ctx.bus.emit(E.BURST, { kind: 'dustRing', position: e.pos.clone(), scale: 1.5 });
-        e.ctx.bus.emit(E.BURST, { kind: 'ring', position: e.pos.clone(), r: e.attack.def.ring?.rMax ?? 2.5, color: '#FF6A3D' });
+        const RR = e.attack.def.ring ?? { rMax: 2.5, grow: 0.4, height: 0.3 };
+        // fx draws the jumpable shockwave wall with the same linear growth as the hit ring (requests/fx.md)
+        if (typeof e.ctx.fx?.shockwave === 'function') e.ctx.fx.shockwave(e.pos, { r: RR.rMax ?? 2.5, dur: RR.grow ?? 0.4, height: RR.height ?? 0.3, color: 'red' });
+        else e.ctx.bus.emit(E.BURST, { kind: 'ring', position: e.pos.clone(), r: RR.rMax ?? 2.5, color: '#FF6A3D' });
         e.ctx.bus.emit(E.SHAKE, { trauma: 0.2 });
       },
       update(e, dt) {

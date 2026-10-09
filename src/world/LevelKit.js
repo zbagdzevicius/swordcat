@@ -660,7 +660,7 @@ export class Kit {
     const ctx = this.ctx;
     if (zn.flag) for (const [k, v] of Object.entries(zn.flag)) (ctx.story?.flag ? ctx.story.flag(k, v) : ctx.state?.setFlag?.(k, v));
     if (zn.toast) ctx.bus.emit(E.TOAST, { text: ctx.strings?.t?.(zn.toast) ?? zn.toast });
-    if (zn.play && !ctx.story?.isPlaying) ctx.story?.play?.(zn.play);
+    if (zn.play) ctx.story?.play?.(zn.play);          // story queues it behind a running scene (a dropped play would be lost: triggers fire once)
   }
 
   _interactZone(it) {

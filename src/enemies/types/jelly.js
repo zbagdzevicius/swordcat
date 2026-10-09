@@ -250,6 +250,7 @@ const STATES = {
         const dmg = typeof a.dmg === 'object' ? (a.dmg[e.size === 'GIANT' ? 'L' : e.size] ?? 1) : a.dmg;
         e.ctx.combat?.areaHit?.(e, a, { center: e.pos, r: e.slamR, y0: -0.3, y1: 1.0, dmg, hitSet: e.slamHit });
         e.ctx.bus.emit(E.BURST, { kind: 'droplets', position: e.pos.clone(), count: 10, scale: e.height });
+        e.ctx.bus.emit(E.BURST, { kind: 'jellySlam', position: e.pos.clone(), scale: e.height / 0.8 });
         e.ctx.bus.emit(E.SHAKE, { trauma: 0.08 * (e.height / 0.8) });
         e.brakeHard();
       }

@@ -273,7 +273,7 @@ const SETPIECES = {
           ctx.objectives?.add?.('lanterns', 1);
         }
       };
-      kit.interact({ id: `lantern_${i + 1}`, at: [x + (x < 0 ? 0.9 : -0.9), z], r: 1.9, kind: 'lantern', prompt: 'prompt.interact',
+      kit.interact({ id: `lantern_${i + 1}`, at: [x + (x < 0 ? 0.9 : -0.9), z], r: 1.9, kind: 'lantern', prompt: 'prompt.light',
         enabled: () => !flame.on && !ctx.story?.isPlaying, use: () => light(false) });
       kit.onLoaded(() => { if (ctx.state?.getFlag?.(key)) light(true); });
       kit.anchor(`lantern_${i + 1}`, x, z);
@@ -484,7 +484,7 @@ export default defineLevel({
       spawns: [['stealer', 3, [-21, -16], 3], ['rat_pike', 2, [-17, -20], 2]] },
     { id: 'forge', kind: 'arena', at: [19, -4], r: 9, props: 'forge', autoLockWhen: occupied, clearedWhen: 'town.free',
       waves: [[['pug', 2], ['rat_pike', 2]]],
-      hints: [{ key: 'hint.pug', on: 'alert', type: 'pug', text: 'Shields block from the front. Bright Slash it, or go around.' }] },   // (story: please add a strings key)
+      hints: [{ key: 'tut.pug', on: 'alert', type: 'pug' }] },
     { id: 'letter_3', kind: 'letter', letterId: 'l3', at: [28, -2] },
     { id: 'vigil_2', kind: 'checkpoint', at: [-8, -9] },
     { id: 'square', kind: 'arena', at: SQUARE.at, r: SQUARE.r, props: 'square', autoLockWhen: occupied, clearedWhen: 'town.free',

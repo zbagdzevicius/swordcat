@@ -164,7 +164,8 @@ export async function levelResults(ctx, levelId, maxSec = 12) {
     try {
       await Promise.race([Promise.resolve(ctx.ui.showResults(res)), new Promise((r) => setTimeout(r, (ctx.params?.test ? 1.5 : maxSec) * 1000))]);
     } catch (e) { console.warn('[story] results card failed', e); }
-    if (g && prevMode && g.mode !== prevMode && (prevMode === 'cutscene' || prevMode === 'dialog')) g.setMode(prevMode);
+    // give the scene its mode back only while it still runs (a skipped scene has ended: forcing 'cutscene' here soft-locked play)
+    if (g && prevMode && g.mode !== prevMode && (prevMode === 'cutscene' || prevMode === 'dialog') && ctx.story?.isPlaying) g.setMode(prevMode);
   }
   return res;
 }

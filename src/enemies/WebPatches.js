@@ -106,7 +106,7 @@ export class WebPatches {
   cut(w) {
     if (!w || w.cut) return;
     w.cut = true; w.t = 0;
-    this.ctx.bus.emit(E.BURST, { kind: 'sparkle', position: w.pos.clone().setY(w.pos.y + 0.2), count: 6, color: '#F0F4F8' });
+    this.ctx.bus.emit(E.BURST, { kind: 'webCut', position: w.pos.clone().setY(w.pos.y + 0.05) });
   }
 
   /** A swing cuts the nearest patch within its reach (+ the patch radius) in front of her. */

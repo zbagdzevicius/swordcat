@@ -24,7 +24,7 @@ import { TUNING, M2, rangeOf } from '../tuning.js';
 import { windupFor } from '../Enemy.js';
 import { bossDef } from '../bossBase.js';
 import { CHAIN_STATE, laneTo, minLead, ringAt } from '../moves.js';
-import { dressKayKit, characters } from './kaykitGear.js';
+import { dressKayKit, characters, seatHat } from './kaykitGear.js';
 import { CACKLEJAW_HIDE, CACKLEJAW_LOOK } from '../scripted/Cacklejaw.js';
 import { GLOAT } from './hyenaStates.js';
 
@@ -108,6 +108,7 @@ const QUAKE_STATE = {
         e.endTelegraphId(e.telegraphId);
         e.quakePhase = 'ring'; e.quakeT = 0;
         e.ctx.bus.emit(E.BURST, { kind: 'dustRing', position: e.pos.clone(), scale: 2 });
+        e.ctx.fx?.shockwave?.(e.pos, { r: QUAKE.rMax, speed: QUAKE.speed, height: QUAKE.height, color: 'jeer' });
         e.ctx.bus.emit(E.SHAKE, { trauma: 0.3 });
       }
       return;
@@ -301,6 +302,7 @@ export default {
   async build(e, m) {
     await dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' });
     if (e.disposed) return;
+    seatHat(e, m);
     const blob = blobMesh(e.radius * 1.7);
     if (blob) { e.object3d.add(blob); e.blob = blob; }
   },

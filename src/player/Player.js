@@ -74,6 +74,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     /** last applied shop upgrades (§13.3: satchel, Valor Gain); applyUpgrades() re-reads state.upgrades on change */
     this._upgSatchel = -1; this._upgValorGain = null;
     this.inShallow = false;
+    /** status slow (§10.3 spider_web): `slow` = fraction of speed removed, `slowT` = seconds left (Clover's mend zeroes both) */
+    this.slow = 0; this.slowT = 0;
     /** visual-only fields the model consumes: squash cue, hurt blink timer (i-frames after a hurt / respawn) */
     this.squashEvent = null;
     this.blinkT = 0; this.stepAccum = 0; this.hurtDur = PLAYER.hurt.stun;
@@ -316,6 +318,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (!ctx.game.simActive(this)) return;
     this.stateT += dt;
     this._tickTimers(dt);
+    if (this.slowT > 0) { this.slowT = Math.max(0, this.slowT - dt); if (this.slowT <= 0) this.slow = 0; }
 
     if (this.scripted || this.attachedTo) {
       if (this.state !== 'scripted') this.setState('scripted');
@@ -448,7 +451,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.threatT = threatened ? TUNING.threatGrace : Math.max(0, this.threatT - dt);
     for (const e of this.jeerers) {
       if (!e.alive) { this.jeerers.delete(e); continue; }
-      const r = e.def?.jeer?.r ?? JEER_R;
+      const r = e.jeerR ?? e.def?.jeer?.r ?? JEER_R;
       if (Math.hypot(e.pos.x - this.pos.x, e.pos.z - this.pos.z) <= r) { jeer = true; break; }
     }
     this.threatened = threatened || this.threatT > 0; this.inJeer = jeer;
@@ -474,7 +477,24 @@ export class Player extends ScriptedActorMixin(Actor) {
   }
 
   /** Speed multiplier: Golden Hour ×1.1, shallow water ×0.6. */
-  get speedMul() { return (this.golden ? PLAYER.golden.speedMul : 1) * (this.inShallow ? PLAYER.water.shallowMul : 1); }
+  get speedMul() {
+    const slowed = this.slowT > 0 ? 1 - Math.min(0.9, Math.max(0, this.slow)) : 1;
+    return (this.golden ? PLAYER.golden.speedMul : 1) * (this.inShallow ? PLAYER.water.shallowMul : 1) * slowed;
+  }
+
+  /** Status slow (requests/enemies.md; §10.3 web: ×0.5 for 2 s, a roll clears it). The strongest / longest wins. */
+  applySlow(mul, sec, source = null) {
+    if (!this.alive || this.scripted || !(sec > 0)) return;
+    if (this.state === 'dodge') return;
+    this.slowT = Math.max(this.slowT, sec);
+    this.slow = Math.max(this.slow, 1 - mul);
+    this.slowSource = source;
+  }
+  isSlowed() { return this.slowT > 0 && this.slow > 0; }
+  /** Clears status effects (Clover's Purr of Mending; a tumble clears the slow). */
+  cleanse() { this.slow = 0; this.slowT = 0; this.slowSource = null; }
+  /** Public: re-derive maxHp / milkMax (Heart Bells, satchel, Mochi). */
+  recomputeMax() { this._recomputeMax(); }
 
   /** The camera's lock-on target (camera owns lock-on), if alive. */
   lockTarget() { const t = this.ctx.cam?.lockTarget; return t && t.alive !== false && t.pos ? t : null; }
@@ -498,6 +518,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.dodgeDir.copy(_dir.normalize());
     this.facing = Math.atan2(this.dodgeDir.x, this.dodgeDir.z);
     this.dodgeBuf = 0; this.zoomies = false; this.zoomT = 0;
+    this.cleanse();
     this.setState('dodge');
     this.ctx.bus.emit(E.PLAYER_DODGE, { dir: this.dodgeDir.clone() });
   }

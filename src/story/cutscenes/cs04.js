@@ -9,6 +9,7 @@
 //     Sage: "...Don't tell anyone I cried."
 //   5 slow push-out (the tail curl is [unverified] on Dragon_Evolved's Body bones: skipped, push-out only); fade out.
 // end: flag forest.camp; Vigil Stone `vigil_3` lit; env forest_night; music dark_forest_creepy (its map volume 0.6).
+import * as THREE from 'three';
 import { say, cam, wait, sfx, yawOf } from './lib.js';
 import { castFriend, buildLanternLight, buildFireflies, animateBuilt, activateVigil, hideParty, showParty } from './cast.js';
 
@@ -20,6 +21,8 @@ export const SEAT = [5.3, 44.4];
 const SAGE_AT = [6.5, 44.0];
 const MOCHI_AT = [4.4, 40.9];
 const FACE_FIRE = yawOf([CAMP[0] - SEAT[0], CAMP[1] - SEAT[1]]);
+/** where she stands when the night starts (gameplay): south of the fire, so the camera looks past it at the sleeping Pudding */
+const END_AT = [7.4, 36.2];
 
 const camp = { anchor: 'camp_fire', or: CAMP };
 const pud = { anchor: 'pud_sleep', or: PUD };
@@ -46,6 +49,14 @@ function castCamp(ctx, cs) {
     // the lantern's light sits a little in front of her and low, so it warms her face instead of blowing it out
     const lx = SEAT[0] + Math.sin(FACE_FIRE) * 0.65, lz = SEAT[1] + Math.cos(FACE_FIRE) * 0.65;
     cs.spawnOne({ id: 'lantern_light', kind: 'object', build: buildLanternLight, at: [lx, lz] });
+    // fx's warm glow halo + embers on the held lantern (requests/fx.md); our PointLight stays the real light
+    cs.spawnOne({ id: 'lantern_glow', kind: 'object', at: [lx, lz], build: (c) => {
+      const holder = new THREE.Object3D();
+      let h = null;
+      try { h = c.fx?.lantern?.('swordcat', { lit: true }) ?? null; } catch (e) { console.warn('[story] fx lantern', e); }
+      holder.userData.dispose = () => { try { h?.remove?.(); } catch { /* fx optional */ } };
+      return holder;
+    } });
   }
   cs.spawnOne({ id: 'fireflies', kind: 'object', build: () => buildFireflies(40, 8), at: camp });
   animateBuilt(cs, 'fireflies');
@@ -114,7 +125,8 @@ export default {
       else activateVigil(ctx, 'vigil_3', true);
     },
     flags: { 'forest.camp': true },
-    actors: { swordcat: { prop: { lantern: false }, pos: SEAT, facing: FACE_FIRE }, pudding: { pose: 'sleep' } },
+    // hand-back south of the fire facing on up the path (+Z): the follow camera behind her must not sit inside the sleeping Pudding
+    actors: { swordcat: { prop: { lantern: false }, pos: END_AT, facing: yawOf([PUD[0] - END_AT[0], PUD[1] - END_AT[1]]) }, pudding: { pose: 'sleep' } },
     env: 'forest_night',
     music: { track: 'dark_forest_creepy', fade: 2 },
     ui: { letterbox: false, hud: true, fade: { alpha: 0, dur: 1.2 } },

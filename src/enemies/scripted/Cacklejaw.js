@@ -7,7 +7,7 @@
 // The boss fight (B2) is a separate type (`boss_cacklejaw`).
 import { ENEMIES } from '../../core/config.js';
 import { CLIP_MAPS } from '../clipMaps.js';
-import { dressKayKit } from '../types/kaykitGear.js';
+import { dressKayKit, seatHat } from '../types/kaykitGear.js';
 
 /** Barbarian props hidden on Cacklejaw (the hyena list minus `Barbarian_Hat`, which he keeps). */
 export const CACKLEJAW_HIDE = ENEMIES.hyena.hide.filter((n) => n !== 'Barbarian_Hat');
@@ -23,5 +23,5 @@ export default {
   faction: 'enemy', radius: 0.6, height: 2.2, mass: 4, hp: 700, poise: 15, walk: 1.6, run: 4.5, sight: 0, fov: 2.44, leash: 999,
   aiLess: true, hurtable: false, smallHeart: false, fish: null, tags: ['cutscene'],
   anims: { ...CLIP_MAPS.kaykit.roles },
-  build: (e, m) => dressKayKit(e, m, CACKLEJAW_LOOK),
+  build: async (e, m) => { await dressKayKit(e, m, CACKLEJAW_LOOK); if (!e.disposed) seatHat(e, m); },
 };

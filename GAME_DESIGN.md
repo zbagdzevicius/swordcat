@@ -904,26 +904,30 @@ Napping (any companion): "Just... resting my eyes..." · "Zzz." Waking: "I'm up!
 
 ### 6.6 Tutorial and prompt strings
 
-| Key | Text (keyboard / gamepad / touch glyphs are swapped in by `ui`) |
+The base text is the desktop line (`hybrid` preset). `ui` uses `key.touch` / `key.pad` first when they exist, and `[Token]` glyphs resolve through the active bindings. The full per-device table is in `research/CONTROLS_SPEC.md` §14.
+
+| Key | Text (base; the touch and pad variants are in the spec) |
 |---|---|
-| `tut.move` | Move [WASD] · Look [Mouse] |
-| `tut.jump` | Jump the fence [Space] |
-| `tut.combo` | Snip, Snap, Swoosh! [⚔ ×3] |
-| `tut.roll` | Tumble past the sack [Shift]. You can't be hurt mid-tumble. |
-| `tut.stand` | Hold the Stand [RMB]. Block the Wobble Knight twice. |
-| `tut.parry` | Raise the Stand *just* as it swings. A white glint means "parry me". |
-| `tut.bright` | Hold ⚔ until it shines, then let go. Bright Slash breaks cracked things. |
-| `tut.meow` | Meow [C]. Hidden kittens answer. So do cows. |
+| `tut.move` | Right-click where to go, or use [WASD]. Hold right-click to keep walking. *(touch: "Drag the left side to move, or tap where to go.")* |
+| `tut.jump` | Jump the fence [Jump]. *(F. Passing it sets `tut.jump.done`, which opens the fence's auto-hop link.)* |
+| `tut.combo` | Snip, Snap, Swoosh! [Attack] ×3: you swing toward the cursor. *(touch: "Tap ⚔ three times.")* |
+| `tut.target` | Right-click a foe to charge in and attack it. *(touch: "Tap a foe…"; pad: "[RB] picks the nearest foe.")* |
+| `tut.roll` | Tumble past the sack [Tumble]: toward the cursor. You can't be hurt mid-tumble. *(touch: "Tap Tumble, or swipe the open ground.")* |
+| `tut.stand` | Hold the Stand [Stand]. Block the Wobble Knight twice. *(Space)* |
+| `tut.parry` | Raise the Stand *just* as it swings. A white glint and a white wedge on the ground mean "parry me". *(touch adds: "When the ring meets you, raise 🛡.")* |
+| `tut.bright` | Hold [Attack] until it shines, then let go. The silver arc shows its reach. Bright Slash breaks cracked things. |
+| `tut.meow` | Meow [Meow]. Hidden kittens answer. So do cows. |
+| `tut.zoom` / `tut.click` / `tut.talk` / `tut.rotate` | Scroll to zoom. · Tip: right-click a spot and she walks there by herself. · Click someone to talk. · Plays best sideways. *(portrait only, once)* |
 | `tut.pearl1` / `tut.pearl2` | "Shh! I'm not here." / "...You're getting good, Clem." *(Pearl, behind the tutorial cow)* |
-| `tut.riposte` | Parried! Press ⚔ now for a Riposte. *(first parry in L1)* |
+| `tut.riposte` | Parried! [Attack] now for a Riposte. *(first parry in L1)* |
 | `tut.pounce` | Jump, then ⚔ in the air: Pounce. Bounce off crows! *(first crow)* |
 | `tut.reflect` | Parry a bolt to send it back. *(first crossbow)* |
-| `tut.milk` | Milk Break [R]: heals 2 hearts. Don't get hit while you sip. |
-| `tut.vigil` | Vigil Stone: rest, save, refill milk, swap kittens [E]. |
+| `tut.milk` | Milk Break [Milk]: heals 2 hearts. Don't get hit while you sip. |
+| `tut.vigil` | Vigil Stone: click it to rest, save, refill milk, swap kittens. |
 | `tut.valor` | Standing your ground fills Valor. Hold the Stand near enemies. |
-| `tut.companion` | [Q] Kitten ability |
+| `tut.companion` | [Ability] Kitten ability: hold to aim, let go to cast. |
 | `tut.holy` | Holy Slash: hold ⚔ until it turns gold (needs 50 Valor). |
-| `tut.golden` | Golden Hour: at full Valor, press Stand + ⚔ together. |
+| `tut.golden` | Golden Hour: at full Valor, press [Golden] (or Stand + Attack together). |
 | `tut.line` | Hold the Line! Keep enemies away from the winch. |
 | `tut.jeer` | A jeering hyena drains your Valor. Hold the Stand and it can't touch you, or hit it to make it choke. |
 | `tut.bones` | Scatter the bones! Hit a bone pile with a heavy attack before it gets up. |
@@ -966,14 +970,14 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 | Move | Input | Numbers |
 |---|---|---|
 | Walk | stick ≤ 0.5 | 2.0 m/s |
-| Run | full stick / WASD | **5.5 m/s** (tech.md §11.2's gait normalises to 5.5). Accel damp λ 14, decel λ 18, facing damp λ 16 (90% of a turn in about 0.15 s). |
+| Run | full stick / WASD, or any click / tap order (§15) | **5.5 m/s** (tech.md §11.2's gait normalises to 5.5). Accel damp λ 14, decel λ 18, facing damp λ 16 (90% of a turn in about 0.15 s). |
 | **Zoomies** (auto) | run for 2.0 s straight with no alerted enemy within 15 m | **7.2 m/s**. Ears back, tail up, a dust puff every 4 steps. Ends on stop, attack, Stand, or an enemy alert. For traversal and the Pilfer chase. |
-| Jump | Space | v₀ **7.4 m/s**, gravity 22 m/s² (shared `config.gravity`), extra fall gravity ×1.35 for the player. **Apex 1.245 m** (clears 1.0 m fences). Early release multiplies vel.y by 0.5. **Coyote 0.12 s, buffer 0.15 s.** Squash −0.25 on landing, stretch +0.18 on takeoff. Air damp λ 4, air max 5.5 m/s. |
+| Jump | F / A / the Jump button (path links jump by themselves, §15.5) | v₀ **7.4 m/s**, gravity 22 m/s² (shared `config.gravity`), extra fall gravity ×1.35 for the player. **Apex 1.245 m** (clears 1.0 m fences). Early release multiplies vel.y by 0.5. **Coyote 0.12 s, buffer 0.15 s.** Squash −0.25 on landing, stretch +0.18 on takeoff. Air damp λ 4, air max 5.5 m/s. |
 | Fall | — | Terminal −14 m/s. **No fall damage.** Landing faster than 9 m/s → 0.15 s squash lockout. |
 | Step / slope | — | Step-up 0.3 m; slopes steeper than normal.y 0.7 slide (tech.md §5) |
 | Water / pit | — | Shallow water: speed ×0.6, paw-shake. **Deep water or a pit:** −1 HP, "Splash!", back to the last safe ground (a ring buffer of 8 grounded positions sampled every 0.5 s). **No life lost.** |
 | Mushroom cap | land on a tagged cap | Bounce vy 9 m/s (about 1.8 m) |
-| **Cape Glide** [MVP+] | hold jump while falling | Fall speed ≤ 1.8 m/s, horizontal 4.5 m/s, at most 1.5 s per airtime |
+| **Cape Glide** [MVP+] | hold Jump while falling | Fall speed ≤ 1.8 m/s, horizontal 4.5 m/s, at most 1.5 s per airtime |
 
 ### 7.2 Attacks (×10 damage scale)
 
@@ -991,25 +995,32 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 | `sunburst` | Sunburst | automatic when Golden Hour ends | 0.6 | 0.20–0.30 | r 6, full circle | 40 | 16 | 99 | 0.16 / 0.70 | — | — | Ends Golden Hour |
 
 **Charge rules**
-- Hold ⚔ longer than 0.35 s to enter `charge`. She walks at 40% (2.2 m/s). Silver sparkles build. The camera pushes in 3.6 → 3.3 m with FOV 45 → 42.
+- Hold ⚔ longer than 0.35 s to enter `charge`. She walks at 40% (2.2 m/s) and turns toward the aim at 540°/s. A ground wedge shows the reach of the release. Silver sparkles build. The camera pushes in 1.0 m and the FOV drops 1°.
 - **Tier 1** at 0.60 s: silver flash plus `pickup/powerup_rise01`.
 - **Tier 2** at 1.10 s, **only with Shard 1 and Valor ≥ 50**: the blade turns gold (art.md §4.3 holy ramp) plus `powerup_rise03`. **Without them, the gold sparkles visibly fizzle at 1.10 s** and the charge stays at tier 1. The player learns the rule without a tutorial.
 - Release at 0.35–0.60 s gives `slash3`. A charge can be held indefinitely. Taking a hit cancels it.
 
 **Assists**
-- Aim assist: on an attack's first active frame she turns toward the nearest enemy within 60° and 3 m. On touch: 90° and 4 m.
-- Attack and roll have a 0.2 s input buffer.
+- **Aim:** every swing gets its direction from one resolver (§15.6), in this order: the Riposte target, a touch drag or the right stick, the **cursor**, the selected target, the soft auto-target, the stick, then facing.
+- **Magnet** on the first active frame. The cone is centred on the *aim*, not on her facing:
+  - mouse: ±25° and range + 1 m (±40° for the selected target);
+  - right stick: ±45° / 3.5 m;
+  - touch and auto-target: ±90° / **4.5 m**.
+
+  Touch, pad and auto-target swings can lunge up to 1.0 m further to close a gap.
+- Attack and roll have a 0.2 s input buffer. The Stand is never buffered.
+- A new move order during a wind-up cancels the swing (no damage, no Valor). WASD and the stick never cancel a wind-up, but they cut recovery from `active[1] + 0.05 s`.
 - **DPS check:** Snip–Snap–Swoosh deals 40 in about 1.4 s (≈ 29/s). A Rat Pikeman (30 HP) dies to one combo or one Riposte.
 
 ### 7.3 Defence: the Stand, parry, Riposte, Tumble
 
 | Move | Input | Numbers |
 |---|---|---|
-| **The Stand** (guard) | hold RMB / LB / 🛡 | **Vigil pose** in 0.08 s [REF ref2]; her ears flatten for 0.1 s first. She shuffles at **1.2 m/s** and turns at 360°/s. Blocks **frontal ±70°** melee and projectiles: **0 damage**, 0.4 m pushback. Each block costs **1 Grit**; hits with poise ≥ 3 cost 2. **Grit 3**, regaining 1 per 1.5 s after 0.8 s without blocking. At 0 Grit: **guard break**, 0.8 s stagger. **Red (unblockable) attacks** go straight through the Stand: full damage plus a guard break. |
+| **The Stand** (guard) | hold Space / LB / 🛡 | On press she **snaps to face** a parryable attacker within 5 m whose hit lands within 0.7 s. After that she faces the cursor (once it moves 30 px), the right stick, or on touch the soonest threat. On touch the guard arc is **±90°**. **Vigil pose** in 0.08 s [REF ref2]; her ears flatten for 0.1 s first. She shuffles at **1.2 m/s** and turns at 360°/s. Blocks **frontal ±70°** melee and projectiles: **0 damage**, 0.4 m pushback. Each block costs **1 Grit**; hits with poise ≥ 3 cost 2. **Grit 3**, regaining 1 per 1.5 s after 0.8 s without blocking. At 0 Grit: **guard break**, 0.8 s stagger. **Red (unblockable) attacks** go straight through the Stand: full damage plus a guard break. |
 | **Parry** | start the Stand **≤ 0.15 s** before a hit lands (Kitten difficulty 0.25 s; touch +0.05 s) | Negates the hit. **+20 Valor**, hitstop 0.12, time scale 0.5 for 0.15 s, gold ring spark, `sword_clash` + `metal_ringing`. Normal enemy: **stagger 1.2 s and a Riposte prompt**. Elite (poise ≥ 5): stagger 0.8 s. Boss: **+35 Dizzy**. **Gold-glint attacks** put a boss straight into Dizzy. **Projectiles are reflected** at 1.5× speed for 25 damage, from the start of the game. |
 | **Whiff lockout** | a Stand pressed and released within 0.25 s that blocked or parried nothing | Parry disabled for 0.30 s (blocking still works). No mashing. |
 | **Standing Ground** | stay in the Stand, planted (speed < 0.1 m/s) for ≥ 1.0 s, with ≥ 1 alerted enemy within 6 m that is targeting her | **+5 Valor/s** (+10/s inside a Jeer aura). **Capped at +30 per Stand**; the cap resets after the Stand has been released for 0.5 s. Her cape billows harder and the mist speeds up around her. The meme as a mechanic. |
-| **Tumble** (roll) | Shift / B | 0.40 s at 9 m/s easing to 4 m/s (about 2.6 m). **I-frames 0.04–0.30.** Cooldown 0.20 s. Cancels attack recovery after the active window. Ground only. |
+| **Tumble** (roll) | Shift / B / the Tumble button or a swipe. Direction: WASD, else toward the cursor. On touch: the stick, else away from the soonest threat. | 0.40 s at 9 m/s easing to 4 m/s (about 2.6 m). **I-frames 0.04–0.30.** Cooldown 0.20 s. Cancels attack recovery after the active window. Ground only. |
 | **Purrfect Dodge** | an enemy's active hitbox overlaps her during i-frames 0.04–0.20 | Time scale 0.35 for 0.5 s (real); world desaturates 30% while she stays saturated; **+12 Valor**; her next hit within 1.2 s crits ×1.5. `pickup/powerup_fx01`. |
 | Graze | overlap during i-frames 0.20–0.30 | +4 Valor, soft chime `ui/glass_001` |
 
@@ -1083,11 +1094,11 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 - **Idle trigger:** 15 s with no input, on an outdoor level, no alerted enemy within 20 m, fog density ≥ 0.02.
 - **Manual trigger:** hold the Stand 2.5 s while planted with no enemy within 12 m.
 - **What happens:**
-  1. The camera glides into `MEME_LOOP` over 2.0 s.
+  1. **The Descent:** the camera cranes down from the top-down view into `MEME_LOOP` over 2.0 s. The fog blends from focus fog back to lens fog at the same time, so the misty horizon appears as the lens reaches eye level.
   2. She switches from Vigil to **Oath** (sword vertical before her face).
   3. Wind ×1.6, mist ×2. The HUD fades out over 0.5 s.
   4. After 1.0 s, a caption fades in at the bottom left in Uncial Antiqua italic: one of `meme.cap1–3` at random.
-- It loops seamlessly with a 3.8 s period (cape, wind and fur cycles are synced). A verlet cape can't repeat exactly, so **during Meme Cam the hero cape cross-fades over 0.3 s to the sway-shader cape** driven by a 3.8 s sine (gust peak at 1.2 s), and the grass wind uses the same period; verlet resumes on exit. Any input exits, with a 0.6 s blend back.
+- It loops seamlessly with a 3.8 s period (cape, wind and fur cycles are synced). A verlet cape can't repeat exactly, so **during Meme Cam the hero cape cross-fades over 0.3 s to the sway-shader cape** driven by a 3.8 s sine (gust peak at 1.2 s), and the grass wind uses the same period; verlet resumes on exit. Any input, or a mouse move of 40 px or more, exits with a 0.9 s rise back to the top-down view. Mouse movement counts toward the idle timer only above 24 px/s.
 - **The first trigger** unlocks the **Meme White** cape and shows `toast.memecam`.
 - **Silent:** wind only, no music, like the silent viral loop [TREND §5].
 - Events: `camera:meme {on}`. Test hook: `__GAME__.idle(seconds)`.
@@ -1126,8 +1137,16 @@ Every telegraph pairs a **colour + a shape + a sound**, so colour-blind players 
 | `jeer` | Purple `#B07CFF` expanding sound-wave rings around a hyena | laugh build | **Stand** (immune, and it charges Standing Ground) or hit it (choke) | 0.5 s |
 | `shadow` (from above) | A dark circle decal that grows; it tracks for the first 60% of its time, then freezes | wing whoosh `impact/cloth` | Move out | 1.0 s |
 
+**Reading attacks from above** (`research/CONTROLS_SPEC.md` §8.2):
+- **Ground strike wedge:** every melee wind-up draws the attack's own arc on the ground, as an outline with a fill that sweeps outward. It tracks the attacker until 0.15 s before the hit, then freezes. The rim flashes when the parry window opens. Red wedges are filled.
+- **Glints and "!"** draw at a constant 28–34 px, on top of everything.
+- **Parry ring** (optional; default on for touch and Kitten difficulty): it shrinks onto her and meets her exactly on the active frame. The parry window is drawn as a band.
+- **Ranged aim lines** lie on the ground.
+- **Aggro ring:** alerted enemies show a thin red ring.
+- **X-ray:** an enemy in a wind-up shows a silhouette when something hides it.
+
 **Off-screen threat arrows:**
-- Any active telegraph whose actor is off-screen and within 15 m shows an arrow at the screen edge, coloured by kind (white, gold, red, purple).
+- Any active telegraph within 15 m whose actor is off-screen, or hidden by an occluder, shows an arrow at the screen edge, coloured by kind (white, gold, red, purple). Ranged enemies may start aiming only when they are on screen or within 9 m of her.
 - At most 4 arrows. Owned by ui; it listens to `combat:telegraph` and `combat:telegraphEnd`.
 
 ### 8.2 Juice table (combat, fx, camera and audio all key off `combat:hit` and the player events)
@@ -1148,8 +1167,19 @@ Every telegraph pairs a **colour + a shape + a sound**, so colour-blind players 
 Rumble uses `gamepad.vibrationActuator.playEffect('dual-rumble')`. Support outside Chromium is [unverified]. Settings: shake 0–100%, "reduce flashes" (caps the bloom spike at 0.8 and removes full-screen flashes).
 
 ### 8.3 Combat camera and targeting
-- **Distances:** follow 3.6 m; locked on 4.5 m (frames the midpoint, offset over her right shoulder); boss arenas 6.0 m (eased over 0.6 s). FOV 45. Pitch −0.35 to 1.1 rad. Auto-follow after 1.5 s without look input.
-- **Lock-on:** nearest enemy within 12 m and inside 100° of camera forward. Switch with a mouse flick over 40 px within 0.15 s, the wheel, or a right-stick flick past 0.7. Breaks at 16 m or after 1.5 s without line of sight.
+- **Camera:** a fixed-yaw, three-quarter top-down camera. The full rig is in `research/CONTROLS_SPEC.md` §2.
+  - FOV 38°. Pitch 46–58°, depending on zoom.
+  - Distance **13 m** on desktop and **12 m** on a phone; zoom 9–18 m. She is never less than **30 CSS px** tall.
+  - **Combat** (an alerted hostile within 10 m): the focus leans 30% toward the engaged enemies (at most 2.5 m). The view zooms **out** by up to 3 m to keep them inside 80% of the frame. It never zooms in by itself and never rotates.
+  - **Bosses:** a 14–22 m fit of her and the boss, with the focus 35% toward the boss and a 56° pitch.
+  - A parry punches in 0.6 m; Golden Hour dollies in to 9 m.
+  - Shake: rotation ×0.5, translation ×2.
+  - Occluders fade (dithered), and she shows an x-ray silhouette when something hides her.
+- **Selection** (it replaces lock-on; the `cam.lock*` API stays as its store):
+  - Click, tap, Tab or RB selects a target.
+  - The target gets a gold ground ring (red during its wind-up) and a world HP bar.
+  - Selection never moves the camera.
+  - It breaks at 16 m, or after 1.5 s without line of sight.
 - **Attack tokens** (tech.md §10): Knight 2 melee / 2 ranged. Tokenless enemies orbit at 1.4× their attack range.
 - **Arena budget:** at most **8 enemies alive** (6 on Low quality) and at most **12 skinned meshes** on screen (tech.md §18).
 - **Damage numbers:** Fredoka 700, white with an ink outline. Crits gold with a sparkle; heals green `#7FD38A`. DOM pool, max 20.
@@ -1733,15 +1763,15 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | Under the hearts | **Grit**: 3 small steel shields | Flash while she's in the Stand; cracked at 0 |
 | Under Grit | **Valor**: a sword that fills from the hilt | Silver; a gold notch at 50; all gold with sparkles at 100, plus the Golden Hour glyph |
 | Under the portrait | **Lives**: cat head with a bow and "×9" | On a lost life, the ghost kitten floats up out of the icon |
-| Bottom-left | **Milk** bottles (empty ones outlined) | A sip animation drains a bottle |
+| Bottom-centre (desktop / pad) | **Ability bar** in LoL style, 56 px slots: Stand with Grit pips, Tumble, Jump, Kitten portrait, Golden Hour \| Milk ×n, Meow, Interact. Each slot has its key glyph, a clockwise cooldown sweep with seconds, and a ready flash (`research/CONTROLS_SPEC.md` §10.1). | On touch, the cluster buttons show the same states. Milk and the companion portrait now live here instead of bottom-left and bottom-right. |
 | Top-right | **Fish** counter; **kittens n/3** for this level; letter seal ✓ | Pop and bounce on change |
-| Bottom-right | **Companion portrait** with a radial cooldown ring in its colour and the key glyph | "zzz" while napping |
 | Top-centre | **Boss bar**: Cinzel Decorative name ribbon, red fill with a white chip trail, phase pips, gold Dizzy bar underneath | Shown on `boss:start` |
 | Top-centre | **Objective line**: "Hold the Line! Gate repair 64%" plus a bar; toasts | — |
 | Screen edges | **Off-screen threat arrows** (§8.1) | At most 4 |
-| Centre | Lock-on reticle: rotating gold ring; a small enemy HP pip bar | The pip bar shows on the first hit and fades after 3 s |
+| World space | **Ground rings:** her pink aim / hero ring with a notch (Stand fan; gold flash in the parry window), the gold selection ring, hover rings and order markers | The old centre lock-on reticle is removed |
+| World space | **Enemy HP bars** (36 × 5 px; touch 44 × 6) over damaged, selected or hovered enemies | Fade 3 s after the last hit; pool of 12 |
 | World space | Damage numbers (§8.3); "!" alert bubbles; interaction tags (parchment plus a wax-seal key glyph) | DOM pool, max 20 |
-| Bottom-centre | **Dialogue scroll**: portrait, speaker name on a pink ribbon, typewriter text at 30 chars/s, a bouncing paw for "next" | Babble (§16.4) |
+| Bottom-centre (over the bar) | **Dialogue scroll**: portrait, speaker name on a pink ribbon, typewriter text at 30 chars/s, a bouncing paw for "next" | Babble (§16.4) |
 | Overlay | Cutscene letterbox bars (CSS, 10% each); "Hold to skip" ring | — |
 | Meme Cam | Everything fades except the caption | — |
 
@@ -1753,7 +1783,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | **Title** | CS-00 live in-engine; logo; "Press any key / Tap to start" | The first input unlocks audio; touch also requests fullscreen |
 | **Main menu** | Continue · New Game · Settings · Credits | — |
 | **New Game** | Difficulty: Kitten / Knight / Nine Lives, with one-line descriptions; "Skip the prologue?" if a save exists | — |
-| **Settings** | Volume (master / music / SFX); invert Y; sensitivity; quality (Auto / Low / Med / High); difficulty (not Nine Lives); hold or toggle for Stand and charge; Auto-Stand assist; screen shake 0–100%; reduce flashes; telegraph patterns; subtitle size; dialogue speed; touch button size; language placeholder [STRETCH] | Saved immediately |
+| **Settings** | Volume (master / music / SFX). **Controls:** preset (Hybrid / LoL classic / Diablo / Mouse only / Keyboard only), rebinding, auto-attack after approach, tap-to-move, swipe-to-tumble, cast mode, parry ring, Stand auto-face, Auto-Riposte, haptics, left-handed, button opacity, edit touch layout, cursor size. **Camera:** zoom, camera lock, edge-pan speed, reduce camera motion. Pad aim sensitivity. Quality (Auto / Low / Med / High); difficulty (not Nine Lives); hold or toggle for Stand and charge; Auto-Stand assist; screen shake 0–100%; reduce flashes; telegraph patterns; subtitle size; dialogue speed; touch button size; language placeholder [STRETCH] | Saved immediately |
 | **HUD** | §14.2 | — |
 | **Dialogue box** | §14.2 | Pauses enemies (`game.setMode('dialog')`) |
 | **Cutscene overlay** | Letterbox, captions, chapter and title cards, skip ring, prompt overlays ("HOLD THE STAND" with a filling ring) | — |
@@ -1767,7 +1797,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | **Game over** | "Time for a cat nap." Swordcat curled asleep around her sword. Wake up (retry level) · Back to Pawsbury | `jingles/jingles_SAX02` |
 | **Toasts** | Kitten found, letter, Heart Bell, skin unlocked, objective done | Queue of 3; 2.5 s each |
 | **Touch controls** | §15.3 | — |
-| **Rotate hint** | Shown in portrait orientation on touch | — |
+| **Rotate hint** | A one-time toast in portrait (`tut.rotate`). Portrait is fully playable. | — |
 | **Credits** | Scroll over the CS-16 festival: team placeholders, then the **full asset attribution from `public/assets/LICENSES.md`** (CC0 courtesy credits; OFL font notices) | No token or creator promotion |
 | **Photo Mode** [STRETCH] | Freeze; free camera within 6 m; poses Vigil / Oath / Milk Selfie; Meme Cam preset; fog and wind sliders; save a PNG (`toBlob` right after a render) | — |
 
@@ -1777,67 +1807,117 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 - Shake 0–100%. Reduce flashes. Hold or toggle for Stand and charge.
 - Auto-Stand assist. Kitten difficulty.
 - No input requires mashing.
-- Touch: aim assist 90° / 4 m, parry window +0.05 s, auto-combo taps.
+- Touch: aim assist 90° / 4.5 m, guard arc ±90°, parry window +0.05 s, auto-combo taps, tap-to-attack with auto-chain, Auto-Riposte and the parry ring.
+- One thumb is enough: tap-to-move, tap-to-attack and Auto-Stand clear Knight encounters.
+- Five keyboard and mouse presets (including mouse-only and keyboard-only) and full rebinding. No pointer lock. Cursor sizes ×1 / 1.5 / 2 and a high-contrast cursor.
+- Reduce camera motion: no lead, no auto zoom, no punch-ins, no yaw blends. Every haptic has a visual or audio twin.
 
 ---
 
 ## 15. Controls [MVP]
 
-### 15.1 Keyboard and mouse
+The binding spec is `research/CONTROLS_SPEC.md`. It covers the camera, the nav grid, the aim resolver, the touch geometry, the config tables and the per-area tasks. This section summarises it.
+
+**One action model on every device.** You choose *where* (a click, a tap, WASD or a stick) and *what* (attack, Stand, Tumble, Jump, abilities). One aim resolver turns each action into a direction. The camera is a fixed-yaw top-down view, so screen-up always means the same direction and there is nothing to look around for. `?cam=classic` keeps the old orbit camera and bindings until M3 ends.
+
+### 15.1 Keyboard and mouse (default preset `hybrid`; no pointer lock, the cursor is always visible)
 
 | Action | Key |
 |---|---|
-| Move / camera | WASD or arrows / mouse (pointer lock after the first click) |
-| Attack / hold to charge | **LMB** or J |
-| **Stand** (hold) / parry (timing) | **RMB** or L |
-| Tumble | Shift or K |
-| Jump (hold while falling to glide [MVP+]) | Space |
+| **Move** (point-and-go) | **RMB** click. Hold RMB to keep following the cursor. Ctrl+RMB queues up to 4 waypoints. |
+| Move (direct) | **WASD** / arrows (screen-relative). Overrides any path at once. |
+| Attack an enemy / use an object | RMB on it. On an enemy she walks into reach, then does one Snip–Snap–Swoosh string (a setting). On an object she walks there and uses it. |
+| **Attack** / combo / hold to charge | **LMB** or J, toward the cursor |
+| **Stand** (hold) / parry (timing) | **Space**, L or Mouse4. Snaps to the threat on press. |
+| Tumble | **Shift**, K or Mouse3. Direction: WASD, else toward the cursor. |
+| Jump (LMB in the air = Pounce at the cursor) | **F** |
 | Interact / confirm | E or Enter |
-| Kitten ability | Q |
+| Kitten ability | Q (hold to aim, release to cast) |
 | Milk Break | R |
 | **Meow** | C |
 | **Golden Hour** | V, or Stand + Attack together at Valor 100 |
-| Lock-on / switch target | Tab or MMB / mouse flick or wheel |
+| Select / cycle target | click a foe / Tab, Shift+Tab |
+| Attack-move · Stop | X then click · H |
+| Show ranges | hold Ctrl |
+| Zoom · Peek | wheel · hold Alt or MMB |
+| Camera lock · Centre | Y toggles the lock; unlocked, you get edge pan, MMB drag and a 25 m leash · hold F1 / Home to centre |
 | Pause; hold to skip cutscenes | Esc or P |
 
-### 15.2 Gamepad (standard mapping, button indices)
+**Other presets:**
+- **LoL classic:** no WASD. A+click attack-moves, S stops, H holds position, D is Milk.
+- **Diablo:** LMB moves and attacks, Shift+LMB attacks in place, RMB is the Stand, Space tumbles.
+- **Mouse only.**
+- **Keyboard only:** J / K / L, and Space jumps.
+
+Any action can be rebound.
+
+### 15.2 Gamepad (twin-stick; standard mapping, button indices)
 
 | Action | Button |
 |---|---|
-| Move / camera | left stick / right stick (dead zone 0.15) |
+| Move / **aim** | left stick (dead zone 0.15) / **right stick** (dead zone 0.25; a ground reticle up to 6 m) |
 | Jump | A (0) |
 | Tumble | B (1) |
 | Attack / charge | X (2) |
 | Interact | Y (3) |
 | **Stand** | **LB (4)** |
-| Lock-on | RB (5); right-stick flick switches target |
-| Kitten ability | LT (6) |
+| Select nearest target | RB (5); D-pad left / right (14 / 15) cycle |
+| Kitten ability | LT (6): tap = smart cast, hold = aim with RS |
 | **Golden Hour** | RT (7) at Valor 100 (or LB + X together) |
+| Controls card | Back (8) |
 | Pause / hold to skip | Start (9) |
 | Meow | L3 (10) |
-| Recentre camera | R3 (11) |
+| Zoom (3 steps) | R3 (11) |
 | Milk | D-pad up (12) |
-| Cycle lock target (accessibility) | D-pad left / right (14 / 15) |
+| Peek | hold D-pad down (13) + RS |
 
-### 15.3 Touch
-- **Left 45% of the screen:** floating joystick (tech.md §7 `TouchControls`). **Right side:** drag to look.
-- **Right cluster** (64–88 px, size slider):
-  - big **⚔** (hold to charge; a ring fills);
-  - **🛡 Stand** (hold);
-  - Tumble; Jump.
-- **Above the cluster:** the kitten-ability portrait, Milk, and a **cat-face Meow** button.
-- **Contextual:** a "!" Interact button. A gold **Golden Hour** button appears at Valor 100.
-- Pause ❚❚ at top centre (hold 1 s to skip a cutscene).
-- **Assists:** tap an enemy to lock on; aim assist 90° / 4 m; parry +0.05 s; auto-combo taps; Auto-Stand on by default.
+### 15.3 Touch (Wild Rift layout; sizes × touch size 0.8–1.4; every button ≥ 56 CSS px)
+- **Joystick** (left 42% × bottom 80%): floating, r 60 px, dead zone 0.10. Its base follows the thumb past 1.6 R.
+- **Free area** (no look-drag any more):
+  - **Tap** the ground to walk there.
+  - Tap a foe to select it and attack it.
+  - Tap an object or NPC to walk there and use it.
+  - **Long-press** to keep following the finger.
+  - **Swipe** (≥ 48 px in ≤ 150 ms) to Tumble.
+  - **Pinch** to zoom.
+
+  Taps within 40 px of a button, or within 0.3 s of releasing a button, are ignored. Tap-to-move and swipe-to-tumble can each be turned off.
+- **Cluster** (bottom-right; the ⚔ centre is 68 px from the corner):
+  - **⚔ 96 px:** tap to attack, hold to charge, drag to aim.
+  - **🛡 Stand 76 px**, directly left of ⚔. It auto-faces the soonest threat; guard arc ±90°.
+  - **Tumble 64.** A drag within 0.08 s steers it.
+  - **Jump 64.**
+  - **Kitten ability 64:** tap = smart cast, drag = aim, ✕ cancels.
+  - **Golden Hour 64**, shown at Valor 100.
+  - **Milk 56** and **Meow 56.**
+  - A contextual **"!" 64.**
+  - ❚❚ 56 at top centre (hold 1 s to skip).
+- **Assists:** a soft auto-target (4.5 m, sticky, the enemy winding up on her first), auto-chain after tapping a foe, Auto-Stand, Auto-Riposte, the parry ring, parry window +0.05 s, and haptics.
+- **Portrait** is fully supported: the cluster is ×0.85, the joystick is in the bottom 38%, and the camera fits at least 9 m across. Settings has a left-handed mirror, button opacity and an edit-layout mode.
 - Controls show when `(pointer: coarse)` matches or on the first `touchstart`.
 
-### 15.4 Changes requested to tech.md §7 (additive; owner: core `Input.js`)
-- **RMB moves from `dodge` to `guard`.** Dodge is Shift / K / B / the roll button.
-- **Gamepad lock-on is RB only** (R3 becomes recentre).
-- New actions: `guard`, `ability`, `milk`, `meow`, `golden`, `recenter`.
-- `input.heldTime(action)` is required (charge, the Stand, prompts).
+### 15.4 Camera summary
+- **Yaw:** fixed per level (default π, looking +Z). A level has at most 3 authored zone hints, and they blend only out of combat. The stick keeps the yaw it started with, so a run never bends.
+- **Lens:** FOV 38° (portrait 50°). Pitch 46–58° depending on zoom. 13 m on desktop and 12 m on a phone; zoom 9–18 m. She is never less than 30 CSS px tall.
+- **Fog:** measured from her, not the lens (clear 5 m, 7 m in combat). The screen edges are misty and the stage is clear.
+- **Occlusion:** occluders fade (dithered) and roofs and canopies lift. She has a hero ring and an x-ray silhouette.
+- **Cutscenes** keep their presets and crane in and out of the top-down view. The Meme Cam descends from it.
 
----
+### 15.5 Point-and-go
+- Orders walk a 0.5 m physics nav grid (A*, string-pulled).
+- Hop, drop, gap, fence and mushroom links are generated automatically, and she jumps them by herself with an assisted hop. The practice-field fence link opens only after the jump lesson.
+- Direct input always overrides an order. The Stand plants her and clears it. After a Tumble, a move order resumes.
+- An unreachable click walks her to the nearest reachable point and shows a grey ✕.
+
+### 15.6 Aim resolver (every directional action)
+The order is: the Riposte target, a touch drag or the right stick, the mouse cursor, the selected target, the soft auto-target, movement, then facing. Magnet cones are centred on the resolved aim (§7.2).
+
+### 15.7 Changes to the input contract (owner: core `Input.js`)
+- RMB changes from `guard` to `move`. `jump` moves from Space to F. `guard` is now Space, L and Mouse4. The wheel zooms instead of switching targets. On the pad, R3 zooms and the right stick aims.
+- Pointer lock is removed in play, and `consumeLook()` returns zeros there.
+- New actions: `move attackMove stop zoomIn zoomOut peek camLock centre ranges`.
+- New input API: `input.pointer`, `takeClick()`, `addTap()`, `addZoom()` / `consumeZoom()`, `aimStick`, `setVirtualAim()`, `haptic()`, and presets with `settings.bindings`.
+- `input.heldTime(action)` is still required (charge, the Stand, prompts).
 
 ## 16. Audio [MVP]
 

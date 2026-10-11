@@ -360,3 +360,160 @@ From CONTROLS §10.7 (unchanged except `camLock`) + AUTOCAM: `reduceCameraMotion
 6. **Rigid follow (AUTOCAM D1)** depends on an interpolated render pose in every state; λ12 fallback per state.
 7. **keep_storm / bog densities** are computed, not yet seen; `world:fog-audit` and ART S2 confirm when M3 builds them.
 8. **Controls rework drift:** if it lands names that differ from CONTROLS §15, this plan's §7 adapts in the S2 commit.
+
+---
+
+## Phase W — Warm Adventure (visual clarity, onboarding, story)
+
+Source: `research/next/WARM_ADVENTURE_SPEC.md` (WA). It is binding on tone, brightness, copy, story order and
+onboarding, and it overrides ART where WA §1 says so. PERF and §5 above stay binding on cost: Phase W adds **+1 play
+draw** (`Bunting`), **0 programs** and **0 post passes**. User request: *"make it much better from visual perspective
+than league of legends (… visual clarity, fun, warm …). and upgrade onboarding, story to feel more warm. right now it
+looks kind of dark, too medieval, it should have fun adventure vibe."*
+
+### W.1 Stages (they slot into §3; never edit a §3.3 wait-list file before its area merges)
+| Stage | Starts when | Content | Exit gate |
+|---|---|---|---|
+| **W0 — data, copy, lints** | now (files outside §3.3 only) | `story.W1` strings, `world.W1` presets + aliases (data only), `world.W3`/`W4` grey scan and lints, `enemies.W1` plate words (config read with a fallback) | G-W0 |
+| **W1 — one config commit** | with or right after S2 (`core.W1` may ride the S2 commit) | WA §12 keys, settings `hudMode` / `hitWords` / `pathPreview` / `tutorialHints`, save migration | G-W1 |
+| **W2 — warm world + clarity + juice** | S3 (Env tokens, `ENV_U`) for world and fx; S4 for characters, player, enemies | mood timeline wired, un-desaturation, paints, silhouettes, prop swaps, Bunting, arena stage, glyph telegraphs, class marks, hero pop-out, hit juice, pickups, idle ladder | G-W2 |
+| **W3 — onboarding + story + UI** | S6 for ui (`index.html`, candy restyle, SafeFrame fixtures); story after the rework's story files merge | title, new-game flow, Morning Practice, CS-01/01b/02, Mochi move, `celebrate.js`, calm HUD, results, banter, befriend beats, audio swaps | G-W3 |
+
+Hard dependencies: (1) `core.W1` before any area reads a WA key without a fallback. (2) `world.W1`/`W2` presets
+before `story.W5` (cutscenes cue them). (3) `fx.W1` glyph shapes before `ui.W5` threat-arrow glyphs and `story.W4`
+glyph one-shots. (4) `ui.W2` `celebrate.js` before `story.W3`/`W5` emit rewards. (5) `world.W6` Mochi cart,
+`companions.W2` and `story.W5` land in one train. (6) Squeakybone, carrier and bone-mallet art after S4 characters.
+
+### W.2 Per-area tasks
+Each task names its files, what "done" means, and one lean test (a unit test in the named file, or one smoke
+assertion in the named block).
+
+#### core (port 5301)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| core.W1 | W1 | WA §12 keys: `TELEGRAPH` colours/glyph/ink, `JUICE.finalBlow`, `CLASS_MARKS`, `IDLE`, `HUD`, `CELEBRATE`, `PICKUP_FX`, `FX.comicPops`, `ENEMIES.*.plateWordsFriend`, `STORY.cs02Cut/kittenOffer/mochiCage`; settings defaults | `src/core/config.js`, `src/core/GameState.js` | all frozen; `IDLE.twirl < CAMERA.memeCam.idle` | `tests/unit/contracts.test.js`: key presence, `IDLE` ordering, `TELEGRAPH.glyph` covers every `ATTACKS[*].telegraph` kind |
+| core.W2 | W1 | Events JSDoc: `reward {kind: sticker/card/friend, id}`, `telegraph:first {kind}`, `story:prompt` + `speaker`, `say`, `stepDots` | `src/core/events.js` | additive; old payloads valid | `tests/unit/events.test.js`: new names exist in `E` |
+| core.W3 | W2 | Load fades are cream `#FFF1DE`, never `#000` | `src/core/Game.js` (via the core owner), `src/world/LevelManager.js` | no black fade on any load path | `tests/unit/core.test.js`: fade colour constant equals `#FFF1DE` |
+| core.W4 | W2 | `art:warm` smoke block: one frame per row of WA §2.3a (every level default, prologue preset, `keep_cellar`, `keep_storm`, callbacks); luma / dark % / black % / R−B / fog sat | `tests/smoke/core.mjs` | every row inside its WA §2.3a band | one assertion per preset row: all five metrics inside the band |
+
+#### physics (port 5311)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| physics.W1 | W2 | Re-run nav after the toy-fort swap, waystones, carriers, Mochi cart at `[-14,-41]` and arena `cart` | `src/physics/NavGrid.js` (data only), level data | no corridor < 1.6 m; start → exit path on every level | `tests/unit/nav.test.js`: path `start` → `exit` on meadow and gate after the swaps |
+
+#### camera (port 5312)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| camera.W1 | W3 | New game: `blendTo('follow', 1.1, inOutSine)` from the title `MEME_LOOP` with no reload; input unlock does not wait for the blend | `src/camera/IsoRig.js`, `src/camera/FollowCamera.js` | no cut; she is in `herFrame` at blend end | `tests/smoke/camera.mjs` `camera:title-blend`: first move order accepted ≤ 0.5 s after the tap |
+| camera.W2 | W2 | Framing reads her **capsule**, never the 1.12 visual bbox (WA5) | `src/camera/framing/*` | `cam.framing()` identical at `playScale` 1.0 and 1.12 | `tests/unit/camera.test.js`: solver output equal for both scales |
+
+#### characters (port 5313)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| characters.W1 | W2 | `playScale` 1.12 hero / 1.08 companions in `ISO_MODES`, 0.3 s blend on hand-off; bow ×1.4 at lens ≥ 12 m | `src/characters/Readability.js`, `src/characters/materials.js` | hitboxes and `MODEL_FIT` unchanged; ART G14 still passes | `tests/unit/characters.test.js`: root scale 1.12 in `follow`, 1.0 in a cutscene |
+| characters.W2 | W2 | Procedural poses `cheer`, `groom`, `twirl`, `boop`, `pawBump` | `src/characters/Poses.js`, `src/characters/KittenBuilder.js` | in `POSE_NAMES`; no new clips or draws | `tests/unit/characters.test.js`: each pose returns finite bone targets |
+| characters.W3 | W2 | Meme White cape → cream `#FFF3E2` + pink hem; `tunic_sword` outfit if `tunic` hides the sword | `src/characters/Cape.js`, outfit table | sword visible in the practice outfit | `tests/unit/characters.test.js`: practice outfit has the sword mesh visible |
+| characters.W4 | W2 | Plate bakes both words (2 rows); `flipPlate()` swaps the UV offset | `src/characters/Plate.js`, `src/characters/BeastDress.js` | 0 canvas work after spawn | `tests/unit/characters.test.js`: flip changes `offset.y`, not the texture |
+| characters.W5 | W3 | Pearl portrait; Squeakybone look (`#F3E6C8`, knob `#E46A5A`); Big Squeaky Bone mallet look; Sir Wobble smile, Sir Sacky face | `src/ui/portraits.js`, character builders | draw counts unchanged (ART G10) | `tests/unit/characters.test.js`: bonehead and barkus draw counts unchanged |
+
+#### player (port 5314)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| player.W1 | W2 | Idle ladder (`IDLE`): glance, look, groom, twirl; loop after Meme Cam; hub `sit` | `src/player/Player.js`, `src/player/PlayerStates.js` | all steps before 15 s; none in combat | `tests/unit/player.test.js`: fake clock → emotes at 4 / 7 / 10 / 12.5 s |
+| player.W2 | W2 | Order feedback: head snap λ 24 + `bowBounce`; double-tap hop; rejected → `shake`; tap-her purr, triple tap `twirl` (out of combat) | `src/player/Orders.js`, `src/player/Player.js` | order outcomes unchanged | `tests/unit/player.test.js`: tap on self in combat → no emote, no order |
+| player.W3 | W2 | Emit combo words and final-blow words | `src/player/PlayerStates.js` | ≤ 1 word / 0.25 s | `tests/unit/player.test.js`: 3-hit combo → Snip, Snap, Swoosh in order |
+| player.W4 | W2 | Knock-out look WA §5.7 (`KO`): `dead` enters pose `sit` + head tilt + dropped sword + dizzy stars; respawn pop `Squash.kick(+2)` + hearts + hop; state id and life logic unchanged | `src/player/Player.js`, `src/player/PlayerStates.js` | never a lying-flat pose; respawn at `KO.sitT + KO.wipeT` (1.55 s) | `tests/unit/player.test.js`: `onDeath()` → pose `sit`; fake clock 1.55 s → respawned and `alive` |
+
+#### combat (port 5315)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| combat.W1 | W2 | Each telegraph carries `glyph` from `TELEGRAPH.glyph`; `telegraph:first {kind}` once per save | `src/combat/Combat.js`, `src/combat/targeting.js` | glyph on every kind | `tests/unit/combat.test.js`: two `red` attacks → one `telegraph:first` |
+| combat.W2 | W2 | Final blow of an encounter: `JUICE.finalBlow` via `game.slowMo` | `src/combat/Combat.js` | only the last alerted enemy triggers it | `tests/unit/combat.test.js`: two kills → one slow-mo |
+
+#### enemies (port 5316)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| enemies.W1 | W0 | `plateWordsFriend` (fallback until core.W1); flip 0.25 s before the poof; hub hyenas wear friend words after `gate.done` | `src/enemies/Enemy.js` | index-paired; POSTMASTER, HYPE-IN-CHIEF | `tests/unit/enemies.test.js`: bonk → friend word before despawn |
+| enemies.W2 | W2 | Wind-up squash −0.10, parry-window stretch +0.12; hover boing; hitstop flash/squash/shake on unscaled time | `src/enemies/Enemy.js` | no material clones (ART D17) | `tests/unit/enemies.test.js`: during hitstop `uFlash` decays while world time is frozen |
+| enemies.W3 | W3 | Display names and barks per WA §8 (Squeakybone, Woof Brigade, Grumpjaw); replace `bark.hyena.alert.3` | `src/enemies/*` (string keys only) | no "Nobody's coming for you!" | `tests/unit/enemies.test.js`: bark pools contain no banned line |
+
+#### companions (port 5317)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| companions.W1 | W2 | Carriers (WA20): wood slats, rope, lilac bow, polka-dot cushion; Mochi cart tipped 8°, broken wheel, cracked lock | `src/companions/*` cage builders | no metal; no member < 0.06 m; same draws | `tests/unit/companions.test.js`: carrier colours contain no iron hex |
+| companions.W2 | W3 | Mochi rescue at `STORY.mochiCage`; lock breaks only on Bright Slash (normal hits "tink"); Old Bridge carrier holds Biscuit; update Old Bridge tests | `src/companions/*`, `src/world/levels/meadow.js` data | `d01` triggers at the cart | `tests/smoke/companions.mjs`: scripted run reaches `d01` ≤ 7:30 game time |
+| companions.W3 | W2 | Paw-bump after encounter clear; cheer on parry / kill streak; idle offsets and per-companion idles | `src/companions/*` | skipped on a new alert | `tests/unit/companions.test.js`: clear → `pawBump` only for companions within 8 m |
+| companions.W4 | W3 | Banter pairs `banter.<id>.<n>` (no alert within 20 m for 25 s) | `src/companions/lines.js` | never in combat; each pair once per level | `tests/unit/companions.test.js`: 25 s calm → exactly one pair |
+| companions.W5 | W3 | Kitten reunion (run 1.5 m, nose-boop, heart, hop, sparkle trail); `kitten:rescued {kittenId, position}` | `src/companions/*` | Particles pool only | `tests/unit/companions.test.js`: rescue payload has `position` |
+
+#### world (port 5318)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| world.W1 | W0 | WA §2.3 rows incl. `keep_cellar` "toy cellar" (WA29) + aliases (`forest_night` → `forest_twilight`, `hub_grey` → `hub_hush`), day `hero` 0.40, `uLampStr` table (keep_cellar 1) | `src/world/Env.js` | every row fog HSV sat ≥ its WA §2.3a minimum; no `hemiGround` with HSV V < 0.25 | `tests/unit/world.test.js`: sat + hemiGround V over `ENV_PRESETS`; aliases resolve |
+| world.W2 | W2 | Mood timeline: `meadow.js:500` → `meadow_morning`, `forest.js:499,506–507` → `forest_twilight`, `bog.js:8` → `bog_dusk`, `keep.js:8` → `keep_twilight`; Kennel Cellars → `keep_cellar` (WA29); `meadow_morning` light row; `forest.js:500` `music.byFlag forest.camp` → `field_of_dreams` (WA §9) | `src/world/levels/*.js` | no playable default is night | `tests/unit/world.test.js`: no level default or `byFlag` resolves to `meadow_night` / `sky_night` |
+| world.W3 | W0 | Remove grey defaults (`HeightFog.js:19`, `Sky.js:51–52`, `MistCards.js:140,304,344`, `GroundMist.js:139`; `Game.js:110` via core) | those files | 0 hits of `#B7C0C3` / `#9AA196` | `tests/unit/world.test.js`: source scan |
+| world.W4 | W0 | Lints: `kit.tpl` no `sat < 0.5` / `mul < 0.8` without `// mood:`; `kit.paint` luma ≥ 0.30 | level files | green after world.W5 | `tests/unit/world.test.js`: two lints |
+| world.W5 | W2 | Un-desaturation (LI W4), paint remap (W5), lilac silhouettes (W6), meadow skyline (W7), `PROP_PAL` (W17) | `src/world/LevelKit.js`, `src/world/Props.js`, `src/world/levels/*.js` | ART G1–G5 on meadow, town, gate | smoke `world:art`: mean luma ≥ 0.48 per day level |
+| world.W6 | W2 | Prop swaps WA §2.5 (waystones, toy fort, prank/festival banners, bog mushrooms + lamp posts, jack-o'-lanterns, Tallbert stone, Sir Sacky, Sir Wobble); Mochi cart + arena `cart` + 3 rats + Biscuit + Letter #1 + `chart` trigger + barn chest interactable | `src/world/levels/*.js`, `src/world/LevelKit.js` | merged per biome; colliders identical where stated | `tests/smoke/world.mjs`: gate scene draws ≤ pre-W + 1 |
+| world.W7 | W2 | `world/Bunting.js` + per-level `bunting` data (`BUNTING` keys) | new `src/world/Bunting.js` | 1 draw, ≤ 240 pennants (Low 120), ≤ 60 lanterns (Low 30), pennants × 2 + lanterns × 8 ≤ 480 tris (Low 240), no shadow | `tests/unit/world.test.js`: caps, tri sum and `castShadow === false` |
+| world.W8 | W2 | Arena stage floor (LI W20) | `src/world/Terrain.js`, level arena data | inside / ring luma ≥ 1.08, grass ≤ 0.45 | `tests/unit/world.test.js`: a paint exists for every `kind:'arena'` |
+| world.W9 | W2 | Pickups: spin, twinkle registration, hop magnet, kill-drop hop arc | `src/world/Pickups.js` | magnet radius unchanged | `tests/unit/world.test.js`: magnet path y > 0 mid-flight |
+| world.W10 | W3 | Clouds + keep moon in the 'far' group (cutscenes only) | `src/world/Sky.js`, `src/world/LevelKit.js` | 0 iso draws | smoke: iso `renderer.info` draws unchanged with clouds loaded |
+
+#### fx (port 5319)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| fx.W1 | W2 | GroundDecals glyph SDFs (shield, star8, chevron2, dots6, paw, crowfoot, arrow), ink sandwich, palette (`#FF8FB1`, `#FF9A3D`, `#FF5A4E`, blob `#5A4E7A`), hero ring α 0.55 w 0.08, sky dashed companion ring, mint interact ring; aim-line cocoa | `src/fx/GroundDecals.js`, `src/fx/Telegraphs.js`, `src/fx/Marks.js` | 0 new draws; ≤ 52 instances in a full fight | `tests/unit/fx.test.js`: every `TELEGRAPH.glyph` value maps to a shape id |
+| fx.W2 | W2 | Colour-language lint (WA §3.2 rules) + dark-literal lint (WA §2.7: no hex with HSV V < 0.20 in `src/fx/**`, `src/ui/**` outside the cocoa allowlist) | new `tests/unit/colorLanguage.test.js` | pink only for the hero; hue 0–30° only for danger; 0 dark literals | the lint itself |
+| fx.W6 | W2 | Dark-literal sweep WA §2.7 (landing disc, decal palette, Shockwaves debris/dust, Horde, Poof feathers, crow shadow → `TELEGRAPH.colors.shadow`) | `src/fx/GroundDecals.js`, `Shockwaves.js`, `Horde.js`, `Poof.js`, `Telegraphs.js` | fx.W2 dark lint green for fx | covered by fx.W2 |
+| fx.W7 | W2 | Heart arc at her feet (WA §3.5a, `CLASS_MARKS.heroHearts`) | `src/fx/GroundDecals.js` | ≤ 6 instances, 0 draws; shown 2.5 s after an HP change and while HP ≤ 1 | `tests/unit/fx.test.js`: HP 3/5 → 5 segments, 3 full; hidden 2.5 s after a change at HP ≥ 2 |
+| fx.W3 | W2 | DamageNumbers v2: curve, arc, 0.35 s merge, colours, `word` and `pop` styles | `src/fx/DamageNumbers.js` | ≤ 20 DOM nodes; transform/opacity only | `tests/unit/fx.test.js`: 3 hits in 0.3 s → one node, summed |
+| fx.W4 | W2 | Twinkles (pickups; ≤ 6 interact zones), hit sparks, collect burst; mist walls lilac α 0.48 + sparkle; GroundMist muls; motes profiles WA §2.4 | `src/fx/FX.js`, `Particles.js`, `MistCards.js`, `GroundMist.js`, `Ambient.js` | ≤ 3 interact particles/s; Low ×0.5 | `tests/unit/fx.test.js`: gate motes are not `ash` |
+| fx.W5 | W3 | Celebration world burst, kitten trail, straw confetti, ghost-paw ground spot | `src/fx/FX.js` | Particles pool only | `tests/unit/fx.test.js`: burst count ≤ pool cap |
+
+#### audio (port 5320)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| audio.W1 | W2 | Pickup pitch ladder; sticker glock thirds; ghost-paw pip; comic-pop cue | `src/audio/cues.js` | rate = 1 + 0.06 n, n ≤ 8, reset 1.5 s | `tests/unit/audio.test.js`: 10 fish → ascending rates, clamped |
+| audio.W2 | W3 | Music swaps WA §9 (CS-02 giggle loop, CS-10 split, CS-06 tavern, results loop + PIZZI sting, lament only CS-10 window / CS-11 / CS-15); squeak SFX; every "known hit" in WA §9 (gate drums + winch, `farDrums`, preload list, `chainIds`, `byFlag forest.camp` in `musicMap.js` and `forest.js` via world, results) | `src/audio/musicMap.js`, `sfxMap.js`, `ambience.js`, `procedural.js`, `AudioManager.js` | WA §9 banned list absent from audio | `tests/unit/audio.test.js`: banned-id scan over `src/audio/**` and `src/world/levels/**` |
+| audio.W3 | W2 | `respawnBoing` (`cat/cat_mewpurr` 0.7 at the wipe + `pickup/bubble` rate 0.8 at the pop) replaces `ghostLife` on `PLAYER_LIFE_LOST` | `src/audio/sfxMap.js` | no `powerup_downer` id left | `tests/unit/audio.test.js`: life lost → `respawnBoing` queued |
+
+#### story (port 5321)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| story.W1 | W0 | Strings: ST §7 + ON tables + WA §8.6 overrides **and its "rows the ST/ON tables missed" table** (Mochi quest/obj/exit toast at the cart, carrier barks, Toy Fort, Big Chief, kitten locations, `life.*`); vocabulary swaps | `src/story/strings.js` | every cutscene key exists; the WA §8.6 banned-word list is absent from display text (allowlist `cs08.*`) | `tests/unit/story.test.js`: practice hints ≤ 7 words, `swordcat` lines ≤ 8 words (allowlist), banned-word scan with the full WA §8.6 list, no Mochi string names the Old Bridge |
+| story.W2 | W3 | `newGame()` with no fade or reload on the title scene; `prologue.start`; order practice → chart → CS-02 → barn → `cs01b`; `continueGame` maps old flags; kitten-mode offer counter | `src/story/StoryManager.js` | control ≤ 5 s after the tap | `tests/smoke/flow.mjs` `flow:first-minute`: move accepted ≤ 5 s, first `reward` ≤ 60 s |
+| story.W3 | W3 | Morning Practice: 7 steps (WA §7.1), Pearl guide, `tutbow`, parry slow-mo, cow clues, Pearl stays after `tutpearl`, chip / dots / idle-demo timers, rewards | `src/story/tutorial.js`, `cutscenes/tutpearl.js`, new `cutscenes/tutbow.js` | `PracticeLog` pure, 7 steps | `tests/unit/story.test.js`: PracticeLog completes 7 steps; idle demo at 8 s |
+| story.W4 | W3 | Glyph one-shots `tut.red` / `tut.aoe` / `tut.gold` on `telegraph:first` | `src/story/tutorial.js` | once per save | `tests/unit/story.test.js`: a second `red` sighting shows nothing |
+| story.W5 | W3 | Cutscenes: `cs00` (Pearl, `meadow_morning`, fog 0.035), `cs01` chart 20 s, new `cs01b` suit-up, `cs02` Giggling Mist behind `STORY.cs02Cut`, `d01` lines + lock beat, `g01` on `prologue.done` | `src/story/cutscenes/*.js` | no night cue before `prologue.done`; CS-02 ≤ 55 s with the cut on | `tests/unit/story.test.js`: CS-02 step durations sum ≤ 55 s; no night preset cue in prologue scenes |
+| story.W7 | W3 | Cutscene cue sweep WA §8.6a (cs01 night-barn cues, cs02 monster/chain SFX and shot 11, cs04 env + music, cs06 music, cs10 music + `hub_grey`, cs07 brass Sunbell) | `src/story/cutscenes/cs01.js`, `cs02.js`, `cs04.js`, `cs06.js`, `cs07.js`, `cs10.js` | WA §9 banned ids absent from `src/story/**`; no `meadow_night` / `forest_night` / `hub_grey` literal in cutscenes | `tests/unit/story.test.js`: source scan of `cutscenes/*.js` for banned audio ids and legacy preset literals |
+| story.W6 | W3 | Befriend beats and lines (`cs05.5–6`, `cs08.3`, `cs09.7–9`, `cs10.2/7/8`, `cs15.1–2`, `cs16.17–19`), cozy CS-10, `hud.boss.bonked`, optional hub cameos (replace villager slots) | `src/story/cutscenes/*.js`, `src/story/dialogue/*` | every boss scene ends on a befriend line | `tests/unit/story.test.js`: each boss defeat scene references a befriend key |
+
+#### ui (port 5322)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| ui.W1 | W3 | Title: no main-menu panel or difficulty picker on a new save; one / two candy buttons; peach rim instead of `.title-shade`; logo pop + bob; gear; footer | `src/ui/menus.js`, `src/ui/ui.css` | as WA §4.3 | `tests/smoke/ui.mjs` `ui:title`: one button without a save, two with one |
+| ui.W2 | W3 | `ui/celebrate.js` (sticker / card / friend, queue, combat dock, fly-to-home) + sticker-book page | new `src/ui/celebrate.js`, `src/ui/menus.js` | never changes `game.timeScale`; ≤ 24 confetti nodes | `tests/unit/ui.test.js`: two cards → shown in order; alerted enemy → docked |
+| ui.W3 | W3 | Guide bubble, chip, paw dots, ghost paw; progressive touch-button reveal | `src/ui/prompts.js`, `src/ui/touch.js` | one bubble max; hidden buttons keep geometry | `tests/unit/ui.test.js`: second prompt replaces the first; `screenOccluders()` rects unchanged by reveal |
+| ui.W4 | W3 | Calm HUD tuck (`hudMode`), fly-to-HUD icons + counter bump, candy ability bar, coral HP pills, lilac Valor well, panels without noise or studs | `src/ui/hud.js`, `abilityBar.js`, `hpBars.js`, `ui.css` | X22 geometry fixed; ≤ 15 style writes/s outside bursts | `tests/unit/ui.test.js`: combat → 4 s calm → tucked |
+| ui.W5 | W3 | Threat-arrow glyphs; results redo (scrim, count-up, stamp, rank words); cursor art | `src/ui/threatArrows.js`, `results.js`, `cursor.js` | no `backdrop-filter`; no letter grades | `tests/unit/ui.test.js`: each rank tier maps to a `results.rank.*` key |
+| ui.W6 | W3 | Kitten-mode offer chips; cream fade layer | `src/ui/menus.js`, `src/ui/toasts.js` | offer once per save | `tests/unit/ui.test.js`: offer not shown twice |
+| ui.W7 | W2 | WA §2.7 ui rows: `cinema.js:20` black fade → `#FFF1DE`, `.cin-bar` `#0B0908` → `#3A2630` + scallop, `.cin-fade` → `#FFF1DE`, `#000` text-shadows → `#4A2A1F`, `portraits.js:79` ink → `#2A1E18`; lives badge pop on `life.lost` (WA §5.7) | `src/ui/cinema.js`, `src/ui/ui.css`, `src/ui/portraits.js`, `src/ui/hud.js` | fx.W2 dark lint green for ui | `tests/unit/ui.test.js`: the `'black'` fade spec resolves to `#FFF1DE` |
+
+#### save (port 5323)
+| ID | Stage | Task | Files | Acceptance | Lean test |
+|---|---|---|---|---|---|
+| save.W1 | W1 | Migrate `hudMode`, `hitWords`, `pathPreview`, `tutorialHints`; flags `sticker.*`, `seen.offer.kitten`, `telegraph.seen.*`; schema stays v1 | `src/save/SaveManager.js` | old saves load; `prologue.armour` without `prologue.done` resumes at the barn | `tests/unit/save.test.js`: old save → defaults filled; mid-prologue mapping |
+
+### W.3 Gates
+| Gate | Must pass |
+|---|---|
+| **G-W0** | unit: preset saturation + hemiGround V + aliases, grey-literal scan, tpl / paint lints, story word-count and the full WA §8.6 banned-word test, enemy plate words |
+| **G-W1** | `contracts` WA keys, save migration, events JSDoc |
+| **G-W2** | `colorLanguage` lint incl. the WA §2.7 dark-literal lint; every WA §2.3a row inside its band (`art:warm`); heart-arc, knock-out and `respawnBoing` unit tests; WA §10 rules 1–4 on meadow, forest twilight, gate, bog dusk and keep twilight (screenshot review: "dark?", "grim or medieval?", "hero in 1 s?", "danger and its kind in 1 s?" → no / no / yes / yes); ART G1–G8 with the twilight floor 0.36 / 15 %; play draws ≤ pre-W + 1; programs unchanged; `perf:no-compile` |
+| **G-W3** | `flow:first-minute` (control ≤ 5 s, first reward ≤ 60 s; first move accepted ≤ 0.5 s after the title tap); `story.W7` cue scan and `audio.W2` banned-id scan green; no cutscene > 25 s before `tut.done` (WA27); `d01` ≤ 7:30; no night or grey preset before `prologue.done`; one bubble max; celebrations never pause; `slice:meadow` and `flow:*` green; screenshot review of title, BONK!, Pink Bow, CS-02 sunbreak, suit-up mirror and the Mochi friend card (warm, readable, no grey wall, no black) |
+
+### W.4 Open items (defaults apply; WA §13)
+CS-02 "never cut" sign-off (`STORY.cs02Cut` defaults to true) · the Mochi move updates companions / flow tests in the
+same train · `tunic_sword` confirmation · bog / keep fog audit on the new presets · GAME_DESIGN prose update by the
+design owner.

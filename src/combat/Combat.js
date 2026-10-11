@@ -42,6 +42,7 @@ import { isHostile } from '../core/ActorRegistry.js';
 import { AttackTokens } from './AttackTokens.js';
 import { Projectiles } from './Projectiles.js';
 import { COMBAT, GLEAM_FROM, juiceFor, sharpMul, isFullCircle } from './attacks.js';
+import { ThreatBook, timeToContact, PARRY_KINDS } from './targeting.js';
 
 const _dir = new THREE.Vector3();
 const _v = new THREE.Vector3();
@@ -98,11 +99,47 @@ export class Combat {
     this._depth = 0;
     this._shakeKey = -1; this._shakeMax = 0;
     this._rumbleKey = -1;
+    /** CONTROLS_SPEC §8.2 / §8.1: live melee wind-ups (combat:telegraph) → nextParryable (parry ring, threat snap) */
+    this.threats = new ThreatBook(() => ctx.game?.time ?? 0);
+    this._parryOut = { attacker: null, activeAt: 0, kind: 'parry', window: 0, projectile: null };
+  }
+
+  /**
+   * §12 combat 2: the single most imminent parryable attack on `actor` (a live white / gold wind-up aimed at it, or an
+   * incoming hostile projectile) → `{ attacker, activeAt, kind, window, projectile }` (shared object) or null.
+   * @param {any} actor @param {number} [maxDist]
+   */
+  nextParryable(actor, maxDist = 6) {
+    if (!actor?.pos) return null;
+    this.threats.prune();
+    const e = this.threats.soonest(actor, maxDist, (x) => x.targetsPlayer !== false && (x.actor?.target === actor || x.actor?.targetActor?.() === actor || x.targetsPlayer === true));
+    const now = this.ctx.game?.time ?? 0, o = this._parryOut;
+    let best = e ? e.activeAt : Infinity, out = e ? { attacker: e.actor, kind: e.kind, projectile: null } : null;
+    for (const pr of this.projectiles?.list ?? []) {
+      if (!pr || pr.dead || pr.reflected || pr.owner?.faction === actor.faction || !pr.vel) continue;
+      const tc = timeToContact(pr.pos, pr.vel, actor.pos, (actor.radius ?? 0.3) + (pr.r ?? 0.15));
+      if (tc === Infinity || tc > 1.0) continue;
+      if (now + tc < best) { best = now + tc; out = { attacker: pr.owner ?? null, kind: 'parry', projectile: pr }; }
+    }
+    if (!out) return null;
+    o.attacker = out.attacker; o.kind = PARRY_KINDS.has(out.kind) ? out.kind : 'parry'; o.projectile = out.projectile; o.activeAt = best;
+    o.window = this.ctx.state?.difficultyCfg?.parry ?? PLAYER.guard.parryWindow;
+    return o;
   }
 
   async init() {
     const bus = this.ctx.bus;
     this._offs.push(
+      bus.on(E.TELEGRAPH, (p) => {
+        try {
+          this.threats.add(p, {
+            defOf: (a, x) => ATTACKS[x?.attackId] ?? ATTACKS[a?.attackId] ?? a?.currentAttack ?? null,
+            targets: (a) => !a?.target || a.target === this.ctx.player || a.target?.tags?.has?.('player'),
+          });
+        } catch { /* a malformed payload never breaks combat */ }
+      }),
+      bus.on(E.TELEGRAPH_END, (p) => this.threats.end(p?.id, (a) => a?.stateName === 'strike' || a?.stateName === 'attack')),
+      bus.on(E.LEVEL_UNLOAD, () => this.threats.clear()),
       bus.on(E.LEVEL_UNLOAD, () => this.clear()),
       bus.on(E.CUTSCENE_START, () => this.projectiles.clear()),
       bus.on(E.LEVEL_LOADED, () => this.projectiles.warm()),   // compile projectile shaders under the veil

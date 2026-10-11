@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep } from './util.js';
-import { own, kitMaterial, RM } from './materials.js';
+import { own, TOP_VIEW, READABILITY, kitMaterial, RM } from './materials.js';
 import { FUR_TIME } from './Fur.js';
 
 export const SWORD = Object.freeze({ blade: 0.85, gripLen: 0.11, guardW: 0.21, pommelY: -0.132, gripY: -0.055 });
@@ -97,6 +97,15 @@ function bladeMaterial(kind) {
   }[kind] || {};
   const m = new THREE.MeshPhysicalMaterial({ vertexColors: true, emissive: new THREE.Color(PAL.holy), emissiveIntensity: 0, ...base });
   if (kind === 'metal') { m.clearcoat = 0.2; m.clearcoatRoughness = 0.15; }
+  // readability from above (CONTROLS_SPEC §12 characters 3): at the iso distance the blade is a few pixels wide, so it
+  // gets a little silver self-light (READABILITY.bladeGlow × the shared top-view factor; 0 in close-ups)
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uTopView = TOP_VIEW;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uTopView;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * ${READABILITY.bladeGlow.toFixed(3)} * uTopView;`);
+  };
+  m.customProgramCacheKey = () => 'sc-blade-v1';
   return own(m);
 }
 

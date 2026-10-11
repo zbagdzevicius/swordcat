@@ -8,7 +8,7 @@
 // returns the final hold duration (for charge release), then resets.
 //
 // The constructor touches no DOM (node-safe); `attach(canvas)` adds the listeners.
-import { INPUT } from './config.js';
+import { INPUT, AIM, HAPTICS } from './config.js';
 import { E } from './events.js';
 
 /** @typedef {{ sources: Set<string>, down: boolean, pressed: boolean, released: boolean, held: number }} ActionState */
@@ -33,8 +33,13 @@ export class Input {
     this.padLook = { x: 0, y: 0 };
     /** 'kbm' | 'pad' | 'touch' — last used device (E.INPUT_DEVICE on change). */
     this.device = 'kbm';
+    /**
+     * CONTROLS_SPEC §6.1: the iso controls (default) never capture the mouse; `?cam=classic` keeps the M1/M2 orbit
+     * camera, its binding table and pointer lock.
+     */
+    this.iso = ctx?.params?.cam !== 'classic';
     this.pointerLocked = false;
-    this.pointerLockEnabled = true;     // Game turns this off in ?test
+    this.pointerLockEnabled = !this.iso;     // Game turns this off in ?test
     /** Re-capture the mouse when the pause menu closes (set once the lock was ever held). */
     this.relockOnResume = false;
     this._lockLost = false;
@@ -47,18 +52,67 @@ export class Input {
     this._listeners = [];
     this.canvas = null;
 
+    // ---- CONTROLS_SPEC §6.1 pointer model (CSS px; ndc relative to the canvas)
+    /** @type {{x:number, y:number, ndcX:number, ndcY:number, inside:boolean, movedPx:number, speed:number, lastMoveT:number}} */
+    this.pointer = { x: 0, y: 0, ndcX: 0, ndcY: 0, inside: false, movedPx: 0, speed: 0, lastMoveT: -Infinity };
+    /** clicks / taps queued for the next consumer: { button, x, y, down, t, mods: {ctrl, shift, alt}, kind? } */
+    this._clicks = [];
+    this._zoom = 0;
+    /** pad right stick (§6.3 aim; dead zone AIM.padDead), y+ = up on the stick */
+    this.aimStick = { x: 0, y: 0 };
+    /** touch drag-aim (§9.4): screen-space vector, y+ = up, `active` while a button is being dragged */
+    this.virtualAim = { x: 0, y: 0, active: false };
+    this._mouseAcc = 0;
+    this._touchT = -Infinity;
+    /** active KBM preset (§6.2) and its flags */
+    this.preset = 'hybrid';
+    this.wasd = true; this.lmbMoves = false;
+
     // code → actions lookup
     /** @type {Map<string, string[]>} */
     this._bind = new Map();
-    for (const [action, codes] of Object.entries(INPUT.keys)) for (const c of codes) {
+    this._moveCodes = new Set();
+    this.rebind();
+  }
+
+  /**
+   * (Re)build the code → actions table: `INPUT.keys`, then the active preset's keys (or the classic table with
+   * `?cam=classic`), then `settings.bindings` ({action: [codes]}) on top. Emits E.INPUT_SCHEME when the preset changed.
+   * @param {string} [preset] defaults to settings.controlPreset
+   */
+  rebind(preset) {
+    const st = this.ctx?.state?.settings;
+    const name = preset ?? st?.controlPreset ?? 'hybrid';
+    const P = INPUT.presets?.[name] ?? INPUT.presets?.hybrid ?? { keys: {} };
+    const table = { ...INPUT.keys, ...(this.iso ? P.keys : INPUT.classicKeys) };
+    const over = st?.bindings;
+    if (over && typeof over === 'object') for (const [a, codes] of Object.entries(over)) if (Array.isArray(codes) && table[a]) table[a] = codes.slice();
+    this.keyTable = table;
+    this._bind.clear();
+    for (const [action, codes] of Object.entries(table)) for (const c of codes ?? []) {
       if (!this._bind.has(c)) this._bind.set(c, []);
       this._bind.get(c).push(action);
     }
-    this._moveCodes = new Set(Object.values(INPUT.move).flat());
+    this.wasd = !this.iso || P.wasd !== false;
+    this.lmbMoves = this.iso && !!P.lmbMoves;
+    this._moveCodes = new Set(this.wasd ? Object.values(INPUT.move).flat() : []);
+    this.padTable = this.iso ? INPUT.pad : { ...INPUT.pad, ...INPUT.classicPad };
+    const next = this.iso ? (INPUT.presets?.[name] ? name : 'hybrid') : 'classic';
+    const changed = next !== this.preset;
+    this.preset = next;
+    if (changed) this.ctx?.bus?.emit?.(E.INPUT_SCHEME, { preset: this.preset });
+    return this.preset;
   }
 
+  /** The codes bound to `action` right now (preset + rebinding aware; ui glyphs). */
+  codesFor(action) { return this.keyTable?.[action] ?? []; }
+
   // ------------------------------------------------------------------ system contract
-  async init() {}
+  async init() {
+    const bus = this.ctx?.bus;
+    if (bus?.on) this._offScheme = bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'controlPreset' || p?.key === 'bindings' || p?.key == null) this.rebind(); });
+    this.rebind();
+  }
   /** Fixed step: advance hold timers + idle timers. */
   update(dt) {
     this._resolveLockLoss();
@@ -67,7 +121,7 @@ export class Input {
     if (this._lookActivity) { this.lookIdleTime = 0; this._lookActivity = false; } else this.lookIdleTime += dt;
   }
   render() {}
-  dispose() { this.detach(); }
+  dispose() { this.detach(); this._offScheme?.(); }
 
   // ------------------------------------------------------------------ queries
   down(a) { return this.actions.get(a)?.down ?? false; }
@@ -126,6 +180,7 @@ export class Input {
     }
     this.keys.clear(); this.keyMove.x = this.keyMove.y = 0;
     this.virtualMove.x = this.virtualMove.y = 0;
+    this.virtualAim.active = false; this.virtualAim.x = this.virtualAim.y = 0;
     this._composeMove();
   }
 
@@ -149,6 +204,65 @@ export class Input {
     if (x || y) this._activity = true;
     this.setDevice('touch'); this._composeMove();
   }
+  /**
+   * §9.4 touch drag-aim: the drag vector in screen space (CSS px or normalised; y+ = up) while a cluster button is
+   * dragged. `active` false clears it.
+   */
+  setVirtualAim(x, y, active = true) {
+    const a = this.virtualAim;
+    a.active = !!active; a.x = active ? +x || 0 : 0; a.y = active ? +y || 0 : 0;
+    if (active) { this._activity = true; this.setDevice('touch'); }
+  }
+
+  /**
+   * §6.1 ui touch: a tap / long-press on the free area at CSS px (x, y). `kind`: 'tap' | 'long' | 'longEnd' | 'move'
+   * (a long-press drag). Queued with the mouse clicks (`takeClick`, button 'tap').
+   */
+  addTap(x, y, kind = 'tap') {
+    this._queueClick({ button: 'tap', kind, x, y, down: kind !== 'longEnd', t: nowMs(), mods: NO_MODS });
+    this._activity = true;
+    this.setDevice('touch');
+  }
+
+  /** The next queued click / tap edge (FIFO, max INPUT.pointer.clickQueue) or null. */
+  takeClick() { return this._clicks.length ? this._clicks.shift() : null; }
+  /** Look at the next click without taking it. */
+  peekClick() { return this._clicks[0] ?? null; }
+  /** Drop every queued click (mode changes, level loads). */
+  clearClicks() { this._clicks.length = 0; }
+  _queueClick(c) {
+    const q = this._clicks, max = INPUT.pointer?.clickQueue ?? 8;
+    q.push(c);
+    while (q.length > max) q.shift();
+  }
+
+  /** §2.3 zoom steps: + = zoom in (closer), − = out. Wheel ticks, pinch (ui) and R3 add here; the camera consumes. */
+  addZoom(k) { if (Number.isFinite(k) && k) { this._zoom += k; this._activity = true; } }
+  consumeZoom() { const z = this._zoom; this._zoom = 0; return z; }
+
+  /**
+   * §10.6 haptics: `navigator.vibrate` on touch, the pad rumble on pad, scaled by settings.haptics (default 1 on touch).
+   * Never in menus. Silently ignored where unsupported.
+   * @param {string} kind a HAPTICS key
+   */
+  haptic(kind) {
+    const pat = HAPTICS[kind];
+    if (pat == null) return false;
+    const st = this.ctx?.state?.settings, scale = st?.haptics ?? 1;
+    if (!(scale > 0) || this.ctx?.game?.mode === 'menu') return false;
+    if (kind === 'button' && !st?.hapticTaps) return false;
+    if (this.device === 'pad') {
+      const ms = Array.isArray(pat) ? pat.reduce((a, b) => a + b, 0) : pat;
+      this.rumble(0.35 * scale, 0.5 * scale, ms);
+      return true;
+    }
+    if (this.device !== 'touch') return false;
+    const nav = typeof navigator !== 'undefined' ? navigator : null;
+    if (!nav?.vibrate) return false;
+    const p = Array.isArray(pat) ? pat.map((v, i) => (i % 2 ? v : Math.round(v * scale))) : Math.round(pat * scale);
+    try { return nav.vibrate(p); } catch { return false; }
+  }
+
   /** Add look in radians (touch drag already scaled by INPUT.touchLookSens). */
   addLook(dx, dy) {
     const k = this.sensitivity;
@@ -183,7 +297,7 @@ export class Input {
     }
     this.padConnected = any;
     let padUsed = false;
-    for (const [action, idxs] of Object.entries(INPUT.pad)) {
+    for (const [action, idxs] of Object.entries(this.padTable ?? INPUT.pad)) {
       for (const i of idxs) {
         const now = merged[i] ?? false, src = 'p' + i;
         const prev = this._padPrev.get(src + action) ?? false;
@@ -194,6 +308,16 @@ export class Input {
     }
     const ls = deadZone(lx, ly, INPUT.deadZone, _dz), mx = ls.x, my = ls.y;
     this.padMove.x = mx; this.padMove.y = -my;
+    if (this.iso) {
+      // §6.3: the right stick aims (a ground reticle); it never turns the fixed-yaw camera
+      const as = deadZone(rx, ry, AIM.padDead ?? 0.25, _dz);
+      this.aimStick.x = as.x; this.aimStick.y = -as.y;
+      if (as.x || as.y) { this._activity = true; padUsed = true; }
+      if (mx || my) { this._activity = true; padUsed = true; }
+      if (padUsed) this.setDevice('pad');
+      this._composeMove();
+      return;
+    }
     const rs = deadZone(rx, ry, INPUT.deadZone, _dz), lkx = rs.x, lky = rs.y;
     if (lkx || lky) {
       const k = INPUT.padLookSpeed * this.sensitivity * frameDt;
@@ -248,35 +372,50 @@ export class Input {
     on(document, 'visibilitychange', () => { if (document.hidden) this.releaseAll(); });
 
     on(canvas, 'mousedown', (e) => {
+      if (this._touchT > nowMs() - 800) return;   // the compatibility mouse event of a touch: ui's touch layer owns it
       this.setDevice('kbm');
       const mode = this.ctx?.game?.mode ?? 'play';
       if (this.pointerLockEnabled && !this.pointerLocked && e.button === 0 && (mode === 'play' || mode === 'memecam')) {
         this.requestPointerLock();
         return;                                   // the click that captures the mouse does not attack
       }
+      this._pointerAt(e.clientX, e.clientY, false);
+      if (this.iso) this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: true, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } });
       const code = 'Mouse' + e.button;
       for (const a of this._bind.get(code) ?? []) this._press(a, 'm:' + code);
-      if (e.button === 1) e.preventDefault();      // no autoscroll
+      if (e.button === 1 || e.button === 3 || e.button === 4) e.preventDefault();      // no autoscroll / history navigation
+      this._activity = true;
     });
     on(window, 'mouseup', (e) => {
       const code = 'Mouse' + e.button;
+      if (this.iso && e.target === canvas) this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: false, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } });
       for (const a of this._bind.get(code) ?? []) this._release(a, 'm:' + code);
     });
     on(canvas, 'contextmenu', (e) => e.preventDefault());
     on(window, 'mousemove', (e) => {
-      if (!this.pointerLocked) return;
+      if (!this.pointerLocked) { if (this._touchT < nowMs() - 800) this._pointerAt(e.clientX, e.clientY, true); return; }
       const k = INPUT.mouseSens * this.sensitivity;
       this.look.x += e.movementX * k; this.look.y += e.movementY * k;
       this.lookPx.x += e.movementX; this.lookPx.y += e.movementY;
       if (e.movementX || e.movementY) { this._activity = true; this._lookActivity = true; }
     });
+    on(canvas, 'mouseleave', () => { this.pointer.inside = false; });
     on(canvas, 'wheel', (e) => {
-      if (this._wheelCooldown > 0 || !e.deltaY) return;
+      if (!e.deltaY) return;
+      if (this.iso) {
+        // §2.3: one wheel tick = one zoom step (no target switching: Tab cycles)
+        if (e.cancelable) e.preventDefault();
+        this.addZoom(e.deltaY > 0 ? -1 : 1);
+        this.pulse(e.deltaY > 0 ? 'zoomOut' : 'zoomIn');
+        return;
+      }
+      if (this._wheelCooldown > 0) return;
       this._wheelCooldown = INPUT.wheelRepeat;
       this.pulse(e.deltaY > 0 ? 'lockNext' : 'lockPrev');
-    }, { passive: true });
+    }, { passive: !this.iso });
+    on(window, 'auxclick', (e) => { if (e.button === 1 || e.button === 3 || e.button === 4) e.preventDefault(); });
     on(document, 'pointerlockchange', () => this._onPointerLockChange(document.pointerLockElement === canvas));
-    on(window, 'touchstart', () => this.setDevice('touch'), { passive: true });
+    on(window, 'touchstart', () => { this._touchT = nowMs(); this.setDevice('touch'); }, { passive: true });
     on(window, 'gamepadconnected', () => { this.padConnected = true; });
     on(window, 'gamepaddisconnected', () => this.releaseAll());
   }
@@ -286,6 +425,35 @@ export class Input {
     this._listeners.length = 0;
     if (typeof document !== 'undefined' && document.pointerLockElement === this.canvas) document.exitPointerLock?.();
   }
+
+  /**
+   * Track the mouse (CSS px): ndc relative to the canvas, travel and speed (§6.1: a cursor drifting slower than
+   * INPUT.pointer.idlePxPerSec is not activity, so a resting hand never blocks the Meme Cam).
+   */
+  _pointerAt(x, y, moved) {
+    const P = this.pointer, r = this.canvas?.getBoundingClientRect?.();
+    const w = r?.width || (typeof innerWidth !== 'undefined' ? innerWidth : 1), h = r?.height || (typeof innerHeight !== 'undefined' ? innerHeight : 1);
+    const left = r?.left ?? 0, top = r?.top ?? 0;
+    const t = nowMs();
+    if (moved) {
+      const d = Math.hypot(x - P.x, y - P.y), dt = Math.max(1, t - (P._t ?? t - 16)) / 1000;
+      P.movedPx += d;
+      P.speed = d / dt;
+      if (d > 0) {
+        P.lastMoveT = t;
+        this._mouseAcc += d;
+        if (P.speed >= (INPUT.pointer?.idlePxPerSec ?? 24) || this._mouseAcc >= 40) { this._activity = true; this._mouseAcc = 0; }
+        if (this.device === 'touch' && d > 2) this.setDevice('kbm');
+      }
+    }
+    P._t = t;
+    P.x = x; P.y = y;
+    P.ndcX = ((x - left) / w) * 2 - 1; P.ndcY = -(((y - top) / h) * 2 - 1);
+    P.inside = x >= left && x <= left + w && y >= top && y <= top + h;
+  }
+
+  /** Seconds since the mouse last moved (KBM aim freshness, §7.1 "pointer moved within the last 3 s"). */
+  pointerIdle() { return (nowMs() - this.pointer.lastMoveT) / 1000; }
 
   requestPointerLock() {
     const c = this.canvas;
@@ -351,6 +519,8 @@ export class Input {
 }
 
 const _dz = { x: 0, y: 0 };
+const NO_MODS = Object.freeze({ ctrl: false, shift: false, alt: false });
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 /** Radial dead zone with rescale, written into `out` ({x, y}). */
 export function deadZone(x, y, dz, out = { x: 0, y: 0 }) {
   const l = Math.hypot(x, y);

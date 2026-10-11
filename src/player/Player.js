@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { E } from '../core/events.js';
-import { PLAYER, ATTACKS, ECONOMY, COMPANIONS, JUICE, ENEMIES } from '../core/config.js';
+import { PLAYER, ATTACKS, ECONOMY, COMPANIONS, JUICE, ENEMIES, AIM } from '../core/config.js';
 import { wrapAngle, dampAngle } from '../core/math.js';
 import { hostileTo } from '../core/ActorRegistry.js';
 import { GuardState, parryWindowFor } from './Guard.js';
@@ -21,8 +21,13 @@ import { MemeCamTrigger } from './MemeCamTrigger.js';
 import { STATES } from './PlayerStates.js';
 import { TUNING, threatens } from './tuning.js';
 import { SwordcatModel } from './SwordcatModel.js';
+import { Orders } from './Orders.js';
+import { resolveAim, autoTarget, magnetPick, threatSnap } from './Aim.js';
+import { assistCone, lungeFor } from '../combat/targeting.js';
 
-const _v = new THREE.Vector3(), _dir = new THREE.Vector3();
+const _v = new THREE.Vector3(), _dir = new THREE.Vector3(), _ex = { x: 0, z: 0 }, _mv = { x: 0, z: 0, mag: 0 };
+const _aimS = { her: null, facing: 0, riposte: null, explicit: null, cursor: null, selected: null, range: 2, auto: null, move: null };
+const _cands = [];
 const _hostile = hostileTo('player');
 const COMBO_INDEX = { slash1: 1, slash2: 2, slash3: 3 };
 const JEER_R = ENEMIES.hyena?.jeer?.r ?? 8;
@@ -83,6 +88,86 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._stillStandingPending = false;
     this._offs = [];
     this.model = new SwordcatModel(this);
+    // ---- CONTROLS_SPEC §5.2 / §7 iso controls
+    /** point-and-go orders (move / attack / attackMove / use / stop) and their path follower */
+    this.orders = new Orders(this);
+    /** the resolved aim (§7.1) of the current / last directional verb: fx draws the aim ring notch from it */
+    this.aim = { active: false, kind: 'attack', dir: { x: 0, z: 1 }, point: null, target: null, range: 0, width: 0, source: 'facing' };
+    this._aimOut = { dir: { x: 0, z: 1 }, point: null, target: null, source: 'facing' };
+    /** soft auto-target memory (§7.2 sticky) and the cursor position the Stand re-aims after (§8.1: 30 px) */
+    this._autoPrev = null;
+    this._guardPtr = { x: 0, y: 0, armed: false };
+  }
+
+  /** The hover pick under the cursor (camera's Picker, once per rendered frame): { kind, actor, id, point }. */
+  get hover() { return this.ctx.cam?.hover ?? null; }
+
+  /** ctx.player.order(kind, arg) (§15.1): issue an order from code (smoke, ui buttons). */
+  order(kind, arg, o = {}) { return this.orders.order(kind, arg, { source: 'api', ...o }); }
+
+  /**
+   * §7.1 resolve the aim for `kind` ('attack' | 'charge' | 'pounce' | 'dodge' | 'guard' | 'ability') into
+   * this._aimOut { dir, point, target, source } (also mirrored into this.aim).
+   */
+  resolveAim(kind = 'attack', range = ATTACKS.slash1.arc.range) {
+    const ctx = this.ctx, input = ctx.input, cam = ctx.cam, s = _aimS;
+    const iso = cam?.isIso !== false;
+    s.her = this.pos; s.facing = this.facing; s.range = range;
+    s.riposte = this.riposteReady() ? this.riposteTarget : null;
+    s.explicit = null; s.cursor = null; s.auto = null; s.move = null;
+    const yaw = cam?.stickYaw ?? cam?.yaw ?? Math.PI;
+    const va = input?.virtualAim, as = input?.aimStick;
+    if (va?.active && Math.hypot(va.x, va.y) > 1e-3) {
+      _ex.x = -Math.sin(yaw) * va.y + Math.cos(yaw) * va.x; _ex.z = -Math.cos(yaw) * va.y - Math.sin(yaw) * va.x; s.explicit = _ex;
+    } else if (iso && input?.device === 'pad' && as && Math.hypot(as.x, as.y) > 0.35) {
+      _ex.x = -Math.sin(yaw) * as.y + Math.cos(yaw) * as.x; _ex.z = -Math.cos(yaw) * as.y - Math.sin(yaw) * as.x; s.explicit = _ex;
+    }
+    const kbOnly = input?.preset === 'keyboardOnly';
+    if (iso && input?.device === 'kbm' && !kbOnly && cam?.cursorValid && (input.pointerIdle?.() ?? 99) < AIM.cursorIdle) s.cursor = cam.cursorGround;
+    const sel = this.lockTarget();
+    s.selected = sel;
+    const mag = this.wishDir(_dir);
+    if (mag > 0.3) { _mv.x = _dir.x; _mv.z = _dir.z; _mv.mag = mag; s.move = _mv; }
+    // soft auto-target (touch, pad, keyboard-only; the classic camera keeps its own assist)
+    if (iso && !s.explicit && !s.cursor && !s.riposte && (input?.device !== 'kbm' || kbOnly)) {
+      const dev = input?.device;
+      const r = dev === 'touch' ? AIM.touchRange : dev === 'pad' ? AIM.padRange : AIM.kbRange;
+      _cands.length = 0;
+      for (const a of ctx.actors?.queryRadius?.(this.pos, r + 1.5, _hostile) ?? []) _cands.push(a);
+      const refYaw = mag > 0.3 ? Math.atan2(_dir.x, _dir.z) : this.facing;
+      const tb = ctx.combat?.threats;
+      s.auto = autoTarget(this.pos, refYaw, _cands, r, (a) => ({ windup: tb?.windingUp?.(a) ?? false, recentHit: false }), sel, this._autoPrev, this.pos.y);
+      this._autoPrev = s.auto;
+    }
+    const out = resolveAim(kind, s, this._aimOut);
+    const a = this.aim;
+    a.kind = kind; a.dir.x = out.dir.x; a.dir.z = out.dir.z; a.point = out.point; a.target = out.target; a.source = out.source; a.range = range;
+    return out;
+  }
+
+  /** Face the resolved aim now (her facing = the aim direction). */
+  faceAim(kind, range) {
+    const o = this.resolveAim(kind, range);
+    this.facing = Math.atan2(o.dir.x, o.dir.z);
+    return o;
+  }
+
+  /**
+   * §10.1 ability-bar data → out: { dodgeCd, meowCd, milk, milkMax, golden 0..1, goldenReady, holyReady, grit, gritMax,
+   * guard, interact }.
+   */
+  abilityState(out = {}) {
+    out.dodgeCd = this.dodgeCd; out.dodgeMax = PLAYER.dodge.cooldown;
+    out.meowCd = this.meowCd; out.meowMax = PLAYER.meow.cooldown;
+    out.milk = this.milk; out.milkMax = this.milkMax;
+    out.golden = Math.min(1, (this.valor ?? 0) / PLAYER.valor.max);
+    out.goldenReady = this.canGolden?.() ?? false;
+    out.holyReady = this.shards >= (ATTACKS.holy.minShards ?? 1) && (this.valor ?? 0) >= PLAYER.charge.holyMinValor;
+    out.grit = this.grit; out.gritMax = this.gritMax;
+    out.guard = this.state === 'guard';
+    out.interact = !!this.ctx.levels?.current?._interact;
+    out.charge = this.charge; out.chargeTier = this.chargeTier;
+    return out;
   }
 
   // ------------------------------------------------------------------ contract fields (§19.4)
@@ -147,6 +232,7 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   // ------------------------------------------------------------------ contract methods
   teleport({ pos, facing = 0 }) {
+    this.orders?.clear('teleport');
     this.pos.copy(pos); this.vel.set(0, 0, 0); this.facing = facing;
     this.onGround = false; this.gravityMul = 1;
     if (this.goldenActivating) this.finishGoldenActivation();
@@ -330,6 +416,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.state === 'scripted') this.setState('move');
 
     this._readInput(dt);
+    this.orders.update(dt);
     if (this.alive && (ctx.game.mode === 'play' || ctx.game.mode === 'memecam')) this.memeCamTrigger.update(dt);
     if (this.memeCamTrigger.active && this.state !== 'memecam' && this.alive) this.setState('memecam');
 
@@ -371,7 +458,9 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   _readInput(dt) {
     const input = this.ctx.input, now = this.ctx.game.time, A = PLAYER.assist;
-    const pa = input.pressed('attack'), pg = input.pressed('guard');
+    this.orders.handleInput(dt);
+    const pa = input.pressed('attack') && !this.orders.suppressAttack, pg = input.pressed('guard');
+    if (pa) this.orders.onAttackInput();
     if (pa) { this.attackBuf = A.buffer; this.lastAttackPress = now; } else this.attackBuf = Math.max(0, this.attackBuf - dt);
     if (pg) {
       this.lastGuardPress = now;
@@ -465,11 +554,17 @@ export class Player extends ScriptedActorMixin(Actor) {
   // ------------------------------------------------------------------ helpers used by PlayerStates
   /** Camera-relative stick direction into `out` (XZ, length ≤ 1). Returns the stick magnitude. */
   wishDir(out) {
-    const input = this.ctx.input;
-    const yaw = this.ctx.cam?.yaw ?? Math.PI;
+    const input = this.ctx.input, cam = this.ctx.cam;
+    // iso: screen-relative through the latched stick yaw (§2.2); classic: the orbit yaw
+    const yaw = (cam?.isIso ? cam.stickYaw : null) ?? cam?.yaw ?? Math.PI;
     // forward = (-sin yaw, 0, -cos yaw), screen-right = (cos yaw, 0, -sin yaw)  (tech.md §8; move.y+ = forward)
     if (this.moveLockT > 0) { out.set(0, 0, 0); return 0; }      // after a splash (§7.1)
     const mx = input.move.x, my = input.move.y;
+    // §5.1 direct input always wins: |move| >= 0.15 cancels any order; otherwise an order steers her (§5.2)
+    if (this.orders.kind) {
+      if (Math.hypot(mx, my) >= 0.15) this.orders.cancelByDirect();
+      else return this.orders.steer(out);
+    }
     out.set(-Math.sin(yaw) * my + Math.cos(yaw) * mx, 0, -Math.cos(yaw) * my - Math.sin(yaw) * mx);
     const l = out.length();
     if (l > 1) out.divideScalar(l);
@@ -514,13 +609,35 @@ export class Player extends ScriptedActorMixin(Actor) {
   canDodge() { return this.alive && this.onGround && this.dodgeCd <= 0; }
   startDodge() {
     const mag = this.wishDir(_dir);
-    if (mag < 0.1) _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+    if (mag < 0.1 && this.ctx.cam?.isIso !== false) {
+      // §6.2 / §6.4: WASD / stick, else toward the cursor (KBM) / the drag (touch) / RS, else away from the soonest
+      // threat (touch), else facing
+      const o = this.resolveAim('dodge');
+      if (o.source === 'cursor' || o.source === 'explicit') _dir.set(o.dir.x, 0, o.dir.z);
+      else if (this.ctx.input?.device === 'touch') {
+        const t = this.ctx.combat?.nextParryable?.(this, 6)?.attacker;
+        if (t?.pos) _dir.set(this.pos.x - t.pos.x, 0, this.pos.z - t.pos.z); else _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+      } else _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+      if (_dir.lengthSq() < 1e-6) _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+    } else if (mag < 0.1) _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+    this.orders.onDodge();
     this.dodgeDir.copy(_dir.normalize());
     this.facing = Math.atan2(this.dodgeDir.x, this.dodgeDir.z);
-    this.dodgeBuf = 0; this.zoomies = false; this.zoomT = 0;
+    this.dodgeBuf = 0; this.zoomies = false; this.zoomT = 0; this._steered = false;
     this.cleanse();
     this.setState('dodge');
     this.ctx.bus.emit(E.PLAYER_DODGE, { dir: this.dodgeDir.clone() });
+  }
+
+  /** §6.4 touch Tumble steer: a drag inside the roll's first 0.08 s re-aims it once (world unit x, z). */
+  steerDodge(x, z) {
+    if (this.state !== 'dodge' || this._steered || (this.guardState?.dodgeT ?? 1) > (this.ctx.config?.TOUCH?.steerWindow ?? 0.08) + 0.05) return false;
+    const l = Math.hypot(x, z);
+    if (l < 1e-6) return false;
+    this._steered = true;
+    this.dodgeDir.set(x / l, 0, z / l);
+    this.facing = Math.atan2(x, z);
+    return true;
   }
 
   doJump() {
@@ -582,9 +699,13 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (!def) return;
     if (this.swing) this.endSwing();
     this.comboNext = null;
-    // facing: riposte → the parried enemy; lock-on target; else a fresh stick direction redirects the swing
+    // facing: riposte → the parried enemy; the attack order's target; else (iso, §7.1) the one aim resolver —
+    // explicit (touch drag / RS) → the cursor (KBM) → the selected target → the soft auto-target → the stick → facing.
+    // Classic: the lock-on target, else a fresh stick direction.
     const lock = this.lockTarget();
     if (id === 'riposte' && this.riposteTarget) this._faceActor(this.riposteTarget);
+    else if (this.orders.kind === 'attack' && this.orders.engaged && this.orders.target?.pos) this._faceActor(this.orders.target);
+    else if (this.ctx.cam?.isIso !== false) { if (id !== 'sunburst') this.faceAim('attack', def.arc?.range ?? ATTACKS.slash1.arc.range); }
     else if (lock && Math.hypot(lock.pos.x - this.pos.x, lock.pos.z - this.pos.z) < PLAYER.lockOn.range) this._faceActor(lock);
     else if (this.wishDir(_dir) > 0.3) this.facing = Math.atan2(_dir.x, _dir.z);
     this._riposteFace = id === 'riposte' ? this.riposteTarget : null;
@@ -628,8 +749,38 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.applySwingOpts(s);
   }
 
-  /** §7.2 Assists: turn toward the nearest enemy within 60° / 3 m (touch 90° / 4 m); the lock-on target wins. */
+  /**
+   * §7.1 magnet (first active frame): turn fully to the best hostile inside a cone around the resolved aim — KBM 25°
+   * (selected 40°) at range + 1.0 m, pad with RS 45° / 3.5 m, touch and auto 90° / 4.5 m (360° with the stick idle).
+   * Lunge magnetism (touch / pad / auto): a target beyond reach lengthens the lunge. Classic camera: the old assist.
+   */
   aimAssist() {
+    if (this.ctx.cam?.isIso === false) return this._aimAssistClassic();
+    const input = this.ctx.input, dev = input?.device === 'touch' ? 'touch' : input?.device === 'pad' ? 'pad' : 'kbm';
+    const def = this.swing?.def, range = def?.arc?.range ?? ATTACKS.slash1.arc.range;
+    const aim = this.aim, sel = this.lockTarget();
+    const stickIdle = Math.hypot(input?.move?.x ?? 0, input?.move?.y ?? 0) < 0.3 && !input?.virtualAim?.active;
+    const padAim = dev === 'pad' && Math.hypot(input?.aimStick?.x ?? 0, input?.aimStick?.y ?? 0) > 0.35;
+    const auto = aim.source === 'auto' || aim.source === 'facing' || aim.source === 'move' || input?.preset === 'keyboardOnly';
+    const cone = assistCone(dev, { arcRange: range, selected: aim.target != null && aim.target === sel, auto: dev === 'kbm' && auto, padAim, stickIdle });
+    _cands.length = 0;
+    for (const a of this.ctx.actors.queryRadius(this.pos, cone.range + 1.5, _hostile)) _cands.push(a);
+    _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+    const t0 = aim.target;
+    let best = t0 && t0.alive !== false && t0.pos && !t0.breakable && Math.hypot(t0.pos.x - this.pos.x, t0.pos.z - this.pos.z) - (t0.radius ?? 0) <= cone.range ? t0 : null;
+    best ??= magnetPick(this.pos, _dir, _cands, cone.angle, cone.range);
+    if (best) {
+      this._faceActor(best);
+      if ((dev !== 'kbm' || auto) && this.swing && def?.lunge) {
+        const d = Math.hypot(best.pos.x - this.pos.x, best.pos.z - this.pos.z) - (best.radius ?? 0);
+        this.swing.lungeOverride = lungeFor(d, range, def.lunge);
+      }
+    } else if (this.orders.kind === 'attack' && this.orders.target?.breakable) this._faceActor(this.orders.target);
+    return best;
+  }
+
+  /** §7.2 (classic camera) assists: turn toward the nearest enemy within 60° / 3 m (touch 90° / 4 m); the lock-on target wins. */
+  _aimAssistClassic() {
     const A = PLAYER.assist, touch = this.ctx.input?.device === 'touch';
     const ang = touch ? A.touchAngle : A.angle, range = touch ? A.touchRange : A.range;
     const lock = this.lockTarget();
@@ -651,6 +802,38 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   _faceActor(a) { this.facing = Math.atan2(a.pos.x - this.pos.x, a.pos.z - this.pos.z); }
 
+  /**
+   * Held verbs that keep turning toward the aim (§6.2 / §8.1): the charge (540°/s toward the cursor / drag / RS) and
+   * the Stand (KBM: toward the cursor at 360°/s once it moved 30 px; touch: auto-faces the soonest threat; pad: RS).
+   * Returns true when it set the facing (locomote must not turn her).
+   */
+  aimTurn(dt, kind) {
+    if (this.ctx.cam?.isIso === false) return false;
+    const input = this.ctx.input, dev = input?.device;
+    let yaw = null;
+    const rate = kind === 'charge' ? AIM.chargeTurn : PLAYER.guard.turnRate;
+    if (kind === 'guard') {
+      if (dev === 'touch' && this.ctx.state?.settings?.standAutoFace !== false) {
+        const nx = this.ctx.combat?.nextParryable?.(this, 6);
+        const t = nx?.attacker ?? this.lockTarget();
+        if (t?.pos) yaw = Math.atan2(t.pos.x - this.pos.x, t.pos.z - this.pos.z);
+      } else if (dev === 'kbm') {
+        const P = input.pointer, g = this._guardPtr;
+        if (!g.armed && P && Math.hypot(P.x - g.x, P.y - g.y) >= AIM.cursorReaimPx) g.armed = true;
+        if (g.armed && this.ctx.cam?.cursorValid) { const c = this.ctx.cam.cursorGround; yaw = Math.atan2(c.x - this.pos.x, c.z - this.pos.z); }
+        else return true;                                           // planted: the stick strafes without turning
+      }
+    }
+    if (yaw == null) {
+      const o = this.resolveAim(kind);
+      if (o.source === 'cursor' || o.source === 'explicit' || (kind === 'charge' && (o.source === 'selected' || o.source === 'auto'))) yaw = Math.atan2(o.dir.x, o.dir.z);
+    }
+    if (yaw == null) return false;
+    const d = wrapAngle(yaw - this.facing), step = rate * dt;
+    this.facing += Math.abs(d) <= step ? d : Math.sign(d) * step;
+    return true;
+  }
+
   // ---- charge (§7.2)
   tier1Time() { return this.ctx.state?.upgrades?.quickCharge ? ECONOMY.shops.quickCharge.tier1 : PLAYER.charge.tier1; }
   tier2Time() {
@@ -666,6 +849,17 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   // ---- the Stand
   startGuard() {
+    // §8.1 threat snap on press: a parryable wind-up (or an incoming bolt) within 5 m landing within 0.7 s: face it at
+    // once; else face the resolved aim (the cursor on KBM). The Stand plants her: move orders clear.
+    this.orders.onGuard();
+    if (this.ctx.cam?.isIso !== false) {
+      const nx = this.ctx.combat?.nextParryable?.(this, AIM.standSnapRange);
+      const snap = nx ? threatSnap(this.pos, [nx], this.ctx.game.time) : null;
+      if (snap) this._faceActor(snap);
+      else if (!this.lockTarget()) { const o = this.resolveAim('guard'); if (o.source !== 'move' && o.source !== 'facing') this.facing = Math.atan2(o.dir.x, o.dir.z); }
+      const P = this.ctx.input?.pointer;
+      this._guardPtr.x = P?.x ?? 0; this._guardPtr.y = P?.y ?? 0; this._guardPtr.armed = false;
+    }
     // the parry window opens only on a real press: re-entering the Stand with the button held is a plain block
     const now = this.ctx.game.time, held = this.lastGuardPress >= 0 ? now - this.lastGuardPress : Infinity;
     this.guardState.start(held);
@@ -980,6 +1174,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   }
 
   _onLevelLoading() {
+    this.orders.clear('level');
     if (this.golden) this.endGolden(false);
     this.memeCamTrigger.reset();
     if (this.swing) this.endSwing();
@@ -1023,6 +1218,8 @@ export class Player extends ScriptedActorMixin(Actor) {
   _onMode(p) {
     const m = p?.mode;
     if (m === 'cutscene' || m === 'dialog') {
+      this.orders.clear('mode');
+      this.ctx.input?.clearClicks?.();
       if (this.scripted) return;
       if (this.state === 'guard') this.stopGuard();
       if (this.state === 'charge') this.cancelCharge();

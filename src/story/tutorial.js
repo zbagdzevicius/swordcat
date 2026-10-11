@@ -70,7 +70,8 @@ export class PracticeLog {
     const s = this.step, c = this.cfg;
     if (!s || this.finished) return false;
     switch (s.id) {
-      case 'move': return this.moved >= c.moveDist && (this.looked >= c.lookRad || this.moved >= c.moveAlone);
+      // CONTROLS_SPEC C6: the iso camera never turns, so the move step needs only the distance (any method)
+      case 'move': return this.moved >= c.moveDist;
       case 'jump': return this.latched.has('north');
       case 'combo': return this.latched.has('combo') || this.dummyHits >= c.comboFallback;
       case 'roll': return this.latched.has('roll');
@@ -221,6 +222,7 @@ export class Tutorial {
 
   _stepDone() {
     const s = this.log.step;
+    if (s?.id === 'jump') this.ctx.state?.setFlag?.('tut.jump.done', true);    // CONTROLS_SPEC §12 story 2
     this._emit(s.textKey, true);                                     // the tag glows gold for a beat
     try { this.ctx.audio?.play2D?.('ui.confirm', { vol: 0.7 }); } catch { /* audio optional */ }
     this.ctx.fx?.burst?.('sparkle', this.ctx.player, { count: 10 });

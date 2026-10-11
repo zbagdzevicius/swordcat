@@ -37,9 +37,9 @@ export function getCharacterEnvMap() { return _envMap; }
  * Readability from above (research/CONTROLS_SPEC.md §12 characters 3): past `from` m between the lens and the focus the
  * top-view factor ramps to 1 by `to` m. At 1: the bow ×`bowScale` with `bowGlow` extra self-light (always pink, always
  * on the LEFT ear), ears ×`earScale`, and a `trimM` m lighter trim on the cape tip. Close-ups (cutscenes, Meme Cam,
- * `?cam=classic`) stay at 0, i.e. exactly the M1/M2 look.
+ * `?cam=classic`) stay at 0, i.e. exactly the M1/M2 look. `bladeGlow`: silver self-light on the blade from above.
  */
-export const READABILITY = Object.freeze({ from: 9, to: 10.5, bowScale: 1.25, bowGlow: 0.08, earScale: 1.1, trimM: 0.02, trimLift: 0.55 });
+export const READABILITY = Object.freeze({ from: 9, to: 10.5, bowScale: 1.25, bowGlow: 0.08, earScale: 1.1, trimM: 0.02, trimLift: 0.55, bladeGlow: 0.22 });
 /** Shared top-view factor 0..1 (a uniform object: bow and cape shaders read it). runtime.characterFrame writes it. */
 export const TOP_VIEW = { value: 0 };
 
@@ -160,9 +160,9 @@ export function tuftMaterial() {
   const t = tuftTexture();
   // soft-blended wisps (no depth writes) drawn after the shell fur; a little self-light keeps them cream when the
   // card faces away from the sun (back-lit tufts are what reads as "fluffy" in the refs)
-  _tuftMat = own(new THREE.MeshStandardMaterial({
+  _tuftMat = new THREE.MeshStandardMaterial({
     vertexColors: true, map: t, alphaTest: 0.08, side: THREE.DoubleSide, roughness: 0.9, metalness: 0, transparent: true, depthWrite: false,
-  }));
+  });
   _tuftMat.onBeforeCompile = (sh) => {
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.16;');
   };
@@ -170,5 +170,7 @@ export function tuftMaterial() {
   // transparent + DoubleSide would make three draw back/front in two passes and flag needsUpdate before each
   // (program re-resolve every draw, 2 draw calls). Alpha-tested, no depth writes: ordering within a card is moot.
   _tuftMat.forceSinglePass = true;
+  // own() after the hook: registered patchers (world's height / focus fog, CONTROLS_SPEC C4) wrap it, not lose it
+  own(_tuftMat);
   return _tuftMat;
 }

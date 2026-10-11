@@ -1,5 +1,9 @@
 // tests/smoke/companions.mjs  (owner: companions) — GAME_DESIGN §9 companions, §12.1 lost kittens, D-01, CS-03 Pudding,
 // scripted NPCs, driven through __GAME__ hooks in the running game. Screenshots → tests/shots/companions/*.png
+// Iso controls (research/CONTROLS_SPEC.md): companions:iso-follow (idle slot off the aim notch, trail round a wall),
+// companions:ability-aim (desktop Q tap / hold / cancel with the mouse), companions:touch (390×844 and 844×390 touch
+// emulation: portrait button, drag-aim, tap a kitten), hub talk interactables in companions:hub. Keys per C10: Stand L,
+// attack J, ability Q, Meow C (jump would be F).
 // The blocks set up what they need themselves (world's meadow zones may not exist yet), around the player at `start`.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -911,10 +915,329 @@ export default [
         await shot(t, 'companions/hub-biscuit');
         await follow(t);
         await t.blankCheck('companions:hub');
+        // iso controls: residents are clickable (pickKind 'npc'); clear of world's interactables they carry a talk_<id>
+        // interactable ([Interact] / a click → their line now); a station keeper stands for its station
+        const talk = await t.G(() => {
+          const c = window.__GAME__.ctx, its = c.levels.current?.interactables ?? [], rs = c.companions.hub.residents;
+          const shown = rs.filter((r) => r.object3d.visible && !r.scripted).length + c.companions.active.length;
+          return { talk: its.filter((i) => i.kind === 'npc' && i.actor).map((i) => i.id), picks: c.companions.pickables().length, shown,
+            keepers: rs.filter((r) => r.beh === 'station').map((r) => `${r.npcId}→${r.interactId}`) };
+        });
+        t.log(`hub talk interactables ${talk.talk.length}, pickables ${talk.picks}, keepers ${talk.keepers.join(' ')}`);
+        t.assert(talk.talk.length >= 5, `too few talk interactables (${talk.talk.join(', ')})`);
+        t.assert(talk.picks >= talk.shown && talk.picks >= 8, `hub pickables ${talk.picks} (shown residents + party ${talk.shown}; far ones are LOD-hidden)`);
+        const clicked = await t.G(() => {
+          const c = window.__GAME__.ctx, r = c.companions.hub.residents.find((x) => x.talkIt && x.npcId.startsWith('villager'));
+          if (!r) return null;
+          c.player.teleport({ pos: r.pos.clone().setX(r.pos.x + 1.2).setY(c.physics.heightAt(r.pos.x + 1.2, r.pos.z)), facing: -Math.PI / 2 });
+          r.talkAt = -Infinity; r.bubble.hide();
+          const ok = c.levels.current.interact(r.talkIt.id);
+          return { ok, id: r.npcId, shown: r.bubble.visible ?? r.bubble.object?.visible ?? null };
+        });
+        t.assert(clicked?.ok && clicked.shown === true, `talking to a villager failed (${JSON.stringify(clicked)})`);
       } finally {
         await restoreState(t, saved);
         await t.loadLevel('meadow', 'start');
       }
+    },
+  },
+  // ------------------------------------------------------------------ iso controls (research/CONTROLS_SPEC.md §7.5, §12)
+  {
+    // the idle slot (back-left / back-right ≥ 1.4 m, off her aim notch) and the path-aware follow: she walks round a
+    // wall (a clicked path when the player's orders exist, else a scripted walk) and Mochi takes her trail round it
+    name: 'companions:iso-follow', order: 86, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      shotDir(t);
+      await stage(t);
+      await t.G(() => window.__GAME__.ctx.companions.setActive(['mochi']));
+      await until(t, () => window.__GAME__.ctx.companions.active[0]?.stateName === 'idle', null, { sim: 6 });
+      const idle = await t.G(() => {
+        const c = window.__GAME__.ctx, m = c.companions.active[0], p = c.player;
+        const dx = m.pos.x - p.pos.x, dz = m.pos.z - p.pos.z, a = Math.atan2(dx, dz);
+        const off = m.aimYaw == null ? Math.PI : Math.abs(Math.atan2(Math.sin(a - m.aimYaw), Math.cos(a - m.aimYaw)));
+        return { d: Math.hypot(dx, dz), behind: -(dx * Math.sin(p.facing) + dz * Math.cos(p.facing)), off, state: m.stateName };
+      });
+      t.log(`idle slot: ${idle.d.toFixed(2)} m, ${idle.behind.toFixed(2)} m behind, ${(idle.off * 180 / Math.PI).toFixed(0)}° off her aim`);
+      t.assert(idle.d >= 1.25 && idle.d <= 2.6, `idle distance ${idle.d.toFixed(2)} m (back-left / back-right ≥ 1.4)`);
+      t.assert(idle.off >= 0.6, `idle in her aim notch (${(idle.off * 180 / Math.PI).toFixed(0)}°)`);
+      await shot(t, 'companions/iso-idle');
+      // she turns to face him (her aim with no cursor / stick = her facing): he walks out of the notch
+      await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, m = c.companions.active[0], p = c.player;
+        c.player.teleport({ pos: p.pos.clone(), facing: Math.atan2(m.pos.x - p.pos.x, m.pos.z - p.pos.z) });
+      });
+      const out = await until(t, () => {
+        const c = window.__GAME__.ctx, m = c.companions.active[0], p = c.player;
+        const a = Math.atan2(m.pos.x - p.pos.x, m.pos.z - p.pos.z), y = m.aimYaw ?? p.facing;
+        return Math.abs(Math.atan2(Math.sin(a - y), Math.cos(a - y))) >= 0.6 && m.stateName === 'idle';
+      }, null, { sim: 6 });
+      t.assert(out, 'Mochi stayed in her aim notch after she turned to him');
+      // a wall between them; she walks round its east end
+      const wall = await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, T = g.THREE, p = c.player.pos, y = c.physics.heightAt(p.x, p.z);
+        c.player.teleport({ pos: p.clone(), facing: 0 });
+        const box = { minX: p.x - 5, maxX: p.x + 3, minZ: p.z + 2.6, maxZ: p.z + 3.0, y0: y - 1, y1: y + 2.4, smokeWall: true };
+        c.physics.addCollider(box);
+        const mesh = new T.Mesh(new T.BoxGeometry(8, 2.4, 0.4), new T.MeshStandardMaterial({ color: '#8A7B66', roughness: 0.9 }));
+        mesh.position.set(p.x - 1, y + 1.2, p.z + 2.8); mesh.castShadow = true; mesh.name = 'smokeWall';
+        c.scene.add(mesh);
+        window.__cmpWall = { box, mesh };
+        const m = c.companions.active[0];
+        return { teleports: m.stats.teleports, trails: m.stats.trails, start: [p.x, p.z] };
+      });
+      try {
+        await t.wait(1200);
+        const [sx, sz] = wall.start;
+        const path = [[sx + 4.5, sz], [sx + 4.5, sz + 6], [sx, sz + 6]];
+        const ordered = await t.G((pts) => {
+          const g = window.__GAME__, c = g.ctx, last = pts[pts.length - 1];
+          if (typeof c.player?.order === 'function') { try { c.player.order('move', { x: last[0], y: 0, z: last[1] }); return 'order'; } catch { /* P2 mid-edit */ } }
+          return 'walk';
+        }, path);
+        if (ordered === 'walk') {
+          // scripted walk at a run (5 m/s) along her path, the way the order follower would move her
+          for (const [tx, tz] of path) {
+            for (let i = 0; i < 200; i++) {
+              const done = await t.G(([x, z]) => {
+                const g = window.__GAME__, c = g.ctx, p = c.player.pos, dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz);
+                if (d < 0.05) return true;
+                const k = Math.min(1, 0.3 / d), nx = p.x + dx * k, nz = p.z + dz * k;
+                c.player.teleport({ pos: new g.THREE.Vector3(nx, c.physics.heightAt(nx, nz), nz), facing: Math.atan2(dx, dz) });
+                return false;
+              }, [tx, tz]);
+              if (done) break;
+              await t.wait(60);
+            }
+          }
+        } else {
+          await until(t, (pt) => { const p = window.__GAME__.ctx.player.pos; return Math.hypot(p.x - pt[0], p.z - pt[1]) < 0.6; }, path[2], { sim: 10 });
+        }
+        await t.wait(400);
+        await shot(t, 'companions/iso-trail');
+        const end = await until(t, (w) => {
+          const c = window.__GAME__.ctx, m = c.companions.active[0], p = c.player;
+          return m.pos.z > w.start[1] + 3.2 && Math.hypot(m.pos.x - p.pos.x, m.pos.z - p.pos.z) < 3.5;
+        }, wall, { sim: 8 });
+        const s = await t.G(() => { const c = window.__GAME__.ctx, m = c.companions.active[0], p = c.player; return { m: [m.pos.x, m.pos.z], p: [p.pos.x, p.pos.z], tp: m.stats.teleports, trails: m.stats.trails, st: m.stateName }; });
+        t.log(`trail follow (${ordered}): Mochi ${s.m.map((v) => v.toFixed(1))}, her ${s.p.map((v) => v.toFixed(1))}, trails ${s.trails - wall.trails}, teleports ${s.tp - wall.teleports}`);
+        t.assert(end, `Mochi did not get round the wall to her (${JSON.stringify(s)})`);
+        t.assert(s.tp === wall.teleports, `Mochi teleported instead of walking round the wall (${s.tp - wall.teleports})`);
+        await shot(t, 'companions/iso-trail-done');
+      } finally {
+        await t.G(() => { const c = window.__GAME__.ctx, w = window.__cmpWall; if (w) { c.physics.removeCollider(w.box); w.mesh.removeFromParent(); w.mesh.geometry.dispose(); w.mesh.material.dispose(); } window.__cmpWall = null; });
+      }
+    },
+  },
+  {
+    // desktop: Q tap = quick cast at the cursor; hold Q = the indicator follows the mouse, release casts; Backspace
+    // (`back`) cancels; Sage's range ring + target pips; Clover's ring; the §10.1 data (cooldownLeft / readiness)
+    name: 'companions:ability-aim', order: 87, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      shotDir(t);
+      const saved = await snapState(t);
+      /** CSS px of a world point (her local frame: +Z ahead, +X her left), or null off screen. */
+      const toScreen = (ahead, side) => t.G(([a, s]) => {
+        const g = window.__GAME__, c = g.ctx, p = c.player, f = p.facing;
+        const v = new g.THREE.Vector3(p.pos.x + Math.sin(f) * a + Math.cos(f) * s, p.pos.y + 0.05, p.pos.z + Math.cos(f) * a - Math.sin(f) * s);
+        const w = { x: v.x, z: v.z };
+        v.project(c.camera);
+        if (v.z > 1 || Math.abs(v.x) > 0.98 || Math.abs(v.y) > 0.98) return null;
+        const r = c.renderer?.domElement?.getBoundingClientRect?.() ?? { left: 0, top: 0, width: innerWidth, height: innerHeight };
+        return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height, w };
+      }, [ahead, side]);
+      const aim = () => t.G(() => {
+        const m = window.__GAME__.ctx.companions, a = m.aim, pl = a.plan;
+        return { active: a.active, shape: a.shape, valid: a.valid, src: a.source, center: [pl.center.x, pl.center.z], targets: pl.targets.length, showing: m.indicator.showing, cursor: !!window.__GAME__.ctx.cam?.cursorGround };
+      });
+      try {
+        await stage(t);
+        await t.G(() => { const g = window.__GAME__, c = g.ctx; g.god(true); c.state.companions.unlocked = ['mochi', 'sage', 'clover']; c.companions.setActive(['mochi']); });
+        await t.wait(1200);
+        t.assert(await spawnAhead(t, 'rat_pike', 5, 1.5), 'rat spawn failed');
+        // hold Q with the mouse to her right-front: the indicator shows and follows
+        const p1 = await toScreen(3, -3);
+        if (p1) await t.page.mouse.move(p1.x, p1.y, { steps: 4 });
+        await t.page.keyboard.down('KeyQ');
+        let a = null;
+        try {
+          a = await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 }) ? await aim() : await aim();
+          t.assert(a.active && a.shape === 'rect', `holding Q shows no Shield Wall indicator (${JSON.stringify(a)})`);
+          await t.wait(300);
+          t.assert((await aim()).showing === 'rect' || (await t.G(() => window.__GAME__.ctx.fx?.drawsAbilityAim === true)), 'the indicator is not drawn');
+          await shot(t, 'companions/aim-wall');
+          if (a.cursor && p1) {
+            const her = await t.G(() => [window.__GAME__.ctx.player.pos.x, window.__GAME__.ctx.player.pos.z]);
+            const want = Math.atan2(p1.w.x - her[0], p1.w.z - her[1]), got = Math.atan2(a.center[0] - her[0], a.center[1] - her[1]);
+            t.assert(Math.abs(Math.atan2(Math.sin(want - got), Math.cos(want - got))) < 0.35, `indicator not toward the cursor (${want.toFixed(2)} vs ${got.toFixed(2)})`);
+          } else t.warn('no cam.cursorGround yet (camera Picker pending): the hold aimed by the smart rule');
+          const p2 = await toScreen(3, 3);
+          if (p2) await t.page.mouse.move(p2.x, p2.y, { steps: 4 });
+          await t.wait(250);
+        } finally { await t.page.keyboard.up('KeyQ'); }
+        const cast = await until(t, () => window.__GAME__.ctx.companions.walls.length > 0, null, { sim: 2 });
+        t.assert(cast, 'releasing Q did not plant the wall');
+        const ev = await t.G(() => window.__GAME__.lastEvent?.('companion:ability'));
+        t.log(`wall cast: ${JSON.stringify(ev && { aimed: ev.aimed, source: ev.source, dir: ev.dir })}`);
+        const data = await t.G(() => { const m = window.__GAME__.ctx.companions; return { left: m.cooldownLeft(), ready: m.readiness(), can: m.canCast(), shape: m.abilityShape() }; });
+        t.assert(data.left > 17 && data.ready < 0.1 && !data.can && data.shape?.shape === 'rect', `ability bar data ${JSON.stringify(data)}`);
+        await t.wait(300);
+        await shot(t, 'companions/aim-wall-cast');
+        // cancel: hold Q, Backspace, release → no cast, no cooldown
+        await t.G(() => { const m = window.__GAME__.ctx.companions; for (const w of [...m.walls]) w.end?.(); m.active[0].cooldown = 0; m.active[0]._endAbility(); });
+        await t.wait(300);
+        const n0 = await t.G(() => window.__GAME__.ctx.companions.active[0].stats.abilities);
+        await t.page.keyboard.down('KeyQ');
+        try {
+          await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 });
+          await t.page.keyboard.press('Backspace');
+          await t.wait(150);
+          t.assert(!(await aim()).active, 'Backspace did not cancel the aim');
+        } finally { await t.page.keyboard.up('KeyQ'); }
+        await t.wait(300);
+        t.assert(await t.G((n) => window.__GAME__.ctx.companions.active[0].stats.abilities === n && window.__GAME__.ctx.companions.active[0].cooldown === 0, n0), 'a cancelled aim cast or spent the cooldown');
+        // Sage: the 14 m ring and pips under the chosen targets
+        await clearEnemies(t);
+        await t.G(() => window.__GAME__.ctx.companions.setActive(['sage']));
+        await t.wait(900);
+        t.assert(await spawnAhead(t, 'rat_pike', 5, -1.5), 'rat spawn failed');
+        t.assert(await spawnAhead(t, 'crow', 7, 2), 'crow spawn failed');
+        await t.wait(500);
+        const p3 = await toScreen(5, -1.5);
+        if (p3) await t.page.mouse.move(p3.x, p3.y, { steps: 4 });
+        await t.page.keyboard.down('KeyQ');
+        try {
+          await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 });
+          await t.wait(350);
+          a = await aim();
+          t.assert(a.shape === 'targets' && a.targets >= 1 && a.valid, `Volley indicator ${JSON.stringify(a)}`);
+          await freeze(t, true);
+          await shot(t, 'companions/aim-volley');
+          await freeze(t, false);
+        } finally { await t.page.keyboard.up('KeyQ'); }
+        t.assert(await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.abilities >= 1, null, { sim: 2 }), 'release did not loose the Volley');
+        // Clover: the soft green ring around her
+        await clearEnemies(t);
+        await t.G(() => window.__GAME__.ctx.companions.setActive(['clover']));
+        await t.wait(900);
+        await t.page.keyboard.down('KeyQ');
+        try {
+          await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 });
+          await t.wait(350);
+          a = await aim();
+          t.assert(a.shape === 'self', `Purr indicator ${JSON.stringify(a)}`);
+          await shot(t, 'companions/aim-purr');
+        } finally { await t.page.keyboard.up('KeyQ'); }
+        t.assert(await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.abilities >= 1, null, { sim: 2 }), 'release did not purr');
+      } finally {
+        await clearEnemies(t);
+        await t.G(() => window.__GAME__.god(false));
+        await restoreState(t, saved);
+      }
+    },
+  },
+  {
+    // phones (Playwright hasTouch + isMobile): portrait 390×844 and landscape 844×390. The portrait button taps the
+    // smart cast; ui's drag-aim (companions.aimAbility → useAbility({ dir })) draws and casts; a tap on Mochi / a kitten
+    // (camera's tap pick when it exists, else companions.use) — screenshots of both orientations.
+    name: 'companions:touch', order: 88, level: null, timeout: 300000,
+    async run(t) {
+      shotDir(t);
+      const errors = [];
+      const ctxM = await t.browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+      const pg = await ctxM.newPage();
+      pg.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+      pg.on('response', (r) => { if (r.status() >= 400) errors.push(`HTTP ${r.status()}: ${r.url()}`); });
+      const G = async (fn, arg) => {
+        const h = await pg.evaluateHandle(fn, arg);
+        try { return await h.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { h.dispose().catch(() => {}); }
+      };
+      const mshot = async (name) => { const p = path.join(t.shotsDir, `${name}.png`); try { await pg.screenshot({ path: p }); } catch (e) { t.warn(`touch shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); } return p; };
+      const untilM = async (fn, arg, ms = 8000) => { const t0 = Date.now(); let v = await G(fn, arg); while (!v && Date.now() - t0 < ms) { await pg.waitForTimeout(150); v = await G(fn, arg); } return v; };
+      try {
+        await pg.goto(`${t.base}?test=1&seed=1`);
+        await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 200000 });
+        await G(async () => {
+          const g = window.__GAME__, c = g.ctx;
+          g.story.skip?.(); g.setMode('play');
+          for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag(k, true);
+          await g.loadLevel('meadow', 'start');
+          return true;
+        });
+        await pg.waitForTimeout(800);
+        // the M2 blocking "turn your device sideways" card is removed by the controls rework (C8, ui); until ui lands,
+        // hide it here so the portrait game (§9.5: fully supported) is what we look at and tap
+        await pg.addStyleTag({ content: '.ui-rotate { display: none !important; }' });
+        await pg.touchscreen.tap(195, 300);                         // first touch: the device becomes 'touch'
+        await G(() => {
+          const g = window.__GAME__, c = g.ctx;
+          g.story.skip?.(); g.setMode('play'); g.god(true); c.state.settings.castMode = 'smart';
+          c.state.companions.unlocked = ['mochi', 'sage', 'clover'];
+          c.companions.setActive(['mochi']);
+          c.player.teleport({ pos: new g.THREE.Vector3(-4, c.physics.heightAt(-4, -50), -50), facing: 0 });
+          for (const [x, z] of [[-2.5, -45.5], [-5.5, -45]]) { const e = g.spawn('rat_pike', x, z); e?.alert?.(); }
+          return true;
+        });
+        await pg.waitForTimeout(1500);
+        const dev = await G(() => window.__GAME__.ctx.input.device);
+        t.log(`touch page: device ${dev}`);
+        await mshot('companions/touch-portrait');
+        // the portrait button (ui's cluster): a tap is the smart cast (the wall goes between her and the rats)
+        const btn = pg.locator('.tb-ability').first();
+        let tapped = false;
+        if (await btn.isVisible().catch(() => false)) { await btn.tap().catch(() => {}); tapped = true; }
+        let cast = tapped && await untilM(() => window.__GAME__.ctx.companions.walls.length > 0, null, 6000);
+        if (!cast) {
+          t.warn(`portrait button ${tapped ? 'tap did not cast' : 'not visible'} (ui touch rework pending): smart cast through the API`);
+          cast = await G(() => window.__GAME__.ctx.companions.useAbility());
+        }
+        t.assert(cast, 'no smart cast on touch');
+        const wall = await G(() => {
+          const c = window.__GAME__.ctx, w = c.companions.walls[0], p = c.player.pos;
+          return w ? { ahead: w.center.z - p.z, side: w.center.x - p.x, src: window.__GAME__.lastEvent?.('companion:ability')?.source } : null;
+        });
+        t.assert(wall && wall.ahead > 1.0, `smart wall not toward the rats (${JSON.stringify(wall)})`);
+        await pg.waitForTimeout(400);
+        await mshot('companions/touch-portrait-cast');
+        // ui's drag-aim: the indicator follows the drag, the release casts along it
+        await G(() => { const m = window.__GAME__.ctx.companions; for (const w of [...m.walls]) w.end?.(); m.active[0].cooldown = 0; m.active[0]._endAbility(); });
+        await pg.waitForTimeout(400);
+        t.assert(await G(() => window.__GAME__.ctx.companions.aimAbility({ dir: { x: -1, z: 0.4 } })), 'aimAbility refused');
+        await pg.waitForTimeout(300);
+        const shown = await G(() => window.__GAME__.ctx.companions.indicator.showing ?? (window.__GAME__.ctx.fx?.drawsAbilityAim ? 'fx' : null));
+        t.assert(shown === 'rect' || shown === 'fx', `drag-aim indicator ${shown}`);
+        await mshot('companions/touch-portrait-aim');
+        t.assert(await G(() => window.__GAME__.ctx.companions.useAbility({ dir: { x: -1, z: 0.4 } })), 'drag release did not cast');
+        // tap Mochi: he trots over and says hello (camera's tap pick when it exists)
+        const pets0 = await G(() => window.__GAME__.ctx.companions.active[0].stats.pets);
+        const via = await G(() => {
+          const g = window.__GAME__, m = g.ctx.companions.active[0];
+          if (typeof g.tapAt === 'function') { try { g.tapAt(m.pos.x, m.pos.z); return 'tapAt'; } catch { /* core mid-edit */ } }
+          return g.ctx.companions.use(m) ? 'use' : 'none';
+        });
+        const petted = await untilM((n) => window.__GAME__.ctx.companions.active[0].stats.pets > n, pets0, 8000);
+        if (via === 'tapAt' && !petted) t.warn('tapAt did not reach companions.use (player use order / camera pick pending)');
+        else t.assert(petted, `tapping Mochi did nothing (${via})`);
+        await pg.waitForTimeout(600);
+        await mshot('companions/touch-portrait-pet');
+        // landscape 844×390: Sage's Volley drag-aim with pips
+        await pg.setViewportSize({ width: 844, height: 390 });
+        await pg.waitForTimeout(1200);
+        await G(() => { const g = window.__GAME__, c = g.ctx; for (const e of [...(c.enemies.list ?? [])]) c.enemies.despawn?.(e); c.companions.setActive(['sage']); for (const [x, z] of [[-2, -44], [-6, -43.5]]) { const e = g.spawn('rat_pike', x, z); e?.alert?.(); } const cr = g.spawn('crow', -4, -42); cr?.alert?.(); return true; });
+        await pg.waitForTimeout(1200);
+        t.assert(await G(() => window.__GAME__.ctx.companions.aimAbility({ dir: { x: 0, z: 1 }, mag: 0.6 })), 'Sage aimAbility refused');
+        await pg.waitForTimeout(300);
+        const va = await G(() => { const a = window.__GAME__.ctx.companions.aim; return { shape: a.shape, n: a.plan.targets.length, valid: a.valid }; });
+        t.assert(va.shape === 'targets' && va.n >= 1, `landscape Volley aim ${JSON.stringify(va)}`);
+        await mshot('companions/touch-landscape-aim');
+        t.assert(await G(() => window.__GAME__.ctx.companions.useAbility({ dir: { x: 0, z: 1 }, mag: 0.6 })), 'Volley drag release did not cast');
+        await pg.waitForTimeout(700);
+        await mshot('companions/touch-landscape-cast');
+      } finally {
+        await ctxM.close().catch(() => {});
+      }
+      const real = errors.filter((e) => !/favicon/.test(e));
+      for (const e of real.slice(0, 10)) t.fail(`touch page: ${e}`);
     },
   },
 ];

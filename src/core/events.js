@@ -40,7 +40,7 @@ export const E = Object.freeze({
 
   // ---- combat (tech.md §4.4 + §19.5) ----
   HIT: 'combat:hit',                        // { attacker, target, attackId, damage, position, dir, killed, blocked, parried, crit, popsSlime }
-  TELEGRAPH: 'combat:telegraph',            // { id, actor, kind, shape, pos, dir, size, duration }  shape: glint|circle|lane|cone|ring|line|swirl|rings|shadow
+  TELEGRAPH: 'combat:telegraph',            // { id, actor, kind, shape, pos, dir, size, duration, attackId?, arc?, range?, windup?, activeAt?, targetsPlayer? }  shape: glint|circle|lane|cone|ring|line|swirl|rings|shadow  (CONTROLS_SPEC §8.5 fields: activeAt = absolute game.time)
   TELEGRAPH_END: 'combat:telegraphEnd',     // { id }
   REFLECT: 'combat:reflect',                // { projectile, by }
 
@@ -58,7 +58,7 @@ export const E = Object.freeze({
   BOSS_DEFEATED: 'boss:defeated',           // { boss, id }
 
   // ---- companions / kittens ----
-  COMPANION_ABILITY: 'companion:ability',   // { kittenId, ability, position }
+  COMPANION_ABILITY: 'companion:ability',   // { kittenId, ability, position, dir?, point?, aimed?, source?, targets? }  (CONTROLS_SPEC §7.5)
   COMPANION_NAP: 'companion:nap',           // { kittenId, on }
   COMPANION_CHANGED: 'companion:changed',   // { active }
   KITTEN_REVEAL: 'kitten:reveal',           // { kittenId, position }
@@ -110,6 +110,13 @@ export const E = Object.freeze({
   SETTINGS_CHANGED: 'settings:changed',     // { key, value }   a state.settings entry changed (ui emits after writing state)
   INPUT_DEVICE: 'input:device',             // { device: 'kbm' | 'pad' | 'touch' }  last-used input device changed
   INPUT_POINTER_LOCK: 'input:pointerLock',  // { locked }  core+: mouse capture gained / lost (lost mid-play → ui.pause())
+
+  // ---- CONTROLS_SPEC §12 core 3 (iso controls; additive) ----
+  PLAYER_ORDER: 'player:order',             // { kind: 'move'|'follow'|'attack'|'attackMove'|'use'|'stop', point?: Vector3, target?: Actor|null, valid, queued, partial? }
+  TARGET_CHANGED: 'target:changed',         // { actor, prev, source: 'click'|'tap'|'tab'|'pad'|'auto'|'clear' }  the selection (cam.lockTarget)
+  CAM_ZOOM: 'camera:zoom',                  // { dist, mul }  the iso zoom changed
+  INPUT_SCHEME: 'input:scheme',             // { preset }  the KBM control preset changed
+  NAV_READY: 'nav:ready',                   // { level, cells, links, ms }  the level's nav grid is built
 });
 
 /** Every known event string (EventBus warns on unknown names). */

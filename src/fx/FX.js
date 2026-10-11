@@ -19,6 +19,7 @@
 // visual dt (0 while hitstop / the pause menu, scaled by slow motion). Two pooled particle draw calls, one marks batch,
 // one trail, decal / aim-line pools, mist cards, ambient motes and the horde: every effect is pooled, nothing allocates
 // per frame.
+import { GroundDecals } from './GroundDecals.js';
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { ATTACKS, JUICE, PLAYER } from '../core/config.js';
@@ -101,6 +102,8 @@ const GOLD = new THREE.Color('#FFD34D'), STAR_COL = new THREE.Color('#FFE88A');
 
 export class FX {
   constructor(ctx) {
+    /** CONTROLS_SPEC §7.5: fx's GroundDecals draws the kitten ability indicator (companions hide their fallback) */
+    this.drawsAbilityAim = ctx?.params?.cam !== 'classic';
     this.ctx = ctx;
     this._teleId = 1000000;      // ids for telegraphs started directly through ctx.fx (enemies use their own)
     this.ready = false;
@@ -159,6 +162,9 @@ export class FX {
     this.lanterns.attach(scene);
     this.encounters = new Encounters(ctx, { particles: this.particles, marks: this.marks, holyFx: this.holyFx, rng, screen: this.screen });
     this.shop = new ShopSparkle(rng);
+    // CONTROLS_SPEC §7.3 / §10.3: hero + aim ring, Stand fan, selection / hover / aggro rings, order markers, ability aim
+    this.decals = new GroundDecals(ctx);
+    this.decals.init(scene);
     this._applyQuality(ctx.quality);
     this._offs.push(ctx.game?.addFrameHook?.(() => { this.screen.afterFrame(); this._warmEnd(); }) ?? (() => {}));
     this._warm = 1;
@@ -479,6 +485,7 @@ export class FX {
     this.encounters.render(dt, time);
     this._goldenPulse(dt);
     this.numbers.render(dt);
+    this.decals?.render(frameDt);
     this.marks.end();
     this.screen.render(frameDt);
     if (this._warm > 0) { this._warm--; this._warmBegin(); }
@@ -531,6 +538,7 @@ export class FX {
     this.particles?.dispose(); this.marks?.dispose(); this.trail?.dispose(); this.numbers?.dispose(); this.telegraphs?.dispose();
     this.holyFx?.dispose(); this.helmets?.dispose(); this.mist?.dispose(); this.hordeFx?.dispose(); this.ambient?.dispose(); this.screen?.dispose();
     this.shock?.dispose(); this.webs?.dispose(); this.sunRays?.dispose(); this.lanterns?.dispose(); this.encounters?.clear(); this.shop?.dispose();
+    this.decals?.dispose();
     this.dizzy.clear(); this._later.length = 0;
     this.ready = false;
   }

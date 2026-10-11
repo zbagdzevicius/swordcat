@@ -20,7 +20,7 @@ const OUT = arg('out', path.join(HERE, 'perf_results.json'));
 const SAMPLE_MS = +arg('ms', 4000);
 const ABLATE = arg('ablate', '1') === '1';
 
-const GPU_ARGS = ['--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-gpu-vsync', '--disable-frame-rate-limit',
+const GPU_ARGS = [`--use-angle=${arg('gpu', 'gl')}`, '--enable-gpu', '--ignore-gpu-blocklist', '--disable-gpu-vsync', '--disable-frame-rate-limit',
   '--enable-precise-memory-info', '--js-flags=--expose-gc'];
 
 const ISO = arg('iso', '0') === '1';
@@ -278,7 +278,7 @@ try {
     await cdp.send('Performance.enable');
     if (prof === 'mobile') await cdp.send('Emulation.setCPUThrottlingRate', { rate: +arg('throttle', 4) });
     const bootT = Date.now();
-    await page.goto(`${BASE}?test=1&seed=1&mute=1&quality=${preset}&level=meadow&spawn=start`);
+    await page.goto(`${BASE}?test=1&seed=1&mute=1&quality=${preset}&level=meadow&spawn=start`, { timeout: 180000, waitUntil: 'commit' });
     await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 180000 });
     const bootMs = Date.now() - bootT;
     const gpu = await page.evaluate(() => { const gl = window.__GAME__.ctx.renderer.getContext(); const e = gl.getExtension('WEBGL_debug_renderer_info'); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : '?'; });

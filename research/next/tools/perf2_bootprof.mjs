@@ -1,6 +1,7 @@
 // CPU profile of cold boot to title (main thread self time by function + by source area), plus long tasks.
 //   node perf2_bootprof.mjs [url-suffix]
 import { chromium } from 'playwright';
+import { orig } from './perf2_srcmap.mjs';
 const BASE = process.env.URL ?? 'http://localhost:5803/';
 const SUF = process.argv[2] ?? '?test&level=meadow&spawn=title';
 const browser = await chromium.launch({ headless: true, args: ['--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist'] });
@@ -28,7 +29,7 @@ const fn = new Map(), area = new Map(); let total = 0;
 for (const [id, us] of self) {
   const n = byId.get(id), f = n.callFrame; total += us;
   const url = f.url.replace(/.*\/bundle\//, '').replace(/\?.*/, '');
-  const k = `${f.functionName || '(anon)'} ${url}:${f.lineNumber + 1}:${f.columnNumber + 1}`;
+  const k = `${f.functionName || '(anon)'} @ ${(f.url && orig(f.url, f.lineNumber, f.columnNumber)) || url + ':' + (f.lineNumber + 1)}`;
   fn.set(k, (fn.get(k) ?? 0) + us);
   const a = f.url ? (url.match(/^([a-zA-Z]+)-/)?.[1] ?? url) : (f.functionName || '(native)');
   area.set(a, (area.get(a) ?? 0) + us);

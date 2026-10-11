@@ -118,11 +118,20 @@ export const STATES = {
       p.ctx.combat.updateSwing(s, dt);
       // lunge: forward push from just before the active window to its end, then brake
       const lunging = s.t >= act[0] * 0.5 && s.t <= act[1];
-      const lunge = lunging ? (def.lunge ?? 0) * p.speedMul : 0;
+      const lunge = lunging ? (s.lungeOverride ?? def.lunge ?? 0) * p.speedMul : 0;
       p.vel.x = damp(p.vel.x, Math.sin(p.facing) * lunge, TUNING.lungeDamp, dt);
       p.vel.z = damp(p.vel.z, Math.cos(p.facing) * lunge, TUNING.lungeDamp, dt);
       const recovering = s.t >= act[1];
       const preActive = s.t < act[0];
+      // CONTROLS_SPEC §8.4: a new move order cancels a swing in its wind-up (no damage, combo resets), waits through the
+      // active frames, and applies in recovery from active[1] + 0.05 s; WASD / the stick cut the recovery from there too
+      const lateRecovery = s.t >= act[1] + 0.05 && !def.noCancel && def.id !== 'holy' && def.id !== 'sunburst';
+      if (p.orders?.pendingSwingCancel && (preActive || lateRecovery) && !s.queued) {
+        p.orders.pendingSwingCancel = false; p.endSwing(); p.comboNext = null; p.setState('move'); return;
+      }
+      if (lateRecovery && !s.queued && p.ctx.cam?.isIso && Math.hypot(p.ctx.input.move.x, p.ctx.input.move.y) >= 0.15 && p.attackBuf <= 0) {
+        p.endSwing(); p.noteComboEnd(def); p.setState('move'); return;
+      }
       // combo: a (buffered) press inside the window QUEUES the next swing; it starts when this one's recovery ends
       // (def.dur), so every slash sweeps its full arc and Snip–Snap–Swoosh keeps the designed ≈1.4 s rhythm (§7.2).
       // Touch auto-combo (§14.4): a tap anywhere in the swing queues the next hit (no need to hit combo[0]).
@@ -163,7 +172,8 @@ export const STATES = {
       if (p.chargeT >= t2 && !p.canHoly() && !p.chargeFizzled) { p.chargeFizzled = true; p.emitCharge(0.5, true); }
       if (tier !== p.chargeTier) { p.chargeTier = tier; p.emitCharge(tier / 2); }
       p.charge = clamp((p.chargeT - C.start) / (t2 - C.start), 0, 1);
-      locomote(p, dt, { max: PLAYER.run * C.moveMul, face: true });
+      const turned = p.aimTurn?.(dt, 'charge');               // §6.2: she turns to the cursor / drag / RS at 540°/s
+      locomote(p, dt, { max: PLAYER.run * C.moveMul, face: !turned, turn: turned ? 'none' : 'damp' });
       if (!p.chargeHeld()) {
         const id = p.chargeTier >= 2 ? 'holy' : p.chargeTier >= 1 ? 'bright' : 'slash3';
         p.clearCharge();
@@ -187,7 +197,11 @@ export const STATES = {
       const A = ATTACKS.pounce;
       if (p.pouncePhase === 'hang') {
         p.vel.y = 0; brake(p, dt, 8);
-        if (p.stateT >= A.hang) { p.pouncePhase = 'dive'; p.aimAssist(); }
+        if (p.stateT >= A.hang) {
+          p.pouncePhase = 'dive';
+          if (p.ctx.cam?.isIso) p.faceAim?.('pounce', ATTACKS.pounce.arc.range);   // §6.2: Pounce toward the cursor
+          p.aimAssist();
+        }
         return;
       }
       if (p.pouncePhase === 'dive') {
@@ -226,7 +240,10 @@ export const STATES = {
       if (p.attackBuf > 0) { p.startGroundAttack(); return; }          // Riposte after a parry, else a slash out of the Stand
       if (p.pushT > 0) {                                  // block pushback carries, then the Stand brakes again
         p.vel.x = damp(p.vel.x, 0, TUNING.blockPushDamp, dt); p.vel.z = damp(p.vel.z, 0, TUNING.blockPushDamp, dt);
-      } else locomote(p, dt, { max: PLAYER.guard.move, turn: 'rate', rate: PLAYER.guard.turnRate, face: true });
+      } else {
+        const turned = p.aimTurn?.(dt, 'guard');              // §8.1: cursor / threat / RS facing; the stick strafes
+        locomote(p, dt, { max: PLAYER.guard.move, turn: turned ? 'none' : 'rate', rate: PLAYER.guard.turnRate, face: !turned });
+      }
     },
     exit(p) { p.stopGuard(); },
   },

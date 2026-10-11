@@ -6,14 +6,14 @@
 import * as THREE from 'three';
 import { groundY } from './steering.js';
 
-/** Colours and sizes (§7.3 indicator family: rims ≥ 0.06 m, depth test off so props never hide them). */
+/** Colours and sizes (§7.3 indicator family: rims ≥ 0.06 m; lifted above the ground, under the actors). */
 export const IND = Object.freeze({
   wall: { color: '#EEF3FF', fill: 0.22, rim: 0.85, rimW: 0.07 },
   bad: { color: '#9AA0A8', fill: 0.12, rim: 0.45 },
   range: { color: '#FFE9A8', fill: 0.0, rim: 0.55, rimW: 0.09 },
   pip: { color: '#FFD34D', fill: 0.18, rim: 0.95, rimW: 0.07, r: 0.55 },
-  purr: { color: '#8EE6A0', fill: 0.16, rim: 0.7, rimW: 0.08 },
-  lift: 0.06, order: 7, maxPips: 3,
+  purr: { color: '#8EE6A0', fill: 0.12, rim: 0.7, rimW: 0.08 },
+  lift: 0.08, order: 7, maxPips: 3,
 });
 
 const VERT = /* glsl */`
@@ -50,7 +50,9 @@ function decal(name, shape) {
     name: 'companionIndicator', vertexShader: VERT, fragmentShader: FRAG,
     uniforms: { uColor: { value: new THREE.Color() }, uSize: { value: new THREE.Vector2(1, 1) }, uShape: { value: shape },
       uFill: { value: 0.2 }, uRim: { value: 0.8 }, uRimW: { value: 0.07 }, uPulse: { value: 0 } },
-    transparent: true, depthTest: false, depthWrite: false, fog: false,
+    // depth-tested (she and the rats stand on it, not behind it) but never z-fighting the ground: lifted, offset
+    transparent: true, depthTest: true, depthWrite: false, fog: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
   });
   const g = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   const mesh = new THREE.Mesh(g, m);

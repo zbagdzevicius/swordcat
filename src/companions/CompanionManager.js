@@ -46,7 +46,7 @@ import { AbilityIndicator } from './AbilityIndicator.js';
 const _slot = { x: 0, z: 0 };
 const _ex = { x: 0, z: 0, mag: 0, source: '' };
 const _req = { dir: null, point: null, mag: undefined, source: 'smart' };
-/** §7.5 cast modes (`settings.castMode`). */
+/** §7.5 cast modes (the castMode setting). */
 export const CAST_MODES = Object.freeze(['smart', 'indicator', 'dragOnly']);
 const toVec = (p) => (p == null ? new THREE.Vector3()
   : Array.isArray(p) ? (p.length >= 3 ? new THREE.Vector3(p[0], p[1], p[2]) : new THREE.Vector3(p[0], 0, p[1]))
@@ -329,7 +329,7 @@ export class CompanionManager {
 
   _endAim() { this._cast = null; this.aim.active = false; this.aim.kittenId = null; }
 
-  /** `settings.castMode` (§7.5): 'smart' (default) | 'indicator' | 'dragOnly'. */
+  /** The castMode setting (§7.5): 'smart' (default) | 'indicator' | 'dragOnly'. */
   get castMode() { const m = this.ctx.state?.settings?.castMode; return CAST_MODES.includes(m) ? m : 'smart'; }
 
   /** The request the held press casts with now: the explicit aim (ui / touch drag / RS), else the cursor, else smart. */

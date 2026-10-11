@@ -29,6 +29,7 @@ import { Toasts } from './toasts.js';
 import { Prompts } from './prompts.js';
 import { ThreatArrows } from './threatArrows.js';
 import { TouchControls } from './touch.js';
+import { AbilityBar, cursorFor } from './abilityBar.js';
 import { openShop as buildShop, stationId } from './shops.js';
 import { openQuestBoard as buildBoard, HUB_LEVEL } from './questBoard.js';
 
@@ -138,6 +139,8 @@ export class UI {
     // layers, back to front
     this.arrows = new ThreatArrows(ctx, this.root);
     this.hud = new Hud(ctx, this.root);
+    /** CONTROLS_SPEC §10.1: the desktop / pad ability bar (the touch cluster shows the same states) */
+    this.bar = new AbilityBar(ctx, this.root);
     this.prompts = new Prompts(ctx, this.root);
     this.toasts = new Toasts(this.hud.toastSlot, () => ctx.input?.device ?? 'kbm');
     this.dialog = new Dialog(ctx, this.root);
@@ -556,6 +559,13 @@ export class UI {
     this.menus.render(dt);
     this.menus.scrollCredits(dt);
     this.touch.render(dt, { play: world && !this.dialog.visible, any: !title && !this.isLoading && !this.results.open && !this.menus.active });
+    this.bar?.render(dt, world && !this.dialog.visible);
+    // §10.2 context cursor over the canvas (only written on change)
+    const canvas = ctx.renderer?.domElement;
+    if (canvas && ctx.cam?.isIso) {
+      const cur = this.menus.active || title ? 'default' : cursorFor(ctx);
+      if (canvas._cur !== cur) { canvas._cur = cur; canvas.style.cursor = cur; }
+    }
   }
 
   _skipHold(dt, mode, input) {
@@ -583,7 +593,7 @@ export class UI {
     for (const off of this._offs) off();
     this._offs.length = 0;
     this._timers.length = 0;
-    for (const m of [this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
+    for (const m of [this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
     this.toasts?.clear();
     this.style?.remove();
     if (this.root) for (const k of ['ui-root', 'is-meme', 'is-title', 'dev-kbm', 'dev-pad', 'dev-touch']) this.root.classList.remove(k);

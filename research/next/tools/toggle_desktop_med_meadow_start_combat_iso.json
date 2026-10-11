@@ -1,0 +1,287 @@
+{
+ "base": {
+  "cpu": 24.5,
+  "gpu": 10.854324,
+  "calls": 145,
+  "tris": 406100
+ },
+ "rows": [
+  {
+   "label": "shadow pass skipped (map kept)",
+   "baseCpu": 23.4,
+   "baseGpu": 10.34,
+   "cpu": 15.6,
+   "gpu": 10.01,
+   "dCpu": -7.6,
+   "dGpu": -0.29,
+   "calls": [
+    145,
+    96
+   ],
+   "tris": [
+    406100,
+    295852
+   ]
+  },
+  {
+   "label": "bloom pass off",
+   "baseCpu": 22.1,
+   "baseGpu": 10.21,
+   "cpu": 21.8,
+   "gpu": 8.48,
+   "dCpu": -0.1,
+   "dGpu": -1.71,
+   "calls": [
+    145,
+    132
+   ],
+   "tris": [
+    406100,
+    406087
+   ]
+  },
+  {
+   "label": "composer MSAA 4 → 0",
+   "baseCpu": 17.9,
+   "baseGpu": 7.35,
+   "cpu": 15.8,
+   "gpu": 3.59,
+   "dCpu": -0.5,
+   "dGpu": -3.69,
+   "calls": [
+    145,
+    145
+   ],
+   "tris": [
+    406100,
+    406100
+   ]
+  },
+  {
+   "label": "pixels ×0.5625 (dpr ×0.75)",
+   "baseCpu": 17.9,
+   "baseGpu": 7.51,
+   "cpu": 17.4,
+   "gpu": 4.79,
+   "dCpu": 0.3,
+   "dGpu": -2.68,
+   "calls": [
+    145,
+    145
+   ],
+   "tris": [
+    406100,
+    406100
+   ]
+  },
+  {
+   "label": "pixels ×0.25 (dpr ×0.5)",
+   "baseCpu": 17.1,
+   "baseGpu": 7.47,
+   "cpu": 16.7,
+   "gpu": 2.77,
+   "dCpu": -0.4,
+   "dGpu": -4.61,
+   "calls": [
+    145,
+    145
+   ],
+   "tris": [
+    406100,
+    406100
+   ]
+  },
+  {
+   "label": "grass/flowers/wheat hidden",
+   "baseCpu": 15.5,
+   "baseGpu": 7.76,
+   "cpu": 14.9,
+   "gpu": 7.26,
+   "dCpu": -0.6,
+   "dGpu": -0.5,
+   "calls": [
+    145,
+    142
+   ],
+   "tris": [
+    406100,
+    283520
+   ]
+  },
+  {
+   "label": "fur shells hidden (all kittens)",
+   "baseCpu": 15.3,
+   "baseGpu": 8.91,
+   "cpu": 15.1,
+   "gpu": 8.85,
+   "dCpu": 0.6,
+   "dGpu": -0.02,
+   "calls": [
+    145,
+    142
+   ],
+   "tris": [
+    406100,
+    397124
+   ]
+  },
+  {
+   "label": "all kittens hidden (hero, NPCs)",
+   "baseCpu": 15.9,
+   "baseGpu": 8.42,
+   "cpu": 12.8,
+   "gpu": 8.17,
+   "dCpu": -2.5,
+   "dGpu": -0.2,
+   "calls": [
+    145,
+    119
+   ],
+   "tris": [
+    406100,
+    312786
+   ]
+  },
+  {
+   "label": "terrain ground hidden",
+   "baseCpu": 15.7,
+   "baseGpu": 8.89,
+   "cpu": 14.7,
+   "gpu": 7.63,
+   "dCpu": -1.1,
+   "dGpu": -1.01,
+   "calls": [
+    145,
+    141
+   ],
+   "tris": [
+    406100,
+    356100
+   ]
+  },
+  {
+   "label": "transparent meshes hidden",
+   "baseCpu": 15.9,
+   "baseGpu": 8.92,
+   "cpu": 14.8,
+   "gpu": 8.42,
+   "dCpu": 0.2,
+   "dGpu": -0.46,
+   "calls": [
+    145,
+    137
+   ],
+   "tris": [
+    406100,
+    396698
+   ]
+  },
+  {
+   "label": "fx.* groups hidden",
+   "baseCpu": 24.9,
+   "baseGpu": 6.49,
+   "cpu": 22.6,
+   "gpu": 5.94,
+   "dCpu": -1.1,
+   "dGpu": -0.4,
+   "calls": [
+    145,
+    142
+   ],
+   "tris": [
+    406100,
+    406000
+   ]
+  },
+  {
+   "label": "sky/skyline/horizon hidden",
+   "baseCpu": 16.7,
+   "baseGpu": 7.9,
+   "cpu": 17.5,
+   "gpu": 8.06,
+   "dCpu": 0.6,
+   "dGpu": 0.1,
+   "calls": [
+    145,
+    145
+   ],
+   "tris": [
+    406100,
+    406100
+   ]
+  },
+  {
+   "label": "level:meadow hidden",
+   "baseCpu": 15.6,
+   "baseGpu": 8.92,
+   "cpu": 12.2,
+   "gpu": 5.99,
+   "dCpu": -3.4,
+   "dGpu": -2.85,
+   "calls": [
+    145,
+    107
+   ],
+   "tris": [
+    406100,
+    164453
+   ]
+  },
+  {
+   "label": "point lights off (count kept 0)",
+   "baseCpu": 21.2,
+   "baseGpu": 10.48,
+   "cpu": 21.8,
+   "gpu": 9.78,
+   "dCpu": 0.6,
+   "dGpu": -0.54,
+   "calls": [
+    145,
+    145
+   ],
+   "tris": [
+    406100,
+    406100
+   ]
+  },
+  {
+   "label": "Standard/Physical → Lambert",
+   "baseCpu": 16.1,
+   "baseGpu": 8.16,
+   "cpu": 17.9,
+   "gpu": 7.54,
+   "dCpu": 2.5,
+   "dGpu": -0.51,
+   "calls": [
+    145,
+    146
+   ],
+   "tris": [
+    406100,
+    406412
+   ]
+  },
+  {
+   "label": "Standard/Physical → Toon",
+   "baseCpu": 17.9,
+   "baseGpu": 9.6,
+   "cpu": 17.1,
+   "gpu": 8.67,
+   "dCpu": 0.1,
+   "dGpu": -0.85,
+   "calls": [
+    145,
+    146
+   ],
+   "tris": [
+    406100,
+    406412
+   ]
+  }
+ ],
+ "buffer": [
+  1280,
+  720
+ ],
+ "programs": 176
+}

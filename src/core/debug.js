@@ -69,7 +69,60 @@ export function installDebug(game) {
     // ---- §19.8 ----
     story: { play: (id) => ctx.story.play(id), flag: (k, v) => ctx.story.flag(k, v), skip: () => ctx.story.skip() },
     player: { setValor: (n) => ctx.player.setValor(n), setShards: (n) => { ctx.state.shards = n; }, setHp: (n) => { ctx.player.hp = n; } },
-    cam: { mode: (m) => ctx.cam.mode(m) },
+    cam: {
+      mode: (m) => ctx.cam.mode(m),
+      // CONTROLS_SPEC §12 core 5: the live iso framing and the zoom
+      iso: () => ctx.cam.iso?.() ?? null,
+      zoom: (mul) => ctx.cam.zoom?.(mul),
+      lock: (on = true) => ctx.cam.setCamLock?.(on, false),
+    },
+    // ---- CONTROLS_SPEC §12 core 5: iso-control hooks (world points go through the real pick path) ----
+    /** World (x, z) → CSS px on the canvas ({x, y, on}), at the ground height there (or y when given). */
+    screen: (x, z, y) => {
+      const gy = Number.isFinite(y) ? y : ctx.physics.topAt?.(x, z) ?? ctx.physics.heightAt(x, z);
+      return ctx.cam.worldToScreen?.({ x, y: gy, z }) ?? null;
+    },
+    /** A mouse click at world (x, z): 'right' = the move button (order), 'left' = attack / use. Through cam.pick. */
+    click: (x, z, button = 'right', mods = {}) => {
+      const s = api.screen(x, z, mods.y);
+      if (!s) return null;
+      const b = button === 'left' ? 0 : button === 'middle' ? 1 : 2;
+      ctx.input._pointerAt?.(s.x, s.y, true);
+      ctx.input._queueClick({ button: b, x: s.x, y: s.y, down: true, t: performance.now(), mods: { ctrl: !!mods.ctrl, shift: !!mods.shift, alt: !!mods.alt } });
+      ctx.input._queueClick({ button: b, x: s.x, y: s.y, down: false, t: performance.now(), mods: { ctrl: !!mods.ctrl, shift: !!mods.shift, alt: !!mods.alt } });
+      return { x: s.x, y: s.y };
+    },
+    /** A touch tap at world (x, z) (input.addTap → the player's tap orders). kind: tap | long | longEnd. */
+    tapAt: (x, z, kind = 'tap') => {
+      const s = api.screen(x, z);
+      if (!s) return null;
+      ctx.input.addTap(s.x, s.y, kind);
+      return { x: s.x, y: s.y };
+    },
+    /** Point the mouse at world (x, z) (cursor aim; KBM). */
+    aimAt: (x, z) => {
+      const s = api.screen(x, z);
+      if (!s) return null;
+      ctx.input.setDevice?.('kbm');
+      ctx.input._pointerAt?.(s.x, s.y, true);
+      ctx.input.pointer.lastMoveT = performance.now();
+      return { x: s.x, y: s.y };
+    },
+    /** Issue an order directly: kind + [x, z] / an actor id / an interactable id. */
+    order: (kind, arg) => {
+      let a = arg;
+      if (Array.isArray(arg)) a = new THREE.Vector3(arg[0], ctx.physics.topAt?.(arg[0], arg[1]) ?? 0, arg[1]);
+      else if (typeof arg === 'string') a = ctx.actors.get?.(arg) ?? ctx.levels.current?.interactables?.find?.((i) => i.id === arg) ?? null;
+      return ctx.player.order(kind, a);
+    },
+    orders: () => { const o = ctx.player.orders; return { kind: o.kind, wp: o.wp, path: o.path.map((p) => [p.x, p.z, p.link ?? null]), partial: o.partial, engaged: o.engaged, hops: o.hops ?? 0, last: o.lastClear ?? null }; },
+    /** The final fog factor at world (x, z) (§4.1). */
+    fogAt: (x, z) => ctx.env.fogAt?.(x, z) ?? null,
+    nav: {
+      path: (ax, az, bx, bz) => { const r = ctx.physics.findPath?.({ x: ax, z: az }, { x: bx, z: bz }); return r ? { ok: r.ok, partial: r.partial, points: r.points.map((p) => [p.x, p.y, p.z, p.link ?? null]), expansions: r.expansions } : null; },
+      walkable: (x, z) => ctx.physics.navWalkable?.(x, z),
+      info: () => { const n = ctx.physics.nav; return n ? { nx: n.nx, nz: n.nz, filled: n.filled, sampled: n.sampled } : null; },
+    },
     idle: (sec) => ctx.player.memeCamTrigger.fastForward(sec),
     boss: { setHpFrac: (f) => ctx.enemies.boss?.setHpFrac(f), phase: () => ctx.enemies.boss?.phase,
             freeShard: () => ctx.enemies.boss?.freeShard?.() },

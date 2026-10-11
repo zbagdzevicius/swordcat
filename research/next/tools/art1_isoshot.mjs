@@ -16,9 +16,7 @@ await p.evaluate(async () => {
   const cam = ctx.cam.camera; const f = pp.clone().add(new THREE.Vector3(0, 0.6, 0));
   const pitch = 51.3 * Math.PI / 180, d = 13;
   window.__pin = () => { cam.fov = 38; cam.updateProjectionMatrix(); cam.position.set(f.x, f.y + Math.sin(pitch) * d, f.z - Math.cos(pitch) * d); cam.lookAt(f); cam.updateMatrixWorld(); };
-  const R = ctx.renderer, r0 = R.render.bind(R); R.render = (sc, c) => { if (c === cam) window.__pin(); return r0(sc, c); };
-  if (ctx.postfx?.composer) { const c0 = ctx.postfx.composer.render.bind(ctx.postfx.composer); ctx.postfx.composer.render = (...a) => { window.__pin(); return c0(...a); }; }
-  if (ctx.postfx?.render) { const p0 = ctx.postfx.render.bind(ctx.postfx); ctx.postfx.render = (...a) => { window.__pin(); return p0(...a); }; }
+  const p0 = ctx.postfx.render.bind(ctx.postfx); ctx.postfx.render = (dt) => { window.__pin(); return p0(dt); };
   await G.waitFrames(20);
 });
 await p.screenshot({ path: outDir + '/art1_iso_13m.png' });

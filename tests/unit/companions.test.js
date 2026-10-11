@@ -34,6 +34,11 @@ import { HUB_SPOTS, HUB_NPCS, VILLAGER_SPOTS, villagerCount, pipVars, HubResiden
 import { RESCUES, lostKittenRows, rowWanted, TREETOP_ROPES } from '../../src/companions/rescues.js';
 import { RopePost, HANG } from '../../src/companions/LostKitten.js';
 import { RANGED } from '../../src/companions/Companion.js';
+import { playerAimYaw, playerForwardYaw, explicitAim, planAbility, abilityShape, CAST } from '../../src/companions/abilityAim.js';
+import { idleSlot, inNotch, Trail, lodOrigin } from '../../src/companions/steering.js';
+import { NPC_LOD } from '../../src/companions/NpcActor.js';
+
+const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 const DT = 1 / 60;
 const ANTI_MULTI_HIT = 0.12;            // combat/attacks.js COMBAT.antiMultiHit (Combat sets it on every landed hit)
@@ -1156,4 +1161,377 @@ test('M2 Sage basic attack: she keeps 2.5–6.5 m off and shoots 5-damage arrows
   assert.ok(shots.every((h) => h.def.dmg === COMPANIONS.dmg));
   const d = dist(sage, rat);
   assert.ok(d >= RANGED.min - 0.6 && d <= RANGED.max + 0.6, `stand-off ${d.toFixed(2)} m`);
+});
+
+// ------------------------------------------------------------------ iso controls (research/CONTROLS_SPEC.md)
+
+/** An Input stand-in with edges, held state, device, move, the P0 aim fields and haptics. */
+function isoInput(ctx) {
+  const inp = {
+    _p: new Set(), _d: new Set(), _r: new Set(), device: 'kbm', move: { x: 0, y: 0 }, aimStick: null, virtualAim: null, haptics: [],
+    pressed(a) { return this._p.has(a); }, down(a) { return this._d.has(a); }, released(a) { return this._r.has(a); },
+    haptic(k) { this.haptics.push(k); },
+  };
+  ctx.input = inp;
+  return inp;
+}
+/** Press / hold / release `a` through `n` fixed steps (press on the first, release on the last unless held on). */
+function pressFor(ctx, a, n, { release = true } = {}) {
+  const inp = ctx.input;
+  for (let i = 0; i < n; i++) {
+    inp._p.clear(); inp._r.clear();
+    if (i === 0) { inp._p.add(a); inp._d.add(a); }
+    if (release && i === n - 1) { inp._d.delete(a); inp._r.add(a); }
+    step(ctx, 1);
+  }
+  inp._p.clear(); inp._r.clear();
+}
+/** Release a held action on the next step. */
+function releaseNow(ctx, a) { const inp = ctx.input; inp._d.delete(a); inp._r.add(a); step(ctx, 1); inp._r.clear(); }
+
+test('iso aim: playerAimYaw follows §7.1 (player.aim, explicit, cursor, selected, movement, facing; classic = camera-forward)', () => {
+  const ctx = makeCtx(); const inp = isoInput(ctx); const p = ctx.player;
+  p.facing = 1.0;
+  assert.ok(Math.abs(playerAimYaw(ctx) - 1.0) < 1e-9, 'facing last');
+  inp.move = { x: 0, y: 1 };                                     // screen-up at yaw π = +Z
+  assert.ok(Math.abs(playerAimYaw(ctx)) < 1e-9, 'movement through the camera yaw');
+  inp.move = { x: 1, y: 0 };                                     // screen-right at yaw π = −X
+  assert.ok(Math.abs(playerAimYaw(ctx) + Math.PI / 2) < 1e-9, 'screen-right is −X when the camera looks +Z');
+  const rat = new FakeEnemy(ctx, 3, 0); ctx.cam.lockTarget = rat;
+  assert.ok(Math.abs(playerAimYaw(ctx) - Math.PI / 2) < 1e-9, 'the selected target beats movement');
+  ctx.cam.cursorGround = { x: 0, y: 0, z: -4 }; ctx.cam.cursorValid = true;
+  assert.ok(Math.abs(Math.abs(playerAimYaw(ctx)) - Math.PI) < 1e-9, 'the cursor beats the selection');
+  inp.device = 'pad';
+  assert.ok(Math.abs(playerAimYaw(ctx) - Math.PI / 2) < 1e-9, 'no cursor on a pad');
+  inp.aimStick = { x: 0, y: 1 };
+  assert.ok(Math.abs(playerAimYaw(ctx)) < 1e-9, 'the right stick is an explicit aim');
+  p.aim = { active: true, dir: { x: -1, z: 0 } };
+  assert.ok(Math.abs(playerAimYaw(ctx) + Math.PI / 2) < 1e-9, "the player's resolved aim wins");
+  delete p.aim; inp.aimStick = null; inp.move = { x: 0, y: 0 }; ctx.cam.lockTarget = null; inp.device = 'kbm'; ctx.cam.cursorGround = null;
+  ctx.params.cam = 'classic'; ctx.cam.yaw = Math.PI / 2;
+  assert.ok(Math.abs(playerAimYaw(ctx) - camForwardYaw(Math.PI / 2)) < 1e-9, '?cam=classic keeps camera-forward');
+  assert.equal(playerForwardYaw, playerAimYaw, 'the M1 name is an alias');
+});
+
+test('iso aim: explicit touch drag / RS map through the camera yaw; px drags scale by 90 px; dead zones', () => {
+  const ctx = makeCtx(); const inp = isoInput(ctx); const out = {};
+  inp.virtualAim = { x: 0, y: 0.1, active: true };
+  assert.equal(explicitAim(ctx, out), null, 'a 0.1 drag is a tap');
+  inp.virtualAim = { x: 45, y: 0, active: true };              // 45 CSS px right
+  assert.ok(explicitAim(ctx, out));
+  assert.ok(Math.abs(out.x + 1) < 1e-9 && Math.abs(out.z) < 1e-9 && Math.abs(out.mag - 0.5) < 1e-9 && out.source === 'touch', JSON.stringify(out));
+  inp.virtualAim = null; inp.aimStick = { x: 0, y: 0.3 };
+  assert.equal(explicitAim(ctx, out), null, 'RS under 0.35');
+  inp.aimStick = { x: 0, y: -0.9 };
+  assert.ok(explicitAim(ctx, out) && Math.abs(out.z + 1) < 1e-9 && out.source === 'pad');
+  ctx.cam.stickYaw = 0;                                          // the stick latch (camera north looking −Z)
+  assert.ok(explicitAim(ctx, out) && Math.abs(out.z - 1) < 1e-9, 'uses cam.stickYaw');
+});
+
+test('iso §7.5 Shield Wall plans: aimed = 1.5 m along the aim (dir or point); smart = toward the engaged centroid, else facing', () => {
+  const ctx = makeCtx(); const p = ctx.player;
+  const [c] = ctx.companions.setActive(['mochi']);
+  p.facing = Math.PI / 2;
+  let pl = planAbility(ctx, c, null);
+  assert.ok(pl.valid && pl.shape === 'rect' && !pl.aimed && pl.source === 'smart');
+  assert.ok(Math.abs(pl.center.x - 1.5) < 1e-9 && Math.abs(pl.center.z) < 1e-9, 'facing when nothing is engaged');
+  assert.equal(pl.width, COMPANIONS.mochi.width); assert.equal(pl.length, CAST.wallDepth);
+  const a = new FakeEnemy(ctx, -2, 3, { state: 'chase', alerted: true }), b = new FakeEnemy(ctx, 2, 3, { state: 'chase', alerted: true });
+  const idle = new FakeEnemy(ctx, -5, -1, { state: 'idle' });
+  ctx.enemies.list.push(a, b, idle);
+  pl = planAbility(ctx, c, null);
+  assert.ok(Math.abs(pl.yaw) < 1e-9 && Math.abs(pl.center.z - 1.5) < 1e-9, 'between her and the two engaged rats (centroid +Z)');
+  pl = planAbility(ctx, c, { dir: { x: 0, z: -2 } });
+  assert.ok(pl.aimed && Math.abs(pl.center.z + 1.5) < 1e-9 && Math.abs(Math.abs(pl.yaw) - Math.PI) < 1e-9, 'aimed by direction');
+  pl = planAbility(ctx, c, { point: { x: -4, z: 0 }, source: 'cursor' });
+  assert.ok(pl.aimed && pl.source === 'cursor' && Math.abs(pl.center.x + 1.5) < 1e-9, 'aimed at a point: 1.5 m along it, not at it');
+  pl = planAbility(ctx, c, { point: { x: 0.01, z: 0.01 } });
+  assert.ok(!pl.aimed && pl.source === 'smart', 'a point on her is no aim');
+  assert.deepEqual(abilityShape(COMPANIONS.mochi), { ability: 'shieldWall', shape: 'rect', range: 1.5, width: 3, length: 0.4 });
+});
+
+test('iso §7.5 Volley plans: smart = Wild Rift order, the selected target first (2 of 5 arrows); aimed = nearest the point; nothing → no cast', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const [s] = ctx.companions.setActive(['sage']);
+  assert.equal(planAbility(ctx, s, null).valid, false, 'no targets: invalid');
+  assert.equal(s.useAbility(), false); assert.equal(s.cooldown, 0, 'no cooldown spent');
+  const near = new FakeEnemy(ctx, 1, 2, { state: 'chase', alerted: true });
+  const crow = new FakeEnemy(ctx, -3, 6, { state: 'circle', alerted: true, flyer: true });
+  const idle = new FakeEnemy(ctx, 2, 3, { state: 'idle' });
+  const sel = new FakeEnemy(ctx, 6, 8, { state: 'idle' });
+  const far = new FakeEnemy(ctx, 0, 20, { state: 'chase', alerted: true });
+  for (const e of [near, crow, idle, sel, far]) { e.hp = e.maxHp = 1000; ctx.enemies.list.push(e); ctx.actors.register(e); }
+  let pl = planAbility(ctx, s, null);
+  assert.ok(pl.valid && pl.shape === 'targets' && pl.range === COMPANIONS.sage.range);
+  assert.ok(pl.targets.length === 3 && pl.targets[0] === near && pl.targets[1] === crow && pl.targets[2] === idle,
+    'engaged and near, then the engaged flyer, then the idle one; 14 m range');
+  ctx.cam.lockTarget = sel;
+  pl = planAbility(ctx, s, null);
+  assert.equal(pl.targets[0], sel, 'the selected target leads'); assert.equal(pl.targets.length, 3);
+  ctx.cam.lockTarget = null;
+  pl = planAbility(ctx, s, { point: { x: 2, z: 3.2 } });
+  assert.equal(pl.targets[0], idle, 'aimed: nearest the aim point first');
+  assert.ok(!pl.targets.includes(far), 'never past 14 m');
+  ctx.cam.lockTarget = sel;
+  pl = planAbility(ctx, s, { point: { x: 6, z: 7 } });
+  assert.equal(pl.targets[0], sel, 'aimed keeps the selected one first when it is among the nearest');
+  // cast it: 5 arrows round-robin over the plan (the first target gets 2)
+  assert.ok(ctx.companions.useAbility({ point: { x: 6, z: 7 } }));
+  step(ctx, Math.round(2.5 / DT));
+  const arrows = ctx.combat.calls.filter((h) => h.att === s && h.def.id === 'companion_arrow');
+  assert.equal(arrows.length, 5);
+  assert.equal(arrows.filter((h) => h.tgt === sel).length, 2, 'the selected target takes 2 arrows');
+});
+
+test('iso cast input: KBM tap = quick cast at the cursor; hold = indicator follows, release casts; Esc / RMB / ✕ cancel (no cooldown)', async () => {
+  const ctx = makeCtx(); await ctx.companions.init(); const inp = isoInput(ctx);
+  const m = ctx.companions; const [c] = m.setActive(['mochi']);
+  ctx.cam.cursorGround = { x: 4, y: 0, z: 0 }; ctx.cam.cursorValid = true;
+  pressFor(ctx, 'ability', 3);                                   // a tap (< CAST.hold)
+  assert.equal(m.walls.length, 1, 'a tap casts');
+  assert.ok(Math.abs(m.walls[0].center.x - 1.5) < 1e-6 && Math.abs(m.walls[0].center.z) < 1e-6, 'toward the cursor');
+  const ev = emitted(ctx, E.COMPANION_ABILITY).at(-1);
+  assert.ok(ev.aimed && ev.source === 'cursor' && Math.abs(ev.dir.x - 1) < 1e-9, JSON.stringify(ev));
+  assert.deepEqual(inp.haptics, ['kitten']);
+  assert.equal(m.aim.active, false);
+  pressFor(ctx, 'ability', 20);                                  // on cooldown: nothing, no indicator
+  assert.equal(c.stats.abilities, 1); assert.equal(m.aim.active, false);
+  // hold: the indicator after CAST.hold, it follows the cursor, the release casts there
+  c.cooldown = 0; c._endAbility();
+  const n0 = c.stats.abilities;
+  pressFor(ctx, 'ability', Math.ceil(CAST.hold / DT) + 4, { release: false });
+  assert.ok(m.aim.active && m.aim.shape === 'rect' && m.aim.kittenId === 'mochi', 'indicator shown while held');
+  ctx.cam.cursorGround = { x: 0, y: 0, z: -3 };
+  step(ctx, 1);
+  assert.ok(Math.abs(m.aim.plan.center.z + 1.5) < 1e-6, 'the indicator follows the cursor');
+  assert.equal(c.stats.abilities, n0, 'no cast while held');
+  releaseNow(ctx, 'ability');
+  assert.equal(c.stats.abilities, n0 + 1, 'release casts');
+  assert.ok(m.walls.some((w) => Math.abs(w.center.z + 1.5) < 1e-6), 'where the indicator was');
+  // Esc while held: cancelled, no cooldown
+  c.cooldown = 0; c._endAbility();
+  pressFor(ctx, 'ability', 15, { release: false });
+  assert.ok(m.aim.active);
+  inp._p.add('back'); step(ctx, 1); inp._p.clear();
+  assert.equal(m.aim.active, false, 'Esc hides the indicator');
+  releaseNow(ctx, 'ability');
+  assert.equal(c.stats.abilities, n0 + 1, 'a cancelled aim casts nothing'); assert.equal(c.cooldown, 0);
+  // RMB (`move`) cancels too, and ui's ✕ (cancelAbilityAim)
+  pressFor(ctx, 'ability', 15, { release: false });
+  inp._p.add('move'); step(ctx, 1); inp._p.clear();
+  assert.equal(m.aim.active, false);
+  releaseNow(ctx, 'ability');
+  pressFor(ctx, 'ability', 15, { release: false });
+  assert.ok(m.cancelAbilityAim());
+  releaseNow(ctx, 'ability');
+  assert.equal(c.stats.abilities, n0 + 1, 'no cast after RMB or ✕');
+  // leaving play drops the aim
+  pressFor(ctx, 'ability', 15, { release: false });
+  ctx.game.mode = 'cutscene'; step(ctx, 1); ctx.game.mode = 'play';
+  assert.equal(m.aim.active, false); assert.equal(m._cast, null);
+  inp._d.clear();
+});
+
+test('iso cast input: pad / touch taps are smart; RS / drag aim; castMode indicator shows at once; dragOnly touch taps cast nothing', async () => {
+  const ctx = makeCtx(); await ctx.companions.init(); const inp = isoInput(ctx);
+  const m = ctx.companions; const [c] = m.setActive(['mochi']);
+  ctx.cam.cursorGround = { x: 4, y: 0, z: 0 };                  // stale: ignored off KBM
+  inp.device = 'pad'; ctx.player.facing = 0;
+  pressFor(ctx, 'ability', 3);
+  assert.ok(Math.abs(m.walls[0].center.z - 1.5) < 1e-6, 'pad tap: smart (facing)');
+  c.cooldown = 0; c._endAbility();                              // pad hold + RS: aimed along the stick
+  inp.aimStick = { x: 0, y: -1 };
+  pressFor(ctx, 'ability', 2, { release: false });
+  assert.ok(m.aim.active, 'an RS aim shows the indicator at once');
+  releaseNow(ctx, 'ability');
+  assert.equal(emitted(ctx, E.COMPANION_ABILITY).at(-1).source, 'pad');
+  assert.ok(m.walls.some((w) => Math.abs(w.center.z + 1.5) < 1e-6), 'behind her, along the stick');
+  inp.aimStick = null;
+  c.cooldown = 0; c._endAbility(); ctx.state.settings.castMode = 'indicator'; inp.device = 'kbm';
+  pressFor(ctx, 'ability', 1, { release: false });
+  assert.ok(m.aim.active, 'indicator mode: shown on press');
+  releaseNow(ctx, 'ability');
+  c.cooldown = 0; c._endAbility(); ctx.state.settings.castMode = 'dragOnly'; inp.device = 'touch';
+  const n = c.stats.abilities;
+  pressFor(ctx, 'ability', 3);
+  assert.equal(c.stats.abilities, n, 'dragOnly: a touch tap casts nothing');
+  assert.ok(m.aimAbility({ dir: { x: -1, z: 0 } }));
+  step(ctx, 1);
+  assert.ok(m.aim.active && Math.abs(m.aim.plan.center.x + 1.5) < 1e-6, 'ui drag-aim drives the indicator');
+  assert.ok(m.useAbility({ dir: { x: -1, z: 0 } }));
+  assert.equal(m.aim.active, false);
+  assert.ok(m.walls.some((w) => Math.abs(w.center.x + 1.5) < 1e-6));
+  ctx.state.settings.castMode = 'smart';
+});
+
+test('iso §10.1 data: cooldownLeft / readiness / canCast / abilityShape per id; napping → not castable', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions; const [c] = m.setActive(['clover']);
+  assert.equal(m.cooldownLeft(), 0); assert.equal(m.readiness('clover'), 1); assert.ok(m.canCast('clover'));
+  assert.equal(m.abilityShape().shape, 'self');
+  assert.ok(m.useAbility());
+  assert.equal(m.cooldownLeft('clover'), COMPANIONS.clover.cd); assert.equal(m.readiness(), 0); assert.equal(m.canCast(), false);
+  step(ctx, Math.round(10 / DT));
+  assert.ok(Math.abs(m.cooldownLeft(0) - (COMPANIONS.clover.cd - 10)) < 0.05);
+  assert.ok(Math.abs(m.readiness() - 10 / COMPANIONS.clover.cd) < 0.01);
+  c.cooldown = 0; c._endAbility(); c.startNap();
+  assert.equal(m.canCast(), false, 'napping');
+  assert.equal(m.cooldownLeft('sage'), 0); assert.equal(m.readiness('sage'), 0); assert.equal(m.abilityShape('sage'), null, 'not in the party');
+});
+
+test('iso follow: the idle slot is back-left / back-right ≥ 1.4 m and flips out of her aim notch', async () => {
+  const p = { x: 0, z: 0 }, out = {};
+  idleSlot(p, 0, 0, 1, out);                                     // she faces +Z and aims +Z
+  assert.ok(out.z < 0 && out.x > 0 && out.side === 1 && Math.hypot(out.x, out.z) >= SLOT.minIdle - 1e-9, JSON.stringify(out));
+  const aimBackLeft = Math.atan2(out.x, out.z);                  // she turns the cursor onto him
+  idleSlot(p, 0, aimBackLeft, 1, out);
+  assert.equal(out.side, -1, 'flips to her other side');
+  assert.ok(!inNotch(p, out.x, out.z, aimBackLeft));
+  const ctx = makeCtx(); await ctx.companions.init();           // in the game: aim at his spot and he moves round
+  const [c] = ctx.companions.setActive(['mochi']);
+  step(ctx, 240);
+  assert.ok(c.pos.x > 0 && c.pos.z < 0, 'settled back-left');
+  ctx.player.aim = { dir: { x: c.pos.x, z: c.pos.z } };
+  step(ctx, 180);
+  assert.ok(!inNotch(ctx.player.pos, c.pos.x, c.pos.z, Math.atan2(ctx.player.aim.dir.x, ctx.player.aim.dir.z)), 'out of the notch');
+  assert.ok(c.pos.x < 0, 'now back-right');
+  assert.ok(dist(c, ctx.player) >= SLOT.minIdle - 0.2);
+});
+
+test('iso follow: blocked by a wall she walked round, he walks her breadcrumb trail instead of teleporting', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const [c] = ctx.companions.setActive(['mochi']);
+  const p = ctx.player;
+  // a wall along x = 0 for z in [-4, 6]: sight lines crossing it are blocked, and nothing walks through it
+  const crosses = (ax, az, bx, bz) => segmentHit(ax, az, bx, bz, 0, -4, 0, 6) >= 0;
+  ctx.physics.lineOfSight = (a, b) => !crosses(a.x, a.z, b.x, b.z);
+  const move0 = ctx.physics.moveActor.bind(ctx.physics);
+  ctx.physics.moveActor = (a, dt) => { const x = a.pos.x, z = a.pos.z; move0(a, dt); if (crosses(x, z, a.pos.x, a.pos.z)) { a.pos.x = x; a.pos.z = z; } };
+  p.pos.set(-1.5, 0, 0); p.onGround = true; c.pos.set(-2.5, 0, -1.5); c.snap();
+  for (const [tx, tz] of [[-1.5, 7], [1.5, 7], [1.5, 3]]) {      // her path round the end of the wall
+    for (let i = 0; i < 600; i++) {
+      const dx = tx - p.pos.x, dz = tz - p.pos.z, d = Math.hypot(dx, dz);
+      if (d < 0.1) break;
+      step(ctx, 1, () => { p.vel.set(dx / d * 4, 0, dz / d * 4); p.facing = Math.atan2(dx, dz); p.pos.addScaledVector(p.vel, DT); });
+    }
+  }
+  p.vel.set(0, 0, 0);
+  step(ctx, Math.round(5 / DT));
+  assert.equal(c.stats.teleports, 0, 'no teleport: he walked round');
+  assert.ok(c.stats.trails >= 1, 'took her trail');
+  assert.ok(c.pos.x > 0 && dist(c, p) < 3.5, `with her on the far side (${c.pos.x.toFixed(2)}, ${c.pos.z.toFixed(2)})`);
+});
+
+test('iso Trail: crumbs every 0.6 m, sequence lookups survive newer crumbs, a teleport restarts it', () => {
+  const t = new Trail(4, 0.6), o = {};
+  assert.equal(t.push(0, 0, 0), true); assert.equal(t.push(0, 0, 0.3), false, 'closer than the spacing');
+  t.push(0, 0, 0.7); t.push(0, 0, 1.4);
+  const s = t.seqOf(1);
+  assert.ok(Math.abs(t.getSeq(s, o).z - 0.7) < 1e-6);
+  t.push(0, 0, 2.1); t.push(0, 0, 2.8);
+  assert.ok(Math.abs(t.getSeq(s, o).z - 0.7) < 1e-6, 'still there after newer crumbs');
+  t.push(0, 0, 3.5);
+  assert.equal(t.getSeq(s, o), null, 'overwritten');
+  assert.equal(t.nearest(0, 2.2), 2);
+  t.push(30, 0, 30);
+  assert.equal(t.count, 1, 'a teleport restarts the trail');
+  assert.equal(t.getSeq(s + 3, o), null, 'old sequence numbers die with it');
+});
+
+test('iso click / tap: pickables, use(): companion hello, NPC nod, kitten rescue; hidden kittens never pickable', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions; const [c] = m.setActive(['mochi']);
+  const npc = m.spawnNpc('pearl', [3, 0, 3], 0);
+  const hid = m.spawnKitten('noodle', [-4, 0, 4], 'meow', { prop: 'barrel' });
+  const out = m.pickables();
+  assert.ok(out.includes(c) && out.includes(npc) && !out.includes(hid), 'hidden kitten not pickable');
+  assert.equal(c.pickKind, 'companion'); assert.equal(npc.pickKind, 'npc'); assert.equal(hid.pickKind, null);
+  assert.ok(c.useR > 1 && npc.useR > 1);
+  assert.ok(m.use(c)); assert.equal(c.stats.pets, 1); assert.ok(c.regroupT > 0);
+  assert.ok(m.use('pearl'));
+  step(ctx, 30);
+  assert.ok(Math.abs(wrapA(npc.facing - Math.atan2(-3, -3))) < 0.4, 'she turned to look at her');
+  hid.reveal();
+  step(ctx, 1);
+  assert.equal(hid.pickKind, 'kitten');
+  assert.equal(m.use(hid), false, 'too far: just a hop');
+  ctx.player.pos.set(hid.pos.x + 1, 0, hid.pos.z);
+  assert.ok(m.use(hid)); assert.ok(hid.rescued); assert.ok(ctx.state.kittens.includes('noodle'));
+  assert.equal(hid.pickKind, null, 'rescued: no longer a target');
+  npc.setScripted(true); assert.equal(npc.pickKind, null, 'scripted NPCs are not clickable'); npc.setScripted(false);
+});
+
+test('iso hub: residents get talk_<id> interactables (prompt.talk) clear of stations; a keeper stands for its station', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  ctx.levels.current = { id: 'town', interactables: [], interact(id) { const it = this.interactables.find((i) => i.id === id); if (!it || (it.enabled && !it.enabled())) return false; it.use(); return true; } };
+  const station = { id: 'bakery', kind: 'station', pos: new THREE.Vector3(-22.6, 0, -18.4), r: 2.2, uses: 0, use() { this.uses++; } };
+  ctx.levels.current.interactables.push(station);
+  ctx.state.setFlag('town.free', true);
+  ctx.state.addKitten('biscuit');
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'town' });
+  const m = ctx.companions, rs = m.hub.residents;
+  const biscuit = rs.find((r) => r.npcId === 'biscuit'), marm = rs.find((r) => r.npcId === 'marmalade');
+  const talk = ctx.levels.current.interactables.find((i) => i.id === 'talk_biscuit');
+  assert.ok(talk && talk.kind === 'npc' && talk.prompt === 'prompt.talk' && talk.pos === biscuit.pos, 'Biscuit talks on [Interact]');
+  assert.equal(marm.interactId, 'bakery', 'Marmalade stands for the bakery');
+  assert.ok(!ctx.levels.current.interactables.some((i) => i.id === 'talk_marmalade'));
+  assert.ok(m.use(marm)); assert.equal(station.uses, 1, 'a click on the keeper opens the shop');
+  const n = ctx.audio.babbles.length;
+  assert.ok(ctx.levels.current.interact('talk_biscuit'));
+  assert.ok(ctx.audio.babbles.length > n, 'her line, now');
+  assert.ok(m.use(biscuit), 'a second click talks again (no repeat wait)');
+  ctx.bus.emit(E.LEVEL_UNLOAD, {});
+  assert.ok(!ctx.levels.current.interactables.some((i) => i.actor), 'talk interactables leave with the residents');
+});
+
+test('iso §2.8 LOD from the camera focus: lodOrigin, NPC far cull, lost kittens', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  ctx.env = { fogDensity: 0.05 };                                // cull at max(40, 2 / 0.05) = 40 m
+  const o = {};
+  ctx.player.pos.set(0, 0, 0);
+  assert.deepEqual(lodOrigin(ctx, o), { x: 0, z: 0 }, 'no focus: her');
+  ctx.cam.focus = new THREE.Vector3(100, 0, 0);
+  assert.deepEqual(lodOrigin(ctx, o), { x: 100, z: 0 }, 'play: the focus');
+  ctx.game.mode = 'cutscene'; ctx.camera.position.set(5, 3, 5);
+  assert.deepEqual(lodOrigin(ctx, o), { x: 5, z: 5 }, 'cutscene presets: the lens');
+  ctx.game.mode = 'play';
+  const npc = ctx.companions.spawnNpc('pearl', [0, 0, 0], 0);
+  npc.render(0, 0.3);
+  assert.ok(npc._far && npc.pickKind === null, `far from the focus (> ${NPC_LOD.minD} m): culled`);
+  assert.ok(npc.object3d.children.every((ch) => !ch.visible));
+  ctx.cam.focus.set(2, 0, 2);
+  npc.render(0, 0.3);
+  assert.ok(!npc._far && npc.pickKind === 'npc', 'back near the focus');
+  const k = ctx.companions.spawnKitten('noodle', [0, 0, 1], null);
+  ctx.cam.focus.set(100, 0, 0); k._farCull();
+  assert.ok(k._far, 'lost kitten culled from the focus');
+  ctx.cam.focus.set(0, 0, 0); k._farCull();
+  assert.ok(!k._far);
+});
+
+test('iso AbilityIndicator: draws the aim (rect / ring + pips / self), hides when idle or when fx takes over', async () => {
+  const ctx = makeCtx(); await ctx.companions.init(); isoInput(ctx);
+  const m = ctx.companions; m.setActive(['mochi']);
+  m.render(0, 0.016);
+  assert.equal(m.indicator.showing, null);
+  assert.ok(m.aimAbility({ dir: { x: 1, z: 0 } }));
+  step(ctx, 1); m.render(0, 0.016);
+  assert.equal(m.indicator.showing, 'rect');
+  const r = m.indicator.rect;
+  assert.ok(r.visible && Math.abs(r.position.x - 1.5) < 1e-6 && Math.abs(r.scale.x - 3) < 1e-6 && Math.abs(r.scale.z - 0.4) < 1e-6);
+  assert.equal(r.material.depthWrite, false, 'a decal: never hides what stands on it');
+  ctx.fx.drawsAbilityAim = true; m.render(0, 0.016);
+  assert.equal(m.indicator.showing, null, 'fx draws it');
+  ctx.fx.drawsAbilityAim = false;
+  m.cancelAbilityAim(); m.render(0, 0.016);
+  assert.equal(m.indicator.showing, null);
+  m.setActive(['sage']);
+  const e = new FakeEnemy(ctx, 2, 5, { state: 'chase', alerted: true }); ctx.enemies.list.push(e);
+  m.aimAbility({ point: { x: 2, z: 5 } }); step(ctx, 1); m.render(0, 0.016);
+  assert.equal(m.indicator.showing, 'targets');
+  assert.ok(m.indicator.ring.visible && Math.abs(m.indicator.ring.scale.x - 28) < 1e-6, '14 m range ring');
+  assert.ok(m.indicator.pips[0].visible && Math.abs(m.indicator.pips[0].position.z - 5) < 1e-6, 'a pip under the target');
+  m.cancelAbilityAim();
+  m.dispose();
+  assert.equal(m.indicator.root, null);
 });

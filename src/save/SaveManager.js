@@ -48,7 +48,14 @@ const QUALITY_NAMES = ['auto', 'low', 'med', 'high'];
 /** numeric settings: [min, max] */
 const SETTING_RANGES = {
   master: [0, 1], music: [0, 1], sfx: [0, 1], shake: [0, 1],
-  sensitivity: [0.1, 5], subtitleSize: [0.5, 3], dialogSpeed: [0.25, 4], touchSize: [0.5, 3],
+  sensitivity: [0.1, 5], subtitleSize: [0.5, 3], dialogSpeed: [0.25, 4], touchSize: [0.8, 1.4],
+  // CONTROLS_SPEC §12 save: the iso-control settings (§10.7)
+  camZoom: [0.7, 1.4], edgePanSpeed: [0.5, 2], buttonOpacity: [0.4, 1], cursorSize: [1, 2],
+};
+/** enum settings (CONTROLS_SPEC §10.7): the allowed values */
+const SETTING_ENUMS = {
+  controlPreset: ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly'], autoAttack: ['auto', 'chain', 'loop', 'off'],
+  castMode: ['smart', 'indicator', 'dragOnly'], parryRing: ['auto', 'on', 'off'], autoRiposte: ['auto', 'on', 'off'], haptics: [0, 0.5, 1],
 };
 const ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MAX_STR = 64;
@@ -91,6 +98,29 @@ function ids(arr, { allowed = null, max = 64 } = {}) {
     if (out.length >= max) break;
   }
   return out;
+}
+
+/** settings.bindings: { action: [KeyboardEvent.code | 'MouseN', ...] } with sane ids only. */
+function cleanBindings(v) {
+  const out = {};
+  if (!isObj(v)) return out;
+  for (const [a, codes] of Object.entries(v)) {
+    if (!ID_RE.test(a) || !Array.isArray(codes)) continue;
+    const list = codes.filter((c) => typeof c === 'string' && ID_RE.test(c)).slice(0, 4);
+    out[a] = list;
+  }
+  return out;
+}
+
+/** settings.touchLayout: null or { button: [dx, dy] } offsets (CSS px, finite, |v| ≤ 2000). */
+function cleanLayout(v) {
+  if (!isObj(v)) return null;
+  const out = {};
+  for (const [b, xy] of Object.entries(v)) {
+    if (!ID_RE.test(b) || !Array.isArray(xy) || xy.length !== 2) continue;
+    if (xy.every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 2000)) out[b] = [xy[0], xy[1]];
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** A JSON primitive worth keeping in flags / settings / level records. */
@@ -197,6 +227,9 @@ function sanitize(d) {
   if (isObj(d.settings)) {
     for (const [k, v] of Object.entries(d.settings)) {
       if (k in SETTING_RANGES) out.settings[k] = num(v, b.settings[k], SETTING_RANGES[k][0], SETTING_RANGES[k][1]);
+      else if (k in SETTING_ENUMS) out.settings[k] = SETTING_ENUMS[k].includes(v) ? v : b.settings[k];
+      else if (k === 'bindings') out.settings.bindings = cleanBindings(v);
+      else if (k === 'touchLayout') out.settings.touchLayout = cleanLayout(v);
       else if (k === 'quality') out.settings.quality = QUALITY_NAMES.includes(v) ? v : b.settings.quality;
       else if (typeof b.settings[k] === 'boolean') out.settings[k] = bool(v, b.settings[k]);
       else if (!(k in b.settings) && k.length <= MAX_STR) { const p = prim(v); if (p.ok) out.settings[k] = p.v; }   // future ui keys

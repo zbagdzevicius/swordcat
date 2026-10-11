@@ -14,6 +14,11 @@
 //   characters:skins  the 7 sword skins (§13.4; GLB skins fitted by core, the claymore tip drags on the ground) and the 7
 //                     capes (§13.5) on the hero, the bow staying pink on her left ear
 //   characters:warm   the hero's shader warm-up (no program compiles on the first Holy charge) and the fur distance LOD
+// Controls rework (research/CONTROLS_SPEC.md §2, §3, §7.4, §12 characters):
+//   characters:iso-read  readability from the iso camera (bow ×1.25 pink on the LEFT ear, ears ×1.1, sword on screen,
+//                        fur LOD from the focus, cat px at 720p / 1080p, zoom 1.4), the x-ray silhouette proxy through an
+//                        occluder (hers + a rat's and a hyena's, telegraph-tinted), hover highlights, close-ups unchanged
+//   characters:iso-touch the same on touch phones (hasTouch + isMobile, 390×844 portrait and 844×390 landscape)
 // Screenshots → tests/shots/characters/*.png. Works against the dev server and the bundled game (no /src imports:
 // the library is reached through any kitten, `root.userData.kitten.constructor.lib`).
 import fs from 'node:fs';
@@ -52,6 +57,299 @@ const unstage = (t) => t.G(async () => {
   ctx.game.setMode('play'); ctx.cam.mode('follow', { blend: false });
   await g.waitFrames(3);
 });
+
+// ------------------------------------------------------------------ controls rework (research/CONTROLS_SPEC.md §2, §3, §7.4, §12)
+
+/** Iso framing defaults (CONTROLS_SPEC §2.1): fixed yaw π (lens south of her, looking +Z), pitch ≈ 50°, FOV 38° / 50°. */
+const ISO = { yaw: Math.PI, pitch: 0.873, dist: 13, fov: 38, fovPortrait: 50, distPhone: 12 };
+
+/**
+ * Frame her from the iso rig. With camera P1 landed (`cam.iso`), the real rig in mode follow at zoom `mul`; until then
+ * a static shot at the same yaw / pitch / distance / FOV (anchored to her, converted from world to her local frame).
+ * Returns { real, dist, fov }.
+ */
+const isoFrame = (t, o = {}) => t.G(async ([I, opt]) => {
+  const g = window.__GAME__, ctx = g.ctx, cam = ctx.cam, p = ctx.player;
+  const portrait = innerHeight > innerWidth * 1.05;
+  if (typeof cam.iso === 'function' && !opt.fake) {
+    cam.mode('follow', { blend: false });
+    cam.zoom?.(opt.mul ?? 1);
+    await g.waitFrames(opt.frames ?? 45);
+    const s = cam.iso();
+    return { real: true, dist: s?.dist ?? cam.distance, fov: ctx.camera.fov, catPx: s?.catPx ?? null };
+  }
+  const dist = (opt.dist ?? (opt.phone ? I.distPhone : I.dist)) * (opt.mul ?? 1), fov = portrait ? I.fovPortrait : I.fov;
+  const wx = Math.sin(I.yaw) * Math.cos(I.pitch) * dist, wy = Math.sin(I.pitch) * dist, wz = Math.cos(I.yaw) * Math.cos(I.pitch) * dist;
+  const f = p.facing ?? 0;
+  // world (wx, wz) → her local frame (+Z = her facing, +X = her left)
+  const lx = wx * Math.cos(f) - wz * Math.sin(f), lz = wx * Math.sin(f) + wz * Math.cos(f);
+  cam.shot({ pos: [lx, wy + 0.5, lz], look: [0, 0.5, 0], fov, anchor: 'swordcat' });
+  await g.waitFrames(opt.frames ?? 45);
+  return { real: false, dist, fov };
+}, [ISO, o]);
+
+/** Page-side helpers (window.__GAME__.__chr): projection, pixel reads after a synchronous frame, measurements. */
+const installChr = (t) => t.G(() => {
+  const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE;
+  const v = new THREE.Vector3();
+  const css = (p) => {
+    v.copy(p).project(ctx.camera);
+    const r = ctx.renderer.domElement.getBoundingClientRect();
+    return { x: (v.x * 0.5 + 0.5) * r.width, y: (-v.y * 0.5 + 0.5) * r.height, z: v.z, w: r.width, h: r.height };
+  };
+  const h = {
+    css,
+    /** Render one frame now and read CSS-px points (array of [x, y]) as [r, g, b] (3×3 mean). */
+    pixels(pts) {
+      g.game.frame(1, 0);
+      const gl = ctx.renderer.getContext(), cv = ctx.renderer.domElement, sx = gl.drawingBufferWidth / cv.clientWidth, sy = gl.drawingBufferHeight / cv.clientHeight;
+      const buf = new Uint8Array(9 * 4);
+      return pts.map(([x, y]) => {
+        const bx = Math.round(x * sx) - 1, by = Math.round(gl.drawingBufferHeight - y * sy) - 1;
+        gl.readPixels(Math.max(0, bx), Math.max(0, by), 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        const c = [0, 0, 0];
+        for (let i = 0; i < 9; i++) { c[0] += buf[i * 4]; c[1] += buf[i * 4 + 1]; c[2] += buf[i * 4 + 2]; }
+        return c.map((n) => Math.round(n / 9));
+      });
+    },
+    /** Render one frame now; the pinkest pixel (max r − g) in a (2r+1)² CSS-px window around [x, y]. */
+    pinkest([x, y], r = 4) {
+      g.game.frame(1, 0);
+      const gl = ctx.renderer.getContext(), cv = ctx.renderer.domElement, sx = gl.drawingBufferWidth / cv.clientWidth, sy = gl.drawingBufferHeight / cv.clientHeight;
+      const n = 2 * Math.round(r * sx) + 1, buf = new Uint8Array(n * n * 4);
+      gl.readPixels(Math.max(0, Math.round(x * sx) - (n >> 1)), Math.max(0, Math.round(gl.drawingBufferHeight - y * sy) - (n >> 1)), n, n, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      let best = [0, 0, 0], bs = -999;
+      for (let i = 0; i < n * n; i++) { const s = buf[i * 4] - buf[i * 4 + 1]; if (s > bs) { bs = s; best = [buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2]]; } }
+      return best;
+    },
+    /** Her on-screen height in CSS px (feet → ear tips) and the bow / blade / chest screen points. */
+    measure() {
+      const k = ctx.player.model.k;
+      k.root.updateMatrixWorld(true);
+      const feet = k.root.getWorldPosition(new THREE.Vector3());
+      const ear = k.rig.earL.getWorldPosition(new THREE.Vector3()); ear.y += 0.12 * k.root.getWorldScale(v).x;
+      const top = css(ear), bot = css(feet);
+      const bowW = k.bow.children[0].getWorldPosition(new THREE.Vector3());
+      const chest = k.rig.chest.getWorldPosition(new THREE.Vector3());
+      const tip = k.sword?.tip.getWorldPosition(new THREE.Vector3());
+      return {
+        catPx: Math.hypot(top.x - bot.x, top.y - bot.y), bow: css(bowW), chest: css(chest), tip: tip ? css(tip) : null,
+        bowScale: +(k.bow.scale.x / (k._bowBase ?? 1)).toFixed(3), earScale: +k.rig.earL.scale.x.toFixed(3),
+        top: k.constructor.lib.TOP_VIEW.value, focusOn: k.constructor.lib.FUR_VIEW.focusOn,
+        lod: k.headFur?._lodN ?? -1, shells: k.headFur?.shells ?? -1, bowParent: k.bow.parent?.name,
+      };
+    },
+    /** A grey box between the lens and `target` (fraction `at` of the way to the lens), or remove it (null). */
+    occluder(target, at = 0.35, size = 1.6) {
+      if (h._occ) { h._occ.removeFromParent(); h._occ.geometry.dispose(); h._occ.material.dispose(); h._occ = null; }
+      if (!target) return null;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), new THREE.MeshStandardMaterial({ color: '#6E6A62', roughness: 0.9 }));
+      m.name = 'smokeOccluder';
+      m.position.lerpVectors(target, ctx.camera.position, at);
+      ctx.scene.add(m); m.updateMatrixWorld(true);
+      h._occ = m;
+      return m.position.toArray();
+    },
+  };
+  g.__chr = h;
+  return true;
+});
+
+/** Pink-ish x-ray tint over grey: red clearly above the occluder grey and above green. */
+const pinkOver = (a, b) => a[0] - b[0] > 25 && a[0] > a[1] + 8;
+const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+const IsoBlocks = [
+  {
+    name: 'characters:iso-read', order: 37, level: 'meadow', spawn: 'start', timeout: 300000,
+    async run(t) {
+      dir(t);
+      const ok = await until(t, () => !!window.__GAME__.ctx.player?.model?.k, null, 15000);
+      if (!t.assert(ok, 'the player renders the characters Swordcat')) return;
+      await installChr(t);
+      await stage(t, 'idle');
+      await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset('meadow_day', 0); await g.waitFrames(10); });
+      // ---- desktop, iso distance 13 m: readability from above
+      const fr = await isoFrame(t);
+      const m = await t.G(() => window.__GAME__.__chr.measure());
+      t.log(`iso (${fr.real ? 'camera IsoRig' : 'emulated shot'}) d ${fr.dist.toFixed(1)} m fov ${fr.fov}: cat ${m.catPx.toFixed(0)} px, top-view ${m.top.toFixed(2)}, bow ×${m.bowScale} ears ×${m.earScale}, fur ${m.lod}/${m.shells} (focus LOD ${m.focusOn})`);
+      t.assert(m.top > 0.99, `top-view readability on at ${fr.dist.toFixed(1)} m (${m.top})`);
+      t.assert(Math.abs(m.bowScale * m.earScale - 1.25) < 0.02 && Math.abs(m.earScale - 1.1) < 0.01, `bow ×1.25 / ears ×1.1 from above (${m.bowScale}, ${m.earScale})`);
+      t.assert(m.bowParent === 'earL', 'bow still on her LEFT ear');
+      if (fr.real) {
+        t.assert(m.focusOn && m.lod === m.shells, `iso: hero fur LOD keyed to the focus (full ${m.lod}/${m.shells})`);
+        t.assert(m.catPx >= 30, `her on-screen size ${m.catPx.toFixed(0)} px ≥ 30`);
+      }
+      // the bow reads pink from the top, the blade is on screen
+      const bowC = await t.G((p) => window.__GAME__.__chr.pinkest([p.x, p.y], 4), m.bow);
+      t.log(`bow pixel ${bowC} at (${m.bow.x.toFixed(0)}, ${m.bow.y.toFixed(0)})`);
+      t.assert(bowC[0] > 150 && bowC[0] > bowC[1] + 25, `pink bow visible from above (rgb ${bowC})`);
+      t.assert(m.tip && m.tip.x > 0 && m.tip.x < m.tip.w && m.tip.y > 0 && m.tip.y < m.tip.h, 'sword tip on screen');
+      await t.shot('characters/iso-desktop', { freeze: true });
+      await t.blankCheck('iso desktop');
+      // zoom 1.4 (18 m): still readable
+      await isoFrame(t, { mul: 1.4, frames: 30 });
+      const m14 = await t.G(() => window.__GAME__.__chr.measure());
+      t.log(`zoom 1.4: cat ${m14.catPx.toFixed(0)} px`);
+      await t.shot('characters/iso-desktop-zoom14', { freeze: true });
+      // 1080p
+      await t.page.setViewportSize({ width: 1920, height: 1080 });
+      await isoFrame(t, { frames: 40 });
+      const m108 = await t.G(() => window.__GAME__.__chr.measure());
+      t.log(`1080p: cat ${m108.catPx.toFixed(0)} px`);
+      if (fr.real) t.assert(m108.catPx >= 80, `1080p: cat ≥ 80 px (${m108.catPx.toFixed(0)})`);
+      await t.shot('characters/iso-1080p', { freeze: true });
+      // close crop around her (the top-down silhouette: bow, ears, sword, cape trim)
+      await t.page.screenshot({ path: path.join(t.shotsDir, 'characters', 'iso-1080p-crop.png'), clip: { x: Math.max(0, m108.chest.x - 110), y: Math.max(0, m108.chest.y - 110), width: 220, height: 220 } });
+      await t.page.setViewportSize({ width: 1280, height: 720 });
+      await isoFrame(t, { frames: 30 });
+
+      // ---- x-ray silhouette through an occluder (her proxy; GreaterDepth + depth pull)
+      const xr = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, h = g.__chr, view = ctx.player.model.view, k = view.kitten;
+        const p = view.getSilhouetteProxy();
+        const chest = k.rig.chest.getWorldPosition(new g.THREE.Vector3());
+        const s = h.css(chest);
+        const pts = [[s.x, s.y]];
+        const out = { proxy: !!p, anchors: p?.skeleton.bones.length ?? 0, verts: p?.geometry.attributes.position.count ?? 0 };
+        view.setXray(false); out.clearOff = h.pixels(pts)[0];
+        view.setXray(true); out.clearOn = h.pixels(pts)[0];           // unoccluded: no self x-ray
+        h.occluder(chest, 0.3, 1.4);
+        view.setXray(false); out.occOff = h.pixels(pts)[0];
+        view.setXray(true); out.occOn = h.pixels(pts)[0];
+        return out;
+      });
+      t.log(`x-ray proxy: ${xr.anchors} anchors, ${xr.verts} verts | clear ${xr.clearOff} → ${xr.clearOn} | occluded ${xr.occOff} → ${xr.occOn}`);
+      t.assert(xr.proxy && xr.anchors >= 20, 'her silhouette proxy is built (body + ears + bow + sword)');
+      t.assert(dist3(xr.clearOff, xr.clearOn) < 18, `no x-ray tint where she is visible (Δ ${dist3(xr.clearOff, xr.clearOn).toFixed(1)})`);
+      t.assert(pinkOver(xr.occOn, xr.occOff), `x-ray silhouette shows through the occluder (${xr.occOff} → ${xr.occOn})`);
+      await t.shot('characters/iso-xray', { freeze: true });
+      // ---- an enemy in a wind-up behind the same kind of wall: telegraph-tinted proxy (generic GLB / beast path)
+      const foe = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player;
+        const pos = new THREE.Vector3(p.pos.x + 2.2, 0, p.pos.z + 1.5);
+        const e = ctx.enemies.spawn('rat_pike', pos, { scripted: true, ai: false, id: 'smoke_rat_x' });
+        const h = ctx.enemies.spawn('hyena', new THREE.Vector3(p.pos.x - 2.4, 0, p.pos.z + 1.8), { scripted: true, ai: false, id: 'smoke_hyena_x' });
+        g.__chr.foes = { smoke_rat_x: e, smoke_hyena_x: h };
+        return { rat: !!e, hyena: !!h };
+      });
+      t.assert(foe.rat && foe.hyena, 'enemies spawned for the proxy check');
+      const loaded = await until(t, () => {
+        const f = window.__GAME__.__chr.foes;
+        const ok = (e) => e && e.visual && e.visual.visible !== false && (!e.def?.id?.startsWith('hyena') || e.dress);
+        return ok(f.smoke_rat_x) && ok(f.smoke_hyena_x);
+      }, null, 30000);
+      t.assert(!!loaded, 'enemy models loaded');
+      const ex = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, lib = ctx.player.model.k.constructor.lib, h = g.__chr;
+        const out = {};
+        for (const id of ['smoke_rat_x', 'smoke_hyena_x']) {
+          const e = h.foes[id];
+          const p = lib.getSilhouetteProxy(e);
+          const c = e.object3d.getWorldPosition(new g.THREE.Vector3()); c.y += (e.height ?? 1) * 0.5;
+          h.occluder(c, 0.3, 1.4);
+          const s = h.css(c);
+          lib.setXray(e, false); const off = h.pixels([[s.x, s.y]])[0];
+          lib.setXray(e, true, { color: '#FF6A3D' }); const on = h.pixels([[s.x, s.y]])[0];
+          out[id] = { proxy: !!p, anchors: p?.skeleton.bones.length ?? 0, off, on, dress: !!e.dress };
+        }
+        return out;
+      });
+      for (const [id, r] of Object.entries(ex)) {
+        t.log(`${id}: proxy ${r.anchors} anchors (dress ${r.dress}), occluded ${r.off} → ${r.on}`);
+        t.assert(r.proxy && r.anchors >= 2, `${id}: silhouette proxy built`);
+        t.assert(r.on[0] - r.off[0] > 20, `${id}: telegraph-tinted x-ray through the occluder`);
+      }
+      await t.shot('characters/iso-xray-enemy', { freeze: true });
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, lib = ctx.player.model.k.constructor.lib;
+        g.__chr.occluder(null);
+        ctx.player.model.view.setXray(false);
+        for (const e of Object.values(g.__chr.foes ?? {})) if (e) lib.setXray(e, false);
+      });
+
+      // ---- hover highlight (§7.4): white on kittens, red on enemies
+      const hi = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, THREE = g.THREE, p = ctx.player, lib = p.model.k.constructor.lib, h = g.__chr;
+        const mochi = ctx.companions.spawnNpc('mochi', new THREE.Vector3(p.pos.x - 1.2, 0, p.pos.z + 0.6), Math.PI);
+        h.mochi = mochi;
+        await g.waitFrames(10);
+        const rat = h.foes.smoke_rat_x;
+        const at = (o, dy) => { const c = o.getWorldPosition(new THREE.Vector3()); c.y += dy; return h.css(c); };
+        const pm = at(mochi.object3d, 0.35), pr = at(rat.object3d, 0.6);
+        const [m0, r0] = h.pixels([[pm.x, pm.y], [pr.x, pr.y]]);
+        lib.setHighlight(mochi, '#FFFFFF', 1);
+        lib.setHighlight(rat, '#FF6A3D', 1);
+        const [m1, r1] = h.pixels([[pm.x, pm.y], [pr.x, pr.y]]);
+        return { m0, m1, r0, r1 };
+      });
+      const lum = (c) => c[0] + c[1] + c[2];
+      t.log(`highlight: mochi ${hi.m0} → ${hi.m1}; rat ${hi.r0} → ${hi.r1}`);
+      t.assert(lum(hi.m1) > lum(hi.m0) + 15, 'kitten hover highlight brightens Mochi');
+      t.assert(hi.r1[0] > hi.r0[0] + 15, 'enemy hover highlight reads red');
+      await t.shot('characters/iso-highlight', { freeze: true });
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, lib = ctx.player.model.k.constructor.lib;
+        for (const e of Object.values(g.__chr.foes ?? {})) if (e) { lib.setHighlight(e, null); ctx.enemies.despawn?.(e); }
+        const mo = g.__chr.mochi;
+        if (mo) { lib.setHighlight(mo, null); if (mo.npcId) ctx.companions.despawn(mo); }
+      });
+      // ---- close-up look unchanged (cutscene distance): top-view 0, bow ×1
+      await camShot(t, [0, 0.95, 2.4], [0, 0.55, 0], 34);
+      const close = await t.G(() => window.__GAME__.__chr.measure());
+      t.assert(close.top < 0.01 && Math.abs(close.bowScale - 1) < 0.01 && Math.abs(close.earScale - 1) < 0.01, `close-up keeps the M1/M2 look (top ${close.top}, bow ×${close.bowScale})`);
+      await t.shot('characters/iso-closeup-unchanged', { freeze: true });
+      await unstage(t);
+    },
+  },
+  {
+    name: 'characters:iso-touch', order: 38, level: null, timeout: 300000,
+    async run(t) {
+      dir(t);
+      // phones (CONTROLS_SPEC §1, §2.1): portrait 390×844 (FOV 50°) and landscape 844×390, touch + mobile emulation
+      for (const [label, w, h] of [['portrait', 390, 844], ['landscape', 844, 390]]) {
+        const context = await t.browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: 1 });
+        const page = await context.newPage();
+        const errs = [];
+        page.on('pageerror', (e) => errs.push(`pageerror: ${e.message}`));
+        page.on('console', (m) => { if (m.type() === 'error') errs.push(`console.error: ${m.text()}`); });
+        try {
+          await page.goto(`${t.base}?test=1&seed=1&level=meadow&spawn=start`);
+          await page.waitForFunction(() => window.__GAME__?.ready === true && !!window.__GAME__.ctx.player?.model?.k, null, { timeout: 120000 });
+          const T = { ...t, page, G: async (fn, arg) => { const r = await page.evaluateHandle(fn, arg); try { return await r.evaluate((x) => (window.__GAME__?.plain ? window.__GAME__.plain(x) : x)); } finally { r.dispose().catch(() => {}); } } };
+          await T.G(async () => { const g = window.__GAME__; g.skipDialog?.(); g.story?.skipAll?.(); g.setMode?.('play'); g.ctx.env.preset('meadow_day', 0); await g.waitFrames(20); });
+          await installChr(T);
+          await stage(T, 'idle');
+          const fr = await isoFrame(T, { phone: true });
+          const m = await T.G(() => window.__GAME__.__chr.measure());
+          const dev = await T.G(() => window.__GAME__.ctx.input?.device ?? '?');
+          t.log(`${label} ${w}×${h} (${fr.real ? 'IsoRig' : 'emulated'} d ${fr.dist.toFixed(1)} fov ${fr.fov}, device ${dev}): cat ${m.catPx.toFixed(0)} px, top ${m.top.toFixed(2)}, bow ×${m.bowScale}`);
+          t.assert(m.top > 0.99 && Math.abs(m.bowScale * m.earScale - 1.25) < 0.02, `${label}: readability from above on`);
+          const bowC = await T.G((p) => window.__GAME__.__chr.pinkest([p.x, p.y], 4), m.bow);
+          t.assert(bowC[0] > 150 && bowC[0] > bowC[1] + 25, `${label}: pink bow visible (rgb ${bowC})`);
+          if (fr.real) t.assert(m.catPx >= (label === 'portrait' ? 28 : 30), `${label}: cat ${m.catPx.toFixed(0)} px ≥ the clamp`);
+          // a touch on her (tap) must not break anything characters own (the proxy / highlight paths stay idle)
+          await page.touchscreen.tap(Math.round(m.chest.x), Math.round(m.chest.y));
+          await T.G(() => window.__GAME__.waitFrames(10));
+          const p = await T.G(() => { const v = window.__GAME__.ctx.player.model.view; v.setXray(true); return !!v.getSilhouetteProxy(); });
+          t.assert(p, `${label}: x-ray proxy available on mobile`);
+          await T.G(() => window.__GAME__.ctx.player.model.view.setXray(false));
+          // the blocking rotate card is ui's (CONTROLS_SPEC C8 removes it); hide any such overlay for the look check
+          await page.evaluate(() => {
+            let el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+            while (el && el.parentElement && el.parentElement !== document.body && !(el.offsetWidth >= innerWidth * 0.95 && el.offsetHeight >= innerHeight * 0.95)) el = el.parentElement;
+            if (el && el.tagName !== 'CANVAS' && /sideways/i.test(el.textContent ?? '')) el.style.display = 'none';
+          });
+          await page.screenshot({ path: path.join(t.shotsDir, 'characters', `iso-touch-${label}.png`) });
+          await page.screenshot({ path: path.join(t.shotsDir, 'characters', `iso-touch-${label}-crop.png`), clip: { x: Math.max(0, m.chest.x - 60), y: Math.max(0, m.chest.y - 60), width: 120, height: 120 } });
+        } finally {
+          for (const e of errs) t.fail(`${label}: ${e}`);
+          await context.close();
+        }
+      }
+    },
+  },
+];
 
 export default [
   {
@@ -490,4 +788,5 @@ export default [
       t.log(`meadow follow view: ${st.calls} calls / ${(st.tris / 1000).toFixed(0)}k tris (scene), frame ${st.frameCalls} / ${(st.frameTris / 1000).toFixed(0)}k`);
     },
   },
+  ...IsoBlocks,
 ];

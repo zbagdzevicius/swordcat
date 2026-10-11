@@ -11,7 +11,8 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { clamp, damp } from '../core/math.js';
 import { SkyDome } from './Sky.js';
-import { HFOG, withHeightFog } from './HeightFog.js';
+import { HFOG, withHeightFog, fogFactor } from './HeightFog.js';
+import { CAMERA } from '../core/config.js';
 import { registerMaterialPatcher, FUR_WIND } from '../characters/index.js';
 
 /**
@@ -114,6 +115,38 @@ export class Env {
 
   /** Final fog density (read-only). */
   get fogDensity() { return this._final; }
+
+  /**
+   * CONTROLS_SPEC §4.1 focus fog (camera calls this every render): `focus` = the iso focus, `mode` 0 = lens fog
+   * (cutscenes, presets, Meme Cam, classic) … 1 = focus fog, `combat` / `boss` widen the clear radius (5 → 7 m, eased
+   * CAMERA.iso.fog.ease s), Golden Hour × goldenClearMul, `env.contribute(key, { clear })` overrides (Cacklejaw P3 3.5).
+   * Per-level `level.cam.fog` ({ clear, clearCombat, topMul }) overrides CAMERA.iso.fog.
+   */
+  setFocusFog({ focus, mode = 1, clear, combat = false } = {}) {
+    const F = CAMERA.iso?.fog;
+    if (!F) return;
+    const lv = this.ctx.levels?.current?.cam?.fog ?? {};
+    if (focus) HFOG.uFogFocus.value.set(focus.x, focus.y, focus.z);
+    HFOG.uFogMode.value = Math.max(0, Math.min(1, mode));
+    let want = Number.isFinite(clear) ? clear : combat ? (lv.clearCombat ?? F.clearCombat) : (lv.clear ?? F.clear);
+    for (const c of this.contrib.values()) if (Number.isFinite(c?.clear)) want = Math.min(want, c.clear);
+    if (this.ctx.player?.golden) want *= F.goldenClearMul;
+    const dt = Math.min(0.1, this._fogDt ?? 1 / 60);
+    this._clear = this._clear == null ? want : this._clear + (want - this._clear) * Math.min(1, dt / Math.max(0.05, F.ease) * 3);
+    HFOG.uFogClear.value = this._clear;
+    HFOG.uFogTopMul.value = lv.topMul ?? F.topMul;
+    this._lowMixIso = mode;
+    this._focusMode = mode;
+  }
+
+  /** CONTROLS_SPEC §12 core 5 (`__GAME__.fogAt`): the final fog factor at world (x, z) (height fog at the ground). */
+  fogAt(x, z, y) {
+    const f = HFOG.uFogFocus.value, cam = this.ctx.camera;
+    const gy = Number.isFinite(y) ? y : (this.ctx.physics?.heightAt?.(x, z) ?? 0);
+    const viewDepth = cam ? Math.hypot(cam.position.x - x, cam.position.y - gy, cam.position.z - z) : 0;
+    return fogFactor({ density: this._final, mode: HFOG.uFogMode.value, clear: HFOG.uFogClear.value, topMul: HFOG.uFogTopMul.value,
+      base: HFOG.uFogBase.value, falloff: HFOG.uFogFalloff.value, focus: f, viewDepth }, { x, y: gy, z });
+  }
   /** Wind strength 0–3 (preset/story; grass and audio wind read it). */
   get wind() { return this.cur.wind; }
   get grade() { return this.cur.grade; }
@@ -222,6 +255,8 @@ export class Env {
     if (this.heroLight) this.heroLight.intensity = HERO_LIGHT.intensity * (c.hero || 0);
     HFOG.uFogLow.value.copy(c.fogLow);
     HFOG.uFogFalloff.value = c.fogFalloff || 0.6;
+    // §4.1: from above all ground is "low": the ground-colour mix drops 0.6 → 0.45 with the focus-fog mode
+    HFOG.uFogLowMix.value = 0.6 + ((CAMERA.iso?.fog?.lowMix ?? 0.6) - 0.6) * (this._focusMode ?? 0);
     if (this.sky) {
       const u = this.sky.uniforms;
       u.uHorizon.value.copy(c.fogColor); u.uTop.value.copy(c.skyTop); u.uGround.value.copy(c.hemiGround);
@@ -288,9 +323,13 @@ export class Env {
     const w = this.cur.wind * (0.7 + 0.6 * this.gust) * 0.22;
     FUR_WIND.value.set(this.windDir.x * w, 0, this.windDir.y * w);
     // sun follows the player; the shadow frustum centre is snapped to shadow-map texels (no shimmer)
-    const p = ctx.player?.object3d?.position ?? cam?.position;
-    if (!p || !this.sunLight) return;
-    this._placeHero(p, cam);
+    this._fogDt = frameDt;
+    const pl = ctx.player?.object3d?.position ?? cam?.position;
+    if (!pl || !this.sunLight) return;
+    this._placeHero(pl, cam);
+    // §2.8: the shadow frustum is centred on the iso focus (her, in classic / cutscenes)
+    const f = ctx.cam?.focus;
+    const p = f?.isVector3 && (this._focusMode ?? 0) > 0.5 ? f : pl;
     const dir = this.sunDir(_v);
     const texel = (SHADOW_HALF * 2) / this.sunLight.shadow.mapSize.x;
     _f.copy(dir).negate();

@@ -402,9 +402,14 @@ export class Hud {
   _renderWorld(dt, p) {
     const ctx = this.ctx, cam = ctx.camera;
     const W = window.innerWidth, H = window.innerHeight;
+    const iso = ctx.cam?.isIso === true;
     const lock = this.visible && !this.meme && cam ? ctx.cam?.lockTarget : null;
-    const lp = lock && lock.alive !== false ? this._proj(lock, (lock.height ?? 1) * 0.55, W, H) : null;
+    // CONTROLS_SPEC C8: no centre-screen reticle in iso (fx draws the gold ground ring); the selection shows its HP pips
+    const lp = !iso && lock && lock.alive !== false ? this._proj(lock, (lock.height ?? 1) * 0.55, W, H) : null;
     flag(this.reticle, 'is-on', !!lp);
+    if (iso && lock && lock.alive !== false && lock !== this.boss) { if (!this.hits.has(lock)) this.hits.set(lock, 0); else this.hits.set(lock, Math.min(this.hits.get(lock), 0.5)); }
+    const hov = iso && this.visible && !this.meme ? ctx.cam?.hover : null;
+    if (hov?.kind === 'enemy' && hov.actor && hov.actor !== this.boss && hov.actor.alive !== false) this.hits.set(hov.actor, Math.min(this.hits.get(hov.actor) ?? PIP_LIFE - 0.7, PIP_LIFE - 0.7));
     if (lp) {
       place(this.reticle, lp.x, lp.y);
       this._pips(this.retPips, lock, lock !== this.boss && this.hits.has(lock));
@@ -415,7 +420,7 @@ export class Hud {
       const nt = t + dt;
       if (nt > PIP_LIFE || e.alive === false || e.hp <= 0) { this.hits.delete(e); continue; }
       this.hits.set(e, nt);
-      if (e === lock || i >= this.pipEls.length || !this.visible || this.meme || !cam) continue;
+      if ((e === lock && !iso) || i >= this.pipEls.length || !this.visible || this.meme || !cam) continue;
       const sp = this._proj(e, (e.height ?? 1) + 0.35, W, H);
       if (!sp) continue;
       const pe = this.pipEls[i++];

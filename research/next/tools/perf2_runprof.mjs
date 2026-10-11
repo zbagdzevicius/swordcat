@@ -70,4 +70,11 @@ for (const [id, us] of selfT) {
 const frames = f1 - f0, perF = (us) => (us / 1000 / frames).toFixed(2);
 console.log(`${level}/${spawn} rats=${RATS} cpu=${CPU}x: ${frames} frames in ${secsArg}s (${(frames / +secsArg).toFixed(1)} fps); profiled ${(total / 1000).toFixed(0)} ms. Values = ms per rendered frame.`);
 console.log('--- TOP SELF'); console.log([...self].sort((a, b) => b[1] - a[1]).slice(0, 45).map(([k, v]) => `${perF(v)}  ${k}`).join('\n'));
+if (process.env.TICKS) {   // per-line ticks of the named functions (dev server: unminified)
+  for (const name of process.env.TICKS.split(',')) {
+    const lines = new Map();
+    for (const n of profile.nodes) if (n.callFrame.functionName === name) for (const t of n.positionTicks ?? []) lines.set(t.line, (lines.get(t.line) ?? 0) + t.ticks);
+    console.log(`--- TICKS ${name}:`, [...lines].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([l, t]) => `L${l}:${t}`).join(' '));
+  }
+}
 console.log('--- TOP INCLUSIVE (game code)'); console.log([...incl].filter(([k]) => /@ src\//.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 45).map(([k, v]) => `${perF(v)}  ${k}`).join('\n'));

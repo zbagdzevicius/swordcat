@@ -104,6 +104,9 @@ export const UI_STRINGS = Object.freeze({
 export function tx(ctx, key, vars = null) {
   if (key == null) return '';
   const s = ctx?.strings;
+  // CONTROLS_SPEC §12 ui 3: device-aware copy: `key.touch` / `key.pad` before the base (KBM hybrid) text
+  const dev = ctx?.input?.device;
+  if ((dev === 'touch' || dev === 'pad') && s?.has?.(`${key}.${dev}`)) return s.t(`${key}.${dev}`, vars);
   if (s?.t && (!s.has || s.has(key))) return s.t(key, vars);
   if (UI_STRINGS[key] != null) return fill(UI_STRINGS[key], vars);
   return fill(String(key), vars);
@@ -113,7 +116,7 @@ export function tx(ctx, key, vars = null) {
 export function txt(ctx, keyOrText, vars = null) {
   if (keyOrText == null || keyOrText === false) return '';
   if (typeof keyOrText !== 'string') return String(keyOrText);
-  return ctx?.strings?.has?.(keyOrText) ? ctx.strings.t(keyOrText, vars) : fill(keyOrText, vars);
+  return ctx?.strings?.has?.(keyOrText) ? tx(ctx, keyOrText, vars) : fill(keyOrText, vars);
 }
 
 /** `{name}` placeholders from `vars` (unknown placeholders stay). */
@@ -174,18 +177,26 @@ export function revealDuration(len, speed = 1, cps = 30) { return Math.max(0, le
 // ------------------------------------------------------------------ device glyphs (§6.6: "glyphs are swapped in by ui")
 /** Short label per action and device (§15.1 keyboard, §15.2 gamepad, §15.3 touch). */
 export const ACTION_GLYPH = Object.freeze({
-  kbm: { attack: 'LMB', guard: 'RMB', dodge: 'Shift', jump: 'Space', interact: 'E', confirm: 'Enter', back: 'Esc', ability: 'Q', milk: 'R',
-    meow: 'C', golden: 'V', pause: 'Esc', lockon: 'Tab', move: 'WASD', look: 'Mouse', recenter: 'MMB' },
+  // CONTROLS_SPEC §6.2 preset `hybrid` (C1: Space = the Stand, F = jump, RMB = move)
+  kbm: { attack: 'LMB', guard: 'Space', dodge: 'Shift', jump: 'F', interact: 'E', confirm: 'Enter', back: 'Esc', ability: 'Q', milk: 'R',
+    meow: 'C', golden: 'V', pause: 'Esc', lockon: 'Tab', move: 'RMB', wasd: 'WASD', look: 'Mouse', recenter: 'F1', zoom: 'Wheel', attackMove: 'X',
+    stop: 'H', camLock: 'Y', aim: 'Mouse' },
   pad: { attack: 'X', guard: 'LB', dodge: 'B', jump: 'A', interact: 'Y', confirm: 'A', back: 'B', ability: 'LT', milk: 'D-pad ↑',
-    meow: 'L3', golden: 'RT', pause: 'Start', lockon: 'RB', move: 'L-stick', look: 'R-stick', recenter: 'R3' },
+    meow: 'L3', golden: 'RT', pause: 'Start', lockon: 'RB', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'R3', aim: 'R-stick' },
   touch: { attack: '⚔', guard: 'Stand', dodge: 'Tumble', jump: 'Jump', interact: '!', confirm: 'Tap', back: 'Back', ability: 'Kitten',
-    milk: 'Milk', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Left thumb', look: 'Drag right', recenter: 'Tap' },
+    milk: 'Milk', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Left thumb', wasd: 'Left thumb', look: 'Drag right',
+    recenter: 'Tap', zoom: 'Pinch', aim: 'Drag' },
 });
+
+/** Semantic glyph tokens (§12 ui 3): resolve through the active bindings / device, never shown as written. */
+const SEMANTIC = new Set(['stand', 'tumble', 'jump', 'move', 'attack', 'interact', 'ability', 'milk', 'meow', 'golden', 'zoom', 'ls', 'rs', 'rb']);
 
 /** Keyboard token (as written in strings.js) → action. */
 export const TOKEN_ACTION = Object.freeze({
-  wasd: 'move', mouse: 'look', space: 'jump', shift: 'dodge', rmb: 'guard', lmb: 'attack', j: 'attack', l: 'guard', k: 'dodge',
+  wasd: 'wasd', mouse: 'look', space: 'guard', shift: 'dodge', rmb: 'move', lmb: 'attack', j: 'attack', l: 'guard', k: 'dodge', f: 'jump',
   e: 'interact', enter: 'confirm', q: 'ability', r: 'milk', c: 'meow', v: 'golden', esc: 'pause', p: 'pause', tab: 'lockon', '⚔': 'attack',
+  stand: 'guard', tumble: 'dodge', jump: 'jump', move: 'move', attack: 'attack', interact: 'interact', ability: 'ability', milk: 'milk',
+  meow: 'meow', golden: 'golden', zoom: 'zoom', ls: 'move', rs: 'aim', rb: 'lockon', y: 'camLock', x: 'attackMove', h: 'stop',
 });
 
 /** Glyph label for an action on a device ('kbm' | 'pad' | 'touch'). */
@@ -199,7 +210,8 @@ function tokenHtml(inner, device) {
   const parts = inner.split(/\s+/);
   const head = parts[0], rest = parts.slice(1).join(' ');
   const act = TOKEN_ACTION[head.toLowerCase()];
-  const label = act ? (device === 'kbm' && act !== 'attack' ? head : actionGlyph(act, device)) : head;
+  const sem = SEMANTIC.has(head.toLowerCase());
+  const label = act ? (device === 'kbm' && act !== 'attack' && !sem ? head : actionGlyph(act, device)) : head;
   const cls = act === 'attack' ? 'ui-key ui-key--sword' : 'ui-key';
   return `<kbd class="${cls}">${esc(label)}</kbd>${rest ? `<span class="ui-key-x">${esc(rest)}</span>` : ''}`;
 }

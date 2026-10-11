@@ -21,7 +21,7 @@ const bctx = await browser.newContext(MOBILE ? { ...devices['Pixel 7'] } : { vie
 const page = await bctx.newPage();
 const cdp = await bctx.newCDPSession(page);
 if (MOBILE) await cdp.send('Emulation.setCPUThrottlingRate', { rate: +arg('throttle', 4) });
-await page.goto(`${BASE}?test=1&seed=1&mute=1&quality=${PRESET}&level=${LEVEL}&spawn=${SPAWN}`);
+await page.goto(`${BASE}?test=1&seed=1&mute=1&quality=${PRESET}&level=${LEVEL}&spawn=${SPAWN}`, { timeout: 180000, waitUntil: 'commit' });
 await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 180000 });
 await page.evaluate(async ([flags]) => {
   const g = window.__GAME__;
@@ -62,15 +62,19 @@ const { profile } = await cdp.send('Profiler.stop');
   out.profile = { totalMs: +total.toFixed(0), topSelf: top(self, 45), topFiles: top(byFile, 30), byArea: top(byArea, 20) };
 }
 
-// ---- (2) isolated render microbench (loop stopped; GPU drained before each measurement)
-out.bench = await page.evaluate(async () => {
+// ---- (2) isolated frame decomposition (loop stopped; GPU drained before each sample; warm-up renders before each row)
+out.bench = process.argv.includes('--nobench') ? { rows: [] } : await page.evaluate(async (N) => {
   const g = window.__GAME__.game, ctx = g.ctx, r = ctx.renderer, gl = r.getContext(), px = new Uint8Array(4);
   const drain = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   g.loop.stop();
+  await new Promise((res) => setTimeout(res, 200));
   const tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
-  const med = (a) => { const s = [...a].sort((x, y) => x - y); return +s[s.length >> 1].toFixed(2); };
-  const run = async (label, fn, n = 24) => {
-    const cpu = [], gpu = [], tot = [], tqv = [];
+  const med = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return +s[s.length >> 1].toFixed(2); };
+  const min = (a) => a.length ? +Math.min(...a).toFixed(2) : null;
+  const run = async (label, fn, n = N, warm = 3) => {
+    for (let i = 0; i < warm; i++) fn();
+    drain();
+    const cpu = [], dr = [], tqv = [];
     for (let i = 0; i < n; i++) {
       drain();
       let q = null;
@@ -78,49 +82,52 @@ out.bench = await page.evaluate(async () => {
       const a = performance.now(); fn(); const b = performance.now();
       if (q) gl.endQuery(tq.TIME_ELAPSED_EXT);
       drain(); const c = performance.now();
-      cpu.push(b - a); gpu.push(c - b); tot.push(c - a);
-      if (q) { await new Promise((res) => setTimeout(res, 30)); if (gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) && !gl.getParameter(tq.GPU_DISJOINT_EXT)) tqv.push(gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6); gl.deleteQuery(q); }
+      cpu.push(b - a); dr.push(c - b);
+      if (q) { await new Promise((res) => setTimeout(res, 0)); for (let k = 0; k < 50 && !gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE); k++) await new Promise((res) => setTimeout(res, 2));
+        if (gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) && !gl.getParameter(tq.GPU_DISJOINT_EXT)) tqv.push(gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6); gl.deleteQuery(q); }
     }
-    return { label, cpuSubmit: med(cpu), drainAfter: med(gpu), total: med(tot), timerQuery: tqv.length ? med(tqv) : null };
+    return { label, cpu: med(cpu), cpuMin: min(cpu), drain: med(dr), gpuTQ: med(tqv), calls: r.info.render.calls, tris: r.info.render.triangles };
   };
   const res = { timerQuery: !!tq, rows: [] };
-  const full = () => ctx.postfx.render(1 / 60);
-  const sceneOnly = () => { r.setRenderTarget(null); r.render(ctx.scene, ctx.camera); };
-  res.rows.push(await run('full frame (postfx.render)', full));
-  res.rows.push(await run('scene only → canvas (no post)', sceneOnly));
-  const sm = r.shadowMap.autoUpdate;
-  r.shadowMap.autoUpdate = false;
-  res.rows.push(await run('scene only, shadow map not re-rendered', sceneOnly));
-  r.shadowMap.autoUpdate = sm;
-  // a frame of game update without render
-  res.rows.push(await run('systems: render() hooks only (no GL)', () => { for (const [, s] of g.renderList) s.render?.(1, 1 / 60); }));
-  res.rows.push(await run('systems: 1 fixed step', () => g.step(1 / 60)));
-  // per-category scene cost: hide one group at a time
-  const groups = new Map();
-  for (const c of ctx.scene.children) groups.set(c.name || c.type, c);
-  for (const [name, obj] of groups) {
-    if (!obj.visible || obj.isCamera || obj.isLight) continue;
-    obj.visible = false;
-    const row = await run(`scene minus top-level "${name}"`, sceneOnly, 12);
-    obj.visible = true;
-    res.rows.push(row);
-  }
-  // pixel cost: half resolution
+  const full = () => { r.info.reset(); ctx.postfx.render(1 / 60); };
+  const sysR = () => { for (const [, s] of g.renderList) s.render?.(1, 1 / 60); };
+  const step = () => g.step(1 / 60);
+  res.rows.push(await run('JS: 1 fixed step (all systems)', step));
+  res.rows.push(await run('JS: render() hooks (all systems)', sysR));
+  for (const [k, s] of g.renderList) if (s.render) res.rows.push(await run(`JS:   render ${k}`, () => s.render(1, 1 / 60), 20));
+  for (const [k, s] of g.stepList) res.rows.push(await run(`JS:   step ${k}`, () => s.update(1 / 60), 20));
+  res.rows.push(await run('JS: scene.updateMatrixWorld', () => ctx.scene.updateMatrixWorld()));
+  res.rows.push(await run('GL: full frame (postfx.render)', full));
+  // toggles — each row is "full frame with X removed"
+  const T = [];
+  T.push(['− shadow pass (autoUpdate off)', () => { r.shadowMap.autoUpdate = false; }, () => { r.shadowMap.autoUpdate = true; }]);
+  T.push(['− bloom pass', () => { if (ctx.postfx.bloomPass) ctx.postfx.bloomPass.enabled = false; }, () => { if (ctx.postfx.bloomPass) ctx.postfx.bloomPass.enabled = true; }]);
+  const hideBy = (pred) => { const hid = []; ctx.scene.traverse((o) => { if (o.visible && pred(o)) { o.visible = false; hid.push(o); } }); return () => hid.forEach((o) => { o.visible = true; }); };
+  let restore = null;
+  const H = (label, pred) => T.push([label, () => { restore = hideBy(pred); }, () => restore?.()]);
+  H('− grass + flowers + wheat', (o) => /^(grass|flowers|wheat)/.test(o.name) || o.name === 'grass');
+  H('− fur shells (all kittens)', (o) => o.isMesh && /^fur/i.test(o.name));
+  H('− all kittens (hero + NPC) ', (o) => /^kitten:/.test(o.name));
+  H('− terrain ground', (o) => o.isMesh && o.name === 'ground');
+  H('− transparent meshes', (o) => o.isMesh && !Array.isArray(o.material) && o.material?.transparent);
+  H('− sky + skyline + horizon', (o) => /^(sky|skyline|horizon)$/.test(o.name));
+  H('− fx.* groups', (o) => /^fx\./.test(o.name));
+  H('− enemies (RootNode/Scene rigs)', (o) => /^enemy|^RootNode$|CharacterArmature/.test(o.name));
+  const lv = ctx.scene.children.find((c) => /^level:/.test(c.name));
+  if (lv) T.push([`− ${lv.name} (all props, terrain, dressing)`, () => { lv.visible = false; }, () => { lv.visible = true; }]);
+  for (const [label, on, off] of T) { on(); res.rows.push(await run('GL: full frame ' + label, full)); off(); }
   const pf = ctx.postfx, d0 = pf.dpr;
-  pf.dpr = d0 * 0.5; pf.setSize(pf.width, pf.height);
-  res.rows.push(await run('full frame @ 0.5× dpr', full));
+  for (const f of [0.75, 0.5]) { pf.dpr = d0 * f; pf.setSize(pf.width, pf.height); res.rows.push(await run(`GL: full frame @ ${f}× pixels-per-axis (dpr ${(d0 * f).toFixed(2)})`, full)); }
   pf.dpr = d0; pf.setSize(pf.width, pf.height);
-  // program/material state
   res.programs = r.info.programs.length;
-  res.programNames = r.info.programs.map((p) => p.name).reduce((m, n) => { m[n] = (m[n] ?? 0) + 1; return m; }, {});
-  res.topLevel = [...groups.keys()];
   let tris = 0, n = 0; const heavy = [];
-  ctx.scene.traverse((o) => { if (o.isMesh && o.geometry) { const g2 = o.geometry; const t = (g2.index ? g2.index.count : g2.attributes.position.count) / 3; const inst = o.isInstancedMesh ? o.count : 1; tris += t * inst; n++; heavy.push([o.name || o.parent?.name || o.type, Math.round(t), inst, o.material?.type, o.castShadow ? 'cast' : '', o.frustumCulled ? '' : 'noCull']); } });
+  ctx.scene.traverse((o) => { if (o.isMesh && o.geometry && o.visible) { const g2 = o.geometry; const t = (g2.index ? g2.index.count : g2.attributes.position.count) / 3; const inst = o.isInstancedMesh ? o.count : (g2.isInstancedBufferGeometry ? g2.instanceCount : 1); tris += t * inst; n++; heavy.push([o.name || o.parent?.name || o.type, Math.round(t), inst, o.material?.type, o.castShadow ? 'cast' : '', o.frustumCulled ? '' : 'noCull']); } });
   res.meshTotal = n; res.trisTotalScene = Math.round(tris);
-  res.heaviestGeom = heavy.sort((a, b) => b[1] * b[2] - a[1] * a[2]).slice(0, 25);
+  res.heaviestGeom = heavy.sort((a, b) => b[1] * b[2] - a[1] * a[2]).slice(0, 20);
   g.loop.start();
   return res;
-});
+}, +arg('n', 30));
 fs.writeFileSync(OUT, JSON.stringify(out, null, 1));
-console.log(JSON.stringify(out.profile.byArea), '\n', out.bench.rows.map((r) => `${r.label}: cpu ${r.cpuSubmit} drain ${r.drainAfter} total ${r.total} tq ${r.timerQuery}`).join('\n'));
+console.log(JSON.stringify(out.profile.byArea));
+for (const r of out.bench.rows) console.log(`${r.label.padEnd(64)} cpu ${r.cpu} (min ${r.cpuMin}) drain ${r.drain} gpuTQ ${r.gpuTQ} calls ${r.calls} tris ${r.tris}`);
 await browser.close();

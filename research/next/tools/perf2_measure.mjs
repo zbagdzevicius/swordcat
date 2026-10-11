@@ -53,7 +53,7 @@ async function startup(browser, url, label) {
 }
 
 async function runtime(browser, level, spawn, label, setup) {
-  const ctxB = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const ctxB = await browser.newContext({ viewport: { width: +(process.env.VW ?? 1920), height: +(process.env.VH ?? 1080) } });
   const page = await ctxB.newPage(); const cdp = await ctxB.newCDPSession(page);
   if (CPU > 1) await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU });
   await page.goto(`${BASE}?test&level=${level}&spawn=${spawn}`);

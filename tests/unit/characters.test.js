@@ -875,3 +875,209 @@ test('M2: fur distance LOD — full shells in close-ups, fewer at the follow cam
   assert.equal(at(9), 0);
   k.dispose();
 });
+
+// ---------------------------------------------------------------- controls rework (research/CONTROLS_SPEC.md §3, §7.4, §12)
+
+const resetView = () => { C.FUR_VIEW.focusOn = false; C.FUR_VIEW.camDist = 0; C.FUR_VIEW.focus.set(0, 0, 0); C.TOP_VIEW.value = 0; };
+const proxyBounds = (p) => {
+  p.parent.updateMatrixWorld(true); p.skeleton.update();
+  const box = new THREE.Box3(), q = v();
+  for (let i = 0; i < p.geometry.attributes.position.count; i++) { p.getVertexPosition(i, q); box.expandByPoint(q.applyMatrix4(p.matrixWorld)); }
+  return box;
+};
+
+test('controls: x-ray silhouette proxy — one hidden skinned draw that covers body, ears, bow (LEFT) and sword', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const scene = new THREE.Scene(); scene.add(k.root);
+  const p = k.getSilhouetteProxy();
+  assert.ok(p?.isSkinnedMesh, 'a SkinnedMesh');
+  assert.equal(p.parent, k.root, 'parented to the kitten root');
+  assert.equal(p.visible, false, 'hidden until the camera shows it');
+  assert.equal(p.castShadow, false);
+  assert.equal(p.material.depthFunc, THREE.GreaterDepth, 'draws only where something is in front');
+  assert.equal(p.material.depthWrite, false);
+  assert.equal(p.material.fog, false);
+  assert.ok(Math.abs(p.material.opacity - C.XRAY.alpha) < 1e-6 && C.XRAY.alpha === 0.55 && C.XRAY.color === '#FFE4EC');
+  const ray = new THREE.Raycaster(new THREE.Vector3(0, 0.5, 5), new THREE.Vector3(0, 0, -1));
+  const hits = []; p.raycast(ray, hits); assert.equal(hits.length, 0, 'never raycast (camera picking)');
+  const names = p.skeleton.bones.map((b) => b.name);
+  for (const n of ['bow', 'blade', 'furHead', 'chest', 'hips', 'earL', 'earR']) assert.ok(names.includes(n), `proxy follows ${n}`);
+  for (const n of ['cape', 'aura', 'holyStreak', 'blob', 'shadowProxy', 'tufts']) assert.ok(!names.includes(n), `no ${n} in the proxy`);
+  const box = proxyBounds(p);
+  const bow = new THREE.Box3().setFromObject(k.bow, true), blade = new THREE.Box3().setFromObject(k.sword.blade, true);
+  assert.ok(box.containsBox(bow.clone().expandByScalar(-0.01)), 'covers the bow');
+  assert.ok(bow.getCenter(v()).x > 0, 'bow on the LEFT ear (+X)');
+  assert.ok(box.max.y >= blade.max.y - 0.03 && box.min.y <= blade.min.y + 0.03, 'covers the sword');
+  assert.ok(box.max.y < 1.2 && box.max.y > 0.95, `proxy height ${box.max.y.toFixed(2)}`);
+  // rebuilt in place after a sword swap (the camera keeps its handle)
+  const anchors0 = p.skeleton.bones.length;
+  k.setSword(null);
+  assert.equal(k.getSilhouetteProxy(), p, 'same mesh object');
+  assert.ok(!p.skeleton.bones.some((b) => b.name === 'blade') && p.skeleton.bones.length < anchors0, 'no blade without a sword');
+  k.setSword('borrowed');
+  assert.ok(k.getSilhouetteProxy().skeleton.bones.some((b) => b.name === 'blade'));
+  k.dispose();
+  assert.equal(p.parent, null, 'disposed with the kitten');
+});
+
+test('controls: proxy collapses a hidden or detached rigid part on the next draw', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const p = k.getSilhouetteProxy();
+  k.root.updateMatrixWorld(true); p.skeleton.update();
+  const bi = p.skeleton.bones.findIndex((b) => b.name === 'blade');
+  const M = p.skeleton.boneMatrices;
+  assert.ok(M.slice(bi * 16, bi * 16 + 16).some((x) => x !== 0));
+  k.sword.group.visible = false;
+  p.onBeforeRender();
+  assert.ok(M.slice(bi * 16, bi * 16 + 16).every((x) => x === 0), 'hidden sword draws nothing');
+  k.sword.group.visible = true;
+  p.skeleton.update(); p.onBeforeRender();
+  assert.ok(M.slice(bi * 16, bi * 16 + 16).some((x) => x !== 0), 'shown again');
+  k.dispose();
+});
+
+test('controls: generic proxy for a skinned beast + rigid helmet (one skeleton, one draw)', () => {
+  const root = new THREE.Group(); root.name = 'beast';
+  const b0 = new THREE.Bone(), b1 = new THREE.Bone(); b0.name = 'Body'; b1.name = 'Head'; b1.position.y = 1; b0.add(b1); root.add(b0);
+  root.updateMatrixWorld(true);
+  const geo = new THREE.CylinderGeometry(0.3, 0.3, 2, 8, 4).translate(0, 1, 0);
+  const n = geo.attributes.position.count, si = [], sw = [];
+  for (let i = 0; i < n; i++) { si.push(geo.attributes.position.getY(i) > 1 ? 1 : 0, 0, 0, 0); sw.push(1, 0, 0, 0); }
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  const body = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial()); root.add(body);
+  body.bind(new THREE.Skeleton([b0, b1]));
+  const helm = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), new THREE.MeshStandardMaterial()); helm.name = 'Knight_Helmet'; helm.position.y = 0.9; b1.add(helm);
+  const fx = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.MeshBasicMaterial()); fx.name = 'shadowDecal'; root.add(fx);
+  const actor = { object3d: root, visual: root };
+  const p = C.getSilhouetteProxy(actor);
+  assert.ok(p?.isSkinnedMesh && p.parent === root);
+  assert.equal(C.getSilhouetteProxy(actor), p, 'cached');
+  assert.deepEqual(p.skeleton.bones.map((b) => b.name).sort(), ['Body', 'Head', 'Knight_Helmet'].sort());
+  const box = proxyBounds(p);
+  assert.ok(box.min.y < 0.05 && box.max.y > 2.1 && box.max.x < 0.5, `fits the beast (${box.min.y.toFixed(2)}..${box.max.y.toFixed(2)})`);
+  assert.ok(Math.abs(p.material.opacity - C.XRAY.enemyAlpha) < 1e-6, 'enemies at 0.45');
+  C.setXray(actor, true, { color: '#FF6A3D' });
+  assert.ok(p.visible && p.material.color.getHexString() === 'ff6a3d', 'telegraph tint');
+  C.setXray(actor, false);
+  assert.equal(p.visible, false);
+  root.updateMatrixWorld(true); p.skeleton.update();
+  const hi = p.skeleton.bones.indexOf(helm);
+  helm.removeFromParent(); p.onBeforeRender();
+  assert.ok(p.skeleton.boneMatrices.slice(hi * 16, hi * 16 + 16).every((x) => x === 0), 'a dropped helmet collapses');
+});
+
+test('controls: setHighlight — kitten rim uniform (own material clone) and emissive on other models', () => {
+  const k = C.buildKitten(C.catConfig('mochi'));
+  const shared = k.kitMat;
+  assert.equal(C.setHighlight({ object3d: k.root }, '#FFFFFF', 1), true);
+  if (shared === C.kitMaterial()) assert.notEqual(k.kitMat, shared, 'shared kit material cloned for this cat only');
+  assert.equal(k.kitMesh.material, k.kitMat);
+  const u = k.kitMat.userData.uniforms.uHighlight.value;
+  assert.ok(Math.abs(u.r - C.HIGHLIGHT.gain) < 1e-6);
+  if (k.furMat) assert.ok(k.furMat.uniforms.uHighlight.value.r > 0.4, 'fur rim too');
+  assert.equal(C.kitMaterial().userData.uniforms.uHighlight.value.r, 0, 'the shared material is untouched');
+  C.setHighlight(k.root, null);
+  assert.equal(u.r, 0);
+  assert.equal(k.highlight, null);
+  k.dispose();
+  const mat = new THREE.MeshStandardMaterial({ emissive: '#101010' });
+  const a = new THREE.Mesh(new THREE.BoxGeometry(), mat), b = new THREE.Mesh(new THREE.BoxGeometry(), mat);
+  const g = new THREE.Group(); g.add(a);
+  C.setHighlight(g, '#FF6A3D', 1);
+  assert.notEqual(a.material, mat, 'cloned');
+  assert.ok(a.material.userData.assetOwned, 'freed by disposeInstance');
+  assert.equal(b.material, mat, 'other instances keep the shared material');
+  assert.ok(a.material.emissive.r > mat.emissive.r + 0.2);
+  C.setHighlight(g, null);
+  assert.ok(Math.abs(a.material.emissive.r - mat.emissive.r) < 1e-6, 'restored');
+});
+
+test('controls: helmet tops take a contrasting top colour (one clone per material)', () => {
+  const mat = new THREE.MeshStandardMaterial({ color: '#8A8D90' });
+  const g = new THREE.Group();
+  const h1 = new THREE.Mesh(new THREE.SphereGeometry(), mat); h1.name = 'kettleHelm';
+  const h2 = new THREE.Mesh(new THREE.SphereGeometry(), mat); h2.name = 'Knight_Helmet';
+  const body = new THREE.Mesh(new THREE.BoxGeometry(), mat); body.name = 'torso';
+  g.add(h1, h2, body);
+  assert.equal(C.topTint(g), 2);
+  assert.equal(h1.material, h2.material, 'one clone per (material, colour)');
+  assert.equal(body.material, mat);
+  const sh = { uniforms: {}, vertexShader: '#include <common>', fragmentShader: '#include <common>\n#include <normal_fragment_maps>' };
+  h1.material.onBeforeCompile(sh);
+  assert.ok(sh.uniforms.uTopColor && /uTopColor/.test(sh.fragmentShader) && /viewMatrix/.test(sh.fragmentShader));
+  assert.ok(/sc-top-v1/.test(h1.material.customProgramCacheKey()));
+});
+
+test('controls: fur LOD keyed to cam.focus — hero full within 25 m of the lens, others drop a tier past 12 m', () => {
+  resetView();
+  const lens = new THREE.Vector3(0, 10, -8), at = new THREE.Vector3(0, 0.8, 0);
+  assert.equal(C.furLodShells('hero', 16, at, lens), 0, 'lens rule (classic, cutscenes) unchanged');
+  C.FUR_VIEW.focusOn = true; C.FUR_VIEW.focus.set(0, 0, 0); C.FUR_VIEW.camDist = 13;
+  assert.equal(C.furLodShells('hero', 16, at, lens), 16, 'hero full at the iso distance');
+  assert.equal(C.furLodShells('hero', 16, at, new THREE.Vector3(0, 30, -30)), 0, 'past 25 m: base layer');
+  const npc = Math.min(10, C.shellsFor('npc'));
+  assert.equal(C.furLodShells('kitten', 10, new THREE.Vector3(2, 0.5, 0), lens), npc, 'one tier down at d 13 > 12');
+  C.FUR_VIEW.camDist = 10;
+  assert.equal(C.furLodShells('kitten', 10, new THREE.Vector3(2, 0.5, 0), lens), 10, 'full near the focus at d 10');
+  const mid = C.furLodShells('kitten', 10, new THREE.Vector3(9, 0.5, 0), lens);
+  assert.ok(mid > 0 && mid < 10, `ramps with the focus distance (${mid})`);
+  assert.equal(C.furLodShells('kitten', 10, new THREE.Vector3(20, 0.5, 0), lens), 0, 'far from the focus: base layer');
+  resetView();
+});
+
+test('controls: updateReadability — iso detection, classic fallback, top-view factor from the lens distance', () => {
+  resetView();
+  const camera = new THREE.PerspectiveCamera();
+  const focus = new THREE.Vector3(5, 0, 5);
+  const ctx = { camera, cam: { focus, modeName: 'follow' }, params: {}, player: { object3d: new THREE.Object3D() } };
+  camera.position.set(5, 10, -3);
+  let r = C.updateReadability(ctx);
+  assert.ok(r.iso && C.FUR_VIEW.focusOn && C.FUR_VIEW.focus.equals(focus));
+  assert.equal(C.TOP_VIEW.value, 1, 'readability on at ~13 m');
+  camera.position.set(5, 6, 1.5);
+  C.updateReadability(ctx); assert.equal(C.TOP_VIEW.value, 0, 'zoomed in: the close-up look');
+  ctx.cam.modeName = 'meme';
+  camera.position.set(5, 10, -3);
+  r = C.updateReadability(ctx); assert.ok(!r.iso && !C.FUR_VIEW.focusOn, 'Meme Cam / cutscenes: lens rule');
+  ctx.cam.modeName = 'follow'; ctx.params.cam = 'classic';
+  r = C.updateReadability(ctx); assert.ok(!r.iso && C.TOP_VIEW.value === 0, '?cam=classic keeps the old look');
+  r = C.updateReadability({ camera, cam: { modeName: 'follow' }, params: {} });
+  assert.ok(!r.iso, 'no cam.focus yet: lens rule');
+  assert.equal(C.topViewFactor(3.6), 0); assert.equal(C.topViewFactor(9), 0); assert.equal(C.topViewFactor(10.5), 1);
+  resetView();
+});
+
+test('controls: readability from above — bow ×1.25 on the LEFT ear, ears ×1.1, cape trim + bow glow uniforms', () => {
+  resetView();
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const ws = (o) => { k.root.updateMatrixWorld(true); return o.getWorldScale(v()).x; };
+  const bow0 = ws(k.bow), ear0 = ws(k.rig.earL);
+  C.TOP_VIEW.value = 1;
+  k.simulate(1 / 60);
+  assert.ok(Math.abs(ws(k.bow) / bow0 - C.READABILITY.bowScale) < 1e-4, 'bow ×1.25 (world)');
+  assert.ok(Math.abs(ws(k.rig.earL) / ear0 - C.READABILITY.earScale) < 1e-4, 'ears ×1.1');
+  assert.equal(k.bow.parent, k.rig.earL, 'still on the LEFT ear');
+  assert.ok(worldPos(k.bow).x > 0);
+  C.TOP_VIEW.value = 0;
+  k.simulate(1 / 60);
+  assert.ok(Math.abs(ws(k.bow) / bow0 - 1) < 1e-6 && Math.abs(ws(k.rig.earL) / ear0 - 1) < 1e-6, 'close-up look restored');
+  const sh = { uniforms: {}, vertexShader: '#include <common>\n#include <begin_vertex>', fragmentShader: '#include <common>\n#include <emissivemap_fragment>\n#include <color_fragment>\n#include <opaque_fragment>' };
+  C.bowMaterial().onBeforeCompile(sh);
+  assert.equal(sh.uniforms.uTopView, C.TOP_VIEW);
+  assert.ok(/0\.080 \* uTopView/.test(sh.fragmentShader), 'bow +0.08 self-light from above');
+  const cape = C.capeMaterial('red');
+  assert.equal(cape.userData.uniforms.uTopView, C.TOP_VIEW);
+  assert.ok(Math.abs(cape.userData.uniforms.uTrimV.value * C.CAPE_DEFAULTS.len - 0.02) < 1e-6, '2 cm trim');
+  k.dispose();
+  resetView();
+});
+
+test('controls: ringAnchor sits on the ground under the body', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const holder = new THREE.Group(); holder.position.set(3, 1.5, -2); holder.add(k.root);
+  const r = C.ringAnchor({ object3d: holder });
+  assert.ok(Math.abs(r.pos.y - 1.5) < 1e-6, 'at the feet');
+  assert.ok(Math.hypot(r.pos.x - 3, r.pos.z + 2) < 0.2, 'under the hips');
+  assert.ok(r.radius > 0.25 && r.radius < 0.5);
+  k.dispose();
+});

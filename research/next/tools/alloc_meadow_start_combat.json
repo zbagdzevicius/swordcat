@@ -1,0 +1,236 @@
+{
+ "frames": 90,
+ "seconds": 5,
+ "totalMB": 69.34,
+ "MBperSec": 13.87,
+ "KBperFrame": 788.9,
+ "top": [
+  [
+   "buildSamples @ node_modules/.vite/deps/zzfx.js:30",
+   14.01,
+   20.2
+  ],
+  [
+   "pinkNoise @ src/audio/procedural.js:27",
+   8.36,
+   12.1
+  ],
+  [
+   "computeVertexNormals @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:14384",
+   8.28,
+   11.9
+  ],
+  [
+   "getParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46085",
+   4.54,
+   6.5
+  ],
+  [
+   "separateActors @ src/physics/Physics.js:700",
+   3.47,
+   5
+  ],
+  [
+   "next @ src/core/rng.js:7",
+   1.94,
+   2.8
+  ],
+  [
+   "setValueM4 @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45003",
+   1.86,
+   2.7
+  ],
+  [
+   "update @ src/world/Pickups.js:215",
+   1.52,
+   2.2
+  ],
+  [
+   "setValueV3f @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44937",
+   1.51,
+   2.2
+  ],
+  [
+   "join @ :0",
+   1.4,
+   2
+  ],
+  [
+   "next @ :0",
+   1.13,
+   1.6
+  ],
+  [
+   "getProgramCacheKeyParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46323",
+   0.82,
+   1.2
+  ],
+  [
+   "queryRadius @ src/core/ActorRegistry.js:77",
+   0.76,
+   1.1
+  ],
+  [
+   "evaluate @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:30086",
+   0.61,
+   0.9
+  ],
+  [
+   "abs @ :0",
+   0.59,
+   0.8
+  ],
+  [
+   "hypot @ :0",
+   0.55,
+   0.8
+  ],
+  [
+   "render @ src/fx/MistCards.js:253",
+   0.53,
+   0.8
+  ],
+  [
+   "_pushOffSteep @ src/physics/Physics.js:560",
+   0.5,
+   0.7
+  ],
+  [
+   "applyQuaternion @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:4371",
+   0.41,
+   0.6
+  ],
+  [
+   "_substep @ src/physics/Physics.js:428",
+   0.41,
+   0.6
+  ],
+  [
+   "heightAt @ src/physics/Heightfield.js:52",
+   0.4,
+   0.6
+  ],
+  [
+   "moveActor @ src/physics/Physics.js:369",
+   0.4,
+   0.6
+  ],
+  [
+   "poll @ src/core/Input.js:161",
+   0.37,
+   0.5
+  ],
+  [
+   "sortOpaque @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:19016",
+   0.35,
+   0.5
+  ],
+  [
+   "resolveCapsule @ src/physics/MeshCollider.js:289",
+   0.32,
+   0.5
+  ],
+  [
+   "values @ :0",
+   0.31,
+   0.5
+  ],
+  [
+   "copyArray @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44905",
+   0.3,
+   0.4
+  ],
+  [
+   "update @ src/camera/Occluders.js:404",
+   0.28,
+   0.4
+  ],
+  [
+   "update @ src/fx/Particles.js:148",
+   0.28,
+   0.4
+  ],
+  [
+   "render @ src/world/Pickups.js:285",
+   0.27,
+   0.4
+  ]
+ ],
+ "files": [
+  [
+   "node_modules/.vite/deps/three.module-Bj7iJlUn.js",
+   21.3,
+   30.7
+  ],
+  [
+   "node_modules/.vite/deps/zzfx.js",
+   14.02,
+   20.2
+  ],
+  [
+   "src/audio/procedural.js",
+   8.38,
+   12.1
+  ],
+  [
+   "src/physics/Physics.js",
+   5.28,
+   7.6
+  ],
+  [
+   "src/core/rng.js",
+   1.94,
+   2.8
+  ],
+  [
+   "src/world/Pickups.js",
+   1.8,
+   2.6
+  ],
+  [
+   "src/enemies/Enemy.js",
+   1.73,
+   2.5
+  ],
+  [
+   "join",
+   1.4,
+   2
+  ],
+  [
+   "next",
+   1.13,
+   1.6
+  ],
+  [
+   "src/core/ActorRegistry.js",
+   0.76,
+   1.1
+  ],
+  [
+   "src/physics/StaticColliders.js",
+   0.72,
+   1
+  ],
+  [
+   "src/physics/Heightfield.js",
+   0.6,
+   0.9
+  ],
+  [
+   "abs",
+   0.59,
+   0.8
+  ],
+  [
+   "hypot",
+   0.55,
+   0.8
+  ],
+  [
+   "src/fx/MistCards.js",
+   0.53,
+   0.8
+  ]
+ ]
+}

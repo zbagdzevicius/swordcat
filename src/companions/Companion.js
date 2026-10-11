@@ -35,7 +35,7 @@ const THINK = 0.2;                       // AI "thinks" (targets, line of sight)
  * a crumb counts as reached within `reach`; no progress for `stuckT` s on the trail, or `stuckFree` s pressing toward
  * the slot without moving (a low fence the chest-height sight line passes over), teleports to her side.
  */
-export const TRAIL = Object.freeze({ n: 48, spacing: 0.6, reach: 0.55, stuckT: 2.5, progressFor: 1.2, stuckFree: 1.5, stuckSpeed: 0.4, wantSpeed: 2 });
+export const TRAIL = Object.freeze({ n: 48, spacing: 0.6, reach: 0.55, stuckT: 2.5, progressFor: 1.2, stuckFree: 1.5, stuckSpeed: 0.4, wantSpeed: 2, clearFor: 0.6 });
 /** Sage's stand-off band (m) and bow draw time (s) for her basic shot. */
 export const RANGED = Object.freeze({ min: 2.5, max: 6.5, draw: 0.35 });
 
@@ -369,7 +369,11 @@ export class Companion extends ScriptedActorMixin(Actor) {
     if (blocked && this.trailSeq < 0 && this.trail.count > 1 && !this.target) {
       const i = this.trail.nearest(this.pos.x, this.pos.z);
       if (i > 0) { this.trailSeq = this.trail.seqOf(i); this.trailT = 0; this.stats.trails++; }
-    } else if (!blocked && this.trailSeq >= 0 && d < COMPANIONS.follow + 1.5) this.trailSeq = -1;
+    }
+    // back in sight: leave the trail only once the sight line has held a moment (a corner the ray clears but the body
+    // would clip flickers in and out of sight)
+    this.clearT = blocked ? 0 : (this.clearT ?? 0) + THINK;
+    if (this.trailSeq >= 0 && this.clearT >= TRAIL.clearFor && d < COMPANIONS.follow + 1.5) this.trailSeq = -1;
     const progressing = this.trailSeq >= 0 && this.trailT < TRAIL.progressFor;
     this.losT = blocked ? (progressing ? this.losT : this.losT + THINK) : 0;
     if (d > COMPANIONS.teleportBeyond || this.losT >= COMPANIONS.teleportLos) {

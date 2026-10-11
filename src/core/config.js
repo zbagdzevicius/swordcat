@@ -21,7 +21,7 @@ export const PLAYER = {
   glide: { fallMax: 1.8, speed: 4.5, maxTime: 1.5 },                                   // MVP+
   dodge: { dur: 0.40, v0: 9, v1: 4, iframes: [0.04, 0.30], cooldown: 0.20, perfect: [0.04, 0.20],
            perfectTimeScale: 0.35, perfectDur: 0.5, perfectValor: 12, perfectCrit: 1.5, perfectCritWindow: 1.2, grazeValor: 4 },
-  guard: { enter: 0.08, move: 1.2, turnRate: Math.PI * 2, arc: 1.2217, pushback: 0.4,
+  guard: { enter: 0.08, move: 1.2, turnRate: Math.PI * 2, arc: 1.2217, touchArc: 1.5708, pushback: 0.4,
            grit: 3, gritRegenDelay: 0.8, gritRegenEvery: 1.5, heavyPoise: 3, breakStagger: 0.8,
            parryWindow: 0.15, touchParryBonus: 0.05, whiffWindow: 0.25, whiffLockout: 0.30,
            parryStagger: 1.2, eliteParryStagger: 0.8, eliteMinPoise: 5, goldParryStagger: 2.0, bossParryDizzy: 35,
@@ -38,10 +38,12 @@ export const PLAYER = {
   stillStanding: { hp: 1, invuln: 2.0, valor: 30, riseTimeScale: 0.4, riseDur: 0.8 },
   meow: { dur: 0.6, cooldown: 1.0, aggroRadius: 8, kittenRadius: 10 },
   memeCam: { idle: 15, noEnemyRadius: 20, minFog: 0.02, manualHold: 2.5, manualClearRadius: 12,
-             blendIn: 2.0, blendOut: 0.6, loop: 3.8, wind: 1.6, mist: 2, captionDelay: 1.0 },
-  assist: { angle: Math.PI / 3, range: 3, touchAngle: Math.PI / 2, touchRange: 4, buffer: 0.2 },
+             blendIn: 2.0, blendOut: 0.9, loop: 3.8, wind: 1.6, mist: 2, captionDelay: 1.0 },
+  // CONTROLS_SPEC §7.1 / C5: the cones are around the resolved aim; touch range 4 → 4.5
+  assist: { angle: Math.PI / 3, range: 3, touchAngle: Math.PI / 2, touchRange: 4.5, buffer: 0.2,
+            kbmCone: 0.436, kbmExtra: 1.0, selCone: 0.698, padCone: 0.785, padRange: 3.5, sticky: 0.75, lungeExtra: 1.0 },
   lockOn: { range: 12, cone: 1.745, breakRange: 16, losTimeout: 1.5, flickPx: 40, flickTime: 0.15 },
-  smallHeart: { chance: 0.10, heal: 1, magnet: 3 },
+  smallHeart: { chance: 0.10, heal: 1, magnet: 3.5 },
   // ---- core+ (additive; requests/player.md): design numbers from GAME_DESIGN prose that Appendix A does not list.
   // src/player/tuning.js reads these (same names) and keeps its own values only as fallbacks.
   faintDur: 2.2, respawnInvuln: 1.0, vigilPlant: 0.8, heartBellHp: 2,
@@ -57,7 +59,73 @@ export const PLAYER = {
 };
 
 export const CAMERA = { dist: 3.6, lockDist: 4.5, bossDist: 6.0, ease: 0.6, fov: 45, pitch: [-0.35, 1.1],
-                        pivotY: 1.05, autoFollowAfter: 1.5, treeFadeOpacity: 0.3 };
+                        pivotY: 1.05, autoFollowAfter: 1.5, treeFadeOpacity: 0.22 };
+
+/**
+ * research/CONTROLS_SPEC.md §13 (binding): the three-quarter top-down play camera ("iso rig"). `CAMERA.dist / lockDist /
+ * bossDist / fov / pitch` above apply only to cutscene presets and `?cam=classic` (C3).
+ */
+CAMERA.iso = {
+  yaw: Math.PI, fov: 38, fovPortrait: 50, dist: 13, distPhone: 12, zoom: [0.70, 1.40], distMin: 9, distMax: 18,
+  pitchNear: 0.803 /* 46° */, pitchFar: 1.012 /* 58° */, pitchPortrait: 1.012, pitchBoss: 0.977 /* 56° */,
+  catH: 0.8, minCatPx: 30, minCatPxBoss: 26, minCatPxPortrait: 28, portraitWidth: 9,
+  focusY: 0.6, followDamp: 12, followDampY: 6, jumpFollow: 0.3, bounceFollow: 0.5,
+  lead: { vel: 0.25, velMax: 1.6, cursor: 0.15, cursorMax: 2.0, max: 2.5, up: 0.8, damp: 4 },
+  frameOffset: 0.04, frameOffsetPortrait: -0.10, near: 0.3, far: 90, refit: 0.4,
+  hint: { blend: 1.2, calmFor: 2.0, maxPerLevel: 3 }, stickRelatch: 0.15,
+  combat: { radius: 10, bias: 0.3, biasMax: 2.5, inner: 0.8, margin: 1.2, zoomOut: 3, outDamp: 2.5, holdIn: 1.5, selWeight: 1.5 },
+  boss: { dist: [14, 22], weight: 0.35, maxOff: 5, herInner: 0.6, bossInner: 0.85, liftAbove: 1.6, lift: 0.3 },
+  unlock: { edgePx: 12, panSpeed: 18, leash: 25, leashSoft: 3, recentre: 0.4 }, peek: { max: 6, damp: 6, back: 0.4 },
+  zoomStep: 0.07, zoomDamp: 8, pinchDamp: 10, padZoom: [0.8, 1.0, 1.25],
+  charge: { dd: -1.0, dfov: -1 }, holy: { dfov: 3, fovT: 0.15, dd: -0.6, ddT: 0.25 },
+  parryPunch: { dd: -0.6, in: 0.08, out: 0.30 }, perfectDodge: { dd: -0.4 },
+  golden: { dist: 9, pitch: 0.803, in: 0.25, out: 0.6 }, dialog: { mul: 0.8, t: 0.5 },
+  shake: { rotMul: 0.5, transMul: 2.0, rotMaxDeg: 1.2, transMax: 0.35, scale: 0.6 },
+  cut: { blendIn: 0.8, handback: 1.0, cutAngle: 2.094, cutDist: 30, veil: 0.25 },
+  meme: { exitPx: 40, idlePxPerSec: 24, spotR: 4 },
+  occl: { opacity: 0.22, fadeIn: 0.15, fadeOut: 0.40, herR: 1.0, enemyR: 0.6, enemies: 4, enemyRange: 8, pathR: 0.4,
+          crownR: 3.5, roofPad: 1.5, xrayFrac: 0.3, xrayDelay: 0.1 },
+  fog: { clear: 5, clearCombat: 7, topMul: 1.5, lowMix: 0.45, ease: 0.6, goldenClearMul: 1.5 },
+  shadowHalf: 16, shadowHalfBoss: 20, lodFromFocus: true,
+};
+
+/** §5.3 nav grid + §5.2 order follower (physics/NavGrid.js, physics/Pathfind.js, player/Orders.js). */
+export const NAV = {
+  cell: 0.5, agentR: 0.32, margin: 0.08, minNy: 0.7, stepUp: 0.3, spanLo: 0.3, spanHi: 1.0,
+  hop: { upMin: 0.3, upMax: 1.1, horiz: 2.4 }, drop: 3.0, gap: 2.0, fence: { top: 1.05, thick: 0.8 }, bounce: 1.8,
+  linkCost: 3, linkEvery: 1.5, maxExpand: 6000, maxPoints: 48, sliceMs: 8, snap: 4, minCorridor: 1.6,
+  arrive: 0.25, arriveMid: 0.6, slowR: 0.8, cornerLook: 0.6, linkStart: 0.6, linkFacing: 0.611 /* 35° */,
+  hopMaxH: 5.5, follow: 0.1, pathsPerSec: 4, stuck: { dist: 0.3, time: 0.4, retries: 3 }, retarget: 1.5,
+  queueMax: 4, leash: 16, attackMoveR: 4.5, useOffset: 0.3,
+};
+
+/** §7 one aim resolver, magnet cones, the soft auto-target score, picking (player/Aim.js, combat, camera/Picker.js). */
+export const AIM = {
+  kbmCone: 0.436 /* 25° */, kbmExtra: 1.0, selCone: 0.698 /* 40° */, padCone: 0.785, padRange: 3.5, touchCone: Math.PI / 2,
+  touchRange: 4.5, kbRange: 3.0, padDead: 0.25, padAimMax: 6, cursorIdle: 3.0, sticky: 0.75, lungeExtra: 1.0,
+  score: { angle: 2.0, windup: 2.5, selected: 1.0, lowHp: 0.8, lowHpFrac: 0.3, recentHit: 0.5, breakable: 3.0 },
+  breakableClear: 6, standSnapRange: 5, standSnapLead: 0.7, cursorReaimPx: 30, chargeTurn: 9.42,
+  pounceMax: 3.5, pounceMagnet: 2.5, pounceTouchDisc: 3.0, jumpAssist: { range: 2.4, dv: 1.2, ang: 0.349, inset: 0.3 },
+  pick: { px: 28, pad: 6, touchPx: 56, interactR: 1.2 }, autoChainRest: 0.10, autoRiposte: 0.15,
+  onScreenMargin: 0.5, rangedNear: 9,
+};
+
+/** §9 touch cluster geometry (CSS px × settings.touchSize; buttons: [size, dx, dy] from the ⚔ centre). */
+export const TOUCH = {
+  stickZone: [0.42, 0.80], stickZonePortrait: [0.55, 0.38], stickR: 60, stickDead: 0.10, stickFollow: 1.6,
+  anchor: 68, minBtn: 56, deadRing: 40, gap: 8, portraitScale: 0.85,
+  buttons: { attack: [96, 0, 0], guard: [76, -124, 4], dodge: [64, -100, -92], jump: [64, 0, -124],
+             ability: [64, -196, -128], golden: [64, -96, -204], milk: [56, 16, -206], meow: [56, -300, -60],
+             interact: [64, -214, 0] },
+  tapMs: 250, tapPx: 12, longMs: 350, swipePx: 48, swipeMs: 150, afterButton: 0.3, aimPx: 16, aimRangePx: 90,
+  steerWindow: 0.08, cancelChip: 72, aimPad: 96,
+};
+
+/** §10.6 haptics: navigator.vibrate patterns (ms) on touch; pad rumble [weak, strong, ms] is derived. */
+export const HAPTICS = {
+  button: 8, hitHeavy: 12, parry: [18, 30, 36], perfectDodge: 25, block: 10,
+  guardBreak: [40, 40, 40], hurt: 55, holy: 70, golden: 110, kitten: [15, 60, 15], orderRejected: [10, 40, 10],
+};
 
 export const ATTACKS = {
   // ---- player (dmg on ×10 scale) ----
@@ -171,7 +239,7 @@ export const DIFFICULTY = {
 };
 
 export const ECONOMY = {
-  fish: { silver: 1, gold: 10, crate: [1, 3], magnet: 2 },
+  fish: { silver: 1, gold: 10, crate: [1, 3], magnet: 3 },
   shops: { satchel: { cost: [100, 200], max: [3, 4] }, sharp: { cost: [120, 240, 400], mul: [1.15, 1.30, 1.50] },
            quickCharge: { cost: 200, tier1: .45, tier2: .85 }, valorGain: { cost: 150, mul: 1.25 }, waveReach: { cost: 200, range: 15, needShards: 2 },
            cape: 80 },
@@ -297,24 +365,50 @@ export const QUALITY = {
  */
 export const INPUT = {
   actions: ['attack', 'guard', 'dodge', 'jump', 'interact', 'confirm', 'back', 'lockon', 'lockPrev', 'lockNext',
-            'pause', 'ability', 'milk', 'meow', 'golden', 'recenter', 'navUp', 'navDown', 'navLeft', 'navRight'],
+            'pause', 'ability', 'milk', 'meow', 'golden', 'recenter', 'navUp', 'navDown', 'navLeft', 'navRight',
+            // CONTROLS_SPEC §6.1 (iso controls)
+            'move', 'attackMove', 'stop', 'zoomIn', 'zoomOut', 'zoomCycle', 'peek', 'camLock', 'centre', 'ranges'],
+  // CONTROLS_SPEC §6.2 preset `hybrid` (the default; C1): RMB = move order, Space = the Stand, F = jump, Shift = Tumble,
+  // LMB = attack toward the cursor. Mouse3 = the back side button (Tumble), Mouse4 = the forward one (Stand).
   keys: {
-    attack: ['KeyJ', 'Mouse0'], guard: ['KeyL', 'Mouse2'], dodge: ['ShiftLeft', 'ShiftRight', 'KeyK'], jump: ['Space'],
+    attack: ['KeyJ', 'Mouse0'], guard: ['Space', 'KeyL', 'Mouse4'], dodge: ['ShiftLeft', 'ShiftRight', 'KeyK', 'Mouse3'], jump: ['KeyF'],
     interact: ['KeyE', 'Enter', 'NumpadEnter'], confirm: ['Enter', 'NumpadEnter', 'KeyE'], back: ['Escape', 'Backspace'],
-    lockon: ['Tab', 'Mouse1'], pause: ['Escape', 'KeyP'], ability: ['KeyQ'], milk: ['KeyR'], meow: ['KeyC'], golden: ['KeyV'],
+    lockon: ['Tab'], pause: ['Escape', 'KeyP'], ability: ['KeyQ'], milk: ['KeyR'], meow: ['KeyC'], golden: ['KeyV'],
     recenter: [], lockPrev: [], lockNext: [],
     navUp: ['ArrowUp', 'KeyW'], navDown: ['ArrowDown', 'KeyS'], navLeft: ['ArrowLeft', 'KeyA'], navRight: ['ArrowRight', 'KeyD'],
+    move: ['Mouse2'], attackMove: ['KeyX'], stop: ['KeyH'], zoomIn: [], zoomOut: [], zoomCycle: [], peek: ['AltLeft', 'Mouse1'],
+    camLock: ['KeyY'], centre: ['F1', 'Home'], ranges: ['ControlLeft', 'ControlRight'],
   },
+  /** `?cam=classic` (§15.3): the M1/M2 orbit-camera binding table (RMB guard, Space jump, MMB lock-on, wheel switch). */
+  classicKeys: {
+    attack: ['KeyJ', 'Mouse0'], guard: ['KeyL', 'Mouse2'], dodge: ['ShiftLeft', 'ShiftRight', 'KeyK'], jump: ['Space'],
+    lockon: ['Tab', 'Mouse1'], move: [], peek: [], centre: [], camLock: [], ranges: [], attackMove: [], stop: [],
+  },
+  /**
+   * §6.2 KBM presets: each a `keys` table merged over `keys` (then `settings.bindings` on top) plus two flags:
+   * `wasd` (WASD moves her) and `lmbMoves` (LMB issues orders, diablo).
+   */
+  presets: {
+    hybrid: { wasd: true, lmbMoves: false, keys: {} },
+    moba: { wasd: false, lmbMoves: false, keys: { attackMove: ['KeyA'], stop: ['KeyS', 'KeyH'], milk: ['KeyD', 'KeyR'] } },
+    diablo: { wasd: true, lmbMoves: true, keys: { move: ['Mouse0'], attack: ['KeyJ'], guard: ['Mouse2', 'KeyL'], dodge: ['Space', 'KeyK'], jump: ['KeyF'] } },
+    mouseOnly: { wasd: true, lmbMoves: false, keys: { guard: ['Mouse4', 'KeyL'], dodge: ['Mouse3', 'KeyK'], jump: ['KeyF'], peek: ['AltLeft'] } },
+    keyboardOnly: { wasd: true, lmbMoves: false, keys: { attack: ['KeyJ'], guard: ['KeyL'], dodge: ['KeyK'], jump: ['Space'], move: [] } },
+  },
+  /** The touch / pointer model (§6.1): mouse speed under which a moving cursor is not "activity" (Meme Cam idle). */
+  pointer: { idlePxPerSec: 24, clickQueue: 8, cursorFresh: 3.0 },
   move: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] },
+  // §6.3 twin-stick pad: RS aims (not look), R3 cycles zoom, D-pad ↓ peeks
   pad: { jump: [0], confirm: [0], dodge: [1], back: [1], attack: [2], interact: [3], guard: [4], lockon: [5], ability: [6],
-         golden: [7], pause: [9], meow: [10], recenter: [11], milk: [12], lockPrev: [14], lockNext: [15],
+         golden: [7], pause: [9], meow: [10], zoomCycle: [11], milk: [12], lockPrev: [14], lockNext: [15], peek: [13],
          navUp: [12], navDown: [13], navLeft: [14], navRight: [15] },
+  classicPad: { recenter: [11], zoomCycle: [], peek: [] },
   deadZone: 0.15, triggerThreshold: 0.5,
   mouseSens: 0.0025,          // rad per px at sensitivity 1
   padLookSpeed: 2.6,          // rad/s at full right-stick deflection, sensitivity 1
   touchLookSens: 0.006,       // rad per px (tech.md §7 TouchControls)
   wheelRepeat: 0.12,          // s between wheel lock-switch edges
-  preventDefault: ['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace'],
+  preventDefault: ['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'F1', 'AltLeft', 'Home'],
 };
 
 // ---- core+ M2: area tuning tables adopted into config (requests/combat.md, enemies.md, physics.md). The owning

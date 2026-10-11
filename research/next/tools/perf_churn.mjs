@@ -20,7 +20,7 @@ await page.route(/three\.module-[^/]*\.js/, async (route) => {
   }
   await route.fulfill({ response: resp, body, headers: { ...resp.headers(), 'content-length': String(Buffer.byteLength(body)) } });
 });
-await page.goto(`${BASE}?test=1&seed=1&mute=1&quality=${arg('preset', 'med')}&level=${LEVEL}&spawn=${SPAWN}`);
+await page.goto(`${BASE}?test=1&seed=1&mute=1&quality=${arg('preset', 'med')}&level=${LEVEL}&spawn=${SPAWN}`, { timeout: 180000, waitUntil: 'commit' });
 await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 180000 });
 await page.evaluate((flags) => { const g = window.__GAME__; if (flags) for (const [k, v] of Object.entries(flags)) g.story.flag(k, v); g.story.skip(); g.skipDialog?.(); g.setMode('play'); g.god(true); }, SPAWN === 'hub' ? { 'town.free': true } : null);
 await page.waitForTimeout(3000);

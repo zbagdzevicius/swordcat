@@ -1,0 +1,236 @@
+{
+ "frames": 128,
+ "seconds": 5,
+ "totalMB": 54.29,
+ "MBperSec": 10.86,
+ "KBperFrame": 434.3,
+ "top": [
+  [
+   "buildSamples @ node_modules/.vite/deps/zzfx.js:30",
+   10.88,
+   20
+  ],
+  [
+   "computeVertexNormals @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:14384",
+   10.34,
+   19
+  ],
+  [
+   "pinkNoise @ src/audio/procedural.js:27",
+   6.39,
+   11.8
+  ],
+  [
+   "getParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46085",
+   2.14,
+   3.9
+  ],
+  [
+   "next @ src/core/rng.js:7",
+   1.95,
+   3.6
+  ],
+  [
+   "update @ src/world/Pickups.js:215",
+   1.76,
+   3.2
+  ],
+  [
+   "setValueV3f @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44937",
+   1.64,
+   3
+  ],
+  [
+   "setValueM4 @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45003",
+   1.44,
+   2.7
+  ],
+  [
+   "render @ src/fx/MistCards.js:253",
+   1.12,
+   2.1
+  ],
+  [
+   "next @ :0",
+   1.04,
+   1.9
+  ],
+  [
+   "separateActors @ src/physics/Physics.js:700",
+   0.9,
+   1.7
+  ],
+  [
+   "join @ :0",
+   0.62,
+   1.1
+  ],
+  [
+   "hypot @ :0",
+   0.51,
+   0.9
+  ],
+  [
+   "poll @ src/core/Input.js:161",
+   0.5,
+   0.9
+  ],
+  [
+   "distToPolyline @ src/world/noise.js:50",
+   0.43,
+   0.8
+  ],
+  [
+   "queryRadius @ src/core/ActorRegistry.js:77",
+   0.43,
+   0.8
+  ],
+  [
+   "_pushOffSteep @ src/physics/Physics.js:560",
+   0.4,
+   0.7
+  ],
+  [
+   "abs @ :0",
+   0.39,
+   0.7
+  ],
+  [
+   "sortOpaque @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:19016",
+   0.38,
+   0.7
+  ],
+  [
+   "sort @ :0",
+   0.37,
+   0.7
+  ],
+  [
+   "update @ src/camera/Occluders.js:404",
+   0.34,
+   0.6
+  ],
+  [
+   "render @ src/world/Pickups.js:285",
+   0.33,
+   0.6
+  ],
+  [
+   "getProgramCacheKeyParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46323",
+   0.31,
+   0.6
+  ],
+  [
+   "E @ src/characters/KittenBuilder.js:43",
+   0.31,
+   0.6
+  ],
+  [
+   "copyArray @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44905",
+   0.31,
+   0.6
+  ],
+  [
+   "step @ src/core/Game.js:247",
+   0.3,
+   0.5
+  ],
+  [
+   "projectObject @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52080",
+   0.28,
+   0.5
+  ],
+  [
+   "evaluate @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:30086",
+   0.27,
+   0.5
+  ],
+  [
+   "cos @ :0",
+   0.24,
+   0.4
+  ],
+  [
+   "animate @ src/characters/KittenBuilder.js:851",
+   0.22,
+   0.4
+  ]
+ ],
+ "files": [
+  [
+   "node_modules/.vite/deps/three.module-Bj7iJlUn.js",
+   19.01,
+   35
+  ],
+  [
+   "node_modules/.vite/deps/zzfx.js",
+   10.88,
+   20
+  ],
+  [
+   "src/audio/procedural.js",
+   6.43,
+   11.9
+  ],
+  [
+   "src/world/Pickups.js",
+   2.09,
+   3.8
+  ],
+  [
+   "src/core/rng.js",
+   1.95,
+   3.6
+  ],
+  [
+   "src/physics/Physics.js",
+   1.91,
+   3.5
+  ],
+  [
+   "src/fx/MistCards.js",
+   1.12,
+   2.1
+  ],
+  [
+   "next",
+   1.04,
+   1.9
+  ],
+  [
+   "join",
+   0.62,
+   1.1
+  ],
+  [
+   "src/characters/KittenBuilder.js",
+   0.57,
+   1
+  ],
+  [
+   "src/core/Input.js",
+   0.53,
+   1
+  ],
+  [
+   "hypot",
+   0.51,
+   0.9
+  ],
+  [
+   "src/core/Game.js",
+   0.45,
+   0.8
+  ],
+  [
+   "src/core/ActorRegistry.js",
+   0.44,
+   0.8
+  ],
+  [
+   "src/world/noise.js",
+   0.43,
+   0.8
+  ]
+ ]
+}

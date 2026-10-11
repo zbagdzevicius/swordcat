@@ -18,9 +18,10 @@ import { smoothstep } from './util.js';
 /**
  * X-ray proxy defaults (CONTROLS_SPEC §3; config CAMERA.iso.occl overrides when core has it): her colour / alpha, the
  * enemy alpha, the proxy inflation (m), and `pull` (m): the proxy's depth is pulled toward the lens by this much, so
- * the x-ray shows only through occluders more than `pull` in front of her, never through her own limbs and cape.
+ * the x-ray shows only through occluders more than `pull` in front of her, never through her own limbs and cape
+ * (`pullPerM` × the actor's largest size, clamped to [pull, pullMax], for bigger actors).
  */
-export const XRAY = Object.freeze({ color: '#FFE4EC', alpha: 0.55, enemyAlpha: 0.45, margin: 0.015, furMargin: 0.035, pull: 0.45, maxBones: 120, renderOrder: 12 });
+export const XRAY = Object.freeze({ color: '#FFE4EC', alpha: 0.55, enemyAlpha: 0.45, margin: 0.015, furMargin: 0.035, pull: 0.45, pullPerM: 0.4, pullMax: 1.0, maxBones: 120, renderOrder: 12 });
 /** Hover / selection highlight gain (rim emissive at strength 1) and the generic emissive share. */
 export const HIGHLIGHT = Object.freeze({ gain: 0.55, emissive: 0.35 });
 /** Contrasting top colour for enemy helmets seen from above (normal.y ramp, mix). */
@@ -113,6 +114,72 @@ function ellipsoidMatrix(box, margin, cover = 1.12, out = new THREE.Matrix4()) {
   return out.makeScale(Math.max(_v2.x, 0.01), Math.max(_v2.y, 0.01), Math.max(_v2.z, 0.01)).setPosition(_v);
 }
 
+/** Jacobi eigen-decomposition of a symmetric 3x3 (row-major array of 9): returns { vals: [3], vecs: [[3],[3],[3]] }. */
+export function eigenSym3(a) {
+  const A = a.slice(), V = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  for (let sweep = 0; sweep < 24; sweep++) {
+    const off = Math.abs(A[1]) + Math.abs(A[2]) + Math.abs(A[5]);
+    if (off < 1e-12) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+      const apq = A[p * 3 + q];
+      if (Math.abs(apq) < 1e-14) continue;
+      const th = (A[q * 3 + q] - A[p * 3 + p]) / (2 * apq);
+      const t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), sn = t * c;
+      for (let k = 0; k < 3; k++) {                       // A = Jᵀ A J
+        const akp = A[k * 3 + p], akq = A[k * 3 + q];
+        A[k * 3 + p] = c * akp - sn * akq; A[k * 3 + q] = sn * akp + c * akq;
+      }
+      for (let k = 0; k < 3; k++) {
+        const apk = A[p * 3 + k], aqk = A[q * 3 + k];
+        A[p * 3 + k] = c * apk - sn * aqk; A[q * 3 + k] = sn * apk + c * aqk;
+      }
+      for (let k = 0; k < 3; k++) {
+        const vkp = V[k * 3 + p], vkq = V[k * 3 + q];
+        V[k * 3 + p] = c * vkp - sn * vkq; V[k * 3 + q] = sn * vkp + c * vkq;
+      }
+    }
+  }
+  return { vals: [A[0], A[4], A[8]], vecs: [0, 1, 2].map((j) => [V[j], V[3 + j], V[6 + j]]) };
+}
+
+/**
+ * Oriented ellipsoid around a point cloud (flat xyz array): principal axes from the covariance, extents from the
+ * `trim`..1-trim percentiles along each axis (stray weighted vertices do not inflate it), × `cover` + margin.
+ * @param {number[]} pts @param {number} margin @param {{ cover?: number, trim?: number }} [o]
+ */
+export function fitEllipsoid(pts, margin, o = {}) {
+  const cap = o.maxPoints ?? 900;
+  if (pts.length / 3 > cap) {                                  // deterministic stride sample: bounded build time
+    const step = pts.length / 3 / cap, out = new Array(cap * 3);
+    for (let j = 0; j < cap; j++) { const i = Math.floor(j * step) * 3; out[j * 3] = pts[i]; out[j * 3 + 1] = pts[i + 1]; out[j * 3 + 2] = pts[i + 2]; }
+    pts = out;
+  }
+  const n = pts.length / 3, cover = o.cover ?? 1.08, trim = n >= 40 ? (o.trim ?? 0.03) : 0;
+  let mx = 0, my = 0, mz = 0;
+  for (let i = 0; i < pts.length; i += 3) { mx += pts[i]; my += pts[i + 1]; mz += pts[i + 2]; }
+  mx /= n; my /= n; mz /= n;
+  const C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < pts.length; i += 3) {
+    const x = pts[i] - mx, y = pts[i + 1] - my, z = pts[i + 2] - mz;
+    C[0] += x * x; C[1] += x * y; C[2] += x * z; C[4] += y * y; C[5] += y * z; C[8] += z * z;
+  }
+  C[3] = C[1]; C[6] = C[2]; C[7] = C[5];
+  const { vecs } = eigenSym3(C.map((c) => c / n));
+  const ax = vecs.map((e) => new THREE.Vector3(...e).normalize());
+  if (ax[0].clone().cross(ax[1]).dot(ax[2]) < 0) ax[2].negate();     // right-handed basis
+  const centre = new THREE.Vector3(mx, my, mz), half = [0, 0, 0];
+  const proj = new Float64Array(n);
+  for (let a = 0; a < 3; a++) {
+    const e = ax[a];
+    for (let i = 0, j = 0; i < pts.length; i += 3, j++) proj[j] = (pts[i] - mx) * e.x + (pts[i + 1] - my) * e.y + (pts[i + 2] - mz) * e.z;
+    proj.sort();
+    const lo = proj[Math.floor(trim * (n - 1))], hi = proj[Math.ceil((1 - trim) * (n - 1))];
+    centre.addScaledVector(e, (lo + hi) / 2);
+    half[a] = Math.max((hi - lo) / 2 * cover + margin, 0.01);
+  }
+  return new THREE.Matrix4().makeBasis(ax[0].multiplyScalar(half[0]), ax[1].multiplyScalar(half[1]), ax[2].multiplyScalar(half[2])).setPosition(centre);
+}
+
 /**
  * Build the parts of a silhouette proxy for `root` (pure: no renderer). Skinned meshes bound to `skeleton` give one
  * ellipsoid per bone (vertices binned by their strongest weight, measured in the bone's bind frame); every other visible
@@ -128,7 +195,7 @@ export function silhouetteParts(root, o = {}) {
   if (!skeleton) root.traverse((c) => { if (!skeleton && c.isSkinnedMesh && c.skeleton && !skippedChain(c, root) && shownUnder(c, root)) skeleton = c.skeleton; });
   const parts = [];     // { anchor: index into anchors, matrix: Matrix4 (unit shape → anchor space), shape: 'ellipsoid'|'box' }
   const anchors = [];   // { obj, inverse }
-  const boxes = new Map();   // bone index → { box, fur }
+  const boxes = new Map();   // bone index → { pts (bone-local xyz), fur }
   if (skeleton) {
     skeleton.bones.forEach((b, i) => anchors.push({ obj: b, inverse: skeleton.boneInverses[i] }));
   }
@@ -164,8 +231,8 @@ export function silhouetteParts(root, o = {}) {
         if (!(bi < nb)) continue;
         _v.applyMatrix4(mats[bi] ??= new THREE.Matrix4().multiplyMatrices(skeleton.boneInverses[bi], c.bindMatrix));
         let e = boxes.get(bi);
-        if (!e) boxes.set(bi, (e = { box: new THREE.Box3(), n: 0, fur: false }));
-        e.box.expandByPoint(_v); e.n++; e.fur ||= fur;
+        if (!e) boxes.set(bi, (e = { pts: [], fur: false }));
+        e.pts.push(_v.x, _v.y, _v.z); e.fur ||= fur;
       }
       return;
     }
@@ -186,8 +253,8 @@ export function silhouetteParts(root, o = {}) {
     parts.push({ anchor: ai, matrix: m, shape: long ? 'box' : 'ellipsoid' });
   });
   for (const [bi, e] of boxes) {
-    if (e.n < minVerts || e.box.isEmpty()) continue;
-    parts.push({ anchor: bi, matrix: ellipsoidMatrix(e.box, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid' });
+    if (e.pts.length < minVerts * 3) continue;
+    parts.push({ anchor: bi, matrix: fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid' });
   }
   // drop anchors no part uses (keeps the bone texture small)
   const used = [...new Set(parts.map((p) => p.anchor))].sort((a, b) => a - b);
@@ -255,6 +322,13 @@ export function buildSilhouetteProxy(root, o = {}) {
     }
     if (dirty && skel.boneTexture) skel.boneTexture.needsUpdate = true;
   };
+  // depth pull scaled to the actor (a long rat's far legs sit deeper behind its own back than her limbs behind her)
+  mesh.updateMatrixWorld(true); skel.update();
+  const wb = new THREE.Box3();
+  for (let i = 0; i < g.attributes.position.count; i++) wb.expandByPoint(mesh.getVertexPosition(i, _v).applyMatrix4(mesh.matrixWorld));
+  wb.getSize(_v2);
+  mesh.material.userData.uniforms.uPull.value = Math.min(XRAY.pullMax, Math.max(XRAY.pull, XRAY.pullPerM * Math.max(_v2.x, _v2.y, _v2.z)));
+  mesh.userData.size = Math.max(_v2.x, _v2.y, _v2.z);
   mesh.userData.disposeData = () => { g.dispose(); skel.dispose(); };
   mesh.userData.dispose = () => {
     mesh.removeFromParent(); mesh.userData.disposeData(); mesh.material.dispose(); _xrayMats.delete(mesh.material);
@@ -367,6 +441,9 @@ export function highlightObject(root, color, strength = 1) {
         if (!m?.emissive) return m;
         if (m.userData?.hiClone) return m;
         const k = m.clone();
+        // clone() drops instance hooks: keep the source's shader patch (world fog) and program key → same program
+        if (Object.prototype.hasOwnProperty.call(m, 'onBeforeCompile')) k.onBeforeCompile = m.onBeforeCompile;
+        if (Object.prototype.hasOwnProperty.call(m, 'customProgramCacheKey')) k.customProgramCacheKey = m.customProgramCacheKey;
         k.userData = { ...m.userData, assetOwned: true, hiClone: true, hiBase: m.emissive.clone(), hiBaseI: m.emissiveIntensity };
         return k;
       });
@@ -459,4 +536,4 @@ export function ringAnchor(target, out = new THREE.Vector3()) {
 }
 
 // unit-test handle
-export const _test = { shownUnder, ellipsoidMatrix, skippedChain };
+export const _test = { shownUnder, ellipsoidMatrix, skippedChain, fitEllipsoid, eigenSym3 };

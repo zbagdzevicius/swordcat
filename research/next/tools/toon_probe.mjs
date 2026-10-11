@@ -54,7 +54,7 @@ for (const lvl of levels) {
     ctx.postfx.render = (dt) => {
       f.copy(ctx.player.object3d?.position ?? ctx.player.pos); f.y += 0.6; f.z += 0.8;
       cam.fov = 38; cam.near = 0.3; cam.far = 90; cam.updateProjectionMatrix();
-      cam.position.set(f.x, f.y + D * Math.sin(P), f.z - D * Math.cos(P)); cam.lookAt(f);
+      const DD = window.__PROBE__.D ?? D; cam.position.set(f.x, f.y + DD * Math.sin(P), f.z - DD * Math.cos(P)); cam.lookAt(f);
       const t0 = performance.now();
       orig(dt);
       if (window.__PROBE__.timing) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); window.__PROBE__.ms.push(performance.now() - t0); }
@@ -80,6 +80,9 @@ for (const lvl of levels) {
   };
 
   await measure('base');
+  await page.evaluate(() => { window.__PROBE__.D = 5; }); await page.evaluate(() => window.__GAME__.waitFrames(20));
+  await page.screenshot({ path: `${OUT}/${lvl}_base_close.png`, clip: { x: 340, y: 100, width: 600, height: 500 } });
+  await page.evaluate(() => { window.__PROBE__.D = null; });
 
   // ---- apply the art_0.md recipe in-page ----
   await page.evaluate((tp) => { window.__TOON_PAL__ = tp; }, { id: lvl, ...TOON[lvl] });
@@ -133,7 +136,7 @@ vec3 toonGrade(vec3 c){ float l = dot(c, vec3(0.2126,0.7152,0.0722)); c = mix(ve
     ctx.scene.traverse((o) => { if (!o.material) return; for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true; });
   });
   await page.evaluate(async (id) => { const G = window.__GAME__; await G.loadLevel(id); await G.waitFrames(30); G.skipDialog?.();
-    G.ctx.env.preset('toon_probe', 0); }, lvl);
+    G.ctx.env.preset('toon_probe', 0); G.ctx.env.sunLight.shadow.intensity = window.__TOON_PAL__.shadowI ?? 0.6; }, lvl);
   // hulls must be (re)added after the reload: run the hull pass again
   await page.evaluate(() => {
     const { ctx, THREE } = window.__GAME__;
@@ -149,6 +152,9 @@ vec3 toonGrade(vec3 c){ float l = dot(c, vec3(0.2126,0.7152,0.0722)); c = mix(ve
   const hulls = await page.evaluate(() => window.__PROBE__.hulls);
   console.log(lvl, 'hulls', hulls);
   await measure('toon');
+  await page.evaluate(() => { window.__PROBE__.D = 5; }); await page.evaluate(() => window.__GAME__.waitFrames(20));
+  await page.screenshot({ path: `${OUT}/${lvl}_toon_close.png`, clip: { x: 340, y: 100, width: 600, height: 500 } });
+  await page.evaluate(() => { window.__PROBE__.D = null; });
   await page.evaluate(() => window.__GAME__.quality('low'));
   await measure('toon_low');
 }

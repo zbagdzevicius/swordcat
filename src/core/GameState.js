@@ -15,7 +15,12 @@ export const defaultState = () => ({
   flags: {}, memeCamSeen: 0,
   settings: { master: 0.8, music: 0.6, sfx: 0.8, invertY: false, sensitivity: 1, quality: 'auto', shake: 1,
               reduceFlashes: false, holdStand: true, holdCharge: true, autoStand: false, patterns: false,
-              subtitleSize: 1, dialogSpeed: 1, touchSize: 1 },
+              subtitleSize: 1, dialogSpeed: 1, touchSize: 1,
+              // CONTROLS_SPEC §10.7 (iso controls)
+              controlPreset: 'hybrid', bindings: {}, camZoom: 1, camLock: true, edgePanSpeed: 1, autoAttack: 'auto',
+              tapToMove: true, swipeTumble: true, castMode: 'smart', parryRing: 'auto', autoRiposte: 'auto', standAutoFace: true,
+              haptics: 1, hapticTaps: false, leftHanded: false, buttonOpacity: 0.85, touchLayout: null, reduceCameraMotion: false,
+              cursorSize: 1, cursorContrast: false, pathPreview: false },
 });
 
 export const SAVE_KEYS = Object.keys(defaultState());

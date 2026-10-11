@@ -1,0 +1,236 @@
+{
+ "frames": 144,
+ "seconds": 5,
+ "totalMB": 36.99,
+ "MBperSec": 7.4,
+ "KBperFrame": 263,
+ "top": [
+  [
+   "computeVertexNormals @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:14384",
+   5.94,
+   16.1
+  ],
+  [
+   "getParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46085",
+   4.1,
+   11.1
+  ],
+  [
+   "setValueV3f @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44937",
+   2.99,
+   8.1
+  ],
+  [
+   "setValueM4 @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45003",
+   2.96,
+   8
+  ],
+  [
+   "sortOpaque @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:19016",
+   1.78,
+   4.8
+  ],
+  [
+   "next @ :0",
+   1.5,
+   4
+  ],
+  [
+   "render @ src/fx/MistCards.js:253",
+   1.23,
+   3.3
+  ],
+  [
+   "E @ src/characters/KittenBuilder.js:43",
+   1.01,
+   2.7
+  ],
+  [
+   "join @ :0",
+   1,
+   2.7
+  ],
+  [
+   "animate @ src/characters/KittenBuilder.js:851",
+   0.73,
+   2
+  ],
+  [
+   "getProgramCacheKeyParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46323",
+   0.67,
+   1.8
+  ],
+  [
+   "sort @ :0",
+   0.61,
+   1.7
+  ],
+  [
+   "poll @ src/core/Input.js:161",
+   0.57,
+   1.5
+  ],
+  [
+   "separateActors @ src/physics/Physics.js:700",
+   0.51,
+   1.4
+  ],
+  [
+   "copyArray @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44905",
+   0.51,
+   1.4
+  ],
+  [
+   "getMaxScaleOnAxis @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:8453",
+   0.46,
+   1.2
+  ],
+  [
+   "update @ src/companions/KittenVisual.js:101",
+   0.44,
+   1.2
+  ],
+  [
+   "projectObject @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52080",
+   0.43,
+   1.2
+  ],
+  [
+   "update @ src/world/Pickups.js:215",
+   0.39,
+   1.1
+  ],
+  [
+   "onBeforeRender @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:19895",
+   0.37,
+   1
+  ],
+  [
+   "step @ src/core/Game.js:247",
+   0.35,
+   0.9
+  ],
+  [
+   "hypot @ :0",
+   0.26,
+   0.7
+  ],
+  [
+   "setValueV1fArray @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45199",
+   0.24,
+   0.7
+  ],
+  [
+   "update @ src/companions/LostKitten.js:528",
+   0.22,
+   0.6
+  ],
+  [
+   "_lensPoints @ src/camera/FollowCamera.js:1079",
+   0.21,
+   0.6
+  ],
+  [
+   "heightAt @ src/physics/Heightfield.js:52",
+   0.2,
+   0.5
+  ],
+  [
+   "seqWithValue @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45420",
+   0.2,
+   0.5
+  ],
+  [
+   "values @ :0",
+   0.18,
+   0.5
+  ],
+  [
+   "_updateInteract @ src/world/Level.js:268",
+   0.18,
+   0.5
+  ],
+  [
+   "render @ src/world/Pickups.js:285",
+   0.17,
+   0.5
+  ]
+ ],
+ "files": [
+  [
+   "node_modules/.vite/deps/three.module-Bj7iJlUn.js",
+   22.5,
+   60.8
+  ],
+  [
+   "src/characters/KittenBuilder.js",
+   1.81,
+   4.9
+  ],
+  [
+   "next",
+   1.5,
+   4
+  ],
+  [
+   "src/fx/MistCards.js",
+   1.23,
+   3.3
+  ],
+  [
+   "join",
+   1,
+   2.7
+  ],
+  [
+   "src/physics/Physics.js",
+   0.83,
+   2.3
+  ],
+  [
+   "src/core/Input.js",
+   0.63,
+   1.7
+  ],
+  [
+   "sort",
+   0.61,
+   1.7
+  ],
+  [
+   "src/world/Pickups.js",
+   0.56,
+   1.5
+  ],
+  [
+   "src/core/Game.js",
+   0.52,
+   1.4
+  ],
+  [
+   "src/companions/KittenVisual.js",
+   0.44,
+   1.2
+  ],
+  [
+   "src/camera/FollowCamera.js",
+   0.37,
+   1
+  ],
+  [
+   "src/world/Level.js",
+   0.35,
+   0.9
+  ],
+  [
+   "src/companions/LostKitten.js",
+   0.34,
+   0.9
+  ],
+  [
+   "src/physics/StaticColliders.js",
+   0.32,
+   0.9
+  ]
+ ]
+}

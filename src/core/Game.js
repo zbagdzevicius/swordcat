@@ -26,7 +26,9 @@ export function parseParams(search = '') {
   const test = flag('test'), debug = flag('debug');
   const seedRaw = q.get('seed');
   const seed = seedRaw != null && seedRaw !== '' && Number.isFinite(+seedRaw) ? (+seedRaw >>> 0) : (test ? 1 : (Date.now() >>> 0));
-  return { test, debug, seed, level: q.get('level') || null, spawn: q.get('spawn') || null, quality: q.get('quality') || null, mute: flag('mute') };
+  // CONTROLS_SPEC §15.3: ?cam=classic keeps the M1/M2 orbit camera, lens fog, pointer lock and bindings
+  const cam = q.get('cam') === 'classic' ? 'classic' : 'iso';
+  return { test, debug, seed, level: q.get('level') || null, spawn: q.get('spawn') || null, quality: q.get('quality') || null, mute: flag('mute'), cam };
 }
 
 /**
@@ -119,7 +121,7 @@ export class Game {
       postfx: null, quality: config.QUALITY.med, params,
     });
     ctx.input = new Input(ctx);
-    ctx.input.pointerLockEnabled = !params.test;
+    ctx.input.pointerLockEnabled = !params.test && !ctx.input.iso;
     ctx.assets = new Assets(ctx);
     ctx.postfx = new PostFX(ctx);
     ctx.postfx.dynamicRes = !params.test;

@@ -1,0 +1,1053 @@
+{
+ "tag": "desktop_med_town",
+ "profile": {
+  "totalMs": 6915,
+  "topSelf": [
+   [
+    "(program) @ :0",
+    2560.7,
+    37
+   ],
+   [
+    "WebGLRenderer.renderBufferDirect @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:51786",
+    198.1,
+    2.9
+   ],
+   [
+    "step @ src/characters/Cape.js:219",
+    187.5,
+    2.7
+   ],
+   [
+    "setProgram @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52328",
+    170.8,
+    2.5
+   ],
+   [
+    "updateMatrixWorld @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:10046",
+    102.5,
+    1.5
+   ],
+   [
+    "getProgram @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52227",
+    90.4,
+    1.3
+   ],
+   [
+    "getParameters @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46085",
+    86.2,
+    1.2
+   ],
+   [
+    "collide @ src/characters/Cape.js:262",
+    80.1,
+    1.2
+   ],
+   [
+    "renderObject @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:47372",
+    79.3,
+    1.1
+   ],
+   [
+    "projectObject @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52080",
+    76.4,
+    1.1
+   ],
+   [
+    "copyArray @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44905",
+    74.2,
+    1.1
+   ],
+   [
+    "uniformMatrix4fv @ :0",
+    73.7,
+    1.1
+   ],
+   [
+    "fromBufferAttribute @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:4916",
+    71,
+    1
+   ],
+   [
+    "setValueV3f @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44937",
+    62.6,
+    0.9
+   ],
+   [
+    "multiplyMatrices @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:8252",
+    56.5,
+    0.8
+   ],
+   [
+    "computeVertexNormals @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:14384",
+    56.2,
+    0.8
+   ],
+   [
+    "_write @ src/characters/Cape.js:504",
+    54.9,
+    0.8
+   ],
+   [
+    "_nearLens @ src/camera/Occluders.js:439",
+    50.4,
+    0.7
+   ],
+   [
+    "uniform3f @ :0",
+    48.1,
+    0.7
+   ],
+   [
+    "upload @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45414",
+    47.7,
+    0.7
+   ],
+   [
+    "setValue @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45357",
+    46.2,
+    0.7
+   ],
+   [
+    "getProgramCacheKey @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:46304",
+    45.3,
+    0.7
+   ],
+   [
+    "updateWorldMatrix @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:10068",
+    43.6,
+    0.6
+   ],
+   [
+    "flatten @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44882",
+    43.5,
+    0.6
+   ],
+   [
+    "WebGLRenderer.render @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:51996",
+    42.6,
+    0.6
+   ],
+   [
+    "bindVertexArray @ :0",
+    42.5,
+    0.6
+   ],
+   [
+    "onBeforeRender @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:19895",
+    41.3,
+    0.6
+   ],
+   [
+    "arraysEqual @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44900",
+    41,
+    0.6
+   ],
+   [
+    "refreshUniformsCommon @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:50083",
+    40.6,
+    0.6
+   ],
+   [
+    "animate @ src/characters/KittenBuilder.js:851",
+    40.2,
+    0.6
+   ],
+   [
+    "bindTexture @ :0",
+    40,
+    0.6
+   ],
+   [
+    "renderObject @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52210",
+    39.9,
+    0.6
+   ],
+   [
+    "setValueM4 @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45003",
+    36.1,
+    0.5
+   ],
+   [
+    "setup @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:42887",
+    36.1,
+    0.5
+   ],
+   [
+    "setValueV1fArray @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:45199",
+    35.4,
+    0.5
+   ],
+   [
+    "needsUpdate @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:42958",
+    35,
+    0.5
+   ],
+   [
+    "traverse @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:9986",
+    34.3,
+    0.5
+   ],
+   [
+    "setFromRotationMatrix @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:8932",
+    32.7,
+    0.5
+   ],
+   [
+    "setValueV1f @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44917",
+    32.3,
+    0.5
+   ],
+   [
+    "animate @ src/characters/KittenView.js:82",
+    31.3,
+    0.5
+   ],
+   [
+    "update @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:44598",
+    29.4,
+    0.4
+   ],
+   [
+    "step @ src/core/Game.js:247",
+    29.3,
+    0.4
+   ],
+   [
+    "refreshMaterialUniforms @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:50048",
+    28.7,
+    0.4
+   ],
+   [
+    "texSubImage2D @ :0",
+    28.7,
+    0.4
+   ],
+   [
+    "renderObjects @ node_modules/.vite/deps/three.module-Bj7iJlUn.js:52200",
+    26.3,
+    0.4
+   ]
+  ],
+  "topFiles": [
+   [
+    "node_modules/.vite/deps/three.module-Bj7iJlUn.js",
+    2742.8,
+    39.7
+   ],
+   [
+    "(program)",
+    2560.7,
+    37
+   ],
+   [
+    "src/characters/Cape.js",
+    332.5,
+    4.8
+   ],
+   [
+    "uniformMatrix4fv",
+    73.7,
+    1.1
+   ],
+   [
+    "src/core/Game.js",
+    66.9,
+    1
+   ],
+   [
+    "src/camera/Occluders.js",
+    61.2,
+    0.9
+   ],
+   [
+    "src/characters/KittenBuilder.js",
+    59.8,
+    0.9
+   ],
+   [
+    "src/physics/Physics.js",
+    57.3,
+    0.8
+   ],
+   [
+    "uniform3f",
+    48.1,
+    0.7
+   ],
+   [
+    "src/camera/FollowCamera.js",
+    46,
+    0.7
+   ],
+   [
+    "src/player/Player.js",
+    43.4,
+    0.6
+   ],
+   [
+    "bindVertexArray",
+    42.5,
+    0.6
+   ],
+   [
+    "bindTexture",
+    40,
+    0.6
+   ],
+   [
+    "src/characters/KittenView.js",
+    36.4,
+    0.5
+   ],
+   [
+    "src/world/Env.js",
+    34.7,
+    0.5
+   ],
+   [
+    "texSubImage2D",
+    28.7,
+    0.4
+   ],
+   [
+    "src/physics/StaticColliders.js",
+    28.6,
+    0.4
+   ],
+   [
+    "src/companions/LostKitten.js",
+    28.4,
+    0.4
+   ],
+   [
+    "drawElements",
+    25.8,
+    0.4
+   ],
+   [
+    "src/world/Pickups.js",
+    25.1,
+    0.4
+   ],
+   [
+    "(idle)",
+    23.6,
+    0.3
+   ],
+   [
+    "src/core/Input.js",
+    23.5,
+    0.3
+   ],
+   [
+    "src/world/Level.js",
+    22.6,
+    0.3
+   ],
+   [
+    "useProgram",
+    22.5,
+    0.3
+   ],
+   [
+    "src/companions/CompanionManager.js",
+    22.2,
+    0.3
+   ],
+   [
+    "getProgramInfoLog",
+    22,
+    0.3
+   ],
+   [
+    "bindFramebuffer",
+    19.9,
+    0.3
+   ],
+   [
+    "uniform1fv",
+    15.9,
+    0.2
+   ],
+   [
+    "src/physics/Heightfield.js",
+    15.5,
+    0.2
+   ],
+   [
+    "src/core/Loop.js",
+    15.5,
+    0.2
+   ]
+  ],
+  "byArea": [
+   [
+    "three",
+    2756.7,
+    39.9
+   ],
+   [
+    "(program)",
+    2560.7,
+    37
+   ],
+   [
+    "characters",
+    445.8,
+    6.4
+   ],
+   [
+    "core",
+    129.9,
+    1.9
+   ],
+   [
+    "camera",
+    108.8,
+    1.6
+   ],
+   [
+    "world",
+    104.3,
+    1.5
+   ],
+   [
+    "physics",
+    101.4,
+    1.5
+   ],
+   [
+    "uniformMatrix4fv",
+    73.7,
+    1.1
+   ],
+   [
+    "companions",
+    65.2,
+    0.9
+   ],
+   [
+    "player",
+    63.3,
+    0.9
+   ],
+   [
+    "uniform3f",
+    48.1,
+    0.7
+   ],
+   [
+    "bindVertexArray",
+    42.5,
+    0.6
+   ],
+   [
+    "bindTexture",
+    40,
+    0.6
+   ],
+   [
+    "fx",
+    30.1,
+    0.4
+   ],
+   [
+    "texSubImage2D",
+    28.7,
+    0.4
+   ],
+   [
+    "ui",
+    27.6,
+    0.4
+   ],
+   [
+    "drawElements",
+    25.8,
+    0.4
+   ],
+   [
+    "(idle)",
+    23.6,
+    0.3
+   ],
+   [
+    "useProgram",
+    22.5,
+    0.3
+   ],
+   [
+    "getProgramInfoLog",
+    22,
+    0.3
+   ]
+  ]
+ },
+ "bench": {
+  "timerQuery": true,
+  "rows": [
+   {
+    "label": "JS: 1 fixed step (all systems)",
+    "cpu": 0.9,
+    "cpuMin": 0.4,
+    "drain": 2.3,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS: render() hooks (all systems)",
+    "cpu": 6.4,
+    "cpuMin": 2,
+    "drain": 6.4,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render physics",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render story",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 3.2,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render player",
+    "cpu": 3.6,
+    "cpuMin": 1.8,
+    "drain": 2.1,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render companions",
+    "cpu": 1.6,
+    "cpuMin": 1.2,
+    "drain": 1.8,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render enemies",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.8,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render combat",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.8,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render levels",
+    "cpu": 0.3,
+    "cpuMin": 0.2,
+    "drain": 2,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render env",
+    "cpu": 0.5,
+    "cpuMin": 0.2,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render cam",
+    "cpu": 0.5,
+    "cpuMin": 0,
+    "drain": 1.8,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render fx",
+    "cpu": 0.3,
+    "cpuMin": 0.1,
+    "drain": 1.6,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render ui",
+    "cpu": 0.3,
+    "cpuMin": 0,
+    "drain": 1.6,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   render audio",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step input",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.6,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step story",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.6,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step player",
+    "cpu": 0.2,
+    "cpuMin": 0,
+    "drain": 1.9,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step companions",
+    "cpu": 0.2,
+    "cpuMin": 0.1,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step enemies",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.8,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step combat",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step physics",
+    "cpu": 0.2,
+    "cpuMin": 0,
+    "drain": 1.8,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step levels",
+    "cpu": 0.1,
+    "cpuMin": 0,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step objectives",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step env",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step fx",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 1.5,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step cam",
+    "cpu": 0.1,
+    "cpuMin": 0,
+    "drain": 1.5,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step ui",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 3.1,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step audio",
+    "cpu": 0.1,
+    "cpuMin": 0,
+    "drain": 2.7,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS:   step save",
+    "cpu": 0,
+    "cpuMin": 0,
+    "drain": 2.5,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "JS: scene.updateMatrixWorld",
+    "cpu": 1.4,
+    "cpuMin": 0.8,
+    "drain": 2.6,
+    "gpuTQ": 0,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "GL: full frame (postfx.render)",
+    "cpu": 18.8,
+    "cpuMin": 2.9,
+    "drain": 21.1,
+    "gpuTQ": 15.27,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "GL: full frame − shadow pass (autoUpdate off)",
+    "cpu": 14.6,
+    "cpuMin": 3.7,
+    "drain": 24.1,
+    "gpuTQ": 14.47,
+    "calls": 96,
+    "tris": 437300
+   },
+   {
+    "label": "GL: full frame − bloom pass",
+    "cpu": 16.1,
+    "cpuMin": 5.2,
+    "drain": 22.2,
+    "gpuTQ": 14.96,
+    "calls": 99,
+    "tris": 587868
+   },
+   {
+    "label": "GL: full frame − grass + flowers + wheat",
+    "cpu": 18.5,
+    "cpuMin": 6.1,
+    "drain": 29.3,
+    "gpuTQ": 15.19,
+    "calls": 109,
+    "tris": 511453
+   },
+   {
+    "label": "GL: full frame − fur shells (all kittens)",
+    "cpu": 17.6,
+    "cpuMin": 5.7,
+    "drain": 21.9,
+    "gpuTQ": 13.74,
+    "calls": 106,
+    "tris": 458601
+   },
+   {
+    "label": "GL: full frame − all kittens (hero + NPC) ",
+    "cpu": 11.9,
+    "cpuMin": 9.3,
+    "drain": 18.1,
+    "gpuTQ": 10.14,
+    "calls": 62,
+    "tris": 281185
+   },
+   {
+    "label": "GL: full frame − terrain ground",
+    "cpu": 16.8,
+    "cpuMin": 3.4,
+    "drain": 23.6,
+    "gpuTQ": 12.78,
+    "calls": 108,
+    "tris": 563381
+   },
+   {
+    "label": "GL: full frame − transparent meshes",
+    "cpu": 17.2,
+    "cpuMin": 5.1,
+    "drain": 26,
+    "gpuTQ": 14.8,
+    "calls": 99,
+    "tris": 457881
+   },
+   {
+    "label": "GL: full frame − sky + skyline + horizon",
+    "cpu": 15.4,
+    "cpuMin": 3.7,
+    "drain": 22.6,
+    "gpuTQ": 14.61,
+    "calls": 110,
+    "tris": 575989
+   },
+   {
+    "label": "GL: full frame − fx.* groups",
+    "cpu": 6.2,
+    "cpuMin": 3,
+    "drain": 12.4,
+    "gpuTQ": 9.44,
+    "calls": 110,
+    "tris": 587793
+   },
+   {
+    "label": "GL: full frame − enemies (RootNode/Scene rigs)",
+    "cpu": 6.5,
+    "cpuMin": 4.7,
+    "drain": 12.8,
+    "gpuTQ": 9.62,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "GL: full frame − level:town (all props, terrain, dressing)",
+    "cpu": 4.5,
+    "cpuMin": 3.6,
+    "drain": 12.1,
+    "gpuTQ": 8.88,
+    "calls": 87,
+    "tris": 309395
+   },
+   {
+    "label": "GL: full frame @ 0.75× pixels-per-axis (dpr 0.75)",
+    "cpu": 6.3,
+    "cpuMin": 3.1,
+    "drain": 16.9,
+    "gpuTQ": 14.22,
+    "calls": 112,
+    "tris": 587881
+   },
+   {
+    "label": "GL: full frame @ 0.5× pixels-per-axis (dpr 0.50)",
+    "cpu": 5.5,
+    "cpuMin": 3.3,
+    "drain": 9.7,
+    "gpuTQ": 6.74,
+    "calls": 112,
+    "tris": 587881
+   }
+  ],
+  "programs": 158,
+  "meshTotal": 115,
+  "trisTotalScene": 844079,
+  "heaviestGeom": [
+   [
+    "furTail",
+    71500,
+    1,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "furTail",
+    71500,
+    1,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "furTail",
+    71500,
+    1,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "furTail",
+    71500,
+    1,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "furHead",
+    5052,
+    14,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "grass",
+    3,
+    18000,
+    "MeshLambertMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "props:town",
+    48076,
+    1,
+    "MeshStandardMaterial",
+    "cast",
+    ""
+   ],
+   [
+    "furHead",
+    3616,
+    11,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "furHead",
+    3616,
+    11,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "kitBody",
+    36614,
+    1,
+    "MeshPhysicalMaterial",
+    "cast",
+    "noCull"
+   ],
+   [
+    "kitBody",
+    33320,
+    1,
+    "MeshPhysicalMaterial",
+    "cast",
+    "noCull"
+   ],
+   [
+    "fade:fence",
+    84,
+    247,
+    "MeshStandardMaterial",
+    "cast",
+    ""
+   ],
+   [
+    "grass",
+    3,
+    5940,
+    "MeshLambertMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "kitBody",
+    17612,
+    1,
+    "MeshPhysicalMaterial",
+    "cast",
+    "noCull"
+   ],
+   [
+    "kitBody",
+    14384,
+    1,
+    "MeshPhysicalMaterial",
+    "cast",
+    "noCull"
+   ],
+   [
+    "kitBody",
+    13892,
+    1,
+    "MeshPhysicalMaterial",
+    "cast",
+    "noCull"
+   ],
+   [
+    "furBib",
+    1064,
+    13,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "kitBody",
+    12008,
+    1,
+    "MeshPhysicalMaterial",
+    "cast",
+    "noCull"
+   ],
+   [
+    "furBib",
+    1064,
+    11,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ],
+   [
+    "furBib",
+    1064,
+    11,
+    "ShaderMaterial",
+    "",
+    "noCull"
+   ]
+  ]
+ }
+}

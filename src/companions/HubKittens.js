@@ -6,7 +6,7 @@
 //   • the station keepers (Marmalade, Tofu, Earl Grey, Pip, Pearl, Snowpaw, Coo) stand at their stalls once their
 //     flag opens them, unless world's Hub already placed them;
 //   • walking up to a resident shows its line in a bubble (the kitten's §6.4 rescue line, a §6.5 hub line);
-//   • iso controls (CONTROLS_SPEC §7.6, §14 `tut.talk`): click / tap a resident (or [Interact] next to it) to hear its
+//   • iso controls (CONTROLS_SPEC §7.6, §14 tut.talk): click / tap a resident (or [Interact] next to it) to hear its
 //     line now: residents are 'npc' pickables and, clear of world's interactables, a `talk_<id>` level interactable
 //     (prompt.talk); a station keeper stands for its station (`interactId`: a click opens the shop);
 //   • distance LOD measured from the camera focus (§2.8), not from her.

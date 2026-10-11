@@ -1,16 +1,22 @@
 // src/companions/abilities.js  (owner: companions) — companion abilities and passives (GAME_DESIGN §9.2,
 // Appendix A COMPANIONS):
-//   Mochi  shieldWall  plant a 3.0 × 1.6 m barrier 1.5 m in front of her (camera-forward) for 4 s, taunt within 6 m
+//   Mochi  shieldWall  plant a 3.0 × 1.6 m barrier 1.5 m from her for 4 s, taunt within 6 m; where: along the aim
+//                      (aimed cast), else between her and the engaged enemies within 6 m, else her facing (§7.5)
 //   Sage   volley      5 arrows over 0.6 s split across ≤ 3 targets within 14 m, 8 dmg each, flyers grounded 3 s
+//                      (aimed: the targets nearest the aim point; the selected target takes 2 arrows)
 //                      passive: one flyer every 2.5 s for 6 dmg; hidden lost kittens within 15 m sparkle
 //   Clover mend        1.0 s channel, then 4 HP over 3 s, cleanses slow; passive: +1 HP every 20 s out of combat
-// Each ability instance: start() → bool (false = nothing to do, no cooldown spent), update(dt) → bool (still
-// running), end(), `holds` (it drives the companion's movement), blocksFrom(att, dir), render(dt).
+// Each ability instance: start(plan) → bool (false = nothing to do, no cooldown spent; `plan` from abilityAim.js
+// planAbility, a smart plan when omitted), update(dt) → bool (still running), end(), `holds` (it drives the companion's
+// movement), blocksFrom(att, dir), render(dt).
 import * as THREE from 'three';
 import { COMPANIONS } from '../core/config.js';
 import { E } from '../core/events.js';
 import { ShieldWall } from './ShieldWall.js';
-import { camForwardYaw, isEngaged, isFlyer, groundY } from './steering.js';
+import { isEngaged, isFlyer, groundY } from './steering.js';
+import { planAbility, playerAimYaw, playerForwardYaw } from './abilityAim.js';
+
+export { playerAimYaw, playerForwardYaw };
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
 
@@ -34,16 +40,11 @@ export function groundFlyer(e, sec) {
   return true;
 }
 
-/** Facing yaw for "her camera-forward" (FollowCamera.yaw), falling back to her facing. */
-export function playerForwardYaw(ctx) {
-  const yaw = ctx.cam?.yaw;
-  if (typeof yaw === 'number' && Number.isFinite(yaw)) return camForwardYaw(yaw);
-  return ctx.player?.facing ?? 0;
-}
-
 class Ability {
   constructor(c) { this.c = c; this.ctx = c.ctx; this.cfg = c.cfg; this.t = 0; this.holds = false; this.done = false; }
   start() { return true; }
+  /** The plan to cast with: the caller's, else a smart one (§7.5). */
+  plan(plan) { return plan?.ability === this.cfg.ability ? plan : planAbility(this.ctx, this.c, null); }
   update(dt) { this.t += dt; return !this.done; }
   end() { this.done = true; }
   blocksFrom() { return false; }
@@ -53,10 +54,12 @@ class Ability {
 // ------------------------------------------------------------------ Mochi: Shield Wall
 
 export class ShieldWallAbility extends Ability {
-  start() {
+  start(plan) {
     const ctx = this.ctx, p = ctx.player, cfg = this.cfg;
     if (!p) return false;
-    const yaw = playerForwardYaw(ctx);
+    const pl = this.plan(plan);
+    if (!pl.valid) return false;
+    const yaw = pl.yaw;
     const center = new THREE.Vector3(p.pos.x + Math.sin(yaw) * cfg.dist, p.pos.y, p.pos.z + Math.cos(yaw) * cfg.dist);
     center.y = groundY(ctx, center.x, center.z, p.pos.y);
     this.wall = new ShieldWall(ctx, { center, yaw, owner: this.c, width: cfg.width, height: cfg.height, dur: cfg.dur });
@@ -182,15 +185,12 @@ export class Arrow {
 // ------------------------------------------------------------------ Sage: Volley
 
 export class VolleyAbility extends Ability {
-  start() {
-    const cfg = this.cfg, c = this.c, list = this.ctx.enemies?.list ?? [];
-    const cand = list.filter((e) => e?.alive && e.hurtable !== false && e.faction === 'enemy'
-      && Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z) <= cfg.range);
-    if (!cand.length) return false;
-    // flyers first, then engaged enemies, then nearest
-    const score = (e) => (isFlyer(e) ? 0 : 100) + (isEngaged(e) ? 0 : 50) + Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z);
-    cand.sort((a, b) => score(a) - score(b));
-    this.targets = cand.slice(0, cfg.targets);
+  start(plan) {
+    const c = this.c;
+    const pl = this.plan(plan);
+    if (!pl.valid || !pl.targets.length) return false;
+    // round-robin over the plan's order: the first (the selected target when there is one) takes 2 of the 5 arrows
+    this.targets = pl.targets.slice();
     this.fired = 0;
     this.holds = true;
     c.visual?.setStance('bow');
@@ -221,9 +221,10 @@ export class VolleyAbility extends Ability {
 // ------------------------------------------------------------------ Clover: Purr of Mending
 
 export class MendAbility extends Ability {
-  start() {
+  start(plan) {
     const p = this.ctx.player;
-    if (!p) return false;
+    if (!p || p.alive === false) return false;
+    if (plan && plan.ability === 'mend' && !plan.valid) return false;
     this.holds = true; this.healed = 0; this.channelled = false;
     this.c.visual?.setStance('staff');
     return true;

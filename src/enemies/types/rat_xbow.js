@@ -1,12 +1,13 @@
 // src/enemies/types/rat_xbow.js  (owner: enemies) — Rat Crossbowman (GAME_DESIGN §10.2–§10.3; art.md §11).
-// Keeps 7–11 m away (strafing), aims rat_bolt for 0.8 s with a dotted `aim` line that STOPS TRACKING 0.2 s before
+// Keeps 6–9 m away (strafing; CONTROLS_SPEC §8.5 — inside the 9 m band it may always shoot; farther out it holds
+// fire while off screen), aims rat_bolt for 0.8 s with a dotted `aim` line that STOPS TRACKING 0.2 s before
 // the shot, fires a reflectable bolt (16 m/s, 18 m), reloads 2.0 s. Hops back 3 m (Rat_Jump) when she gets within
 // 3 m (cooldown 3 s). Spawned with a height offset (`{ y: 1.2 }`, a cart or a wall) it is perched: it never leaves
 // its spot, it only turns and shoots.
 import * as THREE from 'three';
 import { ENEMIES, GRAVITY } from '../../core/config.js';
 import { CLIP_MAPS } from '../clipMaps.js';
-import { TUNING, rangeOf } from '../tuning.js';
+import { TUNING, CONTROLS, rangeOf } from '../tuning.js';
 import { windupFor } from '../Enemy.js';
 import { dressRat, ratBody } from './ratGear.js';
 
@@ -52,6 +53,7 @@ const def = ENEMIES.rat_xbow;
 export default {
   ...def,
   id: 'rat_xbow',
+  keep: CONTROLS.xbowKeep,
   perchable: true,
   scamper: true,
   body: ratBody(),                       // spine capsule: the 0.30 m row circle let its snout pass through her

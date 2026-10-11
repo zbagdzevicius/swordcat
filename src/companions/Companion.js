@@ -1,10 +1,14 @@
 // src/companions/Companion.js  (owner: companions) — a rescued squire who fights beside her (GAME_DESIGN §9.1):
-//   follow  2.5 m behind and to the side (seek + arrive + separation); teleports to her side beyond 15 m or after
-//           4 s out of line of sight; answers her Meow ("mrrp") and regroups; trades slow blinks when she is still
+//   follow  2.5 m behind and to the side (seek + arrive + separation); idle at her back-left / back-right >= 1.4 m
+//           and never in her aim notch (CONTROLS_SPEC §12 companions 3); when the straight line to her is blocked
+//           (she clicked a path round a fence or a house) walks her breadcrumb trail; teleports to her side beyond
+//           15 m, after 4 s out of sight with no trail progress, or when stuck; answers her Meow ("mrrp") and
+//           regroups; trades slow blinks when she is still; a click / tap on him (`use()`) is a little hello
 //   fight   only enemies already engaging her, within 6 m of her: 5 dmg every 1.6 s (combat.applyHit)
 //   nap     never dies: a knock-out blow → curled up "zzz" for 8 s, then wakes at full HP
-//   ability Q / LT (CompanionManager reads the input) → abilities.js; cooldown in `cooldown`
-// Contract (§19.4): kittenId, napT, cooldown, useAbility() + the ScriptedActor API (core/ScriptedActor.js).
+//   ability Q / LT / the portrait (CompanionManager reads the input and aims) → abilities.js; cooldown in `cooldown`
+// Contract (§19.4): kittenId, napT, cooldown, useAbility(req?) + the ScriptedActor API (core/ScriptedActor.js);
+// iso controls (additive): canCast, cooldownLeft, readiness, pickKind / useR / use() for the camera's picker.
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
@@ -15,14 +19,23 @@ import { CATS, catConfig, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { createAbility, updatePassive, COMPANION_HITS, Arrow } from './abilities.js';
-import { followSlot, arrive, separation, pickTarget, estimateDamage, groundY, FOLLOW_SIDE, SLOT } from './steering.js';
+import { followSlot, idleSlot, inNotch, arrive, separation, pickTarget, estimateDamage, groundY, FOLLOW_SIDE, SLOT, Trail } from './steering.js';
+import { planAbility, playerAimYaw, newPlan } from './abilityAim.js';
 
-const _slot = { x: 0, z: 0 }, _des = { x: 0, z: 0 }, _sep = { x: 0, z: 0 };
+const _slot = { x: 0, z: 0, side: 1 }, _des = { x: 0, z: 0 }, _sep = { x: 0, z: 0 }, _alt = { x: 0, z: 0 };
+const _crumb = { x: 0, y: 0, z: 0 };
+const _plan = newPlan();
 const _ray = new THREE.Ray(), _v = new THREE.Vector3(), _from = new THREE.Vector3(), _to = new THREE.Vector3();
 const _her = [null];                     // one-element list for separation() (no per-step allocation)
 /** §6 bark rule: 25% per trigger (nap / wake / the Meow answer are status lines and always show). */
 const BARK_CHANCE = 0.25;
 const THINK = 0.2;                       // AI "thinks" (targets, line of sight) at 5 Hz (tech.md §10)
+/**
+ * Path-aware follow (iso controls: she walks clicked paths round fences and houses). Her breadcrumbs every `spacing` m;
+ * a crumb counts as reached within `reach`; no progress for `stuckT` s on the trail, or `stuckFree` s pressing toward
+ * the slot without moving (a low fence the chest-height sight line passes over), teleports to her side.
+ */
+export const TRAIL = Object.freeze({ n: 48, spacing: 0.6, reach: 0.55, stuckT: 2.5, progressFor: 1.2, stuckFree: 1.5, stuckSpeed: 0.4, wantSpeed: 2 });
 /** Sage's stand-off band (m) and bow draw time (s) for her basic shot. */
 export const RANGED = Object.freeze({ min: 2.5, max: 6.5, draw: 0.35 });
 
@@ -60,7 +73,13 @@ export class Companion extends ScriptedActorMixin(Actor) {
     this.passive = {};
     this.arrows = [];
     this._clipWaits = [];
-    this.stats ={ hits: 0, abilities: 0, naps: 0, teleports: 0, blocks: 0 };
+    this.stats = { hits: 0, abilities: 0, naps: 0, teleports: 0, blocks: 0, trails: 0, pets: 0 };
+    /** her breadcrumbs (path-aware follow) and the crumb we walk to (sequence number; -1 = straight to the slot) */
+    this.trail = new Trail(TRAIL.n, TRAIL.spacing);
+    this.trailSeq = -1; this.trailT = 0; this.stuckT = 0;
+    this._prevX = this.pos.x; this._prevZ = this.pos.z; this._movedSpeed = 0;
+    /** her aim yaw this step (the idle slot keeps out of its notch) */
+    this.aimYaw = null;
     if (opts.pos) this.pos.copy(opts.pos);
     this.facing = opts.facing ?? 0;
     this.object3d.name = 'companion:' + kittenId;
@@ -76,26 +95,62 @@ export class Companion extends ScriptedActorMixin(Actor) {
   }
 
   get napping() { return this.napT > 0; }
-  /** 0..1 ability readiness (HUD ring). */
+  /** 0..1 ability readiness (HUD ring, the ability bar's cooldown sweep). */
   get readiness() { const cd = this.cfg.cd ?? 1; return clamp(1 - this.cooldown / cd, 0, 1); }
-
-  // ------------------------------------------------------------------ ability
-
-  /** Fire the kitten's ability if off cooldown and awake. Returns true when used. */
-  useAbility() {
+  /** Seconds of ability cooldown left (§10.1 ability bar: whole seconds when >= 1 s). */
+  get cooldownLeft() { return Math.max(0, this.cooldown); }
+  /** Could the ability fire right now (off cooldown, awake, free, not mid-cast, her alive)? */
+  get canCast() {
     if (this.cooldown > 0 || this.napT > 0 || this.scripted || this.attachedTo || !this.cfg.ability) return false;
     if (this.ability && !this.ability.done) return false;
     const p = this.ctx.player;
-    if (!p || p.alive === false) return false;
+    return !!p && p.alive !== false;
+  }
+
+  // ------------------------------------------------------------------ ability
+
+  /**
+   * Fire the kitten's ability if off cooldown and awake. Returns true when used.
+   * @param {null | {dir?: {x:number,z:number}, point?: {x:number,y?:number,z:number}, mag?: number, source?: string}
+   *   | ReturnType<typeof planAbility>} [req] an aimed cast (CONTROLS_SPEC §7.5), a ready plan, or nothing = smart cast
+   */
+  useAbility(req = null) {
+    if (!this.canCast) return false;
+    const pl = req && req.ability === this.cfg.ability && Array.isArray(req.targets) ? req : planAbility(this.ctx, this, req, _plan);
+    if (!pl.valid) return false;
     const ab = createAbility(this);
-    if (!ab || !ab.start()) return false;
+    if (!ab || !ab.start(pl)) return false;
     this.ability = ab;
     this.cooldown = this.cfg.cd ?? 10;
     this.abilityAt = this.ctx.game?.time ?? 0;     // sim time of the last use (HUD flash, tests)
     this.stateName = 'ability';
     this.stats.abilities++;
-    this.ctx.bus.emit(E.COMPANION_ABILITY, { kittenId: this.kittenId, ability: this.cfg.ability, position: this.pos.clone() });
+    // payload: §19 { kittenId, ability, position } + (iso, additive) the cast's aim
+    this.ctx.bus.emit(E.COMPANION_ABILITY, { kittenId: this.kittenId, ability: this.cfg.ability, position: this.pos.clone(),
+      dir: { x: pl.dir.x, z: pl.dir.z }, point: { x: pl.point.x, y: pl.point.y, z: pl.point.z }, aimed: pl.aimed, source: pl.source,
+      targets: pl.targets.length });
+    try { this.ctx.input?.haptic?.('kitten'); } catch { /* core mid-edit */ }
     this.ctx.companions?.bark?.(this, 'ability', { chance: BARK_CHANCE });
+    return true;
+  }
+
+  // ------------------------------------------------------------------ click / tap (iso controls)
+
+  /** What the camera's picker sees here: 'companion' (white hover ring, the paw cursor), or null when not clickable. */
+  get pickKind() { return this.scripted || this.attachedTo || !this.object3d.visible ? null : 'companion'; }
+  /** How close she walks before `use()` (a `use` order's reach). */
+  get useR() { return this.radius + 1.1; }
+  /** She clicked / tapped him: he trots up beside her, looks at her and says hello (a nap keeps him asleep). */
+  use() {
+    if (this.scripted) return false;
+    this.stats.pets++;
+    if (this.napT > 0) { this.visual?.emote('blink'); return true; }
+    this.regroupT = 3;
+    const p = this.ctx.player;
+    if (p) this.facing = Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
+    this.visual?.hop(0.2); this.visual?.emote('meow'); this.visual?.setExpression('happy');
+    this.ctx.fx?.burst?.('heart', _v.set(this.pos.x, this.pos.y + this.height + 0.2, this.pos.z), { count: 1 });
+    if (!this.ctx.companions?.bark?.(this, 'idle', { chance: 1, force: true, dur: 2.0 })) this.ctx.companions?.bark?.(this, 'meow', { chance: 1, pool: 'any', force: true, dur: 1.1 });
     return true;
   }
 
@@ -177,7 +232,9 @@ export class Companion extends ScriptedActorMixin(Actor) {
     for (let i = 0; i < 3; i++) {
       if (i < 2) followSlot(p.pos, this.heading, sides[i], _slot, { dist: SLOT.regroupDist + 0.5, angle: SLOT.regroupAngle });
       else followSlot(p.pos, this.heading, 0, _slot, { dist: 1.4, angle: 0 });
+      if (i < 2 && inNotch(p.pos, _slot.x, _slot.z, this.aimYaw)) continue;     // not in front of her sword
       if (ph?.isDeepWater?.(_slot.x, _slot.z)) continue;
+      if (typeof ph?.navWalkable === 'function' && !ph.navWalkable(_slot.x, _slot.z)) continue;
       if (ph?.blockedAt?.(_slot.x, _slot.z, this.radius)) continue;
       if (ph?.inBounds && !ph.inBounds(_slot.x, _slot.z, 1)) continue;
       return out.set(_slot.x, groundY(this.ctx, _slot.x, _slot.z, p.pos.y), _slot.z);
@@ -193,6 +250,8 @@ export class Companion extends ScriptedActorMixin(Actor) {
     this.snap(); this.visual?.snap();
     this.ctx.fx?.burst?.('poof', this.pos, { scale: 0.4 });
     this.losT = 0; this.stats.teleports++;
+    this.trailSeq = -1; this.trailT = 0; this.stuckT = 0;
+    this._prevX = this.pos.x; this._prevZ = this.pos.z;
   }
 
   // ------------------------------------------------------------------ ScriptedActor visual hooks
@@ -262,6 +321,12 @@ export class Companion extends ScriptedActorMixin(Actor) {
     }
     if (!p) { ctx.physics.moveActor(this, dt); return; }
 
+    // how fast we actually moved last step (stuck detection), her breadcrumbs (on the ground only: a jump arc is not
+    // a path we can walk) and her aim (the notch the idle slot keeps out of)
+    this._movedSpeed = dt > 0 ? Math.hypot(this.pos.x - this._prevX, this.pos.z - this._prevZ) / dt : 0;
+    this._prevX = this.pos.x; this._prevZ = this.pos.z;
+    if (p.onGround !== false && !p.scripted) this.trail.push(p.pos.x, p.pos.y, p.pos.z);
+    this.aimYaw = playerAimYaw(ctx);
     // heading the slot hangs off: her velocity while moving, else her facing (smoothed: no orbit-chasing)
     const pSpeed = Math.hypot(p.vel.x, p.vel.z);
     const want = pSpeed > 0.6 ? Math.atan2(p.vel.x, p.vel.z) : p.facing;
@@ -300,7 +365,13 @@ export class Companion extends ScriptedActorMixin(Actor) {
     const ctx = this.ctx;
     const d = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
     const blocked = d > 1.5 && !this._canSee(p);
-    this.losT = blocked ? this.losT + THINK : 0;
+    // blocked: walk her trail from the crumb nearest to us; the 4 s teleport only counts while the trail isn't working
+    if (blocked && this.trailSeq < 0 && this.trail.count > 1 && !this.target) {
+      const i = this.trail.nearest(this.pos.x, this.pos.z);
+      if (i > 0) { this.trailSeq = this.trail.seqOf(i); this.trailT = 0; this.stats.trails++; }
+    } else if (!blocked && this.trailSeq >= 0 && d < COMPANIONS.follow + 1.5) this.trailSeq = -1;
+    const progressing = this.trailSeq >= 0 && this.trailT < TRAIL.progressFor;
+    this.losT = blocked ? (progressing ? this.losT : this.losT + THINK) : 0;
     if (d > COMPANIONS.teleportBeyond || this.losT >= COMPANIONS.teleportLos) {
       if (!this.ability?.holds) {
         this.teleportTo(this._landingNear(p, _v), p.facing);
@@ -319,20 +390,53 @@ export class Companion extends ScriptedActorMixin(Actor) {
     }
   }
 
+  /** Walk her breadcrumb trail (blocked straight line). Returns true while it steers this step (writes _des). */
+  _followTrail(dt, maxS) {
+    if (this.trailSeq < 0) return false;
+    let c = this.trail.getSeq(this.trailSeq, _crumb);
+    if (!c) { this.trailSeq = -1; return false; }
+    let d = Math.hypot(c.x - this.pos.x, c.z - this.pos.z);
+    while (d < TRAIL.reach) {                                       // reached: on to the next (newer) crumb
+      this.trailSeq++; this.trailT = 0;
+      c = this.trailSeq < this.trail.seq ? this.trail.getSeq(this.trailSeq, _crumb) : null;
+      if (!c) { this.trailSeq = -1; return false; }
+      d = Math.hypot(c.x - this.pos.x, c.z - this.pos.z);
+    }
+    this.trailT += dt;
+    const p = this.ctx.player;
+    if (this.trailT > TRAIL.stuckT) { this.trailSeq = -1; this.teleportTo(this._landingNear(p, _v), p.facing); return false; }
+    arrive(this.pos.x, this.pos.z, c.x, c.z, maxS, 0.01, _des);
+    this.settled = false;
+    this.stateName = 'follow';
+    return true;
+  }
+
   _follow(dt, p, pSpeed) {
     const regroup = this.regroupT > 0;
     if (regroup) this.regroupT -= dt;
     this.herStillT = pSpeed < 0.3 ? this.herStillT + dt : 0;
     const dP = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
     let maxS = Math.max(PLAYER.run * 1.15, pSpeed * 1.2);
-    // While she moves: the §9.1 slot, 2.5 m behind and to the side. Once she has stood still for a moment (or
-    // after her Meow) we come up beside her, where the camera can see us, and settle inside a loose band.
+    // While she moves: the §9.1 slot, 2.5 m behind and to the side. Once she has stood still for a moment (or after
+    // her Meow) we come to the idle slot at her back-left / back-right (>= 1.4 m, off her aim notch) and settle inside a
+    // loose band. Either slot flips to her other side when it would sit in the notch (she aims behind herself).
     const beside = regroup || this.herStillT >= SLOT.besideAfter;
-    if (beside) followSlot(p.pos, this.heading, this.side, _slot, { dist: SLOT.regroupDist, angle: SLOT.regroupAngle });
-    else followSlot(p.pos, this.heading, this.side, _slot);
+    if (beside) {
+      idleSlot(p.pos, this.heading, this.aimYaw, this.side, _slot);
+      this.side = _slot.side;
+    } else {
+      followSlot(p.pos, this.heading, this.side, _slot);
+      if (inNotch(p.pos, _slot.x, _slot.z, this.aimYaw)) {
+        followSlot(p.pos, this.heading, -this.side, _alt);
+        if (!inNotch(p.pos, _alt.x, _alt.z, this.aimYaw)) { this.side = -this.side; _slot.x = _alt.x; _slot.z = _alt.z; }
+      }
+    }
     const toSlot = Math.hypot(_slot.x - this.pos.x, _slot.z - this.pos.z);
     const [b0, b1] = SLOT.idleBand;
-    if (this.settled && beside && !regroup && dP >= b0 && dP <= b1 && toSlot < SLOT.settleRadius) {
+    if (this._followTrail(dt, maxS)) {
+      // steering along her trail (_des written there)
+    } else if (this.settled && beside && !regroup && dP >= b0 && dP <= b1 && toSlot < SLOT.settleRadius
+      && !inNotch(p.pos, this.pos.x, this.pos.z, this.aimYaw)) {
       _des.x = 0; _des.z = 0;                                          // settled: don't shuffle about
       this.stateName = 'idle';
     } else {
@@ -354,6 +458,17 @@ export class Companion extends ScriptedActorMixin(Actor) {
     const v = Math.hypot(this.vel.x, this.vel.z);
     if (v > 0.35) this.facing = dampAngle(this.facing, Math.atan2(this.vel.x, this.vel.z), 10, dt);
     else this.facing = dampAngle(this.facing, p.facing, 2.5, dt);
+    // stuck pressing toward her in plain sight (a low fence the chest-height sight line passes over, a cart corner):
+    // take her trail, and if that fails too, pop to her side (out of sight, the 4 s rule above decides)
+    const want = Math.hypot(_des.x, _des.z);
+    if (want > TRAIL.wantSpeed && this._movedSpeed < TRAIL.stuckSpeed && dP > COMPANIONS.follow + 0.8 && this.losT === 0) this.stuckT += dt;
+    else this.stuckT = Math.max(0, this.stuckT - dt * 2);
+    if (this.stuckT > TRAIL.stuckFree) {
+      this.stuckT = 0;
+      const i = this.trailSeq < 0 ? this.trail.nearest(this.pos.x, this.pos.z) : -1;
+      if (i > 0) { this.trailSeq = this.trail.seqOf(i); this.trailT = 0; this.stats.trails++; }
+      else this.teleportTo(this._landingNear(p, _v), p.facing);
+    }
   }
 
   _engage(dt, p) {

@@ -257,7 +257,8 @@ function aimLap(e, p) {
   e.ridePhase = 'aim'; e.rideT = 0;
   e.rideTele = Math.max(minLead('aoe'), WHEEL.tele * e.windupMul());
   const pos = e.pos.clone(), dir = new THREE.Vector3(L.dx, 0, L.dz);
-  e.telegraph('red', { duration: e.rideTele });                                      // the "!!" on him
+  // the "!!" on him; the lane rides in the payload too (CONTROLS_SPEC §8.2/§12: a red lane wedge from above)
+  e.telegraph('red', { duration: e.rideTele, attackId: LAP.id, attackDef: LAP, lane: { w: WHEEL.laneW, l: Math.max(1, L.len), dir: dir.clone() }, range: Math.max(1, L.len) });
   e.telegraphExtra('aoe', { shape: 'lane', pos, dir, w: WHEEL.laneW, l: Math.max(1, L.len), size: [WHEEL.laneW, Math.max(1, L.len)], duration: e.rideTele, follow: false });
 }
 

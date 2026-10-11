@@ -28,7 +28,20 @@ export const MAX_SHELLS = 24;
  * (CAMERA.dist 3.6 m) draws ~13 of 16 hero shells, lock-on (4.5 m) ~10, boss framing (6 m) ~6.
  */
 export const FUR_LOD = { near: 2.6, far: 8, min: 4 };
+/**
+ * Fur LOD under the iso camera (research/CONTROLS_SPEC.md §2.8): distances are measured from `cam.focus`, not the
+ * lens (the lens sits 9–18 m away, so the lens rule would strip every shell). The hero keeps her full shells within
+ * `heroLens` m of the lens; every other cat ramps from full (≤ `near` m from the focus) to the base layer (≥ `far`),
+ * and drops one furShells tier (kitten → npc counts) while the camera is farther than `dropAt` m from the focus.
+ */
+export const FUR_LOD_ISO = Object.freeze({ near: 5, far: 14, min: 3, heroLens: 25, dropAt: 12 });
+/**
+ * Which rule the per-draw LOD uses this frame. runtime.characterFrame() writes it from ctx.cam every frame: `focus`
+ * on (iso gameplay camera) or off (cutscenes, Meme Cam, `?cam=classic`, tools: the lens rule above).
+ */
+export const FUR_VIEW = { focusOn: false, focus: new THREE.Vector3(), camDist: 0 };
 const _lodV = new THREE.Vector3();
+const LOWER_TIER = Object.freeze({ hero: 'kitten', kitten: 'npc', npc: 'npc' });
 
 /** Current fur quality name. */
 export function getFurQuality() { return _quality; }
@@ -275,7 +288,7 @@ const FUR_FRAG = /* glsl */`
 uniform sampler2D uStrands;
 uniform float uSheen;
 uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade, uEdgeStart, uFringe;
-uniform vec3 uTipTint, uRimColor, uHolyColor;
+uniform vec3 uTipTint, uRimColor, uHolyColor, uHighlight;
 varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
 varying float vH, vMask;
 #include <common>
@@ -340,6 +353,8 @@ void main() {
   // its form readable under day fog (Mochi read as a black hole, STATUS M1); stronger toward the strand tips
   col += irr * (uSheen * (0.45 + 0.55 * vH)) * RECIPROCAL_PI;
   col += albedo * uHolyColor * uHoly * 0.07 + vec3(uFlash);   // stays ginger under the glow (ref1)
+  // hover / selection rim (characters.setHighlight; CONTROLS_SPEC §7.4)
+  col += uHighlight * (pow(1.0 - saturate(dot(N, V)), 2.0) * 1.4 + 0.08);
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -359,7 +374,7 @@ export function makeFurMaterial(o = {}) {
       uTipTint: { value: new THREE.Color(o.tipTint ?? PAL.furGingerLight).multiplyScalar(0.18) },
       uRimColor: { value: new THREE.Color('#FFE9D2') }, uRimStrength: { value: o.rim ?? 0.3 },
       uHoly: { value: 0 }, uSheen: { value: o.sheen ?? 0 }, uAmbMul: { value: o.ambMul ?? 1.55 }, uSunMul: { value: o.sunMul ?? 1.0 },
-      uRootDark: { value: o.rootDark ?? 0.82 }, uDensityBoost: { value: o.density ?? 1.5 }, uFlash: { value: 0 },
+      uRootDark: { value: o.rootDark ?? 0.82 }, uDensityBoost: { value: o.density ?? 1.5 }, uFlash: { value: 0 }, uHighlight: { value: new THREE.Color(0, 0, 0) },
       uComb: { value: o.comb ?? 1.6 }, uStretch: { value: o.stretch ?? 0.65 },
       uCells: { value: STRANDS.cells }, uStreak: { value: o.streak ?? 0.09 }, uEdgeFade: { value: o.edgeFade ?? 0.35 },
       uEdgeStart: { value: o.edgeStart ?? 0.35 }, uFringe: { value: o.fringe ?? 1 },
@@ -426,9 +441,7 @@ export class FurPart {
     const n0 = this.shells;
     if (n0 <= 0) return;
     _lodV.setFromMatrixPosition(this.mesh.matrixWorld);
-    const d = _lodV.distanceTo(camera.position);
-    const k = clamp((FUR_LOD.far - d) / (FUR_LOD.far - FUR_LOD.near), 0, 1);
-    const n = k <= 0 ? 0 : Math.max(Math.min(FUR_LOD.min, n0), Math.round(n0 * k));
+    const n = furLodShells(this.tier, n0, _lodV, camera.position);
     if (n === this._lodN) return;
     this._lodN = n;
     if (this.baked) this.mesh.geometry.setDrawRange(0, this.idxPerShell * (n + 1));
@@ -448,6 +461,28 @@ export class FurPart {
     else this.mesh.count = n + 1;
   }
   dispose() { _parts.delete(this); this.mesh.geometry.dispose(); }
+}
+
+/**
+ * Shell count to draw for a fur part of `tier` allocated `n0` shells, at world position `pos`, seen from `lens`
+ * (pure; FurPart._lod and the unit tests use it). Reads FUR_VIEW for the focus rule.
+ * @param {string} tier @param {number} n0 @param {THREE.Vector3} pos @param {THREE.Vector3} lens
+ */
+export function furLodShells(tier, n0, pos, lens) {
+  if (n0 <= 0) return 0;
+  if (FUR_VIEW.focusOn) {
+    const L = FUR_LOD_ISO;
+    if (tier === 'hero') return pos.distanceTo(lens) <= L.heroLens ? n0 : 0;
+    let base = n0;
+    if (FUR_VIEW.camDist > L.dropAt) base = Math.min(n0, shellsFor(LOWER_TIER[tier] ?? 'npc'));
+    if (base <= 0) return 0;
+    const df = Math.hypot(pos.x - FUR_VIEW.focus.x, pos.z - FUR_VIEW.focus.z);
+    const k = clamp((L.far - df) / (L.far - L.near), 0, 1);
+    return k <= 0 ? 0 : Math.max(Math.min(L.min, base), Math.round(base * k));
+  }
+  const d = pos.distanceTo(lens);
+  const k = clamp((FUR_LOD.far - d) / (FUR_LOD.far - FUR_LOD.near), 0, 1);
+  return k <= 0 ? 0 : Math.max(Math.min(FUR_LOD.min, n0), Math.round(n0 * k));
 }
 
 /** Duplicate an indexed geometry (shells 0..n) with an `aShell` attribute; shell-major order for drawRange. */

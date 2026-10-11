@@ -1,0 +1,4650 @@
+{
+ "when": "2026-10-11T06:29:52.445Z",
+ "base": "http://localhost:5801/",
+ "runs": [
+  {
+   "profile": "desktop",
+   "preset": "med",
+   "scenario": "meadow_idle",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 30472,
+   "loadMs": 3527,
+   "frames": 102,
+   "steps": 256,
+   "seconds": 4.23,
+   "fps": 24.1,
+   "frameMs": {
+    "mean": 41.86,
+    "p50": 41.8,
+    "p95": 65.1,
+    "p99": 70.9,
+    "max": 78.1
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.291,
+    "step.input": 0.031,
+    "step.story": 0.069,
+    "step.player": 1.044,
+    "step.companions": 0.136,
+    "step.enemies": 0.037,
+    "step.combat": 0.044,
+    "step.physics": 0.582,
+    "step.levels": 0.624,
+    "step.objectives": 0.02,
+    "step.env": 0.17,
+    "step.fx": 0.03,
+    "step.cam": 0.108,
+    "step.ui": 0.071,
+    "step.audio": 0.112,
+    "step.save": 0.013,
+    "frame.physics": 0.003,
+    "frame.story": 0.022,
+    "frame.player": 6.032,
+    "frame.companions": 1.175,
+    "frame.enemies": 0.019,
+    "frame.combat": 0.005,
+    "frame.levels": 0.792,
+    "frame.env": 0.512,
+    "frame.cam": 0.833,
+    "frame.fx": 0.354,
+    "frame.ui": 0.368,
+    "frame.audio": 0.013,
+    "post.update": 0.003,
+    "gl.shadowMap": 4.681,
+    "pass.0.RenderPass": 14.661,
+    "pass.1.UnrealBloomPass": 2.614,
+    "pass.2.OutputPass": 0.237,
+    "pass.3.ShaderPass": 0.233,
+    "post.render": 17.924,
+    "tick.cpu": 32.127
+   },
+   "gpuMs": {
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0.29,
+     "n": 272
+    },
+    "gpu.frame": {
+     "p50": 8.91,
+     "p95": 20.66,
+     "n": 17
+    },
+    "gpu.pass.0": {
+     "p50": 5.43,
+     "p95": 9.32,
+     "n": 17
+    },
+    "gpu.pass.1": {
+     "p50": 1.51,
+     "p95": 1.75,
+     "n": 17
+    },
+    "gpu.pass.2": {
+     "p50": 1.51,
+     "p95": 1.74,
+     "n": 17
+    },
+    "gpu.pass.3": {
+     "p50": 0.14,
+     "p95": 0.16,
+     "n": 16
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 6.65,
+    "minorGCs": 1,
+    "usedMB": 250.6
+   },
+   "longTasks": {
+    "n": 7,
+    "maxMs": 77
+   },
+   "info": {
+    "calls": 87,
+    "tris": 499095,
+    "sceneCalls": 72,
+    "sceneTris": 499080,
+    "programs": 88,
+    "geometries": 164,
+    "textures": 63
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "med",
+   "census": {
+    "objects": 420,
+    "visibleDrawables": 55,
+    "instancedMeshes": 15,
+    "instances": 531,
+    "skinned": 5,
+    "points": 1,
+    "lightsVisible": 4,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 2,
+    "shadowCasters": 26,
+    "transparentDrawables": 8,
+    "dblSidedTransparent": 0,
+    "materials": 37
+   },
+   "actors": 22,
+   "enemies": 0,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 783.3,
+    "TaskDurationPerSec_ms": 953.3,
+    "RecalcStyleDurationPerSec_ms": 20.6,
+    "LayoutDurationPerSec_ms": 0,
+    "RecalcStyleCountPerSec": 23.6,
+    "LayoutCountPerSec": 0,
+    "Nodes": 1118,
+    "JSEventListeners": 99
+   },
+   "sync": {
+    "mean": 41,
+    "p50": 37.6,
+    "p95": 60.5
+   },
+   "syncCpu": 41.123,
+   "breakdown": [
+    {
+     "label": "(Mesh)",
+     "calls": 15,
+     "inst": 15,
+     "tris": 15,
+     "mats": "ShaderMaterial,RawShaderMaterial:OutputShader,ShaderMaterial:VignetteShader",
+     "dbl": 0
+    },
+    {
+     "label": "terrain/ground/ground",
+     "calls": 4,
+     "inst": 4,
+     "tris": 50000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 2,
+     "inst": 39900,
+     "tris": 119700,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/practiceGateHinge/practiceGate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 72,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/wobbleKnight/wobble_body",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1464,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/wobbleKnight/wobble_arm",
+     "calls": 1,
+     "inst": 1,
+     "tris": 188,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:fence_simple",
+     "calls": 1,
+     "inst": 73,
+     "tris": 4672,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:gate_posts",
+     "calls": 1,
+     "inst": 1,
+     "tris": 88,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallB",
+     "calls": 1,
+     "inst": 7,
+     "tris": 1204,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallC",
+     "calls": 1,
+     "inst": 13,
+     "tris": 481,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallD",
+     "calls": 1,
+     "inst": 6,
+     "tris": 228,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallE",
+     "calls": 1,
+     "inst": 5,
+     "tris": 190,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallF",
+     "calls": 1,
+     "inst": 7,
+     "tris": 322,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 25,
+     "tris": 4900,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 14,
+     "tris": 5628,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_default",
+     "calls": 1,
+     "inst": 8,
+     "tris": 912,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 65,
+     "tris": 5720,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW AnimalArmature/Cow/Cube:merged",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2450,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/skyline",
+     "calls": 1,
+     "inst": 1,
+     "tris": 7797,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19398,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 65,
+     "tris": 5720,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 87,
+   "ablations": {
+    "baseline": {
+     "gpu": 9.29,
+     "cpu": 36.617,
+     "frame": 44.9,
+     "calls": 87,
+     "tris": 499095
+    },
+    "noShadows": {
+     "gpu": 8.16,
+     "cpu": 37.514,
+     "frame": 42,
+     "calls": 65,
+     "tris": 423703
+    },
+    "noBloom": {
+     "gpu": 7.97,
+     "cpu": 21.144,
+     "frame": 27.8,
+     "calls": 74,
+     "tris": 499082
+    },
+    "noGrass": {
+     "gpu": 7.26,
+     "cpu": 30.023,
+     "frame": 38.9,
+     "calls": 84,
+     "tris": 376515
+    },
+    "noFur": {
+     "gpu": 7.04,
+     "cpu": 31.54,
+     "frame": 40.3,
+     "calls": 84,
+     "tris": 377355
+    },
+    "noTransparent": {
+     "gpu": 7.15,
+     "cpu": 29.803,
+     "frame": 38.6,
+     "calls": 82,
+     "tris": 377041
+    },
+    "dpr0.75x": {
+     "gpu": 5.22,
+     "cpu": 26.006,
+     "frame": 35.1,
+     "calls": 87,
+     "tris": 499095
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "med",
+   "scenario": "meadow_walk",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 30472,
+   "loadMs": 2722,
+   "frames": 94,
+   "steps": 162,
+   "seconds": 4.09,
+   "fps": 23,
+   "frameMs": {
+    "mean": 43.95,
+    "p50": 23.8,
+    "p95": 154.8,
+    "p99": 847.1,
+    "max": 847.1
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.128,
+    "step.input": 0.022,
+    "step.story": 0.019,
+    "step.player": 0.936,
+    "step.companions": 0.05,
+    "step.enemies": 0.033,
+    "step.combat": 0.011,
+    "step.physics": 0.357,
+    "step.levels": 0.52,
+    "step.objectives": 0.003,
+    "step.env": 0.028,
+    "step.fx": 0.013,
+    "step.cam": 0.048,
+    "step.ui": 0.013,
+    "step.audio": 0.05,
+    "step.save": 0.004,
+    "frame.physics": 0.003,
+    "frame.story": 0.003,
+    "frame.player": 3.551,
+    "frame.companions": 0.405,
+    "frame.enemies": 0.004,
+    "frame.combat": 0.003,
+    "frame.levels": 0.34,
+    "frame.env": 0.452,
+    "frame.cam": 0.481,
+    "frame.fx": 0.254,
+    "frame.ui": 0.156,
+    "frame.audio": 0.072,
+    "post.update": 0.002,
+    "gl.shadowMap": 2.64,
+    "pass.0.RenderPass": 8.479,
+    "pass.1.UnrealBloomPass": 1.882,
+    "pass.2.OutputPass": 0.094,
+    "pass.3.ShaderPass": 0.12,
+    "post.render": 10.655,
+    "tick.cpu": 18.873
+   },
+   "gpuMs": {
+    "gpu.pass.2": {
+     "p50": 1.92,
+     "p95": 18.26,
+     "n": 16
+    },
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0.58,
+     "n": 241
+    },
+    "gpu.frame": {
+     "p50": 13.34,
+     "p95": 32.55,
+     "n": 16
+    },
+    "gpu.pass.3": {
+     "p50": 0.23,
+     "p95": 0.29,
+     "n": 16
+    },
+    "gpu.pass.0": {
+     "p50": 10.07,
+     "p95": 30.53,
+     "n": 15
+    },
+    "gpu.pass.1": {
+     "p50": 1.97,
+     "p95": 9.88,
+     "n": 15
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 6.34,
+    "minorGCs": 2,
+    "usedMB": 211.8
+   },
+   "longTasks": {
+    "n": 10,
+    "maxMs": 840
+   },
+   "info": {
+    "calls": 77,
+    "tris": 460082,
+    "sceneCalls": 62,
+    "sceneTris": 460067,
+    "programs": 88,
+    "geometries": 165,
+    "textures": 63
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "med",
+   "census": {
+    "objects": 421,
+    "visibleDrawables": 55,
+    "instancedMeshes": 15,
+    "instances": 530,
+    "skinned": 5,
+    "points": 1,
+    "lightsVisible": 4,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 2,
+    "shadowCasters": 26,
+    "transparentDrawables": 8,
+    "dblSidedTransparent": 0,
+    "materials": 37
+   },
+   "actors": 22,
+   "enemies": 0,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 647.3,
+    "TaskDurationPerSec_ms": 970.8,
+    "RecalcStyleDurationPerSec_ms": 16.6,
+    "LayoutDurationPerSec_ms": 1.6,
+    "RecalcStyleCountPerSec": 22.7,
+    "LayoutCountPerSec": 1.5,
+    "Nodes": 1023,
+    "JSEventListeners": 104
+   },
+   "sync": {
+    "mean": 61.32,
+    "p50": 61,
+    "p95": 76.6
+   },
+   "syncCpu": 61.331,
+   "breakdown": [
+    {
+     "label": "(Mesh)",
+     "calls": 15,
+     "inst": 15,
+     "tris": 15,
+     "mats": "ShaderMaterial,RawShaderMaterial:OutputShader,ShaderMaterial:VignetteShader",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "terrain/ground/ground",
+     "calls": 2,
+     "inst": 2,
+     "tris": 40000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 2,
+     "inst": 39900,
+     "tris": 119700,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/practiceGateHinge/practiceGate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 72,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/wobbleKnight/wobble_arm",
+     "calls": 1,
+     "inst": 1,
+     "tris": 188,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:fence_simple",
+     "calls": 1,
+     "inst": 73,
+     "tris": 4672,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:gate_posts",
+     "calls": 1,
+     "inst": 1,
+     "tris": 88,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallB",
+     "calls": 1,
+     "inst": 7,
+     "tris": 1204,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallC",
+     "calls": 1,
+     "inst": 13,
+     "tris": 481,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallD",
+     "calls": 1,
+     "inst": 6,
+     "tris": 228,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallE",
+     "calls": 1,
+     "inst": 5,
+     "tris": 190,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallF",
+     "calls": 1,
+     "inst": 7,
+     "tris": 322,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 25,
+     "tris": 4900,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 14,
+     "tris": 5628,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_default",
+     "calls": 1,
+     "inst": 8,
+     "tris": 912,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 63,
+     "tris": 5544,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW AnimalArmature/Cow/Cube:merged",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2450,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/skyline",
+     "calls": 1,
+     "inst": 1,
+     "tris": 7797,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19398,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 63,
+     "tris": 5544,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "props/practiceGateHinge/practiceGate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 72,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 77.1,
+   "ablations": {
+    "baseline": {
+     "gpu": 16.82,
+     "cpu": 26.554,
+     "frame": 33.5,
+     "calls": 82,
+     "tris": 502427
+    },
+    "noShadows": {
+     "gpu": 14.05,
+     "cpu": 16.829,
+     "frame": 18.6,
+     "calls": 57,
+     "tris": 386052
+    },
+    "noBloom": {
+     "gpu": 11.51,
+     "cpu": 16.847,
+     "frame": 17.9,
+     "calls": 64,
+     "tris": 466124
+    },
+    "noGrass": {
+     "gpu": 13.27,
+     "cpu": 15.529,
+     "frame": 15.8,
+     "calls": 79,
+     "tris": 379907
+    },
+    "noFur": {
+     "gpu": 12.76,
+     "cpu": 16.203,
+     "frame": 18.5,
+     "calls": 77,
+     "tris": 346815
+    },
+    "noTransparent": {
+     "gpu": 12.41,
+     "cpu": 15.445,
+     "frame": 16,
+     "calls": 75,
+     "tris": 372267
+    },
+    "dpr0.75x": {
+     "gpu": 9.17,
+     "cpu": 15.626,
+     "frame": 15.1,
+     "calls": 81,
+     "tris": 470610
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "med",
+   "scenario": "meadow_combat",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 30472,
+   "loadMs": 2424,
+   "frames": 124,
+   "steps": 258,
+   "seconds": 4.3,
+   "fps": 28.8,
+   "frameMs": {
+    "mean": 34.96,
+    "p50": 27.5,
+    "p95": 73,
+    "p99": 94,
+    "max": 113
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.121,
+    "step.input": 0.014,
+    "step.story": 0.034,
+    "step.player": 1.013,
+    "step.companions": 0.248,
+    "step.enemies": 1.977,
+    "step.combat": 0.314,
+    "step.physics": 0.625,
+    "step.levels": 0.456,
+    "step.objectives": 0.006,
+    "step.env": 0.027,
+    "step.fx": 0.019,
+    "step.cam": 0.09,
+    "step.ui": 0.015,
+    "step.audio": 0.084,
+    "step.save": 0.002,
+    "frame.physics": 0,
+    "frame.story": 0.006,
+    "frame.player": 3.596,
+    "frame.companions": 0.379,
+    "frame.enemies": 0.746,
+    "frame.combat": 0.019,
+    "frame.levels": 0.493,
+    "frame.env": 0.527,
+    "frame.cam": 0.567,
+    "frame.fx": 0.51,
+    "frame.ui": 0.337,
+    "frame.audio": 0.062,
+    "post.update": 0.006,
+    "gl.shadowMap": 5.296,
+    "pass.0.RenderPass": 13.103,
+    "pass.1.UnrealBloomPass": 1.098,
+    "pass.2.OutputPass": 0.088,
+    "pass.3.ShaderPass": 0.119,
+    "post.render": 14.49,
+    "tick.cpu": 27.166
+   },
+   "gpuMs": {
+    "gpu.pass.2": {
+     "p50": 2,
+     "p95": 2.19,
+     "n": 21
+    },
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0.92,
+     "n": 320
+    },
+    "gpu.frame": {
+     "p50": 16.83,
+     "p95": 21.44,
+     "n": 20
+    },
+    "gpu.pass.3": {
+     "p50": 0.22,
+     "p95": 0.33,
+     "n": 21
+    },
+    "gpu.pass.0": {
+     "p50": 11.6,
+     "p95": 25.73,
+     "n": 20
+    },
+    "gpu.pass.1": {
+     "p50": 2.17,
+     "p95": 11.13,
+     "n": 20
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 12.18,
+    "minorGCs": 2,
+    "usedMB": 255.9
+   },
+   "longTasks": {
+    "n": 21,
+    "maxMs": 125
+   },
+   "info": {
+    "calls": 123,
+    "tris": 542225,
+    "sceneCalls": 108,
+    "sceneTris": 542210,
+    "programs": 88,
+    "geometries": 167,
+    "textures": 73
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "med",
+   "census": {
+    "objects": 701,
+    "visibleDrawables": 91,
+    "instancedMeshes": 15,
+    "instances": 528,
+    "skinned": 15,
+    "points": 1,
+    "lightsVisible": 4,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 2,
+    "shadowCasters": 48,
+    "transparentDrawables": 12,
+    "dblSidedTransparent": 0,
+    "materials": 59
+   },
+   "actors": 28,
+   "enemies": 6,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 775.9,
+    "TaskDurationPerSec_ms": 986.9,
+    "RecalcStyleDurationPerSec_ms": 31.9,
+    "LayoutDurationPerSec_ms": 4.2,
+    "RecalcStyleCountPerSec": 28.4,
+    "LayoutCountPerSec": 9.5,
+    "Nodes": 1839,
+    "JSEventListeners": 350
+   },
+   "sync": {
+    "mean": 43.42,
+    "p50": 41.5,
+    "p95": 58.4
+   },
+   "syncCpu": 43.447,
+   "breakdown": [
+    {
+     "label": "(Mesh)",
+     "calls": 15,
+     "inst": 15,
+     "tris": 15,
+     "mats": "ShaderMaterial,RawShaderMaterial:OutputShader,ShaderMaterial:VignetteShader",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW RootNode/Rat/Rat_1",
+     "calls": 4,
+     "inst": 4,
+     "tris": 5840,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW RootNode/Rat/Rat_2",
+     "calls": 4,
+     "inst": 4,
+     "tris": 10176,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "terrain/ground/ground",
+     "calls": 4,
+     "inst": 4,
+     "tris": 50000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "RootNode/Rat/Rat_1",
+     "calls": 4,
+     "inst": 4,
+     "tris": 5840,
+     "mats": "MeshStandardMaterial:Grey",
+     "dbl": 0
+    },
+    {
+     "label": "RootNode/Rat/Rat_2",
+     "calls": 4,
+     "inst": 4,
+     "tris": 10176,
+     "mats": "MeshStandardMaterial:Pink",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Neck/Head/prop:kettleHelm",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1864,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Body/Shoulders/prop:spear",
+     "calls": 2,
+     "inst": 2,
+     "tris": 184,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Body/Shoulders/prop:buckler",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1048,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Neck/Head/prop:hood",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1432,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW fit/Scene/crossbow_1handed",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1168,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Scene/CharacterArmature/Pigeon",
+     "calls": 2,
+     "inst": 2,
+     "tris": 7024,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Neck/Head/prop:crowHood",
+     "calls": 2,
+     "inst": 2,
+     "tris": 628,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidLow",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 2,
+     "inst": 39900,
+     "tris": 119700,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "Scene/CharacterArmature/Pigeon",
+     "calls": 2,
+     "inst": 2,
+     "tris": 7024,
+     "mats": "MeshStandardMaterial:Atlas",
+     "dbl": 0
+    },
+    {
+     "label": "fx.telegraph.aim",
+     "calls": 1.2,
+     "inst": 1,
+     "tris": 2,
+     "mats": "ShaderMaterial:fx.telegraph.aim",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/practiceGateHinge/practiceGate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 72,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:fence_simple",
+     "calls": 1,
+     "inst": 73,
+     "tris": 4672,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:gate_posts",
+     "calls": 1,
+     "inst": 1,
+     "tris": 88,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallB",
+     "calls": 1,
+     "inst": 7,
+     "tris": 1204,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallC",
+     "calls": 1,
+     "inst": 13,
+     "tris": 481,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallD",
+     "calls": 1,
+     "inst": 6,
+     "tris": 228,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallE",
+     "calls": 1,
+     "inst": 5,
+     "tris": 190,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/fade:stone_tallF",
+     "calls": 1,
+     "inst": 7,
+     "tris": 322,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 25,
+     "tris": 4900,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 14,
+     "tris": 5628,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/props/trees:tree_default",
+     "calls": 1,
+     "inst": 8,
+     "tris": 912,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 63,
+     "tris": 5544,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW AnimalArmature/Cow/Cube:merged",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2450,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 121.3,
+   "ablations": {
+    "baseline": {
+     "gpu": 16.26,
+     "cpu": 27.064,
+     "frame": 28.9,
+     "calls": 118,
+     "tris": 536155
+    },
+    "noShadows": {
+     "gpu": 15.04,
+     "cpu": 27.345,
+     "frame": 34.9,
+     "calls": 76,
+     "tris": 432963
+    },
+    "noBloom": {
+     "gpu": 14.55,
+     "cpu": 97.524,
+     "frame": 39.9,
+     "calls": 110,
+     "tris": 538084
+    },
+    "noGrass": {
+     "gpu": 18,
+     "cpu": 47.174,
+     "frame": 53.9,
+     "calls": 123,
+     "tris": 415585
+    },
+    "noFur": {
+     "gpu": 29.9,
+     "cpu": 40.26,
+     "frame": 47.3,
+     "calls": 115,
+     "tris": 423345
+    },
+    "noTransparent": {
+     "gpu": 27.96,
+     "cpu": 43.373,
+     "frame": 52.9,
+     "calls": 113,
+     "tris": 452405
+    },
+    "dpr0.75x": {
+     "gpu": 12.47,
+     "cpu": 45.055,
+     "frame": 53.1,
+     "calls": 114,
+     "tris": 556848
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "med",
+   "scenario": "forest",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 30472,
+   "loadMs": 50500,
+   "frames": 68,
+   "steps": 240,
+   "seconds": 4.36,
+   "fps": 15.6,
+   "frameMs": {
+    "mean": 65.15,
+    "p50": 57.2,
+    "p95": 136.3,
+    "p99": 195.1,
+    "max": 195.1
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.222,
+    "step.input": 0.016,
+    "step.story": 0.056,
+    "step.player": 0.982,
+    "step.companions": 0.401,
+    "step.enemies": 2.134,
+    "step.combat": 0.041,
+    "step.physics": 1.256,
+    "step.levels": 0.543,
+    "step.objectives": 0.018,
+    "step.env": 0.079,
+    "step.fx": 0.028,
+    "step.cam": 0.176,
+    "step.ui": 0.026,
+    "step.audio": 0.278,
+    "step.save": 0.01,
+    "frame.physics": 0.003,
+    "frame.story": 0.003,
+    "frame.player": 8.097,
+    "frame.companions": 1.457,
+    "frame.enemies": 0.691,
+    "frame.combat": 0.003,
+    "frame.levels": 0.488,
+    "frame.env": 1.201,
+    "frame.cam": 0.875,
+    "frame.fx": 0.371,
+    "frame.ui": 0.241,
+    "frame.audio": 0.084,
+    "post.update": 0.006,
+    "gl.shadowMap": 6.585,
+    "pass.0.RenderPass": 24.732,
+    "pass.1.UnrealBloomPass": 2.56,
+    "pass.2.OutputPass": 0.521,
+    "pass.3.ShaderPass": 0.24,
+    "post.render": 28.497,
+    "tick.cpu": 50.251
+   },
+   "gpuMs": {
+    "gpu.pass.3": {
+     "p50": 0.22,
+     "p95": 32.49,
+     "n": 13
+    },
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0.86,
+     "n": 192
+    },
+    "gpu.frame": {
+     "p50": 47.56,
+     "p95": 63.76,
+     "n": 12
+    },
+    "gpu.pass.0": {
+     "p50": 11.88,
+     "p95": 53.02,
+     "n": 12
+    },
+    "gpu.pass.1": {
+     "p50": 1.98,
+     "p95": 16.3,
+     "n": 12
+    },
+    "gpu.pass.2": {
+     "p50": 2.08,
+     "p95": 38.79,
+     "n": 12
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 6.1,
+    "minorGCs": 1,
+    "usedMB": 211.6
+   },
+   "longTasks": {
+    "n": 51,
+    "maxMs": 140
+   },
+   "info": {
+    "calls": 144,
+    "tris": 472855,
+    "sceneCalls": 129,
+    "sceneTris": 472840,
+    "programs": 138,
+    "geometries": 130,
+    "textures": 66
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "med",
+   "census": {
+    "objects": 970,
+    "visibleDrawables": 85,
+    "instancedMeshes": 7,
+    "instances": 169,
+    "skinned": 12,
+    "points": 1,
+    "lightsVisible": 6,
+    "pointLightsOn": 2,
+    "pointLightsTotal": 4,
+    "shadowCasters": 39,
+    "transparentDrawables": 21,
+    "dblSidedTransparent": 7,
+    "materials": 56
+   },
+   "actors": 23,
+   "enemies": 10,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 763.3,
+    "TaskDurationPerSec_ms": 896.4,
+    "RecalcStyleDurationPerSec_ms": 12.3,
+    "LayoutDurationPerSec_ms": 0,
+    "RecalcStyleCountPerSec": 14.9,
+    "LayoutCountPerSec": 0,
+    "Nodes": 841,
+    "JSEventListeners": 125
+   },
+   "sync": {
+    "mean": 116.85,
+    "p50": 122.7,
+    "p95": 186.7
+   },
+   "syncCpu": 116.876,
+   "breakdown": [
+    {
+     "label": "level:forest/props/flame",
+     "calls": 28,
+     "inst": 28,
+     "tris": 182,
+     "mats": "MeshBasicMaterial,SpriteMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "(Mesh)",
+     "calls": 15,
+     "inst": 15,
+     "tris": 15,
+     "mats": "ShaderMaterial,RawShaderMaterial:OutputShader,ShaderMaterial:VignetteShader",
+     "dbl": 0
+    },
+    {
+     "label": "web-patch",
+     "calls": 6,
+     "inst": 6,
+     "tris": 12,
+     "mats": "MeshBasicMaterial:enemy-web",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW RootNode/Rat/Rat_1",
+     "calls": 4,
+     "inst": 4,
+     "tris": 5840,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW RootNode/Rat/Rat_2",
+     "calls": 4,
+     "inst": 4,
+     "tris": 10176,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "Neck/Head/prop:eyes",
+     "calls": 4,
+     "inst": 4,
+     "tris": 640,
+     "mats": "MeshBasicMaterial:enemy-eye-rat",
+     "dbl": 0
+    },
+    {
+     "label": "Neck/Head/prop:kettleHelm",
+     "calls": 4,
+     "inst": 4,
+     "tris": 3728,
+     "mats": "MeshStandardMaterial:enemy-metal",
+     "dbl": 0
+    },
+    {
+     "label": "Body/Shoulders/prop:buckler",
+     "calls": 4,
+     "inst": 4,
+     "tris": 2096,
+     "mats": "MeshStandardMaterial:enemy-gear",
+     "dbl": 0
+    },
+    {
+     "label": "Body/Shoulders/prop:spear",
+     "calls": 4,
+     "inst": 4,
+     "tris": 368,
+     "mats": "MeshStandardMaterial:enemy-gear",
+     "dbl": 0
+    },
+    {
+     "label": "terrain/ground/ground",
+     "calls": 4,
+     "inst": 4,
+     "tris": 50000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "RootNode/Rat/Rat_1",
+     "calls": 4,
+     "inst": 4,
+     "tris": 5840,
+     "mats": "MeshStandardMaterial:Grey",
+     "dbl": 0
+    },
+    {
+     "label": "RootNode/Rat/Rat_2",
+     "calls": 4,
+     "inst": 4,
+     "tris": 10176,
+     "mats": "MeshStandardMaterial:Pink",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Neck/Head/prop:kettleHelm",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1864,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Body/Shoulders/prop:spear",
+     "calls": 2,
+     "inst": 2,
+     "tris": 184,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW Body/Shoulders/prop:buckler",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1048,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:forest/props/millWheel",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1200,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 2,
+     "inst": 31920,
+     "tris": 95760,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "water/water/water:stream",
+     "calls": 2,
+     "inst": 2,
+     "tris": 22,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:forest/props/props:forest",
+     "calls": 1,
+     "inst": 1,
+     "tris": 21736,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:forest/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 26,
+     "tris": 5096,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:forest/props/trees:tree_fat",
+     "calls": 1,
+     "inst": 31,
+     "tris": 1550,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:forest/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 26,
+     "tris": 10452,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:forest/props/trees:tree_oak_dark",
+     "calls": 1,
+     "inst": 18,
+     "tris": 3528,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:forest/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 41,
+     "tris": 3608,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19380,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 144,
+   "ablations": {
+    "baseline": {
+     "gpu": 17.22,
+     "cpu": 49.017,
+     "frame": 59.2,
+     "calls": 144,
+     "tris": 472855
+    },
+    "noShadows": {
+     "gpu": 48.02,
+     "cpu": 36.932,
+     "frame": 46.6,
+     "calls": 118,
+     "tris": 389497
+    },
+    "noBloom": {
+     "gpu": 33.71,
+     "cpu": 49.248,
+     "frame": 53.1,
+     "calls": 131,
+     "tris": 472842
+    },
+    "noGrass": {
+     "gpu": 16.05,
+     "cpu": 52.845,
+     "frame": 55.6,
+     "calls": 141,
+     "tris": 374215
+    },
+    "noFur": {
+     "gpu": 13.83,
+     "cpu": 45.674,
+     "frame": 56.7,
+     "calls": 141,
+     "tris": 351115
+    },
+    "noTransparent": {
+     "gpu": 13.84,
+     "cpu": 39.918,
+     "frame": 51.5,
+     "calls": 119,
+     "tris": 350607
+    },
+    "dpr0.75x": {
+     "gpu": 10.54,
+     "cpu": 48.088,
+     "frame": 63.9,
+     "calls": 144,
+     "tris": 472855
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "med",
+   "scenario": "town_hub",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 30472,
+   "loadMs": 14506,
+   "frames": 96,
+   "steps": 244,
+   "seconds": 4.04,
+   "fps": 23.8,
+   "frameMs": {
+    "mean": 42.5,
+    "p50": 39,
+    "p95": 73.4,
+    "p99": 111.7,
+    "max": 111.7
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.232,
+    "step.input": 0.017,
+    "step.story": 0.04,
+    "step.player": 0.425,
+    "step.companions": 1.284,
+    "step.enemies": 0.017,
+    "step.combat": 0.024,
+    "step.physics": 1.91,
+    "step.levels": 0.499,
+    "step.objectives": 0.003,
+    "step.env": 0.049,
+    "step.fx": 0.01,
+    "step.cam": 0.096,
+    "step.ui": 0.016,
+    "step.audio": 0.211,
+    "step.save": 0.01,
+    "frame.physics": 0,
+    "frame.story": 0.002,
+    "frame.player": 4.587,
+    "frame.companions": 7.879,
+    "frame.enemies": 0.008,
+    "frame.combat": 0.006,
+    "frame.levels": 0.234,
+    "frame.env": 0.782,
+    "frame.cam": 0.839,
+    "frame.fx": 0.176,
+    "frame.ui": 0.139,
+    "frame.audio": 0.031,
+    "post.update": 0.005,
+    "gl.shadowMap": 3.354,
+    "pass.0.RenderPass": 13.365,
+    "pass.1.UnrealBloomPass": 1.607,
+    "pass.2.OutputPass": 0.132,
+    "pass.3.ShaderPass": 0.13,
+    "post.render": 15.325,
+    "tick.cpu": 35.378
+   },
+   "gpuMs": {
+    "gpu.pass.0": {
+     "p50": 16.3,
+     "p95": 19.42,
+     "n": 16
+    },
+    "gpu.pass.1": {
+     "p50": 2.04,
+     "p95": 2.35,
+     "n": 16
+    },
+    "gpu.pass.2": {
+     "p50": 2.07,
+     "p95": 2.27,
+     "n": 16
+    },
+    "gpu.pass.3": {
+     "p50": 0.25,
+     "p95": 0.33,
+     "n": 16
+    },
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 1.12,
+     "n": 241
+    },
+    "gpu.frame": {
+     "p50": 21.14,
+     "p95": 24.34,
+     "n": 16
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 11.41,
+    "minorGCs": 1,
+    "usedMB": 396.3
+   },
+   "longTasks": {
+    "n": 43,
+    "maxMs": 87
+   },
+   "info": {
+    "calls": 85,
+    "tris": 575405,
+    "sceneCalls": 70,
+    "sceneTris": 575390,
+    "programs": 151,
+    "geometries": 176,
+    "textures": 65
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "med",
+   "census": {
+    "objects": 1338,
+    "visibleDrawables": 56,
+    "instancedMeshes": 7,
+    "instances": 353,
+    "skinned": 8,
+    "points": 1,
+    "lightsVisible": 6,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 4,
+    "shadowCasters": 21,
+    "transparentDrawables": 17,
+    "dblSidedTransparent": 1,
+    "materials": 34
+   },
+   "actors": 36,
+   "enemies": 0,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 840.9,
+    "TaskDurationPerSec_ms": 988.8,
+    "RecalcStyleDurationPerSec_ms": 16.4,
+    "LayoutDurationPerSec_ms": 0,
+    "RecalcStyleCountPerSec": 23.5,
+    "LayoutCountPerSec": 0,
+    "Nodes": 972,
+    "JSEventListeners": 135
+   },
+   "sync": {
+    "mean": 79.91,
+    "p50": 81.6,
+    "p95": 109.7
+   },
+   "syncCpu": 79.917,
+   "breakdown": [
+    {
+     "label": "(Mesh)",
+     "calls": 15,
+     "inst": 15,
+     "tris": 15,
+     "mats": "ShaderMaterial,RawShaderMaterial:OutputShader,ShaderMaterial:VignetteShader",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/whiskers",
+     "calls": 5,
+     "inst": 5,
+     "tris": 0,
+     "mats": "LineBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "terrain/ground/ground",
+     "calls": 4,
+     "inst": 4,
+     "tris": 24500,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 2,
+     "inst": 23940,
+     "tris": 71820,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "hips/chest/scarfTail",
+     "calls": 2,
+     "inst": 2,
+     "tris": 64,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:town/props/props:town",
+     "calls": 1,
+     "inst": 1,
+     "tris": 48076,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:town/props/fade:lantern",
+     "calls": 1,
+     "inst": 11,
+     "tris": 1738,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:town/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 14,
+     "tris": 2744,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:town/props/trees:tree_default",
+     "calls": 1,
+     "inst": 24,
+     "tris": 2736,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:town/props/fade:fence",
+     "calls": 1,
+     "inst": 247,
+     "tris": 20748,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:town/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 30,
+     "tris": 2640,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:waffles/kitten:waffles/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 14384,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:toffee/kitten:toffee/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 12008,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:villager_hub_14/kitten:villager_hub_14/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 12536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:villager_hub_14/kitten:villager_hub_14/blob",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 10932,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:villager_hub_14/kitten:villager_hub_14/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 12536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:waffles/kitten:waffles/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 14384,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:villager_hub_6/kitten:villager_hub_6/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 13304,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:toffee/kitten:toffee/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 12008,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:town/props/props:town",
+     "calls": 1,
+     "inst": 1,
+     "tris": 48076,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:town/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 30,
+     "tris": 2640,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:town/props/merged:terrace",
+     "calls": 1,
+     "inst": 1,
+     "tris": 460,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 85,
+   "ablations": {
+    "baseline": {
+     "gpu": 30.52,
+     "cpu": 52.224,
+     "frame": 62.3,
+     "calls": 85,
+     "tris": 575405
+    },
+    "noShadows": {
+     "gpu": 18.3,
+     "cpu": 52.462,
+     "frame": 59.9,
+     "calls": 69,
+     "tris": 430434
+    },
+    "noBloom": {
+     "gpu": 36.03,
+     "cpu": 42.592,
+     "frame": 53.3,
+     "calls": 72,
+     "tris": 575392
+    },
+    "noGrass": {
+     "gpu": 20.74,
+     "cpu": 33.718,
+     "frame": 29.2,
+     "calls": 82,
+     "tris": 498977
+    },
+    "noFur": {
+     "gpu": 18.34,
+     "cpu": 29.963,
+     "frame": 28.9,
+     "calls": 82,
+     "tris": 453665
+    },
+    "noTransparent": {
+     "gpu": 19.01,
+     "cpu": 32.372,
+     "frame": 35,
+     "calls": 75,
+     "tris": 453341
+    },
+    "dpr0.75x": {
+     "gpu": 13.11,
+     "cpu": 28.263,
+     "frame": 29,
+     "calls": 85,
+     "tris": 575405
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "med",
+   "scenario": "gate",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 30472,
+   "loadMs": 5241,
+   "frames": 107,
+   "steps": 240,
+   "seconds": 4.15,
+   "fps": 25.8,
+   "frameMs": {
+    "mean": 39.13,
+    "p50": 35.6,
+    "p95": 79,
+    "p99": 133.2,
+    "max": 158
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.196,
+    "step.input": 0.038,
+    "step.story": 0.047,
+    "step.player": 0.442,
+    "step.companions": 0.483,
+    "step.enemies": 0.044,
+    "step.combat": 0.03,
+    "step.physics": 0.556,
+    "step.levels": 0.3,
+    "step.objectives": 0.007,
+    "step.env": 0.122,
+    "step.fx": 0.039,
+    "step.cam": 0.389,
+    "step.ui": 0.012,
+    "step.audio": 0.158,
+    "step.save": 0.005,
+    "frame.physics": 0.002,
+    "frame.story": 0.017,
+    "frame.player": 4.472,
+    "frame.companions": 1.896,
+    "frame.enemies": 0.011,
+    "frame.combat": 0.005,
+    "frame.levels": 0.317,
+    "frame.env": 0.905,
+    "frame.cam": 0.29,
+    "frame.fx": 0.136,
+    "frame.ui": 0.129,
+    "frame.audio": 0.036,
+    "post.update": 0.007,
+    "gl.shadowMap": 3.275,
+    "pass.0.RenderPass": 16.624,
+    "pass.1.UnrealBloomPass": 1.882,
+    "pass.2.OutputPass": 0.12,
+    "pass.3.ShaderPass": 0.134,
+    "post.render": 18.839,
+    "tick.cpu": 30.379
+   },
+   "gpuMs": {
+    "gpu.pass.3": {
+     "p50": 0.25,
+     "p95": 0.33,
+     "n": 18
+    },
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0.83,
+     "n": 272
+    },
+    "gpu.frame": {
+     "p50": 20.74,
+     "p95": 33.56,
+     "n": 17
+    },
+    "gpu.pass.0": {
+     "p50": 12.18,
+     "p95": 33.31,
+     "n": 17
+    },
+    "gpu.pass.1": {
+     "p50": 1.99,
+     "p95": 18.58,
+     "n": 17
+    },
+    "gpu.pass.2": {
+     "p50": 2.09,
+     "p95": 19.51,
+     "n": 17
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 7.91,
+    "minorGCs": 1,
+    "usedMB": 317
+   },
+   "longTasks": {
+    "n": 13,
+    "maxMs": 136
+   },
+   "info": {
+    "calls": 107,
+    "tris": 384217,
+    "sceneCalls": 92,
+    "sceneTris": 384202,
+    "programs": 149,
+    "geometries": 233,
+    "textures": 99
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "med",
+   "census": {
+    "objects": 1009,
+    "visibleDrawables": 66,
+    "instancedMeshes": 5,
+    "instances": 65,
+    "skinned": 8,
+    "points": 1,
+    "lightsVisible": 6,
+    "pointLightsOn": 2,
+    "pointLightsTotal": 4,
+    "shadowCasters": 22,
+    "transparentDrawables": 18,
+    "dblSidedTransparent": 4,
+    "materials": 40
+   },
+   "actors": 20,
+   "enemies": 7,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 780.1,
+    "TaskDurationPerSec_ms": 932.6,
+    "RecalcStyleDurationPerSec_ms": 17.2,
+    "LayoutDurationPerSec_ms": 0,
+    "RecalcStyleCountPerSec": 25.5,
+    "LayoutCountPerSec": 0,
+    "Nodes": 859,
+    "JSEventListeners": 109
+   },
+   "sync": {
+    "mean": 86.05,
+    "p50": 70.8,
+    "p95": 166.1
+   },
+   "syncCpu": 86.055,
+   "breakdown": [
+    {
+     "label": "level:gate/props/flame",
+     "calls": 16,
+     "inst": 16,
+     "tris": 104,
+     "mats": "MeshBasicMaterial,SpriteMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "(Mesh)",
+     "calls": 15,
+     "inst": 15,
+     "tris": 15,
+     "mats": "ShaderMaterial,RawShaderMaterial:OutputShader,ShaderMaterial:VignetteShader",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 4,
+     "inst": 4,
+     "tris": 2912,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 4,
+     "inst": 4,
+     "tris": 1344,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "terrain/ground/ground",
+     "calls": 4,
+     "inst": 4,
+     "tris": 18000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:gate/pickups/pickup:heartbell",
+     "calls": 3,
+     "inst": 3,
+     "tris": 208,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 2,
+     "inst": 2,
+     "tris": 2944,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 2,
+     "inst": 2,
+     "tris": 2944,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 2,
+     "inst": 27930,
+     "tris": 83790,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidLow",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "hips/chest/furBib",
+     "calls": 2,
+     "inst": 14,
+     "tris": 14896,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/furHead",
+     "calls": 2,
+     "inst": 15,
+     "tris": 74344,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/whiskers",
+     "calls": 2,
+     "inst": 2,
+     "tris": 0,
+     "mats": "LineBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:gate/props/causeway",
+     "calls": 1,
+     "inst": 1,
+     "tris": 588,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:gate/props/gatehouseArch",
+     "calls": 1,
+     "inst": 1,
+     "tris": 24,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW props/portcullisPivot/portcullis",
+     "calls": 1,
+     "inst": 1,
+     "tris": 190,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:gate/props/merged:castle",
+     "calls": 1,
+     "inst": 1,
+     "tris": 3552,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:gate/props/props:gate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 15995,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW level:gate/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 36,
+     "tris": 3168,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:earlgrey/kitten:earlgrey/floatingBook",
+     "calls": 1,
+     "inst": 1,
+     "tris": 36,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:earlgrey/kitten:earlgrey/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 12096,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "SHADOW kittenVisual:earlgrey/kitten:earlgrey/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshDepthMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:earlgrey/kitten:earlgrey/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:earlgrey/kitten:earlgrey/floatingBook",
+     "calls": 1,
+     "inst": 1,
+     "tris": 36,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "kittenVisual:earlgrey/kitten:earlgrey/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 12096,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:gate/props/props:gate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 15995,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:gate/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 36,
+     "tris": 3168,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 107,
+   "ablations": {
+    "baseline": {
+     "gpu": 19.2,
+     "cpu": 46.225,
+     "frame": 35.7,
+     "calls": 107,
+     "tris": 384217
+    },
+    "noShadows": {
+     "gpu": 15.47,
+     "cpu": 28.799,
+     "frame": 33.7,
+     "calls": 92,
+     "tris": 313309
+    },
+    "noBloom": {
+     "gpu": 15.22,
+     "cpu": 33.584,
+     "frame": 38.9,
+     "calls": 94,
+     "tris": 384204
+    },
+    "noGrass": {
+     "gpu": 16,
+     "cpu": 27.274,
+     "frame": 30.5,
+     "calls": 104,
+     "tris": 297547
+    },
+    "noFur": {
+     "gpu": 16.01,
+     "cpu": 26.012,
+     "frame": 29.2,
+     "calls": 101,
+     "tris": 254937
+    },
+    "noTransparent": {
+     "gpu": 14.8,
+     "cpu": 28.44,
+     "frame": 34,
+     "calls": 89,
+     "tris": 254205
+    },
+    "dpr0.75x": {
+     "gpu": 11.1,
+     "cpu": 25.563,
+     "frame": 34.1,
+     "calls": 107,
+     "tris": 384217
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "low",
+   "scenario": "meadow_idle",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 48481,
+   "loadMs": 3502,
+   "frames": 107,
+   "steps": 220,
+   "seconds": 4.49,
+   "fps": 23.9,
+   "frameMs": {
+    "mean": 42.32,
+    "p50": 31.1,
+    "p95": 121.5,
+    "p99": 238.3,
+    "max": 339.5
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.244,
+    "step.input": 0.019,
+    "step.story": 0.099,
+    "step.player": 1.896,
+    "step.companions": 0.107,
+    "step.enemies": 0.03,
+    "step.combat": 0.036,
+    "step.physics": 1.015,
+    "step.levels": 1.002,
+    "step.objectives": 0.05,
+    "step.env": 0.237,
+    "step.fx": 0.021,
+    "step.cam": 0.707,
+    "step.ui": 0.203,
+    "step.audio": 0.087,
+    "step.save": 0.008,
+    "frame.physics": 0.005,
+    "frame.story": 0.031,
+    "frame.player": 5.402,
+    "frame.companions": 0.853,
+    "frame.enemies": 0.044,
+    "frame.combat": 0.007,
+    "frame.levels": 0.862,
+    "frame.env": 0.402,
+    "frame.cam": 0.688,
+    "frame.fx": 0.252,
+    "frame.ui": 0.335,
+    "frame.audio": 0.007,
+    "post.update": 0.004,
+    "gl.shadowMap": 0.005,
+    "post.render": 13.495,
+    "tick.cpu": 28.978
+   },
+   "gpuMs": {
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0,
+     "n": 18
+    },
+    "gpu.frame": {
+     "p50": 5.46,
+     "p95": 19.73,
+     "n": 18
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 4.52,
+    "minorGCs": 1,
+    "usedMB": 201.5
+   },
+   "longTasks": {
+    "n": 10,
+    "maxMs": 338
+   },
+   "info": {
+    "calls": 46,
+    "tris": 147122,
+    "sceneCalls": 46,
+    "sceneTris": 147122,
+    "programs": 66,
+    "geometries": 159,
+    "textures": 47
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "low",
+   "census": {
+    "objects": 415,
+    "visibleDrawables": 51,
+    "instancedMeshes": 15,
+    "instances": 367,
+    "skinned": 5,
+    "points": 1,
+    "lightsVisible": 4,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 2,
+    "shadowCasters": 26,
+    "transparentDrawables": 5,
+    "dblSidedTransparent": 0,
+    "materials": 34
+   },
+   "actors": 22,
+   "enemies": 0,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 698.9,
+    "TaskDurationPerSec_ms": 941.5,
+    "RecalcStyleDurationPerSec_ms": 25.3,
+    "LayoutDurationPerSec_ms": 0,
+    "RecalcStyleCountPerSec": 23.6,
+    "LayoutCountPerSec": 0,
+    "Nodes": 912,
+    "JSEventListeners": 99
+   },
+   "sync": {
+    "mean": 55.48,
+    "p50": 51.1,
+    "p95": 91.4
+   },
+   "syncCpu": 55.687,
+   "breakdown": [
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/skyline",
+     "calls": 1,
+     "inst": 1,
+     "tris": 7797,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 8006,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 65,
+     "tris": 5720,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "props/practiceGateHinge/practiceGate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 72,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:fence_simple",
+     "calls": 1,
+     "inst": 73,
+     "tris": 4672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:gate_posts",
+     "calls": 1,
+     "inst": 1,
+     "tris": 88,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallE",
+     "calls": 1,
+     "inst": 5,
+     "tris": 190,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallD",
+     "calls": 1,
+     "inst": 6,
+     "tris": 228,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallF",
+     "calls": 1,
+     "inst": 7,
+     "tris": 322,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallC",
+     "calls": 1,
+     "inst": 13,
+     "tris": 481,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallB",
+     "calls": 1,
+     "inst": 7,
+     "tris": 1204,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/wheat",
+     "calls": 1,
+     "inst": 140,
+     "tris": 12600,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/oldBridge",
+     "calls": 1,
+     "inst": 1,
+     "tris": 540,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/vigil:vigil_1",
+     "calls": 1,
+     "inst": 1,
+     "tris": 140,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/vigil:vigil_2",
+     "calls": 1,
+     "inst": 1,
+     "tris": 140,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "AnimalArmature/Cow/Cube:merged",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2450,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/terrain/ground",
+     "calls": 1,
+     "inst": 1,
+     "tris": 20000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 1,
+     "inst": 4000,
+     "tris": 12000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/flowers",
+     "calls": 1,
+     "inst": 120,
+     "tris": 720,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "water/water/water:stream",
+     "calls": 1,
+     "inst": 1,
+     "tris": 16,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 25,
+     "tris": 4900,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 14,
+     "tris": 5628,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_default",
+     "calls": 1,
+     "inst": 8,
+     "tris": 912,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/pickups/pickup:letter",
+     "calls": 1,
+     "inst": 1,
+     "tris": 76,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "hips/chest/furBib",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1064,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/furTail",
+     "calls": 1,
+     "inst": 1,
+     "tris": 71500,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/furHead",
+     "calls": 1,
+     "inst": 1,
+     "tris": 5052,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/blob",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 46,
+   "ablations": {
+    "baseline": {
+     "gpu": 4.83,
+     "cpu": 31.548,
+     "frame": 36.1,
+     "calls": 46,
+     "tris": 147122
+    },
+    "noShadows": {
+     "gpu": 7.14,
+     "cpu": 24.623,
+     "frame": 28.9,
+     "calls": 46,
+     "tris": 147122
+    },
+    "noBloom": {
+     "gpu": 4.96,
+     "cpu": 31.375,
+     "frame": 24.2,
+     "calls": 46,
+     "tris": 147122
+    },
+    "noGrass": {
+     "gpu": 5.28,
+     "cpu": 23.65,
+     "frame": 31.1,
+     "calls": 44,
+     "tris": 134402
+    },
+    "noFur": {
+     "gpu": 5.2,
+     "cpu": 22.967,
+     "frame": 27.3,
+     "calls": 43,
+     "tris": 138146
+    },
+    "noTransparent": {
+     "gpu": 5.34,
+     "cpu": 14.164,
+     "frame": 15.2,
+     "calls": 44,
+     "tris": 146808
+    },
+    "dpr0.75x": {
+     "gpu": 4.3,
+     "cpu": 15.546,
+     "frame": 22.6,
+     "calls": 46,
+     "tris": 147122
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "low",
+   "scenario": "meadow_walk",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 48481,
+   "loadMs": 2513,
+   "frames": 84,
+   "steps": 176,
+   "seconds": 4.05,
+   "fps": 20.7,
+   "frameMs": {
+    "mean": 48.79,
+    "p50": 29.8,
+    "p95": 161.2,
+    "p99": 361.2,
+    "max": 361.2
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.157,
+    "step.input": 0.042,
+    "step.story": 0.011,
+    "step.player": 0.756,
+    "step.companions": 0.065,
+    "step.enemies": 0.039,
+    "step.combat": 0.01,
+    "step.physics": 0.483,
+    "step.levels": 0.511,
+    "step.objectives": 0.007,
+    "step.env": 0.05,
+    "step.fx": 0.013,
+    "step.cam": 0.082,
+    "step.ui": 0.018,
+    "step.audio": 0.068,
+    "step.save": 0.006,
+    "frame.physics": 0.005,
+    "frame.story": 0.002,
+    "frame.player": 6.838,
+    "frame.companions": 0.531,
+    "frame.enemies": 0.011,
+    "frame.combat": 0.005,
+    "frame.levels": 0.465,
+    "frame.env": 0.377,
+    "frame.cam": 0.665,
+    "frame.fx": 0.307,
+    "frame.ui": 0.374,
+    "frame.audio": 0.146,
+    "post.update": 0.001,
+    "gl.shadowMap": 0.002,
+    "post.render": 10.64,
+    "tick.cpu": 23.187
+   },
+   "gpuMs": {
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0,
+     "n": 14
+    },
+    "gpu.frame": {
+     "p50": 6.92,
+     "p95": 48.92,
+     "n": 14
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 10.71,
+    "minorGCs": 3,
+    "usedMB": 235.8
+   },
+   "longTasks": {
+    "n": 10,
+    "maxMs": 363
+   },
+   "info": {
+    "calls": 42,
+    "tris": 134209,
+    "sceneCalls": 42,
+    "sceneTris": 134209,
+    "programs": 66,
+    "geometries": 160,
+    "textures": 47
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "low",
+   "census": {
+    "objects": 416,
+    "visibleDrawables": 51,
+    "instancedMeshes": 15,
+    "instances": 366,
+    "skinned": 5,
+    "points": 1,
+    "lightsVisible": 4,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 2,
+    "shadowCasters": 26,
+    "transparentDrawables": 5,
+    "dblSidedTransparent": 0,
+    "materials": 34
+   },
+   "actors": 22,
+   "enemies": 0,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 556.7,
+    "TaskDurationPerSec_ms": 984,
+    "RecalcStyleDurationPerSec_ms": 17.6,
+    "LayoutDurationPerSec_ms": 0.9,
+    "RecalcStyleCountPerSec": 20.5,
+    "LayoutCountPerSec": 0.7,
+    "Nodes": 1121,
+    "JSEventListeners": 104
+   },
+   "sync": {
+    "mean": 34.44,
+    "p50": 29.7,
+    "p95": 58.7
+   },
+   "syncCpu": 34.449,
+   "breakdown": [
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/skyline",
+     "calls": 1,
+     "inst": 1,
+     "tris": 7797,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 8006,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 63,
+     "tris": 5544,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "props/practiceGateHinge/practiceGate",
+     "calls": 1,
+     "inst": 1,
+     "tris": 72,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "props/wobbleKnight/wobble_arm",
+     "calls": 1,
+     "inst": 1,
+     "tris": 188,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "props/wobbleKnight/wobble_body",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1464,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallF",
+     "calls": 1,
+     "inst": 7,
+     "tris": 322,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallC",
+     "calls": 1,
+     "inst": 13,
+     "tris": 481,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallE",
+     "calls": 1,
+     "inst": 5,
+     "tris": 190,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallD",
+     "calls": 1,
+     "inst": 6,
+     "tris": 228,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:gate_posts",
+     "calls": 1,
+     "inst": 1,
+     "tris": 88,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:fence_simple",
+     "calls": 1,
+     "inst": 73,
+     "tris": 4672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:lantern_post",
+     "calls": 1,
+     "inst": 1,
+     "tris": 56,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "AnimalArmature/Cow/Cube:merged",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2450,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/terrain/ground",
+     "calls": 1,
+     "inst": 1,
+     "tris": 20000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 1,
+     "inst": 4000,
+     "tris": 12000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/flowers",
+     "calls": 1,
+     "inst": 120,
+     "tris": 720,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "water/water/water:stream",
+     "calls": 1,
+     "inst": 1,
+     "tris": 16,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 25,
+     "tris": 4900,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 14,
+     "tris": 5628,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_default",
+     "calls": 1,
+     "inst": 8,
+     "tris": 912,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "hips/chest/furBib",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1064,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/furTail",
+     "calls": 1,
+     "inst": 1,
+     "tris": 71500,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/furHead",
+     "calls": 1,
+     "inst": 1,
+     "tris": 5052,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/blob",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/whiskers",
+     "calls": 1,
+     "inst": 1,
+     "tris": 0,
+     "mats": "LineBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/tufts",
+     "calls": 1,
+     "inst": 1,
+     "tris": 312,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "fx.mist.ambient",
+     "calls": 1,
+     "inst": 24,
+     "tris": 48,
+     "mats": "ShaderMaterial:fx.mist.ambient",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 43,
+   "ablations": {
+    "baseline": {
+     "gpu": 5.58,
+     "cpu": 19.275,
+     "frame": 27.1,
+     "calls": 39,
+     "tris": 146424
+    },
+    "noShadows": {
+     "gpu": 6.3,
+     "cpu": 15.756,
+     "frame": 18.9,
+     "calls": 43,
+     "tris": 134123
+    },
+    "noBloom": {
+     "gpu": 5.78,
+     "cpu": 10.002,
+     "frame": 13.6,
+     "calls": 43,
+     "tris": 140394
+    },
+    "noGrass": {
+     "gpu": 5.8,
+     "cpu": 11.427,
+     "frame": 13.9,
+     "calls": 41,
+     "tris": 130516
+    },
+    "noFur": {
+     "gpu": 6.08,
+     "cpu": 15.952,
+     "frame": 14.3,
+     "calls": 35,
+     "tris": 120399
+    },
+    "noTransparent": {
+     "gpu": 5.85,
+     "cpu": 13.38,
+     "frame": 22,
+     "calls": 37,
+     "tris": 133762
+    },
+    "dpr0.75x": {
+     "gpu": 3.68,
+     "cpu": 16.876,
+     "frame": 25.1,
+     "calls": 43,
+     "tris": 146575
+    }
+   },
+   "errors": []
+  },
+  {
+   "profile": "desktop",
+   "preset": "low",
+   "scenario": "meadow_combat",
+   "gpu": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5.0)",
+   "bootMs": 48481,
+   "loadMs": 3350,
+   "frames": 125,
+   "steps": 248,
+   "seconds": 4.19,
+   "fps": 29.8,
+   "frameMs": {
+    "mean": 33.82,
+    "p50": 29.7,
+    "p95": 73,
+    "p99": 106.4,
+    "max": 120.9
+   },
+   "syncMs": null,
+   "perFrameMs": {
+    "input.poll": 0.136,
+    "step.input": 0.016,
+    "step.story": 0.051,
+    "step.player": 1.342,
+    "step.companions": 0.052,
+    "step.enemies": 2.079,
+    "step.combat": 0.17,
+    "step.physics": 0.548,
+    "step.levels": 0.621,
+    "step.objectives": 0.006,
+    "step.env": 0.03,
+    "step.fx": 0.024,
+    "step.cam": 0.079,
+    "step.ui": 0.018,
+    "step.audio": 0.063,
+    "step.save": 0.004,
+    "frame.physics": 0.002,
+    "frame.story": 0.022,
+    "frame.player": 4.002,
+    "frame.companions": 0.447,
+    "frame.enemies": 0.844,
+    "frame.combat": 0.022,
+    "frame.levels": 0.408,
+    "frame.env": 0.501,
+    "frame.cam": 0.559,
+    "frame.fx": 0.588,
+    "frame.ui": 0.345,
+    "frame.audio": 0.097,
+    "post.update": 0.001,
+    "gl.shadowMap": 0.006,
+    "post.render": 10.446,
+    "tick.cpu": 23.991
+   },
+   "gpuMs": {
+    "gpu.gl.shadowMap": {
+     "p50": 0,
+     "p95": 0,
+     "n": 21
+    },
+    "gpu.frame": {
+     "p50": 8.55,
+     "p95": 30.77,
+     "n": 21
+    }
+   },
+   "timerQuery": true,
+   "heap": {
+    "MBperSec": 8.86,
+    "minorGCs": 1,
+    "usedMB": 220.8
+   },
+   "longTasks": {
+    "n": 18,
+    "maxMs": 122
+   },
+   "info": {
+    "calls": 59,
+    "tris": 164964,
+    "sceneCalls": 59,
+    "sceneTris": 164964,
+    "programs": 66,
+    "geometries": 162,
+    "textures": 56
+   },
+   "dpr": 1,
+   "buffer": [
+    1280,
+    720
+   ],
+   "quality": "low",
+   "census": {
+    "objects": 641,
+    "visibleDrawables": 82,
+    "instancedMeshes": 15,
+    "instances": 366,
+    "skinned": 13,
+    "points": 1,
+    "lightsVisible": 4,
+    "pointLightsOn": 1,
+    "pointLightsTotal": 2,
+    "shadowCasters": 43,
+    "transparentDrawables": 10,
+    "dblSidedTransparent": 0,
+    "materials": 55
+   },
+   "actors": 27,
+   "enemies": 5,
+   "mode": "play",
+   "cdp": {
+    "ScriptDurationPerSec_ms": 717.6,
+    "TaskDurationPerSec_ms": 972,
+    "RecalcStyleDurationPerSec_ms": 42.1,
+    "LayoutDurationPerSec_ms": 7,
+    "RecalcStyleCountPerSec": 29.4,
+    "LayoutCountPerSec": 11.9,
+    "Nodes": 1940,
+    "JSEventListeners": 156
+   },
+   "sync": {
+    "mean": 43.25,
+    "p50": 38.9,
+    "p95": 66.4
+   },
+   "syncCpu": 43.259,
+   "breakdown": [
+    {
+     "label": "RootNode/Rat/Rat_1",
+     "calls": 3,
+     "inst": 3,
+     "tris": 4380,
+     "mats": "MeshStandardMaterial:Grey",
+     "dbl": 0
+    },
+    {
+     "label": "RootNode/Rat/Rat_2",
+     "calls": 3,
+     "inst": 3,
+     "tris": 7632,
+     "mats": "MeshStandardMaterial:Pink",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidLow",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/lidUp",
+     "calls": 2,
+     "inst": 2,
+     "tris": 1456,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "chest/head/eyes",
+     "calls": 2,
+     "inst": 2,
+     "tris": 672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "Scene/CharacterArmature/Pigeon",
+     "calls": 2,
+     "inst": 2,
+     "tris": 7024,
+     "mats": "MeshStandardMaterial:Atlas",
+     "dbl": 0
+    },
+    {
+     "label": "sky",
+     "calls": 1,
+     "inst": 1,
+     "tris": 960,
+     "mats": "ShaderMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/skyline",
+     "calls": 1,
+     "inst": 1,
+     "tris": 7797,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "skyline/skyline/horizon",
+     "calls": 1,
+     "inst": 1,
+     "tris": 8006,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/kitBody",
+     "calls": 1,
+     "inst": 1,
+     "tris": 33320,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeR",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "head/eyes/eyeL",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/shadowProxy",
+     "calls": 1,
+     "inst": 1,
+     "tris": 536,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "earL/bowHolder/bow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1824,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/blade",
+     "calls": 1,
+     "inst": 1,
+     "tris": 60,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordSocket/sword:borrowed/hilt",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1472,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "swordcat/kitten:swordcat/cape",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1536,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "Neck/Head/prop:kettleHelm",
+     "calls": 1,
+     "inst": 1,
+     "tris": 932,
+     "mats": "MeshStandardMaterial:enemy-metal",
+     "dbl": 0
+    },
+    {
+     "label": "Body/Shoulders/prop:spear",
+     "calls": 1,
+     "inst": 1,
+     "tris": 92,
+     "mats": "MeshStandardMaterial:enemy-gear",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/props:meadow",
+     "calls": 1,
+     "inst": 1,
+     "tris": 19923,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/pickups/pickups:fish",
+     "calls": 1,
+     "inst": 64,
+     "tris": 5632,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:fence_simple",
+     "calls": 1,
+     "inst": 73,
+     "tris": 4672,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallD",
+     "calls": 1,
+     "inst": 6,
+     "tris": 228,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallE",
+     "calls": 1,
+     "inst": 5,
+     "tris": 190,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallC",
+     "calls": 1,
+     "inst": 13,
+     "tris": 481,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallF",
+     "calls": 1,
+     "inst": 7,
+     "tris": 322,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/fade:stone_tallB",
+     "calls": 1,
+     "inst": 7,
+     "tris": 1204,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/wheat",
+     "calls": 1,
+     "inst": 140,
+     "tris": 12600,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/oldBridge",
+     "calls": 1,
+     "inst": 1,
+     "tris": 540,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/vigil:vigil_2",
+     "calls": 1,
+     "inst": 1,
+     "tris": 140,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/vigil:vigil_3",
+     "calls": 1,
+     "inst": 1,
+     "tris": 140,
+     "mats": "MeshBasicMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "AnimalArmature/Cow/Cube:merged",
+     "calls": 1,
+     "inst": 1,
+     "tris": 2450,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/terrain/ground",
+     "calls": 1,
+     "inst": 1,
+     "tris": 20000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/grass",
+     "calls": 1,
+     "inst": 4000,
+     "tris": 12000,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "grass/grass/flowers",
+     "calls": 1,
+     "inst": 120,
+     "tris": 720,
+     "mats": "MeshLambertMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "water/water/water:stream",
+     "calls": 1,
+     "inst": 1,
+     "tris": 16,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_oak",
+     "calls": 1,
+     "inst": 25,
+     "tris": 4900,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_detailed",
+     "calls": 1,
+     "inst": 14,
+     "tris": 5628,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "level:meadow/props/trees:tree_default",
+     "calls": 1,
+     "inst": 8,
+     "tris": 912,
+     "mats": "MeshStandardMaterial",
+     "dbl": 0
+    },
+    {
+     "label": "hips/chest/furBib",
+     "calls": 1,
+     "inst": 1,
+     "tris": 1064,
+     "mats": "MeshPhysicalMaterial",
+     "dbl": 0
+    }
+   ],
+   "breakdownTotal": 55.4,
+   "ablations": {
+    "baseline": {
+     "gpu": 8.49,
+     "cpu": 24.183,
+     "frame": 28.2,
+     "calls": 54,
+     "tris": 163660
+    },
+    "noShadows": {
+     "gpu": 7.95,
+     "cpu": 17.536,
+     "frame": 20.6,
+     "calls": 55,
+     "tris": 158832
+    },
+    "noBloom": {
+     "gpu": 7.04,
+     "cpu": 39.108,
+     "frame": 30.3,
+     "calls": 57,
+     "tris": 160276
+    },
+    "noGrass": {
+     "gpu": 6.31,
+     "cpu": 17.802,
+     "frame": 22.1,
+     "calls": 55,
+     "tris": 147692
+    },
+    "noFur": {
+     "gpu": 6.81,
+     "cpu": 22.387,
+     "frame": 29.1,
+     "calls": 49,
+     "tris": 150310
+    },
+    "noTransparent": {
+     "gpu": 6.49,
+     "cpu": 25.939,
+     "frame": 32.1,
+     "calls": 51,
+     "tris": 159816
+    },
+    "dpr0.75x": {
+     "gpu": 4.75,
+     "cpu": 17.353,
+     "frame": 22,
+     "calls": 50,
+     "tris": 156078
+    }
+   },
+   "errors": []
+  }
+ ]
+}

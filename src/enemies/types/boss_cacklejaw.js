@@ -166,7 +166,8 @@ function aimRush(e) {
   e.rushLane = rushLane(e, tgt);
   e.rushPhase = 'aim'; e.rushT = 0;
   e.rushTele = Math.max(minLead('gold'), RUSH.tele * e.windupMul());
-  e.telegraph('gold', { duration: e.rushTele });                                      // the gold glint on the blade
+  e.telegraph('gold', { duration: e.rushTele, attackId: DASH.id, attackDef: DASH, range: e.rushLane.len,           // the gold glint on the blade
+    lane: { w: BM.rushW, l: e.rushLane.len, dir: new THREE.Vector3(e.rushLane.dx, 0, e.rushLane.dz) } });
   e.telegraphExtra('aoe', { shape: 'lane', pos: e.pos.clone(), dir: new THREE.Vector3(e.rushLane.dx, 0, e.rushLane.dz),
     w: BM.rushW, l: e.rushLane.len, size: [BM.rushW, e.rushLane.len], duration: e.rushTele, follow: false });
 }

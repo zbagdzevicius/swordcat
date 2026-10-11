@@ -45,3 +45,10 @@ export function rangeOf(rng, v) {
   if (!Array.isArray(v)) return v;
   return v[0] + (v[1] - v[0]) * rng();
 }
+
+/**
+ * CONTROLS_SPEC §8.5 / §12 enemies (iso camera pacing). `config.ENEMY_TUNING.controls` overrides key by key once core
+ * adopts it (requests/core.md). `xbowKeep` replaces ENEMIES.rat_xbow.keep [7, 11]: inside the 9 m "near" band, so a
+ * crossbowman in its comfort band can always shoot and is on screen at the default zoom.
+ */
+export const CONTROLS = Object.freeze({ xbowKeep: [6, 9], ...(ENEMY_TUNING.controls ?? {}) });

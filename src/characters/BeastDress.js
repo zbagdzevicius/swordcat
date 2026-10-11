@@ -12,6 +12,7 @@ import { attachBeastHead } from './BeastHead.js';
 import { attachPlate, pickPlateWord } from './Plate.js';
 import { buildProp, buildCage } from './Props/ProcProps.js';
 import { own } from './materials.js';
+import { buildSilhouetteProxy, highlightObject, XRAY } from './Readability.js';
 
 /** Per-look head preset + options and plate word source (§3.7 villains, §11 boss builds). */
 export const BEAST_LOOKS = Object.freeze({
@@ -63,6 +64,25 @@ export function dressBeast(model, look = 'hyena', o = {}) {
   const held = {};
   const dress = {
     look: typeof look === 'string' ? look : L.head, head, plate, word, held,
+    /** The dressed model root and the x-ray proxy (lazy; research/CONTROLS_SPEC.md §3). */
+    model, silhouetteProxy: null, _proxyDirty: false, highlight: null,
+    get isBeastDress() { return true; },
+    /**
+     * One-draw x-ray silhouette (body ellipsoids per bone + beast head + held props), hidden until shown. Camera tints it
+     * with the telegraph colour at 0.45 while the beast winds up and is occluded.
+     */
+    getSilhouetteProxy() {
+      if (dress.silhouetteProxy && !dress._proxyDirty) return dress.silhouetteProxy;
+      dress._proxyDirty = false;
+      dress.silhouetteProxy = buildSilhouetteProxy(model, { alpha: XRAY.enemyAlpha, into: dress.silhouetteProxy }) ?? dress.silhouetteProxy;
+      return dress.silhouetteProxy;
+    },
+    /** Hover / selection highlight (§7.4: red #FF6A3D on enemies); null clears. */
+    setHighlight(color, strength = 1) {
+      highlightObject(model, color, strength);
+      dress.highlight = color === null || color === undefined ? null : { color, strength };
+      return dress;
+    },
     /** 'neutral' | 'sneer' | 'angry' | 'laugh' | 'sad' | 'surprised' | 'kneel' */
     setExpression(name) { head?.setExpression(name); return dress; },
     /** Barkus phase 2: the horned helm shatters. */
@@ -80,10 +100,12 @@ export function dressBeast(model, look = 'hyena', o = {}) {
       const def = CARRY[key] || {};
       holdOnBone(model, obj, HAND[hand] || hand, { p: opts.p ?? def.p, r: opts.r ?? def.r, s: opts.s ?? def.s });
       held[key] = obj;
+      dress._proxyDirty = true;
       return obj;
     },
-    drop(key) { const h = held[key]; if (h) { h.removeFromParent(); delete held[key]; } return h ?? null; },
+    drop(key) { const h = held[key]; if (h) { h.removeFromParent(); delete held[key]; dress._proxyDirty = true; } return h ?? null; },
     dispose() {
+      dress.silhouetteProxy?.userData.dispose?.(); dress.silhouetteProxy = null;
       head?.dispose(); head?.root.removeFromParent();
       plate?.removeFromParent(); plate?.traverse((c) => { if (c.isMesh) c.geometry.dispose(); });
       plate?.userData.texture?.dispose?.();

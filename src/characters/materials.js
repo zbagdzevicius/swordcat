@@ -33,6 +33,16 @@ function applyEnv(m) {
 export function setCharacterEnvMap(tex) { _envMap = tex; for (const m of _all) applyEnv(m); }
 export function getCharacterEnvMap() { return _envMap; }
 
+/**
+ * Readability from above (research/CONTROLS_SPEC.md §12 characters 3): past `from` m between the lens and the focus the
+ * top-view factor ramps to 1 by `to` m. At 1: the bow ×`bowScale` with `bowGlow` extra self-light (always pink, always
+ * on the LEFT ear), ears ×`earScale`, and a `trimM` m lighter trim on the cape tip. Close-ups (cutscenes, Meme Cam,
+ * `?cam=classic`) stay at 0, i.e. exactly the M1/M2 look.
+ */
+export const READABILITY = Object.freeze({ from: 9, to: 10.5, bowScale: 1.25, bowGlow: 0.08, earScale: 1.1, trimM: 0.02, trimLift: 0.55 });
+/** Shared top-view factor 0..1 (a uniform object: bow and cape shaders read it). runtime.characterFrame writes it. */
+export const TOP_VIEW = { value: 0 };
+
 /** Shared holy colour uniform object (fx can tween the hue globally). */
 export const HOLY_COLOR = { value: new THREE.Color(PAL.holyRim) };
 
@@ -49,6 +59,7 @@ export function makeKitMaterial(o = {}) {
   const uniforms = {
     uRim: { value: new THREE.Color('#FFF1DD').multiplyScalar(0.22) },
     uHoly: { value: 0 }, uHolyColor: HOLY_COLOR, uFlash: { value: 0 }, uMetalEnv: { value: o.metalEnv ?? 1.5 },
+    uHighlight: { value: new THREE.Color(0, 0, 0) },
   };
   mat.userData.uniforms = uniforms;
   mat.onBeforeCompile = (sh) => {
@@ -57,7 +68,7 @@ export function makeKitMaterial(o = {}) {
       .replace('#include <common>', '#include <common>\nattribute vec4 rmse;\nvarying vec4 vRMSE;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRMSE = rmse;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec4 vRMSE;\nuniform vec3 uRim; uniform float uHoly; uniform vec3 uHolyColor; uniform float uFlash; uniform float uMetalEnv;')
+      .replace('#include <common>', '#include <common>\nvarying vec4 vRMSE;\nuniform vec3 uRim; uniform float uHoly; uniform vec3 uHolyColor; uniform float uFlash; uniform float uMetalEnv; uniform vec3 uHighlight;')
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vRMSE.x;')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vRMSE.y;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
@@ -68,12 +79,13 @@ export function makeKitMaterial(o = {}) {
           totalEmissiveRadiance += uRim * rimK * vRMSE.z;
           totalEmissiveRadiance += uHolyColor * uHoly * ( rimK * ( 0.45 + 0.6 * vRMSE.z ) + 0.05 * vRMSE.y + 0.015 );
           totalEmissiveRadiance += vec3( uFlash );
+          totalEmissiveRadiance += uHighlight * ( pow( 1.0 - ndv, 2.0 ) * 1.4 + 0.08 );   // hover / selection rim
         }`)
       .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_SHEEN\nmaterial.sheenColor *= vRMSE.z;\n#endif')
       // fur / cloth: the hemisphere light already gives the soft ambient; damp the env-map diffuse so white coats don't bloom
       .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\niblIrradiance *= mix(1.0, 0.45, vRMSE.z);\n#if defined( RE_IndirectSpecular )\nradiance *= mix(1.0, uMetalEnv, vRMSE.y);\n#endif');
   };
-  mat.customProgramCacheKey = () => 'sc-kit-v2';
+  mat.customProgramCacheKey = () => 'sc-kit-v3';
   return own(mat);
 }
 

@@ -25,6 +25,7 @@ import { damp, dampAngle, wrapAngle, clamp } from '../core/math.js';
 import { TUNING, M2, rangeOf } from './tuning.js';
 import { clipKey, clipsFor, isSpec, specDuration } from './clipMaps.js';
 import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright } from './rig.js';
+import { rangedStartAllowed } from './onscreen.js';
 
 let teleId = 1;
 /** States an open-zone enemy leaves (→ return) when she is walled off inside a locked arena it isn't part of. */
@@ -98,6 +99,37 @@ export function defaultShape(kind) {
 export function windupFor(def, mul = 1) {
   const lead = TELEGRAPH.minLead[def?.telegraph] ?? TUNING.windupMin;
   return Math.max(lead, TUNING.windupMin, (def?.windup ?? MELEE_FALLBACK.windup) * mul);
+}
+
+/** Telegraph kinds that come from a melee swing (CONTROLS_SPEC §8.2 strike wedges). */
+export const WEDGE_KINDS = Object.freeze(new Set(['parry', 'gold', 'red', 'grab']));
+
+/**
+ * CONTROLS_SPEC §8.5 telegraph payload (additive `combat:telegraph` fields): `attackId`, `arc`, `range`, `windup`
+ * (seconds after the difficulty multiplier), `activeAt` (absolute game.time the hit becomes live: strike start +
+ * `active[0]` for swings) and `targetsPlayer`. `desc` may override any of them; `desc.strikeIn` (s until the strike
+ * state starts, default = the telegraph duration) and `desc.attackDef` steer the defaults. Pure; exported for tests.
+ * @param {any} e enemy @param {string} kind @param {any} desc @param {number} duration @param {number} now game.time
+ */
+export function telegraphPayload(e, kind, desc, duration, now) {
+  const atk = e.attack;
+  const adef = desc.attackDef ?? atk?.def ?? null;
+  const strikeIn = desc.strikeIn ?? duration;
+  const a0 = adef?.arc && WEDGE_KINDS.has(kind) ? (adef.active?.[0] ?? 0) : 0;
+  const arc = desc.arc ?? adef?.arc ?? null;
+  const p = e.ctx?.player;
+  let tgt = null;
+  try { tgt = e.targetActor?.() ?? null; } catch { tgt = null; }
+  // dash attacks (hyena_lunge, stealer_snatch, rushes) have no arc: a lane along the facing (length = speed × dur)
+  const lane = desc.lane ?? (!arc && adef?.speed ? { w: Math.max(0.6, (e.radius ?? 0.35) * 2 + 0.3), l: adef.speed * (adef.dur ?? 0.4) } : null);
+  return {
+    attackId: desc.attackId ?? adef?.id ?? atk?.id ?? null,
+    arc, lane,
+    range: desc.range ?? arc?.range ?? lane?.l ?? adef?.r ?? atk?.range ?? null,
+    windup: desc.windup ?? strikeIn,
+    activeAt: desc.activeAt ?? now + strikeIn + a0,
+    targetsPlayer: desc.targetsPlayer ?? (!!p && tgt === p),
+  };
 }
 
 /**
@@ -212,7 +244,9 @@ export const BASE_STATES = {
         // §10.3 follow-up: its gold glint must show ≥ minLead, so it starts before this strike ends (windup stays short)
         const fdef = e.followUp.def, lead = TELEGRAPH.minLead[fdef.telegraph] ?? TUNING.windupMin;
         const w = Math.max(0.05, (fdef.windup ?? 0.3) * e.windupMul());
-        if (e.stateT >= dur - Math.max(0, lead - w) && e.stateT > a1) e.telegraph(fdef.telegraph, { duration: Math.max(lead, w) });
+        if (e.stateT >= dur - Math.max(0, lead - w) && e.stateT > a1) {
+          e.telegraph(fdef.telegraph, { duration: Math.max(lead, w), strikeIn: Math.max(0, dur - e.stateT) + w, attackId: e.followUp.id, attackDef: fdef });
+        }
       }
       if (e.stateT >= dur) {
         if (e.followUp) { e.attack = e.followUp; e.followUp = null; e.preTold = e.telegraphId != null; e.setState('windup'); }
@@ -708,6 +742,13 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   /** Weighted pick from def.attacks (seeded) among those usable at distance `d`; kept until used. */
   pickAttack(d = this.distToPlayer()) {
+    const c = this._pickAttack(d);
+    // CONTROLS_SPEC §8.5: no off-screen snipes. The choice is kept; it just can't start until she can see it.
+    this.holdFire = !!c && !rangedStartAllowed(this, c);
+    return this.holdFire ? null : c;
+  }
+
+  _pickAttack(d) {
     if (this.attackChoice && this.stateName === 'chase') return this.attackChoice;
     const list = (this.def.attacks ?? []).filter((a) => (this.attackCd[a.id] ?? 0) <= 0 && (a.minRange == null || d >= a.minRange * 0.8)
       && (!a.when || a.when(this)) && (!this.def.canUse || this.def.canUse(this, a, d)));
@@ -880,10 +921,12 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   _emitTelegraph(kind, desc) {
     const id = teleId++;
     if (!desc.pos) this.updateTell();
+    const duration = desc.duration ?? 0.5;
     this.ctx.bus.emit(E.TELEGRAPH, {
       ...desc, id, actor: this, kind, shape: desc.shape ?? defaultShape(kind),
       pos: desc.pos ?? this.tellPos, dir: desc.dir ?? this.tellDir,
-      size: desc.size ?? desc.r ?? 1, duration: desc.duration ?? 0.5,
+      size: desc.size ?? desc.r ?? 1, duration,
+      ...telegraphPayload(this, kind, desc, duration, this.ctx.game?.time ?? 0),
     });
     return id;
   }
@@ -1199,9 +1242,9 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   _tickMixer(dt) {
     this._frame++;
-    const cam = this.ctx.camera;
+    const cam = this.ctx.cam?.focus ?? this.ctx.camera?.position;        // CONTROLS_SPEC §2.8: LOD from the focus
     if (cam && dt > 0) {
-      const dx = cam.position.x - this.pos.x, dz = cam.position.z - this.pos.z;
+      const dx = cam.x - this.pos.x, dz = cam.z - this.pos.z;
       if (dx * dx + dz * dz > TUNING.animFarDist * TUNING.animFarDist) {
         this._farDt += dt;
         if ((this._frame + this.id) % 2) return;

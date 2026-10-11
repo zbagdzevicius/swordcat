@@ -5,7 +5,11 @@
 //   • seeded villager kittens fill the rest, up to 20 residents on screen (12 on Low);
 //   • the station keepers (Marmalade, Tofu, Earl Grey, Pip, Pearl, Snowpaw, Coo) stand at their stalls once their
 //     flag opens them, unless world's Hub already placed them;
-//   • walking up to a resident shows its line in a bubble (the kitten's §6.4 rescue line, a §6.5 hub line).
+//   • walking up to a resident shows its line in a bubble (the kitten's §6.4 rescue line, a §6.5 hub line);
+//   • iso controls (CONTROLS_SPEC §7.6, §14 `tut.talk`): click / tap a resident (or [Interact] next to it) to hear its
+//     line now: residents are 'npc' pickables and, clear of world's interactables, a `talk_<id>` level interactable
+//     (prompt.talk); a station keeper stands for its station (`interactId`: a click opens the shop);
+//   • distance LOD measured from the camera focus (§2.8), not from her.
 // HubKittens is driven by CompanionManager (enter() on `level:loaded`, update / render each step, leave() on unload);
 // the residents are NpcActors registered in ctx.actors (`<kittenId>`, `villager_hub_<i>`, station ids).
 import * as THREE from 'three';
@@ -13,7 +17,7 @@ import { KITTEN_IDS, LEVEL_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
 import { damp, dampAngle } from '../core/math.js';
 import { lostKittenConfig, villagerConfig } from '../characters/index.js';
 import { NpcActor } from './NpcActor.js';
-import { BarkGate, groundY } from './steering.js';
+import { BarkGate, groundY, lodOrigin } from './steering.js';
 import { lineText } from './lines.js';
 import { buildFishingStick, buildCup, buildTable, buildButterfly, disposeDressing } from './dressing.js';
 
@@ -75,7 +79,11 @@ export const HUB = Object.freeze({
   // §18 draw budget: residents farther than cullR from her are hidden (the town fog has swallowed them), only those
   // within shadowR cast shadows; re-checked every lodEvery s
   cullR: 26, shadowR: 8, lodEvery: 0.25,
+  // iso controls: [Interact] / click reach of a resident's talk interactable; a keeper within keeperR of a world
+  // interactable stands for it; a resident within clearR of one gets no talk interactable (E stays the station's)
+  talkUseR: 1.5, keeperR: 3.5, clearR: 2.5,
 });
+const _o = { x: 0, z: 0 };
 
 /** How many villagers fill in beside `rescued` kittens for a quality name (total ≤ maxOnScreen). Pure. */
 export function villagerCount(rescued, quality = 'med') {
@@ -108,6 +116,51 @@ export class HubResident extends NpcActor {
     this.talkAt = -Infinity;
     this.dress = null;
     this.greet = this.beh === 'station' || this.beh === 'wave';
+    this.farCull = false;                       // the hub's own LOD (from the focus) hides far residents
+    /** the `talk_<id>` level interactable while registered */
+    this.talkIt = null;
+  }
+
+  /** A click / tap / [Interact] on this resident: its line now (a repeat is fine: she asked). */
+  use() {
+    if (this.scripted || this.disposed) return false;
+    this._faceHerT = 2.5;
+    const hub = this.ctx.companions?.hub;
+    const said = this.talk(hub?.gate ?? new BarkGate({ gap: 0, noRepeat: 0 }), this.ctx.game?.time ?? 0, { force: true });
+    if (!said) { this.visual?.emote('nod'); this.visual?.hop(0.12); }
+    return true;
+  }
+
+  /**
+   * Register the `talk_<id>` interactable (kind 'npc', prompt.talk) in the level, unless a world interactable is within
+   * HUB.clearR (E stays the station's / the board's) or this keeper stands for one (then `interactId` = its id).
+   */
+  registerTalk() {
+    const list = this.ctx.levels?.current?.interactables;
+    if (!Array.isArray(list) || this.talkIt) return null;
+    let near = null, nd = Infinity;
+    for (const it of list) {
+      if (!it?.pos || it.actor) continue;
+      const d = Math.hypot(it.pos.x - this.home.x, it.pos.z - this.home.z);
+      if (d < nd) { nd = d; near = it; }
+    }
+    if (this.beh === 'station' && near && nd <= HUB.keeperR) { this.interactId = near.id; return null; }
+    if (near && nd <= HUB.clearR) return null;
+    if (!this.lines?.length) return null;
+    this.talkIt = {
+      id: 'talk_' + this.npcId, kind: 'npc', pos: this.pos, r: HUB.talkUseR, prompt: 'prompt.talk', actor: this,
+      enabled: () => !this.disposed && !this.scripted && this.object3d.visible,
+      use: () => this.use(),
+    };
+    list.push(this.talkIt);
+    this.interactId = this.talkIt.id;
+    return this.talkIt;
+  }
+
+  _unregisterTalk() {
+    const list = this.ctx.levels?.current?.interactables, it = this.talkIt;
+    if (it && Array.isArray(list)) { const i = list.indexOf(it); if (i >= 0) list.splice(i, 1); }
+    this.talkIt = null;
   }
 
   /** Build this resident's activity dressing (fishing stick, table + cup, butterfly, basket...). */
@@ -154,11 +207,14 @@ export class HubResident extends NpcActor {
     this.object3d.traverse((m) => { if (m.isMesh && m !== this.bubble?.sprite) m.castShadow = on; });
   }
 
-  /** Say a line in a bubble when she walks up (manager's gate keeps it to one at a time). */
-  talk(gate, now) {
+  /**
+   * Say a line in a bubble when she walks up (manager's gate keeps it to one at a time); `force` (she clicked it) skips
+   * the repeat wait and the gate.
+   */
+  talk(gate, now, { force = false } = {}) {
     const keys = this.lines;
-    if (!keys?.length || now - this.talkAt < HUB.repeatAfter) return false;
-    const key = gate.pick(keys, now, this.ctx.rng ?? Math.random, { chance: 1 });
+    if (!keys?.length || (!force && now - this.talkAt < HUB.repeatAfter)) return false;
+    const key = gate.pick(keys, now, this.ctx.rng ?? Math.random, { chance: 1, force });
     if (!key) return false;
     this.talkAt = now;
     const vars = this.npcId === 'pip' ? pipVars(this.ctx.state?.kittens ?? [], this._levelNames()) : undefined;
@@ -250,7 +306,9 @@ export class HubResident extends NpcActor {
       this.vel.x = damp(this.vel.x, vx, 8, dt); this.vel.z = damp(this.vel.z, vz, 8, dt);
     }
     const sp = Math.hypot(this.vel.x, this.vel.z);
-    if (face != null) this.facing = dampAngle(this.facing, face, 4, dt);
+    if (this._faceHerT > 0) this._faceHerT -= dt;
+    if (this._faceHerT > 0 && p && !PINNED.has(b)) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 8, dt);
+    else if (face != null) this.facing = dampAngle(this.facing, face, 4, dt);
     else if (sp > 0.3) this.facing = dampAngle(this.facing, Math.atan2(this.vel.x, this.vel.z), 8, dt);
     else if (d < 3.2 && b !== 'nap' && b !== 'fish' && b !== 'read' && b !== 'stareUp' && !this.bedPose) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 3, dt);
     else this.facing = dampAngle(this.facing, this.homeFacing, 1.5, dt);
@@ -270,6 +328,7 @@ export class HubResident extends NpcActor {
   }
 
   dispose() {
+    this._unregisterTalk();
     if (this.dress) disposeDressing(this.dress);
     if (this.fly) disposeDressing(this.fly);
     this.dress = null; this.fly = null;
@@ -331,6 +390,7 @@ export class HubKittens {
     r.setShadows(false);                                         // §18 budget: only residents near her cast shadows
     this.mgr._add(r, id);
     r.dressUp();
+    try { r.registerTalk(); } catch (e) { console.warn('[companions] hub talk interactable failed', e); }
     r.snap?.(); r.visual?.snap();
     this.residents.push(r);
     return r;
@@ -343,16 +403,16 @@ export class HubKittens {
     this.active = false;
   }
 
-  /** Distance LOD (§18): hide far residents, shadows only near her. */
+  /** Distance LOD (§18), from the camera focus (CONTROLS_SPEC §2.8): hide far residents, shadows only near it. */
   lod(dt) {
     this.lodT = (this.lodT ?? 0) - dt;
     if (this.lodT > 0) return;
     this.lodT = HUB.lodEvery;
-    const p = this.ctx.player;
-    if (!p) return;
+    if (!this.ctx.player && !this.ctx.cam?.focus) return;
+    const o = lodOrigin(this.ctx, _o);
     let shown = 0;
     for (const r of this.residents) {
-      const d = Math.hypot(p.pos.x - r.pos.x, p.pos.z - r.pos.z);
+      const d = Math.hypot(o.x - r.pos.x, o.z - r.pos.z);
       const vis = d < HUB.cullR || r.scripted;
       r.object3d.visible = vis;
       if (r.fly) r.fly.visible = vis;

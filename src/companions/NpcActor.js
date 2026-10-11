@@ -2,6 +2,8 @@
 // Marmalade, Snowpaw, Earl Grey, Pip, Tofu, squires, villagers, old knights (characters' buildKitten via catConfig)
 // and Coo the courier pigeon (creatures/monsters-blob/Pigeon.glb, clip set S1). The ScriptedActor API is the
 // story's handle on them; when not scripted they idle, turn to watch her when she is near, and can wave.
+// Iso controls (CONTROLS_SPEC §7.6, §12 companions 3): clickable (`pickKind` 'npc', `useR`, `interactId`, `use()`: she
+// walks up and they turn, nod and say their line), and far-culled by the distance from the camera focus (§2.8).
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
@@ -11,6 +13,7 @@ import { catConfig, villagerConfig, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { disposeInstance } from '../core/Assets.js';
+import { lodOrigin } from './steering.js';
 
 /** GLB-backed NPCs (everything else is a procedural cat). Clip names are clip set S1 (ASSETS.md). */
 export const NPC_GLB = {
@@ -23,6 +26,13 @@ export function npcLook(npcId) {
 }
 
 const LOOK_RADIUS = 3.5;
+/**
+ * §18 draw budget, keyed to the camera focus (CONTROLS_SPEC §2.8): an NPC beyond max(minD, 2 / fog density) of the focus
+ * is not drawn (hyst m hysteresis), checked every `every` s. `useR` = how close a `use` order walks before use().
+ */
+export const NPC_LOD = Object.freeze({ minD: 40, hyst: 6, every: 0.25 });
+export const NPC_USE = Object.freeze({ reach: 1.0, faceSpeed: 8 });
+const _o = { x: 0, z: 0 };
 
 export class NpcActor extends ScriptedActorMixin(Actor) {
   /**
@@ -42,6 +52,11 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
     this.homeFacing = this.facing;
     this.stateName = 'idle';
     this.greet = opts.greet ?? false;
+    /** a level interactable this NPC stands for (a station keeper → the station): a click uses it (iso controls) */
+    this.interactId = null;
+    /** far cull by the focus distance (HubResident: the hub's own LOD does it) */
+    this.farCull = true; this._far = false; this._lodT = 0;
+    this._faceHerT = 0;
     this.object3d.name = 'npc:' + npcId;
     this.visual = null; this.anim = null; this.glb = glb; this.model = null;
     this._clipWaits = [];
@@ -65,6 +80,39 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
       this.anim = new Animator(m.scene, m.animations);
       this.anim.play(this.glb.idle);
     } catch (e) { console.warn(`[companions] ${this.npcId} model failed`, e); }
+  }
+
+  // ---- click / tap (iso controls)
+
+  /** What the camera's picker sees: 'npc' (white hover ring, the paw + wax seal cursor), or null when not clickable. */
+  get pickKind() { return this.scripted || this.disposed || this._far || !this.object3d.visible || this.attachedTo ? null : 'npc'; }
+  /** How close she walks before use() (a `use` order's reach). */
+  get useR() { return this.radius + NPC_USE.reach; }
+  /**
+   * She clicked / tapped this NPC and arrived: turn to her, a nod and a little hop (talking NPCs say a line: see
+   * HubResident). Returns true.
+   */
+  use() {
+    if (this.scripted || this.disposed) return false;
+    this._faceHerT = 2.5;
+    this.visual?.emote('nod'); this.visual?.hop(0.12);
+    if (this.anim) this.onEmote('yes');
+    return true;
+  }
+
+  /** §2.8 far cull from the camera focus (lens in cutscenes): hide the children far beyond the fog. */
+  _farCullStep(dt) {
+    if (!this.farCull || (this._lodT -= dt) > 0) return;
+    this._lodT = NPC_LOD.every;
+    lodOrigin(this.ctx, _o);
+    const fog = this.ctx.env?.fogDensity ?? this.ctx.scene?.fog?.density ?? 0;
+    const D = Math.max(NPC_LOD.minD, fog > 1e-4 ? 2 / fog : 1e9);
+    const d = Math.hypot(_o.x - this.pos.x, _o.z - this.pos.z);
+    const far = !this.scripted && (this._far ? d > D - NPC_LOD.hyst : d > D);
+    if (far === this._far) return;
+    this._far = far;
+    if (far) { this._farHidden = []; for (const c of this.object3d.children) if (c.visible) { c.visible = false; this._farHidden.push(c); } }
+    else { for (const c of this._farHidden ?? []) c.visible = true; this._farHidden = null; }
   }
 
   /** Show a speech bubble (barks; cutscene dialogue is the ui's). */
@@ -118,7 +166,8 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
     this.vel.x = damp(this.vel.x, 0, 8, dt); this.vel.z = damp(this.vel.z, 0, 8, dt);
     const p = this.ctx.player;
     const d = p ? Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) : Infinity;
-    if (d < LOOK_RADIUS) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 3, dt);
+    if (this._faceHerT > 0) this._faceHerT -= dt;
+    if (p && (d < LOOK_RADIUS || this._faceHerT > 0)) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), this._faceHerT > 0 ? NPC_USE.faceSpeed : 3, dt);
     else this.facing = dampAngle(this.facing, this.homeFacing, 1.5, dt);
     this.visual?.setWave(this.greet && d < 6 && d > 1.5);
     this.ctx.physics.moveActor(this, dt);
@@ -127,6 +176,8 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
   render(alpha, dt) {
     super.render(alpha);
     const vdt = visualDt(this.ctx, dt ?? 0);         // 0 in hitstop / the pause menu, × slow-mo
+    this._farCullStep(dt ?? 0);
+    if (this._far) return;
     if (this.visual) {
       const p = this.ctx.player;
       let look = 0;

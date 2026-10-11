@@ -41,14 +41,127 @@ export function nextCompanion(unlocked, current, dir = 1) {
 /** Side of the player each companion prefers (+1 = her left, −1 = her right). */
 export const FOLLOW_SIDE = Object.freeze({ mochi: 1, sage: -1, clover: 1 });
 
-/** Follow-slot geometry (metres): the slot sits COMPANIONS.follow (2.5 m) from her, behind and to the side. */
+/**
+ * Follow-slot geometry (metres): the slot sits COMPANIONS.follow (2.5 m) from her, behind and to the side.
+ * Iso controls (CONTROLS_SPEC §12 companions 3): the idle slot is at her back-left / back-right, ≥ 1.4 m out, and never
+ * inside the aim notch (the 15° notch on her ring points where her sword goes: a kitten there would be swung through
+ * and would hide the notch). `notch` is the half-angle kept clear around the aim.
+ */
 export const SLOT = Object.freeze({
   angle: 0.6,                    // the moving slot: 0.6 rad off straight behind (≈ 2.06 m back, 1.41 m aside)
-  regroupDist: 1.35, regroupAngle: 1.3,   // beside her (after her Meow, or once she stands still): in the camera's view
-  besideAfter: 0.8,              // seconds she must stand still before we come up beside her
-  settleRadius: 1.2,             // once settled beside her, stay put until the slot drifts this far
-  deadZone: 0.35, idleBand: [1.0, 3.4],
+  regroupDist: 1.6, regroupAngle: 0.85,   // idle (after her Meow, or once she stands still): back-left / back-right
+  minIdle: 1.4,                  // never closer than this to her when idle (her hero ring is r 0.75; the sword arc ~1.9)
+  notch: 0.7,                    // ±40° around her aim kept clear
+  besideAfter: 0.8,              // seconds she must stand still before we come up to the idle slot
+  settleRadius: 1.2,             // once settled, stay put until the slot drifts this far
+  deadZone: 0.35, idleBand: [1.3, 3.4],
 });
+
+/** Signed smallest difference b − a of two angles (radians, −π..π). */
+const angDiff = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+
+/**
+ * Is (x, z) inside the aim notch around her: within `notch` rad of `aimYaw` as seen from p? (null aim → false). Pure.
+ */
+export function inNotch(p, x, z, aimYaw, notch = SLOT.notch) {
+  if (aimYaw == null || !Number.isFinite(aimYaw)) return false;
+  const dx = x - p.x, dz = z - p.z;
+  if (dx * dx + dz * dz < 1e-8) return true;
+  return Math.abs(angDiff(aimYaw, Math.atan2(dx, dz))) < notch;
+}
+
+/**
+ * The idle slot (CONTROLS_SPEC §12 companions 3): her back-left (`side` +1) or back-right (−1) relative to `facing`,
+ * `dist` ≥ SLOT.minIdle from her. When that spot lies in the aim notch (she aims behind herself with the cursor), the
+ * other side is tried, then the spot behind her relative to the AIM. Writes `out.x/z/side`; pure.
+ * @param {{x:number,z:number}} p @param {number} facing @param {number|null} aimYaw @param {number} side
+ */
+export function idleSlot(p, facing, aimYaw, side, out, { dist = SLOT.regroupDist, angle = SLOT.regroupAngle, notch = SLOT.notch } = {}) {
+  const d = Math.max(dist, SLOT.minIdle);
+  for (const s of [side, -side]) {
+    followSlot(p, facing, s, out, { dist: d, angle });
+    if (!inNotch(p, out.x, out.z, aimYaw, notch)) { out.side = s; return out; }
+  }
+  followSlot(p, aimYaw, side, out, { dist: d, angle });
+  out.side = side;
+  return out;
+}
+
+/**
+ * Screen-space vector → world XZ direction through the iso camera yaw (`sx` right, `sy` up the screen = camera
+ * forward). Returns the length of (sx, sy) and writes the unit direction into `out` (zero vector → out unchanged). Pure.
+ */
+export function screenToWorldDir(sx, sy, camYaw, out) {
+  const len = Math.hypot(sx, sy);
+  if (len < 1e-6) return 0;
+  const f = camForwardYaw(camYaw), fx = Math.sin(f), fz = Math.cos(f);
+  const rx = -Math.cos(f), rz = Math.sin(f);                  // screen-right = her right when facing forward
+  out.x = (fx * sy + rx * sx) / len; out.z = (fz * sy + rz * sx) / len;
+  return len;
+}
+
+/**
+ * Her breadcrumb trail (path-aware follow): a ring buffer of her positions every `spacing` m. A companion whose
+ * straight line to her is blocked (a fence, a building corner, the path she clicked around) walks the trail instead of
+ * pressing into the obstacle. No allocation after construction; pure.
+ */
+export class Trail {
+  constructor(n = 48, spacing = 0.6) {
+    this.n = n; this.spacing = spacing;
+    this.xs = new Float32Array(n); this.ys = new Float32Array(n); this.zs = new Float32Array(n);
+    this.count = 0; this.head = -1;
+    /** crumbs pushed so far (a crumb's sequence number stays valid while newer ones arrive: see getSeq) */
+    this.seq = 0; this.base = 0;
+  }
+  clear() { this.count = 0; this.head = -1; this.base = this.seq; }
+  /** Add (x, y, z) if it is `spacing` from the newest crumb; a jump > `reset` m (teleport) restarts the trail. */
+  push(x, y, z, reset = 4) {
+    if (this.count) {
+      const h = this.head, d = Math.hypot(x - this.xs[h], z - this.zs[h]);
+      if (d > reset) this.clear();
+      else if (d < this.spacing) return false;
+    }
+    this.head = (this.head + 1) % this.n;
+    this.xs[this.head] = x; this.ys[this.head] = y; this.zs[this.head] = z;
+    this.count = Math.min(this.n, this.count + 1);
+    this.seq++;
+    return true;
+  }
+  /** Sequence number of the i-th newest crumb. */
+  seqOf(i) { return this.seq - 1 - i; }
+  /** The crumb with sequence number `s` into `out`; null once it has been overwritten (or after a clear). */
+  getSeq(s, out) { return s < this.base ? null : this.get(this.seq - 1 - s, out); }
+  /** Index (0 = newest) of the crumb nearest to (x, z), or −1 when empty. */
+  nearest(x, z) {
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < this.count; i++) {
+      const k = (this.head - i + this.n) % this.n, d = (this.xs[k] - x) ** 2 + (this.zs[k] - z) ** 2;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+  /** The i-th newest crumb (0 = newest) into `out` ({x, y, z}); null when out of range. */
+  get(i, out) {
+    if (i < 0 || i >= this.count) return null;
+    const k = (this.head - i + this.n) % this.n;
+    out.x = this.xs[k]; out.y = this.ys[k]; out.z = this.zs[k];
+    return out;
+  }
+}
+
+/**
+ * Where distance LODs measure from (CONTROLS_SPEC §2.8: every distance LOD keys to `cam.focus`, not the lens): the
+ * iso focus in play / Meme Cam / dialogue, else the rendering lens (cutscene presets), else her. Writes `out.x/z`.
+ */
+export function lodOrigin(ctx, out) {
+  const m = ctx?.game?.mode, f = ctx?.cam?.focus;
+  if (f && Number.isFinite(f.x) && Number.isFinite(f.z) && (m === 'play' || m === 'memecam' || m === 'dialog' || m === 'menu')) { out.x = f.x; out.z = f.z; return out; }
+  const c = ctx?.camera?.position;
+  if (c && m !== 'play' && m !== 'menu') { out.x = c.x; out.z = c.z; return out; }
+  const p = ctx?.player?.pos ?? c;
+  if (p) { out.x = p.x; out.z = p.z; } else { out.x = 0; out.z = 0; }
+  return out;
+}
 
 /**
  * Walkable ground height at (x, z) for an actor arriving from about `fromY` (bridge decks, prop tops, terrain),

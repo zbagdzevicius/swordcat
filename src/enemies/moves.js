@@ -80,7 +80,7 @@ export const CHAIN_STATE = {
       const [at] = preTell(s.dur, lead, w);
       if (e.chainT >= at) {
         const left = Math.max(0, s.dur - e.chainT);
-        e.telegraph(next.telegraph, { duration: left + Math.max(w, lead - left) });
+        e.telegraph(next.telegraph, { duration: left + Math.max(w, lead - left), attackDef: next, attackId: next.id });
         e.chainTold = e.chainIdx + 1; e.chainShown = left;      // glint seconds already shown when its windup begins
       }
     }

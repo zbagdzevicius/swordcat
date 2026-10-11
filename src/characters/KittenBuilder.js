@@ -15,7 +15,8 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32 } from './util.js';
-import { makeKitMaterial, kitMaterial, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR } from './materials.js';
+import { makeKitMaterial, kitMaterial, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR, TOP_VIEW, READABILITY } from './materials.js';
+import { buildSilhouetteProxy, HIGHLIGHT } from './Readability.js';
 import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
 import { EyePair, EXPRESSIONS, eyePivotMatrix, ringGeometry } from './Eyes.js';
 import { buildBow } from './Bow.js';
@@ -300,6 +301,7 @@ export class Kitten {
       const headQ = new THREE.Quaternion(); bind.head.decompose(_v, headQ, _v2);
       bow.quaternion.copy(earQ.invert().multiply(headQ).multiply(E(0.25, -0.25, -(cfg.bow.tilt ?? 0.32))));
       if (cfg.bow.scale2) bow.scale.setScalar(cfg.bow.scale2);
+      this._bowBase = bow.scale.x;
       joints.earL.add(bow);
       this.bow = bow; rig.bowAnchor = bow;
       updaters.push(bow.userData.update);
@@ -347,7 +349,16 @@ export class Kitten {
     this.animate(0);
     this.root.updateMatrixWorld(true);
     root.userData.kitten = this;
+    /** KittenView driving this kitten (set by the view), x-ray proxy (lazy), highlight state, top-view factor. */
+    this.view = null;
+    this.silhouetteProxy = null;
+    this._proxyDirty = false;
+    this.highlight = null;
+    this._topK = 0;
   }
+
+  /** Duck-typing flag for characters' resolvers (Readability.resolveTarget). */
+  get isKitten() { return true; }
 
   // ------------------------------------------------------------------ geometry helpers
 
@@ -761,11 +772,12 @@ export class Kitten {
     return this;
   }
   /** Bow visibility (Clementine has no bow until CS-01 shot 5). Never call with false after that: hard rule. */
-  setBowVisible(on) { if (this.bow) this.bow.visible = on; return this; }
+  setBowVisible(on) { if (this.bow) this.bow.visible = on; this._proxyDirty = true; return this; }
 
   /** Equip a sword skin (or null). `o.model` for GLB skins (diamond / toobig). */
   setSword(skin, o = {}) {
     if (this.sword) { this.sword.group.removeFromParent(); this.sword.dispose(); this.sword = null; }
+    this._proxyDirty = true;
     if (!skin) return this;
     this.sword = buildSword(typeof skin === 'string' ? skin : skin.skin, typeof skin === 'object' ? { ...skin, ...o } : o);
     if (this.cfg.swordScale) this.sword.group.scale.setScalar(this.cfg.swordScale);
@@ -814,6 +826,7 @@ export class Kitten {
   setProp(name, on = true, opts = {}) {
     const cut = name.indexOf('@');
     if (cut > 0) { opts = { ...opts, at: opts.at ?? name.slice(cut + 1) }; name = name.slice(0, cut); }
+    this._proxyDirty = true;
     let p = this.props[name];
     if (on) {
       if (!p) {
@@ -834,6 +847,61 @@ export class Kitten {
   }
   /** Fur quality for this kitten only (0 = sheen). Global switch: Fur.setFurQuality. */
   setFurShells(n) { this.headFur?.setShells(n); this.bibFur?.setShells(n); this.tailFur?.setShells(n); return this; }
+  /**
+   * Hover / selection rim (research/CONTROLS_SPEC.md §7.4): `color` (null clears) x `strength`, on the kit body and the
+   * shell fur. A cat on the shared kit material gets its own clone first (same GPU program, no compile).
+   * @param {THREE.ColorRepresentation|null} color @param {number} [strength=1]
+   */
+  setHighlight(color, strength = 1) {
+    const on = color !== null && color !== undefined && strength > 0;
+    if (!on && !this.highlight) return this;
+    if (on && this.kitMat === kitMaterial()) {
+      const m = makeKitMaterial();
+      this.kitMat = m; this.kitMesh.material = m;
+      for (const f of [this.headFur, this.bibFur, this.tailFur]) {
+        if (!f) continue;
+        if (f.mesh.material === f.sheenMat) f.mesh.material = m;
+        f.sheenMat = m;
+      }
+    }
+    const c = this.kitMat.userData.uniforms?.uHighlight?.value;
+    if (c) { if (on) c.set(color).multiplyScalar(HIGHLIGHT.gain * strength); else c.setRGB(0, 0, 0); }
+    for (const fm of [this.furMat, this.furMatBaked]) {
+      const u = fm?.uniforms?.uHighlight;
+      if (u && c) { u.value.copy(c); fm.uniformsNeedUpdate = true; }
+    }
+    this.highlight = on ? { color, strength } : null;
+    return this;
+  }
+
+  /**
+   * The x-ray silhouette proxy (research/CONTROLS_SPEC.md §3): one merged skinned mesh (body ellipsoids per bone, ears,
+   * bow, sword, props; no fur, no cape) parented to the root, hidden until the camera shows it. Built on first use and
+   * rebuilt in place after a sword / prop / bow change.
+   * @returns {THREE.SkinnedMesh | null}
+   */
+  getSilhouetteProxy() {
+    if (this.silhouetteProxy && !this._proxyDirty) return this.silhouetteProxy;
+    this._proxyDirty = false;
+    this.silhouetteProxy = buildSilhouetteProxy(this.root, { skeleton: this.skeleton, into: this.silhouetteProxy }) ?? this.silhouetteProxy;
+    return this.silhouetteProxy;
+  }
+
+  /**
+   * Readability from above (CONTROLS_SPEC §12 characters 3): bow x1.25 (its extra self-light is in the bow shader),
+   * ears x1.1, at top-view factor `k` (0 = the close-up look). Kitten.simulate applies TOP_VIEW.value every frame.
+   * @param {number} k 0..1
+   */
+  setTopView(k) {
+    k = clamp(k, 0, 1);
+    if (k === this._topK) return this;
+    this._topK = k;
+    const ear = 1 + (READABILITY.earScale - 1) * k;
+    this.rig.joints.earL.scale.setScalar(ear); this.rig.joints.earR.scale.setScalar(ear);
+    if (this.bow) this.bow.scale.setScalar((this._bowBase ?? 1) * (1 + (READABILITY.bowScale - 1) * k) / ear);
+    return this;
+  }
+
   /** Mesh-wide flash (hurt blink / poof) 0..1. */
   setFlash(v) {
     if (this.kitMat.userData.uniforms && this.kitMat !== kitMaterial()) this.kitMat.userData.uniforms.uFlash.value = v * 0.6;
@@ -934,7 +1002,9 @@ export class Kitten {
   simulate(dt, o = {}) {
     // parents first: the actor root may have been teleported / turned this frame (level load, respawn), and the cape
     // pins + colliders read the joints' matrixWorld (requests/player.md: the cloth re-initialised on the wrong side)
+    this.setTopView(TOP_VIEW.value);
     this.root.updateWorldMatrix(true, true);
+    if (this.silhouetteProxy?.visible && this._proxyDirty) this.getSilhouetteProxy();
     if (this.sword && this.sword.skin === 'toobig' && this.sword.group.parent) this._dragTip();
     if (tickFurTime(dt, o.frameId)) { CAPE_TIME.value += dt; envTick(); }
     if (this.furMat) {
@@ -995,6 +1065,7 @@ export class Kitten {
   warmObjects() {
     const out = [...(this.auraMeshes || [])];
     if (this.sword) { out.push(this.sword.streak); if (this.sword.sparkles) out.push(this.sword.sparkles); }
+    if (this.silhouetteProxy) out.push(this.silhouetteProxy);   // the x-ray program (first occlusion behind a roof)
     return out.filter((o) => o && o.geometry);
   }
   /**
@@ -1046,6 +1117,7 @@ export class Kitten {
     disown(this.auraMat); this.auraMat = null;
     disown(this.furMat); disown(this.furMatBaked);
     if (this.kitMat !== kitMaterial()) disown(this.kitMat);
+    this.silhouetteProxy?.userData.dispose?.(); this.silhouetteProxy = null;
     this.skeleton?.dispose();
     this.root.removeFromParent();
   }

@@ -30,6 +30,13 @@ export { noteRender, envTick, envColorsFromLights, characterEnvColors, resetChar
 export { STRANDS, FUR_RENDER_ORDER } from './Fur.js';
 export { CAPE_FRONT, CAPE_NECK, capeFold, capeHem, capeShade, capeFoldPhase, drapePoint } from './Cape.js';
 export { BOW_SELF_LIGHT } from './Bow.js';
+// ---- readability from the iso camera (research/CONTROLS_SPEC.md §3, §7.4, §12 characters)
+export {
+  getSilhouetteProxy, setHighlight, setXray, ringAnchor, topTint, topTintMaterial, highlightObject, buildSilhouetteProxy,
+  silhouetteParts, xrayMaterial, setProxyXray, updateReadability, topViewFactor, resolveTarget, XRAY, HIGHLIGHT, TOP_TINT,
+} from './Readability.js';
+export { READABILITY, TOP_VIEW } from './materials.js';
+export { FUR_LOD_ISO, FUR_VIEW, furLodShells } from './Fur.js';
 
 // ---- test / debug handle: the library reachable from any built kitten (`root.userData.kitten.constructor.lib`), so
 // smoke tests driving the BUNDLED game (no /src imports there) can build props, cages and cats next to the player.
@@ -44,9 +51,14 @@ import { FUR_LOD as _FUR_LOD } from './Fur.js';
 import { cagedKitten as _cagedKitten } from './Cages.js';
 import { characterEnvColors as _characterEnvColors } from './runtime.js';
 import { getCharacterEnvMap as _getCharacterEnvMap } from './materials.js';
+import { getSilhouetteProxy as _gsp, setHighlight as _shl, setXray as _sx, ringAnchor as _ra, topTint as _tt } from './Readability.js';
+import { FUR_LOD_ISO as _FLI, FUR_VIEW as _FV } from './Fur.js';
+import { TOP_VIEW as _TV, READABILITY as _RD } from './materials.js';
 _Kitten.lib = Object.freeze({
   buildKitten: _buildKitten, buildProp: _buildProp, buildCage: _buildCage, PROP_NAMES: _PROP_NAMES, buildBeastHead: _buildBeastHead,
   BEAST_PRESETS: _BEAST_PRESETS, buildPlate: _buildPlate, CATS: _CATS, catConfig: _catConfig, SQUIRE_IDS: _SQUIRE_IDS,
   cagedKitten: _cagedKitten, characterEnvColors: _characterEnvColors, getCharacterEnvMap: _getCharacterEnvMap,
   KITTEN_IDS: _KITTEN_IDS, HUB_ACTIVITY: _HUB, SWORD_SKINS: _SWORD_SKINS, CAPES: _CAPES, FUR_LOD: _FUR_LOD,
+  getSilhouetteProxy: _gsp, setHighlight: _shl, setXray: _sx, ringAnchor: _ra, topTint: _tt, FUR_LOD_ISO: _FLI, FUR_VIEW: _FV,
+  TOP_VIEW: _TV, READABILITY: _RD,
 });

@@ -8,7 +8,7 @@
 // cloth under flat overcast light (a 9-column grid alone aliased the folds into a flat board).
 import * as THREE from 'three';
 import { CAPES } from './palette.js';
-import { own } from './materials.js';
+import { own, TOP_VIEW, READABILITY } from './materials.js';
 import { clamp, smoothstep } from './util.js';
 
 export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.3, botW: 0.6, len: 0.47, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.61, anchorZ: -0.12,
@@ -38,7 +38,8 @@ export function capeMaterial(style = 'red', o = {}) {
   });
   const uniforms = {
     uLining: { value: new THREE.Color(spec.lining) }, uHem: { value: new THREE.Color(spec.hem) },
-    uTime: CAPE_TIME, uSpeed: { value: 0 }, uSwayAmp: { value: 1 },
+    uTime: CAPE_TIME, uSpeed: { value: 0 }, uSwayAmp: { value: 1 }, uTopView: TOP_VIEW,
+    uTrimV: { value: READABILITY.trimM / CAPE_DEFAULTS.len },
   };
   m.userData.uniforms = uniforms;
   m.onBeforeCompile = (sh) => {
@@ -56,20 +57,25 @@ export function capeMaterial(style = 'red', o = {}) {
         }
         #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nuniform vec3 uLining, uHem;')
+      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nuniform vec3 uLining, uHem;\nuniform float uTopView, uTrimV;')
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (!gl_FrontFacing) diffuseColor.rgb = uLining;
         float hemK = smoothstep(0.004, 0.012, vCapeUv.y) * (1.0 - smoothstep(0.03, 0.038, vCapeUv.y));
         diffuseColor.rgb = mix(diffuseColor.rgb, uHem, hemK);
         diffuseColor.rgb *= mix(0.82, 1.0, smoothstep(0.0, 0.25, vCapeUv.y)); // grimy hem / fold shade
-        diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.72, 1.0, vCapeUv.y));  // tucked under the collar / head`)
+        diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.72, 1.0, vCapeUv.y));  // tucked under the collar / head
+        // readability from above: a lighter trim on the cape tip (the bottom 2 cm), faded in by the top-view factor
+        {
+          vec3 trimC = min(max(diffuseColor.rgb, uHem) * 1.3 + 0.06, vec3(1.0));
+          diffuseColor.rgb = mix(diffuseColor.rgb, trimC, uTopView * ${READABILITY.trimLift.toFixed(2)} * (1.0 - smoothstep(uTrimV * 0.8, uTrimV, vCapeUv.y)));
+        }`)
       // baked fold shade on ALL the light (diffuse + sheen + env): overcast light comes from above, so vertical folds
       // get almost no shading from their normals alone
       .replace('#include <opaque_fragment>', `outgoingLight *= vCapeAO;
         #include <opaque_fragment>`);
   };
   if (o.sway) m.defines = { CAPE_SWAY: '' };
-  m.customProgramCacheKey = () => 'sc-cape-v4' + (o.sway ? '-sway' : '');
+  m.customProgramCacheKey = () => 'sc-cape-v5' + (o.sway ? '-sway' : '');
   _mats.set(key, own(m));
   return m;
 }

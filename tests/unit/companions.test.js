@@ -300,7 +300,7 @@ test('§9.1 nap: a knock-out blow → immune, 8 s zzz, then full HP; never dies'
   assert.equal(c.resolveIncoming(e, { dmg: 1 }), 'hit', 'small hits just hurt');
 });
 
-test('§9.2 Shield Wall: 3 × 1.6 m, 1.5 m ahead (camera-forward), blocks + staggers, taunts, 4 s, 18 s cooldown', async () => {
+test('§9.2 Shield Wall: 3 × 1.6 m, 1.5 m toward the engaged enemies (smart cast), blocks + staggers, taunts, 4 s, 18 s cooldown', async () => {
   const ctx = makeCtx(); await ctx.companions.init();
   const m = ctx.companions;
   const [c] = m.setActive(['mochi']);
@@ -315,7 +315,10 @@ test('§9.2 Shield Wall: 3 × 1.6 m, 1.5 m ahead (camera-forward), blocks + stag
   assert.equal(ab.kittenId, 'mochi'); assert.equal(ab.ability, 'shieldWall');
   assert.equal(m.walls.length, 1);
   const w = m.walls[0];
-  assert.ok(Math.abs(w.center.z - COMPANIONS.mochi.dist) < 1e-6 && Math.abs(w.center.x) < 1e-6, 'centre 1.5 m along camera-forward');
+  // §7.5 smart: between her and the centroid of the engaged enemies within 6 m (the far one does not count)
+  const yaw = Math.atan2(0.5, 4);
+  assert.ok(Math.abs(w.center.x - Math.sin(yaw) * COMPANIONS.mochi.dist) < 1e-6 && Math.abs(w.center.z - Math.cos(yaw) * COMPANIONS.mochi.dist) < 1e-6,
+    `centre 1.5 m toward the engaged rat (${w.center.x.toFixed(3)}, ${w.center.z.toFixed(3)})`);
   assert.equal(w.width, COMPANIONS.mochi.width); assert.equal(w.height, COMPANIONS.mochi.height);
   const posts = ctx.actors.byTag('shieldWall');
   assert.ok(posts.length >= 7, 'posts registered');
@@ -551,7 +554,7 @@ test('steering: groundY prefers physics.groundAt (bridge decks), then the height
   assert.ok(!groundFlyer({ alive: true, tags: new Set(['enemy']), def: {} }, 3), 'walkers are not grounded');
 });
 
-test('§9.1 follow: once she stands still he comes up beside her (in the camera view) and settles', async () => {
+test('§9.1 follow (iso): once she stands still he comes to her back-left, ≥ 1.4 m out, and settles', async () => {
   const ctx = makeCtx(); await ctx.companions.init();
   const [c] = ctx.companions.setActive(['mochi']);
   const p = ctx.player;
@@ -561,8 +564,9 @@ test('§9.1 follow: once she stands still he comes up beside her (in the camera 
   p.vel.set(0, 0, 0);
   step(ctx, 240);
   const d = dist(c, p), behind = p.pos.z - c.pos.z;
-  assert.ok(Math.abs(d - SLOT.regroupDist) < 0.5, `beside her at ~${SLOT.regroupDist} m (got ${d.toFixed(2)})`);
-  assert.ok(behind < 0.9, `level with her shoulder, not trailing (${behind.toFixed(2)} m behind)`);
+  assert.ok(Math.abs(d - SLOT.regroupDist) < 0.5, `idle at ~${SLOT.regroupDist} m (got ${d.toFixed(2)})`);
+  assert.ok(d >= SLOT.minIdle - 0.15, `never crowding her hero ring (${d.toFixed(2)} m)`);
+  assert.ok(behind > 0.4 && behind < 1.8, `back-left, not level with her sword arm nor trailing far (${behind.toFixed(2)} m behind)`);
   assert.ok(c.pos.x > p.pos.x, 'on his side (Mochi: her left, +X)');
   const before = c.pos.clone();
   step(ctx, 60);

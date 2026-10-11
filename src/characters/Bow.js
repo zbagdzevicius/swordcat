@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, Spring } from './util.js';
-import { own } from './materials.js';
+import { own, TOP_VIEW, READABILITY } from './materials.js';
 
 const _mats = new Map();
 /** Fraction of the bow's albedo added as emission. */
@@ -16,10 +16,14 @@ export function bowMaterial(sheenColor = PAL.bowLight) {
     clearcoat: 0.25, clearcoatRoughness: 0.4, side: THREE.DoubleSide,
   }));
   // the bow is recognition cue #1 (art.md §0): a touch of self-light keeps it pastel pink in shade, fog and night
+  // (+ READABILITY.bowGlow more from above; the top-view factor is a shared uniform object)
   m.onBeforeCompile = (sh) => {
-    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * ${BOW_SELF_LIGHT.toFixed(3)};`);
+    sh.uniforms.uTopView = TOP_VIEW;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uTopView;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (${BOW_SELF_LIGHT.toFixed(3)} + ${READABILITY.bowGlow.toFixed(3)} * uTopView);`);
   };
-  m.customProgramCacheKey = () => 'sc-bow-v2';
+  m.customProgramCacheKey = () => 'sc-bow-v3';
   _mats.set(sheenColor, m);
   return m;
 }

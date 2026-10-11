@@ -1888,7 +1888,7 @@ Any action can be rebound.
   - **Tumble 64.** A drag within 0.08 s steers it.
   - **Jump 64.**
   - **Kitten ability 64:** tap = smart cast, drag = aim, ✕ cancels.
-  - **Golden Hour 64**, shown at Valor 100.
+  - **Golden Hour 64**, shown at Valor 100 with Shard 2.
   - **Milk 56** and **Meow 56.**
   - A contextual **"!" 64.**
   - ❚❚ 56 at top centre (hold 1 s to skip).

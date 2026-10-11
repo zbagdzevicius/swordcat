@@ -13,7 +13,8 @@ import { E } from '../../src/core/events.js';
 import { ATTACKS, ENEMIES, BOSSES, DIZZY, TELEGRAPH, DIFFICULTY, PLAYER, QUALITY } from '../../src/core/config.js';
 import { Dizzy } from '../../src/enemies/Dizzy.js';
 import { Boss, phaseFor } from '../../src/enemies/Boss.js';
-import { Enemy, windupFor, defaultShape, segSegXZ } from '../../src/enemies/Enemy.js';
+import { Enemy, windupFor, defaultShape, segSegXZ, telegraphPayload } from '../../src/enemies/Enemy.js';
+import { insideFrustum, pointOnScreen, rangedStartAllowed, ONSCREEN_FALLBACK } from '../../src/enemies/onscreen.js';
 import { resolveEnemyDef, TYPES, countsTowardCap } from '../../src/enemies/EnemyManager.js';
 import { CLIP_MAPS, clipNames, clipKey, isSpec, rigFor, clipsFor, subclip, specDuration } from '../../src/enemies/clipMaps.js';
 import { TUNING } from '../../src/enemies/tuning.js';
@@ -296,7 +297,7 @@ test('resolveEnemyDef: every Appendix A row, Bonehead variants, jelly sizes, bos
   assert.equal(pike.hp, 30); assert.equal(pike.poise, 2); assert.equal(pike.sight, 10); assert.equal(pike.leash, 18);
   assert.deepEqual(pike.followUp, { id: 'rat_poke2', chance: 0.3 });
   const xbow = resolveEnemyDef('rat_xbow');
-  assert.deepEqual(xbow.keep, [7, 11]); assert.equal(xbow.attacks[0].id, 'rat_bolt');
+  assert.deepEqual(xbow.keep, [6, 9], 'CONTROLS_SPEC §8.5 rat_xbow.keep'); assert.equal(xbow.attacks[0].id, 'rat_bolt');
   const crow = resolveEnemyDef('crow');
   assert.equal(crow.fly.alt, 4); assert.equal(crow.hittableBelow, 2.2); assert.ok(crow.tags.includes('flyer'));
   for (const id of ['cacklejaw', 'pilfer', 'barkus_silhouette']) {
@@ -1372,4 +1373,129 @@ test('world requests: far idle enemies sleep (no AI / draw) and wake when she ne
   assert.equal(ctx.enemies._warmKeep.length, 2);
   ctx.bus.emit(E.LEVEL_UNLOAD, { id: 'meadow' });
   assert.equal(ctx.enemies._warmKeep.length, 0);
+});
+
+// ============================================================================================ controls rework (CONTROLS_SPEC §8.5)
+/** An iso-like camera (yaw π: south of her, looking +Z at `focus`), as if a frame had been rendered. */
+function isoCam(ctx, focus = at(0, 0), { dist = 13, pitchDeg = 51, fov = 38, aspect = 16 / 9 } = {}) {
+  const cam = new THREE.PerspectiveCamera(fov, aspect, 0.3, 90);
+  const pr = THREE.MathUtils.degToRad(pitchDeg);
+  cam.position.set(focus.x, focus.y + 0.6 + Math.sin(pr) * dist, focus.z - Math.cos(pr) * dist);
+  cam.lookAt(focus.x, focus.y + 0.6, focus.z);
+  cam.updateMatrixWorld(true);
+  ctx.camera = cam;
+  ctx.game.frameCount = 1;
+  ctx.game.stepCount = (ctx.game.stepCount ?? 0) + 1;
+  return cam;
+}
+
+/** step() that also bumps game.stepCount (the on-screen frustum cache key). */
+function stepN(ctx, n, each) { return step(ctx, n, (i) => { ctx.game.stepCount = (ctx.game.stepCount ?? 0) + 1; return each ? each(i) : false; }); }
+
+test('controls: telegraph payload — attackId, arc, range, windup (× difficulty), activeAt = the strike, targetsPlayer', async () => {
+  for (const difficulty of [undefined, 'kitten']) {
+    const ctx = await world({ difficulty });
+    const ev = record(ctx, E.TELEGRAPH);
+    const e = ctx.enemies.spawn('rat_pike', at(0, 4), { facing: Math.PI, alerted: true });
+    e.def = { ...e.def, followUp: null, fleeBelow: 0 };
+    let strikeAt = null;
+    step(ctx, 60 * 6, () => { if (e.stateName === 'strike' && strikeAt == null) strikeAt = ctx.game.time; return strikeAt != null; });
+    const t = ev.find((x) => x.kind === 'parry' && x.actor === e);
+    assert.ok(t && strikeAt != null, 'wind-up and strike');
+    assert.equal(t.attackId, 'rat_poke');
+    assert.deepEqual(t.arc, ATTACKS.rat_poke.arc); assert.equal(t.range, ATTACKS.rat_poke.arc.range);
+    const mul = difficulty ? DIFFICULTY[difficulty].windup : 1;
+    assert.ok(Math.abs(t.windup - windupFor(ATTACKS.rat_poke, mul)) < 1e-9, `windup ${t.windup} (× ${mul})`);
+    assert.ok(Math.abs(t.windup - t.duration) < 1e-9);
+    // the swing's first live frame (strike start + active[0]) within a step of the advertised activeAt
+    const live = strikeAt + ATTACKS.rat_poke.active[0];
+    assert.ok(Math.abs(t.activeAt - live) <= 2 * DT + 1e-9, `activeAt ${t.activeAt.toFixed(3)} vs ${live.toFixed(3)}`);
+    assert.equal(t.targetsPlayer, true);
+  }
+});
+
+test('controls: payload for the gold follow-up and dash lanes; pure telegraphPayload overrides', async () => {
+  // follow-up gold (emitted during the strike): activeAt = when its own strike starts
+  const ctx = await world();
+  const ev = record(ctx, E.TELEGRAPH);
+  const e = ctx.enemies.spawn('rat_pike', at(0, 4), { facing: Math.PI, alerted: true });
+  e.def = { ...e.def, followUp: { id: 'rat_poke2', chance: 1 }, fleeBelow: 0 };
+  let gold = null, strike2 = null;
+  step(ctx, 60 * 8, () => {
+    gold ??= ev.find((x) => x.kind === 'gold' && x.actor === e) ?? null;
+    if (gold && e.stateName === 'strike' && e.attack?.id === 'rat_poke2' && strike2 == null) strike2 = ctx.game.time;
+    return strike2 != null;
+  });
+  assert.ok(gold, 'gold follow-up told'); assert.equal(gold.attackId, 'rat_poke2');
+  assert.ok(strike2 != null, 'follow-up strike');
+  assert.ok(Math.abs(gold.activeAt - strike2) <= 2 * DT + 1e-9, `gold activeAt ${gold.activeAt.toFixed(3)} vs ${strike2.toFixed(3)}`);
+
+  // pure: a dash attack (no arc) gets a lane along the facing; overrides win; a companion target = not her
+  const fake = { attack: { id: 'hyena_lunge', def: ATTACKS.hyena_lunge, range: 5 }, radius: 0.4, ctx: { player: { id: 'p' } }, targetActor() { return { id: 'mochi' }; } };
+  const pl = telegraphPayload(fake, 'red', {}, 0.6, 10);
+  assert.equal(pl.attackId, 'hyena_lunge'); assert.equal(pl.arc, null);
+  assert.ok(pl.lane && Math.abs(pl.lane.l - ATTACKS.hyena_lunge.speed * ATTACKS.hyena_lunge.dur) < 1e-9, 'lunge lane');
+  assert.equal(pl.range, pl.lane.l); assert.equal(pl.activeAt, 10.6); assert.equal(pl.targetsPlayer, false);
+  const o = telegraphPayload(fake, 'aim', { activeAt: 3, windup: 1, attackId: 'x', targetsPlayer: true }, 0.5, 0);
+  assert.equal(o.activeAt, 3); assert.equal(o.windup, 1); assert.equal(o.attackId, 'x'); assert.equal(o.targetsPlayer, true);
+});
+
+test('controls: on-screen rule — pure frustum test with a 0.5 m margin; unknown before the first frame; rig API wins', () => {
+  const ctx = fakeCtx({ systems: false });
+  assert.equal(pointOnScreen(ctx, at(0, 0)), null, 'no rendered frame yet: unknown');
+  const cam = isoCam(ctx);
+  const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+  assert.equal(insideFrustum(fr, at(0, 0)), true, 'her feet');
+  assert.equal(insideFrustum(fr, at(0, 6)), true, '6 m up-screen');
+  assert.equal(insideFrustum(fr, at(0, 20)), false, '20 m up-screen is off the top edge');
+  assert.equal(insideFrustum(fr, at(14, 0)), false, '14 m to the side');
+  assert.equal(pointOnScreen(ctx, at(0, 6)), true);
+  // the margin shrinks the frustum: find the right edge at z 0, then step inside it by less than 0.5 m
+  let x = 0; while (insideFrustum(fr, at(x - 0.01, 0))) x -= 0.01;
+  assert.equal(insideFrustum(fr, at(x + 0.2, 0), 0.5), false, 'within 0.5 m of the edge = not on screen');
+  assert.equal(insideFrustum(fr, at(x + 1.0, 0), 0.5), true);
+  ctx.cam = { onScreen: (p, m) => (assert.equal(m, ONSCREEN_FALLBACK.onScreenMargin), p.x < 0) };
+  assert.equal(pointOnScreen(ctx, at(-1, 50)), true); assert.equal(pointOnScreen(ctx, at(1, 0)), false);
+});
+
+test('controls: no off-screen snipes — a far crossbowman off screen holds fire; on screen or within 9 m it shoots', async () => {
+  const ctx = await world();
+  const ev = record(ctx, E.TELEGRAPH);
+  // 13 m DOWN-screen (behind the lens at yaw π) — off screen and farther than 9 m
+  const e = ctx.enemies.spawn('rat_xbow', at(0, -13), { alerted: true });
+  e.perched = true;                              // stays put: the test is about the rule, not the keep band
+  isoCam(ctx);
+  stepN(ctx, 60 * 3, () => e.stateName === 'windup');
+  assert.notEqual(e.stateName, 'windup', 'no wind-up off screen');
+  assert.equal(e.holdFire, true, 'holding fire');
+  assert.equal(ev.filter((x) => x.kind === 'aim').length, 0);
+  assert.equal(rangedStartAllowed(e, { def: ATTACKS.rat_bolt, kind: 'ranged' }), false);
+  assert.equal(rangedStartAllowed(e, { def: ATTACKS.rat_poke, kind: 'melee' }), true, 'melee is never gated');
+  // the camera pans to show it → it may start
+  isoCam(ctx, at(0, -9));
+  stepN(ctx, 60 * 3, () => e.stateName === 'windup');
+  assert.equal(e.stateName, 'windup', 'on screen: it aims');
+  const tele = ev.find((x) => x.kind === 'aim');
+  assert.ok(tele && tele.attackId === 'rat_bolt' && tele.targetsPlayer === true, 'aim payload');
+  // off screen but within 9 m: allowed (the 9 m "near" band)
+  const ctx2 = await world();
+  const n = ctx2.enemies.spawn('rat_xbow', at(0, -8.5), { alerted: true });
+  n.perched = true;
+  isoCam(ctx2, at(0, 30));                      // camera looking far away
+  stepN(ctx2, 60 * 3, () => n.stateName === 'windup');
+  assert.equal(n.stateName, 'windup', 'within 9 m it shoots even off screen');
+});
+
+test('controls: crows dive only on screen (no near exemption); the keep band [6, 9] sits inside the near band', async () => {
+  const ctx = await world();
+  const c = ctx.enemies.spawn('crow', at(0, 3), { alerted: true });
+  assert.equal(c.def.onScreenOnly, true);
+  isoCam(ctx, at(0, 40));                       // the camera panned away (unlocked): the crow must wait
+  stepN(ctx, 60 * 4, () => c.stateName === 'windup');
+  assert.notEqual(c.stateName, 'windup');
+  isoCam(ctx, at(0, 0));
+  stepN(ctx, 60 * 6, () => c.stateName === 'windup');
+  assert.equal(c.stateName, 'windup', 'on screen: it dives');
+  const [near, far] = resolveEnemyDef('rat_xbow').keep;
+  assert.ok(near === 6 && far === 9 && far <= ONSCREEN_FALLBACK.rangedNear);
 });

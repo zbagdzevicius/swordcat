@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { GeoBuilder, mat, rgb, mixRgb, fbm3, smoothstep, mulberry32, hashString, damp } from './util.js';
 import { kitMaterial, RM, tuftMaterial, own } from './materials.js';
 import { eyeGeometry, eyeMaterial } from './Eyes.js';
+import { TOP_TINT } from './Readability.js';
 
 export const BEAST_PRESETS = Object.freeze({
   hyena: { fur: '#B08A55', furDark: '#74552F', spots: '#36271A', muzzle: '#3E322A', belly: '#BCA57E', ear: '#2E241C', earInner: '#7A5A48', eye: { inner: '#F6D27A', outer: '#C98A1E', ring: '#3A2410', slit: true }, scale: 1.3 },
@@ -135,7 +136,9 @@ export function buildBeastHead(preset = 'hyena', opts = {}) {
     }
     if (opts.hornedHelm !== false) {
       const hg = new GeoBuilder(), iron = rgb(P.helm), trim = rgb(P.trim), horn = rgb(P.horn);
-      hg.add(new THREE.SphereGeometry(0.43, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.42).scale(1.15, 0.9, 1.05), { matrix: mat([0, 0.08, -0.02], [-0.12, 0, 0]), color: iron, rmse: [0.4, 0.9, 0, 0] });
+      // readability from above (CONTROLS_SPEC §12 characters 3): the crown of the helm takes a contrasting top colour
+      const crown = rgb(P.helmTop ?? TOP_TINT.color);
+      hg.add(new THREE.SphereGeometry(0.43, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.42).scale(1.15, 0.9, 1.05), { matrix: mat([0, 0.08, -0.02], [-0.12, 0, 0]), color: (v, n) => mixRgb(iron, crown, smoothstep(TOP_TINT.from + 0.2, TOP_TINT.to + 0.1, n.y) * 0.55), rmse: [0.4, 0.9, 0, 0] });
       hg.add(new THREE.TorusGeometry(0.42, 0.03, 8, 40), { matrix: mat([0, 0.2, 0.02], [Math.PI / 2 - 0.12, 0, 0], [1.15, 1.05, 1]), color: trim, rmse: [0.5, 0.6, 0, 0] });
       for (const s of [1, -1]) {
         const curve = new THREE.CatmullRomCurve3([V(s * 0.38, 0.3, 0), V(s * 0.58, 0.38, 0.05), V(s * 0.68, 0.58, 0.12), V(s * 0.62, 0.78, 0.18)]);

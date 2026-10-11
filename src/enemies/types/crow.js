@@ -67,6 +67,7 @@ export default {
   ...def,
   id: 'crow',
   token: 'ranged',
+  onScreenOnly: true,                    // CONTROLS_SPEC §8.5: a crow dives only while it is on screen (no near exemption)
   walk: 1.2, run: def.fly.speed * 0.8,
   anims: { ...CLIP_MAPS.pigeon.roles },
   smallHeart: true,

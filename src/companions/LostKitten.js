@@ -23,7 +23,7 @@ import { CATS, lostKittenConfig, buildCage, visualDt } from '../characters/index
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { lineText } from './lines.js';
-import { COMPANION_IDS, SERVICE_IDS, SERVICE_FLAGS, SERVICE_SCENES, groundY } from './steering.js';
+import { COMPANION_IDS, SERVICE_IDS, SERVICE_FLAGS, SERVICE_SCENES, groundY, lodOrigin } from './steering.js';
 import { buildStocks, buildRopePost, buildRope, disposeDressing } from './dressing.js';
 
 export const HIDES = Object.freeze(['meow', 'cage', 'stand', 'break', 'climb']);
@@ -57,6 +57,7 @@ export const HANG = { lowerDur: 2.0, ropeTop: 3.2, postHp: 30, size: [0.95, 1.0,
 export const BARREL_STACK = [[-0.95, 0], [0.95, 0], [-0.95, -0.95], [0, -0.95], [0.95, -0.95]];
 
 const _v = new THREE.Vector3(), _rA = new THREE.Vector3(), _rB = new THREE.Vector3();
+const _lod = { x: 0, z: 0 };
 /** Hop-out directions tried around "toward her" (radians), nearest first. */
 const HOP_TRIES = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
 
@@ -459,6 +460,36 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   snapFacing() { this.prevFacing = this.facing; }
 
+  // ------------------------------------------------------------------ click / tap (iso controls)
+
+  /**
+   * What the camera's picker sees (CONTROLS_SPEC §7.6): a revealed kitten waiting for her is 'kitten' (tap it: she
+   * walks over and the contact rescues it); a service kitten staying put after its scene (Marmalade at the door) is
+   * 'npc'. Hidden kittens are never pickable (a hover ring would give the hiding place away); a cage is the lock's
+   * (combat's breakable).
+   */
+  get pickKind() {
+    if (this.hidden || this.scripted || this._far || !this.object3d.visible) return null;
+    if (this.stateName === 'waiting' && !this.rescued) return 'kitten';
+    if (this.stateName === 'stay') return 'npc';
+    return null;
+  }
+  /** How close a `use` order walks: inside the contact radius, so arriving is the rescue. */
+  get useR() { return Math.max(0.6, RESCUE.radius - 0.2); }
+  /** She clicked it and arrived: a waiting kitten within reach is rescued; a staying one waves. */
+  use() {
+    const p = this.ctx.player;
+    if (!p || this.scripted) return false;
+    if (this.stateName === 'waiting' && !this.rescued) {
+      const d = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
+      if (d <= RESCUE.radius + (p.radius ?? 0.32) + 0.4) { this.rescue(); return true; }
+      this.visual?.hop(0.2); this.visual?.emote('meow');
+      return false;
+    }
+    if (this.stateName === 'stay') { this.visual?.hop(0.15); this.visual?.emote('nod'); return true; }
+    return false;
+  }
+
   rescue() {
     if (this.rescued) return;
     if (this.hidden) this.reveal();
@@ -747,15 +778,15 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   /**
    * §18 draw-call budget (core integration, M2): a kitten (and its cage / hiding prop) far beyond what the level's fog
-   * lets through is not drawn: d > max(40, 2 / fog density) from the camera (6 m hysteresis). Only the children /
-   * the prop root are toggled, so the gameplay `object3d.visible` logic is untouched.
+   * lets through is not drawn: d > max(40, 2 / fog density) from the camera FOCUS in play (CONTROLS_SPEC §2.8; the lens
+   * in cutscene presets), 6 m hysteresis. Only the children / the prop root are toggled, so the gameplay
+   * `object3d.visible` logic is untouched.
    */
   _farCull() {
-    const cam = this.ctx.camera;
-    if (!cam?.position) return;
+    const o = lodOrigin(this.ctx, _lod);
     const fog = this.ctx.env?.fogDensity ?? this.ctx.scene?.fog?.density ?? 0;
     const D = Math.max(40, fog > 1e-4 ? 2 / fog : 1e9);
-    const d = Math.hypot(cam.position.x - this.pos.x, cam.position.z - this.pos.z);
+    const d = Math.hypot(o.x - this.pos.x, o.z - this.pos.z);
     const far = this._far ? d > D - 6 : d > D;
     if (far) {
       // (also catches children added while far, e.g. a visual that finished loading)

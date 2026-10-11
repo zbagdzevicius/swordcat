@@ -11,6 +11,7 @@ import { E } from '../core/events.js';
 import { setFurQuality, FUR_WIND } from './Fur.js';
 import { setAssetResolver } from './util.js';
 import { setCharacterEnvMap } from './materials.js';
+import { updateReadability } from './Readability.js';
 
 /** Wind direction for fur and capes (world XZ, normalised at use) and m/s-ish gain per unit of env.wind. */
 export const WIND = Object.freeze({ dir: [0.82, 0, 0.45], gain: 0.22, gustAmp: 0.35, gustPeriod: 3.8 });
@@ -71,6 +72,8 @@ export function characterFrame(ctx) {
   if (f === st.frame && f !== -1) return;
   st.frame = f;
   if (ctx.renderer && ctx.scene) noteRender(ctx.renderer, ctx.scene);   // Kitten.simulate() runs envTick() once per frame
+  // readability from the iso camera: the top-view factor (bow, ears, cape trim) and fur LOD from cam.focus
+  st.view = updateReadability(ctx);
   const env = ctx.env;
   // world's Env may own FUR_WIND (it writes it every frame after us): if the value changed since our last write,
   // someone else drives it and we stop writing for good.

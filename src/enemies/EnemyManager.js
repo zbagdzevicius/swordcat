@@ -498,6 +498,8 @@ export class EnemyManager {
     let d = Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
     const cam = this.ctx.camera?.position;                     // a cutscene / shot camera near it keeps it awake too
     if (cam) d = Math.min(d, Math.hypot(e.pos.x - cam.x, e.pos.z - cam.z));
+    const f = this.ctx.cam?.focus;                             // CONTROLS_SPEC §2.8: the iso focus (peek / edge pan) too
+    if (f) d = Math.min(d, Math.hypot(e.pos.x - f.x, e.pos.z - f.z));
     const S = M2.sleep;
     return e.asleep ? d > S.dist - S.hysteresis : d > S.dist;
   }

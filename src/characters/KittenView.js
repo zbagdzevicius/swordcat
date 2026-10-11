@@ -18,6 +18,7 @@ import { buildKitten, Kitten } from './KittenBuilder.js';
 import { catConfig } from './configs.js';
 import { FUR_WIND } from './Fur.js';
 import { initCharacters, characterFrame, visualDt } from './runtime.js';
+import { setProxyXray, ringAnchor, XRAY } from './Readability.js';
 
 /** Meme Cam cape settings (GAME_DESIGN §7.8: 3.8 s loop, gust peak at 1.2 s; 0.3 s in, 0.6 s out; §5.2 cape wind ×1.6). */
 export const MEME_CAPE = Object.freeze({ in: { blend: 0.3, period: 3.8, gustPeak: 1.2 }, out: { blend: 0.6 }, windMul: 1.6 });
@@ -45,6 +46,7 @@ export class KittenView {
     }
     /** @type {Kitten} */
     this.kitten = kitten;
+    kitten.view = this;
     this.root = kitten.root;
     if (o.castShadow === false) kitten.root.traverse((c) => { if (c.isMesh) c.castShadow = false; });
     const parent = o.parent ?? this.actor?.object3d ?? null;
@@ -54,6 +56,8 @@ export class KittenView {
     this._dt = 0;
     this._meme = false;
     this._offs = [];
+    // the hero's x-ray proxy is built now (level load), not on the first occlusion mid-fight (CONTROLS_SPEC §3)
+    if (this.ctx && kitten.tier === 'hero') kitten.getSilhouetteProxy();
     // shader warm-up (requests/fx.md, player.md): the first frames, then every level load and quality change
     this._warm = 2;
     if (this.ctx?.bus?.on) {
@@ -66,6 +70,9 @@ export class KittenView {
     const followMeme = o.memeCam ?? !!this.actor?.tags?.has?.('player');
     if (followMeme && this.ctx?.bus?.on) this._offs.push(this.ctx.bus.on(E.MEME_CAM, (p) => this.setMemeCam(!!p?.on)));
   }
+
+  /** Duck-typing flag for characters' resolvers (Readability.resolveTarget). */
+  get isKittenView() { return true; }
 
   /** Joint rig (KittenBuilder rig: body, hips, chest, head, shoulderL/R, ..., swordSocket, capeAnchor, bowAnchor). */
   get rig() { return this.kitten.rig; }
@@ -124,6 +131,29 @@ export class KittenView {
   setHoly(v) { this.kitten.setHoly(v); return this; }
   setFlash(v) { this.kitten.setFlash(v); return this; }
   setVisible(on) { this.kitten.root.visible = !!on; return this; }
+
+  // ------------------------------------------------------------------ readability from above (CONTROLS_SPEC §3, §7.4)
+
+  /**
+   * The x-ray silhouette proxy: one merged skinned mesh (body, ears, bow, sword; no fur), a hidden child of the kitten
+   * root. Camera's Occluders shows it (`visible`, or setXray) while she is occluded; it draws only where something
+   * nearer than her hides her (depthFunc GreaterDepth with a depth pull), flat #FFE4EC at 0.55.
+   * @returns {THREE.SkinnedMesh | null}
+   */
+  getSilhouetteProxy() { return this.kitten.getSilhouetteProxy(); }
+  /**
+   * Show / hide the x-ray silhouette. @param {boolean} on
+   * @param {{ color?: THREE.ColorRepresentation, alpha?: number }} [o] default her pink-white at 0.55
+   */
+  setXray(on, o = {}) {
+    const p = on ? this.getSilhouetteProxy() : this.kitten.silhouetteProxy;
+    setProxyXray(p, on, { color: o.color ?? XRAY.color, alpha: o.alpha ?? XRAY.alpha });
+    return this;
+  }
+  /** Hover / selection rim: `color` (null clears) x `strength` (§7.4: white on NPCs and kittens). */
+  setHighlight(color, strength = 1) { this.kitten.setHighlight(color, strength); return this; }
+  /** Ground point under her body + ring radius (hero / selection rings). @param {THREE.Vector3} [out] */
+  ringAnchor(out) { return ringAnchor(this, out); }
 
   // ------------------------------------------------------------------ ScriptedActor visual hooks (§19.4)
 

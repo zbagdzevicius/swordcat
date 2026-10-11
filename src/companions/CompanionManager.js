@@ -6,6 +6,15 @@
 //   spawnKitten(id, pos, hide, opts?)  a LostKitten (hide: 'meow'|'cage'|'stand'|'break'|'climb'|null); companion
 //                               ids make a caged squire (Mochi D-01) that joins when freed
 //   pudding                     the Pudding actor or null
+// Iso controls (CONTROLS_SPEC §7.5, §10.1, §12 companions; additive):
+//   useAbility(i | { dir?, point?, mag?, id? })  smart cast (index / nothing) or an aimed cast (ui's drag release,
+//               mouseOnly slot click); the Q / LT / portrait input is read here: tap = quick cast (at the cursor on
+//               KBM, smart on pad and touch), hold = the indicator follows the aim, release casts; Esc / RMB / ✕ cancel
+//   aim         { active, kittenId, ability, shape, valid, plan } while an ability is aimed (fx and ui read it;
+//               AbilityIndicator draws it until fx takes over); aimAbility(req) / cancelAbilityAim() for ui
+//   cooldownLeft(id?) / readiness(id?) / canCast(id?) / abilityShape(id?)   the ability bar and the ranges overlay
+//   pickables(out) / use(actorOrId)   companion-area actors the camera's picker may hit (pickKind, useR,
+//               interactId, use()) and what a click / tap on one does
 // Extras for other areas (additive): unlock(id), useAbility(i), wallBetween(a, b) (Shield Wall occlusion for
 // Combat), milkBonus (Mochi passive), kittens, bark(actor, category, opts), get(id), despawn(actor), clearLevel(),
 // markCleared(arenaId), lowerCage(id), and (M2):
@@ -31,8 +40,14 @@ import { SpoonBrigade } from './SpoonBrigade.js';
 import { HubKittens } from './HubKittens.js';
 import { RESCUES, rowWanted } from './rescues.js';
 import { CATS } from '../characters/index.js';
+import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } from './abilityAim.js';
+import { AbilityIndicator } from './AbilityIndicator.js';
 
 const _slot = { x: 0, z: 0 };
+const _ex = { x: 0, z: 0, mag: 0, source: '' };
+const _req = { dir: null, point: null, mag: undefined, source: 'smart' };
+/** §7.5 cast modes (`settings.castMode`). */
+export const CAST_MODES = Object.freeze(['smart', 'indicator', 'dragOnly']);
 const toVec = (p) => (p == null ? new THREE.Vector3()
   : Array.isArray(p) ? (p.length >= 3 ? new THREE.Vector3(p[0], p[1], p[2]) : new THREE.Vector3(p[0], 0, p[1]))
     : new THREE.Vector3(p.x ?? 0, p.y ?? 0, p.z ?? 0));
@@ -65,6 +80,14 @@ export class CompanionManager {
     /** §12.5 hub residents */
     this.hub = new HubKittens(ctx, this);
     this.swapT = 0;
+    /**
+     * Iso controls: the kitten ability being aimed (CONTROLS_SPEC §7.5). `plan` is abilityAim.js planAbility's output
+     * (shape, center, yaw, width, length, range, targets, dir, point, valid); fx's GroundDecals and ui read it.
+     */
+    this.aim = { active: false, kind: 'ability', kittenId: null, ability: null, shape: null, valid: false, source: null, plan: newPlan() };
+    /** the press being held: { t, shown, cancelled, device, req } */
+    this._cast = null;
+    this.indicator = new AbilityIndicator(ctx, this);
     /** pending timed calls (sim s): [{ t, fn }] */
     this._later = [];
     this._offs = [];
@@ -79,7 +102,7 @@ export class CompanionManager {
   async init() {
     const bus = this.ctx.bus;
     this._offs.push(
-      bus.on(E.LEVEL_UNLOAD, () => this.clearLevel()),
+      bus.on(E.LEVEL_UNLOAD, () => { this._endAim(); this.clearLevel(); }),
       bus.on(E.LEVEL_LOADED, (p) => this._onLevelLoaded(p)),
       bus.on(E.SAVE_LOADED, () => this._syncFromState()),
       bus.on(E.PLAYER_MEOW, (p) => this._onMeow(p?.position ?? this.ctx.player?.pos)),
@@ -252,8 +275,157 @@ export class CompanionManager {
     } else finish();
   }
 
-  /** Fire the ability of active companion `i` (also the touch portrait button). */
-  useAbility(i = 0) { return this.active[i]?.useAbility() ?? false; }
+  /** Active companion by id ('mochi'), index (0) or nothing (the first). */
+  _comp(id) {
+    if (id == null) return this.active[0] ?? null;
+    if (typeof id === 'number') return this.active[id] ?? null;
+    return this.active.find((c) => c.kittenId === id) ?? null;
+  }
+
+  /**
+   * Fire an active companion's ability. `useAbility()` / `useAbility(i)`: the smart cast (§7.5). `useAbility({ dir,
+   * point, mag, id, index })`: an aimed cast (ui's drag-aim release, a click on the ability-bar slot in `mouseOnly`);
+   * no dir / point → smart. Ends any aiming in progress. Returns true when the ability fired.
+   */
+  useAbility(arg = 0) {
+    if (arg == null || typeof arg === 'number') return this.active[arg ?? 0]?.useAbility() ?? false;
+    const c = this._comp(arg.id ?? arg.index ?? null);
+    if (!c) return false;
+    this._endAim();
+    const aimed = (arg.dir && Number.isFinite(arg.dir.x)) || (arg.point && Number.isFinite(arg.point.x));
+    return c.useAbility(aimed ? { dir: arg.dir ?? null, point: arg.point ?? null, mag: arg.mag, source: arg.source ?? 'api' } : null);
+  }
+
+  /** Seconds of ability cooldown left (§10.1 ability bar), 0 when ready or unknown. */
+  cooldownLeft(id) { return this._comp(id)?.cooldownLeft ?? 0; }
+  /** 0..1 ability readiness (§10.1 cooldown sweep; the HUD ring). */
+  readiness(id) { return this._comp(id)?.readiness ?? 0; }
+  /** Could the ability fire now (off cooldown, awake, not mid-cast)? */
+  canCast(id) { return !!this._comp(id)?.canCast; }
+  /** Static indicator shape / range of a companion's ability (ranges overlay, tooltips), or null. */
+  abilityShape(id) { const c = this._comp(id); return c ? abilityShape(c.cfg) : null; }
+
+  /**
+   * ui's drag-aim: set the aim of the press being held (`{ dir?, point?, mag? }`, world space), or start an aim when
+   * none is held (touch: the portrait button pressed through ui instead of the `ability` action). Shows the indicator.
+   */
+  aimAbility(req) {
+    const c = this._comp(req?.id ?? null);
+    if (!c || !c.canCast) return false;
+    if (!this._cast) this._cast = { t: 0, shown: true, cancelled: false, device: this.ctx.input?.device ?? 'touch', req: null, viaApi: true };
+    this._cast.req = req ?? null; this._cast.shown = true; this._cast.cancelled = false;
+    this._refreshAim(c);
+    return true;
+  }
+
+  /** ✕ / Esc / RMB: drop the ability being aimed; the release then casts nothing. */
+  cancelAbilityAim() {
+    if (!this._cast) return false;
+    this._cast.cancelled = true;
+    this.aim.active = false;
+    if (this._cast.viaApi) this._endAim();
+    return true;
+  }
+
+  _endAim() { this._cast = null; this.aim.active = false; this.aim.kittenId = null; }
+
+  /** `settings.castMode` (§7.5): 'smart' (default) | 'indicator' | 'dragOnly'. */
+  get castMode() { const m = this.ctx.state?.settings?.castMode; return CAST_MODES.includes(m) ? m : 'smart'; }
+
+  /** The request the held press casts with now: the explicit aim (ui / touch drag / RS), else the cursor, else smart. */
+  _castReq(cast) {
+    const ctx = this.ctx;
+    _req.dir = null; _req.point = null; _req.mag = undefined; _req.source = 'smart';
+    const r = cast.req;
+    if (r && (r.dir || r.point)) { _req.dir = r.dir ?? null; _req.point = r.point ?? null; _req.mag = r.mag; _req.source = r.source ?? 'touch'; return _req; }
+    const ex = explicitAim(ctx, _ex);
+    if (ex) { cast.explicit = true; _req.dir = ex; _req.mag = ex.mag; _req.source = ex.source; return _req; }
+    const g = cursorGround(ctx);
+    if (g) { _req.point = g; _req.source = 'cursor'; return _req; }
+    return null;
+  }
+
+  /** Recompute the shown indicator for the held press. */
+  _refreshAim(c) {
+    const a = this.aim, cast = this._cast;
+    if (!cast || cast.cancelled || !cast.shown) { a.active = false; return; }
+    planAbility(this.ctx, c, this._castReq(cast), a.plan);
+    a.active = true; a.kittenId = c.kittenId; a.ability = a.plan.ability; a.shape = a.plan.shape; a.valid = a.plan.valid;
+    a.source = a.plan.source;
+  }
+
+  /**
+   * The ability input (Q / LT / the touch portrait through the `ability` action), per fixed step in play (§6.2–6.4,
+   * §7.5): press → hold ≥ CAST.hold (or castMode 'indicator', or an explicit drag / RS aim) shows the indicator;
+   * release casts (a tap: at the cursor on KBM, smart on pad and touch; 'dragOnly' touch taps cast nothing);
+   * Esc / RMB (`back` / `move`) or ui's ✕ cancel.
+   */
+  _updateCast(dt) {
+    const ctx = this.ctx, inp = ctx.input, p = ctx.player;
+    const c = this.active[0];
+    const live = ctx.game.mode === 'play' && !ctx.levels?.loading && !!c && !!p && p.alive !== false && !p.scripted;
+    if (!live) { if (this._cast) this._endAim(); return; }
+    const pressed = !!inp?.pressed?.('ability');
+    const hasDown = typeof inp?.down === 'function';
+    const down = hasDown ? !!inp.down('ability') : false;
+    const released = typeof inp?.released === 'function' ? !!inp.released('ability') : pressed && !down;
+    if (pressed && !this._cast) {
+      if (!c.canCast) {                                            // cooling down / napping: nothing to aim
+        if (released || !down) return;
+        try { inp?.haptic?.('orderRejected'); } catch { /* core mid-edit */ }
+        this._cast = { t: 0, shown: false, cancelled: true, device: inp?.device ?? 'kbm', req: null };
+        return;
+      }
+      const dev = inp?.device ?? 'kbm', mode = this.castMode;
+      this._cast = { t: 0, shown: mode === 'indicator' || (mode === 'dragOnly' && dev !== 'touch'), cancelled: false, device: dev, req: null };
+    }
+    const cast = this._cast;
+    if (!cast) return;
+    if (cast.viaApi) { if (!cast.cancelled) this._refreshAim(c); return; }   // ui drives it (aimAbility / useAbility)
+    if (!pressed && !down && !released) { this._endAim(); return; }           // the release was lost (focus loss)
+    cast.t += dt;
+    if (!cast.cancelled && (inp?.pressed?.('back') || inp?.pressed?.('move'))) { cast.cancelled = true; this.aim.active = false; }
+    if (!cast.cancelled) {
+      if (!cast.shown && (cast.t >= CAST.hold || explicitAim(ctx, _ex))) cast.shown = true;
+      this._refreshAim(c);
+    }
+    if (!released) return;
+    // release: cast
+    let req = null, go = !cast.cancelled && c.canCast;
+    if (go && cast.shown) req = this._castReq(cast);
+    else if (go) {                                                 // a tap
+      if (this.castMode === 'dragOnly' && cast.device === 'touch') go = false;
+      else if (cast.device === 'kbm') { const g = cursorGround(ctx); if (g) { _req.dir = null; _req.point = g; _req.mag = undefined; _req.source = 'cursor'; req = _req; } }
+      else { const ex = explicitAim(ctx, _ex); if (ex) { _req.dir = ex; _req.point = null; _req.mag = ex.mag; _req.source = ex.source; req = _req; } }
+    }
+    if (go) c.useAbility(req);
+    this._endAim();
+  }
+
+  // ------------------------------------------------------------------ click / tap (iso controls)
+
+  /**
+   * This area's actors the camera's picker may hit (CONTROLS_SPEC §7.6: kind 'npc' for NPCs and the party, kitten
+   * rescues as 'kitten'): each has `pickKind`, `useR` (a `use` order's reach), `interactId` (a level interactable it
+   * stands for, e.g. a station keeper) and `use()`. Fills and returns `out`.
+   */
+  pickables(out = []) {
+    out.length = 0;
+    for (const c of this.active) if (c.pickKind) out.push(c);
+    for (const a of this.actors) if (a.pickKind) out.push(a);
+    return out;
+  }
+
+  /**
+   * She clicked / tapped `target` (an actor or an id) and arrived (the player's `use` order calls this, or the level
+   * interactable it stands for): talk, say hello, get rescued. Returns true when something happened.
+   */
+  use(target) {
+    const a = typeof target === 'string' ? this.get(target) : target;
+    if (!a?.pickKind) return false;
+    if (a.interactId && this.ctx.levels?.current?.interact?.(a.interactId)) return true;
+    try { return !!a.use?.(); } catch (e) { console.error('[companions] use failed', e); return false; }
+  }
 
   // ------------------------------------------------------------------ spawning
 
@@ -554,10 +726,7 @@ export class CompanionManager {
         try { l.fn(); } catch (e) { console.error('[companions] timed call failed', e); }
       }
     }
-    if (g.mode === 'play' && !ctx.levels?.loading && ctx.input?.pressed?.('ability')) {
-      const p = ctx.player;
-      if (p && p.alive !== false && !p.scripted) this.useAbility(0);
-    }
+    this._updateCast(dt);
     for (const c of this.active) c.update(dt);
     for (let i = this.actors.length - 1; i >= 0; i--) {
       const a = this.actors[i];
@@ -576,9 +745,12 @@ export class CompanionManager {
     for (const a of this.actors) a.render(alpha, dt);
     for (const w of this.walls) w.render(dt);
     this.spoons.render(dt);
+    this.indicator.render(dt ?? 0);
   }
 
   dispose() {
+    this._endAim();
+    this.indicator.dispose();
     this.clearLevel();
     for (const c of this.active) { this.ctx.actors.unregister(c); c.dispose(); }
     this.active = [];

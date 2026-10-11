@@ -74,10 +74,21 @@ export class CameraShake {
     return o;
   }
 
-  /** Step, then rotate / nudge `cam` in its local frame (call after lookAt). */
-  apply(cam, dt, scale = 1) {
+  /**
+   * Step, then rotate / nudge `cam` in its local frame (call after lookAt). `mix` (CONTROLS_SPEC §2.5, the iso rig):
+   * { rotMul, transMul, rotMaxDeg, transMax } — rotations ×0.5 (≤ 1.2°), screen-plane translation ×2 (≤ 0.35 m).
+   */
+  apply(cam, dt, scale = 1, mix = null) {
     const o = this.step(dt, scale);
     if (o.pitch === 0 && o.yaw === 0 && o.roll === 0 && o.x === 0 && o.y === 0) return;
+    if (mix) {
+      const rm = mix.rotMul ?? 1, rMax = ((mix.rotMaxDeg ?? 90) * Math.PI) / 180, tm = mix.transMul ?? 1, tMax = mix.transMax ?? 1;
+      const cl = (v, m) => (v > m ? m : v < -m ? -m : v);
+      cam.rotateX(cl(o.pitch * rm, rMax)); cam.rotateY(cl(o.yaw * rm, rMax)); cam.rotateZ(cl(o.roll * rm, rMax));
+      if (o.x) cam.translateX(cl(o.x * tm, tMax));
+      if (o.y) cam.translateY(cl(o.y * tm, tMax));
+      return;
+    }
     cam.rotateX(o.pitch); cam.rotateY(o.yaw); cam.rotateZ(o.roll);
     if (o.x) cam.translateX(o.x);
     if (o.y) cam.translateY(o.y);

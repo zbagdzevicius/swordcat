@@ -152,7 +152,8 @@ export class Tutorial {
       const p = this.ctx.player, [sx, sz] = PRACTICE.sack;
       this._fact({ type: 'dodge', nearSack: !!p && Math.hypot(p.pos.x - sx, p.pos.z - sz) <= PRACTICE.rollR });
     });
-    on(E.LEVEL_LOADED, () => this.reset());
+    on(E.LEVEL_LOADED, () => { this.reset(); this._clickT = 0; });
+    on(E.PLAYER_ORDER, () => { this._ordered = true; });
     on(E.LEVEL_UNLOAD, () => this._hide(true));
     on(E.FLAG_SET, (f) => { if (f?.key === 'prologue.tutorial' && f.value && this.active) this._end(false); });
     for (const h of HINTS) on(h.on, (p) => this._hint(h, p));
@@ -167,6 +168,7 @@ export class Tutorial {
   // ------------------------------------------------------------------ loop (play mode, StoryManager.update)
   update(dt) {
     const ctx = this.ctx, p = ctx.player;
+    this._clickTip(dt);
     if (!this.eligible() || !p) { if (this.active) this._hide(true); this.active = false; return; }
     if (this.story?.isPlaying || ctx.game?.mode === 'menu') return;
     if (!this.active) {
@@ -258,6 +260,15 @@ export class Tutorial {
   _hide(clear) {
     this._shown = null;
     this.ctx.bus.emit(E.PROMPT, { kind: 'tutorial', action: null, hold: 0, textKey: clear ? null : this.log.step?.textKey ?? null, step: 0, total: this.log.total, progress: 1, done: true, id: 'tutorial' });
+  }
+
+  /** CONTROLS_SPEC §14 `tut.click`: 20 s of meadow play without ever using an order → one tip (not on pad). */
+  _clickTip(dt) {
+    const ctx = this.ctx;
+    if (this._ordered || ctx.game?.mode !== 'play' || ctx.levels?.current?.id !== 'meadow' || ctx.input?.device === 'pad') return;
+    if (!ctx.state?.getFlag?.('prologue.done') || ctx.state?.getFlag?.('seen.tut.click') || ctx.params?.test) return;
+    this._clickT = (this._clickT ?? 0) + dt;
+    if (this._clickT >= 20) this._hint({ key: 'tut.click', when: () => true });
   }
 
   _hint(h, payload) {

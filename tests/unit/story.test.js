@@ -57,6 +57,8 @@ test('U14: with HOMAGE_LINES = false no homage text is reachable', () => {
 /** Files whose dotted ids are sound ids, not strings keys (audio's cue sheets `cs09.roar`, shop sounds `shop.open`…). */
 const CUE_FILES = { has: (rel) => rel.startsWith('src/audio/') };
 const NOT_KEYS = /^(prologue|meadow|forest|town|gate|bog|keep|ending|seen|story)\.(armour|tutorial|done|pudding|mochi|sage|camp|boss|marmalade|letters|tofu|earlgrey|clover|free|pip|pin|line|pearl|keys|brutus|seen|card|gate)\b/;
+/** CONTROLS_SPEC: the `tut.jump.done` flag and §10.7 setting names quoted in code / comments. */
+const NOT_KEYS2 = /^(tut\.jump\.done|settings\.(bindings|autoAttack|castMode|parryRing|autoRiposte|controlPreset|camZoom|camLock|touchLayout|tapToMove|swipeTumble|haptics|buttonOpacity|leftHanded|reduceCameraMotion|standAutoFace|edgePanSpeed|pathPreview|cursorSize|cursorContrast|hapticTaps))$/;
 const KEY_RE = /['"`]((?:tut|obj|prompt|toast|bark|kitten|hub|letter|ch|region|name|menu|pause|settings|results|life|gameover|loading|meme|ach|shop|board|difficulty|vigil|hud|credits|title|game|newgame|memecam|rotate|cs\d\d[a-z]?|g\d\d|d\d\d|grizzlechop|cacklejaw|pilfer|brutus|barkus|postcredits|ending)\.[\w.]*\w)['"`]/g;
 
 test('U14: every strings key used anywhere in src/ exists in strings.js', () => {
@@ -67,7 +69,7 @@ test('U14: every strings key used anywhere in src/ exists in strings.js', () => 
       if (e.isDirectory()) walk(p);
       else if (p.endsWith('.js') && !CUE_FILES.has(path.relative(ROOT, p).split(path.sep).join('/'))) for (const m of fs.readFileSync(p, 'utf8').matchAll(KEY_RE)) {
         const k = m[1];
-        if (!has(k) && !NOT_KEYS.test(k) && !CUES[k]) missing.push(`${path.relative(ROOT, p)}: ${k}`);
+        if (!has(k) && !NOT_KEYS.test(k) && !NOT_KEYS2.test(k) && !CUES[k]) missing.push(`${path.relative(ROOT, p)}: ${k}`);
       }
     }
   };

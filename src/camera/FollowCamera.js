@@ -53,7 +53,7 @@ import { OccluderFader, SOLID_MIN_H } from './Occluders.js';
 import { PRESETS, localToWorld } from './presets.js';
 import { toRecord } from '../physics/StaticColliders.js';
 import { RENDER, AIM, TELEGRAPH } from '../core/config.js';
-import { ISO, isoFrame, isoPosition, isoLead, fitDist, pxAt, screenToWorldDir, capXZ } from './IsoRig.js';
+import { ISO, isoFrame, isoPosition, isoLead, fitDist, pxAt, apparentH, screenToWorldDir, capXZ } from './IsoRig.js';
 import { screenToGround, pickAt, worldToScreen as w2s, canvasRect } from './Picker.js';
 import { setXray } from '../characters/Readability.js';
 
@@ -449,6 +449,7 @@ export class FollowCamera {
       bus.on(E.PLAYER_DAMAGED, (p) => { this._noteAttacker(p?.source); if (!this.camLocked) this._recentrePan = true; }),
       // §2.4 punches (real time): parry −0.6 m, Holy +3° FOV, Purrfect Dodge −0.4 m through its slow motion
       bus.on(E.PLAYER_PARRY, () => { this._punchT = 0; }),
+      bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'camZoom' && Number.isFinite(p.value)) this.zoom(p.value); }),
       bus.on(E.PLAYER_HOLY, () => { this._holyT = 0; }),
       bus.on(E.PLAYER_PERFECT_DODGE, (p) => { if (!p?.graze) this._dodgeT = PLAYER.dodge.perfectDur; }),
       bus.on(E.ENEMY_ALERTED, (p) => { if (!this.camLocked && p?.enemy?.pos && this.ctx.player && p.enemy.pos.distanceTo(this.ctx.player.pos) < 8) this._recentrePan = true; }),
@@ -717,7 +718,12 @@ export class FollowCamera {
   onScreen(p, margin = 0) {
     const cam = this.ctx.camera;
     if (!cam || !p) return true;
-    if (!this._frustumOk) return true;
+    if (!this._frustumOk) {                                  // not rendered by this rig yet: the camera as it stands
+      if (!(this.ctx.game?.frameCount > 0)) return true;     // boot / node tests: no meaningful pose → unknown = on screen
+      cam.updateMatrixWorld();
+      _projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+      this._frustum.setFromProjectionMatrix(_projView);
+    }
     const pl = this._frustum.planes;
     for (let i = 0; i < 6; i++) if (pl[i].distanceToPoint(p) < margin) return false;
     return true;
@@ -939,7 +945,7 @@ export class FollowCamera {
     const info = this.isoInfo;
     info.yaw = yaw; info.pitch = this._isoP; info.dist = this._isoD; info.fov = out.fov; info.portrait = fr.portrait; info.phone = fr.phone;
     info.frameOffset = fr.frameOffset;
-    info.catPx = pxAt(p.height ?? I.catH, this._isoD, out.fov, H);
+    info.catPx = pxAt(apparentH(this._isoP, I), this._isoD, out.fov, H);
     this.distance = this._isoD;
     this.pitch = this._isoP;
     this._snap = false;
@@ -1572,15 +1578,21 @@ export class FollowCamera {
     // §2.1 framing: setViewOffset places her 4 % below centre (portrait: 40 % from the top)
     const offK = this._isoW * (this.isoInfo.frameOffset ?? ISO.frameOffset);
     const vw = this._viewW(), vh = this._viewH();
-    const offKey = Math.abs(offK) < 1e-4 ? 0 : Math.round(offK * vh * 4) / 4;
+    // touch landscape: the right half belongs to the thumb cluster, so she sits a little left of centre (42 %)
+    const offXK = this._isoW * (ctx.input?.device === 'touch' && !this.isoInfo.portrait ? (ISO.frameOffsetTouchX ?? 0.08) : 0);
+    const offY = Math.abs(offK) < 1e-4 ? 0 : Math.round(offK * vh * 4) / 4, offX = Math.abs(offXK) < 1e-4 ? 0 : Math.round(offXK * vw * 4) / 4;
+    const offKey = offY || offX ? `${offX}|${offY}` : 0;
     if (offKey !== this._viewOff || (offKey && (cam.view?.fullWidth !== vw || cam.view?.fullHeight !== vh))) {
       this._viewOff = offKey;
-      if (offKey) cam.setViewOffset(vw, vh, 0, -offKey, vw, vh); else cam.clearViewOffset();
+      if (offKey) cam.setViewOffset(vw, vh, offX, -offY, vw, vh); else cam.clearViewOffset();
       proj = false;                                              // set/clearViewOffset update the projection
     }
     if (proj) cam.updateProjectionMatrix();
 
-    this.shaker.apply(cam, dt, (ctx.state?.settings?.shake ?? 1) * (this._isoW > 0.5 ? ISO.shake.scale : 1));    // camera-space rotations after lookAt
+    // camera-space rotations after lookAt; the iso rig mixes less rotation, more screen-plane jolt (§2.5)
+    const isoShake = this._isoW > 0.5;
+    const calmShake = ctx.state?.settings?.reduceCameraMotion && ctx.state?.settings?.shake == null ? 0 : 1;
+    this.shaker.apply(cam, dt, (ctx.state?.settings?.shake ?? 1) * calmShake * (isoShake ? ISO.shake.scale : 1), isoShake ? ISO.shake : null);
     cam.updateMatrixWorld();
     _projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(_projView);

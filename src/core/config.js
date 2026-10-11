@@ -66,12 +66,15 @@ export const CAMERA = { dist: 3.6, lockDist: 4.5, bossDist: 6.0, ease: 0.6, fov:
  * bossDist / fov / pitch` above apply only to cutscene presets and `?cam=classic` (C3).
  */
 CAMERA.iso = {
-  yaw: Math.PI, fov: 38, fovPortrait: 50, dist: 13, distPhone: 12, zoom: [0.70, 1.40], distMin: 9, distMax: 18,
+  // dist 13 → 12.4: her measured height (feet → ear tips, foreshortened at ~51°) is 77 px at 1080p at 13 m; §16.2 asks ≥ 80
+  yaw: Math.PI, fov: 38, fovPortrait: 50, dist: 12.4, distPhone: 12, zoom: [0.70, 1.40], distMin: 9, distMax: 18,
   pitchNear: 0.803 /* 46° */, pitchFar: 1.012 /* 58° */, pitchPortrait: 1.012, pitchBoss: 0.977 /* 56° */,
   catH: 0.8, minCatPx: 30, minCatPxBoss: 26, minCatPxPortrait: 28, portraitWidth: 9,
+  // integration: the clamp measures her APPARENT size (feet → ear tips ≈ 1.0 m × cos pitch; 0.98 keeps a margin), what a screenshot shows
+  catHView: 0.98,
   focusY: 0.6, followDamp: 12, followDampY: 6, jumpFollow: 0.3, bounceFollow: 0.5,
   lead: { vel: 0.25, velMax: 1.6, cursor: 0.15, cursorMax: 2.0, max: 2.5, up: 0.8, damp: 4 },
-  frameOffset: 0.04, frameOffsetPortrait: -0.10, near: 0.3, far: 90, refit: 0.4,
+  frameOffset: 0.04, frameOffsetPortrait: -0.10, frameOffsetTouchX: 0.08 /* integration: touch landscape, left of the cluster */, near: 0.3, far: 90, refit: 0.4,
   hint: { blend: 1.2, calmFor: 2.0, maxPerLevel: 3 }, stickRelatch: 0.15,
   combat: { radius: 10, bias: 0.3, biasMax: 2.5, inner: 0.8, margin: 1.2, zoomOut: 3, outDamp: 2.5, holdIn: 1.5, selWeight: 1.5 },
   boss: { dist: [14, 22], weight: 0.35, maxOff: 5, herInner: 0.6, bossInner: 0.85, liftAbove: 1.6, lift: 0.3 },
@@ -112,11 +115,15 @@ export const AIM = {
 
 /** §9 touch cluster geometry (CSS px × settings.touchSize; buttons: [size, dx, dy] from the ⚔ centre). */
 export const TOUCH = {
-  stickZone: [0.42, 0.80], stickZonePortrait: [0.55, 0.38], stickR: 60, stickDead: 0.10, stickFollow: 1.6,
+  stickZone: [0.42, 0.80], stickZonePortrait: [0.48, 0.38], stickR: 60, stickDead: 0.10, stickFollow: 1.6,
   anchor: 68, minBtn: 56, deadRing: 40, gap: 8, portraitScale: 0.85,
   buttons: { attack: [96, 0, 0], guard: [76, -124, 4], dodge: [64, -100, -92], jump: [64, 0, -124],
              ability: [64, -196, -128], golden: [64, -96, -204], milk: [56, 16, -206], meow: [56, -300, -60],
              interact: [64, -214, 0] },
+  // integration: on a portrait phone the §9.2 landscape offsets spill over the joystick half; the cluster stacks up the
+  // right half instead (×portraitScale like the rest), leaving the left 48 % × bottom 38 % to the stick
+  buttonsPortrait: { attack: [96, 0, 0], guard: [76, -114, 18], dodge: [64, -104, -82], jump: [64, 0, -118], ability: [64, 0, -212],
+                     interact: [64, -96, -170], milk: [56, -100, -258], meow: [56, 0, -298], golden: [64, -100, -340] },
   tapMs: 250, tapPx: 12, longMs: 350, swipePx: 48, swipeMs: 150, afterButton: 0.3, aimPx: 16, aimRangePx: 90,
   steerWindow: 0.08, cancelChip: 72, aimPad: 96,
 };

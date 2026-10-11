@@ -364,6 +364,7 @@ export class AudioManager {
     this.time += dt;
     if (!this.ready) return;
     this._applyMusicChanges();
+    this._placeListener();
     const ac = this.ac, now = ac.currentTime;
     // hitstop duck (rising edge)
     const hs = (this.ctx.game?.hitstopT ?? 0) > 0;
@@ -719,9 +720,31 @@ export class AudioManager {
   }
 
   _cameraPos(out) {
+    const L = this.listener;
+    if (L && L.parent && L.parent !== this.ctx.camera) return out.setFromMatrixPosition(L.matrixWorld);
     const c = this.ctx.camera;
     if (!c) return out.set(0, 0, 0);
     return out.setFromMatrixPosition(c.matrixWorld);
+  }
+
+  /**
+   * CONTROLS_SPEC §2.8: in the iso play camera the ears sit at the focus + 1.2 m, facing along the camera yaw
+   * (screen-right = right ear); in cutscenes, presets, Meme Cam and `?cam=classic` they ride the lens as before.
+   */
+  _placeListener() {
+    const L = this.listener, ctx = this.ctx, cam = ctx.cam;
+    if (!L) return;
+    const iso = cam?.isIso && cam.focus?.isVector3 && (cam.modeName === 'follow' || cam.modeName === 'lock' || cam.modeName === 'boss');
+    if (iso) {
+      if (L.parent !== ctx.scene) ctx.scene.add(L);
+      L.position.set(cam.focus.x, cam.focus.y + 1.2, cam.focus.z);
+      L.rotation.set(0, cam.yaw ?? Math.PI, 0);
+      L.updateMatrixWorld(true);
+    } else if (L.parent !== ctx.camera && ctx.camera) {
+      ctx.camera.add(L);
+      L.position.set(0, 0, 0); L.rotation.set(0, 0, 0);
+      L.updateMatrixWorld(true);
+    }
   }
 
   /**

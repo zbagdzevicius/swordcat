@@ -72,7 +72,9 @@ export class Input {
     /** @type {Map<string, string[]>} */
     this._bind = new Map();
     this._moveCodes = new Set();
+    this._quietRebind = true;
     this.rebind();
+    this._quietRebind = false;
   }
 
   /**
@@ -100,7 +102,7 @@ export class Input {
     const next = this.iso ? (INPUT.presets?.[name] ? name : 'hybrid') : 'classic';
     const changed = next !== this.preset;
     this.preset = next;
-    if (changed) this.ctx?.bus?.emit?.(E.INPUT_SCHEME, { preset: this.preset });
+    if (changed && !this._quietRebind) this.ctx?.bus?.emit?.(E.INPUT_SCHEME, { preset: this.preset });
     return this.preset;
   }
 

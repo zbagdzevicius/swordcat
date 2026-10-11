@@ -1471,8 +1471,9 @@ test('controls: no off-screen snipes — a far crossbowman off screen holds fire
   assert.equal(ev.filter((x) => x.kind === 'aim').length, 0);
   assert.equal(rangedStartAllowed(e, { def: ATTACKS.rat_bolt, kind: 'ranged' }), false);
   assert.equal(rangedStartAllowed(e, { def: ATTACKS.rat_poke, kind: 'melee' }), true, 'melee is never gated');
-  // the camera pans to show it → it may start
-  isoCam(ctx, at(0, -9));
+  // the camera pans to show it → it may start (focus 2 m past it: inside the frustum shrunk by 0.5 m; a focus 4 m
+  // away leaves it only 0.4 m inside the bottom edge at 13 m / 51°, which the 0.5 m margin rightly counts as off screen)
+  isoCam(ctx, at(0, -11));
   stepN(ctx, 60 * 3, () => e.stateName === 'windup');
   assert.equal(e.stateName, 'windup', 'on screen: it aims');
   const tele = ev.find((x) => x.kind === 'aim');

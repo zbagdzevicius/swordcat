@@ -1,7 +1,8 @@
 # SWORDCAT: Nine Lives of Meow Island — Status
 
 Milestones **M0 (core engine)**, **M1 (meadow vertical slice)** and **M2 (Acts I–II: forest, town + hub, gate)** are done
-(GAME_DESIGN §19.10). `npm run check` (build, then 558 unit tests, then 157 Playwright smoke blocks) passes.
+(GAME_DESIGN §19.10), and the **controls rework** (research/CONTROLS_SPEC.md: LoL-style iso camera, click / tap to move,
+mobile cluster) is integrated. `npm run check` = build, then the unit tests, then the Playwright smoke blocks.
 
 ## Implemented
 - **Core:** Game loop, fixed-step systems, EventBus with the frozen event catalog, GameState, Assets (GLTF cache, `fitToHeight`, MODEL_FIT), Input (KBM, gamepad, touch), PostFX (MSAA, bloom, NaN-safe, quality tiers), ScriptedActor, the Appendix A config, and the `?test` / `?debug` hooks (`window.__GAME__`, lil-gui, stats). The asset prune step keeps `dist/` at about 76 MB.
@@ -38,23 +39,30 @@ npm run check          # all three
 Smoke options: `SMOKE_URL=http://localhost:<port>/` (use your own dev server), `SMOKE_ONLY=<area|block>`, `--headed`, `--verbose`, and `SMOKE_GPU=gl|d3d11|swiftshader`.
 `tests/shots/` is generated output and is gitignored. A curated set is in `docs/screens/`.
 
-## Controls (KBM / gamepad)
-| Action | Keyboard / mouse | Gamepad |
-|---|---|---|
-| Move / camera | WASD or arrows / mouse (pointer lock after the first click) | left / right stick |
-| Attack, hold to charge (Holy) | LMB or J | X |
-| Stand (hold) / parry (timing) | RMB or L | LB |
-| Tumble | Shift or K | B |
-| Jump (LMB in the air = Pounce) | Space | A |
-| Interact / confirm | E or Enter | Y |
-| Kitten ability | Q | LT |
-| Milk Break | R | D-pad up |
-| Meow | C | L3 |
-| Golden Hour (Valor 100) | V, or Stand + Attack | RT |
-| Lock-on / switch target | Tab or MMB / flick or wheel | RB / right-stick flick |
-| Pause; hold to skip cutscenes | Esc or P | Start |
+## Controls (iso camera, research/CONTROLS_SPEC.md; `?cam=classic` keeps the old orbit camera)
+A fixed-yaw three-quarter top-down camera (38° FOV, ~50° pitch, 12.4 m on desktop, 12 m on phones, portrait 50° / 58°)
+follows her; you never steer the camera. Keyboard + mouse uses the `hybrid` preset (Settings → Controls also offers
+`moba`, `diablo`, `mouseOnly`, `keyboardOnly`):
 
-On touch devices: a floating joystick on the left 45% of the screen, drag on the right side to look, and on-screen buttons.
+| Action | Keyboard / mouse | Gamepad | Touch |
+|---|---|---|---|
+| Move | RMB click / hold (path-finds, auto-jumps fences and gaps; Ctrl+RMB queues), or WASD | left stick | floating joystick (left side), or tap / long-press the ground |
+| Attack, hold to charge (Holy) | LMB, toward the cursor (J) | X (aim with RS) | ⚔ tap / hold, drag to aim |
+| Attack order | RMB on a foe (walks in, auto-chains); X + click = attack-move | — | tap a foe |
+| Stand (hold) / parry (timing) | Space (L, Mouse 5): snaps to the incoming threat | LB | 🛡 hold |
+| Tumble | Shift (K, Mouse 4): toward WASD, else the cursor | B | Tumble button, or swipe the free ground |
+| Jump (Attack in the air = Pounce) | F | A | Jump |
+| Interact / talk | click it (LMB or RMB), or E | Y | tap it, or "!" |
+| Kitten ability | Q: tap = cast at the cursor, hold = aim | LT (+ RS) | portrait tap = smart cast, drag = aim, ✕ cancels |
+| Milk / Meow / Golden Hour | R / C / V (or Space + LMB) | D-pad ↑ / L3 / RT | buttons |
+| Select / cycle target | LMB / RMB on a foe, Tab (Shift+Tab back) | RB, D-pad ← → | tap a foe |
+| Zoom / camera lock / centre / peek | wheel / Y / F1 or Home / Alt or MMB | R3 cycles / — / — / D-pad ↓ + RS | pinch |
+| Stop | H | — | — |
+| Pause; hold to skip cutscenes | Esc or P | Start | ❚❚ |
+
+Ground indicators: the pink hero ring (its notch points where the sword goes), the Stand fan (gold for the parry
+window), strike wedges under every melee wind-up, the shrinking parry ring (touch / Kitten), selection, hover and aggro
+rings, order markers and path dots. The desktop / pad ability bar sits at the bottom centre.
 
 ## Known issues
 - **Smoke run time:** the full smoke takes 45–50 minutes on Iris Xe; a few blocks are timing-sensitive under load (enemies:hyena waits up to 45 s for a gloat).
@@ -63,7 +71,19 @@ On touch devices: a floating joystick on the left 45% of the screen, drag on the
 - **Bundle:** `index` (game code) is ~1.5 MB minified and `three` ~0.82 MB (its own chunk); levels, lil-gui, stats and zzfx load lazily.
 - **Looks:** the gate deck bricks read a little dark in `gate_dusk` fog; CS-05's shard moment is still very bright (ref1 glow); the war-wagon kittens hop over the bars of the cart cage when it opens; Grizzlechop's Wheel Ride charge stops on her collider instead of passing through.
 - **Stub levels:** `bog` and `keep` are dressed stubs (M3). M3 enemies (Boneheads, Brutus, Barkus moves) still run on the generic base.
+- **Controls rework, not built yet (CONTROLS_SPEC):** dithered (alpha-hash) occluder fades and roof-only / crown-only
+  rules (props still fade as whole units, transparently); ground mist sheets, the wheat trample and grass LOD from the
+  focus (§4.2); zone yaw hints authored by world (the API `cam.setHint` exists, no level uses it); pad aim reticle and
+  peek reticle visuals; the ranges overlay (Ctrl); `Edit layout` for the touch cluster; Golden / dialogue framing is
+  basic; enemy helmet top tints (see requests/characters.md); the practice-fence nav link is not gated on
+  `tut.jump.done` (a click past it auto-hops). Unit + smoke coverage: tests/unit/controls.test.js, tests/smoke/controls.mjs.
 - **Pending requests:** `requests/*.md` lists only open (optional) items; `requests/RESOLVED.md` lists what each integration pass applied.
+
+## Controls rework integration (2026-10-11)
+See `requests/RESOLVED.md` (third section). New: camera `IsoRig` + `Picker`, physics `NavGrid` / `Pathfind`, player
+`Aim` / `Orders`, fx `GroundDecals`, ui `touchLayout` / touch rewrite / `abilityBar`, focus fog wiring, presets and
+settings, the audio listener at the focus; smoke `tests/smoke/controls.mjs` (desktop, nav, every level from the new
+camera, 844×390 + 390×844 touch, `?cam=classic`) and the rewritten `camera.mjs`.
 
 ## Fixed in the M2 integration pass (2026-10-09)
 - Camera inside the Standing Stones: ring stones (and the meadow's scattered tall stones) are camera-fadeable instanced props now (`fade: true`), so the follow camera fades a stone it is behind or inside instead of showing a flat grey face. Every `fade: true` prop collider carries `camFade: true`.

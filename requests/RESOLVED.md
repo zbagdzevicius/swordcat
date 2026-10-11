@@ -70,3 +70,40 @@ The area M2 notes ("How to use …") moved from `requests/<area>.md` to the end 
 
 ## New smoke: the M2 playthrough (`tests/smoke/flow.mjs`)
 `flow:forest` → `flow:town` → `flow:gate` play the §19.10 exit path through the real triggers (no `story.play` fallbacks): the meadow exit, Sage's rope posts cut by swings → D-02, the camp trigger → CS-04 (night), the mill arena → B1 fought down with real hits (god) → CS-05, the forest exit; Bakery Street → D-03 → Pilfer's chase (3 hits) → CS-06, Tofu's Meow → D-04, the three lanterns, the Square's 5 waves → the giant Gloomjelly → Earl Grey → D-04, Clover's stocks (E) → D-04, the steps → CS-07, a Satchel bought at the bakery station (E), the Quest Board (E) → travel to the gate; the war-wagon (3 blows) → D-06, the battlefield → "Back to the Line!", the marker → The Line (real repair, waves fought) → CS-08 → G-02 → 100 % → B2 fought down → CS-09 → CS-10 → the grey hub.
+
+# Controls rework integration (core, 2026-10-11: research/CONTROLS_SPEC.md wired end to end)
+
+The camera, input, player, physics, fx and ui parts of the spec had not landed (only characters, companions and part of
+enemies / combat had); the integrator built them. Everything below is live in the default game; `?cam=classic` keeps the
+M1/M2 orbit camera, lens fog, pointer lock and the old binding table.
+
+## Contract changes
+| Change | Where |
+|---|---|
+| `CAMERA.iso`, `NAV`, `AIM`, `TOUCH`, `HAPTICS`, `INPUT.presets` / `classicKeys` / `classicPad` / `pointer`, new actions (`move attackMove stop zoomIn zoomOut zoomCycle peek camLock centre ranges`), `PLAYER.guard.touchArc`, the iso `PLAYER.assist` keys, fish magnet 3, small heart 3.5, Meme Cam blend-out 0.9, tree fade 0.22 (§13, C1, C7). Integration values: desktop distance 12.4 m (her measured size ≥ 80 px at 1080p), `catHView` (the cat clamp works on her apparent, foreshortened height), `frameOffsetTouchX` (touch landscape: she sits left of the cluster), `TOUCH.buttonsPortrait` / `stickZonePortrait` 0.48 (the landscape offsets spill over the joystick on a 390 px phone). | core/config.js |
+| Input: no pointer lock in iso; `pointer`, `takeClick` / `peekClick` / `clearClicks` (mouse + taps, queue of 8, mods), `addTap(x, y, 'tap' / 'long' / 'move' / 'longEnd')`, `addZoom` / `consumeZoom` (wheel, pinch, R3), `aimStick` (pad RS aims), `setVirtualAim` / `virtualAim`, `haptic(kind)`, presets + `settings.bindings` (`rebind`, `codesFor`, `preset`, `wasd`, `lmbMoves`), mouse activity only above 24 px/s. | core/Input.js |
+| Events `player:order`, `target:changed`, `camera:zoom`, `input:scheme`, `nav:ready`; JSDoc for the telegraph §8.5 fields and the `companion:ability` aim fields. | core/events.js |
+| `params.cam` ('iso' / 'classic'); `ctx.strings.t` is device-aware (`key.touch` / `key.pad` first). | core/Game.js |
+| Settings §10.7 defaults; save `migrate` validates them (enums, ranges, bindings, touchLayout). | core/GameState.js, save/SaveManager.js |
+| Debug hooks: `click(x, z, button, mods)`, `tapAt`, `aimAt`, `screen`, `order`, `orders`, `fogAt`, `nav.path / walkable / info`, `cam.iso / zoom / lock`. Smoke harness: `t.click`, `t.tapAt`, `t.aimAt`, `t.viewport`; every block starts with no order / selection / zoom / drag-aim. | core/debug.js, tests/smoke.mjs |
+| Camera: `IsoRig.js` (pure maths) + `Picker.js` (`screenToGround`, `pickAt`); FollowCamera runs the iso rig for follow / lock / boss: `focus`, `stickYaw`, `isoYaw` (level `cam.yaw`; the gate looks north), `zoom`, `setHint`, `screenToGround`, `cursorGround` / `cursorValid`, `hover`, `worldToScreen`, `onScreen`, `pick`, `iso()`, `select(actor, source)`, `setCamLock`, engaged-set framing with combat zoom-out, boss fit [14, 22], lead, peek, edge pan when unlocked, charge / parry / Holy / Purrfect Dodge / Golden Hour punches, view-offset framing, near / far 0.3 / 90, the 1.0 s hand-back, the iso shake mix, focus-fog writes, x-ray via `characters.setXray` (her, and enemies winding up behind cover), multi-target occluder fades. | camera/* |
+| Physics: `NavGrid` (0.5 m, lazily sampled + background fill, dynamic invalidation) and `Pathfind` (A*, automatic hop / drop / gap links over fences and streams, run-up take-offs, string pulling); `findPath`, `nearestWalkable`, `navWalkable`, `losWalkable`, `nav`. | physics/* |
+| Player: `Aim.js` (the §7.1 resolver, §7.2 auto-target, magnet cones, threat snap, assisted hop) and `Orders.js` (move / follow / attack with auto-chain / attackMove / use / stop, queue, path follower with link jumps, run-up retries and stuck re-plans, §8.4 cancel rules); `resolveAim`, `faceAim`, `aimTurn`, `abilityState`, `order`, `hover`, `steerDodge`; the Stand threat snap, cursor-facing Stand / charge, Pounce toward the cursor. | player/* |
+| Combat: `threats` (a ThreatBook fed by telegraphs) and `nextParryable(actor)`. | combat/Combat.js |
+| fx: `GroundDecals` (one instanced draw): hero / aim ring, Stand fan, charge reach, strike wedges, parry ring, selection / hover / aggro rings, order markers, path dots, landing ring, the companion ability indicator (`fx.drawsAbilityAim`). | fx/GroundDecals.js |
+| World: `Env.setFocusFog`, `Env.fogAt`, shadows centred on the focus, the iso low-mix; `level.cam` (yaw, fog overrides). | world/Env.js, world/Level.js, world/levels/gate.js |
+| ui: touch rewrite (floating stick, cluster from `touchLayout.js`, dead rings, drag-aim + ✕, Tumble steer, tap / long-press / swipe / pinch, quick taps in the stick zone count as taps, haptics, portrait, mirror, opacity; the rotate card is a one-time toast), `abilityBar.js` (desktop / pad bar, context cursors), no lock reticle in iso (HP pips for the selected / hovered / hit), device-aware strings and preset-aware glyphs, new settings rows, the portrait HUD strip. | ui/* |
+| Story: §14 copy (base / `.pad` / `.touch`), `tut.target / zoom / click / talk / rotate`, camera toasts, tips; the tutorial move step needs no look (C6); flag `tut.jump.done`. | story/strings.js, story/tutorial.js |
+| Audio: the listener rides the iso focus (+1.2 m, camera yaw). | audio/AudioManager.js |
+| Meme Cam exits on a click / tap / 40 px mouse move in iso. | player/MemeCamTrigger.js |
+
+## Requests applied
+- companions: the input names (`aimStick`, `virtualAim` in CSS px, `pressed('move')`, `haptic`), `cam.cursorGround / cursorValid / focus / stickYaw / lockTarget`, `cam.pick` includes `companions.pickables()`, the use order calls `companions.use(actor)`, `player.aim.dir`, `fx.drawsAbilityAim`, ui drag-aim through `setVirtualAim` + the `ability` action, the ability bar reads `cooldownLeft / readiness`.
+- characters: `cam.focus` + `modeName` kept as the iso detection; x-ray via `setXray`; the hero ring is fx's.
+- enemies: `cam.onScreen(p, margin)` (the frustum shrunk by the margin; before the first rendered frame it answers "on screen"). The enemies unit test's "pans to show it" focus moved 2 m (the rat sat 0.4 m inside the bottom edge, which the 0.5 m margin rightly counts as off screen).
+
+## Smoke
+New `tests/smoke/controls.mjs` (desktop KBM end to end, the nav fence hop, every M2 level from the iso camera, phone
+landscape + portrait with hasTouch, `?cam=classic`); `camera.mjs` rewritten for the iso rig (follow, select, boss fit,
+hand-back, occlusion + x-ray, town house fade; meme / presets / shake / CS-08 kept). Jump taps use `KeyF`; the flow's
+square check remembers the giant jelly's spawn (the iso fight clears the waves between two polls).

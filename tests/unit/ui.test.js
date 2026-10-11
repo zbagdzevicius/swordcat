@@ -65,16 +65,19 @@ test('typewriter: segments / reveal counts at 30 chars/s × speed (§14.2)', () 
 });
 
 test('device glyphs: keyboard / pad / touch (§6.6, §15)', () => {
-  assert.equal(actionGlyph('jump', 'kbm'), 'Space');
+  assert.equal(actionGlyph('jump', 'kbm'), 'F');              // CONTROLS_SPEC C1: F = jump
   assert.equal(actionGlyph('jump', 'pad'), 'A');
-  assert.equal(actionGlyph('guard', 'kbm'), 'RMB');          // §15.4: RMB = guard
+  assert.equal(actionGlyph('guard', 'kbm'), 'Space');          // CONTROLS_SPEC C1: Space = the Stand
+  assert.equal(actionGlyph('move', 'kbm'), 'RMB');             // RMB = move orders
   assert.equal(actionGlyph('lockon', 'pad'), 'RB');          // §15.4: lock-on is RB only
   assert.equal(actionGlyph('attack', 'touch'), '⚔');
   assert.equal(actionGlyph('nope', 'pad'), 'nope');
-  const k = glyphify('Press [Space] to jump', 'kbm');
+  const k = glyphify('Press [Space] to stand', 'kbm');
   assert.match(k, /<kbd class="ui-key">Space<\/kbd>/);
-  const p = glyphify('Press [Space] to jump', 'pad');
+  const p = glyphify('Press [Jump] to jump', 'pad');
   assert.match(p, /<kbd class="ui-key">A<\/kbd>/);
+  assert.match(glyphify('Press [Jump] to jump', 'kbm'), /<kbd class="ui-key">F<\/kbd>/, 'semantic tokens resolve through the bindings');
+  assert.match(glyphify('Hold [Stand]', 'touch'), /<kbd class="ui-key">Stand<\/kbd>/);
   assert.match(glyphify('Swing ⚔ ×3', 'kbm'), /ui-key--sword">LMB</);
   assert.match(glyphify('[Weird] <b>', 'kbm'), /<kbd class="ui-key">Weird<\/kbd> &lt;b&gt;/);
 });
@@ -290,7 +293,7 @@ test('touch stick: radius clamp, dead zone, y+ = forward (drag up)', () => {
   assert.equal(tiny.x, 0); assert.equal(tiny.y, 0);
   const diag = stickVector(R, R);
   assert.ok(Math.abs(Math.hypot(diag.x, diag.y) - 1) < 1e-9);
-  assert.ok(TOUCH.leftFrac === 0.45, '§15.3: left 45%');
+  assert.ok(TOUCH.leftFrac === 0.42, 'CONTROLS_SPEC §9.1: the joystick zone is the left 42 %');
 });
 
 test('threat arrows: edge placement, behind-camera flip, on-screen test (§8.1)', () => {

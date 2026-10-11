@@ -26,6 +26,9 @@ export function catClampDist(fovDeg, hCss, minPx, catH = ISO.catH) {
   return (catH * hCss) / (2 * t * minPx);
 }
 
+/** Her apparent height (m) seen from `pitch` rad above the horizon: feet → ear tips (CAMERA.iso.catHView) × cos(pitch). */
+export function apparentH(pitch, I = ISO) { return (I.catHView ?? 1.03) * Math.cos(pitch); }
+
 /** On-screen height (CSS px) of an `h` m object at distance `d` (vertical FOV `fovDeg`, viewport `hCss` px high). */
 export function pxAt(h, d, fovDeg, hCss) {
   return (h * hCss) / (2 * Math.max(1e-3, d) * Math.tan((fovDeg * DEG) / 2));
@@ -68,7 +71,13 @@ export function isoFrame(v, out = {}, I = ISO) {
   if (extra > 0) d = Math.min(d + extra, Math.max(d, v.boss ? I.boss.dist[1] : I.distMax + I.combat.zoomOut));
   if (v.boss) d = clamp(d, I.boss.dist[0], I.boss.dist[1]);
   const minPx = portrait ? I.minCatPxPortrait : v.boss ? I.minCatPxBoss : I.minCatPx;
-  const dMax = catClampDist(fov, v.h, minPx, I.catH);
+  // the cat-size clamp on her APPARENT height from above (feet → ear tips × cos pitch: she is foreshortened as the
+  // camera tilts down); the pitch depends on the distance, so two passes settle it
+  let dMax = Infinity;
+  for (let k = 0; k < 3; k++) {
+    const pitch = portrait ? I.pitchPortrait : v.boss ? I.pitchBoss : isoPitch(Math.min(d, dMax), I);
+    dMax = catClampDist(fov, v.h, minPx, apparentH(pitch, I));
+  }
   d = Math.max(Math.min(d, dMax), Math.min(I.distMin, dMax));
   out.fov = fov; out.dist = d; out.dMax = dMax; out.portrait = portrait; out.phone = phone; out.aspect = aspect;
   out.pitch = portrait ? I.pitchPortrait : v.boss ? I.pitchBoss : isoPitch(d, I);

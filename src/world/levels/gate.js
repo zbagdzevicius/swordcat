@@ -128,7 +128,7 @@ const SETPIECES = {
   /** The causeway: textured deck, sides, parapets, tower piers, the ledge and its steps; pillars underneath; the Line. */
   async causeway(kit) {
     const ctx = kit.ctx, level = kit.level, d = GATE.deck, L = GATE.ledge;
-    const top = 0.02, bot = GATE.seabed - 0.6, stone = '#C4BEB2', dark = '#9E998E';
+    const top = 0.02, bot = GATE.seabed - 0.6, stone = '#D8D1C4', dark = '#ADA79B';   // ×1.1 from above (CONTROLS_SPEC §4.2)
     const boxes = [
       { x0: -d.x, x1: d.x, y0: bot, y1: top, z0: d.z0, z1: d.z1, color: stone },                        // deck + its sides
       { x0: L.x0 + 1.5, x1: L.x1, y0: bot, y1: L.y + 0.02, z0: L.z0, z1: L.z1, color: dark },              // the ledge
@@ -360,6 +360,9 @@ export default defineLevel({
   id: 'gate', size: 180, res: 120, seed: 41, hills: { amp: 0.6 }, pathWidth: 8, rim: 4,
   shape: gateShape, grassMask: gateGrass, groundColor: gateGround,
   env: { default: 'gate_dusk' },
+  // CONTROLS_SPEC §11: the causeway runs toward −z, so the iso camera sits north (yaw 0): screen-up = onward;
+  // The Line needs width (clear 8 in the arena)
+  cam: { yaw: 0, fog: { clear: 6, clearCombat: 8, topMul: 1.3 } },
   music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },   // audio holds battle_theme_a through the Line
   spine: [[0, 66], [0, 52], [0, 41], [0, 10], [0, -30], [0, -60], [0, -72], [4, -80]],
   paths: [{ pts: [[0, -66], [-8, -66]], width: 3 }, { pts: [[0, -70], [10, -78]], width: 3 }],

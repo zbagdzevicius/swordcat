@@ -397,13 +397,12 @@ export default [
       // 1 move + look
       await t.hold('KeyW', 1400);
       await t.hold('KeyD', 1200);                                  // the fence stops her ~2.5 m north: strafe along it
-      await t.G(() => { const c = window.__GAME__.ctx.cam; c.yaw += 0.8; });
-      const s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 });
+      const s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 });   // C6: moving is enough
       if (!s2) t.log('tutorial diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, tu = g.ctx.story.tutorial, p = g.ctx.player; return { i: tu.log.i, moved: tu.log.moved, looked: tu.log.looked, active: tu.active, wait: tu.waitT, pend: tu.pending, pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, yaw: g.ctx.cam.yaw }; })));
-      t.assert(!!s2, 'step 2 (jump) after moving and looking');
+      t.assert(!!s2, 'step 2 (jump) after moving');
       // 2 jump the inner fence (z −87): walk at it and jump
       await tp(t, -10, -88.6, 0);
-      await t.page.keyboard.down('KeyW'); await t.wait(120); await t.page.keyboard.down('Space'); await t.wait(420); await t.page.keyboard.up('Space'); await t.wait(500); await t.page.keyboard.up('KeyW');   // a full (held) jump: a tap is cut short
+      await t.page.keyboard.down('KeyW'); await t.wait(120); await t.page.keyboard.down('KeyF'); await t.wait(420); await t.page.keyboard.up('KeyF'); await t.wait(500); await t.page.keyboard.up('KeyW');   // a full (held) jump: a tap is cut short (CONTROLS_SPEC C1: F = jump)
       let s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 });
       if (!s) { t.warn('fence jump missed: placing her north of it'); await tp(t, -10, -85, 0); s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 }); }
       t.assert(!!s, 'step 3 (combo) after crossing the fence');

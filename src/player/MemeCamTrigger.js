@@ -130,6 +130,8 @@ export class MemeCamTrigger {
     if (Math.abs(input.move.x) + Math.abs(input.move.y) > 0.1) return true;
     if (input.actions instanceof Map) { for (const s of input.actions.values()) if (s.pressed) return true; }
     else if (input.anyActivity()) return true;
+    // CONTROLS_SPEC §2.7: in iso there is no look; a click, a tap or a mouse move ≥ 40 px (Input's activity) exits
+    if (input.iso && input.idleTime === 0) return true;
     return input.lookIdleTime === 0;
   }
 

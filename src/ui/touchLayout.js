@@ -21,7 +21,7 @@ export function computeLayout(w, h, o = {}) {
   const ax = mirror ? left + T.anchor * Math.max(1, k) : w - right - T.anchor * Math.max(1, k);
   const ay = h - bottom - T.anchor * Math.max(1, k);
   const buttons = {};
-  for (const [name, [size, dx, dy]] of Object.entries(T.buttons)) {
+  for (const [name, [size, dx, dy]] of Object.entries(portrait && T.buttonsPortrait ? T.buttonsPortrait : T.buttons)) {
     const sz = Math.max(T.minBtn, size * k);
     let x = ax + (mirror ? -dx : dx) * k, y = ay + dy * k;
     const custom = o.layout?.[name];
@@ -33,6 +33,30 @@ export function computeLayout(w, h, o = {}) {
   for (const b of Object.values(buttons)) {
     b.x = Math.max(left + b.r + 4, Math.min(w - right - b.r - 4, b.x));
     b.y = Math.max(hudBottom + b.r, Math.min(h - bottom - b.r - 4, b.y));
+  }
+  // short screens at big touch sizes: the HUD clamp can squeeze the top row together; slide the smaller of an
+  // overlapping pair sideways (away from the ⚔ side) until the 8 px gap holds
+  const names = Object.keys(buttons);
+  for (let it = 0; it < 8; it++) {
+    let moved = false;
+    for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+      const a = buttons[names[i]], b = buttons[names[j]];
+      const gap = Math.hypot(a.x - b.x, a.y - b.y) - a.r - b.r;
+      if (gap >= T.gap) continue;
+      const m = a.r <= b.r ? a : b, o = m === a ? b : a;
+      const dir = mirror ? 1 : -1;
+      const dy = m.y - o.y, need = o.r + m.r + T.gap;
+      const dxNeed = Math.sqrt(Math.max(0, need * need - dy * dy));
+      m.x = o.x + dir * dxNeed;
+      m.x = Math.max(left + m.r + 4, Math.min(w - right - m.r - 4, m.x));
+      // pinned at the screen edge: slide it up instead
+      if (Math.hypot(m.x - o.x, m.y - o.y) - m.r - o.r < T.gap) {
+        const dx = m.x - o.x;
+        m.y = Math.max(hudBottom + m.r, o.y - Math.sqrt(Math.max(0, need * need - dx * dx)));
+      }
+      moved = true;
+    }
+    if (!moved) break;
   }
   const [zw, zh] = portrait ? T.stickZonePortrait : T.stickZone;
   const stickZone = mirror ? { x0: w * (1 - zw), x1: w, y0: h * (1 - zh), y1: h } : { x0: 0, x1: w * zw, y0: h * (1 - zh), y1: h };

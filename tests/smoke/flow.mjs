@@ -140,11 +140,15 @@ const FLOW = [
     name: 'flow:forest', order: 90, level: 'meadow', spawn: 'start', timeout: 600000,
     async run(t) {
       fs.mkdirSync(path.join(t.shotsDir, DIR), { recursive: true });
-      await fresh(t, MEADOW_DONE, null);
+      // a scene chain left by an earlier block (e.g. the gate's CS-09 → CS-10 travel to the hub) may still load a level
+      await settle(t);
+      await t.wait(1500);
+      await settle(t);
+      await fresh(t, MEADOW_DONE, (await t.G(levelId)) === 'meadow' ? null : 'meadow', 'start');
       await t.G(() => { const g = window.__GAME__, s = g.ctx.state; s.companions.unlocked = ['mochi']; g.ctx.companions.setActive?.(['mochi']); s.fish = 0; });
       await tp(t, 30, 88.5, 0);
-      await walkTo(t, 30, 95, 3000);
-      t.assert(await t.waitForEvent('level:exit', 6000), 'meadow exit → level:exit');
+      const wp = await walkTo(t, 30, 95, 3000);
+      if (!t.assert(await t.waitForEvent('level:exit', 6000), 'meadow exit → level:exit')) t.log('exit diag ' + JSON.stringify({ wp, d: await t.G(() => { const g = window.__GAME__, c = g.ctx; return { mode: g.mode, yaw: c.cam.yaw, sy: c.cam.stickYaw, st: c.player.stateName, pos: c.player.pos.toArray(), lv: c.levels.current?.id, loading: c.levels.loading, playing: c.story.playingId, flags: Object.keys(c.state.flags), ml: c.player.moveLockT, scripted: c.player.scripted }; }) }));
       t.assert(!!(await until(t, () => window.__GAME__.ctx.levels.current?.id === 'forest' && !window.__GAME__.ctx.levels.loading, null, { timeout: 90000 })), 'forest loads from the meadow exit');
       await settle(t);
       await t.G(() => window.__GAME__.god(true));
@@ -277,11 +281,14 @@ const FLOW = [
       await walkTo(t, 0, 0, 4000, 2);
       const sq = await until(t, () => window.__GAME__.ctx.levels.current.arena?.('square')?.locked, null, { timeout: 8000 });
       t.assert(!!sq, 'the square arena locks');
+      // the iso fight clears waves fast: remember the giant's spawn even if it pops between two polls
+      await t.G(() => { const g = window.__GAME__; window.__sawGiant = false; g.ctx.bus.on(g.E.ENEMY_SPAWNED, (p) => { const e = p?.enemy; if (e && (e.type === 'jelly_giant' || e.size === 'GIANT')) window.__sawGiant = true; }); });
       let giant = false;
       for (let i = 0; i < 60; i++) {
         const st = await t.G(() => { const g = window.__GAME__, a = g.ctx.levels.current.arena('square'); return { cleared: !!(a?.cleared || g.ctx.state.getFlag('town.cleared.square')), locked: !!a?.locked, n: a?.enemies?.length, pend: g.ctx.enemies.pending?.length, wave: a?.wave ?? a?.waveIndex ?? null, giant: g.ctx.enemies.list.some((e) => e.alive && e.type === 'jelly_giant'), scene: g.ctx.story.playingId }; });
         if (i % 4 === 0) t.log(`square ${i}: ${JSON.stringify(st)} live ${await t.G(() => window.__GAME__.ctx.enemies.list.filter((e) => e.alive && e.faction === 'enemy').map((e) => e.type + (e.scripted ? '*' : '') + (e.dormant ? '~' : '')).join(','))}`);
         if (st.giant && !giant) { giant = true; await t.wait(800); await shot(t, 't6-square-giant'); }
+        if (!giant && await t.G(() => window.__sawGiant)) giant = true;
         if (st.scene === 'd04earlgrey') break;
         if (st.cleared) break;
         await fight(t, { near: 30, ms: 6000 });

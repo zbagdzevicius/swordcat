@@ -897,7 +897,7 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 /* ================================================================== CONTROLS_SPEC §10.1 ability bar (desktop / pad) */
 .ability-bar { position: absolute; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(12px); display: flex; align-items: flex-end;
   gap: 8px; padding: 8px 12px 9px; border-radius: 16px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; --slot: 56px;
-  background: var(--noise), linear-gradient(#F4E7C9F2, #E2CC9DF2); border: 3px solid var(--ink); box-shadow: 0 4px 0 #3A2A1F99, 0 8px 18px #0005; font-size: 15px; }
+  background: var(--noise), linear-gradient(#F4E7C9F2, #E2CC9DF2); border: 3px solid var(--ink); box-shadow: 0 4px 0 #3A2A1F99, 0 8px 18px #0005; font-size: 16px; padding-bottom: 26px; }
 .ability-bar.is-on { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
 .ability-bar.is-small { --slot: 48px; gap: 6px; }
 .ab-sep { width: 3px; align-self: stretch; margin: 4px 2px; border-radius: 2px; background: #6B4A2B66; }
@@ -910,15 +910,17 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 .ab-ability .ab-ico svg { width: 112%; margin: -6%; }
 .ab-ability { border-color: var(--sig); border-width: 3px; }
 .ab-ability.is-empty { opacity: .45; }
-.ab-sweep { position: absolute; inset: 0; pointer-events: none; background: conic-gradient(#1A120E8C var(--cd, 0deg), #0000 0); opacity: 0; }
+.ab-sweep { position: absolute; inset: 0; pointer-events: none; background: conic-gradient(#1A120E8C var(--cd, 0deg), #0000 0); opacity: 0; overflow: hidden; }
 .ab-slot.is-cd .ab-sweep { opacity: 1; }
 .ab-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; font-family: var(--f-logo); font-weight: 700;
   font-size: 1.45em; color: #FFF6E6; -webkit-text-stroke: 2px #2A1E18; paint-order: stroke; }
-.ab-key { position: absolute; right: 3px; bottom: 1px; font-weight: 800; font-size: .72em; color: #2A1E18; background: #FFF6E6E0; border-radius: 4px; padding: 0 3px; line-height: 1.25; pointer-events: none; }
+.ab-slot { overflow: visible; }
+.ab-slot .ab-sweep, .ab-slot .ab-ico { border-radius: 10px; }
+.ab-key { position: absolute; left: 50%; bottom: -24px; transform: translateX(-50%); font-weight: 800; font-size: 16px; color: #2A1E18; white-space: nowrap; line-height: 1.1; pointer-events: none; }
 .ab-grit { position: absolute; left: 4px; top: 3px; display: flex; gap: 2px; pointer-events: none; }
 .ab-grit i { width: 7px; height: 7px; border-radius: 2px; background: #9AA0A6; border: 1px solid #2A1E18; }
 .ab-grit i.f { background: #E8EEF4; }
-.ab-count { position: absolute; left: 4px; top: 2px; font-weight: 800; font-size: .78em; color: #2A1E18; pointer-events: none; }
+.ab-count { position: absolute; right: -6px; top: -10px; font-weight: 800; font-size: 16px; color: #FFF6E6; background: #6B4A2B; border-radius: 9px; padding: 0 5px; line-height: 1.2; pointer-events: none; }
 .ab-guard.is-active { background: radial-gradient(circle at 35% 30%, #FFFFFF, #DCE4EC 60%, #AEB8C4); }
 .ab-guard.is-broken .ab-ico { opacity: .45; }
 .ab-guard.is-holy::after { content: ''; position: absolute; right: 4px; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: #FFD34D; box-shadow: 0 0 6px #FFD34D; }
@@ -934,4 +936,15 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 .ab-ability.is-nap .ab-ico { filter: saturate(.4); }
 /* the bar replaces the bottom-left milk and the bottom-right companion portrait */
 body.ui-bar .hud-milk, body.ui-bar .hud-comp { display: none; }
-body.ui-bar .hud-save { bottom: calc(18px + 90px); }
+body.ui-bar .hud-save { bottom: calc(18px + 112px); }
+
+/* ================================================================== CONTROLS_SPEC §9.1 portrait phones: a condensed HUD strip
+   (scaled with transforms so no text drops under the 16 px floor of §14.1) */
+@media (orientation: portrait) and (max-width: 560px) {
+  .ui-root.dev-touch .hud-tl { top: calc(8px + env(safe-area-inset-top)); left: 8px; transform: scale(.78); transform-origin: top left; }
+  .ui-root.dev-touch .hud-tr { top: calc(8px + env(safe-area-inset-top)); right: 8px; transform: scale(.72); transform-origin: top right; flex-direction: column; align-items: flex-end; gap: .3em; }
+  body.ui-touch .ui-root.dev-touch .hud-tc { top: calc(92px + env(safe-area-inset-top)); width: 76vw; }
+  .ui-root.dev-touch .ui-hint { top: 24vh; bottom: auto; max-width: 64vw; }
+  .ui-root.dev-touch .hud-milk { top: calc(84px + env(safe-area-inset-top)); left: 10px; transform: scale(.8); transform-origin: top left; }
+  .tb-pause { top: calc(10px + env(safe-area-inset-top)); left: 50%; }
+}

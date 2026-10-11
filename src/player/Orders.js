@@ -264,7 +264,9 @@ export class Orders {
     const p = this.p;
     if (!this.kind) return;
     if (!p.alive || p.scripted) { this.clear('dead'); return; }
-    if (p.state === 'hurt' || p.state === 'stagger' || p.state === 'dead') { this.clear('hurt'); return; }
+    // a hurt stun or a guard break drops walking orders; an attack order waits it out (auto-attack resumes, like LoL)
+    if (p.state === 'dead') { this.clear('dead'); return; }
+    if (p.state === 'hurt' || p.state === 'stagger') { if (this.kind !== 'attack') this.clear('hurt'); return; }
     switch (this.kind) {
       case 'attack': this._updateAttack(dt); break;
       case 'use': this._updateUse(dt); break;
@@ -294,7 +296,15 @@ export class Orders {
       if (d <= NAV.linkStart && to) {
         const ax = to.x - p.pos.x, az = to.z - p.pos.z, yaw = Math.atan2(ax, az);
         if (Math.abs(wrapAngle(yaw - p.facing)) <= NAV.linkFacing || d < 0.25) {
-          this._jumpLink(to);
+          if (this._jumpLink(to)) { this.wp++; return; }
+          // too close to the obstacle for any arc to clear it: back up for a run-up (once per link), then retry
+          if (!w.backed) {
+            w.backed = true;
+            const l = Math.hypot(ax, az) || 1, bx = p.pos.x - (ax / l) * 1.1, bz = p.pos.z - (az / l) * 1.1;
+            if (this.ctx.physics?.navWalkable?.(bx, bz) !== false) this.path.splice(this.wp, 0, { x: bx, y: p.pos.y, z: bz });
+            return;
+          }
+          this._jumpLink(to, true);
           this.wp++;
           return;
         }
@@ -319,19 +329,54 @@ export class Orders {
   }
 
   /** Assisted hop over a nav link (§5.4): a full jump with the horizontal speed that lands on `to`. */
-  _jumpLink(to) {
+  _jumpLink(to, force = false) {
     const p = this.p;
     const dx = to.x - p.pos.x, dz = to.z - p.pos.z, dist = Math.hypot(dx, dz);
     const dh = (to.y ?? p.pos.y) - p.pos.y;
     let v = hopSpeed(dist + 0.15, dh, PLAYER.jumpV, GRAVITY, NAV.hopMaxH, PLAYER.fallGravityMul);
     if (v == null) v = Math.min(NAV.hopMaxH, PLAYER.run);
     v = Math.max(v, 2.0);
+    // clear what is in between (a fence, a low wall): pick the horizontal speed whose arc is above the obstacle top
+    // while her body is over it
+    const ob = this._obstacle(dx / (dist || 1), dz / (dist || 1), dist);
+    if (ob) {
+      const H = ob.top - p.pos.y + 0.08, g = GRAVITY, v0 = PLAYER.jumpV, r = (p.radius ?? 0.32) + 0.08;
+      const disc = v0 * v0 - 2 * g * H;
+      if (disc > 0) {
+        const t0 = (v0 - Math.sqrt(disc)) / g, t1 = (v0 + Math.sqrt(disc)) / g;     // time above the top
+        const vMin = (ob.s1 + r) / t1, vMax = t0 > 1e-3 ? (ob.s0 - r) / t0 : Infinity;
+        if (vMin <= vMax) v = Math.min(NAV.hopMaxH, Math.max(vMin, Math.min(vMax, Math.max(v, (vMin + Math.min(vMax, NAV.hopMaxH)) / 2))));
+        else if (!force) return false;
+      }
+    }
     p.facing = Math.atan2(dx, dz);
     p.doJump();
     p.jumpCutDone = true;                                            // an order hop is never cut short
     p.vel.x = (dx / (dist || 1)) * v; p.vel.z = (dz / (dist || 1)) * v;
     this._hop = { v, x: to.x, z: to.z };
     this.hops = (this.hops ?? 0) + 1;
+    return true;
+  }
+
+  /**
+   * The obstacle a jump along (ux, uz) passes over within `len` m of her (nav grid): { s0, s1 (distances), top } or null.
+   */
+  _obstacle(ux, uz, len) {
+    const nav = this.ctx.physics?.nav, p = this.p;
+    if (!nav?.top) return null;
+    let s0 = -1, s1 = -1, top = -Infinity;
+    for (let s = 0.1; s <= len + 0.05; s += 0.1) {
+      const k = nav.index(p.pos.x + ux * s, p.pos.z + uz * s);
+      if (k < 0) break;
+      const blocked = !nav.walkable(k);
+      const h = blocked ? nav.top[k] : nav.h[k];
+      if (blocked || h > p.pos.y + NAV.stepUp) {
+        if (s0 < 0) s0 = s;
+        s1 = s; top = Math.max(top, h);
+      }
+    }
+    if (s0 < 0 || !Number.isFinite(top) || top > p.pos.y + NAV.fence.top + 0.6) return null;
+    return { s0, s1, top };
   }
 
   /** Attack order: approach to reach, then swing per settings.autoAttack. */

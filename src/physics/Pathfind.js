@@ -189,6 +189,17 @@ function smooth(grid, chain, s, from, to) {
       const t = chain[cur], l = chain[m];
       let tp = pts[pts.length - 1];
       if (!tp || Math.hypot(tp.x - grid.cx(t), tp.z - grid.cz(t)) > 1e-3) { tp = P(t); pts.push(tp); }
+      // a jump over an obstacle needs a run-up: move the take-off back along the link (≤ 1 m) while the ground there is
+      // walkable, level with it and in a straight line from the previous point
+      const ux = grid.cx(l) - grid.cx(t), uz = grid.cz(l) - grid.cz(t), ul = Math.hypot(ux, uz) || 1;
+      const prev = pts.length > 1 ? pts[pts.length - 2] : from;
+      for (const back of [1.0, 0.75, 0.5]) {
+        const qx = tp.x - (ux / ul) * back, qz = tp.z - (uz / ul) * back, qk = grid.index(qx, qz);
+        if (qk < 0 || !grid.walkable(qk) || Math.abs(grid.h[qk] - tp.y) > NAV.stepUp) continue;
+        if (!grid.losWalkable(qx, qz, tp.x, tp.z) || (prev && !grid.losWalkable(prev.x, prev.z, qx, qz))) continue;
+        tp.x = qx; tp.z = qz; tp.y = grid.h[qk];
+        break;
+      }
       tp.link = LINK_NAMES[s.link[l]] || 'hop';
       tp.to = P(l);
       pts.push(P(l)); ax = grid.cx(l); az = grid.cz(l);

@@ -84,17 +84,61 @@ test('Input: edges latch until endStep; heldTime counts sim time and survives th
   // A2 actions all exist
   for (const a of ['guard', 'ability', 'milk', 'meow', 'golden', 'recenter', 'attack', 'dodge', 'jump', 'interact', 'lockon', 'pause'])
     assert.ok(inp.actions.has(a), `action ${a}`);
-  assert.deepEqual(INPUT.keys.guard, ['KeyL', 'Mouse2'], 'RMB → guard (A2)');
-  assert.ok(!INPUT.keys.dodge.includes('Mouse2'), 'RMB no longer dodges');
-  assert.deepEqual(INPUT.pad.lockon, [5], 'gamepad lock-on is RB only');
-  assert.deepEqual(INPUT.pad.recenter, [11], 'R3 recentres');
+  // CONTROLS_SPEC C1 (preset hybrid): Space / L / Mouse4 = the Stand, RMB = move orders, F = jump; J / K / L aliases kept
+  assert.deepEqual(INPUT.keys.guard, ['Space', 'KeyL', 'Mouse4'], 'Space = the Stand (C1)');
+  assert.deepEqual(INPUT.keys.move, ['Mouse2'], 'RMB = move orders');
+  assert.deepEqual(INPUT.keys.jump, ['KeyF'], 'F = jump');
+  assert.ok(!INPUT.keys.dodge.includes('Mouse2'), 'RMB never dodges');
+  assert.deepEqual(INPUT.pad.lockon, [5], 'gamepad select is RB only');
+  assert.deepEqual(INPUT.pad.zoomCycle, [11], 'R3 cycles the zoom (C1)');
+  // ?cam=classic keeps the old table (RMB guard, Space jump, R3 recentre)
+  assert.deepEqual(INPUT.classicKeys.guard, ['KeyL', 'Mouse2']);
+  assert.deepEqual(INPUT.classicPad.recenter, [11]);
+});
+
+test('Input (iso): presets merge over the keys, settings.bindings on top; clicks / taps queue; zoom; virtual aim', () => {
+  const st = { settings: { controlPreset: 'hybrid', bindings: {} } };
+  const events = [];
+  const ctx = { state: st, bus: { emit: (n, p) => events.push([n, p]), on: () => () => {} }, params: { cam: 'iso' } };
+  const inp = new Input(ctx);
+  assert.equal(inp.iso, true);
+  assert.equal(inp.pointerLockEnabled, false, 'no pointer lock in iso (C2)');
+  assert.ok(inp._bind.get('Space').includes('guard'));
+  assert.ok(inp._bind.get('Mouse2').includes('move'));
+  assert.equal(inp.preset, 'hybrid');
+  st.settings.controlPreset = 'moba';
+  inp.rebind();
+  assert.equal(inp.preset, 'moba');
+  assert.equal(inp.wasd, false, 'moba: WASD does not move');
+  assert.ok(inp._bind.get('KeyA').includes('attackMove'));
+  assert.deepEqual(events.at(-1), ['input:scheme', { preset: 'moba' }]);
+  st.settings.controlPreset = 'diablo'; inp.rebind();
+  assert.ok(inp.lmbMoves && inp._bind.get('Mouse0').includes('move'), 'diablo: LMB moves');
+  st.settings.controlPreset = 'hybrid'; st.settings.bindings = { jump: ['KeyG'] }; inp.rebind();
+  assert.deepEqual(inp.codesFor('jump'), ['KeyG'], 'rebinding wins');
+  inp.addTap(10, 20, 'tap'); inp.addTap(30, 40, 'long');
+  const c1 = inp.takeClick(), c2 = inp.takeClick();
+  assert.equal(c1.button, 'tap'); assert.equal(c1.kind, 'tap'); assert.equal(c2.kind, 'long');
+  assert.equal(inp.takeClick(), null);
+  for (let i = 0; i < 20; i++) inp.addTap(i, i);
+  let n = 0; while (inp.takeClick()) n++;
+  assert.equal(n, INPUT.pointer.clickQueue, 'the queue keeps the newest 8');
+  inp.addZoom(1); inp.addZoom(-0.5);
+  assert.equal(inp.consumeZoom(), 0.5); assert.equal(inp.consumeZoom(), 0);
+  inp.setVirtualAim(3, 4, true);
+  assert.deepEqual(inp.virtualAim, { x: 3, y: 4, active: true });
+  inp.releaseAll();
+  assert.equal(inp.virtualAim.active, false);
+  const classic = new Input({ params: { cam: 'classic' } });
+  assert.equal(classic.iso, false); assert.ok(classic._bind.get('Mouse2').includes('guard'), 'classic: RMB guards');
 });
 
 test('Input: losing pointer lock mid-play opens the pause menu once; resume re-captures the mouse', () => {
   const events = [];
   const ui = { busy: false, pauses: 0, pause() { this.pauses++; this.busy = true; ctx.game.mode = 'menu'; } };
   const ctx = { game: { mode: 'play' }, ui, levels: { loading: false }, bus: { emit: (n, p) => events.push([n, p]) } };
-  const inp = new Input(ctx);
+  const inp = new Input({ ...ctx, params: { cam: 'classic' } });
+  inp.ctx = ctx;
   inp.pointerLockEnabled = true;
   let requested = 0; inp.requestPointerLock = () => { requested++; };
   inp._onPointerLockChange(true);

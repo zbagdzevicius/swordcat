@@ -95,6 +95,8 @@ export class Level {
     this.music = def.music ?? null;
     this.indoor = !!def.indoor;
     this.fogBase = def.fogBase ?? 0;
+    /** CONTROLS_SPEC §11: the iso camera for this level ({ yaw, fog?: { clear, clearCombat, topMul } }; yaw π by default) */
+    this.cam = def.cam ?? null;
     this.pickups = null; this.grass = null; this.batch = null; this.trees = []; this.skyline = null; this.dawnstone = null; this.waterMeshes = null;
     /** visual-only animators { render(dt, t) } (windmill fans, flags) */
     this.animators = [];

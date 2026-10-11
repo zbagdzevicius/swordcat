@@ -143,6 +143,15 @@ const t = {
   /** Tap a key `n` times, `gap` ms apart. */
   async tap(code, n = 1, gap = 120) { for (let i = 0; i < n; i++) { await page.keyboard.press(code); if (i < n - 1) await page.waitForTimeout(gap); } },
   async blankCheck(label) { const n = await G(() => window.__GAME__.sampleCanvas()); if (n < 4) fail(`${label}: canvas looks blank (${n} colours)`); return n; },
+  // ---- CONTROLS_SPEC §12 core 6: iso-control helpers (world points go through the real pick path)
+  /** A mouse click at world (x, z): 'right' = a move / attack / use order, 'left' = swing toward it / use. */
+  click: (x, z, button = 'right', mods = {}) => G(([a, b, c, d]) => window.__GAME__.click(a, b, c, d), [x, z, button, mods]),
+  /** A touch tap at world (x, z) (the player's tap orders). */
+  tapAt: (x, z, kind = 'tap') => G(([a, b, c]) => window.__GAME__.tapAt(a, b, c), [x, z, kind]),
+  /** Point the mouse at world (x, z) (cursor aim). */
+  aimAt: (x, z) => G(([a, b]) => window.__GAME__.aimAt(a, b), [x, z]),
+  /** Resize the page (the iso rig re-fits). */
+  async viewport(w, h) { await page.setViewportSize({ width: w, height: h }); await t.frames(10); },
 };
 
 async function boot() {
@@ -154,7 +163,7 @@ async function boot() {
 }
 
 /** Keys a block may still hold down if it failed mid-way (released before the next block). */
-const HELD_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyC', 'KeyQ', 'Space', 'ShiftLeft', 'Escape'];
+const HELD_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyC', 'KeyQ', 'KeyF', 'Space', 'ShiftLeft', 'AltLeft', 'Escape'];
 
 const withTimeout = (p, ms) => {
   let id;
@@ -176,6 +185,7 @@ try {
         // kept, no party, no stray enemies, real-time sim, no held input), exactly as when it runs alone. Blocks
         // that chain on purpose (story:title → story:cs01) use `level: null` and keep what the previous block left.
         for (const k of HELD_KEYS) await page.keyboard.up(k).catch(() => {});
+        for (const button of ['left', 'right', 'middle']) await page.mouse.up({ button }).catch(() => {});
         await G(() => {
           const g = window.__GAME__, c = g.ctx;
           g.story.skip();
@@ -186,7 +196,10 @@ try {
           c.companions?.setActive?.([]);
           for (const e of [...(c.enemies?.list ?? [])]) c.enemies.despawn?.(e);
           c.input?.setVirtualMove?.(0, 0);
-          for (const a of ['guard', 'attack', 'jump', 'dodge']) { try { c.input?._release?.(a, 'v'); } catch { /* */ } }
+          for (const a of ['guard', 'attack', 'jump', 'dodge', 'ability']) { try { c.input?._release?.(a, 'v'); } catch { /* */ } }
+          // iso controls: no stale order / selection / click / zoom / drag-aim carries into the next block
+          c.player?.orders?.clear?.('smoke'); c.cam?.select?.(null); c.input?.clearClicks?.(); c.input?.setVirtualAim?.(0, 0, false);
+          c.input?.consumeZoom?.(); c.cam?.zoom?.(1); c.cam?.setCamLock?.(true, false); c.input?.setDevice?.('kbm');
           g.setMode('play'); g.god(false);
         });
         await t.loadLevel(b.level, b.spawn ?? 'start');

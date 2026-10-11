@@ -321,6 +321,9 @@ export class TouchControls {
   _up(e) {
     if (e.pointerId === this.stick.id) {
       this.stick.id = null; flag(this.base, 'is-on', false); this.ctx.input?.setVirtualMove(0, 0);
+      // a quick touch in the stick zone that never became a drag is a tap (tap-to-move / tap a foe works everywhere)
+      const moved = Math.max(this.stick.moved, Math.hypot(e.clientX - this.stick.ox, e.clientY - this.stick.oy));
+      if (e.type === 'pointerup' && classifyGesture({ dt: nowS() - this.stick.t0, dist: moved, up: true, sinceButton: nowS() - this._lastButtonUp }) === 'tap') this.tapAt(this.stick.ox, this.stick.oy);
       return;
     }
     const f = this.free.get(e.pointerId);

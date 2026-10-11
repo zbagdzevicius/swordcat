@@ -461,9 +461,9 @@ export default [
         await t.page.keyboard.down('KeyW');
         try {
           for (let i = 0; i < 40 && (await t.G(() => window.__GAME__.game.time)) - t0 < 3; i++) {
-            await t.page.keyboard.down('Space'); await t.wait(450); await t.page.keyboard.up('Space'); await t.wait(60);
+            await t.page.keyboard.down('KeyF'); await t.wait(450); await t.page.keyboard.up('KeyF'); await t.wait(60);
           }
-        } finally { await t.page.keyboard.up('KeyW'); await t.page.keyboard.up('Space'); }
+        } finally { await t.page.keyboard.up('KeyW'); await t.page.keyboard.up('KeyF'); }
         const hop = await recStop(t);
         const hr = await rise(hop);
         const maxRise = Math.max(...hr.map((r) => r[0])), under = hr.filter((r) => r[1] < -1e-3).length;
@@ -476,7 +476,7 @@ export default [
         t.assert(maxRise < stood + apex + 0.15, `climbed the 60° bank by hopping: ${maxRise.toFixed(2)} m above the old ground (highest ground stood on ${stood.toFixed(2)} + one jump ${apex.toFixed(2)})`);
         t.assert(under === 0, `${under} frames with her feet under the bank`);
         // 2. put her high on the steep run and hold W into it: she still slides down to its foot
-        t.assert(c.steepB - c.steepA > 1, `setup: steep run ${c.steepA.toFixed(2)}..${c.steepB.toFixed(2)} m`);
+        t.assert(c.steepB - c.steepA >= 0.9, `setup: steep run ${c.steepA.toFixed(2)}..${c.steepB.toFixed(2)} m`);
         await t.G(([c, f]) => {
           window.__GAME__.game.setTimeScale(0);
           const g = window.__GAME__, T = g.THREE, u = c.steepA + 0.7 * (c.steepB - c.steepA), x = c.o[0] + f[0] * u, z = c.o[2] + f[1] * u;

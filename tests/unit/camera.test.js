@@ -29,7 +29,7 @@ const nearV = (v, arr, eps = 1e-6, msg = '') => { near(v.x, arr[0], eps, msg + '
 /** Minimal ctx: bus, actors, input, state, a camera, a flat-ground physics (optional raycast hit). */
 function makeCtx({ ground = 0, rayHit = null } = {}) {
   const ctx = {
-    game: { mode: 'play', loop: { timeScale: 1 }, hitstopT: 0, setMode(m) { this.mode = m; } },
+    game: { mode: 'play', loop: { timeScale: 1 }, hitstopT: 0, setMode(m) { this.mode = m; } }, params: { cam: 'classic' },
     bus: new EventBus(), config, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 600),
     actors: new ActorRegistry(), state: new GameState(), enemies: { list: [], boss: null }, levels: { loading: false, anchor: (n) => anchors[n] ?? null },
     physics: {
@@ -481,8 +481,8 @@ test('FollowCamera: meme mode emits camera:meme on/off and glides into MEME_LOOP
   assert.ok(cam.memeT > 0 && cam.memeT < 3.8);
   cam.mode('follow');
   assert.deepEqual(got, [true, false]);
-  frames(cam, 40);
-  near(ctx.camera.position.distanceTo(new THREE.Vector3(0, CAMERA.pivotY, 0)), CAMERA.dist, 1e-3, 'back at follow after the 0.6 s blend');
+  frames(cam, 60);
+  near(ctx.camera.position.distanceTo(new THREE.Vector3(0, CAMERA.pivotY, 0)), CAMERA.dist, 1e-3, 'back at follow after the 0.9 s blend (CONTROLS_SPEC C7)');
 });
 
 test('FollowCamera: preset() / shot() / camera:mode, handback with a 0.6 s blend on cutscene:end', async () => {

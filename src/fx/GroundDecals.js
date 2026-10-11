@@ -180,6 +180,8 @@ export class GroundDecals {
     const play = this.enabled && cam?.isIso && (mode === 'play' || mode === 'dialog') && cam.modeName !== 'preset' && cam.modeName !== 'meme' && cam.modeName !== 'cutscene';
     if (play && p && p.alive !== false && !p.scripted) this._hero(p, dt);
     if (play) {
+      this._wedges();
+      if (p) this._parryRing(p);
       this._selection(cam, dt);
       this._hover(cam);
       this._aggro(p);
@@ -240,6 +242,63 @@ export class GroundDecals {
     const c = cam.cursorGround;
     if (Math.hypot(c.x - p.pos.x, c.z - p.pos.z) < 0.3) return null;
     return Math.atan2(c.x - p.pos.x, c.z - p.pos.z);
+  }
+
+  /**
+   * §8.2.1 strike wedges: every live melee wind-up (white parry / gold / red / purple grab) draws its attack's own arc
+   * from the attacker: a rim plus a fill sweeping outward over the wind-up. It tracks the attacker's facing until 0.15 s
+   * before the strike, then freezes (a fair dodge read); at parry-window open the rim flashes and thickens.
+   */
+  _wedges() {
+    const ctx = this.ctx, book = ctx.combat?.threats, now = ctx.game?.time ?? 0;
+    if (!book?.live?.size) { this._frozen?.clear?.(); return; }
+    this._frozen ??= new Map();
+    const win = ctx.state?.difficultyCfg?.parry ?? PLAYER.guard.parryWindow;
+    let n = 0;
+    for (const e of book.live.values()) {
+      if (n >= 8) break;
+      const a = e.actor, arc = e.payload?.arc;
+      if (!a?.pos || a.alive === false || !arc || e.ended) continue;
+      const left = e.activeAt - now;
+      if (left < -0.05) continue;
+      const range = Math.max(0.6, arc.range ?? e.payload?.range ?? 1.5);
+      const half = Math.max(0.25, Math.min(Math.PI, Math.abs((arc.from ?? 0.5) - (arc.to ?? -0.5)) / 2 + 0.12));
+      // freeze the facing 0.15 s before the strike
+      let yaw = a.facing ?? 0;
+      if (left <= 0.15) { if (!this._frozen.has(e)) this._frozen.set(e, yaw); yaw = this._frozen.get(e); } else this._frozen.delete(e);
+      const k = e.kind;
+      const col = k === 'gold' ? DECAL_COLORS.gold : k === 'red' ? TELEGRAPH.colors.red : k === 'grab' ? TELEGRAPH.colors.grab : DECAL_COLORS.white;
+      const prog = e.windup > 0 ? Math.max(0, Math.min(1, 1 - left / e.windup)) : 1;
+      const open = left <= win + (ctx.input?.device === 'touch' ? PLAYER.guard.touchParryBonus : 0) && left >= -0.05;
+      const pos = a.object3d?.position ?? a.pos, R = range + (a.radius ?? 0.3);
+      // rim (2 px → 4 px at the parry window), fill sweeping out; red = filled ("don't be here")
+      this._add(DECAL.FAN, pos.x, pos.y, pos.z, R, yaw, col, open ? 0.95 : 0.8, open ? 0.86 : 0.93, 0.01, half, 0, 0, k === 'red' ? 0.32 : 0.12);
+      if (prog > 0.02) this._add(DECAL.FAN, pos.x, pos.y, pos.z, Math.max(0.2, R * prog), yaw, col, k === 'red' ? 0.3 : 0.22, 0, 0.02, half, 0, 0, 0.9);
+      n++;
+    }
+    if (this._frozen.size > 32) this._frozen.clear();
+  }
+
+  /**
+   * §8.2.2 the parry ring (settings.parryRing: auto = touch and Kitten difficulty): for the single most imminent
+   * parryable attack on her, a ring shrinking from 2.2 m to her radius exactly at the strike, the parry window drawn
+   * as a brighter band; gold for gold kinds.
+   */
+  _parryRing(p) {
+    const ctx = this.ctx, st = ctx.state, mode = st?.settings?.parryRing ?? 'auto';
+    const on = mode === 'on' || (mode === 'auto' && (ctx.input?.device === 'touch' || st?.difficulty === 'kitten'));
+    if (!on) return;
+    const nx = ctx.combat?.nextParryable?.(p, 6);
+    if (!nx) return;
+    const now = ctx.game?.time ?? 0, left = nx.activeAt - now;
+    if (left > 0.6 || left < -0.05) return;
+    const R0 = 2.2, r1 = p.radius ?? 0.45, k = Math.max(0, Math.min(1, left / 0.6));
+    const r = r1 + (R0 - r1) * k, inWin = left <= (nx.window ?? 0.15);
+    const col = nx.kind === 'gold' ? DECAL_COLORS.gold : DECAL_COLORS.white;
+    const pos = p.object3d?.position ?? p.pos;
+    this._add(DECAL.RING, pos.x, pos.y, pos.z, Math.max(r, r1 + 0.02), 0, col, inWin ? 1 : 0.7, inWin ? 0.78 : 0.88, 0.015);
+    // the target band: her radius, where the ring must be when she raises the Stand
+    this._add(DECAL.RING, pos.x, pos.y, pos.z, r1 + 0.18, 0, col, 0.35, 0.7, 0.02);
   }
 
   /** §7.4 the selection: a gold dashed ring rotating 0.5 rev/s, red during its wind-up. */

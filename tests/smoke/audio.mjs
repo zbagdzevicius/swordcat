@@ -79,8 +79,11 @@ export default [
       t.assert(s.wind && s.wind.gainNow > 0.03, `procedural wind running (gain ${s.wind?.gainNow})`);
       t.assert(['heartThump', 'crowCaw', 'hyenaLaugh', 'blip'].every((k) => s.zzfx.includes(k)), `zzfx baked: ${s.zzfx}`);
       t.assert(s.gains.master > 0.5 && s.gains.music > 0.2 && s.gains.sfx > 0.5, `bus gains ${JSON.stringify(s.gains)}`);
-      const listeners = await t.G(() => window.__GAME__.ctx.camera.children.filter((c) => c.type === 'AudioListener').length);
-      t.assert(listeners === 1, `exactly one AudioListener on the camera (${listeners})`);
+      // CONTROLS_SPEC §2.8: in the iso play camera the ears ride the focus (in the scene), on the lens otherwise
+      const listeners = await t.G(() => { const c = window.__GAME__.ctx; let n = 0; c.scene.traverse((o) => { if (o.type === 'AudioListener') n++; }); return n; });
+      t.assert(listeners === 1, `exactly one AudioListener (${listeners})`);
+      const ears = await t.G(() => { const c = window.__GAME__.ctx, L = c.audio.listener, f = c.cam.focus; return c.cam.isIso && L.parent === c.scene ? Math.hypot(L.position.x - f.x, L.position.z - f.z) : 0; });
+      t.assert(ears < 0.01, `the listener sits at the iso focus (${ears})`);
       const m = await peak(t, 'master', 600);
       t.log(`unlocked: sr=${s.sampleRate} music ${db(s.levels.music)} dB, master peak ${db(m)} dB, wind ${s.wind.wind} → ${s.wind.freqNow} Hz`);
       await shot(t, '01-unlock-meadow');

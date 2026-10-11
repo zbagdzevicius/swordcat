@@ -83,7 +83,9 @@ function actorScreen(ctx, a, x, y, basePx) {
   _a.set(pos.x, pos.y + Math.min(0.15, h * 0.2), pos.z);
   _b.set(pos.x, pos.y + h, pos.z);
   worldToScreen(ctx, _a, _sa); worldToScreen(ctx, _b, _sb);
-  if (_sa.z >= 1 || _sb.z >= 1) return null;
+  // behind the lens or beyond the far plane: never pickable (a point behind the camera can project onto the screen)
+  if (!(_sa.z > -1 && _sa.z < 1) || !(_sb.z > -1 && _sb.z < 1)) return null;
+  if (ctx.camera && pos.distanceToSquared?.(ctx.camera.position) > 60 * 60) return null;
   // projected radius: a point `radius` m to the side of her chest
   const right = ctx.cam?.yaw != null ? ctx.cam.yaw : Math.PI;
   _a.set(pos.x + Math.cos(right) * (a.radius ?? 0.4), pos.y + h * 0.5, pos.z - Math.sin(right) * (a.radius ?? 0.4));
@@ -145,7 +147,7 @@ export function pickAt(ctx, x, y, opts = {}, out = { kind: 'ground', actor: null
   for (const it of level?.interactables ?? []) {
     if (!it?.pos || (it.enabled && !it.enabled())) continue;
     _a.set(it.pos.x, it.pos.y + 0.5, it.pos.z); worldToScreen(ctx, _a, _sa);
-    if (_sa.z >= 1) continue;
+    if (!(_sa.z > -1 && _sa.z < 1)) continue;
     const R = Math.max(AIM.pick.interactR, Math.min(it.r ?? 1.2, 2.0) * 0.6);
     _b.set(it.pos.x + Math.cos(ctx.cam?.yaw ?? Math.PI) * R, it.pos.y + 0.5, it.pos.z - Math.sin(ctx.cam?.yaw ?? Math.PI) * R);
     worldToScreen(ctx, _b, _sb);

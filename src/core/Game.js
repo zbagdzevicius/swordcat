@@ -117,9 +117,17 @@ export class Game {
       game: this, bus, config, renderer, scene, camera,
       input: null, assets: null, actors: new ActorRegistry(), state: new GameState(), rng: createRng(params.seed),
       physics: null, combat: null, cam: null, player: null, enemies: null, companions: null, levels: null,
-      env: null, objectives: null, strings: { t: translate, has: hasString, S: STRINGS }, fx: null, audio: null, story: null, ui: null, save: null,
+      env: null, objectives: null, strings: null, fx: null, audio: null, story: null, ui: null, save: null,
       postfx: null, quality: config.QUALITY.med, params,
     });
+    // strings (A4) + CONTROLS_SPEC §12 ui 3: device-aware copy (`key.touch` / `key.pad` before the base KBM text)
+    ctx.strings = {
+      t: (key, vars) => {
+        const d = ctx.input?.device;
+        return translate((d === 'touch' || d === 'pad') && typeof key === 'string' && hasString(`${key}.${d}`) ? `${key}.${d}` : key, vars);
+      },
+      has: hasString, S: STRINGS,
+    };
     ctx.input = new Input(ctx);
     ctx.input.pointerLockEnabled = !params.test && !ctx.input.iso;
     ctx.assets = new Assets(ctx);

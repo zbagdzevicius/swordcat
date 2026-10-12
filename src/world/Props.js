@@ -447,3 +447,83 @@ export function footprint(tpl, x, y, z, yaw, sx, sy, sz, { kind = 'auto', shrink
   for (let i = 0; i < n; i++) { const t = (i / (n - 1) - 0.5) * (len - r * 2); out.circles.push({ x: cx + ax * t, z: cz + az * t, r, y0, y1 }); }
   return out;
 }
+
+// ------------------------------------------------------------------ CONTROLS_SPEC §3: occlusion from above
+/**
+ * Fraction of a tree template's height where its crown starts (the lowest "leafy" vertex: green dominates red), for
+ * the camera's crown-only fade (trunks never fade). Pure. Returns `fallback` when no leafy vertex exists.
+ * @param {THREE.BufferGeometry} geo vertex-coloured template geometry @param {number} [fallback]
+ */
+export function crownFraction(geo, fallback = 0.35) {
+  const p = geo?.attributes?.position, c = geo?.attributes?.color;
+  if (!p || !c) return fallback;
+  let y0 = Infinity, y1 = -Infinity, low = Infinity;
+  for (let i = 0; i < p.count; i++) { const y = p.getY(i); if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  for (let i = 0; i < p.count; i++) {
+    const r = c.getX(i), g = c.getY(i);
+    if (g > r * 1.08 && g > c.getZ(i)) { const y = p.getY(i); if (y < low) low = y; }
+  }
+  if (!(y1 > y0) || !Number.isFinite(low)) return fallback;
+  return Math.min(0.8, Math.max(0.12, (low - y0) / (y1 - y0)));
+}
+
+/**
+ * Is triangle (a, b, c) of a building a roof face? Up-facing (normal y > `ny`) and above `eave` of the height. Pure.
+ * @param {number[]} a @param {number[]} b @param {number[]} c [x, y, z] @param {{minY:number, maxY:number}} box
+ */
+export function isRoofTriangle(a, b, c, box, { ny = 0.3, eave = 0.42 } = {}) {
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  const nx = uy * vz - uz * vy, nyy = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, nyy, nz);
+  if (!(l > 1e-12)) return false;
+  const cy = (a[1] + b[1] + c[1]) / 3;
+  return Math.abs(nyy / l) > ny && cy > box.minY + eave * (box.maxY - box.minY);
+}
+
+/**
+ * Split an indexed template geometry by a triangle predicate into [rest, picked] (both indexed, sharing nothing).
+ * Either may be null when empty. Pure (three only).
+ * @param {THREE.BufferGeometry} geo @param {(a:number[], b:number[], c:number[]) => boolean} pick
+ */
+export function splitGeometry(geo, pick) {
+  const ni = geo.index ? geo.toNonIndexed() : geo.clone();
+  const P = ni.attributes.position, names = Object.keys(ni.attributes);
+  const a = [0, 0, 0], b = [0, 0, 0], c = [0, 0, 0];
+  const sel = [[], []];
+  for (let t = 0; t < P.count / 3; t++) {
+    const i = t * 3;
+    a[0] = P.getX(i); a[1] = P.getY(i); a[2] = P.getZ(i);
+    b[0] = P.getX(i + 1); b[1] = P.getY(i + 1); b[2] = P.getZ(i + 1);
+    c[0] = P.getX(i + 2); c[1] = P.getY(i + 2); c[2] = P.getZ(i + 2);
+    sel[pick(a, b, c) ? 1 : 0].push(t);
+  }
+  const out = sel.map((tris) => {
+    if (!tris.length) return null;
+    const g = new THREE.BufferGeometry();
+    for (const name of names) {
+      const src = ni.attributes[name], k = src.itemSize, arr = new Float32Array(tris.length * 3 * k);
+      tris.forEach((t, j) => { for (let q = 0; q < 3 * k; q++) arr[j * 3 * k + q] = src.array[t * 3 * k + q]; });
+      g.setAttribute(name, new THREE.BufferAttribute(arr, k));
+    }
+    const n = tris.length * 3, idx = new Uint32Array(n);
+    for (let i = 0; i < n; i++) idx[i] = i;
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.computeBoundingBox(); g.computeBoundingSphere();
+    return g;
+  });
+  if (ni !== geo) ni.dispose();
+  return out;
+}
+
+/**
+ * A building template split into its body (walls, eaves, chimneys) and its roof faces (`isRoofTriangle`), so the
+ * iso camera can fade the roof only (`camFade: 'roof'`). Both keep the source's box (same placement maths).
+ * @returns {{body: any, roof: any|null}}
+ */
+export function splitRoofTemplate(tpl, opts) {
+  if (!tpl?.geometry?.attributes?.position) return { body: tpl, roof: null };
+  const box = { minY: tpl.box.min.y, maxY: tpl.box.max.y };
+  const [rest, roof] = splitGeometry(tpl.geometry, (a, b, c) => isRoofTriangle(a, b, c, box, opts));
+  if (!roof || !rest) { rest?.dispose(); roof?.dispose(); return { body: tpl, roof: null }; }
+  return { body: { ...tpl, key: tpl.key + '|body', geometry: rest }, roof: { ...tpl, key: tpl.key + '|roof', geometry: roof, parts: [], roofOf: tpl.key } };
+}

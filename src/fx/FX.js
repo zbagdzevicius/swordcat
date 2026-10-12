@@ -20,6 +20,7 @@
 // one trail, decal / aim-line pools, mist cards, ambient motes and the horde: every effect is pooled, nothing allocates
 // per frame.
 import { GroundDecals } from './GroundDecals.js';
+import { GroundMist } from './GroundMist.js';
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { ATTACKS, JUICE, PLAYER } from '../core/config.js';
@@ -98,6 +99,8 @@ export function hitJuice(h, player) {
 const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
+/** CONTROLS_SPEC §12 fx 4: the sword ribbon is ×1.3 wider in the iso camera. */
+export const FX_ISO = Object.freeze({ trailWidth: 1.3 });
 const GOLD = new THREE.Color('#FFD34D'), STAR_COL = new THREE.Color('#FFE88A');
 
 export class FX {
@@ -133,11 +136,14 @@ export class FX {
     this.particles.attach(scene);
     this.marks = new Marks(128);
     scene.add(this.marks.mesh);
+    // CONTROLS_SPEC §8.2.3: the iso telegraph glints / "!" at a constant screen size, on top of everything
+    this.marksTop = new Marks(48, { overlay: true });
+    scene.add(this.marksTop.mesh);
     this.trail = new SwordTrail();
     scene.add(this.trail.mesh);
     this.numbers = new DamageNumbers(ctx);
     this.numbers.init();
-    this.telegraphs = new Telegraphs(ctx, this.marks);
+    this.telegraphs = new Telegraphs(ctx, this.marks, this.marksTop);
     this.telegraphs.init(scene);
     this.screen = new ScreenFX(ctx);
     this.screen.init();
@@ -165,6 +171,9 @@ export class FX {
     // CONTROLS_SPEC §7.3 / §10.3: hero + aim ring, Stand fan, selection / hover / aggro rings, order markers, ability aim
     this.decals = new GroundDecals(ctx);
     this.decals.init(scene);
+    // CONTROLS_SPEC §4.2 ground mist sheets (the iso play camera's misty screen edges)
+    this.groundMist = new GroundMist(ctx);
+    this.groundMist.init(scene, ctx.quality);
     this._applyQuality(ctx.quality);
     this._offs.push(ctx.game?.addFrameHook?.(() => { this.screen.afterFrame(); this._warmEnd(); }) ?? (() => {}));
     this._warm = 1;
@@ -434,8 +443,11 @@ export class FX {
       holy: { casts: this.holyFx?.casts ?? 0, flashes: this.holyFx?.flashes ?? 0, fizzles: this.holyFx?.fizzles ?? 0, bloomLevel: this.holyFx?.bloomLevel ?? 0,
         light: this.holyFx?.light?.intensity ?? 0, player: this.ctx.player ? this.holyFx?.level(this.ctx.player) ?? 0 : 0 },
       bloom: this.ctx.postfx?.bloom ?? 0, peakBloom: this.screen?.peakBloom ?? 0, vignette: this.screen?.vignette ?? 0,
-      dizzy: this.dizzy.size, marks: this.marks?.count ?? 0, counts: { ...this.counts }, warmups: this.warmups,
+      dizzy: this.dizzy.size, marks: this.marks?.count ?? 0, marksTop: this.marksTop?.count ?? 0, counts: { ...this.counts }, warmups: this.warmups,
       mistLoop: this.mist?.loopW ?? 0,
+      groundMist: { visible: !!this.groundMist?.mesh?.visible, alpha: this.groundMist?.alpha ?? 0, sheets: this.groundMist?.count ?? 0,
+        holes: this.groundMist?.holes ?? 0, factor: this.groundMist?.factor ?? 0 },
+      decals: this.decals?.stats?.() ?? null,
       m2: {
         shocks: this.shock?.active ?? 0, shocksStarted: this.shock?.started ?? 0, cracks: this.shock?.activeCracks ?? 0, cracksStarted: this.shock?.crackCount ?? 0,
         webs: this.webs?.count ?? 0, websMade: this.webs?.made ?? 0, webCuts: this.webs?.cuts ?? 0, sunRays: this.sunRays?.mode ?? null,
@@ -463,10 +475,13 @@ export class FX {
     if (!this.ready) return;
     this._warmEnd();                    // normally done by the frame hook; a no-op when it already ran
     const ctx = this.ctx, dt = visualDt(ctx, frameDt), p = ctx.player;
-    this.marks.begin();
+    const viewH = ctx.renderer?.domElement?.clientHeight || (typeof innerHeight === 'number' ? innerHeight : 720);
+    this.marks.begin(viewH);
+    this.marksTop.begin(viewH);
     this.particles.update(dt);
     this.helmets.update(dt);
-    if (p) this.trail.track(p, dt, { skin: ctx.state?.cosmetics?.sword, golden: !!p.golden });
+    const iso = !!ctx.cam?.isIso && ctx.params?.cam !== 'classic';
+    if (p) this.trail.track(p, dt, { skin: ctx.state?.cosmetics?.sword, golden: !!p.golden, widthMul: iso ? FX_ISO.trailWidth : 1 });
     this.holyFx.render(dt, frameDt);
     this.screen.holy = this.holyFx.bloomLevel;
     this.screen.golden = !!p?.golden && p.alive !== false;
@@ -475,6 +490,7 @@ export class FX {
     // drift ×2 in Meme Cam; also ×2 while Standing Ground pays out (§7.3 "the mist speeds up around her")
     this.mist.speedMul = this._memeMist ? (PLAYER.memeCam.mist ?? 2) : p?.standingGround && p.alive !== false ? 2 : 1;
     this.mist.render(dt);
+    if (this.groundMist) { this.groundMist.speedMul = this.mist.speedMul; this.groundMist.render(dt); }
     this.hordeFx.render(dt);
     this.ambient.render(dt);
     const time = ctx.game?.realTime ?? 0;
@@ -485,8 +501,9 @@ export class FX {
     this.encounters.render(dt, time);
     this._goldenPulse(dt);
     this.numbers.render(dt);
-    this.decals?.render(frameDt);
+    this.decals?.render(dt);              // visual dt: order markers and pulses freeze with the pause menu / hitstop
     this.marks.end();
+    this.marksTop.end();
     this.screen.render(frameDt);
     if (this._warm > 0) { this._warm--; this._warmBegin(); }
   }
@@ -496,10 +513,10 @@ export class FX {
    * telegraph, fog wall or horde would otherwise compile its program mid-fight: requests/player.md).
    */
   warmObjects() {
-    return [this.particles?.add.mesh, this.particles?.alpha.mesh, this.marks?.mesh, this.trail?.mesh,
+    return [this.particles?.add.mesh, this.particles?.alpha.mesh, this.marks?.mesh, this.marksTop?.mesh, this.trail?.mesh,
       this.holyFx?.fields[0]?.points, this.holyFx?.arcs[0]?.mesh, this.helmets?.list[0], this.telegraphs?.decals[0]?.mesh,
       this.telegraphs?.lines[0]?.mesh, this.mist?.ambient?.mesh, this.hordeFx?.mesh, this.ambient?.points,
-      this.shock?.rings[0]?.mesh, this.shock?.cracks[0]?.mesh, this.webs?.mesh, this.sunRays?.follow.mesh].filter(Boolean);
+      this.shock?.rings[0]?.mesh, this.shock?.cracks[0]?.mesh, this.webs?.mesh, this.sunRays?.follow.mesh, this.groundMist?.mesh].filter(Boolean);
   }
 
   /**
@@ -535,10 +552,10 @@ export class FX {
   dispose() {
     for (const off of this._offs) { try { off?.(); } catch { /* ignore */ } }
     this._offs.length = 0;
-    this.particles?.dispose(); this.marks?.dispose(); this.trail?.dispose(); this.numbers?.dispose(); this.telegraphs?.dispose();
+    this.particles?.dispose(); this.marks?.dispose(); this.marksTop?.dispose(); this.trail?.dispose(); this.numbers?.dispose(); this.telegraphs?.dispose();
     this.holyFx?.dispose(); this.helmets?.dispose(); this.mist?.dispose(); this.hordeFx?.dispose(); this.ambient?.dispose(); this.screen?.dispose();
     this.shock?.dispose(); this.webs?.dispose(); this.sunRays?.dispose(); this.lanterns?.dispose(); this.encounters?.clear(); this.shop?.dispose();
-    this.decals?.dispose();
+    this.decals?.dispose(); this.groundMist?.dispose();
     this.dizzy.clear(); this._later.length = 0;
     this.ready = false;
   }
@@ -550,6 +567,7 @@ export class FX {
     if (!q || !this.particles) return;
     this.particles.setBudget(q.particles ?? 2000);
     this.mist.setCount(MIST_COUNT[q.id] ?? MIST_COUNT.med);
+    this.groundMist?.setQuality(q);
     this.ambient.setBudget((q.particles ?? 2000) / 2000);
     if (this.encounters) this.encounters.lowQ = (q.particles ?? 2000) < 1000;
   }
@@ -602,7 +620,7 @@ export class FX {
         }
         return;
       }
-      case 'block': this.counts.blocks++; this._guardSparks(h.target, '#F4F8FF', 10); return;
+      case 'block': this.counts.blocks++; this._guardSparks(h.target, '#F4F8FF', 10); if (h.target === ctx.player) this.decals?.flash('block'); return;
       case 'blockNpc': this.counts.blocks++; this._sparks(_p, dir, 8, '#F4F8FF', 1); return;
       case 'parryNpc':
         this.particles.single(_p, { shape: SHAPE.RING, color: '#FFD34D', intensity: 2.2, size0: 0.2, size1: 1.2, life: 0.22, grow: GROW.OUT });

@@ -45,6 +45,8 @@ export class PropActor extends Actor {
     /** hit-sound material for audio (straw | wood | stone | armour | metal | rope); overrides the per-kind default */
     this.material = o.material ?? PROP_MATERIAL[this.kind] ?? 'wood';
     this.breakable = o.breakable !== false;
+    /** CONTROLS_SPEC §7.2 / §11: the soft auto-target and the picker may pick it (rope posts, crates, cracked boulders) */
+    this.assistable = o.assistable ?? this.breakable;
     this.tags.add('prop').add(this.kind);
     for (const t of o.tags ?? []) this.tags.add(t);
     this.fixed = true;

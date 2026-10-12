@@ -26,6 +26,22 @@ function cast(ctx, cs) {
   castFriend(ctx, cs, 'mochi', MOCHI, 0.1);
 }
 
+/** Stand spawned cast on the step treads: a spawn point resolves to the terrain under the stone steps, which would
+ *  leave Snowpaw and Marmalade sunk to their necks in the masonry. */
+function onTheSteps(ctx, cs) {
+  const ph = ctx.physics;
+  if (typeof ph?.groundAt !== 'function') return;
+  for (const id of ['snowpaw', 'marmalade']) {
+    const a = cs.actor(id);
+    if (!a?.pos) continue;
+    const y = ph.groundAt(a.pos.x, a.pos.z, a.pos.y + 3);
+    if (Number.isFinite(y) && y > a.pos.y) { a.pos.y = y; a.vel?.set?.(0, 0, 0); a.snap?.(); }
+  }
+}
+
+/** Low two-shots onto Snowpaw from in front of her (on Clem's right, a step below her): her face, not her back. */
+const ON_SNOWPAW = { target: 'snowpaw', pos: [1.9, 0.85, -0.2], fov: 40, lookMid: 1.1 };
+
 export default {
   id: 'cs07', kind: 'cutscene', skippable: true,
   results: 'town',
@@ -38,15 +54,17 @@ export default {
     { t: 'spawn', id: 'snowpaw', type: 'snowpaw', at: SNOWPAW, facing: Math.PI, visible: false },
     { t: 'spawn', id: 'marmalade', type: 'marmalade', at: MARMALADE, facing: Math.PI, visible: false },
     ...VILLAGERS.map((p, i) => ({ t: 'spawn', id: `villager_${i + 1}`, type: `villager_${31 + i}`, at: p, facing: yawOf([-p[0], 36 - p[1]]), visible: false })),
+    { t: 'call', fn: onTheSteps },
 
-    // ---- 1 · crane from the dark Sunbell down to the steps
-    { t: 'cam', anchor: [0, 0, 0], mode: 'rail', pos: [2.5, 16, 44], to: [2.6, 1.5, 31.8], look: BELL, lookTo: [0, 1.0, 38.6], fov: [34, 40], dur: 7, ease: 'inOutSine', nowait: true },
+    // ---- 1 · crane from the dark Sunbell down to the steps; it settles high enough (2.6 m, 5.6 m back from Clem)
+    // to see over the step lips onto Clem, Mochi and the two on the treads above them
+    { t: 'cam', anchor: [0, 0, 0], mode: 'rail', pos: [2.5, 16, 44], to: [2.6, 2.6, 30.8], look: BELL, lookTo: [0, 1.15, 38.0], fov: [34, 40], dur: 7, ease: 'inOutSine', nowait: true },
     wait(4.6),
     sfx('cs07.door', 'snowpaw'),
     { t: 'actor', id: 'snowpaw', visible: true, moveTo: [-0.4, 38.0], speed: 1.3, nowait: true },
     { t: 'actor', id: 'marmalade', visible: true, moveTo: [1.2, 38.9], speed: 1.0, nowait: true },
     wait(2.6),
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'snowpaw', pos: [1.8, 0.9, 1.0], fov: 40, lookMid: 0.85 }),
+    cam('TWO_SHOT_LOW', 'swordcat', ON_SNOWPAW),
     say('snowpaw', 'cs07.1', 3.4, { expression: 'surprised' }),
     { t: 'actor', id: 'swordcat', expression: 'happy', emote: 'blink' },
     say('swordcat', 'cs07.2', 1.4),
@@ -55,7 +73,7 @@ export default {
     say('mochi', 'cs07.3', 1.4),
 
     // ---- 2 · the red cloth
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'snowpaw', pos: [1.7, 0.75, 1.4], fov: 38, lookMid: 0.8 }),
+    cam('TWO_SHOT_LOW', 'swordcat', { ...ON_SNOWPAW, pos: [1.6, 0.75, -0.1], fov: 38 }),
     { t: 'actor', id: 'snowpaw', expression: 'happy' },
     say('snowpaw', 'cs07.4', 3.0),
     sfx('cs07.cape', 'swordcat'),
@@ -66,7 +84,7 @@ export default {
     cam(null, 'swordcat', { pos: [-0.9, 0.7, -1.9], look: [0, 0.55, 0.2], fov: 42 }),
     wait(1.4),
     { t: 'actor', id: 'swordcat', pose: 'kneel', expression: 'earnest' },
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'snowpaw', pos: [1.7, 0.75, 1.4], fov: 38, lookMid: 0.75 }),
+    cam(null, 'swordcat', { pos: [1.4, 0.6, 0.5], look: [0, 0.45, 0.1], fov: 40 }),   // from the first tread, clear of the lip
     say('swordcat', 'cs07.6', 2.0),
     { t: 'actor', id: 'swordcat', pose: 'idle' },
 
@@ -75,7 +93,7 @@ export default {
     { t: 'actor', id: 'marmalade', face: [0, 54], faceDur: 0.5, pose: 'oath' },
     sfx('cs07.point', 'marmalade'),
     say('marmalade', 'cs07.7', 3.4),
-    cam('TWO_SHOT_LOW', 'swordcat', { target: 'marmalade', pos: [3.2, 0.9, 0.6], fov: 40, lookMid: 0.85 }),
+    cam('TWO_SHOT_LOW', 'swordcat', { target: 'marmalade', pos: [3.4, 1.0, -0.6], fov: 44, lookMid: 1.3 }),
     { t: 'actor', id: 'marmalade', face: 'swordcat', faceDur: 0.4, pose: 'idle' },
     say('marmalade', 'cs07.8', 4.4),
     { t: 'actor', id: 'swordcat', expression: 'determined', pose: 'vigil' },

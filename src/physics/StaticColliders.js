@@ -255,6 +255,51 @@ export class StaticColliders {
    * @param {any} [actor] apply per-collider filters for this actor
    * @param {boolean} [solidOnly] skip colliders rays ignore (`ray: false`, fog-wall rings): projectile tests
    */
+  /**
+   * Nav rasterisation (CONTROLS_SPEC §5.3): the highest top (y1) of the colliders overlapping the circle (x, z, r)
+   * within heights [y0, y1] that block navigation (`nav: false` colliders are skipped; per-collider filters apply for
+   * `actor`). -Infinity if none; Infinity for a collider without a top.
+   */
+  navTop(x, z, r, y0, y1, actor = null) {
+    if (!this.records.length) return -Infinity;
+    const cand = this.query(x - r - 0.05, z - r - 0.05, x + r + 0.05, z + r + 0.05);
+    let best = -Infinity;
+    for (let i = 0; i < cand.length; i++) {
+      const rec = cand[i];
+      if (rec.src?.nav === false || rec.y0 >= y1 || rec.y1 <= y0 || (actor && !applies(rec, actor))) continue;
+      if (rec.y1 > best && overlapXZ(rec, x, z, r)) best = rec.y1;
+    }
+    return best;
+  }
+
+  /**
+   * One-query nav sample (CONTROLS_SPEC §5.3; Physics._navSample's fast path where no architecture mesh is near):
+   * the surface (max of `groundY` and the highest walkable prop top ≤ maxY at the point, as supportAt), whether that
+   * top bounces, and the highest blocking top (navTop rules) within r over [surface + spanLo, surface + spanHi].
+   * Writes `out` = { h, bounce, block } and returns it.
+   */
+  navCell(x, z, r, groundY, maxY, spanLo, spanHi, actor, out) {
+    out.h = groundY; out.bounce = false; out.block = -Infinity;
+    if (!this.records.length) return out;
+    const cand = this.query(x - r - 0.05, z - r - 0.05, x + r + 0.05, z + r + 0.05);
+    let best = -Infinity, bounce = 0;
+    for (let i = 0; i < cand.length; i++) {
+      const rec = cand[i];
+      if (!rec.walk || rec.kind === RING || rec.y1 > maxY || rec.y1 <= best || (actor && !applies(rec, actor))) continue;
+      if (overlapXZ(rec, x, z, 0)) { best = rec.y1; bounce = rec.bounce; }
+    }
+    if (best > groundY) { out.h = best; out.bounce = bounce > 0; }
+    const y0 = out.h + spanLo, y1 = out.h + spanHi;
+    let blk = -Infinity;
+    for (let i = 0; i < cand.length; i++) {
+      const rec = cand[i];
+      if (rec.src?.nav === false || rec.y0 >= y1 || rec.y1 <= y0 || rec.y1 <= blk || (actor && !applies(rec, actor))) continue;
+      if (overlapXZ(rec, x, z, r)) blk = rec.y1;
+    }
+    out.block = blk;
+    return out;
+  }
+
   overlaps(x, z, r = 0, y0 = -Infinity, y1 = Infinity, actor = null, solidOnly = false) {
     if (!this.records.length) return null;
     const cand = this.query(x - r - 0.05, z - r - 0.05, x + r + 0.05, z + r + 0.05);
@@ -344,6 +389,29 @@ export class StaticColliders {
         : rec.kind === CIRCLE ? this._rayCyl(rec, ox, oy, oz, dx, dy, dz, best, inflate) : this._rayRing(rec, ox, oy, oz, dx, dy, dz, best);
       if (t >= 0 && t <= best) { best = t; found = true; this.hitSrc = rec.src; this.hitNx = this._nx; this.hitNy = this._ny; this.hitNz = this._nz; }
     }
+    return found ? best : -1;
+  }
+
+  /**
+   * Ray vs the WALKABLE TOPS only (the plane y = y1 inside each walkable collider's footprint, hit from above): the
+   * pick for click / tap to move onto ledges, crates, stumps and mushroom caps without catching tree trunks or walls.
+   * @returns {number} distance or -1. Sets `hitSrc` (normal +Y).
+   */
+  raycastTops(ox, oy, oz, dx, dy, dz, maxDist, actor = null) {
+    this.hitSrc = null;
+    if (!this.records.length || !(maxDist > 0) || !(dy < -1e-6)) return -1;
+    const ex = ox + dx * maxDist, ez = oz + dz * maxDist;
+    const cand = this.query(Math.min(ox, ex) - 0.01, Math.min(oz, ez) - 0.01, Math.max(ox, ex) + 0.01, Math.max(oz, ez) + 0.01, this._cand2);
+    let best = maxDist, found = false;
+    for (let i = 0; i < cand.length; i++) {
+      const rec = cand[i];
+      if (!rec.walk || rec.kind === RING || !Number.isFinite(rec.y1) || (actor && !applies(rec, actor))) continue;
+      const t = (rec.y1 - oy) / dy;
+      if (!(t >= 0 && t <= best)) continue;
+      if (!overlapXZ(rec, ox + dx * t, oz + dz * t, 0)) continue;
+      best = t; found = true; this.hitSrc = rec.src;
+    }
+    if (found) { this.hitNx = 0; this.hitNy = 1; this.hitNz = 0; }
     return found ? best : -1;
   }
 

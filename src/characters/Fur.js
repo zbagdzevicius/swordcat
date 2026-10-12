@@ -415,10 +415,14 @@ export class FurPart {
     this.furMat = o.furMat; this.sheenMat = o.sheenMat;
     this.maxShells = o.maxShells ?? MAX_SHELLS;
     if (o.skeleton) {
-      this.baked = true;
       this.furMat = o.bakedMat;
       this.idxPerShell = geo.index.count;
-      const g = bakeShells(geo, this.maxShells);
+      // bake only the shells the current quality draws (Low: the base layer alone, not 25 copies on the GPU);
+      // setShells() re-bakes up to maxShells the first time more are asked for (quality raised, Meme Cam)
+      this._src = geo;
+      this.baked = true;
+      this.bakedShells = clamp(Math.round(o.shells ?? shellsFor(this.tier)), 0, this.maxShells);
+      const g = bakeShells(geo, this.bakedShells);
       this.mesh = new THREE.SkinnedMesh(g, this.furMat);
       this.mesh.bind(o.skeleton, o.bindMatrix || new THREE.Matrix4());
     } else {
@@ -454,13 +458,23 @@ export class FurPart {
     n = clamp(Math.round(n), 0, this.maxShells);
     if (n === this.shells) return;
     this.shells = n; this._lodN = -1;
+    if (this.baked && n > this.bakedShells) this._rebake(this.maxShells);
     const mat = n > 0 ? this.furMat : this.sheenMat;
     this.mesh.material = mat;
     if (n > 0) mat.uniforms.uShells.value = n;
     if (this.baked) this.mesh.geometry.setDrawRange(0, this.idxPerShell * (n + 1));
     else this.mesh.count = n + 1;
   }
-  dispose() { _parts.delete(this); this.mesh.geometry.dispose(); }
+  /** Re-bake the skinned shell copies for up to `n` shells (the old GPU buffers are released). */
+  _rebake(n) {
+    const old = this.mesh.geometry;
+    this.mesh.geometry = bakeShells(this._src, n);
+    this.bakedShells = n;
+    old.dispose();
+  }
+  /** Shells allocated on the GPU (baked parts; instanced parts allocate instances only). */
+  get allocatedShells() { return this.baked ? this.bakedShells : this.maxShells; }
+  dispose() { _parts.delete(this); this.mesh.geometry.dispose(); this._src = null; }
 }
 
 /**

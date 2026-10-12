@@ -19,9 +19,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, ECONOMY } from '../core/config.js';
-import { clamp, clamp01 } from '../core/math.js';
+import { clamp, clamp01, wrapAngle } from '../core/math.js';
 import { isHostile } from '../core/ActorRegistry.js';
 import { COMBAT, PROJECTILE_KIND, AUTO_PROJECTILES, reflectedDef } from './attacks.js';
+import { aimCfg } from './targeting.js';
 
 // art.md §6.2 palette tokens used here
 const PAL = {
@@ -43,6 +44,9 @@ const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _ray = new THREE.Ray();
+const _reflectQ = [];
+/** reflect-to-aim tie-break: radians of aim error worth one metre of distance⁻¹ (aim line first, then nearest) */
+const REFLECT_DIST_W = 0.02;
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 /** physics.sphereCast options: props and architecture stop round projectiles; the ground is tested by height. */
 const WALL_CAST = Object.freeze({ terrain: false, mesh: true, statics: true });
@@ -245,8 +249,11 @@ export class Projectiles {
   /**
    * §19.4 reflect: flip ×reflectSpeedMul, owner = `by`, dmg = reflectDmg. When the shooter stands within
    * `COMBAT.reflectAimCone` of the flipped path the shot is aimed at its chest and keeps homing on it.
+   * Iso controls (CONTROLS_SPEC §12 combat 4): when a hostile of `by` lies within ±AIM.reflectCone (25°) of her aim,
+   * the shot flies at that one instead (and homes on it); otherwise back to the shooter as above.
+   * @param {any} p @param {any} by the parrying actor @param {{ dir?: {x:number,z:number}|number }} [opts] explicit aim
    */
-  reflect(p, by) {
+  reflect(p, by, opts) {
     if (!p?.alive) return p;
     const speed = Math.max(p.vel.length(), p.speed) * PLAYER.guard.reflectSpeedMul;
     _v.copy(p.vel).negate();
@@ -254,7 +261,11 @@ export class Projectiles {
     _v.normalize();
     const src = p.source;
     p.homing = null;
-    if (src && src !== by && src.alive !== false && src.pos) {
+    const aimed = this._reflectAimTarget(p, by, opts);
+    if (aimed) {
+      _w.set(aimed.pos.x - p.pos.x, aimed.pos.y + (aimed.height ?? 1) * 0.5 - p.pos.y, aimed.pos.z - p.pos.z);
+      if (_w.lengthSq() > 1e-8) { _v.copy(_w).normalize(); p.homing = aimed; }
+    } else if (src && src !== by && src.alive !== false && src.pos) {
       _w.set(src.pos.x - p.pos.x, src.pos.y + (src.height ?? 1) * 0.5 - p.pos.y, src.pos.z - p.pos.z);
       const flat = Math.hypot(_w.x, _w.z), vflat = Math.hypot(_v.x, _v.z);
       if (flat > 1e-4 && vflat > 1e-4) {
@@ -278,6 +289,47 @@ export class Projectiles {
     this.combat.stats.reflects++;
     this.ctx.bus.emit(E.REFLECT, { projectile: p, by });
     return p;
+  }
+
+  /**
+   * The aim of the parrying actor for a reflect, as a yaw, or null when it has none worth following: `opts.dir`, else
+   * (iso camera, an actor with an aim resolver) a deliberate aim — the cursor, a touch drag / the right stick, or the
+   * selected target. A plain facing / movement / soft auto-target aim is no aim: the bolt goes back to its shooter.
+   */
+  _reflectAimYaw(by, opts) {
+    const d = opts?.dir;
+    if (typeof d === 'number') return d;
+    if (d && (d.x || d.z)) return Math.atan2(d.x, d.z);
+    if (!by?.pos || this.ctx.cam?.isIso === false) return null;
+    if (typeof by.resolveAim === 'function') {
+      try {
+        const o = by.resolveAim('guard');
+        if (o && (o.source === 'cursor' || o.source === 'explicit' || o.source === 'selected') && (o.dir.x || o.dir.z)) return Math.atan2(o.dir.x, o.dir.z);
+      } catch { /* a broken resolver never breaks the parry */ }
+    }
+    return null;
+  }
+
+  /** §12 combat 4: the hostile of `by` nearest its aim line within ±AIM.reflectCone and AIM.reflectRange, or null. */
+  _reflectAimTarget(p, by, opts) {
+    const yaw = this._reflectAimYaw(by, opts);
+    if (yaw == null) return null;
+    const A = aimCfg(), here = by.pos, filter = this.combat.targetFilter(by.faction ?? 'player');
+    const list = this.ctx.actors?.queryRadius?.(here, A.reflectRange, filter, _reflectQ);
+    if (!list) return null;
+    let best = null, bs = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (a === by || !a?.pos || a.alive === false || a.hurtable === false || a.hidden || a.dormant || a.breakable) continue;
+      const dx = a.pos.x - here.x, dz = a.pos.z - here.z, d = Math.hypot(dx, dz);
+      if (d < 1e-3 || d - (a.radius ?? 0) > A.reflectRange) continue;
+      const ang = Math.max(0, Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) - Math.asin(Math.min(1, (a.radius ?? 0) / d)));
+      if (ang > A.reflectCone) continue;
+      const sc = ang + REFLECT_DIST_W * d;                      // nearest the aim line, then nearest
+      if (sc < bs) { bs = sc; best = a; }
+    }
+    _reflectQ.length = 0;
+    return best;
   }
 
   /** End a projectile now (`reason`: 'hit' | 'blocked' | 'expired' | 'ground' | 'wall' | 'bounds' | 'eaten' | ...). */

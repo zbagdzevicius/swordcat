@@ -24,6 +24,8 @@ const M = {
   stoneL: 'models/env/nature/stone_largeA.glb', stoneL2: 'models/env/nature/stone_largeB.glb', reeds: 'models/env/nature/grass_large.glb',
 };
 const BRICKS = 'textures/bricks076c/color.jpg';
+/** The causeway's pale kerb / ledge rim colour (vertex colour × the brick map). */
+const LIP = '#FFFDF6';
 
 /** §12.6 geometry. */
 export const GATE = Object.freeze({
@@ -116,12 +118,15 @@ function brazierParts() {
   return p;
 }
 
-/** The gatehouse arch above the passage, with crenellations, and the arch's stone frame (procedural, vertex-coloured). */
+/** The gatehouse arch's crenellations (world boxes on the lintel top at y, centred on z). */
 function archCrenels(x0, x1, y, z) {
   const p = [];
-  for (let x = x0 + 0.4; x < x1; x += 1.1) p.push([box(0.6, 0.7, 0.9, x, y + 0.35, z), '#8E8C84']);
+  for (let x = x0 + 0.4; x < x1; x += 1.1) p.push({ x0: x - 0.3, x1: x + 0.3, y0: y, y1: y + 0.7, z0: z - 0.45, z1: z + 0.45, color: '#8E8C84' });
   return p;
 }
+/** CONTROLS_SPEC §3: the arch and the raised portcullis fade (roof rule) while she is in the passage or this close
+ *  to either mouth of it: with the iso lens north of the gatehouse (yaw 0) they otherwise hang across the frame. */
+const ARCH_ROOF_PAD = 2.6;
 
 // ---------------------------------------------------------------------------------------------- setpieces
 const SETPIECES = {
@@ -147,11 +152,22 @@ const SETPIECES = {
       // the tower piers (x ±(4.2 … 12.8), z 3.6 … 12.4) from the sea bed to the deck
       const [tx, tz] = GATE.towers[sx > 0 ? 1 : 0];
       boxes.push({ x0: tx - 4.4, x1: tx + 4.4, y0: bot, y1: top + 0.01, z0: tz - 4.4, z1: tz + 4.4, color: dark });
+      // a pale kerb (2.5 cm, visual only) inside each parapet line: the deck edge reads from above, gaps included
+      boxes.push({ x0: sx > 0 ? d.x - 0.9 : -d.x + 0.4, x1: sx > 0 ? d.x - 0.4 : -d.x + 0.9, y0: top - 0.01, y1: top + 0.025, z0: d.z0, z1: d.z1, color: LIP });
     }
+    // the ledge's edges: the deck lip over the stair gap and the ledge's outer rim (the drops read from the iso camera)
+    boxes.push({ x0: d.x - 0.35, x1: d.x, y0: top - 0.01, y1: top + 0.025, z0: -54, z1: -50, color: LIP });
+    boxes.push({ x0: L.x1 - 0.35, x1: L.x1, y0: L.y, y1: L.y + 0.045, z0: L.z0, z1: L.z1, color: LIP });
     const geo = worldBoxesGeometry(boxes, { tile: 2.2 });
-    const mat = await texturedMaterial(ctx, BRICKS, { tint: '#FFF8EC', mapMix: 0.45, key: 'bricks', gain: 1.75 });
-    if (!mat.map) mat.color.set('#B8B2A6');
+    // §4.2 iso: the deck read dark and muddy from above (it is most of the frame): ×1.27 albedo (1.93 → 2.45) and the
+    // brick map's dark joints lifted to a pale mortar (joint) so the courses read against her dark armour and the hyenas
+    const mat = await texturedMaterial(ctx, BRICKS, { tint: '#FFF8EC', mapMix: 0.45, key: 'deck', gain: 2.45, joint: 0.38 });
+    if (!mat.map) mat.color.set('#CCC6BA');   // no map (slow load): the same ×1.27 lift
     kit.castle = kit.merged('castle');
+    // CONTROLS_SPEC §3 solids: the flanking towers and the gatehouse are their own merged meshes so the iso camera can
+    // fade them (camFade 'solid') when they stand between the lens and her; the long shore walls stay in 'castle'
+    kit.gateTowers = kit.merged('gate_towers');
+    kit.gatehouseTowers = kit.merged('gatehouse');
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'causeway'; mesh.receiveShadow = true; mesh.castShadow = true; mesh.userData.camFade = false;
     kit.object(mesh);
@@ -182,7 +198,7 @@ const SETPIECES = {
     const [tower, banner] = await Promise.all([kit.tpl(M.tower, { sat: 0.25, mul: 0.95 }), kit.tpl(M.banner)]);
     for (const [x, z] of GATE.towers) {
       if (tower) {
-        const p = kit.place(tower, x, z, { fit: { h: GATE.towerH }, y: 0, yaw: x < 0 ? Math.PI / 2 : -Math.PI / 2, collider: 'box', shrink: 0.98, jitter: 0.03, clear: false, occupy: 4.5, into: kit.castle });
+        const p = kit.place(tower, x, z, { fit: { h: GATE.towerH }, y: 0, yaw: x < 0 ? Math.PI / 2 : -Math.PI / 2, collider: 'box', shrink: 0.98, jitter: 0.03, clear: false, occupy: 4.5, into: kit.gateTowers ?? kit.castle });
         if (p) kit.anchor(x < 0 ? 'tower_w' : 'tower_e', x, z, p.top, x < 0 ? Math.PI / 2 : -Math.PI / 2);
       }
       if (banner) kit.place(banner, x + (x < 0 ? 4.25 : -4.25), z, { fit: { h: 3.4 }, y: 4.2, yaw: x < 0 ? 0 : Math.PI, collider: false, clear: false, occupy: false, jitter: 0 });
@@ -196,23 +212,29 @@ const SETPIECES = {
     const ctx = kit.ctx, level = kit.level, gh = GATE.gatehouse;
     const [tower, wall, port, banner, brazier] = await Promise.all([kit.tpl(M.tower, { sat: 0.25, mul: 0.95 }), kit.tpl(M.wall, { sat: 0.25, mul: 0.95 }), kit.tpl(M.portcullis),
       kit.tpl(M.banner), kit.tpl(M.brazier)]);
-    for (const sx of [-1, 1]) if (tower) kit.place(tower, sx * gh.towerX, gh.z, { fit: { h: gh.towerH }, yaw: 0, collider: 'box', shrink: 0.98, jitter: 0.03, clear: 3, into: kit.castle });
-    // the arch: a stone lintel block over the passage, with crenellations
+    for (const sx of [-1, 1]) if (tower) kit.place(tower, sx * gh.towerX, gh.z, { fit: { h: gh.towerH }, yaw: 0, collider: 'box', shrink: 0.98, jitter: 0.03, clear: 3, into: kit.gatehouseTowers ?? kit.castle });
+    // the arch: a stone lintel block over the passage, with crenellations (one mesh: they fade together)
     const [a0, a1] = gh.arch, [y0, y1] = gh.archY;
     const lintel = worldBoxesGeometry([{ x0: a0 - 0.3, x1: a1 + 0.3, y0, y1, z0: gh.z - 1.9, z1: gh.z + 1.9, color: '#C4BEB2' },
-      { x0: a0 - 0.5, x1: a1 + 0.5, y0: y0 - 0.25, y1: y0, z0: gh.z - 2.0, z1: gh.z + 2.0, color: '#A9A498' }], { tile: 2.2 });
-    const lmat = await texturedMaterial(ctx, BRICKS, { tint: '#FFF8EC', mapMix: 0.45, key: 'bricks', gain: 1.75 });
+      { x0: a0 - 0.5, x1: a1 + 0.5, y0: y0 - 0.25, y1: y0, z0: gh.z - 2.0, z1: gh.z + 2.0, color: '#A9A498' },
+      ...archCrenels(a0 - 0.3, a1 + 0.3, y1, gh.z)], { tile: 2.2 });
+    const lmat = await texturedMaterial(ctx, BRICKS, { tint: '#FFF8EC', mapMix: 0.45, key: 'bricks', gain: 1.93 /* §4.2: ×1.1, the deck read dark in gate_dusk */ });
     if (!lmat.map) lmat.color.set('#B8B2A6');
-    const lmesh = new THREE.Mesh(lintel, lmat); lmesh.name = 'gatehouseArch'; lmesh.castShadow = true; lmesh.receiveShadow = true;
+    const lmesh = new THREE.Mesh(lintel, lmat); lmesh.name = 'gatehouseArch'; lmesh.castShadow = true; lmesh.receiveShadow = true; lmesh.userData.camFade = 'roof'; lmesh.userData.roofPad = ARCH_ROOF_PAD;
     kit.object(lmesh);
-    kit.place(kit.proc('arch_crenels', () => archCrenels(a0 - 0.3, a1 + 0.3, y1, 0)), 0, gh.z, { y: 0, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
     // the portcullis (Kenney metal gate stretched over the passage): raised; the 100 % test drops and lifts it
     if (port) {
       const b = port.box, mesh = kit.mesh(port, { name: 'portcullis' });
       const sw = (a1 - a0) / (b.max.z - b.min.z), sh = (y0 - 0.1) / (b.max.y - b.min.y);
       mesh.scale.set(1.6, sh, sw);
       mesh.rotation.y = Math.PI / 2;
+      // CONTROLS_SPEC §3: raised, the bars hang across the passage at lens height when she walks under the arch (yaw 0:
+      // the lens sits north of the gatehouse), so they fade by the roof rule like the lintel; dropped, they are a wall
+      // (solid: fade only when they hide her). The camera's occluder boxes are static, so the pivot is re-registered
+      // whenever it settles after a drop / lift (the 100 % test, gate_open).
       const pg = new THREE.Group(); pg.name = 'portcullisPivot'; pg.add(mesh);
+      const tagPort = (down) => { pg.userData.camFade = down ? 'solid' : 'roof'; pg.userData.roofPad = down ? undefined : ARCH_ROOF_PAD + 1.2; };
+      tagPort(false);
       mesh.position.set(-(b.min.z + b.max.z) / 2 * sw, -b.min.y * sh, 0);
       pg.position.set(0, 0, gh.z - 1.2);
       kit.object(pg);
@@ -221,7 +243,13 @@ const SETPIECES = {
       pg.position.y = up;
       const col = { x: 0, z: gh.z - 1.2, hx: (a1 - a0) / 2, hz: 0.12, y0: -1, y1: y0, walkable: false, portcullis: true };
       let colOn = false;
-      level.animators.push({ render: (dt) => { if (pos !== target) { const s = Math.sign(target - pos) * Math.min(Math.abs(target - pos), dt * (target < pos ? 6 : 1.6)); pos += s; pg.position.y = pos; } } });
+      level.animators.push({ render: (dt) => {
+        if (pos === target) return;
+        const step = dt * (target < pos ? 6 : 1.6);
+        pos = Math.abs(target - pos) <= step ? target : pos + Math.sign(target - pos) * step;
+        pg.position.y = pos;
+        if (pos === target) { tagPort(target === 0); ctx.cam?.refreshFadeable?.(pg); }      // settled: move its fade boxes with it
+      } });
       level.portcullis = {
         get down() { return target === 0; },
         set(downNow) {
@@ -352,6 +380,7 @@ async function decorate(kit) {
   };
   level.startLine = start;
   kit.castle?.build();
+  for (const b of [kit.gateTowers, kit.gatehouseTowers]) { const m = b?.build(); if (m) m.userData.camFade = 'solid'; }
   kit.trigger({ id: 'line', at: [0, GATE.line], r: 3, once: false, when: LINE_WHEN, fire: start });
 }
 
@@ -362,7 +391,10 @@ export default defineLevel({
   env: { default: 'gate_dusk' },
   // CONTROLS_SPEC §11: the causeway runs toward −z, so the iso camera sits north (yaw 0): screen-up = onward;
   // The Line needs width (clear 8 in the arena)
+  // §4.2 gate_dusk: the low sun along the causeway draws long shadows (good height cues), so its azimuth stays
   cam: { yaw: 0, fog: { clear: 6, clearCombat: 8, topMul: 1.3 } },
+  // §2.7 the Meme Cam spot: the causeway rampart (she faces the gatehouse; the causeway runs off into the fog behind her)
+  memeSpot: { at: [0, 30], yaw: 0, r: 4 },
   music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },   // audio holds battle_theme_a through the Line
   spine: [[0, 66], [0, 52], [0, 41], [0, 10], [0, -30], [0, -60], [0, -72], [4, -80]],
   paths: [{ pts: [[0, -66], [-8, -66]], width: 3 }, { pts: [[0, -70], [10, -78]], width: 3 }],
@@ -387,6 +419,10 @@ export default defineLevel({
     { id: 'vigil_2', kind: 'checkpoint', at: [4.6, 20], facing: Math.PI },
     { id: 'raft', kind: 'setpiece', at: GATE.raft, props: 'raft' },
     { id: 'causeway', kind: 'arena', at: [0, 10], size: [12, 40], boss: 'boss_cacklejaw', autoLockWhen: 'gate.line && !gate.boss' },
+    // §11 camera zones: The Line (17 m at 56°, wide enough for every lane; armed only while it can run) and the raft
+    { id: 'line_view', kind: 'camera', at: [0, 12], size: [16, 34], camIf: LINE_WHEN, cam: { dist: 17, pitch: 0.977 } },
+    // the raft floats 10 m off the west edge: on the causeway beside it the view widens enough to keep it in frame
+    { id: 'raft_view', kind: 'camera', at: [0, -12], size: [12, 14], cam: { dist: 14 } },
   ],
   setpieces: SETPIECES,
   decorate,

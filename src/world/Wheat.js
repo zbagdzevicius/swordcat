@@ -3,8 +3,24 @@
 // head (two crossed diamond cards) and an awn fan on top, vertex-coloured green-gold → straw → pale awns. Per
 // instance: height, yaw, lean and a colour jitter (instanceColor). The vertex shader sways the clumps with the same
 // rolling gust waves as the grass (Env wind / gust / windDir) and parts them around the player. One draw call.
+// CONTROLS_SPEC §4.2 trample field: up to TRAMPLE.slots trampling actors (her + the nearest enemies): within `r` m the
+// stalks bend outward, within `flat` m they flatten to `minH` of their height (readable from the iso camera).
 import * as THREE from 'three';
 import { mulberry32 } from '../core/rng.js';
+
+/** §4.2 trample: slots (her + 4 enemies), bend radius, flatten radius, flattened height share. */
+export const TRAMPLE = Object.freeze({ slots: 5, r: 1.4, flat: 0.9, minH: 0.4 });
+
+/**
+ * Trample response at horizontal distance `d` (m) from a trampler: { bend 0..1 (outward lean), squash 0..1 (1 =
+ * flattened to TRAMPLE.minH) }. Pure; mirrors the shader.
+ */
+export function trampleAt(d, T = TRAMPLE) {
+  const bend = 1 - smooth01(T.flat * 0.35, T.r, d);
+  const squash = 1 - smooth01(T.flat * 0.5, T.flat, d);
+  return { bend, squash };
+}
+function smooth01(a, b, x) { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
 
 /** Wheat look + build knobs. */
 export const WHEAT = Object.freeze({
@@ -91,11 +107,21 @@ const WHEAT_VERT = /* glsl */`
   float bend = (gust * 1.0 + 0.25 + flutter) * uWind * (0.6 + 0.5 * uGust);
   vec3 off = vec3(uWindDir.x, 0.0, uWindDir.y) * bend * 0.28 * t2 * wS;
   off.y -= bend * bend * 0.05 * t2 * wS;
-  vec2 away = wOrg.xz - uPlayer.xz; float pd = length(away);
-  float push = (1.0 - smoothstep(0.25, 0.9, pd)) * t2 * step(abs(uPlayer.y - wOrg.y), 1.5);
-  off.xz += (pd > 1e-3 ? away / pd : vec2(0.0)) * push * 0.55 * wS;
-  off.y -= push * 0.25 * wS;
-  transformed += wInv * off;
+  // trample field: the strongest trampler wins (bend outward within r, flatten within flat)
+  vec2 tDir = vec2(0.0); float tBend = 0.0, tSquash = 0.0;
+  for (int i = 0; i < ${TRAMPLE.slots}; i++) {
+    vec4 tp = uTrample[i];
+    if (tp.w < 0.5 || abs(tp.y - wOrg.y) > 1.5) continue;
+    vec2 away = wOrg.xz - tp.xz; float pd = length(away);
+    float b = 1.0 - smoothstep(${(TRAMPLE.flat * 0.35).toFixed(3)}, ${TRAMPLE.r.toFixed(3)}, pd);
+    float sq = 1.0 - smoothstep(${(TRAMPLE.flat * 0.5).toFixed(3)}, ${TRAMPLE.flat.toFixed(3)}, pd);
+    if (b > tBend) { tBend = b; tDir = pd > 1e-3 ? away / pd : vec2(0.0); }
+    tSquash = max(tSquash, sq);
+  }
+  off.xz += tDir * tBend * 0.6 * t2 * wS;
+  // flatten: pull every vertex down toward TRAMPLE.minH of its height (in clump space, before the instance scale)
+  vec3 flatOff = vec3(0.0, -transformed.y * (1.0 - ${TRAMPLE.minH.toFixed(3)}) * tSquash, 0.0);
+  transformed += wInv * off + flatOff;
 }
 `;
 
@@ -109,14 +135,14 @@ export function makeWheatMaterial(uniforms) {
 attribute float aH;
 uniform float uTime, uWind, uGust;
 uniform vec2 uWindDir;
-uniform vec3 uPlayer;
+uniform vec4 uTrample[${TRAMPLE.slots}];
 float wh21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }`)
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + WHEAT_VERT);
     // thin double-sided cards: light both faces like the front (no dark backs)
     sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>',
       'float faceDirection = 1.0;\nvec3 normal = normalize( vNormal );\nvec3 nonPerturbedNormal = normal;');
   };
-  m.customProgramCacheKey = () => 'world-wheat-v2';
+  m.customProgramCacheKey = () => 'world-wheat-v3';
   m.userData.owned = true;
   return m;
 }
@@ -130,7 +156,8 @@ export class WheatField {
     this.seed = seed; this.name = name;
     this.items = [];
     this.uniforms = { uTime: { value: 0 }, uWind: { value: 0.6 }, uGust: { value: 0.5 },
-      uWindDir: { value: new THREE.Vector2(0.8, 0.6).normalize() }, uPlayer: { value: new THREE.Vector3(0, -999, 0) } };
+      uWindDir: { value: new THREE.Vector2(0.8, 0.6).normalize() },
+      uTrample: { value: Array.from({ length: TRAMPLE.slots }, () => new THREE.Vector4(0, -999, 0, 0)) } };
     this.mesh = null;
   }
 
@@ -163,12 +190,19 @@ export class WheatField {
     return mesh;
   }
 
-  /** Per frame: wind from Env, parting around `player` (Vector3 or null). */
-  update(time, env, player) {
+  /**
+   * Per frame: wind from Env; the trample field from `player` (Vector3 or null) and up to TRAMPLE.slots − 1 more
+   * positions in `others` (enemies nearest her; objects with `x, y, z`).
+   */
+  update(time, env, player, others = null) {
     const u = this.uniforms;
     u.uTime.value = time; u.uWind.value = env?.wind ?? 0.6; u.uGust.value = env?.gust ?? 0.5;
     if (env?.windDir) u.uWindDir.value.copy(env.windDir);
-    if (player) u.uPlayer.value.copy(player); else u.uPlayer.value.set(0, -999, 0);
+    const T = u.uTrample.value;
+    let k = 0;
+    if (player) T[k++].set(player.x, player.y, player.z, 1);
+    if (others) for (let i = 0; i < others.length && k < T.length; i++) { const o = others[i]; if (o) T[k++].set(o.x, o.y, o.z, 1); }
+    for (; k < T.length; k++) T[k].w = 0;
   }
 
   dispose() {

@@ -3,7 +3,7 @@
 // night fireflies, keep embers (rise faster), bog spores, town dust, gate ash. HDR additive so bloom catches the
 // bright ones; faded by fog (additive → black) and near the recycling box edge so nothing pops.
 import * as THREE from 'three';
-import { FOG_FACTOR, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { hash01 } from './util.js';
 
 /** Mote presets (art.md §8 table). `rise` m/s (negative falls), `drift` × wind, `blink` 0 steady … 1 firefly. */
@@ -95,7 +95,7 @@ export class Ambient {
     g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
     g.setDrawRange(0, 0);
     this.geometry = g;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.ambient', vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uTime: { value: 0 }, uPx: { value: 30 }, uRise: { value: 0 }, uWobble: { value: 0.5 }, uBox: { value: BOX },
         uHeight: { value: HEIGHT }, uBlink: { value: 0 }, uCam: { value: new THREE.Vector3() }, uDrift: { value: new THREE.Vector2() },

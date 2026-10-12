@@ -86,8 +86,9 @@ export function iconFor(key, icon) {
 
 export class Toasts {
   /** @param {HTMLElement} parent @param {() => string} [device] current input device ('kbm' | 'pad' | 'touch') */
-  constructor(parent, device = () => 'kbm') {
+  constructor(parent, device = () => 'kbm', input = () => null) {
     this.device = device;
+    this.input = input;
     this.q = new ToastQueue();
     this.root = el('div', 'ui-toasts', { parent });
     /** @type {Map<number, HTMLElement>} */
@@ -106,7 +107,7 @@ export class Toasts {
       let e = this.els.get(t.id);
       if (!e) {
         const ic = t.icon && ICONS[t.icon] ? `<span class="toast-ico">${ICONS[t.icon]()}</span>` : '';
-        e = el('div', 'ui-toast', { html: `${ic}<span class="toast-txt">${glyphify(t.text, this.device())}</span>`, parent: this.root });
+        e = el('div', 'ui-toast', { html: `${ic}<span class="toast-txt">${glyphify(t.text, this.device(), this.input())}</span>`, parent: this.root });
         this.els.set(t.id, e);
       }
       if (t.t > t.life - this.q.cfg.fadeOut) flag(e, 'is-out', true);

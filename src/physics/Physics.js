@@ -4,6 +4,9 @@
 // Additive API: groundAt, normalAt, sphereCast, lineOfSight, waterLevelAt, isShallowWater, inBounds, blockedAt,
 //   overlapsStatic, bounceAt, addCollider, removeCollider, updateCollider, refreshColliders, addMesh, removeMesh,
 //   rebuildMeshes, setDebug.
+// Nav API (CONTROLS_SPEC §5.3): nav (NavGrid), findPath, nearestWalkable, navWalkable, losWalkable, refreshLinks,
+//   addNavLink, navDebug; level data `navLinks` (authored / gated links), `navBlock` (no-go rects / discs), colliders
+//   with `nav: false` are skipped; emits E.NAV_READY { level, cells, links, ms } once the grid is filled.
 // Without a level (or a level without a heightfield) the terrain is the plane y = 0 (heightAt → 0).
 //
 // World model, per level (LevelData from world/LevelKit):
@@ -36,7 +39,7 @@ import { PHYSICS, NAV } from '../core/config.js';
 import { E } from '../core/events.js';
 import { StaticColliders, toRecord } from './StaticColliders.js';
 import { NavGrid, WALK } from './NavGrid.js';
-import { findPath } from './Pathfind.js';
+import { findPath, markTraps, buildIslands } from './Pathfind.js';
 import { MeshCollider } from './MeshCollider.js';
 import { PhysicsDebug } from './PhysicsDebug.js';
 
@@ -57,6 +60,8 @@ const KIND_NAMES = ['terrain', 'static', 'mesh'];
 const TERRAIN = 0, STATIC = 1, MESH = 2;
 const SNAP_NONE = 0, SNAP_FLOOR = 1, SNAP_EDGE = 2;
 const RIM_RISE = 0.05;           // terrain this far above the feet at the capsule's leading rim counts as "in the way"
+/** nav layers: a walkable surface at least this far above a clear floor is overhead (the floor is the nav layer there) */
+const OVERHEAD = NAV.overhead ?? 7;
 /** 16 horizontal unit directions (x, z pairs) for the capsule-rim probes */
 const RIM_DIRS = Array.from({ length: 32 }, (_, i) => (i & 1 ? Math.sin : Math.cos)((i >> 1) * Math.PI / 8));
 
@@ -101,7 +106,14 @@ export class Physics {
     this._stepNx = 0; this._stepNy = 1; this._stepNz = 0; this._stepObj = null; this._stepKind = -1;
   }
 
-  async init() {}
+  async init() {
+    // gated nav links (`when: 'tut.jump.done'`) re-evaluate on story flags (path queries also re-check them)
+    if (!this._offFlag && this.ctx?.bus?.on) {
+      const fn = () => { if (this.nav?.checkLinks()) this._debug?.rebuildNav?.(); };
+      const off = this.ctx.bus.on(E.FLAG_SET, fn);
+      this._offFlag = typeof off === 'function' ? off : () => this.ctx?.bus?.off?.(E.FLAG_SET, fn);
+    }
+  }
 
   /** Fixed step (after combat): actor-vs-actor separation (tech.md §5 item 4). */
   update(dt) { this.separateActors(); }
@@ -115,59 +127,134 @@ export class Physics {
     const nav = this.nav;
     if (nav && !nav.filled) {
       const t0 = nowMs();
-      if (nav.fill(this.ctx?.levels?.loading ? NAV.sliceMs * 4 : NAV.sliceMs, nowMs)) {
-        this._navMs += nowMs() - t0;
-        this.ctx?.bus?.emit?.(E.NAV_READY, { level: this.level?.id ?? null, cells: nav.size, links: 0, ms: Math.round(this._navMs) });
-      } else this._navMs += nowMs() - t0;
+      const done = nav.fill(this.ctx?.levels?.loading ? NAV.sliceMs * 4 : NAV.sliceMs, nowMs);
+      this._navMs += nowMs() - t0;
+      if (done) this._navReady();
+    } else if (nav && (nav.trapVersion !== nav.version || nav.trapLinks !== nav.linkVersion)) {
+      // the island audit again once the grid has settled after invalidations (dynamic colliders) / gated link changes:
+      // debounced 0.5 s so a collider that moves every frame never re-runs it per frame
+      const key = nav.version * 4096 + nav.linkVersion, t = nowMs();
+      if (key !== this._trapKey) { this._trapKey = key; this._trapAt = t; }
+      else if (t - this._trapAt >= 500) this._markTraps();
+    } else if (nav?.islandBuild) {
+      // the island graph + jump-link cache after each audit (Pathfind.buildIslands), a slice per frame: until it is
+      // ready, path queries run plain A* (an unreachable click floods to NAV.maxExpand)
+      const t0 = nowMs(), done = buildIslands(nav, NAV.sliceMs, nowMs);
+      this._islandMs = (this._islandMs ?? 0) + nowMs() - t0;
+      if (done && this.navStats) { this.navStats.islands = nav.islands.count; this.navStats.islandMs = Math.round(this._islandMs); }
     }
   }
 
   // ==================================================================== nav (CONTROLS_SPEC §5.3)
+  /** The grid is complete: emit nav:ready, run the corridor audit in ?debug / ?test builds. */
+  _navReady() {
+    const nav = this.nav;
+    this.navStats = { level: this.level?.id ?? null, cells: nav.size, links: nav.openLinks, ms: Math.round(this._navMs), walk: 0 };
+    for (let k = 0; k < nav.size; k++) if (nav.flag[k] === WALK) this.navStats.walk++;
+    this._markTraps();
+    this._debug?.rebuildNav?.();
+    const p = this.ctx?.params;
+    if (p && (p.debug || p.test)) {
+      const t0 = nowMs();
+      this.corridors = nav.corridors();
+      if (this.corridors.length && p.debug) {
+        console.warn(`[nav] ${this.level?.id ?? '?'}: ${this.corridors.length} corridor(s) narrower than ${NAV.minCorridor} m clear`,
+          this.corridors.map((c) => `(${c.x}, ${c.z}) ${c.width} m`).join(', '));
+      }
+      this.navStats.auditMs = Math.round(nowMs() - t0);
+    }
+    this.ctx?.bus?.emit?.(E.NAV_READY, { level: this.navStats.level, cells: nav.size, links: nav.openLinks, ms: this.navStats.ms });
+  }
+
   /** (Re)create the nav grid for the current level (lazy cells + background fill). */
   _buildNav() {
     const b = this.bounds, hf = this.heightfield;
+    this._runtimeLinks = [];                                           // runtime links belong to the level they were added on
     let minX, minZ, maxX, maxZ;
     if (b) { minX = b.min.x; minZ = b.min.y; maxX = b.max.x; maxZ = b.max.y; }
     else if (hf) { const h = hf.size / 2; minX = -h; minZ = -h; maxX = h; maxZ = h; }
     else { this.nav = null; return; }
-    const top = { v: 0 };
-    const nav = new NavGrid({ minX, minZ, maxX, maxZ }, (x, z) => this._navSample(x, z, top), NAV.cell);
-    nav.top = new Float32Array(nav.size);
-    const probe = nav.probe.bind(nav);
-    nav.probe = (k) => {
-      if (nav.flag[k] !== 0) return nav.flag[k];
-      top.v = NaN;
-      const f = probe(k);
-      nav.top[k] = Number.isFinite(top.v) ? top.v : nav.h[k];
-      return f;
-    };
+    this._navBlocks = parseBlocks(this.level?.navBlock);
+    // the architecture's XZ box (+ the agent radius): outside it a nav sample skips the mesh queries
+    this._navMeshBox = this._meshBox();
+    const nav = new NavGrid({ minX, minZ, maxX, maxZ }, (x, z) => this._navSample(x, z), NAV.cell);
+    const st = this.ctx?.state;
+    // `when`: a flag expression (state.cond) or a function of the GameState
+    nav.setLinks(this.level?.navLinks ?? [], (expr) => (typeof expr === 'function' ? !!expr(st) : st?.cond ? st.cond(expr) : true));
     this.nav = nav;
     this._navMs = 0;
-  }
-
-  /** Nav sample at (x, z): the walkable surface and whether an agent fits there (see NavGrid). */
-  _navSample(x, z, top) {
-    if (!this.inBounds(x, z, NAV.agentR)) { top.v = 1e4; return { h: this.heightAt(x, z), ok: false }; }
-    const h = this.topAt(x, z);
-    if (!Number.isFinite(h)) return { h: 0, ok: false };
-    const hf = this.heightfield;
-    if (hf && Math.abs(h - hf.heightAt(x, z)) < 0.05 && this._terrainSteep(x, z)) { top.v = h + 2; return { h, ok: false }; }
-    if (this.isDeepWater(x, z, h)) { top.v = h; return { h, ok: false }; }
-    const r = NAV.agentR + NAV.margin;
-    const src = this.statics.overlaps(x, z, r, h + NAV.spanLo, h + NAV.spanHi, this.ctx?.player ?? null);
-    if (src && src.nav !== false) { top.v = Number.isFinite(src.y1) ? src.y1 : h + 10; return { h, ok: false }; }
-    if (this.octree && this.mesh.overlapsSphere(x, h + 0.65, z, NAV.agentR)) { top.v = h + 10; return { h, ok: false }; }
-    return { h, ok: true };
+    this.corridors = [];
+    this.navStats = null;
   }
 
   /**
-   * §5.3 path query: `{ points: [{x, y, z, link?, to?}], partial, goal, ok }` (see Pathfind.js). Without a nav grid a
-   * straight line to the goal.
+   * Re-evaluate the gated nav links now (story flags changed). Returns the number of open authored links.
+   * (Path queries re-check the gates too, so this is only needed for overlays / immediate stats.)
+   */
+  refreshLinks() { if (!this.nav) return 0; this.nav.refreshLinks(); this._debug?.rebuildNav?.(); return this.nav.openLinks; }
+
+  /** Add an authored nav link at runtime (same shape as a level `navLinks` entry). */
+  addNavLink(link) {
+    if (!this.nav || !link) return false;
+    this._runtimeLinks ??= [];
+    this._runtimeLinks.push(link);
+    this.nav.setLinks([...(this.level?.navLinks ?? []), ...this._runtimeLinks]);
+    this._debug?.rebuildNav?.();
+    return true;
+  }
+
+  /** Nav sample at (x, z): the walkable surface, whether an agent fits there, the obstacle top, bounce caps. */
+  _navSample(x, z) {
+    if (!this.inBounds(x, z, NAV.agentR)) return { h: this.heightAt(x, z), ok: false, top: 1e4 };
+    const st = this.statics, r = NAV.agentR + NAV.margin, actor = this.ctx?.player ?? null;
+    const t = this.heightAt(x, z);
+    let h, bounce, block;
+    const mb = this._navMeshBox;
+    const nearMesh = !!this.octree && (!mb || (x >= mb.minX && x <= mb.maxX && z >= mb.minZ && z <= mb.maxZ));
+    if (nearMesh) {
+      // architecture around: the full surface query (bridge decks, ledges, stairs), then the prop rasteriser
+      h = this.topAt(x, z);
+      if (!Number.isFinite(h)) return { h: 0, ok: false, top: 1e4 };
+      bounce = st.support >= h - 1e-3 && st.supportBounce > 0;
+      block = st.navTop(x, z, r, h + NAV.spanLo, h + NAV.spanHi, actor);
+    } else {
+      // terrain + props only: one hash query answers both (StaticColliders.navCell)
+      const c = st.navCell(x, z, r, t, t + 50, NAV.spanLo, NAV.spanHi, actor, this._navOut ??= { h: 0, bounce: false, block: 0 });
+      h = c.h; bounce = c.bounce; block = c.block;
+    }
+    // one layer per cell: a surface ≥ OVERHEAD m above a clear floor is overhead (the Bell Tower's bell platform 14 m
+    // above the terrace): the floor under it is the walkable layer, not a 14 m "wall" walling in a pocket beside it
+    if (h - t >= OVERHEAD) {
+      const lo = this.groundAt(x, z, h - OVERHEAD);
+      if (h - lo >= OVERHEAD) {
+        const loBounce = st.support >= lo - 1e-3 && st.supportBounce > 0;
+        const lb = st.navTop(x, z, r, lo + NAV.spanLo, lo + NAV.spanHi, actor);
+        if (!(lb > -Infinity) && !(nearMesh && this.mesh.overlapsSphere(x, lo + 0.65, z, NAV.agentR))) { h = lo; block = lb; bounce = loBounce; }
+      }
+    }
+    const hf = this.heightfield;
+    if (hf && Math.abs(h - t) < 0.05 && this._terrainSteep(x, z)) return { h, ok: false, top: h + 2 };
+    if (this.isDeepWater(x, z, h)) return { h, ok: false, top: h };
+    const blocks = this._navBlocks;
+    if (blocks) for (const q of blocks) if (inBlock(q, x, z)) return { h, ok: false, top: h + 10 };
+    if (block > -Infinity) return { h, ok: false, top: Number.isFinite(block) ? block : h + 10 };
+    if (nearMesh && this.mesh.overlapsSphere(x, h + 0.65, z, NAV.agentR)) return { h, ok: false, top: h + 10 };
+    return { h, ok: true, top: h, bounce };
+  }
+
+  /**
+   * §5.3 path query: `{ points: [{x, y, z, link?, to?}], links, partial, goal, ok, expansions }` (see Pathfind.js).
+   * Without a nav grid a straight line to the goal.
    * @param {{x:number, z:number}} from @param {{x:number, z:number}} to @param {object} [opts]
    */
   findPath(from, to, opts = {}) {
-    if (!this.nav) return { points: [{ x: to.x, y: this.heightAt(to.x, to.z), z: to.z }], partial: false, goal: { x: to.x, y: 0, z: to.z }, ok: true, expansions: 0 };
-    return findPath(this.nav, from, to, opts);
+    if (!this.nav) {
+      const q = { x: to.x, y: this.heightAt(to.x, to.z), z: to.z };
+      return { points: [q], links: [], partial: false, goal: { ...q }, ok: true, expansions: 0 };
+    }
+    const r = findPath(this.nav, from, to, opts);
+    this.lastPath = { from: { x: from.x, y: from.y, z: from.z }, points: r.points };     // the nav overlay draws it
+    return r;
   }
   /** Nearest walkable point to (x, z) within `maxR` m (`{x, y, z}`), or null. */
   nearestWalkable(x, z, maxR = NAV.snap) {
@@ -176,14 +263,31 @@ export class Physics {
   }
   navWalkable(x, z) { return this.nav ? this.nav.walkableAt(x, z) : true; }
   losWalkable(a, b) { return this.nav ? this.nav.losWalkable(a.x, a.z, b.x, b.z) : true; }
+  /** The nav island audit (Pathfind.markTraps): small walled-in pockets that no link leads out of. */
+  _markTraps() {
+    const nav = this.nav;
+    if (!nav) return 0;
+    const t0 = nowMs(), n = markTraps(nav);
+    this._islandMs = 0;
+    if (this.navStats) { this.navStats.traps = n; this.navStats.trapMs = Math.round(nowMs() - t0); }
+    return n;
+  }
+  /** Show / hide the nav overlay (walkable cells, links, gates) — part of the collider debug overlay. */
+  navDebug(on = true) {
+    if (on && !this._debug) { this.setDebug(true); this._navOwnsDebug = true; }
+    if (this._debug) this._debug.showNav(on);
+    if (!on && this._navOwnsDebug) { this._navOwnsDebug = false; this.setDebug(false); }
+    return !!this._debug?.navOn;
+  }
   /** Forget nav cells under a collider's footprint (dynamic colliders). */
   _navDirty(c) {
     if (!this.nav || !c) return;
     const r = toRecord(c);
-    if (r) this.nav.invalidate(r.minX, r.minZ, r.maxX, r.maxZ);
+    if (r) { this.nav.invalidate(r.minX, r.minZ, r.maxX, r.maxZ); this._debug?.navDirty?.(); }
   }
 
   dispose() {
+    this._offFlag?.(); this._offFlag = null;
     this.setDebug(false);
     this.setLevel(null);
   }
@@ -223,25 +327,47 @@ export class Physics {
   }
   removeCollider(c) { this._extra.delete(c); const r = this.statics.remove(c); this._debug?.rebuild(); this._navDirty(c); return r; }
   /** Re-index a collider whose fields you changed (moved door). */
-  updateCollider(c) { this._navDirty(c); this.statics.update(c); this._debug?.rebuild(); this._navDirty(c); }
+  updateCollider(c) {
+    const old = this.statics._bySrc?.get(c);                         // the old footprint (before the edit)
+    if (old && this.nav) this.nav.invalidate(old.minX, old.minZ, old.maxX, old.maxZ);
+    this.statics.update(c); this._debug?.rebuild(); this._navDirty(c);
+  }
   /**
    * Re-read `level.colliders` after editing its arrays in place (arena fog walls, opened gates). Colliders added with
    * addCollider stay.
    */
   refreshColliders() {
+    const before = this.nav ? new Map(this.statics.records.map((r) => [r.src, r])) : null;
     this.statics.set(this.level?.colliders ?? null);
     for (const [c, hint] of this._extra) if (!this.statics.has(c)) this.statics.add(c, hint);
     this._debug?.rebuild();
-    // arena fog walls / opened gates changed in place: forget the cells they touch (rings: their whole box)
-    const cols = this.level?.colliders;
-    if (this.nav && cols) for (const c of cols.rings ?? []) this._navDirty(c);
-    if (this.nav && this.nav.flag) this._navRefreshT = (this._navRefreshT ?? 0) + 1;
+    // arena fog walls / opened gates changed in place: forget the cells of every collider that appeared, went away or
+    // moved (old and new footprints); rings always (their state lives outside the record)
+    if (before) {
+      const dirty = (r) => { this.nav.invalidate(r.minX, r.minZ, r.maxX, r.maxZ); };
+      for (const r of this.statics.records) {
+        const o = before.get(r.src);
+        if (!o || r.kind === 2 || o.minX !== r.minX || o.maxX !== r.maxX || o.minZ !== r.minZ || o.maxZ !== r.maxZ || o.y0 !== r.y0 || o.y1 !== r.y1) { dirty(r); if (o) dirty(o); }
+        before.delete(r.src);
+      }
+      for (const o of before.values()) dirty(o);
+      this._debug?.navDirty?.();
+    }
   }
   /** Add an Object3D's meshes to the architecture (rebuilds the Octree: once per change, not per frame). */
-  addMesh(obj) { this.mesh.add(obj); this.octree = this.mesh.octree; this._debug?.rebuild(); return obj; }
-  removeMesh(obj) { const r = this.mesh.remove(obj); this.octree = this.mesh.octree; this._debug?.rebuild(); return r; }
+  addMesh(obj) { const b0 = this._meshBox(); this.mesh.add(obj); this.octree = this.mesh.octree; this._debug?.rebuild(); this._meshNav(b0); return obj; }
+  removeMesh(obj) { const b0 = this._meshBox(); const r = this.mesh.remove(obj); this.octree = this.mesh.octree; this._debug?.rebuild(); this._meshNav(b0); return r; }
   /** Rebuild the architecture after moving collision meshes. */
-  rebuildMeshes() { this.mesh.rebuild(); this.octree = this.mesh.octree; this._debug?.rebuild(); }
+  rebuildMeshes() { const b0 = this._meshBox(); this.mesh.rebuild(); this.octree = this.mesh.octree; this._debug?.rebuild(); this._meshNav(b0); }
+  _meshBox() { const ob = this.octree?.bounds; return ob && Number.isFinite(ob.min.x) ? { minX: ob.min.x - 1, maxX: ob.max.x + 1, minZ: ob.min.z - 1, maxZ: ob.max.z + 1 } : null; }
+  /** The architecture changed: refresh the nav's mesh box and forget the cells under the old and new boxes. */
+  _meshNav(b0) {
+    if (!this.nav) return;
+    const b1 = this._meshBox();
+    this._navMeshBox = b1;
+    for (const b of [b0, b1]) if (b) this.nav.invalidate(b.minX, b.minZ, b.maxX, b.maxZ);
+    this._debug?.navDirty?.();
+  }
 
   // ==================================================================== queries
   /** Terrain height at (x, z) (0 without a level). */
@@ -386,9 +512,10 @@ export class Physics {
    * Ray vs terrain + architecture (+ static props with opts.statics). Returns a shared hit object
    * { distance, point, normal, object, kind: 'terrain'|'mesh'|'static' } or null. Copy what you keep. For props,
    * `object` is the collider description itself (its own fields, e.g. `cam`, come back). `opts.ignore(src) → true`
-   * skips a prop (announced by `castIgnore`); `opts.actor` applies per-collider faction filters.
+   * skips a prop (announced by `castIgnore`); `opts.actor` applies per-collider faction filters. `opts.tops` (without
+   * `statics`) adds the walkable prop TOPS only (CONTROLS_SPEC §2 `cam.screenToGround`: ledges, crates, stumps, caps).
    * @param {THREE.Ray} ray @param {number} [maxDist]
-   * @param {{terrain?:boolean, mesh?:boolean, statics?:boolean, actor?:any, ignore?:(src:any)=>boolean}} [opts]
+   * @param {{terrain?:boolean, mesh?:boolean, statics?:boolean, tops?:boolean, actor?:any, ignore?:(src:any)=>boolean}} [opts]
    */
   raycast(ray, maxDist = 100, opts = RAY_DEFAULTS) {
     const o = ray.origin;
@@ -427,6 +554,11 @@ export class Physics {
         if (radius > 0) { obj = this.mesh.sweepTri?.obj ?? null; h.normal.set(this.mesh.sweepNx, this.mesh.sweepNy, this.mesh.sweepNz); }
         else { obj = this.mesh.rayTri?.obj ?? null; h.normal.set(this.mesh.rayNx, this.mesh.rayNy, this.mesh.rayNz); }
       }
+    }
+    if (opts.tops && !opts.statics && radius === 0 && this.statics.count) {
+      // walkable prop tops only (the click / tap-to-move pick: ledges, crates, stumps, caps; never trunks or walls)
+      const t = this.statics.raycastTops(ox, oy, oz, dx, dy, dz, best, opts.actor ?? null);
+      if (t >= 0 && t <= best) { best = t; kind = STATIC; obj = this.statics.hitSrc; h.normal.set(0, 1, 0); }
     }
     if (opts.statics && this.statics.count) {
       const t = this.statics.raycast(ox, oy, oz, dx, dy, dz, best, radius, opts.actor ?? null, typeof opts.ignore === 'function' ? opts.ignore : null);
@@ -864,11 +996,27 @@ export class Physics {
   /** Show / hide the collider overlay (props, architecture wireframe, actor cylinders). Visual only. */
   setDebug(on = true) {
     if (on && !this._debug && this.ctx?.scene) { this._debug = new PhysicsDebug(this); this._debug.rebuild(); }
-    else if (!on && this._debug) { this._debug.dispose(); this._debug = null; }
+    else if (!on && this._debug) { this._debug.dispose(); this._debug = null; this._navOwnsDebug = false; }
     return !!this._debug;
   }
 
   get debug() { return !!this._debug; }
+}
+
+/** Level `navBlock` entries → normalised no-go shapes: [x0, z0, x1, z1], {minX, minZ, maxX, maxZ}, {at|x,z, r}. */
+function parseBlocks(list) {
+  if (!Array.isArray(list) || !list.length) return null;
+  const out = [];
+  for (const b of list) {
+    if (Array.isArray(b) && b.length >= 4) out.push({ minX: Math.min(b[0], b[2]), maxX: Math.max(b[0], b[2]), minZ: Math.min(b[1], b[3]), maxZ: Math.max(b[1], b[3]) });
+    else if (b && Number.isFinite(b.minX)) out.push({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ });
+    else if (b && b.r > 0) { const x = b.at ? b.at[0] : b.x, z = b.at ? b.at[1] : b.z; if (Number.isFinite(x) && Number.isFinite(z)) out.push({ x, z, r: b.r }); }
+  }
+  return out.length ? out : null;
+}
+function inBlock(q, x, z) {
+  if (q.r !== undefined) { const dx = x - q.x, dz = z - q.z; return dx * dx + dz * dz <= q.r * q.r; }
+  return x >= q.minX && x <= q.maxX && z >= q.minZ && z <= q.maxZ;
 }
 
 /** Is (x, z) inside the area of a `level.water` entry? */

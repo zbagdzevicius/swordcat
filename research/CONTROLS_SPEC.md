@@ -247,8 +247,15 @@ Otherwise `partial: true`: walk to the nearest reachable point, show the grey �
 
 **Interplay:** Tumble keeps a `move` order (it resumes after the roll) and drops `attack`/`use`. The **Stand plants
 her**: it clears move orders (Standing Ground needs it) and pauses `attack`. Milk Break keeps walking the path at
-1.1 m/s. Ability casts and Meow keep the order. Attack input (LMB / ⚔ / X) cancels a `move` order. Any `cutscene` /
-`dialog` mode or hurt stun clears orders.
+1.1 m/s. Ability casts and Meow keep the order. Attack input (LMB / ⚔ / X) cancels a `move` order. A click is a
+commitment (LoL): a **hurt stun pauses** every order (move / attackMove / use / attack / hold-to-follow while RMB or
+the long-press is held) and it resumes when the stun ends, re-planned from wherever the knockback left her. Only a
+**guard break** (attack orders wait it out), death, a `cutscene` / `dialog` mode or direct input clear orders.
+**Links:** the run-up back-off before a too-close hop only goes to a spot on the surface she stands on (within
+`stepUp`); the same take-off tried more than **3 + 1** times in one order (she keeps landing back before it) ends the
+order with the grey ✕. A `use` / `attack` path that runs out short of reach re-plans once; running out again at the
+same spot rejects it (grey ✕ + "mrr?"). **Attack-move arm** (X): Esc, direct input, leaving play or **4 s** with no
+click disarm it; while armed the attack button fires it and a move click (RMB) is a plain move (diablo: LMB fires).
 
 ### 5.3 Nav grid (`physics/NavGrid.js` + `physics/Pathfind.js`, pure, node-testable)
 | Param | Value |
@@ -400,7 +407,7 @@ release, Pounce dive, Tumble, Stand facing and abilities. Precedence:
 
 **Magnet** on the first active frame (`onActiveStart`): turn fully to the best hostile inside a cone around the
 resolved `dir`. KBM **±25°**, range + **1.0 m** (the selected target: ±40°). Pad with RS **±45°**, 3.5 m. Touch and
-auto **±90°**, **4.5 m**; with the stick idle the auto-target is picked from 360°. This replaces §7.2's 60° / 3 m
+auto **±90°**, **4.5 m**; with the stick idle the auto-target is picked from 360°. A swing released with an **explicit aim** (touch drag / RS: `swing.aimSource = 'explicit'`) always uses the pad-RS cone (±45°, 3.5 m) around that aim, never 360°. This replaces §7.2's 60° / 3 m
 cone around facing.
 
 **Lunge magnetism** (touch, pad and auto-target only): if the target is beyond range, lunge =
@@ -501,8 +508,8 @@ casts), `dragOnly`. ✕ or Esc or RMB cancels.
 ### 8.3 Attack orders and auto-chain (`settings.autoAttack`)
 | Value | Behaviour after an `attack` order reaches its target | Default |
 |---|---|---|
-| `chain` | one Snip → Snap → Swoosh string (auto grace 0.35 s), then stand ready | desktop and pad |
-| `loop` | keep chaining strings (0.10 s rest between strings) while the target lives and no other order or direct input arrives (LoL auto-attack) | **touch and Kitten difficulty** (value `auto`) |
+| `chain` | one Snip → Snap → Swoosh string (auto grace 0.35 s), then the order ends (click again) | — |
+| `loop` | keep chaining strings (0.10 s rest between strings) while the target lives and no other order or direct input arrives (LoL auto-attack) | **every device** (value `auto`) |
 | `off` | approach and face only | — |
 Manual LMB / ⚔ / X presses during a chain take over (the next press is the next step; the DPS check of 40 dmg in
 ≈ 1.4 s holds either way). Auto-chain stops on the Stand, Tumble, Jump, any other order or direct input.

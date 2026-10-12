@@ -35,6 +35,27 @@
 //   object.userData.camOccluder = false        never auto-register this object / batch
 // Solid units never make their colliders camera-transparent (covers() ignores them), and their lens test is
 // triangle-accurate (the camera pressed against a wall is inside the house's box but must not fade it).
+//
+// Iso camera rules (research/CONTROLS_SPEC.md §3):
+//   - targets are CAPSULES: update(dt, cam, targets, { n, radii, her }) grows each test by radii[i] (her chest 1.0 m,
+//     engaged enemies / the selection 0.6, the next waypoint 0.4). The capsule ends r m short of the subject (toward
+//     the lens), so its round end reaches the subject's depth but never past it: only what is lens-side of her fades
+//     (a tall stone just behind her, screen-up of her, stays solid);
+//   - roofs and solid units fade further (`archOpacity`) than trees (`minOpacity`): a big saturated roof at the tree
+//     opacity still reads as a heavy tinted screen-door over the street;
+//   - the fade is DITHERED (`dither`, default on): the faded clone stays opaque (depth writes, no sorting, shadows
+//     unchanged) and discards fragments whose opacity is under a 4×4 ordered screen threshold (makeFadeMaterial).
+//     ShaderMaterials (nothing to patch) keep the blended fallback. Linear timing: `fadeIn` / `fadeOut` seconds (0 = the old
+//     exponential `speed`);
+//   - CROWNS (tree units: FADE_NAME names, `camFade: 'crown'`): trunks never fade. A part named / with a material named
+//     like a trunk (TRUNK_NAME) is never faded; a part named like foliage (CROWN_NAME) fades whole; a merged tree fades
+//     only above `crownFrac` of its local height (a shader cut in the faded clone; world may set a per-template
+//     `userData.crownFrac`). A crown also fades when it rises
+//     within `crownR` m horizontally of a target capsule (the view from above);
+//   - ROOFS: `camFade: 'roof'` (Mesh / Group / InstancedMesh / BatchedMesh) or `batched.userData.camFadeRoofIds`:
+//     fade when `her` stands inside the roof's footprint grown by `roofPad` m (and under it), or the roof cuts a
+//     capsule. Tag the roof parts only: walls stay. `object.userData.roofPad` (m) overrides `roofPad` for that root
+//     (an arch over a passage: the lintel / raised portcullis fade while she walks the whole passage).
 import * as THREE from 'three';
 
 export const FADE_NAME = /(^|[^a-z])(tree|trees|pine|oak|birch|willow|fir|spruce|trunk|leaves|leaf|foliage|canopy|hedge)([^a-z]|$)/i;
@@ -47,6 +68,12 @@ export const CHECK_HZ = 20;
 const PRECISE_MAX_TRIS = 40000;
 /** auto solid occluders: at least this tall (m): taller than her eye line (crates, low walls and rocks stay solid) */
 export const SOLID_MIN_H = 1.8;
+/** parts of a crown unit that never fade (trunks); matched on the mesh and the material name */
+export const TRUNK_NAME = /(^|[^a-z])(trunk|trunks|bark|stem|stump|roots?)([^a-z]|$)/i;
+/** parts of a crown unit that fade whole (no height cut) */
+export const CROWN_NAME = /(^|[^a-z])(leaves|leaf|foliage|canopy|crown|needles)([^a-z]|$)/i;
+/** tree-like names (crown rules); fences, hedges and posts fade whole on the capsule test only */
+const TREE_NAME = /(^|[^a-z])(tree|trees|pine|oak|birch|willow|fir|spruce|leaves|leaf|foliage|canopy)([^a-z]|$)/i;
 /** auto solid occluders: largest prop footprint (m²) considered (terrain, water, grass are far bigger) */
 const SOLID_MAX_AREA = 1600;
 
@@ -54,9 +81,10 @@ const _m = new THREE.Matrix4(), _a = new THREE.Vector3(), _b = new THREE.Vector3
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 const _color = new THREE.Color();
 const _box = new THREE.Box3();
+const _side = new THREE.Vector3(), _up = new THREE.Vector3(), _off = new THREE.Vector3(), _a2 = new THREE.Vector3(), _b2 = new THREE.Vector3();
 const _raycaster = new THREE.Raycaster();
 const _hits = [];
-const _rayDir = new THREE.Vector3();
+const _rayDir = new THREE.Vector3(), _end = new THREE.Vector3();
 let _scratch = null;          // lazily built Mesh used for the triangle refinement (DoubleSide: any face counts)
 
 /**
@@ -100,13 +128,52 @@ function fadeableMaterial(m) {
   return !!m && (!m.isShaderMaterial || !!m.uniforms?.opacity);
 }
 
-function makeFadeMaterial(m) {
+/** GLSL: the 4×4 ordered (Bayer) threshold at a pixel, in (0, 1). */
+const BAYER_GLSL = `
+float camBayer4(vec2 p) {
+  const float M[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
+  ivec2 q = ivec2(mod(floor(p), 4.0));
+  return (M[q.x + q.y * 4] + 0.5) / 16.0;
+}`;
+
+/**
+ * A faded clone of `m`.
+ * Dithered (`dither`, built-in materials): opaque with depth writes; the fragment keeps itself when its opacity beats
+ * a 4×4 ordered screen threshold (a clean screen-door pattern; three's own alphaHash is per-pixel noise, which reads as
+ * static over a canopy that fills the frame). No blending, no sorting, shadows unchanged (the depth pass ignores it).
+ * Blended otherwise (ShaderMaterials have no chunk to patch, and genuinely translucent sources).
+ * `crownY` (geometry-local y): fragments below it keep the base opacity (a merged tree's trunk never fades).
+ * @param {THREE.Material} m @param {{ dither?: boolean, crownY?: number }} [o]
+ */
+export function makeFadeMaterial(m, { dither = false, crownY = -Infinity } = {}) {
   const f = m.clone();
-  if (m.onBeforeCompile) f.onBeforeCompile = m.onBeforeCompile;         // keep world patches (height fog...)
-  if (m.customProgramCacheKey) f.customProgramCacheKey = m.customProgramCacheKey;
-  f.transparent = true;
-  f.depthWrite = false;
-  f.userData = { ...m.userData, camFadeClone: true, baseOpacity: m.opacity ?? 1 };
+  const base = m.onBeforeCompile, key = m.customProgramCacheKey;
+  if (base) f.onBeforeCompile = base;                                   // keep world patches (height fog, wind...)
+  if (key) f.customProgramCacheKey = key;
+  const baseA = m.opacity ?? 1;
+  const dith = dither && !m.isShaderMaterial && !(m.transparent && baseA < 1);
+  f.userData = { ...m.userData, camFadeClone: true, baseOpacity: baseA, camDither: dith };
+  if (!dith) { f.transparent = true; f.depthWrite = false; return f; }
+  f.transparent = false;
+  f.alphaHash = false;
+  f.depthWrite = m.depthWrite !== false;
+  const uCrownY = { value: Number.isFinite(crownY) ? crownY : -1e9 }, uBaseA = { value: baseA };
+  f.userData.camCrownY = uCrownY;
+  f.onBeforeCompile = function (sh, r) {
+    base?.call(this, sh, r);
+    sh.uniforms.uCamCrownY = uCrownY; sh.uniforms.uCamBaseA = uBaseA;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vCamLocalY;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCamLocalY = position.y;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying float vCamLocalY;
+uniform float uCamCrownY, uCamBaseA;${BAYER_GLSL}`)
+      .replace('#include <alphahash_fragment>', `#include <alphahash_fragment>
+if (vCamLocalY >= uCamCrownY && diffuseColor.a < camBayer4(gl_FragCoord.xy)) discard;   // cam fade (dithered)
+diffuseColor.a = uCamBaseA;`);
+  };
+  f.customProgramCacheKey = () => (key ? key.call(m) : '') + '|camDither';
   return f;
 }
 
@@ -140,9 +207,17 @@ function instanceFilter(obj) {
 }
 
 export class OccluderFader {
-  /** @param {{ minOpacity?: number, speed?: number, margin?: number, maxProxies?: number, checkHz?: number }} [opts] */
-  constructor({ minOpacity = 0.3, speed = 7, margin = 0.15, maxProxies = 16, checkHz = CHECK_HZ } = {}) {
-    this.minOpacity = minOpacity; this.speed = speed; this.margin = margin; this.maxProxies = maxProxies;
+  /**
+   * @param {{ minOpacity?: number, archOpacity?: number, speed?: number, margin?: number, maxProxies?: number, checkHz?: number,
+   *   dither?: boolean, fadeIn?: number, fadeOut?: number, crownR?: number, crownFrac?: number, roofPad?: number }} [opts]
+   *   fadeIn / fadeOut: linear fade times (s); 0 = exponential at `speed`. crownR 0 disables the crown proximity rule.
+   *   archOpacity: the faded opacity of roof and solid units (houses, towers, statues); minOpacity for the rest.
+   */
+  constructor({ minOpacity = 0.3, archOpacity = minOpacity, speed = 7, margin = 0.15, maxProxies = 16, checkHz = CHECK_HZ, dither = true,
+    fadeIn = 0, fadeOut = 0, crownR = 0, crownFrac = 0.35, roofPad = 1.5 } = {}) {
+    this.minOpacity = minOpacity; this.archOpacity = archOpacity; this.speed = speed; this.margin = margin; this.maxProxies = maxProxies;
+    this.dither = dither; this.fadeIn = fadeIn; this.fadeOut = fadeOut;
+    this.crownR = crownR; this.crownFrac = crownFrac; this.roofPad = roofPad;
     this.checkInterval = checkHz > 0 ? 1 / checkHz : 0;
     /** @type {any[]} registered units (one per tagged mesh / group / instance) */
     this.units = [];
@@ -163,15 +238,25 @@ export class OccluderFader {
   get fadedCount() { let n = 0; for (const u of this.active) if (u.f > 0.05) n++; return n; }
   /** registered solid occluder units (houses, towers, statues, pillars) */
   get solidCount() { let n = 0; for (const u of this.units) if (u.solid) n++; return n; }
+  /** roof units (`camFade: 'roof'`) */
+  get roofCount() { let n = 0; for (const u of this.units) if (u.roof) n++; return n; }
+  /** crown units (trees) */
+  get crownCount() { let n = 0; for (const u of this.units) if (u.crown) n++; return n; }
   /** solid occluder units currently faded */
   get fadedSolidCount() { let n = 0; for (const u of this.active) if (u.solid && u.f > 0.05) n++; return n; }
 
   /** Register `obj` (and, for groups, all its meshes as one unit). Static props only (bounds are cached). */
-  add(obj, parentForProxies = null, { solid = false } = {}) {
+  add(obj, parentForProxies = null, { solid = false, roof = false, crown = null } = {}) {
     if (!obj || this._roots.has(obj)) return 0;
     if (parentForProxies) this._proxyParent = parentForProxies;
     obj.updateWorldMatrix(true, true);
     const before = this.units.length;
+    const ud = obj.userData ?? {};
+    if (ud.camFade === 'roof') roof = true;
+    else if (ud.camFade === 'solid') solid = true;           // refresh() / addFadeable() keep a tagged solid solid
+    this._crown = !roof && !solid && (crown ?? (ud.camFade === 'crown' || TREE_NAME.test(obj.name ?? '')));
+    // world's per-template leaf start (`userData.crownFrac`, 0..1 of the local height), else the global default
+    this._crownFracNow = Number.isFinite(ud.crownFrac) ? Math.min(0.95, Math.max(0, ud.crownFrac)) : this.crownFrac;
     if (obj.isBatchedMesh) this._addBatched(obj, obj);
     else if (obj.isInstancedMesh) this._addInstanced(obj, obj);
     else if (obj.isMesh) this._addUnit(obj, [obj]);
@@ -185,7 +270,9 @@ export class OccluderFader {
       });
       if (meshes.length) this._addUnit(obj, meshes);
     }
-    if (solid) for (let i = before; i < this.units.length; i++) this.units[i].solid = true;
+    this._crown = false; this._crownFracNow = null;
+    const pad = Number.isFinite(ud.roofPad) ? Math.max(0, ud.roofPad) : null;
+    for (let i = before; i < this.units.length; i++) { const u = this.units[i]; if (solid) u.solid = true; if (roof) u.roof = true; if (pad != null) u.roofPad = pad; }
     if (this.units.length > before) { this._roots.add(obj); this._aabbs = null; }
     return this.units.length - before;
   }
@@ -219,6 +306,15 @@ export class OccluderFader {
       const ud = o.userData;
       if (ud?.camFade === false || ud?.cameraOwned) return;
       if (ud?.camFade === 'solid') { n += this.add(o, null, { solid: true }); return; }
+      if (ud?.camFade === 'roof') { n += this.add(o, null, { roof: true }); return; }
+      if (ud?.camFadeRoofIds != null && o.isBatchedMesh) {
+        const ids = ud.camFadeRoofIds instanceof Set ? ud.camFadeRoofIds : new Set(ud.camFadeRoofIds);
+        const before = this.units.length;
+        o.updateWorldMatrix(true, false);
+        this._addBatched(o, o, (i) => ids.has(i));
+        for (let i = before; i < this.units.length; i++) this.units[i].roof = true;
+        n += this.units.length - before; this._aabbs = null;
+      }
       if (ud?.camFadeSolidIds != null && o.isBatchedMesh) {
         const ids = ud.camFadeSolidIds instanceof Set ? ud.camFadeSolidIds : new Set(ud.camFadeSolidIds);
         const before = this.units.length;
@@ -228,11 +324,14 @@ export class OccluderFader {
         n += this.units.length - before; this._aabbs = null;
         if (ud.camFadeIds == null && typeof ud.camFade !== 'function' && ud.camFade !== true) return;
       }
-      if (ud?.camFade === true || ud?.camFadeIds != null || (typeof ud?.camFade === 'function' && (o.isBatchedMesh || o.isInstancedMesh))) { n += this.add(o); return; }
+      if (ud?.camFade === true || ud?.camFade === 'crown' || ud?.camFadeIds != null || (typeof ud?.camFade === 'function' && (o.isBatchedMesh || o.isInstancedMesh))) {
+        n += this.add(o, null, { crown: ud.camFade === 'crown' || TREE_NAME.test(o.name ?? '') || (named && !o.isBatchedMesh) }); return;
+      }
+      if (o.isBatchedMesh && ud?.camFadeRoofIds != null) return;
       if (o.isBatchedMesh) return;                                   // untagged batch: may hold houses, fences...
       const isNamed = named || FADE_NAME.test(o.name ?? '');
-      if (isNamed && (o.isMesh || o.isInstancedMesh)) { n += this.add(o); return; }
-      if (isNamed && o.children.length && o.children.every((c) => c.isMesh && !c.isInstancedMesh && !c.isBatchedMesh)) { n += this.add(o); return; }   // a tree group
+      if (isNamed && (o.isMesh || o.isInstancedMesh)) { n += this.add(o, null, { crown: true }); return; }
+      if (isNamed && o.children.length && o.children.every((c) => c.isMesh && !c.isInstancedMesh && !c.isBatchedMesh)) { n += this.add(o, null, { crown: true }); return; }   // a tree group
       for (const c of o.children) visit(c, isNamed);
     };
     visit(root, false);
@@ -252,7 +351,7 @@ export class OccluderFader {
       this._aabbs = [];
       const m = this.margin;
       for (const u of this.units) for (const p of u.parts) {
-        if (u.solid) continue;                                   // solid occluders keep blocking the arm
+        if (u.solid || u.roof) continue;                         // solid occluders / roofs keep blocking the arm
         const b = p.box.clone().applyMatrix4(p.world);           // back to the prop's own extent (the box has the fade margin)
         b.min.x += m; b.min.z += m; b.max.x -= m; b.max.z -= m; b.max.y -= m;
         if (b.max.x < b.min.x) b.min.x = b.max.x = (b.min.x + b.max.x) / 2;
@@ -298,19 +397,28 @@ export class OccluderFader {
     box.min.z -= this.margin / sz; box.max.z += this.margin / sz;
     const sphere = box.getBoundingSphere(new THREE.Sphere()).applyMatrix4(world);
     const part = { mesh, box, world: world.clone(), inv: world.clone().invert(), index: -1, matrix: null, proxy: null, orig: null, faded: null,
-      kind: 'mesh', geoId: -1, rayGeo: rayGeo && triCount(rayGeo) <= PRECISE_MAX_TRIS ? rayGeo : null, hidByUs: false };
+      kind: 'mesh', geoId: -1, rayGeo: rayGeo && triCount(rayGeo) <= PRECISE_MAX_TRIS ? rayGeo : null, hidByUs: false,
+      sx, sy, sz, crownY: -Infinity, never: false };
+    if (unit.crown) {
+      const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+      const nm = `${mesh.name ?? ''} ${mat?.name ?? ''}`;
+      if (TRUNK_NAME.test(nm) && !CROWN_NAME.test(nm)) part.never = true;               // trunks never fade
+      else if (!CROWN_NAME.test(nm)) part.crownY = localBox.min.y + (this._crownFracNow ?? this.crownFrac) * (localBox.max.y - localBox.min.y);
+    }
     unit.parts.push(part);
+    unit.aabb.union(_box.copy(box).applyMatrix4(world));
     unit.center.add(sphere.center);
     unit._spheres.push(sphere);
     return part;
   }
 
   _newUnit(root) {
-    return { root, parts: [], center: new THREE.Vector3(), radius: 0, f: 0, hit: false, precise: false, solid: false, _spheres: [] };
+    return { root, parts: [], center: new THREE.Vector3(), radius: 0, f: 0, hit: false, precise: false, solid: false, roof: false,
+      crown: !!this._crown, aabb: new THREE.Box3(), _spheres: [] };
   }
 
   _finishUnit(u) {
-    if (!u.parts.length) return false;
+    if (!u.parts.length || u.parts.every((p) => p.never)) return false;     // a lone trunk: nothing to fade
     u.center.multiplyScalar(1 / u._spheres.length);
     let r = 0;
     for (const s of u._spheres) r = Math.max(r, u.center.distanceTo(s.center) + s.radius);
@@ -400,39 +508,126 @@ export class OccluderFader {
    *   the lens fades even when the sight line to the subject slips between its rails
    * @param {number} [nLens]
    * @param {boolean} [solidOnly] only solid occluders may fade (a medium / far shot: trees stay, a house never hides her)
+   * Iso form: update(dt, camPos, targets, { n, radii, her, crowns = true, lens, nLens, solidOnly }) — capsule radii per
+   * target, `her` feet (the roof rule), crowns (the crown proximity rule).
    */
   update(dt, camPos, targets, nTargets = targets.length, lens = null, nLens = lens ? lens.length : 0, solidOnly = false) {
+    let radii = null, her = null, crowns = false;                         // positional (classic) form: no crown rule
+    if (nTargets && typeof nTargets === 'object') {                     // update(dt, cam, targets, { n, radii, her, ... })
+      const o = nTargets;
+      nTargets = o.n ?? targets.length; radii = o.radii ?? null; her = o.her ?? null;
+      lens = o.lens ?? null; nLens = o.nLens ?? (lens ? lens.length : 0); solidOnly = !!o.solidOnly; crowns = o.crowns !== false;
+    }
     if (!this.units.length) return;
     this._checkT -= dt;
     const check = this._checkT <= 0;
     if (check) this._checkT = this.checkInterval;
+    const linear = this.fadeIn > 0 && this.fadeOut > 0;
     const k = 1 - Math.exp(-this.speed * dt);
     for (const u of this.units) {
-      if (check) u.hit = this.enabled && (!solidOnly || u.solid) && (this._occludes(u, camPos, targets, nTargets) || this._nearLens(u, camPos, lens, nLens));
+      if (check) {
+        u.hit = this.enabled && (!solidOnly || u.solid) && (
+          this._occludes(u, camPos, targets, nTargets, radii)
+          || (crowns && u.crown && this.crownR > 0 && this._nearCrown(u, camPos, targets, nTargets, radii))
+          || (u.roof && !!her && this._underRoof(u, her))
+          || this._nearLens(u, camPos, lens, nLens));
+      }
       const hit = u.hit;
       if (!hit && u.f <= 0) continue;
-      const target = hit ? 1 : 0;
-      u.f += (target - u.f) * k;
-      if (!hit && u.f < 0.02) u.f = 0;
-      if (hit && u.f > 0.98) u.f = 1;
+      if (linear) u.f = hit ? Math.min(1, u.f + dt / this.fadeIn) : Math.max(0, u.f - dt / this.fadeOut);
+      else {
+        u.f += ((hit ? 1 : 0) - u.f) * k;
+        if (!hit && u.f < 0.02) u.f = 0;
+        if (hit && u.f > 0.98) u.f = 1;
+      }
       if (u.f > 0) { this.active.add(u); this._applyFade(u); }
       else { this._restore(u); this.active.delete(u); }
     }
   }
 
-  /** Does the unit block the segment camera → any subject point? */
-  _occludes(u, camPos, targets, nTargets) {
+  /**
+   * Does the unit cut the capsule camera → any subject point (radius radii[t], default 0)? A capsule (r > 0) ends r m
+   * short of the subject, toward the lens: its round end then reaches the subject's depth but not beyond, so props
+   * behind her (farther from the lens, screen-up of her at the iso pitch) never fade.
+   */
+  _occludes(u, camPos, targets, nTargets, radii = null) {
     for (let t = 0; t < nTargets; t++) {
-      const p = targets[t];
-      if (distSqPointSegment(u.center, camPos, p) > u.radius * u.radius) continue;    // broad phase
+      const r = radii ? (radii[t] ?? 0) : 0;
+      let p = targets[t];
+      if (r > 0) {
+        _end.subVectors(camPos, p);
+        const len = _end.length();
+        if (len > 1e-6) { p = _end.multiplyScalar(Math.min(r, len * 0.5) / len).add(targets[t]); }
+      }
+      const R = u.radius + r;
+      if (distSqPointSegment(u.center, camPos, p) > R * R) continue;    // broad phase
       for (const part of u.parts) {
+        if (part.never) continue;
         _b.copy(camPos).applyMatrix4(part.inv);
         _c.copy(p).applyMatrix4(part.inv);
-        if (!segmentHitsBox(_b, _c, part.box)) continue;
-        if (!u.precise || this._segmentHitsTriangles(part, camPos, p)) return true;
+        let box = part.box;
+        if (r > 0) {
+          box = _box.copy(part.box);
+          box.min.x -= r / part.sx; box.max.x += r / part.sx; box.min.y -= r / part.sy; box.max.y += r / part.sy;
+          box.min.z -= r / part.sz; box.max.z += r / part.sz;
+        }
+        if (!segmentHitsBox(_b, _c, box)) continue;
+        if (!u.precise || this._capsuleHitsTriangles(part, camPos, p, r, targets[t])) return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Triangle test of a capsule: the centre line a → `subject` (any face on it is lens-side of her), then 4 lines offset
+   * by 0.7 r around it, ending at `b` (the capsule's shortened end).
+   */
+  _capsuleHitsTriangles(part, a, b, r, subject = b) {
+    if (this._segmentHitsTriangles(part, a, subject)) return true;
+    if (!(r > 0)) return false;
+    _rayDir.subVectors(b, a).normalize();
+    _side.set(-_rayDir.z, 0, _rayDir.x);
+    if (_side.lengthSq() < 1e-8) _side.set(1, 0, 0); else _side.normalize();
+    _up.crossVectors(_side, _rayDir).normalize();
+    const o = r * 0.7;
+    for (let i = 0; i < 4; i++) {
+      const sx = i === 0 ? o : i === 1 ? -o : 0, sy = i === 2 ? o : i === 3 ? -o : 0;
+      _off.copy(_side).multiplyScalar(sx).addScaledVector(_up, sy);
+      _a2.copy(a).addScaledVector(_off, 0.15);                         // capsules taper toward the lens
+      _b2.copy(b).add(_off);
+      if (this._segmentHitsTriangles(part, _a2, _b2)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Crown rule (§3): a canopy within crownR m horizontally of a target capsule's ground track that rises above the
+   * capsule there (it hides that patch of ground from above).
+   */
+  _nearCrown(u, camPos, targets, nTargets, radii) {
+    const bx = u.aabb, cx = (bx.min.x + bx.max.x) / 2, cz = (bx.min.z + bx.max.z) / 2;
+    const half = Math.hypot(bx.max.x - bx.min.x, bx.max.z - bx.min.z) * 0.35;  // ~ the crown's own horizontal radius
+    for (let t = 0; t < nTargets; t++) {
+      const p = targets[t], r = radii ? (radii[t] ?? 0) : 0;
+      const dx = p.x - camPos.x, dz = p.z - camPos.z, l2 = dx * dx + dz * dz;
+      let s = l2 > 1e-8 ? ((cx - camPos.x) * dx + (cz - camPos.z) * dz) / l2 : 1;
+      s = s < 0 ? 0 : s > 1 ? 1 : s;
+      const hx = camPos.x + dx * s - cx, hz = camPos.z + dz * s - cz;
+      const d = Math.hypot(hx, hz) - half;
+      if (d > this.crownR + r * 0.5) continue;
+      const segY = camPos.y + (p.y - camPos.y) * s;
+      if (bx.max.y < segY - r) continue;                                  // the crown stays below the sight line
+      if (bx.max.y < p.y + 0.6) continue;                                  // a low bush beside her hides nothing
+      return true;
+    }
+    return false;
+  }
+
+  /** Roof rule (§3): she stands under the roof footprint grown by roofPad. */
+  _underRoof(u, her) {
+    const bx = u.aabb, pad = u.roofPad ?? this.roofPad;
+    return her.x >= bx.min.x - pad && her.x <= bx.max.x + pad && her.z >= bx.min.z - pad && her.z <= bx.max.z + pad
+      && bx.max.y > her.y + 1.0;
   }
 
   /** Does any lens segment (camera → lens[i]) touch one of the unit's part boxes? (no triangle refinement) */
@@ -442,6 +637,7 @@ export class OccluderFader {
       const p = lens[t];
       if (distSqPointSegment(u.center, camPos, p) > u.radius * u.radius) continue;
       for (const part of u.parts) {
+        if (part.never) continue;
         _b.copy(camPos).applyMatrix4(part.inv);
         _c.copy(p).applyMatrix4(part.inv);
         if (!segmentHitsBox(_b, _c, part.box)) continue;
@@ -559,8 +755,9 @@ export class OccluderFader {
   }
 
   _applyFade(u) {
-    const op = 1 - u.f * (1 - this.minOpacity);
+    const op = 1 - u.f * (1 - (u.roof || u.solid ? this.archOpacity : this.minOpacity));
     for (const part of u.parts) {
+      if (part.never) continue;                         // trunks never fade
       const mesh = part.mesh;
       if (part.kind === 'inst' || part.kind === 'batch') {
         if (!part.proxy) {
@@ -576,9 +773,9 @@ export class OccluderFader {
         const m = mesh.material;
         if (Array.isArray(m)) {
           if (!m.every(fadeableMaterial)) { part.orig = m; part.faded = 'hide'; continue; }
-          part.orig = m; part.faded = m.map(makeFadeMaterial);
+          part.orig = m; part.faded = m.map((x) => makeFadeMaterial(x, this._fadeOpts(part)));
         } else if (!fadeableMaterial(m)) { part.orig = m; part.faded = 'hide'; }
-        else { part.orig = m; part.faded = makeFadeMaterial(m); }
+        else { part.orig = m; part.faded = makeFadeMaterial(m, this._fadeOpts(part)); }
         if (part.faded !== 'hide') mesh.material = part.faded;
       }
       if (part.faded === 'hide') { mesh.visible = u.f < 0.5; continue; }
@@ -586,6 +783,9 @@ export class OccluderFader {
       for (const fm of list) setOpacity(fm, (fm.userData.baseOpacity ?? 1) * op);
     }
   }
+
+  /** makeFadeMaterial options for a part (dither, the crown cut). */
+  _fadeOpts(part) { return { dither: this.dither, crownY: part.crownY }; }
 
   _batchVisible(part) {
     try { return part.mesh.getVisibleAt(part.index) !== false; } catch { return false; }
@@ -656,7 +856,7 @@ export class OccluderFader {
     if (!geo) return null;
     const srcMat = Array.isArray(src.material) ? src.material[0] : src.material;
     mesh.material?.dispose?.();
-    mesh.material = fadeableMaterial(srcMat) ? makeFadeMaterial(srcMat) : new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
+    mesh.material = fadeableMaterial(srcMat) ? makeFadeMaterial(srcMat, this._fadeOpts(part)) : new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
     mesh.geometry = geo;
     if (instanced) {
       mesh.setMatrixAt(0, part.matrix); mesh.instanceMatrix.needsUpdate = true;

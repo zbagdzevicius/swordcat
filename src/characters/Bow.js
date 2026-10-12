@@ -2,7 +2,7 @@
 // and sits on her LEFT ear (+X, the viewer's right in a front view). The builder parents it to the `earL` joint.
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { GeoBuilder, mat, rgb, mixRgb, smoothstep, Spring } from './util.js';
+import { GeoBuilder, mat, rgb, mixRgb, smoothstep, Spring, segScale } from './util.js';
 import { own, TOP_VIEW, READABILITY } from './materials.js';
 
 const _mats = new Map();
@@ -35,10 +35,11 @@ export function bowMaterial(sheenColor = PAL.bowLight) {
  * @param {{color?:string, light?:string, shade?:string, knot?:string, scale?:number}} o
  */
 export function bowGeometry(o = {}) {
+  const d = o.detail ?? 1;   // tessellation factor (Low: QUALITY.low.charDetail via the kitten)
   const base = rgb(o.color ?? PAL.bow), shade = rgb(o.shade ?? PAL.bowShade), knot = rgb(o.knot ?? PAL.bowKnot), light = rgb(o.light ?? PAL.bowLight);
   const gb = new GeoBuilder();
   for (const s of [1, -1]) {
-    const g = new THREE.SphereGeometry(0.035, 24, 16).scale(1.5, 0.85, 0.5);
+    const g = new THREE.SphereGeometry(0.035, segScale(24, d, 14), segScale(16, d, 10)).scale(1.5, 0.85, 0.5);
     g.translate(s * 0.035, 0, 0);
     // pinch the inner end (art.md §2.6) + a central fold crease
     const p = g.attributes.position;
@@ -59,7 +60,7 @@ export function bowGeometry(o = {}) {
     });
   }
   // knot
-  gb.add(new THREE.SphereGeometry(0.017, 16, 12).scale(1.0, 1.15, 0.8), { matrix: mat([0, 0, 0.004]), color: knot, rmse: [0.38, 0, 1, 0] });
+  gb.add(new THREE.SphereGeometry(0.017, segScale(16, d, 10), segScale(12, d, 8)).scale(1.0, 1.15, 0.8), { matrix: mat([0, 0, 0.004]), color: knot, rmse: [0.38, 0, 1, 0] });
   // tails: V-notched ribbons hanging down and outward
   for (const s of [1, -1]) {
     const g = new THREE.PlaneGeometry(0.02, 0.05, 2, 4);

@@ -5,11 +5,17 @@
 //   vigils, interactables, actors (PropActors / critters), pickups, grass, batch, water[], music, indoor, fogBase,
 //   waterLevelAt(x, z), isDeepWater(x, z, y), surfaceAt(x, z), anchor(name), arena(id), critter(id), actor(id),
 //   setDawnstone(on), and the per-step trigger / interact / arena-autolock logic.
+// Iso camera data (research/CONTROLS_SPEC.md §11, §12 world): `cam` ({ yaw, fog?, light? }), `zoneAt(pos)` (the zone
+// she is in; zones with a `cam` hint win), `camZone` (the hint zone applied now; world drives `ctx.cam.setHint` on
+// zone changes, out of combat only), `memeSpot` ({ at, yaw, r }), `navLinks` / `navBlock` (physics nav),
+// `interactables` ({ id, pos, r, kind, enabled(), usePos?, use() }); E prefers the hovered interactable in reach.
 // Everything gameplay-related runs in update(dt) (fixed step, play mode only); render() is visual only.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { distToPolyline, inBox } from './noise.js';
 import { Terrain } from './Terrain.js';
+import { pickZone } from './isoView.js';
+import { CAMERA } from '../core/config.js';
 
 const _v = new THREE.Vector3();
 const GROUPS = ['terrain', 'props', 'grass', 'water', 'skyline', 'dawnstone', 'pickups', 'actors'];
@@ -66,6 +72,24 @@ export function endLevelRun(state, id) {
   if (rec) { delete rec.runT0; delete rec.runLost; delete rec.runFish0; }
 }
 
+/** Ground-mist factor while an arena is locked (fx GroundMist reads `level.cam.fog.mist`): the fog wall is the edge. */
+export const ARENA_MIST = 0.3;
+
+/**
+ * The level's own copy of `cam.fog` whose `mist` (fx GroundMist's per-level factor) drops to ARENA_MIST while one of
+ * the level's arenas is locked: the 4–16 m mist ring otherwise washes the arena's own stones and walls 6–8 m from
+ * her, and the fight's boundary is the fog wall. Outside fights it is the authored value (undefined = the preset's).
+ */
+export function arenaAwareFog(fog, level) {
+  const out = { ...(fog ?? {}) }, base = out.mist;
+  delete out.mist;
+  Object.defineProperty(out, 'mist', {
+    enumerable: true,
+    get: () => (level.arenas?.some((a) => a.locked && !a.cleared) ? Math.min(Number.isFinite(base) ? base : 1, ARENA_MIST) : base),
+  });
+  return out;
+}
+
 export class Level {
   /** @param {any} ctx @param {any} def the defineLevel() definition */
   constructor(ctx, def) {
@@ -96,7 +120,15 @@ export class Level {
     this.indoor = !!def.indoor;
     this.fogBase = def.fogBase ?? 0;
     /** CONTROLS_SPEC §11: the iso camera for this level ({ yaw, fog?: { clear, clearCombat, topMul } }; yaw π by default) */
-    this.cam = def.cam ?? null;
+    this.cam = def.cam ? { ...def.cam, fog: arenaAwareFog(def.cam.fog, this) } : null;
+    /** §2.7 the level's Meme Cam spot { at: [x, z], yaw, r } (her facing for the shot; the camera looks back at her) */
+    this.memeSpot = def.memeSpot ?? null;
+    /** §5.3 authored nav links [{ a: [x, z], b: [x, z], kind: 'hop'|'drop'|'bounce'|'fence', when?, oneWay?, gate? }] */
+    this.navLinks = def.navLinks ?? [];
+    /** §5.3 cosmetic no-go rects [{ minX, maxX, minZ, maxZ }] (or { at: [x, z], size: [w, d] }) for the nav grid */
+    this.navBlock = (def.navBlock ?? []).map((b) => (b.at && b.size ? { minX: b.at[0] - b.size[0] / 2, maxX: b.at[0] + b.size[0] / 2, minZ: b.at[1] - b.size[1] / 2, maxZ: b.at[1] + b.size[1] / 2 } : b));
+    /** §2.2 the camera hint zone in effect (null = the level framing) and the one she is in now */
+    this.camZone = null; this._zoneNow = null; this._calmT = 0; this._hintSent = false;
     this.pickups = null; this.grass = null; this.batch = null; this.trees = []; this.skyline = null; this.dawnstone = null; this.waterMeshes = null;
     /** visual-only animators { render(dt, t) } (windmill fans, flags) */
     this.animators = [];
@@ -114,6 +146,7 @@ export class Level {
     this.run = { runT0: 0, runLost: 0, runFish0: 0 };
     this.exiting = false;
     this.disposed = false;
+    this._dawnOn = true; this._farOn = undefined; this._farForce = null; this._skylineOn = true;
   }
 
   // ------------------------------------------------------------------ queries
@@ -158,11 +191,72 @@ export class Level {
   anchor(name) { return this.anchors[name] ?? this.spawns[name] ?? null; }
 
   arena(id) { return this.arenas.find((a) => a.id === id) ?? null; }
+
+  /**
+   * CONTROLS_SPEC §2.2 / §12 world: the zone def at `pos` ({ x, z }): zones with a camera hint (`zone.cam = { yaw?, dist?,
+   * pitch?, clear? }`) win, then the smallest; the current hint zone holds until she is 1.5 m outside it. Or null.
+   */
+  zoneAt(pos) {
+    if (!pos) return null;
+    this._zoneOk ??= (zn) => zn.camIf == null || condOk(this.ctx, zn.camIf);
+    return pickZone(this.def?.zones, pos.x, pos.z, this._zoneNow, undefined, this._zoneOk);
+  }
+
+  /** The level's iso yaw (default π: camera south of her, looking +Z). */
+  get camYaw() { return Number.isFinite(this.cam?.yaw) ? this.cam.yaw : (CAMERA.iso?.yaw ?? Math.PI); }
+
+  /**
+   * §2.2 hint driver (fixed step): a zone change applies its `cam` hint (or the level framing on leaving) through
+   * `ctx.cam.setHint`, only once no alerted hostile has been within the combat radius for `hint.calmFor` s; a blend
+   * that started finishes. Reduce camera motion snaps. A camera that reads `zoneAt` itself sets `cam.zoneHints`.
+   */
+  _updateCamHint(dt, p) {
+    const ctx = this.ctx, cam = ctx.cam, I = CAMERA.iso;
+    if (!p || !I) return;
+    const z = this.zoneAt(p.pos);
+    this._zoneNow = z;
+    const want = z?.cam ? z : null;
+    // calm = no alerted, live hostile within the combat radius
+    let engaged = false;
+    const R = I.combat?.radius ?? 10;
+    for (const e of ctx.enemies?.list ?? []) {
+      if (!e || e.alive === false || e.dead || !e.alerted) continue;
+      const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+      if (dx * dx + dz * dz <= R * R) { engaged = true; break; }
+    }
+    this._calmT = engaged ? 0 : this._calmT + dt;
+    if (want === this.camZone && this._hintSent) return;
+    if (this._hintSent && this._calmT < (I.hint?.calmFor ?? 2)) return;      // in combat the hint waits
+    this.camZone = want; this._hintSent = true;
+    if (cam?.zoneHints === true || typeof cam?.setHint !== 'function' || ctx.params?.cam === 'classic') return;
+    const h = want?.cam ?? {};
+    const snap = !!ctx.state?.settings?.reduceCameraMotion || !this._hintStarted;
+    this._hintStarted = true;
+    cam.setHint({ yaw: Number.isFinite(h.yaw) ? h.yaw : this.camYaw, pitch: h.pitch, dist: h.dist, clear: h.clear, zone: want?.id ?? null }, snap ? 0 : (I.hint?.blend ?? 1.2));
+  }
   critter(id) { return this.critters.find((c) => c.critterId === id) ?? null; }
   actor(id) { return this.actors.find((a) => a.propId === id || a.critterId === id) ?? null; }
 
   /** The Dawnstone glow at `bell_far` (CS-02 shot 2 puts it out for good). */
-  setDawnstone(on) { if (this.groups.dawnstone) this.groups.dawnstone.visible = !!on; }
+  setDawnstone(on) { this._dawnOn = !!on; if (this.groups.dawnstone) this.groups.dawnstone.visible = !!on && this._farOn !== false; }
+
+  /**
+   * §4.1 the 'far' visibility group (sky dome, far skyline, horizon, Dawnstone): hidden in iso play (the lens never
+   * sees the horizon from above), shown in cutscenes, presets and Meme Cam (the fog mode < 0.5). `on` = true / false
+   * forces it (story `visible: { far }`), null = automatic again.
+   */
+  setFar(on) { this._farForce = on == null ? null : !!on; this._applyFar(); }
+
+  _applyFar() {
+    const env = this.ctx.env;
+    const auto = this.ctx.params?.cam === 'classic' || !((env?._focusMode ?? 0) > 0.5);
+    const on = this._farForce ?? auto;
+    if (on === this._farOn) return;
+    this._farOn = on;
+    if (this.groups.skyline) this.groups.skyline.visible = on && this._skylineOn !== false;
+    if (this.groups.dawnstone) this.groups.dawnstone.visible = on && this._dawnOn !== false;
+    if (env?.sky?.mesh) env.sky.mesh.visible = on;
+  }
 
   // ------------------------------------------------------------------ registration (LevelKit)
   /** Register a level actor (PropActor / Critter): actor registry + scene + per-step update. */
@@ -263,6 +357,7 @@ export class Level {
       for (const fn of due.reverse()) { try { fn(this); } catch (e) { console.error(`[world] ${this.id}: timer failed`, e); } }
     }
     this.pickups?.update(dt);
+    this._updateCamHint(dt, alive ? p : null);
     this._updateInteract(alive ? p : null);
   }
 
@@ -271,10 +366,14 @@ export class Level {
     const ctx = this.ctx;
     let best = null, bd = Infinity;
     if (p && ctx.game?.mode === 'play') {
+      // §12 world 3: with two in reach, the one under the cursor / last tapped (player.hover) wins, else the nearest
+      const hov = p.hover, hid = hov && (hov.kind === 'interact' || hov.kind === 'npc') ? (hov.id ?? hov.interact?.id ?? null) : null;
       for (const it of this.interactables) {
         if (it.enabled && !it.enabled()) continue;
         const d = Math.hypot(p.pos.x - it.pos.x, p.pos.z - it.pos.z);
-        if (d <= it.r && Math.abs(p.pos.y - it.pos.y) < 2.2 && d < bd) { bd = d; best = it; }
+        if (!(d <= it.r && Math.abs(p.pos.y - it.pos.y) < 2.2)) continue;
+        const dd = hid != null && it.id === hid ? -1 : d;
+        if (dd < bd) { bd = dd; best = it; }
       }
     }
     if (best !== this._interact) {
@@ -304,8 +403,11 @@ export class Level {
     const p = ctx.player, cam = ctx.camera;
     const center = p?.object3d?.position ?? cam?.position ?? _v.set(0, 0, 0);
     const vdt = ctx.game?.hitstopT > 0 ? 0 : dt;
-    this.grass?.update(t, ctx.env, center, p && p.alive !== false ? p.object3d.position : null);
-    if (cam && this.groundLod) Terrain.updateGroundLod(this.groups.terrain, cam.position, this.groundLod);
+    this._applyFar();
+    // §4.2 grass tiles and LOD follow the iso focus (what the lens looks at), the trample follows her
+    const focus = ctx.cam?.focus?.isVector3 && (ctx.env?._focusMode ?? 0) > 0.5 ? ctx.cam.focus : center;
+    this.grass?.update(t, ctx.env, focus, p && p.alive !== false ? p.object3d.position : null);
+    if (cam && this.groundLod) Terrain.updateGroundLod(this.groups.terrain, focus === center ? cam.position : focus, this.groundLod);
     if (this.batch && cam) this.batch.cull(cam.position, this.cullDist(), dt);
     for (const a of this.animators) a.render(vdt, t);
     for (const a of this.actors) a.render(alpha, vdt);
@@ -329,6 +431,7 @@ export class Level {
     for (const off of this._offs) off();
     this._offs.length = 0;
     if (this._interact) this.ctx.bus.emit(E.INTERACT_CLEAR, {});
+    if (this.ctx.env?.sky?.mesh) this.ctx.env.sky.mesh.visible = true;
     for (const a of this.arenas) a.dispose();
     for (const a of [...this.actors]) this.removeActor(a);
     for (const v of this.vigils) v.dispose();

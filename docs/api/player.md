@@ -128,3 +128,28 @@ them, e.g. on `kitten.auraMeshes`).
   while she runs (visual only).
 
 The M1 API notes of this area are archived in `docs/api/player.md`.
+
+## Controls rework (CONTROLS_SPEC §12 player)
+- `player.order(kind, arg, o?)` / `player.orders` (`Orders.js`): move / follow / attack / attackMove / use / stop and the
+  Ctrl+RMB queue (≤ 4); a direct-line follower when `physics.findPath` is absent. Emits `player:order`
+  `{ kind, point, target, valid, queued, partial }`. A move / attackMove that can make no progress (she already stands
+  on the closest reachable cell, the click farther off) is rejected (`valid: false, partial: true`); every rejected or
+  partial order plays `ui.error` ("mrr?", ≥ 0.25 s apart) and a rejected one a head `shake`. `orders.lastClear` says why the last order ended (`arrived`,
+  `direct`, `attack`, `dodge`, `guard`, `stuck`, `target`, `leash`, `mode`, `level`, `stop`).
+- `player.aim` `{ active, kind, dir, point, target, range, width, source }` (live every step, §7.1 `Aim.resolveAim`);
+  `player.hover` (camera's pick); `player.resolveAim(kind, range)`, `faceAim`, `aimTurn`.
+- `player.abilityState(out)` → `{ dodgeCd, dodgeMax, meowCd, meowMax, milk, milkMax, golden, goldenReady, goldenLocked,
+  holyReady, grit, gritMax, guard, interact, charge, chargeTier, shards, riposteReady, airborne }`.
+- `player.steerDodge(x, z)` (touch: once, inside the roll's first 0.08 s).
+- Stand (§8.1): threat snap on the first step (`combat.nextParryable`, ≤ 5 m, lands ≤ 0.7 s), KBM re-aims at the
+  cursor after it moves 30 px, touch auto-faces the soonest threat (`settings.standAutoFace`), the guard arc is ±90°
+  on touch (`GuardState.arc` ← `PLAYER.guard.touchArc`), the Stand clears move orders. **Auto-Riposte**
+  (`settings.autoRiposte` 'auto' = touch): the Riposte fires `AIM.autoRiposte` 0.15 s after a parry when the parried
+  enemy is within 4 m (`player.autoRiposted` counts them).
+- §7.2 auto-target: "hit her within the last 2 s" from `combat.hitRecently`, plus every attack on her (blocks too).
+- §5.4 jump: `player.inputJump()` (F / A / Jump) = `doJump()` + the jump assist (`Aim.jumpAssistPlan`: toward a raised
+  walkable top within 2.4 m, ±1.2 m/s, ≤ 20°, lands ≥ 0.3 m inside both edges; `player.airAssist` holds it in the air,
+  `player.jumpAssists` counts them). Order hops (`Orders._jumpLink`) are separate and never Pounce.
+- Pounce (§6.2 / §6.4): `player.pouncePlan(out)` / `player.diveAt` — the cursor (≤ 3.5 m), crows within 2.5 m of it
+  magnetised (touch / pad: a 3 m disc); the dive carries her toward it (≤ 9 m/s horizontal).
+- Meme Cam idle (iso): `Input.idleTime` + held buttons, so a thumb resting on the joystick does not reset it.

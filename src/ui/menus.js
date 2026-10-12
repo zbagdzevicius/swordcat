@@ -10,8 +10,8 @@
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
 import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS } from '../core/config.js';
 import { el, flag, setText, setVar, pulse } from './dom.js';
-import { tx, esc, actionGlyph } from './text.js';
-import { SETTINGS, SETTING_GROUPS, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS } from './settings.js';
+import { tx, esc, actionGlyph, presetGlyph, PRESET_IDS } from './text.js';
+import { SETTINGS, SETTING_GROUPS, visibleSettings, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS } from './settings.js';
 import { defaultState } from '../core/GameState.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
@@ -200,7 +200,12 @@ export class Menus {
       const r = this._rep;
       if (dir === 0) { if (r.axis === axis) { r.dir = 0; r.axis = ''; } return false; }
       const edge = axis === 'v' ? input.pressed(dir < 0 ? 'navUp' : 'navDown') : input.pressed(dir < 0 ? 'navLeft' : 'navRight');
-      if (r.axis !== axis || r.dir !== dir || edge) { r.axis = axis; r.dir = dir; r.t = NAV.repeatDelay; return true; }
+      if (r.axis !== axis || r.dir !== dir || edge) { r.axis = axis; r.dir = dir; r.t = NAV.repeatDelay; r.fc = this.ctx.game?.frameCount; return true; }
+      // hold-repeat counts rendered frames, not catch-up steps: a long (loaded) frame that runs many fixed steps
+      // between a key's down and up events must not read as a held key
+      const fc = this.ctx.game?.frameCount;
+      if (fc != null && r.fc === fc) return false;
+      r.fc = fc;
       r.t -= dt;
       if (r.t <= 0) { r.t = NAV.repeatEvery; return true; }
       return false;
@@ -356,8 +361,19 @@ export class Menus {
     body.classList.add('menu-scroll');
     const items = [];
     let group = '';
-    for (const def of SETTINGS) {
-      if (def.group !== group) { group = def.group; el('div', 'srow-group', { parent: body, text: SETTING_GROUPS[group] ?? group }); }
+    const iso = ctx.cam?.isIso !== false;
+    // rows that do nothing on the current device are hidden; on touch the Controls group (touch rows first) leads
+    const dev = ctx.input?.device ?? 'kbm', touch = dev === 'touch';
+    // §9.2 Edit layout (touch): drag the cluster buttons; stored in settings.touchLayout
+    const canEdit = !!this.ui.touch?.enabled && layer !== 'title';
+    const editBtn = () => items.push(this._button(body, tx(ctx, 'ui.touch.edit'), () => this.ui.editTouchLayout?.(), { cls: 'btn--plain' }));
+    const cardBtn = () => items.push(this._button(body, tx(ctx, 'ui.settings.controls'), () => this.openControls(), { cls: 'btn--plain' }));
+    const touchExtras = () => { if (canEdit) editBtn(); cardBtn(); };   // on touch they close the leading Controls group
+    for (const def of visibleSettings(iso, dev)) {
+      if (def.group !== group) {
+        if (touch && group === 'controls') touchExtras();
+        group = def.group; el('div', 'srow-group', { parent: body, text: SETTING_GROUPS[group] ?? group });
+      }
       items.push(this._settingRow(body, def));
       if (def.key === 'quality') {          // §14.3 language placeholder [STRETCH]: shown, not changeable yet
         const row = el('div', 'mi srow srow--choice is-disabled srow--lang', { parent: body });
@@ -365,8 +381,12 @@ export class Menus {
         items.push({ el: row, disabled: true });
       }
     }
-    el('div', 'srow-group', { parent: body, text: tx(ctx, 'ui.settings.controls') });
-    items.push(this._button(body, tx(ctx, 'ui.settings.controls'), () => this.openControls(), { cls: 'btn--plain' }));
+    if (touch && group === 'controls') touchExtras();   // (only if Controls were the whole list)
+    else if (!touch) {
+      el('div', 'srow-group', { parent: body, text: tx(ctx, 'ui.settings.controls') });
+      cardBtn();
+      if (canEdit) editBtn();
+    }
     items.push(this._button(body, tx(ctx, 'ui.settings.reset'), () => this.openConfirm(tx(ctx, 'ui.settings.resetConfirm'), () => {
       resetSettings(ctx, defaultState().settings);
       if (this.top) this._refresh(this.top);
@@ -375,19 +395,49 @@ export class Menus {
     this.push(this._wire({ id: 'settings', el: e, items, layer, scroll: true }));
   }
 
-  /** Controls card (§15): every action with its glyph on keyboard, gamepad and touch; the active device is highlighted. */
+  /**
+   * Controls card (CONTROLS_SPEC §10.7: one page per preset / pad / touch): every action with its glyph on keyboard +
+   * mouse (the previewed preset; ◀ ▶ flips through the five), gamepad and touch; the active device is highlighted.
+   */
   openControls() {
     const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
     const layer = this.top?.layer ?? 'modal';
     const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}`);
+    const presetDef = SETTINGS.find((d) => d.key === 'controlPreset');
+    let preset = ctx.input?.preset ?? ctx.state?.settings?.controlPreset ?? 'hybrid';
+    if (!PRESET_IDS.includes(preset)) preset = 'hybrid';
+    const pick = el('div', 'mi srow srow--choice ctl-preset', { parent: body });
+    pick.innerHTML = `<span class="srow-lbl">${esc(tx(ctx, 'ui.controls.preset'))}</span><div class="srow-ctl"><span class="ch"><span class="ch-l">◀</span><span class="ch-val"></span><span class="ch-r">▶</span></span></div>`;
     const tbl = el('div', 'ctl-table menu-scroll', { parent: body });
-    let html = `<div class="ctl-row ctl-head"><span></span>${['kbm', 'pad', 'touch'].map((d) => `<span class="${d === dev ? 'is-dev' : ''}">${d === 'kbm' ? I.keyboardIco() : d === 'pad' ? I.padIco() : I.touchIco()}</span>`).join('')}</div>`;
-    for (const [act, label] of CONTROL_ROWS) {
-      html += `<div class="ctl-row"><span class="ctl-lbl">${esc(label)}</span>${['kbm', 'pad', 'touch'].map((d) => `<span class="${d === dev ? 'is-dev' : ''}"><kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${esc(actionGlyph(act, d))}</kbd></span>`).join('')}</div>`;
-    }
-    tbl.innerHTML = html;
-    const items = [this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' })];
-    this.push(this._wire({ id: 'controls', el: e, items, layer }));
+    const draw = () => {
+      const i = PRESET_IDS.indexOf(preset);
+      setText(pick.querySelector('.ch-val'), formatSetting(presetDef, preset, (k) => tx(ctx, k)) + (preset === (ctx.state?.settings?.controlPreset ?? 'hybrid') ? ' ✓' : ''));
+      flag(pick, 'is-first', i <= 0); flag(pick, 'is-last', i >= PRESET_IDS.length - 1);
+      const bind = ctx.state?.settings?.bindings ?? null;
+      const devs = ['kbm', 'pad', 'touch'];
+      let html = `<div class="ctl-row ctl-head"><span></span>${devs.map((d) => `<span class="${d === dev ? 'is-dev' : ''}">${d === 'kbm' ? I.keyboardIco() : d === 'pad' ? I.padIco() : I.touchIco()}</span>`).join('')}</div>`;
+      for (const [act, label] of CONTROL_ROWS) {
+        html += `<div class="ctl-row"><span class="ctl-lbl">${esc(label)}</span>${devs.map((d) => {
+          const g = d === 'kbm' ? presetGlyph(act, preset, bind) : actionGlyph(act, d);
+          const cap = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${esc(g)}</kbd>`;
+          return `<span class="${d === dev ? 'is-dev' : ''}">${cap}</span>`;
+        }).join('')}</div>`;
+      }
+      tbl.innerHTML = html;
+    };
+    const step = (dir) => {
+      const i = Math.max(0, Math.min(PRESET_IDS.length - 1, PRESET_IDS.indexOf(preset) + dir));
+      if (PRESET_IDS[i] === preset) return;
+      preset = PRESET_IDS[i]; draw(); this.sfx('ui.toggle');
+    };
+    pick.querySelector('.ch-l').addEventListener('click', (ev) => { ev.stopPropagation(); step(-1); });
+    pick.querySelector('.ch-r').addEventListener('click', (ev) => { ev.stopPropagation(); step(1); });
+    draw();
+    const items = [
+      { el: pick, disabled: false, adjust: step, activate: () => step(1) },
+      this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }),
+    ];
+    this.push(this._wire({ id: 'controls', el: e, items, layer, focus: 1 }));
   }
 
   _settingRow(parent, def) {

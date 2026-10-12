@@ -1,30 +1,57 @@
 // src/fx/shaders.js  (owner: fx) — GLSL snippets shared by the fx materials (particles, telegraph marks, decals,
 // mist, horde, trails). Every custom fx material:
-//   - uses three's fog uniforms (`fog: true` + UniformsLib.fog) so the world's FogExp2 applies (art.md §9: fog *is* the look);
-//     additive materials fade to black in fog instead of tinting toward the fog colour;
+//   - is built with `fxShaderMaterial(params)` (or patched with `withFxFog(mat)` after a clone). With `fog: true` it
+//     gets world's height / focus fog (CONTROLS_SPEC §4.1, contract C4: `vFogW` + `HFOG_GLSL` + the shared HFOG
+//     uniforms), so in the iso camera fx fog is measured from her exactly like the level geometry (the stage is clear,
+//     the screen edges misty); additive materials fade to black in fog instead of tinting toward the fog colour;
 //   - ends with <tonemapping_fragment> + <colorspace_fragment> so the Low preset (no composer) matches Med/High;
 //   - clamps every pow() base and guards every normalize() (requests/characters.md: one NaN pixel + MSAA + bloom).
 import * as THREE from 'three';
+import { HFOG, patchFogVarying } from '../world/HeightFog.js';
 
 /** Uniform set for a fogged ShaderMaterial (merge with your own). */
 export const fogUniforms = () => THREE.UniformsUtils.clone(THREE.UniformsLib.fog);
 
-/** Fragment helper: fog factor 0..1 (needs <fog_pars_fragment> and vFogDepth from <fog_vertex>). */
+/**
+ * CONTROLS_SPEC §4.1 / C4: give a fogged fx ShaderMaterial the world's fog maths (vFogW + HFOG_GLSL + the SHARED
+ * HFOG uniform objects). Idempotent. Call it again after `material.clone()`: a clone deep-copies its uniforms, which
+ * would detach the shared focus / clear / mode values. Env's scene patcher skips the material afterwards (`userData.hfog`).
+ * @template {THREE.ShaderMaterial} M @param {M} mat @returns {M}
+ */
+export function withFxFog(mat) {
+  if (!mat?.fog || typeof mat.fragmentShader !== 'string') return mat;
+  if (!mat.fragmentShader.includes('varying vec3 vFogW')) {
+    // patchFogVarying treats any source that mentions `hfogFactor` as already patched, and FOG_FACTOR calls it:
+    // hide the calls while it patches, then put them back
+    mat.fragmentShader = mat.fragmentShader.replace(/\bhfog(Factor|Color)\b/g, '__fxHfog$1');
+    patchFogVarying(mat);
+    mat.fragmentShader = mat.fragmentShader.replace(/__fxHfog(Factor|Color)/g, 'hfog$1');
+  }
+  mat.uniforms ??= {};
+  Object.assign(mat.uniforms, HFOG);
+  mat.userData.hfog = true;
+  return mat;
+}
+
+/** `new THREE.ShaderMaterial(params)` + `withFxFog` (every fogged fx shader material is built through this). */
+export const fxShaderMaterial = (params) => withFxFog(new THREE.ShaderMaterial(params));
+
+/**
+ * Fragment helpers: the fog factor 0..1 and the fog colour at this fragment, the same values the level geometry gets
+ * here (lens fog in cutscenes / Meme Cam / `?cam=classic`, focus fog in the iso play camera). Needs
+ * <fog_pars_fragment> and <fog_vertex>, patched by `withFxFog` (`hfogFactor` / `hfogColor` are world's HFOG_GLSL).
+ */
 export const FOG_FACTOR = /* glsl */`
 float fxFog() {
 #ifdef USE_FOG
-  #ifdef FOG_EXP2
-    return 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
-  #else
-    return smoothstep( fogNear, fogFar, vFogDepth );
-  #endif
+  return hfogFactor( vFogW, vFogDepth );
 #else
   return 0.0;
 #endif
 }
 vec3 fxFogColor() {
 #ifdef USE_FOG
-  return fogColor;
+  return hfogColor( vFogW );
 #else
   return vec3( 0.0 );
 #endif

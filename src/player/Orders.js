@@ -4,10 +4,13 @@
 //                      physics nav grid, always runs (Zoomies after 2 s as usual), auto-jumps nav links (assisted hop)
 //   follow             RMB held / a touch long-press: re-targets under the pointer every NAV.follow s
 //   attack(actor)      RMB / tap on a hostile or breakable: selects it, paths to reach (arc + radius − 0.25), faces it,
-//                      then `settings.autoAttack` (chain: one Snip–Snap–Swoosh; loop: keep chaining; off: just face)
+//                      then `settings.autoAttack` (auto/loop: keep chaining, LoL; chain: one Snip–Snap–Swoosh then the
+//                      order ends; off: just face)
 //   attackMove(point)  X then a click: path there, fighting any hostile within NAV.attackMoveR m of her on the way
 //   use(target)        a click / tap on an interactable or NPC: path to it, face it, then levels.interact / companions.use
 //   stop               H: clears the path, the queue and the order target
+// A hurt stun pauses any order (it re-plans from wherever the knockback left her); only a guard break (attack orders
+// excepted), death, a cutscene or direct input end one.
 // Direct input (|move| ≥ 0.15) cancels any order at once (Player.wishDir). The follower feeds Player.wishDir, so every
 // state that locomotes (move, charge, Milk Break, the Stand's shuffle) follows the path with its own speed caps.
 // Clicks and taps arrive through `input.takeClick()`; picks go through `cam.pick` (camera/Picker.js).
@@ -36,6 +39,7 @@ export class Orders {
     this.path = [];
     this.wp = 0;
     this.partial = false;
+    this._rejectT = -Infinity;                                  // last "mrr?" (s, wall clock)
     /** queued move points (Ctrl+RMB) */
     this.queue = [];
     /** hold-to-follow (RMB held / touch long-press) */
@@ -56,6 +60,15 @@ export class Orders {
     this._repathT = 0; this._pathsThisSec = 0; this._pathSecT = 0;
     this._hop = null;
     this._pick = null;
+    /** X armed at (s, wall clock): the arm times out after ATTACK_MOVE_ARM s */
+    this._armT = 0;
+    /** per-order link bookkeeping, kept across re-plans (keyed by the take-off cell): take-offs, run-up done */
+    this._linkTries = new Map();
+    this._backed = new Set();
+    /** a use / attack path that ran out short of reach: the spot it ran out at (one re-plan, then rejected) */
+    this._endAt = null;
+    /** a hurt stun paused the order: re-plan from the knockback spot when it ends */
+    this._hurtPause = false;
   }
 
   get active() { return this.kind !== null; }
@@ -86,6 +99,7 @@ export class Orders {
     this.target = kind === 'attack' || kind === 'use' ? arg : null;
     this.engaged = false; this._chainStrings = 0; this._chainRest = 0; this._sawCombo = 0;
     this._stuck.fails = 0; this._stuck.t = 0;
+    this._linkTries.clear(); this._backed.clear(); this._endAt = null; this._hurtPause = false;
     const pt = kind === 'attack' ? arg.pos : kind === 'use' ? (arg.usePos ?? arg.pos) : arg;
     this.point.set(pt.x, pt.y ?? p.pos.y, pt.z);
     if (kind === 'attack') this.ctx.cam?.select?.(arg, o.source === 'touch' ? 'tap' : 'click');
@@ -93,7 +107,7 @@ export class Orders {
     if (p.state === 'attack' && (kind === 'move' || kind === 'attackMove')) this.pendingSwingCancel = true;
     if (p.state === 'guard' && kind !== 'attack') { /* the Stand plants her: the order waits until she lets go */ }
     this._emit(kind, this.point, this.target, ok, false);
-    if (!ok || this.partial) this.ctx.input?.haptic?.('orderRejected');
+    if (!ok || this.partial) this._rejectFx(ok);
     return ok;
   }
 
@@ -101,17 +115,40 @@ export class Orders {
   clear(reason = '') {
     this.kind = null; this.target = null; this.path.length = 0; this.wp = 0; this.queue.length = 0;
     this.engaged = false; this.follow = false; this._resume = null; this.pendingSwingCancel = false; this._hop = null;
+    this._endAt = null; this._hurtPause = false;
     this.lastClear = reason;
   }
 
   /** Direct movement input took over (WASD / stick past 0.15): any order ends (§5.1). */
   cancelByDirect() { if (this.kind) this.clear('direct'); this.attackMoveArmed = false; }
+
+  /** End an order that can't get there: grey ✕ (player:order valid:false), "mrr?" and the head shake. */
+  _fail(reason) {
+    this.partial = true;
+    this._emit(this.kind, this.point, this.target, false, false);
+    this.clear(reason);
+    this._rejectFx(false);
+  }
   /** Attack input (LMB / ⚔ / X) cancels a move order (§5.2 interplay). */
   onAttackInput() { if (this.kind === 'move') this.clear('attack'); }
   /** Tumble keeps a move order (it resumes after the roll), drops attack / use. */
   onDodge() { if (this.kind === 'attack' || this.kind === 'use') this.clear('dodge'); this._hop = null; }
   /** The Stand plants her: move orders clear; an attack order pauses. */
   onGuard() { if (this.kind === 'move' || this.kind === 'attackMove' || this.kind === 'use') this.clear('guard'); }
+
+  /**
+   * §5.2 rejected / partial order feedback (the grey ✕ marker rides player:order): the "mrr?" (`ui.error`) and a little
+   * head shake. Core's Input already buzzes on `valid: false`; a partial order she still walks buzzes here.
+   */
+  _rejectFx(valid) {
+    const ctx = this.ctx;
+    if (valid) ctx.input?.haptic?.('orderRejected');
+    const now = performance.now() / 1000;
+    if (now - this._rejectT < 0.25) return;                     // a burst of clicks on deep water: one chirp
+    this._rejectT = now;
+    try { ctx.audio?.play2D?.('ui.error', { volume: 0.45, bus: 'ui' }); } catch (e) { console.warn('[orders] reject sound failed', e); }
+    if (!valid) try { this.p.model?.emote?.('shake'); } catch { /* model mid-swap */ }
+  }
 
   _validTarget(a) { return !!a && a.alive !== false && !!a.pos && a.hurtable !== false; }
 
@@ -138,6 +175,15 @@ export class Orders {
       this.partial = true;
       return false;
     }
+    // a ground order with no progress possible: the path ends where she stands but the click is farther off (deep
+    // water, a rock she is already hugging) → rejected (grey ✕ + "mrr?"), not a silent marker under a cat that never
+    // moves. attack / use goals sit inside their actor's collider, so standing next to one is "in reach", not rejected.
+    const end = r.points[r.points.length - 1];
+    if ((this.kind === 'move' || this.kind === 'attackMove') && r.points.length === 1 && !end.link && Math.hypot(end.x - p.pos.x, end.z - p.pos.z) < NAV.arriveMid) {
+      if (Math.hypot(goal.x - end.x, goal.z - end.z) < NAV.arriveMid) return true;   // already there
+      this.partial = true;
+      return false;
+    }
     for (const q of r.points) this.path.push(q);
     this.partial = !!r.partial;
     // the first point may be her own cell: skip it when she is on it
@@ -151,8 +197,11 @@ export class Orders {
     const ctx = this.ctx, input = ctx.input, p = this.p;
     this.suppressAttack = false;
     if (!input?.takeClick) return;
-    if (ctx.game?.mode !== 'play' || p.scripted) { input.clearClicks?.(); this.follow = false; return; }
-    if (input.pressed('attackMove')) this.attackMoveArmed = true;
+    if (ctx.game?.mode !== 'play' || p.scripted) { input.clearClicks?.(); this.follow = false; this.attackMoveArmed = false; return; }
+    const now = performance.now() / 1000;
+    if (input.pressed('attackMove')) { this.attackMoveArmed = true; this._armT = now; }
+    // LoL: Esc cancels the targeting; the arm also lapses after a few seconds with no click
+    if (this.attackMoveArmed && (input.pressed('back') || input.pressed('pause') || now - this._armT > ATTACK_MOVE_ARM)) this.attackMoveArmed = false;
     if (input.pressed('stop')) {
       this.clear('stop');
       this.attackMoveArmed = false;
@@ -194,6 +243,10 @@ export class Orders {
     const pk = cam.pick(c.x, c.y);
     this._pick = pk;
     const point = Number.isFinite(pk.point?.x) ? pk.point : null;
+    // LoL: while X is armed the attack button fires the attack-move and a move click cancels the targeting (a plain
+    // move). A preset with no mouse attack button (diablo: LMB moves) fires it with the move click.
+    const mouseAttack = (input.keyTable?.attack ?? []).some((cs) => /^Mouse/.test(cs));
+    if (this.attackMoveArmed && isMove && !isAttack && mouseAttack) this.attackMoveArmed = false;
     if (this.attackMoveArmed && (isMove || isAttack)) {
       this.attackMoveArmed = false;
       if (point) this.order('attackMove', point, { source: 'mouse' });
@@ -264,9 +317,16 @@ export class Orders {
     const p = this.p;
     if (!this.kind) return;
     if (!p.alive || p.scripted) { this.clear('dead'); return; }
-    // a hurt stun or a guard break drops walking orders; an attack order waits it out (auto-attack resumes, like LoL)
+    // a click is a commitment (LoL): a hurt stun pauses every order and it resumes when the stun ends, re-planned from
+    // wherever the knockback left her. A guard break drops walking orders; an attack order waits that out too.
     if (p.state === 'dead') { this.clear('dead'); return; }
-    if (p.state === 'hurt' || p.state === 'stagger') { if (this.kind !== 'attack') this.clear('hurt'); return; }
+    if (p.state === 'stagger' && this.kind !== 'attack') { this.clear('guardBreak'); return; }
+    if (p.state === 'hurt' || p.state === 'stagger') { this._hurtPause = true; this._hop = null; return; }
+    if (this._hurtPause) {
+      this._hurtPause = false;
+      const goal = this.kind === 'attack' ? (this.engaged ? null : this.target?.pos) : this.path.length ? (this.kind === 'move' ? this._goal : this.point) : null;
+      if (goal && !this._plan(goal)) { this._fail('unreachable'); return; }
+    }
     switch (this.kind) {
       case 'attack': this._updateAttack(dt); break;
       case 'use': this._updateUse(dt); break;
@@ -283,27 +343,47 @@ export class Orders {
     if (this.engaged) return;
     if (this.wp >= this.path.length) {
       if (this.kind === 'move') {
-        if (this.queue.length) { const q = this.queue.shift(); this.point.copy(q); this._plan(q); }
+        if (this.queue.length) { const q = this.queue.shift(); this.point.copy(q); if (!this._plan(q)) this._fail('unreachable'); }
         else if (!this.follow) this.clear('arrived');
-      }
+      } else if ((this.kind === 'use' || this.kind === 'attack') && p.onGround && p.state === 'move') this._pathSpent();
       return;
     }
     const w = this.path[this.wp], last = this.wp === this.path.length - 1;
     const dx = w.x - p.pos.x, dz = w.z - p.pos.z, d = Math.hypot(dx, dz);
+    // a bounce link (§5.4): the take-off is ON a bounce cap. She never stands on a cap (physics springs her off it),
+    // so steer the spring itself: right after a bounce near the take-off, aim the airtime at the landing
+    const bounceT = (this.ctx.game?.time ?? 0) - (p.lastBounceT ?? -Infinity);
+    // a hop that came down on a bounce cap has landed (she never touches ground there): let the waypoints move on
+    if (this._hop && !p.onGround && bounceT >= 0 && bounceT < 0.25 && (p.lastBounceT ?? -Infinity) > (this._hop.t0 ?? -Infinity) + 0.05) this._hop = null;
+    const bouncing = !p.onGround && bounceT >= 0 && bounceT < 0.25;
+    // any link while she springs off a cap is flown as a bounce: a ground take-off (hop / drop) never fires there
+    // (she is never onGround on a cap), so a path planned before the nav grid knew the cap would trap her bouncing
+    if (w.link && (w.link === 'bounce' || bouncing)) {
+      const to = w.to ?? this.path[this.wp + 1];
+      if (to && bouncing && d <= NAV.linkStart + 0.9) { this._bounceLink(to); this.wp++; return; }
+    }
+    // springing off a cap short of the next point (a take-off at the cap's far rim, or plain ground beyond it): steer
+    // the spring onto it — walking input alone can't carry her there in the air
+    if (bouncing && !this._hop && d > (w.link ? NAV.linkStart : (last ? NAV.arrive : NAV.arriveMid))) { this._bounceLink(w, false); return; }
     // a link take-off: jump once she is close and facing it
-    if (w.link && p.onGround && !this._hop) {
+    if (w.link && w.link !== 'bounce' && p.onGround && !this._hop) {
       const to = w.to ?? this.path[this.wp + 1];
       if (d <= NAV.linkStart && to) {
         const ax = to.x - p.pos.x, az = to.z - p.pos.z, yaw = Math.atan2(ax, az);
         if (Math.abs(wrapAngle(yaw - p.facing)) <= NAV.linkFacing || d < 0.25) {
-          if (this._jumpLink(to)) { this.wp++; return; }
-          // too close to the obstacle for any arc to clear it: back up for a run-up (once per link), then retry
-          if (!w.backed) {
-            w.backed = true;
+          if ((this._linkTries.get(this._linkKey(w)) ?? 0) > NAV.stuck.retries) { this._fail('link'); return; }
+          if (this._jumpLink(to)) { this._takeOff(w); this.wp++; return; }
+          // too close to the obstacle for any arc to clear it: back up for a run-up (once per link, across re-plans),
+          // then retry. The run-up spot must be on the surface she stands on: backing off a crate drops her a level
+          // and the re-plan hops her straight back up (an endless crate loop)
+          const key = this._linkKey(w);
+          if (!this._backed.has(key)) {
+            this._backed.add(key);
             const l = Math.hypot(ax, az) || 1, bx = p.pos.x - (ax / l) * 1.1, bz = p.pos.z - (az / l) * 1.1;
-            if (this.ctx.physics?.navWalkable?.(bx, bz) !== false) this.path.splice(this.wp, 0, { x: bx, y: p.pos.y, z: bz });
-            return;
+            const by = this._sameSurfaceY(bx, bz);
+            if (by != null) { this.path.splice(this.wp, 0, { x: bx, y: by, z: bz }); return; }
           }
+          if (!this._takeOff(w)) return;
           this._jumpLink(to, true);
           this.wp++;
           return;
@@ -321,11 +401,74 @@ export class Orders {
         const moved = Math.hypot(p.pos.x - S.x, p.pos.z - S.z);
         S.t = 0; S.x = p.pos.x; S.z = p.pos.z;
         if (moved < NAV.stuck.dist) {
-          if (++S.fails > NAV.stuck.retries) { this.partial = true; this._emit(this.kind, this.point, this.target, false, false); this.clear('stuck'); this.ctx.input?.haptic?.('orderRejected'); return; }
-          this._plan(this.kind === 'attack' && this.target?.pos ? this.target.pos : this._goal);
+          if (++S.fails > NAV.stuck.retries) { this.partial = true; this._emit(this.kind, this.point, this.target, false, false); this.clear('stuck'); this._rejectFx(false); return; }
+          // a dynamic collider (cart, gate) may have closed the route: no path is a rejection, not a silent "arrived"
+          if (!this._plan(this.kind === 'attack' && this.target?.pos ? this.target.pos : this._goal)) { this._fail('unreachable'); return; }
         } else S.fails = Math.max(0, S.fails - 1);
       }
     } else { S.t = 0; S.x = p.pos.x; S.z = p.pos.z; }
+  }
+
+  /** Take-off bookkeeping key: the link's take-off cell (stable across re-plans). */
+  _linkKey(w) {
+    const nav = this.ctx.physics?.nav;
+    const k = nav?.index ? nav.index(w.x, w.z) : -1;
+    return k >= 0 ? k : `${Math.round(w.x * 2)},${Math.round(w.z * 2)}`;
+  }
+
+  /**
+   * Count a take-off at link `w`. The same take-off tried more than NAV.stuck.retries + 1 times in one order (she
+   * keeps landing back before it: a hop that never sticks) ends the order with the grey ✕ — the stuck detector never
+   * sees this, she is moving the whole time. Returns false when the order ended.
+   */
+  _takeOff(w) {
+    const key = this._linkKey(w), n = (this._linkTries.get(key) ?? 0) + 1;
+    this._linkTries.set(key, n);
+    if (n > NAV.stuck.retries + 1) { this._fail('link'); return false; }
+    return true;
+  }
+
+  /** The nav height at (x, z) when it is the surface she stands on (within NAV.stepUp), else null. */
+  _sameSurfaceY(x, z) {
+    const ph = this.ctx.physics, nav = ph?.nav, p = this.p;
+    if (ph?.navWalkable?.(x, z) === false) return null;
+    if (!nav?.h || !nav.index) return p.pos.y;
+    const k = nav.index(x, z);
+    if (k < 0 || (nav.walkable && !nav.walkable(k))) return null;
+    const h = nav.h[k];
+    return Number.isFinite(h) && Math.abs(h - p.pos.y) <= NAV.stepUp ? h : null;
+  }
+
+  /**
+   * A use / attack path ran out with the target still out of reach (it stands on an island, a ledge, past a partial
+   * path): re-plan once; ran out again at the same spot → rejected (grey ✕ + "mrr?"), never a ring that waits forever.
+   */
+  _pathSpent() {
+    const p = this.p, t = this.target;
+    if (!t?.pos) return;
+    const d = Math.hypot(t.pos.x - p.pos.x, t.pos.z - p.pos.z);
+    const reach = this.kind === 'use' ? (t.useR ?? Math.max(0.6, (t.r ?? 1.5) - NAV.useOffset)) : SWING.arc.range + (t.radius ?? 0.3) - 0.25;
+    if (d <= reach) return;
+    const e = this._endAt;
+    if (e && Math.hypot(p.pos.x - e.x, p.pos.z - e.z) < 0.5) { this._fail('unreachable'); return; }
+    this._endAt = { x: p.pos.x, z: p.pos.z };
+    this._plan(this.kind === 'attack' ? t.pos : this.point);
+    // nothing new to walk (she stands on the end already): the re-plan changed nothing → reject now
+    if (this.wp >= this.path.length) this._fail('unreachable');
+  }
+
+  /** Steer a bounce (already airborne off a cap) onto `to`: the horizontal speed that covers the gap in the airtime left. */
+  _bounceLink(to, count = true) {
+    const p = this.p, g = GRAVITY * (p.gravityMul ?? 1);
+    const dx = to.x - p.pos.x, dz = to.z - p.pos.z, dist = Math.hypot(dx, dz);
+    const vy = Math.max(0, p.vel.y), tUp = vy / g, apex = p.pos.y + (vy * vy) / (2 * g);
+    const fall = Math.max(0.05, apex - (to.y ?? p.pos.y));
+    const T = tUp + Math.sqrt((2 * fall) / (GRAVITY * PLAYER.fallGravityMul));
+    const v = Math.min(NAV.hopMaxH, Math.max(1.0, (dist + 0.1) / Math.max(0.15, T)));
+    p.facing = Math.atan2(dx, dz);
+    p.vel.x = (dx / (dist || 1)) * v; p.vel.z = (dz / (dist || 1)) * v;
+    this._hop = { v, x: to.x, z: to.z, t0: this.ctx.game?.time ?? 0 };
+    if (count) this.hops = (this.hops ?? 0) + 1;
   }
 
   /** Assisted hop over a nav link (§5.4): a full jump with the horizontal speed that lands on `to`. */
@@ -353,7 +496,7 @@ export class Orders {
     p.doJump();
     p.jumpCutDone = true;                                            // an order hop is never cut short
     p.vel.x = (dx / (dist || 1)) * v; p.vel.z = (dz / (dist || 1)) * v;
-    this._hop = { v, x: to.x, z: to.z };
+    this._hop = { v, x: to.x, z: to.z, t0: this.ctx.game?.time ?? 0 };
     this.hops = (this.hops ?? 0) + 1;
     return true;
   }
@@ -408,16 +551,27 @@ export class Orders {
   _autoSwing(dt) {
     const p = this.p, st = this.ctx.state?.settings ?? {};
     let mode = st.autoAttack ?? 'auto';
-    if (mode === 'auto') mode = this.ctx.input?.device === 'touch' || this.ctx.state?.difficulty === 'kitten' ? 'loop' : 'chain';
+    // LoL: a right-click on a foe is continuous auto-attack on every device (the Stand, Tumble, direct input or a new
+    // order interrupt it). 'chain' is the opt-in one-string variant
+    if (mode === 'auto') mode = 'loop';
     if (mode === 'off') return;
-    if (mode === 'chain' && this._chainStrings >= 1 && p.state === 'move') { this.engaged = true; return; }
+    // §8.3: the Stand pauses the chain. While it is held (or a fresh press is buffered) no auto press is fed, and an
+    // auto press still sitting in the buffer is dropped, so a parry is never swallowed by the next auto swing (or by a
+    // slash out of the Stand from a stale buffer); a real ⚔ press is left alone (that is a deliberate slash / Riposte)
+    if (p.standPending()) {
+      if (this._autoBuf && !p.attackPressedSince(PLAYER.assist.buffer)) p.attackBuf = 0;
+      this._autoBuf = false;
+      return;
+    }
+    // chain: the string is done → the order ends (no silent "engaged" order with nothing happening; click again)
+    if (mode === 'chain' && this._chainStrings >= 1 && p.state === 'move') { this.clear('chainDone'); return; }
     // count finished strings (the last combo step of a string ran)
     if (p.state === 'attack' && p.comboIndex >= 3) this._sawCombo = 3;
     if (p.state === 'move' && this._sawCombo >= 3) { this._sawCombo = 0; this._chainStrings++; this._chainRest = AIM.autoChainRest; if (mode === 'chain') return; }
     if (this._chainRest > 0) { this._chainRest -= dt; return; }
     if (!p.onGround) return;
     // press: from neutral, and inside each swing's combo window (the auto-combo grace chains Snip → Snap → Swoosh)
-    if (p.state === 'move' || (p.state === 'attack' && p.swing?.def?.next && !p.swing.queued)) p.attackBuf = Math.max(p.attackBuf, PLAYER.assist.buffer * 0.5);
+    if (p.state === 'move' || (p.state === 'attack' && p.swing?.def?.next && !p.swing.queued)) { p.attackBuf = Math.max(p.attackBuf, PLAYER.assist.buffer * 0.5); this._autoBuf = true; }
   }
 
   /** Use order: walk to the target's reach, face it, use it. */
@@ -499,6 +653,8 @@ export class Orders {
 
 /** §8 LMB on a friend uses it only when no hostile is alerted within this many metres (she never swings at friends). */
 const ATTACK_SAFE_R = 10;
+/** An armed attack-move (X) with no click lapses after this many seconds. */
+const ATTACK_MOVE_ARM = 4;
 
 /** Stick magnitude whose locomotion speed (walk ≤ 0.5, run at 1) is `v` m/s. */
 function magForSpeed(v) {

@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { E } from '../core/events.js';
-import { PLAYER, ATTACKS, ECONOMY, COMPANIONS, JUICE, ENEMIES, AIM } from '../core/config.js';
+import { PLAYER, ATTACKS, ECONOMY, COMPANIONS, JUICE, ENEMIES, AIM, GRAVITY } from '../core/config.js';
 import { wrapAngle, dampAngle } from '../core/math.js';
 import { hostileTo } from '../core/ActorRegistry.js';
 import { GuardState, parryWindowFor } from './Guard.js';
@@ -22,13 +22,14 @@ import { STATES } from './PlayerStates.js';
 import { TUNING, threatens } from './tuning.js';
 import { SwordcatModel } from './SwordcatModel.js';
 import { Orders } from './Orders.js';
-import { resolveAim, autoTarget, magnetPick, threatSnap } from './Aim.js';
-import { assistCone, lungeFor } from '../combat/targeting.js';
+import { resolveAim, autoTarget, magnetPick, threatSnap, jumpAssistPlan } from './Aim.js';
+import { assistCone, lungeSpeed } from '../combat/targeting.js';
 
 const _v = new THREE.Vector3(), _dir = new THREE.Vector3(), _ex = { x: 0, z: 0 }, _mv = { x: 0, z: 0, mag: 0 };
 const _aimS = { her: null, facing: 0, riposte: null, explicit: null, cursor: null, selected: null, range: 2, auto: null, move: null };
-const _cands = [];
+const _cands = [], _snapOut = { at: null };
 const _hostile = hostileTo('player');
+const AIM_RECENT = 2.0;
 const COMBO_INDEX = { slash1: 1, slash2: 2, slash3: 3 };
 const JEER_R = ENEMIES.hyena?.jeer?.r ?? 8;
 
@@ -97,6 +98,43 @@ export class Player extends ScriptedActorMixin(Actor) {
     /** soft auto-target memory (§7.2 sticky) and the cursor position the Stand re-aims after (§8.1: 30 px) */
     this._autoPrev = null;
     this._guardPtr = { x: 0, y: 0, armed: false };
+    /** §7.2 "hit her within the last 2 s": attacker → game time of its last attack on her */
+    this._recentAttackers = new Map();
+    this._autoInfoOut = { windup: false, recentHit: false };
+    this._autoInfo = (a) => {
+      const o = this._autoInfoOut;
+      o.windup = this.ctx.combat?.threats?.windingUp?.(a) ?? false;
+      o.recentHit = this._recentHit(a);
+      return o;
+    };
+    /** §8.1 Auto-Riposte: counts down after a parry (sim s); at 0 the Riposte fires if the parried enemy is in reach */
+    this.autoRiposteT = 0;
+    /** §5.4 jump assist: the extra air velocity (x, z) the assisted take-off holds until she lands */
+    this.airAssist = { x: 0, z: 0, on: false };
+    /** §5.4 Pounce dive point while airborne with Pounce ready (fx draws the 0.9 m dive circle): { x, z, valid } */
+    this.diveAt = { x: 0, z: 0, valid: false };
+  }
+
+  /** §7.2: remember who just attacked her (the auto-target prefers them for 2 s). */
+  _noteAttacker(att) {
+    const a = att?.isProjectile ? att.owner : att;
+    if (!a || a === this) return;
+    const now = this.ctx.game?.time ?? 0;
+    this._recentAttackers.set(a, now);
+    if (this._recentAttackers.size > 16) for (const [k, t] of this._recentAttackers) if (now - t > AIM_RECENT || k.alive === false) this._recentAttackers.delete(k);
+  }
+  _recentHit(a) {
+    if (this.ctx.combat?.hitRecently?.(a, AIM_RECENT)) return true;          // combat's record (hits that landed)
+    const t = this._recentAttackers.get(a);                                   // ours: every attack on her (blocks too)
+    return t != null && (this.ctx.game?.time ?? 0) - t <= AIM_RECENT;
+  }
+
+  /** §8.1 Auto-Riposte setting: 'auto' = on for touch, off otherwise; 'on' / true; 'off' / false. */
+  autoRiposteOn() {
+    const v = this.ctx.state?.settings?.autoRiposte ?? 'auto';
+    if (v === true || v === 'on') return true;
+    if (v === false || v === 'off') return false;
+    return this.ctx.input?.device === 'touch';
   }
 
   /** The hover pick under the cursor (camera's Picker, once per rendered frame): { kind, actor, id, point }. */
@@ -135,14 +173,33 @@ export class Player extends ScriptedActorMixin(Actor) {
       _cands.length = 0;
       for (const a of ctx.actors?.queryRadius?.(this.pos, r + 1.5, _hostile) ?? []) _cands.push(a);
       const refYaw = mag > 0.3 ? Math.atan2(_dir.x, _dir.z) : this.facing;
-      const tb = ctx.combat?.threats;
-      s.auto = autoTarget(this.pos, refYaw, _cands, r, (a) => ({ windup: tb?.windingUp?.(a) ?? false, recentHit: false }), sel, this._autoPrev, this.pos.y);
+      s.auto = autoTarget(this.pos, refYaw, _cands, r, this._autoInfo, sel, this._autoPrev, this.pos.y);
       this._autoPrev = s.auto;
     }
     const out = resolveAim(kind, s, this._aimOut);
     const a = this.aim;
     a.kind = kind; a.dir.x = out.dir.x; a.dir.z = out.dir.z; a.point = out.point; a.target = out.target; a.source = out.source; a.range = range;
     return out;
+  }
+
+  /**
+   * Keep `player.aim` live for fx / ui / companions (§12 player 2): while she is free (move / guard / charge) the
+   * aim of her next swing is re-resolved every step; swings keep the aim they started with. `active` is true while a
+   * directional verb is being aimed (a charge, the Stand, a swing, a Pounce, a kitten ability). Also the Pounce dive
+   * point while airborne with Pounce ready (`diveAt`, fx's 0.9 m dive circle).
+   */
+  _refreshAim() {
+    const st = this.state, a = this.aim;
+    if (this.ctx.cam?.isIso === false) { a.active = false; this.diveAt.valid = false; return; }
+    if (st === 'move' || st === 'guard' || st === 'charge') {
+      const kind = st === 'move' ? 'attack' : st;
+      this.resolveAim(kind, ATTACKS.slash1.arc.range);
+      const arc = st === 'guard' ? null : ATTACKS.slash1.arc;
+      a.width = arc ? Math.abs(arc.from - arc.to) : 2 * (this.guardState.arc ?? PLAYER.guard.arc);
+    }
+    a.active = st === 'attack' || st === 'charge' || st === 'guard' || st === 'pounce' || !!this.ctx.companions?.aim?.active;
+    if (!this.onGround && this.pounceReady && st === 'move' && this.alive) this.pouncePlan(this.diveAt);
+    else this.diveAt.valid = false;
   }
 
   /** Face the resolved aim now (her facing = the aim direction). */
@@ -153,8 +210,8 @@ export class Player extends ScriptedActorMixin(Actor) {
   }
 
   /**
-   * §10.1 ability-bar data → out: { dodgeCd, meowCd, milk, milkMax, golden 0..1, goldenReady, holyReady, grit, gritMax,
-   * guard, interact }.
+   * §10.1 ability-bar data → out: { dodgeCd, dodgeMax, meowCd, meowMax, milk, milkMax, golden 0..1, goldenReady,
+   * goldenLocked, holyReady, grit, gritMax, guard, interact, charge, chargeTier, shards, riposteReady, airborne }.
    */
   abilityState(out = {}) {
     out.dodgeCd = this.dodgeCd; out.dodgeMax = PLAYER.dodge.cooldown;
@@ -167,6 +224,11 @@ export class Player extends ScriptedActorMixin(Actor) {
     out.guard = this.state === 'guard';
     out.interact = !!this.ctx.levels?.current?._interact;
     out.charge = this.charge; out.chargeTier = this.chargeTier;
+    // lock states (§10.1: desaturated + a lock pip) and the Stand slot's parry flash
+    out.shards = this.shards;
+    out.goldenLocked = this.shards < TUNING.goldenMinShards;
+    out.riposteReady = this.riposteReady();
+    out.airborne = !this.onGround;
     return out;
   }
 
@@ -270,7 +332,10 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.memeCamTrigger.active) this.memeCamTrigger.exit();
     const g = this.guardState;
     g.dodging = this.state === 'dodge';
-    g.parryWindow = parryWindowFor(ctx.state?.difficultyCfg, ctx.input?.device === 'touch');
+    const touch = ctx.input?.device === 'touch';
+    g.parryWindow = parryWindowFor(ctx.state?.difficultyCfg, touch);
+    g.arc = touch && ctx.cam?.isIso !== false ? (PLAYER.guard.touchArc ?? PLAYER.guard.arc) : PLAYER.guard.arc;   // §8.1
+    this._noteAttacker(att);
     const r = g.resolve(def, hitDir, this.facing);
     this.combatT = TUNING.combatStance;
     switch (r) {
@@ -295,6 +360,7 @@ export class Player extends ScriptedActorMixin(Actor) {
         this.riposteTarget = att?.isProjectile ? null : att;
         this.riposteT = this.riposteTarget ? G.riposteWindow : 0;
         if (ctx.state?.settings?.autoStand || ctx.input?.device === 'touch') this.autoStandT = TUNING.autoStand;
+        this.autoRiposteT = this.riposteTarget && this.autoRiposteOn() ? AIM.autoRiposte : 0;   // §8.1 Auto-Riposte
         return 'parry';
       }
       case 'block':
@@ -421,10 +487,13 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.memeCamTrigger.active && this.state !== 'memecam' && this.alive) this.setState('memecam');
 
     STATES[this.state].update(this, dt);
+    this._refreshAim();
 
     // gravity: snappier falls; pounce sets its own
     if (this.state !== 'pounce') this.gravityMul = this.vel.y < 0 ? PLAYER.fallGravityMul : 1;
-    if (this.jumping && !this.jumpCutDone && !this.onGround && this.vel.y > 0 && !ctx.input.down('jump')) {
+    // variable jump height: releasing Jump cuts the rise (not on touch: a finger tap is 50–120 ms, and the copy says
+    // "tap [Jump]" to clear the practice fence, §14)
+    if (this.jumping && !this.jumpCutDone && !this.onGround && this.vel.y > 0 && !ctx.input.down('jump') && ctx.input.device !== 'touch') {
       this.vel.y *= PLAYER.jumpCut; this.jumpCutDone = true;
     }
     const wasGround = this.onGround;
@@ -451,6 +520,15 @@ export class Player extends ScriptedActorMixin(Actor) {
       if (this.moveLockT <= TUNING.splashLockMax - TUNING.splashLockMin && (!m || Math.hypot(m.x, m.y) < 0.2)) this.moveLockT = 0;
     }
     if (this.riposteT <= 0) this.riposteTarget = null;
+    if (this.autoRiposteT > 0) {
+      this.autoRiposteT = Math.max(0, this.autoRiposteT - dt);
+      // §8.1: 0.15 s after the parry, a Riposte at the parried enemy if it is within reach (4 m); the state machine
+      // starts it from the Stand / neutral through the attack buffer (a swing / Tumble already running is left alone)
+      if (this.autoRiposteT === 0 && this.riposteReady() && (this.state === 'guard' || this.state === 'move') && this.onGround) {
+        this.attackBuf = Math.max(this.attackBuf, PLAYER.assist.buffer);
+        this.autoRiposted = (this.autoRiposted ?? 0) + 1;
+      }
+    }
     this.valorState.update(dt);
     this.applyUpgrades();
     if (this.guardState.update(dt)) this.ctx.bus.emit(E.PLAYER_GRIT, { value: this.guardState.grit, max: this.guardState.gritMax, broken: false });
@@ -476,6 +554,7 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   _landed() {
     const impact = this.landImpact || 0;
+    this.airAssist.on = false;
     this.jumping = false; this.jumpCutDone = false; this.pounceReady = true;
     this.ctx.bus.emit(E.PLAYER_LAND, { impact });
     if (impact > PLAYER.hardLandSpeed && this.state === 'move') this.setState('land');
@@ -485,6 +564,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   _bounced() {
     this.jumping = false; this.jumpCutDone = true; this.pounceReady = true; this.coyoteT = 0;
     this.squashEvent = 'bounce';
+    this.lastBounceT = this.ctx.game?.time ?? 0;               // Orders steers a bounce link from here
     this.ctx.bus.emit(E.PLAYER_JUMP, { bounce: this.bounced });
   }
 
@@ -561,10 +641,9 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.moveLockT > 0) { out.set(0, 0, 0); return 0; }      // after a splash (§7.1)
     const mx = input.move.x, my = input.move.y;
     // §5.1 direct input always wins: |move| >= 0.15 cancels any order; otherwise an order steers her (§5.2)
-    if (this.orders.kind) {
-      if (Math.hypot(mx, my) >= 0.15) this.orders.cancelByDirect();
-      else return this.orders.steer(out);
-    }
+    // (an armed attack-move with no order yet is disarmed by direct input too)
+    if (Math.hypot(mx, my) >= 0.15) { if (this.orders.kind || this.orders.attackMoveArmed) this.orders.cancelByDirect(); }
+    else if (this.orders.kind) return this.orders.steer(out);
     out.set(-Math.sin(yaw) * my + Math.cos(yaw) * mx, 0, -Math.cos(yaw) * my - Math.sin(yaw) * mx);
     const l = out.length();
     if (l > 1) out.divideScalar(l);
@@ -599,6 +678,15 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.autoStandT > 0) return true;
     return st?.settings?.holdStand === false ? this.guardToggle : this.ctx.input.down('guard');
   }
+
+  /** The Stand is held, or a fresh press of it is still inside the input buffer (newer than the last ⚔ press). */
+  standPending() {
+    if (this.wantGuard()) return true;
+    const now = this.ctx.game.time;
+    return this.lastGuardPress >= 0 && this.lastGuardPress > this.lastAttackPress && now - this.lastGuardPress <= PLAYER.assist.buffer;
+  }
+  /** A real ⚔ press within the last `win` s. */
+  attackPressedSince(win) { return this.lastAttackPress >= 0 && this.ctx.game.time - this.lastAttackPress <= win; }
 
   chargeHeld() {
     if (this.ctx.state?.settings?.holdCharge === false && this.state === 'charge') return !this.chargeToggleRelease;
@@ -645,6 +733,65 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.jumping = true; this.jumpCutDone = false;
     this.squashEvent = 'jump';
     this.ctx.bus.emit(E.PLAYER_JUMP, {});
+  }
+
+  /**
+   * A jump from her own input (F / A / the Jump button). §5.4 jump direction: along the path when an order walks her
+   * (the follower keeps steering in the air), else her current velocity, else straight up; plus the jump assist toward
+   * a raised walkable top within 2.4 m (iso only).
+   */
+  inputJump() {
+    this.doJump();
+    this._jumpAssist();
+  }
+
+  _jumpAssist() {
+    const aa = this.airAssist;
+    aa.on = false; aa.x = 0; aa.z = 0;
+    const ph = this.ctx.physics, A = AIM.jumpAssist;
+    if (!A || this.ctx.cam?.isIso === false || this.orders.kind || typeof ph?.topAt !== 'function') return;
+    const probe = (x, z) => ({ top: ph.topAt(x, z), walkable: ph.navWalkable ? ph.navWalkable(x, z) !== false : true });
+    const plan = jumpAssistPlan(this.pos, this.vel, probe, { ...A, v0: PLAYER.jumpV, g: GRAVITY, fallMul: PLAYER.fallGravityMul });
+    if (!plan) return;
+    aa.x = plan.vx - this.vel.x; aa.z = plan.vz - this.vel.z; aa.on = true;
+    this.vel.x = plan.vx; this.vel.z = plan.vz;
+    this.jumpCutDone = true;                                          // an assisted hop always reaches its top
+    this.jumpAssists = (this.jumpAssists ?? 0) + 1;
+  }
+
+  /**
+   * §6.2 / §6.4 Pounce aim: KBM → the cursor point (≤ AIM.pounceMax m horizontal), a hostile (crows first) within
+   * AIM.pounceMagnet m of it magnetised; touch / pad → the best hostile in an AIM.pounceTouchDisc m disc around her,
+   * else the resolved aim. Writes out { x, z, valid, target }.
+   */
+  pouncePlan(out = this.diveAt) {
+    const ctx = this.ctx, input = ctx.input, cam = ctx.cam;
+    out.valid = false; out.target = null;
+    if (cam?.isIso === false) return out;
+    const kbm = input?.device === 'kbm' && input?.preset !== 'keyboardOnly';
+    let cx, cz, R;
+    if (kbm && cam?.cursorValid && (input.pointerIdle?.() ?? 99) < AIM.cursorIdle) {
+      const c = cam.cursorGround;
+      let dx = c.x - this.pos.x, dz = c.z - this.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > AIM.pounceMax) { dx *= AIM.pounceMax / d; dz *= AIM.pounceMax / d; }
+      cx = this.pos.x + dx; cz = this.pos.z + dz; R = AIM.pounceMagnet;
+    } else { cx = this.pos.x; cz = this.pos.z; R = AIM.pounceTouchDisc; }
+    let best = null, bs = Infinity;
+    for (const a of ctx.actors?.queryRadius?.(_v.set(cx, this.pos.y, cz), R + 1, _hostile) ?? []) {
+      if (!a?.pos || a.alive === false || a.hidden || a.hurtable === false || a.breakable || a.dormant) continue;
+      const d = Math.hypot(a.pos.x - cx, a.pos.z - cz);
+      if (d > R + (a.radius ?? 0)) continue;
+      if (Math.hypot(a.pos.x - this.pos.x, a.pos.z - this.pos.z) > AIM.pounceMax + (a.radius ?? 0)) continue;
+      const sc = d - (a.tags?.has?.('flyer') ? 1 : 0);
+      if (sc < bs) { bs = sc; best = a; }
+    }
+    if (best) { out.x = best.pos.x; out.z = best.pos.z; out.target = best; out.valid = true; return out; }
+    if (kbm && R === AIM.pounceMagnet) { out.x = cx; out.z = cz; out.valid = true; return out; }
+    const o = this.resolveAim('pounce', ATTACKS.pounce.arc.range);
+    const reach = o.target?.pos ? Math.min(AIM.pounceMax, Math.hypot(o.target.pos.x - this.pos.x, o.target.pos.z - this.pos.z)) : 0.6;
+    out.x = this.pos.x + o.dir.x * reach; out.z = this.pos.z + o.dir.z * reach; out.target = o.target ?? null; out.valid = true;
+    return out;
   }
 
   updateZoomies(dt, mag) {
@@ -703,17 +850,26 @@ export class Player extends ScriptedActorMixin(Actor) {
     // explicit (touch drag / RS) → the cursor (KBM) → the selected target → the soft auto-target → the stick → facing.
     // Classic: the lock-on target, else a fresh stick direction.
     const lock = this.lockTarget();
+    let lungeAt = null;
     if (id === 'riposte' && this.riposteTarget) this._faceActor(this.riposteTarget);
     else if (this.orders.kind === 'attack' && this.orders.engaged && this.orders.target?.pos) this._faceActor(this.orders.target);
-    else if (this.ctx.cam?.isIso !== false) { if (id !== 'sunburst') this.faceAim('attack', def.arc?.range ?? ATTACKS.slash1.arc.range); }
+    else if (this.ctx.cam?.isIso !== false) { if (id !== 'sunburst') lungeAt = this._lungeCandidate(this.faceAim('attack', def.arc?.range ?? ATTACKS.slash1.arc.range)); }
     else if (lock && Math.hypot(lock.pos.x - this.pos.x, lock.pos.z - this.pos.z) < PLAYER.lockOn.range) this._faceActor(lock);
     else if (this.wishDir(_dir) > 0.3) this.facing = Math.atan2(_dir.x, _dir.z);
     this._riposteFace = id === 'riposte' ? this.riposteTarget : null;
     if (id === 'riposte') { this.riposteT = 0; this.riposteTarget = null; }
-    this.swing = ctx.combat.beginSwing(this, def, this._riposteFace ? { target: this._riposteFace } : undefined);
+    // §7.1 lunge magnetism from the first frame of the lunge window (touch / pad / auto-target swings)
+    this.swing = ctx.combat.beginSwing(this, def, this._riposteFace ? { target: this._riposteFace } : lungeAt && def.lunge ? { lungeTo: lungeAt } : undefined);
     this.applySwingOpts(this.swing);
+    // the aim this swing was released with: an explicit aim (a touch drag / RS) keeps its narrow magnet on the active
+    // frame, even when the drag pad already let go (ui clears virtualAim ~2 frames after release)
+    if (this.swing) this.swing.aimSource = this.ctx.cam?.isIso !== false && id !== 'riposte' ? this.aim.source : null;
     this.swingSerial++;
-    this.swingGuardLatch = this.wantGuard();        // a Stand held into the swing can't cancel it (PlayerStates.attack)
+    // a Stand held into the swing can't cancel it (PlayerStates.attack): ⚔ out of the Stand, a Riposte, Auto-Stand.
+    // A Stand pressed AFTER the ⚔ press behind this swing (an auto-chain / queued combo hit) is a fresh parry intent
+    // and is not latched, so it still cancels the wind-up / recovery
+    const freshStand = this.lastGuardPress >= 0 && this.lastGuardPress > this.lastAttackPress && this.autoStandT <= 0;
+    this.swingGuardLatch = this.wantGuard() && (id === 'riposte' || !freshStand);
     this.attackBuf = 0;
     this.comboIndex = COMBO_INDEX[id] ?? 0;
     this.zoomies = false; this.zoomT = 0;
@@ -759,21 +915,26 @@ export class Player extends ScriptedActorMixin(Actor) {
     const input = this.ctx.input, dev = input?.device === 'touch' ? 'touch' : input?.device === 'pad' ? 'pad' : 'kbm';
     const def = this.swing?.def, range = def?.arc?.range ?? ATTACKS.slash1.arc.range;
     const aim = this.aim, sel = this.lockTarget();
-    const stickIdle = Math.hypot(input?.move?.x ?? 0, input?.move?.y ?? 0) < 0.3 && !input?.virtualAim?.active;
+    // a swing released with an explicit aim (touch drag / RS) uses the pad-RS cone (±45°, 3.5 m) around that aim: never
+    // the 360° "stick idle" cone, which would turn a deliberate drag back toward a foe behind her
+    const explicit = this.swing?.aimSource === 'explicit';
+    const stickIdle = !explicit && Math.hypot(input?.move?.x ?? 0, input?.move?.y ?? 0) < 0.3 && !input?.virtualAim?.active;
     const padAim = dev === 'pad' && Math.hypot(input?.aimStick?.x ?? 0, input?.aimStick?.y ?? 0) > 0.35;
-    const auto = aim.source === 'auto' || aim.source === 'facing' || aim.source === 'move' || input?.preset === 'keyboardOnly';
-    const cone = assistCone(dev, { arcRange: range, selected: aim.target != null && aim.target === sel, auto: dev === 'kbm' && auto, padAim, stickIdle });
+    const auto = !explicit && (aim.source === 'auto' || aim.source === 'facing' || aim.source === 'move' || input?.preset === 'keyboardOnly');
+    const cone = explicit ? { angle: AIM.padCone, range: AIM.padRange }
+      : assistCone(dev, { arcRange: range, selected: aim.target != null && aim.target === sel, auto: dev === 'kbm' && auto, padAim, stickIdle });
     _cands.length = 0;
     for (const a of this.ctx.actors.queryRadius(this.pos, cone.range + 1.5, _hostile)) _cands.push(a);
     _dir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
     const t0 = aim.target;
-    let best = t0 && t0.alive !== false && t0.pos && !t0.breakable && Math.hypot(t0.pos.x - this.pos.x, t0.pos.z - this.pos.z) - (t0.radius ?? 0) <= cone.range ? t0 : null;
+    let best = t0 && t0.alive !== false && t0.pos && !t0.breakable && Math.hypot(t0.pos.x - this.pos.x, t0.pos.z - this.pos.z) - (t0.radius ?? 0) <= cone.range
+      && (!explicit || Math.abs(wrapAngle(Math.atan2(t0.pos.x - this.pos.x, t0.pos.z - this.pos.z) - this.facing)) <= cone.angle) ? t0 : null;
     best ??= magnetPick(this.pos, _dir, _cands, cone.angle, cone.range);
     if (best) {
       this._faceActor(best);
       if ((dev !== 'kbm' || auto) && this.swing && def?.lunge) {
         const d = Math.hypot(best.pos.x - this.pos.x, best.pos.z - this.pos.z) - (best.radius ?? 0);
-        this.swing.lungeOverride = lungeFor(d, range, def.lunge);
+        this.swing.lungeOverride = lungeSpeed(def, d, range);
       }
     } else if (this.orders.kind === 'attack' && this.orders.target?.breakable) this._faceActor(this.orders.target);
     return best;
@@ -800,6 +961,14 @@ export class Player extends ScriptedActorMixin(Actor) {
     return best;
   }
 
+  /** The aim's target when the swing should lunge at it (§7.1: touch / pad / the soft auto-target; never a KBM cursor swing). */
+  _lungeCandidate(o) {
+    const t = o?.target, dev = this.ctx.input?.device;
+    if (!t?.pos || t.alive === false || t.breakable || t.faction === this.faction) return null;
+    if (dev === 'touch' || dev === 'pad' || o.source === 'auto' || this.ctx.input?.preset === 'keyboardOnly') return t;
+    return null;
+  }
+
   _faceActor(a) { this.facing = Math.atan2(a.pos.x - this.pos.x, a.pos.z - this.pos.z); }
 
   /**
@@ -815,7 +984,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (kind === 'guard') {
       if (dev === 'touch' && this.ctx.state?.settings?.standAutoFace !== false) {
         const nx = this.ctx.combat?.nextParryable?.(this, 6);
-        const t = nx?.attacker ?? this.lockTarget();
+        const t = nx?.pos ? { pos: nx.pos } : nx?.attacker ?? this.lockTarget();   // a bolt: face the bolt
         if (t?.pos) yaw = Math.atan2(t.pos.x - this.pos.x, t.pos.z - this.pos.z);
       } else if (dev === 'kbm') {
         const P = input.pointer, g = this._guardPtr;
@@ -854,8 +1023,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.orders.onGuard();
     if (this.ctx.cam?.isIso !== false) {
       const nx = this.ctx.combat?.nextParryable?.(this, AIM.standSnapRange);
-      const snap = nx ? threatSnap(this.pos, [nx], this.ctx.game.time) : null;
-      if (snap) this._faceActor(snap);
+      const snap = nx ? threatSnap(this.pos, [nx], this.ctx.game.time, _snapOut) : null;
+      if (snap) { const at = _snapOut.at ?? snap.pos; this.facing = Math.atan2(at.x - this.pos.x, at.z - this.pos.z); }
       else if (!this.lockTarget()) { const o = this.resolveAim('guard'); if (o.source !== 'move' && o.source !== 'facing') this.facing = Math.atan2(o.dir.x, o.dir.z); }
       const P = this.ctx.input?.pointer;
       this._guardPtr.x = P?.x ?? 0; this._guardPtr.y = P?.y ?? 0; this._guardPtr.armed = false;
@@ -1191,7 +1360,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._recomputeMax();
     if (!this.alive || this.state === 'dead') { this.alive = true; this.hurtable = true; }
     this.hp = this.maxHp;
-    this.invulnT = 0; this.immuneT = 0; this.critT = 0; this.riposteT = 0; this.autoStandT = 0;
+    this.invulnT = 0; this.immuneT = 0; this.critT = 0; this.riposteT = 0; this.autoStandT = 0; this.autoRiposteT = 0;
     this.moveLockT = 0; this.splashCdT = 0; this._softBreak = false;
     this.guardState.reset();
     this.respawnPoint.pos.copy(this.pos); this.respawnPoint.facing = this.facing;

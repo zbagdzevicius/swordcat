@@ -5,7 +5,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { PLAYER, ATTACKS, DIFFICULTY, GRAVITY } from '../../src/core/config.js';
+import { PLAYER, ATTACKS, DIFFICULTY, GRAVITY, AIM, NAV, HAPTICS } from '../../src/core/config.js';
+import { jumpAssistPlan, hopSpeed } from '../../src/player/Aim.js';
 import { E } from '../../src/core/events.js';
 import { resolveGuard, GuardState, parryWindowFor } from '../../src/player/Guard.js';
 import { Valor, valorGain } from '../../src/player/Valor.js';
@@ -808,4 +809,391 @@ test('Player: applySlow (web) halves her speed for 2 s, a tumble or cleanse() cl
   p._scanThreats(DT);
   assert.equal(p.inJeer, true, '…but inside the duet r 10');
   assert.equal(typeof p.recomputeMax, 'function', 'public recomputeMax');
+});
+
+// ================================================================== CONTROLS_SPEC (iso controls): orders, Stand, aim
+/** Hold a WASD key on the rig's real Input (direct movement, §5.1). */
+const holdKey = (r, code, on = true) => { if (on) r.input.keys.add(code); else r.input.keys.delete(code); r.input._updateKeyMove(); };
+const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+test('Orders: a move order walks the direct line (no nav yet), runs, arrives within 0.25 m and emits player:order', async () => {
+  const r = await rig(), { p } = r;
+  assert.equal(p.order('move', new THREE.Vector3(0, 0, 6)), true);
+  const ev = r.last(E.PLAYER_ORDER);
+  assert.equal(ev.kind, 'move'); assert.equal(ev.valid, true); assert.equal(ev.queued, false);
+  r.seconds(0.6);
+  assert.ok(Math.hypot(p.vel.x, p.vel.z) > PLAYER.run * 0.8, `she runs (${Math.hypot(p.vel.x, p.vel.z).toFixed(2)})`);
+  r.seconds(2);
+  assert.equal(p.orders.kind, null); assert.equal(p.orders.lastClear, 'arrived');
+  assert.ok(Math.hypot(p.pos.x, p.pos.z - 6) <= NAV.arrive + 0.05, `arrived (${p.pos.z.toFixed(2)})`);
+});
+
+test('Orders: direct input (WASD past 0.15) cancels any order at once; stop clears path, queue and target', async () => {
+  const r = await rig(), { p } = r;
+  p.order('move', new THREE.Vector3(0, 0, 12));
+  p.order('move', new THREE.Vector3(5, 0, 12), { queued: true });
+  assert.equal(p.orders.queue.length, 1, 'Ctrl+RMB queues');
+  r.seconds(0.3);
+  holdKey(r, 'KeyD'); r.step();
+  assert.equal(p.orders.kind, null); assert.equal(p.orders.lastClear, 'direct'); assert.equal(p.orders.queue.length, 0);
+  holdKey(r, 'KeyD', false); r.seconds(0.3);
+  p.order('move', new THREE.Vector3(0, 0, 12));
+  p.order('stop');
+  assert.equal(p.orders.kind, null); assert.equal(p.orders.path.length, 0);
+  assert.equal(r.last(E.PLAYER_ORDER).kind, 'stop');
+});
+
+test('Orders: the queue holds at most NAV.queueMax waypoints and walks them in turn', async () => {
+  const r = await rig(), { p } = r;
+  p.order('move', new THREE.Vector3(0, 0, 2));
+  for (let i = 0; i < 6; i++) p.order('move', new THREE.Vector3(i + 1, 0, 2), { queued: true });
+  assert.equal(p.orders.queue.length, NAV.queueMax);
+  r.seconds(5);
+  assert.equal(p.orders.kind, null);
+  assert.ok(Math.hypot(p.pos.x - NAV.queueMax, p.pos.z - 2) < 0.4, `the last queued point (${p.pos.x.toFixed(2)}, ${p.pos.z.toFixed(2)})`);
+});
+
+test('Orders §5.2 interplay: Tumble keeps a move order and drops an attack order; the Stand clears a move order', async () => {
+  const r = await rig(), { p } = r;
+  p.order('move', new THREE.Vector3(0, 0, 15));
+  r.seconds(0.2); r.tap('dodge');
+  assert.equal(p.state, 'dodge'); assert.equal(p.orders.kind, 'move', 'Tumble keeps the move order');
+  r.seconds(0.6);
+  assert.equal(p.orders.kind, 'move', '…and it resumes after the roll');
+  r.press('guard'); r.step(2);
+  assert.equal(p.state, 'guard'); assert.equal(p.orders.kind, null, 'the Stand plants her'); assert.equal(p.orders.lastClear, 'guard');
+  r.release('guard'); r.seconds(0.6);
+  const e = r.enemy(6, 0);
+  e.pos.set(p.pos.x, 0, p.pos.z + 6);
+  assert.equal(p.order('attack', e), true);
+  r.seconds(0.1); r.tap('dodge');
+  assert.equal(p.orders.kind, null, 'Tumble drops the attack order'); assert.equal(p.orders.lastClear, 'dodge');
+});
+
+test('Orders §8.4: a move order in a wind-up cancels the swing (no hit); in the active frames it waits for recovery', async () => {
+  const r = await rig(), { p } = r;
+  const S = ATTACKS.slash1;
+  const e = r.enemy(1.0, 0);
+  r.tap('attack');
+  assert.equal(p.state, 'attack');
+  p.order('move', new THREE.Vector3(-4, 0, 0));
+  r.step();
+  assert.equal(p.state, 'move', 'wind-up cancelled at once'); assert.equal(p.swing, null);
+  r.seconds(0.3);
+  assert.equal(e.hp, e.maxHp, 'the cancelled swing dealt no damage');
+  p.order('stop'); r.seconds(0.5);
+  p.pos.set(0, 0, 0); p.facing = 0; p.vel.set(0, 0, 0);
+  r.tap('attack');
+  while (p.swing && p.swing.t < S.active[0] + 0.01) r.step();
+  assert.equal(p.state, 'attack');
+  p.order('move', new THREE.Vector3(-4, 0, 0));
+  r.step();
+  assert.equal(p.state, 'attack', 'active frames: the order waits');
+  r.seconds(S.active[1] - S.active[0] + 0.1);
+  assert.equal(p.state, 'move', 'recovery: the order applies'); assert.equal(p.orders.kind, 'move');
+  assert.ok(e.hp < e.maxHp, 'the active swing landed');
+});
+
+test('Orders: WASD never cancels a wind-up or the active frames, but cuts recovery from active[1] + 0.05', async () => {
+  const r = await rig(), { p } = r;
+  const S = ATTACKS.slash1;
+  r.tap('attack');
+  holdKey(r, 'KeyW'); r.step(2);
+  assert.equal(p.state, 'attack', 'wind-up kept');
+  while (p.swing && p.swing.t < S.active[1] + 0.05) { assert.equal(p.state, 'attack'); r.step(); }
+  r.step(2);
+  assert.equal(p.state, 'move', 'late recovery cut by movement');
+  holdKey(r, 'KeyW', false);
+});
+
+test('Orders: an attack order paths to reach, faces the target and auto-chains (chain = one Snip–Snap–Swoosh string)', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.state.settings.autoAttack = 'chain';
+  const e = r.enemy(6, 0.4);
+  e.maxHp = e.hp = 9999;
+  p.order('attack', e);
+  r.seconds(4);
+  const combos = r.events.filter((x) => x[0] === E.PLAYER_SWING).map((x) => x[1].combo);
+  assert.deepEqual(combos, [1, 2, 3], `chain: one full string, then stand ready (${combos})`);
+  assert.equal(p.orders.kind, null, 'chain: the order ends after the string (no silent engaged order)');
+  assert.equal(p.orders.lastClear, 'chainDone');
+  const reach = ATTACKS.slash1.arc.range + e.radius - 0.25;
+  assert.ok(Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z) <= reach + 0.7, 'in reach');
+  // loop keeps chaining strings while the target lives
+  ctx.state.settings.autoAttack = 'loop';
+  r.events.length = 0;
+  p.order('attack', e);
+  r.seconds(4);
+  assert.ok(r.count(E.PLAYER_SWING) >= 5, `loop: keeps swinging (${r.count(E.PLAYER_SWING)})`);
+  // off: approach and face only
+  ctx.state.settings.autoAttack = 'off';
+  p.order('stop'); r.seconds(1.5); r.events.length = 0;
+  p.order('attack', e); r.seconds(1.5);
+  assert.equal(r.count(E.PLAYER_SWING), 0, 'off: no swings');
+});
+
+test('Orders: autoAttack auto = loop on every device (LoL right-click keeps auto-attacking)', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.state.settings.autoAttack = 'auto';
+  assert.equal(ctx.input.device, 'kbm');
+  const e = r.enemy(4, 0);
+  e.maxHp = e.hp = 9999;
+  p.order('attack', e);
+  r.seconds(5);
+  assert.ok(r.count(E.PLAYER_SWING) >= 5, `KBM auto keeps swinging (${r.count(E.PLAYER_SWING)})`);
+  assert.equal(p.orders.kind, 'attack');
+});
+
+test('Orders: a hurt stun pauses a move order (it resumes from the knockback spot); a guard break clears it', async () => {
+  const r = await rig(), { p } = r;
+  p.order('move', new THREE.Vector3(0, 0, 8));
+  r.seconds(0.4);
+  p.setState('hurt'); p.pos.x += 1.0;                                  // knocked sideways
+  r.seconds(PLAYER.hurt.stun * 0.5);
+  assert.equal(p.orders.kind, 'move', 'the order waits the stun out');
+  r.seconds(PLAYER.hurt.stun + 3);
+  assert.equal(p.orders.lastClear, 'arrived', `…then resumes and arrives (${p.orders.lastClear})`);
+  assert.ok(Math.hypot(p.pos.x, p.pos.z - 8) <= NAV.arrive + 0.05, `at the goal (${p.pos.x.toFixed(2)}, ${p.pos.z.toFixed(2)})`);
+  p.order('move', new THREE.Vector3(0, 0, 0));
+  r.step();
+  p.setState('stagger'); r.step();
+  assert.equal(p.orders.kind, null); assert.equal(p.orders.lastClear, 'guardBreak');
+});
+
+test('Orders: a use order whose path runs out short of reach re-plans once, then ends with the grey marker', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.physics.nav = {};
+  // the target stands on an island: every path ends 3 m short of it
+  ctx.physics.findPath = (a, b) => ({ points: [{ x: b.x, y: 0, z: b.z - 3 }], partial: true });
+  let used = 0;
+  const it = { id: 'sign', pos: new THREE.Vector3(0, 0, 6), r: 1.5, use: () => { used++; } };
+  assert.equal(p.order('use', it), true);
+  r.seconds(4);
+  assert.equal(p.orders.kind, null, `the use order ended (${p.orders.lastClear})`);
+  assert.equal(p.orders.lastClear, 'unreachable');
+  assert.equal(r.last(E.PLAYER_ORDER).valid, false, 'the grey marker');
+  assert.equal(used, 0);
+});
+
+test('Orders: an armed attack-move (X) is disarmed by Esc, by direct input and after 4 s with no click', async () => {
+  const r = await rig(), { p } = r;
+  r.tap('attackMove');
+  assert.equal(p.orders.attackMoveArmed, true);
+  r.tap('pause');
+  assert.equal(p.orders.attackMoveArmed, false, 'Esc');
+  r.tap('attackMove');
+  holdKey(r, 'KeyW'); r.step(); holdKey(r, 'KeyW', false);
+  assert.equal(p.orders.attackMoveArmed, false, 'direct input');
+  r.tap('attackMove');
+  p.orders._armT -= 5; r.step();
+  assert.equal(p.orders.attackMoveArmed, false, 'timed out');
+});
+
+test('Aim §7.1: a swing released with an explicit aim (touch drag) keeps it: no 360° turn to a foe behind her', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.input.device = 'touch';
+  r.enemy(2.0, -Math.PI / 2);                                          // a foe 180° away from the drag
+  p.facing = Math.PI / 2;
+  p.aim.source = 'explicit'; p.aim.target = null;
+  p.swing = { def: ATTACKS.slash1, aimSource: 'explicit' };
+  ctx.input.virtualAim = { active: false, x: 0, y: 0 };               // the pad already let go
+  p.aimAssist();
+  assert.ok(Math.abs(wrapA(p.facing - Math.PI / 2)) < 1e-6, `explicit aim kept (${p.facing.toFixed(2)})`);
+  // the same swing with no explicit aim and the stick idle: the 360° touch magnet turns her
+  p.swing = { def: ATTACKS.slash1, aimSource: 'auto' }; p.aim.source = 'auto';
+  p.aimAssist();
+  assert.ok(Math.abs(wrapA(p.facing + Math.PI / 2)) < 0.05, `auto aim turns to the foe (${p.facing.toFixed(2)})`);
+  p.swing = null;
+});
+
+test('Orders: an unreachable goal answers partial + the rejected haptic; no progress for 3 re-plans → stop', async () => {
+  const r = await rig(), { p, ctx } = r;
+  // one owner for the rejected buzz: core Input's player:order {valid:false} listener (§10.6) — observed at navigator.vibrate
+  await ctx.input.init(); ctx.input.setDevice('touch');
+  const haptics = [], nav = globalThis.navigator;
+  Object.defineProperty(nav, 'vibrate', { configurable: true, writable: true, value: (pat) => { haptics.push(pat); return true; } });
+  try {
+    ctx.physics.nav = {};
+    ctx.physics.findPath = () => ({ points: [], partial: true });
+    assert.equal(p.order('move', new THREE.Vector3(0, 0, 50)), false);
+    assert.equal(r.last(E.PLAYER_ORDER).valid, false);
+    assert.equal(haptics.length, 1, 'the rejected haptic, exactly once (Orders does not double-buzz a valid:false order)');
+    assert.deepEqual(haptics[0], HAPTICS.orderRejected);
+    // a wall right in front: the path says go, physics says no
+    ctx.physics.findPath = (a, b) => ({ points: [{ x: b.x, y: 0, z: b.z }], partial: false });
+    const move = ctx.physics.moveActor;
+    ctx.physics.moveActor = (a, dt) => { move(a, dt); if (a === p && p.pos.z > 0.5) { p.pos.z = 0.5; p.vel.z = 0; } };
+    haptics.length = 0;
+    p.order('move', new THREE.Vector3(0, 0, 10));
+    r.seconds(NAV.stuck.time * (NAV.stuck.retries + 3) + 0.5);
+    assert.equal(p.orders.kind, null); assert.equal(p.orders.lastClear, 'stuck');
+    assert.equal(r.last(E.PLAYER_ORDER).valid, false, 'the grey marker');
+    assert.deepEqual(haptics, [HAPTICS.orderRejected], 'the rejected haptic');
+  } finally { delete nav.vibrate; ctx.input.dispose(); }
+});
+
+test('Orders: a failed re-plan mid-walk (stuck retry, next queued point) ends "unreachable" with the grey marker, never "arrived"', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.physics.nav = {};
+  // the queued point: the route to it is gone by the time she gets there
+  ctx.physics.findPath = (a, b) => ({ points: [{ x: b.x, y: 0, z: b.z }], partial: false });
+  p.order('move', new THREE.Vector3(0, 0, 2));
+  p.order('move', new THREE.Vector3(0, 0, 20), { queued: true });
+  ctx.physics.findPath = (a, b) => (b.z > 10 ? { points: [], partial: true } : { points: [{ x: b.x, y: 0, z: b.z }], partial: false });
+  r.seconds(3);
+  assert.equal(p.orders.kind, null); assert.equal(p.orders.lastClear, 'unreachable', `queued (${p.orders.lastClear})`);
+  assert.equal(r.last(E.PLAYER_ORDER).valid, false, 'the grey marker (queued)');
+  // the stuck re-plan: a cart rolls across the route and the re-plan finds nothing
+  p.pos.set(0, 0, 0); p.vel.set(0, 0, 0);
+  ctx.physics.findPath = (a, b) => ({ points: [{ x: b.x, y: 0, z: b.z }], partial: false });
+  const move = ctx.physics.moveActor;
+  ctx.physics.moveActor = (a, dt) => { move(a, dt); if (a === p && p.pos.z > 0.5) { p.pos.z = 0.5; p.vel.z = 0; } };
+  p.order('move', new THREE.Vector3(0, 0, 10));
+  ctx.physics.findPath = () => ({ points: [], partial: true });
+  r.seconds(NAV.stuck.time * 2 + 0.5);
+  assert.equal(p.orders.kind, null); assert.equal(p.orders.lastClear, 'unreachable', `stuck (${p.orders.lastClear})`);
+  assert.equal(r.last(E.PLAYER_ORDER).valid, false, 'the grey marker (stuck)');
+  ctx.physics.moveActor = move;
+});
+
+test('Stand §8.1: threat snap on press faces the soonest parryable wind-up within 5 m / 0.7 s; touch arc ±90°', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const e = r.enemy(2.5, deg(150));                     // behind her left
+  p.facing = 0;
+  ctx.combat.nextParryable = () => ({ attacker: e, activeAt: ctx.game.time + 0.4, kind: 'parry' });
+  r.press('guard'); r.step();
+  const want = Math.atan2(e.pos.x, e.pos.z);
+  assert.ok(Math.abs(wrapA(p.facing - want)) < 0.05, `snapped to the threat (${p.facing.toFixed(2)} vs ${want.toFixed(2)})`);
+  r.release('guard'); r.seconds(0.5);
+  // a wind-up landing in 1.2 s does not snap
+  p.facing = 0;
+  ctx.combat.nextParryable = () => ({ attacker: e, activeAt: ctx.game.time + 1.2, kind: 'parry' });
+  r.press('guard'); r.step();
+  assert.ok(Math.abs(p.facing) < 0.05, 'beyond 0.7 s: no snap');
+  r.release('guard');
+  // the guard arc: 80° off her nose blocks on touch (±90°), hits on KBM (±70°)
+  const g = guardState({ guardT: 0.5 });
+  assert.equal(resolveGuard({ ...g, arc: PLAYER.guard.touchArc }, POKE, hitFrom(deg(80)), 0), 'block');
+  assert.equal(resolveGuard({ ...g }, POKE, hitFrom(deg(80)), 0), 'hit');
+  assert.equal(resolveGuard({ ...g, arc: PLAYER.guard.touchArc }, POKE, hitFrom(deg(95)), 0), 'hit');
+});
+
+test('Auto-Riposte §8.1: on touch (auto) the Riposte fires 0.15 s after a parry; off on KBM unless set on', async () => {
+  for (const [device, setting, want] of [['touch', 'auto', true], ['kbm', 'auto', false], ['kbm', 'on', true], ['touch', 'off', false]]) {
+    const r = await rig(), { p, ctx } = r;
+    ctx.input.setDevice(device);
+    ctx.state.settings.autoRiposte = setting;
+    const e = r.enemy(1.2, 0);
+    r.press('guard'); r.step(2);
+    assert.equal(ctx.combat.applyHit(e, p, ATTACKS.rat_poke), 'parry');
+    r.seconds(AIM.autoRiposte - 0.05);
+    assert.notEqual(p.swing?.def.id, 'riposte', `${device}/${setting}: not before 0.15 s`);
+    r.seconds(0.15);
+    const fired = r.events.some((x) => x[0] === E.PLAYER_SWING && x[1].attackId === 'riposte');
+    assert.equal(fired, want, `${device}/${setting}: auto riposte ${want}`);
+    r.release('guard');
+  }
+});
+
+test('Aim: player.aim stays live (active in the Stand; the auto-target on touch) and a recent attacker wins a tie', async () => {
+  const r = await rig(), { p, ctx } = r;
+  r.step();
+  assert.equal(p.aim.active, false);
+  r.press('guard'); r.step(2);
+  assert.equal(p.aim.active, true, 'active in the Stand'); assert.equal(p.aim.kind, 'guard');
+  r.release('guard'); r.seconds(0.3);
+  ctx.input.setDevice('touch');
+  const a = r.enemy(2.0, deg(-30)), b = r.enemy(2.0, deg(30));
+  r.step();
+  const first = p.aim.target;
+  assert.ok(first === a || first === b, `auto-target on touch (${p.aim.source})`);
+  const other = first === a ? b : a;
+  p._noteAttacker(other);
+  p._autoPrev = null; r.step();
+  assert.equal(p.aim.target, other, 'the one that just attacked her wins a tie');
+});
+
+test('Jump assist §5.4: a run-up jump toward a 0.8 m stump is nudged (≤ +1.2 m/s, ≤ 20°) to land 0.3 m inside its edge', () => {
+  const A = AIM.jumpAssist, o = { ...A, v0: PLAYER.jumpV, g: GRAVITY, fallMul: PLAYER.fallGravityMul };
+  // a stump: top 0.8 m, front edge at z 1.6, 1.2 m deep, centred 0.4 m to her side (≈ 10° off her run)
+  const stump = (x, z) => (z >= 1.6 && z <= 2.8 && Math.abs(x - 0.4) <= 0.6 ? { top: 0.8, walkable: true } : { top: 0, walkable: true });
+  const her = { x: 0, y: 0, z: 0 };
+  const plan = jumpAssistPlan(her, { x: 0, z: 3.0 }, stump, o);
+  assert.ok(plan, 'assisted');
+  const sp = Math.hypot(plan.vx, plan.vz);
+  assert.ok(Math.abs(sp - 3.0) <= A.dv + 1e-9, `within ±1.2 m/s (${sp.toFixed(2)})`);
+  assert.ok(Math.abs(plan.yaw) <= A.ang + 1e-9, `≤ 20° (${(plan.yaw * 57.3).toFixed(1)}°)`);
+  const lz = Math.cos(plan.yaw) * plan.dist, lx = Math.sin(plan.yaw) * plan.dist;
+  assert.ok(lz >= 1.6 + A.inset - 0.16 && lz <= 2.8 - A.inset + 0.16 && Math.abs(lx - 0.4) <= 0.6, `lands inside the top (${lx.toFixed(2)}, ${lz.toFixed(2)})`);
+  near(hopSpeed(plan.dist, plan.rise, o.v0, o.g, Infinity, o.fallMul), sp, 1e-6, 'the hop maths agree');
+  // a full run (5.5 m/s) would overshoot the 1.2 m deep stump: the nudge slows her (≤ 1.2 m/s) instead
+  const run = jumpAssistPlan(her, { x: 0, z: 5.5 }, stump, o);
+  assert.ok(run && Math.hypot(run.vx, run.vz) < 5.5 && Math.cos(run.yaw) * run.dist <= 2.8 - A.inset + 0.16, 'slowed onto the stump');
+  // standing still: straight up; a 2 m wall is no hop target; a walk-speed hop that needs > +1.2 m/s: a plain jump
+  assert.equal(jumpAssistPlan(her, { x: 0, z: 0.1 }, stump, o), null);
+  assert.equal(jumpAssistPlan(her, { x: 0, z: 3 }, (x, z) => ({ top: z > 1 ? 2 : 0, walkable: true }), o), null);
+  const far = (x, z) => (z >= 2.3 ? { top: 1.0, walkable: true } : { top: 0, walkable: true });
+  assert.equal(jumpAssistPlan(her, { x: 0, z: 0.6 }, far, o), null, 'a walk-speed hop cannot be nudged that far');
+  assert.equal(jumpAssistPlan(her, { x: 0, z: 3.0 }, (x, z) => (z >= 1.6 && z <= 2.8 ? { top: 0.8, walkable: false } : { top: 0, walkable: true }), o), null, 'not walkable');
+  // a non-walkable top (a fence) is not a landing
+  assert.equal(jumpAssistPlan(her, { x: 0, z: 2.5 }, (x, z) => (z >= 1.6 && z <= 2.8 ? { top: 0.8, walkable: false } : { top: 0, walkable: true }), o), null);
+});
+
+test('Jump assist in the Player: F toward a stump takes the nudged velocity and holds it through the air', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const stumpTop = (x, z) => (z >= 1.8 && z <= 3.0 && Math.abs(x - 0.4) <= 0.6 ? 0.8 : 0);
+  ctx.physics.topAt = stumpTop;
+  ctx.physics.navWalkable = () => true;
+  const move = ctx.physics.moveActor;
+  ctx.physics.moveActor = (a, dt) => {
+    move(a, dt);
+    const t = stumpTop(a.pos.x, a.pos.z);
+    if (t > 0 && a.pos.y <= t && a.pos.y > t - 0.5 && a.vel.y <= 0) { a.pos.y = t; a.vel.y = 0; a.onGround = true; }
+  };
+  p.pos.set(0, 0, -2);
+  const yaw = ctx.cam?.stickYaw ?? ctx.cam?.yaw ?? Math.PI;
+  holdKey(r, Math.abs(Math.cos(yaw) + 1) < 0.1 ? 'KeyW' : 'KeyS');
+  r.seconds(0.45);                                      // run up toward +Z
+  assert.ok(p.vel.z > 3 && p.pos.z > -0.6 && p.pos.z < 0.6, `run-up (z ${p.pos.z.toFixed(2)}, vz ${p.vel.z.toFixed(2)})`);
+  r.tap('jump');
+  assert.ok(p.airAssist.on, 'assisted take-off');
+  r.step(3);
+  for (let i = 0; i < 60 && !p.onGround; i++) r.step();
+  holdKey(r, 'KeyW', false); holdKey(r, 'KeyS', false);
+  assert.ok(p.pos.y >= 0.79, `landed on the stump (y ${p.pos.y.toFixed(2)}, z ${p.pos.z.toFixed(2)})`);
+  assert.equal(p.airAssist.on, false, 'cleared on landing');
+});
+
+test('Meme Cam idle (iso): a thumb resting in the joystick dead zone does not reset the idle clock; a press does', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const mc = p.memeCamTrigger;
+  ctx.input.setDevice('touch');
+  ctx.params.test = false;
+  r.seconds(0.5);
+  const t0 = mc.idleT;
+  ctx.input.setVirtualMove(0, 0);                       // a resting thumb: ui reports a 0 vector
+  r.seconds(1);
+  assert.ok(mc.idleT > t0 + 0.9, `idle keeps counting (${mc.idleT.toFixed(2)})`);
+  r.press('meow'); r.step(); r.release('meow');
+  assert.equal(mc.idleT, 0, 'a press resets it');
+  ctx.params.test = true;
+});
+
+test('Pounce aim §6.2/§6.4: touch magnetises a crow in the 3 m disc (flyers first); KBM dives toward the cursor ≤ 3.5 m', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.input.setDevice('touch');
+  const rat = r.enemy(1.5, deg(-40)), crow = r.enemy(2.4, deg(60));
+  crow.tags.add('flyer');
+  const plan = p.pouncePlan({});
+  assert.equal(plan.valid, true); assert.equal(plan.target, crow, 'the crow beats the nearer rat');
+  // KBM: the cursor point, clamped to 3.5 m; a crow within 2.5 m of it is magnetised
+  ctx.actors.unregister?.(rat); rat.alive = false; crow.alive = false;
+  ctx.input.setDevice('kbm');
+  ctx.input.pointerIdle = () => 0;
+  ctx.cam.cursorValid = true; ctx.cam.cursorGround = new THREE.Vector3(-8, 0, 0);
+  const k = p.pouncePlan({});
+  assert.ok(k.valid && !k.target); near(k.x, -AIM.pounceMax, 1e-6, 'clamped to 3.5 m'); near(k.z, 0, 1e-6);
+  const crow2 = r.enemy(3.0, deg(-80)); crow2.tags.add('flyer');
+  const k2 = p.pouncePlan({});
+  assert.equal(k2.target, crow2, 'a crow near the cursor point');
 });

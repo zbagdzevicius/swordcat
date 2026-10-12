@@ -65,3 +65,27 @@ New calls, all additive:
 
 ## To core (optional, additive)
 - `config.PHYSICS` overrides the engine tunables in `PHYSICS_DEFAULTS` (Physics.js). The tunables are `walkableNormalY 0.7`, `groundSnap 0.3`, `skin 0.02`, `substep 0.5`, `maxSubsteps 24`, `deepWater 0.5`, `edgeSlip 2.0` and `steepFaceTol 0.05`. It isn't needed; the defaults match §7.1 and tech.md §5.
+
+## Controls rework (CONTROLS_SPEC §5.3, §12 physics): nav grid, links, pick tops
+- `physics.findPath(from, to, opts?)` → `{ points: [{ x, y, z, link?, to?, authored? }], links, partial, goal, cost,
+  expansions, ok }`. `link` is `'hop' | 'drop' | 'gap' | 'fence' | 'bounce'`; a link point is the take-off, `to` the
+  landing. Unreachable goals end at the A* best node (`partial`); `ok` is false only when nothing is reachable (a start
+  > NAV.snap off the nav): when she already stands on the closest cell the path is that one cell. Once the island
+  graph is built (a few frames after `nav:ready` / an invalidation), a goal on an island she cannot reach snaps at once to
+  the nearest reachable cell ≤ 24 m (`partial: true, snapped: true`; no A* flood to `NAV.maxExpand`); `navStats.islands`
+  / `islandMs` report it. A goal inside a collider (a click on a wall / house face) whose nearest-walkable snap would cost
+  > 2.5× the straight line + 4 m (the far side, round through a gate: `Pathfind.DETOUR`) is re-tried from the first
+  walkable cell back along the line toward her, and toward `opts.toward` (`{x, z}`, e.g. the camera side of the pick
+  ray) when given; the cheaper (path cost + 2 × distance to the click) wins and the result has `redirected: true`. Runtime `addNavLink` links are dropped by `setLevel`. `nearestWalkable(x, z, maxR)`, `navWalkable(x, z)`, `losWalkable(a, b)`, `physics.nav` (the NavGrid),
+  `refreshLinks()`, `addNavLink(link)`, `navDebug(on)` (overlay: cells around her, authored links, closed gates, the
+  last path), `navStats` / `corridors` (after `nav:ready`).
+- Level data: `navLinks: [{ a: [x, z], b: [x, z], kind: 'hop'|'drop'|'bounce'|'fence', when?, oneWay?, gate? }]`.
+  `when` is a flag expression (`state.cond`) or a function of the GameState; it is re-checked on every path query and
+  on `story:flag`. A CLOSED `fence` link with a `gate: [[x, z], [x, z]]` line also shuts the automatic jump links
+  across that line (the lesson fence). Endpoints snap ≤ 0.75 m to a walkable cell (past a lip for the landing).
+  Authored links cost half an automatic link's penalty, so they win over automatic ones nearby.
+  `navBlock`: `[x0, z0, x1, z1]`, `{ minX, maxX, minZ, maxZ }` or `{ at: [x, z], r }`. Colliders with `nav: false`
+  never block the grid.
+- `physics.raycast(ray, max, { terrain, mesh, tops: true })`: also hits WALKABLE PROP TOPS (ledges, crates, stumps,
+  mushroom caps), never trunks or walls.
+- Bounce links are followed by player `Orders`: a hop that comes down on a bounce cap counts as landed, and the spring off the cap is steered onto the link's landing (`_bounceLink`).

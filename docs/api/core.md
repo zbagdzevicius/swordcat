@@ -49,3 +49,27 @@
   (seen in a long full smoke run: "The AudioContext encountered an error from the audio device…") the context can go
   'suspended' / 'interrupted' or 'closed'. Please `ac.resume()` on 'suspended'/'interrupted' (on the next user gesture
   if it rejects) and, on 'closed', rebuild the graph (new context via unlock) instead of staying silent.
+
+## Controls rework (CONTROLS_SPEC §6, §12 core)
+- `input.consumeLook()` returns zeros in iso unless the pointer is locked (`?cam=classic` keeps the orbit look). Mouse
+  movement counts as activity only above 24 px/s.
+- `input.haptic(kind)`: wired to parry, perfectDodge, hurt, block, guardBreak, hitHeavy, holy, golden, kitten,
+  orderRejected (touch only; the pad rumbles from JUICE), scaled by `settings.haptics`, never in menus. ui sends
+  `button` from the touch cluster (gated by `settings.hapticTaps`).
+- Action `controls` = pad Back / View (8): ui pauses and opens the controls card. Unbound on the keyboard and in classic.
+- `config.AIM` now carries the combat prose numbers too (`recentHitWindow`, `reflectCone`, `reflectRange`,
+  `projectileLead`, `lungeSettle`, `lungeFrac`, `selExtra`, `ringLead`, `threatRange`, `threatKeep`,
+  `hittableBelowDefault`); `combat/targeting.js aimCfg()` merges them over its fallback.
+- Smoke harness: `t.viewport(w, h, { touch: true })` boots a separate hasTouch + isMobile phone session
+  (`{ page, G, shot, frames, screen, tapAt(x, z), touch(type, x, y, id), close }`); `page.goto` / `reload` use
+  `SMOKE_BOOT_TIMEOUT` (default 60 s). `controls:pad` stubs `navigator.getGamepads` for pad checks.
+
+## Pointer activity + Meme Cam exit (2026-10-12)
+- `input.pointer.speed` is the NET displacement over the last `INPUT.pointer.speedWindow` (0.25 s) divided by the
+  window, so cursor jitter cancels out; activity needs ≥ `INPUT.pointer.idlePxPerSec` (≥ 6 px net in 250 ms).
+- While `game.mode === 'memecam'`, pointer motion is activity (resets `idleTime`) only once the cursor is
+  `CAMERA.iso.meme.exitPx` (40) from where it rested when the Meme Cam started (CONTROLS_SPEC §2.7). MemeCamTrigger's
+  `idleTime === 0` exit therefore already honours exitPx; no player change needed.
+- `input.pointerMark()` / `input.pointerSince(mark)`: straight-line CSS px the cursor is from a mark.
+- The canvas rect is cached (refreshed on resize / scroll / canvas ResizeObserver), not read per mousemove.
+- Removed `INPUT.pointer.cursorFresh` (unused); cursor freshness is `AIM.cursorIdle` with `input.pointerIdle()`.

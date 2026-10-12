@@ -17,37 +17,50 @@ import { DIFFICULTY } from '../core/config.js';
  * @property {string[]} [optionLabels]      strings keys or literal labels per option
  * @property {'pct'|'mul'|'speed'} [fmt]
  * @property {string[]} [onOff]  toggle labels [off, on] (strings keys or literal)
+ * @property {'classic'|'iso'} [cam]  only shown under that camera (CONTROLS_SPEC §10.7: invertY is classic-only)
+ * @property {Dev|Dev[]} [dev]  only shown while the last-used input device is one of these (rows that do nothing on
+ *   the current device are hidden: no cursor / edge-pan rows on a phone, no touch-button rows at a desk)
+ * @property {Dev|Dev[]} [isoDev]  like `dev`, but only applied under the iso camera (look sensitivity: iso has no
+ *   mouse / touch look, only the pad's right-stick nudge; classic keeps it for every device)
  */
+/** @typedef {'kbm'|'touch'|'pad'} Dev */
 
 /** @type {SettingDef[]} */
 export const SETTINGS = Object.freeze([
   { key: 'master', type: 'slider', label: 'settings.master', group: 'audio', min: 0, max: 1, step: 0.05, fmt: 'pct' },
   { key: 'music', type: 'slider', label: 'settings.music', group: 'audio', min: 0, max: 1, step: 0.05, fmt: 'pct' },
   { key: 'sfx', type: 'slider', label: 'settings.sfx', group: 'audio', min: 0, max: 1, step: 0.05, fmt: 'pct' },
-  { key: 'invertY', type: 'toggle', label: 'settings.invertY', group: 'controls' },
-  { key: 'sensitivity', type: 'slider', label: 'settings.sensitivity', group: 'controls', min: 0.25, max: 2.5, step: 0.05, fmt: 'mul' },
+  { key: 'invertY', type: 'toggle', label: 'settings.invertY', group: 'controls', cam: 'classic' },
+  { key: 'sensitivity', type: 'slider', label: 'settings.sensitivity', group: 'controls', isoDev: 'pad', min: 0.25, max: 2.5, step: 0.05, fmt: 'mul' },
   { key: 'holdStand', type: 'toggle', label: 'settings.holdStand', group: 'controls', onOff: ['Toggle', 'Hold'] },
   { key: 'holdCharge', type: 'toggle', label: 'settings.holdCharge', group: 'controls', onOff: ['Toggle', 'Hold'] },
   { key: 'autoStand', type: 'toggle', label: 'settings.autoStand', group: 'controls' },
   // CONTROLS_SPEC §10.7: the iso controls
-  { key: 'controlPreset', type: 'choice', label: 'settings.controlPreset', group: 'controls', options: ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly'],
+  { key: 'controlPreset', type: 'choice', label: 'settings.controlPreset', group: 'controls', dev: 'kbm', options: ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly'],
     optionLabels: ['Hybrid', 'MOBA', 'Diablo', 'Mouse only', 'Keyboard only'] },
   { key: 'camZoom', type: 'slider', label: 'settings.camZoom', group: 'controls', min: 0.7, max: 1.4, step: 0.05, fmt: 'mul' },
+  { key: 'camLock', type: 'toggle', label: 'settings.camLock', group: 'controls', cam: 'iso', onOff: ['Free (Y)', 'Locked'] },
   { key: 'autoAttack', type: 'choice', label: 'settings.autoAttack', group: 'controls', options: ['auto', 'chain', 'loop', 'off'], optionLabels: ['Auto', 'One combo', 'Keep going', 'Off'] },
   { key: 'castMode', type: 'choice', label: 'settings.castMode', group: 'controls', options: ['smart', 'indicator', 'dragOnly'], optionLabels: ['Smart', 'Show first', 'Drag only'] },
-  { key: 'edgePanSpeed', type: 'slider', label: 'settings.edgePanSpeed', group: 'controls', min: 0.5, max: 2, step: 0.25, fmt: 'mul' },
-  { key: 'touchSize', type: 'choice', label: 'settings.touchSize', group: 'controls', options: [0.8, 1, 1.2, 1.4], optionLabels: ['S', 'M', 'L', 'XL'] },
-  { key: 'tapToMove', type: 'toggle', label: 'settings.tapToMove', group: 'controls' },
-  { key: 'swipeTumble', type: 'toggle', label: 'settings.swipeTumble', group: 'controls' },
-  { key: 'leftHanded', type: 'toggle', label: 'settings.leftHanded', group: 'controls' },
-  { key: 'buttonOpacity', type: 'slider', label: 'settings.buttonOpacity', group: 'controls', min: 0.4, max: 1, step: 0.05, fmt: 'pct' },
-  { key: 'haptics', type: 'choice', label: 'settings.haptics', group: 'controls', options: [0, 0.5, 1], optionLabels: ['Off', 'Soft', 'On'] },
+  { key: 'autoRiposte', type: 'choice', label: 'settings.autoRiposte', group: 'controls', options: ['auto', 'on', 'off'], optionLabels: ['Auto', 'On', 'Off'] },
+  { key: 'standAutoFace', type: 'toggle', label: 'settings.standAutoFace', group: 'controls' },
+  { key: 'pathPreview', type: 'toggle', label: 'settings.pathPreview', group: 'controls' },
+  { key: 'edgePanSpeed', type: 'slider', label: 'settings.edgePanSpeed', group: 'controls', cam: 'iso', dev: 'kbm', min: 0.5, max: 2, step: 0.25, fmt: 'mul' },
+  { key: 'touchSize', type: 'choice', label: 'settings.touchSize', group: 'controls', dev: 'touch', options: [0.8, 1, 1.2, 1.4], optionLabels: ['S', 'M', 'L', 'XL'] },
+  { key: 'tapToMove', type: 'toggle', label: 'settings.tapToMove', group: 'controls', dev: 'touch' },
+  { key: 'swipeTumble', type: 'toggle', label: 'settings.swipeTumble', group: 'controls', dev: 'touch' },
+  { key: 'leftHanded', type: 'toggle', label: 'settings.leftHanded', group: 'controls', dev: 'touch' },
+  { key: 'buttonOpacity', type: 'slider', label: 'settings.buttonOpacity', group: 'controls', dev: 'touch', min: 0.4, max: 1, step: 0.05, fmt: 'pct' },
+  { key: 'haptics', type: 'choice', label: 'settings.haptics', group: 'controls', dev: ['touch', 'pad'], options: [0, 0.5, 1], optionLabels: ['Off', 'Soft', 'On'] },
+  { key: 'hapticTaps', type: 'toggle', label: 'settings.hapticTaps', group: 'controls', dev: 'touch' },
   { key: 'difficulty', type: 'choice', label: 'settings.difficulty', group: 'game', options: ['kitten', 'knight'], optionLabels: ['difficulty.kitten', 'difficulty.knight'] },
   { key: 'quality', type: 'choice', label: 'settings.quality', group: 'game', options: ['auto', 'low', 'med', 'high'],
     optionLabels: ['settings.quality.auto', 'settings.quality.low', 'settings.quality.med', 'settings.quality.high'] },
   { key: 'shake', type: 'slider', label: 'settings.shake', group: 'access', min: 0, max: 1, step: 0.1, fmt: 'pct' },
   { key: 'reduceCameraMotion', type: 'toggle', label: 'settings.reduceCameraMotion', group: 'access' },
   { key: 'parryRing', type: 'choice', label: 'settings.parryRing', group: 'access', options: ['auto', 'on', 'off'], optionLabels: ['Auto', 'On', 'Off'] },
+  { key: 'cursorSize', type: 'choice', label: 'settings.cursorSize', group: 'access', dev: 'kbm', options: [1, 1.5, 2], optionLabels: ['×1', '×1.5', '×2'] },
+  { key: 'cursorContrast', type: 'toggle', label: 'settings.cursorContrast', group: 'access', dev: 'kbm' },
   { key: 'reduceFlashes', type: 'toggle', label: 'settings.reduceFlashes', group: 'access' },
   { key: 'patterns', type: 'toggle', label: 'settings.patterns', group: 'access' },
   { key: 'subtitleSize', type: 'choice', label: 'settings.subtitleSize', group: 'access', options: [0.85, 1, 1.25, 1.5], optionLabels: ['S', 'M', 'L', 'XL'] },
@@ -61,6 +74,36 @@ export const SETTING_BY_KEY = Object.freeze(Object.fromEntries(SETTINGS.map((d) 
 
 const round = (v, step) => Math.round(v / step) * step;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+const devIn = (list, d) => (Array.isArray(list) ? list.includes(d) : list === d);
+
+/**
+ * Is the row shown under the current camera and input device? (`cam: 'classic'` rows only with ?cam=classic, `'iso'`
+ * only in iso; `dev` / `isoDev` rows only on those devices.) `device` omitted / null = no device filter.
+ * @param {SettingDef} def @param {boolean} [iso] @param {Dev|null} [device]
+ */
+export function settingVisible(def, iso = true, device = null) {
+  if (def.cam === 'classic' && iso) return false;
+  if (def.cam === 'iso' && !iso) return false;
+  if (device) {
+    if (def.dev && !devIn(def.dev, device)) return false;
+    if (iso && def.isoDev && !devIn(def.isoDev, device)) return false;
+  }
+  return true;
+}
+
+/**
+ * The rows to show, in display order. On touch the Controls group comes first and its touch rows lead it (CONTROLS_SPEC
+ * §9: a phone player opens Settings to resize / move buttons, not to scroll past Sound). Pure.
+ * @param {boolean} [iso] @param {Dev|null} [device]
+ * @returns {SettingDef[]}
+ */
+export function visibleSettings(iso = true, device = null) {
+  const rows = SETTINGS.filter((d) => settingVisible(d, iso, device));
+  if (device !== 'touch') return rows;
+  const rank = (d) => (d.group !== 'controls' ? 2 : devIn(d.dev, 'touch') ? 0 : 1);
+  return rows.map((d, i) => [d, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]);
+}
 
 /** Current value of a setting (difficulty from state.difficulty). */
 export function readSetting(state, key) {
@@ -160,9 +203,14 @@ export function resetSettings(ctx, defaults) {
   return changed;
 }
 
-/** The Controls card (§15.1–§15.3): [action, label key-or-text] rows; glyphs come from text.js per device. */
+/**
+ * The Controls card (CONTROLS_SPEC §6.2–§6.4): [action, label] rows; glyphs come from text.js per device (the KBM
+ * column follows the previewed preset).
+ */
 export const CONTROL_ROWS = Object.freeze([
-  ['move', 'Move'], ['look', 'Camera'], ['attack', 'Attack · hold to charge'], ['guard', 'Stand · tap to parry'], ['dodge', 'Tumble'],
-  ['jump', 'Jump · ⚔ in the air: Pounce'], ['interact', 'Interact'], ['ability', 'Kitten ability'], ['milk', 'Milk Break'], ['meow', 'Meow'],
-  ['golden', 'Golden Hour'], ['lockon', 'Lock-on'], ['pause', 'Pause · hold to skip scenes'],
+  ['move', 'Move · click / hold to walk'], ['attack', 'Attack · hold to charge'], ['attackMove', 'Attack-move'],
+  ['guard', 'Stand · tap to parry'], ['dodge', 'Tumble'], ['jump', 'Jump · ⚔ in the air: Pounce'], ['interact', 'Interact · talk'],
+  ['ability', 'Kitten ability'], ['milk', 'Milk Break'], ['meow', 'Meow'], ['golden', 'Golden Hour'],
+  ['lockon', 'Select / cycle target'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'], ['peek', 'Peek ahead'],
+  ['pause', 'Pause · hold to skip scenes'],
 ]);

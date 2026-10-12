@@ -439,7 +439,8 @@ export default [
       await shot(t, '09-forest-day-stream');
       // CS-04 Lantern Night: forest.camp → dark_forest_creepy (track volume 0.6), crickets, the campfire, the owl
       await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('forest.camp', true); else c.state.setFlag('forest.camp', true); });
-      await t.G(() => window.__GAME__.teleport(4, 1, 34));
+      // no fight at the camp (a slow machine lets the camp rats alert first: the combat track then wins, rightly)
+      await t.G(() => { const c = window.__GAME__.ctx; for (const e of [...(c.enemies?.list ?? [])]) c.enemies.despawn?.(e); window.__GAME__.teleport(4, 1, 34); });
       const night = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'dark_forest_creepy' && d.playing && !d.fading), 12000);
       s = await st(t);
       t.assert(night, `night track after forest.camp (${JSON.stringify(s.music.decks)})`);

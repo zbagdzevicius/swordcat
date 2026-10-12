@@ -3,7 +3,7 @@
 // Marks may be HDR (colour > 1) so bloom picks up glints. Shapes 0–11 are the shared particle shapes (shaders.js);
 // 20+ are mark-only shapes with an ink outline for readability against bright fog (art.md §13 ink #3A2A1F).
 import * as THREE from 'three';
-import { FOG_FACTOR, SHAPES, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, SHAPES, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { upload } from './Particles.js';
 
 export const MARK = Object.freeze({ SOFT: 0, STAR4: 2, STAR5: 3, RING: 4, STAR8: 10, EXCL: 20, EXCL2: 21, SWIRL: 22, HALO: 23 });
@@ -24,6 +24,7 @@ attribute vec4 iPar;     // size, phase/rotation, shape, pattern (0 none, 1 stri
 attribute float iAspect; // height / width
 uniform float uMaxFrac;   // cap on a mark's projected height (fraction of the screen height)
 uniform vec2 uNearFade;   // view-depth range (m) over which marks fade in from the camera
+uniform float uViewH;     // viewport height (CSS px) for constant-screen-size marks (size < 0 = −px)
 varying vec2 vUv;
 varying vec4 vCol;
 varying vec3 vPar;
@@ -34,7 +35,11 @@ void main() {
   vUv = corner;
   float shape = iPar.z;
   float size = iPar.x, fade = 1.0;
-  if ( projectionMatrix[2][3] < -0.5 ) {           // perspective: marks are world-sized, so cap them on screen
+  if ( size < 0.0 ) {                              // CONTROLS_SPEC §8.2.3: a constant screen size (px), never capped
+    float depth = max( 1e-3, -mvPosition.z );
+    size = projectionMatrix[2][3] < -0.5 ? -size * 2.0 * depth / ( projectionMatrix[1][1] * max( uViewH, 1.0 ) * max( 1.0, iAspect ) )
+                                         : -size * 2.0 / ( projectionMatrix[1][1] * max( uViewH, 1.0 ) );
+  } else if ( projectionMatrix[2][3] < -0.5 ) {    // perspective: marks are world-sized, so cap them on screen
     float depth = max( 1e-3, -mvPosition.z );
     // halos and jeer rings are meant to read big (silhouette rims / shock rings): looser cap
     float frac = ( shape > 22.5 || abs( shape - 4.0 ) < 0.5 ) ? uMaxFrac * 4.0 : uMaxFrac;
@@ -116,7 +121,12 @@ void main() {
 }`;
 
 export class Marks {
-  constructor(capacity = 96) {
+  /**
+   * @param {number} [capacity]
+   * @param {{ overlay?: boolean, name?: string }} [opts] overlay: drawn on top of everything (depthTest off,
+   *   renderOrder 10): the iso telegraph glints and "!" (CONTROLS_SPEC §8.2.3)
+   */
+  constructor(capacity = 96, opts = {}) {
     this.capacity = capacity;
     this.count = 0;
     const g = new THREE.InstancedBufferGeometry();
@@ -129,29 +139,32 @@ export class Marks {
     g.setAttribute('iPos', this.aPos); g.setAttribute('iCol', this.aCol); g.setAttribute('iPar', this.aPar); g.setAttribute('iAspect', this.aAsp);
     g.instanceCount = 0;
     this.geometry = g;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.marks', vertexShader: VERT, fragmentShader: FRAG, fog: true,
-      uniforms: { ...fogUniforms(), uMaxFrac: { value: MARK_SCREEN.maxFrac }, uNearFade: { value: new THREE.Vector2(...MARK_SCREEN.nearFade) } },
-      transparent: true, depthWrite: false, depthTest: true,
+      uniforms: { ...fogUniforms(), uMaxFrac: { value: MARK_SCREEN.maxFrac }, uNearFade: { value: new THREE.Vector2(...MARK_SCREEN.nearFade) },
+        uViewH: { value: 720 } },
+      transparent: true, depthWrite: false, depthTest: !opts.overlay,
     });
+    if (opts.overlay) this.material.name = 'fx.marks.overlay';
     this.mesh = new THREE.Mesh(g, this.material);
-    this.mesh.name = 'fx.marks';
+    this.mesh.name = opts.name ?? (opts.overlay ? 'fx.marks.overlay' : 'fx.marks');
     this.mesh.frustumCulled = false;
     this.mesh.matrixAutoUpdate = false;
-    this.mesh.renderOrder = 9;
+    this.mesh.renderOrder = opts.overlay ? 10 : 9;
     this.mesh.visible = false;
     this._tmp = new THREE.Color();
   }
 
-  /** Start a frame (marks are rebuilt every frame). */
-  begin() { this.count = 0; }
+  /** Start a frame (marks are rebuilt every frame). `viewH` = the viewport height in CSS px (pixel-sized marks). */
+  begin(viewH) { this.count = 0; if (viewH > 0) this.material.uniforms.uViewH.value = viewH; }
 
   /**
-   * Add one mark. `color` is a THREE.Color (linear; HDR via `intensity`).
+   * Add one mark. `color` is a THREE.Color (linear; HDR via `intensity`). `size` in metres, or NEGATIVE for a
+   * constant on-screen height in CSS px (−28 = a 28 px glint at any distance and zoom).
    * @returns {number} slot or -1 when full
    */
   push(x, y, z, size, shape, color, intensity = 1, alpha = 1, phase = 0, pattern = 0, aspect = 1) {
-    if (this.count >= this.capacity || !(alpha > 0.002) || !(size > 0)) return -1;
+    if (this.count >= this.capacity || !(alpha > 0.002) || !(size !== 0) || !Number.isFinite(size)) return -1;
     const i = this.count++, i3 = i * 3, i4 = i * 4;
     const P = this.aPos.array, C = this.aCol.array, R = this.aPar.array;
     P[i3] = x; P[i3 + 1] = y; P[i3 + 2] = z;

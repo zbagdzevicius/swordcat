@@ -111,6 +111,9 @@ export const AIM = {
   pounceMax: 3.5, pounceMagnet: 2.5, pounceTouchDisc: 3.0, jumpAssist: { range: 2.4, dv: 1.2, ang: 0.349, inset: 0.3 },
   pick: { px: 28, pad: 6, touchPx: 56, interactR: 1.2 }, autoChainRest: 0.10, autoRiposte: 0.15,
   onScreenMargin: 0.5, rangedNear: 9,
+  // combat (CONTROLS_SPEC prose numbers; combat/targeting.js aimCfg merges these over its AIM_FALLBACK)
+  lungeFrac: 0.7, selExtra: 1.5, recentHitWindow: 2.0, reflectCone: 0.436 /* ±25° */, reflectRange: 16,
+  projectileLead: 1.0, lungeSettle: 0.05, ringLead: 0.6, threatRange: 6, threatKeep: 0.1, hittableBelowDefault: 2.2,
 };
 
 /** §9 touch cluster geometry (CSS px × settings.touchSize; buttons: [size, dx, dy] from the ⚔ centre). */
@@ -354,15 +357,16 @@ export const RENDER = {
 
 /**
  * Quality presets (tech.md §18; R15). 'auto' picks low on coarse pointers, high on discrete GPUs, else med.
- * Agents read ctx.quality (the active preset) and listen to E.QUALITY for changes.
+ * Agents read ctx.quality (the active preset) and listen to E.QUALITY for changes. charDetail: tessellation factor for
+ * cats built under the preset (characters: armour / body / head-fur segments; Low ≈ the lite tier's 0.55).
  */
 export const QUALITY = {
   low:  { id: 'low',  maxDpr: 1.0, minDpr: 0.6, composer: false, msaa: 0, bloom: false, shadows: false, shadowMap: 1024,
-          grass: 4000, furShells: 0, kittenShells: 0, maxEnemies: 6, maxSkinned: 6, particles: 500, dynamicRes: true },
+          grass: 4000, furShells: 0, kittenShells: 0, charDetail: 0.55, maxEnemies: 6, maxSkinned: 6, particles: 500, dynamicRes: true },
   med:  { id: 'med',  maxDpr: 1.5, minDpr: 0.7, composer: true, msaa: 4, bloom: true, shadows: true, shadowMap: 2048,
-          grass: 30000, furShells: 16, kittenShells: 10, maxEnemies: 8, maxSkinned: 12, particles: 2000, dynamicRes: true },
+          grass: 30000, furShells: 16, kittenShells: 10, charDetail: 1, maxEnemies: 8, maxSkinned: 12, particles: 2000, dynamicRes: true },
   high: { id: 'high', maxDpr: 2.0, minDpr: 0.8, composer: true, msaa: 4, bloom: true, shadows: true, shadowMap: 2048,
-          grass: 45000, furShells: 16, kittenShells: 10, maxEnemies: 8, maxSkinned: 12, particles: 2000, dynamicRes: true },
+          grass: 45000, furShells: 16, kittenShells: 10, charDetail: 1, maxEnemies: 8, maxSkinned: 12, particles: 2000, dynamicRes: true },
 };
 
 /**
@@ -374,7 +378,7 @@ export const INPUT = {
   actions: ['attack', 'guard', 'dodge', 'jump', 'interact', 'confirm', 'back', 'lockon', 'lockPrev', 'lockNext',
             'pause', 'ability', 'milk', 'meow', 'golden', 'recenter', 'navUp', 'navDown', 'navLeft', 'navRight',
             // CONTROLS_SPEC §6.1 (iso controls)
-            'move', 'attackMove', 'stop', 'zoomIn', 'zoomOut', 'zoomCycle', 'peek', 'camLock', 'centre', 'ranges'],
+            'move', 'attackMove', 'stop', 'zoomIn', 'zoomOut', 'zoomCycle', 'peek', 'camLock', 'centre', 'ranges', 'controls'],
   // CONTROLS_SPEC §6.2 preset `hybrid` (the default; C1): RMB = move order, Space = the Stand, F = jump, Shift = Tumble,
   // LMB = attack toward the cursor. Mouse3 = the back side button (Tumble), Mouse4 = the forward one (Stand).
   keys: {
@@ -384,7 +388,7 @@ export const INPUT = {
     recenter: [], lockPrev: [], lockNext: [],
     navUp: ['ArrowUp', 'KeyW'], navDown: ['ArrowDown', 'KeyS'], navLeft: ['ArrowLeft', 'KeyA'], navRight: ['ArrowRight', 'KeyD'],
     move: ['Mouse2'], attackMove: ['KeyX'], stop: ['KeyH'], zoomIn: [], zoomOut: [], zoomCycle: [], peek: ['AltLeft', 'Mouse1'],
-    camLock: ['KeyY'], centre: ['F1', 'Home'], ranges: ['ControlLeft', 'ControlRight'],
+    camLock: ['KeyY'], centre: ['F1', 'Home'], ranges: ['ControlLeft', 'ControlRight'], controls: [],
   },
   /** `?cam=classic` (§15.3): the M1/M2 orbit-camera binding table (RMB guard, Space jump, MMB lock-on, wheel switch). */
   classicKeys: {
@@ -399,17 +403,17 @@ export const INPUT = {
     hybrid: { wasd: true, lmbMoves: false, keys: {} },
     moba: { wasd: false, lmbMoves: false, keys: { attackMove: ['KeyA'], stop: ['KeyS', 'KeyH'], milk: ['KeyD', 'KeyR'] } },
     diablo: { wasd: true, lmbMoves: true, keys: { move: ['Mouse0'], attack: ['KeyJ'], guard: ['Mouse2', 'KeyL'], dodge: ['Space', 'KeyK'], jump: ['KeyF'] } },
-    mouseOnly: { wasd: true, lmbMoves: false, keys: { guard: ['Mouse4', 'KeyL'], dodge: ['Mouse3', 'KeyK'], jump: ['KeyF'], peek: ['AltLeft'] } },
+    mouseOnly: { wasd: true, lmbMoves: false, keys: { guard: ['Mouse4', 'KeyL'], dodge: ['Mouse3', 'KeyK'], jump: ['KeyF', 'Mouse1'], peek: ['AltLeft'] } },
     keyboardOnly: { wasd: true, lmbMoves: false, keys: { attack: ['KeyJ'], guard: ['KeyL'], dodge: ['KeyK'], jump: ['Space'], move: [] } },
   },
   /** The touch / pointer model (§6.1): mouse speed under which a moving cursor is not "activity" (Meme Cam idle). */
-  pointer: { idlePxPerSec: 24, clickQueue: 8, cursorFresh: 3.0 },
+  pointer: { idlePxPerSec: 24, speedWindow: 0.25, clickQueue: 8 },   // speed = net px over speedWindow s; cursor freshness: AIM.cursorIdle
   move: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] },
   // §6.3 twin-stick pad: RS aims (not look), R3 cycles zoom, D-pad ↓ peeks
   pad: { jump: [0], confirm: [0], dodge: [1], back: [1], attack: [2], interact: [3], guard: [4], lockon: [5], ability: [6],
-         golden: [7], pause: [9], meow: [10], zoomCycle: [11], milk: [12], lockPrev: [14], lockNext: [15], peek: [13],
+         golden: [7], controls: [8], pause: [9], meow: [10], zoomCycle: [11], milk: [12], lockPrev: [14], lockNext: [15], peek: [13],
          navUp: [12], navDown: [13], navLeft: [14], navRight: [15] },
-  classicPad: { recenter: [11], zoomCycle: [], peek: [] },
+  classicPad: { recenter: [11], zoomCycle: [], peek: [], controls: [] },
   deadZone: 0.15, triggerThreshold: 0.5,
   mouseSens: 0.0025,          // rad per px at sensitivity 1
   padLookSpeed: 2.6,          // rad/s at full right-stick deflection, sensitivity 1

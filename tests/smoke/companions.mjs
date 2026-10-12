@@ -331,8 +331,11 @@ export default [
         const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'mochi');
         return c.combat.applyHit(c.companions.active[0] ?? k, k.lock, { id: 'smoke', dmg: 50 });   // not hers: immune
       })], opened: false };
-      for (let i = 0; i < 4 && !hits.opened; i++) {
-        await t.wait(250);
+      const lockState = await t.G(() => { const g = window.__GAME__, k = g.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { mode: g.mode, inv: k.lock.invulnT ?? 0, t: g.game.time }; });
+      if (lockState.mode !== 'play') { t.log(`mode ${lockState.mode} before the lock hits: back to play`); await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); }); }
+      for (let i = 0; i < 6 && !hits.opened; i++) {
+        // her next blow lands once the lock's own anti-multi-hit window (sim time) has run out
+        await until(t, () => { const k = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return !(k.lock.invulnT > 0); }, null, { sim: 2, every: 100 });
         const r = await t.G(() => {
           const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'mochi');
           return { r: c.combat.applyHit(c.player, k.lock, c.config.ATTACKS.slash1), opened: k.lock.opened };
@@ -604,6 +607,44 @@ export default [
         t.assert(!r.err, `bubble-edge ${side}: ${r.err}`);
         t.log(`bubble ${side}: anchor x ${r.ax.toFixed(2)}, rect ${r.left.toFixed(3)}..${r.right.toFixed(3)} (center ${r.cx.toFixed(2)}, tail ${r.tail})`);
         t.assert(r.left >= -1 && r.right <= 1, `bubble clipped at the ${side} edge: ${r.left.toFixed(3)}..${r.right.toFixed(3)}`);
+      }
+      // bottom edge (iso view): a speaker just above the ability bar → the bubble is lifted clear of the bar (HUD-safe
+      // inset from ctx.ui.safeInsets), never slid under it
+      await follow(t);
+      await t.wait(1500);
+      await freeze(t, true);
+      const rb = await t.G(async (line) => {
+        const g = window.__GAME__, c = g.ctx, m = c.companions.active[0], cam = c.camera, V = g.THREE.Vector3;
+        const si = c.ui?.safeInsets;
+        if (!si || !(si.bottom > 0)) return { skip: `no bottom inset (${JSON.stringify(si)})` };
+        // walk from her toward the camera (screen-down on the ground) until the speaker's head projects onto the bar
+        const p = c.player.pos, fw = new V(); cam.getWorldDirection(fw); fw.y = 0; fw.normalize();
+        const want = -1 + (si.bottom * 0.6 / si.h) * 2, q = new V();
+        let d = 0;
+        for (; d < 30; d += 0.1) { q.set(p.x - fw.x * d, p.y + m.height + 0.32, p.z - fw.z * d).project(cam); if (q.y <= want) break; }
+        const pin = () => { m.pos.set(p.x - fw.x * d, p.y, p.z - fw.z * d); m.object3d?.position.copy(m.pos); };
+        pin(); m.bubble.show(line, Infinity); m.bubble.update(0.5);
+        // hold him there for a few frames (his steering may still nudge the visual), then measure the clamped bubble
+        for (let i = 0; i < 20; i++) { pin(); await new Promise((res) => requestAnimationFrame(res)); }
+        pin();
+        const sp = m.bubble.sprite, b = m.bubble.body;
+        if (!sp || !b) return { err: 'no sprite' };
+        sp.updateWorldMatrix(true, false);
+        const a = new V().setFromMatrixPosition(sp.matrixWorld).project(cam);
+        const H = new V().setFromMatrixColumn(sp.matrixWorld, 1).length() * cam.projectionMatrix.elements[5];
+        const bottomNdc = a.y + (0 - sp.center.y) * H; // body bottom = the canvas bottom row (tail tip) at center.y
+        const bottomPx = (1 - bottomNdc) / 2 * si.h;    // px from the canvas top
+        return { anchorY: a.y, bottomPx, barTop: si.h - si.bottom, cy: sp.center.y };
+      }, LINE);
+      await t.wait(200);
+      await shot(t, 'companions/bubble-bottom');
+      await t.G(() => window.__GAME__.ctx.companions.active[0]?.bubble.hide());
+      await freeze(t, false);
+      if (rb.skip) t.log(`bubble bottom: skipped — ${rb.skip}`);
+      else {
+        t.assert(!rb.err, `bubble-edge bottom: ${rb.err}`);
+        t.log(`bubble bottom: anchor y ${rb.anchorY.toFixed(2)}, bubble bottom ${rb.bottomPx.toFixed(0)} px, bar top ${rb.barTop.toFixed(0)} px (center.y ${rb.cy.toFixed(2)})`);
+        t.assert(rb.bottomPx <= rb.barTop + 1, `bubble slid under the ability bar: bottom ${rb.bottomPx.toFixed(0)} > bar top ${rb.barTop.toFixed(0)}`);
       }
       follow(t);
     },
@@ -919,13 +960,15 @@ export default [
         // interactable ([Interact] / a click → their line now); a station keeper stands for its station
         const talk = await t.G(() => {
           const c = window.__GAME__.ctx, its = c.levels.current?.interactables ?? [], rs = c.companions.hub.residents;
-          const shown = rs.filter((r) => r.object3d.visible && !r.scripted).length + c.companions.active.length;
-          return { talk: its.filter((i) => i.kind === 'npc' && i.actor).map((i) => i.id), picks: c.companions.pickables().length, shown,
+          const shown = rs.filter((r) => r.object3d.visible && !r.scripted).length,
+            partyPicked = c.companions.active.some((a) => c.companions.pickables().includes(a));
+          return { talk: its.filter((i) => i.kind === 'npc' && i.actor).map((i) => i.id), picks: c.companions.pickables().length, shown, partyPicked,
             keepers: rs.filter((r) => r.beh === 'station').map((r) => `${r.npcId}→${r.interactId}`) };
         });
         t.log(`hub talk interactables ${talk.talk.length}, pickables ${talk.picks}, keepers ${talk.keepers.join(' ')}`);
         t.assert(talk.talk.length >= 5, `too few talk interactables (${talk.talk.join(', ')})`);
-        t.assert(talk.picks >= talk.shown && talk.picks >= 8, `hub pickables ${talk.picks} (shown residents + party ${talk.shown}; far ones are LOD-hidden)`);
+        t.assert(talk.picks >= talk.shown && talk.picks >= 8, `hub pickables ${talk.picks} (shown residents ${talk.shown}; far ones are LOD-hidden)`);
+        t.assert(!talk.partyPicked, 'the active party must not be pickable (its zone swallowed move clicks)');
         const clicked = await t.G(() => {
           const c = window.__GAME__.ctx, r = c.companions.hub.residents.find((x) => x.talkIt && x.npcId.startsWith('villager'));
           if (!r) return null;
@@ -1155,7 +1198,7 @@ export default [
       const mshot = async (name) => { const p = path.join(t.shotsDir, `${name}.png`); try { await pg.screenshot({ path: p }); } catch (e) { t.warn(`touch shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); } return p; };
       const untilM = async (fn, arg, ms = 8000) => { const t0 = Date.now(); let v = await G(fn, arg); while (!v && Date.now() - t0 < ms) { await pg.waitForTimeout(150); v = await G(fn, arg); } return v; };
       try {
-        await pg.goto(`${t.base}?test=1&seed=1`);
+        await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 180000 });
         await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 200000 });
         await G(async () => {
           const g = window.__GAME__, c = g.ctx;
@@ -1208,18 +1251,25 @@ export default [
         t.assert(shown === 'rect' || shown === 'fx', `drag-aim indicator ${shown}`);
         await mshot('companions/touch-portrait-aim');
         t.assert(await G(() => window.__GAME__.ctx.companions.useAbility({ dir: { x: -1, z: 0.4 } })), 'drag release did not cast');
-        // tap Mochi: he trots over and says hello (camera's tap pick when it exists)
+        // a tap on Mochi (he trails right behind her) is NOT a use order any more: the party is not pickable, so the
+        // tap falls through to ground and she walks there (a step-back tap next to him used to be swallowed)
+        await G(() => { const c = window.__GAME__.ctx; for (const e of [...(c.enemies.list ?? [])]) c.enemies.despawn?.(e); return true; });
+        await untilM(() => window.__GAME__.ctx.companions.active[0]?.stateName === 'idle', null, 10000);
+        await pg.waitForTimeout(500);
         const pets0 = await G(() => window.__GAME__.ctx.companions.active[0].stats.pets);
-        const via = await G(() => {
-          const g = window.__GAME__, m = g.ctx.companions.active[0];
-          if (typeof g.tapAt === 'function') { try { g.tapAt(m.pos.x, m.pos.z); return 'tapAt'; } catch { /* core mid-edit */ } }
-          return g.ctx.companions.use(m) ? 'use' : 'none';
-        });
-        const petted = await untilM((n) => window.__GAME__.ctx.companions.active[0].stats.pets > n, pets0, 8000);
-        if (via === 'tapAt' && !petted) t.warn('tapAt did not reach companions.use (player use order / camera pick pending)');
-        else t.assert(petted, `tapping Mochi did nothing (${via})`);
+        const s = await G(() => { const g = window.__GAME__, m = g.ctx.companions.active[0]; return g.screen?.(m.pos.x, m.pos.z, m.pos.y + 0.35) ?? null; });
+        t.assert(s && s.on !== false, 'Mochi off screen');
+        const pk = await G(([x, y]) => { const k = window.__GAME__.ctx.cam.pick?.(x, y); return k ? { kind: k.kind, actor: k.actor?.kittenId ?? null } : null; }, [s.x, s.y]);
+        t.log(`pick on Mochi → ${JSON.stringify(pk)}`);
+        t.assert(pk && pk.kind !== 'npc', `Mochi is still pickable (${JSON.stringify(pk)})`);
+        const from = await G(() => { const p = window.__GAME__.ctx.player.pos; return { x: p.x, z: p.z }; });
+        await pg.touchscreen.tap(s.x, s.y);
+        const moved = await untilM((f) => { const c = window.__GAME__.ctx, p = c.player.pos; return c.player.orders?.kind === 'move' || Math.hypot(p.x - f.x, p.z - f.z) > 0.4; }, from, 5000);
+        const pets1 = await G(() => window.__GAME__.ctx.companions.active[0].stats.pets);
+        t.assert(moved, 'a tap on Mochi did not become a move');
+        t.assert(pets1 === pets0, `a tap on Mochi still "used" him (pets ${pets0} → ${pets1})`);
         await pg.waitForTimeout(600);
-        await mshot('companions/touch-portrait-pet');
+        await mshot('companions/touch-portrait-tap-through');
         // landscape 844×390: Sage's Volley drag-aim with pips
         await pg.setViewportSize({ width: 844, height: 390 });
         await pg.waitForTimeout(1200);

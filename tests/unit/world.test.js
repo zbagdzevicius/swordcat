@@ -14,7 +14,7 @@ import { ENEMIES, BOSSES, KITTENS_BY_LEVEL, KITTEN_IDS, LEVEL_IDS, ATTACKS } fro
 import { ENV_PRESETS, finalFog, toState } from '../../src/world/Env.js';
 import { Objectives } from '../../src/world/Objectives.js';
 import { Arena, arenaRingPoints, ARENA, arenaFlag } from '../../src/world/Arena.js';
-import { Level, condOk, waterEntryLevel, colliderList, levelRun, endLevelRun } from '../../src/world/Level.js';
+import { Level, condOk, waterEntryLevel, colliderList, levelRun, endLevelRun, arenaAwareFog, ARENA_MIST } from '../../src/world/Level.js';
 import { Terrain, polylineDistanceGrid } from '../../src/world/Terrain.js';
 import { VigilStone } from '../../src/world/VigilStone.js';
 import { Pickups, placedFishFlag } from '../../src/world/Pickups.js';
@@ -1273,4 +1273,257 @@ test('LevelManager.activateVigil lights a Vigil Stone by id', () => {
   assert.equal(lm.activateVigil('vigil_3', { silent: true }), true);
   assert.deepEqual(lit, [{ silent: true }]);
   assert.equal(lm.activateVigil('nope'), false);
+});
+
+// ============================================================================================ CONTROLS_SPEC (iso camera)
+import { ISO_RULES, cameraSide, zoneContains, pickZone, hintStats, onCameraSide, isClutter, clutterAnchors, spawnAudit } from '../../src/world/isoView.js';
+import { crownFraction, isRoofTriangle, splitRoofTemplate, splitGeometry } from '../../src/world/Props.js';
+import { TRAMPLE, trampleAt } from '../../src/world/Wheat.js';
+import { Env } from '../../src/world/Env.js';
+import { HFOG } from '../../src/world/HeightFog.js';
+import { CAMERA as CAM_CFG } from '../../src/core/config.js';
+
+const allDefs = async () => Object.fromEntries(await Promise.all(Object.entries(LEVELS).map(async ([id, f]) => [id, (await f()).default])));
+
+test('iso: camera side of a level yaw (pi: the lens sits at -Z; the gate yaw 0: at +Z)', () => {
+  const [sx, sz] = cameraSide(Math.PI); assert.ok(near(sx, 0, 1e-9) && near(sz, -1, 1e-9));
+  const [gx, gz] = cameraSide(0); assert.ok(near(gx, 0) && near(gz, 1));
+  assert.ok(onCameraSide(0, -4, 0.5, 0, 0, Math.PI), '4 m south of the anchor at yaw pi is between the lens and it');
+  assert.ok(!onCameraSide(0, 4, 0.5, 0, 0, Math.PI), 'north of it is not');
+  assert.ok(!onCameraSide(0, -8, 0.5, 0, 0, Math.PI), 'beyond 6 m it is not');
+  assert.ok(!onCameraSide(5, -3, 0.5, 0, 0, Math.PI), 'well to the side it is not');
+  assert.ok(onCameraSide(0, 4, 0.5, 0, 0, 0), 'at yaw 0 the camera side is +Z');
+});
+
+test('iso: zoneAt picks hint zones first, then the smallest; hysteresis on leaving; ok() filters (camIf)', () => {
+  const big = { id: 'big', at: [0, 0], r: 20 }, hint = { id: 'hint', at: [5, 0], r: 4, cam: { dist: 15 } }, box = { id: 'box', at: [0, 0], size: [4, 4], cam: { dist: 12 } };
+  const zones = [big, hint, box];
+  assert.equal(pickZone(zones, -10, 0), big);
+  assert.equal(pickZone(zones, 6, 0), hint, 'a hint zone wins over a bigger plain one');
+  assert.equal(pickZone(zones, 1, 0), box, 'the smaller hint zone wins');
+  assert.equal(pickZone(zones, 9.5, 0), big, 'outside the hint disc');
+  assert.equal(pickZone(zones, 9.5, 0, hint), hint, 'the current hint zone holds within its 1.5 m pad');
+  assert.equal(pickZone(zones, 10.6, 0, hint), big, 'and lets go beyond it');
+  assert.equal(pickZone(zones, 6, 0, null, undefined, (z) => z !== hint), big, 'filtered out');
+  assert.ok(zoneContains({ at: [0, 0], size: [2, 10], yaw: Math.PI / 2 }, 4, 0), 'a rotated box');
+});
+
+test('iso: every level authors <= 3 camera hints (<= 3 yaw hints); a > 45 deg swing only for the Mushroom Ring set piece; one memeSpot outdoors', async () => {
+  const defs = await allDefs();
+  for (const [id, def] of Object.entries(defs)) {
+    const h = hintStats(def);
+    assert.ok(h.yawHints <= ISO_RULES.maxYawHints, `${id}: ${h.yawHints} yaw hints`);
+    assert.ok(h.hints <= ISO_RULES.maxHints, `${id}: ${h.hints} camera hints (${h.ids})`);
+    assert.deepEqual(h.bigYaw.filter((z) => z !== 'mushroom_climb'), [], `${id}: big yaw swings ${h.bigYaw}`);
+    assert.ok(Number.isFinite(def.cam?.yaw), `${id}: cam.yaw`);
+    for (const z of def.zones ?? []) if (z.cam) {
+      for (const k of Object.keys(z.cam)) assert.ok(['yaw', 'pitch', 'dist', 'clear'].includes(k), `${id}:${z.id} cam.${k}`);
+      if (z.cam.dist != null) assert.ok(z.cam.dist >= CAM_CFG.iso.distMin && z.cam.dist <= CAM_CFG.iso.distMax, `${id}:${z.id} dist ${z.cam.dist}`);
+    }
+  }
+  for (const id of ['meadow', 'forest', 'town', 'gate']) assert.ok(Array.isArray(defs[id].memeSpot?.at) && Number.isFinite(defs[id].memeSpot.yaw), `${id} memeSpot`);
+  assert.equal(defs.gate.cam.yaw, 0, 'the gate looks north (screen-up = onward)');
+  assert.deepEqual(hintStats(defs.meadow).ids.sort(), ['fields_view', 'practice', 'stones_glade_view']);
+});
+
+test('iso 8.5 spawn audit: no open-zone spawn group 6 m down-screen of a trigger, checkpoint or arena entry', async () => {
+  const defs = await allDefs();
+  for (const [id, def] of Object.entries(defs)) assert.deepEqual(spawnAudit(def), [], `${id}: ${JSON.stringify(spawnAudit(def))}`);
+  // the rule itself: a group 3 m south of a checkpoint at yaw pi is flagged
+  const bad = spawnAudit({ cam: { yaw: Math.PI }, zones: [{ id: 'v', kind: 'checkpoint', at: [0, 0] }, { id: 'o', kind: 'open', at: [0, -3], spawns: [['rat_pike', 2, [0, -3], 2]] }] });
+  assert.equal(bad.length, 1);
+});
+
+test('iso 11 clutter rule: a prop taller than 2.2 m within 6 m camera-side of the spine is clutter', () => {
+  const def = { spine: [[0, 0], [0, 20]], zones: [{ kind: 'arena', at: [10, 10], r: 8 }] };
+  const A = clutterAnchors(def);
+  assert.ok(isClutter(0.5, -3, 1, 3, A, Math.PI), 'south of the spine start');
+  assert.ok(!isClutter(0.5, -3, 1, 2.0, A, Math.PI), 'short props are fine');
+  assert.ok(isClutter(10, 6, 1, 3, A, Math.PI), 'south of the arena centre');
+  assert.ok(!isClutter(4, 10, 0.5, 5, A, Math.PI), 'beside the spine (lateral)');
+});
+
+test('Props: crown fraction from the leafy vertices; roof triangles; a building splits into body + roof', () => {
+  // a trunk box (brown, 0..2) and a crown box (green, 2..5)
+  const trunk = new THREE.BoxGeometry(0.4, 2, 0.4).translate(0, 1, 0), crown = new THREE.BoxGeometry(2, 3, 2).translate(0, 3.5, 0);
+  const t = procTemplate('tree_t', [[trunk, '#5A4632'], [crown, '#4F5C2A']]);
+  assert.ok(near(crownFraction(t.geometry), 2 / 5, 0.02), `crownFrac ${crownFraction(t.geometry)}`);
+  assert.equal(crownFraction(procTemplate('rock', [[new THREE.BoxGeometry(1, 1, 1), '#8C8F88']]).geometry), 0.35, 'no leaves: fallback');
+  const box = { minY: 0, maxY: 6 };
+  assert.ok(isRoofTriangle([0, 5, 0], [1, 5, 0], [0, 5.5, -1], box), 'an up-facing slope high on the house');
+  assert.ok(!isRoofTriangle([0, 1, 0], [1, 1, 0], [0, 4, 0], box), 'a wall');
+  assert.ok(!isRoofTriangle([0, 0.5, 0], [1, 0.5, 0], [0, 0.5, -1], box), 'a porch step low down');
+  const house = procTemplate('house_t', [[new THREE.BoxGeometry(4, 3, 4).translate(0, 1.5, 0), '#C9C4B6'], [new THREE.ConeGeometry(3.2, 2.5, 4).translate(0, 4.25, 0), '#B05A54']]);
+  const sp = splitRoofTemplate(house);
+  assert.ok(sp.roof && sp.body !== house, 'split');
+  const nb = house.geometry.index.count, nr = sp.roof.geometry.index.count, nw = sp.body.geometry.index.count;
+  assert.equal(nr + nw, nb, 'every triangle lands in one part');
+  const ry = sp.roof.geometry.boundingBox;
+  assert.ok(ry.min.y >= 2.9, `the roof starts at the eaves (${ry.min.y.toFixed(2)})`);
+  assert.deepEqual(sp.roof.box, house.box, 'same placement box');
+  const [a, b] = splitGeometry(house.geometry, () => false);
+  assert.ok(a && b === null);
+});
+
+test('Wheat trample: bend within 1.4 m, flattened to 40 % within 0.9 m; 5 trample slots fed from her + enemies', () => {
+  assert.deepEqual([TRAMPLE.slots, TRAMPLE.r, TRAMPLE.flat, TRAMPLE.minH], [5, 1.4, 0.9, 0.4]);
+  assert.ok(trampleAt(0.2).squash > 0.99 && trampleAt(0.2).bend > 0.99);
+  assert.ok(trampleAt(1.2).bend > 0 && trampleAt(1.2).squash === 0, 'bent, not flattened, at 1.2 m');
+  assert.equal(trampleAt(1.5).bend, 0);
+  const f = new WheatField();
+  f.update(1, null, new THREE.Vector3(1, 0, 2), [{ x: 3, y: 0, z: 3 }, { x: 4, y: 0, z: 4 }]);
+  const T = f.uniforms.uTrample.value;
+  assert.equal(T.length, 5);
+  assert.deepEqual(T.map((v) => v.w), [1, 1, 1, 0, 0]);
+  assert.deepEqual([T[0].x, T[0].z, T[2].x], [1, 2, 4]);
+  f.update(1, null, null, null);
+  assert.ok(T.every((v) => v.w === 0));
+});
+
+test('Level: zone hints go to cam.setHint on entry (snap at load), wait while she is engaged, restore on leaving', () => {
+  const ctx = fakeCtx({ systems: false });
+  const hints = [];
+  ctx.cam = { setHint: (h, blend) => hints.push({ ...h, blend }) };
+  const foe = { pos: new THREE.Vector3(30, 0, 3), alerted: true, alive: true };
+  ctx.enemies = { list: [foe] };
+  const def = { id: 'h', cam: { yaw: Math.PI }, zones: [{ id: 'z', at: [30, 0], r: 5, cam: { dist: 15, clear: 7 } }] };
+  const L = new Level(ctx, def);
+  const p = { pos: new THREE.Vector3(0, 0, 0), alive: true };
+  L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 1); assert.equal(hints[0].blend, 0, 'the level framing snaps at load'); assert.equal(hints[0].yaw, Math.PI);
+  p.pos.set(30, 0, 0);
+  for (let i = 0; i < 60; i++) L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 1, 'an alerted foe within 10 m: the hint waits');
+  foe.alerted = false;
+  for (let i = 0; i < 100; i++) L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 1, 'still < 2 s calm');
+  for (let i = 0; i < 30; i++) L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 2); assert.equal(hints[1].dist, 15); assert.equal(hints[1].zone, 'z'); assert.ok(near(hints[1].blend, CAM_CFG.iso.hint.blend));
+  assert.equal(L.camZone.id, 'z');
+  p.pos.set(36, 0, 0);
+  for (let i = 0; i < 5; i++) L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 2, 'inside the pad');
+  p.pos.set(40, 0, 0);
+  L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 3); assert.equal(hints[2].dist, undefined); assert.equal(L.camZone, null);
+  ctx.cam.zoneHints = true;                       // a camera that reads zoneAt itself
+  p.pos.set(30, 0, 0);
+  L._updateCamHint(1 / 60, p);
+  assert.equal(hints.length, 3); assert.equal(L.camZone.id, 'z');
+});
+
+test('Level: E prefers the hovered interactable when two are in reach', () => {
+  const ctx = fakeCtx({ systems: false });
+  const used = [];
+  ctx.game = { mode: 'play' };
+  ctx.input = { pressed: (a) => a === 'interact' };
+  const L = new Level(ctx, { id: 'e' });
+  const mk = (id, x) => ({ id, kind: 'interact', r: 2, pos: new THREE.Vector3(x, 0, 0), use: () => used.push(id) });
+  L.interactables.push(mk('near', 0.5), mk('far', 1.5));
+  const p = { pos: new THREE.Vector3(0, 0, 0), hover: null };
+  L._updateInteract(p);
+  assert.deepEqual(used, ['near']);
+  p.hover = { kind: 'interact', id: 'far' };
+  L._interact = null;
+  L._updateInteract(p);
+  assert.deepEqual(used, ['near', 'far'], 'the hovered one wins');
+});
+
+test('Env: per-level focus fog (cam.fog, per-preset rows), the zone clear, the iso hemisphere', () => {
+  const ctx = fakeCtx({ systems: false });
+  ctx.scene = new THREE.Scene();
+  const env = new Env(ctx);
+  env.sunLight = new THREE.DirectionalLight(); env.hemiLight = new THREE.HemisphereLight();
+  ctx.levels = { current: { cam: { yaw: Math.PI, fog: { clear: 5.5, clearCombat: 7, topMul: 1.35, forest_night: { clear: 4.5, clearCombat: 6, topMul: 1.2 } },
+    light: { forest_night: { hemiMul: 1.15 } } }, camZone: null } };
+  env.presetName = 'forest_day';
+  env.setFocusFog({ focus: new THREE.Vector3(), mode: 1 });
+  assert.ok(near(HFOG.uFogClear.value, 5.5) && near(HFOG.uFogTopMul.value, 1.35));
+  env.presetName = 'forest_night'; env._clear = null;
+  env.setFocusFog({ focus: new THREE.Vector3(), mode: 1 });
+  assert.ok(near(HFOG.uFogClear.value, 4.5) && near(HFOG.uFogTopMul.value, 1.2), 'the night row');
+  ctx.levels.current.camZone = { cam: { clear: 7 } }; env._clear = null;
+  env.setFocusFog({ focus: new THREE.Vector3(), mode: 1 });
+  assert.ok(near(HFOG.uFogClear.value, 7), 'a zone hint clear (Mushroom Ring 7 m)');
+  env.cur.hemi = 1; env._focusMode = 1; env._apply(false);
+  assert.ok(near(env.hemiLight.intensity, 1.15), `iso hemi x1.15 (${env.hemiLight.intensity})`);
+  env._focusMode = 0; env._apply(false);
+  assert.ok(near(env.hemiLight.intensity, 1), 'eye-level shots keep the authored look');
+  HFOG.uFogMode.value = 0; HFOG.uFogClear.value = 5; HFOG.uFogTopMul.value = 1.5;
+});
+
+test('iso level data: the meadow fence link is gated on tut.jump.done (gate line along the fence); forest / town hop links', async () => {
+  const defs = await allDefs();
+  const fence = defs.meadow.navLinks.find((l) => l.kind === 'fence');
+  assert.equal(fence.when, 'tut.jump.done');
+  assert.ok(fence.a[1] < -87 && fence.b[1] > -87, 'the link crosses the inner fence (z -87)');
+  assert.deepEqual(fence.gate, [[-20, -87], [-2, -87]]);
+  const f = defs.forest.navLinks;
+  assert.equal(f.filter((l) => l.kind === 'hop').length, 4 + 7, '2 ledges x 2 hops + 7 stump hops');
+  for (const l of f) assert.ok(Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]) <= 3.2, `link length ${JSON.stringify(l)}`);
+  assert.equal(defs.town.navLinks.length, 4, 'street, 3 crates, balcony');
+});
+
+test('iso builds headless: roof faces and solids tagged on the batch, tree crowns (crownFrac), memeSpot / navLinks on the Level', async () => {
+  let { L } = await buildM2('town');
+  const ud = L.batch.mesh.userData;
+  assert.ok(ud.camFadeRoofIds?.size >= 27, `roof instances ${ud.camFadeRoofIds?.size}`);
+  assert.ok(ud.camFadeSolidIds?.size >= 10, `solid instances ${ud.camFadeSolidIds?.size}`);
+  for (const id of ud.camFadeRoofIds) assert.ok(!ud.camFadeSolidIds.has(id), 'a roof is never a solid');
+  assert.equal(L.navLinks.length, 4); assert.deepEqual(L.memeSpot.at, [0, 3.2]);
+  assert.ok(L.zoneAt({ x: 0, z: 8 })?.id === 'square');
+  assert.ok(L.zoneAt({ x: -30, z: 0 })?.id !== 'hub_view', 'the hub view waits for town.free');
+  L.dispose();
+  ({ L } = await buildM2('forest'));
+  assert.ok(L.trees.filter((t) => t.userData.camFade === 'crown').every((t) => t.userData.crownFrac > 0.1 && t.userData.crownFrac <= 0.8));
+  assert.ok(L.trees.some((t) => t.userData.camFade === 'crown'));
+  assert.ok(L.batch.mesh.userData.camFadeSolidIds?.size >= 6, 'the 6 millstone pillars');
+  assert.equal(L.zoneAt({ x: -26.4, z: -58.6 })?.id, 'mushroom_climb');
+  L.dispose();
+  ({ L } = await buildM2('gate'));
+  assert.ok(L.root.getObjectByName('merged:gatehouse')?.userData.camFade === 'solid', 'the gatehouse fades as a solid');
+  assert.ok(L.root.getObjectByName('merged:gate_towers')?.userData.camFade === 'solid');
+  L.dispose();
+});
+
+test('LevelManager.setVisible("far") forces the far group; null returns it to automatic (hidden in iso play)', () => {
+  const ctx = fakeCtx({ systems: false });
+  ctx.scene = new THREE.Scene();
+  ctx.env = { _focusMode: 1, sky: { mesh: new THREE.Object3D() } };
+  const L = new Level(ctx, { id: 'f' });
+  L._applyFar();
+  assert.equal(L.groups.skyline.visible, false); assert.equal(ctx.env.sky.mesh.visible, false);
+  const lm = new LevelManager(ctx); lm.current = L;
+  lm.setVisible('far', true);
+  assert.equal(L.groups.skyline.visible, true); assert.equal(L.groups.dawnstone.visible, true);
+  lm.setVisible('far', null);
+  assert.equal(ctx.env.sky.mesh.visible, false, 'automatic: hidden in iso');
+  ctx.env._focusMode = 0; L._applyFar();
+  assert.equal(ctx.env.sky.mesh.visible, true, 'a cutscene shows it');
+  L.setDawnstone(false); assert.equal(L.groups.dawnstone.visible, false);
+});
+
+test('PropActor: breakables are assistable (the 7.2 soft auto-target / picker), the swinging sack is not', () => {
+  const ctx = fakeCtx({ systems: false });
+  assert.equal(new PropActor(ctx, { kind: 'crate', hp: 1 }).assistable, true);
+  assert.equal(new PropActor(ctx, { kind: 'x', breakable: false }).assistable, false);
+});
+
+test('arenaAwareFog: cam.fog.mist drops to ARENA_MIST while an arena is locked; the def is not mutated', () => {
+  const def = { clear: 5, forest_night: { clear: 4.5 } }, lv = { arenas: [{ locked: false, cleared: false }] };
+  const f = arenaAwareFog(def, lv);
+  assert.equal(f.mist, undefined, 'no authored value, no fight: the preset factor (fx) applies');
+  assert.equal(f.clear, 5); assert.deepEqual(f.forest_night, { clear: 4.5 });
+  lv.arenas[0].locked = true;
+  assert.equal(f.mist, ARENA_MIST);
+  lv.arenas[0].cleared = true;
+  assert.equal(f.mist, undefined);
+  const g = arenaAwareFog({ mist: 0.2 }, { arenas: [{ locked: true }] });
+  assert.equal(g.mist, 0.2, 'an authored value below the arena factor wins');
+  assert.equal('mist' in def, false);
+  assert.equal(arenaAwareFog(undefined, { arenas: [] }).mist, undefined);
+});
+
+test('ARENA.wall: the fog wall is lighter and narrower than the fx defaults (iso readability)', () => {
+  assert.ok(ARENA.wall.alpha <= 0.4 && ARENA.wall.width <= 4 && ARENA.wall.bandW <= 1.2 && ARENA.wall.bandA <= 0.15);
 });

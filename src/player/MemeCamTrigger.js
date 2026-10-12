@@ -59,7 +59,7 @@ export class MemeCamTrigger {
     // idle
     const moving = Math.hypot(p.vel.x, p.vel.z) > 0.2;
     const busy = p.state !== 'move' || moving || !p.onGround || p.swing || p.guarding || p.scripted;
-    if (busy || input.anyActivity()) { this.idleT = 0; this.bonus = 0; return; }
+    if (busy || this._idleBroken(input)) { this.idleT = 0; this.bonus = 0; return; }
     if (!ctx.params?.test) this.idleT += dt;
     if (this.idleSeconds < cfg.idle) return;
     if (!this.canIdleTrigger()) return;
@@ -109,6 +109,9 @@ export class MemeCamTrigger {
     this.active = true; this.t = 0; this.standT = 0; this._armed = false;
     this._prevCam = ctx.cam?.modeName && ctx.cam.modeName !== 'meme' && ctx.cam.modeName !== 'preset' ? ctx.cam.modeName : 'follow';
     p.onMemeCam?.(true);
+    // §2.7: at the level's memeSpot she turns to its authored yaw, so the camera's spot framing sees her face
+    const ms = ctx.levels?.current?.memeSpot;
+    if (ms?.at && typeof ms.yaw === 'number' && ctx.cam?.isIso !== false && Math.hypot(p.pos.x - ms.at[0], p.pos.z - ms.at[1]) <= (ms.r ?? 4)) p.facing = ms.yaw;
     ctx.game.setMode('memecam');
     ctx.cam?.mode?.('meme');
     const st = ctx.state;
@@ -133,6 +136,18 @@ export class MemeCamTrigger {
     // CONTROLS_SPEC §2.7: in iso there is no look; a click, a tap or a mouse move ≥ 40 px (Input's activity) exits
     if (input.iso && input.idleTime === 0) return true;
     return input.lookIdleTime === 0;
+  }
+
+  /**
+   * Does this step's input break the idle clock? CONTROLS_SPEC §12 player 5: in iso the clock runs on Input.idleTime
+   * (new presses, clicks / taps, stick or mouse motion past its threshold) plus buttons held down, so a thumb resting
+   * on the touch joystick inside its dead zone does not keep her "busy". Classic: any activity.
+   */
+  _idleBroken(input) {
+    if (!input.iso || typeof input.idleTime !== 'number') return input.anyActivity();
+    if (input.idleTime === 0) return true;
+    if (input.actions instanceof Map) { for (const s of input.actions.values()) if (s.pressed || s.down) return true; }
+    return false;
   }
 
   /** Any input: back to play with the 0.6 s blend (the camera eases back). */

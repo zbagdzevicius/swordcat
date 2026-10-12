@@ -84,6 +84,16 @@ export function canvas2d(w, h) {
 let _resolve = coreAssetUrl;
 /** Route asset URLs through the game's resolver (runtime.initCharacters passes ctx.assets.url). */
 export function setAssetResolver(fn) { _resolve = typeof fn === 'function' ? fn : coreAssetUrl; }
+/**
+ * Character mesh detail (QUALITY.charDetail; GAME_DESIGN §18 Low budget): a 0..1 factor on the tessellation of cats
+ * built from now on (armour, body, head fur, tail). 1 = full detail; Low uses ~0.55 (the lite tier's density). Read at
+ * build time: a quality change applies to cats built after it (runtime.initCharacters / E.QUALITY write it).
+ */
+let _charDetail = 1;
+export function setCharDetail(k) { _charDetail = Number.isFinite(k) ? clamp(k, 0.3, 1) : 1; }
+export function charDetail() { return _charDetail; }
+/** Scale a segment count by a detail factor (never below `min`; 1 = unchanged). */
+export function segScale(n, k = _charDetail, min = 5) { return k >= 1 ? n : Math.max(Math.min(min, n), Math.round(n * k)); }
 /** Asset URL under public/assets (tech.md §2: BASE_URL + 'assets/...'; CONTRIBUTING §9: via core's resolver). */
 export function assetUrl(p) { return _resolve(p); }
 

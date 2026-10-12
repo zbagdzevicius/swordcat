@@ -26,6 +26,7 @@ import { TUNING, M2, rangeOf } from './tuning.js';
 import { clipKey, clipsFor, isSpec, specDuration } from './clipMaps.js';
 import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright } from './rig.js';
 import { rangedStartAllowed } from './onscreen.js';
+import { topTint } from '../characters/Readability.js';
 
 let teleId = 1;
 /** States an open-zone enemy leaves (→ return) when she is walled off inside a locked arena it isn't part of. */
@@ -1164,6 +1165,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
         m.root.visible = true;
       }
       if (this.disposed) return;
+      // CONTROLS_SPEC §12 characters 3: helmet tops read from above (owned materials are patched in place, per instance)
+      if (this.ctx.cam?.isIso !== false && !def.noTopTint) { try { topTint(m.root); } catch { /* cosmetic only */ } }
       this._flash = def.noFlash ? [] : flashMaterials(m.root);
       this.anim = new Animator(m.scene, clipsFor(def.anims, m.animations));
       this._animKey = '';

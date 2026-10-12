@@ -202,6 +202,12 @@ test('bubble: clampShift keeps the bubble rect inside the screen margin (review 
   const top = clampShift(0, 0.9, -0.2, 0.2, 0, 0.3, m, m);
   assert.ok(Math.abs(0.9 + 0.3 + top.dy - (1 - m)) < 1e-9, 'top edge pulled down');
   assert.ok(Math.abs(clampShift(0.5, 0, -1.5, 1.5, 0, 0.3, m, m).dx + 0.5) < 1e-9, 'oversized rect is centred');
+  // HUD-safe bottom (ability bar): a bark near the bottom edge is lifted above the bar, not just the screen margin
+  const hud = 0.3, low = clampShift(0, -0.95, -0.2, 0.2, 0, 0.3, m, m, hud);
+  assert.ok(Math.abs(-0.95 + low.dy - (-1 + hud)) < 1e-9, 'bottom edge lifted above the HUD inset');
+  assert.deepEqual(clampShift(0, 0, -0.2, 0.2, 0, 0.3, m, m, hud), { dx: 0, dy: 0 }, 'clear of the HUD: untouched');
+  const tall = clampShift(0, 0, -0.2, 0.2, 0, 1.9, m, m, hud);
+  assert.ok(Math.abs(0 + 0.95 + tall.dy - ((-1 + hud + 1 - m) / 2)) < 1e-9, 'oversized rect centred in the usable span');
 });
 
 test('assets manifest lists what the area loads; per-level subsets are listed too', () => {
@@ -1444,7 +1450,8 @@ test('iso click / tap: pickables, use(): companion hello, NPC nod, kitten rescue
   const npc = m.spawnNpc('pearl', [3, 0, 3], 0);
   const hid = m.spawnKitten('noodle', [-4, 0, 4], 'meow', { prop: 'barrel' });
   const out = m.pickables();
-  assert.ok(out.includes(c) && out.includes(npc) && !out.includes(hid), 'hidden kitten not pickable');
+  assert.ok(out.includes(npc) && !out.includes(hid), 'hidden kitten not pickable');
+  assert.ok(!out.includes(c), 'the active party is never offered: clicks right behind her fall through to ground');
   assert.equal(c.pickKind, 'companion'); assert.equal(npc.pickKind, 'npc'); assert.equal(hid.pickKind, null);
   assert.ok(c.useR > 1 && npc.useR > 1);
   assert.ok(m.use(c)); assert.equal(c.stats.pets, 1); assert.ok(c.regroupT > 0);

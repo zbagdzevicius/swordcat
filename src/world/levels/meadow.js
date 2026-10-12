@@ -12,7 +12,7 @@ import { PropActor, SwingingSack, WobbleKnight } from '../PropActor.js';
 import { WheatField } from '../Wheat.js';
 import { makeStoneMaterial } from '../Props.js';
 import { E } from '../../core/events.js';
-import { smoothPolyline, pointAlong, distToPolyline } from '../noise.js';
+import { smoothPolyline, pointAlong, distToPolyline, inBox } from '../noise.js';
 
 const M = {
   fence: 'models/env/nature/fence_simple.glb',
@@ -398,7 +398,20 @@ const SETPIECES = {
     if (!mesh) return;
     kit.object(mesh);
     level.wheat = field;
-    level.animators.push({ render: (dt, t) => field.update(t ?? 0, ctx.env, ctx.player?.alive !== false ? ctx.player?.object3d?.position ?? null : null) });
+    // §4.2 trample field: her + the 4 nearest live enemies standing in the field (crows on foot, rats)
+    const tramplers = [], dist = [];
+    level.animators.push({ render: (dt, t) => {
+      const her = ctx.player?.alive !== false ? ctx.player?.object3d?.position ?? null : null;
+      tramplers.length = 0; dist.length = 0;
+      if (her) for (const e of ctx.enemies?.list ?? []) {
+        if (!e || e.alive === false || !e.pos || !inBox(e.pos.x, e.pos.z, zone.at, zone.size)) continue;
+        const d = (e.pos.x - her.x) ** 2 + (e.pos.z - her.z) ** 2;
+        let i = tramplers.length; tramplers.push(e.pos); dist.push(d);
+        while (i > 0 && dist[i - 1] > d) { tramplers[i] = tramplers[i - 1]; dist[i] = dist[i - 1]; i--; }
+        tramplers[i] = e.pos; dist[i] = d;
+      }
+      field.update(t ?? 0, ctx.env, her, tramplers);
+    } });
   },
 
   /** Old Bridge (x = 30, z 57–67, 4 m wide) over the stream; Mochi's cage cart at (30, 74); reeds and lily pads. */
@@ -487,6 +500,18 @@ export default defineLevel({
   env: { default: 'meadow_day', byFlag: [['!prologue.done', 'meadow_night']] },
   music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', prologue: 'village_bards_tale', byFlag: [['!prologue.done', 'village_bards_tale']] },
   spine: SPINE,
+  // CONTROLS_SPEC §11 iso camera: yaw π (camera south of her, the spine runs north); §4.2 meadow_day fog is the
+  // CAMERA.iso.fog default (clear 5 / 7, topMul 1.5); from above the sun moves to the side (~80° off the view: shadows
+  // fall across the screen, not under the props) and the hemisphere lifts ×1.08 (the lens sees mostly ground)
+  cam: { yaw: Math.PI, fog: { clear: 5, clearCombat: 7, topMul: 1.5 },
+    light: { meadow_day: { hemiMul: 1.08, sunAz: -1.45 },
+      // Midnight Practice: the moon and a lifted cool sky fill so the field reads from above (ground ≥ ~12 % at 8 m)
+      meadow_night: { hemiMul: 2.4, sunMul: 2.4, envMul: 1.8, hemiSky: '#B4C2D6', hemiGround: '#343C2E' } } },
+  // §2.7 the Meme Cam spot: the Tallbert knoll (she faces south, the statue and the misty lane behind her)
+  memeSpot: { at: [2, -58.5], yaw: Math.PI, r: 4 },
+  // §5.4 the fence lesson: the 1.0 m inner fence (z −87, x −20…−2) is a gated link; before `tut.jump.done` no automatic
+  // hop crosses it either (the gate line), so a click past it walks round the fence end, and the prompt teaches the jump
+  navLinks: [{ a: [-14.5, -88.3], b: [-14.5, -85.7], kind: 'fence', when: 'tut.jump.done', gate: [[-20, -87], [-2, -87]] }],
   paths: [{ pts: [[-22, -30], [-38, -27], [-56, -31], [-80, -28]], width: 3 }, { pts: [[-22, -30], [-9, -23], [8, -27], [30, -22]], width: 3 }],
   spawns: { title: [0, -64, Math.PI], practice: [-10, -90, 0], start: [-1.5, -54.5, -0.4], boss: [30, 66, 0] },   // [x, z, yaw]; yaw 0 faces +Z
   anchors: {
@@ -497,30 +522,36 @@ export default defineLevel({
   },
   keep: [{ box: [27.6, 50, 32.4, 57.8], h: 0.32, feather: 2.5 }, { box: [27.6, 66.2, 32.4, 72], h: 0.32, feather: 2.5 }],
   zones: [
-    { id: 'practice', kind: 'setpiece', at: [0, -80], size: [40, 40], props: 'practiceField', tutorial: true, keepClear: true, flat: 26 },
+    { id: 'practice', kind: 'setpiece', at: [0, -80], size: [40, 40], props: 'practiceField', tutorial: true, keepClear: true, flat: 26,
+      cam: { dist: 12 } },                                           // §11: tutorial readability (she reads big)
     { id: 'tallbert', kind: 'trigger', at: [0, -61], r: 2.5, play: 'g01', when: 'prologue.tutorial && !prologue.done', once: true },
     { id: 'lane', kind: 'trigger', at: [-6, -52], r: 3, play: 'cs02', when: 'prologue.tutorial && !prologue.done', once: true },
     { id: 'vigil_1', kind: 'checkpoint', at: [-16, -36] },
     { id: 'crossroads', kind: 'open', at: [-22, -30], r: 10, props: 'crossroads', onlyIf: 'prologue.done',
-      spawns: [['rat_pike', 2, [-14, -42], 4], ['rat_pike', 2, [-24, -32], 2], ['rat_xbow', 1, CROSSROADS_PERCH, 0, { y: 1.2 }]] },
+      spawns: [['rat_pike', 2, [-9.5, -41], 4], ['rat_pike', 2, [-24, -32], 2], ['rat_xbow', 1, CROSSROADS_PERCH, 0, { y: 1.2 }]] },
     { id: 'noodle', kind: 'kitten', kittenId: 'noodle', at: [-30, -26], hide: 'meow', prop: 'barrel', onlyIf: 'prologue.done' },
     { id: 'letter_1', kind: 'letter', letterId: 'l1', at: [-18, -24] },
     { id: 'stones', kind: 'arena', at: [-20, -4], r: 12, props: 'stoneRing8', stones: STONES_TALL.slice(1, 6),   // same 5 templates as the scatter: 5 fade sets, not 8
       waves: [[['rat_pike', 3]], [['rat_pike', 3], ['rat_xbow', 1]]] },
     { id: 'button', kind: 'kitten', kittenId: 'button', at: [-20, -4], hide: 'stand', standTime: 3.0, zoneR: 1.2, needClear: 'stones', onlyIf: 'prologue.done' },
     { id: 'vigil_2', kind: 'checkpoint', at: [-12, 8] },
+    // CONTROLS_SPEC §2.2 (<= 3 hints per level): one framing hint over both the Standing Stones and the Picnic Glade
+    { id: 'stones_glade_view', kind: 'camera', at: [-8, 8], size: [48, 48], cam: { dist: 15 } },
     { id: 'glade', kind: 'arena', at: [2, 18], r: 14, lockOn: 'cs03:end', autoLockWhen: (s) => s?.getFlag?.('meadow.pudding') === 'netted',
       restoreUnless: (s) => s?.getFlag?.('meadow.pudding') === 'netted',     // the ropes fight re-arms until Pudding is free
       objective: { id: 'net_ropes', max: 3 }, props: 'picnicGlade',
       interact: { id: 'picnic', at: [0, 16], play: 'cs03', when: 'prologue.done && !meadow.pudding', prompt: 'prompt.picnic', r: 1.8 },
       waves: [[['rat_pike', 4]], [['rat_pike', 3], ['rat_xbow', 1]]] },
-    { id: 'crowfields', kind: 'open', at: [24, 40], size: [50, 40], props: 'wheatField', onlyIf: 'prologue.done', keepClear: true,
+    { id: 'crowfields', kind: 'open', at: [24, 40], size: [50, 40], props: 'wheatField', onlyIf: 'prologue.done', keepClear: true,   // framed by fields_view (below)
       spawns: [['crow', 4, [24, 40], 8], ['rat_xbow', 1, [16, 46], 0, { y: 1.0 }], ['rat_xbow', 1, [32, 34], 0, { y: 1.0 }]],
       hints: [{ key: 'tut.pounce', on: 'alert', type: 'crow' }, { key: 'tut.reflect', on: 'telegraph', type: 'rat_xbow' }],
       placed: [{ id: 'cow_fields', model: M.cow, at: [40, 30], fit: { h: 1.6 }, yaw: -Math.PI / 2, clip: 'Idle_Headlow', meowWakes: true, walkTo: [40, 36], kind: 'cow', radius: 0.9 }] },
     { id: 'biscuit', kind: 'kitten', kittenId: 'biscuit', at: [41.5, 30], hide: 'meow', prop: 'cow', onlyIf: 'prologue.done' },
     { id: 'vigil_3', kind: 'checkpoint', at: [28, 52] },
-    { id: 'bridge', kind: 'arena', at: [30, 70], r: 12, props: 'oldBridge',
+    // Crow Fields + the Old Bridge: one closer hint (10.4 m; +3 m combat zoom-out = 13.4 m) so she stays >= 45 px on
+    // desktop against the grey-green wheat while crows and bolts frame wide (CONTROLS_SPEC §2.2: 3 hints in all)
+    { id: 'fields_view', kind: 'camera', at: [27, 56], size: [54, 72], cam: { dist: 10.4 } },
+    { id: 'bridge', kind: 'arena', at: [30, 70], r: 12, props: 'oldBridge',   // framed by fields_view
       rescue: { companion: 'mochi', cage: MOCHI_CAGE, hp: 30, play: 'd01', flag: 'meadow.mochi', style: 'cart', facing: Math.PI },
       waves: [[['rat_pike', 3], ['rat_xbow', 1]], [['rat_pike', 3], ['rat_xbow', 2]], [['rat_pike', 4], ['crow', 2]]] },
     // gated on Mochi: the forest expects her in the party (§12.3); reaching the exit early nudges her back to the cage

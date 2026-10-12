@@ -25,7 +25,8 @@ import { ECONOMY } from '../core/config.js';
 import { Level, condOk } from './Level.js';
 import { Terrain } from './Terrain.js';
 import { Grass, GRASS_COLORS } from './Grass.js';
-import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial } from './Props.js';
+import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial, crownFraction, splitRoofTemplate } from './Props.js';
+import { clutterAnchors, isClutter } from './isoView.js';
 export { procTemplate };
 import { PropActor, Critter } from './PropActor.js';
 import { Pickups } from './Pickups.js';
@@ -158,6 +159,12 @@ export class Kit {
     this.blockers = [];
     this.terrain = null;
     this._warned = new Set();
+    /** CONTROLS_SPEC §3: batch handles of roof faces (`camFade: 'roof'`) and solid occluders (`'solid'`, clutter audit), capsule-fade props (`camFade: true`: bunting) */
+    this._roofHandles = []; this._solidHandles = []; this._fadeHandles = [];
+    /** roof splits per template key */
+    this._roofSplit = new Map();
+    /** §11 camera-side clutter audit anchors (spine samples, arena centres), built once the terrain exists */
+    this._clutterAnchors = null;
   }
 
   // ------------------------------------------------------------------ small helpers
@@ -297,9 +304,16 @@ export class Kit {
     const m = trs(new THREE.Matrix4(), x, y, z, yaw, sv, o.tiltX ?? 0, o.tiltZ ?? 0).multiply(_m.makeTranslation(ox, oy, oz));
     const jit = o.jitter ?? 0.06;
     const color = o.color != null ? new THREE.Color(o.color) : (jit > 0 ? new THREE.Color(1, 1, 1).multiplyScalar(1 - jit + this.rng() * jit * 2) : null);
-    let handle = null;
+    let handle = null, roofHandle = null;
     if (o.tree || o.fade) this._addInst(tpl, m, color, !!o.tree);
     else if (o.into) o.into.items.push({ geo: tpl.geometry, m, color });     // a merged architecture mesh (kit.merged)
+    else if (o.camFade === 'roof') {
+      // §3 roofs: the roof faces become their own batch instance, tagged for the roof-only fade (walls stay)
+      let sp = this._roofSplit.get(tpl.key);
+      if (!sp) { sp = splitRoofTemplate(tpl, o.roof); this._roofSplit.set(tpl.key, sp); if (sp.roof) this.templates.push({ key: sp.body.key, geometry: sp.body.geometry, parts: [] }, sp.roof); }
+      handle = this.batch.add(sp.body.geometry, m, { color, cull: o.cull });
+      if (sp.roof) { roofHandle = this.batch.add(sp.roof.geometry, m, { color, cull: o.cull }); this._roofHandles.push(roofHandle); }
+    }
     else handle = this.batch.add(tpl.geometry, m, { color, cull: o.cull });
     const parts = [];
     for (const p of tpl.parts) {
@@ -308,6 +322,14 @@ export class Kit {
     }
     const w = (b.max.x - b.min.x) * sv[0], d = (b.max.z - b.min.z) * sv[2], hgt = (b.max.y - b.min.y) * sv[1];
     const radius = Math.max(w, d) / 2;
+    // §3 solids (towers, pillars, the gatehouse) and the §11 camera-side clutter audit: a static batch prop taller than
+    // 2.2 m within 6 m of the spine / an arena centre on the camera side fades as a solid occluder
+    if (handle && o.camFade === 'solid') this._solidHandles.push(handle);
+    else if (handle && o.camFade === true) this._fadeHandles.push(handle);   // capsule fade only (bunting, overhead strings)
+    else if (handle && o.camFade !== false && o.camFade !== 'roof' && !o.into && this._isClutter(x, z, radius, hgt)) {
+      this._solidHandles.push(handle);
+      (this.level.audit ??= { clutter: [] }).clutter.push({ key: tpl.key, at: [+x.toFixed(1), +z.toFixed(1)], h: +hgt.toFixed(1) });
+    }
     const colliders = [];
     if (o.collider !== false) for (const c of this._footprint(tpl, x, y, z, yaw, sv, ox, oz, o)) colliders.push(this.collider(c));
     const clearR = o.clear === false ? 0 : (o.clear ?? (o.tree ? Math.max(0.6, radius * 0.18) : radius * 0.8));
@@ -317,7 +339,14 @@ export class Kit {
       const c = Math.cos(yaw), s = Math.sin(yaw), hw = w / 2, hd = d / 2;
       this.level.surfaces.push({ kind: o.surface, test: (px, pz) => { const dx = px - x, dz = pz - z; return Math.abs(dx * c - dz * s) <= hw && Math.abs(dx * s + dz * c) <= hd; } });
     }
-    return { tpl, handle, matrix: m, scale: sv, x, y, z, yaw, parts, colliders, radius, top: y + hgt };
+    return { tpl, handle, roofHandle, matrix: m, scale: sv, x, y, z, yaw, parts, colliders, radius, top: y + hgt };
+  }
+
+  /** §11 camera-side clutter rule for a prop at (x, z) (radius, height). */
+  _isClutter(x, z, r, h) {
+    if (!(h > 2.2) || !this.terrain) return false;
+    this._clutterAnchors ??= clutterAnchors(this.def, this.terrain.spine ?? this.def.spine);
+    return isClutter(x, z, Math.min(r, 3), h, this._clutterAnchors, this.def.cam?.yaw ?? Math.PI);
   }
 
   /** Footprint colliders (circle for round things, yawed box for long ones), in world space. */
@@ -434,7 +463,7 @@ export class Kit {
       if (zn.flat) flats.push({ x: zn.at[0], z: zn.at[1], r: zn.flat, h: zn.flatH });
     }
     for (const f of def.flats ?? []) flats.push(Array.isArray(f) ? { x: f[0], z: f[1], r: f[2], h: f[3] } : f);
-    this.terrain = new Terrain(def, { flats });
+    this.terrain = new Terrain(def, { flats, grassDarken: (def.grass ?? this.biome.grass) !== false ? (def.grassDarken ?? 0.10) : 0 });
     this.terrain.build();
     mark('terrain');
     level.terrain = this.terrain;
@@ -531,6 +560,11 @@ export class Kit {
     if (def.water?.length) { level.waterMeshes = new WaterSet(def.water, def.size ?? 200); level.groups.water.add(level.waterMeshes.group); }
     level.batch = this.batch;
     this.batch.build(level.groups.props, { spareInstances: 64, spareVertices: 6000 });
+    // §3 occlusion tags on the batch (instance ids exist only after the build): roof faces, solid occluders
+    const ids = (hs) => new Set(hs.map((h) => this.batch.items[h.index]?.id).filter((i) => i >= 0));
+    if (this._roofHandles.length) this.batch.mesh.userData.camFadeRoofIds = ids(this._roofHandles);
+    if (this._solidHandles.length) this.batch.mesh.userData.camFadeSolidIds = ids(this._solidHandles);
+    if (this._fadeHandles.length) this.batch.mesh.userData.camFadeIds = ids(this._fadeHandles);
     this._buildTrees();
     mark('batch');
 
@@ -970,7 +1004,10 @@ export class Kit {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere(); mesh.computeBoundingBox?.();
       mesh.castShadow = true; mesh.receiveShadow = true;
-      mesh.userData.camFade = true; mesh.userData.owned = true;
+      // §3: tree crowns fade from above, trunks never (`crownFrac` = where the leaves start, per template)
+      if (set.sway) { mesh.userData.camFade = 'crown'; mesh.userData.crownFrac = crownFraction(tpl.geometry); }
+      else mesh.userData.camFade = true;
+      mesh.userData.owned = true;
       level.groups.props.add(mesh);
       level.trees.push(mesh);
     }

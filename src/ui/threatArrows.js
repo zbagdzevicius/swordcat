@@ -92,7 +92,7 @@ export class ThreatArrows {
       _v.copy(a.pos); _v.y += (a.height ?? 1) * 0.6;
       const behind = isBehind(cam, _v);
       _v.project(cam);
-      if (onScreen(_v.x, _v.y, behind)) continue;
+      if (onScreen(_v.x, _v.y, behind) && !a.hidden) continue;           // §10.4: off screen or hidden
       cand.push({ d, x: _v.x, y: _v.y, behind, kind: tl.kind });
     }
     cand.sort((a, b) => a.d - b.d);

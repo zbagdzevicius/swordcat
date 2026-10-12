@@ -28,21 +28,33 @@ export function wrapText(text, maxChars = 24, maxLines = 3) {
 export const BUBBLE_MARGIN_PX = 16;
 
 /**
+ * The HUD's safe insets (CSS px from each canvas edge, plus the canvas size they were measured against: {top, bottom,
+ * w, h}) — `ctx.ui.safeInsets` (UI._measureSafe: the ability bar at the bottom, the boss plate at the top). Bubbles are
+ * kept clear of them so an iso-view bark near the bottom edge never slides under the ability bar. Set once by the
+ * CompanionManager (every TextSprite — companions, NPCs, story/enemy barks — shares it); null = screen margins only.
+ * @type {null | (() => ({top?: number, bottom?: number, h?: number} | null | undefined))}
+ */
+let safeInsetsOf = null;
+/** @param {null | (() => ({top?: number, bottom?: number, h?: number} | null | undefined))} fn */
+export function setBubbleSafeInsets(fn) { safeInsetsOf = typeof fn === 'function' ? fn : null; }
+
+/**
  * Pure clamp: how far (in NDC) to shift a bubble so its rect stays inside the screen minus a margin.
  * The rect is given relative to the anchor (the speaker's projected point): x from ax+l to ax+r, y from ay+b to ay+t.
- * A rect larger than the usable span is centred on screen. Returns {dx, dy}.
+ * A rect larger than the usable span is centred in it. Returns {dx, dy}.
  * @param {number} ax @param {number} ay @param {number} l @param {number} r @param {number} b @param {number} t
  * @param {number} mx margin in NDC x @param {number} my margin in NDC y
+ * @param {number} [myLo] bottom margin in NDC (defaults to `my`; the HUD-safe bottom) @param {number} [myHi] top margin
  */
-export function clampShift(ax, ay, l, r, b, t, mx, my) {
-  const axis = (a, lo, hi, m) => {
-    const min = -1 + m, max = 1 - m;
-    if (hi - lo >= max - min) return -(a + (lo + hi) / 2); // too big: centre it
+export function clampShift(ax, ay, l, r, b, t, mx, my, myLo = my, myHi = my) {
+  const axis = (a, lo, hi, mLo, mHi) => {
+    const min = -1 + mLo, max = 1 - mHi;
+    if (hi - lo >= max - min) return (min + max) / 2 - (a + (lo + hi) / 2); // too big: centre it in the usable span
     if (a + lo < min) return min - (a + lo);
     if (a + hi > max) return max - (a + hi);
     return 0;
   };
-  return { dx: axis(ax, l, r, mx), dy: axis(ay, b, t, my) };
+  return { dx: axis(ax, l, r, mx, mx), dy: axis(ay, b, t, myLo, myHi) };
 }
 
 const _anchor = new THREE.Vector3();
@@ -101,7 +113,7 @@ export class TextSprite {
   get visible() { return this.on; }
 
   /**
-   * Keep the bubble's body inside the viewport (BUBBLE_MARGIN_PX) by sliding the sprite around its anchor
+   * Keep the bubble's body inside the viewport (BUBBLE_MARGIN_PX) and off the HUD (setBubbleSafeInsets) by sliding the sprite around its anchor
    * (sprite.center), and redraw the tail so its tip still sits on the speaker. Runs right before the sprite renders,
    * with the rendering camera, so it works for any camera/viewport. Exposed for tests.
    * @param {{getSize: (v: THREE.Vector2) => THREE.Vector2}} renderer @param {THREE.Camera} camera
@@ -124,7 +136,13 @@ export class TextSprite {
     // body rect relative to the anchor at the default centre (0.5, 0): x right, y up (the tail tip is the bottom)
     const l = (body.x / cw - 0.5) * W, r = ((body.x + body.w) / cw - 0.5) * W;
     const t = (1 - body.y / ch) * H, b = 0;
-    const { dx, dy } = clampShift(_anchor.x, _anchor.y, l, r, b, t, (BUBBLE_MARGIN_PX * 2) / pw, (BUBBLE_MARGIN_PX * 2) / ph);
+    // HUD-safe insets (CSS px of the canvas rect they were measured on → this viewport's px), on top of the margin
+    let si = null;
+    try { si = safeInsetsOf?.(); } catch { si = null; }
+    const k = si?.h > 0 ? ph / si.h : 1;
+    const insB = Math.min(ph * 0.45, Math.max(0, (si?.bottom ?? 0) * k)), insT = Math.min(ph * 0.45, Math.max(0, (si?.top ?? 0) * k));
+    const { dx, dy } = clampShift(_anchor.x, _anchor.y, l, r, b, t, (BUBBLE_MARGIN_PX * 2) / pw, (BUBBLE_MARGIN_PX * 2) / ph,
+      ((insB + BUBBLE_MARGIN_PX) * 2) / ph, ((insT + BUBBLE_MARGIN_PX) * 2) / ph);
     sp.center.set(0.5 - dx / W, -dy / H);
     // tail tip stays on the speaker (canvas u = center.x), kept inside the body's rounded corners
     const want = Math.round(Math.min(body.x + body.w - 34, Math.max(body.x + 34, sp.center.x * cw)) / 4) * 4;

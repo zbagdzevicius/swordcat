@@ -2,7 +2,7 @@
 // planar front UVs, clearcoat. Coat-coloured eyelids give blinks and expressions; a wet glint for "glisten".
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { canvas2d, Spring, damp, mulberry32, hashString } from './util.js';
+import { canvas2d, Spring, damp, mulberry32, hashString, charDetail, segScale } from './util.js';
 import { own } from './materials.js';
 
 const _texCache = new Map();
@@ -42,9 +42,9 @@ export function makeEyeTexture(o = {}) {
   return t;
 }
 
-/** Eye sphere with planar front UVs; flattened in z. Radius r. */
-export function eyeGeometry(r = 0.045, flat = 0.55) {
-  const g = new THREE.SphereGeometry(r, 32, 24);
+/** Eye sphere with planar front UVs; flattened in z. Radius r; `detail` scales the tessellation (Low: charDetail). */
+export function eyeGeometry(r = 0.045, flat = 0.55, detail = 1) {
+  const g = new THREE.SphereGeometry(r, segScale(32, detail, 18), segScale(24, detail, 12));
   const p = g.attributes.position, uv = g.attributes.uv;
   for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / (2 * r) + 0.5, p.getY(i) / (2 * r) + 0.5);
   g.scale(1, 1, flat);
@@ -87,9 +87,10 @@ export function eyePivotMatrix(pos, side, yaw = 0.32) {
 }
 const _ringGeo = new Map();
 /** Thin dark ring around the eye outline (art.md §2.2 eye-line); merged into the head kit mesh by the builder. */
-export function ringGeometry(r) {
-  if (!_ringGeo.has(r)) _ringGeo.set(r, new THREE.TorusGeometry(r * 1.02, r * 0.05, 5, 36));
-  return _ringGeo.get(r);
+export function ringGeometry(r, detail = 1) {
+  const n = segScale(36, detail, 20), key = r + ':' + n;
+  if (!_ringGeo.has(key)) _ringGeo.set(key, new THREE.TorusGeometry(r * 1.02, r * 0.05, detail < 1 ? 4 : 5, n));
+  return _ringGeo.get(key);
 }
 let _lashMat = null;
 function lashMaterial() { return _lashMat || (_lashMat = own(new THREE.MeshStandardMaterial({ color: PAL.eyeLine, roughness: 0.55 }))); }
@@ -119,16 +120,17 @@ export const EXPRESSIONS = Object.freeze({
 
 /**
  * A pair of eyes with lids, built in HEAD space and parented to the head joint.
- * @param {object} o { r, flat, posL:[x,y,z], posR, yaw, colors:{inner,outer,ring,pupil}|{L:{},R:{}}, lidColor:[r,g,b] linear, kitMat, slit }
+ * @param {object} o { r, flat, detail (0..1, default charDetail()), posL:[x,y,z], posR, yaw, colors:{inner,outer,ring,pupil}|{L:{},R:{}}, lidColor:[r,g,b] linear, kitMat, slit }
  */
 export class EyePair {
   constructor(o) {
     this.group = new THREE.Group(); this.group.name = 'eyes';
     this.r = o.r ?? 0.045;
     const flat = o.flat ?? 0.55;
-    const geo = eyeGeometry(this.r, flat);
+    const detail = o.detail ?? charDetail();
+    const geo = eyeGeometry(this.r, flat, detail);
     const colorsL = o.colors?.L || o.colors || {}, colorsR = o.colors?.R || o.colors || {};
-    const lidGeo = new THREE.SphereGeometry(this.r * 1.07, 28, 14, 0, Math.PI, 0, Math.PI).scale(1, 1, Math.max(flat * 1.25, 0.72));
+    const lidGeo = new THREE.SphereGeometry(this.r * 1.07, segScale(28, detail, 16), segScale(14, detail, 8), 0, Math.PI, 0, Math.PI).scale(1, 1, Math.max(flat * 1.25, 0.72));
     const lidMat = o.lidMat;
     this.eyes = []; this.upper = []; this.lower = [];
     for (const side of [1, -1]) {

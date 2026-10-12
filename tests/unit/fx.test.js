@@ -766,3 +766,314 @@ test('M2 FX service: jeer fog, theft, jelly, slams, webs, lanterns, The Line and
   assert.equal(fx.stats().m2.lanternLights, 0, 'pooled lantern lights dropped on a level without them');
   fx.dispose();
 });
+
+// ================================================================== CONTROLS_SPEC (iso controls): fx P3
+// fog (§4.1, C4), ground mist (§4.2), ground decals (§7.3, §8.2, §10.3), constant-size marks (§8.2.3), numbers (§10.4)
+const { withFxFog, fxShaderMaterial, FOG_FACTOR, fogUniforms: isoFogUniforms } = await import('../../src/fx/shaders.js');
+const { HFOG } = await import('../../src/world/HeightFog.js');
+const GD = await import('../../src/fx/GroundDecals.js');
+const GM = await import('../../src/fx/GroundMist.js');
+const { isoNumberScale, DAMAGE_ISO } = await import('../../src/fx/DamageNumbers.js');
+const { bandGeometry, MIST_ISO } = await import('../../src/fx/MistCards.js');
+const { TELE_ISO } = await import('../../src/fx/Telegraphs.js');
+const { Marks: IsoMarks } = await import('../../src/fx/Marks.js');
+
+test('iso fog (C4): fx shader materials get vFogW + HFOG_GLSL and share the HFOG uniforms, also after a clone', () => {
+  const m = fxShaderMaterial({ fog: true, uniforms: isoFogUniforms(),
+    vertexShader: '#include <fog_pars_vertex>\nvoid main(){ vec4 mvPosition = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mvPosition;\n#include <fog_vertex>\n}',
+    fragmentShader: '#include <fog_pars_fragment>\n' + FOG_FACTOR + '\nvoid main(){ gl_FragColor = vec4(fxFogColor(), fxFog()); }' });
+  assert.ok(m.vertexShader.includes('vFogW = '), 'vertex writes vFogW');
+  assert.ok(m.fragmentShader.includes('varying vec3 vFogW'), 'fragment declares vFogW');
+  assert.ok(m.fragmentShader.includes('float hfogFactor('), 'HFOG_GLSL declared');
+  assert.ok(m.fragmentShader.indexOf('float hfogFactor(') < m.fragmentShader.indexOf('float fxFog()'), 'declared before fxFog uses it');
+  assert.ok(m.fragmentShader.includes('return hfogFactor( vFogW, vFogDepth )'), 'fxFog calls it');
+  assert.equal(m.uniforms.uFogFocus, HFOG.uFogFocus, 'shared focus uniform');
+  assert.equal(m.uniforms.uFogMode, HFOG.uFogMode);
+  assert.equal(m.userData.hfog, true, 'Env skips it');
+  const src = m.fragmentShader;
+  withFxFog(m);
+  assert.equal(m.fragmentShader, src, 'idempotent');
+  const c = withFxFog(m.clone());
+  assert.equal(c.uniforms.uFogClear, HFOG.uFogClear, 'a clone is re-shared');
+  assert.equal((c.fragmentShader.match(/varying vec3 vFogW/g) ?? []).length, 1);
+  const noFog = fxShaderMaterial({ fog: false, vertexShader: 'void main(){}', fragmentShader: 'void main(){}' });
+  assert.ok(!noFog.userData.hfog, 'unfogged materials untouched');
+});
+
+test('iso fog (C4): every fogged fx material in the scene measures fog like the level (no lens-only fog maths left)', async () => {
+  const ctx = setupFx();
+  await ctx.fx.init();
+  await frames(ctx, 2);
+  ctx.fx.mistRing([0, 0, 0], 6);
+  ctx.fx.telegraph({ kind: 'aoe', shape: 'circle', pos: [0, 0, 0], size: 2, duration: 1 });
+  await frames(ctx, 1);
+  const bad = [];
+  ctx.scene.traverse((o) => {
+    const m = o.material;
+    if (!m?.isShaderMaterial || !m.fog) return;
+    if (!m.userData.hfog || m.uniforms.uFogMode !== HFOG.uFogMode || /fogDensity \* fogDensity \* vFogDepth/.test(m.fragmentShader)) bad.push(m.name);
+  });
+  assert.deepEqual(bad, []);
+  ctx.fx.dispose();
+});
+
+test('strike wedge state (§8.2.1): fill, freeze 0.15 s before the strike, parry window open + rim flash', () => {
+  const w = PLAYER.guard.parryWindow;
+  let s = GD.wedgeState(10, 0.8, 9.4, w);
+  assert.ok(Math.abs(s.prog - 0.25) < 1e-9); assert.equal(s.frozen, false); assert.equal(s.open, false);
+  s = GD.wedgeState(10, 0.8, 9.86, w);
+  assert.equal(s.frozen, true, 'frozen inside 0.15 s');
+  assert.equal(s.open, true, 'parry window open'); assert.ok(s.flash > 0.5, 'flash at window open');
+  s = GD.wedgeState(10, 0.8, 9.98, w);
+  assert.equal(s.flash, 0, 'flash over after 0.12 s');
+  assert.equal(GD.wedgeState(10, 0.8, 10.2, w).open, false, 'closed after the strike');
+});
+
+test('parry ring (§8.2.2): 2.2 m at 0.6 s → her radius exactly at the strike; auto = touch / Kitten', () => {
+  assert.equal(GD.parryRingRadius(0.6, 0.45), 2.2);
+  assert.equal(GD.parryRingRadius(0, 0.45), 0.45);
+  assert.ok(Math.abs(GD.parryRingRadius(0.3, 0.45) - 1.325) < 1e-9);
+  assert.equal(GD.parryRingRadius(0.7, 0.45), null);
+  assert.equal(GD.parryRingRadius(-0.1, 0.45), null);
+  assert.equal(GD.parryRingOn('auto', 'touch', 'normal'), true);
+  assert.equal(GD.parryRingOn('auto', 'kbm', 'kitten'), true);
+  assert.equal(GD.parryRingOn('auto', 'kbm', 'normal'), false);
+  assert.equal(GD.parryRingOn('on', 'pad', 'hard'), true);
+  assert.equal(GD.parryRingOn('off', 'touch', 'kitten'), false);
+});
+
+test('path preview points (§10.3): every step metres along the polyline, capped', () => {
+  const pts = GD.pointsAlong({ x: 0, z: 0 }, [{ x: 0, z: 3 }, { x: 3, z: 3 }], 1.2, 10);
+  assert.equal(pts.length, 5);
+  assert.ok(Math.abs(pts[0].z - 1.2) < 1e-9 && pts[0].x === 0);
+  assert.ok(Math.abs(pts[2].x - 0.6) < 1e-9 && pts[2].z === 3, 'carries the remainder over the corner');
+  assert.ok(Math.abs(pts[2].yaw - Math.PI / 2) < 1e-9);
+  assert.equal(GD.pointsAlong({ x: 0, z: 0 }, [{ x: 0, z: 30 }], 1, 3).length, 3);
+  // start index (no slice) and pooled point objects (no per-frame allocation)
+  const pool = [], out = [], path = [{ x: 9, z: 9 }, { x: 0, z: 3 }, { x: 3, z: 3 }];
+  const a = GD.pointsAlong({ x: 0, z: 0 }, path, 1.2, 10, out, 1, pool);
+  assert.equal(a.length, 5); assert.ok(Math.abs(a[2].x - 0.6) < 1e-9 && a[2].z === 3);
+  const first = a[0];
+  const b = GD.pointsAlong({ x: 0, z: 0 }, path, 1.2, 2, out, 1, pool);
+  assert.equal(b.length, 2); assert.equal(b[0], first, 'reuses the pooled objects');
+  assert.equal(pool.length, 5);
+});
+
+test('ground mist (§4.2): 8 sheets in the 4–16 m ring, 3.5 m clear disc, holes over wind-ups, preset factor', () => {
+  const L = GM.mistLayout(5, -3, 8);
+  assert.equal(L.length, 8);
+  for (const s of L) {
+    const d = Math.hypot(s.x - 5, s.z + 3);
+    assert.ok(d > 4 && d < 16, `sheet at ${d.toFixed(1)} m`);
+    assert.ok(s.h >= 0.4 && s.h <= 1.3); assert.ok(s.a >= 0.1 && s.a <= 0.22);
+  }
+  assert.equal(GM.mistMask(0, 0, 0, 0), 0, 'clear on her');
+  assert.equal(GM.mistMask(3.4, 0, 0, 0), 0, 'clear inside 3.5 m');
+  assert.equal(GM.mistMask(9, 0, 0, 0), 1, 'full in the ring');
+  assert.equal(GM.mistMask(16.5, 0, 0, 0), 0, 'none beyond 16 m');
+  assert.equal(GM.mistMask(9, 0, 0, 0, [{ x: 9, z: 0, r: 2 }]), 0, 'a hole over a wind-up');
+  assert.equal(GM.mistFactor('bog'), 1.4); assert.equal(GM.mistFactor('nope'), GM.GROUND_MIST.def);
+});
+
+test('ground mist: one draw, iso play camera only, eases with the focus-fog mode, cuts wind-up holes', async () => {
+  const ctx = setupFx();
+  await ctx.fx.init();
+  const gm = ctx.fx.groundMist;
+  assert.ok(gm.mesh && gm.mesh.isMesh, 'one mesh');
+  await frames(ctx, 3);
+  assert.equal(gm.mesh.visible, false, 'no iso camera → hidden');
+  const mode0 = HFOG.uFogMode.value;
+  ctx.cam = { isIso: true, modeName: 'follow', focus: new THREE.Vector3(0, 0, 0) };
+  ctx.env = { presetName: 'meadow_day', wind: 0.6, windDir: new THREE.Vector2(1, 0) };
+  HFOG.uFogMode.value = 1;
+  ctx.combat = { threats: { live: new Map([[1, { actor: { pos: new THREE.Vector3(6, 0, 0), alive: true }, payload: { arc: { range: 1.5 } }, ended: false }]]) } };
+  await frames(ctx, 60);
+  assert.equal(gm.mesh.visible, true);
+  assert.ok(gm.alpha > 0.9, `alpha ${gm.alpha}`);
+  assert.equal(gm.holes, 1);
+  assert.equal(ctx.fx.stats().groundMist.sheets, 8);
+  HFOG.uFogMode.value = 0;                       // a cutscene: lens fog → the mist fades out
+  await frames(ctx, 120);
+  assert.equal(gm.mesh.visible, false);
+  HFOG.uFogMode.value = mode0;
+  ctx.cam = null; ctx.env = null; ctx.combat = null;
+  ctx.fx.dispose();
+});
+
+/** A minimal iso world for GroundDecals: an iso cam, a stub heroine, a threat book. */
+function isoDecals() {
+  const ctx = setupFx();
+  ctx.cam = { isIso: true, modeName: 'follow', focus: new THREE.Vector3(), cursorValid: false, cursorGround: new THREE.Vector3(), hover: null, lockTarget: null };
+  ctx.player = { pos: new THREE.Vector3(), facing: 0, state: 'move', onGround: true, alive: true, radius: 0.45, grit: 3, gritMax: 3,
+    guardState: { guardT: 0, parryT: 0, lockoutT: 0, arc: PLAYER.guard.arc }, orders: null };
+  ctx.input = { device: 'kbm', down: () => false, pointerIdle: () => 99 };
+  const live = new Map();
+  ctx.combat = { threats: { live }, nextParryable: () => null, projectiles: { list: [] } };
+  ctx.physics = { heightAt: () => 0 };
+  const d = new GD.GroundDecals(ctx);
+  d.init(ctx.scene);
+  return { ctx, d, live };
+}
+
+test('ground decals: hero ring always in iso play; nothing in classic / cutscenes; one instanced draw', () => {
+  const { ctx, d } = isoDecals();
+  d.render(DT);
+  assert.equal(d.counts.hero, 1);
+  assert.equal(d.mesh.visible, true);
+  assert.ok(d.mesh.isInstancedMesh);
+  ctx.cam.modeName = 'cutscene';
+  d.render(DT);
+  assert.equal(d.n, 0, 'cutscene: nothing');
+  ctx.cam.modeName = 'follow'; ctx.cam.isIso = false;
+  d.render(DT);
+  assert.equal(d.n, 0, 'classic: nothing');
+  d.dispose();
+});
+
+test('ground decals: a strike wedge per melee wind-up, frozen 0.15 s before the strike (gold gets a tip star)', () => {
+  const { ctx, d, live } = isoDecals();
+  const rat = { id: 7, pos: new THREE.Vector3(0, 0, 2), facing: Math.PI, alive: true, radius: 0.4 };
+  ctx.game.time = 0;
+  live.set(1, { id: 1, actor: rat, kind: 'parry', windup: 0.8, activeAt: 0.8, payload: { arc: { range: 1.6, from: 0.6, to: -0.6 } }, ended: false });
+  d.render(DT);
+  assert.equal(d.counts.wedge, 1);
+  assert.equal(d.wedgeList[0].frozen, false);
+  ctx.game.time = 0.7;                           // inside the 0.15 s lead: frozen
+  d.render(DT);
+  const y0 = d.wedgeList[0].yaw;
+  assert.equal(d.wedgeList[0].frozen, true);
+  rat.facing = Math.PI / 2;                      // it keeps turning: the wedge does not
+  ctx.game.time = 0.75; d.render(DT);
+  assert.equal(d.wedgeList[0].yaw, y0, 'frozen yaw');
+  assert.equal(d.wedgeList[0].open, true, 'parry window open');
+  const n0 = d.n;
+  live.get(1).kind = 'gold';
+  d.render(DT);
+  assert.equal(d.n, n0 + 1, 'gold adds its star');
+  live.clear(); d.render(DT);
+  assert.equal(d.counts.wedge ?? 0, 0);
+  d.dispose();
+});
+
+test('ground decals: the parry ring (setting on), a red dodge chevron, the Riposte arrow', () => {
+  const { ctx, d, live } = isoDecals();
+  ctx.state.settings.parryRing = 'on';
+  const rat = { id: 7, pos: new THREE.Vector3(0, 0, 2), facing: Math.PI, alive: true, radius: 0.4 };
+  ctx.game.time = 0;
+  ctx.combat.nextParryable = () => ({ attacker: rat, activeAt: 0.3, kind: 'parry', window: 0.15 });
+  d.render(DT);
+  assert.equal(d.counts.parryRing, 1);
+  assert.ok(Math.abs(d.parryRingR - GD.parryRingRadius(0.3, 0.45)) < 1e-9);
+  ctx.state.settings.parryRing = 'off';
+  d.render(DT);
+  assert.equal(d.counts.parryRing ?? 0, 0);
+  ctx.state.settings.parryRing = 'on';
+  ctx.combat.nextParryable = () => null;
+  live.set(2, { id: 2, actor: rat, kind: 'red', windup: 0.8, activeAt: 0.4, targetsPlayer: true, payload: { arc: { range: 2 } } });
+  d.render(DT);
+  assert.equal(d.counts.chevron, 1, 'red: a dodge chevron, no ring');
+  assert.equal(d.counts.parryRing ?? 0, 0);
+  ctx.player.riposteTarget = rat; ctx.player.riposteT = 0.5;
+  d.render(DT);
+  assert.equal(d.counts.riposte, 1);
+  d.dispose();
+});
+
+test('ground decals: order markers (paw / ✕), queued waypoints, RMB dots, path preview, ranges overlay', () => {
+  const { ctx, d } = isoDecals();
+  ctx.bus.emit(E.PLAYER_ORDER, { kind: 'move', point: new THREE.Vector3(3, 0, 4), valid: true });
+  ctx.bus.emit(E.PLAYER_ORDER, { kind: 'move', point: new THREE.Vector3(9, 0, 9), valid: false });
+  ctx.bus.emit(E.PLAYER_ORDER, { kind: 'stop', valid: true });
+  assert.deepEqual(d.markers.map((m) => m.kind), ['move', 'bad']);
+  d.render(DT);
+  assert.equal(d.counts.marker, 2);
+  for (let i = 0; i < 50; i++) d.render(DT);
+  assert.equal(d.markers.length, 0, 'markers expire');
+  ctx.player.orders = { kind: 'move', path: [new THREE.Vector3(0, 0, 4), new THREE.Vector3(4, 0, 4)], wp: 0, engaged: false,
+    queue: [new THREE.Vector3(4, 0, 9), new THREE.Vector3(0, 0, 9)] };
+  d.render(DT);
+  assert.equal(d.counts.goal, 1); assert.equal(d.counts.queued, 2); assert.equal(d.counts.path ?? 0, 0, 'no path dots by default');
+  ctx.input.down = (a) => a === 'move';
+  d.render(DT);
+  assert.equal(d.counts.path, 3, 'RMB held: 3 dots on the next segment');
+  ctx.input.down = () => false; ctx.state.settings.pathPreview = true;
+  d.render(DT);
+  assert.ok(d.counts.path >= 6, `preview paws every 1.2 m (${d.counts.path})`);
+  ctx.input.down = (a) => a === 'ranges';
+  d.render(DT);
+  assert.equal(d.counts.ranges, 1);
+  d.dispose();
+});
+
+test('ground decals: Stand fan, charge reach (+ holyWave lane with Shard 2), landing ring + dive circle, swing smear', () => {
+  const { ctx, d } = isoDecals();
+  const p = ctx.player;
+  p.state = 'guard'; d.render(DT);
+  assert.equal(d.counts.fan, 1);
+  d.flash('block'); d.render(DT);
+  assert.equal(d.counts.blockSpark, 1, 'a block flashes a white ground ring');
+  p.state = 'charge'; p.chargeT = 1; p.chargeTier = 2; p.shards = 2; p.valor = 100;
+  d.render(DT);
+  assert.equal(d.counts.charge, 1); assert.equal(d.counts.holyLane, 1);
+  p.shards = 1; d.render(DT);
+  assert.equal(d.counts.holyLane ?? 0, 0, 'Shard 1: no lane');
+  p.state = 'move'; p.onGround = false; p.pos.y = 2; p.pounceReady = true;
+  d.render(DT);
+  assert.equal(d.counts.landing, 1); assert.equal(d.counts.dive, 1);
+  p.onGround = true; p.pos.y = 0;
+  ctx.bus.emit(E.PLAYER_SWING, { attackId: 'slash1', combo: 1 });
+  assert.deepEqual(d.markers.map((m) => m.kind), ['smear']);
+  let seen = 0;
+  for (let i = 0; i < 30; i++) { d.render(DT); seen += d.counts.smear ?? 0; }
+  assert.ok(seen > 0, 'the smear drew'); assert.equal(d.markers.length, 0, 'and expired');
+  d.dispose();
+});
+
+test('marks (§8.2.3): a negative size is a constant screen height in px; the overlay batch ignores depth', () => {
+  const m = new IsoMarks(4), top = new IsoMarks(4, { overlay: true });
+  assert.equal(top.material.depthTest, false); assert.equal(top.mesh.renderOrder, 10);
+  assert.equal(m.material.depthTest, true);
+  m.begin(390);
+  assert.equal(m.material.uniforms.uViewH.value, 390);
+  assert.ok(m.push(0, 0, 0, -28, 2, new THREE.Color(1, 1, 1)) >= 0, 'px marks accepted');
+  assert.equal(m.push(0, 0, 0, 0, 2, new THREE.Color(1, 1, 1)), -1, 'zero size rejected');
+  assert.equal(TELE_ISO.glintPx, 28); assert.equal(TELE_ISO.goldPx, 34); assert.equal(TELE_ISO.exclPx, 34);
+  m.dispose(); top.dispose();
+});
+
+test('telegraphs in the iso camera: glints and "!" go to the overlay at a constant px size; aim lines lie flat', async () => {
+  const ctx = setupFx();
+  await ctx.fx.init();
+  ctx.cam = { isIso: true, modeName: 'follow', focus: new THREE.Vector3() };
+  const rat = actor(ctx, 'enemy', 0, 3);
+  ctx.fx.telegraph({ kind: 'parry', actor: rat, duration: 0.8 });
+  ctx.fx.telegraph({ kind: 'aim', actor: rat, shape: 'line', duration: 1.0, dir: [0, 0, -1], size: 18 });
+  await frames(ctx, 4);
+  const top = ctx.fx.marksTop;
+  assert.ok(top.count >= 3, `overlay marks ${top.count}`);
+  const sizes = Array.from(top.aPar.array.slice(0, top.count * 4)).filter((_, i) => i % 4 === 0);
+  assert.ok(sizes.every((s) => s < 0), 'px-sized');
+  const line = ctx.fx.telegraphs.lines.find((l) => l.busy);
+  const P = line.pos;
+  assert.ok(Math.abs(P[1] - P[4]) < 1e-6 && Math.abs(P[1] - P[7]) < 1e-6, 'flat (both edges at the same height)');
+  assert.ok(Math.abs(P[1] - TELE_ISO.aimLift) < 1e-6, 'at y + 0.05');
+  assert.equal(line.material.depthTest, false);
+  ctx.cam = null;
+  ctx.fx.dispose();
+});
+
+test('damage numbers in iso (§10.4): scale with the camera distance, never below 18 px', () => {
+  assert.equal(isoNumberScale(26, DAMAGE_ISO.refDist), 1);
+  assert.ok(isoNumberScale(26, 18) < 1);
+  assert.ok(isoNumberScale(26, 18) * 26 >= 18 - 1e-9);
+  assert.ok(isoNumberScale(22, 60) * 22 >= 18 - 1e-9, 'minimum 18 px');
+  assert.ok(isoNumberScale(26, 5) <= DAMAGE_ISO.maxMul);
+});
+
+test('fog walls in iso (§4.2): a closed 2 m ground band along the card line; cards tilt 60°, capped 2.5 m', () => {
+  const g = bandGeometry([0, 0, 2, 0, 2, 2, 0, 2], MIST_ISO.bandW, () => 0);
+  assert.equal(g.getAttribute('position').count, 8);
+  assert.equal(g.index.count, 4 * 6, 'closed loop');
+  assert.ok(Math.abs(MIST_ISO.tilt - Math.PI / 3) < 1e-9); assert.equal(MIST_ISO.wallH, 2.5);
+  g.dispose();
+});

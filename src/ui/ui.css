@@ -206,9 +206,12 @@ kbd.ui-key--sword { background: linear-gradient(#FBD3DE, #F2A2B8); border-color:
 .hud-obj.is-complete .obj-txt::before { content: '✓ '; }
 .hud-obj.is-done { animation: pop .5s var(--ease-pop); }
 
-.hud-toast-slot { display: flex; flex-direction: column; align-items: center; gap: .35em; }
+.hud-toast-slot { display: flex; flex-direction: column; align-items: center; gap: .35em; width: 100%; }
+/* toasts wrap instead of overflowing: a long line on a narrow screen was clipped on both sides (portrait 390 px) */
+.ui-toasts { display: flex; flex-direction: column; align-items: center; gap: .35em; width: 100%; }
 .ui-toast {
-  display: flex; align-items: center; gap: .5em; padding: .32em 1.1em .36em .5em; border-radius: 999px; font-weight: 600; white-space: nowrap;
+  display: flex; align-items: center; gap: .5em; padding: .32em 1.1em .36em .5em; border-radius: 999px; font-weight: 600;
+  white-space: normal; text-align: center; overflow-wrap: anywhere; max-width: min(100%, calc(100vw - 32px)); box-sizing: border-box;
   background: var(--noise), linear-gradient(#FFFBF0, #F1E1BD); border: 2px solid var(--goldDeep); box-shadow: 0 4px 0 #6B4A2B55, 0 6px 16px #0003;
   animation: inDown .4s var(--ease-pop); transition: opacity .35s, transform .35s;
 }
@@ -272,6 +275,8 @@ kbd.ui-key--sword { background: linear-gradient(#FBD3DE, #F2A2B8); border-color:
 .ui-hint.is-on { display: flex; }
 .ui-hint.is-enter { animation: inDown .4s var(--ease-pop); }
 .ui-hint.is-dim { opacity: 0; }
+/* touch: the card fades back while it covers the floating stick or an alerted foe; full again after 2 s clear (prompts.js) */
+.ui-hint.is-busy:not(.is-dim) { opacity: .22; transition-duration: .18s; }
 .hint-step { display: none; font-family: var(--f-head); font-weight: 700; font-size: max(16px, .8em); color: var(--pinkDark); letter-spacing: .06em; }
 .ui-hint.has-step .hint-step { display: block; }
 .hint-txt { font-weight: 500; line-height: 1.45; }
@@ -447,10 +452,19 @@ kbd.ui-key--sword { background: linear-gradient(#FBD3DE, #F2A2B8); border-color:
   background: var(--noise), radial-gradient(120% 90% at 50% 40%, #F4E7C9F2 55%, #E8D5AAF2 85%, #D1B47FF2 100%);
   max-height: calc(100vh - 4vh - clamp(48px, 9.5vmin, 120px) * .78 - 3.2em - 6vh); }
 .menu--title .menu-body { gap: .6em; }
+/* menu buttons never shrink below their content (a flex column would squash cards and spill their text); a title
+   column that runs out of height scrolls instead. Side padding keeps the focus ring, glow and paw marker unclipped. */
+.menu-body > .btn { flex-shrink: 0; }
+.menu--title .menu-panel > .menu-body { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--edge) transparent;
+  padding: .5em .7em .7em 1.8em; margin: -.5em -.7em -.7em -1.8em; }
 /* portrait / narrow: a strip along the bottom, under the kitten's chin */
 @media (max-aspect-ratio: 1/1) {
   .menu--title { justify-content: center; align-items: flex-end; padding: 0 16px 4vh; }
   .menu--title .menu-panel { width: min(22em, 92vw); max-height: 42vh; }
+  /* difficulty: slimmer cards and a touch more height so Kitten / Knight / Nine Lives / Back all show without scrolling */
+  .menu--newgame.menu--title .menu-panel { max-height: 47vh; }
+  .menu--newgame .menu-body { gap: .45em; }
+  .menu--newgame .btn--card { min-height: 0; padding: .35em 1em .45em; }
 }
 .menu-panel > .menu-body { flex: 1 1 auto; }
 .menu--credits .menu-body { overflow: hidden; }
@@ -551,7 +565,8 @@ kbd.ui-key--sword { background: linear-gradient(#FBD3DE, #F2A2B8); border-color:
 .hud-save.is-stamp .save-seal { animation: stamp .45s cubic-bezier(.3, 1.4, .6, 1); }
 .ui-root.dev-touch .hud-save { bottom: auto; top: calc(14px + 2.6em); right: 18px; }
 .ui-root.dev-touch .hud-milk { left: auto; right: auto; bottom: auto; top: calc(14px + 7.4em); left: 16px; }
-.ui-root.dev-touch .ui-hint { top: auto; bottom: 30vh; }
+/* touch: the objective card tucks under the top-left HUD (portrait + hearts + valor), out of the stick's thumb arc and off her */
+.ui-root.dev-touch .ui-hint { top: calc(20px + 5.9 * clamp(16px, 1.05vmin + 9px, 22px) + env(safe-area-inset-top)); bottom: auto; max-width: min(19em, 33vw); }
 /* touch: the ❚❚ button owns the top centre (72 px × touch size × .62 + margins), so the boss bar / objective sit below it */
 body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe-area-inset-top)); }
 #touch { --ts: 1; --tb: calc(72px * var(--ts)); }
@@ -593,7 +608,7 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 .tb-golden { right: calc(var(--tb) * -.15); bottom: calc(var(--tb) * 3.4); width: calc(var(--tb) * .95); height: calc(var(--tb) * .95); background: radial-gradient(circle at 35% 30%, #FFF6DA, #FFD34D 60%, #D99A2B);
   border-color: var(--goldDeep); animation: pulseGold 1.1s ease-in-out infinite; }
 @keyframes pulseGold { 0%, 100% { box-shadow: 0 4px 0 #6B4A2B, 0 0 0 0 #FFD34D99; } 50% { box-shadow: 0 4px 0 #6B4A2B, 0 0 0 12px #FFD34D00; } }
-.tb-pause { left: 50%; top: calc(10px + env(safe-area-inset-top)); width: calc(var(--tb) * .62); height: calc(var(--tb) * .62); margin-left: calc(var(--tb) * -.31); opacity: 0; pointer-events: none; }
+.tb-pause { --pause: max(56px, calc(var(--tb) * .62)); left: 50%; top: calc(10px + env(safe-area-inset-top)); width: var(--pause); height: var(--pause); margin-left: calc(var(--pause) / -2); opacity: 0; pointer-events: none; }
 .touch-root.is-any .tb-pause { opacity: .9; pointer-events: auto; }
 
 /* CONTROLS_SPEC §9: the cluster is placed by touchLayout.js (inline left / top / size); the aim pad, the ✕ chip */
@@ -634,6 +649,25 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
   .dlg-scroll { padding: .8em 2em .8em 5.6em; min-height: 5em; }
   .dlg-portrait { width: 4.4em; height: 4.4em; }
   .kit-grid { grid-template-columns: repeat(6, 1fr); }
+}
+/* landscape phones: the difficulty cards sit side by side in a wide panel so all three fit without scrolling */
+@media (max-height: 520px) and (min-aspect-ratio: 1/1) {
+  .menu--newgame.menu--title { justify-content: center; }
+  .menu--newgame.menu--title .menu-panel { width: min(44em, 92vw); }
+  .menu--newgame .menu-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; column-gap: .9em; }
+  .menu--newgame .btn--card { min-height: 0; padding: .45em .8em .55em; justify-content: flex-start; }
+  .menu--newgame .btn--card .btn-sub { line-height: 1.2; }
+  .menu--newgame .menu-body > .btn--plain { grid-column: 1 / -1; justify-self: center; min-width: 10em; }
+}
+/* touch: every menu target is at least 44 CSS px (WCAG 2.5.5 / Apple HIG), even when landscape phones shrink the panel.
+   Toggles act on the whole row, so a 44 px row is their hit area; the small ◀ ▶ arrows get an invisible 44 px hit-slop. */
+@media (pointer: coarse) {
+  .btn--candy, .btn--plain { min-height: 44px; }
+  .srow { min-height: 44px; }
+  .sl { padding: calc((44px - .55em) / 2) 0; margin: -.6em 0; }
+  .ch { gap: .9em; }
+  .ch-l, .ch-r { position: relative; }
+  .ch-l::before, .ch-r::before { content: ''; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; }
 }
 @media (max-width: 760px) {
   .hud-tc { width: 70vw; }
@@ -896,9 +930,13 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 
 /* ================================================================== CONTROLS_SPEC §10.1 ability bar (desktop / pad) */
 .ability-bar { position: absolute; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(12px); display: flex; align-items: flex-end;
-  gap: 8px; padding: 8px 12px 9px; border-radius: 16px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; --slot: 56px;
-  background: var(--noise), linear-gradient(#F4E7C9F2, #E2CC9DF2); border: 3px solid var(--ink); box-shadow: 0 4px 0 #3A2A1F99, 0 8px 18px #0005; font-size: 16px; padding-bottom: 26px; }
-.ability-bar.is-on { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
+  gap: 8px; padding: 9px 14px 14px; border-radius: 16px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; --slot: 56px;
+  background: var(--noise), linear-gradient(#F4E7C9F2, #E2CC9DF2); border: 3px solid var(--ink); box-shadow: 0 4px 0 #3A2A1F99, 0 8px 18px #0005; font-size: 16px; }
+.ability-bar.is-on { opacity: 1; transform: translateX(-50%) scale(var(--fit, 1)); }
+/* a viewport narrower than the bar (portrait phone / tablet on KBM): abilityBar.js sets --fit so it shrinks to fit, never off-screen */
+.ability-bar { transform-origin: 50% 100%; }
+/* only the slots catch the pointer: clicks on the panel and its gutters reach the world (click-to-move, RMB) */
+.ability-bar.is-on .ab-slot { pointer-events: auto; }
 .ability-bar.is-small { --slot: 48px; gap: 6px; }
 .ab-sep { width: 3px; align-self: stretch; margin: 4px 2px; border-radius: 2px; background: #6B4A2B66; }
 .ab-slot { position: relative; width: var(--slot); height: var(--slot); border-radius: 12px; display: flex; align-items: center; justify-content: center; cursor: pointer;
@@ -916,7 +954,11 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
   font-size: 1.45em; color: #FFF6E6; -webkit-text-stroke: 2px #2A1E18; paint-order: stroke; }
 .ab-slot { overflow: visible; }
 .ab-slot .ab-sweep, .ab-slot .ab-ico { border-radius: 10px; }
-.ab-key { position: absolute; left: 50%; bottom: -24px; transform: translateX(-50%); font-weight: 800; font-size: 16px; color: #2A1E18; white-space: nowrap; line-height: 1.1; pointer-events: none; }
+.ab-key { position: absolute; right: -7px; bottom: -9px; min-width: 20px; padding: 1px 5px 2px; border-radius: 7px; text-align: center; font-weight: 800; font-size: 16px;
+  color: #2A1E18; background: linear-gradient(#FFFDF6, #EAD8B0); border: 2px solid #2A1E18; box-shadow: 0 2px 0 #2A1E1866; white-space: nowrap; line-height: 1.1; pointer-events: none; z-index: 2; }
+.ab-key:empty { display: none; }
+.ability-bar.is-pad .ab-key { border-radius: 50%; min-width: 22px; padding: 2px 3px; }
+.ab-key { right: -9px; bottom: -11px; padding: 0 4px 1px; letter-spacing: -.02em; }
 .ab-grit { position: absolute; left: 4px; top: 3px; display: flex; gap: 2px; pointer-events: none; }
 .ab-grit i { width: 7px; height: 7px; border-radius: 2px; background: #9AA0A6; border: 1px solid #2A1E18; }
 .ab-grit i.f { background: #E8EEF4; }
@@ -926,25 +968,143 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 .ab-guard.is-holy::after { content: ''; position: absolute; right: 4px; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: #FFD34D; box-shadow: 0 0 6px #FFD34D; }
 .ab-guard.is-flash { animation: abFlash .45s ease; }
 @keyframes abFlash { 0% { box-shadow: 0 0 0 0 #FFD34D; } 40% { box-shadow: 0 0 0 6px #FFD34DAA; } 100% { box-shadow: 0 0 0 0 #FFD34D00; } }
-.ab-slot.is-ready { animation: abReady .4s ease; }
-@keyframes abReady { 0% { filter: brightness(1.8); } 100% { filter: none; } }
+.ab-slot.is-flash-ready { animation: abReady .45s ease; }
+@keyframes abReady { 0% { filter: brightness(2.2); box-shadow: 0 0 0 4px #FFFFFFCC, inset 0 -3px 0 #0002; } 100% { filter: none; box-shadow: 0 0 0 0 #FFFFFF00, inset 0 -3px 0 #0002; } }
+/* locked: desaturated with a lock pip */
+.ab-slot.is-locked::before { content: ''; position: absolute; left: -6px; top: -7px; width: 16px; height: 16px; border-radius: 50%; z-index: 2;
+  background: #6B4A2B url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7V5.5a3 3 0 0 1 6 0V7' fill='none' stroke='%23FFF6E6' stroke-width='1.8'/%3E%3Crect x='4' y='7' width='8' height='6' rx='1.4' fill='%23FFF6E6'/%3E%3C/svg%3E") center / 12px no-repeat;
+  border: 1.5px solid #2A1E18; }
+/* the Stand at 0 Grit: cracked */
+.ab-guard.is-broken::before { content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 1;
+  background: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M22 2l-5 11 7 5-8 9 3 11' fill='none' stroke='%232A1E18' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* §10.1 hover tooltip */
+.ab-tip { position: absolute; left: var(--x, 50%); bottom: calc(100% + 12px); transform: translateX(-50%) translateY(4px); width: max-content; max-width: 300px;
+  padding: 8px 12px 9px; border-radius: 10px; background: var(--noise), linear-gradient(#FFF8E8, #F1E2C2); border: 2.5px solid var(--ink); box-shadow: 0 3px 0 #3A2A1F88;
+  color: var(--ink); font-size: 16px; line-height: 1.3; opacity: 0; pointer-events: none; transition: opacity .12s, transform .12s; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+.ab-tip.is-on { opacity: 1; transform: translateX(-50%); }
+.ab-tip::after { content: ''; position: absolute; left: 50%; bottom: -8px; width: 12px; height: 12px; background: #F1E2C2; border: 2.5px solid var(--ink); border-top: 0; border-left: 0; transform: translateX(-50%) rotate(45deg); }
+.ab-tip-h { font-family: var(--f-body); font-weight: 800; font-size: 1.05em; letter-spacing: .01em; }
+.ab-tip .ui-key { justify-self: end; align-self: start; }
+.ab-tip-b { grid-column: 1 / -1; font-weight: 600; color: var(--ink2); }
+.ability-bar.is-mouse-only .ab-slot:hover { transform: translateY(-2px); }
 .ab-golden { background: linear-gradient(0deg, #FFD34D calc(var(--fill, 0) * 100%), #E9DDC2 0); }
 .ab-golden.is-locked .ab-ico { filter: saturate(.2); opacity: .55; }
 .ab-golden.is-ready { animation: pulseGold 1.1s ease-in-out infinite; }
 .ab-milk.is-empty .ab-ico, .ab-interact:not(.is-lit) .ab-ico { opacity: .35; }
 .ab-interact.is-lit { background: radial-gradient(circle at 35% 30%, #FFF6DA, #FFE3A3 60%, #D9B26A); }
 .ab-ability.is-nap .ab-ico { filter: saturate(.4); }
-/* the bar replaces the bottom-left milk and the bottom-right companion portrait */
-body.ui-bar .hud-milk, body.ui-bar .hud-comp { display: none; }
-body.ui-bar .hud-save { bottom: calc(18px + 112px); }
+/* the bar (desktop / pad) or the cluster (touch) replaces the bottom-left milk and the bottom-right companion portrait */
+body.ui-bar .hud-milk, body.ui-bar .hud-comp, body.ui-touch .hud-milk, body.ui-touch .hud-comp { display: none; }
+body.ui-bar .hud-save { bottom: calc(18px + 104px); }
+/* a touch device that went KBM (key press, paired keyboard): one control surface at a time, so the cluster steps aside
+   for the bar instead of drawing under it; the next tap flips the device back to touch and the cluster returns */
+body.ui-bar .touch-root .touch-cluster .tbtn { opacity: 0; pointer-events: none; }
 
 /* ================================================================== CONTROLS_SPEC §9.1 portrait phones: a condensed HUD strip
-   (scaled with transforms so no text drops under the 16 px floor of §14.1) */
+   (scaled with transforms so no text drops under the 16 px floor of §14.1). Keyed on the viewport alone, not on .dev-touch:
+   a phone / tablet that turns KBM (a key press, a paired keyboard) keeps the same strip. `.ui-root.ui-root` holds the
+   specificity of the landscape .dev-touch rules above so these still win over them. */
 @media (orientation: portrait) and (max-width: 560px) {
-  .ui-root.dev-touch .hud-tl { top: calc(8px + env(safe-area-inset-top)); left: 8px; transform: scale(.78); transform-origin: top left; }
-  .ui-root.dev-touch .hud-tr { top: calc(8px + env(safe-area-inset-top)); right: 8px; transform: scale(.72); transform-origin: top right; flex-direction: column; align-items: flex-end; gap: .3em; }
-  body.ui-touch .ui-root.dev-touch .hud-tc { top: calc(92px + env(safe-area-inset-top)); width: 76vw; }
-  .ui-root.dev-touch .ui-hint { top: 24vh; bottom: auto; max-width: 64vw; }
-  .ui-root.dev-touch .hud-milk { top: calc(84px + env(safe-area-inset-top)); left: 10px; transform: scale(.8); transform-origin: top left; }
+  .ui-root.ui-root .hud-tl { top: calc(8px + env(safe-area-inset-top)); left: 8px; transform: scale(.78); transform-origin: top left; }
+  .ui-root.ui-root .hud-tr { top: calc(8px + env(safe-area-inset-top)); right: 8px; transform: scale(.72); transform-origin: top right; flex-direction: column; align-items: flex-end; gap: .3em; }
+  body .ui-root.ui-root .hud-tc { top: calc(92px + env(safe-area-inset-top)); width: calc(100vw - 24px); }
+  .ui-toast { border-radius: 18px; }
+  /* the lesson card sits just under the HUD strip: mid-screen it covered the practice fence right above her (requests/story.md) */
+  .ui-root.ui-root .ui-hint { top: calc(96px + env(safe-area-inset-top)); bottom: auto; max-width: 70vw; }
+  /* both share the strip under the HUD: the card steps aside while a toast is up instead of drawing over it */
+  .ui-root.ui-root:has(.ui-toast:not(.is-out)) .ui-hint { opacity: 0; }
+  .ui-root.ui-root .hud-milk { left: 10px; right: auto; bottom: auto; top: calc(84px + env(safe-area-inset-top)); transform: scale(.8); transform-origin: top left; }
+  .ui-root.ui-root .hud-save { right: 10px; bottom: auto; top: calc(8px + 7.2em + env(safe-area-inset-top)); }
   .tb-pause { top: calc(10px + env(safe-area-inset-top)); left: 50%; }
+}
+
+/* ================================================================== CONTROLS_SPEC §10.4 enemy HP pills + §10.5 Grit arc (iso) */
+.hp-bars { position: absolute; inset: 0; pointer-events: none; display: none; }
+.hp-bars.is-on { display: block; }
+.hpb { position: absolute; left: 0; top: 0; width: 36px; height: 5px; margin: -4px 0 0 -20px; padding: 1.5px; box-sizing: content-box; border-radius: 6px;
+  background: #2A1E18E6; box-shadow: 0 1px 0 #0006; opacity: 0; transition: opacity .15s; will-change: transform; --f: 1; }
+.hpb.is-on { opacity: var(--a, 1); }
+.hpb i { position: absolute; left: 1.5px; top: 1.5px; height: 5px; border-radius: 3px; width: calc(var(--f) * 36px); }
+.hpb-chip { background: #FFF6E6; }
+.hpb-fill { background: linear-gradient(#FF8A7A, #E04646); }
+.hpb.is-sel { background: #2A1E18; box-shadow: 0 0 0 1.5px #FFD34D, 0 1px 0 #0006; }
+.hp-bars.is-touch .hpb { width: 44px; height: 6px; margin: -5px 0 0 -24px; border-radius: 7px; }
+.hp-bars.is-touch .hpb i { height: 6px; width: calc(var(--f) * 44px); }
+.grit-arc { position: absolute; left: 0; top: 0; width: 52px; height: 23px; margin: -23px 0 0 -26px; opacity: 0; transition: opacity .12s; will-change: transform; }
+.grit-arc.is-on { opacity: 1; }
+.grit-arc svg { display: block; overflow: visible; width: 52px; height: 23px; }
+.grit-arc .ga-o { stroke: #2A1E18; stroke-width: 6.4; }
+.grit-arc .ga-f { stroke: #7C8188; stroke-width: 3.4; }
+.grit-arc .ga-seg.f .ga-f { stroke: #EEF3F8; }
+.grit-arc.is-broken .ga-f { stroke: #E04646; }
+
+/* ================================================================== §9.2 Edit layout (touchEditor.js) */
+.touch-root.is-edit { background: #1A120E66; }
+.touch-root.is-edit .touch-cluster { opacity: 1; pointer-events: none; }
+.touch-root.is-edit .touch-cluster .tbtn { pointer-events: auto; opacity: 1; transform: none; cursor: grab; outline: 3px dashed #FFF6E6AA; outline-offset: 4px; }
+.touch-root.is-edit .touch-cluster .tbtn.is-hidden { opacity: .8; }
+.touch-root.is-edit .touch-cluster .tbtn.is-drag { outline-color: #FFD34D; transform: scale(1.08); z-index: 3; }
+.touch-root.is-edit .touch-cluster .tbtn.is-bad { outline-color: #FF5A4A; box-shadow: 0 0 0 6px #FF5A4A66; }
+.touch-root.is-edit .tb-pause, .touch-root.is-edit .stick-base { display: none; }
+.tedit-panel { position: absolute; left: 50%; top: calc(12px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 4; padding: 10px 14px 12px; border-radius: 14px;
+  background: var(--noise), linear-gradient(#FFF8E8, #F1E2C2); border: 3px solid var(--ink); box-shadow: 0 4px 0 #3A2A1F99; color: var(--ink); text-align: center;
+  font-family: var(--f-body, inherit); font-size: 16px; max-width: min(92vw, 460px); pointer-events: auto; }
+.tedit-hint { margin: 0 0 8px; font-weight: 700; }
+.tedit-btns { display: flex; gap: 10px; justify-content: center; }
+.tedit-b { min-width: 76px; min-height: 44px; padding: 6px 14px; border-radius: 12px; border: 2.5px solid var(--ink); background: linear-gradient(#FFFDF6, #EAD8B0);
+  font: inherit; font-weight: 800; color: var(--ink); box-shadow: 0 3px 0 #3A2A1F88; }
+.tedit-done { background: linear-gradient(#FFE38A, #F0B93F); }
+.tedit-done.is-off { filter: grayscale(.8); opacity: .7; }
+.tedit-panel.is-shake { animation: teditShake .35s ease; }
+@keyframes teditShake { 0%, 100% { transform: translateX(-50%); } 25% { transform: translateX(calc(-50% - 8px)); } 75% { transform: translateX(calc(-50% + 8px)); } }
+.tbtn .tb-count { position: absolute; right: -6px; top: -8px; font-weight: 800; font-size: 16px; color: #FFF6E6; background: #6B4A2B; border: 1.5px solid #2A1E18;
+  border-radius: 9px; padding: 0 5px; line-height: 1.25; pointer-events: none; }
+.ctl-preset { margin-bottom: .5em; }
+.ctl-preset.is-first .ch-l, .ctl-preset.is-last .ch-r { opacity: .3; }
+.ctl-na { opacity: .45; font-weight: 700; }
+/* §9.4 while aiming, the rest of the cluster steps back so the ✕ chip and the aim pad read first */
+.touch-root.is-aiming .touch-cluster .tbtn:not(.is-down) { opacity: .3; transition: opacity .12s; }
+/* the hidden contextual buttons ('!', Golden Hour, an empty kitten slot) stay hidden while aiming, not 30 % ghosts */
+.touch-root .touch-cluster .tbtn.is-hidden, .touch-root.is-aiming .touch-cluster .tbtn.is-hidden { opacity: 0; }
+/* a button the layout had to drop on a very small screen (touchLayout BUTTON_PRIORITY) */
+.touch-cluster .tbtn.is-dropped { display: none; }
+.touch-root.is-edit .touch-cluster .tbtn.is-dropped { display: flex; }
+
+/* ================================================================== §9.1 HUD hit areas: the HUD cards take their own clicks / taps
+   (#ui sits above the canvas and #touch), so a right-click on the hearts no longer walks her there and a left-click no
+   longer swings; the rest of the top strip stays open for tapping foes up-screen. Hidden HUD (dialog, cutscene, Meme
+   Cam) lets everything through again. The lesson card blocks the mouse only: on touch it fades back off the stick. */
+.hud:not(.is-hidden):not(.is-meme) :is(.hud-portrait, .hud-hearts, .hud-grit, .hud-valor, .hud-count, .hud-boss.is-on, .hud-obj.is-on) { pointer-events: auto; }
+body:not(.ui-touch) .hud:not(.is-hidden):not(.is-meme) .ui-toast:not(.is-out) { pointer-events: auto; }
+body:not(.ui-touch) .ui-hint.is-on:not(.is-dim) { pointer-events: auto; }
+
+/* ================================================================== §9.1 touch landscape: the top-centre column (boss bar, objective)
+   fits the free band between the top-left HUD block and the cluster (touch.js sets --tc-l / --tc-w); toasts sit in the
+   left column under the HUD, where the lesson card is (it steps aside while a toast is up), never over her; in a boss
+   fight the lesson card and the objective line step aside for the bar. Left-handed play mirrors the HUD so the
+   portrait / hearts / card block sits opposite the mirrored cluster. */
+@media (orientation: landscape) {
+  body.ui-touch.has-tc-band .ui-root .hud-tc { left: var(--tc-l); width: var(--tc-w); transform: none; }
+  body.ui-touch .ui-root .hud-toast-slot { position: fixed; left: calc(16px + env(safe-area-inset-left)); right: auto; top: calc(20px + 5.9 * clamp(16px, 1.05vmin + 9px, 22px) + env(safe-area-inset-top));
+    width: min(19em, 33vw, calc(var(--tc-l, 100vw) - 24px)); align-items: flex-start; }
+  body.ui-touch .ui-root .hud-toast-slot .ui-toasts { align-items: flex-start; }
+  body.ui-touch .ui-root .hud-toast-slot .ui-toast { text-align: left; border-radius: 16px; max-width: 100%; }
+  body.ui-touch .ui-root:has(.ui-toast:not(.is-out)) .ui-hint { opacity: 0; }
+  body.ui-touch .ui-root:has(.hud-boss.is-on) .ui-hint, body.ui-touch .ui-root:has(.hud-boss.is-on) .hud-obj { opacity: 0; pointer-events: none; }
+  body.ui-touch .ui-root .hud-boss .boss-medal { width: 2.8em; height: 2.8em; }
+  body.ui-touch .ui-root .hud-boss .boss-name { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  body.ui-touch.tc-narrow .ui-root .hud-boss .boss-name { padding: .1em 1.1em .2em; letter-spacing: .02em; }
+  body.ui-touch.ui-lefty .ui-root .hud-tl { left: auto; right: calc(16px + env(safe-area-inset-right)); flex-direction: row-reverse; }
+  body.ui-touch.ui-lefty .ui-root .hud-stats { align-items: flex-end; }
+  body.ui-touch.ui-lefty .ui-root .hud-tr { right: auto; left: calc(16px + env(safe-area-inset-left)); }
+  body.ui-touch.ui-lefty .ui-root .ui-hint { left: auto; right: calc(16px + env(safe-area-inset-right)); }
+  body.ui-touch.ui-lefty .ui-root .hud-toast-slot { left: auto; right: calc(16px + env(safe-area-inset-right)); width: min(19em, 33vw, calc(var(--tc-r, 100vw) - 24px)); align-items: flex-end; }
+  body.ui-touch.ui-lefty .ui-root .hud-toast-slot .ui-toasts { align-items: flex-end; }
+}
+/* portrait: the hearts wrap short of ❚❚ (touch.js caps the row's width; extra max-HP hearts start a second row) */
+.hud-hearts.is-capped { flex-wrap: wrap; row-gap: .1em; }
+.hud-hearts.is-capped .heart { width: var(--heart-w, 1.6em); }
+@media (orientation: portrait) and (max-width: 560px) {
+  body.ui-touch .ui-root.ui-root .hud-tc { top: max(calc(92px + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); }
+  body.ui-touch .ui-root.ui-root .ui-hint { top: max(calc(96px + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); }
 }

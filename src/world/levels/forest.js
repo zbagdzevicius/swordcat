@@ -37,6 +37,8 @@ export const MUSHROOM_CAPS = Object.freeze([
   { at: [-26.4, -61.3], y: 4.0, bounce: 9 }, { at: [-24.0, -62.0], y: 5.2, bounce: 0 },
 ]);
 export const CAP_R = 1.2;
+/** CONTROLS_SPEC §11 the Mushroom Ring hint: the camera swings to the spiral's open (east) side, flatter and closer. */
+export const MUSHROOM_CAM = Object.freeze({ yaw: 1.75, pitch: 0.768 /* 44° */, dist: 11, clear: 7 });
 /** Stump Crossing (§12.4): the deep stream (z 13–23) and its 6 stumps; gaps ≤ 3.0 m. */
 export const STREAM = { y: -0.4, width: 10, pts: [[-100, 16.5], [-70, 19], [-40, 17.2], [-10, 18.6], [10, 17.6], [24, 18], [44, 18.4], [70, 17], [100, 18.8]] };
 export const STUMPS = Object.freeze([[20, 12.5], [22, 15], [25, 16.5], [23, 19], [26, 21], [24, 23.5]]);
@@ -57,13 +59,21 @@ const box = (w, h, d, x = 0, y = 0, z = 0, ry = 0) => { const g = new THREE.BoxG
 const cyl = (r0, r1, h, x = 0, y = 0, z = 0, seg = 10) => new THREE.CylinderGeometry(r0, r1, h, seg).translate(x, y + h / 2, z);
 
 /** A giant mushroom platform: a pale stem of height `h` (the cap top), a domed cap r CAP_R with spots. */
-function capParts(h, bounce) {
+function capParts(h, bounce, arrowYaw = 0) {
   const capCol = bounce ? C.capRed : C.capTan;
   const cap = new THREE.SphereGeometry(CAP_R * 1.06, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2); cap.scale(1, 0.42, 1); cap.translate(0, h - 0.34, 0);
   const rim = new THREE.CylinderGeometry(CAP_R * 1.06, CAP_R * 0.9, 0.16, 18).translate(0, h - 0.42, 0);
   const p = [[cyl(0.26, 0.38, h - 0.3, 0, 0, 0, 10), C.stem], [cap, capCol], [rim, '#D9CDB0']];
   // a little skirt ring on the stem, spots on the cap
   p.push([new THREE.TorusGeometry(0.3, 0.05, 5, 12).rotateX(Math.PI / 2).translate(0, h * 0.62, 0), '#D9CDB0']);
+  // CONTROLS_SPEC §11: bounce caps carry a pale up-arrow on top (readable from the iso camera: "this one bounces")
+  if (bounce) {
+    const top = h - 0.34 + CAP_R * 1.06 * 0.42 + 0.015;
+    const tri = new THREE.ShapeGeometry(new THREE.Shape([new THREE.Vector2(0, 0.42), new THREE.Vector2(-0.34, 0.02), new THREE.Vector2(0.34, 0.02)]));
+    tri.rotateX(-Math.PI / 2); tri.translate(0, 0, -0.02); tri.rotateY(arrowYaw); tri.translate(0, top, 0);
+    const stem = new THREE.PlaneGeometry(0.2, 0.36); stem.rotateX(-Math.PI / 2); stem.translate(0, 0, 0.17); stem.rotateY(arrowYaw); stem.translate(0, top, 0);
+    p.push([tri, '#F4EBD6'], [stem, '#F4EBD6']);
+  }
   const spots = bounce ? 7 : 5;
   for (let i = 0; i < spots; i++) {
     const a = i * 2.4, rr = 0.35 + (i % 3) * 0.24, y = h - 0.34 + Math.sqrt(Math.max(0, 1 - (rr / (CAP_R * 1.06)) ** 2)) * CAP_R * 1.06 * 0.42;
@@ -204,7 +214,8 @@ const SETPIECES = {
   /** Mushroom Ring (−20, −58): 5 cap platforms (caps 2 and 4 bounce), the mushroom house, a fairy ring. */
   async mushroomRing(kit) {
     MUSHROOM_CAPS.forEach((c, i) => {
-      const tpl = kit.proc(`mush_cap_${i}`, () => capParts(c.y, c.bounce));
+      // the arrow points screen-up under the ring's camera hint (local −Z turned by hint yaw − the cap's yaw)
+      const tpl = kit.proc(`mush_cap_${i}`, () => capParts(c.y, c.bounce, MUSHROOM_CAM.yaw - i * 1.3));
       const [x, z] = c.at, g = kit.h(x, z);
       kit.place(tpl, x, z, { yaw: i * 1.3, collider: false, jitter: 0.03, clear: 1.0, occupy: CAP_R + 0.3 });
       // the cap is a walkable disc at its top (a solid prism from the ground: no walking under it)
@@ -413,7 +424,7 @@ const SETPIECES = {
     const pil = kit.proc('millstone_pillar', millstoneParts), cfg = BOSSES.grizzlechop.pillars;
     level.bossPillars = [];
     MILL_PILLARS.forEach(([x, z], i) => {
-      kit.place(pil, x, z, { yaw: i * 0.9, collider: false, jitter: 0.04, clear: 1.0, occupy: 1.0 });
+      kit.place(pil, x, z, { yaw: i * 0.9, collider: false, jitter: 0.04, clear: 1.0, occupy: 1.0, camFade: 'solid' });   // §11: fade from above
       const g = kit.h(x, z);
       level.bossPillars.push(kit.collider({ x, z, r: cfg.radius, y0: g - 0.6, y1: g + cfg.height, pillar: i }));
       kit.anchor(`mill_pillar_${i}`, x, z, g);
@@ -434,6 +445,33 @@ const SETPIECES = {
     kit.paint(cx, cz, zone.r, '#5A5040', 0.45, 3);
   },
 };
+
+/** §5.4 Treetop links: for each root ledge, ground → its half-height step → the ledge top (hops, both ways). */
+function treetopLinks() {
+  const [tx, tz] = TREETOP.trunk, out = [];
+  for (const [x, z] of TREETOP.ledges) {
+    const d = Math.hypot(x - tx, z - tz) || 1, ux = (x - tx) / d, uz = (z - tz) / d;
+    const r = (v) => Math.round(v * 100) / 100;
+    const step = [r(x + ux * 1.15), r(z + uz * 1.15)], ground = [r(x + ux * 2.4), r(z + uz * 2.4)];
+    out.push({ a: ground, b: step, kind: 'hop' }, { a: step, b: [x, z], kind: 'hop' });
+  }
+  return out;
+}
+
+/**
+ * §5.4 Stump Crossing links: south bank → the 6 stumps in order → north bank (hops, both ways). Each end sits 0.5 m
+ * inside the stump top's edge toward the next one, so the assisted hop covers the gap, not centre to centre (≤ 5.5 m/s).
+ */
+function stumpLinks() {
+  const pts = [[STUMPS[0][0] - 0.3, STUMPS[0][1] - 1.9], ...STUMPS, [STUMPS[5][0], STUMPS[5][1] + 2.0]];
+  const r = (v) => Math.round(v * 100) / 100, out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1], d = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / d, uz = (bz - az) / d;
+    const ia = i === 0 ? 0 : STUMP.r - 0.3, ib = i === pts.length - 2 ? 0 : STUMP.r - 0.3;      // banks: no inset
+    out.push({ a: [r(ax + ux * ia), r(az + uz * ia)], b: [r(bx - ux * ib), r(bz - uz * ib)], kind: 'hop' });
+  }
+  return out;
+}
 
 /** z of the stream centre line at x (piecewise linear through STREAM.pts). */
 function STREAM_Z(x) {
@@ -461,6 +499,20 @@ export default defineLevel({
   env: { default: 'forest_day', byFlag: [['forest.camp', 'forest_night']] }, moodLive: true,
   music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop', byFlag: [['forest.camp', 'dark_forest_creepy']] },
   spine: SPINE,
+  // CONTROLS_SPEC §11 iso camera: yaw π (the spine runs north). §4.2 fog: forest_day ρ 0.06 clear 5.5 / 7 topMul 1.35;
+  // forest_night clear 4.5 / 6 (the lantern pools are the stage); from above the lens sees mostly the (very dark) forest
+  // floor, so the moon, hemisphere (a lifted cool sky fill) and environment light rise ×2.4–3.4 in iso (ground ≥ ~12 %
+  // luminance 8 m from her; cutscenes and Meme Cam keep the eye-level night);
+  // by day the sun swings to the side of the view (crowns fade from above, their shadows fall across the screen)
+  cam: { yaw: Math.PI,
+    fog: { clear: 5.5, clearCombat: 7, topMul: 1.35, forest_night: { clear: 4.5, clearCombat: 6, topMul: 1.35 } },
+    light: { forest_day: { sunAz: -1.35 }, forest_night: { hemiMul: 3.4, sunMul: 3.2, envMul: 2.4, hemiSky: '#B0C0D8', hemiGround: '#3A4636' } } },
+  // §2.7 the Meme Cam spot: the Mushroom Ring (the caps and the mushroom house behind her)
+  memeSpot: { at: [-20.5, -57], yaw: 1.5, r: 4 },
+  // §5.4 authored links: the Treetop root ledges (ground → the 0.75 m step → the 1.5 m ledge) and Stump Crossing
+  navLinks: [...treetopLinks(), ...stumpLinks()],
+  // click-to-move walks round the Lantern Camp fire, never into its stone ring (stones r ~1.1 + the agent's footprint)
+  navBlock: [{ at: CAMP.fire, r: 1.5 }],
   paths: [{ pts: [[27, 4], [36, 8], [40, 11], [40, 25], [32, 30], [20, 30]], width: 2.6 }, { pts: [[-10, 84], [-18, 90], [-24, 95]], width: 4 }],
   spawns: { start: [0, -92, 0], boss: [-10, 70.5, 0], camp: [3, 33, 0] },     // [x, z, yaw]
   anchors: {
@@ -471,17 +523,19 @@ export default defineLevel({
   zones: [
     { id: 'gate', kind: 'open', at: [0, -85], r: 8, props: 'forestGate', keepClear: 6, spawns: [['rat_pike', 2, [-6, -70], 4]] },
     { id: 'vigil_1', kind: 'checkpoint', at: [0, -78] },
+    // §11 the Mushroom Ring climb: a camera-only zone round the caps (the hint swings to the spiral's open side)
+    { id: 'mushroom_climb', kind: 'camera', at: [-26.4, -58.6], r: 5.5, cam: MUSHROOM_CAM },
     { id: 'mushrooms', kind: 'open', at: [-20, -58], r: 15, props: 'mushroomRing', keepClear: 9, spawns: [['rat_pike', 2, [-14, -64], 4]] },
     { id: 'bell_1', kind: 'heartBell', bellId: 'hb1', at: MUSHROOM_CAPS[4].at, y: MUSHROOM_CAPS[4].y },
     { id: 'pickles', kind: 'kitten', kittenId: 'pickles', at: [-12, -50.6], hide: 'meow', prop: 'barrel', facing: 0 },
-    { id: 'hollow', kind: 'arena', at: [-10, -30], r: 12, props: 'spiderHollow',
+    { id: 'hollow', kind: 'arena', at: [-10, -30], r: 12, props: 'spiderHollow', cam: { dist: 12 },
       waves: [[['spider', 3]], [['spider', 3], ['rat_pike', 2]]] },
     { id: 'pebble', kind: 'kitten', kittenId: 'pebble', at: [-23.4, -26.4], hide: 'break', facing: 1.2 },
     { id: 'vigil_2', kind: 'checkpoint', at: [2, -20] },
-    { id: 'treetop', kind: 'open', at: [18, -8], r: 9, props: 'treetop',
+    { id: 'treetop', kind: 'open', at: [18, -8], r: 9, props: 'treetop', cam: { pitch: 0.663 /* 38°: a side view of the ledges */, dist: 10 },
       spawns: [['rat_xbow', 1, TREETOP.ledges[0], 0, { y: TREETOP.ledgeY }], ['rat_xbow', 1, TREETOP.ledges[1], 0, { y: TREETOP.ledgeY }],
         ['crow', 2, [18, -8], 6], ['rat_pike', 2, [21, -13], 3]] },
-    { id: 'stream', kind: 'setpiece', at: [24, 18], props: 'stumpStream' },
+    { id: 'stream', kind: 'setpiece', at: [24, 18], props: 'stumpStream', r: 7 },
     { id: 'letter_2', kind: 'letter', letterId: 'l2', at: STUMPS[3], yAbs: STUMP.top + 0.02 },
     { id: 'camp', kind: 'trigger', at: CAMP.at, r: 6, play: 'cs04', when: 'forest.sage && !forest.camp', once: true },
     { id: 'campsite', kind: 'setpiece', at: CAMP.at, r: 10, props: 'lanternCamp', keepClear: 9 },

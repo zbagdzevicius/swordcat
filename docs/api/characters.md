@@ -73,9 +73,16 @@
 Import only from `src/characters/index.js`.
 
 ### Kittens (player: SwordcatModel, companions: Companion / NpcActor / LostKitten / HubKittens / SpoonBrigade)
-- Easiest: `const view = new KittenView(ctx, cfgOrCatId, { actor, parent?, pose?, expression?, memeCam? })` — parents
+- Easiest: `const view = new KittenView(ctx, cfgOrCatId, { actor, parent?, pose?, expression?, memeCam?, glance? })` — parents
   the kitten under `actor.object3d`, follows core's quality preset (`QUALITY.furShells` hero / `kittenShells` others),
   honours hitstop / pause / slow motion (`visualDt`), drives wind; `view.bindScripted()` wires onPose / onEmote / onProp.
+  Idle camera glance (`GLANCE`, default on for the player): after 2.5 s still in pose `'idle'` (unscripted, grounded,
+  no Meme Cam) she looks over her shoulder toward `ctx.camera` (up to 75°, head + chest, chin up, pupils) for 2-3.4 s,
+  every 3-6 s; applied additively in `view.simulate()` after all animator layers; state in `view._g`.
+  Mesh detail follows `QUALITY.charDetail` (Low 0.55: armour / body / head-fur / eye / bow tessellation) and is read
+  when a cat is BUILT: a quality change applies to cats built afterwards. Skinned fur bakes only the shells the
+  preset draws (Low: the base layer) and re-bakes on the first request for more. With shadows off the shadow proxy
+  is hidden. `setCharDetail(k)` / `charDetail()` for tools; smoke `characters:low-budget` holds the phone budgets.
   Per frame `view.render(frameDt)`, or `view.animate(frameDt)` → your joint offsets → `view.simulate()`.
 - Raw: `const k = buildKitten(cfg)`; add `k.root` under your `actor.object3d` (origin at the feet, faces +Z, 1 unit = H).
   Configs: `swordcatConfig({ cape: 'cream' | 'red' | ..., armour, bow, sword })`, `CATS[id]` (every named cat, old knights),
@@ -220,7 +227,7 @@ New API (all exported from `src/characters/index.js`, also on `Kitten.lib` for s
 | `setXray(target, on, { color, alpha })` / `view.setXray(on, o)` | Show / hide + tint. Defaults: her `#FFE4EC` @ 0.55 (`XRAY`), enemies @ 0.45 (pass the telegraph colour). |
 | `setHighlight(target, color \| null, strength = 1)` | Hover / selection rim (§7.4). Kittens: rim uniform in the kit + fur shaders (a cat on the shared kit material gets its own clone, same program). Other models: emissive on per-instance clones (`userData.assetOwned`, original emissive restored on `null`). |
 | `ringAnchor(target, out?)` → `{ pos, radius }` | Ground point under the body + ring radius for the hero / selection rings. |
-| `topTint(root, color?, { match })` | Contrasting colour on the upward-facing faces of helmet meshes (names matching helm / hat / hood / kettle by default); one shared clone per (material, colour). |
+| `topTint(root, color?, { match, perInstance })` | Contrasting colour on the upward-facing faces of helmet meshes (names matching helm / hat / hood / kettle by default). Shared materials: one cached clone per (material, colour). Per-instance materials (`userData.enemyOwned` / `assetOwned`, or `perInstance: true`) are patched **in place**, so `flashMaterials` / `disposeInstanceMaterials` still own them; same program key either way. Idempotent. |
 | `updateReadability(ctx)` | Called by `characterFrame` each frame: `TOP_VIEW` (0..1 from the lens → focus distance, 9 → 10.5 m) and `FUR_VIEW` (fur LOD from `cam.focus`). |
 
 Readability from above (automatic, faded in by `TOP_VIEW`, so close-ups / cutscenes / Meme Cam / `?cam=classic` keep the
@@ -241,7 +248,8 @@ so world's fog patcher (C4 focus fog) wraps them instead of being replaced.
 
 ### → enemies
 3. Call `characters.topTint(e.visual)` once the gear is on (kettle helms, `Knight_Helmet`, feather hats), or pass the
-   helmet mesh root. It clones per source material, so a pack shares one program.
+   helmet mesh root. Call it after `markOwned(m.scene)`: owned materials are then patched in place (hit flash and
+   dispose keep working per instance) and the whole pack still shares one program.
 
 ### → ui / player (hover, selection)
 4. On hover change call `characters.setHighlight(prev, null)` then `setHighlight(actor, '#FF6A3D' | '#FFD34D' | '#FFFFFF')`

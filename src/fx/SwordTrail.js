@@ -3,7 +3,7 @@
 // depthWrite off, alpha fading with age. Gold for holy / Golden Hour, white-blue for normal swings, and the colour of the
 // equipped skin otherwise (GAME_DESIGN §13.4: "the trail colour changes").
 import * as THREE from 'three';
-import { FOG_FACTOR, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { resolveBlade, actorWorldPos } from './util.js';
 import { easeSwing } from '../core/math.js';
 
@@ -69,7 +69,7 @@ void main() {
   ${OUTPUT}
 }`;
 
-const _h = new THREE.Vector3(), _t = new THREE.Vector3();
+const _h = new THREE.Vector3(), _t = new THREE.Vector3(), _c = new THREE.Vector3();
 
 export class SwordTrail {
   constructor() {
@@ -89,7 +89,7 @@ export class SwordTrail {
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.setDrawRange(0, 0);
     this.geometry = g;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.swordTrail', vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: this.color }, uIntensity: { value: 1.4 }, uAlpha: { value: 1 } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
@@ -132,7 +132,9 @@ export class SwordTrail {
 
   /**
    * Per frame for an actor: sample while its swing is in the trail window, age the samples, rebuild the strip.
-   * @param {any} actor @param {number} dt visual dt (0 while hitstop) @param {{skin?: string, golden?: boolean}} [o]
+   * `o.widthMul`: the ribbon is widened about its centre line (×1.3 in the iso camera, CONTROLS_SPEC §12 fx 4: seen
+   * from 13 m above, the stock ribbon reads as a thread).
+   * @param {any} actor @param {number} dt visual dt (0 while hitstop) @param {{skin?: string, golden?: boolean, widthMul?: number}} [o]
    */
   track(actor, dt, o = {}) {
     // age + drop old samples
@@ -152,8 +154,14 @@ export class SwordTrail {
         this._newRibbon = true;                        // each swing is its own ribbon
       }
       if (sw.t >= this._w0 && sw.t <= this._w1 && dt > 0) {
-        if (resolveBlade(actor, _h, _t)) { _h.lerp(_t, HILT_INSET); this.push(_h, _t); }       // the ribbon covers the outer blade
-        else if (this._arc(actor, sw, _h, _t)) this.push(_h, _t);
+        let ok = false;
+        if (resolveBlade(actor, _h, _t)) { _h.lerp(_t, HILT_INSET); ok = true; }       // the ribbon covers the outer blade
+        else ok = this._arc(actor, sw, _h, _t);
+        if (ok) {
+          const k = o.widthMul ?? 1;
+          if (k !== 1) { _c.addVectors(_h, _t).multiplyScalar(0.5); _h.sub(_c).multiplyScalar(k).add(_c); _t.sub(_c).multiplyScalar(k).add(_c); }
+          this.push(_h, _t);
+        }
       }
     } else if (this._swing) { this._swing = null; this._newRibbon = true; }
     this._build();

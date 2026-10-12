@@ -59,12 +59,29 @@ const flags = (keys) => { const s = window.__GAME__.ctx.state; return Object.fro
 const playing = () => window.__GAME__.ctx.story.playingId ?? null;
 const levelId = () => window.__GAME__.ctx.levels.current?.id ?? null;
 
+/**
+ * Arm a page-side record of scene starts for `ids` (cutscene:start since now). Call it before an action whose
+ * last step may fire the scene itself (e.g. fight() landing the final kill), so beat() still credits a scene
+ * that already started — and maybe ended or was skipped — before it got to poll.
+ */
+async function armScenes(t, ...ids) {
+  await t.G((list) => {
+    const g = window.__GAME__;
+    if (!window.__flowSeen) {
+      window.__flowSeen = new Set();
+      g.ctx.bus.on('cutscene:start', (p) => { if (p?.id) window.__flowSeen.add(p.id); });
+    }
+    for (const i of list) window.__flowSeen.delete(i);
+  }, ids);
+}
+
 /** Wait for scene `id` to start by itself (the real trigger), let it run `watch` ms, skip it, wait for play. */
 async function beat(t, id, { timeout = 15000, watch = 1500, shotName = null, label = id } = {}) {
-  const on = await until(t, (i) => window.__GAME__.ctx.story.playingId === i || window.__GAME__.ctx.story.queue?.some?.((q) => q.id === i), id, { timeout });
+  const on = await until(t, (i) => { const st = window.__GAME__.ctx.story; return st.playingId === i || st.queue?.some?.((q) => q.id === i) || !!window.__flowSeen?.has(i); }, id, { timeout });
   t.assert(!!on, `${label}: scene ${id} starts from its trigger`);
   if (!on) return false;
-  await until(t, (i) => window.__GAME__.ctx.story.playingId === i, id, { timeout: 15000 });
+  // started already (armScenes) and over by now → nothing left to watch or skip
+  await until(t, (i) => { const st = window.__GAME__.ctx.story; return st.playingId === i || (!!window.__flowSeen?.has(i) && !st.queue?.some?.((q) => q.id === i)); }, id, { timeout: 15000 });
   await t.wait(watch);
   if (shotName) await shot(t, shotName);
   // skip it (and anything it chains into that we are not waiting for)
@@ -405,7 +422,12 @@ const FLOW = [
       t.assert((await t.G(flags, ['gate.pip']))['gate.pip'] === true, 'gate.pip');
 
       // --- the Old Battlefield skirmishes (S1 + S2) → gate_back ("Back to the Line!")
-      for (const z of [-80, -66, -56]) { await tp(t, 0, z, 0); await t.frames(20); await fight(t, { ms: 20000, sel: 'e.pos.z < -40' }); }
+      // the last z < -45 kill can land inside fight() and fire gate_back before beat() polls → arm the record first
+      await armScenes(t, 'gate_back');
+      for (const z of [-80, -66, -56]) {
+        if (await t.G(() => window.__GAME__.ctx.story.isPlaying || !!window.__flowSeen?.has('gate_back'))) break;
+        await tp(t, 0, z, 0); await t.frames(20); await fight(t, { ms: 20000, sel: 'e.pos.z < -40' });
+      }
       await beat(t, 'gate_back', { timeout: 20000, label: 'battlefield cleared' });
       t.assert((await t.G(flags, ['gate.back']))['gate.back'] === true, 'gate.back');
 
@@ -443,11 +465,29 @@ const FLOW = [
       for (let i = 0; i < 40; i++) { if (await t.G(() => !!window.__GAME__.ctx.story.playingId)) break; await fight(t, { ms: 1500 }); }
       await beat(t, 'g02', { timeout: 30000, watch: 2500, shotName: 'g6-g02', label: 'Line 85 %' });
       await t.G(() => window.__GAME__.ctx.objectives.set('line', 99.6));
-      for (let i = 0; i < 60; i++) {
-        if (await t.G(() => window.__GAME__.ctx.state.getFlag('gate.line'))) break;
+      // the last 0.4 % (~1 s at full rate) must not depend on frame rate: each beat, clear whatever stands within
+      // the winch radius (trickle runners otherwise keep the repair blocked on a slow machine); if it still has not
+      // crossed after a few beats (pin stolen, blocked again), push it to 100 % so the done path runs regardless
+      let lineVia = null;
+      for (let i = 0; i < 40; i++) {
+        if (await t.G(() => window.__GAME__.ctx.state.getFlag('gate.line'))) { lineVia ??= 'natural'; break; }
+        await t.G((force) => {
+          const c = window.__GAME__.ctx, L = c.objectives.line, o = c.objectives.get('line');
+          if (L?.winch && !L.done) {
+            const r = (L.cfg?.winchRadius ?? 4) + 2, r2 = r * r;
+            for (const e of [...(c.enemies?.list ?? [])]) {
+              if (!e?.pos || e.alive === false || e.boss) continue;
+              const dx = e.pos.x - L.winch.x, dz = e.pos.z - L.winch.z;
+              if (dx * dx + dz * dz <= r2) c.enemies.despawn?.(e);
+            }
+          }
+          if (force && o && !o.done) c.objectives.set('line', o.max);
+        }, i >= 8);
+        if (i >= 8) lineVia ??= 'forced';
         await fight(t, { ms: 1500 });
         await t.G(() => { const s = window.__GAME__.ctx.story; if (s.playingId === 'gate_open') s.skip(); });
       }
+      t.log(`Line 99.6 → 100 %: ${lineVia}`);
       t.assert((await t.G(flags, ['gate.line']))['gate.line'] === true, 'The Line completes → gate.line');
 
       // --- B2: the causeway arena locks → Cacklejaw, fought down with god

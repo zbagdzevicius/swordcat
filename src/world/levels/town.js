@@ -43,12 +43,24 @@ export const SQUARE = Object.freeze({ at: [0, 8], r: 15, rim: 0.6, fountainR: 3,
 /** The castle terrace (+1.2 m), its steps, the Bell Tower and the loft ledge (y 6 above the terrace). */
 export const TERRACE = Object.freeze({ x0: -14, x1: 14, z0: 41, z1: 62, h: 1.2, stepsZ0: 36.8, steps: 5, stepsW: 9 });
 export const TOWER = Object.freeze({ at: [0, 55.6], h: 16, ledge: { at: [0, 50.5], y: 6, size: [2.5, 1.5] }, bell: { y: 14, r: 1.0 } });
-/** The tower stairs: three flights of 8 steps (0.25 m) zig-zagging up the tower's south face to the ledge. */
-export const FLIGHTS = Object.freeze([{ z: 45.9, x0: -7, x1: -3, y0: 0, dir: 1 }, { z: 47.4, x0: -3, x1: -7, y0: 2, dir: -1 }, { z: 48.9, x0: -7, x1: -3, y0: 4, dir: 1 }]);
+/**
+ * The tower stairs: three flights of 8 steps (0.25 m) zig-zagging up the tower's south face to the ledge. Each flight is
+ * 1.5 m wide and their edges sit on the 0.5 m nav grid (z 45 / 46.5 / 48 / 49.5, steps every 0.5 m in x): flights that
+ * abut 2 m apart in height must not share a nav cell, or click paths cut the corner from one flight onto the next.
+ */
+export const FLIGHTS = Object.freeze([{ z: 45.75, x0: -7, x1: -3, y0: 0, dir: 1, w: 1.5 }, { z: 47.25, x0: -3, x1: -7, y0: 2, dir: -1, w: 1.5 }, { z: 48.75, x0: -7, x1: -3, y0: 4, dir: 1, w: 1.5 }]);
 /** The Pilfer chase anchors (§12.5 bakery: ~70 m at 6 m/s). */
 export const CHASE = Object.freeze([[-20, -12], [-34, -14], [-46, -4], [-44, 12], [-30, 16], [-36, 4]]);
 const POST = { at: [-40.5, 4], steps: [-35.6, 4] };
 const WALL_R = 60;
+
+/** §5.4 nav links up Waffles' crate steps: the street → crate 1 (1 m) → 2 → 3 → the balcony (3.0 m). */
+function crateLinks() {
+  const s = CRATE_STEPS, pts = [[s[0][0], s[0][1] - 1.5], ...s.map(([x, z]) => [x, z]), [BALCONY.at[0], BALCONY.at[1] - 0.6]];
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) out.push({ a: pts[i], b: pts[i + 1], kind: 'hop' });
+  return out;
+}
 
 // ---------------------------------------------------------------------------------------------- procedural parts
 const box = (w, h, d, x = 0, y = 0, z = 0, ry = 0) => { const g = new THREE.BoxGeometry(w, h, d); if (ry) g.rotateY(ry); return g.translate(x, y, z); };
@@ -92,7 +104,7 @@ function bellPlatformParts() {
 
 /** One stair flight (8 steps × 0.25 m rise, 0.5 m run) along ±x with posts and a rail; built from x0 to x1 at y0. */
 function flightParts(f, ground) {
-  const p = [], n = 8, run = Math.abs(f.x1 - f.x0) / n, w = 1.4;
+  const p = [], n = 8, run = Math.abs(f.x1 - f.x0) / n, w = f.w ?? 1.4;
   for (let i = 0; i < n; i++) {
     const x = f.x0 + f.dir * run * (i + 0.5), top = ground + f.y0 + (i + 1) * 0.25;
     p.push([box(run + 0.02, 0.08, w, x, top - 0.04, f.z), C.plank]);
@@ -190,10 +202,10 @@ const SETPIECES = {
     if (wall) for (const [a, b] of chords) kit.fence(wall, a, b, { fit: { h: 5.0 }, height: 5.0, walkable: false, depthScale: 4.5, maxPieceScale: 5.0, jitter: 0.04, wobble: 0, clear: 2.2, fade: false });
     if (tower) for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2 + Math.PI / 8, x = Math.sin(a) * WALL_R, z = Math.cos(a) * WALL_R;
-      kit.place(tower, x, z, { fit: { h: 11 }, yaw: a + Math.PI, collider: 'circle', shrink: 0.7, jitter: 0.03, clear: 3 });
+      kit.place(tower, x, z, { fit: { h: 11 }, yaw: a + Math.PI, collider: 'circle', shrink: 0.7, jitter: 0.03, clear: 3, camFade: 'solid' });
     }
     if (gate) {
-      kit.place(gate, 0, -WALL_R, { fit: { x: 13 }, yaw: 0, collider: false, jitter: 0, clear: 3 });
+      kit.place(gate, 0, -WALL_R, { fit: { x: 13 }, yaw: 0, collider: false, jitter: 0, clear: 3, camFade: 'solid' });
       // the gate's two flanks (the arch in the middle stays open, 4.6 m)
       const y = kit.h(0, -WALL_R);
       for (const sx of [-1, 1]) kit.collider({ x: sx * 4.6, z: -WALL_R, hx: 2.3, hz: 2.4, y0: y - 1, y1: y + 7, walkable: false });
@@ -219,7 +231,7 @@ const SETPIECES = {
     ];
     const tpls = new Map();
     for (const [m] of H) if (!tpls.has(m)) tpls.set(m, await kit.tpl(m));
-    for (const [m, x, z, yaw, h] of H) { const t = tpls.get(m); if (t) kit.place(t, x, z, { fit: { h }, yaw, collider: 'box', shrink: 0.86, jitter: 0.07, clear: 3.5 }); }
+    for (const [m, x, z, yaw, h] of H) { const t = tpls.get(m); if (t) kit.place(t, x, z, { fit: { h }, yaw, collider: 'box', shrink: 0.86, jitter: 0.07, clear: 3.5, camFade: 'roof' }); }   // §3 roof-only fade
     // flower boxes under some windows, bunting across the streets
     const fb = kit.proc('flower_box', flowerBoxParts);
     for (const [x, z, yaw, y] of [[-5.6, -41, Math.PI / 2, 2.2], [5.6, -41.2, -Math.PI / 2, 2.2], [-5.7, -24.5, Math.PI / 2, 2.4], [5.8, -19.6, -Math.PI / 2, 2.3], [-14.2, -26.5, 0, 2.2]]) {
@@ -228,7 +240,7 @@ const SETPIECES = {
     for (const [a, b] of [[[-5.2, 5.6, -45], [5.2, 5.6, -45]], [[-5.2, 5.4, -22], [5.2, 5.4, -22]], [[-5.0, 5.2, -12], [5.0, 5.6, -12]], [[-11, 5.6, 22.5], [11, 5.6, 22.5]]]) {
       const ya = kit.h(a[0], a[2]), yb = kit.h(b[0], b[2]);
       const g = kit.proc('bunting_' + a.join('_'), () => buntingParts([a[0], a[1] + ya, a[2]], [b[0], b[1] + yb, b[2]]));
-      kit.place(g, 0, 0, { y: 0, ground: false, collider: false, clear: false, occupy: false, jitter: 0, cull: false });
+      kit.place(g, 0, 0, { y: 0, ground: false, collider: false, clear: false, occupy: false, jitter: 0, cull: false, camFade: true });   // fades when it crosses her (iso lens)
     }
     // street lanterns (unlit by day), carts, barrels, crates, hedges
     const [lan, cart, barrel, crate, sack, treeD, treeO, fence, well] = await Promise.all([kit.tpl(M.lantern), kit.tpl(M.cart), kit.tpl(M.barrel), kit.tpl(M.crate), kit.tpl(M.sack),
@@ -302,13 +314,13 @@ const SETPIECES = {
   async bakery(kit) {
     const level = kit.level;
     const [bak, post, stall] = await Promise.all([kit.tpl(M.homeBR), kit.tpl(M.marketB), kit.tpl(M.stallR)]);
-    if (bak) kit.place(bak, -26.6, -20.4, { fit: { h: 6.5 }, yaw: Math.PI * 0.3, collider: 'box', shrink: 0.86, jitter: 0, clear: 3 });
+    if (bak) kit.place(bak, -26.6, -20.4, { fit: { h: 6.5 }, yaw: Math.PI * 0.3, collider: 'box', shrink: 0.86, jitter: 0, clear: 3, camFade: 'roof' });
     kit.place(kit.proc('sign_bread', () => signParts('bread', '#D9A55A')), -23.3, -18.0, { yaw: Math.PI * 0.3 + Math.PI / 2, lift: 3.2, collider: false, clear: false, occupy: false, jitter: 0 });
     if (stall) kit.place(stall, -21.0, -21.8, { fit: { h: 2.4 }, yaw: Math.PI * 0.3, collider: 'box', jitter: 0.04 });
     kit.anchor('bakery_door', -23.2, -19.2, undefined, Math.PI * 0.3);
     kit.anchor('bakery_meet', -21.4, -16.6, undefined, Math.PI + Math.PI * 0.3);
     kit.anchor('bakery_cot', -22, -20, undefined, -Math.PI / 2);
-    if (post) kit.place(post, POST.at[0], POST.at[1], { fit: { max: 9 }, yaw: Math.PI / 2, collider: 'box', shrink: 0.88, jitter: 0, clear: 3 });
+    if (post) kit.place(post, POST.at[0], POST.at[1], { fit: { max: 9 }, yaw: Math.PI / 2, collider: 'box', shrink: 0.88, jitter: 0, clear: 3, camFade: 'roof' });
     kit.place(kit.proc('sign_mail', () => signParts('letter')), -36.4, 6.4, { yaw: Math.PI / 2 + Math.PI / 2, lift: 3.0, collider: false, clear: false, occupy: false, jitter: 0 });
     kit.anchor('post_office', POST.at[0], POST.at[1], undefined, Math.PI / 2);
     kit.anchor('post_steps', POST.steps[0], POST.steps[1], undefined, Math.PI / 2);
@@ -321,7 +333,7 @@ const SETPIECES = {
   async forge(kit) {
     const level = kit.level;
     const smith = await kit.tpl(M.smith);
-    if (smith) kit.place(smith, 32.5, -10, { fit: { h: 6.5 }, yaw: -Math.PI / 2, collider: 'box', shrink: 0.85, jitter: 0, clear: 3 });
+    if (smith) kit.place(smith, 32.5, -10, { fit: { h: 6.5 }, yaw: -Math.PI / 2, collider: 'box', shrink: 0.85, jitter: 0, clear: 3, camFade: 'roof' });
     const fp = kit.place(kit.proc('forge_yard', forgeParts), 26.4, -12.2, { yaw: -0.3, collider: 'box', shrink: 0.9, jitter: 0.03 });
     if (fp) addFlame(level, level.lightPool, 26.4 + Math.cos(-0.3) * 1.9 + Math.sin(-0.3) * -0.4, fp.y + 1.1, -12.2 - Math.sin(-0.3) * 1.9 + Math.cos(-0.3) * -0.4, { size: 0.9, light: 1.6, distance: 7, glow: 1.2 });
     kit.place(kit.proc('sign_anvil', () => signParts('anvil')), 28.3, -6.2, { yaw: -Math.PI / 2, lift: 3.0, collider: false, clear: false, occupy: false, jitter: 0 });
@@ -387,17 +399,17 @@ const SETPIECES = {
     kit.anchor('snowpaw', 0, 41.6, top + kit.h(0, 41.6) - top, Math.PI);
     // the Bell Tower (16 m) on the terrace, the castle behind it
     const [tx, tz] = TOWER.at, tg = kit.h(tx, tz);
-    if (tower) kit.place(tower, tx, tz, { fit: { h: TOWER.h }, yaw: Math.PI, collider: 'box', shrink: 0.85, jitter: 0, clear: 4 });
-    if (castle) kit.place(castle, 0, 65.6, { fit: { h: 18 }, yaw: Math.PI, collider: 'box', shrink: 0.85, jitter: 0, clear: 5, cull: false });
+    if (tower) kit.place(tower, tx, tz, { fit: { h: TOWER.h }, yaw: Math.PI, collider: 'box', shrink: 0.85, jitter: 0, clear: 4, camFade: 'solid' });
+    if (castle) kit.place(castle, 0, 65.6, { fit: { h: 18 }, yaw: Math.PI, collider: 'box', shrink: 0.85, jitter: 0, clear: 5, cull: false, camFade: 'solid' });
     // three stair flights up the tower's south face to the loft ledge (y 6 above the terrace)
     const tGround = kit.h(-5, 47);
     FLIGHTS.forEach((f, i) => {
       kit.place(kit.proc('tower_flight_' + i, () => flightParts(f, 0)), 0, 0, { y: tGround, collider: false, clear: false, occupy: false, jitter: 0.03, ground: false });
       const n = 8, rn = Math.abs(f.x1 - f.x0) / n;
-      for (let k = 0; k < n; k++) kit.collider({ x: f.x0 + f.dir * rn * (k + 0.5), z: f.z, hx: rn / 2, hz: 0.7, y0: tGround - 0.6, y1: tGround + f.y0 + (k + 1) * 0.25, step: `f${i}` });
+      for (let k = 0; k < n; k++) kit.collider({ x: f.x0 + f.dir * rn * (k + 0.5), z: f.z, hx: rn / 2, hz: (f.w ?? 1.4) / 2, y0: tGround - 0.6, y1: tGround + f.y0 + (k + 1) * 0.25, step: `f${i}` });
     });
     // landings between flights (east after flight 1, west after flight 2)
-    for (const [x0, x1, z0, z1, y] of [[-3, -1.6, 45.2, 48.1, 2], [-8.4, -7, 46.7, 49.6, 4]]) {
+    for (const [x0, x1, z0, z1, y] of [[-3, -1.6, 45.0, 48.0, 2], [-8.4, -7, 46.5, 49.5, 4]]) {
       kit.place(kit.proc(`landing_${x0}`, () => landingParts(x0, x1, z0, z1, y)), 0, 0, { y: tGround, collider: false, clear: false, occupy: false, jitter: 0.03, ground: false });
       kit.collider({ x: (x0 + x1) / 2, z: (z0 + z1) / 2, hx: (x1 - x0) / 2, hz: (z1 - z0) / 2, y0: tGround - 0.6, y1: tGround + y });
     }
@@ -427,14 +439,14 @@ const SETPIECES = {
     level.groups.dawnstone.add(glow);
     kit.onFlag('ending.seen', (v) => level.setDawnstone(!!v));
     // library (church), tavern (patio tables), lookout tower
-    if (church) kit.place(church, -21, 26.5, { fit: { h: 9 }, yaw: Math.PI / 2 + 0.3, collider: 'box', shrink: 0.85, jitter: 0, clear: 3 });
+    if (church) kit.place(church, -21, 26.5, { fit: { h: 9 }, yaw: Math.PI / 2 + 0.3, collider: 'box', shrink: 0.85, jitter: 0, clear: 3, camFade: 'roof' });
     kit.place(kit.proc('sign_book', () => signParts('book')), -17.6, 23.6, { yaw: 0.3, lift: 3.0, collider: false, clear: false, occupy: false, jitter: 0 });
-    if (tavern) kit.place(tavern, 19.6, 19.6, { fit: { h: 8 }, yaw: -Math.PI / 2, collider: 'box', shrink: 0.86, jitter: 0, clear: 3 });
+    if (tavern) kit.place(tavern, 19.6, 19.6, { fit: { h: 8 }, yaw: -Math.PI / 2, collider: 'box', shrink: 0.86, jitter: 0, clear: 3, camFade: 'roof' });
     const table = kit.proc('patio_table', () => [[cyl(0.5, 0.5, 0.06, 0, 0.72, 0, 12), C.plank], [cyl(0.06, 0.08, 0.72), C.woodDark], [cyl(0.25, 0.3, 0.04), C.woodDark],
       [cyl(0.05, 0.04, 0.12, 0.2, 0.78, 0.1, 8), C.cream]]);
     for (const [x, z] of [[13.6, 18.6], [14.4, 21.6]]) kit.place(table, x, z, { yaw: x, collider: 'circle', jitter: 0.04 });
     kit.anchor('tavern_patio', 14, 20, undefined, Math.PI / 2);
-    if (towerBlue) kit.place(towerBlue, 23, 31.5, { fit: { h: 12 }, yaw: -2.4, collider: 'box', shrink: 0.85, jitter: 0, clear: 3 });
+    if (towerBlue) kit.place(towerBlue, 23, 31.5, { fit: { h: 12 }, yaw: -2.4, collider: 'box', shrink: 0.85, jitter: 0, clear: 3, camFade: 'solid' });
     kit.place(kit.proc('sign_eye', () => signParts('eye')), 20.3, 29.0, { yaw: -2.4, lift: 3.0, collider: false, clear: false, occupy: false, jitter: 0 });
     kit.place(kit.proc('sign_hanger', () => signParts('hanger')), -13.6, 29.0, { yaw: Math.PI, lift: 2.8, collider: false, clear: false, occupy: false, jitter: 0 });
     kit.paint(0, 50, 9, '#8C8470', 0.45, 3);
@@ -465,6 +477,16 @@ export default defineLevel({
   music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
     byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'story_lament_warriors_soul'], ['town.free', 'village_bards_tale']] },
   spine: SPINE,
+  // CONTROLS_SPEC §11 iso camera: yaw π (the Castle Steps are north). §4.2 town_occupied / hub_*: ρ 0.04, clear 6 / 7.5,
+  // topMul 1.4 (roofs fade from above, §3; the eaves' shadows draw the street edges)
+  cam: { yaw: Math.PI, fog: { clear: 6, clearCombat: 7.5, topMul: 1.4 } },
+  // §2.7 the Meme Cam spot: the fountain (she faces south, the fountain and the cat statue behind her)
+  memeSpot: { at: [0, 3.2], yaw: Math.PI, r: 4 },
+  // §5.4 Waffles' crate balcony: the 1 / 2 / 3 m crate steps up to the 3.0 m balcony (hops, both ways)
+  navLinks: crateLinks(),
+  // click-to-move walks round the fountain, never hops onto its rim / the statue base (Toffee's climb stays a
+  // deliberate jump): a no-go disc over the basin + the agent's footprint, so a click there snaps to the paving
+  navBlock: [{ at: SQUARE.at, r: SQUARE.fountainR + 0.4 }],
   paths: [{ pts: BAKERY_ST, width: 5 }, { pts: FORGE_ST, width: 5 }, { pts: EAST_ST, width: 4 }, { pts: LIB_ST, width: 4 }],
   // the castle terrace (+1.2 m) behind its retaining wall
   keep: [{ box: [TERRACE.x0, TERRACE.z0, TERRACE.x1, TERRACE.z1 + 8], h: TERRACE.h, feather: 0.9 }],
@@ -487,7 +509,7 @@ export default defineLevel({
       hints: [{ key: 'tut.pug', on: 'alert', type: 'pug' }] },
     { id: 'letter_3', kind: 'letter', letterId: 'l3', at: [28, -2] },
     { id: 'vigil_2', kind: 'checkpoint', at: [-8, -9] },
-    { id: 'square', kind: 'arena', at: SQUARE.at, r: SQUARE.r, props: 'square', autoLockWhen: occupied, clearedWhen: 'town.free',
+    { id: 'square', kind: 'arena', at: SQUARE.at, r: SQUARE.r, props: 'square', cam: { dist: 16 }, autoLockWhen: occupied, clearedWhen: 'town.free',
       waves: [[['rat_pike', 4]], [['pug', 2], ['rat_pike', 2]], [['stealer', 3], ['rat_pike', 2]], [['pug', 2], ['rat_xbow', 2], ['crow', 2]], [['jelly_giant', 1, { at: 'center' }]]] },
     // companions perch a climb kitten `y` above the walkable surface under it (the fountain rim, 0.6): the statue top 2.5
     { id: 'toffee', kind: 'kitten', kittenId: 'toffee', at: SQUARE.at, hide: 'climb', y: SQUARE.top - SQUARE.rim, facing: Math.PI },
@@ -495,6 +517,8 @@ export default defineLevel({
     { id: 'castle', kind: 'setpiece', at: [0, 50], props: 'castle' },
     { id: 'muffin', kind: 'kitten', kittenId: 'muffin', at: TOWER.ledge.at, hide: 'climb', y: TOWER.ledge.y, facing: 0 },
     { id: 'hub', kind: 'setpiece', at: [0, -50], props: 'hub' },
+    // §11 the hub (after `town.free`): a slightly wider view inside the walls (the square's 16 m wins there)
+    { id: 'hub_view', kind: 'camera', at: [0, 0], r: WALL_R - 2, camIf: 'town.free', cam: { dist: 15 } },
   ],
   setpieces: SETPIECES,
   decorate,

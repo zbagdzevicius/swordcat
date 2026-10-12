@@ -6,6 +6,8 @@
 //   scoreCandidate(...)            the §7.2 soft auto-target score (lower wins) with its term breakdown
 //   pickAssist(...)                best candidate + stickiness (§7.2 "sticky 0.75")
 //   lungeFor(dist, range, lunge)   lunge magnetism (§7.1): clamp(dist − 0.7 × range, lunge, lunge + 1.0)
+//   lungeSpeed(def, dist, range)   the same in the units swings use: `def.lunge` is a speed (m/s) held over the lunge
+//                                  window, so the clamp runs on the distance it covers and returns the speed
 //   isParryKind / isWindupKind     telegraph kinds the parry ring / the windup bonus care about
 //   ThreatBook                     live melee wind-ups (from combat:telegraph) → nextParryable (§8.2 parry ring,
 //                                  §8.1 threat snap), with activeAt / windup filled when enemies don't send them
@@ -25,7 +27,7 @@ export const AIM_FALLBACK = Object.freeze({
   score: Object.freeze({ angle: 2.0, windup: 2.5, selected: 1.0, lowHp: 0.8, lowHpFrac: 0.3, recentHit: 0.5, breakable: 3.0 }),
   breakableClear: 6, standSnapRange: 5, standSnapLead: 0.7,
   // combat-only (prose numbers of the spec)
-  recentHitWindow: 2.0, reflectCone: 0.436, ringLead: 0.6, threatRange: 6, threatKeep: 0.1,
+  recentHitWindow: 2.0, reflectCone: 0.436, reflectRange: 16, projectileLead: 1.0, lungeSettle: 0.05, ringLead: 0.6, threatRange: 6, threatKeep: 0.1,
   hittableBelowDefault: 2.2,
 });
 
@@ -84,6 +86,28 @@ export function lungeFor(dist, range, lunge, extra = aimCfg().lungeExtra) {
   return Math.min(base + extra, Math.max(base, want));
 }
 
+/** The lunge window of a swing def (s): from half-way to the active frames to their end (PlayerStates' push). */
+export function lungeWindow(def) {
+  const act = def?.active ?? [0, def?.dur ?? 0.4];
+  return Math.max(0, act[1] - act[0] * 0.5);
+}
+
+/**
+ * Lunge magnetism in swing units (§7.1, GAME_DESIGN "lunge up to 1.0 m further to close a gap"): `def.lunge` is the
+ * forward speed (m/s) a swing pushes over `lungeWindow(def)`, which covers ≈ lunge × (window − lungeSettle) m. The
+ * clamp of `lungeFor` runs on that distance — clamp(dist − 0.7 × range, base, base + 1.0) — and the speed that covers
+ * it comes back. Returns `def.lunge` when the target is within reach (or the def has no lunge / window).
+ * @param {any} def swing def @param {number} dist edge distance to the target @param {number} [range] reach (def arc)
+ */
+export function lungeSpeed(def, dist, range = def?.arc?.range ?? 0) {
+  const lunge = def?.lunge;
+  if (typeof lunge !== 'number') return lunge;
+  const w = lungeWindow(def) - aimCfg().lungeSettle;
+  if (!(w > 0.02) || !(dist > range)) return lunge;
+  const base = lunge * w;
+  return lungeFor(dist, range, base) / w;
+}
+
 /**
  * §7.2 soft auto-target score of one candidate (lower wins). Writes the term breakdown into `terms` when given.
  * Filtering (range, cone, faction) is the caller's job; this is just the formula.
@@ -111,6 +135,58 @@ export function scoreCandidate(from, t, aimYaw, f, terms) {
     terms.lowHp = low; terms.recentHit = recent; terms.breakable = brk; terms.score = score;
   }
   return score;
+}
+
+/**
+ * §7.2 soft auto-target over a candidate list: filter (alive, hurtable, not hidden / dormant, low enough, within
+ * `range` edge distance and `angle` half-cone of `refYaw`; breakables only with no hostile within `breakableClear`),
+ * score each with `scoreCandidate`, and keep `prev` unless a challenger beats it by `AIM.sticky` (no ping-pong).
+ * Hostility / faction filtering is the caller's job (`cands` are already the actor's targets).
+ *
+ * `out` (optional) receives the breakdown: `{ target, score, terms, kept, prevScore, list: [{actor, score, terms}] }`
+ * (`list` holds every candidate that passed the filter; `kept` = the sticky rule kept `prev`).
+ * @param {{pos:{x:number,y?:number,z:number}}} from
+ * @param {Iterable<any>} cands
+ * @param {{ range: number, angle?: number, refYaw: number, selected?: any, prev?: any, sticky?: boolean,
+ *   breakables?: boolean, windup?: (a:any) => boolean, recentHit?: (a:any) => boolean, groundY?: number }} o
+ * @param {any} [out]
+ * @returns {any|null}
+ */
+export function pickAssist(from, cands, o, out) {
+  const A = aimCfg(), here = from.pos, range = o.range, half = o.angle ?? Math.PI;
+  const groundY = o.groundY ?? here.y ?? 0, allowBrk = o.breakables !== false;
+  const ok = (a) => a && a !== from && a.pos && a.alive !== false && a.hurtable !== false && !a.hidden && !a.dormant;
+  let hostileNear = false;
+  if (allowBrk) {
+    for (const a of cands) {
+      if (!ok(a) || a.breakable) continue;
+      if (Math.hypot(a.pos.x - here.x, a.pos.z - here.z) - (a.radius ?? 0) <= A.breakableClear) { hostileNear = true; break; }
+    }
+  }
+  if (out) { out.target = null; out.score = Infinity; out.terms = null; out.kept = false; out.prevScore = Infinity; (out.list ??= []).length = 0; }
+  const terms = out ? {} : null;
+  let best = null, bs = Infinity, bestTerms = null, prevScore = Infinity, prevTerms = null;
+  for (const a of cands) {
+    if (!ok(a)) continue;
+    if (a.breakable && (!allowBrk || hostileNear)) continue;
+    if (!lowEnough(a, groundY)) continue;
+    const dx = a.pos.x - here.x, dz = a.pos.z - here.z, d = Math.hypot(dx, dz) - (a.radius ?? 0);
+    if (d > range) continue;
+    if (half < Math.PI - 1e-6 && d > 1e-3 && Math.abs(wrapAngle(Math.atan2(dx, dz) - o.refYaw)) > half) continue;
+    const t = terms ? {} : null;
+    const sc = scoreCandidate(from, a, o.refYaw, {
+      windup: !!o.windup?.(a), selected: o.selected != null && a === o.selected, recentHit: !!o.recentHit?.(a), breakable: !!a.breakable,
+    }, t);
+    if (out) out.list.push({ actor: a, score: sc, terms: t });
+    if (a === o.prev) { prevScore = sc; prevTerms = t; }
+    if (sc < bs) { bs = sc; best = a; bestTerms = t; }
+  }
+  let kept = false;
+  if ((o.sticky ?? o.prev != null) && o.prev && prevScore < Infinity && best !== o.prev && bs > prevScore - A.sticky) {
+    best = o.prev; bs = prevScore; bestTerms = prevTerms; kept = true;
+  }
+  if (out) { out.target = best; out.score = bs; out.terms = bestTerms; out.kept = kept; out.prevScore = prevScore; }
+  return best;
 }
 
 /** Is a flyer (crow) low enough to be hit (§7.2: crows only below `hittableBelow` 2.2 m)? */

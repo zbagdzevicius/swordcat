@@ -1,7 +1,7 @@
 // In-game glue for the characters area (GAME_DESIGN §19.2 characters row; CONTRIBUTING §5–§6).
 // characters has no ctx system of its own:
 //   - initCharacters(ctx) (the first KittenView calls it) maps core's quality preset (ctx.quality.furShells /
-//     kittenShells, E.QUALITY) onto the fur shell counts and resolves asset URLs through ctx.assets.url (plate font);
+//     kittenShells, charDetail, E.QUALITY) onto the fur shell counts + character mesh detail and resolves asset URLs through ctx.assets.url (plate font);
 //   - characterFrame(ctx) drives the shared fur / cape wind from ctx.env.wind unless world's Env writes FUR_WIND;
 //   - the character environment map (overcast PMREM from the LIVE scene lights, art.md §4.1) needs no ctx at all:
 //     every kitten reports the renderer + scene that draw it (noteRender) and Kitten.simulate() calls envTick().
@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { setFurQuality, FUR_WIND } from './Fur.js';
-import { setAssetResolver } from './util.js';
+import { setAssetResolver, setCharDetail } from './util.js';
 import { setCharacterEnvMap } from './materials.js';
 import { updateReadability } from './Readability.js';
 
@@ -49,10 +49,15 @@ export function initCharacters(ctx) {
   _states.set(ctx, st);
   if (typeof ctx.assets?.url === 'function') setAssetResolver((p) => ctx.assets.url(p));
   setFurQuality(furShellsForPreset(ctx.quality));
+  setCharDetail(ctx.quality?.charDetail ?? 1);
   if (ctx.renderer && ctx.scene) noteRender(ctx.renderer, ctx.scene);
   const bus = ctx.bus;
   if (bus?.on) {
-    offs.push(bus.on(E.QUALITY, (p) => setFurQuality(furShellsForPreset(p?.preset ?? ctx.quality))));
+    offs.push(bus.on(E.QUALITY, (p) => {
+      const preset = p?.preset ?? ctx.quality;
+      setFurQuality(furShellsForPreset(preset));
+      setCharDetail(preset?.charDetail ?? 1);   // cats built from now on (Low: lighter armour / body / head meshes)
+    }));
     offs.push(bus.on(E.ENV_CHANGED, () => { _env.countdown = 0; }));
   }
   return st;

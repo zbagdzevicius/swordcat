@@ -1,6 +1,7 @@
 // src/core/Input.js  (owner: core) — keyboard/mouse/gamepad + touch hooks → actions.
-// tech.md §7 + GAME_DESIGN §15 + §19.1 A2 (RMB = guard; actions guard/ability/milk/meow/golden/recenter;
-// heldTime(action); gamepad lock-on is RB only, R3 = recenter).
+// tech.md §7 + GAME_DESIGN §15 + research/CONTROLS_SPEC.md §6 (iso: no pointer lock, pointer model, click / tap
+// queue, zoom, pad aim stick, touch drag-aim, KBM presets + rebinding, haptics; `?cam=classic` keeps the M1/M2
+// orbit table: RMB guard, Space jump, R3 recenter, pointer lock).
 //
 // Edge semantics (tech.md §6): `pressed`/`released` are latched from DOM events until the FIRST fixed step
 // consumes them (Game calls endStep() after each non-hitstop step), so edges are never lost or doubled.
@@ -8,7 +9,7 @@
 // returns the final hold duration (for charge release), then resets.
 //
 // The constructor touches no DOM (node-safe); `attach(canvas)` adds the listeners.
-import { INPUT, AIM, HAPTICS } from './config.js';
+import { INPUT, AIM, HAPTICS, CAMERA } from './config.js';
 import { E } from './events.js';
 
 /** @typedef {{ sources: Set<string>, down: boolean, pressed: boolean, released: boolean, held: number }} ActionState */
@@ -55,6 +56,12 @@ export class Input {
     // ---- CONTROLS_SPEC §6.1 pointer model (CSS px; ndc relative to the canvas)
     /** @type {{x:number, y:number, ndcX:number, ndcY:number, inside:boolean, movedPx:number, speed:number, lastMoveT:number}} */
     this.pointer = { x: 0, y: 0, ndcX: 0, ndcY: 0, inside: false, movedPx: 0, speed: 0, lastMoveT: -Infinity };
+    /** Recent pointer samples {t, x, y} (ms, CSS px) for the windowed speed (§6.1). */
+    this._ptrHist = [];
+    /** The canvas rect, cached (a layout read per mousemove is a forced reflow); null = re-read on next use. */
+    this._rect = null;
+    /** Pointer position when the Meme Cam started: only a move of ≥ CAMERA.iso.meme.exitPx from it is activity (§2.7). */
+    this._memeMark = null;
     /** clicks / taps queued for the next consumer: { button, x, y, down, t, mods: {ctrl, shift, alt}, kind? } */
     this._clicks = [];
     this._zoom = 0;
@@ -62,7 +69,8 @@ export class Input {
     this.aimStick = { x: 0, y: 0 };
     /** touch drag-aim (§9.4): screen-space vector, y+ = up, `active` while a button is being dragged */
     this.virtualAim = { x: 0, y: 0, active: false };
-    this._mouseAcc = 0;
+    /** mouse buttons whose press was queued as a click (their release is queued too, wherever it lands) */
+    this._clickDown = new Set();
     this._touchT = -Infinity;
     /** active KBM preset (§6.2) and its flags */
     this.preset = 'hybrid';
@@ -112,18 +120,49 @@ export class Input {
   // ------------------------------------------------------------------ system contract
   async init() {
     const bus = this.ctx?.bus;
-    if (bus?.on) this._offScheme = bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'controlPreset' || p?.key === 'bindings' || p?.key == null) this.rebind(); });
+    if (bus?.on) {
+      this._offScheme = bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'controlPreset' || p?.key === 'bindings' || p?.key == null) this.rebind(); });
+      this._offHaptics = this._wireHaptics(bus);
+    }
     this.rebind();
+  }
+
+  /**
+   * §10.6: the gameplay moments that buzz a phone. The pad already rumbles from combat / player (JUICE), so these
+   * only vibrate on touch; `haptic(kind)` called directly still routes to the pad rumble.
+   * @returns {() => void} unsubscribe
+   */
+  _wireHaptics(bus) {
+    const offs = [];
+    const on = (ev, fn) => { if (ev) { const off = bus.on(ev, fn); if (typeof off === 'function') offs.push(off); } };
+    const buzz = (kind) => { if (this.device === 'touch') this.haptic(kind); };
+    const isPlayer = (a) => !!a && a === this.ctx?.player;
+    on(E.PLAYER_PARRY, () => buzz('parry'));
+    on(E.PLAYER_PERFECT_DODGE, () => buzz('perfectDodge'));
+    on(E.PLAYER_DAMAGED, (p) => { if (!(p?.amount > 0)) return; buzz('hurt'); });
+    on(E.PLAYER_HOLY, () => buzz('holy'));
+    on(E.PLAYER_GOLDEN, (p) => { if (p?.on) buzz('golden'); });
+    on(E.KITTEN_RESCUED, () => buzz('kitten'));
+    on(E.PLAYER_ORDER, (p) => { if (p && p.valid === false) buzz('orderRejected'); });
+    let broken = false;
+    on(E.PLAYER_GRIT, (p) => { const b = !!p?.broken; if (b && !broken) buzz('guardBreak'); broken = b; });
+    on(E.HIT, (p) => {
+      if (!p || p.parried) return;
+      if (isPlayer(p.target) && p.blocked) buzz('block');
+      else if (isPlayer(p.attacker) && (p.killed || p.crit)) buzz('hitHeavy');
+    });
+    return () => { for (const off of offs) off(); };
   }
   /** Fixed step: advance hold timers + idle timers. */
   update(dt) {
     this._resolveLockLoss();
     for (const s of this.actions.values()) if (s.down) s.held += dt;
     if (this._activity) { this.idleTime = 0; this._activity = false; } else this.idleTime += dt;
+    if (this._memeMark && this.ctx?.game?.mode !== 'memecam') this._memeMark = null;   // the next Meme Cam re-marks
     if (this._lookActivity) { this.lookIdleTime = 0; this._lookActivity = false; } else this.lookIdleTime += dt;
   }
   render() {}
-  dispose() { this.detach(); this._offScheme?.(); }
+  dispose() { this.detach(); this._offScheme?.(); this._offHaptics?.(); }
 
   // ------------------------------------------------------------------ queries
   down(a) { return this.actions.get(a)?.down ?? false; }
@@ -138,10 +177,15 @@ export class Input {
     return false;
   }
 
-  /** Returns look deltas since the previous call ({x, y} radians, {px, py} raw mouse px) and resets them. */
+  /**
+   * Returns look deltas since the previous call ({x, y} radians, {px, py} raw mouse px) and resets them.
+   * CONTROLS_SPEC C2: zeros in iso (the fixed-yaw camera is never steered), unless the mouse is captured
+   * (Photo Mode); `?cam=classic` keeps the orbit look.
+   */
   consumeLook() {
     const o = this._consumed;
-    o.x = this.look.x; o.y = this.look.y; o.px = this.lookPx.x; o.py = this.lookPx.y;
+    const live = !this.iso || this.pointerLocked;
+    o.x = live ? this.look.x : 0; o.y = live ? this.look.y : 0; o.px = live ? this.lookPx.x : 0; o.py = live ? this.lookPx.y : 0;
     this.look.x = this.look.y = this.lookPx.x = this.lookPx.y = 0;
     return o;
   }
@@ -181,6 +225,9 @@ export class Input {
       if (s.sources.size) { s.sources.clear(); s.down = false; s.released = true; }
     }
     this.keys.clear(); this.keyMove.x = this.keyMove.y = 0;
+    // a held mouse order button (hold-to-follow) ends on blur too: queue its release
+    for (const button of this._clickDown) this._queueClick({ button, x: this.pointer.x, y: this.pointer.y, down: false, t: nowMs(), mods: NO_MODS });
+    this._clickDown.clear();
     this.virtualMove.x = this.virtualMove.y = 0;
     this.virtualAim.active = false; this.virtualAim.x = this.virtualAim.y = 0;
     this._composeMove();
@@ -353,7 +400,15 @@ export class Input {
   /** Add DOM listeners. `canvas` receives mouse buttons, pointer lock and wheel. */
   attach(canvas) {
     this.canvas = canvas;
+    this._rect = null;
     const on = (t, type, fn, opts) => { t.addEventListener(type, fn, opts); this._listeners.push(() => t.removeEventListener(type, fn, opts)); };
+    const stale = () => { this._rect = null; };
+    on(window, 'resize', stale);
+    on(window, 'scroll', stale, { capture: true, passive: true });
+    on(window, 'orientationchange', stale);
+    if (typeof ResizeObserver !== 'undefined' && canvas) {
+      const ro = new ResizeObserver(stale); ro.observe(canvas); this._listeners.push(() => ro.disconnect());
+    }
 
     on(window, 'keydown', (e) => {
       if (EDITABLE.has(e.target?.tagName)) return;
@@ -382,7 +437,7 @@ export class Input {
         return;                                   // the click that captures the mouse does not attack
       }
       this._pointerAt(e.clientX, e.clientY, false);
-      if (this.iso) this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: true, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } });
+      if (this.iso) { this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: true, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } }); this._clickDown.add(e.button); }
       const code = 'Mouse' + e.button;
       for (const a of this._bind.get(code) ?? []) this._press(a, 'm:' + code);
       if (e.button === 1 || e.button === 3 || e.button === 4) e.preventDefault();      // no autoscroll / history navigation
@@ -390,7 +445,8 @@ export class Input {
     });
     on(window, 'mouseup', (e) => {
       const code = 'Mouse' + e.button;
-      if (this.iso && e.target === canvas) this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: false, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } });
+      // the release of a queued press is queued wherever it lands (over the HUD too), so hold-to-follow always ends
+      if (this.iso && this._clickDown.delete(e.button)) this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: false, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } });
       for (const a of this._bind.get(code) ?? []) this._release(a, 'm:' + code);
     });
     on(canvas, 'contextmenu', (e) => e.preventDefault());
@@ -429,22 +485,29 @@ export class Input {
   }
 
   /**
-   * Track the mouse (CSS px): ndc relative to the canvas, travel and speed (§6.1: a cursor drifting slower than
-   * INPUT.pointer.idlePxPerSec is not activity, so a resting hand never blocks the Meme Cam).
+   * Track the mouse (CSS px): ndc relative to the canvas, travel and speed. §6.1: speed is the NET displacement over
+   * the last INPUT.pointer.speedWindow s (divided by the full window), so a resting hand's jitter (which cancels out) and a slow drift under
+   * INPUT.pointer.idlePxPerSec are not activity. §2.7: while the Meme Cam runs, a move only counts once the cursor is
+   * CAMERA.iso.meme.exitPx from where it was when the Meme Cam started.
    */
   _pointerAt(x, y, moved) {
-    const P = this.pointer, r = this.canvas?.getBoundingClientRect?.();
+    const P = this.pointer, r = this._canvasRect();
     const w = r?.width || (typeof innerWidth !== 'undefined' ? innerWidth : 1), h = r?.height || (typeof innerHeight !== 'undefined' ? innerHeight : 1);
     const left = r?.left ?? 0, top = r?.top ?? 0;
     const t = nowMs();
     if (moved) {
-      const d = Math.hypot(x - P.x, y - P.y), dt = Math.max(1, t - (P._t ?? t - 16)) / 1000;
+      const d = Math.hypot(x - P.x, y - P.y);
       P.movedPx += d;
-      P.speed = d / dt;
+      const win = (INPUT.pointer?.speedWindow ?? 0.25) * 1000, H = this._ptrHist;
+      // drop samples older than the window, keeping one at/before its start as the baseline
+      while (H.length > 1 && H[1].t <= t - win) H.shift();
+      const base = H[0] ?? { x: P.x, y: P.y };
+      P.speed = Math.hypot(x - base.x, y - base.y) / (win / 1000);   // net px over the window: jitter cancels out
+      H.push({ t, x, y });
+      if (H.length > 64) H.shift();
       if (d > 0) {
         P.lastMoveT = t;
-        this._mouseAcc += d;
-        if (P.speed >= (INPUT.pointer?.idlePxPerSec ?? 24) || this._mouseAcc >= 40) { this._activity = true; this._mouseAcc = 0; }
+        if (P.speed >= (INPUT.pointer?.idlePxPerSec ?? 24) && this._memeAllows(x, y)) this._activity = true;
         if (this.device === 'touch' && d > 2) this.setDevice('kbm');
       }
     }
@@ -453,6 +516,24 @@ export class Input {
     P.ndcX = ((x - left) / w) * 2 - 1; P.ndcY = -(((y - top) / h) * 2 - 1);
     P.inside = x >= left && x <= left + w && y >= top && y <= top + h;
   }
+
+  /** The canvas bounding rect, cached until a resize / scroll / canvas resize. */
+  _canvasRect() {
+    if (!this.canvas?.getBoundingClientRect) return null;
+    return (this._rect ??= this.canvas.getBoundingClientRect());
+  }
+
+  /** §2.7: in the Meme Cam, pointer motion is activity only past CAMERA.iso.meme.exitPx from the mark. */
+  _memeAllows(x, y) {
+    if ((this.ctx?.game?.mode ?? 'play') !== 'memecam') { this._memeMark = null; return true; }
+    this._memeMark ??= this.pointerMark();      // called before pointer.x/y take (x, y): the mark is where the cursor rested
+    return Math.hypot(x - this._memeMark.x, y - this._memeMark.y) >= (CAMERA.iso?.meme?.exitPx ?? 40);
+  }
+
+  /** A mark of the current cursor position, for pointerSince(mark). */
+  pointerMark() { return { x: this.pointer.x, y: this.pointer.y }; }
+  /** CSS px (straight line) the cursor is from `mark` (jitter around a resting point stays ~0). */
+  pointerSince(mark) { return mark ? Math.hypot(this.pointer.x - mark.x, this.pointer.y - mark.y) : 0; }
 
   /** Seconds since the mouse last moved (KBM aim freshness, §7.1 "pointer moved within the last 3 s"). */
   pointerIdle() { return (nowMs() - this.pointer.lastMoveT) / 1000; }

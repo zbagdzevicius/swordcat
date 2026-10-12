@@ -16,7 +16,7 @@
 // Visual only: no colliders, no AI, never touches gameplay state.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { OUTPUT, fogUniforms } from './shaders.js';
+import { OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { resolveAnchor, resolveActor, toVec3, groundY, hash01, isActor } from './util.js';
 
 export const HORDE = Object.freeze({
@@ -203,14 +203,11 @@ void main() {
   if ( vAlpha < 0.004 ) discard;
   vec3 col = uColor;
 #ifdef USE_FOG
-  #ifdef FOG_EXP2
-    float d = fogDensity * uFogMul * vFogDepth;
-    float f = 1.0 - exp( - d * d );
-  #else
-    float f = smoothstep( fogNear, fogFar / max( uFogMul, 0.05 ), vFogDepth );
-  #endif
+  // world's fog maths (CONTROLS_SPEC §4.1, C4: lens or focus fog, height-weighted); the horde's own thinner lens fog
+  // (uFogMul) scales the lens depth only, so the iso stage stays exactly as clear as the level around it
+  float f = hfogFactor( vFogW, vFogDepth * uFogMul );
   f = 1.0 - ( 1.0 - clamp( f, 0.0, 1.0 ) ) * ( 0.45 + 0.55 * vAlpha );
-  col = mix( col, fogColor, f );
+  col = mix( col, hfogColor( vFogW ), f );
 #endif
   gl_FragColor = vec4( col, vAlpha );
   ${OUTPUT}
@@ -251,7 +248,7 @@ export class Horde {
     g.setAttribute('iA', this.iA); g.setAttribute('iB', this.iB); g.setAttribute('iC', this.iC);
     g.instanceCount = 0;
     this.geometry = g;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.horde', vertexShader: VERT, fragmentShader: FRAG, fog: true,
       // blended so near-camera / edge members fade smoothly; depthWrite keeps each silhouette self-occluding
       transparent: true, depthWrite: true,

@@ -7,6 +7,12 @@
 //   combat:holy     Holy Slash with Shard 2 → holyWave pierces a line of rats (each hit once)
 //   combat:tokens   4 rats around her: never more than the difficulty's melee tokens attack at once (Knight 2, Kitten 1)
 //   combat:visuals  every projectile look frozen in front of the camera (bolt, reflected bolt, orb, glob, wave, gleam)
+// Iso controls (research/CONTROLS_SPEC.md §7–§8, §12 combat):
+//   combat:reflect-aim  the cursor on a second rat: the parried bolt flies at it (±25° of the aim), the shooter is spared
+//   combat:assist       §7.2 score on live actors (the rat winding up on her ranks first, §8.5 payload, nextParryable;
+//                       frozen shot of the strike wedge + parry ring), then desktop LMB toward the cursor hits a side rat
+//   combat:touch        390×844 and 844×390 hasTouch / isMobile: ⚔ with an idle stick = 360° auto-target + lunge
+//                       magnetism; the parry ring (auto on touch) cues a 🛡 press from the touch button → parry
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -342,6 +348,256 @@ export default [
       await t.G(() => { const ctx = window.__GAME__.ctx; ctx.combat.projectiles.clear(); ctx.game.setTimeScale(1); return true; });
       t.assert(n === 6, `6 projectiles on screen (got ${n})`);
       await t.blankCheck('combat:visuals');
+    },
+  },
+  // ================================================================ iso controls (CONTROLS_SPEC §7–§8, §12 combat)
+  {
+    name: 'combat:assist', order: 36, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, 5);
+      await t.frames(5);
+      // 1) §7.2 score on live actors: a real pikeman winding up on her at 2.4 m outranks a passive one at 1.5 m;
+      //    nextParryable reports its strike (activeAt in the future, the parry window); the parry ring + wedge draw.
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E, S = g.__combatSpawn;
+        ctx.state.settings.parryRing = 'on';
+        const near = S('rat_pike', 1.4, 1.8, { passive: true });
+        const wind = S('rat_pike', -0.5, 2.4);
+        const st = g.__assist = { near: near.id, wind: wind.id, at: null, done: false };
+        st.off = ctx.bus.on(E.TELEGRAPH, (p) => {
+          if (p.actor !== wind || st.at || (p.kind !== 'parry' && p.kind !== 'gold')) return;
+          const out = {};
+          const pick = ctx.combat.assistTarget(ctx.player, 4.5, Math.PI, out);
+          const nx = ctx.combat.nextParryable(ctx.player, 6);
+          st.at = { pick: pick?.id ?? null, terms: out.terms, list: out.list.map((e) => ({ id: e.actor.id, s: +e.score.toFixed(2) })),
+            nx: nx ? { attacker: nx.attacker?.id, left: nx.activeAt - ctx.game.time, window: nx.window, kind: nx.kind } : null,
+            payload: { activeAt: p.activeAt, windup: p.windup, attackId: p.attackId, targetsPlayer: p.targetsPlayer } };
+          // freeze ~0.3 s before the strike for the screenshot (parry ring mid-shrink + the strike wedge)
+          const hook = ctx.game.addFrameHook(() => {
+            if (ctx.game.time >= p.activeAt - 0.3) { ctx.game.setTimeScale(0); st.done = true; hook(); }
+          });
+        });
+        return true;
+      });
+      try { await t.page.waitForFunction(() => window.__GAME__.__assist.done, null, { timeout: 15000, polling: 50 }); } catch { /* asserted below */ }
+      await t.frames(2);
+      await t.shot('combat/assist-windup');
+      const a = await t.G(() => { const g = window.__GAME__, st = g.__assist; st.off(); g.ctx.game.setTimeScale(1); return { at: st.at, near: st.near, wind: st.wind }; });
+      t.log(`telegraph: ${JSON.stringify(a.at?.payload)}; scores ${JSON.stringify(a.at?.list)}; next ${JSON.stringify(a.at?.nx)}`);
+      t.assert(!!a.at, 'the live pikeman wound up (combat:telegraph)');
+      if (a.at) {
+        t.assert(a.at.pick === a.wind, `§7.2: the rat winding up on her ranks first (picked ${a.at.pick}, terms ${JSON.stringify(a.at.terms)})`);
+        t.assert(a.at.terms?.windup === -2.5, 'the wind-up term is −2.5');
+        t.assert(a.at.nx?.attacker === a.wind && a.at.nx.left > 0 && a.at.nx.window > 0, `nextParryable → the pikeman, strike ahead (${JSON.stringify(a.at.nx)})`);
+        t.assert(typeof a.at.payload.activeAt === 'number' && typeof a.at.payload.windup === 'number' && a.at.payload.targetsPlayer === true,
+          `§8.5 payload filled (${JSON.stringify(a.at.payload)})`);
+      }
+      // 2) desktop LMB toward the cursor: aim at a passive rat off to her side (outside the old facing cone), click →
+      //    she swings toward it (§6 LMB attacks toward the cursor; KBM magnet ±25°) and it takes the hit.
+      const r = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, S = g.__combatSpawn, p = ctx.player;
+        for (const e of [...ctx.enemies.list]) ctx.enemies.despawn(e);
+        ctx.combat.log.length = 0;
+        const side = S('rat_pike', 1.9, 1.7, { passive: true });
+        side.hp = side.maxHp = 100;
+        return { id: side.id, x: side.pos.x, z: side.pos.z, f0: p.facing };
+      });
+      await t.frames(3);
+      // a real mouse press (the LMB = attack binding + the click pick), the cursor a little off the rat
+      const sp = await t.G(([x, z]) => window.__GAME__.screen(x, z), [r.x + 0.25, r.z]);
+      await t.page.mouse.move(sp.x, sp.y, { steps: 4 });
+      await t.frames(2);
+      await t.page.mouse.down({ button: 'left' });
+      await t.wait(70);
+      await t.page.mouse.up({ button: 'left' });
+      await t.wait(120);
+      await t.shot('combat/assist-lmb');
+      await t.wait(600);
+      const s = await t.G((rid) => {
+        const ctx = window.__GAME__.ctx, p = ctx.player, e = ctx.actors.list.find((x) => x.id === rid);
+        return { hits: ctx.combat.log.filter((x) => x.targetId === rid).map((x) => `${x.attackId}:${x.result}`),
+          face: p.facing, want: Math.atan2(e.pos.x - p.pos.x, e.pos.z - p.pos.z) };
+      }, r.id);
+      const err = Math.abs(Math.atan2(Math.sin(s.face - s.want), Math.cos(s.face - s.want)));
+      t.log(`LMB at the side rat: hits ${s.hits.join(', ') || 'none'}; facing error ${(err * 57.3).toFixed(1)}°`);
+      t.assert(s.hits.some((h) => h.endsWith(':hit')), 'the LMB swing toward the cursor hits the side rat');
+      t.assert(err < 0.45, `she faces the rat after the swing (${(err * 57.3).toFixed(1)}°)`);
+    },
+  },
+  {
+    name: 'combat:reflect-aim', order: 32.5, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t, 5);
+      await t.frames(5);
+      // §12 combat 4: the cursor points at a second rat; a parried bolt flies at it (±25° of the aim), not the shooter
+      const r = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, S = g.__combatSpawn, p = ctx.player;
+        const shooter = S('rat_xbow', 0.0, 7, { passive: true });
+        const mark = S('rat_pike', -0.65, 5, { passive: true });   // 37° off the bolt: guarded by a cursor-facing Stand, outside the shooter's 25°
+        return { shooter: shooter.id, mark: mark.id, mx: mark.pos.x, mz: mark.pos.z, my: mark.pos.y };
+      });
+      await t.frames(3);
+      await t.aimAt(r.mx, r.mz);
+      await t.frames(2);
+      await t.G(([guardSrc, ids]) => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E, THREE = g.THREE, p = ctx.player;
+        const guard = new Function(`return (${guardSrc})`)();
+        const rat = ctx.actors.list.find((a) => a.id === ids.shooter);
+        const from = new THREE.Vector3(rat.pos.x, rat.pos.y + rat.height * 0.6, rat.pos.z);
+        const dir = new THREE.Vector3(p.pos.x - from.x, p.pos.y + p.height * 0.55 - from.y, p.pos.z - from.z);
+        const bolt = ctx.combat.spawnProjectile(ctx.config.ATTACKS.rat_bolt, rat, from, dir);
+        const st = g.__ra = { pressed: false, reflected: null, frozen: false };
+        st.off = ctx.bus.on(E.REFLECT, (e) => { st.proj = e.projectile; st.reflected = { homing: e.projectile.homing?.id ?? null, vx: e.projectile.vel.x, vz: e.projectile.vel.z }; });
+        st.offH = ctx.game.addFrameHook(() => {
+          if (!st.reflected) ctx.input.pointer.lastMoveT = performance.now();   // she keeps the mouse on the mark
+          if (!bolt.alive) return;
+          const d = Math.hypot(bolt.pos.x - p.pos.x, bolt.pos.z - p.pos.z);
+          if (st.reflected && !st.frozen && bolt.reflected && d >= 1.8) { st.frozen = true; ctx.game.setTimeScale(0); }
+          if (st.pressed) return;
+          if ((d - p.radius - bolt.r) / bolt.speed <= 0.07) { st.pressed = true; guard(400); }
+        });
+        return true;
+      }, [guardFor.toString(), r]);
+      const ok = await t.waitForEvent('combat:reflect', 6000);
+      try { await t.page.waitForFunction(() => window.__GAME__.__ra.frozen, null, { timeout: 4000, polling: 'raf' }); } catch { t.warn('reflect-aim: never froze for the shot'); }
+      await t.frames(2);
+      await t.shot('combat/reflect-aim');
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(1));
+      await t.wait(1400);
+      const s = await t.G((ids) => {
+        const g = window.__GAME__, ctx = g.ctx, st = g.__ra;
+        st.off(); st.offH();
+        const alive = (id) => ctx.actors.list.find((a) => a.id === id)?.alive ?? false;
+        return { reflected: st.reflected, pressed: st.pressed, markHit: ctx.combat.log.find((e) => e.targetId === ids.mark && e.attackId === 'rat_bolt') ?? null,
+          shooterAlive: alive(ids.shooter), markAlive: alive(ids.mark),
+          end: st.proj ? { reason: st.proj.endReason, pos: st.proj.pos.toArray().map((v) => +v.toFixed(2)) } : null,
+          markPos: (() => { const m = ctx.actors.list.find((a) => a.id === ids.mark); return m ? m.pos.toArray().map((v) => +v.toFixed(2)) : null; })(),
+          log: ctx.combat.log.slice(-4).map((e) => `${e.attackId}:${e.result}:${e.targetId}`) };
+      }, r);
+      t.log(`reflect-aim: ${JSON.stringify(s.reflected)}; mark hit ${JSON.stringify(s.markHit)}; shooter alive ${s.shooterAlive}; bolt end ${JSON.stringify(s.end)} mark at ${JSON.stringify(s.markPos)}; log ${s.log.join(' ')}`);
+      t.assert(ok && !!s.reflected, `bolt reflected (guard pressed=${s.pressed})`);
+      if (s.reflected) t.assert(s.reflected.homing === r.mark, `the reflect flies at the rat under the cursor (homing ${s.reflected.homing}, mark ${r.mark})`);
+      t.assert(s.markHit?.damage === 25, `the marked rat takes the 25 reflect (${JSON.stringify(s.markHit)})`);
+      t.assert(s.shooterAlive, 'the shooter is spared (the aim chose the other rat)');
+    },
+  },
+  {
+    name: 'combat:touch', order: 37, level: null, timeout: 400000,
+    async run(t) {
+      const DIR = 'combat';
+      // one orientation per browser context; a context whose GPU process crashes under machine load is retried once
+      const todo = [[390, 844, 'portrait', 0], [844, 390, 'landscape', 0]];
+      for (let k = 0; k < todo.length; k++) {
+        const [w, h, tag, retry] = todo[k];
+        let crashed = false;
+        const errors = [];
+        const ctxM = await t.browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        const pg = await ctxM.newPage();
+        pg.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+        pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+        const G = async (fn, arg) => { const hd = await pg.evaluateHandle(fn, arg); try { return await hd.evaluate((x) => (window.__GAME__?.plain ? window.__GAME__.plain(x) : x)); } finally { hd.dispose().catch(() => {}); } };
+        const mshot = async (name) => { try { await pg.screenshot({ path: path.join(t.shotsDir, DIR, `${name}.png`) }); } catch (e) { t.warn(`touch shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); } };
+        const untilM = async (fn, arg, ms = 8000) => { const t0 = Date.now(); let v = await G(fn, arg); while (!v && Date.now() - t0 < ms) { await pg.waitForTimeout(120); v = await G(fn, arg); } return v; };
+        try {
+          await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 200000, waitUntil: 'domcontentloaded' });
+          await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 200000 });
+          await G(async () => {
+            const g = window.__GAME__, c = g.ctx;
+            g.story.skip?.(); g.setMode('play');
+            for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag(k, true);
+            await g.loadLevel('meadow', 'start');
+            return true;
+          });
+          await pg.waitForTimeout(600);
+          await pg.touchscreen.tap(Math.round(w * 0.6), Math.round(h * 0.4));      // first touch: device 'touch'
+          await G(() => {
+            const g = window.__GAME__, c = g.ctx, p = c.player;
+            g.story.skip?.(); g.setMode('play'); g.god(true); c.ui.touch.enable(true);
+            c.state.settings.parryRing = 'auto'; c.state.settings.autoRiposte = 'auto';
+            // a clear patch of meadow ahead of the spawn (away from the fence rail)
+            const f = p.facing, x = p.pos.x + Math.sin(f) * 5, z = p.pos.z + Math.cos(f) * 5;
+            p.teleport({ pos: new g.THREE.Vector3(x, c.physics.heightAt(x, z), z), facing: f });
+          });
+          await pg.waitForTimeout(700);
+          const dev = await G(() => window.__GAME__.ctx.input.device);
+          t.assert(dev === 'touch', `${tag}: device touch (${dev})`);
+          const btn = (a) => G((x) => { const e = document.querySelector(`.tbtn[data-action="${x}"]`); if (!e) return null; const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2, r.width]; }, a);
+          // ---- 1) ⚔ with the stick idle: 360° auto-target within 4.5 m, the magnet turns her and the lunge closes in
+          const r1 = await G(() => {
+            const g = window.__GAME__, c = g.ctx, p = c.player;
+            c.combat.log.length = 0;
+            const a = p.facing + 2.2, x = p.pos.x + Math.sin(a) * 3.6, z = p.pos.z + Math.cos(a) * 3.6;
+            const e = c.enemies.spawn('rat_pike', new g.THREE.Vector3(x, c.physics.heightAt(x, z), z), { facing: a + Math.PI });
+            e.ai = false; e.hp = e.maxHp = 100;
+            window.__tRat = e;
+            return { id: e.id, d0: Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z), p0: [p.pos.x, p.pos.z], dir: [(e.pos.x - p.pos.x) / 3.6, (e.pos.z - p.pos.z) / 3.6] };
+          });
+          await pg.waitForTimeout(400);
+          const [ax, ay, aw] = await btn('attack');
+          t.assert(aw >= 56, `${tag}: ⚔ ≥ 56 px (${aw})`);
+          for (let i = 0; i < 3; i++) { await pg.touchscreen.tap(Math.round(ax), Math.round(ay)); await pg.waitForTimeout(260); }
+          await mshot(`touch-${tag}-01-autotarget`);
+          await pg.waitForTimeout(500);
+          const s1 = await G((r) => {
+            const c = window.__GAME__.ctx, p = c.player, e = window.__tRat;
+            return { hits: c.combat.log.filter((x) => x.targetId === r.id && x.result === 'hit').map((x) => x.attackId), d1: Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z),
+              moved: (p.pos.x - r.p0[0]) * r.dir[0] + (p.pos.z - r.p0[1]) * r.dir[1], swings: c.combat.stats.swings };
+          }, r1);
+          t.log(`${tag}: ⚔ auto-target: hits ${s1.hits.join(', ') || 'none'}, she moved ${s1.moved.toFixed(2)} m toward it, distance ${r1.d0.toFixed(2)} → ${s1.d1.toFixed(2)} m (knockback)`);
+          t.assert(s1.hits.length >= 1, `${tag}: ⚔ with an idle stick hits the rat 3.6 m away off her side (360° auto-target + lunge)`);
+          t.assert(s1.moved > 1.0, `${tag}: lunge magnetism carried her toward it (${s1.moved.toFixed(2)} m)`);
+          await G(() => { const c = window.__GAME__.ctx; c.enemies.despawn(window.__tRat); });
+          // ---- 2) the parry ring (auto = on for touch) + 🛡 from the touch button just before the strike → parry
+          let parried = false;
+          for (let attempt = 0; attempt < 3 && !parried; attempt++) {
+            await G(() => {
+              const g = window.__GAME__, c = g.ctx, E = g.E, p = c.player;
+              for (const e of [...c.enemies.list]) c.enemies.despawn(e);
+              g.clearEvents();
+              const a = p.facing + 0.6, x = p.pos.x + Math.sin(a) * 1.8, z = p.pos.z + Math.cos(a) * 1.8;
+              const rat = c.enemies.spawn('rat_pike', new g.THREE.Vector3(x, c.physics.heightAt(x, z), z), { facing: a + Math.PI });
+              const el = document.querySelector('.tbtn[data-action="guard"]');
+              const rc = el.getBoundingClientRect(), cx = rc.x + rc.width / 2, cy = rc.y + rc.height / 2;
+              const ev = (tp) => el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: 61, clientX: cx, clientY: cy, pointerType: 'touch' }));
+              const st = window.__tp = { rat: rat.id, ring: null, pressed: false, parry: null, shot: false };
+              st.offP = c.bus.on(E.PLAYER_PARRY, (e) => { st.parry = { attacker: e.attacker?.id, gold: e.gold }; });
+              st.off = c.game.addFrameHook(() => {
+                const nx = c.combat.nextParryable(p, 6);
+                if (!nx || nx.attacker !== rat) return;
+                const left = nx.activeAt - c.game.time;
+                if (!st.ring && left <= 0.32) { st.ring = { left, window: nx.window }; c.game.setTimeScale(0); st.shot = true; }
+                if (!st.pressed && left <= 0.10 && st.go) {
+                  st.pressed = true; ev('pointerdown');
+                  setTimeout(() => ev('pointerup'), 450);
+                }
+              });
+              return true;
+            });
+            const froze = await untilM(() => window.__tp.shot, null, 12000);
+            if (froze) { await pg.waitForTimeout(80); if (attempt === 0) await mshot(`touch-${tag}-02-parry-ring`); }
+            await G(() => { window.__tp.go = true; window.__GAME__.ctx.game.setTimeScale(1); });
+            await untilM(() => !!window.__tp.parry, null, 3000);
+            await pg.waitForTimeout(150);
+            if (attempt === 0) await mshot(`touch-${tag}-03-parry`);
+            const st = await G(() => { const s = window.__tp; s.off(); s.offP(); return { ring: s.ring, pressed: s.pressed, parry: s.parry, rat: s.rat }; });
+            parried = !!st.parry && st.parry.attacker === st.rat;
+            t.log(`${tag}: parry attempt ${attempt + 1}: ring ${JSON.stringify(st.ring)}, 🛡 pressed ${st.pressed}, parry ${JSON.stringify(st.parry)}`);
+            if (attempt === 0) t.assert(!!st.ring, `${tag}: nextParryable tracked the pikeman's strike (parry ring data)`);
+            await pg.waitForTimeout(700);
+          }
+          t.assert(parried, `${tag}: 🛡 pressed on the ring's cue parries the pikeman (touch arc ±90°, auto-face)`);
+          // Auto-Riposte (auto = on for touch) follows a melee parry within 4 m
+          const rip = await untilM(() => window.__GAME__.ctx.combat.log.some((e) => e.attackId === 'riposte'), null, 2500);
+          if (!rip) t.warn(`${tag}: no Auto-Riposte after the touch parry (player area)`);
+          await mshot(`touch-${tag}-04-end`);
+          await G(() => { const c = window.__GAME__.ctx; for (const e of [...c.enemies.list]) c.enemies.despawn(e); });
+        } catch (e) {
+          crashed = /crash/i.test(String(e?.message ?? e));
+          if (crashed && !retry) { t.warn(`${tag}: the page crashed (${String(e?.message ?? e).split('\n')[0]}); retrying once`); todo.push([w, h, tag, 1]); }
+          else t.fail(`${tag}: ${e?.message ?? e}`);
+        } finally { await pg.close().catch(() => {}); await ctxM.close().catch(() => {}); }
+        if (!crashed || retry) for (const e of errors) t.fail(`${tag} page: ${e}`);
+      }
     },
   },
 ];

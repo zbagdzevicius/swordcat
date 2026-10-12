@@ -32,7 +32,7 @@ mobile cluster) is integrated. `npm run check` = build, then the unit tests, the
 npm install
 npm run dev            # http://localhost:5173/  (add ?debug for lil-gui + stats, ?test for hooks)
 npm run build          # dist/ (pruned assets)
-npm run test:unit      # node --test, 558 tests
+npm run test:unit      # node --test, ~700 tests
 npm run smoke          # Playwright smoke against vite preview :4173 (needs a build); screenshots → tests/shots/
 npm run check          # all three
 ```
@@ -71,13 +71,20 @@ rings, order markers and path dots. The desktop / pad ability bar sits at the bo
 - **Bundle:** `index` (game code) is ~1.5 MB minified and `three` ~0.82 MB (its own chunk); levels, lil-gui, stats and zzfx load lazily.
 - **Looks:** the gate deck bricks read a little dark in `gate_dusk` fog; CS-05's shard moment is still very bright (ref1 glow); the war-wagon kittens hop over the bars of the cart cage when it opens; Grizzlechop's Wheel Ride charge stops on her collider instead of passing through.
 - **Stub levels:** `bog` and `keep` are dressed stubs (M3). M3 enemies (Boneheads, Brutus, Barkus moves) still run on the generic base.
-- **Controls rework, not built yet (CONTROLS_SPEC):** dithered (alpha-hash) occluder fades and roof-only / crown-only
-  rules (props still fade as whole units, transparently); ground mist sheets, the wheat trample and grass LOD from the
-  focus (§4.2); zone yaw hints authored by world (the API `cam.setHint` exists, no level uses it); pad aim reticle and
-  peek reticle visuals; the ranges overlay (Ctrl); `Edit layout` for the touch cluster; Golden / dialogue framing is
-  basic; enemy helmet top tints (see requests/characters.md); the practice-fence nav link is not gated on
-  `tut.jump.done` (a click past it auto-hops). Unit + smoke coverage: tests/unit/controls.test.js, tests/smoke/controls.mjs.
+- **Controls rework, still open (CONTROLS_SPEC):** the camera peek reticle visual; the see-through hole shader (§3,
+  deferred: dithered roof / crown fades read well so far); desktop interaction tags show by proximity, not on hover
+  (§10.4); the ledge readability art pass (a light lip on walkable tops); Lantern Alley / Post Office yaw hints
+  (optional). Large oak crowns faded right next to her show as a fine screen-door pattern over a big area.
 - **Pending requests:** `requests/*.md` lists only open (optional) items; `requests/RESOLVED.md` lists what each integration pass applied.
+
+## Controls rework, part 2 (2026-10-11)
+See `requests/RESOLVED.md` (fourth section). Every area finished its §12 list: dithered crown / roof occluder fades and
+capsule targets, zone hints (yaw / pitch / dist) and Golden / dialogue framing, gated authored nav links + bounce links
+that a click rides, tap-to-ledge picking, Auto-Riposte and the touch guard arc, jump assist, Pounce aim, the §7.2 score
+with lunge magnetism, bolt reflect toward the aim, context cursors, enemy HP pills, the touch `Edit layout`, preset
+glyphs everywhere, GroundMist sheets, strike wedges, the parry ring, order markers / path dots, the Ctrl ranges overlay,
+the pad right-stick reticle, helmet top tints, wheat trample, grass LOD from the focus, the 9-step tutorial (works by
+touch alone). The pale diagonal streaks over iso levels (ambient mist cards seen from above) are gone.
 
 ## Controls rework integration (2026-10-11)
 See `requests/RESOLVED.md` (third section). New: camera `IsoRig` + `Picker`, physics `NavGrid` / `Pathfind`, player

@@ -315,7 +315,7 @@ export class Hud {
         setVar(this.compEl, '--sig', SIGNATURE[id] ?? '#D9B26A');
       }
       const dev = ctx.input?.device ?? 'kbm';
-      setText(this.compKey, actionGlyph('ability', dev));
+      setText(this.compKey, actionGlyph('ability', dev, ctx.input));
       flag(this.compEl, 'is-nap', (c.napT ?? 0) > 0);
     }
   }
@@ -407,9 +407,7 @@ export class Hud {
     // CONTROLS_SPEC C8: no centre-screen reticle in iso (fx draws the gold ground ring); the selection shows its HP pips
     const lp = !iso && lock && lock.alive !== false ? this._proj(lock, (lock.height ?? 1) * 0.55, W, H) : null;
     flag(this.reticle, 'is-on', !!lp);
-    if (iso && lock && lock.alive !== false && lock !== this.boss) { if (!this.hits.has(lock)) this.hits.set(lock, 0); else this.hits.set(lock, Math.min(this.hits.get(lock), 0.5)); }
-    const hov = iso && this.visible && !this.meme ? ctx.cam?.hover : null;
-    if (hov?.kind === 'enemy' && hov.actor && hov.actor !== this.boss && hov.actor.alive !== false) this.hits.set(hov.actor, Math.min(this.hits.get(hov.actor) ?? PIP_LIFE - 0.7, PIP_LIFE - 0.7));
+    // iso: hpBars.js draws the §10.4 world pills (damaged / selected / hovered); these pips are the classic camera's
     if (lp) {
       place(this.reticle, lp.x, lp.y);
       this._pips(this.retPips, lock, lock !== this.boss && this.hits.has(lock));
@@ -420,7 +418,7 @@ export class Hud {
       const nt = t + dt;
       if (nt > PIP_LIFE || e.alive === false || e.hp <= 0) { this.hits.delete(e); continue; }
       this.hits.set(e, nt);
-      if ((e === lock && !iso) || i >= this.pipEls.length || !this.visible || this.meme || !cam) continue;
+      if (iso || e === lock || i >= this.pipEls.length || !this.visible || this.meme || !cam) continue;
       const sp = this._proj(e, (e.height ?? 1) + 0.35, W, H);
       if (!sp) continue;
       const pe = this.pipEls[i++];
@@ -435,7 +433,7 @@ export class Hud {
     flag(this.riposte, 'is-on', !!rt);
     if (rt) {
       const sp = this._proj(rt, (rt.height ?? 1) + 0.9, W, H);
-      const key = actionGlyph('attack', ctx.input?.device ?? 'kbm');
+      const key = actionGlyph('attack', ctx.input?.device ?? 'kbm', ctx.input);
       setHtml(this.riposte, `<kbd class="ui-key ui-key--sword">${esc(key)}</kbd><span>${esc(tx(ctx, 'hud.riposte'))}</span>`);
       if (sp) place(this.riposte, sp.x, sp.y); else place(this.riposte, W * 0.5, H * 0.38);
     }

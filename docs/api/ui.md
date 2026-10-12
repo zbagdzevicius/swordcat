@@ -76,3 +76,50 @@ The strings `prompt.shop` / `prompt.board` already exist for the tag labels. If 
 ## To story (optional)
 - The shop and board copy lives in ui's `UI_STRINGS` under `ui.*` keys: item names and descriptions, skin and cape names, lock reasons, and board and results labels. Story may add the same keys to `strings.js` (localisation); `strings.js` wins as soon as it has them.
 - `story.unlock()` emits a `ui:toast` with `name: id` ("Sword unlocked: fishbone"), and the ui also toasts on `state:unlock` with the display name. Dropping story's toast would avoid a double toast; the queue drops exact duplicates only.
+
+## CONTROLS_SPEC (iso controls) ui pieces (2026-10-11) — everyone
+- `ui/abilityBar.js` §10.1: the desktop / pad bar (8 slots, corner glyphs from `input.codesFor`, 30 Hz conic sweeps,
+  whole seconds, a white flash + `ui/glass_001` tick at −20 dB for cooldowns ≥ 2 s, lock pip, cracked Stand at 0 Grit,
+  hover tooltips from `bar.*`). Reads `player.abilityState(out)` and `companions.cooldownLeft / readiness`.
+  `bar.insetBottom` (CSS px, view bottom → bar top; reserved on KBM / pad also while a dialogue hides the bar, 0 on
+  touch) is the camera's bottom safe inset. Only the slots catch the pointer: clicks on the panel padding and gutters
+  reach the world; a right click on a slot does nothing.
+- `ui.safeInsets` {top, bottom, left, right, w, h}: CSS px from each canvas edge, re-measured at 4 Hz. top = the bottom edge of the boss plate while it is shown; bottom = the ability bar. The camera's boss fit keeps her and the boss inside this rect.
+- `ui/cursor.js` §10.2: `cursorKind(state)` (pure) + `CursorController` (canvas `cursor` + `#app[data-cursor]`):
+  ground paw (pink bow ribbon), enemy sword, interact seal, pickup sparkle, attack-move, aim reticle (companion aim),
+  unreachable grey ✕ (no walkable nav cell within 2 m of the cursor; `physics.nearestWalkable`), none in cutscenes /
+  Meme Cam. `settings.cursorSize` 1 / 1.5 / 2 and `settings.cursorContrast`.
+- `ui/hpBars.js` §10.4–10.5: enemy HP pills (36 × 5, touch 44 × 6; damaged / selected / hovered, fade 3 s after the
+  last hit, pool 12, boss excluded) and the Grit arc over her head while guarding. In iso the hud pips and the lock
+  reticle are off (C8); `?cam=classic` keeps them.
+- §10.6 haptics: core's `Input` wires the gameplay events itself; ui only sends `button` from the cluster.
+- `ui/touchEditor.js` §9.2 Edit layout (Settings → "Edit touch layout", touch only): drag buttons; Done writes
+  `settings.touchLayout` = `{ name: [dx, dy] }` offsets from the ⚔ anchor in unscaled, unmirrored px; portrait entries
+  are keyed `portrait:<name>` (SaveManager's `cleanLayout` keeps them: the id regex allows `:`).
+- `ui/touchLayout.js` hero clearance: `computeLayout` moves any default-placed button whose hit circle + dead ring
+  reaches the `heroClearR(w, h)` disc (`HERO_CLEAR` 120 px, `TOUCH.heroClear` if set, scaled by min(w, h) / 430 below
+  390 px) around her point, or overlaps an `o.keepOut` rect (touch.js passes the `.hud-tl` / `.hud-tr` / ❚❚ rects),
+  to the nearest legal free spot; if none it shrinks to 56 px, then takes the spot of a lower-`BUTTON_PRIORITY`
+  button, then is dropped (`layout.dropped`, hidden with `.is-dropped`; never ⚔; `o.noDrop` in the editor). Custom
+  Edit-layout spots stay put. Her point is `o.hero` (touch.js passes `cam.heroScreen()` when the camera offers it),
+  else `heroPoint(w, h)` from the camera's own framing (`IsoRig.isoFrameOffset` + `CAMERA.iso.frameOffsetTouchX`:
+  ≈ 42 % × 48 % landscape, 50 % × 40 % portrait). The ✕ chip (`layout.cancel`) gets its own free spot clear of every
+  button, her and the keep-outs. `heroGap(b, hero, r)` < 0 = intrudes. `clampStickBase` keeps the floating stick's base
+  a stick radius inside the left / right / bottom edges. Touch dead rings swallow only ground taps: `touch.js` asks
+  `cam.pick(x, y, { touch, ground: false })` first, so a foe / NPC / interactable under the finger still wins.
+- §9.1 HUD hit areas: the HUD cards (portrait, hearts, Grit, Valor, counters, boss bar, objective line; toasts and the
+  lesson card on desktop) take their own pointer events, so clicks / taps on them never reach the world; the rest of
+  the top strip is open to taps. Touch landscape: `.hud-tc` is narrowed to the free band between `.hud-tl` and the
+  cluster (`body.has-tc-band`, `--tc-l` / `--tc-w`), toasts sit in the left column where the lesson card is, the card
+  and objective line step aside during a boss fight, and `settings.leftHanded` mirrors the HUD (`body.ui-lefty`).
+  Portrait: the hearts row wraps (≤ 2 rows, then shrinks) short of ❚❚ and the card / column sit under it (`--tl-b`).
+- Touch gestures: a second finger within 0.2 s of the stick's touch-down (or before the stick goes live) turns both
+  into a pinch; the stick only drives her once the thumb moves past a tap (12 px) or rests 0.25 s. ⚔ flick-aim: in
+  play the first press waits 0.1 s (or a 16 px drag, which presses with that drag as the explicit aim), a quicker
+  release presses + releases in one step.
+- `text.js`: `actionGlyph(action, device, input)` / `glyphify(text, device, input)` resolve through the active preset
+  and `settings.bindings`; `presetGlyph(action, preset, bindings)` previews any preset (the controls card's ◀ ▶).
+  Touch interaction tags read "Tap".
+- `settings.js`: rows for `camLock`, `autoRiposte`, `standAutoFace`, `pathPreview`, `hapticTaps`, `cursorSize`,
+  `cursorContrast`; `invertY` only under `?cam=classic` (`settingVisible(def, iso)`). ui keeps `settings.camLock` and
+  `cam.camLocked` in sync both ways (Y in play writes the setting; the setting applies at boot and on change).

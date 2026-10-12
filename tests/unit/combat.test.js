@@ -628,3 +628,211 @@ test('Combat system contract: init/update/render/dispose, clears on level unload
   combat.dispose();
   assert.equal(ctx.scene.children.filter((c) => c.name.startsWith('projectile:')).length, 0);
 });
+
+// ------------------------------------------------------------------ iso controls (CONTROLS_SPEC §7–§8, §12 combat)
+import { scoreCandidate, pickAssist, lungeFor, lungeSpeed, lungeWindow, assistCone, ThreatBook, aimCfg, timeToContact } from '../../src/combat/targeting.js';
+
+test('§7.2 score: dist + 2·angle/π − 2.5 windup − 1 selected − 0.8 low hp − 0.5 recent hit + 3 breakable (breakdown)', () => {
+  const her = { pos: { x: 0, y: 0, z: 0 } };
+  const t = { pos: { x: 0, y: 0, z: 3 }, radius: 0.5, hp: 2, maxHp: 10 };
+  const terms = {};
+  const s = scoreCandidate(her, t, Math.PI / 2, { windup: true, selected: true, recentHit: true, breakable: true }, terms);
+  assert.ok(Math.abs(terms.dist - 2.5) < 1e-9, 'edge distance');
+  assert.ok(Math.abs(terms.angle - 1.0) < 1e-9, '90° off the stick = +1.0');
+  assert.equal(terms.windup, -2.5); assert.equal(terms.selected, -1); assert.equal(terms.lowHp, -0.8);
+  assert.equal(terms.recentHit, -0.5); assert.equal(terms.breakable, 3);
+  assert.ok(Math.abs(s - (2.5 + 1 - 2.5 - 1 - 0.8 - 0.5 + 3)) < 1e-9);
+  assert.equal(terms.score, s);
+  assert.equal(scoreCandidate(her, { pos: { x: 0, z: 2 }, hp: 5, maxHp: 10 }, 0, {}), 2, 'plain: just the distance');
+});
+
+test('§7.2 pickAssist: wind-up beats nearer, breakables only when clear, crows only low, stickiness 0.75, breakdown', () => {
+  const her = { pos: { x: 0, y: 0, z: 0 } };
+  const near = { pos: { x: 0, y: 0, z: 1.5 } }, wind = { pos: { x: 0, y: 0, z: 3.5 } };
+  const out = {};
+  assert.equal(pickAssist(her, [near, wind], { range: 4.5, refYaw: 0, windup: (a) => a === wind }, out), wind, '3.5 − 2.5 < 1.5');
+  assert.equal(out.target, wind); assert.equal(out.list.length, 2); assert.equal(out.terms.windup, -2.5); assert.equal(out.kept, false);
+  // range + cone
+  assert.equal(pickAssist(her, [wind], { range: 3, refYaw: 0 }), null, 'beyond range');
+  const side = { pos: { x: 2, y: 0, z: 0 } };
+  assert.equal(pickAssist(her, [side], { range: 4.5, refYaw: 0, angle: 0.436 }), null, 'outside a 25° cone');
+  assert.equal(pickAssist(her, [side], { range: 4.5, refYaw: 0 }), side, '360° auto-target');
+  // breakables: only with no hostile within 6 m; +3 otherwise
+  const crate = { pos: { x: 0, y: 0, z: 1 }, breakable: true }, far = { pos: { x: 0, y: 0, z: 7 } };
+  assert.equal(pickAssist(her, [crate, near], { range: 4.5, refYaw: 0 }), near, 'a hostile is near: the crate is ignored');
+  assert.equal(pickAssist(her, [crate, far], { range: 4.5, refYaw: 0 }), crate, 'clear: the crate is the auto-target');
+  assert.equal(pickAssist(her, [crate], { range: 4.5, refYaw: 0, breakables: false }), null, 'breakables off');
+  // crows: only below hittableBelow
+  const crow = { pos: { x: 0, y: 3.0, z: 1 }, def: { hittableBelow: 2.2 } };
+  assert.equal(pickAssist(her, [crow], { range: 4.5, refYaw: 0 }), null, 'a high crow is not a target');
+  crow.pos.y = 1.5;
+  assert.equal(pickAssist(her, [crow], { range: 4.5, refYaw: 0 }), crow, 'a low crow is');
+  // dead / hidden / dormant / not hurtable are skipped
+  for (const k of [{ alive: false }, { hidden: true }, { dormant: true }, { hurtable: false }]) {
+    assert.equal(pickAssist(her, [{ pos: { x: 0, y: 0, z: 1 }, ...k }], { range: 4.5, refYaw: 0 }), null, JSON.stringify(k));
+  }
+  // stickiness: keep the current target unless a challenger is better by 0.75
+  const cur = { pos: { x: 0, y: 0, z: 2.0 } }, ch = { pos: { x: 0, y: 0, z: 1.5 } };
+  assert.equal(pickAssist(her, [cur, ch], { range: 4.5, refYaw: 0, prev: cur }, out), cur, 'better by 0.5 only: no ping-pong');
+  assert.equal(out.kept, true);
+  ch.pos.z = 1.2;
+  assert.equal(pickAssist(her, [cur, ch], { range: 4.5, refYaw: 0, prev: cur }), ch, 'better by 0.8: switch');
+  ch.pos.z = 1.5;
+  assert.equal(pickAssist(her, [cur, ch], { range: 4.5, refYaw: 0, prev: cur, sticky: false }), ch, 'sticky off');
+  const gone = { pos: { x: 0, y: 0, z: 2 }, alive: false };
+  assert.equal(pickAssist(her, [gone, ch], { range: 4.5, refYaw: 0, prev: gone }), ch, 'a dead previous target is dropped');
+});
+
+test('§7.1 cones + lunge magnetism: device cones around the aim, lunge = clamp(dist − 0.7·range, lunge, lunge + 1)', () => {
+  const A = aimCfg();
+  assert.deepEqual(assistCone('touch'), { angle: A.touchCone, range: 4.5 });
+  assert.deepEqual(assistCone('touch', { stickIdle: true }), { angle: Math.PI, range: 4.5 }, 'idle stick: 360°');
+  assert.deepEqual(assistCone('pad', { padAim: true }), { angle: A.padCone, range: 3.5 });
+  const k = assistCone('kbm', { arcRange: 1.9 });
+  assert.equal(k.angle, A.kbmCone); assert.ok(Math.abs(k.range - 2.9) < 1e-9);
+  assert.equal(assistCone('kbm', { arcRange: 1.9, selected: true }).angle, A.selCone);
+  assert.equal(lungeFor(1.5, 1.9, 2.5), 2.5, 'within reach: the def lunge');
+  assert.ok(Math.abs(lungeFor(4.0, 1.9, 2.5) - 2.67) < 1e-9, 'beyond: grows (4.0 − 1.33)');
+  assert.equal(lungeFor(9, 1.9, 2.5), 3.5, 'capped at lunge + 1.0');
+});
+
+test('combat.assistTarget: §7.2 score over real actors (telegraph wind-up, recent hit, selected), sticky prev, legacy prefer', async () => {
+  const { ctx, combat } = setup();
+  await combat.init();
+  const cat = mk(ctx, 'player', 0, 0, { hp: 8 });
+  const a = mk(ctx, 'enemy', 0, 1.6), b = mk(ctx, 'enemy', 0, 3.2);
+  const out = {};
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI, out), a, 'nearest');
+  assert.equal(out.list.length, 2);
+  // b winds up on her: −2.5 beats 1.6 m of distance
+  ctx.bus.emit(E.TELEGRAPH, { id: 77, actor: b, kind: 'parry', duration: 0.5, targetsPlayer: true });
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI, out), b, 'winding up on her ranks first');
+  assert.equal(out.terms.windup, -2.5);
+  ctx.bus.emit(E.TELEGRAPH_END, { id: 77 });
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI), a);
+  // b hit her in the last 2 s (−0.5) and is selected (−1.0): 2.9 − 1.5 = 1.4 vs a 1.3 → sticky prev a keeps a
+  cat.resolveIncoming = () => 'hit';
+  combat.applyHit(b, cat, ATTACKS.rat_poke);
+  assert.ok(combat.hitRecently(b) && !combat.hitRecently(a));
+  ctx.game.time += 2.5;
+  assert.ok(!combat.hitRecently(b), 'the 2 s window lapses');
+  ctx.game.time -= 2.5;
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI, out, { selected: b, prev: a }), a, 'within 0.75: stays on a');
+  assert.equal(out.kept, false, 'a is simply better here');
+  b.hp = 1;                                                     // < 30 %: −0.8 more → 0.6 vs 1.3, better by 0.7: kept
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI, out, { selected: b, prev: a }), a);
+  assert.equal(out.kept, true, 'the sticky rule kept a');
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI, out, { selected: b }), b, 'no previous target: b');
+  // dir: a reference direction other than facing; cones are around it
+  const c = mk(ctx, 'enemy', 2, 0);
+  assert.equal(combat.assistTarget(cat, 4.5, 0.436, null, { dir: { x: 1, z: 0 } }), c, 'cone around the stick direction');
+  assert.equal(combat.assistTarget(cat, 4.5, 0.436, null, { dir: Math.PI / 2 }), c, 'yaw form');
+  // legacy 4th argument: a preferred actor wins while inside range and cone
+  assert.equal(combat.assistTarget(cat, 4.5, Math.PI, b), b);
+  assert.equal(combat.assistTarget(cat, 1.0, Math.PI, b), null, 'prefer out of range: the scored search (nothing in 1 m)');
+});
+
+test('combat.nextParryable: soonest live white / gold wind-up on her (activeAt filled from the def), bolts, red skipped', async () => {
+  const { ctx, combat } = setup();
+  await combat.init();
+  const cat = mk(ctx, 'player', 0, 0, { hp: 8 });
+  const r1 = mk(ctx, 'enemy', 0, 2), r2 = mk(ctx, 'enemy', 2, 0), r3 = mk(ctx, 'enemy', -2, 0);
+  assert.equal(combat.nextParryable(cat), null);
+  const p1 = { id: 1, actor: r1, kind: 'parry', duration: 0.8, attackId: 'rat_poke', targetsPlayer: true };
+  ctx.bus.emit(E.TELEGRAPH, p1);
+  const act = ATTACKS.rat_poke.active?.[0] ?? 0;
+  assert.ok(Math.abs(p1.activeAt - (0.8 + act)) < 1e-9, '§8.5 payload filled: activeAt = now + windup + active[0]');
+  assert.equal(p1.windup, 0.8);
+  ctx.bus.emit(E.TELEGRAPH, { id: 2, actor: r2, kind: 'gold', duration: 0.4, activeAt: 0.4, targetsPlayer: true });
+  ctx.bus.emit(E.TELEGRAPH, { id: 3, actor: r3, kind: 'red', duration: 0.1, activeAt: 0.1, targetsPlayer: true });
+  let n = combat.nextParryable(cat);
+  assert.equal(n.attacker, r2, 'the gold one lands first; red is a dodge, not a parry');
+  assert.equal(n.kind, 'gold'); assert.equal(n.activeAt, 0.4); assert.equal(n.window, PLAYER.guard.parryWindow);
+  r2.staggerT = 0.5;
+  assert.equal(combat.nextParryable(cat).attacker, r1, 'a staggered attacker is no threat');
+  r2.staggerT = 0;
+  ctx.game.time = 0.5;
+  assert.equal(combat.nextParryable(cat).attacker, r1, 'past its activeAt the gold one drops');
+  assert.equal(combat.nextParryable(cat, 1.0), null, 'maxDist');
+  ctx.bus.emit(E.TELEGRAPH_END, { id: 1 });
+  assert.equal(combat.nextParryable(cat), null, 'ended (not striking): gone');
+  // an incoming bolt counts (kind parry, the shooter as attacker)
+  const shooter = mk(ctx, 'enemy', 0, 9);
+  combat.spawnProjectile(ATTACKS.rat_bolt, shooter, new THREE.Vector3(0, 0.5, 6), new THREE.Vector3(0, 0, -1));
+  n = combat.nextParryable(cat);
+  assert.equal(n.attacker, shooter); assert.ok(n.projectile); assert.ok(n.activeAt > 0.5 && n.activeAt < 1.0);
+  assert.equal(n.pos, n.projectile.pos, 'pos = the bolt (what the threat snap turns to), not the far shooter');
+  ctx.input.device = 'touch';
+  assert.ok(Math.abs(combat.nextParryable(cat).window - (PLAYER.guard.parryWindow + PLAYER.guard.touchParryBonus)) < 1e-9, 'touch +0.05');
+  assert.ok(Math.abs(timeToContact({ x: 0, z: 6 }, { x: 0, z: -16 }, { x: 0, z: 0 }, 0.45) - (5.55 / 16)) < 1e-9);
+});
+
+test('ThreatBook: entries outlive the glint while the strike is underway, prune dead attackers, pool reuse', () => {
+  let now = 0;
+  const tb = new ThreatBook(() => now);
+  const a = { pos: { x: 0, z: 1 }, alive: true };
+  tb.add({ id: 5, actor: a, kind: 'parry', duration: 0.5, activeAt: 0.7, targetsPlayer: true });
+  assert.ok(tb.windingUp(a));
+  now = 0.5;
+  tb.end(5, () => true);                                    // glint over, the swing is in its strike
+  assert.ok(tb.soonest({ pos: { x: 0, z: 0 } }, 6), 'kept until activeAt');
+  assert.ok(!tb.windingUp(a), 'no longer "winding up" for the score');
+  now = 0.9; tb.prune();
+  assert.equal(tb.live.size, 0, 'pruned past activeAt + keep');
+  tb.add({ id: 6, actor: a, kind: 'parry', duration: 0.5, targetsPlayer: true });
+  assert.equal(tb._pool.length, 0, 'the pooled entry was reused');
+  a.alive = false; tb.prune();
+  assert.equal(tb.live.size, 0); assert.equal(tb._pool.length, 1);
+  assert.equal(tb.add({ id: 7, actor: a, kind: 'aim' }), null, 'ranged aims are not melee wind-ups');
+});
+
+test('beginSwing lungeTo: lunge magnetism covers up to 1.0 m more toward a far target (swing.lungeOverride, m/s)', () => {
+  const { ctx, combat } = setup();
+  const cat = mk(ctx, 'player', 0, 0);
+  const far = mk(ctx, 'enemy', 0, 5.3), close = mk(ctx, 'enemy', 0, 1.2);
+  const def = ATTACKS.slash1, w = lungeWindow(def) - aimCfg().lungeSettle;
+  assert.ok(Math.abs(lungeWindow(def) - (def.active[1] - def.active[0] / 2)) < 1e-12);
+  const capped = combat.beginSwing(cat, def, { lungeTo: far }).lungeOverride;
+  assert.ok(Math.abs(capped * w - (def.lunge * w + 1.0)) < 1e-9, `capped at +1.0 m of travel (${capped} m/s)`);
+  assert.equal(combat.beginSwing(cat, def, { lungeTo: close }).lungeOverride, def.lunge, 'within reach');
+  const mid = combat.beginSwing(cat, def, { lungeTo: { x: 0, z: 2.3 } }).lungeOverride;
+  const want = 2.3 - 0.7 * def.arc.range;
+  assert.ok(want > def.lunge * w && Math.abs(mid * w - want) < 1e-9, `a point target: travel = dist − 0.7·range (${mid})`);
+  assert.equal(lungeSpeed(def, 1.0), def.lunge, 'lungeSpeed within reach');
+  assert.equal(combat.beginSwing(cat, def).lungeOverride, undefined, 'no lungeTo: untouched');
+  assert.equal(combat.beginSwing(cat, { id: 'x', dur: 0.3, arc: def.arc }, { lungeTo: far }).lungeOverride, undefined, 'defs without lunge');
+});
+
+test('reflect toward the aim: a hostile within ±25° of her aim gets the bolt, else it flies back to the shooter', () => {
+  const { ctx, combat } = setup();
+  const shooter = mk(ctx, 'enemy', 0, 9, { hp: 20 });
+  const other = mk(ctx, 'enemy', 6, 0.6, { hp: 20 });
+  const cat = mk(ctx, 'player', 0, 0, { hp: 8 });
+  const bolt = () => combat.spawnProjectile(ATTACKS.rat_bolt, shooter, new THREE.Vector3(0, 0.5, 1), new THREE.Vector3(0, 0, -1));
+  // explicit aim at the other rat (east)
+  let q = bolt();
+  combat.reflect(q, cat, { dir: { x: 1, z: 0 } });
+  assert.equal(q.homing, other); assert.ok(q.vel.x > 0 && Math.abs(q.vel.z) < q.vel.x * 0.2, 'east, at the other rat');
+  for (let i = 0; i < 60 && other.alive; i++) combat.update(DT);
+  assert.equal(other.alive, false, 'the reflected bolt (25) kills it');
+  // the aim points at nothing (west): back to the shooter, as before
+  q = bolt();
+  combat.reflect(q, cat, { dir: { x: -1, z: 0 } });
+  assert.equal(q.homing, shooter); assert.ok(q.vel.z > 0);
+  // her aim resolver (cursor) is used when no dir is given; a facing / auto aim is no aim (back to the shooter)
+  const third = mk(ctx, 'enemy', -5, 5, { hp: 20 });
+  cat.resolveAim = () => ({ source: 'cursor', dir: { x: -Math.SQRT1_2, z: Math.SQRT1_2 } });
+  q = bolt(); combat.reflect(q, cat);
+  assert.equal(q.homing, third, 'cursor aim');
+  cat.resolveAim = () => ({ source: 'auto', dir: { x: -Math.SQRT1_2, z: Math.SQRT1_2 } });
+  q = bolt(); combat.reflect(q, cat);
+  assert.equal(q.homing, shooter, 'auto: back to the shooter even with a rat along it');
+  cat.resolveAim = () => ({ source: 'selected', dir: { x: -Math.SQRT1_2, z: Math.SQRT1_2 } });
+  q = bolt(); combat.reflect(q, cat);
+  assert.equal(q.homing, third, 'the selected target is a deliberate aim');
+  // classic camera: the M1 rule only
+  ctx.cam = { isIso: false };
+  cat.resolveAim = () => ({ source: 'cursor', dir: { x: 1, z: 0 } });
+  q = bolt(); combat.reflect(q, cat);
+  assert.equal(q.homing, shooter, 'classic: back to the shooter');
+});

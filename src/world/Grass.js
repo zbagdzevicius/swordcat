@@ -243,19 +243,21 @@ export class Grass {
     const nearCount = Math.round((q.grass ?? 30000) * (o.near ?? 1));
     this.group = new THREE.Group(); this.group.name = 'grass';
     this.layers = [];
-    const nearTile = low ? 22 : 31;
+    // CONTROLS_SPEC §4.2: the tiles follow the iso focus and reach further (the view from above shows ~16–22 m of
+    // ground across); blades are 1.25× wider so the thinner spread still covers
+    const nearTile = low ? 26 : 36;
     // §18 budget: the 5-tri blade only on High; Med / Low near blades and every far clump use the 3-tri blade
     const nearTris = q.id === 'high' ? 5 : 3;
-    if (nearCount > 0) this.layers.push(makeGrassLayer({ count: nearCount, tile: nearTile, bladeH: H, bladeW: 0.05, fade: [-1, 0, nearTile * 0.36, nearTile * 0.49], seed, colors, ground: o.ground, groundUV, tris: nearTris }));
+    if (nearCount > 0) this.layers.push(makeGrassLayer({ count: nearCount, tile: nearTile, bladeH: H, bladeW: 0.0625, fade: [-1, 0, nearTile * 0.4, nearTile * 0.5], seed, colors, ground: o.ground, groundUV, tris: nearTris }));
     const farCount = low ? 0 : Math.round(nearCount * 0.33 * (o.far ?? 1));
-    if (farCount > 0) this.layers.push(makeGrassLayer({ count: farCount, tile: 96, bladeH: H * 1.35, bladeW: 0.2, fade: [nearTile * 0.3, nearTile * 0.44, 38, 47], seed: seed + 1, colors, ground: o.ground, groundUV, lean: 0.5, tris: 3 }));
+    if (farCount > 0) this.layers.push(makeGrassLayer({ count: farCount, tile: 96, bladeH: H * 1.35, bladeW: 0.25, fade: [nearTile * 0.34, nearTile * 0.48, 38, 47], seed: seed + 1, colors, ground: o.ground, groundUV, lean: 0.5, tris: 3 }));
     const fl = Math.round((low ? 120 : q.id === 'high' ? 700 : 480) * (o.flowers ?? 1));
     if (fl > 0) this.layers.push(makeGrassLayer({ count: fl, tile: 40, bladeH: H * 1.15, bladeW: 0.085, fade: [-1, 0, 14, 19.5], seed: seed + 2, colors, ground: o.ground, groundUV, flower: true, lean: 0.2 }));
     for (const l of this.layers) this.group.add(l.mesh);
     this._dir = new THREE.Vector2();
   }
 
-  /** Per frame. `center` = where the tiles follow (player feet), `player` = trample position (or null). */
+  /** Per frame. `center` = where the tiles follow (the iso focus; her feet otherwise), `player` = trample position (or null). */
   update(time, env, center, player) {
     const wind = env?.wind ?? 0.6, gust = env?.gust ?? 0.5;
     if (env?.windDir) this._dir.copy(env.windDir); else this._dir.set(0.8, 0.6).normalize();

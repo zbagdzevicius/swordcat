@@ -3,7 +3,7 @@
 // (normal blending: puffs, dust, feathers, droplets, hearts). Each pool is ONE instanced draw call; dead particles are
 // swap-removed so the live set stays contiguous (instanceCount = live). No allocations per frame.
 import * as THREE from 'three';
-import { FOG_FACTOR, SHAPES, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, SHAPES, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { setColor } from './util.js';
 
 /** Sprite shapes (fxShape in shaders.js). */
@@ -104,7 +104,7 @@ export class ParticlePool {
     g.setAttribute('iPos', this.aPos); g.setAttribute('iCol', this.aCol); g.setAttribute('iPar', this.aPar); g.setAttribute('iDir', this.aDir);
     g.instanceCount = 0;
     this.geometry = g;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: `fx.particles.${name}`, vertexShader: VERT, fragmentShader: FRAG(additive), uniforms: fogUniforms(), fog: true,
       transparent: true, depthWrite: false, depthTest: true,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,

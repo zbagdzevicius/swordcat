@@ -11,7 +11,7 @@ import { el, flag, setText, setHtml, setVar, pulse } from './dom.js';
 import { tx, txt, chapterInfo, esc } from './text.js';
 import * as I from './icons.js';
 
-export const CINEMA = Object.freeze({ chapterSec: 3.0, lifeLostSec: 1.5, tipCount: 7, skipHold: 1.0, ringDelay: 0.12 });
+export const CINEMA = Object.freeze({ chapterSec: 3.0, lifeLostSec: 1.5, tipCount: 12, skipHold: 1.0, ringDelay: 0.12 });
 
 /** Normalise a cutscene `fade` field → { color, alpha, dur } or null (no change). Pure. */
 export function parseFade(f) {

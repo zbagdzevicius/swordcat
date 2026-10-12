@@ -67,7 +67,7 @@ const F_MAIN = `#ifdef USE_FOG
  * @template T @param {T & {vertexShader: string, fragmentShader: string, uniforms: object}} shader @returns {T}
  */
 export function patchFogVarying(shader) {
-  if (!shader || shader.fragmentShader.includes('hfogFactor')) return shader;
+  if (!shader || shader.fragmentShader.includes('varying vec3 vFogW')) return shader;
   shader.uniforms ??= {};
   Object.assign(shader.uniforms, HFOG);
   shader.vertexShader = shader.vertexShader.replace('#include <fog_pars_vertex>', V_PARS).replace('#include <fog_vertex>', V_MAIN);

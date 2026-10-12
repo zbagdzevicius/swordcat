@@ -602,3 +602,258 @@ test('settings: reset to the §19.7 defaults (difficulty kept) and the controls 
   assert.equal(st.settings.shake, 1); assert.equal(st.difficulty, 'kitten');
   for (const [act] of CONTROL_ROWS) for (const d of ['kbm', 'pad', 'touch']) assert.ok(actionGlyph(act, d), `${act}/${d}`);
 });
+
+// ------------------------------------------------------------------ CONTROLS_SPEC (iso controls) ui parts
+import { INPUT, TOUCH as TOUCH_CFG } from '../../src/core/config.js';
+import { codeLabel, preferredCode, presetGlyph, PRESET_IDS } from '../../src/ui/text.js';
+import { slotGlyph } from '../../src/ui/abilityBar.js';
+import { cursorKind, cursorCss, clampCursorSize, CURSOR_KINDS, CursorController } from '../../src/ui/cursor.js';
+import { barAlpha, pickBars, HPBAR } from '../../src/ui/hpBars.js';
+import { computeLayout, minGap, offsetFor, layoutKey, layoutConflicts, classifyGesture } from '../../src/ui/touchLayout.js';
+import { settingVisible } from '../../src/ui/settings.js';
+
+/** A fake core Input with the active preset's merged codes (core merges keys ← preset ← bindings the same way). */
+const fakeInput = (preset = 'hybrid', device = 'kbm', bindings = {}) => ({
+  device, preset,
+  codesFor: (a) => bindings[a] ?? INPUT.presets[preset]?.keys?.[a] ?? INPUT.keys[a] ?? [],
+});
+
+test('§12 ui 3 glyphs: preset-aware tokens resolve through the active bindings', () => {
+  assert.equal(codeLabel('KeyQ'), 'Q');
+  assert.equal(codeLabel('Mouse2'), 'RMB');
+  assert.equal(codeLabel('ShiftLeft'), 'Shift');
+  assert.equal(preferredCode('attack', ['KeyJ', 'Mouse0']), 'Mouse0');      // mouse-first actions show the button
+  assert.equal(preferredCode('guard', ['Mouse4', 'KeyL']), 'KeyL');          // others the key
+  const hy = fakeInput('hybrid'), di = fakeInput('diablo'), ko = fakeInput('keyboardOnly'), mo = fakeInput('moba');
+  assert.equal(actionGlyph('guard', 'kbm', hy), 'Space');
+  assert.equal(actionGlyph('attack', 'kbm', hy), 'LMB');
+  assert.equal(actionGlyph('move', 'kbm', hy), 'RMB');
+  assert.equal(actionGlyph('move', 'kbm', di), 'LMB');                       // diablo: LMB moves
+  assert.equal(actionGlyph('dodge', 'kbm', di), 'Space');
+  assert.equal(actionGlyph('attack', 'kbm', ko), 'J');
+  assert.equal(actionGlyph('move', 'kbm', ko), 'WASD');                      // keyboardOnly: no click-move
+  assert.equal(actionGlyph('attackMove', 'kbm', mo), 'A');
+  assert.equal(actionGlyph('zoom', 'kbm', hy), 'Wheel');                     // gestures never come from bindings
+  assert.equal(actionGlyph('guard', 'pad', hy), 'LB');                       // pad glyphs ignore KBM bindings
+  // semantic tokens follow the preset; a literal key token follows a rebinding that moved the action off it
+  assert.match(glyphify('Hold [Stand].', 'kbm', di), /<kbd class="ui-key">L<\/kbd>/);
+  assert.match(glyphify('Hold [Stand].', 'kbm', hy), /<kbd class="ui-key">Space<\/kbd>/);
+  assert.match(glyphify('Jump [Jump].', 'touch', hy), />Jump</);
+  assert.match(glyphify('Press [Space].', 'kbm', hy), />Space</);
+  assert.match(glyphify('Press [Space].', 'kbm', fakeInput('hybrid', 'kbm', { guard: ['KeyG'] })), />G</);
+  assert.match(glyphify('Snip [Attack] x3', 'kbm', ko), /ui-key--sword">J</);
+  // custom rebinding wins over the preset
+  assert.equal(actionGlyph('jump', 'kbm', fakeInput('hybrid', 'kbm', { jump: ['KeyT'] })), 'T');
+  // the ability bar corner glyph
+  assert.equal(slotGlyph(hy, 'ability'), 'Q');
+  assert.equal(slotGlyph(fakeInput('hybrid', 'pad'), 'ability'), 'LT');
+  assert.equal(slotGlyph(di, 'dodge'), 'Space');
+});
+
+test('controls card: every preset previews a glyph for every row; move shows WASD when the preset walks on it', () => {
+  assert.deepEqual([...PRESET_IDS], ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly']);
+  for (const p of PRESET_IDS) for (const [act] of CONTROL_ROWS) {
+    const g = presetGlyph(act, p);
+    assert.ok(typeof g === 'string' && g.length > 0 && g !== act, `${p}.${act} -> ${g}`);
+  }
+  assert.equal(presetGlyph('move', 'hybrid'), 'RMB / WASD');
+  assert.equal(presetGlyph('move', 'moba'), 'RMB');
+  assert.equal(presetGlyph('move', 'diablo'), 'LMB / WASD');
+  assert.equal(presetGlyph('move', 'keyboardOnly'), 'WASD');
+  assert.equal(presetGlyph('guard', 'diablo'), 'L');               // diablo Stand: RMB / L -> first key
+  assert.equal(presetGlyph('guard', 'hybrid', { guard: ['KeyG'] }), 'G');
+  assert.ok(!CONTROL_ROWS.some(([a]) => a === 'look'), 'no camera-look row in iso');
+});
+
+test('§10.2 cursors: kind from the frame state; sizes x1 / x1.5 / x2 and a high-contrast variant', () => {
+  const base = { mode: 'play', hoverKind: 'ground' };
+  assert.equal(cursorKind(base), 'ground');
+  assert.equal(cursorKind({ ...base, hoverKind: 'enemy' }), 'enemy');
+  assert.equal(cursorKind({ ...base, hoverKind: 'breakable' }), 'enemy');
+  assert.equal(cursorKind({ ...base, hoverKind: 'npc' }), 'interact');
+  assert.equal(cursorKind({ ...base, hoverKind: 'interact' }), 'interact');
+  assert.equal(cursorKind({ ...base, hoverKind: 'pickup' }), 'pickup');
+  assert.equal(cursorKind({ ...base, unreachable: true }), 'unreachable');
+  assert.equal(cursorKind({ ...base, hoverKind: 'enemy', unreachable: true }), 'enemy');      // a foe wins
+  assert.equal(cursorKind({ ...base, attackMove: true, hoverKind: 'enemy' }), 'attackMove');
+  assert.equal(cursorKind({ ...base, aiming: true, attackMove: true }), 'aim');
+  assert.equal(cursorKind({ ...base, mode: 'cutscene' }), 'none');
+  assert.equal(cursorKind({ ...base, meme: true }), 'none');
+  assert.equal(cursorKind({ ...base, mode: 'menu' }), 'default');
+  assert.equal(cursorKind({ ...base, menu: true }), 'default');
+  assert.equal(clampCursorSize(1.2), 1); assert.equal(clampCursorSize(1.5), 1.5); assert.equal(clampCursorSize(9), 2);
+  for (const k of CURSOR_KINDS) {
+    const a = cursorCss(k, 1), b = cursorCss(k, 2), c = cursorCss(k, 1, true);
+    assert.match(a, /^url\("data:image\/svg\+xml;utf8,.*"\) \d+ \d+, [a-z-]+$/, k);
+    assert.ok(decodeURIComponent(a).includes('width="32"') && decodeURIComponent(b).includes('width="64"'), `${k} sizes`);
+    assert.notEqual(a, c, `${k} contrast variant differs`);
+  }
+  assert.equal(cursorCss('none'), 'none');
+  assert.equal(cursorCss('default'), 'default');
+  assert.ok(decodeURIComponent(cursorCss('ground')).includes('#F7A8C4'), 'the paw wears a pink bow ribbon');
+  assert.match(cursorCss('aim', 1), /\) 16 16,/);       // the hotspot scales with the size (reticle centred)
+  assert.match(cursorCss('aim', 2), /\) 32 32,/);
+});
+
+test('§10.4 HP pills: shown when damaged (fade 3 s after the last hit), selected or hovered; pool of 12; boss excluded', () => {
+  assert.equal(HPBAR.pool, 12);
+  assert.deepEqual([HPBAR.w, HPBAR.h, HPBAR.wTouch, HPBAR.hTouch], [36, 5, 44, 6]);
+  assert.equal(barAlpha(Infinity, false, false), 0);
+  assert.equal(barAlpha(0, false, false), 1);
+  assert.equal(barAlpha(2.9, false, false), 1);
+  assert.ok(barAlpha(3.2, false, false) > 0 && barAlpha(3.2, false, false) < 1);
+  assert.equal(barAlpha(3.5, false, false), 0);
+  assert.equal(barAlpha(Infinity, true, false), 1);
+  assert.equal(barAlpha(Infinity, false, true), 1);
+  const mk = (n, hp = 10) => Array.from({ length: n }, (_, i) => ({ id: i, hp, maxHp: 20, alive: true }));
+  const foes = mk(16), boss = { hp: 100, maxHp: 100, alive: true };
+  const tracked = foes.map((a, i) => ({ actor: a, sinceHit: i * 0.1 }));
+  tracked.push({ actor: boss, sinceHit: 0 });
+  const sel = mk(1)[0], hov = foes[15];
+  const out = pickBars(tracked, sel, hov, boss);
+  assert.equal(out.length, 12);
+  assert.equal(out[0].actor, sel);                              // the selection first, then the hover
+  assert.equal(out[1].actor, hov);
+  assert.ok(!out.some((o) => o.actor === boss), 'the boss keeps its top bar');
+  assert.equal(out[2].actor, foes[0]);                          // then the most recently hit
+  const dead = { hp: 0, maxHp: 20, alive: false };
+  assert.equal(pickBars([{ actor: dead, sinceHit: 0 }], dead, null, null).length, 0);
+});
+
+test('§9.2 Edit layout: custom offsets round-trip, follow the mirror and orientation, and conflicts are reported', () => {
+  for (const [w, h] of [[844, 390], [390, 844]]) {
+    for (const leftHanded of [false, true]) {
+      const L0 = computeLayout(w, h, { leftHanded, noDrop: true });             // as the editor lays it out
+      const b = L0.buttons.meow;
+      const tx0 = b.x + (leftHanded ? 10 : -10), ty0 = b.y - 6;
+      const key = layoutKey('meow', L0.portrait);
+      assert.equal(key, L0.portrait ? 'portrait:meow' : 'meow');
+      const off = offsetFor(L0, tx0, ty0, leftHanded);
+      const L1 = computeLayout(w, h, { leftHanded, noDrop: true, layout: { [key]: off } });
+      assert.ok(Math.abs(L1.buttons.meow.x - tx0) <= 1 && Math.abs(L1.buttons.meow.y - ty0) <= 1, `${w}x${h} lh=${leftHanded} round-trip`);
+      const plain = computeLayout(h, w, { leftHanded, noDrop: true }), other = computeLayout(h, w, { leftHanded, noDrop: true, layout: { [key]: off } });
+      assert.deepEqual([other.buttons.meow.x, other.buttons.meow.y], [plain.buttons.meow.x, plain.buttons.meow.y], 'the other orientation ignores it');
+      assert.deepEqual(layoutConflicts(L0), [], `${w}x${h} default layout has no conflicts`);
+    }
+  }
+  // overlapping custom placement: the layout still separates them (>= 8 px) at any size
+  for (const ts of [0.8, 1, 1.4]) {
+    const L = computeLayout(844, 390, { touchSize: ts, layout: { meow: [0, 0] } });
+    assert.ok(minGap(L) >= TOUCH_CFG.gap - 0.5, `ts ${ts}: gap ${minGap(L).toFixed(1)}`);
+  }
+  // a conflicting pair is reported
+  const L = computeLayout(844, 390, {});
+  L.buttons.meow.x = L.buttons.attack.x; L.buttons.meow.y = L.buttons.attack.y;
+  assert.deepEqual(layoutConflicts(L, ['attack', 'meow']).sort(), ['attack', 'meow']);
+});
+
+test('§9.3 gesture classifier: strict thresholds', () => {
+  const T = TOUCH_CFG;
+  assert.equal(classifyGesture({ dt: 0.1, dist: 4, up: true, sinceButton: 1 }), 'tap');
+  assert.equal(classifyGesture({ dt: 0.1, dist: 4, up: true, sinceButton: 0.2 }), 'none');     // too soon after a button
+  assert.equal(classifyGesture({ dt: T.tapMs / 1000 + 0.05, dist: 4, up: true, sinceButton: 1 }), 'none');
+  assert.equal(classifyGesture({ dt: 0.1, dist: T.tapPx + 1, up: true, sinceButton: 1 }), 'none');
+  assert.equal(classifyGesture({ dt: 0.4, dist: 5, up: false, sinceButton: 1 }), 'long');
+  assert.equal(classifyGesture({ dt: 0.3, dist: 5, up: false, sinceButton: 1 }), 'none');
+  assert.equal(classifyGesture({ dt: 0.12, dist: 60, up: false, sinceButton: 1 }), 'swipe');
+  assert.equal(classifyGesture({ dt: 0.2, dist: 60, up: false, sinceButton: 1 }), 'none');     // too slow for a swipe
+});
+
+test('§10.7 settings: every new controls / accessibility row exists with save defaults; invertY is classic-only', () => {
+  for (const k of ['controlPreset', 'camZoom', 'camLock', 'autoAttack', 'castMode', 'edgePanSpeed', 'touchSize', 'tapToMove', 'swipeTumble',
+    'leftHanded', 'buttonOpacity', 'haptics', 'hapticTaps', 'autoRiposte', 'standAutoFace', 'pathPreview', 'parryRing', 'reduceCameraMotion',
+    'cursorSize', 'cursorContrast']) assert.ok(SETTING_BY_KEY[k], `setting row ${k}`);
+  const st = defaultState();
+  for (const d of SETTINGS) if (d.key !== 'difficulty') assert.ok(d.key in (st.settings ?? {}), `default for ${d.key}`);
+  assert.equal(settingVisible(SETTING_BY_KEY.invertY, true), false);
+  assert.equal(settingVisible(SETTING_BY_KEY.invertY, false), true);
+  assert.equal(settingVisible(SETTING_BY_KEY.camLock, false), false);
+  assert.equal(settingVisible(SETTING_BY_KEY.haptics, true), true);
+  assert.equal(stepSetting(SETTING_BY_KEY.cursorSize, 1, 1), 1.5);
+  assert.equal(formatSetting(SETTING_BY_KEY.cursorSize, 2), '×2');
+});
+
+test('settings rows filter by input device; on touch the Controls group (touch rows first) leads', async () => {
+  const { visibleSettings } = await import('../../src/ui/settings.js');
+  const keys = (iso, dev) => visibleSettings(iso, dev).map((d) => d.key);
+  const touch = keys(true, 'touch'), kbm = keys(true, 'kbm'), pad = keys(true, 'pad');
+  for (const k of ['sensitivity', 'edgePanSpeed', 'cursorSize', 'cursorContrast', 'controlPreset', 'invertY']) assert.ok(!touch.includes(k), `touch hides ${k}`);
+  for (const k of ['touchSize', 'tapToMove', 'swipeTumble', 'leftHanded', 'buttonOpacity', 'haptics', 'hapticTaps']) {
+    assert.ok(touch.includes(k), `touch shows ${k}`);
+    if (k !== 'haptics') assert.ok(!kbm.includes(k) && !pad.includes(k), `desk hides ${k}`);
+  }
+  for (const k of ['edgePanSpeed', 'cursorSize', 'controlPreset']) assert.ok(kbm.includes(k) && !pad.includes(k), k);
+  assert.ok(pad.includes('sensitivity') && pad.includes('haptics') && !kbm.includes('sensitivity'));
+  assert.ok(keys(false, 'touch').includes('sensitivity'), 'classic keeps look sensitivity for touch drag');
+  assert.equal(touch[0], 'touchSize');
+  const firstNonCtl = visibleSettings(true, 'touch').findIndex((d) => d.group !== 'controls');
+  assert.ok(visibleSettings(true, 'touch').slice(firstNonCtl).every((d) => d.group !== 'controls'), 'controls contiguous');
+  assert.deepEqual(keys(true, null), SETTINGS.filter((d) => settingVisible(d, true)).map((d) => d.key), 'no device = old behaviour');
+  assert.ok(touch.length < keys(true, null).length && kbm.length < keys(true, null).length);
+});
+
+test('touch layout: no button + dead ring reaches the disc around her on screen (landscape / portrait, small phones)', async () => {
+  const { computeLayout, heroPoint, heroGap, heroClearR, minGap, BUTTON_PRIORITY } = await import('../../src/ui/touchLayout.js');
+  for (const [w, h] of [[844, 390], [932, 430], [1180, 820], [390, 844], [667, 375], [740, 360], [375, 667]]) {
+    for (const ts of [0.8, 1]) {
+      const L = computeLayout(w, h, { touchSize: ts }), hero = heroPoint(w, h), cr = heroClearR(w, h);
+      for (const [n, b] of Object.entries(L.buttons)) assert.ok(heroGap(b, hero, cr) >= -0.5, `${w}×${h} ts ${ts}: ${n} at ${b.x.toFixed(0)},${b.y.toFixed(0)} ${heroGap(b, hero, cr).toFixed(0)} px into her disc`);
+      assert.ok(minGap(L) >= 8 - 1e-6, `${w}×${h} ts ${ts}: buttons stay 8 px apart`);
+      assert.deepEqual(L.dropped, [], `${w}×${h} ts ${ts}: every button fits`);
+      const c = L.cancel;
+      for (const [n, b] of Object.entries(L.buttons)) assert.ok(Math.hypot(c.x - b.x, c.y - b.y) >= c.r + b.r + 8 - 0.5, `${w}×${h} ts ${ts}: ✕ chip clear of ${n}`);
+    }
+  }
+  // the hero point follows the camera's touch framing (FRAME.herY, frameOffsetTouchX): ≈ (0.42 W, 0.48 H) landscape
+  const hp = heroPoint(844, 390);
+  assert.ok(Math.abs(hp.x - 354) < 6 && Math.abs(hp.y - 187) < 6, `hero ${hp.x},${hp.y}`);
+  const L = computeLayout(844, 390), hero = heroPoint(844, 390);
+  assert.ok(Math.hypot(L.buttons.meow.x - hero.x, L.buttons.meow.y - hero.y) >= heroClearR(844, 390) + 40 + L.buttons.meow.r - 0.5, 'Meow off the play field');
+  // a custom (Edit layout) spot is the player's call and stays put
+  const C = computeLayout(844, 390, { layout: { meow: [-300, -60] } });
+  assert.ok(Math.abs(C.buttons.meow.x - (C.anchor.x - 300)) < 1e-9);
+  // a tiny screen drops the lowest-priority buttons first, never ⚔; noDrop (the editor) keeps them all
+  const S = computeLayout(568, 320, { touchSize: 1.4 });
+  assert.ok(S.buttons.attack && S.dropped.length > 0, 'something had to go');
+  const kept = BUTTON_PRIORITY.filter((n) => S.buttons[n]), worstKept = Math.max(...kept.map((n) => BUTTON_PRIORITY.indexOf(n)));
+  for (const n of S.dropped) assert.ok(BUTTON_PRIORITY.indexOf(n) > BUTTON_PRIORITY.indexOf('ability'), `dropped ${n} before a lower-priority one (kept up to ${BUTTON_PRIORITY[worstKept]})`);
+  assert.equal(Object.keys(computeLayout(568, 320, { touchSize: 1.4, noDrop: true }).buttons).length, 9);
+  // HUD keep-outs: no button and no ✕ chip overlaps them (the mirrored HUD case)
+  const keepOut = [{ x0: 8, y0: 6, x1: 241, y1: 170 }];
+  const M = computeLayout(844, 390, { leftHanded: true, keepOut });
+  const hits = (b) => { const nx = Math.max(8, Math.min(241, b.x)), ny = Math.max(6, Math.min(170, b.y)); return Math.hypot(b.x - nx, b.y - ny) < b.r; };
+  for (const [n, b] of Object.entries(M.buttons)) assert.ok(!hits(b), `mirrored ${n} clear of the HUD block`);
+  assert.ok(!hits(M.cancel), 'the ✕ chip clear of the HUD block');
+});
+
+test('touch stick: the floating base stays a stick radius inside the edges so a corner thumb reaches full speed', async () => {
+  const { clampStickBase, stickVector } = await import('../../src/ui/touchLayout.js');
+  const R = 60;
+  for (const [w, h] of [[844, 390], [390, 844]]) {
+    const b = clampStickBase(14, h - 14, w, h, R);
+    assert.ok(b.x >= R && h - b.y >= R, `${w}×${h}: base ${b.x},${b.y}`);
+    const v = stickVector(0 - b.x, h - b.y, R);                  // the thumb pushed into the corner
+    assert.ok(Math.hypot(v.x, v.y) > 0.95, `${w}×${h}: full deflection ${Math.hypot(v.x, v.y).toFixed(2)}`);
+    assert.deepEqual(clampStickBase(200, h / 2, w, h, R), { x: 200, y: h / 2 }, 'a mid-zone touch is not moved');
+  }
+});
+
+test('§10.2 cursor probe: no walkable cell within 2 m, or only cells on islands she cannot reach (physics.reachableFrom), read unreachable', () => {
+  const cam = { cursorValid: true, hover: { kind: 'ground' }, cursorGround: { x: 10, z: 0 } };
+  const near = { yes: true }, reach = { v: true }, calls = [];
+  const physics = {
+    nav: {},
+    nearestWalkable: () => (near.yes ? { x: 10, y: 0, z: 0 } : null),
+    reachableFrom: (from, x, z, gap) => { calls.push([from.x, x, z, gap]); return reach.v; },
+  };
+  const c = new CursorController({ cam, physics, player: { pos: { x: 0, y: 0, z: 0 } } });
+  const probe = () => c._probe(1);
+  assert.equal(probe(), false, 'a walkable cell on her island');
+  assert.deepEqual(calls[0], [0, 10, 0, 2]);
+  reach.v = false; assert.equal(probe(), true, 'a roof / walled yard / far bank');
+  reach.v = null; assert.equal(probe(), false, 'island audit still building: no claim');
+  near.yes = false; reach.v = true; assert.equal(probe(), true, 'no walkable cell within the gap');
+  delete physics.reachableFrom; near.yes = true; assert.equal(probe(), false, 'older physics: nearestWalkable only');
+  physics.reachableFrom = () => { throw new Error('x'); }; assert.equal(probe(), false, 'a throwing query never sticks the grey paw');
+  cam.hover.kind = 'enemy'; physics.reachableFrom = () => false; assert.equal(probe(), false, 'only over ground');
+});

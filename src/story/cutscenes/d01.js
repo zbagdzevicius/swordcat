@@ -3,7 +3,7 @@
 // the cutscene actor `mochi` wherever he landed); they add him to the party when the promise resolves.
 //   Mochi: "Squire Mochi reporting! Well. Reject Mochi. Too clumsy, they said."   Clem: "Too small, they said."
 //   Mochi: "Then we're a team!"   Mochi: "I'll do the shield. You do the... pointy part."
-//   Toast: "Mochi joined! [Q] Shield Wall"
+//   Toast: "Mochi joined! [Ability] Shield Wall" (ui resolves the glyph per preset / device)
 import * as THREE from 'three';
 import { say, cam, wait } from './lib.js';
 

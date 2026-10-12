@@ -14,6 +14,17 @@ export const DAMAGE_STYLE = Object.freeze({
 
 const MAX = 20;
 const LIFE = 0.95;
+/**
+ * CONTROLS_SPEC §10.4 iso camera: numbers rise 0.6 m (heals 0.5), scale with the camera distance (× ref / distance,
+ * so zooming out shrinks them like the world) and never drop below 18 px.
+ */
+export const DAMAGE_ISO = Object.freeze({ rise: 0.6, riseHeal: 0.5, refDist: 12.4, minPx: 18, maxMul: 1.3 });
+
+/** Iso size multiplier for a number of base `size` px at camera distance `dist` (pure; unit-tested). */
+export function isoNumberScale(size, dist, D = DAMAGE_ISO) {
+  const k = dist > 0 ? Math.min(D.maxMul, D.refDist / dist) : 1;
+  return Math.max(D.minPx / size, k);
+}
 const _p = new THREE.Vector3();
 
 /**
@@ -96,14 +107,18 @@ export class DamageNumbers {
     const st = DAMAGE_STYLE[style] ?? DAMAGE_STYLE.normal;
     n.pos.copy(pos); n.t = 0; n.life = style === 'crit' ? LIFE * 1.25 : LIFE; n.active = true;
     n.dx = ((this._next * 37) % 11 - 5) * 4;            // deterministic small sideways offset (px) so stacked hits fan out
-    n.rise = style === 'heal' ? 0.7 : 0.9;
-    n.scale = 1;
+    const iso = this._iso();
+    n.rise = iso ? (style === 'heal' ? DAMAGE_ISO.riseHeal : DAMAGE_ISO.rise) : style === 'heal' ? 0.7 : 0.9;
+    n.scale = 1; n.size = st.size;
     const el = n.el;
     el.textContent = text;
     el.className = style === 'crit' ? 'fx-dmg crit' : 'fx-dmg';
     el.style.color = st.color;
     el.style.fontSize = st.size + 'px';
   }
+
+  /** The iso play camera (not classic). */
+  _iso() { const c = this.ctx?.cam; return !!c?.isIso && this.ctx?.params?.cam !== 'classic'; }
 
   get active() { let k = 0; for (const n of this.pool) if (n.active) k++; return k; }
 
@@ -114,6 +129,7 @@ export class DamageNumbers {
     if (!this.layer || !this._any()) return;
     // window size, not layer.clientWidth: reading layout after last frame's transform writes would force a reflow
     const cam = this.ctx.camera, w = window.innerWidth, h = window.innerHeight;
+    const iso = this._iso(), dist = iso ? (this.ctx.cam?.distance ?? cam.position.distanceTo(this.ctx.cam?.focus ?? cam.position)) : 0;
     for (const n of this.pool) {
       if (!n.active) continue;
       n.t += dt;
@@ -124,7 +140,7 @@ export class DamageNumbers {
       _p.project(cam);
       if (_p.z > 1 || _p.z < -1) { n.el.style.opacity = '0'; continue; }
       const x = (_p.x * 0.5 + 0.5) * w + n.dx, y = (-_p.y * 0.5 + 0.5) * h;
-      const pop = u < 0.12 ? 1.45 - 0.45 * (u / 0.12) : 1;
+      const pop = (u < 0.12 ? 1.45 - 0.45 * (u / 0.12) : 1) * (iso ? isoNumberScale(n.size ?? 26, dist) : 1);
       const a = u > 0.68 ? 1 - (u - 0.68) / 0.32 : 1;
       n.el.style.opacity = a.toFixed(3);
       n.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%) scale(${pop.toFixed(3)})`;

@@ -29,7 +29,11 @@ import { Toasts } from './toasts.js';
 import { Prompts } from './prompts.js';
 import { ThreatArrows } from './threatArrows.js';
 import { TouchControls } from './touch.js';
-import { AbilityBar, cursorFor } from './abilityBar.js';
+import { AbilityBar } from './abilityBar.js';
+import { CursorController } from './cursor.js';
+import { HpBars } from './hpBars.js';
+import { applySetting } from './settings.js';
+import { TouchLayoutEditor } from './touchEditor.js';
 import { openShop as buildShop, stationId } from './shops.js';
 import { openQuestBoard as buildBoard, HUB_LEVEL } from './questBoard.js';
 
@@ -118,8 +122,8 @@ export class UI {
   /** story: "Press any key" was pressed → the main menu (§14.3). */
   openMainMenu() { this.menus?.openMain(); }
 
-  /** True while a ui screen owns input (title, menus, results). */
-  get busy() { return !!(this.menus?.active || this.results?.open); }
+  /** True while a ui screen owns input (title, menus, results, the touch layout editor). */
+  get busy() { return !!(this.menus?.active || this.results?.open || this.touchEditor); }
 
   async init() {
     if (!hasDom()) return;
@@ -128,6 +132,9 @@ export class UI {
     document.head.appendChild(this.style);
     this.root = document.getElementById('ui') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'ui' }));
     this.root.classList.add('ui-root');
+    // §9.1: the HUD cards take their own clicks now (ui.css), so a right-click on one must not open the browser menu
+    this._noMenu = (e) => { if (!/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName ?? '')) e.preventDefault(); };
+    this.root.addEventListener('contextmenu', this._noMenu);
     this.touchHost = document.getElementById('touch') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'touch' }));
     loadFonts((p) => ctx.assets.url(p)).catch(() => {});
     // boot save snapshot (Game loaded it into ctx.state before init; the boot level load overwrites levelId/spawnId)
@@ -139,10 +146,21 @@ export class UI {
     // layers, back to front
     this.arrows = new ThreatArrows(ctx, this.root);
     this.hud = new Hud(ctx, this.root);
+    /** CONTROLS_SPEC §10.4 / §10.5: enemy HP pills and the Grit arc (iso) */
+    // (in their own layer under #touch: a pill never covers a touch button, the menus / dialog still cover the pills)
+    this.worldHost = document.getElementById('ui-world') ?? (() => {
+      const d = Object.assign(document.createElement('div'), { id: 'ui-world' });
+      d.style.cssText = 'position:fixed;inset:0;z-index:4;pointer-events:none;';
+      document.body.insertBefore(d, this.touchHost);
+      return d;
+    })();
+    this.hpBars = new HpBars(ctx, this.worldHost);
+    /** §10.2 context cursors */
+    this.cursor = new CursorController(ctx);
     /** CONTROLS_SPEC §10.1: the desktop / pad ability bar (the touch cluster shows the same states) */
     this.bar = new AbilityBar(ctx, this.root);
     this.prompts = new Prompts(ctx, this.root);
-    this.toasts = new Toasts(this.hud.toastSlot, () => ctx.input?.device ?? 'kbm');
+    this.toasts = new Toasts(this.hud.toastSlot, () => ctx.input?.device ?? 'kbm', () => ctx.input ?? null);
     this.dialog = new Dialog(ctx, this.root);
     this.overlay = new Cinema(ctx, this.root, { onHud: () => {}, rand: this.rand });
     this.results = new Results(ctx, this.root, { sfx: (id) => this.sfx(id), onClose: () => this._giveBackMode() });
@@ -156,6 +174,9 @@ export class UI {
 
   _subscribe() {
     const ctx = this.ctx, bus = ctx.bus, on = (n, f) => this._offs.push(bus.on(n, f));
+    // §10.7 settings.camLock ↔ the camera's lock (Y toggles it in play; the setting persists it)
+    on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'camLock' && ctx.cam?.setCamLock && ctx.cam.camLocked !== !!p.value) ctx.cam.setCamLock(!!p.value, false); });
+    if (ctx.state?.settings?.camLock === false) ctx.cam?.setCamLock?.(false, false);
     const T = (k, v) => tx(ctx, k, v);
     on(E.TOAST, (p) => this.toast(p?.text ?? (p?.key ? T(p.key, p.vars) : ''), { icon: p?.icon, key: p?.key }));
     // M2 (STATUS known issue): the toast counts the level's kittens like the HUD, Results and Quest Board (n/3);
@@ -246,6 +267,23 @@ export class UI {
   _after(sec, fn) { this._timers.push({ t: sec, fn }); }
 
   sfx(id) { try { this.ctx.audio?.play2D?.(id); } catch { /* audio optional */ } }
+
+  /**
+   * §9.2 Edit layout: closes the menus and shows the touch cluster in edit mode (drag buttons; Done saves
+   * settings.touchLayout, Reset clears it). The game stays paused underneath.
+   */
+  editTouchLayout() {
+    if (this.touchEditor || !this.touch) return false;
+    const ctx = this.ctx;
+    this._freeze();
+    this.menus.closeAll();
+    this.touchEditor = new TouchLayoutEditor(ctx, this.touch, () => {
+      this.touchEditor = null;
+      // back to the pause menu (the game stays frozen until Resume)
+      if (ctx.game?.mode === 'menu') this.menus.openPause();
+    });
+    return true;
+  }
 
   // ------------------------------------------------------------------ contract + services
   /** Show / hide the loading veil (§19.3; LevelManager calls it around every load). */
@@ -503,6 +541,7 @@ export class UI {
     const ctx = this.ctx, input = ctx.input, mode = ctx.game.mode, story = ctx.story;
     if (this.results.open) { this.results.update(dt, input); return; }
     if (this.menus.active) { this.menus.update(input, dt); return; }
+    if (this.touchEditor) { if (input?.pressed?.('back') || input?.pressed?.('pause')) this.touchEditor.close(false); return; }
     if (!input || ctx.levels?.loading) return;
     if (mode === 'cutscene' || mode === 'dialog') {
       // requests/story.md: while a scene runs, Esc / Start belongs to story (hold = skip); never pause on it
@@ -520,6 +559,8 @@ export class UI {
     if (story?.tutorial?.active) {
       if (input.released('pause') && input.heldTime('pause') < UI_TIMING.tutorialTap) this.pause();
     } else if (input.pressed('pause')) this.pause();
+    // CONTROLS_SPEC §6.3: pad Back / View opens the controls card over the pause book (Back closes it as usual)
+    else if ((mode === 'play' || mode === 'memecam') && input.pressed?.('controls')) { this.pause(); if (this.menus.paused) this.menus.openControls(); }
   }
 
   // ------------------------------------------------------------------ per frame
@@ -555,17 +596,40 @@ export class UI {
     const world = hudOn && !this.meme && (mode === 'play' || mode === 'memecam') && !this.menus.active;
     this.prompts.render(dt, { world, hint: hudOn && !this.meme });
     this.arrows.render(dt, world);
+    this.hpBars?.render(dt, world);
     this.results.render(dt);
     this.menus.render(dt);
     this.menus.scrollCredits(dt);
     this.touch.render(dt, { play: world && !this.dialog.visible, any: !title && !this.isLoading && !this.results.open && !this.menus.active });
     this.bar?.render(dt, world && !this.dialog.visible);
+    this._measureSafe(dt);
     // §10.2 context cursor over the canvas (only written on change)
-    const canvas = ctx.renderer?.domElement;
-    if (canvas && ctx.cam?.isIso) {
-      const cur = this.menus.active || title ? 'default' : cursorFor(ctx);
-      if (canvas._cur !== cur) { canvas._cur = cur; canvas.style.cursor = cur; }
+    this.cursor?.update(dt, { menu: !!this.menus.active || title || this.results.open || !!this.touchEditor });
+    const cl = ctx.cam?.camLocked;
+    if (typeof cl === 'boolean' && ctx.state?.settings && ctx.state.settings.camLock !== cl && ctx.cam?.isIso) applySetting(ctx, 'camLock', cl);
+  }
+
+  /**
+   * The canvas area the HUD covers (CSS px from each canvas edge): the boss plate at the top, the ability bar at the
+   * bottom. The camera reads `ctx.ui.safeInsets` for its §2.4 boss fit (requests/camera: keep the boss off the HUD).
+   * Re-measured at 4 Hz (two layout reads); zero while the HUD is hidden.
+   */
+  _measureSafe(dt) {
+    const s = this.safeInsets ?? (this.safeInsets = { top: 0, bottom: 0, left: 0, right: 0, w: 0, h: 0 });
+    if ((this._safeT = (this._safeT ?? 0) - dt) > 0) return;
+    this._safeT = 0.25;
+    const cv = this.ctx.renderer?.domElement;
+    const r = cv?.getBoundingClientRect?.() ?? (typeof innerWidth !== 'undefined' ? { left: 0, top: 0, width: innerWidth, height: innerHeight } : null);
+    if (!r || !(r.width > 0)) return;
+    s.w = r.width; s.h = r.height;
+    s.bottom = this.bar?.safeInset(r) ?? 0;
+    const be = this.hud?.bossEl;
+    let top = 0;
+    if (be && this.hud.visible !== false && be.classList.contains('is-on')) {
+      const b = be.getBoundingClientRect();
+      if (b.height > 0) top = Math.max(0, b.bottom - r.top);
     }
+    s.top = top;
   }
 
   _skipHold(dt, mode, input) {
@@ -593,8 +657,9 @@ export class UI {
     for (const off of this._offs) off();
     this._offs.length = 0;
     this._timers.length = 0;
-    for (const m of [this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
+    for (const m of [this.hpBars, this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
     this.toasts?.clear();
+    if (this._noMenu) this.root?.removeEventListener('contextmenu', this._noMenu);
     this.style?.remove();
     if (this.root) for (const k of ['ui-root', 'is-meme', 'is-title', 'dev-kbm', 'dev-pad', 'dev-touch']) this.root.classList.remove(k);
     this.hud = this.dialog = this.overlay = this.menus = this.results = this.toasts = this.prompts = this.arrows = this.touch = null;

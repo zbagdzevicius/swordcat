@@ -14,7 +14,7 @@
 // (everything in ONE skinned mesh, vertex-coloured eyes: villagers, hub residents, riders, spoon brigade).
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32 } from './util.js';
+import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32, charDetail, segScale } from './util.js';
 import { makeKitMaterial, kitMaterial, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR, TOP_VIEW, READABILITY } from './materials.js';
 import { buildSilhouetteProxy, HIGHLIGHT } from './Readability.js';
 import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
@@ -86,6 +86,8 @@ export class Kitten {
     const tier = cfg.tier || 'kitten';
     this.tier = tier;
     this.lite = tier === 'lite';
+    // tessellation factor: the lite tier's fixed 0.55, else the quality preset's charDetail (Low ~0.55, Med/High 1)
+    this.detail = this.lite ? 0.55 : charDetail();
     const w = cfg.width ?? 1;
     this.w = w;
     const root = new THREE.Group();
@@ -162,8 +164,8 @@ export class Kitten {
     const updaters = [];
     const A = {
       cfg, w, flags, lite: this.lite,
-      /** Segment count scaled down for the lite tier (villagers, old knights, riders). */
-      seg: (n) => (this.lite ? Math.max(5, Math.round(n * 0.55)) : n),
+      /** Segment count scaled down for the lite tier (villagers, old knights, riders) and on Low (charDetail). */
+      seg: (n) => segScale(n, this.detail),
       add: (bone, geo, o = {}) => {
         const m = o.m ? _m.multiplyMatrices(bind[bone], o.m) : bind[bone];
         kit.add(geo, { matrix: m.clone(), color: o.color, rmse: o.rmse, bone: boneIndex[bone], keepColors: o.keepColors });
@@ -219,9 +221,9 @@ export class Kitten {
     } else {
       const lidC = coatColor(coat, 'head', new THREE.Vector3(FACE.eyeL[0], FACE.eyeL[1] + 0.07, FACE.eyeL[2] - 0.02));
       const lidMat = own(new THREE.MeshStandardMaterial({ color: new THREE.Color(lidC[0], lidC[1], lidC[2]).multiplyScalar(0.78), roughness: 0.95 }));
-      this.eyes = new EyePair({ r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat, slit: eyeCfg.slit, lash: eyeCfg.lash ?? 1, seed: (cfg.id || 'kitten') + ':eyes' });
+      this.eyes = new EyePair({ r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat, detail: this.detail, slit: eyeCfg.slit, lash: eyeCfg.lash ?? 1, seed: (cfg.id || 'kitten') + ':eyes' });
       joints.head.add(this.eyes.group);
-      for (const [pos, side] of [[posL, 1], [posR, -1]]) A.add('head', ringGeometry(eyeR), { m: eyePivotMatrix(pos, side, 0.3), color: rgb(PAL.eyeLine), rmse: RM.eyeLine });
+      for (const [pos, side] of [[posL, 1], [posR, -1]]) A.add('head', ringGeometry(eyeR, this.detail), { m: eyePivotMatrix(pos, side, 0.3), color: rgb(PAL.eyeLine), rmse: RM.eyeLine });
       if (flags.hideEye) { /* set after accessories */ }
     }
 
@@ -292,7 +294,7 @@ export class Kitten {
     // ---- bow (HARD RULE: left ear)
     this.bow = null;
     if (cfg.bow) {
-      const bow = buildBow(cfg.bow);
+      const bow = buildBow({ detail: this.detail, ...cfg.bow });
       // target in head space (art.md §2.2: (+0.10, 0.955, 0.06) world → head-local (0.10, 0.335, 0.06))
       const headPos = new THREE.Vector3(...(cfg.bow.at || [0.118, 0.292, 0.08]));
       const toEar = _m2.copy(bind.earL).invert().multiply(bind.head);
@@ -386,6 +388,7 @@ export class Kitten {
     const S = this.lite ? { skull: [28, 20], cheek: [14, 10], pad: [10, 8], chin: [10, 8] }
       : this.tier === 'hero' ? { skull: [46, 34], cheek: [22, 16], pad: [14, 10], chin: [12, 9] }
         : { skull: [38, 28], cheek: [20, 14], pad: [12, 9], chin: [10, 8] };
+    if (!this.lite && this.detail < 1) for (const k in S) S[k] = S[k].map((n) => segScale(n, this.detail, 8));
     const skull = new THREE.SphereGeometry(FACE.skullR, S.skull[0], S.skull[1]).scale(...FACE.skullScale).translate(...FACE.skull);
     out.push({ geo: skull, region: 'head' });
     const cheekR = FACE.cheekR * (cfg.fur?.cheek ?? 1);
@@ -427,7 +430,7 @@ export class Kitten {
   _ears(A, cfg, bind, boneIndex, earS) {
     const coat = this.coat, lite = this.lite;
     const pink = rgb(cfg.earInner ?? PAL.earInner), cream = rgb(coat.cream || coat.light || coat.base), light = rgb(coat.light || coat.base);
-    const { geo, front, t, cup } = earGeometry(0.07 * earS, 0.118 * earS, { depth: 0.6, cup: 0.78, radial: lite ? 16 : 28, rows: lite ? 9 : 14 });
+    const { geo, front, t, cup } = earGeometry(0.07 * earS, 0.118 * earS, { depth: 0.6, cup: 0.78, radial: lite ? 16 : segScale(28, this.detail, 16), rows: lite ? 9 : segScale(14, this.detail, 9) });
     const color = (v, n, lp, i) => {
       let c = mixRgb(coatColor(coat, 'ear', lp), light, smoothstep(0.02, 0.12, lp.y) * 0.25);
       // cream furnishings on the front rim, fading back into the coat around the sides
@@ -509,10 +512,10 @@ export class Kitten {
 
   /** Torso, bib, arms, paws, legs, feet: fur where exposed, simple shapes under armour/clothes. */
   _body(A, { armour, clothed, bind, boneIndex, coatRoot }) {
-    const w = this.w, lite = this.lite;
+    const w = this.w, lite = this.lite, sg = (n) => segScale(n, this.detail, 6);
     // bib (chest space): the cream ruff between the pauldrons
-    const bibGeo = new THREE.SphereGeometry(0.1, lite ? 16 : 28, lite ? 12 : 20).scale(1.05 * w, 0.75, 0.8).translate(0, 0.215, 0.045);
-    const bodyGeo = new THREE.SphereGeometry(0.16, lite ? 20 : 36, lite ? 14 : 24).scale(1.0 * w, 1.25, 0.92).translate(0, 0.0, 0.0);
+    const bibGeo = new THREE.SphereGeometry(0.1, lite ? 16 : sg(28), lite ? 12 : sg(20)).scale(1.05 * w, 0.75, 0.8).translate(0, 0.215, 0.045);
+    const bodyGeo = new THREE.SphereGeometry(0.16, lite ? 20 : sg(36), lite ? 14 : sg(24)).scale(1.0 * w, 1.25, 0.92).translate(0, 0.0, 0.0);
     const bellyColor = (v, n, lp) => coatColor(this.coat, 'body', _v.copy(lp).applyMatrix4(bind.chest));
     if (lite) {
       A.add('chest', bibGeo, { color: (v, n, lp) => coatColor(this.coat, 'bib', lp), rmse: RM.fur });
@@ -527,22 +530,22 @@ export class Kitten {
       if (!armour && clothed) A.add('chest', bodyGeo, { color: bellyColor, rmse: RM.fur });
     }
     // lower torso / belly on the hips
-    A.add('hips', new THREE.SphereGeometry(0.15, 24, 16).scale(1.0 * w, 0.9, 0.95), { m: mat([0, 0.02, 0]), color: coatRoot('body'), rmse: RM.fur });
+    A.add('hips', new THREE.SphereGeometry(0.15, sg(24), sg(16)).scale(1.0 * w, 0.9, 0.95), { m: mat([0, 0.02, 0]), color: coatRoot('body'), rmse: RM.fur });
     // arms and paws
     for (const s of ['L', 'R']) {
-      A.add('shoulder' + s, new THREE.CapsuleGeometry(0.045, 0.07, 4, 12), { m: mat([0, -0.055, 0]), color: coatRoot('leg'), rmse: RM.fur });
-      A.add('elbow' + s, new THREE.CapsuleGeometry(0.042, 0.07, 4, 12), { m: mat([0, -0.05, 0]), color: coatRoot('leg'), rmse: RM.fur });
+      A.add('shoulder' + s, new THREE.CapsuleGeometry(0.045, 0.07, 4, sg(12)), { m: mat([0, -0.055, 0]), color: coatRoot('leg'), rmse: RM.fur });
+      A.add('elbow' + s, new THREE.CapsuleGeometry(0.042, 0.07, 4, sg(12)), { m: mat([0, -0.05, 0]), color: coatRoot('leg'), rmse: RM.fur });
       if (!armour) {
-        A.add('paw' + s, new THREE.SphereGeometry(0.047, 18, 14).scale(1, 0.85, 1.05), { m: mat([0, -0.035, 0.006]), color: coatRoot('paw'), rmse: RM.fur });
+        A.add('paw' + s, new THREE.SphereGeometry(0.047, sg(18), sg(14)).scale(1, 0.85, 1.05), { m: mat([0, -0.035, 0.006]), color: coatRoot('paw'), rmse: RM.fur });
         for (let t = 0; t < 3; t++) A.add('paw' + s, new THREE.SphereGeometry(0.0085, 8, 6), { m: mat([(t - 1) * 0.017, -0.068, 0.03]), color: rgb('#E7A3A8'), rmse: RM.skin });
       }
     }
     // legs and feet
     for (const s of ['L', 'R']) {
-      A.add('thigh' + s, new THREE.CapsuleGeometry(0.052, 0.05, 4, 12), { m: mat([0, -0.04, 0]), color: coatRoot('leg'), rmse: RM.fur });
-      A.add('knee' + s, new THREE.CapsuleGeometry(0.045, 0.06, 4, 12), { m: mat([0, -0.05, 0]), color: coatRoot('leg'), rmse: RM.fur });
+      A.add('thigh' + s, new THREE.CapsuleGeometry(0.052, 0.05, 4, sg(12)), { m: mat([0, -0.04, 0]), color: coatRoot('leg'), rmse: RM.fur });
+      A.add('knee' + s, new THREE.CapsuleGeometry(0.045, 0.06, 4, sg(12)), { m: mat([0, -0.05, 0]), color: coatRoot('leg'), rmse: RM.fur });
       if (!armour) {
-        A.add('foot' + s, new THREE.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2).scale(0.052, 0.05, 0.07), { m: mat([0, -0.03, 0.025]), color: coatRoot('paw'), rmse: RM.fur });
+        A.add('foot' + s, new THREE.SphereGeometry(1, sg(18), sg(10), 0, Math.PI * 2, 0, Math.PI / 2).scale(0.052, 0.05, 0.07), { m: mat([0, -0.03, 0.025]), color: coatRoot('paw'), rmse: RM.fur });
         A.add('foot' + s, new THREE.CircleGeometry(0.045, 16).rotateX(Math.PI / 2).scale(1, 1, 1.35), { m: mat([0, -0.0295, 0.025]), color: rgb('#C98A90'), rmse: RM.skin });
       }
     }
@@ -550,7 +553,7 @@ export class Kitten {
 
   /** Tail: tapered tube along the rest curve (art.md §2.4), smooth-skinned to the 6 tail joints. */
   _tail(A, kit, bind, boneIndex) {
-    const curve = this.tailCurve, tub = this.lite ? 20 : 24, rad = this.lite ? 8 : 10;
+    const curve = this.tailCurve, tub = this.lite ? 20 : segScale(24, this.detail, 14), rad = this.lite ? 8 : segScale(10, this.detail, 7);
     const thick = this.cfg.tail?.thick ?? 1;
     const tg = new THREE.TubeGeometry(curve, tub, 1, rad, false);
     const pos = tg.attributes.position, c = new THREE.Vector3(), tmp = new THREE.Vector3();

@@ -871,15 +871,17 @@ export class Cutscene {
     if (end.arena) applyArena(ctx, end.arena);
     if (end.music !== undefined) { const m = end.music; try { ctx.audio?.music?.(m?.track ?? m ?? null, m?.fade ?? 1); } catch (e) { console.warn(e); } }
     if (end.companions) ctx.companions?.setActive?.(end.companions);
-    // ui + camera handback (§5.1: letterbox off, HUD restored, 0.6 s blend; a skip cuts)
+    // ui + camera handback (§5.1: letterbox off, HUD restored; a skip cuts). The blend length is the camera's own
+    // default unless the scene names one: CONTROLS_SPEC §2.6 the 1.0 s reverse crane arc to the iso pose (or a veil cut
+    // when the poses are far apart), CAMERA.ease 0.6 s with ?cam=classic.
     host?.cinema?.apply?.({ letterbox: false, hud: true, fade: { alpha: 0, dur: skipped ? 0 : 0.5 }, ...(end.ui ?? {}), caption: null, title: null }, this, true);
     if (skipped) host?.cinema?.clear?.();
     if (host?.cinema?.letterOn && !end.ui?.letter) host.cinema.letter?.(null);
     const camOpt = end.cam ?? 'follow';
     if (camOpt !== false) {
       const m = typeof camOpt === 'string' ? camOpt : camOpt.mode ?? 'follow';
-      const blend = skipped ? false : (typeof camOpt === 'object' && camOpt.blend != null ? camOpt.blend : ctx.config?.CAMERA?.ease ?? 0.6);
-      try { ctx.cam?.mode?.(m, { blend }); } catch (e) { console.warn(e); }
+      const blend = skipped ? false : (typeof camOpt === 'object' && camOpt.blend != null ? camOpt.blend : undefined);
+      try { ctx.cam?.mode?.(m, blend === undefined ? {} : { blend }); } catch (e) { console.warn(e); }
     }
     // level change
     // (a function may decide at run time and await things first, e.g. CS-10's results card when skipped early)

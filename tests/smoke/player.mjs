@@ -1,6 +1,6 @@
 // tests/smoke/player.mjs  (owner: player) — Swordcat's §7 moveset in the running game (GAME_DESIGN §19.9 items 2–5
 // plus the player's own checks). Screenshots go to tests/shots/player/ (Read them when reviewing).
-//   player:move      W runs (≥ 4.5 m/s, 'run'), Space jumps and lands, the 3-hit combo chains (combo 1 → 2 → 3)
+//   player:move      W runs (≥ 4.5 m/s, 'run'), jump (F) and land, the 3-hit combo chains (combo 1 → 2 → 3)
 //   player:parry     a passive rat_pike pokes into a fresh Stand → player:parry +20 Valor; ⚔ within 0.8 s → Riposte;
 //                    a late poke is a block (1 Grit); Standing Ground pays Valor while planted near an alerted rat
 //   player:dodge     Shift Tumbles; a poke during the i-frames → player:perfectDodge (+12 Valor, crit window)
@@ -12,6 +12,13 @@
 //   player:upgrades  M2 §13.3: satchel II → milkMax 4 (filled), Valor Gain ×1.25, Sharpness III ×1.5, Quick Charge tier 2 < 1.05 s
 //   player:standing  M2 §7.3: Standing Ground pays through a block; stops when the rat targets a companion → standing-ground.png
 //   player:cosmetics M2 §13.4/§13.5: six skin + cape pairs → look-skin-*.png; Even More Too Big tip on the ground / trailing
+//   player:click-move    CONTROLS_SPEC §12: a real RMB click ≥ 9 m away past the practice fence (tut.jump.done):
+//                        the path takes the fence link, she auto-hops it and arrives within 0.5 m → click-move-*.png
+//   player:attack-order  hover a rat (player.hover = enemy), RMB it: attack order + selection, paths, chains, hits
+//   player:stand-snap    a rat winds up behind her: Space turns her to it on the Stand's first step; parry / block
+//   player:wasd-override D cancels a click-move at once ('direct'); J cancels a move order and swings at the cursor
+//   player:touch         844×390 + 390×844 hasTouch: tap-to-move, tap a rat = loop auto-attack until it falls,
+//                        hold 🛡 → parry → Auto-Riposte by itself, the ±90° touch guard arc
 //   player:look      studio gallery: idle, Big Swoosh, the Stand, Golden Hour Oath, run (SMOKE_PLAYER_LOOK=full: every
 //                    pose / swing — slash1-3, bright, riposte, jump, pounce, sip, charge, holy, hurt, faint)
 import fs from 'node:fs';
@@ -125,6 +132,20 @@ async function shot(t, name) {
 }
 
 const ps = (t) => t.G(() => window.__GAME__.__pl.ps());
+/** Plain iso play: the prologue done, no story running, god on, KBM, no order and no selection. */
+async function isoPlay(t, reload = null) {
+  await t.G(async (sp) => {
+    const g = window.__GAME__, c = g.ctx;
+    g.story.skip?.(); if (Array.isArray(c.story?.queue)) c.story.queue.length = 0;
+    for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag(k, true);
+    if (sp) { await g.loadLevel('meadow', sp); g.story.skip?.(); }      // the day meadow (the prologue night is over)
+    g.setMode('play'); g.god(true); c.input.setDevice('kbm');
+    c.player.orders.clear('smoke'); c.cam.select?.(null); c.cam.zoom?.(1);
+    return true;
+  }, reload);
+  await t.frames(20);
+  await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); return true; });
+}
 /** Wait for a sim-side condition (source of a (p, ctx) => bool expression), up to `ms` real ms. */
 const until = (t, pred, ms = 8000) => t.G(([src, m]) => window.__GAME__.__pl.until(new Function('p', 'ctx', `return (${src})`), m), [pred, ms]);
 const simWait = (t, sec) => t.G((x) => window.__GAME__.__pl.simWait(x), sec);
@@ -138,6 +159,57 @@ async function pose(t, name, start, pred, cam) {
   if (!ok) t.warn(`look ${name}: condition not reached`);
   await t.G(() => { window.__GAME__.__pl.resume(); return true; });
   await t.frames(2);
+}
+
+/**
+ * A hasTouch + isMobile phone session at w × h on the meadow (like `t.viewport(w, h, { touch: true })`, with the
+ * generous navigation timeouts a loaded machine needs: the page's "load" can take > 30 s while other areas build).
+ */
+async function phone(t, w, h) {
+  const context = await t.browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+  const pg = await context.newPage();
+  pg.setDefaultTimeout(120000); pg.setDefaultNavigationTimeout(240000);
+  pg.on('pageerror', (e) => t.fail(`[${w}×${h} touch] pageerror: ${e.message}`));
+  const G = async (fn, arg) => {
+    const hd = await pg.evaluateHandle(fn, arg);
+    try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); }
+  };
+  const s = {
+    page: pg, G, w, h,
+    frames: (n = 1) => G((k) => window.__GAME__.waitFrames(k), n),
+    async shot(name) {
+      const p = path.join(t.shotsDir, `${name}.png`);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      try { await pg.screenshot({ path: p }); } catch (e) { t.warn(`touch shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); }
+      return p;
+    },
+    screen: (x, z, y) => G(([a, b, c]) => window.__GAME__.screen(a, b, c), [x, z, y]),
+    async tapAt(x, z) { const p = await s.screen(x, z); if (p) await pg.touchscreen.tap(Math.round(p.x), Math.round(p.y)); return p; },
+    touch: (type, x, y, id = 11) => G(([tp, px, py, pid]) => {
+      const caps = (window.__ptrCap ??= {});
+      const el = tp === 'pointerdown' ? (document.elementFromPoint(px, py)?.closest?.('.tbtn, .touch-root') ?? document.querySelector('.touch-root')) : (caps[pid] ?? document.querySelector('.touch-root'));
+      if (!el) return null;
+      if (tp === 'pointerdown') caps[pid] = el;
+      el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: pid, clientX: px, clientY: py, pointerType: 'touch', isPrimary: pid === 11 }));
+      if (tp === 'pointerup' || tp === 'pointercancel') delete caps[pid];
+      return el.className;
+    }, [type, x, y, id]),
+    close: () => context.close().catch(() => {}),
+  };
+  try {
+    await pg.goto(`${t.base}?test=1&seed=1`, { waitUntil: 'domcontentloaded' });
+    await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 300000, polling: 250 });
+    await G(async () => {
+      const g = window.__GAME__, c = g.ctx;
+      g.story.skip?.(); g.setMode('play');
+      for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag?.(k, true);
+      await g.loadLevel('meadow', 'start');
+      g.story.skip?.(); g.setMode('play');
+      return true;
+    });
+    await s.frames(10);
+  } catch (e) { await s.close(); throw e; }
+  return s;
 }
 
 export default [
@@ -614,6 +686,446 @@ export default [
       const back = await until(t, 'p.model.k?.sword?.skin === "borrowed"', 8000);
       t.assert(back, 'the Borrowed Blade comes back');
       t.log(`toobig tip y ${tip.tipY.toFixed(3)} m`);
+    },
+  },
+
+  // ================================================================== CONTROLS_SPEC (LoL-style iso controls, §12 player 6)
+  // ------------------------------------------------------------------ click-to-move past the practice fence
+  {
+    name: 'player:click-move', order: 28.1, level: 'meadow', spawn: 'start', timeout: 200000,
+    async run(t) {
+      // the jump lesson done (through story.flag: physics re-evaluates the practice-fence nav link on story:flag)
+      await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('tut.jump.done', true); else c.state.setFlag('tut.jump.done', true); return true; });
+      await isoPlay(t, 'practice');
+      await install(t);
+      // outside the practice field's inner fence (z −87, x −20…−2), the lesson done; zoomed out so the far side is on screen
+      await t.G(() => {
+        const g = window.__GAME__, c = g.ctx;
+        g.teleport(-8, c.physics.topAt(-8, -92), -92);
+        c.cam.zoom?.(1.4);
+        return true;
+      });
+      await t.frames(20);
+      // the farthest point up-screen (≥ 9 m, across the fence) that is on screen with a margin
+      const goal = await t.G(() => {
+        const g = window.__GAME__, W = innerWidth, H = innerHeight;
+        for (let z = -77; z >= -83; z -= 0.5) {
+          const s = g.screen(-8, z);
+          if (s && s.x > 40 && s.x < W - 40 && s.y > 60 && s.y < H - 60) return { x: -8, z, sx: s.x, sy: s.y };
+        }
+        return null;
+      });
+      if (!t.assert(goal, 'a goal past the fence is on screen')) {
+        t.log(JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx; return { lvl: c.levels?.current?.id, pos: c.player.pos.toArray(), s: g.screen(-8, -80), W: innerWidth, H: innerHeight, mode: c.game.mode }; })));
+        return;
+      }
+      const from = await ps(t);
+      const dist = Math.hypot(goal.x - from.pos[0], goal.z - from.pos[2]);
+      await clearEv(t);
+      await t.page.mouse.move(goal.sx, goal.sy);
+      await t.page.mouse.down({ button: 'right' }); await t.page.mouse.up({ button: 'right' });     // a click, not a hold
+      if (!t.assert(await waitEv(t, 'player:order', 3000), 'RMB → player:order')) {
+        t.log(JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx, p = c.player;
+          return { mode: c.game.mode, scripted: p.scripted, state: p.state, pos: p.pos.toArray(), o: g.orders(), dev: c.input.device, story: !!c.story?.isPlaying, flag: c.state.getFlag('tut.jump.done') }; })));
+      }
+      const ord = await t.G(() => window.__GAME__.orders());
+      t.log(`click ${dist.toFixed(1)} m → path ${JSON.stringify(ord.path.map((q) => [+q[0].toFixed(1), +q[1].toFixed(1), q[2]]))}`);
+      t.assert(ord.kind === 'move' && ord.path.some((q) => q[2]), 'a move order whose path takes the fence link');
+      // a frame mid-hop for the review
+      const hop = await until(t, '!p.onGround && p.pos.z > -88.5 && p.pos.z < -85.5', 8000);
+      if (hop) await shot(t, 'player/click-move-hop'); else t.warn('no mid-hop frame caught');
+      const ok = await until(t, `Math.hypot(p.pos.x - (${goal.x}), p.pos.z - (${goal.z})) < 0.5 && !p.orders.kind`, 15000);
+      const end = await t.G(() => ({ o: window.__GAME__.orders(), pos: window.__GAME__.ctx.player.pos.toArray() }));
+      t.assert(ok, `arrives within 0.5 m (${end.pos.map((v) => v.toFixed(2))} vs ${goal.x}, ${goal.z}; ${end.o.last})`);
+      t.assert(end.o.hops >= 1, `auto-jumped the fence (${end.o.hops} hops)`);
+      await shot(t, 'player/click-move-arrived');
+      await t.G(() => { window.__GAME__.ctx.cam.zoom?.(1); return true; });
+    },
+  },
+
+  // ------------------------------------------------------------------ Lantern Alley: crate steps → Waffles' balcony
+  // A use / move order up the crate steps must either reach the balcony or end (grey ✕) — never hop crate 2 ↔ 3 forever
+  {
+    name: 'player:crate-balcony', order: 28.15, level: 'town', spawn: 'start', timeout: 240000,
+    async run(t) {
+      await install(t);
+      await t.G(() => { const g = window.__GAME__, c = g.ctx; g.story.skip?.(); g.setMode('play'); c.input.setDevice('kbm'); return true; });
+      const probe = async (label, issueSrc) => {
+        await t.G(() => { const g = window.__GAME__, c = g.ctx; c.player.orders.clear('smoke'); g.teleport(3, c.physics.topAt(3, -33), -33); c.player.orders.hops = 0; return true; });
+        await t.frames(20);
+        const issued = await t.G((src) => new Function('g', 'c', src)(window.__GAME__, window.__GAME__.ctx), issueSrc);
+        const first = await t.G(() => window.__GAME__.orders());
+        const ended = await until(t, '!p.orders.kind', 20000);
+        const end = await t.G(() => { const g = window.__GAME__, p = g.ctx.player; return { o: g.orders(), pos: p.pos.toArray().map((v) => +v.toFixed(2)) }; });
+        t.log(`${label}: ${JSON.stringify(issued)} path ${JSON.stringify(first.path.map((q) => [+q[0].toFixed(1), +q[1].toFixed(1), q[2]]))} → ${end.o.last} at ${end.pos} after ${end.o.hops} hops`);
+        t.assert(ended, `${label}: the order ends within 20 s (${end.o.kind ?? end.o.last}, ${end.o.hops} hops)`);
+        t.assert(end.o.hops <= 12, `${label}: no crate hop loop (${end.o.hops} hops)`);
+        return end;
+      };
+      const use = await probe('use Waffles', `
+        const list = c.companions?.pickables?.([]) ?? [];
+        const w = list.find((a) => Math.hypot(a.pos.x - 5, a.pos.z + 30) < 1.6);
+        if (!w) return { err: 'no kitten on the balcony', n: list.length };
+        return { ok: c.player.order('use', w), y: +w.pos.y.toFixed(2) };`);
+      if (use.o.last === 'used') t.log('use Waffles: reached her'); else t.warn(`use Waffles ended ${use.o.last} (no climb)`);
+      await shot(t, 'player/crate-balcony-use');
+      await probe('move onto the balcony', `return c.player.order('move', { x: 5, y: 3, z: -30.3 });`);
+      await shot(t, 'player/crate-balcony-move');
+      await probe('move under the balcony', `return c.player.order('move', { x: 5.71, y: 0, z: -30.98 });`);
+    },
+  },
+
+  // ------------------------------------------------------------------ touch: a drag-aimed charge keeps its aim (§7.1)
+  // ⚔ held ~1.6 s while dragging screen-left, a rat 2.6 m screen-right: the Bright Swoosh must swing left, not turn
+  // back 180° to the rat once the drag pad lets go (ui clears virtualAim ~2 frames after the release)
+  {
+    name: 'player:touch-charge-aim', order: 28.16, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await isoPlay(t);
+      await install(t);
+      const r = await t.G(async () => {
+        const g = window.__GAME__, c = g.ctx, p = c.player, input = c.input, L = g.__pl, THREE = g.THREE;
+        c.input.setDevice('touch');
+        const yaw = c.cam.stickYaw ?? c.cam.yaw ?? Math.PI;
+        const rx = Math.cos(yaw), rz = -Math.sin(yaw);                                 // screen-right on the ground
+        const pos = new THREE.Vector3(p.pos.x + rx * 2.6, 0, p.pos.z + rz * 2.6);
+        pos.y = c.physics.heightAt(pos.x, pos.z);
+        const e = c.enemies.spawn('rat_pike', pos, { facing: Math.atan2(-rx, -rz) });
+        e.ai = false; e.hp = e.maxHp = 9999;
+        const left = Math.atan2(-rx, -rz);
+        p.facing = Math.atan2(rx, rz);                                                   // facing the rat to start
+        input.setVirtual('attack', true);
+        input.setVirtualAim(-1, 0);                                                      // drag screen-left
+        await L.simWait(1.6);
+        input.setVirtualAim(-1, 0);
+        input.setVirtual('attack', false);
+        await L.frames(2);
+        input.setVirtualAim(0, 0, false);                                                // the pad lets go
+        const ok = await L.until((pp) => pp.swing && pp.swing.t >= (pp.swing.def.active?.[0] ?? 0) + 0.02, 4000);
+        const out = { ok, id: p.swing?.def.id ?? null, src: p.swing?.aimSource ?? null, facing: p.facing, left, err: Math.abs(Math.atan2(Math.sin(p.facing - left), Math.cos(p.facing - left))) };
+        c.enemies.despawn(e);
+        c.input.setDevice('kbm');
+        return out;
+      });
+      t.log(`touch charge: ${JSON.stringify(r)}`);
+      t.assert(r.ok && /bright|holy|slash3/.test(r.id ?? ''), `the charge released a swing (${r.id})`);
+      t.assert(r.src === 'explicit', `the swing keeps its explicit aim source (${r.src})`);
+      t.assert(r.err < 0.35, `it swings screen-left, not back at the rat (facing ${r.facing?.toFixed(2)} vs ${r.left?.toFixed(2)})`);
+    },
+  },
+
+  // ------------------------------------------------------------------ RMB on a rat: path, select, auto-chain, hits
+  {
+    name: 'player:attack-order', order: 28.2, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await isoPlay(t, 'start');                                          // the day meadow (readable shots)
+      await install(t);
+      const rat = await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, p = c.player;
+        c.state.settings.autoAttack = 'auto';                            // every device → loop (LoL)
+        const e = g.spawn('rat_pike', p.pos.x + 1.0, p.pos.z + 5.5);   // 5.5 m up-screen, AI off (a training dummy)
+        e.ai = false;
+        g.__plRat = e;
+        return { hp: e.hp };
+      });
+      await t.frames(5);
+      const sp = await t.G(() => { const e = window.__GAME__.__plRat; return window.__GAME__.screen(e.pos.x, e.pos.z, e.pos.y + 0.4); });
+      await t.page.mouse.move(sp.x, sp.y);
+      await t.frames(3);
+      const hover = await t.G(() => window.__GAME__.ctx.player.hover?.kind ?? null);
+      t.assert(hover === 'enemy', `player.hover = the rat (${hover})`);
+      await clearEv(t);
+      await t.page.mouse.down({ button: 'right' }); await t.page.mouse.up({ button: 'right' });
+      t.assert(await waitEv(t, 'player:order', 3000), 'RMB → player:order');
+      const o = await t.G(() => ({ o: window.__GAME__.orders(), sel: window.__GAME__.ctx.cam.lockTarget === window.__GAME__.__plRat }));
+      t.assert(o.o.kind === 'attack', `an attack order (${o.o.kind})`);
+      t.assert(o.sel, 'the rat is selected (gold ring)');
+      const swung = await until(t, 'ctx.player.state === "attack"', 8000);
+      t.assert(swung, 'she walks into reach and swings');
+      await shot(t, 'player/attack-order');
+      const done = await until(t, '!window.__GAME__.__plRat.alive || (p.orders.kind === "attack" && p.orders._chainStrings >= 1)', 10000);
+      const r = await t.G(() => {
+        const g = window.__GAME__, ev = g.__plEv;
+        return { hits: ev.filter((e) => e.type === 'combat:hit' && !e.toPlayer).length, swings: ev.filter((e) => e.type === 'player:swing').map((e) => e.combo),
+          hp: g.__plRat.hp, alive: g.__plRat.alive };
+      });
+      t.log(`attack order: swings ${r.swings}, hits ${r.hits}, rat hp ${r.hp} alive ${r.alive}`);
+      t.assert(done, 'the auto-attack ran a full string (or the rat fell)');
+      t.assert(r.hits >= 2 && r.swings[0] === 1, 'the combo hits the rat');
+      await t.G(() => { const g = window.__GAME__, c = g.ctx; c.player.orders.clear('smoke'); c.cam.select?.(null); if (g.__plRat.alive) c.enemies.despawn(g.__plRat); return true; });
+    },
+  },
+
+  // ------------------------------------------------------------------ the Stand wins over the auto-attack chain (§8.3)
+  {
+    name: 'player:order-parry', order: 28.25, level: 'meadow', spawn: 'start', timeout: 200000,
+    async run(t) {
+      await isoPlay(t, 'start');
+      await install(t);
+      // an attack order on a live rat_pike: while she is mid-swing in the auto chain, press the Stand
+      // activeAt − 0.08 s before its poke lands → a parry; once at − 0.28 s → at least a block (she is in the Stand)
+      const r = await t.G(() => new Promise((resolve) => {
+        const g = window.__GAME__, c = g.ctx, p = c.player, input = c.input, L = g.__pl;
+        c.state.settings.autoAttack = 'loop';                            // keep swinging (no chain rest)
+        const e = L.rat(0, 1.6);
+        e.ai = true; e.alerted = true; e.hp = e.maxHp = 9999;
+        e.superArmor = true;                                             // her chain must not stagger it out of its poke (a hyena / boss case)
+        g.__plRat = e;
+        p.order('attack', e);
+        const leads = [0.08, 0.08, 0.28, 0.08], trials = [];
+        let phase = 0, pressAt = 0, tel = null, k = 0, t0 = performance.now(), hits0 = 0;
+        // her side of each poke: a combat:hit on her (hit / block) or a player:parry (the parried poke never lands)
+        const hitsOnHer = () => g.__plEv.filter((x) => (x.type === 'combat:hit' && x.toPlayer) || x.type === 'player:parry')
+          .map((x) => (x.type === 'player:parry' ? { ...x, result: 'parry' } : x));
+        const off = c.game.addFrameHook(() => {
+          const now = c.game.time;
+          if (phase === 0) {
+            const nx = c.combat.nextParryable?.(p, 6);
+            if (nx && nx.attacker === e && p.state === 'attack') {
+              const lead = nx.activeAt - now;
+              if (lead > 0 && lead <= leads[k] && lead > leads[k] - 0.06) {
+                input._press('guard', 'k:Space'); pressAt = now; tel = nx; hits0 = hitsOnHer().length;
+                const sw = p.swing, act = sw?.def.active ?? [0, 0];
+                // the active frames themselves are never cancelled (§7.3): the Stand takes over at their end
+                const activeLeft = sw && sw.t >= act[0] && sw.t < act[1] ? act[1] - sw.t : 0;
+                trials.push({ lead: +lead.toFixed(3), swing: sw?.def.id ?? null, queued: !!sw?.queued, activeLeft: +activeLeft.toFixed(3) });
+                phase = 1;
+              }
+            }
+          } else if (phase === 1) {
+            const tr = trials[trials.length - 1];
+            if (tr.guardAt === undefined && p.state === 'guard') tr.guardAt = +(now - pressAt).toFixed(3);
+            const hs = hitsOnHer();
+            if (hs.length > hits0 || now - pressAt > 1.2) {
+              tr.result = hs.length > hits0 ? hs[hs.length - 1].result : 'none';
+              tr.hitDt = +((hs.length > hits0 ? hs[hs.length - 1].t : now) - pressAt).toFixed(3);
+              tr.ratState = e.stateName ?? e.state ?? null; tr.ratStag = !!(e.staggerT > 0 || e.stunned);
+              input._release('guard', 'k:Space'); phase = 2; pressAt = now;
+            }
+          } else if (phase === 2 && now - pressAt > 0.3) {
+            if (!c.player.orders.kind) p.order('attack', e);               // re-issue (a parry can end it)
+            if (++k >= leads.length) { off(); resolve({ ok: true, trials }); return; }
+            phase = 0;
+          }
+          if (performance.now() - t0 > 90000) { off(); input._release('guard', 'k:Space'); resolve({ ok: false, trials, phase }); }
+        });
+      }));
+      t.log(`order-parry trials ${JSON.stringify(r.trials)}`);
+      t.assert(r.ok, `caught ${r.trials.length}/4 rat pokes mid-chain (phase ${r.phase})`);
+      for (const tr of r.trials) {
+        // the queued / next auto swing must never swallow the press: she is in the Stand within a frame or two
+        // (or right after the active frames she was in)
+        t.assert(tr.guardAt !== undefined && tr.guardAt <= tr.activeLeft + 0.1,
+          `Stand pressed ${tr.lead}s before the poke during ${tr.swing}${tr.queued ? ' (next queued)' : ''}: in the Stand after ${tr.guardAt}s (active left ${tr.activeLeft}s)`);
+        // inside the 0.15 s parry window → parry; the early −0.28 s press is outside it → a block. Never a clean hit
+        // ('none' = the poke never landed, e.g. her swing knocked the rat out of reach)
+        const want = tr.lead <= 0.15 ? ['parry', 'none'] : ['parry', 'block', 'none'];
+        t.assert(want.includes(tr.result), `Stand at −${tr.lead}s mid-chain: ${tr.result} (expected ${want.join(' / ')})`);
+      }
+      const parries = r.trials.filter((tr) => tr.result === 'parry').length, early = r.trials.filter((tr) => tr.lead <= 0.15 && tr.result !== 'none').length;
+      t.assert(parries >= 1 && parries >= early, `mid-chain parries ${parries} of ${early} landed in-window pokes`);
+      await t.G(() => { const g = window.__GAME__, c = g.ctx; c.player.orders.clear('smoke'); c.cam.select?.(null); c.state.settings.autoAttack = 'auto'; if (g.__plRat.alive) c.enemies.despawn(g.__plRat); return true; });
+    },
+  },
+
+  // ------------------------------------------------------------------ the Stand snaps to the incoming wind-up (§8.1)
+  {
+    name: 'player:stand-snap', order: 28.3, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await isoPlay(t, 'start');                                          // the day meadow (readable shots)
+      await install(t);
+      await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, p = c.player;
+        const e = g.__pl.rat(Math.PI * 0.75, 1.6);                     // behind her left; its AI runs
+        e.ai = true; e.alerted = true;
+        g.__plRat = e;
+        return true;
+      });
+      // when its wind-up on her is 0.2–0.6 s from landing: turn her away, then press the Stand (same frame)
+      const r = await t.G(() => new Promise((resolve) => {
+        const g = window.__GAME__, c = g.ctx, p = c.player, e = g.__plRat, input = c.input;
+        let phase = 0, away = 0, t0 = performance.now(), snapF = null;
+        const off = c.game.addFrameHook(() => {
+          const nx = c.combat.nextParryable?.(p, 6);
+          if (phase === 0 && nx && nx.attacker === e) {
+            const lead = nx.activeAt - c.game.time;
+            if (lead > 0.2 && lead < 0.6) {
+              away = Math.atan2(p.pos.x - e.pos.x, p.pos.z - e.pos.z);  // facing directly away from the rat
+              p.facing = away;
+              input._press('guard', 'k:Space');
+              phase = 1;
+              return;
+            }
+          }
+          if (phase === 1 && p.state === 'guard') {
+            const want = Math.atan2(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
+            snapF = Math.abs(Math.atan2(Math.sin(p.facing - want), Math.cos(p.facing - want)));
+            phase = 2;
+          }
+          if (phase >= 2 && phase++ > 40) { off(); input._release('guard', 'k:Space'); resolve({ ok: true, snapErr: snapF, away }); }
+          if (performance.now() - t0 > 25000) { off(); input._release('guard', 'k:Space'); resolve({ ok: false, phase }); }
+        });
+      }));
+      t.assert(r.ok, `caught a rat wind-up on her (phase ${r.phase})`);
+      if (r.ok) t.assert(r.snapErr < 0.2, `the Stand snapped to the threat on its first step (off by ${(r.snapErr * 57.3).toFixed(1)}°)`);
+      const res = await t.G(() => window.__GAME__.__plEv.filter((e) => e.type === 'combat:hit' && e.toPlayer).map((e) => e.result));
+      const parried = await t.G(() => window.__GAME__.__plEv.some((e) => e.type === 'player:parry'));
+      t.log(`stand-snap: off ${(r.snapErr * 57.3).toFixed(1)}°, results ${JSON.stringify(res)} parry ${parried}`);
+      t.assert(parried || res.some((x) => x === 'block' || x === 'parry'), 'the snapped Stand met the poke (parry or block)');
+      await t.G(() => { const g = window.__GAME__; if (g.__plRat.alive) g.ctx.enemies.despawn(g.__plRat); return true; });
+      // the fan screenshot: a fresh Stand facing the cursor
+      await t.G(() => { const g = window.__GAME__, p = g.ctx.player; g.aimAt(p.pos.x - 3, p.pos.z + 1); return true; });
+      await t.page.keyboard.down('Space');
+      await until(t, 'p.state === "guard"', 3000);
+      await shot(t, 'player/stand-fan');
+      await t.page.keyboard.up('Space');
+    },
+  },
+
+  // ------------------------------------------------------------------ WASD always overrides an order (§5.1)
+  {
+    name: 'player:wasd-override', order: 28.4, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await install(t);
+      await isoPlay(t);
+      await t.G(() => { window.__GAME__.ctx.cam.zoom?.(1.4); return true; });
+      await t.frames(10);
+      const p0 = await ps(t);
+      const goal = await t.G(([x, z]) => {
+        const g = window.__GAME__, H = innerHeight;
+        for (let d = 12; d >= 5; d -= 0.5) { const s = g.screen(x, z + d); if (s && s.y > 60 && s.y < H - 60) return { ...s, d }; }
+        return null;
+      }, [p0.pos[0], p0.pos[2]]);
+      await t.page.mouse.move(goal.x, goal.y);
+      await t.page.mouse.down({ button: 'right' }); await t.page.mouse.up({ button: 'right' });
+      t.assert(await until(t, 'p.orders.kind === "move"', 3000), 'the click issues a move order');
+      const mid = await ps(t);
+      await t.page.keyboard.down('KeyD');
+      const cut = await until(t, '!p.orders.kind', 2000);
+      await t.wait(500);
+      await t.page.keyboard.up('KeyD');
+      const o = await t.G(() => window.__GAME__.orders());
+      const end = await ps(t);
+      t.assert(cut && o.last === 'direct', `D cancels the order at once (${o.kind} / ${o.last})`);
+      t.assert(end.pos[0] < mid.pos[0] - 0.8, `and she walks screen-right (−X at yaw π): Δx ${(end.pos[0] - mid.pos[0]).toFixed(2)}`);
+      t.assert(end.pos[2] - p0.pos[2] < goal.d - 0.5, `she never reached the order point (${(end.pos[2] - p0.pos[2]).toFixed(2)} of ${goal.d} m)`);
+      await t.G(() => { window.__GAME__.ctx.cam.zoom?.(1); return true; });
+      // an LMB press cancels a move order too (attack input, §5.2), and swings toward the cursor
+      await t.G(([x, z]) => window.__GAME__.order('move', [x, z]), [end.pos[0], end.pos[2] + 8]);
+      await t.frames(5);
+      await t.G(() => { const p = window.__GAME__.ctx.player; window.__GAME__.aimAt(p.pos.x - 3, p.pos.z); return true; });
+      await t.frames(2);
+      await clearEv(t);
+      await t.tap('KeyJ');
+      t.assert(await waitEv(t, 'player:swing', 2000), 'J swings');
+      const o2 = await t.G(() => ({ o: window.__GAME__.orders(), f: window.__GAME__.ctx.player.facing }));
+      t.assert(!o2.o.kind && o2.o.last === 'attack', `attack input cancels the move order (${o2.o.last})`);
+      t.assert(Math.abs(Math.atan2(Math.sin(o2.f + Math.PI / 2), Math.cos(o2.f + Math.PI / 2))) < 0.4, `the swing faces the cursor (facing ${o2.f.toFixed(2)})`);
+    },
+  },
+
+  // ------------------------------------------------------------------ touch: tap orders, loop auto-attack, Auto-Riposte, ±90°
+  {
+    name: 'player:touch', order: 28.5, level: null, timeout: 400000,
+    async run(t) {
+      for (const [w, h, tag] of [[844, 390, 'landscape'], [390, 844, 'portrait']]) {
+        const s = await phone(t, w, h);
+        try {
+          await s.page.touchscreen.tap(Math.round(w * 0.6), Math.round(h * 0.35));       // first touch: device 'touch'
+          await s.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.god(true); g.ctx.ui?.touch?.enable?.(true); g.ctx.player.orders.clear('smoke'); return true; });
+          await s.frames(20);
+          const dev = await s.G(() => window.__GAME__.ctx.input.device);
+          t.assert(dev === 'touch', `${tag}: device touch (${dev})`);
+          const until2 = async (src, ms = 8000) => {
+            const t0 = Date.now();
+            for (;;) {
+              const v = await s.G((code) => { try { return !!new Function('g', 'p', `return (${code})`)(window.__GAME__, window.__GAME__.ctx.player); } catch { return false; } }, src);
+              if (v || Date.now() - t0 > ms) return v;
+              await s.page.waitForTimeout(100);
+            }
+          };
+          // ---- tap the ground 3 m up-screen: a move order that arrives
+          const p0 = await s.G(() => window.__GAME__.ctx.player.pos.toArray());
+          const goal = [p0[0] + 1, p0[2] + 3];
+          await s.tapAt(goal[0], goal[1]);
+          const arrived = await until2(`Math.hypot(p.pos.x - ${goal[0]}, p.pos.z - ${goal[1]}) < 0.7 && !p.orders.kind`, 8000);
+          t.assert(arrived, `${tag}: tap-to-move arrives`);
+          // ---- tap a rat: attack order; on touch autoAttack 'auto' = loop: she keeps chaining until it falls
+          await s.G(() => {
+            const g = window.__GAME__, c = g.ctx, p = c.player;
+            c.state.settings.autoAttack = 'auto';
+            const e = g.spawn('rat_pike', p.pos.x - 1.5, p.pos.z + 3.5); e.ai = false;
+            window.__tRat = e; window.__tSw = 0;
+            window.__tOff?.(); window.__tOff = c.bus.on('player:swing', () => { window.__tSw++; });
+            return true;
+          });
+          await s.frames(10);
+          const rsp = await s.G(() => { const e = window.__tRat; return window.__GAME__.screen(e.pos.x, e.pos.z, e.pos.y + 0.4); });
+          await s.page.touchscreen.tap(Math.round(rsp.x), Math.round(rsp.y));
+          let ord = await until2('p.orders.kind === "attack" || !window.__tRat.alive', 3000);
+          if (!ord) {                                                       // a loaded GPU can drop the first tap's frame
+            const dbg = await s.G(() => ({ o: window.__GAME__.orders(), ev: window.__GAME__.lastEvent('player:order'), dev: window.__GAME__.ctx.input.device }));
+            t.warn(`${tag}: first tap on the rat → ${JSON.stringify(dbg)} (${Math.round(rsp.x)}, ${Math.round(rsp.y)}); tapping again`);
+            const r2 = await s.G(() => { const e = window.__tRat; return window.__GAME__.screen(e.pos.x, e.pos.z, e.pos.y + 0.4); });
+            await s.page.touchscreen.tap(Math.round(r2.x), Math.round(r2.y));
+            ord = await until2('p.orders.kind === "attack" || !window.__tRat.alive', 3000);
+          }
+          t.assert(ord, `${tag}: a tap on the rat = an attack order`);
+          await until2('p.state === "attack"', 6000);
+          await s.shot(`player/touch-${tag}-attack`);
+          const dead = await until2('!window.__tRat.alive', 15000);
+          const sw = await s.G(() => window.__tSw);
+          t.assert(dead, `${tag}: loop auto-attack keeps chaining until the rat falls (${sw} swings)`);
+          // ---- Auto-Riposte: hold 🛡, a poke is parried, the Riposte fires by itself 0.15 s later
+          await s.G(() => {
+            const g = window.__GAME__, c = g.ctx, p = c.player;
+            c.player.orders.clear('smoke'); c.cam.select?.(null);
+            const a = p.facing, e = g.spawn('rat_pike', p.pos.x + Math.sin(a) * 1.3, p.pos.z + Math.cos(a) * 1.3); e.ai = false;
+            window.__tRat2 = e; window.__tRip = 0;
+            window.__tOff2?.(); window.__tSwAll = [];
+            window.__tOff2 = c.bus.on('player:swing', (x) => { window.__tSwAll.push(x?.attackId); if (x?.attackId === 'riposte') window.__tRip++; });
+            return true;
+          });
+          await s.frames(10);
+          const gb = await s.G(() => { const b = document.querySelector('.touch-cluster .tbtn[data-action="guard"]'); const r = b?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; });
+          t.assert(gb, `${tag}: the 🛡 button`);
+          if (gb) {
+            // press 🛡 (a synthetic touch on the button) and poke on the Stand's first step, page-side: a harness round
+            // trip outlasts the 0.20 s touch parry window on a loaded machine
+            const res = await s.G(([x, y]) => new Promise((resolve) => {
+              const g = window.__GAME__, c = g.ctx, p = c.player, e = window.__tRat2;
+              p.invulnT = 0; p.guardState.grit = p.guardState.gritMax; p.guardState.lockoutT = 0;
+              const el = document.elementFromPoint(x, y)?.closest?.('.tbtn');
+              (window.__ptrCap ??= {})[21] = el;
+              el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 21, clientX: x, clientY: y, pointerType: 'touch' }));
+              const t0 = performance.now();
+              const off = c.game.addFrameHook(() => {
+                if (p.state === 'guard') { off(); p.invulnT = 0; resolve(c.combat.applyHit(e, p, c.config.ATTACKS.rat_poke)); }
+                else if (performance.now() - t0 > 15000) { off(); resolve(`no-guard (${el?.className} ${p.state})`); }
+              });
+            }), [gb.x, gb.y]);
+            t.assert(res === 'parry', `${tag}: holding 🛡 raises the Stand, a poke on its first step is parried (${res})`);
+            const rip = await until2('window.__tRip > 0', 10000);            // slow motion + hitstop on a loaded GPU
+            if (!t.assert(rip, `${tag}: Auto-Riposte fired on touch`)) {
+              t.log(JSON.stringify(await s.G(() => { const p = window.__GAME__.ctx.player; return { sw: window.__tSwAll, st: p.state, ar: p.autoRiposteT, n: p.autoRiposted ?? 0, rt: p.riposteT, tgt: !!p.riposteTarget, dev: window.__GAME__.ctx.input.device, ts: window.__GAME__.ctx.game.timeScale }; })));
+            }
+            await s.shot(`player/touch-${tag}-riposte`);
+            // ±90° on touch: a poke from 80° off her nose meets the Stand (KBM's ±70° would not)
+            await until2('p.state === "guard"', 4000);
+            const side = await s.G(() => {
+              const g = window.__GAME__, c = g.ctx, p = c.player, e = window.__tRat2;
+              if (!e.alive) return 'dead';
+              p.invulnT = 0; p.guardState.grit = p.guardState.gritMax;
+              p.facing = Math.atan2(e.pos.x - p.pos.x, e.pos.z - p.pos.z) + (80 * Math.PI) / 180;
+              return c.combat.applyHit(e, p, c.config.ATTACKS.rat_poke);
+            });
+            t.assert(side === 'block' || side === 'parry' || side === 'dead', `${tag}: 80° off the nose is inside the touch guard arc (${side})`);
+            await s.touch('pointerup', gb.x, gb.y, 21);
+          }
+          await s.G(() => { const c = window.__GAME__.ctx; for (const e of [...c.enemies.list]) c.enemies.despawn(e); return true; });
+          await s.shot(`player/touch-${tag}-end`);
+        } finally { await s.close(); }
+      }
     },
   },
 ];

@@ -9,6 +9,8 @@ import { capeMaterial, capeGeometry } from './Cape.js';
 import { buildSword } from './Sword.js';
 
 const C = (c) => rgb(c);
+/** Segment count through the assembly context's detail (lite tier / Low quality: KittenBuilder's A.seg). */
+const sg = (A, n) => (A.seg ? A.seg(n) : n);
 export const flipShell = (geo) => {
   const g2 = geo.clone(); const idx = g2.index.array;
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
@@ -30,9 +32,9 @@ export function tunic(A, { color = PAL.tunic, trim = '#6E5638', belt = true } = 
   const geo = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y - 0.30)), 40).scale(1.06 * w, 1, 1.04);
   const c = C(color), t = C(trim);
   both(A, 'hips', geo, null, (v, n, lp) => mixRgb(c, t, Math.min(1, smoothstep(-0.112, -0.122, lp.y) + smoothstep(0.305, 0.315, lp.y))), RM.cloth);
-  for (const s of ['L', 'R']) A.add('shoulder' + s, new THREE.CylinderGeometry(0.052, 0.058, 0.08, 16, 1), { m: mat([0, -0.035, 0]), color: c, rmse: RM.cloth });
+  for (const s of ['L', 'R']) A.add('shoulder' + s, new THREE.CylinderGeometry(0.052, 0.058, 0.08, sg(A, 16), 1), { m: mat([0, -0.035, 0]), color: c, rmse: RM.cloth });
   if (belt) {
-    A.add('hips', new THREE.TorusGeometry(0.16, 0.011, 6, 40), { m: mat([0, 0.04, 0], [Math.PI / 2, 0, 0], [1.08 * w, 1.05, 1]), color: C(PAL.leather), rmse: RM.leather });
+    A.add('hips', new THREE.TorusGeometry(0.16, 0.011, 6, sg(A, 40)), { m: mat([0, 0.04, 0], [Math.PI / 2, 0, 0], [1.08 * w, 1.05, 1]), color: C(PAL.leather), rmse: RM.leather });
     A.add('hips', new THREE.BoxGeometry(0.03, 0.026, 0.01), { m: mat([0, 0.04, 0.172]), color: C(PAL.brass), rmse: RM.brass });
   }
 }
@@ -41,7 +43,7 @@ export function tunic(A, { color = PAL.tunic, trim = '#6E5638', belt = true } = 
 export function tabard(A, { color = '#3F6FB5', crest = '#D8DCE2', trim = '#2C5290' } = {}) {
   const c = C(color), cr = C(crest), tr = C(trim);
   for (const side of [1, -1]) {
-    const g = new THREE.CylinderGeometry(0.18 * A.w, 0.196 * A.w, 0.34, 40, 24, true, side > 0 ? -0.58 : Math.PI - 0.58, 1.16);
+    const g = new THREE.CylinderGeometry(0.18 * A.w, 0.196 * A.w, 0.34, sg(A, 40), sg(A, 24), true, side > 0 ? -0.58 : Math.PI - 0.58, 1.16);
     const col = (v, n, lp) => mixRgb(c, tr, Math.min(1, smoothstep(0.1, 0.12, Math.abs(lp.x)) + smoothstep(-0.15, -0.165, lp.y)));
     both(A, 'chest', g, mat([0, -0.07, 0.004]), col, RM.cloth, mixRgb(c, [0, 0, 0], 0.4));
     if (side > 0) { // silver paw crest: a pad + 4 toe beans sewn on the front panel
@@ -56,7 +58,7 @@ export function tabard(A, { color = '#3F6FB5', crest = '#D8DCE2', trim = '#2C529
 export function apron(A, { color = '#8A6A4A', big = false, strap = '#5A3E2B' } = {}) {
   const c = C(color), edge = mixRgb(c, [0, 0, 0], 0.3), st = C(strap);
   const h = big ? 0.44 : 0.3, r = big ? 0.19 : 0.18;
-  const g = new THREE.CylinderGeometry(r * A.w, (r + (big ? 0.06 : 0.03)) * A.w, h, 20, 6, true, -0.8, 1.6);
+  const g = new THREE.CylinderGeometry(r * A.w, (r + (big ? 0.06 : 0.03)) * A.w, h, sg(A, 20), 6, true, -0.8, 1.6);
   const yc = 0.1 - h / 2 + (big ? 0.12 : 0.08);
   both(A, 'hips', g, mat([0, yc, 0.01]), (v, n, lp) => mixRgb(c, edge, smoothstep(-h / 2 + 0.03, -h / 2, lp.y) * 0.8 + smoothstep(0.62, 0.78, Math.abs(Math.atan2(lp.x, lp.z))) * 0.5), RM.leather);
   if (!big) {
@@ -64,7 +66,7 @@ export function apron(A, { color = '#8A6A4A', big = false, strap = '#5A3E2B' } =
     return;
   }
   // bib up the chest, sagging a little because it is far too big for her
-  const bib = new THREE.CylinderGeometry(0.168 * A.w, 0.182 * A.w, 0.19, 16, 4, true, -0.62, 1.24);
+  const bib = new THREE.CylinderGeometry(0.168 * A.w, 0.182 * A.w, 0.19, sg(A, 16), 4, true, -0.62, 1.24);
   both(A, 'chest', bib, mat([0, 0.045, 0.012]), (v, n, lp) => mixRgb(c, edge, smoothstep(0.08, 0.095, lp.y) * 0.8), RM.leather);
   // neck strap and waist ties
   A.add('chest', new THREE.TorusGeometry(0.098, 0.009, 6, 28, Math.PI * 1.1), { m: mat([0, 0.18, -0.005], [0.15, 0, -0.05 * Math.PI]), color: st, rmse: RM.leather });
@@ -81,7 +83,7 @@ export function gown(A, { color = '#B9A3D6', trim = '#E8DFF5' } = {}) {
   const prof = [[0.12, 0.62], [0.15, 0.55], [0.155, 0.45], [0.14, 0.36], [0.2, 0.25], [0.26, 0.12], [0.3, 0.015]];
   const g = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y - 0.30)).reverse(), 40);
   both(A, 'hips', g, null, (v, n, lp) => mixRgb(c, t, Math.min(1, smoothstep(-0.26, -0.28, lp.y) + smoothstep(0.30, 0.31, lp.y) * 0.8)), RM.velvet);
-  for (const s of ['L', 'R']) A.add('shoulder' + s, new THREE.SphereGeometry(0.06, 16, 12).scale(1, 0.8, 1), { m: mat([0, -0.02, 0]), color: t, rmse: RM.cloth });
+  for (const s of ['L', 'R']) A.add('shoulder' + s, new THREE.SphereGeometry(0.06, sg(A, 16), sg(A, 12)).scale(1, 0.8, 1), { m: mat([0, -0.02, 0]), color: t, rmse: RM.cloth });
 }
 
 /**
@@ -184,7 +186,7 @@ export function coif(A, { color = '#EDE6DA' } = {}) {
   const tube = rimTube(rim, 0.011);
   if (tube) A.add('head', tube, { color: C('#F7C6D9'), rmse: RM.cloth });   // pink-ribbon trim (her blossom colour)
   // veil: back half of a flared skirt hanging from the nape over the shoulder blades
-  const veil = new THREE.CylinderGeometry(0.13, 0.215, 0.19, 32, 4, true, Math.PI - 1.75, 3.5);
+  const veil = new THREE.CylinderGeometry(0.13, 0.215, 0.19, sg(A, 32), 4, true, Math.PI - 1.75, 3.5);
   const vp = veil.attributes.position;
   for (let i = 0; i < vp.count; i++) { const y = vp.getY(i); if (y < -0.09) vp.setY(i, y - 0.012 * Math.sin(Math.atan2(vp.getX(i), vp.getZ(i)) * 6) ** 2); }
   veil.computeVertexNormals();
@@ -195,7 +197,7 @@ export function coif(A, { color = '#EDE6DA' } = {}) {
 /** Scarf (Pip): neck wrap + two long trailing ribbons that sway. */
 export function scarf(A, { color = '#C2353B', length = 0.5 } = {}) {
   const c = C(color);
-  A.add('chest', new THREE.TorusGeometry(0.1, 0.035, 10, 28), { m: mat([0, 0.2, 0.01], [Math.PI / 2 + 0.15, 0, 0], [1.1, 1, 0.8]), color: c, rmse: RM.cloth });
+  A.add('chest', new THREE.TorusGeometry(0.1, 0.035, sg(A, 10), sg(A, 28)), { m: mat([0, 0.2, 0.01], [Math.PI / 2 + 0.15, 0, 0], [1.1, 1, 0.8]), color: c, rmse: RM.cloth });
   for (const s of [1, -1]) {
     const g = capeGeometry(3, 9);
     const p = g.attributes.position;
@@ -210,34 +212,34 @@ export function scarf(A, { color = '#C2353B', length = 0.5 } = {}) {
 
 /** Brass bell collar (Clover). */
 export function bellCollar(A, { color = '#B0503C' } = {}) {
-  A.add('chest', new THREE.TorusGeometry(0.098, 0.012, 8, 32), { m: mat([0, 0.19, 0.012], [Math.PI / 2 + 0.2, 0, 0], [1.1, 1, 0.85]), color: C(color), rmse: RM.leather });
-  A.add('chest', new THREE.SphereGeometry(0.034, 16, 12), { m: mat([0, 0.148, 0.122]), color: C(PAL.brass), rmse: RM.brass });
+  A.add('chest', new THREE.TorusGeometry(0.098, 0.012, sg(A, 8), sg(A, 32)), { m: mat([0, 0.19, 0.012], [Math.PI / 2 + 0.2, 0, 0], [1.1, 1, 0.85]), color: C(color), rmse: RM.leather });
+  A.add('chest', new THREE.SphereGeometry(0.034, sg(A, 16), sg(A, 12)), { m: mat([0, 0.148, 0.122]), color: C(PAL.brass), rmse: RM.brass });
   A.add('chest', new THREE.BoxGeometry(0.04, 0.005, 0.005), { m: mat([0, 0.138, 0.154]), color: C('#4A3418'), rmse: RM.nose });
 }
 
 /** Herb / mail satchel on a cross strap. */
 export function satchel(A, { color = '#7A5A3A', side = -1 } = {}) {
   A.add('hips', new THREE.BoxGeometry(0.09, 0.08, 0.04, 2, 2, 2), { m: mat([side * 0.17 * A.w, 0.0, 0.03], [0, side * 0.9, 0]), color: C(color), rmse: RM.leather });
-  A.add('chest', new THREE.TorusGeometry(0.19, 0.008, 6, 40), { m: mat([0, 0.0, 0], [0, 0, side * 0.75], [1, 1.25, 0.9]), color: C(PAL.leatherDark), rmse: RM.leather });
+  A.add('chest', new THREE.TorusGeometry(0.19, 0.008, 6, sg(A, 40)), { m: mat([0, 0.0, 0], [0, 0, side * 0.75], [1, 1.25, 0.9]), color: C(PAL.leatherDark), rmse: RM.leather });
   A.add('hips', new THREE.SphereGeometry(0.02, 8, 6), { m: mat([side * 0.17 * A.w, 0.05, 0.06]), color: C('#6E9A3C'), rmse: RM.leaf });
 }
 
 // ------------------------------------------------------------------ headgear
 
 /** Oversized pot helm (Mochi), also the spoon brigade's `pot_helm`. */
-export function potHelmGeometry(scale = 1) {
+export function potHelmGeometry(scale = 1, seg = (n) => n) {
   const gb = new GeoBuilder();
   const prof = [[0.0001, 0.16], [0.08, 0.158], [0.15, 0.14], [0.19, 0.1], [0.205, 0.04], [0.205, 0.0], [0.22, -0.005], [0.22, -0.018], [0.2, -0.02]].reverse();
-  const bowl = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 36);
+  const bowl = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), seg(36));
   const metal = C(PAL.potMetal);
   gb.add(bowl, { color: (v, n) => mixRgb(metal, C('#5E605C'), smoothstep(0.0, -0.6, n.y)), rmse: [0.42, 0.85, 0, 0] });
   gb.add(flipShell(bowl), { color: C('#3A3B38'), rmse: [0.7, 0.6, 0, 0] });
   gb.add(new THREE.CapsuleGeometry(0.018, 0.16, 4, 8), { matrix: mat([0.27, 0.05, 0], [0, 0, Math.PI / 2 - 0.25]), color: C('#4A4C48'), rmse: [0.5, 0.8, 0, 0] });
-  gb.add(new THREE.TorusGeometry(0.205, 0.008, 6, 40), { matrix: mat([0, 0.065, 0], [Math.PI / 2, 0, 0]), color: C('#7A7D78'), rmse: [0.35, 0.9, 0, 0] });
+  gb.add(new THREE.TorusGeometry(0.205, 0.008, 6, seg(40)), { matrix: mat([0, 0.065, 0], [Math.PI / 2, 0, 0]), color: C('#7A7D78'), rmse: [0.35, 0.9, 0, 0] });
   const g = gb.build(); if (scale !== 1) g.scale(scale, scale, scale); return g;
 }
 export function potHelm(A, { scale = 1.05, tilt = [0.12, 0.15, 0.14] } = {}) {
-  A.add('head', potHelmGeometry(scale), { m: mat([0, 0.285, -0.005], tilt), keepColors: true });
+  A.add('head', potHelmGeometry(scale, (n) => sg(A, n)), { m: mat([0, 0.285, -0.005], tilt), keepColors: true });
   A.flags.earsLow = 0.9;
 }
 
@@ -380,9 +382,9 @@ export function towerShield(A, { color = '#3F6FB5', rim = '#8C6A4A', crest = '#D
     }
     return mixRgb(c, [0, 0, 0], 0.3);
   };
-  A.add('pawL', new THREE.CylinderGeometry(r, r, 0.03, 40, 1), { m, color: face, rmse: [0.6, 0.1, 0.2, 0] });
-  A.add('pawL', new THREE.TorusGeometry(r, 0.018, 8, 48), { m: m.clone().multiply(mat([0, 0, 0], [Math.PI / 2, 0, 0])), color: C(rim), rmse: RM.wood });
-  A.add('pawL', new THREE.SphereGeometry(0.07, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), { m: m.clone().multiply(mat([0, 0.012, 0])), color: C(PAL.brass), rmse: RM.brass });
+  A.add('pawL', new THREE.CylinderGeometry(r, r, 0.03, sg(A, 40), 1), { m, color: face, rmse: [0.6, 0.1, 0.2, 0] });
+  A.add('pawL', new THREE.TorusGeometry(r, 0.018, sg(A, 8), sg(A, 48)), { m: m.clone().multiply(mat([0, 0, 0], [Math.PI / 2, 0, 0])), color: C(rim), rmse: RM.wood });
+  A.add('pawL', new THREE.SphereGeometry(0.07, sg(A, 20), sg(A, 12), 0, Math.PI * 2, 0, Math.PI / 2), { m: m.clone().multiply(mat([0, 0.012, 0])), color: C(PAL.brass), rmse: RM.brass });
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     A.add('pawL', new THREE.SphereGeometry(0.011, 8, 6), { m: m.clone().multiply(mat([Math.cos(a) * r * 0.88, 0.016, Math.sin(a) * r * 0.88])), color: C(PAL.brass), rmse: RM.brass });

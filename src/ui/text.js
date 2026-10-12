@@ -1,7 +1,7 @@
 // src/ui/text.js  (owner: ui) — pure text helpers for every screen (GAME_DESIGN §6.6, §6.8, §14): string lookup with a
 // safe fallback, HTML escaping, *emphasis*, device glyphs for the [Key] tokens in tutorial / prompt strings, times,
 // hearts, objectives, chapter cards and ranks. Node-safe: no DOM, imports only core/config.js.
-import { LEVEL_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
+import { LEVEL_IDS, KITTENS_BY_LEVEL, INPUT } from '../core/config.js';
 
 /**
  * UI copy the ui needs that strings.js (story) does not carry yet (requested in requests/ui.md). strings.js wins as
@@ -97,6 +97,30 @@ export const UI_STRINGS = Object.freeze({
   'ui.settings.reset': 'Reset to defaults',
   'ui.settings.resetConfirm': 'Reset every setting to its default?',
   'ui.controls.title': 'Controls',
+  // ---- CONTROLS_SPEC §10.1 ability-bar tooltips (title · one-line rule) and §10.7 settings rows
+  'bar.guard': 'The Stand · Hold to block. Raise it just as a blow lands to parry. Snaps to the nearest threat.',
+  'bar.dodge': 'Tumble · A quick roll: nothing can hurt you mid-tumble.',
+  'bar.jump': 'Jump · Hop fences and gaps. Attack in the air to Pounce.',
+  'bar.ability': 'Kitten ability · Tap to cast at the cursor, hold to aim, let go to cast.',
+  'bar.golden': 'Golden Hour · At full Valor: the sun is on your side.',
+  'bar.milk': 'Milk Break · Heals 2 hearts. Don’t get hit while you sip.',
+  'bar.meow': 'Meow · Hidden kittens answer. So do cows.',
+  'bar.interact': 'Interact · Talk, open, rescue. Lit when something is near.',
+  'bar.holy': 'Holy Slash ready: hold Attack until it turns gold.',
+  'ui.controls.preset': 'Keyboard and mouse',
+  'ui.controls.na': '—',
+  'ui.tag.tap': 'Tap',
+  'ui.touch.edit': 'Edit touch layout',
+  'ui.touch.editHint': 'Drag the buttons where your thumbs like them.',
+  'ui.touch.done': 'Done',
+  'ui.touch.reset': 'Reset',
+  'settings.camLock': 'Camera follows her',
+  'settings.autoRiposte': 'Auto-Riposte',
+  'settings.standAutoFace': 'Stand turns to the threat',
+  'settings.hapticTaps': 'Vibrate on button taps',
+  'settings.cursorSize': 'Cursor size',
+  'settings.cursorContrast': 'High-contrast cursor',
+  'settings.pathPreview': 'Show the whole path',
   'ui.boss.crit': 'Crits ×2!',
 });
 
@@ -182,10 +206,11 @@ export const ACTION_GLYPH = Object.freeze({
     meow: 'C', golden: 'V', pause: 'Esc', lockon: 'Tab', move: 'RMB', wasd: 'WASD', look: 'Mouse', recenter: 'F1', zoom: 'Wheel', attackMove: 'X',
     stop: 'H', camLock: 'Y', aim: 'Mouse' },
   pad: { attack: 'X', guard: 'LB', dodge: 'B', jump: 'A', interact: 'Y', confirm: 'A', back: 'B', ability: 'LT', milk: 'D-pad ↑',
-    meow: 'L3', golden: 'RT', pause: 'Start', lockon: 'RB', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'R3', aim: 'R-stick' },
+    meow: 'L3', golden: 'RT', pause: 'Start', lockon: 'RB', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'R3', aim: 'R-stick',
+    attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: 'D-pad ↓' },
   touch: { attack: '⚔', guard: 'Stand', dodge: 'Tumble', jump: 'Jump', interact: '!', confirm: 'Tap', back: 'Back', ability: 'Kitten',
-    milk: 'Milk', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Left thumb', wasd: 'Left thumb', look: 'Drag right',
-    recenter: 'Tap', zoom: 'Pinch', aim: 'Drag' },
+    milk: 'Milk', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Stick / tap', wasd: 'Left thumb', look: 'Drag right',
+    recenter: 'Tap', zoom: 'Pinch', aim: 'Drag', attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: '—' },
 });
 
 /** Semantic glyph tokens (§12 ui 3): resolve through the active bindings / device, never shown as written. */
@@ -199,19 +224,85 @@ export const TOKEN_ACTION = Object.freeze({
   meow: 'meow', golden: 'golden', zoom: 'zoom', ls: 'move', rs: 'aim', rb: 'lockon', y: 'camLock', x: 'attackMove', h: 'stop',
 });
 
-/** Glyph label for an action on a device ('kbm' | 'pad' | 'touch'). */
-export function actionGlyph(action, device = 'kbm') {
+/** Short readable label for a KeyboardEvent.code / mouse code (keycaps, the ability-bar corner glyph). Pure. */
+export function codeLabel(code) {
+  if (!code) return '';
+  const m = /^Key([A-Z])$/.exec(code);
+  if (m) return m[1];
+  const n = /^(?:Digit|Numpad)(\d)$/.exec(code);
+  if (n) return n[1];
+  return ({ Space: 'Space', ShiftLeft: 'Shift', ShiftRight: 'Shift', ControlLeft: 'Ctrl', ControlRight: 'Ctrl', AltLeft: 'Alt', AltRight: 'Alt', Tab: 'Tab',
+    Escape: 'Esc', Enter: 'Enter', NumpadEnter: 'Enter', Backspace: 'Bksp', Mouse0: 'LMB', Mouse1: 'MMB', Mouse2: 'RMB', Mouse3: 'M4', Mouse4: 'M5',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', F1: 'F1', Home: 'Home' })[code] ?? code;
+}
+
+/** Actions whose KBM glyph prefers a mouse button when one is bound (LMB attack, RMB move). */
+const MOUSE_FIRST = new Set(['attack', 'move']);
+
+/**
+ * The preferred bound code for an action from the active KBM bindings (`input.codesFor`), or null. Pure given the
+ * codes: mouse-first actions show their mouse button, every other action its first keyboard key.
+ * @param {string} action @param {string[]} codes
+ */
+export function preferredCode(action, codes) {
+  if (!codes?.length) return null;
+  if (MOUSE_FIRST.has(action)) return codes.find((c) => c.startsWith('Mouse')) ?? codes[0];
+  return codes.find((c) => !c.startsWith('Mouse')) ?? codes[0];
+}
+
+/** Actions whose KBM glyph never comes from a binding (they name a gesture, not a key). */
+const FIXED_KBM = new Set(['wasd', 'look', 'aim', 'zoom', 'confirm', 'back']);
+
+/**
+ * Glyph label for an action on a device ('kbm' | 'pad' | 'touch'). With `input` (the core Input) on KBM the label
+ * follows the active preset and rebinding (`input.codesFor`), so presets never need new strings (§12 ui 3).
+ */
+export function actionGlyph(action, device = 'kbm', input = null) {
+  if (device === 'kbm' && input?.codesFor && !FIXED_KBM.has(action)) {
+    const c = preferredCode(action, input.codesFor(action));
+    if (c) return codeLabel(c);
+    if (action === 'move') return ACTION_GLYPH.kbm.wasd;      // keyboardOnly: no move click, WASD walks
+  }
   const t = ACTION_GLYPH[device] ?? ACTION_GLYPH.kbm;
   return t[action] ?? ACTION_GLYPH.kbm[action] ?? String(action ?? '');
 }
 
+/** The KBM preset ids (§6.2), in menu order. */
+export const PRESET_IDS = Object.freeze(['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly']);
+
+/**
+ * KBM glyph for an action under any preset (the controls card previews presets without switching). Pure: the codes
+ * are `bindings[action]` ?? the preset's table ?? the base hybrid table (core Input merges them the same way).
+ * `move` reads "RMB / WASD" when the preset also walks on WASD.
+ * @param {string} action @param {string} preset @param {Record<string,string[]>} [bindings]
+ */
+export function presetGlyph(action, preset = 'hybrid', bindings = null) {
+  const P = INPUT.presets?.[preset] ?? INPUT.presets?.hybrid ?? { keys: {}, wasd: true };
+  const codesOf = (a) => bindings?.[a] ?? P.keys?.[a] ?? INPUT.keys?.[a] ?? [];
+  if (action === 'move') {
+    const c = preferredCode('move', codesOf('move'));
+    const parts = [c ? codeLabel(c) : null, P.wasd !== false ? 'WASD' : null].filter(Boolean);
+    return parts.join(' / ') || ACTION_GLYPH.kbm.move;
+  }
+  return actionGlyph(action, 'kbm', { codesFor: codesOf });
+}
+
 /** One `[token]` → keycap HTML for `device`. Unknown tokens stay as written. */
-function tokenHtml(inner, device) {
+function tokenHtml(inner, device, input) {
   const parts = inner.split(/\s+/);
   const head = parts[0], rest = parts.slice(1).join(' ');
   const act = TOKEN_ACTION[head.toLowerCase()];
   const sem = SEMANTIC.has(head.toLowerCase());
-  const label = act ? (device === 'kbm' && act !== 'attack' && !sem ? head : actionGlyph(act, device)) : head;
+  // semantic tokens ([Stand], [Attack] …) always resolve; a literal keyboard token ([Space]) resolves through the
+  // bindings only when the preset / rebinding moved that action off the written key
+  let label = head;
+  if (act) {
+    if (device !== 'kbm' || sem || act === 'attack') label = actionGlyph(act, device, input);
+    else if (input?.codesFor && !FIXED_KBM.has(act)) {
+      const codes = input.codesFor(act);
+      if (codes.length && !codes.some((c) => codeLabel(c).toLowerCase() === head.toLowerCase())) label = actionGlyph(act, device, input);
+    }
+  }
   const cls = act === 'attack' ? 'ui-key ui-key--sword' : 'ui-key';
   return `<kbd class="${cls}">${esc(label)}</kbd>${rest ? `<span class="ui-key-x">${esc(rest)}</span>` : ''}`;
 }
@@ -221,22 +312,22 @@ function tokenHtml(inner, device) {
  * becomes the attack chip, `*x*` becomes emphasis. Everything else is escaped.
  * @param {string} text @param {'kbm'|'pad'|'touch'} [device]
  */
-export function glyphify(text, device = 'kbm') {
+export function glyphify(text, device = 'kbm', input = null) {
   const str = String(text ?? '');
   let out = '', last = 0;
   const re = /\[([^\]]+)\]/g;
   let m;
   while ((m = re.exec(str))) {
-    out += plainGlyphs(str.slice(last, m.index), device);
-    out += tokenHtml(m[1].trim(), device);
+    out += plainGlyphs(str.slice(last, m.index), device, input);
+    out += tokenHtml(m[1].trim(), device, input);
     last = m.index + m[0].length;
   }
-  out += plainGlyphs(str.slice(last), device);
+  out += plainGlyphs(str.slice(last), device, input);
   return out;
 }
 
-function plainGlyphs(s, device) {
-  return rich(s).replace(/⚔/g, `<kbd class="ui-key ui-key--sword">${esc(actionGlyph('attack', device))}</kbd>`);
+function plainGlyphs(s, device, input) {
+  return rich(s).replace(/⚔/g, `<kbd class="ui-key ui-key--sword">${esc(actionGlyph('attack', device, input))}</kbd>`);
 }
 
 // ------------------------------------------------------------------ numbers

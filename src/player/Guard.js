@@ -4,7 +4,7 @@ import { PLAYER } from '../core/config.js';
 
 /**
  * §19.4 resolve (the player's `resolveIncoming` calls it). Mutates `g.grit` on a block.
- * @param {{dodgeT:number, dodging:boolean, guarding:boolean, guardT:number, parryT?:number, grit:number, lockoutT:number, parryWindow?:number}} g
+ * @param {{dodgeT:number, dodging:boolean, guarding:boolean, guardT:number, parryT?:number, grit:number, lockoutT:number, parryWindow?:number, arc?:number}} g
  * @param {{telegraph?:string, unblockable?:boolean, poise?:number}} def incoming attack def
  * @param {{x:number, z:number}} hitDirIntoTarget unit XZ direction from the attacker INTO her
  * @param {number} facing her yaw (atan2(dir.x, dir.z))
@@ -16,7 +16,8 @@ export function resolveGuard(g, def, hitDirIntoTarget, facing, cfg = PLAYER) {
     return g.dodgeT <= cfg.dodge.perfect[1] ? 'perfectDodge' : 'graze';        // both → 'immune' for Combat
   if (!g.guarding) return 'hit';
   const fx = Math.sin(facing), fz = Math.cos(facing);
-  const frontal = -(hitDirIntoTarget.x * fx + hitDirIntoTarget.z * fz) >= Math.cos(cfg.guard.arc);
+  // CONTROLS_SPEC §8.1: ±70° on KBM / pad, ±90° on touch (`g.arc` = PLAYER.guard.touchArc, set by the owner)
+  const frontal = -(hitDirIntoTarget.x * fx + hitDirIntoTarget.z * fz) >= Math.cos(g.arc ?? cfg.guard.arc) - 1e-9;
   if (!frontal) return 'hit';
   if (def.telegraph === 'red' || def.unblockable) return 'break';
   // parry timing counts from the Stand PRESS (parryT), not from (re-)entering the Stand: a Stand re-entered with the
@@ -46,6 +47,8 @@ export class GuardState {
     this.lockoutT = 0;
     /** parry window in seconds (difficulty row + touch bonus; set by the owner) */
     this.parryWindow = cfg.guard.parryWindow;
+    /** half-angle of the frontal guard arc (rad): ±70°, ±90° on touch (set by the owner) */
+    this.arc = cfg.guard.arc;
     this.dodging = false;
     this.dodgeT = 0;
     /** did this Stand block or parry anything? (whiff rule) */

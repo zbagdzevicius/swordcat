@@ -10,7 +10,7 @@
 // Explicit levels come from `fx.holy(actor, 0..1)` (cutscenes: CS-00 pulse, CS-02 shot 12, the ending).
 import * as THREE from 'three';
 import { PLAYER, ATTACKS } from '../core/config.js';
-import { FOG_FACTOR, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { MARK } from './Marks.js';
 import { SHAPE, FADE, GROW } from './Particles.js';
 import { actorWorldPos, resolveBlade, isActor, auraOwner } from './util.js';
@@ -87,7 +87,7 @@ export class SparkleField {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
     g.setAttribute('aSize', new THREE.BufferAttribute(sz, 1));
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.holy.sparkles', vertexShader: SPARK_VERT, fragmentShader: SPARK_FRAG, fog: true,
       uniforms: { ...fogUniforms(), uTime: { value: 0 }, uI: { value: 0 }, uColor: { value: new THREE.Color('#FFF1C4') }, uPx: { value: 36 }, uRise: { value: 1 } },
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -152,7 +152,7 @@ function arcGeometry() {
 
 class GoldArc {
   constructor() {
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.holy.arc', vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, fog: true,
       uniforms: { ...fogUniforms(), uR: { value: 1 }, uThick: { value: 0.3 }, uTheta0: { value: 0 }, uSweep: { value: Math.PI },
         uColor: { value: new THREE.Color('#FFD34D') }, uI: { value: 0 }, uRing: { value: 0 } },

@@ -51,8 +51,10 @@ export function locomote(p, dt, o = {}) {
   let lambda;
   if (p.onGround) lambda = mag > 0.05 ? PLAYER.accelDamp : (o.decel ?? PLAYER.decelDamp);
   else { lambda = PLAYER.airDamp; speed = Math.min(speed, PLAYER.airMax * p.speedMul); }
-  p.vel.x = damp(p.vel.x, _wish.x * speed, lambda, dt);
-  p.vel.z = damp(p.vel.z, _wish.z * speed, lambda, dt);
+  // §5.4 jump assist: the assisted take-off's extra velocity holds through the air while she steers the same way
+  const aa = !p.onGround && mag > 0.05 ? p.airAssist : null;
+  p.vel.x = damp(p.vel.x, _wish.x * speed + (aa?.on ? aa.x : 0), lambda, dt);
+  p.vel.z = damp(p.vel.z, _wish.z * speed + (aa?.on ? aa.z : 0), lambda, dt);
   const turn = o.turn ?? 'damp';
   const lock = p.lockTarget();
   if (o.face && lock) {
@@ -86,7 +88,7 @@ function tryActions(p, { allowAttack = true, allowGuard = true, allowDodge = tru
     if (p.onGround) { p.startGroundAttack(); return true; }
     if (p.pounceReady) { p.setState('pounce'); return true; }
   }
-  if (allowJump && p.jumpBuf > 0 && (p.onGround || p.coyoteT > 0)) { p.doJump(); return false; }
+  if (allowJump && p.jumpBuf > 0 && (p.onGround || p.coyoteT > 0)) { (p.inputJump ?? p.doJump).call(p); return false; }
   if (allowSip && p.milkPressed && p.canSip()) { p.setState('sip'); return true; }
   return false;
 }
@@ -132,23 +134,27 @@ export const STATES = {
       if (lateRecovery && !s.queued && p.ctx.cam?.isIso && Math.hypot(p.ctx.input.move.x, p.ctx.input.move.y) >= 0.15 && p.attackBuf <= 0) {
         p.endSwing(); p.noteComboEnd(def); p.setState('move'); return;
       }
-      // combo: a (buffered) press inside the window QUEUES the next swing; it starts when this one's recovery ends
-      // (def.dur), so every slash sweeps its full arc and Snip–Snap–Swoosh keeps the designed ≈1.4 s rhythm (§7.2).
-      // Touch auto-combo (§14.4): a tap anywhere in the swing queues the next hit (no need to hit combo[0]).
-      const comboFrom = p.autoCombo() ? 0 : def.combo?.[0];
-      if (def.next && def.combo && p.attackBuf > 0 && s.t >= comboFrom && s.t <= def.combo[1]) { s.queued = true; p.attackBuf = 0; }
-      if (s.queued && s.t >= Math.max(def.dur ?? act[1], act[1])) { p.startAttack(def.next); return; }
       // cancels: Golden Hour any time before the active frames; Stand before/after them; Tumble / charge after.
       // A Stand already held when the swing started (⚔ out of the Stand, a Riposte, Auto-Stand) never cancels it:
       // only a fresh Stand press does (requests/combat.md); she drops back into the Stand when the swing ends.
+      // Checked BEFORE the queued combo hit starts, so a parry press in the recovery wins over the next swing.
       if (preActive && p.tryGolden()) return;
       const wantGuard = p.wantGuard();
       if (!wantGuard) p.swingGuardLatch = false;
-      if ((preActive || recovering) && wantGuard && !p.swingGuardLatch && p.onGround && !def.noCancel) { p.endSwing(); p.setState('guard'); return; }
+      const freshGuard = wantGuard && !p.swingGuardLatch;
+      if ((preActive || recovering) && freshGuard && p.onGround && !def.noCancel) { p.endSwing(); p.setState('guard'); return; }
+      // combo: a (buffered) press inside the window QUEUES the next swing; it starts when this one's recovery ends
+      // (def.dur), so every slash sweeps its full arc and Snip–Snap–Swoosh keeps the designed ≈1.4 s rhythm (§7.2).
+      // Touch auto-combo (§14.4): a tap anywhere in the swing queues the next hit (no need to hit combo[0]).
+      // A fresh Stand (pressed during the active frames) un-queues it: the recovery check above takes her to the Stand.
+      if (freshGuard && s.queued && !def.noCancel) s.queued = false;
+      const comboFrom = p.autoCombo() ? 0 : def.combo?.[0];
+      if (!freshGuard && def.next && def.combo && p.attackBuf > 0 && s.t >= comboFrom && s.t <= def.combo[1]) { s.queued = true; p.attackBuf = 0; }
+      if (s.queued && s.t >= Math.max(def.dur ?? act[1], act[1])) { p.startAttack(def.next); return; }
       const rollFrom = def.rollCancel ?? act[1];
       if (s.t >= rollFrom && p.dodgeBuf > 0 && p.canDodge() && !def.noCancel) { p.endSwing(); p.startDodge(); return; }
       // jump out of the recovery (after the active frames), so movement never feels glued to a swing
-      if (recovering && !def.noCancel && def.id !== 'holy' && p.jumpBuf > 0 && p.onGround) { p.endSwing(); p.setState('move'); p.doJump(); return; }
+      if (recovering && !def.noCancel && def.id !== 'holy' && p.jumpBuf > 0 && p.onGround) { p.endSwing(); p.setState('move'); (p.inputJump ?? p.doJump).call(p); return; }
       if (recovering && !def.noCancel && def.id !== 'holy' && p.chargeHeld() && p.attackHeldTime() >= PLAYER.charge.start && p.onGround) {
         p.endSwing(); p.setState('charge'); return;
       }
@@ -199,14 +205,25 @@ export const STATES = {
         p.vel.y = 0; brake(p, dt, 8);
         if (p.stateT >= A.hang) {
           p.pouncePhase = 'dive';
-          if (p.ctx.cam?.isIso) p.faceAim?.('pounce', ATTACKS.pounce.arc.range);   // §6.2: Pounce toward the cursor
-          p.aimAssist();
+          p.diveV = null;
+          const plan = p.ctx.cam?.isIso && p.pouncePlan ? p.pouncePlan() : null;
+          if (plan?.valid) {
+            // §6.2: Pounce toward the cursor (≤ 3.5 m), a crow near it magnetised; the dive's horizontal speed carries
+            // her to the point by the time she lands (≤ 9 m/s)
+            const dx = plan.x - p.pos.x, dz = plan.z - p.pos.z, d = Math.hypot(dx, dz);
+            if (d > 0.05) p.facing = Math.atan2(dx, dz);
+            const floor = p.ctx.physics?.topAt?.(p.pos.x, p.pos.z) ?? p.ctx.physics?.heightAt?.(p.pos.x, p.pos.z) ?? 0;
+            const tDive = Math.max(0.1, (p.pos.y - (Number.isFinite(floor) ? floor : 0)) / A.diveSpeed);
+            const hv = Math.min(9, d / tDive);
+            p.diveV = { x: d > 1e-3 ? (dx / d) * hv : 0, z: d > 1e-3 ? (dz / d) * hv : 0 };
+          } else p.aimAssist();
         }
         return;
       }
       if (p.pouncePhase === 'dive') {
         p.vel.y = -A.diveSpeed;
-        p.vel.x = damp(p.vel.x, Math.sin(p.facing) * 2, 6, dt); p.vel.z = damp(p.vel.z, Math.cos(p.facing) * 2, 6, dt);
+        if (p.diveV) { p.vel.x = damp(p.vel.x, p.diveV.x, 30, dt); p.vel.z = damp(p.vel.z, p.diveV.z, 30, dt); }
+        else { p.vel.x = damp(p.vel.x, Math.sin(p.facing) * 2, 6, dt); p.vel.z = damp(p.vel.z, Math.cos(p.facing) * 2, 6, dt); }
         const s = p.swing;
         s.t = 0;                                         // re-sweep the whole ±0.9 cone every step
         const hits = p.ctx.combat.updateSwing(s, dt);

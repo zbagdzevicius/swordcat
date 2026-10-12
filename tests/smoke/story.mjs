@@ -1,7 +1,10 @@
 // tests/smoke/story.mjs  (owner: story) — smoke blocks for src/story: the title loop, CS-01, Midnight Practice, G-01,
 // CS-02 (never cut), CS-03 (never cut) + the Pudding follow beat, D-01, hold-to-skip and barks; M2: forest (D-02, CS-04,
-// CS-05), town (D-03, CS-06, D-04 ×3, CS-07) and gate (yard, D-06, CS-08 never cut, G-02, CS-09, CS-10 → the grey hub). Screenshots go to
-// tests/shots/story/. Run against your own dev server:
+// CS-05), town (D-03, CS-06, D-04 ×3, CS-07) and gate (yard, D-06, CS-08 never cut, G-02, CS-09, CS-10 → the grey hub).
+// CONTROLS_SPEC §12 story: `story:tutorial` plays Midnight Practice with the desktop mouse (RMB to move, RMB a dummy to
+// target it, LMB / J to swing) and `story:tutorial-touch` plays it on 844×390 and 390×844 hasTouch / isMobile pages through
+// the touch path only (joystick, ground taps, the ⚔ / 🛡 / Jump / Tumble / Meow buttons, a tap on a dummy, a swipe).
+// Screenshots go to tests/shots/story/. Run against your own dev server:
 //   SMOKE_URL=http://localhost:5211/ SMOKE_ONLY=story node tests/smoke.mjs
 // Scenes are watched at real speed and photographed at their beats (dialogue keys / scene time); the sim is frozen
 // (time scale 0) while a screenshot is taken so slow GPU readbacks never skip a beat.
@@ -318,6 +321,226 @@ const M2_BLOCKS = [
   },
 ];
 
+/**
+ * Midnight Practice through the touch path only, on its own hasTouch / isMobile page (`w`×`h`). Real taps go through
+ * Playwright's touchscreen; drags and swipes are synthetic touch PointerEvents on the touch layer (like ui's own smoke).
+ * Teleports place her at each station (the walk between them is not the lesson); every lesson input is a touch.
+ */
+async function tutorialTouch(t, w, h, tag) {
+  const errors = [];
+  const ctxM = await t.browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+  const pg = await ctxM.newPage();
+  pg.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+  const G = async (fn, arg) => { const hd = await pg.evaluateHandle(fn, arg); try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); } };
+  const untilM = async (fn, arg, ms = 8000) => { const t0 = Date.now(); let v = await G(fn, arg); while (!v && Date.now() - t0 < ms) { await pg.waitForTimeout(120); v = await G(fn, arg); } return v; };
+  const stepAt = (n, ms = 8000) => untilM((k) => window.__GAME__.ctx.story.tutorial.step >= k, n, ms);
+  const mshot = async (name) => {
+    await G(() => window.__GAME__.game.setTimeScale(0));
+    try { await pg.waitForTimeout(60); await pg.screenshot({ path: path.join(t.shotsDir, DIR, `${name}.png`) }); } catch (e) { t.warn(`shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); }
+    finally { await G(() => window.__GAME__.game.setTimeScale(1)); }
+  };
+  /** Synthetic touch pointer (captured by the element it went down on, like a real pointer). */
+  const ptr = (type, x, y, id = 11) => G(([tp, px, py, pid]) => {
+    const caps = (window.__ptrCap ??= {});
+    const el = tp === 'pointerdown' ? (document.elementFromPoint(px, py)?.closest?.('.tbtn, .touch-root') ?? document.querySelector('.touch-root')) : (caps[pid] ?? document.querySelector('.touch-root'));
+    if (tp === 'pointerdown') caps[pid] = el;
+    el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: pid, clientX: px, clientY: py, pointerType: 'touch', isPrimary: pid === 11 }));
+    if (tp === 'pointerup' || tp === 'pointercancel') delete caps[pid];
+    return el?.className ?? null;
+  }, [type, x, y, id]);
+  const btn = (a) => G((x) => { const b = document.querySelector(`.tbtn[data-action="${x}"]`); if (!b || b.classList.contains('is-hidden')) return null; const r = b.getBoundingClientRect(); return r.width > 0 ? [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)] : null; }, a);
+  const tapBtn = async (a) => { const c = await btn(a); if (!c) return false; await pg.touchscreen.tap(c[0], c[1]); return true; };
+  const tpM = (x, z, yaw = 0) => G(([px, pz, f]) => { const g = window.__GAME__, p = g.ctx.player; p.teleport({ pos: new g.THREE.Vector3(px, g.ctx.physics.heightAt(px, pz), pz), facing: f }); return true; }, [x, z, yaw]);
+  const hint = () => G(() => { const e = document.querySelector('.ui-hint.is-on .hint-txt'); return e && e.textContent.trim() ? e.textContent.trim().slice(0, 140) : null; });
+  try {
+    for (let k = 0; ; k++) {                                     // a loaded machine: the first load can be slow
+      try { await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 120000 }); break; } catch (e) { if (k >= 2) throw e; t.warn(`${tag}: page load retry ${k + 1}`); }
+    }
+    await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 200000 });
+    // first touch (input device → 'touch') BEFORE practice loads: that tap is a ground tap (a move order) and must not
+    // walk her through the move / fence steps
+    await pg.touchscreen.tap(Math.round(w * 0.62), Math.round(h * 0.3));
+    await pg.waitForTimeout(300);
+    await G(async () => {
+      const g = window.__GAME__, c = g.ctx;
+      g.story.skip?.(); c.story.queue.length = 0;
+      c.player?.order?.('stop');
+      c.state.flags = {}; c.state.setFlag('prologue.armour', true);
+      await g.loadLevel('meadow', 'practice');
+      return true;
+    });
+    await pg.waitForTimeout(500);
+    await G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.god(true); g.ctx.ui.touch.enable(true); });
+    const s1 = await untilM(() => window.__GAME__.ctx.story.tutorial.active, null, 30000);
+    const dev = await G(() => ({ dev: window.__GAME__.ctx.input.device, active: window.__GAME__.ctx.story.tutorial.active, key: window.__GAME__.ctx.story.tutorial.textKey }));
+    t.assert(dev.dev === 'touch', `${tag}: device touch (${dev.dev})`);
+    t.assert(!!s1 && dev.active, `${tag}: practice starts`);
+    const h1 = await untilM(() => { const e = document.querySelector('.ui-hint.is-on .hint-txt'), x = e?.textContent?.trim() ?? ''; return /Drag the left side|tap where to go/.test(x) ? x : null; }, null, 8000)
+      ?? await G(() => document.querySelector('.ui-hint.is-on .hint-txt')?.textContent?.trim() ?? null);
+    t.log(`${tag}: hint "${h1}"`);
+    t.assert(!!h1 && /Drag the left side|tap where to go/.test(h1), `${tag}: the move hint is the touch copy (${h1})`);
+    await mshot(`02t-${tag}-1-move`);
+    // ---- 1 move: the floating joystick (drag on the left side), then a ground tap
+    const sx = Math.round(w * 0.18), sy = Math.round(h * 0.82);
+    await ptr('pointerdown', sx, sy);
+    for (let k = 1; k <= 6; k++) await ptr('pointermove', sx + k * 12, sy);
+    await pg.waitForTimeout(1000);
+    await ptr('pointerup', sx + 72, sy);
+    let s = await stepAt(2, 3000);
+    if (!s) {
+      t.log(`${tag}: the joystick alone did not finish the move step; a ground tap`);
+      const tg = await G(() => { const g = window.__GAME__, p = g.ctx.player.pos; return g.screen(p.x + 3.5, p.z - 1); });
+      await pg.touchscreen.tap(Math.round(tg.x), Math.round(tg.y));
+      s = await stepAt(2, 8000);
+    }
+    t.assert(!!s, `${tag}: step 2 (jump) after moving by touch`);
+    // ---- 2 jump the fence: hold the stick toward it (screen-up = north) and press Jump (a tap, then a held press)
+    await tpM(-10, -88.7, 0);
+    await pg.waitForTimeout(1300);
+    await mshot(`02t-${tag}-2-jump`);
+    const jb = await btn('jump');
+    t.assert(!!jb, `${tag}: the Jump button shows`);
+    let how = null;
+    for (const holdMs of [0, 450, 650]) {
+      await tpM(-10, -88.9, 0);
+      await pg.waitForTimeout(500);                             // landed and settled (a teleport mid-air keeps falling)
+      await ptr('pointerdown', sx, sy);
+      for (let k = 1; k <= 6; k++) await ptr('pointermove', sx, sy - k * 12);
+      await pg.waitForTimeout(350);                             // up to running speed toward the fence
+      if (holdMs === 0) await pg.touchscreen.tap(jb[0], jb[1]);
+      else {                                                   // held to the apex (sim time: slow under load)
+        await ptr('pointerdown', jb[0], jb[1], 12);
+        await pg.waitForTimeout(holdMs);
+        await untilM(() => { const p = window.__GAME__.ctx.player; return p.onGround === false && p.vel.y <= 0.3; }, null, 2500);
+        await ptr('pointerup', jb[0], jb[1], 12);
+      }
+      await pg.waitForTimeout(900);
+      await ptr('pointerup', sx, sy - 72);
+      s = await stepAt(3, 2500);
+      if (s) { how = holdMs ? 'held Jump' : 'tapped Jump'; break; }
+    }
+    t.log(`${tag}: fence cleared by ${how ?? 'nothing'}`);
+    if (how !== 'tapped Jump') t.warn(`${tag}: a TAP on Jump does not clear the 1.0 m practice fence (jump cut on release)`);
+    if (!s) { t.warn(`${tag}: fence jump missed: placing her north of it`); await tpM(-10, -85, 0); s = await stepAt(3, 4000); }
+    t.assert(!!s, `${tag}: step 3 (combo) after the fence`);
+    t.assert(await G(() => window.__GAME__.ctx.state.getFlag('tut.jump.done') === true), `${tag}: flag tut.jump.done`);
+    // ---- 3 combo: tap ⚔ three times next to a dummy
+    await tpM(0, -77.4, 0);
+    await pg.waitForTimeout(1200);
+    for (let k = 0; k < 3 && !(await G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 4)); k++) {
+      for (let i = 0; i < 3; i++) { await tapBtn('attack'); await pg.waitForTimeout(240); }
+      await pg.waitForTimeout(700);
+    }
+    s = await stepAt(4, 5000);
+    t.assert(!!s, `${tag}: step 4 (target) after ⚔ ×3`);
+    // ---- 4 target: tap a dummy → an attack order
+    await G(() => window.__GAME__.ctx.player.order?.('stop'));
+    await tpM(0, -78.8, 0);
+    await pg.waitForTimeout(1300);
+    let ord = null;
+    s = null;
+    for (let k = 0; k < 3 && !s; k++) {
+      await G(() => window.__GAME__.clearEvents());
+      const dsp = await G(() => {
+        const g = window.__GAME__, d = g.ctx.actors.list.filter((x) => x.kind === 'dummy').sort((p, q) => Math.hypot(p.pos.x, p.pos.z + 76) - Math.hypot(q.pos.x, q.pos.z + 76))[0];
+        const sp = g.screen(d.pos.x, d.pos.z, d.pos.y + 0.55), pk = g.ctx.cam.pick?.(sp.x, sp.y);
+        const top = document.elementFromPoint(sp.x, sp.y);
+        return { x: sp.x, y: sp.y, pick: pk?.kind ?? null, el: top ? top.tagName + '.' + String(top.className).split(' ')[0] : null };
+      });
+      if (k === 0) await mshot(`02t-${tag}-4-target`);
+      await pg.touchscreen.tap(Math.round(dsp.x), Math.round(dsp.y));
+      s = await stepAt(5, 3500);
+      ord = await G(() => window.__GAME__.lastEvent('player:order'));
+      if (!s) t.log(`${tag}: dummy tap ${k + 1}: pick ${dsp.pick}, element ${dsp.el}, order ${ord?.kind}`);
+    }
+    t.assert(ord?.kind === 'attack', `${tag}: tapping a dummy orders an attack (${ord?.kind})`);
+    t.assert(!!s, `${tag}: step 5 (roll) after tapping a dummy`);
+    await G(() => window.__GAME__.ctx.player.order?.('stop'));
+    // ---- 5 roll past the sack: a swipe on the free ground (falls back to the Tumble button)
+    await tpM(6.2, -84, Math.PI / 2);
+    await pg.waitForTimeout(1300);
+    const fx = Math.round(w * 0.6), fy = Math.round(h * (tag === 'portrait' ? 0.4 : 0.45));
+    await G(([x, y]) => {                                       // one synchronous gesture: a swipe is ≤ 150 ms
+      const el = document.querySelector('.touch-root');
+      const ev = (tp, px) => el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: 31, clientX: px, clientY: y, pointerType: 'touch' }));
+      ev('pointerdown', x); ev('pointermove', x + 30); ev('pointermove', x + 70); ev('pointerup', x + 70);
+    }, [fx, fy]);
+    s = await stepAt(6, 3000);
+    if (!s) { t.warn(`${tag}: swipe did not tumble by the sack: Tumble button`); await tpM(6.2, -84, Math.PI / 2); await pg.waitForTimeout(300); await tapBtn('dodge'); s = await stepAt(6, 4000); }
+    t.assert(!!s, `${tag}: step 6 (Stand) after the tumble`);
+    // ---- 6 hold 🛡 in front of the Wobble Knight until it is blocked twice
+    await tpM(0, -84.9, Math.PI);
+    await pg.waitForTimeout(400);
+    const gb = await btn('guard');
+    t.assert(!!gb, `${tag}: the 🛡 button shows`);
+    await ptr('pointerdown', gb[0], gb[1], 21);
+    await pg.waitForTimeout(1500);
+    await mshot(`02t-${tag}-6-stand`);
+    s = await stepAt(7, 15000);
+    await ptr('pointerup', gb[0], gb[1], 21);
+    if (!s) {                                                   // under load: one more raise in front of it
+      t.log(`${tag}: blocks so far ${await G(() => window.__GAME__.ctx.story.tutorial.log.blocks)}; holding 🛡 again`);
+      await tpM(0, -84.9, Math.PI); await pg.waitForTimeout(300);
+      await ptr('pointerdown', gb[0], gb[1], 21); s = await stepAt(7, 15000); await ptr('pointerup', gb[0], gb[1], 21);
+    }
+    t.assert(!!s, `${tag}: step 7 (parry) after two blocks`);
+    // ---- 7 parry: press 🛡 just before the strike (in-page timing; the touch Auto-Riposte assist may follow)
+    for (let k = 0; k < 4 && !(await G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 8)); k++) {
+      await pg.evaluate(([gx, gy]) => new Promise((resolve) => {
+        const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), t0 = performance.now();
+        const el = document.elementFromPoint(gx, gy)?.closest?.('.tbtn') ?? document.querySelector('.tbtn[data-action="guard"]');
+        const ev = (tp) => el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: 22, clientX: gx, clientY: gy, pointerType: 'touch' }));
+        const tick = () => {
+          if (!wk || performance.now() - t0 > 6000) { resolve(false); return; }
+          if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.07) { ev('pointerdown'); setTimeout(() => { ev('pointerup'); resolve(true); }, 350); return; }
+          requestAnimationFrame(tick);
+        };
+        tick();
+      }), gb);
+      await pg.waitForTimeout(700);
+    }
+    s = await stepAt(8, 2000);
+    if (!s) {
+      t.warn(`${tag}: no timed parry landed: emitting one from the Wobble Knight`);
+      await G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); g.ctx.bus.emit(g.E.PLAYER_PARRY, { attacker: wk, gold: false, position: g.ctx.player.pos.clone() }); });
+      s = await stepAt(8, 4000);
+    }
+    t.assert(!!s, `${tag}: step 8 (Bright Slash) after the parry`);
+    // ---- 8 Bright Slash: hold ⚔ facing the cracked boulder, let go
+    await tpM(-10, -85.6, 0);
+    await pg.waitForTimeout(1300);
+    for (let k = 0; k < 3 && !(await G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 9)); k++) {
+      const ab = await btn('attack');
+      await ptr('pointerdown', ab[0], ab[1], 23);
+      await untilM(() => (window.__GAME__.ctx.player.chargeTier ?? 0) >= 1, null, 4000);   // shines (sim time: slow under load)
+      await pg.waitForTimeout(120);
+      if (k === 0) await mshot(`02t-${tag}-8-bright`);
+      await ptr('pointerup', ab[0], ab[1], 23);
+      await pg.waitForTimeout(1300);
+    }
+    s = await stepAt(9, 4000);
+    t.assert(!!s, `${tag}: step 9 (Meow) after the boulder breaks`);
+    // ---- 9 Meow: the cat-face button next to the sleeping cow → Pearl
+    await tpM(9.5, -72.5, Math.PI / 2);
+    await pg.waitForTimeout(1300);
+    const h9 = await hint();
+    t.assert(!h9 || /cat face/.test(h9), `${tag}: the meow hint is the touch copy (${h9})`);
+    t.assert(await tapBtn('meow'), `${tag}: the Meow button shows`);
+    const pearl = await untilM(() => window.__GAME__.ctx.story.playingId === 'tutpearl', null, 8000);
+    t.assert(!!pearl, `${tag}: Pearl pops out (tutpearl)`);
+    if (await untilM((k) => window.__GAME__.ctx.story.line?.key === k, 'tut.pearl1', 8000)) { await pg.waitForTimeout(500); await mshot(`02t-${tag}-9-pearl`); }
+    // dialogue advances by tapping the box / screen
+    for (let k = 0; k < 30 && await G(() => window.__GAME__.ctx.story.isPlaying); k++) { await pg.touchscreen.tap(Math.round(w * 0.5), Math.round(h * 0.82)); await pg.waitForTimeout(500); }
+    const done = await untilM(() => window.__GAME__.ctx.state.getFlag('prologue.tutorial') === true && !window.__GAME__.ctx.story.isPlaying, null, 20000);
+    t.assert(!!done, `${tag}: practice over (prologue.tutorial)`);
+    await pg.waitForTimeout(1200);
+    await mshot(`02t-${tag}-10-done`);
+  } catch (e) { t.fail(`${tag}: ${e?.message ?? e}`); }
+  finally { await ctxM.close(); }
+  for (const e of errors) t.fail(`${tag} page: ${e}`);
+}
+
 export default [
   // ------------------------------------------------------------------ CS-00 title loop, then New Game → CS-01
   {
@@ -394,10 +617,15 @@ export default [
       t.assert(s1 === 1, `tutorial starts at step 1 (${s1})`);
       await t.wait(900);
       await shot(t, '02a-tutorial-move');
-      // 1 move + look
-      await t.hold('KeyW', 1400);
-      await t.hold('KeyD', 1200);                                  // the fence stops her ~2.5 m north: strafe along it
-      const s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 });   // C6: moving is enough
+      // 1 move (C6: any method, no camera look): a real right-click on the ground 4.5 m east of her (an order)
+      const p0 = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
+      const m1 = await t.G(([x, z]) => window.__GAME__.screen(x, z), [p0[0] + 4.5, p0[2]]);
+      await t.page.mouse.move(m1.x, m1.y); await t.wait(80);
+      await t.page.mouse.click(m1.x, m1.y, { button: 'right' });
+      let s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 });
+      const ord1 = await t.lastEvent('player:order');
+      t.assert(ord1?.kind === 'move', `RMB on the ground is a move order (${ord1?.kind})`);
+      if (!s2) { t.warn('the click walk did not finish the move step: WASD'); await t.hold('KeyD', 1200); s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 }); }
       if (!s2) t.log('tutorial diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, tu = g.ctx.story.tutorial, p = g.ctx.player; return { i: tu.log.i, moved: tu.log.moved, looked: tu.log.looked, active: tu.active, wait: tu.waitT, pend: tu.pending, pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, yaw: g.ctx.cam.yaw }; })));
       t.assert(!!s2, 'step 2 (jump) after moving');
       // 2 jump the inner fence (z −87): walk at it and jump
@@ -406,27 +634,44 @@ export default [
       let s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 });
       if (!s) { t.warn('fence jump missed: placing her north of it'); await tp(t, -10, -85, 0); s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 }); }
       t.assert(!!s, 'step 3 (combo) after crossing the fence');
+      t.assert(await t.G(() => window.__GAME__.ctx.state.getFlag('tut.jump.done') === true), 'flag tut.jump.done after the jump step');
       await shot(t, '02b-tutorial-combo');
       // 3 Snip–Snap–Swoosh on a dummy (0, −76)
       await tp(t, 0, -77.4, 0);
+      // J swings toward the cursor (§7.1): put the pointer on the dummy (an earlier block may have left it anywhere)
+      const dum = await t.G(() => window.__GAME__.screen(0, -76, 0.6));
+      if (dum) { await t.page.mouse.move(dum.x, dum.y); await t.wait(100); }
       for (let k = 0; k < 3 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 4)); k++) { await t.tap('KeyJ', 3, 230); await t.wait(700); }
       s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 4, { timeout: 5000 });
-      t.assert(!!s, 'step 4 (roll) after the combo');
-      // 4 roll past the sack (8, −84)
+      t.assert(!!s, 'step 4 (target) after the combo');
+      // 4 target: a real right-click on a straw dummy → an attack order (she walks in and chains on it)
+      await tp(t, 0, -79.5, 0);
+      await t.wait(1300);                                          // the prompt shows after PRACTICE.nextDelay
+      await t.G(() => window.__GAME__.clearEvents());
+      const dsp = await t.G(() => { const g = window.__GAME__, d = g.ctx.actors.list.filter((x) => x.kind === 'dummy').sort((p, q) => Math.hypot(p.pos.x, p.pos.z + 76) - Math.hypot(q.pos.x, q.pos.z + 76))[0]; return g.screen(d.pos.x, d.pos.z, d.pos.y + 0.55); });
+      await t.page.mouse.move(dsp.x, dsp.y); await t.wait(120);
+      await shot(t, '02b2-tutorial-target');
+      await t.page.mouse.click(dsp.x, dsp.y, { button: 'right' });
+      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 5, { timeout: 6000 });
+      const ord4 = await t.lastEvent('player:order');
+      t.assert(ord4?.kind === 'attack', `RMB on a dummy is an attack order (${ord4?.kind})`);
+      t.assert(!!s, 'step 5 (roll) after targeting a dummy');
+      await t.page.keyboard.press('KeyH');                        // stop the auto-chain
+      // 5 roll past the sack (8, −84)
       await tp(t, 6.2, -84, Math.PI / 2);
       await t.page.keyboard.press('ShiftLeft');
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 5, { timeout: 5000 });
-      t.assert(!!s, 'step 5 (Stand) after the roll');
-      // 5 block the Wobble Knight twice (0, −86, it faces +Z): stand in front, hold guard
+      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 6, { timeout: 5000 });
+      t.assert(!!s, 'step 6 (Stand) after the roll');
+      // 6 block the Wobble Knight twice (0, −86, it faces +Z): stand in front, hold the Stand (Space, C1)
       await tp(t, 0, -84.9, Math.PI);
-      await t.page.keyboard.down('KeyL');
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 6, { timeout: 15000 });
-      await t.page.keyboard.up('KeyL');
-      t.assert(!!s, 'step 6 (parry) after two blocks');
+      await t.page.keyboard.down('Space');
+      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 7, { timeout: 15000 });
+      await t.page.keyboard.up('Space');
+      t.assert(!!s, 'step 7 (parry) after two blocks');
       await shot(t, '02c-tutorial-parry');
-      // 6 parry: raise the Stand on the white glint (poll the wobble knight's telegraph), retry a few swings
+      // 7 parry: raise the Stand on the white glint (poll the wobble knight's telegraph), retry a few swings
       // in-page timing (a round trip is too coarse for the 0.15 s window): raise the Stand ~0.07 s before the strike
-      for (let k = 0; k < 4 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 7)); k++) {
+      for (let k = 0; k < 4 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 8)); k++) {
         await t.page.evaluate(() => new Promise((resolve) => {
           const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), inp = g.ctx.input, t0 = performance.now();
           const tick = () => {
@@ -442,20 +687,26 @@ export default [
         }));
         await t.wait(700);
       }
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 7, { timeout: 2000 });
+      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 8, { timeout: 2000 });
       if (!s) {
         t.warn('no timed parry landed: emitting one from the Wobble Knight');
         await t.G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); g.ctx.bus.emit(g.E.PLAYER_PARRY, { attacker: wk, gold: false, position: g.ctx.player.pos.clone() }); });
-        s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 7, { timeout: 4000 });
+        s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 8, { timeout: 4000 });
       }
-      t.assert(!!s, 'step 7 (Bright Slash) after the parry');
-      // 7 Bright Slash the cracked boulder (−10, −84)
+      t.assert(!!s, 'step 8 (Bright Slash) after the parry');
+      // 8 Bright Slash the cracked boulder (−10, −84): hold LMB with the cursor on it (the swing goes toward the cursor)
       await tp(t, -10, -85.6, 0);
-      for (let k = 0; k < 3 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 8)); k++) { await t.hold('KeyJ', 900); await t.wait(1200); }
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 8, { timeout: 4000 });
-      t.assert(!!s, 'step 8 (Meow) after the boulder breaks');
+      for (let k = 0; k < 3 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 9)); k++) {
+        const bsp = await t.G(() => window.__GAME__.screen(-10, -84));
+        await t.page.mouse.move(bsp.x, bsp.y); await t.wait(80);
+        await t.page.mouse.down({ button: 'left' }); await t.wait(900); await t.page.mouse.up({ button: 'left' });
+        await t.wait(1200);
+        if (k === 1 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 9))) { await t.hold('KeyJ', 900); await t.wait(1200); }
+      }
+      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 9, { timeout: 4000 });
+      t.assert(!!s, 'step 9 (Meow) after the boulder breaks');
       await shot(t, '02d-tutorial-meow');
-      // 8 Meow at the cow (12, −72) → Pearl
+      // 9 Meow at the cow (12, −72) → Pearl
       await tp(t, 9.5, -72.5, Math.PI / 2);
       await t.page.keyboard.press('KeyC');
       const pearl = await until(t, () => window.__GAME__.ctx.story.playingId === 'tutpearl', null, { timeout: 8000 });
@@ -471,6 +722,15 @@ export default [
     },
   },
 
+  // ------------------------------------------------------------------ Midnight Practice on a phone (CONTROLS_SPEC §16.4)
+  {
+    name: 'story:tutorial-touch', order: 72.5, level: null, timeout: 1500000,
+    async run(t) {
+      ensureDir(t);
+      for (const [w, h, tag] of [[844, 390, 'landscape'], [390, 844, 'portrait']]) await tutorialTouch(t, w, h, tag);
+    },
+  },
+
   // ------------------------------------------------------------------ G-01 Sir Tallbert
   {
     name: 'story:g01', order: 73, level: 'meadow', spawn: 'start', timeout: 90000,
@@ -478,8 +738,8 @@ export default [
       ensureDir(t);
       await fresh(t, { 'prologue.armour': true, 'prologue.tutorial': true }, 'meadow', 'practice');
       await tp(t, 0, -64.5, 0);
-      await t.hold('KeyW', 1500);
-      let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 5000 });
+      await t.click(0, -59.5);                                     // C10: an RMB move order through the gate (iso)
+      let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 8000 });
       if (!ok) { t.warn('walk did not reach the tallbert trigger: teleporting into it'); await tp(t, 0, -61, 0); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 5000 }); }
       if (!ok) t.log('g01 diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, p = g.ctx.player, L = g.ctx.levels.current; return { pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, q: g.ctx.story.queue.length, flags: g.ctx.state.flags, trig: L.triggers.map((x) => [x.id, x.fired, x.inside]), loading: g.ctx.levels.loading, ev: g.events.slice(-25) }; })));
       t.assert(!!ok, 'G-01 plays at the north gate');

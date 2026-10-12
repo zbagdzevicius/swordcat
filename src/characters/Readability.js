@@ -462,19 +462,12 @@ export function highlightObject(root, color, strength = 1) {
 // ------------------------------------------------------------------ helmet tops
 
 const _topCache = new Map();
-/**
- * A clone of `mat` whose upward-facing surfaces (world normal.y from..to) take `color` (TOP_TINT.mix): helmet tops that
- * read against the ground from above. Cached per (material, colour), so a whole pack shares one clone.
- */
-export function topTintMaterial(mat, color = TOP_TINT.color, o = {}) {
-  if (!mat || mat.userData?.topTint) return mat;
-  const key = mat.uuid + '|' + new THREE.Color(color).getHexString() + '|' + (o.mix ?? TOP_TINT.mix);
-  let m = _topCache.get(key);
-  if (m) return m;
-  m = mat.clone();
-  const uniforms = { uTopColor: { value: new THREE.Color(color) }, uTopMix: { value: o.mix ?? TOP_TINT.mix } };
-  m.userData = { ...mat.userData, topTint: true, uniforms: { ...(mat.userData?.uniforms ?? {}), ...uniforms } };
-  const prev = mat.onBeforeCompile;
+const _topPatched = new WeakSet();
+
+/** Install the top-tint shader hook + program key on `m` (chains any hook already on it, e.g. world's fog patcher). */
+function patchTopTint(m, src, uniforms) {
+  m.userData = { ...src.userData, topTint: true, uniforms: { ...(src.userData?.uniforms ?? {}), ...uniforms } };
+  const prev = Object.prototype.hasOwnProperty.call(src, 'onBeforeCompile') ? src.onBeforeCompile : null;
   m.onBeforeCompile = (sh, r) => {
     if (prev && prev !== THREE.Material.prototype.onBeforeCompile) prev.call(m, sh, r);
     Object.assign(sh.uniforms, uniforms);
@@ -486,17 +479,47 @@ export function topTintMaterial(mat, color = TOP_TINT.color, o = {}) {
           diffuseColor.rgb = mix(diffuseColor.rgb, uTopColor, smoothstep(${TOP_TINT.from.toFixed(2)}, ${TOP_TINT.to.toFixed(2)}, upK) * uTopMix);
         }`);
   };
-  const prevKey = mat.customProgramCacheKey?.bind(mat);
+  const prevKey = Object.prototype.hasOwnProperty.call(src, 'customProgramCacheKey') ? src.customProgramCacheKey.bind(src) : null;
   m.customProgramCacheKey = () => (prevKey ? prevKey() : '') + '|sc-top-v1';
+  m.needsUpdate = true;
+  return m;
+}
+
+/** True for materials that belong to one instance (enemies' `markOwned`, assets' `cloneMaterials` / `tint`). */
+const isInstanceMat = (mat) => !!(mat?.userData?.enemyOwned || mat?.userData?.assetOwned);
+
+/**
+ * Helmet-top tint for `mat` (upward-facing surfaces, world normal.y from..to, take `color` at TOP_TINT.mix): helmet
+ * tops that read against the ground from above.
+ * - Shared materials: a clone cached per (material, colour), so a whole pack shares one clone + one program.
+ * - Per-instance materials (`userData.enemyOwned` / `assetOwned`, or `o.perInstance: true`): patched IN PLACE, so the
+ *   owner's hit flash (`flashMaterials`) and `disposeInstanceMaterials` keep working on that instance only. The
+ *   program key is the same, so a pack still shares one program.
+ */
+export function topTintMaterial(mat, color = TOP_TINT.color, o = {}) {
+  if (!mat || mat.userData?.topTint) return mat;
+  const mix = o.mix ?? TOP_TINT.mix;
+  const uniforms = { uTopColor: { value: new THREE.Color(color) }, uTopMix: { value: mix } };
+  if (o.perInstance ?? isInstanceMat(mat)) {
+    if (_topPatched.has(mat)) return mat;
+    _topPatched.add(mat);
+    return patchTopTint(mat, mat, uniforms);
+  }
+  const key = mat.uuid + '|' + new THREE.Color(color).getHexString() + '|' + mix;
+  let m = _topCache.get(key);
+  if (m) return m;
+  m = patchTopTint(mat.clone(), mat, uniforms);
   _topCache.set(key, m);
   return m;
 }
 
 /**
  * Give helmet tops under `root` a contrasting top colour (CONTROLS_SPEC §12 characters 3). `o.match` (RegExp / name
- * list) picks the meshes (default: names containing helm / hat / hood). Returns the count of meshes changed.
+ * list) picks the meshes (default: names containing helm / hat / hood / kettle). `o.perInstance` forces in-place
+ * patching (auto for enemy- / asset-owned materials, see topTintMaterial). Returns the count of meshes changed.
  */
 export function topTint(root, color = TOP_TINT.color, o = {}) {
+  if (!root?.traverse) return 0;
   const match = o.match instanceof RegExp ? o.match : Array.isArray(o.match) ? new RegExp(o.match.join('|'), 'i') : /helm|hat|hood|cap\b|kettle/i;
   let n = 0;
   root.traverse((c) => {

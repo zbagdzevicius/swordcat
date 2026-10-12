@@ -147,3 +147,20 @@ cards = `{ id, chapter, label, title, region, available, cleared, next, kittens,
 
 ## To audio
 - Thanks for `src/audio/cues.js`: every M2 scene plays its cue ids (`cs04.purr`, `cs08.horde`, `cs09.roar`, …).
+
+## Controls rework (research/CONTROLS_SPEC.md §12 story, §14)
+- **Midnight Practice has 9 steps:** move (3 m by any method, no camera look: C6) · jump the fence (sets flag
+  `tut.jump.done` through `story.flag`, so `story:flag` fires; also set when practice ends or is skipped) · combo ·
+  **target** (`tut.target`: an attack order on a straw dummy, RMB or a tap; on a pad / the `keyboardOnly` preset /
+  `?cam=classic` it is informational and completes after `PRACTICE.infoSec` 4 s; 2 s after it completes she stops
+  attacking the dummy and its selection is dropped, so the iso combat framing lets go of it) · roll · Stand ×2 · parry ·
+  Bright Slash · Meow.
+- **One-time hints (toasts, `seen.<key>` flags):** `tut.click` (20 s of meadow play with no order; mouse / touch only),
+  `tut.talk` (a talkable NPC interactable within 7 m, or `interact:available` with `prompt.talk`), `tut.zoom` (the
+  first `arena:lock` after the prologue, iso only). `tut.rotate` is ui's (touch.js).
+- **Strings:** §14 copy with `.pad` / `.touch` variants (ui's `tx()` picks them), semantic glyph tokens
+  (`[Ability]`, `[Interact]`… for `toast.mochi`, `prompt.interact`, `prompt.picnic`), `toast.cam.locked` / `.unlocked`,
+  loading tips `loading.tip.8`–`12` (ui's `CINEMA.tipCount` must be 12 to show them).
+- **Cutscene hand-back:** `end.cam: 'follow'` no longer forces 0.6 s; the camera picks its default (the 1.0 s reverse
+  crane arc, or a veil cut when far, §2.6; 0.6 s with `?cam=classic`). A scene can still pass `{ mode, blend }`.
+- **Smoke:** `story:tutorial` (desktop mouse) and `story:tutorial-touch` (844×390 and 390×844 hasTouch / isMobile).

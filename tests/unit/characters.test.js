@@ -266,6 +266,33 @@ test('runtime: core QUALITY presets drive fur shells; E.QUALITY switches them li
   st.dispose(); k.dispose();
 });
 
+test('Low quality: lighter cat meshes (charDetail) and shell fur baked only as far as it is drawn', () => {
+  const tris = (k) => k.kitMesh.geometry.index.count / 3;
+  const ctx = miniCtx();
+  ctx.quality = QUALITY.low;
+  const st = C.initCharacters(ctx);
+  assert.equal(C.charDetail(), QUALITY.low.charDetail);
+  const lo = C.buildKitten(C.swordcatConfig()), loMochi = C.buildKitten(C.CATS.mochi);
+  // no shells on Low: the skinned tail holds the base layer only (one copy), not MAX_SHELLS + 1 copies
+  assert.equal(lo.tailFur.allocatedShells, 0);
+  assert.equal(lo.tailFur.mesh.geometry.index.count, lo.tailFur.idxPerShell);
+  ctx.bus.emit(E.QUALITY, { name: 'med', preset: QUALITY.med });
+  assert.equal(C.charDetail(), 1);
+  const hi = C.buildKitten(C.swordcatConfig()), hiMochi = C.buildKitten(C.CATS.mochi);
+  assert.ok(tris(lo) < tris(hi) * 0.5, `Low hero kit mesh ${tris(lo)} vs ${tris(hi)}`);
+  assert.ok(tris(loMochi) < tris(hiMochi) * 0.6, `Low Mochi kit mesh ${tris(loMochi)} vs ${tris(hiMochi)}`);
+  assert.ok(lo.headFur.mesh.geometry.index.count < hi.headFur.mesh.geometry.index.count * 0.5, 'Low head fur is lighter');
+  // raising the quality re-bakes the Low-built tail on demand: the shells really draw
+  assert.equal(lo.tailFur.shells, QUALITY.med.furShells);
+  assert.equal(lo.tailFur.allocatedShells, C.MAX_SHELLS);
+  assert.equal(lo.tailFur.mesh.geometry.drawRange.count, lo.tailFur.idxPerShell * (QUALITY.med.furShells + 1));
+  assert.ok(lo.tailFur.mesh.geometry.index.count >= lo.tailFur.idxPerShell * (C.MAX_SHELLS + 1));
+  // Med builds bake what Med draws (16 + base), not the Ultra maximum
+  assert.equal(hi.tailFur.allocatedShells, QUALITY.med.furShells);
+  for (const k of [lo, loMochi, hi, hiMochi]) k.dispose();
+  st.dispose(); C.setCharDetail(1);
+});
+
 test('KittenView binds a kitten to an Actor: parenting, ScriptedActor hooks, Meme Cam cape, hitstop', () => {
   const ctx = miniCtx();
   const actor = new TestActor(ctx, { faction: 'player' }); actor.tags.add('player');
@@ -1006,6 +1033,30 @@ test('controls: helmet tops take a contrasting top colour (one clone per materia
   h1.material.onBeforeCompile(sh);
   assert.ok(sh.uniforms.uTopColor && /uTopColor/.test(sh.fragmentShader) && /viewMatrix/.test(sh.fragmentShader));
   assert.ok(/sc-top-v1/.test(h1.material.customProgramCacheKey()));
+});
+
+test('controls: helmet top tint on per-instance (enemy-owned) materials patches in place', () => {
+  const mk = () => { const m = new THREE.MeshStandardMaterial({ color: '#8A8D90' }); m.userData.enemyOwned = true; return m; };
+  const fogHook = (sh) => { sh.fragmentShader += '\n// fog'; };
+  const a = mk(); a.onBeforeCompile = fogHook;
+  const b = mk();
+  const g1 = new THREE.Group(); const h1 = new THREE.Mesh(new THREE.SphereGeometry(), a); h1.name = 'kettleHelm'; g1.add(h1);
+  const g2 = new THREE.Group(); const h2 = new THREE.Mesh(new THREE.SphereGeometry(), b); h2.name = 'kettleHelm'; g2.add(h2);
+  assert.equal(C.topTint(g1), 1);
+  assert.equal(C.topTint(g2), 1);
+  assert.equal(h1.material, a, 'same per-instance material (flash / dispose still see it)');
+  assert.equal(h2.material, b);
+  assert.ok(a.userData.enemyOwned && a.userData.topTint, 'owner flag kept');
+  assert.equal(a.customProgramCacheKey(), b.customProgramCacheKey(), 'pack shares one program');
+  const sh = { uniforms: {}, vertexShader: '#include <common>', fragmentShader: '#include <common>\n#include <normal_fragment_maps>' };
+  a.onBeforeCompile(sh);
+  assert.ok(sh.uniforms.uTopColor && /\/\/ fog/.test(sh.fragmentShader), 'chains the existing hook');
+  assert.equal(C.topTint(g1), 1); assert.equal(h1.material, a, 'idempotent');
+  assert.equal(C.topTint(null), 0);
+  // forced per-instance on an untagged material
+  const c = new THREE.MeshStandardMaterial(); const g3 = new THREE.Group(); const h3 = new THREE.Mesh(new THREE.SphereGeometry(), c); h3.name = 'hat'; g3.add(h3);
+  C.topTint(g3, undefined, { perInstance: true });
+  assert.equal(h3.material, c);
 });
 
 test('controls: fur LOD keyed to cam.focus — hero full within 25 m of the lens, others drop a tier past 12 m', () => {

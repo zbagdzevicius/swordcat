@@ -124,6 +124,7 @@ export const S = {
   'tut.pearl2': d("...You're getting good, Clem."),
   'tut.riposte': d('Parried! [Attack] now for a Riposte.'),
   'tut.riposte.touch': d('Parried! Tap ⚔ now for a Riposte.'),
+  'tut.riposte.auto': d('Parried! She ripostes all by herself.'),
   'tut.pounce': d('Jump [Jump], then [Attack] in the air: Pounce where you point. Bounce off crows!'),
   'tut.pounce.pad': d('Jump, then [Attack] in the air. Bounce off crows!'),
   'tut.pounce.touch': d('Jump, then ⚔ in the air: Pounce. Bounce off crows!'),
@@ -157,11 +158,6 @@ export const S = {
   'tut.rotate': d('Plays best sideways.'),
   'toast.cam.locked': d('Camera locked.'),
   'toast.cam.unlocked': d('Camera free: move the mouse to the edge to look around. [Y]'),
-  'tip.ring': d('The notch on your ring is where your sword goes.'),
-  'tip.plant': d('Pressing the Stand plants your paws: perfect for Standing Ground.'),
-  'tip.stop': d('Press H to stand still.'),
-  'tip.tapFoe': d('Tap a foe to charge in.'),
-  'tip.camLock': d('Y frees the camera.'),
   'tut.title': d('Midnight Practice'),
   'tut.step': d('{n}/{total}'),
   'tut.skip': d('Hold [Esc] to skip practice'),
@@ -201,7 +197,7 @@ export const S = {
   'd01.2': d('Too small, they said.'),
   'd01.3': d("Then we're a team!"),
   'd01.4': d("I'll do the shield. You do the... pointy part."),
-  'toast.mochi': d('Mochi joined! [Q] Shield Wall'),
+  'toast.mochi': d('Mochi joined! [Ability] Shield Wall'),
 
   // ================================================================== D-02 Sage Joins
   'd02.1': d('Thanks for the landing.'),
@@ -603,9 +599,9 @@ export const S = {
   'obj.done': d('Objective complete!'),
 
   // ================================================================== prompts (interaction tags, cutscene prompts)
-  'prompt.interact': d('[E]'),
+  'prompt.interact': d('[Interact]'),
   'prompt.talk': d('Talk'),
-  'prompt.picnic': d('Sit for a Milk Break [E]'),
+  'prompt.picnic': d('Sit for a Milk Break [Interact]'),
   'prompt.vigil': d('Rest'),
   'prompt.read': d('Read'),
   'prompt.open': d('Open'),
@@ -658,6 +654,18 @@ export const S = {
   'loading.tip.5': d('Bright Slash pops slimes without splitting them.'),
   'loading.tip.6': d('Standing your ground fills Valor.'),
   'loading.tip.7': d('Nine lives per level. Use them.'),
+  // CONTROLS_SPEC §14 loading tips (ui's CINEMA.tipCount picks from 1..n; device variants via tx())
+  'loading.tip.8': d('The notch on your ring is where your sword goes.'),
+  'loading.tip.9': d('Pressing the Stand plants your paws: perfect for Standing Ground.'),
+  'loading.tip.10': d('Press H to stand still.'),
+  'loading.tip.10.pad': d('Let go of the stick and she stands still.'),
+  'loading.tip.10.touch': d('Let go of the joystick and she stands still.'),
+  'loading.tip.11': d('Right-click a foe to charge in.'),
+  'loading.tip.11.pad': d('RB picks the nearest foe.'),
+  'loading.tip.11.touch': d('Tap a foe to charge in.'),
+  'loading.tip.12': d('Y frees the camera.'),
+  'loading.tip.12.pad': d('R3 zooms the camera in and out.'),
+  'loading.tip.12.touch': d('Pinch to zoom.'),
 
   // ================================================================== §14.3 menus (ui reads these keys)
   'menu.continue': d('Continue'),

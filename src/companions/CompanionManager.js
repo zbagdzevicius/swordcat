@@ -14,7 +14,8 @@
 //               AbilityIndicator draws it until fx takes over); aimAbility(req) / cancelAbilityAim() for ui
 //   cooldownLeft(id?) / readiness(id?) / canCast(id?) / abilityShape(id?)   the ability bar and the ranges overlay
 //   pickables(out) / use(actorOrId)   companion-area actors the camera's picker may hit (pickKind, useR,
-//               interactId, use()) and what a click / tap on one does
+//               interactId, use(); never the active party, whose clicks fall through to ground) and what a click /
+//               tap on one does
 // Extras for other areas (additive): unlock(id), useAbility(i), wallBetween(a, b) (Shield Wall occlusion for
 // Combat), milkBonus (Mochi passive), kittens, bark(actor, category, opts), get(id), despawn(actor), clearLevel(),
 // markCleared(arenaId), lowerCage(id), and (M2):
@@ -42,6 +43,7 @@ import { RESCUES, rowWanted } from './rescues.js';
 import { CATS } from '../characters/index.js';
 import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } from './abilityAim.js';
 import { AbilityIndicator } from './AbilityIndicator.js';
+import { setBubbleSafeInsets } from './Bubble.js';
 
 const _slot = { x: 0, z: 0 };
 const _ex = { x: 0, z: 0, mag: 0, source: '' };
@@ -61,6 +63,8 @@ export const GATE_CREW = Object.freeze({ earlgrey: { at: [-1.6, 42.2], facing: M
 
 export class CompanionManager {
   constructor(ctx) {
+    // every speech bubble (ours, NPCs', story/enemy barks) stays clear of the HUD's safe insets (ability bar, boss plate)
+    setBubbleSafeInsets(() => ctx.ui?.safeInsets);
     this.ctx = ctx;
     /** @type {Companion[]} */
     this.active = [];
@@ -405,14 +409,16 @@ export class CompanionManager {
   // ------------------------------------------------------------------ click / tap (iso controls)
 
   /**
-   * This area's actors the camera's picker may hit (CONTROLS_SPEC §7.6: kind 'npc' for NPCs and the party, kitten
-   * rescues as 'kitten'): each has `pickKind`, `useR` (a `use` order's reach), `interactId` (a level interactable it
-   * stands for, e.g. a station keeper) and `use()`. Fills and returns `out`.
+   * This area's actors the camera's picker may hit (CONTROLS_SPEC §7.6: kind 'npc' for NPCs, kitten rescues as
+   * 'kitten'): each has `pickKind`, `useR` (a `use` order's reach), `interactId` (a level interactable it stands for,
+   * e.g. a station keeper) and `use()`. Fills and returns `out`.
+   * The active party is NOT offered: a companion trails ~1.3 m behind her, so its pick zone sits exactly where a
+   * step-back / sidestep click lands and would swallow the move (worst mid-fight). Those clicks fall through to
+   * ground; `use(companionOrId)` still works for direct callers.
    */
   pickables(out = []) {
     out.length = 0;
-    for (const c of this.active) if (c.pickKind) out.push(c);
-    for (const a of this.actors) if (a.pickKind) out.push(a);
+    for (const a of this.actors) if (a.pickKind && !this.active.includes(a)) out.push(a);
     return out;
   }
 

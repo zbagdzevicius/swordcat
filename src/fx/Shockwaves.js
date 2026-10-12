@@ -7,7 +7,7 @@
 // visible one is one draw call, idle ones cost nothing. The ring's base hugs the terrain (per-vertex ground offsets
 // re-sampled every frame for the current radius), so it never floats over a dip or sinks into a slope.
 import * as THREE from 'three';
-import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { SHAPE, FADE, GROW } from './Particles.js';
 
 /** Radius of a shockwave at time t (linear expansion r0 → r1 over dur; pure, unit-tested). */
@@ -154,7 +154,7 @@ function crackGeometry() {
 
 class ShockRing {
   constructor() {
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.shock.ring', vertexShader: RING_VERT, fragmentShader: RING_FRAG, fog: true,
       uniforms: { ...fogUniforms(), uR: { value: 1 }, uH: { value: 0.3 }, uColor: { value: new THREE.Color() }, uI: { value: 1 }, uA: { value: 0 },
         uTime: { value: 0 }, uSeed: { value: 0 } },
@@ -169,7 +169,7 @@ class ShockRing {
 
 class Crack {
   constructor() {
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.shock.crack', vertexShader: CRACK_VERT, fragmentShader: CRACK_FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color() }, uI: { value: 2 }, uA: { value: 0 }, uReveal: { value: 0 }, uSeed: { value: 0 } },
       transparent: true, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,

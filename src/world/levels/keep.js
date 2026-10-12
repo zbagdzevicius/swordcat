@@ -6,6 +6,8 @@ import { defineLevel } from '../LevelKit.js';
 export default defineLevel({
   id: 'keep', size: 140, res: 112, seed: 59, hills: { amp: 2.0 }, pathWidth: 6, pathSurface: 'stone', surface: 'stone',
   env: { default: 'keep_storm' },
+  // CONTROLS_SPEC §4.2 / §11 (M3 authors the rampart climb hint + links): keep_storm clear 5 / 7, topMul 1.4
+  cam: { yaw: Math.PI, fog: { clear: 5, clearCombat: 7, topMul: 1.4, keep_cellar: { clear: 5, clearCombat: 7, topMul: 1.4 } } },
   music: { explore: 'battle_theme_a', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },
   spine: [[0, -66], [0, -58], [0, -20], [0, 10], [0, 36], [0, 46]],
   spawns: { start: [0, -66, 0], gate: [0, -66, 0], boss: [-3, 32, 0] },

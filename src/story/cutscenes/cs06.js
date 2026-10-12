@@ -20,6 +20,11 @@ export const BAG = [-32.6, 3.2];
 const ME = [-31.0, 2.0];
 const SAGE = [-32.0, 4.6];
 const COO = [-34.4, 1.6];
+/** Where Coo lands by the bag, and where Sage steps back to (to Clem's right, behind every Coo lens) to make room. */
+const COO_HOP = [BAG[0] - 0.2, BAG[1] - 0.3];
+const SAGE_ASIDE = [-30.0, 3.0];
+/** Coo's flight: up and away over the Post Office roofs (horizontal unit + run in metres, climb in metres). */
+const FLIGHT = [-0.555, 0.832], FLIGHT_RUN = 10.8, FLIGHT_UP = 7;
 const FACE_BAG = yawOf([BAG[0] - ME[0], BAG[1] - ME[1]]);
 
 /** Eight summons fanned out on the cobbles around the bag. */
@@ -44,7 +49,7 @@ function cooFliesOff(ctx, cs) {
   const c = cs.actor('coo');
   if (!c) return null;
   c.play?.('hop', {});
-  const to = [c.pos.x - 6, c.pos.y + 7, c.pos.z + 9];
+  const to = [c.pos.x + FLIGHT[0] * FLIGHT_RUN, c.pos.y + FLIGHT_UP, c.pos.z + FLIGHT[1] * FLIGHT_RUN];
   return flyObject(cs, () => cs.actor('coo'), [c.pos.x, c.pos.y, c.pos.z], to, 2.0, 1.2);
 }
 
@@ -79,8 +84,10 @@ export default {
     { t: 'actor', id: 'swordcat', expression: 'determined', emote: 'nod' },
     say('swordcat', 'cs06.4', 2.0),
 
-    // ---- 3 · Coo
-    { t: 'actor', id: 'coo', visible: true, moveTo: [BAG[0] - 0.2, BAG[1] - 0.3], speed: 1.4 },
+    // ---- 3 · Coo (Sage steps back to Clem's right as he lands, so no Coo shot looks through her)
+    { t: 'actor', id: 'sage', moveTo: SAGE_ASIDE, speed: 1.4, nowait: true },
+    { t: 'actor', id: 'coo', visible: true, moveTo: COO_HOP, speed: 1.4 },
+    { t: 'actor', id: 'sage', face: COO_HOP, faceDur: 0.3, nowait: true },
     { t: 'actor', id: 'coo', clip: 'hop', once: true },
     cam(null, 'coo', { pos: [0.55, 0.42, 1.5], look: [0, 0.28, 0], fov: 34 }),
     sfx('cs06.coo', 'coo'),
@@ -90,7 +97,8 @@ export default {
     say('swordcat', 'cs06.6', 2.2),
     { t: 'actor', id: 'coo', clip: 'nod', once: true },
     say('coo', 'cs06.7', 1.0),
-    cam(null, 'swordcat', { pos: [0.7, 0.35, 1.6], look: [-1, 2.4, -2], fov: 46 }),
+    // low lens 2.6 m behind his perch, looking up along the flight line (world axes: a point anchor has yaw 0)
+    cam(null, COO_HOP, { pos: [-FLIGHT[0] * 2.6, 0.3, -FLIGHT[1] * 2.6], look: [FLIGHT[0] * 2, 1.0, FLIGHT[1] * 2], fov: 48 }),
     sfx('cs06.cooFlutter', 'coo'),
     { t: 'call', fn: cooFliesOff, max: 3 },
     { t: 'actor', id: 'coo', visible: false },

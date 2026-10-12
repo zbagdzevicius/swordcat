@@ -12,7 +12,7 @@ import { ActorRegistry, hostileTo } from '../../src/core/ActorRegistry.js';
 import { Actor } from '../../src/core/Actor.js';
 import { ScriptedActorMixin } from '../../src/core/ScriptedActor.js';
 import { parseParams } from '../../src/core/Game.js';
-import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS, QUALITY, INPUT } from '../../src/core/config.js';
+import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS, QUALITY, INPUT, HAPTICS } from '../../src/core/config.js';
 
 test('rng: seeded, reproducible, helpers in range, forks independent', () => {
   const a = createRng(42), b = createRng(42);
@@ -79,8 +79,11 @@ test('Input: edges latch until endStep; heldTime counts sim time and survives th
   inp.setVirtualMove(1, 1);
   assert.ok(Math.hypot(inp.move.x, inp.move.y) <= 1 + 1e-9);
   inp.setVirtual('milk', true); assert.ok(inp.pressed('milk')); inp.setVirtual('milk', false); assert.ok(!inp.down('milk'));
-  inp.addLook(0.1, -0.2); const l = inp.consumeLook(); assert.ok(Math.abs(l.x - 0.1) < 1e-9 && Math.abs(l.y + 0.2) < 1e-9);
-  assert.equal(inp.consumeLook().x, 0);
+  // C2: in iso the look is swallowed (fixed-yaw camera); ?cam=classic keeps the orbit look
+  inp.addLook(0.1, -0.2); assert.deepEqual({ ...inp.consumeLook() }, { x: 0, y: 0, px: 0, py: 0 }, 'iso: consumeLook() is zeros');
+  const cl = new Input({ params: { cam: 'classic' } });
+  cl.addLook(0.1, -0.2); const l = cl.consumeLook(); assert.ok(Math.abs(l.x - 0.1) < 1e-9 && Math.abs(l.y + 0.2) < 1e-9);
+  assert.equal(cl.consumeLook().x, 0);
   // A2 actions all exist
   for (const a of ['guard', 'ability', 'milk', 'meow', 'golden', 'recenter', 'attack', 'dodge', 'jump', 'interact', 'lockon', 'pause'])
     assert.ok(inp.actions.has(a), `action ${a}`);
@@ -131,6 +134,72 @@ test('Input (iso): presets merge over the keys, settings.bindings on top; clicks
   assert.equal(inp.virtualAim.active, false);
   const classic = new Input({ params: { cam: 'classic' } });
   assert.equal(classic.iso, false); assert.ok(classic._bind.get('Mouse2').includes('guard'), 'classic: RMB guards');
+});
+
+test('Input (iso): §6.1 mouse speed threshold, pad 8 = controls card, presets of §6.2, queued releases', () => {
+  const inp = new Input({ params: {} });
+  const t0 = performance.now();
+  // a resting hand drifting 1 px every 100 ms (10 px/s) is not activity; a real flick is
+  inp._pointerAt(100, 100, false);
+  inp.pointer._t = t0 - 100; inp._activity = false;
+  inp._pointerAt(101, 100, true);
+  assert.equal(inp._activity, false, '10 px/s drift is idle');
+  inp.pointer._t = performance.now() - 16;
+  inp._pointerAt(141, 100, true);
+  assert.equal(inp._activity, true, 'a 40 px / 16 ms move is activity');
+  inp.update(1 / 60); assert.equal(inp.idleTime, 0);
+  assert.ok(inp.pointer.movedPx >= 41 && inp.pointer.lastMoveT > 0);
+  // §6.3 pad Back/View (8) opens the controls card
+  assert.deepEqual(INPUT.pad.controls, [8]);
+  assert.ok(INPUT.actions.includes('controls'));
+  // §6.2 mouseOnly: MMB click = Jump (peek stays on Alt)
+  const st = { settings: { controlPreset: 'mouseOnly', bindings: {} } };
+  const mo = new Input({ state: st, params: {} });
+  assert.ok(mo._bind.get('Mouse1').includes('jump') && !mo._bind.get('Mouse1').includes('peek'));
+  assert.ok(mo._bind.get('Mouse4').includes('guard') && mo._bind.get('Mouse3').includes('dodge'));
+  st.settings.controlPreset = 'keyboardOnly'; mo.rebind();
+  assert.ok(mo._bind.get('Space').includes('jump') && !(mo._bind.get('Mouse2') ?? []).includes('move'), 'keyboardOnly: Space jumps, no RMB orders');
+  st.settings.controlPreset = 'nonsense'; mo.rebind();
+  assert.equal(mo.preset, 'hybrid', 'unknown preset falls back to hybrid');
+  // a held order button's release is queued on blur (hold-to-follow never sticks)
+  mo._clickDown.add(2); mo.releaseAll();
+  const up = mo.takeClick();
+  assert.ok(up && up.button === 2 && up.down === false);
+  assert.equal(mo._clickDown.size, 0);
+});
+
+test('Input: §10.6 haptics buzz a phone on parry / hurt / block / order rejected; scaled, never in menus or on KBM', async () => {
+  const { EventBus } = await import('../../src/core/EventBus.js');
+  const { E } = await import('../../src/core/events.js');
+  const calls = [];
+  const had = Object.getOwnPropertyDescriptor(navigator, 'vibrate');
+  Object.defineProperty(navigator, 'vibrate', { configurable: true, writable: true, value: (p) => { calls.push(p); return true; } });
+  try {
+    const bus = new EventBus(), player = { id: 'player' };
+    const ctx = { bus, player, game: { mode: 'play' }, state: { settings: { haptics: 1, hapticTaps: false, bindings: {} } }, params: {} };
+    const inp = new Input(ctx);
+    await inp.init();
+    inp.device = 'kbm';
+    bus.emit(E.PLAYER_PARRY, {});
+    assert.equal(calls.length, 0, 'no vibrate on keyboard + mouse');
+    inp.device = 'touch';
+    bus.emit(E.PLAYER_PARRY, {}); bus.emit(E.PLAYER_DAMAGED, { amount: 1 });
+    bus.emit(E.HIT, { target: player, blocked: true }); bus.emit(E.PLAYER_ORDER, { kind: 'move', valid: false });
+    bus.emit(E.PLAYER_GRIT, { broken: true }); bus.emit(E.PLAYER_GRIT, { broken: true });
+    assert.deepEqual(calls, [HAPTICS.parry, HAPTICS.hurt, HAPTICS.block, HAPTICS.orderRejected, HAPTICS.guardBreak]);
+    calls.length = 0;
+    ctx.state.settings.haptics = 0.5; bus.emit(E.PLAYER_DAMAGED, { amount: 2 });
+    assert.deepEqual(calls, [Math.round(HAPTICS.hurt * 0.5)], 'scaled by settings.haptics');
+    ctx.game.mode = 'menu'; bus.emit(E.PLAYER_DAMAGED, { amount: 2 });
+    ctx.state.settings.haptics = 0; ctx.game.mode = 'play'; bus.emit(E.PLAYER_DAMAGED, { amount: 2 });
+    assert.equal(calls.length, 1, 'never in menus / when off');
+    assert.equal(inp.haptic('button'), false, 'button taps only with settings.hapticTaps');
+    inp.dispose();
+    ctx.state.settings.haptics = 1; bus.emit(E.PLAYER_PARRY, {});
+    assert.equal(calls.length, 1, 'dispose unsubscribes');
+  } finally {
+    if (had) Object.defineProperty(navigator, 'vibrate', had); else delete navigator.vibrate;
+  }
 });
 
 test('Input: losing pointer lock mid-play opens the pause menu once; resume re-captures the mouse', () => {
@@ -282,4 +351,35 @@ test('M2 Assets.disposeInstance: frees cloned skeletons and owned material clone
   assert.equal(skDisposed, 1); assert.equal(ownedDisposed, 1); assert.equal(sharedDisposed, 0);
   assert.equal(root.parent, null);
   disposeInstance(null);   // no-op
+});
+
+test('Input (iso): §6.1 jitter is not activity (net px over a window), §2.7 the Meme Cam exits only past exitPx', async () => {
+  const { CAMERA } = await import('../../src/core/config.js');
+  const game = { mode: 'play' };
+  const inp = new Input({ params: {}, game });
+  inp._pointerAt(200, 200, false);
+  // a resting hand: ±1 px every 16 ms for half a second
+  for (let i = 0; i < 30; i++) { inp._pointerAt(200 + (i % 2), 200, true); }
+  assert.equal(inp._activity, false, '1 px jitter at mouse rate is idle');
+  inp._pointerAt(240, 200, true);
+  assert.equal(inp._activity, true, 'a 40 px move is activity');
+  inp.update(1 / 60);
+  // Meme Cam: a 30 px nudge does not exit, crossing exitPx from where the cursor rested does
+  game.mode = 'memecam'; inp._activity = false; inp._ptrHist.length = 0;
+  inp._pointerAt(270, 200, true);
+  assert.equal(inp._activity, false, '30 px < exitPx keeps the Meme Cam');
+  inp._pointerAt(240 + CAMERA.iso.meme.exitPx + 1, 200, true);
+  assert.equal(inp._activity, true, '≥ exitPx from the mark exits');
+  assert.ok(inp.pointerSince(inp.pointerMark()) === 0);
+  game.mode = 'play'; inp.update(1 / 60); assert.equal(inp._memeMark, null);
+});
+
+test('Input: the canvas rect is cached (no layout read per mousemove) until a resize', () => {
+  const inp = new Input({ params: {} });
+  let reads = 0;
+  inp.canvas = { getBoundingClientRect: () => { reads++; return { left: 0, top: 0, width: 100, height: 100 }; } };
+  for (let i = 0; i < 10; i++) inp._pointerAt(i, i, true);
+  assert.equal(reads, 1);
+  inp._rect = null; inp._pointerAt(50, 50, true);
+  assert.equal(reads, 2); assert.equal(inp.pointer.ndcX, 0);
 });

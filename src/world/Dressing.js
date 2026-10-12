@@ -19,24 +19,28 @@ export function within(p, ms = 4000) {
 
 /**
  * A vertex-coloured standard material with a repeating colour map (world-UV geometry). `tint` multiplies the map;
- * `mapMix` (0..1) blends the photo map toward its luminance × tint so it sits in the soft palette.
+ * `mapMix` (0..1) blends the photo map toward its luminance × tint so it sits in the soft palette; `joint` (> 0)
+ * lifts the map's darkest values (mortar joints, cracks) toward that pale level (linear, before `gain`) over the map
+ * luminance band `jointLo`..`jointHi`, so a dark-jointed photo texture reads as pale-mortared blocks from the iso camera.
  */
-export async function texturedMaterial(ctx, path, { tint = '#FFFFFF', mapMix = 0.65, roughness = 0.95, key = 'tex', gain = 1.15 } = {}) {
+export async function texturedMaterial(ctx, path, { tint = '#FFFFFF', mapMix = 0.65, roughness = 0.95, key = 'tex', gain = 1.15, joint = 0, jointLo = 0.03, jointHi = 0.1 } = {}) {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, envMapIntensity: 0.45, color: new THREE.Color(tint) });
   m.userData.owned = true;
   const tex = path && ctx?.assets?.texture ? await within(ctx.assets.texture(path, { srgb: true, repeat: true })) : null;
   if (tex) {
     m.map = tex;
-    const mix = mapMix.toFixed(3);
+    const mix = mapMix.toFixed(3), jk = joint > 0 ? `j${joint.toFixed(3)}_${jointLo.toFixed(3)}_${jointHi.toFixed(3)}` : '';
+    const lift = joint > 0 ? `\n  sampledDiffuseColor.rgb = mix(vec3(${joint.toFixed(3)}), sampledDiffuseColor.rgb, smoothstep(${jointLo.toFixed(3)}, ${jointHi.toFixed(3)}, lum));` : '';
     m.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
   float lum = dot(sampledDiffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-  sampledDiffuseColor.rgb = mix(vec3(lum), sampledDiffuseColor.rgb, ${mix}) * ${gain.toFixed(3)};
+  sampledDiffuseColor.rgb = mix(vec3(lum), sampledDiffuseColor.rgb, ${mix});${lift}
+  sampledDiffuseColor.rgb *= ${gain.toFixed(3)};
   diffuseColor *= sampledDiffuseColor;
 #endif`);
     };
-    m.customProgramCacheKey = () => 'world-tex-' + key + mix + gain.toFixed(3);
+    m.customProgramCacheKey = () => 'world-tex-' + key + mix + gain.toFixed(3) + jk;
   }
   return m;
 }

@@ -198,6 +198,8 @@ have not landed yet. Nothing needs to change for the game to keep working; each 
 - `pickables(out)`: this area's clickable actors. Each has `pickKind` (`'companion'` | `'npc'` | `'kitten'`; null =
   not clickable now: hidden kittens, scripted actors, far-culled NPCs), `useR` (how close a `use` order walks),
   `interactId` (a level interactable it stands for, or null) and `use()`.
+  The active party is never included (it trails right behind her, so its pick zone ate step-back / sidestep move
+  clicks); clicks on a companion fall through to ground. `use('sage')` still says hello for direct callers.
   `use(actorOrId)`: what a click / tap does on arrival: `levels.current.interact(interactId)` when set, else
   `actor.use()`. Mochi / Sage / Clover say hello and regroup; NPCs turn and nod; hub residents say their line; a
   revealed lost kitten within reach is rescued; a station keeper opens their station.

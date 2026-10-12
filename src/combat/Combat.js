@@ -6,6 +6,9 @@
 //   spawnProjectile(def, owner, pos, dir, opts?) → projectile   (pooled; parry reflects it — Projectiles.js)
 //   tokens                                         AttackTokens (difficulty limits [melee, ranged])
 //   extras: areaHit (rings, landings, dives, blasts), staggerArea, assistTarget, dealtMul, reflect, targetFilter
+//   iso controls (CONTROLS_SPEC §7–§8): assistTarget(actor, range, angle, out?, opts?) = the §7.2 soft auto-target
+//   score with stickiness + breakdown; nextParryable(actor) (parry ring / threat snap); hitRecently(attacker);
+//   beginSwing opts.lungeTo (lunge magnetism → swing.lungeOverride); reflect toward the resolved aim (±25°).
 //
 // applyHit, in order (tech.md §9.3 + §19.4):
 //   1. `none`  — target dead / not hurtable / invulnT > 0 (the caller may retry next step).
@@ -42,7 +45,7 @@ import { isHostile } from '../core/ActorRegistry.js';
 import { AttackTokens } from './AttackTokens.js';
 import { Projectiles } from './Projectiles.js';
 import { COMBAT, GLEAM_FROM, juiceFor, sharpMul, isFullCircle } from './attacks.js';
-import { ThreatBook, timeToContact, PARRY_KINDS } from './targeting.js';
+import { ThreatBook, timeToContact, PARRY_KINDS, pickAssist, lungeSpeed, aimCfg } from './targeting.js';
 
 const _dir = new THREE.Vector3();
 const _v = new THREE.Vector3();
@@ -101,12 +104,22 @@ export class Combat {
     this._rumbleKey = -1;
     /** CONTROLS_SPEC §8.2 / §8.1: live melee wind-ups (combat:telegraph) → nextParryable (parry ring, threat snap) */
     this.threats = new ThreatBook(() => ctx.game?.time ?? 0);
-    this._parryOut = { attacker: null, activeAt: 0, kind: 'parry', window: 0, projectile: null };
+    this._parryOut = { attacker: null, activeAt: 0, kind: 'parry', window: 0, projectile: null, pos: null };
+    /** attacker id → sim time it last damaged the heroine (§7.2 "hit her within the last 2 s") */
+    this._hitHer = new Map();
+  }
+
+  /** Did `attacker` damage the heroine within `AIM.recentHitWindow` (2 s)? (§7.2 score term) */
+  hitRecently(attacker, window = aimCfg().recentHitWindow) {
+    const t = attacker?.id != null ? this._hitHer.get(attacker.id) : undefined;
+    return t !== undefined && (this.ctx.game?.time ?? 0) - t <= window;
   }
 
   /**
    * §12 combat 2: the single most imminent parryable attack on `actor` (a live white / gold wind-up aimed at it, or an
-   * incoming hostile projectile) → `{ attacker, activeAt, kind, window, projectile }` (shared object) or null.
+   * incoming hostile projectile) → `{ attacker, activeAt, kind, window, projectile, pos }` (a shared object) or null.
+   * `window` is her parry window (difficulty + the touch bonus); `pos` is where the threat is now (the bolt itself for
+   * projectiles, else the attacker) — what the Stand's threat snap should turn to.
    * @param {any} actor @param {number} [maxDist]
    */
   nextParryable(actor, maxDist = 6) {
@@ -114,16 +127,21 @@ export class Combat {
     this.threats.prune();
     const e = this.threats.soonest(actor, maxDist, (x) => x.targetsPlayer !== false && (x.actor?.target === actor || x.actor?.targetActor?.() === actor || x.targetsPlayer === true));
     const now = this.ctx.game?.time ?? 0, o = this._parryOut;
-    let best = e ? e.activeAt : Infinity, out = e ? { attacker: e.actor, kind: e.kind, projectile: null } : null;
-    for (const pr of this.projectiles?.list ?? []) {
-      if (!pr || pr.dead || pr.reflected || pr.owner?.faction === actor.faction || !pr.vel) continue;
+    let best = e ? e.activeAt : Infinity, att = e ? e.actor : null, kind = e ? e.kind : 'parry', proj = null;
+    const list = this.projectiles?.list ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const pr = list[i];
+      if (!pr?.alive || pr.reflected || pr.wave || pr.faction === actor.faction || !pr.vel) continue;
+      if (pr.faction && !isHostile(pr.faction, actor.faction)) continue;
       const tc = timeToContact(pr.pos, pr.vel, actor.pos, (actor.radius ?? 0.3) + (pr.r ?? 0.15));
-      if (tc === Infinity || tc > 1.0) continue;
-      if (now + tc < best) { best = now + tc; out = { attacker: pr.owner ?? null, kind: 'parry', projectile: pr }; }
+      if (tc === Infinity || tc > aimCfg().projectileLead) continue;
+      if (now + tc < best) { best = now + tc; att = pr.owner ?? null; kind = 'parry'; proj = pr; }
     }
-    if (!out) return null;
-    o.attacker = out.attacker; o.kind = PARRY_KINDS.has(out.kind) ? out.kind : 'parry'; o.projectile = out.projectile; o.activeAt = best;
-    o.window = this.ctx.state?.difficultyCfg?.parry ?? PLAYER.guard.parryWindow;
+    if (!e && !proj) return null;
+    o.attacker = att; o.kind = PARRY_KINDS.has(kind) ? kind : 'parry'; o.projectile = proj; o.activeAt = best;
+    o.pos = proj ? proj.pos : att?.pos ?? null;
+    const touch = this.ctx.input?.device === 'touch';
+    o.window = (this.ctx.state?.difficultyCfg?.parry ?? PLAYER.guard.parryWindow) + (touch ? PLAYER.guard.touchParryBonus ?? 0 : 0);
     return o;
   }
 
@@ -139,7 +157,7 @@ export class Combat {
         } catch { /* a malformed payload never breaks combat */ }
       }),
       bus.on(E.TELEGRAPH_END, (p) => this.threats.end(p?.id, (a) => a?.stateName === 'strike' || a?.stateName === 'attack')),
-      bus.on(E.LEVEL_UNLOAD, () => this.threats.clear()),
+      bus.on(E.LEVEL_UNLOAD, () => { this.threats.clear(); this._hitHer.clear(); }),
       bus.on(E.LEVEL_UNLOAD, () => this.clear()),
       bus.on(E.CUTSCENE_START, () => this.projectiles.clear()),
       bus.on(E.LEVEL_LOADED, () => this.projectiles.warm()),   // compile projectile shaders under the veil
@@ -155,8 +173,12 @@ export class Combat {
    * as the attacker exposes this swing as `attacker.swing`), and on the first active step `timeScale` (slow-mo),
    * aim assist (player), `projectile` (holyWave from `projectileMinShards`) and Golden Hour `gleam`s.
    * @param {any} attacker @param {any} def
+   * `opts.lungeTo` (an actor or a point, §7.1 lunge magnetism for touch / pad / auto-target swings): when it stands
+   * beyond the arc's reach the swing's lunge covers up to 1.0 m more (targeting.lungeSpeed) →
+   * `swing.lungeOverride`, a speed like `def.lunge` (the attacker's movement reads it; the player's PlayerStates does).
    * @param {{ dmgMul?: number, crit?: number, dmg?: number, arc?: any, active?: [number, number], target?: any,
-   *   assist?: boolean|{range?: number, angle?: number}, projectiles?: boolean, gleam?: boolean, timeScale?: boolean }} [opts]
+   *   assist?: boolean|{range?: number, angle?: number}, projectiles?: boolean, gleam?: boolean, timeScale?: boolean,
+   *   lungeTo?: any }} [opts]
    * @returns {Swing}
    */
   beginSwing(attacker, def, opts = {}) {
@@ -170,6 +192,7 @@ export class Combat {
       baseDmgMul: this.dealtMul(attacker),
       hitOpts: { dmgMul: opts.dmgMul ?? this.dealtMul(attacker), crit: opts.crit ?? 1, dmg: opts.dmg },
     };
+    if (opts.lungeTo) { const l = this.lungeTo(s, opts.lungeTo); if (l != null) s.lungeOverride = l; }
     this.stats.swings++;
     return s;
   }
@@ -233,6 +256,17 @@ export class Combat {
     return w && w !== tgt && w.alive !== false && w.hurtable !== false ? w : null;
   }
 
+  /**
+   * §7.1 lunge magnetism: the lunge speed (m/s, like `def.lunge`) swing `s` should use to reach `to` (actor or
+   * {x, z}), or null when the def has no lunge. Within reach it is the def's own lunge.
+   */
+  lungeTo(s, to) {
+    const lunge = s?.def?.lunge, a = s?.attacker, p = to?.pos ?? to;
+    if (typeof lunge !== 'number' || !a?.pos || !p || typeof p.x !== 'number') return null;
+    const d = Math.hypot(p.x - a.pos.x, p.z - a.pos.z) - (to?.pos ? (to.radius ?? 0) : 0);
+    return lungeSpeed(s.def, d, s.arc?.range ?? 0);
+  }
+
   /** Stop a swing early (stagger, hurt, roll cancel). Safe on null. */
   cancelSwing(s) { if (s) { s.cancelled = true; s.done = true; } }
 
@@ -258,14 +292,15 @@ export class Combat {
     const a = s.attacker, def = s.def, o = s.opts, touch = this.ctx.input?.device === 'touch';
     let range = touch ? PLAYER.assist.touchRange : PLAYER.assist.range;
     let angle = touch ? PLAYER.assist.touchAngle : PLAYER.assist.angle;
-    let prefer = o.target ?? a.lockTarget ?? null;
+    const lock = typeof a.lockTarget === 'function' ? a.lockTarget() : a.lockTarget;
+    let prefer = o.target ?? lock ?? null;
     if (def.id === 'riposte') {
       range = PLAYER.guard.riposteRange; angle = Math.PI;
       const lp = this.lastParry, now = this.ctx.game?.time ?? 0;
       if (!prefer && lp && lp.by === a && !lp.projectile && now - lp.time <= PLAYER.guard.riposteWindow + (def.dur ?? 0)) prefer = lp.attacker;
     }
     if (o.assist && typeof o.assist === 'object') { range = o.assist.range ?? range; angle = o.assist.angle ?? angle; }
-    const t = this.assistTarget(a, range, angle, prefer);
+    const t = this.assistTarget(a, range, angle, null, { prefer, selected: lock ?? null });
     if (t) a.facing = Math.atan2(t.pos.x - a.pos.x, t.pos.z - a.pos.z);
     s.target = t;
   }
@@ -406,6 +441,7 @@ export class Combat {
 
     this.stats.hits++;
     if (r === 'break') this.stats.breaks++;
+    if (isPlayer && src && src !== tgt && src.id != null) this._hitHer.set(src.id, game?.time ?? 0);
     tgt.onHit?.(info);
     if (killed) {
       tgt.alive = false;
@@ -487,27 +523,41 @@ export class Combat {
   }
 
   /**
-   * Best target for aim assist: `prefer` if valid, else the nearest (edge distance + angle) hostile within `range`
-   * and `angle` (half-angle) of `actor.facing`.
+   * §7.2 soft auto-target (CONTROLS_SPEC §12 combat 1): the lowest-score target of `actor` within `range` (edge
+   * distance) and `angle` (half-cone) of the reference direction, by
+   *   dist + 2·|angle|/π − 2.5·winding up on her − 1·selected − 0.8·hp<30 % − 0.5·hit her in the last 2 s + 3·breakable,
+   * with stickiness (`prev` stays unless a challenger beats it by AIM.sticky 0.75). Crows only below
+   * `hittableBelow`; breakables only with `opts.breakables` and no hostile within 6 m.
+   * `out` (optional) receives the breakdown — see targeting.pickAssist. Legacy call: a 4th argument that is an actor is
+   * `opts.prefer` (returned outright while it is inside range and cone).
+   * @param {any} actor @param {number} range @param {number} angle half-angle (π = all around)
+   * @param {any} [out] breakdown out (or, legacy, the preferred actor)
+   * @param {{ dir?: number|{x:number,z:number}, sticky?: boolean, prev?: any, breakables?: boolean, selected?: any,
+   *   prefer?: any }} [opts] `dir`: yaw or vector of the stick / aim (default: facing)
+   * @returns {any|null}
    */
-  assistTarget(actor, range, angle, prefer = null) {
+  assistTarget(actor, range, angle, out = null, opts = {}) {
+    if (!actor?.pos) return null;
+    if (out && out.pos) { opts = { ...opts, prefer: out }; out = null; }
     const filter = this.targetFilter(actor.faction);
-    const score = (t) => {
-      if (!t || t === actor || !t.alive || !t.hurtable || t.breakable || t.hidden || t.dormant || !filter(t)) return Infinity;
-      const dx = t.pos.x - actor.pos.x, dz = t.pos.z - actor.pos.z;
-      const d = Math.hypot(dx, dz) - (t.radius ?? 0);
-      if (d > range) return Infinity;
-      const ang = Math.abs(wrapAngle(Math.atan2(dx, dz) - (actor.facing ?? 0)));
-      if (ang > angle) return Infinity;
-      return Math.max(0, d) + ang;
-    };
-    if (prefer && score(prefer) < Infinity) return prefer;
+    const dir = opts.dir;
+    const refYaw = typeof dir === 'number' ? dir : dir && (dir.x || dir.z) ? Math.atan2(dir.x, dir.z) : (actor.facing ?? 0);
+    const prefer = opts.prefer;
+    if (prefer && prefer !== actor && prefer.pos && prefer.alive !== false && prefer.hurtable !== false && !prefer.hidden && filter(prefer)) {
+      const dx = prefer.pos.x - actor.pos.x, dz = prefer.pos.z - actor.pos.z;
+      if (Math.hypot(dx, dz) - (prefer.radius ?? 0) <= range && Math.abs(wrapAngle(Math.atan2(dx, dz) - refYaw)) <= angle) {
+        if (out) { out.target = prefer; out.score = -Infinity; out.terms = null; out.kept = false; out.prevScore = Infinity; (out.list ??= []).length = 0; }
+        return prefer;
+      }
+    }
     const list = this.ctx.actors.queryRadius(actor.pos, range + COMBAT.queryPad, filter, this._borrow());
-    let best = null, bs = Infinity;
     try {
-      for (let i = 0; i < list.length; i++) { const sc = score(list[i]); if (sc < bs) { bs = sc; best = list[i]; } }
+      return pickAssist(actor, list, {
+        range, angle, refYaw, prev: opts.prev ?? null, sticky: opts.sticky, breakables: opts.breakables === true,
+        selected: opts.selected ?? null, groundY: actor.pos.y,
+        windup: (a) => this.threats.windingUp(a), recentHit: (a) => this.hitRecently(a),
+      }, out ?? undefined);
     } finally { this._release(); }
-    return best;
   }
 
   /** Damage multiplier the heroine deals: sharpness upgrade × Golden Hour. 1 for everyone else. */
@@ -539,7 +589,7 @@ export class Combat {
   }
 
   /** §19.4: flip ×reflectSpeedMul, owner = the parrying actor, dmg = reflectDmg (also called by a parry). */
-  reflect(p, by) { return this.projectiles.reflect(p, by); }
+  reflect(p, by, opts) { return this.projectiles.reflect(p, by, opts); }
 
   // ================================================================ system
   update(dt) {

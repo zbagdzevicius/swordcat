@@ -6,6 +6,7 @@
 //   anchor(name)       → { pos, facing } (level anchors, then spawns)
 //   arenaNear(pos, maxDist = 20) → Arena (lock(), clear())
 //   setVisible(group, on)  'terrain' | 'props' | 'grass' (CloudSea flights) + 'water' | 'skyline' | 'dawnstone' | 'pickups'
+//                          + 'far' (CONTROLS_SPEC §4.1: sky dome, skyline, Dawnstone; hidden in iso play; null = auto)
 // Additive (world): arena(id), exit(to, spawnId) (exit box: flag <level>.done, level:exit, level:results, then the
 // next level), results(), interact(id), spawnProp(name, at, opts) / despawnProp(obj) (story's placed props: signpost,
 // post bag, cot...), setDawnstone(on). Level triggers / interacts / arenas run inside Level.update (play mode only).
@@ -277,6 +278,9 @@ export class LevelManager {
 
   /** Hide/show a level group (CloudSea flights): terrain, props, grass, water, skyline, dawnstone, pickups. */
   setVisible(group, on) {
+    // CONTROLS_SPEC §4.1: 'far' = sky dome + skyline + horizon + Dawnstone (auto-hidden in iso play); null = automatic
+    if (group === 'far') { this.current?.setFar?.(on); return; }
+    if (group === 'skyline' && this.current) { this.current._skylineOn = !!on; this.current._farOn = undefined; }
     const g = this.current?.groups?.[group];
     if (g) g.visible = !!on;
     if (group === 'props') for (const t of this.current?.trees ?? []) t.visible = !!on;

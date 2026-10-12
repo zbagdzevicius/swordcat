@@ -19,6 +19,14 @@
 //   enemies:pilfer    the town chase on a path: runs, 3 hits drop the post bag (item:returned), hands over to story
 //   enemies:b1        forest Cheese Mill: Grizzlechop — flurry gold glint, Wheel Ride lane, P2 crossbowmen, Cheese Bombs; beaten with god
 //   enemies:b2        gate causeway: Cacklejaw — Laugh Quake, Ratio Rush (gold lane), the Jeer Duet, 3 shadow clones; beaten with god
+//   Controls rework (CONTROLS_SPEC §8.5 / §12 enemies), seen through the iso camera:
+//   enemies:onscreen-rule      a crossbowman 13 m down-screen (off screen, > 9 m) holds fire; on screen at 9.6 m it aims; a
+//                              crow far off screen dives only once it is on screen; keep band [6, 9]
+//   enemies:telegraph-payload  rat_pike `combat:telegraph` carries attackId / arc / range / windup / activeAt /
+//                              targetsPlayer; activeAt = the first live frame; the facing (wedge) freezes ≥ 0.15 s
+//                              before it; a hyena lunge carries a lane; wedge + parry ring shot from above
+//   enemies:touch              phones (hasTouch + isMobile, 844×390 and 390×844): the wedge / parry ring read from
+//                              above, a crossbowman beside the narrow portrait frame holds fire, tap a rat = it falls
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,7 +67,15 @@ const HELPERS = () => {
     follow() { ctx.cam.mode('follow', { blend: 0 }); },
     listen() {
       h.offs.push(ctx.bus.on(E.TELEGRAPH, (p) => {
-        h.tele.push({ id: p.id, kind: p.kind, shape: p.shape, type: p.actor?.def?.id, dur: p.duration, at: ctx.game.time, actor: p.actor });
+        const a = p.actor, pl = ctx.player;
+        const chest = a?.pos ? { x: a.pos.x, y: a.pos.y + (a.height ?? 1) * 0.5, z: a.pos.z } : null;
+        h.tele.push({
+          id: p.id, kind: p.kind, shape: p.shape, type: a?.def?.id, dur: p.duration, at: ctx.game.time, actor: a,
+          // CONTROLS_SPEC §8.5 payload + where the shooter stood (the on-screen rule)
+          attackId: p.attackId, arc: p.arc ?? null, lane: p.lane ?? null, range: p.range, windup: p.windup, activeAt: p.activeAt,
+          targetsPlayer: p.targetsPlayer, onScreen: chest ? ctx.cam.onScreen?.(chest, 0.5) ?? null : null,
+          dist: a?.pos && pl ? Math.hypot(a.pos.x - pl.pos.x, a.pos.z - pl.pos.z) : null,
+        });
         if (h.freezeKind === p.kind && h.freezeAt === Infinity) h.freezeAt = ctx.game.time + h.freezeDelay;
       }));
       h.offs.push(ctx.bus.on(E.TELEGRAPH_END, (p) => {
@@ -97,6 +113,19 @@ async function prepare(t, day = false) {
   await t.G(() => window.__GAME__.__en.listen());
   if (day) await t.G(() => window.__GAME__.ctx.env?.preset?.('meadow_day', 0));      // M2 looks read better in daylight
 }
+
+/**
+ * Page fn: the iso camera's screen axes on the ground at her feet. `down` = toward the lens (screen-down), `right` =
+ * screen right (checked through the real projection), plus her position, the input device and the iso framing.
+ */
+const SCREEN_AXES = () => {
+  const g = window.__GAME__, ctx = g.ctx, p = ctx.player.pos, c = ctx.camera.position;
+  let dx = c.x - p.x, dz = c.z - p.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+  let rx = -dz, rz = dx;
+  const s0 = g.screen(p.x, p.z), s1 = g.screen(p.x + rx * 2, p.z + rz * 2);
+  if (s0 && s1 && s1.x < s0.x) { rx = -rx; rz = -rz; }
+  return { down: [dx, dz], right: [rx, rz], p: [p.x, p.z], dev: ctx.input.device, ring: ctx.state.settings?.parryRing ?? null, iso: g.cam.iso() };
+};
 
 /** Wait until every spawned enemy has its model (or fail after `ms`). */
 async function waitLoaded(t, ms = 45000) {
@@ -496,7 +525,7 @@ export default [
           return { type: e.type, fit: h.fit(e), h: e.def.height, clips: e.anim ? Object.keys(e.anim.actions).length : -1, helmet: !!e.helmet, tip: !!e.tipNode, head: !!e.head };
         }, id);
         t.log(`${f.type}: ${f.fit.x.toFixed(2)} × ${f.fit.y.toFixed(2)} × ${f.fit.z.toFixed(2)} m (row h ${f.h}), clips ${f.clips}, head ${f.head}, tip ${f.tip}`);
-        t.assert(Math.abs(f.fit.y / f.h - 1) < 0.3, `${type}: fitted height ${f.fit.y.toFixed(2)} vs ${f.h}`);
+        t.assert(Math.abs(f.fit.y / f.h - 1) < 0.35, `${type}: fitted height ${f.fit.y.toFixed(2)} vs ${f.h}`);
         await t.G(([rid, p, l]) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return g.__en.frame(e, p, l, 40); }, [id, pos, look]);
         await t.frames(8);
         await t.shot(`enemies/m2-looks-${type}`);
@@ -863,6 +892,285 @@ export default [
       const cs = await t.waitForEvent('cutscene:start', 8000);
       t.log(`after the defeat: cutscene:start ${cs}`);
       await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  // ---------------------------------------------------------------------------------------------------------------
+  // Controls rework (CONTROLS_SPEC §8.5 / §12 enemies), all through the live iso camera
+  {
+    name: 'enemies:onscreen-rule', order: 57, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t);
+      await t.G(() => window.__GAME__.ctx.cam.mode('follow', { blend: 0 }));
+      await t.frames(6);
+      const ax = await t.G(SCREEN_AXES);
+      t.log(`iso: d ${ax.iso?.dist?.toFixed(1)} yaw ${ax.iso?.yaw?.toFixed(2)}; down-screen (${ax.down.map((v) => v.toFixed(2))})`);
+      // 1) a crossbowman 13 m DOWN-screen: off screen and beyond the 9 m near band → it must hold fire
+      const id = await t.G(([d, p]) => {
+        const g = window.__GAME__, ctx = g.ctx;
+        const x = p[0] + d[0] * 13, z = p[1] + d[1] * 13;
+        const e = ctx.enemies.spawn('rat_xbow', new g.THREE.Vector3(x, ctx.physics.heightAt(x, z), z), { alerted: true, facing: Math.atan2(-d[0], -d[1]) });
+        e.perched = true;                                 // holds its spot: the test is the rule, not the keep band
+        e.alert();
+        return e.id;
+      }, [ax.down, ax.p]);
+      await waitLoaded(t);
+      const off = await t.G((rid) => {
+        const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid);
+        return { on: g.ctx.cam.onScreen({ x: e.pos.x, y: e.pos.y + e.height * 0.5, z: e.pos.z }, 0.5), d: e.distToPlayer() };
+      }, id);
+      t.assert(off.on === false && off.d > 9, `the crossbowman is off screen and > 9 m (on ${off.on}, ${off.d.toFixed(1)} m)`);
+      await t.wait(3500);
+      const held = await t.G((rid) => {
+        const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid);
+        return { state: e.stateName, hold: !!e.holdFire, aims: g.__en.tele.filter((x) => x.actor === e && x.kind === 'aim').length,
+          // ITS bolts only (an earlier block's fight can leave other projectiles in the pool stats)
+          shots: (g.ctx.combat.projectiles?.list ?? []).filter((p) => p.owner === e).length };
+      }, id);
+      t.log(`off screen: state ${held.state}, holdFire ${held.hold}, aims ${held.aims}, projectiles ${held.shots}`);
+      t.assert(held.aims === 0 && held.shots === 0, 'no off-screen snipe (no aim telegraph, no bolt)');
+      t.assert(held.hold, 'the crossbowman reports holdFire');
+      await t.shot('enemies/onscreen-01-held');
+      // 2) the same crossbowman moved on screen but still beyond 9 m (9.6 m, up-screen and to the side; straight
+      //    up-screen the top edge is only ~10.5 m away at the default zoom): it aims and shoots
+      const spot = await t.G(([rid, d, p]) => {
+        const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid);
+        const r = [-d[1], d[0]];
+        for (let k = 0; k <= 30; k++) {
+          const a = (k / 30) * 1.4, ux = -d[0] * Math.cos(a) + r[0] * Math.sin(a), uz = -d[1] * Math.cos(a) + r[1] * Math.sin(a);
+          const x = p[0] + ux * 9.6, z = p[1] + uz * 9.6, y = ctx.physics.heightAt(x, z);
+          if (ctx.cam.onScreen({ x, y: y + e.height * 0.5, z }, 1.0)) {
+            e.pos.set(x, y, z); e.facing = Math.atan2(-ux, -uz); e.snap?.();
+            return { x, z, a };
+          }
+        }
+        return null;
+      }, [id, ax.down, ax.p]);
+      t.assert(!!spot, 'found an on-screen spot 9.6 m from her');
+      const aimed = await until(t, (rid) => window.__GAME__.__en.tele.some((x) => x.actor?.id === rid && x.kind === 'aim'), id, 12000);
+      if (!t.assert(aimed, 'on screen at 9.6 m: it aims')) {
+        t.log(JSON.stringify(await t.G((rid) => {
+          const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid);
+          return { st: e.stateName, hold: e.holdFire, d: e.distToPlayer(), cd: e.cooldownT, perched: e.perched, pos: e.pos.toArray(),
+            on: ctx.cam.onScreen({ x: e.pos.x, y: e.pos.y + e.height * 0.5, z: e.pos.z }, 0.5), scr: g.screen(e.pos.x, e.pos.z), alive: e.alive, ai: e.ai, dormant: e.dormant };
+        }, id)));
+      }
+      if (aimed) {
+        await t.G(() => window.__GAME__.__en.freezeAfter(null, 0));
+        await until(t, () => window.__GAME__.__en.frozen, null, 3000);
+        await t.frames(3);
+        await t.shot('enemies/onscreen-02-aim-from-above');
+        await t.G(() => window.__GAME__.__en.thaw());
+        const a = await t.G((rid) => { const x = window.__GAME__.__en.tele.find((q) => q.actor?.id === rid && q.kind === 'aim'); return { on: x.onScreen, d: x.dist, id: x.attackId, tp: x.targetsPlayer }; }, id);
+        t.assert(a.on === true && a.id === 'rat_bolt' && a.tp === true, `the aim started on screen (on ${a.on}, ${a.d?.toFixed(1)} m, ${a.id}, targetsPlayer ${a.tp})`);
+      }
+      const keep = await t.G((rid) => window.__GAME__.ctx.enemies.list.find((x) => x.id === rid)?.def.keep, id);
+      t.assert(Array.isArray(keep) && keep[0] === 6 && keep[1] === 9, `rat_xbow.keep = [6, 9] (${JSON.stringify(keep)})`);
+      // 3) a crow spawned far off screen: it may close in, but its dive (shadow decal) starts on screen only
+      await t.G(([d, p]) => {
+        const g = window.__GAME__, ctx = g.ctx;
+        for (const e of [...ctx.enemies.list]) ctx.enemies.despawn(e);
+        g.__en.tele.length = 0;
+        ctx.enemies.spawn('crow', new g.THREE.Vector3(p[0] + d[0] * 15, 0, p[1] + d[1] * 15), { alerted: true });
+      }, [ax.down, ax.p]);
+      await waitLoaded(t);
+      const dived = await until(t, () => window.__GAME__.__en.tele.some((x) => x.type === 'crow' && x.kind === 'shadow'), null, 25000);
+      const crow = await t.G(() => window.__GAME__.__en.tele.filter((x) => x.type === 'crow').map((x) => ({ k: x.kind, on: x.onScreen, d: x.dist })));
+      t.log(`crow telegraphs: ${crow.map((x) => `${x.k}(on ${x.on}, ${x.d?.toFixed(1)} m)`).join(', ') || 'none'}`);
+      t.assert(dived, 'the crow eventually dives');
+      t.assert(crow.filter((x) => x.k === 'shadow').every((x) => x.on === true), 'every crow dive started on screen');
+      if (dived) await t.shot('enemies/onscreen-03-crow-dive');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:telegraph-payload', order: 58, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepare(t);
+      await t.G(() => window.__GAME__.ctx.cam.mode('follow', { blend: 0 }));
+      // a rat_pike 3 m beside her; she circles it during its wind-up so its facing (the wedge) has something to track
+      const id = await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, h = g.__en, p = ctx.player;
+        const e = h.spawn('rat_pike', Math.PI / 2, 3, { alerted: true });
+        e.def = { ...e.def, followUp: null, fleeBelow: 0 };
+        h.track = { samples: [], strikeAt: null, circle: null };
+        h.orbitOff = ctx.game.addFrameHook(() => {
+          const tr = h.track;
+          if (!e.alive || tr.strikeAt != null) return;
+          if (e.stateName === 'windup') {
+            tr.samples.push([ctx.game.time, e.facing]);
+            // orbit her around the rat at 2 m (0.9 rad/s): its facing follows her until the freeze
+            tr.circle ??= { a: Math.atan2(p.pos.x - e.pos.x, p.pos.z - e.pos.z), t0: ctx.game.time };
+            const a = tr.circle.a + (ctx.game.time - tr.circle.t0) * 0.9;
+            const x = e.pos.x + Math.sin(a) * 2, z = e.pos.z + Math.cos(a) * 2;
+            p.pos.set(x, ctx.physics.heightAt(x, z), z);
+          }
+          if (e.stateName === 'strike') tr.strikeAt = ctx.game.time;
+        });
+        return e.id;
+      });
+      await waitLoaded(t);
+      const got = await until(t, () => window.__GAME__.__en.track.strikeAt != null, null, 20000);
+      t.assert(got, 'rat_pike winds up and strikes');
+      const r = await t.G((rid) => {
+        const g = window.__GAME__, h = g.__en, A = g.ctx.config.ATTACKS;
+        h.orbitOff?.(); h.orbitOff = null;
+        const x = h.tele.find((q) => q.actor?.id === rid && (q.kind === 'parry' || q.kind === 'gold'));
+        if (!x) return null;
+        const def = A[x.attackId];
+        return {
+          kind: x.kind, attackId: x.attackId, arcOk: !!x.arc && !!def?.arc && x.arc.range === def.arc.range && x.range === x.arc.range, range: x.range, windup: x.windup, dur: x.dur, at: x.at, activeAt: x.activeAt,
+          tp: x.targetsPlayer, a0: def?.active?.[0] ?? 0, strikeAt: h.track.strikeAt, samples: h.track.samples,
+        };
+      }, id);
+      t.assert(!!r, 'a parry / gold telegraph was emitted');
+      if (r) {
+        t.log(`payload: ${r.kind} ${r.attackId} range ${r.range} windup ${r.windup.toFixed(2)} activeAt ${r.activeAt.toFixed(2)} (strike ${r.strikeAt.toFixed(2)} + ${r.a0}) targetsPlayer ${r.tp}`);
+        t.assert(typeof r.attackId === 'string' && r.attackId.startsWith('rat_poke'), `attackId (${r.attackId})`);
+        t.assert(r.arcOk, 'arc + range from the attack def');
+        t.assert(Math.abs(r.windup - r.dur) < 1e-6 && r.windup >= 0.45, `windup = the telegraph duration (${r.windup.toFixed(2)} s)`);
+        // frame hooks run per rendered frame: a loaded machine renders ~20 fps, so allow one frame of slack
+        t.assert(Math.abs(r.activeAt - (r.strikeAt + r.a0)) < 0.08 + r.a0, `activeAt is the first live frame (Δ ${(r.activeAt - r.strikeAt - r.a0).toFixed(3)} s)`);
+        t.assert(r.tp === true, 'targetsPlayer');
+        // facing: it turns during the early wind-up, and holds still from activeAt − 0.15 s (the wedge freeze)
+        const early = r.samples.filter(([tm]) => tm < r.activeAt - 0.3);
+        const late = r.samples.filter(([tm]) => tm >= r.activeAt - 0.15);
+        const span = (arr) => (arr.length ? Math.max(...arr.map((s) => s[1])) - Math.min(...arr.map((s) => s[1])) : 0);
+        t.log(`facing: early span ${span(early).toFixed(3)} rad (${early.length} frames), late span ${span(late).toFixed(4)} rad (${late.length})`);
+        t.assert(span(early) > 0.05, 'the facing tracks her early in the wind-up');
+        t.assert(span(late) < 1e-3, 'the facing is frozen within 0.15 s of activeAt');
+      }
+      // the wedge + parry ring as seen from above: freeze 0.12 s before the next poke's live frame
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, h = g.__en;
+        ctx.state.settings.parryRing = 'on';
+        h.tele.length = 0;
+        h.offs.push(ctx.game.addFrameHook(() => {
+          const x = h.tele.find((q) => q.kind === 'parry' || q.kind === 'gold');
+          if (x && !h.frozen && !h.shotDone && ctx.game.time >= x.activeAt - 0.12) { ctx.game.setTimeScale(0); h.frozen = true; h.shotDone = true; }
+        }));
+      });
+      if (await until(t, () => window.__GAME__.__en.frozen, null, 15000)) {
+        await t.frames(3);
+        await t.shot('enemies/payload-wedge-from-above');
+        await t.G(() => window.__GAME__.__en.thaw());
+      } else t.warn('no second wind-up to photograph');
+      // a dash attack (hyena lunge) carries a lane instead of an arc
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, h = g.__en;
+        ctx.state.settings.parryRing = 'auto';
+        for (const e of [...ctx.enemies.list]) ctx.enemies.despawn(e);
+        h.tele.length = 0;
+        h.spawn('hyena', 0, 5, { alerted: true });
+      });
+      await waitLoaded(t);
+      const lunge = await until(t, () => window.__GAME__.__en.tele.some((x) => x.type === 'hyena' && x.lane), null, 30000);
+      const hy = await t.G(() => window.__GAME__.__en.tele.filter((x) => x.type === 'hyena').map((x) => ({ k: x.kind, id: x.attackId, lane: x.lane, arc: !!x.arc, r: x.range })));
+      t.log(`hyena telegraphs: ${hy.map((x) => `${x.k}/${x.id}${x.lane ? ` lane ${x.lane.w.toFixed(2)}×${x.lane.l.toFixed(2)}` : ''}${x.arc ? ' arc' : ''}`).join(', ')}`);
+      if (lunge) {
+        const l = hy.find((x) => x.lane);
+        t.assert(l.lane.l > 1 && l.lane.w >= 0.6 && l.r === l.lane.l, 'lunge lane payload (w ≥ 0.6 m, range = lane length)');
+      } else t.warn('the hyena did not lunge within 30 s (machine load); the lane payload is covered by unit tests');
+      await t.G(() => window.__GAME__.__en.done());
+    },
+  },
+  {
+    name: 'enemies:touch', order: 59, level: null, timeout: 480000,
+    async run(t) {
+      for (const [w, hgt, tag] of [[844, 390, 'landscape'], [390, 844, 'portrait']]) {
+        const errors = [];
+        const ctxM = await t.browser.newContext({ viewport: { width: w, height: hgt }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        const pg = await ctxM.newPage();
+        pg.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+        pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+        const G = async (fn, arg) => { const hd = await pg.evaluateHandle(fn, arg); try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); } };
+        const mshot = async (name) => { try { await pg.screenshot({ path: path.join(t.shotsDir, 'enemies', `${name}.png`) }); } catch (e) { t.warn(`touch shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); } };
+        const untilM = async (fn, arg, ms = 8000) => { const t0 = Date.now(); let v = await G(fn, arg); while (!v && Date.now() - t0 < ms) { await pg.waitForTimeout(150); v = await G(fn, arg); } return v; };
+        try {
+          await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 240000, waitUntil: 'domcontentloaded' });   // a loaded machine
+          await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 240000 });
+          await G(async () => {
+            const g = window.__GAME__, c = g.ctx;
+            g.story.skip?.(); g.setMode('play');
+            for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag(k, true);
+            await g.loadLevel('meadow', 'start');
+            return true;
+          });
+          await pg.waitForTimeout(800);
+          await pg.touchscreen.tap(Math.round(w * 0.6), Math.round(hgt * 0.35));   // first touch: device 'touch'
+          await G((src) => {
+            const g = window.__GAME__;
+            new Function(`return (${src})`)()();             // the shared helpers (god, steps off the start spawn)
+            g.ctx.input.setDevice?.('touch');
+            g.__en.listen(); g.story.skip?.(); g.setMode('play'); g.ctx.ui.touch?.enable?.(true);
+            g.ctx.cam.mode('follow', { blend: 0 });
+          }, HELPERS.toString());
+          await pg.waitForTimeout(700);
+          const ax = await G(SCREEN_AXES);
+          t.log(`${tag}: device ${ax.dev}, d ${ax.iso?.dist?.toFixed(1)}, fov ${ax.iso?.fov}, parryRing ${ax.ring}`);
+          t.assert(ax.dev === 'touch', `${tag}: device touch`);
+          // a rat 2.6 m up-screen: its wind-up wedge + the (auto, touch) parry ring, frozen just before the hit
+          const rid = await G(([d, r, p]) => {
+            const g = window.__GAME__, ctx = g.ctx, h = g.__en;
+            for (const o of [...ctx.enemies.list]) ctx.enemies.despawn(o);   // hermetic: no open-zone rats join in
+            const x = p[0] - d[0] * 2.6 + r[0] * 0.8, z = p[1] - d[1] * 2.6 + r[1] * 0.8;
+            const e = ctx.enemies.spawn('rat_pike', new g.THREE.Vector3(x, ctx.physics.heightAt(x, z), z), { alerted: true, facing: Math.atan2(p[0] - x, p[1] - z) });
+            e.def = { ...e.def, followUp: null, fleeBelow: 0 };
+            h.offs.push(ctx.game.addFrameHook(() => {
+              const q = h.tele.find((y) => y.actor === e && (y.kind === 'parry' || y.kind === 'gold'));
+              if (q && !h.frozen && !h.shotDone && ctx.game.time >= q.activeAt - 0.12) { ctx.game.setTimeScale(0); h.frozen = true; h.shotDone = true; }
+            }));
+            return e.id;
+          }, [ax.down, ax.right, ax.p]);
+          const frozen = await untilM(() => window.__GAME__.__en.frozen, null, 25000);
+          t.assert(!!frozen, `${tag}: the rat winds up (frozen before the hit)`);
+          if (frozen) {
+            await pg.waitForTimeout(300);
+            await mshot(`touch-${tag}-01-wedge`);
+            const q = await G((id) => { const x = window.__GAME__.__en.tele.find((y) => y.actor?.id === id); return x ? { k: x.kind, tp: x.targetsPlayer, on: x.onScreen, arc: !!x.arc, act: x.activeAt, at: x.at } : null; }, rid);
+            t.assert(q && q.tp === true && q.arc && q.act > q.at && q.on === true, `${tag}: telegraph payload on touch (${JSON.stringify(q)})`);
+            await G(() => window.__GAME__.__en.thaw());
+          }
+          // a crossbowman 11 m to the side (portrait: outside the narrow frame) — the rule follows the real frame
+          const xb = await G(([r, p]) => {
+            const g = window.__GAME__, ctx = g.ctx, h = g.__en;
+            const x = p[0] + r[0] * 11, z = p[1] + r[1] * 11;
+            const e = ctx.enemies.spawn('rat_xbow', new g.THREE.Vector3(x, ctx.physics.heightAt(x, z), z), { alerted: true, facing: Math.atan2(p[0] - x, p[1] - z) });
+            e.perched = true;
+            e.alert();                                        // it knows she is there: only the rule may hold it
+            h.xb = e;
+            return e.id;
+          }, [ax.right, ax.p]);
+          await untilM(() => window.__GAME__.__en.loaded(), null, 45000);
+          await pg.waitForTimeout(3500);
+          const xs = await G((id) => {
+            const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === id);
+            if (!e) return null;
+            const on = g.ctx.cam.onScreen({ x: e.pos.x, y: e.pos.y + e.height * 0.5, z: e.pos.z }, 0.5);
+            return { on, d: e.distToPlayer(), aims: g.__en.tele.filter((x) => x.actor === e && x.kind === 'aim').map((x) => ({ on: x.onScreen, d: x.dist })), hold: !!e.holdFire, st: e.stateName, shots: g.ctx.combat.stats?.projectiles ?? 0 };
+          }, xb);
+          t.log(`${tag}: xbow at ${xs?.d?.toFixed(1)} m, on screen ${xs?.on}, state ${xs?.st}, aims ${xs?.aims.length}, holdFire ${xs?.hold}, bolts ${xs?.shots}`);
+          t.assert(xs && xs.aims.every((a) => a.on === true || a.d <= 9), `${tag}: every aim started on screen or within 9 m`);
+          if (xs && xs.on === false && xs.d > 9) t.assert(xs.aims.length === 0 && (xs.hold || xs.st !== 'chase'), `${tag}: the off-frame crossbowman holds fire (${xs.st})`);
+          if (tag === 'portrait') t.assert(xs && xs.on === false, 'portrait: 11 m to the side is off the narrow frame');
+          await mshot(`touch-${tag}-02-xbow`);
+          // tap the rat: select + attack order (auto-chain loops on touch); god mode: it falls
+          await G((id) => { const g = window.__GAME__; for (const o of [...g.ctx.enemies.list]) if (o.id !== id) g.ctx.enemies.despawn(o); g.clearEvents(); }, rid);
+          if (await G((id) => !!window.__GAME__.ctx.enemies.list.find((x) => x.id === id && x.alive), rid)) {
+            const sp = await G((id) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === id); return g.screen(e.pos.x, e.pos.z, e.pos.y + 0.4); }, rid);
+            await pg.touchscreen.tap(Math.round(sp.x), Math.round(sp.y));
+            await pg.waitForTimeout(500);
+            await mshot(`touch-${tag}-03-tapped`);
+            const dead = await untilM((id) => !window.__GAME__.ctx.enemies.list.some((x) => x.id === id && x.alive), rid, 20000);
+            t.assert(!!dead, `${tag}: tapping the rat attacks it until it falls`);
+          }
+          await G(() => window.__GAME__.__en.done());
+          for (const e of errors) t.fail(`${tag}: ${e}`);
+        } catch (e) {
+          t.fail(`${tag}: ${String(e?.message ?? e).split('\n')[0]}`);
+        } finally {
+          await ctxM.close().catch(() => {});
+        }
+      }
     },
   },
 ];

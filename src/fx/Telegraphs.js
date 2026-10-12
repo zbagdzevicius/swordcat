@@ -15,9 +15,15 @@
 // Descriptor (combat:telegraph payload, §19.5): { id, actor, kind, shape, pos, dir, size, duration } plus optional
 // { r, w|width, l|length|range, angle, inner, target, follow }. `size` may be a number, [a, b] or an object (see
 // normalizeTelegraph). Timers run in SIM time (update), so hitstop / slow motion keep them in sync with enemy windups.
+//
+// Iso camera (research/CONTROLS_SPEC.md §8.2; GroundDecals draws the melee strike wedges and the parry ring): glints
+// and "!" / "!!" are a CONSTANT screen size (glint 28 px, gold 34 px, "!" 34 px at head + 0.5 m, the strike flash ×1.6)
+// on an overlay batch (depthTest off, renderOrder 10), so they read through roofs and at any zoom; ranged aim lines lie
+// flat on the ground (y + 0.05) along the whole projected path (≤ 12 m), dotted while tracking, solid white once they
+// stop tracking 0.2 s before the shot; decal rims are ≥ 0.12 m wide; the jeer gets a faint purple ground disc.
 import * as THREE from 'three';
 import { TELEGRAPH } from '../core/config.js';
-import { FOG_FACTOR, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial, withFxFog } from './shaders.js';
 import { MARK } from './Marks.js';
 import { toVec3, actorWorldPos, weaponPoint, headPoint, groundY, isActor } from './util.js';
 
@@ -121,7 +127,7 @@ const DECAL_FRAG = /* glsl */`
 uniform int uShape;
 uniform vec3 uColor;
 uniform vec3 uRim;
-uniform float uFill, uAlpha, uR, uW, uL, uAngle, uInner, uTime, uPattern;
+uniform float uFill, uAlpha, uR, uW, uL, uAngle, uInner, uTime, uPattern, uDisc;
 varying vec2 vLocal;
 #include <fog_pars_fragment>
 ${FOG_FACTOR}
@@ -133,7 +139,7 @@ void main() {
   float fillM;             // 1 where the fill has reached
   float baseA = 0.12, fillA = 0.45;
   vec3 col = uColor;
-  float rimW = 0.06 + 0.012 * uR;
+  float rimW = max( 0.12, 0.06 + 0.012 * uR );     // §8.2.5: rim ≥ 0.12 m
   if ( uShape == 0 ) {
     edge = uR - d;
     fillM = smoothstep( -aa, aa, uR * uFill - d );
@@ -169,7 +175,7 @@ void main() {
       float rr = fract( uTime * 0.6 + float( i ) / 3.0 ) * uR;
       a += ( 1.0 - smoothstep( 0.04, 0.16, abs( d - rr ) ) ) * ( 1.0 - rr / uR ) * 0.85;
     }
-    a = max( a, 0.06 * step( 0.0, edge ) );
+    a = max( a, max( 0.06, uDisc ) * step( 0.0, edge ) );   // §8.2.7 the jeer's faint ground disc
     a = max( a, ( 1.0 - smoothstep( 0.0, rimW, abs( edge ) ) ) * 0.5 );
     a *= step( -aa, edge ) * uAlpha;
     if ( a < 0.004 ) discard;
@@ -194,15 +200,15 @@ void main() {
 let _decalBase = null;
 function decalMaterial() {
   if (!_decalBase) {
-    _decalBase = new THREE.ShaderMaterial({
+    _decalBase = fxShaderMaterial({
       name: 'fx.telegraph.decal', vertexShader: DECAL_VERT, fragmentShader: DECAL_FRAG, fog: true,
       uniforms: { ...fogUniforms(), uShape: { value: 0 }, uColor: { value: new THREE.Color() }, uRim: { value: new THREE.Color('#FFFFFF') },
         uFill: { value: 0 }, uAlpha: { value: 0 }, uR: { value: 1 }, uW: { value: 1 }, uL: { value: 1 }, uAngle: { value: 1 },
-        uInner: { value: 0 }, uTime: { value: 0 }, uPattern: { value: 0 } },
+        uInner: { value: 0 }, uTime: { value: 0 }, uPattern: { value: 0 }, uDisc: { value: 0 } },
       transparent: true, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
     });
   }
-  return _decalBase.clone();
+  return withFxFog(_decalBase.clone());
 }
 
 const GRID = 17;
@@ -272,7 +278,7 @@ void main() {
 }`;
 const LINE_FRAG = /* glsl */`
 uniform vec3 uColor;
-uniform float uAlpha, uCrawl, uLock, uWidth, uLen;
+uniform float uAlpha, uCrawl, uLock, uWidth, uLen, uSolid, uCap, uHole;
 varying vec2 vLine;
 #include <fog_pars_fragment>
 ${FOG_FACTOR}
@@ -288,6 +294,15 @@ void main() {
   float ends = smoothstep( 0.0, 0.3, vLine.x ) * ( 1.0 - smoothstep( uLen - 0.4, uLen, vLine.x ) );
   vec3 col = mix( vec3( 0.04, 0.025, 0.02 ), uColor * ( 1.4 + 1.2 * uLock ), max( dotM, core / 0.18 * 0.6 ) );
   float a = max( max( dotM, halo * 0.45 ), core ) * ends * uAlpha;
+  if ( uSolid > 0.5 ) {                             // iso, locked: a solid white bar (it fires along this now)
+    float bar = 1.0 - smoothstep( 0.5, 0.85, abs( vLine.y ) );
+    col = mix( vec3( 0.04, 0.025, 0.02 ), uColor * 1.8, bar );
+    a = max( bar, ( 1.0 - smoothstep( 0.85, 1.0, abs( vLine.y ) ) ) * 0.5 ) * ends * uAlpha;
+  }
+  // iso: kept under the bloom threshold (a flat ground strip must not bloom into a wide white bar), and faded
+  // around her (uHole = metres along the line nearest her) so her silhouette stays readable on top of it
+  col = min( col, vec3( uCap ) );
+  a *= mix( 0.12, 1.0, smoothstep( 0.35, 1.05, abs( vLine.x - uHole ) ) );
   if ( a < 0.004 ) discard;
   gl_FragColor = vec4( mix( col, fxFogColor(), fxFog() * 0.4 ), a );
   ${OUTPUT}
@@ -302,26 +317,27 @@ class AimLine {
     g.setAttribute('aLine', new THREE.BufferAttribute(this.uv, 2).setUsage(THREE.DynamicDrawUsage));
     g.setIndex([0, 2, 1, 1, 2, 3]);
     this.geometry = g;
-    _lineBase ??= new THREE.ShaderMaterial({
+    _lineBase ??= fxShaderMaterial({
       name: 'fx.telegraph.aim', vertexShader: LINE_VERT, fragmentShader: LINE_FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color('#FFFFFF') }, uAlpha: { value: 1 }, uCrawl: { value: 0 }, uLock: { value: 0 },
-        uWidth: { value: 0.16 }, uLen: { value: 1 } },
+        uWidth: { value: 0.16 }, uLen: { value: 1 }, uSolid: { value: 0 }, uCap: { value: 100 }, uHole: { value: -1e4 } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
     });
-    this.material = _lineBase.clone();
+    this.material = withFxFog(_lineBase.clone());
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.name = 'fx.telegraph.aim';
     this.mesh.frustumCulled = false; this.mesh.matrixAutoUpdate = false; this.mesh.renderOrder = 8; this.mesh.visible = false;
     this.busy = false;
   }
 
-  /** Billboard the strip around the segment a→b, facing the camera. */
-  set(a, b, camPos, width) {
+  /** Billboard the strip around the segment a→b, facing the camera (`flat`: lying on the ground, iso). */
+  set(a, b, camPos, width, flat = false) {
     _d.subVectors(b, a); const len = _d.length();
     if (len < 1e-4) return;
     _d.multiplyScalar(1 / len);
     _m.addVectors(a, b).multiplyScalar(0.5);
-    _s.subVectors(camPos, _m).cross(_d);
+    if (flat) _s.set(_d.z, 0, -_d.x);
+    else _s.subVectors(camPos, _m).cross(_d);
     if (_s.lengthSq() < 1e-8) _s.set(0, 1, 0); else _s.normalize();
     _s.multiplyScalar(width * 0.5);
     const P = this.pos, U = this.uv;
@@ -340,6 +356,10 @@ class AimLine {
   dispose() { this.mesh.removeFromParent(); this.geometry.dispose(); this.material.dispose(); }
 }
 
+/** Iso readability constants (CONTROLS_SPEC §8.2.3–8.2.5, §8.2.7; CSS px and metres). */
+export const TELE_ISO = Object.freeze({ glintPx: 28, goldPx: 34, exclPx: 34, exclLift: 0.5, flashMul: 1.6, aimMax: 12, aimLift: 0.05,
+  aimWidth: 0.22, aimPx: 8, aimWMin: 0.06, aimWMax: 0.4, aimCap: 0.72, aimHoleLat: 1.2, rimMin: 0.12, jeerDisc: 0.12 });
+
 /** Pure: how much of an actor's marks to keep given its camera distance `dA` vs the player's `dP` (unit-tested). */
 export function occluderFactor(dA, dP) {
   if (!(dP > 0) || !(dA >= 0)) return 1;
@@ -350,6 +370,7 @@ export function occluderFactor(dA, dP) {
 const _d = new THREE.Vector3(), _m = new THREE.Vector3(), _s = new THREE.Vector3();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _p = new THREE.Vector3(), _q = new THREE.Vector3();
 const _col = new THREE.Color(), _white = new THREE.Color('#FFFFFF');
+const _w0 = new THREE.Vector3(), _w1 = new THREE.Vector3();
 const RED_GLOW = new THREE.Color(TELEGRAPH.colors.red);
 
 /** One live telegraph. */
@@ -378,10 +399,15 @@ export function originMode(desc) {
 }
 
 export class Telegraphs {
-  /** @param {any} ctx @param {import('./Marks.js').Marks} marks */
-  constructor(ctx, marks) {
+  /**
+   * @param {any} ctx @param {import('./Marks.js').Marks} marks
+   * @param {import('./Marks.js').Marks|null} [top] overlay batch for the iso constant-size glints / "!"
+   */
+  constructor(ctx, marks, top = null) {
     this.ctx = ctx;
     this.marks = marks;
+    this.top = top;
+    this._isoNow = false;
     /** @type {Map<any, Live>} */
     this.active = new Map();
     this._free = [];
@@ -473,9 +499,16 @@ export class Telegraphs {
     }
   }
 
+  /** The iso play camera is on (follow / lock / boss; not presets, cutscenes, the Meme Cam or `?cam=classic`). */
+  get iso() {
+    const c = this.ctx.cam;
+    return !!c?.isIso && this.ctx.params?.cam !== 'classic' && (c.modeName === 'follow' || c.modeName === 'lock' || c.modeName === 'boss');
+  }
+
   /** Per frame: place visuals and push marks. `dt` = visual dt. */
   render(dt) {
     const ctx = this.ctx, cam = ctx.camera;
+    this._isoNow = this.iso;
     const patterns = !!ctx.state?.settings?.patterns;
     for (const L of this.active.values()) {
       const n = L.n;
@@ -498,6 +531,7 @@ export class Telegraphs {
         d.place(L.origin.x, L.origin.y, L.origin.z, L.dir.x, L.dir.z, L.bounds, this._ground);
         const u = d.material.uniforms;
         u.uFill.value = prog; u.uAlpha.value = alpha; u.uTime.value = L.real; u.uPattern.value = pattern;
+        u.uDisc.value = this._isoNow && n.kind === 'jeer' ? TELE_ISO.jeerDisc : 0;
         d.mesh.visible = true;
       }
       // ---- aim line
@@ -537,12 +571,58 @@ export class Telegraphs {
       if (d > 1e-4) _b.multiplyScalar(Math.min(n.l, Math.max(0.3, d - 0.1)) / d);
       _b.add(_a);
     }
-    l.set(_a, _b, cam.position, 0.16);
+    const iso = this._isoNow;
+    if (iso) {
+      // §8.2.4 on the ground: from the shooter's feet along the aim, the full projected path (≤ 12 m)
+      _d.subVectors(_b, _a); _d.y = 0;
+      if (_d.lengthSq() < 1e-8) _d.copy(L.dir);
+      _d.normalize();
+      const len = Math.min(TELE_ISO.aimMax, Math.max(n.l, 0.5));
+      if (L.actor) actorWorldPos(L.actor, _a);
+      const gA = this._ground(_a.x, _a.z, _a.y);
+      _a.y = gA + TELE_ISO.aimLift;
+      _b.copy(_a).addScaledVector(_d, len);
+      _b.y = Math.max(this._ground(_b.x, _b.z, gA), gA - 1) + TELE_ISO.aimLift;
+    }
     const u = l.material.uniforms;
+    let width = 0.16, hole = -1e4;
+    if (iso) {
+      width = this._aimWidth(_a, _b, cam);
+      // her spot along the strip (when it runs within reach of her): the shader fades the beam there
+      const pp = this.ctx.player?.object3d?.position ?? this.ctx.player?.pos;
+      if (pp) {
+        const dx = _b.x - _a.x, dz = _b.z - _a.z, L2 = Math.hypot(dx, dz) || 1;
+        const rx = pp.x - _a.x, rz = pp.z - _a.z, along = (rx * dx + rz * dz) / L2;
+        if (Math.abs(rx * dz - rz * dx) / L2 < TELE_ISO.aimHoleLat && along > -1 && along < L2 + 1) hole = along;
+      }
+    }
+    l.set(_a, _b, cam.position, width, iso);
+    l.material.depthTest = !iso;
+    u.uCap.value = iso ? TELE_ISO.aimCap : 100;
+    u.uHole.value = hole;
+    u.uSolid.value = iso && L.frozen ? 1 : 0;
     u.uAlpha.value = alpha;
     u.uLock.value = L.frozen ? 0.6 + 0.4 * Math.sin(L.real * 40) : 0;
     if (!L.frozen) u.uCrawl.value = L.real * 1.4;
     l.mesh.visible = true;
+  }
+
+  /**
+   * Iso aim strip width (m) for a constant ~`TELE_ISO.aimPx` CSS px across it on screen, whatever its screen
+   * direction (a flat strip running up the screen is not foreshortened; one running across it is).
+   */
+  _aimWidth(a, b, cam) {
+    const H = this.ctx.renderer?.domElement?.clientHeight || (typeof innerHeight === 'number' ? innerHeight : 720);
+    const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz);
+    if (!cam || !(l > 1e-4) || !(H > 0)) return TELE_ISO.aimWidth;
+    cam.updateMatrixWorld?.();
+    _w0.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+    _w1.set(_w0.x + dz / l, _w0.y, _w0.z - dx / l);
+    _w0.project(cam); _w1.project(cam);
+    if (!(_w0.z < 1 && _w1.z < 1)) return TELE_ISO.aimWidth;
+    const pxPerM = Math.hypot((_w1.x - _w0.x) * (cam.aspect || 1), _w1.y - _w0.y) * H / 2;
+    if (!(pxPerM > 1e-3)) return TELE_ISO.aimWidth;
+    return Math.min(TELE_ISO.aimWMax, Math.max(TELE_ISO.aimWMin, TELE_ISO.aimPx / pxPerM));
   }
 
   /** Weapon / glint point for marks: the live tell point, else the actor's weapon, else the origin + 0.9 m. */
@@ -558,6 +638,7 @@ export class Telegraphs {
   }
 
   _marks(L, alpha, pattern) {
+    if (this._isoNow) { this._marksIso(L, alpha, pattern); return; }
     const n = L.n, A = L.actor, M = this.marks, t = L.real;
     const pop = Math.min(1, t / 0.12), popS = pop < 1 ? 1 + 2.70158 * (pop - 1) ** 3 + 1.70158 * (pop - 1) ** 2 : 1;
     // the strike flash: a brighter, bigger glint 0.25 s before the active frame (the audio "ting" lands on it)
@@ -609,6 +690,71 @@ export class Telegraphs {
         _col.copy(L.color);
         M.push(_p.x, _p.y, _p.z, 0.85 * popS, MARK.SWIRL, _col, 1.9, alpha, t * 2.4);
         M.push(_p.x, _p.y, _p.z, 0.4 * popS, MARK.SOFT, _col, 1.5, alpha * 0.6);
+        break;
+      }
+      case 'jeer': {
+        this._headPoint(L, _q, -0.25);
+        _col.copy(L.color);
+        for (let k = 0; k < 2; k++) {
+          const f = (t * 1.1 + k * 0.5) % 1;
+          M.push(_q.x, _q.y, _q.z, 0.5 + f * 1.6, MARK.RING, _col, 1.6, alpha * (1 - f) * 0.9);
+        }
+        break;
+      }
+      default: break;
+    }
+  }
+
+  /**
+   * §8.2.3 iso marks: constant screen size on the overlay batch (no occluder softening: from above nothing stands
+   * between the lens and her). Sizes are negative = CSS px (Marks.push).
+   */
+  _marksIso(L, alpha, pattern) {
+    const n = L.n, A = L.actor, T = this.top ?? this.marks, M = this.marks, t = L.real, I = TELE_ISO;
+    const pop = Math.min(1, t / 0.12), popS = pop < 1 ? 1 + 2.70158 * (pop - 1) ** 3 + 1.70158 * (pop - 1) ** 2 : 1;
+    const flashAt = n.duration - 0.25;
+    const flash = L.t > flashAt && L.t < flashAt + 0.14 ? Math.sin(((L.t - flashAt) / 0.14) * Math.PI) : 0;
+    const fl = 1 + (I.flashMul - 1) * flash;
+    const glint = n.shape === 'glint';
+    switch (n.kind) {
+      case 'parry': {
+        if (!glint && !A) break;
+        this._glintPoint(L, _p);
+        const tw = 0.85 + 0.15 * Math.sin(t * 18);
+        T.push(_p.x, _p.y, _p.z, -I.glintPx * popS * tw * fl, MARK.STAR4, _white, 3.2 + 3 * flash, alpha, t * 0.8, pattern);
+        T.push(_p.x, _p.y, _p.z, -I.glintPx * 0.5 * popS, MARK.SOFT, _white, 2.0, alpha * 0.7);
+        this._headPoint(L, _q, I.exclLift + 0.04 * Math.sin(t * 9));
+        T.push(_q.x, _q.y, _q.z, -I.exclPx * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
+        break;
+      }
+      case 'gold': {
+        if (!glint && !A) break;
+        this._glintPoint(L, _p);
+        _col.copy(L.color);
+        T.push(_p.x, _p.y, _p.z, -I.goldPx * popS * fl, MARK.STAR8, _col, 2.8 + 2.5 * flash, alpha, t * 1.1, pattern);
+        T.push(_p.x, _p.y, _p.z, -I.goldPx * 0.5 * popS, MARK.STAR4, _white, 2.4, alpha * 0.9, -t * 0.6, 0);
+        break;
+      }
+      case 'red': {
+        const pulse = 0.75 + 0.25 * Math.sin(t * 22);
+        if (glint || A) {
+          this._glintPoint(L, _p);
+          T.push(_p.x, _p.y, _p.z, -I.goldPx * pulse * popS * fl, MARK.SOFT, RED_GLOW, 2.6, alpha, 0, pattern);
+        }
+        if (A) {        // the body glow stays world-sized and depth-tested (a rim around the silhouette)
+          this._behind(A, 0.4, _q);
+          const h = (A.height ?? 1) * (A.object3d?.scale?.y ?? 1);
+          M.push(_q.x, _q.y, _q.z, h * 1.25, MARK.HALO, RED_GLOW, 1.8, alpha * (0.45 + 0.15 * pulse), 0, 0, 1.35);
+        }
+        this._headPoint(L, _q, I.exclLift + 0.05 * Math.abs(Math.sin(t * 12)));
+        T.push(_q.x, _q.y, _q.z, -I.exclPx * popS, MARK.EXCL2, RED_GLOW, 1.3, alpha, 0, pattern, 0.95);
+        break;
+      }
+      case 'grab': {
+        this._glintPoint(L, _p);
+        _col.copy(L.color);
+        T.push(_p.x, _p.y, _p.z, -I.goldPx * popS, MARK.SWIRL, _col, 1.9, alpha, t * 2.4);
+        T.push(_p.x, _p.y, _p.z, -I.glintPx * 0.5 * popS, MARK.SOFT, _col, 1.5, alpha * 0.6);
         break;
       }
       case 'jeer': {

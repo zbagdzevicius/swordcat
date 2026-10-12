@@ -6,6 +6,9 @@ import { defineLevel } from '../LevelKit.js';
 export default defineLevel({
   id: 'bog', size: 180, res: 120, seed: 47, hills: { amp: 1.0 }, pathWidth: 4,
   env: { default: 'bog' },
+  // CONTROLS_SPEC §4.2 / §11: the densest fog (the stage is small by design); a memeSpot at the Sovereign Pool
+  cam: { yaw: Math.PI, fog: { clear: 4.5, clearCombat: 6, topMul: 1.2 } },
+  memeSpot: { at: [-6, 70], yaw: Math.PI, r: 4 },
   music: { explore: 'cave_theme', combat: 'battle_fast_fight_loop' },
   spine: [[0, -80], [-22, -52], [0, -22], [26, 4], [12, 34], [-16, 54], [-6, 78], [-6, 90]],
   spawns: { start: [0, -86, 0], boss: [-6, 64, 0] },

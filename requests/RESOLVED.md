@@ -107,3 +107,55 @@ New `tests/smoke/controls.mjs` (desktop KBM end to end, the nav fence hop, every
 landscape + portrait with hasTouch, `?cam=classic`); `camera.mjs` rewritten for the iso rig (follow, select, boss fit,
 hand-back, occlusion + x-ray, town house fade; meme / presets / shake / CS-08 kept). Jump taps use `KeyF`; the flow's
 square check remembers the giant jelly's spawn (the iso fight clears the waves between two polls).
+
+---
+
+# Controls rework, part 2 (2026-10-11): area passes + integration
+
+Every area finished its CONTROLS_SPEC §12 items (dithered crown / roof fades, capsule occlusion, zone hints with
+dist / pitch, Golden / dialogue framing, memeSpot; authored + gated nav links, bounce links, `tops` raycasts; Auto-Riposte,
+touch guard arc, live `player.aim`, jump assist, Pounce aim; §7.2 score + lunge speed + bolt reflect toward the aim;
+cursor.js, hpBars.js, touch Edit layout, preset glyphs; GroundMist, strike wedges, parry ring, order markers, ranges;
+level `cam` rows, zone hints, roof / crown / solid tags, wheat trample; the 9-step tutorial; topTint). The integrator
+then applied the open requests and fixed what the full smoke run found.
+
+## Requests applied
+- camera ← physics: `Picker.screenToGround` raycasts walkable prop tops (`tops: true`); tops more than 2.8 m above the
+  terrain are skipped (a 5.6 m hay stack camera-side of the practice field was catching clicks past the fence).
+- player ← physics: bounce links are followed (`Orders._bounceLink`: right after a spring near the take-off, the airtime is
+  aimed at the landing; a hop that lands on a cap counts as landed). A move order now rides the Mushroom Ring to cap 5.
+- player ← combat: lunge magnetism in swing units (`lungeSpeed`), and touch / pad / auto swings pass `lungeTo` at the
+  swing start so the whole lunge window gets it; the Stand threat snap measures and faces the bolt (`nextParryable().pos`;
+  `threatSnap(her, threats, now, out)` → `out.at`), touch auto-face too.
+- player ← story: touch Jump is never cut short (a tap clears the 1.0 m practice fence).
+- player ← camera: at the level's `memeSpot` she turns to its yaw when the Meme Cam starts.
+- fx ← player: the Pounce dive circle sits at `player.diveAt`; the hero notch follows the live aim (auto / selected
+  while a verb is active).
+- ui ← core: pad Back (8) pauses and opens the controls card. ui ← story: `CINEMA.tipCount` 12; the portrait
+  tutorial card sits under the HUD strip. story / ui ← player: with Auto-Riposte on, the hint reads "Parried! She
+  ripostes all by herself." (`tut.riposte.auto`). The touch `button` haptic was already sent by touch.js.
+- world ← fx: `patchFogVarying` tests for `varying vec3 vFogW` (a shader that calls `hfogFactor` is patched).
+  world ← physics: the meadow fence link moved to x −14.5 (off the hay platform's rim).
+- enemies ← characters: `topTint(m.root)` in `Enemy.loadVisual` (iso; owned materials patched in place).
+- core ← combat: the combat-only AIM keys are in `config.AIM`. core ← characters: the harness passes the boot
+  timeout to `page.goto` / `reload`.
+- Declined / kept: the fx tunables stay as frozen tables next to their code (DECAL_CFG, GROUND_MIST, …); still open
+  (optional): camera owning `settings.camLock`, audio `ui.ready`, enemies' boss yield, ui's CS-06 letter card,
+  `postfx.setGrade`, `level.cam.fog.mist`.
+
+## Integration fixes
+- The long pale diagonal streaks over every iso level were the ambient MistCards (wide cards leaned toward a lens 50°
+  above them). In iso they fade to 12 % (`MIST_ISO.ambientA`); GroundMist carries the mist. (Hiding them with
+  `visible = false` never worked as a test: fx re-shows its meshes every frame.)
+- Enemy HP pills live in their own layer under `#touch` (`#ui-world`), so a pill never covers a touch button.
+- New: the §6.3 pad right-stick ground reticle (fx `_padReticle`).
+
+## Smoke
+New `controls:pad` (stubbed gamepad: RS reticle + linger, Back → controls card); `physics:nav-forest` now rides the
+Mushroom Ring by a move order. Robustness: `controls:nav` learns the jump lesson first (the fence link is gated);
+`controls:classic` holds W until she walked; `camera:boss-fit` reopens an arena an earlier block saved as cleared;
+`enemies:onscreen-rule` counts only the crossbowman's own bolts; `physics:nav-forest` accepts arrival at the picked
+surface (a stump top in front of the target); `enemies:m2looks` height tolerance 35 % (Cacklejaw's hat); `controls:touch` accepts arrival at the order's own point
+(a crate top in front of the tapped ground) and taps ⚔ once more if the first tap lands in a recovery;
+`story:tutorial` puts the cursor on the dummy before the J combo (J swings toward the cursor); `audio:forest` despawns
+the camp rats before the night-music check.

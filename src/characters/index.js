@@ -7,7 +7,7 @@ export {
 } from './configs.js';
 export { PAL, CAPES, SIGNATURE, VILLAGER_COATS } from './palette.js';
 export {
-  FUR_QUALITY, setFurQuality, getFurQuality, shellsFor, FUR_WIND, FUR_TIME, makeStrandTexture, makeFurMaterial, coatColor, headFurMask, FurPart,
+  FUR_QUALITY, setFurQuality, getFurQuality, shellsFor, FUR_WIND, FUR_TIME, makeStrandTexture, makeFurMaterial, coatColor, headFurMask, FurPart, MAX_SHELLS,
 } from './Fur.js';
 export { makeEyeTexture, eyeGeometry, eyeMaterial, EyePair, EXPRESSIONS } from './Eyes.js';
 export { buildBow, bowGeometry, bowMaterial } from './Bow.js';
@@ -20,7 +20,7 @@ export { ACCESSORIES } from './Accessories.js';
 export { buildProp, buildCage, PROP_NAMES, PROP_MOUNTS } from './Props/ProcProps.js';
 export { CHEESE, M2_BUILDERS, M2_MOUNTS } from './Props/M2Props.js';
 export { registerMaterialPatcher, makeKitMaterial, kitMaterial, RM, HOLY_COLOR, setCharacterEnvMap, getCharacterEnvMap } from './materials.js';
-export { assetUrl, setAssetResolver, mulberry32, hashString } from './util.js';
+export { assetUrl, setAssetResolver, mulberry32, hashString, setCharDetail, charDetail } from './util.js';
 // ---- in-game glue (M1)
 export { KittenView, MEME_CAPE, POSE_BLEND } from './KittenView.js';
 export { initCharacters, disposeCharacters, characterFrame, visualDt, furShellsForPreset, WIND } from './runtime.js';

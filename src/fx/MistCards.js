@@ -6,8 +6,12 @@
 //   - fog walls: `mistRing(center, r | [w, d])` = cards every 1.5 m on a ring (arena template §12.1) or along the four
 //     edges of a rectangle (rectangular arenas, level bounds). The wall rises on creation; `dispose()` dissolves it
 //     over 1.5 s (arena clear) and `remove()` drops it at once. Each wall / the field is ONE instanced draw call.
+// Iso camera (research/CONTROLS_SPEC.md §4.2): seen from above a vertical card is a sliver, so in the play camera the
+// cards sit 0.3–1.2 m above the ground (walls: capped at 2.5 m) and lean 60° toward the lens; every fog wall also
+// lays a 2 m-wide ground mist band along its line (one more draw per wall, iso only). The ground mist sheets
+// (GroundMist.js) carry the misty screen edges; this field stays for texture, cutscenes and the classic camera.
 import * as THREE from 'three';
-import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { PLAYER } from '../core/config.js';
 import { groundY, toVec3, hash01, actorWorldPos } from './util.js';
 
@@ -16,6 +20,10 @@ export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.62, ri
   focusIn: 0.5, focusOut: 1.2, focusMin: 0.08 });   // cards up to her depth (+ a margin) fade to focusMin
 
 export const AMBIENT = Object.freeze({ w: 8, h: 2.5, maxA: 0.22, radius: 34 });
+/** Iso placement (CONTROLS_SPEC §4.2): lean toward the lens, base lift and height caps (m), the wall's ground band. */
+// ambientA: the ambient field's alpha in the iso view. Its wide cards, leaned toward a lens 50° above them, read as long
+// pale streaks over the ground; the GroundMist sheets carry the iso mist instead, so the field only lingers faintly.
+export const MIST_ISO = Object.freeze({ tilt: Math.PI / 3, lift: 0.3, ambientH: 0.9, wallH: 2.5, bandW: 2, bandA: 0.42, ease: 3, ambientA: 0.12 });
 /** Ambient density per level id (× the quality count). */
 export const AMBIENT_DENSITY = Object.freeze({ meadow: 1, forest: 0.85, town: 0.45, gate: 1, bog: 1.3, keep: 0.6, sky: 0 });
 
@@ -45,6 +53,8 @@ export function rectCardPositions(cx, cz, w, d, spacing = WALL.spacing, yaw = 0)
 const VERT = /* glsl */`
 attribute vec3 iPos;      // card base centre (world)
 attribute vec4 iCard;     // width, height, seed, alpha
+uniform float uTilt;      // iso: the card leans toward the lens by this angle from vertical (rad)
+uniform vec2 uIsoH;       // iso: x = base lift (m), y = height cap (m; 0 = none)
 varying vec2 vUv;
 varying float vSeed, vAlpha, vCamDist;
 #include <fog_pars_vertex>
@@ -54,7 +64,10 @@ void main() {
   float l = length( tc );
   vec2 side = l > 1e-4 ? vec2( tc.y, -tc.x ) / l : vec2( 1.0, 0.0 );
   float h = iCard.y * ( 0.35 + 0.65 * clamp( iCard.w * 1.4, 0.0, 1.0 ) );
-  vec3 wp = iPos + vec3( side.x, 0.0, side.y ) * corner.x * iCard.x + vec3( 0.0, corner.y * h, 0.0 );
+  if ( uIsoH.y > 0.0 ) h = min( h, uIsoH.y );
+  vec2 toCam = l > 1e-4 ? tc / l : vec2( 0.0, 1.0 );
+  vec3 upv = vec3( -toCam.x * sin( uTilt ), cos( uTilt ), -toCam.y * sin( uTilt ) );   // top leans away: the face looks up at the lens
+  vec3 wp = iPos + vec3( 0.0, uIsoH.x, 0.0 ) + vec3( side.x, 0.0, side.y ) * corner.x * iCard.x + upv * corner.y * h;
   vUv = vec2( corner.x + 0.5, corner.y );
   vSeed = iCard.z; vAlpha = iCard.w;
   vCamDist = distance( cameraPosition, wp );
@@ -122,11 +135,11 @@ export class CardSet {
     g.setAttribute('iPos', this.aPos); g.setAttribute('iCard', this.aCard);
     g.instanceCount = count;
     this.geometry = g;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name, vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color('#9AA196') }, uTime: { value: 0 }, uMaxA: { value: maxA },
         uNear: { value: 3 }, uFocus: { value: new THREE.Vector2() }, uScroll: { value: new THREE.Vector2() }, uLoop: { value: new THREE.Vector2() },
-        uLoopDrift: { value: new THREE.Vector2() } },
+        uLoopDrift: { value: new THREE.Vector2() }, uTilt: { value: 0 }, uIsoH: { value: new THREE.Vector2() } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
     });
     this.mesh = new THREE.Mesh(g, this.material);
@@ -153,11 +166,67 @@ export class CardSet {
 
   dirty() { this.aPos.needsUpdate = true; this.aCard.needsUpdate = true; }
 
+  /** Iso lean / lift / cap (k = 0 classic … 1 iso). */
+  setIso(k, cap) {
+    const u = this.material.uniforms;
+    u.uTilt.value = MIST_ISO.tilt * k;
+    u.uIsoH.value.set(MIST_ISO.lift * k, k > 0.01 ? cap + (8 - cap) * (1 - k) : 0);
+  }
+
   dispose() { this.mesh.removeFromParent(); this.geometry.dispose(); this.material.dispose(); }
 }
 
+// ------------------------------------------------------------------ the wall's ground band (iso)
+const BAND_VERT = /* glsl */`
+attribute float aAcross;  // −1..1 across the band
+varying vec3 vW;
+varying float vAcross;
+void main() {
+  vW = position; vAcross = aAcross;
+  gl_Position = projectionMatrix * viewMatrix * vec4( position, 1.0 );
+}`;
+const BAND_FRAG = /* glsl */`
+uniform vec3 uColor;
+uniform vec2 uScroll;
+uniform float uAlpha;
+varying vec3 vW;
+varying float vAcross;
+${NOISE}
+void main() {
+  float n = fxFbm2( vW.xz * 0.35 + uScroll );
+  float a = ( 1.0 - smoothstep( 0.35, 1.0, abs( vAcross ) ) ) * smoothstep( 0.2, 0.75, n ) * uAlpha;
+  if ( a < 0.003 ) discard;
+  gl_FragColor = vec4( uColor, a );
+  ${OUTPUT}
+}`;
+
+/**
+ * A closed band `width` m wide along the card line `pts` ([x, z, …]), heights from `ground` (pure geometry; one draw).
+ * @returns {THREE.BufferGeometry}
+ */
+export function bandGeometry(pts, width, ground) {
+  const n = pts.length / 2, pos = new Float32Array(n * 2 * 3), acr = new Float32Array(n * 2), idx = [];
+  for (let i = 0; i < n; i++) {
+    const ip = (i - 1 + n) % n, inx = (i + 1) % n;
+    let tx = pts[inx * 2] - pts[ip * 2], tz = pts[inx * 2 + 1] - pts[ip * 2 + 1];
+    const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+    const nx = tz, nz = -tx, x = pts[i * 2], z = pts[i * 2 + 1];
+    for (let s = 0; s < 2; s++) {
+      const k = s ? 1 : -1, vx = x + nx * k * width / 2, vz = z + nz * k * width / 2, v = i * 2 + s;
+      pos[v * 3] = vx; pos[v * 3 + 1] = ground(vx, vz) + 0.06; pos[v * 3 + 2] = vz; acr[v] = k;
+    }
+    const a = i * 2, b = inx * 2;
+    idx.push(a, b, a + 1, a + 1, b, b + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aAcross', new THREE.BufferAttribute(acr, 1));
+  g.setIndex(idx);
+  return g;
+}
+
 const _v = new THREE.Vector3();
-const _fogLow = new THREE.Color();
+const _fogLow = new THREE.Color(), _white = new THREE.Color('#FFFFFF');
 
 /** Fog-low tint derived from the current fog colour (greener and darker near the ground, art.md §9.2). */
 function fogLowFrom(fogColor, out) {
@@ -178,6 +247,7 @@ export class MistCards {
     this._loopPhase = 0;
     this._drift = new THREE.Vector2();
     this._offs = null;           // Float32Array of ambient base offsets
+    this.iso = 0;                // eased iso weight (lean / lift / ground bands)
   }
 
   init(scene, count) {
@@ -227,7 +297,16 @@ export class MistCards {
     }
     set.dirty();
     this.scene?.add(set.mesh);
-    const wall = { set, t: 0, rise: opts.rise ?? WALL.rise, out: -1, outDur: WALL.dissolve, alpha: 0 };
+    // iso: a 2 m-wide ground mist band along the wall line (shown with the iso weight)
+    const band = new THREE.Mesh(bandGeometry(pts, MIST_ISO.bandW, (x, z) => groundY(this.ctx, x, z, c.y)), new THREE.ShaderMaterial({
+      name: 'fx.mist.band', vertexShader: BAND_VERT, fragmentShader: BAND_FRAG, fog: false, transparent: true, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      uniforms: { uColor: { value: new THREE.Color('#9AA196') }, uScroll: { value: new THREE.Vector2() }, uAlpha: { value: 0 } },
+    }));
+    band.material.userData.noHeightFog = true;
+    band.name = 'fx.mist.band'; band.frustumCulled = false; band.matrixAutoUpdate = false; band.renderOrder = 2; band.visible = false;
+    this.scene?.add(band);
+    const wall = { set, band, t: 0, rise: opts.rise ?? WALL.rise, out: -1, outDur: WALL.dissolve, alpha: 0 };
     this.walls.add(wall);
     const self = this;
     return {
@@ -242,6 +321,7 @@ export class MistCards {
   _removeWall(wall) {
     if (!this.walls.delete(wall)) return;
     wall.set.dispose();
+    if (wall.band) { wall.band.removeFromParent(); wall.band.geometry.dispose(); wall.band.material.dispose(); }
   }
 
   /** Remove every wall immediately (level unload). */
@@ -262,6 +342,10 @@ export class MistCards {
     const wind = Math.max(0.15, ctx.env?.wind ?? 0.6);
     this._drift.x += dt * this._speed * wind * 0.9 * free; this._drift.y += dt * this._speed * wind * 0.35 * free;
     if (fog?.color) fogLowFrom(fog.color, _fogLow); else _fogLow.set('#9AA196');
+    // iso weight: the play camera's three-quarter top-down view (eased, so a cutscene hand-off never pops the cards)
+    const c = ctx.cam, isoOn = !!c?.isIso && ctx.params?.cam !== 'classic' && (c.modeName === 'follow' || c.modeName === 'lock' || c.modeName === 'boss');
+    this.iso += ((isoOn ? 1 : 0) - this.iso) * (dt > 0 ? 1 - Math.exp(-MIST_ISO.ease * dt) : 1);
+    if (Math.abs(this.iso - (isoOn ? 1 : 0)) < 0.002) this.iso = isoOn ? 1 : 0;
     // ---- ambient field (recycled around the camera)
     const A = this.ambient;
     if (A) {
@@ -280,6 +364,8 @@ export class MistCards {
         A.dirty();
         const u = A.material.uniforms;
         u.uColor.value.copy(_fogLow); u.uTime.value = time;
+        u.uMaxA.value = AMBIENT.maxA * (1 - (1 - MIST_ISO.ambientA) * this.iso);
+        A.setIso(this.iso, MIST_ISO.ambientH);
         A.scroll.set(time * 0.035 * this._speed, -time * 0.012 * this._speed);
         A.setLoop(this._loopPhase, this.loopW, 0.035 * this.speedMul, -0.012 * this.speedMul, period);
       }
@@ -297,6 +383,14 @@ export class MistCards {
       u.uFocus.value.set(focus, focus > 0 ? 1 : 0);
       w.set.scroll.set(time * 0.06 * this._speed, -time * 0.02 * this._speed);
       w.set.setLoop(this._loopPhase, this.loopW, 0.06 * this.speedMul, -0.02 * this.speedMul, period);
+      w.set.setIso(this.iso, MIST_ISO.wallH);
+      if (w.band) {
+        const bu = w.band.material.uniforms;
+        bu.uAlpha.value = MIST_ISO.bandA * a * this.iso;
+        bu.uColor.value.copy(_fogLow).lerp(_white, 0.15);
+        bu.uScroll.value.set(time * 0.05 * this._speed, -time * 0.02 * this._speed);
+        w.band.visible = bu.uAlpha.value > 0.003;
+      }
     }
   }
 

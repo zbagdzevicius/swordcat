@@ -171,3 +171,44 @@ Automatic (no call needed):
 - Shop purchase: `ctx.fx.purchase({ el: cardElement })` → a gold star burst + ring over the card (DOM layer
   `.fx-shop-layer`, z-index 60, pointer-events none; respects prefers-reduced-motion). Add `at: ctx.player` (or the
   counter's position) for gold coins + sparkles in the world too.
+
+# Controls rework notes (research/CONTROLS_SPEC.md §12 fx, 2026-10-11)
+
+## What fx draws in the iso play camera (follow / lock / boss; nothing in cutscenes, presets, Meme Cam or `?cam=classic`)
+- **GroundDecals** (`fx.decals`, one instanced draw): hero / aim ring (notch = the cursor / aim), Stand fan (silver,
+  Grit notches, gold through the parry window, grey through the whiff lockout, ±90° on touch), charge reach (+ the
+  holyWave lane with Shard 2, grey when the Holy would fizzle), parry / block ground sparks, landing ring + Pounce dive
+  circle, Riposte arrow, Golden Hour gleam lanes, slash smear; strike wedges (from `combat.threats`: freeze 0.15 s before
+  `activeAt`, the rim flashes at parry-window open; gold tip star, red filled + jagged, purple grab); the parry ring
+  (`settings.parryRing`, auto = touch / Kitten; red attacks get a dodge chevron); selection / hover (+ `setHighlight`) /
+  aggro rings; contact blobs under enemies; bolt shadow dots; order markers (cream paw + 4 ticks collapsing onto the
+  spot, a cream 4-tick goal crosshair while she walks; red / gold rings, grey ✕ paw; pink is hers alone), queued waypoints (cream ticks), 3 dots while RMB is held, `settings.pathPreview` paws; the kitten ability indicator; the
+  ranges overlay (Ctrl). Her indicators are pulled 0.45 m toward the lens so grass never cuts them. The hero ring's
+  notch is a solid 0.3 m / 0.25 rad arrow tick (the cursor on KBM, else her aim / facing). Nothing is drawn while
+  `game.mode !== 'play'` (dialog, cutscene, Meme Cam); her decals fade back in over the last 0.3 s of the hand-back.
+- **Telegraphs**: glints and "!" at a constant 28 / 34 CSS px on the overlay batch `fx.marksTop` (depthTest off);
+  ranged aim lines flat on the ground along the whole path (≤ 12 m), solid white once locked; rims ≥ 0.12 m; jeer disc.
+- **GroundMist** (`fx.groundMist`, one draw): 8 sheets 12 × 12 m in the 4–16 m ring around the focus, clear 3.5 m disc,
+  holes over wind-ups, × the preset's mist factor (or `level.cam.fog.mist`), drift with the wind (×2 Standing Ground /
+  Meme Cam). MistCards: 0.3–1.2 m, tilted 60° to face the lens; fog walls capped at 2.5 m + a 2 m ground band.
+- **Fog (C4)**: every fogged fx material uses world's focus fog through `fxShaderMaterial` / `withFxFog` (shaders.js);
+  Horde uses `hfogFactor` directly. SwordTrail ×1.3 wide; damage numbers rise 0.6 m, scale with the camera distance,
+  ≥ 18 px.
+
+## For smoke authors
+`fx.decals.stats()` → `{ n, counts, wedges, parryRing, fanHalf, markers, highlight }` (per-frame counts by kind);
+`fx.stats().groundMist`, `fx.stats().marksTop`. Blocks: `fx:wedge`, `fx:parry-ring`, `fx:indicators`, `fx:iso-touch`.
+
+## Controls rework: new fx API (additive)
+- `fx.decals` (GroundDecals): `stats()` → `{ n, counts, wedges: [{ id, kind, activeAt, frozen, open, range, half, yaw }],
+  parryRing, markers, highlight }`; `flash('block' | 'parry')`. Counts keys: hero, fan, charge, holyLane, landing,
+  dive, parrySpark, blockSpark, wedge, parryRing, chevron, riposte, ranges, selection, hover, aggro, blobs, bolts,
+  path, goal, queued, marker, smear, gleam, ability.
+- `fx.groundMist` (GroundMist): one instanced draw; `fx.stats().groundMist` → `{ visible, alpha, sheets, holes, factor }`.
+- `fx.marksTop`: the overlay mark batch (depthTest off, renderOrder 10); `Marks.push(…, size < 0)` = a constant
+  on-screen height in CSS px. `fx.stats().marksTop`.
+- `fx/shaders.js`: `fxShaderMaterial(params)`, `withFxFog(material)` (any fogged custom ShaderMaterial: world's focus
+  fog, shared HFOG uniforms; call again after a `clone()`).
+- `fx.decals.stats().counts.reticle`: the §6.3 pad right-stick ground reticle (white ring + cross up to 6 m, eased, 1.0 s linger).
+- `fx.decals.counts.reachEdge` / `abilityChip`, `fx.decals.reachEdgeAt` (m or null): a companion reach ring wider than the frame (Volley 14 m) is marked by a dotted arc + outward chevron just inside the frame edge along the aim; the aim point gets a chip (white; grey ring + cross = no target). Hero ring: `DECAL_CFG.heroOutline` dark rim under the pink. Iso crossbow aim strip: `TELE_ISO.aimPx` screen-constant width, `aimCap` (linear, under the bloom threshold), faded within ~1 m of her (`uHole`).
+- Pounce dive circle: drawn at `player.diveAt` when valid. The ambient mist cards fade to `MIST_ISO.ambientA` (0.12) in the iso camera; their leaned cards read as long pale streaks from above, and the GroundMist sheets carry the iso mist.

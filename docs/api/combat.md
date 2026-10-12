@@ -120,3 +120,21 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
 - New smoke block `combat:block` (Stand block = 0 dmg, −1 Grit, hitstop 0.04, no i-frames; then a poke hurts her
   for 1 HP with hitstop 0.07 and 0.9 s i-frames).
 
+
+## Iso controls (CONTROLS_SPEC §7–§8, §12 combat) — additive
+- `assistTarget(actor, range, angle, out?, opts?)`: the §7.2 soft auto-target score (lower wins): dist + 2·|angle|/π
+  − 2.5 winding up on her (a live parry / gold / red telegraph) − 1 selected − 0.8 hp < 30 % − 0.5 hit her in the
+  last 2 s + 3 breakable. `opts`: `dir` (yaw or `{x, z}`; default facing), `prev` + `sticky` (keep `prev` unless a
+  challenger is better by `AIM.sticky` 0.75), `selected`, `breakables` (only with no hostile within 6 m), `prefer`.
+  Crows count only below `hittableBelow`. `out` gets `{ target, score, terms, kept, prevScore, list }`. The legacy
+  call `assistTarget(actor, range, angle, preferActor)` still works. The pure core is `targeting.pickAssist`.
+- `hitRecently(actor)`: did it damage the heroine within 2 s.
+- `nextParryable(actor, maxDist = 6)` → `{ attacker, activeAt, kind: 'parry'|'gold', window, projectile, pos }` (a
+  shared object) or null: the soonest live white / gold wind-up aimed at her (fed by `combat:telegraph`, with
+  `activeAt` / `windup` / `arc` / `range` / `attackId` / `targetsPlayer` filled in when enemies leave them out), or an
+  incoming hostile bolt within 1 s. `window` includes the touch bonus. `pos` is the bolt for projectiles.
+- `beginSwing(attacker, def, { lungeTo })`: lunge magnetism. A target beyond reach sets `swing.lungeOverride` (m/s)
+  so the lunge covers up to 1.0 m more (`targeting.lungeSpeed(def, dist, range)`).
+- `reflect(projectile, by, { dir }?)`: a parried bolt flies at the hostile nearest her aim within ±25° and 16 m (the
+  cursor, drag, right stick or selected-target aim, else her facing) and homes on it. Otherwise it flies back to the
+  shooter as before. The classic camera keeps the M1 rule.

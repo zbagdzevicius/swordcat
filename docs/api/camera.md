@@ -92,6 +92,8 @@ The M1 API notes of this area are archived in `docs/api/camera.md`; what core ap
 ### enemies: boss framing
 - The arm is 6.0 m during boss fights. Set `boss.camDist` (m) to use a different arm for a boss.
 - The camera reads `enemies.boss` (`pos`, `height`, `alive`). When she is not locked on, a soft boss assist keeps him within about 20° of the screen centre once the player stops steering the view, and it replaces auto-follow during the fight. Tall bosses lift the look point a little when they are close.
+- Iso boss fit (§2.4): every frame the rig projects her and the boss exactly (`IsoRig.isoProject / subjectOverflow / safeFitDist`) against the HUD-free safe rect (`ctx.ui.safeInsets`: the boss plate on top, the ability bar at the bottom). It widens d within [14, 22] (or the cat-size clamp) until she sits in the inner 60 % and he in the inner 85 %. When even 22 m is not enough, the focus slides along the her → boss line (up to 85 % of the way, ≤ 6 m from the default lerp). If both still cannot fit, she may sit in 92 % of the rect. Uses `radius` (+0.3 m) and `height`.
+- Iso combat fit (§2.4, non-boss fights): the engaged set is alerted hostiles within `ISO.combat.radius` (10 m), plus ranged ones (a crossbow) up to their longest attack range (≤ 16.5 m), nearest first. Her and up to 8 of them are projected exactly (`safeFitDist` with a distance-following pitch) against the same HUD-free safe rect: she in the inner 60 %, they in the inner 92 %. The focus keeps the default bias when that fits; otherwise it leans along her → centroid (≤ 5 m) to the nearest lean that fits, else to the least-bad lean that keeps her inside 60 %. d widens up to +8 m (still under `distMax + combat.zoomOut` and the cat-size clamp).
 
 ### world: occlusion in town and the hub, arenas
 - **Solid occluders (automatic):** on `level:loaded`, the camera registers every untagged static prop in `level.groups.props` that stands at least 1.8 m tall on a solid collider footprint: houses, the castle, the Bell Tower, statues and pillars. These props still stop the spring arm, but they fade whenever they hide her. Town registers 18 today. You don't need to do anything.
@@ -101,3 +103,36 @@ The M1 API notes of this area are archived in `docs/api/camera.md`; what core ap
 
 ## To world: town house colliders are much smaller than the houses (open)
 Scattered town houses get an `auto` circle collider. For example, the house at about (−13.9, −34.4) is about 11 × 11 m but has `r` 3.18. That leaves the camera, and possibly her, free inside the walls and under the roof. Please give buildings `collider: 'box'` with `shrink` of about 0.9 (or explicit footprints). The camera's solid-occluder fade hides most of the problem, but the walls should still stop the arm.
+
+## Controls rework (CONTROLS_SPEC §2, §3): occlusion from above, zone hints, framings, Meme Cam spot
+- **Occlusion from above (§3)**, `Occluders.js`:
+  - Targets are capsules: her chest (r 1.0), up to 4 engaged enemies within 8 m (r 0.6), the selection (r 0.6), and
+    the next path waypoint within 3 m (r 0.4).
+  - Fades are **dithered**: the faded clone stays opaque with depth writes and drops fragments under a 4×4 ordered
+    screen threshold. There is no blending or sorting and shadows don't change. It reaches 0.22 in 0.15 s and returns
+    in 0.40 s (linear). ShaderMaterials keep the blended fallback.
+  - **Crowns** (`camFade: 'crown'`, or tree names): trunks never fade. Parts named or with materials named like
+    `trunk` / `bark` / `stem` / `stump` / `roots` stay opaque. Merged trees fade only above `userData.crownFrac` of
+    their local height (default 0.35). A crown also fades when it rises within 3.5 m horizontally of a target capsule.
+  - **Roofs** (`camFade: 'roof'` on a Mesh, Group or InstancedMesh, or `batch.userData.camFadeRoofIds`): a roof fades
+    while she stands under its footprint grown by 1.5 m, or when it cuts a capsule. Walls stay.
+  - The x-ray turns on once more than 30 % of 6 samples on her capsule are blocked by solids for 0.1 s.
+- **Zone hints (§2.2):** `ctx.cam.setHint({ yaw?, pitch?, dist?, clear?, zone? }, blend)` now honours all three.
+  - `dist` is the base distance before the player's zoom and the clamps. Phones scale it by 12 / 13.
+  - `pitch` is in rad, landscape only; boss fights and portrait keep their own.
+  - A missing `yaw` means the level yaw. A missing `pitch` or `dist` eases back to the rig's own value.
+  - `ctx.cam.iso().hint` reports the hint in effect.
+  - `zoneHints` stays `false`, so world keeps driving `setHint` (Level.js).
+- **Landscape framing (playtest fix, supersedes §2.1 "4 % below centre" and the 0.8 m screen-up bias):**
+  `IsoRig.FRAME` { herY 0.48, insetMax 0.25, upBias 0, cursorDownMul 1.5 }. `isoFrameOffset(vh, insetBottom, portrait)`
+  puts her focus at 48 % of the band above the ability bar (`ctx.ui.bar.insetBottom`), feet ≈ 45 % from the top on
+  720p: ≈ 3.7 m of clickable ground below her above the bar (4.7 m to the edge), 6.8 m ahead, 7.9 m to each side.
+  The offset eases (λ 6). The KBM cursor lead's down-screen part is × 1.5, so it is symmetric on screen. Portrait
+  framing is unchanged. `CAMERA.iso.frameOffset` / `lead.up` are no longer read (requests/core.md).
+- **Framings (§2.4):**
+  - Golden Hour dollies to 9 m at 46° over 0.25 s, holds through the 0.8 s Oath, and eases back over 0.6 s.
+  - Dialogue (`dialog` mode) eases the focus to the midpoint between her and the speaker (the `dialog:line` speaker
+    id, within 12 m) and sets d × 0.8 over 0.5 s, with no cut. Her own lines keep the two-shot.
+- **Meme Cam (§2.7):** within `memeSpot.r` of `levels.current.memeSpot.at`, the MEME_LOOP framing uses `memeSpot.yaw`
+  if that view is clear. Otherwise it uses the clear-view search.
+- Click / tap picking (`Picker.screenToGround`) includes walkable prop tops (`physics.raycast` `tops: true`); a top more than 2.8 m above the terrain under it is skipped (a tall stack the lens looks over), so the click lands on the ground behind it. A taller top is still a target when the nav island audit (`Pathfind.reachableIslands`) shows her island reaching it (walking or auto / authored links: the Lantern Alley balcony via crate hops), or when its plateau steps down; a click on a deck rim snaps to the nearest walkable cell (≤ 1 m) at that height. Interactables: the pick radius is projected at the spot's ground. Vigil Stones and hub stations use ≤ 0.8 m. A Vigil Stone is picked at its foot (base px) or when the pointer ray hits its collider, so near-miss grass stays a move.

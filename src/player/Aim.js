@@ -89,19 +89,22 @@ export function magnetPick(her, dir, cands, cone, range) {
 
 /**
  * §8.1 threat snap: among live parryable threats `{ attacker, activeAt }` the one within AIM.standSnapRange m that
- * lands within AIM.standSnapLead s (soonest, then nearest). Returns the attacker (or null).
+ * lands within AIM.standSnapLead s (soonest, then nearest). Range is measured to `t.pos` when given (an incoming
+ * bolt: the bolt itself, not its shooter 6–9 m away). Returns the attacker (or null); `out.at` gets the point to face.
  */
-export function threatSnap(her, threats, now) {
-  let best = null, bt = Infinity, bd = Infinity;
+export function threatSnap(her, threats, now, out) {
+  let best = null, bt = Infinity, bd = Infinity, bp = null;
   for (const t of threats) {
     const a = t?.attacker;
     if (!a?.pos || a.alive === false) continue;
     const dt = (t.activeAt ?? Infinity) - now;
     if (dt < -0.05 || dt > AIM.standSnapLead) continue;
-    const d = Math.hypot(a.pos.x - her.x, a.pos.z - her.z) - (a.radius ?? 0);
+    const p = t.pos ?? a.pos;
+    const d = Math.hypot(p.x - her.x, p.z - her.z) - (p === a.pos ? (a.radius ?? 0) : 0);
     if (d > AIM.standSnapRange) continue;
-    if (dt < bt - 1e-6 || (Math.abs(dt - bt) <= 1e-6 && d < bd)) { best = a; bt = dt; bd = d; }
+    if (dt < bt - 1e-6 || (Math.abs(dt - bt) <= 1e-6 && d < bd)) { best = a; bt = dt; bd = d; bp = p; }
   }
+  if (out) out.at = bp;
   return best;
 }
 
@@ -118,4 +121,62 @@ export function hopSpeed(dist, dh, v0, g, maxH, fallMul = 1) {
   const T = tUp + tDown;
   const v = dist / T;
   return v <= maxH ? v : null;
+}
+
+/**
+ * §5.4 jump assist (direct control): a take-off toward a raised walkable top (a stump, a mushroom cap, a ledge) within
+ * `o.range` m gets its horizontal velocity nudged — at most `o.dv` m/s faster or slower and `o.ang` rad off the run
+ * heading — so she lands at least `o.inset` m inside its near edge (and, on a small top, inside its far edge too).
+ * Pure: `probe(x, z)` → { top, walkable }.
+ * @param {{x:number, y:number, z:number}} her
+ * @param {{x:number, z:number}} vel her horizontal velocity at take-off
+ * @param {(x:number, z:number) => {top:number, walkable:boolean}} probe
+ * @param {{range:number, dv:number, ang:number, inset:number, v0:number, g:number, fallMul?:number, minRise?:number, maxRise?:number, step?:number}} o
+ * @returns {{vx:number, vz:number, dist:number, rise:number, yaw:number}|null} the new horizontal velocity, or null
+ */
+export function jumpAssistPlan(her, vel, probe, o) {
+  const sp = Math.hypot(vel.x, vel.z);
+  if (sp < 0.5) return null;                                       // straight up: nothing to aim at
+  const yaw0 = Math.atan2(vel.x, vel.z);
+  const minRise = o.minRise ?? 0.3, maxRise = o.maxRise ?? 1.1, step = o.step ?? 0.15;
+  const apex = (o.v0 * o.v0) / (2 * o.g);
+  let best = null, bestScore = Infinity;
+  for (let k = 0; k <= 8; k++) {
+    const off = k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (o.ang / 4);
+    const yaw = yaw0 + off, ux = Math.sin(yaw), uz = Math.cos(yaw);
+    for (let s = 0.3; s <= o.range + 1e-6; s += step) {
+      const a = probe(her.x + ux * s, her.z + uz * s);
+      const rise = a.top - her.y;
+      if (rise > maxRise + 0.05) break;                             // a wall along this ray
+      if (rise < minRise) continue;
+      // the near edge is at ~s: the landing zone runs from s + inset to the far edge − inset, on the same top
+      const L = s + o.inset;
+      const b = probe(her.x + ux * L, her.z + uz * L);
+      if (!b.walkable || Math.abs(b.top - a.top) > 0.25 || b.top - her.y > apex - 0.1) break;
+      let far = L;
+      while (far < L + 4) {
+        const c = probe(her.x + ux * (far + step), her.z + uz * (far + step));
+        if (!c.walkable || Math.abs(c.top - b.top) > 0.25) break;
+        far += step;
+      }
+      const score = Math.abs(off) * 2 + s * 0.1;
+      if (score < bestScore) { bestScore = score; best = { yaw, near: L, far: Math.max(L, far - o.inset + step * 0.5), rise: b.top - her.y }; }
+      break;
+    }
+  }
+  if (!best) return null;
+  // air time to the top's height, then the speed that lands inside [near, far], as close to her own speed as it gets
+  const T = airTime(best.rise, o.v0, o.g, o.fallMul ?? 1);
+  if (T == null) return null;
+  const vLo = best.near / T, vHi = best.far / T;
+  const v = Math.min(Math.max(sp, vLo), Math.max(vLo, vHi));
+  if (Math.abs(v - sp) > o.dv + 1e-9) return null;                 // out of the nudge's reach: a plain jump
+  return { vx: Math.sin(best.yaw) * v, vz: Math.cos(best.yaw) * v, dist: v * T, rise: best.rise, yaw: best.yaw };
+}
+
+/** Air time of a jump (vertical speed v0, gravity g, × fallMul falling) that lands `dh` m higher; null above the apex. */
+export function airTime(dh, v0, g, fallMul = 1) {
+  const apex = (v0 * v0) / (2 * g);
+  if (dh > apex - 0.05) return null;
+  return v0 / g + Math.sqrt((2 * (apex - dh)) / (g * fallMul));
 }

@@ -51,8 +51,10 @@ export class Terrain {
    * @param {object} def level definition (size, res, seed, hills, spine, pathWidth, paths, water, keep, rim, biome)
    * @param {{flats?: {x:number,z:number,r:number}[]}} [opts]
    */
-  constructor(def, { flats = [] } = {}) {
+  constructor(def, { flats = [], grassDarken = 0 } = {}) {
     this.def = def;
+    /** CONTROLS_SPEC §4.2: ground under grass −10 % (seen from above the blades are sparse; the ground carries the colour) */
+    this.grassDarken = grassDarken;
     this.size = def.size ?? 200; this.res = def.res ?? 128;
     this.half = this.size / 2; this.cell = this.size / this.res; this.W = this.res + 1;
     this.seed = (def.seed ?? 1) | 0;
@@ -237,6 +239,7 @@ export class Terrain {
     const h = this.heightfield.h[i];
     if (typeof this.def.groundColor === 'function') this.def.groundColor(x, z, h, out);
     out.multiplyScalar(0.92 + 0.08 * smooth(-1.5, 1.5, h));
+    if (this.grassDarken > 0) out.multiplyScalar(1 - this.grassDarken * Math.min(1, this.density[i] ?? 0));
     return out;
   }
 

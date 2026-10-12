@@ -16,6 +16,7 @@ import { CamPose, blendPose, applyPose, resolveEase } from '../../src/camera/pos
 import { CameraShake } from '../../src/camera/CameraShake.js';
 import { relYaw, pickLockTarget, switchLockTarget, nearestLockTarget, handoverLockTarget, acquireLockTarget, LOCK_FALLBACK_RANGE, FlickDetector, StickFlick } from '../../src/camera/LockOn.js';
 import { segmentHitsBox, distSqPointSegment, OccluderFader, SOLID_MIN_H } from '../../src/camera/Occluders.js';
+import { ISO, isoProject, isoPosition, subjectOverflow, safeFitDist } from '../../src/camera/IsoRig.js';
 import { CutsceneCamera, normalizeShot, bezier2, shotScale } from '../../src/camera/CutsceneCamera.js';
 import { MemeCam } from '../../src/camera/MemeCam.js';
 import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, ARM_GOOD, HANDOVER_RATE, FADE_MAX_DIST, FADE_COLLIDERS, LOCK_SEP, LOCK_BIAS_MAX, COMBAT_PITCH, COMBAT_LIFT, lockYawBias, lockScreenSep, lockSepGoal,
@@ -244,7 +245,10 @@ test('OccluderFader: a tree between the camera and her fades to CAMERA.treeFadeO
   const camPos = new THREE.Vector3(0, 1.5, -4), subj = [new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(0, 1.05, 0)];
   for (let i = 0; i < 90; i++) fader.update(1 / 60, camPos, subj);
   assert.notEqual(tree.material, mat, 'faded clone in place');
-  near(tree.material.opacity, CAMERA.treeFadeOpacity, 0.02); assert.equal(tree.material.transparent, true);
+  near(tree.material.opacity, CAMERA.treeFadeOpacity, 0.02);
+  assert.equal(tree.material.userData.camDither, true, 'dithered fade'); assert.equal(tree.material.transparent, false, 'no blending / sorting');
+  assert.match(tree.material.customProgramCacheKey(), /camDither/);
+  assert.equal(tree.material.depthWrite, true);
   // move the camera to the other side: the instance at z=2 now occludes, the tree restores
   camPos.set(0, 1.2, 4);
   for (let i = 0; i < 120; i++) fader.update(1 / 60, camPos, subj);
@@ -1057,4 +1061,223 @@ test('Solid occluders: explicit tags (camFade "solid", camFadeSolidIds) and camO
   lvl.bm.userData.camOccluder = false;
   const res = f2.scanSolids(lvl.root, [{ minX: -2.55, maxX: 2.55, minZ: 7.45, maxZ: 12.55, y0: -0.6, y1: 7 }]);
   assert.equal(res.units, 0);
+});
+
+// ---------------------------------------------------------------------------------- iso occlusion rules (§3)
+test('OccluderFader iso: capsule radius, linear 0.15 s in / 0.40 s out, crowns (trunks never fade), roofs', () => {
+  const O = ISO.occl;
+  const scene = new THREE.Scene();
+  const mk = (geo, name) => { const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial()); m.name = name; return m; };
+  // a GLB-like tree group: separate trunk + leaves meshes, 3 m beside the sight line
+  const tree = new THREE.Group(); tree.name = 'tree_oak';
+  const trunk = mk(new THREE.CylinderGeometry(0.3, 0.3, 3).translate(0, 1.5, 0), 'Trunk');
+  const leaves = mk(new THREE.IcosahedronGeometry(1.6, 1).translate(0, 4, 0), 'Leaves');
+  tree.add(trunk, leaves); tree.position.set(2.2, 0, -3); scene.add(tree);
+  // a merged tree (one mesh): only the crown part fades (shader cut)
+  const merged = mk(new THREE.CylinderGeometry(1.2, 0.3, 5).translate(0, 2.5, 0), 'pine_merged'); merged.position.set(-30, 0, 0); scene.add(merged);
+  // a roof (tagged) far from the sight line, a fence post 0.7 m off the line (inside her capsule only)
+  const roof = mk(new THREE.BoxGeometry(6, 1, 6).translate(0, 3.5, 0), 'roof'); roof.userData.camFade = 'roof'; roof.position.set(20, 0, 20); scene.add(roof);
+  const post = mk(new THREE.BoxGeometry(0.2, 1.2, 0.2).translate(0, 0.6, 0), 'post'); post.userData.camFade = true; post.position.set(0.75, 0, -0.7); scene.add(post);
+  const fader = new OccluderFader({ minOpacity: O.opacity, fadeIn: O.fadeIn, fadeOut: O.fadeOut, crownR: O.crownR, roofPad: O.roofPad });
+  fader.scan(scene, scene);
+  assert.equal(fader.roofCount, 1); assert.ok(fader.crownCount >= 2, 'tree group + merged pine are crowns');
+  const camPos = new THREE.Vector3(0, 9, -8), her = new THREE.Vector3(0, 0, 0), chest = [new THREE.Vector3(0, 0.4, 0)];
+  const step = (s, opts) => { for (let t = 0; t < s * 60; t++) fader.update(1 / 60, camPos, chest, opts); };
+  // line test only (no radius): the post 0.75 m off the line stays
+  step(0.5, { n: 1, radii: [0], her, crowns: false });
+  assert.equal(post.material.userData.camFadeClone, undefined, 'thin line misses the post');
+  // her capsule (r 1.0) catches it; linear: ~0.15 s to full
+  fader.update(1 / 20, camPos, chest, { n: 1, radii: [O.herR], her });   // a check tick
+  step(0.12, { n: 1, radii: [O.herR], her });
+  const u = fader.units.find((x) => x.root === post);
+  assert.ok(u.f > 0.7 && u.f <= 1, `post fading in fast (${u.f.toFixed(2)})`);
+  step(0.2, { n: 1, radii: [O.herR], her });
+  assert.equal(u.f, 1); near(post.material.opacity, O.opacity, 1e-6);
+  // crown proximity: the leaves fade, the trunk never does
+  assert.notEqual(leaves.material.userData.camFadeClone, undefined, 'leaves faded (within crownR of her capsule)');
+  assert.equal(trunk.material.userData.camFadeClone, undefined, 'trunk never fades');
+  // fade out over ~0.4 s once she walks away
+  camPos.set(40, 9, -8); her.set(40, 0, 0); chest[0].set(40, 0.4, 0);
+  step(0.25, { n: 1, radii: [O.herR], her });
+  assert.ok(u.f > 0 && u.f < 0.6, `post fading out slowly (${u.f.toFixed(2)})`);
+  step(0.3, { n: 1, radii: [O.herR], her });
+  assert.equal(u.f, 0); assert.equal(post.material.userData.camFadeClone, undefined, 'restored');
+  // roof: she walks under its footprint (+1.5 m pad) → it fades although no capsule cuts it
+  camPos.set(20 - 7.5, 9, 12); her.set(20 - 3 - 1.2, 0, 20); chest[0].set(her.x, 0.4, her.z);
+  step(0.6, { n: 1, radii: [0], her, crowns: false });
+  assert.notEqual(roof.material.userData.camFadeClone, undefined, 'roof faded with her under the eaves');
+  her.set(20 - 3 - 2.5, 0, 20); chest[0].set(her.x, 0.4, her.z); camPos.set(her.x, 9, 12);
+  step(0.8, { n: 1, radii: [0], her, crowns: false });
+  assert.equal(roof.material.userData.camFadeClone, undefined, 'roof back beyond the pad');
+  // merged tree: the clone carries the crown cut above crownFrac of its height
+  camPos.set(-30, 9, -8); her.set(-30, 0, 0); chest[0].set(-30, 0.4, 0);
+  step(0.6, { n: 1, radii: [O.herR], her });
+  const cut = merged.material.userData.camCrownY;
+  assert.ok(cut, 'crown cut uniform'); near(cut.value, 0.35 * 5, 1e-6, 'local y: the trunk third stays opaque');
+  assert.match(merged.material.customProgramCacheKey(), /camDither/);
+  fader.clear();
+  assert.equal(merged.material.userData.camFadeClone, undefined);
+});
+
+test('OccluderFader: a lone trunk-named mesh never registers; positional (classic) update ignores the crown rule', () => {
+  const scene = new THREE.Scene();
+  const t = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3), new THREE.MeshStandardMaterial()); t.name = 'trunk'; scene.add(t);
+  const fader = new OccluderFader({ crownR: 3.5, fadeIn: 0.15, fadeOut: 0.4 });
+  assert.equal(fader.scan(scene, scene), 0);
+  const tree = new THREE.Mesh(new THREE.SphereGeometry(1).translate(0, 4, 0), new THREE.MeshStandardMaterial()); tree.name = 'tree'; tree.position.set(2.5, 0, -2);
+  scene.add(tree); fader.add(tree, scene, { crown: true });
+  const cam = new THREE.Vector3(0, 9, -8), subj = [new THREE.Vector3(0, 0.4, 0)];
+  for (let i = 0; i < 30; i++) fader.update(1 / 60, cam, subj);
+  assert.equal(fader.fadedCount, 0, 'classic: no crown proximity');
+  for (let i = 0; i < 30; i++) fader.update(1 / 60, cam, subj, { n: 1, radii: [1] });
+  assert.equal(fader.fadedCount, 1, 'iso: crown beside the capsule fades');
+});
+
+test('FollowCamera iso x-ray: the share of her capsule hidden (6 samples; > 30 % shows the silhouette)', async () => {
+  const { cam } = await makeCam();
+  const pos = new THREE.Vector3(0, 0, 0), lens = new THREE.Vector3(0, 9, -8);
+  cam.yaw = Math.PI;
+  cam._blocked = (a, b) => b.x < -0.1;                              // only her screen-right flank (−X at yaw π)
+  near(cam._herOccludedFrac(lens, pos, 0.8), 1 / 6);
+  assert.ok(cam._herOccludedFrac(lens, pos, 0.8) <= ISO.occl.xrayFrac, 'a post beside her: no x-ray');
+  cam._blocked = (a, b) => b.y > 0.3;                               // a wall hiding her from the hips up
+  near(cam._herOccludedFrac(lens, pos, 0.8), 4 / 6);
+  assert.ok(cam._herOccludedFrac(lens, pos, 0.8) > ISO.occl.xrayFrac);
+});
+
+/** FollowCamera in iso mode on a tiny ctx (flat ground, no colliders). */
+async function makeIsoCam() {
+  const ctx = makeCtx();
+  ctx.params = { cam: 'iso' }; ctx.player.onGround = true;
+  ctx.physics.raycast = () => null;
+  const cam = new FollowCamera(ctx);
+  ctx.cam = cam;
+  await cam.init();
+  const step = (n) => { for (let i = 0; i < n; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); } };
+  step(3);
+  return { ctx, cam, step };
+}
+
+test('FollowCamera iso §2.4: Golden Hour dolly to 9 m at 46° in 0.25 s, held through the 0.8 s Oath, back over 0.6 s', async () => {
+  const { ctx, cam, step } = await makeIsoCam();
+  const G = ISO.golden, d0 = cam.iso().dist;
+  assert.ok(d0 > 11, `explore distance ${d0}`);
+  ctx.bus.emit(E.PLAYER_GOLDEN, { on: true });
+  near(cam._goldenT, G.in + PLAYER.golden.activate + G.out, 1e-9, 'envelope length');
+  step(Math.round((G.in + 0.5) * 60));                               // well inside the hold
+  near(cam._goldenEnvelope(), 1, 1e-9, 'held through the Oath');
+  near(cam.iso().dist, G.dist, 0.35, 'dollied to 9 m');
+  near(cam.iso().pitch, G.pitch, 0.03, 'at 46°');
+  step(Math.round((PLAYER.golden.activate - 0.5 + G.out * 0.5) * 60));
+  const mid = cam._goldenEnvelope();
+  assert.ok(mid > 0.2 && mid < 0.8, `easing back (${mid.toFixed(2)})`);
+  step(60);
+  assert.equal(cam._goldenEnvelope(), 0);
+  near(cam.iso().dist, d0, 0.2, 'back to the explore distance');
+});
+
+test('FollowCamera iso §2.4: dialogue eases the focus to the speaker midpoint and d × 0.8 over 0.5 s, no cut', async () => {
+  const { ctx, cam, step } = await makeIsoCam();
+  const mochi = new Actor(ctx, { faction: 'neutral', height: 0.8 });
+  mochi.pos.set(4, 0, 0); mochi.object3d.position.copy(mochi.pos); ctx.actors.register(mochi, 'mochi');
+  const f0 = cam.focus.x, d0 = cam.iso().dist;
+  ctx.game.mode = 'dialog';
+  ctx.bus.emit(E.DIALOG_LINE, { speaker: 'mochi', text: 'Meow' });
+  step(1);
+  const pos1 = ctx.camera.position.clone();
+  step(1);
+  assert.ok(ctx.camera.position.distanceTo(pos1) < 0.3, 'no cut: one frame moves the lens only a little');
+  step(60);
+  near(cam.focus.x - f0, 2, 0.2, 'focus at the midpoint between her and Mochi');
+  near(cam.iso().dist, d0 * ISO.dialog.mul, 0.3, 'd × 0.8');
+  // a line of her own keeps the midpoint (no ping-pong); the end of the dialogue eases back
+  ctx.bus.emit(E.DIALOG_LINE, { speaker: 'swordcat', text: 'Mrrp' });
+  step(30);
+  near(cam.focus.x - f0, 2, 0.2, 'her own line keeps the two-shot');
+  ctx.bus.emit(E.DIALOG_END, {}); ctx.game.mode = 'play';
+  step(90);
+  near(cam.focus.x, f0, 0.1, 'focus back on her');
+  near(cam.iso().dist, d0, 0.2);
+});
+
+test('FollowCamera iso §2.2: zone hints blend dist / pitch / yaw over 1.2 s and ease back when cleared', async () => {
+  const { cam, step } = await makeIsoCam();
+  const d0 = cam.iso().dist, p0 = cam.iso().pitch;
+  cam.setHint({ dist: 17, pitch: 0.977, zone: 'line_view' }, 1.2);
+  step(36);                                                           // half way: in between
+  const mid = cam.iso();
+  assert.ok(mid.dist > d0 + 0.5 && mid.dist < 16.8, `blending (${mid.dist.toFixed(2)})`);
+  step(60);
+  near(cam.iso().dist, 17, 0.25, 'the hinted distance');
+  near(cam.iso().pitch, 0.977, 0.02, 'the hinted pitch');
+  near(cam.yaw, Math.PI, 1e-9, 'a missing yaw = the level yaw (no turn)');
+  assert.equal(cam.iso().hint.zone, 'line_view');
+  // the player's zoom still applies on top of the hint (and every clamp)
+  cam.zoom(0.8); step(90);
+  near(cam.iso().dist, 17 * 0.8, 0.3, 'zoom × hint');
+  cam.zoom(1);
+  // leaving the zone: back to the rig's own distance and pitch curve
+  cam.setHint({}, 1.2);
+  step(110);
+  near(cam.iso().dist, d0, 0.2); near(cam.iso().pitch, p0, 0.01);
+  // a yaw hint turns the rig; blend 0 snaps
+  cam.setHint({ yaw: Math.PI / 2, dist: 12 }, 0);
+  step(2);
+  near(cam.yaw, Math.PI / 2, 1e-6, 'snapped yaw');
+  near(cam.iso().dist, 12, 0.3, 'snapped dist');
+});
+
+test('Meme Cam §2.7: within r of the level memeSpot the authored yaw frames her; elsewhere the clear-view search', async () => {
+  const { ctx, cam } = await makeCam();
+  ctx.player.facing = 0.4;
+  ctx.levels.current = { memeSpot: { at: [1, 1], yaw: 2.0, r: 4 } };
+  near(cam.memeYawOffset(ctx.player), 2.0 - 0.4, 1e-9, 'framing yaw = memeSpot.yaw');
+  ctx.player.pos.set(10, 0, 10); ctx.player.object3d.position.copy(ctx.player.pos);
+  assert.equal(cam.memeYawOffset(ctx.player), 0, 'far from the spot: straight in front of her face');
+});
+
+test('§2.4 boss safe fit: isoProject matches three.js (with the view offset); safeFitDist / subjectOverflow honour the HUD rect', () => {
+  const W = 1280, H = 720, fov = 38, yaw = Math.PI, pitch = ISO.pitchBoss, d = 18, focus = { x: 1, y: 0.5, z: 2 }, offX = 12, offY = 40;
+  const cam = new THREE.PerspectiveCamera(fov, W / H, 0.3, 90);
+  const p = isoPosition(focus, yaw, pitch, d, {});
+  cam.position.set(p.x, p.y, p.z); cam.lookAt(focus.x, focus.y, focus.z); cam.setViewOffset(W, H, offX, -offY, W, H); cam.updateMatrixWorld();
+  for (const q of [[5, 0, 9], [-3, 1, -4], [1, 0.5, 2]]) {
+    const v = new THREE.Vector3(...q).project(cam), o = isoProject(...q, focus, yaw, pitch, d, fov, W, H, offX, offY, {});
+    assert.ok(Math.abs((v.x + 1) / 2 * W - o.x) < 0.01 && Math.abs((1 - v.y) / 2 * H - o.y) < 0.01, `projection of ${q}`);
+  }
+  // a boss 10.5 m straight down-screen (toward the lens) does not fit at any distance with the default 0.35 lerp …
+  const S = { l: 8, t: 98, r: W - 8, b: 621 };
+  const subs = [{ x: 0, z: 0, y0: 0, y1: 1, r: 0.5, inner: ISO.boss.herInner }, { x: 0, z: -10.5, y0: 0, y1: 2.2, r: 1.3, inner: ISO.boss.bossInner }];
+  assert.equal(safeFitDist(subs, 2, { x: 0, y: 0.5, z: -3.7 }, yaw, pitch, fov, W, H, 0, offY, S, 14, 22), 23);
+  const o = subjectOverflow(subs[1], { x: 0, y: 0.5, z: -3.7 }, yaw, pitch, 22, fov, W, H, 0, offY, S, ISO.boss.bossInner, {});
+  assert.ok(o.over > 0 && o.dy < 0, 'he is below his rect: the push is up-screen');
+  // … but leaning the focus 75 % of the way puts him inside the safe rect, her still inside it too
+  const f2 = { x: 0, y: 0.5, z: -7.9 };
+  assert.ok(subjectOverflow(subs[1], f2, yaw, pitch, 22, fov, W, H, 0, offY, S, ISO.boss.bossInner, {}).over < 30);
+  assert.equal(subjectOverflow(subs[0], f2, yaw, pitch, 22, fov, W, H, 0, offY, S, 0.92, {}).over, 0);
+  // a close boss beside her fits at the near clamp; the same gap toward the lens needs a wider frame
+  subs[1].z = 0; subs[1].x = -4;
+  assert.equal(safeFitDist(subs, 2, { x: -1.4, y: 0.5, z: 0 }, yaw, pitch, fov, W, H, 0, offY, S, 14, 22), 14);
+  subs[1].x = 0; subs[1].z = -4;
+  const dDown = safeFitDist(subs, 2, { x: 0, y: 0.5, z: -1.4 }, yaw, pitch, fov, W, H, 0, offY, S, 14, 22);
+  assert.ok(dDown > 14 && dDown <= 22, 'toward the lens: ' + dDown);
+});
+
+test('OccluderFader: capsules only fade what is lens-side of the subject; roofs / solids fade to archOpacity', () => {
+  const scene = new THREE.Scene();
+  const stone = (z, name) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.6, 0.6).translate(0, 1.3, 0), new THREE.MeshStandardMaterial());
+    m.name = name; m.userData.camFade = 'solid'; m.position.set(0, 0, z); scene.add(m); return m;
+  };
+  const behind = stone(1.3, 'stoneN'), front = stone(-1.6, 'stoneS');
+  const fader = new OccluderFader({ minOpacity: 0.22, archOpacity: 0.1, checkHz: 0 });
+  fader.scan(scene, scene);
+  assert.equal(fader.solidCount, 2);
+  const camPos = new THREE.Vector3(0, 9, -8), chest = [new THREE.Vector3(0, 0.5, 0)], her = new THREE.Vector3();
+  for (let i = 0; i < 60; i++) fader.update(1 / 60, camPos, chest, { n: 1, radii: [1.0], her, crowns: false });
+  const uB = fader.units.find((u) => u.root === behind), uF = fader.units.find((u) => u.root === front);
+  assert.equal(uB.f, 0, 'a tall stone just behind her (screen-up) stays solid');
+  assert.ok(uF.f > 0.95, `the stone between the lens and her fades (${uF.f.toFixed(2)})`);
+  near(front.material.opacity, 0.1, 1e-6, 'solid units fade to archOpacity');
+  fader.clear();
 });

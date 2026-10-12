@@ -10,7 +10,7 @@ import { ActorRegistry } from '../../src/core/ActorRegistry.js';
 import { Input } from '../../src/core/Input.js';
 import { GameState } from '../../src/core/GameState.js';
 import { Actor } from '../../src/core/Actor.js';
-import { isoPitch, catClampDist, pxAt, widthFitDist, isoFrame, isoPosition, isoLead, fitDist, screenToWorldDir, craneArc, deviceClass } from '../../src/camera/IsoRig.js';
+import { isoPitch, catClampDist, pxAt, widthFitDist, isoFrame, isoFrameOffset, isoPosition, isoLead, fitDist, screenToWorldDir, craneArc, deviceClass, FRAME } from '../../src/camera/IsoRig.js';
 import { FollowCamera } from '../../src/camera/FollowCamera.js';
 import { NavGrid } from '../../src/physics/NavGrid.js';
 import { findPath } from '../../src/physics/Pathfind.js';
@@ -68,6 +68,15 @@ test('iso rig: position (yaw π = south of her, looking +Z), screen → world di
   near(r.x, -1, 1e-9, 'screen right = −X at yaw π (the camera looks +Z)');
   const L = isoLead({ x: 20, z: 0 }, { x: 0, z: 40 }, Math.PI, { portrait: true }, {});
   assert.ok(Math.hypot(L.x, L.z) <= I.lead.max + 1e-9, 'lead capped');
+  // the KBM cursor lead is symmetric on screen: 4 m down-screen leads like 6 m up-screen (cursorDownMul 1.5)
+  const up = isoLead({ x: 0, z: 0 }, { x: 0, z: 6 }, Math.PI, {}, {}), dn = isoLead({ x: 0, z: 0 }, { x: 0, z: -4 }, Math.PI, {}, {});
+  near(up.z, 0.9 + FRAME.upBias, 1e-9); near(dn.z, -0.9 + FRAME.upBias, 1e-9, 'down-screen cursor lead scaled');
+  // framing: her focus at FRAME.herY of the band above the bottom inset (the ability bar); portrait unchanged
+  near(isoFrameOffset(720, 0, false), FRAME.herY - 0.5, 1e-9);
+  near(isoFrameOffset(720, 100, false), (FRAME.herY * 620 - 360) / 720, 1e-9, 'bar inset lifts her');
+  near(isoFrameOffset(720, 1e4, false), (FRAME.herY * 720 * (1 - FRAME.insetMax) - 360) / 720, 1e-9, 'inset capped');
+  near(isoFrameOffset(844, 100, true), I.frameOffsetPortrait, 1e-9);
+  near(isoFrame({ w: 1280, h: 720, insetBottom: 100 }).frameOffset, isoFrameOffset(720, 100, false), 1e-9);
   const still = isoLead({ x: 5, z: 5 }, null, Math.PI, { still: true }, {});
   assert.equal(still.x, 0); assert.equal(still.z, 0);
   const need = fitDist([{ x: 0, z: 0 }, { x: 6, z: 0 }], 2, { x: 0, z: 0 }, Math.PI, isoPitch(13), 38, 16 / 9, 0.8, 1.2);
@@ -104,7 +113,7 @@ test('FollowCamera (iso): fixed yaw π, 13 m at 51°, follows her focus; zoom cl
   ctx.player.pos.set(0, 0, 10); ctx.player.object3d.position.copy(ctx.player.pos);
   for (let i = 0; i < 120; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }
   near(cam.yaw, Math.PI, 1e-9, 'never rotates');
-  near(cam.focus.z, 10.8, 0.15, 'focus = her + screen-up bias 0.8 m');
+  near(cam.focus.z, 10 + FRAME.upBias, 0.15, 'focus = her (+ the screen-up bias, 0 since the framing playtest)');
   assert.equal(cam.zoom(9), I.zoom[1]); assert.equal(cam.zoom(0.1), I.zoom[0]);
   const got = [];
   ctx.bus.on('target:changed', (p) => got.push(p.source));
@@ -204,6 +213,11 @@ test('auto-target (§7.2): wind-up on her beats nearer; sticky by 0.75; breakabl
   assert.ok(m && m.pos.z === 2, 'the magnet cone around the aim');
   assert.equal(threatSnap(her, [{ attacker: A(0, 3), activeAt: 10.5 }, { attacker: A(2, 0), activeAt: 10.3 }], 10).pos.x, 2, 'soonest wins');
   assert.equal(threatSnap(her, [{ attacker: A(0, 3), activeAt: 12 }], 10), null, 'beyond 0.7 s: no snap');
+  // a bolt: the range is measured to the bolt (`pos`), not the shooter 8 m away, and out.at is the bolt
+  const shooter = A(0, 8), out = {};
+  assert.equal(threatSnap(her, [{ attacker: shooter, activeAt: 10.4, pos: { x: 1, z: 2 } }], 10, out), shooter, 'snaps to an incoming bolt');
+  assert.deepEqual([out.at.x, out.at.z], [1, 2], 'faces the bolt');
+  assert.equal(threatSnap(her, [{ attacker: shooter, activeAt: 10.4 }], 10), null, 'the shooter alone is out of range');
   const v = hopSpeed(2.4, 0, config.PLAYER.jumpV, config.GRAVITY, NAV.hopMaxH, config.PLAYER.fallGravityMul);
   assert.ok(v > 2 && v < 5.5, `hop ${v}`);
   assert.equal(hopSpeed(2, 2, config.PLAYER.jumpV, config.GRAVITY, 5.5), null, 'too high');

@@ -16,7 +16,7 @@ import { S, t, has, pick, fill, text, speakerName } from '../../src/story/string
 import { Cutscene, STEP_TYPES, END_KEYS, walkSteps, sampleKeys, revealTime, isInstant, layoutPoint, spawnKind, isCat } from '../../src/story/Cutscene.js';
 import { StoryManager, chapterInfo, chapterOf, BOSS_SCENES, SKIP_HOLD } from '../../src/story/StoryManager.js';
 import { CUTSCENES, PLACEHOLDER_ENDS, placeholderScene } from '../../src/story/cutscenes/index.js';
-import { PracticeLog, TUTORIAL_STEPS, PRACTICE, inPractice, HINTS } from '../../src/story/tutorial.js';
+import { PracticeLog, TUTORIAL_STEPS, PRACTICE, inPractice, HINTS, Tutorial, TALK_TIP_R } from '../../src/story/tutorial.js';
 import { BarkGate, CLEM_BARKS, ENEMY_BARKS, BOSS_BARKS, enemyType, bossKey } from '../../src/story/dialogue/barks.js';
 import { U as HORDE_U, LAT, MARK, FACE as CS02_FACE, FILES, CS02_CAST } from '../../src/story/cutscenes/cs02.js';
 import { CS03_MARKS, NET } from '../../src/story/cutscenes/cs03.js';
@@ -380,17 +380,20 @@ test('chapters: card text and the chapter of a level / flags', () => {
 });
 
 // ====================================================================================================== Midnight Practice
-test('tutorial: the 8 steps advance on their conditions, in order; position facts are latched', () => {
+test('tutorial: the 9 steps advance on their conditions, in order; position facts are latched', () => {
   const log = new PracticeLog();
   assert.equal(log.step.id, 'move');
   log.note({ type: 'north' });                                  // crossing the fence early counts later
   log.note({ type: 'moved', d: 2 });
   assert.equal(log.complete(), false);
-  log.note({ type: 'moved', d: 1.5 }); log.note({ type: 'looked', rad: 0.6 });
-  assert.equal(log.complete(), true); log.advance();
+  log.note({ type: 'moved', d: 1.5 });
+  assert.equal(log.complete(), true, 'C6: 3 m of movement is enough (no camera look)'); log.advance();
   assert.equal(log.step.id, 'jump'); assert.equal(log.complete(), true, 'already north of the fence'); log.advance();
   log.note({ type: 'hit', attackId: 'slash1', dummy: true }); assert.equal(log.complete(), false);
   log.note({ type: 'hit', attackId: 'slash3', dummy: true }); assert.equal(log.complete(), true); log.advance();
+  assert.equal(log.step.id, 'target');
+  log.note({ type: 'order', kind: 'move', dummy: false }); assert.equal(log.complete(), false, 'a move order is not a target');
+  log.note({ type: 'order', kind: 'attack', dummy: true }); assert.equal(log.complete(), true, 'an attack order on a dummy'); log.advance();
   log.note({ type: 'dodge', nearSack: false }); assert.equal(log.complete(), false);
   log.note({ type: 'dodge', nearSack: true }); assert.equal(log.complete(), true); log.advance();
   log.note({ type: 'block' }); assert.equal(log.complete(), false);
@@ -401,9 +404,168 @@ test('tutorial: the 8 steps advance on their conditions, in order; position fact
   assert.equal(log.step.id, 'meow');
   log.note({ type: 'cow' }); assert.equal(log.complete(), true);
   assert.equal(log.advance(), null); assert.ok(log.finished);
-  assert.equal(TUTORIAL_STEPS.length, 8);
+  assert.equal(TUTORIAL_STEPS.length, 9);
+  assert.deepEqual(TUTORIAL_STEPS.map((s) => s.id), ['move', 'jump', 'combo', 'target', 'roll', 'stand', 'parry', 'bright', 'meow']);
   assert.ok(inPractice(0, -80) && inPractice(-19, -99) && !inPractice(0, -55));
   assert.equal(PRACTICE.skipHold, 1.0);
+});
+
+test('tutorial: the target step — attack order (latched early), a picked target, or the info timeout without a pointer', () => {
+  const at = () => { const l = new PracticeLog(); l.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target'); return l; };
+  // an attack order on a dummy during the combo step latches the lesson
+  const early = new PracticeLog(); early.i = 2;
+  early.note({ type: 'order', kind: 'attack', dummy: true }); early.advance();
+  assert.equal(early.step.id, 'target'); assert.equal(early.complete(), true, 'latched from the combo step');
+  // a target pick (pad RB / Tab) only counts on the step itself
+  const pre = new PracticeLog(); pre.i = 2; pre.note({ type: 'target' }); pre.advance();
+  assert.equal(pre.complete(), false);
+  pre.note({ type: 'target' }); assert.equal(pre.complete(), true);
+  // attack order on a real foe does not teach "click the dummy"; attack-move neither
+  const l = at();
+  l.note({ type: 'order', kind: 'attack', dummy: false }); l.note({ type: 'order', kind: 'attackMove', dummy: true });
+  assert.equal(l.complete(), false);
+  // informational timeout (pad / keyboard-only): PRACTICE.infoSec of the prompt being up
+  l.note({ type: 'info', t: PRACTICE.infoSec - 0.1 }); assert.equal(l.complete(), false);
+  l.note({ type: 'info', t: PRACTICE.infoSec }); assert.equal(l.complete(), true);
+  l.advance(); assert.equal(l.infoT, 0, 'the info timer resets per step');
+  l.note({ type: 'info', t: 99 }); assert.equal(l.step.id, 'roll'); assert.equal(l.complete(), false, 'info never completes a non-info step');
+});
+
+/** A tiny ctx for driving Tutorial without a game. */
+function tutCtx({ device = 'kbm', preset = 'hybrid', iso = true, flags = {}, interactables = [] } = {}) {
+  const handlers = new Map(), emitted = [];
+  const bus = { on: (ev, fn) => { (handlers.get(ev) ?? handlers.set(ev, []).get(ev)).push(fn); return () => {}; }, emit: (ev, p) => { emitted.push([ev, p]); for (const fn of handlers.get(ev) ?? []) fn(p); } };
+  const f = { ...flags };
+  const pos = { x: 0, z: -80, y: 0, clone() { return { ...this, copy(o) { this.x = o.x; this.z = o.z; return this; } }; } };
+  const ctx = {
+    bus, emitted, params: {},
+    state: { getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; } },
+    input: { device, preset, down: () => false },
+    cam: { isIso: iso },
+    game: { mode: 'play' },
+    levels: { current: { id: 'meadow', interactables, actor: () => null, critter: () => null } },
+    player: { pos, onGround: true },
+    strings: { t: (k) => k },
+  };
+  return { ctx, f };
+}
+
+test('tutorial: target step times out on a pad / keyboard-only, but waits for a click with a mouse or touch', () => {
+  for (const [opt, waits] of [[{ device: 'kbm' }, true], [{ device: 'touch' }, true], [{ device: 'pad' }, false], [{ device: 'kbm', preset: 'keyboardOnly' }, false], [{ device: 'touch', preset: 'keyboardOnly' }, true], [{ iso: false }, false]]) {
+    const { ctx } = tutCtx({ ...opt, flags: { 'prologue.armour': true } });
+    const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
+    tu.init();
+    tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target');
+    for (let k = 0; k < 120; k++) tu.update(0.05);          // 6 s
+    assert.equal(tu.log.step.id === 'target', waits, JSON.stringify(opt));
+  }
+});
+
+test('tutorial: player:order facts — an attack order on a dummy completes the target step; invalid orders are ignored', () => {
+  const { ctx } = tutCtx({ flags: { 'prologue.armour': true } });
+  const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
+  tu.init();
+  tu.update(0.05);                                            // starts (inside the practice field)
+  assert.ok(tu.active);
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target');
+  ctx.bus.emit('player:order', { kind: 'attack', target: { kind: 'dummy' }, valid: false });
+  assert.equal(tu.log.complete(), false, 'a rejected order');
+  ctx.bus.emit('player:order', { kind: 'attack', target: { kind: 'dummy' }, valid: true });
+  assert.equal(tu.log.complete(), true);
+  assert.equal(tu._ordered, true, 'an order also disarms the tut.click tip');
+});
+
+test('tutorial: the jump step sets flag tut.jump.done (physics opens the fence nav link on it)', () => {
+  const { ctx, f } = tutCtx({ flags: { 'prologue.armour': true } });
+  const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
+  tu.init();
+  tu.log.i = 1; tu.active = true; tu._shown = 1;
+  ctx.player.pos.z = PRACTICE.fenceZ + 1;
+  tu.update(0.05);
+  assert.equal(f['tut.jump.done'], true);
+  assert.equal(tu.log.step.id, 'combo');
+});
+
+test('tutorial: after the target lesson she lets go of the dummy (order stopped, selection dropped)', () => {
+  const { ctx } = tutCtx({ flags: { 'prologue.armour': true } });
+  const calls = [];
+  const dummy = { kind: 'dummy' };
+  ctx.player.orders = { kind: 'attack', target: dummy };
+  ctx.player.order = (k) => { calls.push('order:' + k); ctx.player.orders.kind = null; };
+  ctx.cam.lockTarget = dummy;
+  ctx.cam.select = (a, src) => { calls.push('select:' + a + ':' + src); ctx.cam.lockTarget = a; };
+  const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
+  tu.init();
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target'); tu.active = true; tu._shown = tu.log.i;
+  ctx.bus.emit('player:order', { kind: 'attack', target: dummy, valid: true });
+  tu.update(0.05);                                            // completes the step
+  assert.equal(tu.log.step.id, 'roll');
+  tu.update(1.0);
+  assert.deepEqual(calls, [], 'one chain lands first');
+  tu.update(1.1);
+  assert.deepEqual(calls, ['order:stop', 'select:null:clear']);
+  tu.update(1.0);
+  assert.equal(calls.length, 2, 'once');
+});
+
+test('hints: tut.click after 20 s without an order (pointer schemes only); tut.talk near a talkable NPC; tut.zoom on the first arena', () => {
+  const toasts = (ctx) => ctx.emitted.filter(([e]) => e === 'ui:toast').map(([, p]) => p.key);
+  // tut.click
+  for (const [opt, want] of [[{ device: 'kbm' }, true], [{ device: 'touch' }, true], [{ device: 'pad' }, false], [{ preset: 'keyboardOnly' }, false]]) {
+    const { ctx } = tutCtx({ ...opt, flags: { 'prologue.done': true, 'prologue.tutorial': true } });
+    const tu = new Tutorial(ctx, { isPlaying: false });
+    tu.init();
+    for (let k = 0; k < 21; k++) tu.update(1);
+    assert.equal(toasts(ctx).includes('tut.click'), want, 'tut.click ' + JSON.stringify(opt));
+  }
+  {
+    const { ctx } = tutCtx({ flags: { 'prologue.done': true } });
+    const tu = new Tutorial(ctx, { isPlaying: false });
+    tu.init();
+    ctx.bus.emit('player:order', { kind: 'move', valid: true });
+    for (let k = 0; k < 25; k++) tu.update(1);
+    assert.ok(!toasts(ctx).includes('tut.click'), 'no tip once she used an order');
+  }
+  // tut.talk: proximity scan
+  const npc = { id: 'talk_pip', kind: 'npc', prompt: 'prompt.talk', pos: { x: TALK_TIP_R + 3, z: -80 } };
+  const { ctx, f } = tutCtx({ flags: { 'prologue.done': true, 'prologue.tutorial': true }, interactables: [npc] });
+  const tu = new Tutorial(ctx, { isPlaying: false });
+  tu.init();
+  tu.update(0.6);
+  assert.ok(!toasts(ctx).includes('tut.talk'), 'too far');
+  npc.pos.x = TALK_TIP_R - 1;
+  tu.update(0.6);
+  assert.ok(toasts(ctx).includes('tut.talk'), 'in reach');
+  assert.equal(f['seen.tut.talk'], true);
+  tu.update(0.6);
+  assert.equal(toasts(ctx).filter((k) => k === 'tut.talk').length, 1, 'once per save');
+  // tut.zoom / tut.talk hint rows
+  const zoom = HINTS.find((h) => h.key === 'tut.zoom'), talk = HINTS.find((h) => h.key === 'tut.talk');
+  assert.ok(zoom && talk);
+  assert.equal(zoom.on, 'arena:lock');
+  assert.equal(!!zoom.when({ state: { getFlag: () => true }, cam: { isIso: true } }), true);
+  assert.equal(!!zoom.when({ state: { getFlag: () => true }, cam: { isIso: false } }), false, 'no zoom in classic');
+  assert.equal(!!talk.when({}, { prompt: 'prompt.talk', target: { kind: 'talk' } }), true);
+  assert.equal(!!talk.when({}, { prompt: 'prompt.interact', target: { kind: 'vigil' } }), false);
+});
+
+test('CONTROLS_SPEC §14 copy: base / .pad / .touch variants, glyph tokens, no old bindings', () => {
+  for (const k of ['tut.move', 'tut.jump', 'tut.combo', 'tut.target', 'tut.roll', 'tut.stand', 'tut.parry', 'tut.riposte', 'tut.bright', 'tut.pounce',
+    'tut.reflect', 'tut.meow', 'tut.milk', 'tut.vigil', 'tut.companion', 'tut.holy', 'tut.golden', 'tut.zoom', 'tut.click', 'tut.talk', 'tut.rotate',
+    'toast.cam.locked', 'toast.cam.unlocked']) assert.ok(has(k), k);
+  for (const k of ['tut.move', 'tut.combo', 'tut.target', 'tut.roll', 'tut.pounce', 'tut.vigil', 'tut.companion', 'tut.golden', 'tut.zoom', 'tut.talk']) assert.ok(has(k + '.pad'), k + '.pad');
+  for (const k of ['tut.move', 'tut.jump', 'tut.combo', 'tut.target', 'tut.roll', 'tut.stand', 'tut.parry', 'tut.riposte', 'tut.bright', 'tut.pounce',
+    'tut.meow', 'tut.milk', 'tut.vigil', 'tut.companion', 'tut.holy', 'tut.golden', 'tut.zoom', 'tut.click', 'tut.talk']) assert.ok(has(k + '.touch'), k + '.touch');
+  for (let i = 1; i <= 12; i++) assert.ok(has('loading.tip.' + i), 'loading.tip.' + i);
+  // C1: no copy teaches the old table (Space = jump, RMB = guard, mouse look, Q / E hard-coded keycaps)
+  const all = Object.keys(S).filter((k) => /^(tut|toast|prompt|loading)./.test(k)).map((k) => [k, t(k)]);
+  for (const [k, s] of all) {
+    assert.ok(!/\[(Space|Q|E|J|K|L|RMB|LMB|Mouse)\]/.test(s), `${k}: hard-coded keycap in "${s}"`);
+    assert.ok(!/look around with|move the mouse to look|right mouse.*(guard|block)/i.test(s) || k === 'toast.cam.unlocked', `${k}: old camera copy`);
+  }
+  assert.equal(t('tut.move'), 'Right-click where to go, or use [WASD]. Hold right-click to keep walking.');
+  assert.equal(t('tut.jump'), 'Jump the fence [Jump].');
+  assert.equal(t('tut.target.touch'), 'Tap a foe to charge in and attack it.');
 });
 
 test('tutorial: dummy hits without a finisher still complete the combo after 6', () => {

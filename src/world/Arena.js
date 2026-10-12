@@ -28,7 +28,9 @@ const ARENA_LEAVE = 4;
 /** The flag that marks an arena cleared (pure; the same `<level>.cleared.<id>` convention as the open zones). */
 export const arenaFlag = (levelId, arenaId) => `${levelId}.cleared.${arenaId}`;
 
-export const ARENA = Object.freeze({ waveDelay: 1.5, exploreAfter: 4, ringInset: 1.5, triggerInset: 2, wallPad: 0.4, clearJingle: 'jingles/jingles_STEEL00' });
+export const ARENA = Object.freeze({ waveDelay: 1.5, exploreAfter: 4, ringInset: 1.5, triggerInset: 2, wallPad: 0.4, clearJingle: 'jingles/jingles_STEEL00',
+  /** fog wall look (fx.mistRing opts): card alpha (fx default 0.62) and width (5.5 m), the iso ground band 1.2 m / 0.12 */
+  wall: Object.freeze({ alpha: 0.35, width: 3.5, bandW: 1.2, bandA: 0.12 }) });
 const _v = new THREE.Vector3();
 
 /** The 6 template spawn points of an arena zone (pure; unit-tested). Returns [[x, z], ...]. */
@@ -330,7 +332,10 @@ export class Arena {
 
   _raiseWall() {
     const fx = this.ctx.fx;
-    try { this.wall = fx?.mistRing?.(this.center.clone(), this.size ?? this.r, { size: this.size, id: this.id }) ?? null; } catch (e) { console.warn('[arena] mistRing', e); this.wall = null; }
+    // a lighter, narrower wall (ARENA.wall): from above the default cards and ground band read as a grey smear over
+    // the ring stones; bandW / bandA are honoured once fx's mistRing takes them (requests/fx.md)
+    const W = ARENA.wall;
+    try { this.wall = fx?.mistRing?.(this.center.clone(), this.size ?? this.r, { size: this.size, id: this.id, alpha: W.alpha, width: W.width, bandW: W.bandW, bandA: W.bandA }) ?? null; } catch (e) { console.warn('[arena] mistRing', e); this.wall = null; }
     const L = this.level;
     if (!L) return;
     const add = (c) => { c.arenaWall = this.id; this._wallColliders.push(c); if (typeof L.addCollider === 'function') L.addCollider(c); };

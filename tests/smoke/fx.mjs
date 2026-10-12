@@ -11,6 +11,7 @@
 //   fx:horde       CS-02's 40 silhouettes march horde_a → horde_b in the fog, part around her, then flee
 //   fx:dizzy       boss Dizzy stars + gold "!", the hurt vignette and the low-HP pulse
 //   fx:gallery     every burst kind frozen in front of her (art review)
+//   fx:wedge / fx:parry-ring / fx:indicators / fx:iso-touch   the iso controls (CONTROLS_SPEC §7.3, §8.2, §10.3; below)
 //   fx:m2-*        M2: slams / shockwaves / cracks, jelly split + pop, web patches, jeer fog, theft + stealer poof,
 //                  Golden Hour rays + Sunburst, lanterns (forest, pooled lights), The Line repair (gate), shop sparkle
 //
@@ -120,6 +121,357 @@ async function prepare(t, at = [-4, -50, 0]) {
   }, [SPAWN.toString(), PLACE.toString(), FREEZE.toString(), at]);
   await t.frames(30);
 }
+
+// ================================================================== iso controls (research/CONTROLS_SPEC.md §12 fx 4)
+//   fx:wedge        a real rat_pike wind-up → a strike wedge carrying the threat's `activeAt`; it tracks, then freezes
+//                   0.15 s before the strike (yaw held), the parry window opens, the ground mist cuts a hole over it
+//   fx:parry-ring   the shrinking parry ring (setting on) on a live wind-up; a red wind-up → the dodge chevron instead
+//   fx:indicators   desktop mouse: hero / aim ring, the move paw (RMB click), queued waypoints (Ctrl+RMB), hover ring +
+//                   highlight, selection ring (LMB), the Stand fan (Space), the ranges overlay (Ctrl), the charge reach,
+//                   flat ground aim line (crossbow), ground mist sheets, px-sized glints on the overlay batch
+//   fx:iso-touch    phone landscape 844×390 and portrait 390×844 (hasTouch / isMobile): parry ring on by default
+//                   (auto = touch), the ±90° Stand fan, tap-to-move paw, glints at a constant 28–34 CSS px
+
+/** Page-side: freeze (time scale 0) the first frame `pred(g)` holds; sets g.__isoFrozen. Logs `log(g)` every frame. */
+const ARM_ISO = (predSrc, logSrc) => {
+  const g = window.__GAME__, c = g.ctx;
+  const pred = new Function('g', `return (${predSrc})(g)`);   // eslint-disable-line no-new-func
+  const log = logSrc ? new Function('g', `return (${logSrc})(g)`) : null;   // eslint-disable-line no-new-func
+  g.__isoFrozen = false; g.__isoLog = [];
+  g.__isoOff?.();
+  const off = c.game.addFrameHook(() => {
+    if (log) { const v = log(g); if (v) g.__isoLog.push(v); if (g.__isoLog.length > 400) g.__isoLog.shift(); }
+    if (pred(g)) { c.game.setTimeScale(0); g.__isoFrozen = true; off(); }
+  });
+  g.__isoOff = off;
+  return true;
+};
+
+async function armIso(t, pred, log = null) {
+  await t.G(([a, p, l]) => { const g = window.__GAME__; g.__armIso ??= new Function(`return (${a})`)(); return g.__armIso(p, l); }, [ARM_ISO.toString(), pred, log]);   // eslint-disable-line no-new-func
+}
+const isoFrozen = (t, ms = 30000) => untilPage(t, '(g) => g.__isoFrozen', ms);
+const decals = (t) => t.G(() => window.__GAME__.ctx.fx.decals.stats());
+
+/** A clear meadow lane, iso camera, desktop mouse; no enemies; parry ring per `ring`. */
+async function prepIso(t, ring = 'off') {
+  await prepare(t);
+  await t.G((r) => {
+    const g = window.__GAME__, c = g.ctx;
+    c.state.settings.parryRing = r; c.state.settings.pathPreview = false;
+    g.story.skip?.(); g.setMode('play');
+    const ui = document.querySelector('.ui-root'); if (ui) ui.style.visibility = '';
+    return true;
+  }, ring);
+  await t.frames(10);
+  const iso = await t.G(() => !!window.__GAME__.ctx.cam.isIso);
+  t.assert(iso, 'the iso camera is on');
+  return iso;
+}
+
+export const ISO_BLOCKS = [
+  {
+    name: 'fx:wedge', order: 49.5, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepIso(t, 'off');
+      await t.G(() => { window.__GAME__.__fxSpawn('rat_pike', 0.4, 2.4, true); return true; });
+      await armIso(t, '(g) => { const w = g.ctx.fx.decals.wedgeList[0]; return !!w && w.activeAt - g.ctx.game.time < 0.09; }',
+        '(g) => { const w = g.ctx.fx.decals.wedgeList[0]; return w ? { left: w.activeAt - g.ctx.game.time, frozen: w.frozen, open: w.open, yaw: w.yaw } : null; }');
+      const ok = await isoFrozen(t, 40000);
+      t.assert(!!ok, 'a live rat_pike wind-up never drew a strike wedge');
+      if (!ok) return;
+      await t.frames(2);
+      await t.shot('fx/iso-wedge');
+      const r = await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, d = c.fx.decals.stats(), live = [...c.combat.threats.live.values()];
+        return { d, log: g.__isoLog, live: live.map((e) => ({ id: e.id, activeAt: e.activeAt, kind: e.kind })), mist: c.fx.stats().groundMist };
+      });
+      const w = r.d.wedges[0];
+      const th = r.live.find((e) => e.id === w.id);
+      t.assert(!!th && Math.abs(th.activeAt - w.activeAt) < 1e-6, `the wedge carries the threat's activeAt (${w.activeAt} vs ${th?.activeAt})`);
+      t.assert(['parry', 'gold', 'red', 'grab'].includes(w.kind), `wedge kind ${w.kind}`);
+      t.assert(w.frozen && w.open, `frozen ${w.frozen}, parry window open ${w.open} at ${(w.activeAt).toFixed(2)}`);
+      const early = r.log.filter((s) => s.left > 0.2);
+      const late = r.log.filter((s) => s.left <= 0.15);
+      t.assert(early.length > 0 && early.every((s) => !s.frozen), 'it tracked before the last 0.15 s');
+      t.assert(late.length > 0 && late.every((s) => s.frozen && Math.abs(s.yaw - late[0].yaw) < 1e-9), 'frozen (yaw held) in the last 0.15 s');
+      t.assert(r.mist.visible && r.mist.holes >= 1, `the ground mist cuts a hole over the wind-up (${JSON.stringify(r.mist)})`);
+      t.log(`wedge ${w.kind} r ${w.range.toFixed(2)} ±${(w.half * 57.3).toFixed(0)}°, ${r.log.length} samples, mist holes ${r.mist.holes}`);
+      await resume(t);
+    },
+  },
+  {
+    name: 'fx:parry-ring', order: 49.6, level: 'meadow', spawn: 'start', timeout: 150000,
+    async run(t) {
+      await prepIso(t, 'on');
+      await t.G(() => { window.__GAME__.__fxSpawn('rat_pike', -0.5, 2.4, true); return true; });
+      await armIso(t, '(g) => { const r = g.ctx.fx.decals.parryRingR; return r != null && r < 1.3; }',
+        '(g) => g.ctx.fx.decals.parryRingR');
+      const ok = await isoFrozen(t, 40000);
+      t.assert(!!ok, 'no parry ring on a live wind-up (setting on)');
+      if (ok) {
+        await t.frames(2);
+        await t.shot('fx/iso-parry-ring');
+        const r = await t.G(() => ({ d: window.__GAME__.ctx.fx.decals.stats(), log: window.__GAME__.__isoLog }));
+        t.assert(r.d.counts.parryRing === 1, 'one ring (the single most imminent attack)');
+        t.assert(r.log.length > 2 && r.log[0] > r.log[r.log.length - 1] && r.log[0] <= 2.2 + 1e-6, `it shrinks (${r.log[0]?.toFixed(2)} → ${r.log.at(-1)?.toFixed(2)})`);
+      }
+      await resume(t);
+      // a red (unblockable) wind-up on her: no ring, a pulsing dodge chevron
+      await t.G(() => {
+        const g = window.__GAME__, c = g.ctx;
+        for (const e of [...c.enemies.list]) c.enemies.despawn(e);
+        const rat = g.__fxSpawn('rat_pike', 0.3, 2.6, false);
+        c.fx.telegraph({ actor: rat, kind: 'red', duration: 0.7, windup: 0.7, arc: { range: 2.2, from: 0.9, to: -0.9 }, targetsPlayer: true });
+        return true;
+      });
+      await armIso(t, '(g) => (g.ctx.fx.decals.counts.chevron ?? 0) > 0');
+      const red = await isoFrozen(t, 15000);
+      t.assert(!!red, 'a red wind-up never showed the dodge chevron');
+      if (red) {
+        await t.frames(2);
+        await t.shot('fx/iso-red-chevron');
+        const d = await decals(t);
+        t.assert((d.counts.parryRing ?? 0) === 0, 'red attacks get no parry ring');
+        t.assert(d.wedges.some((w) => w.kind === 'red'), 'the red wedge (filled, jagged) is drawn');
+      }
+      await resume(t);
+    },
+  },
+  {
+    name: 'fx:indicators', order: 49.7, level: 'meadow', spawn: 'start', timeout: 200000,
+    async run(t) {
+      await prepIso(t, 'off');
+      let d = await decals(t);
+      t.assert(d.counts.hero === 1, 'the hero / aim ring is always on in play');
+      const s0 = await stats(t);
+      t.assert(s0.groundMist.visible && s0.groundMist.sheets >= 4, `ground mist sheets on (${JSON.stringify(s0.groundMist)})`);
+      const P = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
+      // ---- the move paw (RMB click), frozen right after the click
+      await armIso(t, '(g) => g.ctx.fx.decals.markers.some((m) => m.kind === "move" && m.t > 0.15)');
+      await t.click(P[0] + 2, P[2] + 3.5, 'right');
+      t.assert(!!(await isoFrozen(t, 8000)), 'an RMB click drew no move marker');
+      await t.frames(3);
+      await t.shot('fx/iso-move-paw');
+      await resume(t);
+      // ---- queued waypoints (Ctrl + RMB) with the path preview on
+      await t.G(() => { window.__GAME__.ctx.state.settings.pathPreview = true; return true; });
+      await t.click(P[0] - 4, P[2] + 9, 'right');
+      await untilPage(t, '(g) => (g.ctx.player.orders?.path?.length ?? 0) > 0', 8000);
+      await t.click(P[0] + 3, P[2] + 12, 'right', { ctrl: true });
+      await t.wait(250);
+      await t.click(P[0] - 1, P[2] + 15, 'right', { ctrl: true });
+      const q = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.queued ?? 0) >= 1 && (g.ctx.fx.decals.counts.path ?? 0) >= 1', 10000);
+      await t.G(() => window.__GAME__.ctx.game.setTimeScale(0));
+      await t.frames(2);
+      await t.shot('fx/iso-queue');
+      d = await decals(t);
+      await resume(t);
+      t.assert(!!q, `queued waypoints + path preview paws (queued ${d.counts.queued}, path ${d.counts.path})`);
+      await t.G(() => { const g = window.__GAME__; g.ctx.state.settings.pathPreview = false; g.ctx.player.order?.('stop'); return true; });
+      await t.wait(300);
+      // ---- hover ring + highlight, then LMB selects (gold dashed ring)
+      const rat = await t.G(() => { const e = window.__GAME__.__fxSpawn('rat_pike', 0.9, 3.2, false); window.__isoRat = e; return [...e.pos.toArray(), e.id]; });
+      await t.frames(5);
+      await t.aimAt(rat[0], rat[2]);
+      const hov = await untilPage(t, '(g, id) => (g.ctx.fx.decals.counts.hover ?? 0) > 0 && g.ctx.fx.decals.stats().highlight === id', 10000, rat[3]);
+      t.assert(!!hov, 'hovering a rat draws the red hover ring and highlights it');
+      await t.shot('fx/iso-hover', { freeze: true });
+      await t.click(rat[0], rat[2], 'left');
+      const sel = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.selection ?? 0) > 0', 10000);
+      t.assert(!!sel, 'a click on the rat selects it (gold rotating ring)');
+      const her = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
+      await t.aimAt(her[0] - 3, her[2] - 1.2);              // empty ground left of her (on screen)
+      const unhl = await untilPage(t, '(g, id) => g.ctx.fx.decals.stats().highlight !== id', 10000, rat[3]);
+      if (!t.assert(!!unhl, 'the rat highlight clears when the cursor leaves')) {
+        t.log(JSON.stringify(await t.G(() => { const c = window.__GAME__.ctx; return { mode: c.game.mode, hover: c.cam.hover?.kind, id: c.cam.hover?.actor?.id, ptr: c.input.pointer }; })));
+      }
+      await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); return true; });
+      // ---- the Stand fan (Space) and the ranges overlay (Ctrl)
+      await t.page.keyboard.down('Space');
+      const fan = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.fan ?? 0) > 0', 10000);
+      await t.shot('fx/iso-stand', { freeze: true });
+      await t.page.keyboard.up('Space');
+      t.assert(!!fan, 'Space: the Stand fan');
+      await untilPage(t, '(g) => g.ctx.player.stateName !== "guard"', 5000);
+      await t.page.keyboard.down('ControlLeft');
+      const rng = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.ranges ?? 0) > 0', 10000);
+      await t.shot('fx/iso-ranges', { freeze: true });
+      await t.page.keyboard.up('ControlLeft');
+      t.assert(!!rng, 'Ctrl: the ranges overlay');
+      // ---- the charge reach (hold J)
+      await t.page.keyboard.down('KeyJ');
+      const ch = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.charge ?? 0) > 0', 10000);
+      await t.shot('fx/iso-charge', { freeze: true });
+      await t.page.keyboard.up('KeyJ');
+      t.assert(!!ch, 'holding attack shows the charge reach');
+      await t.wait(900);
+      // ---- a crossbow aim line lies flat on the ground; its glints / "!" are px-sized on the overlay batch
+      // back on the clear lane, as fx:live (inside rat_xbow.keep [6, 9], so it may shoot: §8.5)
+      await t.G(() => { const g = window.__GAME__; g.ctx.player.order?.('stop'); g.ctx.cam.select?.(null); g.__fxPlace(-4, -50, 0); g.__fxSpawn('rat_xbow', 0.45, 8, true); return true; });
+      const aim = await freezeOn(t, 'TELEGRAPH', 0.35, { kind: 'aim' }, () => t.clearEvents(), 45000);
+      t.assert(aim, 'the crossbow rat never aimed');
+      if (aim) {
+        await t.frames(2);
+        const L = await t.G(() => {
+          const l = window.__GAME__.ctx.fx.telegraphs.lines.find((x) => x.mesh.visible);
+          return l ? { y: [l.pos[1], l.pos[4], l.pos[7], l.pos[10]], depthTest: l.material.depthTest, len: l.material.uniforms.uLen.value } : null;
+        });
+        await t.shot('fx/iso-aim-line');
+        t.assert(!!L && Math.max(...L.y) - Math.min(...L.y) < 1.2 && !L.depthTest, `the aim line lies on the ground (${JSON.stringify(L)})`);
+        t.assert(!!L && L.len > 3 && L.len <= 12.01, `the full projected path ≤ 12 m (${L?.len})`);
+      }
+      await resume(t);
+      const s1 = await stats(t);
+      t.log(`decals ${JSON.stringify(s1.decals?.counts)}, marks ${s1.marks} + overlay ${s1.marksTop}`);
+    },
+  },
+  {
+    name: 'fx:iso-touch', order: 49.8, level: null, timeout: 400000,
+    async run(t) {
+      shotDir(t);
+      for (const [w, h, tag] of [[844, 390, 'landscape'], [390, 844, 'portrait']]) {
+        const errors = [];
+        const ctxM = await t.browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        const pg = await ctxM.newPage();
+        pg.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+        pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text().slice(0, 300)}`); });
+        const G = async (fn, arg) => { const hd = await pg.evaluateHandle(fn, arg); try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); } };
+        const until2 = async (src, ms = 10000) => { const t0 = Date.now(); for (;;) { const v = await G((s) => new Function('g', `return (${s})(g)`)(window.__GAME__), src); if (v) return v; if (Date.now() - t0 > ms) return null; await pg.waitForTimeout(100); } };   // eslint-disable-line no-new-func
+        /** Freeze (time scale 0) on the first frame `src` holds (a frame hook: never misses a short window under load). */
+        const freezeWhen = async (src, ms) => {
+          await G((p) => { const g = window.__GAME__, c = g.ctx, fn = new Function('g', `return (${p})(g)`); window.__tFrozen = false;   // eslint-disable-line no-new-func
+            const off = c.game.addFrameHook(() => { if (fn(g)) { c.game.setTimeScale(0); window.__tFrozen = true; off(); } }); window.__tOff = off; return true; }, src);
+          const ok = await until2('() => window.__tFrozen', ms);
+          if (!ok) await G(() => { window.__tOff?.(); return true; });
+          return ok;
+        };
+        const mshot = async (name) => { try { await pg.screenshot({ path: path.join(t.shotsDir, 'fx', `${name}.png`) }); } catch (e) { t.warn(`shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); } };
+        try {
+          await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 200000 });
+          await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 200000 });
+          await G(async () => {
+            const g = window.__GAME__, c = g.ctx;
+            g.story.skip?.(); g.setMode('play');
+            for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag(k, true);
+            await g.loadLevel('meadow', 'start');
+            return true;
+          });
+          await pg.waitForTimeout(600);
+          await pg.touchscreen.tap(Math.round(w * 0.6), Math.round(h * 0.4));
+          await G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.god(true); g.ctx.state.settings.parryRing = 'auto'; g.ctx.ui?.touch?.enable?.(true); return true; });
+          await pg.waitForTimeout(500);
+          const dev = await G(() => window.__GAME__.ctx.input.device);
+          t.assert(dev === 'touch', `${tag}: device touch (${dev})`);
+          // ---- tap-to-move: the paw marker
+          const tgt = await G(() => { const g = window.__GAME__, p = g.ctx.player.pos; return g.screen(p.x + 1.5, p.z + 3); });
+          await pg.touchscreen.tap(Math.round(tgt.x), Math.round(tgt.y));
+          const paw = await freezeWhen('(g) => g.ctx.fx.decals.markers.some((m) => m.kind === "move" && m.t > 0.12)', 8000);
+          if (paw) { await mshot(`iso-touch-${tag}-paw`); await G(() => window.__GAME__.ctx.game.setTimeScale(1)); }
+          t.assert(!!paw, `${tag}: a tap on the ground draws the move paw`);
+          await pg.waitForTimeout(1200);
+          // ---- a live wind-up: parry ring on by default on touch, the wedge, a px-sized glint on the overlay
+          await G(() => { const g = window.__GAME__, p = g.ctx.player; g.ctx.player.order?.('stop'); window.__tr = g.spawn('rat_pike', p.pos.x + 1.4, p.pos.z + 2); return true; });
+          const ring = await freezeWhen('(g) => { const r = g.ctx.fx.decals.parryRingR; return r != null && r < 1.4; }', 40000);
+          t.assert(!!ring, `${tag}: the parry ring shows on touch by default (auto)`);
+          if (ring) {
+            await pg.waitForTimeout(200);
+            await mshot(`iso-touch-${tag}-ring`);
+            const st = await G(() => { const c = window.__GAME__.ctx, top = c.fx.marksTop; const sizes = Array.from(top.aPar.array.slice(0, top.count * 4)).filter((_, i) => i % 4 === 0);
+              return { d: c.fx.decals.stats(), top: top.count, sizes, viewH: top.material.uniforms.uViewH.value }; });
+            t.assert(st.d.counts.wedge >= 1, `${tag}: the strike wedge`);
+            t.assert(st.top >= 1 && st.sizes.every((s) => s <= -28 * 0.5), `${tag}: overlay glints at a constant px size (${st.sizes.map((s) => s.toFixed(0))})`);
+            t.assert(Math.abs(st.viewH - h) < 2, `${tag}: px marks use the CSS viewport height (${st.viewH})`);
+            await G(() => window.__GAME__.ctx.game.setTimeScale(1));
+          }
+          // ---- the Stand on touch: the fan is ±90°
+          await G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); return true; });
+          await pg.waitForTimeout(400);
+          const gb = await G(() => { const el = document.querySelector('.tbtn[data-action="guard"]'); if (!el) return null; const r = el.getBoundingClientRect(); return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]; });
+          if (gb) {
+            await G(([x, y]) => { const el = document.querySelector('.tbtn[data-action="guard"]'); window.__gEl = el;
+              el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 41, clientX: x, clientY: y, pointerType: 'touch' })); return true; }, gb);
+            const fan = await until2('(g) => (g.ctx.fx.decals.counts.fan ?? 0) > 0', 8000);
+            const arc = await G(() => window.__GAME__.ctx.fx.decals.fanHalf);
+            if (fan) await mshot(`iso-touch-${tag}-stand`);
+            await G(([x, y]) => { window.__gEl.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 41, clientX: x, clientY: y, pointerType: 'touch' })); return true; }, gb);
+            t.assert(!!fan, `${tag}: 🛡 hold shows the Stand fan`);
+            t.assert(Math.abs((arc ?? 0) - Math.PI / 2) < 0.01, `${tag}: the touch Stand fan is ±90° (${arc})`);
+          } else t.warn(`${tag}: no 🛡 button found (ui layout)`);
+          t.assert(!errors.some((e) => /Shader Error|vFogW|hfog/i.test(e)), `${tag}: no shader errors (${errors.slice(0, 2).join(' | ')})`);
+        } finally {
+          await ctxM.close().catch(() => {});
+        }
+      }
+    },
+  },
+  {
+    // readability fixes: the off-screen Volley reach (edge arc + cursor chip), the crossbow aim strip (screen-constant
+    // width, under the bloom threshold, faded around her), the hero ring's dark outline
+    name: 'fx:readability', order: 49.9, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      await prepIso(t, 'off');
+      // ---- Sage's Volley held on open ground: no target → a dotted arc at the frame edge + a grey "no target" chip
+      await t.G(() => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi', 'sage', 'clover']; c.companions.setActive(['sage']); return true; });
+      await t.wait(1500);
+      const P = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
+      await t.aimAt(P[0] + 2.5, P[2] + 3);
+      await t.page.keyboard.down('KeyQ');
+      const vol = await untilPage(t, '(g) => g.ctx.companions.aim?.active && (g.ctx.fx.decals.counts.reachEdge ?? 0) > 0 && (g.ctx.fx.decals.counts.abilityChip ?? 0) > 0', 15000);
+      const va = await t.G(() => { const c = window.__GAME__.ctx; return { aim: { active: c.companions.aim.active, shape: c.companions.aim.shape, valid: c.companions.aim.valid }, edge: c.fx.decals.reachEdgeAt, range: c.companions.aim.plan?.range }; });
+      await t.shot('fx/volley-edge', { freeze: true });
+      await t.page.keyboard.up('KeyQ');                    // no target: the release casts nothing
+      await t.G(() => { const g = window.__GAME__; if (g.ctx.game.mode !== 'play') g.setMode('play'); return true; });
+      t.assert(!!vol, `held Volley: an edge arc + aim chip are drawn (${JSON.stringify(va)})`);
+      t.assert(!!vol && va.edge > 2 && va.edge < va.range, `the edge arc sits inside the frame, short of the off-screen ${va.range} m ring (${va.edge})`);
+      await t.G(() => { const c = window.__GAME__.ctx; c.companions.setActive([]); return true; });
+      await t.wait(600);
+      // ---- a crossbow rat aiming up the screen through her (its strip runs along the screen's vertical axis)
+      await t.G(() => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player;
+        p.order?.('stop'); ctx.cam.select?.(null); g.__fxPlace(-4, -50, 0);
+        const cp = ctx.camera.position, rel = Math.atan2(p.pos.x - cp.x, p.pos.z - cp.z) - p.facing;   // away from the lens = straight above her on screen
+        g.__fxSpawn('rat_xbow', rel, 8, true);
+        return true;
+      });
+      // frozen once the aim locks (the solid bar: the brightest state, the one that bloomed)
+      await armIso(t, '(g) => g.ctx.fx.telegraphs.lines.some((l) => l.mesh.visible && l.material.uniforms.uSolid.value > 0.5)');
+      const aim = !!(await isoFrozen(t, 45000));
+      if (!t.assert(aim, 'the crossbow rat never locked its aim (vertical)')) {
+        t.log(JSON.stringify(await t.G(() => window.__GAME__.ctx.enemies.list.map((e) => ({ type: e.type, st: e.stateName, pos: e.pos.toArray().map((v) => +v.toFixed(1)) })))));
+        await t.shot('fx/xbow-vertical-fail');
+      }
+      if (aim) {
+        await t.frames(2);
+        const L = await t.G(() => {
+          const l = window.__GAME__.ctx.fx.telegraphs.lines.find((x) => x.mesh.visible), u = l?.material.uniforms;
+          return u ? { cap: u.uCap.value, hole: u.uHole.value, len: u.uLen.value, w: u.uWidth.value } : null;
+        });
+        await t.shot('fx/xbow-vertical');
+        t.assert(!!L && L.cap < 0.85, `the iso aim strip stays under the 0.85 bloom threshold (${JSON.stringify(L)})`);
+        t.assert(!!L && L.hole > 0 && L.hole < L.len + 1, `the strip fades around her (${JSON.stringify(L)})`);
+        t.assert(!!L && L.w >= 0.06 && L.w <= 0.4, `screen-constant strip width (${L?.w} m)`);
+      }
+      await resume(t);
+      await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); return true; });
+    },
+  },
+  {
+    name: 'fx:hero-ring-town', order: 49.95, level: 'town', spawn: 'hub', timeout: 180000,
+    async run(t) {
+      await prepare(t, null);
+      await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); return true; });
+      const on = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.hero ?? 0) > 0', 15000);
+      t.assert(!!on, 'the hero ring is on in town');
+      // the pale plazas (square paving, forge sand): enemies cleared so the ring is seen on its own
+      for (const [name, x, z] of [['square', 0, -8], ['forge', 12, -2]]) {
+        await t.G(([px, pz]) => { window.__GAME__.__fxPlace(px, pz, 0); return true; }, [x, z]);
+        await t.wait(900);
+        await t.shot(`fx/hero-ring-${name}`, { freeze: true });
+      }
+    },
+  },
+];
 
 // ================================================================== M2 blocks (fx:m2-*)
 /** Page-side: freeze the sim and step the given fx sub-systems by `sec` (deterministic, load-proof screenshots). */
@@ -386,10 +738,11 @@ export default [
       const s = await stats(t);
       await resume(t);
       t.assert(s.telegraphs === r.n, `telegraphs drawn ${s.telegraphs}, expected ${r.n}`);
-      t.assert(s.marks >= 10, `telegraph marks ${s.marks}`);
+      t.assert(s.marks + (s.marksTop ?? 0) >= 10, `telegraph marks ${s.marks} + overlay ${s.marksTop}`);
       for (const k of ['parry', 'gold', 'red', 'aoe', 'aim', 'grab', 'jeer', 'shadow']) t.assert(s.byKind[k] >= 1, `kind ${k} never drawn`);
       await t.G(() => { const g = window.__GAME__; for (const id of g.__fxIds) g.ctx.fx.telegraphEnd(id); });
-      t.assert(!!(await until(t, (x) => x.telegraphs === 0, 8000)), 'telegraphs did not end');
+      // ours ended (the level's own practice rats may be winding up meanwhile)
+      t.assert(!!(await untilPage(t, '(g) => !g.__fxIds.some((id) => g.ctx.fx.telegraphs.active.has(id))', 12000)), 'telegraphs did not end');
       // a real enemy windup: the rat's own combat:telegraph reaches fx
       const before = (await stats(t)).byKind;
       await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); g.__fxSpawn('rat_pike', 0, 1.6, true); });
@@ -698,4 +1051,5 @@ export default [
     },
   },
   ...M2_BLOCKS,
+  ...ISO_BLOCKS,
 ];

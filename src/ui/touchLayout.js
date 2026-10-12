@@ -1,16 +1,24 @@
 // src/ui/touchLayout.js  (owner: ui) — research/CONTROLS_SPEC.md §9 touch geometry and gesture rules, pure and
 // unit-tested: the Wild Rift cluster (button centres / sizes for a viewport, touch size, orientation, mirror), the
 // joystick zone, dead rings, and the free-area gesture classifier.
-import { TOUCH } from '../core/config.js';
+import { TOUCH, CAMERA } from '../core/config.js';
+import { isoFrameOffset } from '../camera/IsoRig.js';
 
 /** Clamp the touch-size setting to the spec range (0.8–1.4). */
 export const clampTs = (ts) => Math.max(0.8, Math.min(1.4, Number.isFinite(ts) ? ts : 1));
 
+/** Placement priority: when a small screen can't fit every default button clear of her, the last ones go first. */
+export const BUTTON_PRIORITY = Object.freeze(['attack', 'guard', 'dodge', 'ability', 'jump', 'interact', 'milk', 'golden', 'meow']);
+
 /**
- * Cluster layout for a viewport (CSS px). Returns { buttons: { name: { x, y, r, size } } (centres), anchor: { x, y },
- * portrait, scale, stickZone: { x0, y0, x1, y1 }, hudBottom, cancel: { x, y, r } }.
+ * Cluster layout for a viewport (CSS px). Returns { buttons: { name: { x, y, r, size } } (centres), dropped: [names],
+ * anchor: { x, y }, portrait, scale, stickZone: { x0, y0, x1, y1 }, hudBottom, hero: { x, y }, cancel: { x, y, r } }.
+ *   keepOut: screen rects { x0, y0, x1, y1 } (the HUD blocks, ❚❚) no default-placed button or the ✕ chip may overlap;
+ *   noDrop: never drop a button that has no legal spot (the Edit-layout screen shows every button);
+ *   hero: her screen point override (default heroPoint).
  * @param {number} w @param {number} h
- * @param {{ touchSize?: number, leftHanded?: boolean, safe?: { top?: number, right?: number, bottom?: number, left?: number }, layout?: object|null }} [o]
+ * @param {{ touchSize?: number, leftHanded?: boolean, safe?: { top?: number, right?: number, bottom?: number, left?: number },
+ *   layout?: object|null, keepOut?: {x0:number,y0:number,x1:number,y1:number}[], noDrop?: boolean, hero?: {x:number,y:number} }} [o]
  */
 export function computeLayout(w, h, o = {}) {
   const T = TOUCH, ts = clampTs(o.touchSize ?? 1), safe = o.safe ?? {};
@@ -18,14 +26,17 @@ export function computeLayout(w, h, o = {}) {
   const k = ts * (portrait ? T.portraitScale : 1);
   const right = safe.right ?? 0, bottom = safe.bottom ?? 0, left = safe.left ?? 0, top = safe.top ?? 0;
   const mirror = !!o.leftHanded;
+  const keep = Array.isArray(o.keepOut) ? o.keepOut.filter((r) => r && r.x1 > r.x0 && r.y1 > r.y0) : [];
   const ax = mirror ? left + T.anchor * Math.max(1, k) : w - right - T.anchor * Math.max(1, k);
   const ay = h - bottom - T.anchor * Math.max(1, k);
   const buttons = {};
   for (const [name, [size, dx, dy]] of Object.entries(portrait && T.buttonsPortrait ? T.buttonsPortrait : T.buttons)) {
     const sz = Math.max(T.minBtn, size * k);
     let x = ax + (mirror ? -dx : dx) * k, y = ay + dy * k;
-    const custom = o.layout?.[name];
-    if (Array.isArray(custom) && custom.length === 2 && custom.every(Number.isFinite)) { x = ax + custom[0]; y = ay + custom[1]; }
+    // §9.2 Edit layout: settings.touchLayout offsets from the ⚔ anchor in unscaled, unmirrored px (portrait entries
+    // are keyed `portrait:<name>`), so a custom layout follows touch size and the left-handed mirror
+    const custom = o.layout?.[layoutKey(name, portrait)];
+    if (Array.isArray(custom) && custom.length === 2 && custom.every(Number.isFinite)) { x = ax + (mirror ? -custom[0] : custom[0]) * k; y = ay + custom[1] * k; }
     buttons[name] = { x, y, r: sz / 2, size: sz };
   }
   // keep every button inside the viewport (and the Milk / Golden tops below the HUD strip)
@@ -34,6 +45,43 @@ export function computeLayout(w, h, o = {}) {
     b.x = Math.max(left + b.r + 4, Math.min(w - right - b.r - 4, b.x));
     b.y = Math.max(hudBottom + b.r, Math.min(h - bottom - b.r - 4, b.y));
   }
+  const [zw, zh] = portrait ? T.stickZonePortrait : T.stickZone;
+  const stickZone = mirror ? { x0: w * (1 - zw), x1: w, y0: h * (1 - zh), y1: h } : { x0: 0, x1: w * zw, y0: h * (1 - zh), y1: h };
+  // hero clearance: no default-placed button (hit circle + dead ring) may reach into the disc around her on screen (or
+  // a HUD keep-out), or taps on foes beside her land in a dead ring. Offenders slide to the nearest legal free spot,
+  // shrink to the minimum size if none, and are dropped (lowest priority first) when even that fails. Custom
+  // Edit-layout positions are the player's choice and stay put.
+  const hero = o.hero ?? heroPoint(w, h, portrait);
+  // the disc shrinks with the screen (heroClearR)
+  const clearR = heroClearR(w, h);
+  const dropped = [];
+  const isCustom = (name) => { const c = o.layout?.[layoutKey(name, portrait)]; return Array.isArray(c) && c.length === 2 && c.every(Number.isFinite); };
+  const view = { w, h, left, right, bottom, top, yMin: hudBottom, hero, clearR, ring: T.deadRing, zone: stickZone, keep };
+  const prio = (n) => { const i = BUTTON_PRIORITY.indexOf(n); return i < 0 ? 99 : i; };
+  const clearHero = () => {
+    const all = Object.keys(buttons).sort((a, b) => prio(a) - prio(b));
+    const bad = all.filter((n) => !isCustom(n) && !legal(buttons[n], buttons[n].r, view));
+    const placed = all.filter((n) => !bad.includes(n));
+    const queue = [...bad];
+    while (queue.length) {
+      const n = queue.shift(), b = buttons[n];
+      const others = placed.map((m) => buttons[m]);
+      let spot = freeSpot(b, b.r, others, view);
+      if (!spot && b.r > T.minBtn / 2) { spot = freeSpot(b, T.minBtn / 2, others, view); if (spot) { b.r = T.minBtn / 2; b.size = T.minBtn; } }
+      if (spot) { b.x = spot.x; b.y = spot.y; placed.push(n); continue; }
+      if (o.noDrop || n === 'attack') { placed.push(n); continue; }
+      // no room: a lower-priority default button gives up its spot (and re-queues), else this one is dropped
+      const victim = placed.filter((m) => m !== 'attack' && !isCustom(m) && prio(m) > prio(n)).sort((a, c) => prio(c) - prio(a))[0];
+      if (victim) {
+        placed.splice(placed.indexOf(victim), 1);
+        queue.unshift(n);
+        queue.push(victim); queue.sort((a, c) => prio(a) - prio(c));
+        continue;
+      }
+      delete buttons[n]; dropped.push(n);
+    }
+  };
+  clearHero();
   // short screens at big touch sizes: the HUD clamp can squeeze the top row together; slide the smaller of an
   // overlapping pair sideways (away from the ⚔ side) until the 8 px gap holds
   const names = Object.keys(buttons);
@@ -58,11 +106,102 @@ export function computeLayout(w, h, o = {}) {
     }
     if (!moved) break;
   }
-  const [zw, zh] = portrait ? T.stickZonePortrait : T.stickZone;
-  const stickZone = mirror ? { x0: w * (1 - zw), x1: w, y0: h * (1 - zh), y1: h } : { x0: 0, x1: w * zw, y0: h * (1 - zh), y1: h };
+  clearHero();                                                        // the squeeze may slide one back toward her
+  // the ✕ chip (shown while aiming): its own free spot near the cluster's top corner, clear of every button, her and
+  // the HUD keep-outs (it may sit in the HUD strip between them). It used to land on Milk.
   const cr = (T.cancelChip * Math.max(1, k)) / 2;
-  const cancel = { x: mirror ? left + cr + 16 : w - right - cr - 16, y: hudBottom + cr + 8, r: cr };
-  return { buttons, anchor: { x: ax, y: ay }, portrait, scale: k, stickZone, hudBottom, cancel };
+  const want = { x: mirror ? left + cr + 16 : w - right - cr - 16, y: hudBottom + cr + 8 };
+  const chipView = { ...view, yMin: top + 4, ring: 0, clearR: Math.min(clearR, 60), zone: { x0: 0, x1: 0, y0: 0, y1: 0 } };
+  const spot = freeSpot(want, cr, Object.values(buttons), chipView);
+  const cancel = { x: spot?.x ?? want.x, y: spot?.y ?? want.y, r: cr };
+  return { buttons, dropped, anchor: { x: ax, y: ay }, portrait, scale: k, stickZone, hudBottom, hero, clearR, cancel };
+}
+
+/** Hero clearance radius (CSS px) around her screen point that no button + dead ring may reach (TOUCH.heroClear). */
+export const HERO_CLEAR = 120;
+
+/** The hero disc radius for a viewport: HERO_CLEAR from a 430 px short side up, scaled down below it (she is drawn
+ *  smaller on a short phone, and 9 buttons must still fit beside her: ≈ 105 px at 375, 89 px at 320). */
+export function heroClearR(w, h) { return (TOUCH.heroClear ?? HERO_CLEAR) * Math.min(1, Math.min(w, h) / 430); }
+
+/**
+ * Her focus on screen (CSS px) at rest (no lead), from the iso rig's own framing (camera/IsoRig.isoFrameOffset and
+ * CAMERA.iso.frameOffsetTouchX, the numbers FollowCamera feeds setViewOffset on a touch device): landscape she sits
+ * frameOffsetTouchX left of centre at FRAME.herY of the height (≈ 0.42 W, 0.48 H; a touch view has no bottom inset),
+ * portrait centred, frameOffsetPortrait above the middle (≈ 0.40 H). Pure.
+ */
+export function heroPoint(w, h, portrait = h > w * 1.05) {
+  const offY = isoFrameOffset(h, 0, portrait);
+  const offX = portrait ? 0 : (CAMERA.iso?.frameOffsetTouchX ?? 0);
+  return { x: w * (0.5 - offX), y: h * (0.5 + offY) };
+}
+
+/** Clearance (px) between a button's dead ring and the hero disc; < 0 = intrudes. */
+export function heroGap(b, hero, clearR = HERO_CLEAR) {
+  return Math.hypot(b.x - hero.x, b.y - hero.y) - b.r - TOUCH.deadRing - clearR;
+}
+
+/** Does a circle (x, y, r) overlap the rect? */
+const hitsRect = (x, y, r, q) => {
+  const nx = Math.max(q.x0, Math.min(q.x1, x)), ny = Math.max(q.y0, Math.min(q.y1, y));
+  return Math.hypot(x - nx, y - ny) < r;
+};
+
+/** Is a centre legal for a circle of radius r: in the viewport, top edge at or below yMin, clear of her disc, the stick zone and the keep-outs. */
+function legal(p, r, v) {
+  const { x, y } = p;
+  if (x - r < v.left + 4 - 1e-6 || x + r > v.w - v.right - 4 + 1e-6 || y - r < v.yMin - 1e-6 || y + r > v.h - v.bottom - 4 + 1e-6) return false;
+  if (Math.hypot(x - v.hero.x, y - v.hero.y) - r - v.ring - v.clearR < -0.5) return false;
+  const z = v.zone;
+  if (z.x1 > z.x0 && x + r > z.x0 && x - r < z.x1 && y + r > z.y0 && y - r < z.y1) return false;
+  return !v.keep.some((q) => hitsRect(x, y, r, q));
+}
+
+/** Nearest legal centre (4 px grid) to `b` for a circle of radius `r` among `others` (≥ TOUCH.gap from each). null when none. */
+function freeSpot(b, r, others, v) {
+  const x0 = v.left + r + 4, x1 = v.w - v.right - r - 4, y0 = Math.max(v.yMin + r, v.top + r + 4), y1 = v.h - v.bottom - r - 4;
+  let best = null, bestD = Infinity;
+  const p = { x: 0, y: 0 };
+  for (let y = y0; y <= y1 + 1e-6; y += 4) {
+    for (let x = x0; x <= x1 + 1e-6; x += 4) {
+      const d = Math.hypot(x - b.x, y - b.y);
+      if (d >= bestD) continue;
+      p.x = x; p.y = y;
+      if (!legal(p, r, v)) continue;
+      if (others.some((q) => q !== b && Math.hypot(x - q.x, y - q.y) - r - q.r < TOUCH.gap)) continue;
+      best = { x, y }; bestD = d;
+    }
+  }
+  return best;
+}
+
+/** settings.touchLayout key for a button in an orientation. */
+export function layoutKey(name, portrait) { return portrait ? `portrait:${name}` : name; }
+
+/**
+ * The stored offset for a button dropped at screen (x, y): unscaled, unmirrored px from the ⚔ anchor of `layout`
+ * (the inverse of computeLayout's custom placement). Pure.
+ * @param {ReturnType<typeof computeLayout>} layout @param {number} x @param {number} y @param {boolean} [mirror]
+ * @returns {[number, number]}
+ */
+export function offsetFor(layout, x, y, mirror = false) {
+  const k = layout.scale || 1;
+  const dx = (x - layout.anchor.x) / k, dy = (y - layout.anchor.y) / k;
+  return [Math.round(mirror ? -dx : dx), Math.round(dy)];
+}
+
+/**
+ * Edit-layout validity: every pair of visible buttons keeps ≥ TOUCH.gap px apart and stays out of the HUD strip.
+ * Returns the names of the buttons that break it (empty = OK). Pure.
+ */
+export function layoutConflicts(layout, names = Object.keys(layout.buttons)) {
+  const bad = new Set();
+  for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+    const a = layout.buttons[names[i]], b = layout.buttons[names[j]];
+    if (!a || !b) continue;
+    if (Math.hypot(a.x - b.x, a.y - b.y) - a.r - b.r < TOUCH.gap - 0.5) { bad.add(names[i]); bad.add(names[j]); }
+  }
+  return [...bad];
 }
 
 /** Smallest gap (px) between any two button hit circles of a layout (unit test: ≥ TOUCH.gap). */
@@ -70,6 +209,7 @@ export function minGap(layout, names = Object.keys(layout.buttons)) {
   let g = Infinity;
   for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
     const a = layout.buttons[names[i]], b = layout.buttons[names[j]];
+    if (!a || !b) continue;
     g = Math.min(g, Math.hypot(a.x - b.x, a.y - b.y) - a.r - b.r);
   }
   return g;
@@ -98,6 +238,19 @@ export function inDeadRing(layout, x, y, visible = null) {
 export function inStickZone(layout, x, y) {
   const z = layout.stickZone;
   return x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1;
+}
+
+/**
+ * Where the floating stick's base goes for a touch at (x, y): at least the stick radius (× touch size) plus a 4 px
+ * margin inside the left, right and bottom edges (and the safe insets), so a thumb that lands near a corner can
+ * still reach full deflection toward it. Pure.
+ * @param {number} x @param {number} y @param {number} w @param {number} h @param {number} R stick radius (px)
+ * @param {{ left?: number, right?: number, bottom?: number }} [safe]
+ */
+export function clampStickBase(x, y, w, h, R, safe = {}) {
+  const m = R + 4;
+  const x0 = (safe.left ?? 0) + m, x1 = w - (safe.right ?? 0) - m, y1 = h - (safe.bottom ?? 0) - m;
+  return { x: x0 <= x1 ? Math.max(x0, Math.min(x1, x)) : w / 2, y: Math.min(y1, y) };
 }
 
 /**

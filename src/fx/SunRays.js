@@ -7,7 +7,7 @@
 // Kept subtle on purpose: it is additive over bright fog, and the bloom (1.2 in Golden Hour) does the rest.
 // Two pooled billboards (one follows her, one stays where the Sunburst went off). Each visible one is one draw call.
 import * as THREE from 'three';
-import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 
 /** Size (m) and intensity of the rays for a mode at time t (pure, unit-tested). null = finished. */
 export function sunRayEnvelope(mode, t) {
@@ -77,7 +77,7 @@ const _p = new THREE.Vector3(), _d = new THREE.Vector3();
 
 class RayDisc {
   constructor(name) {
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name, vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uSize: { value: 1 }, uColor: { value: new THREE.Color('#FFC85A') }, uI: { value: 0 }, uTime: { value: 0 }, uSeed: { value: 0 } },
       transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending,

@@ -41,6 +41,8 @@ const NUM = ['fogDensity', 'hemi', 'sun', 'sunElev', 'sunAz', 'wind', 'env', 'fo
 const COL = ['fogColor', 'fogLow', 'skyTop', 'hemiSky', 'hemiGround', 'sunColor'];
 const FOG_MIN = 0.005, FOG_MAX = 0.12;
 const SHADOW_HALF = 20;
+/** signed smallest angle a − b */
+const angDiff = (a, b) => { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
 /**
  * Hero key light (art.md mood rule: the hero carries the warm saturation in every biome). At night the cool hemi /
  * moon and the night grade turn her ginger fur chestnut-grey, so a small warm point light rides between her and the
@@ -125,10 +127,14 @@ export class Env {
   setFocusFog({ focus, mode = 1, clear, combat = false } = {}) {
     const F = CAMERA.iso?.fog;
     if (!F) return;
-    const lv = this.ctx.levels?.current?.cam?.fog ?? {};
+    // `level.cam.fog` may carry per-preset rows (forest_night): { clear, clearCombat, topMul, <preset>: {...} }
+    const fr = this.ctx.levels?.current?.cam?.fog;
+    const lv = fr?.[this.presetName] ?? fr ?? {};
     if (focus) HFOG.uFogFocus.value.set(focus.x, focus.y, focus.z);
     HFOG.uFogMode.value = Math.max(0, Math.min(1, mode));
-    let want = Number.isFinite(clear) ? clear : combat ? (lv.clearCombat ?? F.clearCombat) : (lv.clear ?? F.clear);
+    // a zone hint's `clear` (§2.2: the Mushroom Ring 7 m) replaces the level's explore clear radius
+    const zc = this.ctx.levels?.current?.camZone?.cam?.clear;
+    let want = Number.isFinite(clear) ? clear : combat ? Math.max(lv.clearCombat ?? F.clearCombat, Number.isFinite(zc) ? zc : 0) : (Number.isFinite(zc) ? zc : (lv.clear ?? F.clear));
     for (const c of this.contrib.values()) if (Number.isFinite(c?.clear)) want = Math.min(want, c.clear);
     if (this.ctx.player?.golden) want *= F.goldenClearMul;
     const dt = Math.min(0.1, this._fogDt ?? 1 / 60);
@@ -250,8 +256,20 @@ export class Env {
     if (this.fog) { this.fog.density = this._final; this.fog.color.copy(c.fogColor); }
     const bg = this.ctx.scene.background;
     if (bg?.isColor) bg.copy(c.fogColor); else this.ctx.scene.background = c.fogColor.clone();
-    if (this.hemiLight) { this.hemiLight.color.copy(c.hemiSky); this.hemiLight.groundColor.copy(c.hemiGround); this.hemiLight.intensity = c.hemi; }
-    if (this.sunLight) { this.sunLight.color.copy(c.sunColor); this.sunLight.intensity = c.sun; this.sunLight.visible = c.sun > 0.001; }
+    // §4.2 per-level lighting from above (`level.cam.light`: { hemiMul, sunAz } per preset, or for every preset),
+    // mixed in with the focus-fog mode so cutscenes and Meme Cam keep the authored eye-level look
+    // `hemiMul` / `sunMul` / `envMul` scale the hemisphere, the sun (the moon at night) and the environment light;
+    // `hemiSky` / `hemiGround` blend the fill toward lifted colours (at night the lens sees mostly ground, which the
+    // eye-level presets leave near-black outside the lantern pools)
+    const iso = this._isoLight(), mix = this._focusMode ?? 0;
+    const isoMul = (k) => 1 + ((iso?.[k] ?? 1) - 1) * mix;
+    if (this.hemiLight) {
+      this.hemiLight.color.copy(c.hemiSky); this.hemiLight.groundColor.copy(c.hemiGround);
+      if (iso?.hemiSky && mix > 0) this.hemiLight.color.lerp(_c.set(iso.hemiSky), mix);
+      if (iso?.hemiGround && mix > 0) this.hemiLight.groundColor.lerp(_c.set(iso.hemiGround), mix);
+      this.hemiLight.intensity = c.hemi * isoMul('hemiMul');
+    }
+    if (this.sunLight) { const sun = c.sun * isoMul('sunMul'); this.sunLight.color.copy(c.sunColor); this.sunLight.intensity = sun; this.sunLight.visible = sun > 0.001; }
     if (this.heroLight) this.heroLight.intensity = HERO_LIGHT.intensity * (c.hero || 0);
     HFOG.uFogLow.value.copy(c.fogLow);
     HFOG.uFogFalloff.value = c.fogFalloff || 0.6;
@@ -263,14 +281,22 @@ export class Env {
       u.uSunColor.value.copy(c.sunColor); u.uSunGlow.value = Math.min(1.5, c.sun * 0.6);
       this.sunDir(u.uSunDir.value);
     }
-    if (this.ctx.scene && this.envMap) this.ctx.scene.environmentIntensity = c.env;
+    if (this.ctx.scene && this.envMap) this.ctx.scene.environmentIntensity = c.env * isoMul('envMul');
     if (typeof this.ctx.postfx?.setGrade === 'function') this.ctx.postfx.setGrade(c.grade);
     if (emit) this._emit();
   }
 
-  /** Unit vector toward the sun (from the preset elevation/azimuth). */
+  /** The current level's iso lighting row for the active preset (`cam.light[preset]`, else `cam.light`), or null. */
+  _isoLight() {
+    const L = this.ctx.levels?.current?.cam?.light;
+    if (!L) return null;
+    return L[this.presetName] ?? (L.hemiMul != null || L.sunAz != null || L.sunMul != null || L.envMul != null ? L : null);
+  }
+
+  /** Unit vector toward the sun (from the preset elevation/azimuth; the iso row may swing the azimuth, §4.2). */
   sunDir(out = new THREE.Vector3()) {
-    const el = this.cur.sunElev, az = this.cur.sunAz;
+    const el = this.cur.sunElev, iso = this._isoLight(), m = this._focusMode ?? 0;
+    const az = iso && Number.isFinite(iso.sunAz) ? this.cur.sunAz + angDiff(iso.sunAz, this.cur.sunAz) * m : this.cur.sunAz;
     return out.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).normalize();
   }
 
@@ -304,7 +330,7 @@ export class Env {
       this._envRT?.dispose?.();
       this._envRT = rt;
       this.ctx.scene.environment = this.envMap;
-      this.ctx.scene.environmentIntensity = c.env;
+      this.ctx.scene.environmentIntensity = c.env * (1 + ((this._isoLight()?.envMul ?? 1) - 1) * (this._focusMode ?? 0));
       if (old && old !== this.envMap) old.dispose?.();
     } catch (e) {
       console.warn('[env] PMREM environment failed', e);
@@ -331,7 +357,12 @@ export class Env {
     const f = ctx.cam?.focus;
     const p = f?.isVector3 && (this._focusMode ?? 0) > 0.5 ? f : pl;
     const dir = this.sunDir(_v);
-    const texel = (SHADOW_HALF * 2) / this.sunLight.shadow.mapSize.x;
+    // §2.8: half-size 16 m around the iso focus (20 m in boss fights); the classic / cutscene frustum stays 20 m
+    const isoOn = (this._focusMode ?? 0) > 0.5;
+    const half = isoOn ? (ctx.enemies?.boss?.alive ? (CAMERA.iso?.shadowHalfBoss ?? SHADOW_HALF) : (CAMERA.iso?.shadowHalf ?? SHADOW_HALF)) : SHADOW_HALF;
+    const sc = this.sunLight.shadow.camera;
+    if (sc.right !== half) { sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half; sc.updateProjectionMatrix(); }
+    const texel = (half * 2) / this.sunLight.shadow.mapSize.x;
     _f.copy(dir).negate();
     _r.crossVectors(_up, _f); if (_r.lengthSq() < 1e-6) _r.set(1, 0, 0); _r.normalize();
     _u.crossVectors(_f, _r).normalize();

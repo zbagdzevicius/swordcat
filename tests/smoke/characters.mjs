@@ -303,7 +303,7 @@ const IsoBlocks = [
     },
   },
   {
-    name: 'characters:iso-touch', order: 38, level: null, timeout: 300000,
+    name: 'characters:iso-touch', order: 38, level: null, timeout: 900000,
     async run(t) {
       dir(t);
       // phones (CONTROLS_SPEC §1, §2.1): portrait 390×844 (FOV 50°) and landscape 844×390, touch + mobile emulation
@@ -314,8 +314,8 @@ const IsoBlocks = [
         page.on('pageerror', (e) => errs.push(`pageerror: ${e.message}`));
         page.on('console', (m) => { if (m.type() === 'error') errs.push(`console.error: ${m.text()}`); });
         try {
-          await page.goto(`${t.base}?test=1&seed=1&level=meadow&spawn=start`);
-          await page.waitForFunction(() => window.__GAME__?.ready === true && !!window.__GAME__.ctx.player?.model?.k, null, { timeout: 120000 });
+          await page.goto(`${t.base}?test=1&seed=1&level=meadow&spawn=start`, { timeout: 240000 });
+          await page.waitForFunction(() => window.__GAME__?.ready === true && !!window.__GAME__.ctx.player?.model?.k, null, { timeout: 300000 });
           const T = { ...t, page, G: async (fn, arg) => { const r = await page.evaluateHandle(fn, arg); try { return await r.evaluate((x) => (window.__GAME__?.plain ? window.__GAME__.plain(x) : x)); } finally { r.dispose().catch(() => {}); } } };
           await T.G(async () => { const g = window.__GAME__; g.skipDialog?.(); g.story?.skipAll?.(); g.setMode?.('play'); g.ctx.env.preset('meadow_day', 0); await g.waitFrames(20); });
           await installChr(T);
@@ -347,6 +347,116 @@ const IsoBlocks = [
           await context.close();
         }
       }
+    },
+  },
+  {
+    // Low on a phone (GAME_DESIGN §18 Low budget; QA perf finding): cats built under Low use QUALITY.low.charDetail
+    // (lighter armour / body / head / eyes) and bake no fur shells. Budget per cat in drawn triangles; the whole-frame
+    // phone budget (80k) is logged (most of it is the level's ground / props / wheat, world's share).
+    name: 'characters:low-budget', order: 39, level: null, timeout: 600000,
+    async run(t) {
+      const BUDGET = { hero: 24000, mochi: 17000, frame: 80000 };   // were ~47k / ~30k before charDetail
+      const context = await t.browser.newContext({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      const errs = [];
+      page.on('pageerror', (e) => errs.push(`pageerror: ${e.message}`));
+      page.on('console', (m) => { if (m.type() === 'error') errs.push(`console.error: ${m.text()}`); });
+      try {
+        await page.goto(`${t.base}?test=1&seed=1&level=meadow&spawn=start&quality=low`, { timeout: 240000 });
+        await page.waitForFunction(() => window.__GAME__?.ready === true && !!window.__GAME__.ctx.player?.model?.k, null, { timeout: 300000 });
+        const r = await page.evaluate(async () => {
+          const g = window.__GAME__, ctx = g.ctx;
+          g.skipDialog?.(); g.story?.skipAll?.(); g.setMode?.('play');
+          ctx.companions.unlock?.('mochi', { activate: true });
+          await g.waitFrames(30);
+          const drawn = (root) => {
+            let n = 0, baked = 0;
+            root?.traverse((o) => {
+              if (!o.isMesh || !o.geometry) return;
+              for (let q = o; q && q !== root.parent; q = q.parent) if (!q.visible) return;
+              const geo = o.geometry, total = geo.index ? geo.index.count : geo.attributes.position.count;
+              n += Math.min(total - geo.drawRange.start, geo.drawRange.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+              if (o.name === 'furTail') baked = total / 3;
+            });
+            return { tris: Math.round(n), tailBaked: Math.round(baked) };
+          };
+          const hero = ctx.player.model.k, mochiRoot = ctx.scene.getObjectByName('kitten:mochi');
+          return {
+            quality: ctx.quality?.id, charDetail: ctx.quality?.charDetail,
+            hero: { ...drawn(hero.root), kit: hero.kitMesh.geometry.index.count / 3, tailIdx: (hero.tailFur?.idxPerShell ?? 0) / 3 },
+            mochi: mochiRoot ? drawn(mochiRoot) : null, frame: g.state().tris, calls: g.state().calls,
+          };
+        });
+        t.log(`Low phone 844×390: hero ${r.hero.tris} tris (kit mesh ${r.hero.kit}, tail baked ${r.hero.tailBaked}), mochi ${r.mochi?.tris ?? '-'}, frame ${r.frame} tris / ${r.calls} calls (phone budget ${BUDGET.frame})`);
+        t.assert(r.quality === 'low' && r.charDetail < 1, `?quality=low boots Low with charDetail < 1 (${r.quality}, ${r.charDetail})`);
+        t.assert(r.hero.tris <= BUDGET.hero, `hero draws ${r.hero.tris} tris on Low (budget ${BUDGET.hero})`);
+        t.assert(r.hero.tailBaked <= r.hero.tailIdx + 1, `no fur shells baked on Low (tail ${r.hero.tailBaked} tris vs one layer ${r.hero.tailIdx})`);
+        if (r.mochi) t.assert(r.mochi.tris <= BUDGET.mochi, `Mochi draws ${r.mochi.tris} tris on Low (budget ${BUDGET.mochi})`);
+        else t.warn('Mochi did not join (companions.unlock): companion budget not checked');
+        if (r.frame > BUDGET.frame) t.warn(`Low phone frame ${r.frame} tris over the ${BUDGET.frame} budget (characters' share: ${r.hero.tris + (r.mochi?.tris ?? 0)})`);
+        await page.screenshot({ path: path.join(t.shotsDir, 'characters', 'low-phone.png') });
+      } finally {
+        for (const e of errs) t.fail(`low-budget: ${e}`);
+        await context.close();
+      }
+    },
+  },
+];
+
+// ------------------------------------------------------------------ idle camera glance (KittenView GLANCE)
+
+const GlanceBlocks = [
+  {
+    name: 'characters:glance', order: 38, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      dir(t);
+      const ok = await until(t, () => !!window.__GAME__.ctx.player?.model?.view, null, 15000);
+      if (!t.assert(ok, 'the player has a KittenView')) return;
+      await installChr(t);
+      await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player;
+        g.god(true); ctx.env.preset('meadow_day', 0);
+        p.vel.set(0, 0, 0); p.object3d.rotation.y = 0; if ('facing' in p) p.facing = 0;
+        Object.assign(p.model.view._g, { still: 0, phase: 'wait', w: 0 });
+        await g.waitFrames(5);
+      });
+      await isoFrame(t, { frames: 20 });
+      // a sample: glance state + the head's world forward vs the lens bearing
+      const sample = () => t.G(() => {
+        const g = window.__GAME__, THREE = g.THREE, ctx = g.ctx, p = ctx.player, v = p.model.view, gs = v._g;
+        const J = v.rig.joints, f = new THREE.Vector3(0, 0, 1).applyQuaternion(J.head.getWorldQuaternion(new THREE.Quaternion()));
+        const r = new THREE.Vector3(0, 0, 1).applyQuaternion(v.root.getWorldQuaternion(new THREE.Quaternion()));
+        const hp = J.head.getWorldPosition(new THREE.Vector3()), c = ctx.camera.position;
+        const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+        const camB = Math.atan2(c.x - hp.x, c.z - hp.z), headY = Math.atan2(f.x, f.z), rootY = Math.atan2(r.x, r.z);
+        return { phase: gs.phase, w: gs.w, still: gs.still, pose: v.kitten.poseName, state: p.state,
+          headRel: wrap(headY - rootY), camRel: wrap(camB - rootY), headToCam: Math.abs(wrap(camB - headY)), rootToCam: Math.abs(wrap(camB - rootY)) };
+      });
+      const s0 = await sample();
+      t.log(`glance start: pose ${s0.pose} state ${s0.state} phase ${s0.phase} still ${s0.still.toFixed(2)} w ${s0.w.toFixed(2)}`);
+      // wait for the glance (2.5 s still + ease in)
+      const got = await until(t, () => { const gs = window.__GAME__.ctx.player.model.view._g; return gs.phase === 'hold' && gs.w > 0.85; }, null, 25000);
+      const s1 = await sample();
+      t.log(`glancing: w ${s1.w.toFixed(2)} head yaw ${(s1.headRel * 57.3).toFixed(0)}° (lens at ${(s1.camRel * 57.3).toFixed(0)}°), head→lens ${(s1.headToCam * 57.3).toFixed(0)}° vs body→lens ${(s1.rootToCam * 57.3).toFixed(0)}°`);
+      t.assert(got, 'after standing still she glances toward the lens');
+      t.assert(Math.abs(s1.headRel) > 0.7 && Math.abs(s1.headRel) < 1.5, `head turns 45-85° (${(s1.headRel * 57.3).toFixed(0)}°)`);
+      t.assert(s1.headToCam < s1.rootToCam - 0.6, 'the head turns toward the camera, not away');
+      await t.shot('characters/glance-iso', { freeze: true });
+      const m = await t.G(() => window.__GAME__.__chr.measure());
+      await t.page.screenshot({ path: path.join(t.shotsDir, 'characters', 'glance-iso-crop.png'), clip: { x: Math.max(0, m.chest.x - 90), y: Math.max(0, m.chest.y - 90), width: 180, height: 180 } });
+      // 1080p close crop (her face over the shoulder), held glance
+      await t.G(() => { window.__GAME__.ctx.player.model.view._g.t = 30; });
+      await t.page.setViewportSize({ width: 1920, height: 1080 });
+      await t.G(() => window.__GAME__.waitFrames(20));
+      const mb = await t.G(() => window.__GAME__.__chr.measure());
+      await t.page.screenshot({ path: path.join(t.shotsDir, 'characters', 'glance-1080p-crop.png'), clip: { x: Math.max(0, mb.chest.x - 130), y: Math.max(0, mb.chest.y - 130), width: 260, height: 260 } });
+      await t.page.setViewportSize({ width: 1280, height: 720 });
+      // moving cancels it quickly
+      await t.G(async () => { const g = window.__GAME__, p = g.ctx.player; for (let i = 0; i < 20; i++) { p.vel.set(0, 0, 3); await g.waitFrames(1); } });
+      const s2 = await sample();
+      t.log(`moving: phase ${s2.phase} w ${s2.w.toFixed(2)} pose ${s2.pose}`);
+      t.assert(s2.phase === 'wait' && s2.w < 0.2, `moving drops the glance (w ${s2.w.toFixed(2)})`);
+      await t.G(async () => { const g = window.__GAME__; g.ctx.player.vel.set(0, 0, 0); await g.waitFrames(3); });
     },
   },
 ];
@@ -789,4 +899,5 @@ export default [
     },
   },
   ...IsoBlocks,
+  ...GlanceBlocks,
 ];

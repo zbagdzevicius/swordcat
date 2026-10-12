@@ -3,7 +3,7 @@
 // Visuals only: enemies / world own the slow and the cut test; they call `ctx.fx.webPatch(pos, {r, life})` and keep the
 // handle (`cut()` when slashed, `remove()` when the level drops it). One instanced draw call for every patch (≤ 32).
 import * as THREE from 'three';
-import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms } from './shaders.js';
+import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { SHAPE, FADE } from './Particles.js';
 
 export const WEB = Object.freeze({ max: 32, r: 1.0, life: 8, fadeIn: 0.25, fadeOut: 0.6, cutFade: 0.3, color: '#E9EEF2' });
@@ -92,7 +92,7 @@ export class WebPatches {
     this.aPar = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(THREE.DynamicDrawUsage);
     g.setAttribute('iPos', this.aPos); g.setAttribute('iPar', this.aPar);
     g.instanceCount = 0;
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.web', vertexShader: VERT, fragmentShader: FRAG, fog: true,
       uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color(WEB.color) } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,

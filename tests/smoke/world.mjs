@@ -1,6 +1,8 @@
 // tests/smoke/world.mjs  (owner: world) — smoke blocks for src/world (levels, LevelKit, Env, arenas, vigils, pickups,
 // exits). Screenshots go to tests/shots/world/. Run against your own dev server:
-//   SMOKE_URL=http://localhost:5208/ SMOKE_ONLY=world node tests/smoke.mjs
+//   SMOKE_URL=http://localhost:5508/ SMOKE_ONLY=world node tests/smoke.mjs
+// CONTROLS_SPEC blocks (iso camera): world:fog-audit, world:zone-shots, world:iso-data (desktop mouse), world:touch
+// (phone landscape 844×390 + portrait 390×844, hasTouch / isMobile).
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -48,6 +50,48 @@ async function levelShare(t) {
     for (const c of hidden) c.visible = true;
     return { calls: s.calls, tris: s.tris };
   });
+}
+
+/**
+ * A phone session (hasTouch + isMobile, w × h CSS px) at `?test=1&seed=1`, booted with a generous navigation timeout
+ * (a cold context loads every dev module), the prologue done and `level` / `spawn` loaded. Errors are collected.
+ */
+async function phone(t, w, h, level, spawn, flags = {}) {
+  const errors = [];
+  const context = await t.browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+  const pg = await context.newPage();
+  pg.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+  const G = async (fn, arg) => { const hd = await pg.evaluateHandle(fn, arg); try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); } };
+  const s = {
+    page: pg, errors, G,
+    frames: (n = 1) => G((k) => window.__GAME__.waitFrames(k), n),
+    async shot(name) {
+      const p = path.join(t.shotsDir, `${name}.png`);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      try { await pg.screenshot({ path: p }); } catch (e) { t.warn(`phone shot ${name}: ${String(e?.message ?? e).slice(0, 120)}`); }
+    },
+    async tapAt(x, z) {
+      const p = await G(([a, b]) => window.__GAME__.screen(a, b), [x, z]);
+      if (!p || !Number.isFinite(p.x)) return null;
+      await pg.touchscreen.tap(Math.round(p.x), Math.round(p.y));
+      return p;
+    },
+    close: () => context.close().catch(() => {}),
+  };
+  await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 240000 });
+  await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 240000 });
+  await G(async ([id, sp, fl]) => {
+    const g = window.__GAME__, c = g.ctx;
+    g.story.skip?.(); g.setMode('play');
+    for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag?.(k, true);
+    for (const [k, v] of Object.entries(fl)) c.state.setFlag?.(k, v);
+    await g.loadLevel(id, sp);
+    g.story.skip?.(); g.setMode('play');
+    return true;
+  }, [level, spawn, flags]);
+  await s.frames(10);
+  return s;
 }
 
 async function fresh(t, spawn = 'start', flags = {}) {
@@ -606,6 +650,225 @@ export default [
       t.assert(end.fired.length === 5 && end.line === true, `every threshold fired once, gate.line set (${JSON.stringify(end)})`);
       t.assert(end.locked, 'the causeway boss arena locks after the portcullis test');
       await t.shot(pre + 'line-boss', { freeze: true });
+    },
+  },
+  // ============================================================================================ CONTROLS_SPEC (iso camera)
+  {
+    // §12 world 4: every level, from the iso camera: fog on her < 3 %, the top screen edge 15–30 % (asserted 8–45 %, the
+    // spec band is reported), a foe 8 m away < 12 %; the far group (sky dome, skyline) hidden in play
+    name: 'world:fog-audit', order: 45, level: null, timeout: 400000,
+    async run(t) {
+      const pre = shotDir(t);
+      const DAY = { 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true, 'meadow.mochi': true, 'meadow.done': true, 'forest.done': true, 'forest.boss': true };
+      for (const [id, spawn, flags] of [['meadow', 'start', DAY], ['forest', 'start', DAY], ['forest', 'vigil_3', { ...DAY, 'forest.sage': true, 'forest.camp': true }],
+        ['town', 'start', DAY], ['town', 'hub', { ...DAY, 'town.free': true }], ['gate', 'start', DAY], ['bog', 'start', DAY], ['keep', 'start', DAY]]) {
+        await t.G(() => { const g = window.__GAME__; g.story.skip(); g.setMode('play'); });
+        await freshAt(t, id, spawn, flags);
+        await t.G(() => { const g = window.__GAME__; g.god(true); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+        await t.frames(50);
+        const r = await t.G(() => {
+          const g = window.__GAME__, c = g.ctx, p = c.player.pos, cv = c.renderer.domElement.getBoundingClientRect();
+          const fog = (x, z) => g.fogAt?.(x, z) ?? c.env.fogAt(x, z);
+          const top = [];
+          for (const fx of [0.5, 0.15, 0.85]) {
+            const q = c.cam.screenToGround?.(cv.left + cv.width * fx, cv.top + 6);
+            if (q && Number.isFinite(q.x)) top.push({ f: +fog(q.x, q.z).toFixed(3), d: +Math.hypot(q.x - p.x, q.z - p.z).toFixed(1) });
+          }
+          const yaw = c.cam.isoYaw ?? c.levels.current.camYaw ?? Math.PI, up = [-Math.sin(yaw), -Math.cos(yaw)];
+          return { preset: c.env.presetName, her: +fog(p.x, p.z).toFixed(4), at8: +fog(p.x + up[0] * 8, p.z + up[1] * 8).toFixed(3), at12: +fog(p.x + up[0] * 12, p.z + up[1] * 12).toFixed(3),
+            top, mode: c.env._focusMode, sky: c.env.sky?.mesh?.visible, skyline: c.levels.current.groups.skyline.visible, iso: c.cam.iso?.() };
+        });
+        t.log(`fog ${id}/${spawn} (${r.preset}): her ${r.her}, 8 m ${r.at8}, 12 m ${r.at12}, top ${JSON.stringify(r.top)}, dist ${r.iso?.dist?.toFixed?.(1)}`);
+        t.assert(r.her < 0.03, `${id}: fog on her < 3 % (${r.her})`);
+        t.assert(r.at8 < 0.12, `${id}: a foe 8 m up-screen reads (${r.at8} < 0.12)`);
+        // §4.2 table: the fog 12 m up-screen per preset (the top screen edge sits ~10–13 m from her at 12.4 m)
+        const at12 = { meadow_day: 0.18, forest_day: 0.24, forest_night: 0.26, town_occupied: 0.11, gate_dusk: 0.14, bog: 0.30, keep_storm: 0.19 }[r.preset];
+        if (at12 != null) t.assert(Math.abs(r.at12 - at12) <= 0.06, `${id}: fog at 12 m ${r.at12} ≈ the §4.2 table ${at12}`);
+        const topC = r.top[0]?.f ?? null, topMax = Math.max(0, ...r.top.map((q) => q.f));
+        if (topC != null) {
+          t.assert(topMax <= 0.55, `${id}: the top edge is misty, not a wall (${topMax})`);
+          if (topMax < 0.15 || topC > 0.30) t.warn(`${id}/${spawn}: top-edge fog ${topC} (corners ${topMax}) vs the §4.2 band 0.15–0.30 (at ${r.top[0].d} m)`);
+        }
+        if (r.mode > 0.5) t.assert(r.sky === false && r.skyline === false, `${id}: the far group is hidden in iso play (sky ${r.sky}, skyline ${r.skyline})`);
+        await t.shot(pre + `fog-${id}-${spawn}`, { freeze: true });
+      }
+    },
+  },
+  {
+    // §12 world 4: each zone from its hint (the hint is applied out of combat; yaw hints swing the camera), plus the
+    // x-ray rate along the spine (props camera-side of the path fade, so she is rarely silhouetted)
+    name: 'world:zone-shots', order: 46, level: null, timeout: 500000,
+    async run(t) {
+      const pre = shotDir(t);
+      const DAY = { 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true, 'meadow.mochi': true, 'meadow.done': true, 'forest.done': true, 'forest.boss': true };
+      const extra = { town: { 'town.free': true }, gate: { 'gate.back': true } };
+      for (const id of ['meadow', 'forest', 'town', 'gate']) {
+        await t.G(() => { const g = window.__GAME__; g.story.skip(); g.setMode('play'); });
+        await freshAt(t, id, 'start', { ...DAY, ...(extra[id] ?? {}) });
+        const zones = await t.G(() => (window.__GAME__.ctx.levels.current.def.zones ?? []).filter((z) => z.cam).map((z) => ({ id: z.id, at: z.at, cam: z.cam })));
+        const STAND = { hub_view: [-28, -22], mushroom_climb: [-22.9, -57.1] };
+        for (const z of zones) {
+          await t.G(() => { const g = window.__GAME__; g.god(true); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+          // stand at the zone centre (on the ground beside a set piece: 1.5 m toward the camera side when it is a cap ring)
+          const at = STAND[z.id] ?? z.at;
+          await tp(t, at[0], at[1], Math.PI);
+          await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+          await t.wait(2600);                                   // calm 2 s, then the 1.2 s blend
+          const s = await t.G(() => { const c = window.__GAME__.ctx, L = c.levels.current; return { zone: L.camZone?.id ?? null, iso: c.cam.iso?.() }; });
+          t.log(`${id}:${z.id} → zone ${s.zone}, iso yaw ${s.iso?.yaw?.toFixed?.(2)} pitch ${s.iso?.pitch?.toFixed?.(2)} dist ${s.iso?.dist?.toFixed?.(1)} (hint ${JSON.stringify(z.cam)})`);
+          t.assert(s.zone === z.id, `${id}: the ${z.id} hint is in effect (${s.zone})`);
+          if (Number.isFinite(z.cam.yaw) && s.iso && Math.abs(Math.atan2(Math.sin(s.iso.yaw - z.cam.yaw), Math.cos(s.iso.yaw - z.cam.yaw))) > 0.15) t.warn(`${id}:${z.id}: camera yaw ${s.iso.yaw.toFixed(2)} ≠ hint ${z.cam.yaw}`);
+          if (Number.isFinite(z.cam.dist) && s.iso && Math.abs(s.iso.dist - z.cam.dist) > 1.5) t.warn(`${id}:${z.id}: camera dist ${s.iso.dist.toFixed(1)} ≠ hint ${z.cam.dist} (camera may not honour dist hints yet)`);
+          await t.shot(pre + `zone-${id}-${z.id}`, { freeze: true });
+        }
+        // x-ray along the spine: she stands on the path every ~12 m; count the stops where the camera silhouettes her
+        const pts = await t.G(() => { const sp = window.__GAME__.ctx.levels.current.spine ?? [], out = [];
+          for (let i = 0; i < sp.length - 1; i++) { const [ax, az] = sp[i], [bx, bz] = sp[i + 1], n = Math.max(1, Math.round(Math.hypot(bx - ax, bz - az) / 12)); for (let k = 0; k < n; k++) out.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n]); }
+          return out; });
+        let xr = 0;
+        for (const [x, z] of pts) {
+          await tp(t, x, z, Math.PI);
+          await t.frames(12);
+          if (await t.G(() => !!window.__GAME__.ctx.cam._xrayOn)) xr++;
+        }
+        t.log(`${id}: x-ray at ${xr}/${pts.length} spine stops`);
+        t.assert(xr <= Math.ceil(pts.length * 0.25), `${id}: she is rarely hidden on the spine (${xr}/${pts.length})`);
+      }
+    },
+  },
+  {
+    // §11 / §12 world 2–3: the iso data in the running game: zone lookup, memeSpot, nav links (the fence lesson gate),
+    // roof / crown / solid fade registration, the wheat trample, and a click on a Vigil Stone (the use order)
+    name: 'world:iso-data', order: 47, level: 'meadow', spawn: 'start', timeout: 300000,
+    async run(t) {
+      const pre = shotDir(t);
+      await fresh(t, 'start', { 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true });
+      await t.G(() => window.__GAME__.god(true));
+      const m = await t.G(() => { const L = window.__GAME__.ctx.levels.current; return { meme: L.memeSpot, links: L.navLinks.length, yaw: L.camYaw, zone: L.zoneAt({ x: -20, z: -4 })?.id, it: L.interactables.slice(0, 3).map((i) => ({ id: i.id, kind: i.kind, r: i.r, pos: [i.pos.x, i.pos.z] })) }; });
+      t.log('meadow iso data', JSON.stringify(m));
+      t.assert(m.meme?.at && m.links === 1 && Math.abs(m.yaw - Math.PI) < 1e-6 && m.zone === 'stones', 'memeSpot, the fence link, yaw π, zoneAt');
+      // the fence lesson: before tut.jump.done no path hops the inner fence (z −87, x −20…−2); after it one may
+      const crosses = (r) => { const P = r?.points ?? []; for (let i = 1; i < P.length; i++) { const [ax, , az] = P[i - 1], [bx, , bz] = P[i]; if ((az + 87) * (bz + 87) < 0) { const x = ax + (bx - ax) * ((-87 - az) / (bz - az)); if (x > -20 && x < -2) return true; } } return false; };
+      const navInfo = await t.G(() => { const n = window.__GAME__.ctx.physics.nav; return { authored: n?.authored?.length ?? null, gates: n?.gatesClosed ?? null }; });
+      await t.G(() => window.__GAME__.ctx.state.setFlag('tut.jump.done', false));
+      const before = await t.G(() => window.__GAME__.nav?.path?.(-11, -90, -11, -84) ?? null);
+      await t.G(() => window.__GAME__.ctx.state.setFlag('tut.jump.done', true));
+      const after = await t.G(() => window.__GAME__.nav?.path?.(-11, -90, -11, -84) ?? null);
+      t.log(`fence: nav ${JSON.stringify(navInfo)}, before ${before?.points?.length} pts crosses ${crosses(before)}, after ${after?.points?.length} pts crosses ${crosses(after)}`);
+      if (navInfo.authored == null) t.warn('physics nav does not read level.navLinks yet (the fence gate is data only)');
+      else {
+        t.assert(!crosses(before), 'before the jump lesson a path walks round the fence');
+        t.assert(crosses(after), 'after it the path hops the fence');
+      }
+      // occluder registration from the level tags (camera's fader): crowns, solids (the clutter audit), roofs in town
+      const occ = await t.G(() => { const f = window.__GAME__.ctx.cam._fader; return f ? { crowns: f.crownCount, solids: f.solidCount, roofs: f.roofCount } : null; });
+      const clutter = await t.G(() => window.__GAME__.ctx.levels.current.audit?.clutter ?? []);
+      t.log(`meadow occluders ${JSON.stringify(occ)}; camera-side clutter tagged solid: ${clutter.length} ${JSON.stringify(clutter.slice(0, 6))}`);
+      if (occ) t.assert(occ.crowns > 0, 'tree crowns registered');
+      const crowns = await t.G(() => window.__GAME__.ctx.levels.current.trees.map((m) => `${m.name}:${m.userData.camFade}:${(m.userData.crownFrac ?? 0).toFixed(2)}`));
+      t.log('tree crown fractions', crowns.join(', '));
+      // the wheat trample: she flattens the stalks round her in the Crow Fields
+      await tp(t, 12, 34, Math.PI);
+      await t.frames(20);
+      const tr = await t.G(() => { const w = window.__GAME__.ctx.levels.current.wheat; return w ? w.uniforms.uTrample.value.map((v) => +v.w) : null; });
+      t.assert(tr && tr[0] === 1, `the trample slot follows her (${JSON.stringify(tr)})`);
+      await t.shot(pre + 'iso-wheat-trample', { freeze: true });
+      // desktop: a right click on Vigil Stone 2 walks her there and lights it (the use order through the real pick)
+      await t.loadLevel('meadow', 'start'); await t.frames(10);
+      await tp(t, -8, 2, Math.PI);
+      await t.clearEvents();
+      await t.click(-12, 8, 'right');
+      const lit = await t.waitForEvent('checkpoint', 12000);
+      const sp = await t.G(() => window.__GAME__.ctx.state.spawnId);
+      t.assert(lit && sp === 'vigil_2', `a click on the Vigil Stone lights it (${sp})`);
+      await t.shot(pre + 'iso-click-vigil', { freeze: true });
+      // town: roofs registered, a roof fades while she walks beside its house (roof-only: the walls stay)
+      await freshAt(t, 'town', 'start', { 'prologue.done': true, 'meadow.done': true, 'forest.done': true, 'forest.boss': true, 'town.free': true });
+      await t.G(() => window.__GAME__.god(true));
+      const town = await t.G(() => { const c = window.__GAME__.ctx, f = c.cam._fader, ud = c.levels.current.batch.mesh.userData; return { roofs: f?.roofCount ?? null, roofIds: ud.camFadeRoofIds?.size ?? 0, solidIds: ud.camFadeSolidIds?.size ?? 0 }; });
+      t.log('town occluders', JSON.stringify(town));
+      t.assert(town.roofIds >= 27 && town.solidIds >= 10, `roof / solid instances tagged (${JSON.stringify(town)})`);
+      if (town.roofs != null) t.assert(town.roofs >= 27, `camera registered the roofs (${town.roofs})`);
+      await tp(t, -5.6, -41, Math.PI);
+      await t.wait(900);
+      const faded = await t.G(() => window.__GAME__.ctx.cam._fader?.fadedCount ?? null);
+      t.log(`beside a house: ${faded} faded units`);
+      await t.shot(pre + 'iso-town-roof-fade', { freeze: true });
+      await tp(t, 0, 3.2, Math.PI);
+      await t.frames(30);
+      await t.shot(pre + 'iso-town-fountain', { freeze: true });
+    },
+  },
+  {
+    // §16: phone landscape + portrait (hasTouch, isMobile): the level reads from the iso camera, a tap on a Vigil Stone
+    // lights it (tap → use order), and the zone hint applies on a phone too
+    name: 'world:touch', order: 48, level: null, timeout: 900000,
+    async run(t) {
+      for (const [w, h] of [[844, 390], [390, 844]]) {
+        const s = await phone(t, w, h, 'meadow', 'vigil_1', { 'meadow.cleared.stones': true });   // a calm ring: the hint is not held by a fight
+        try {
+          await s.G(() => { const g = window.__GAME__; g.god(true); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+          await s.frames(30);
+          const v = await s.G(() => { const c = window.__GAME__.ctx; return { dev: c.input.device, iso: c.cam.iso?.(), vig: c.levels.current.vigils.map((x) => [x.id, x.pos?.x ?? x.at?.[0], x.pos?.z ?? x.at?.[1]]) }; });
+          t.log(`${w}×${h}: device ${v.dev}, iso ${JSON.stringify(v.iso)}`);
+          await s.shot(`world/touch-${w}x${h}-vigil1`);
+          // tap Vigil Stone 2 from 3.4 m away (screen-left of her, clear of the HUD strip and the right-hand cluster): she walks there and lights it
+          await s.G(() => { const g = window.__GAME__, p = g.ctx.player; p.teleport({ pos: new g.THREE.Vector3(-15, g.ctx.physics.heightAt(-15, 6.5), 6.5), facing: Math.PI }); });
+          await s.frames(20);
+          await s.G(() => window.__GAME__.clearEvents?.());
+          const tap = await s.tapAt(-12, 8);
+          let lit = false;
+          for (let i = 0; i < 30 && !lit; i++) { await s.frames(15); lit = await s.G(() => window.__GAME__.ctx.state.spawnId === 'vigil_2'); }
+          if (!lit) t.log(`${w}×${h}: after the tap ${JSON.stringify(await s.G(() => ({ order: window.__GAME__.orders?.(), pos: window.__GAME__.ctx.player.pos.toArray().map((v) => +v.toFixed(2)) })))}`);
+          t.log(`${w}×${h}: tap at ${JSON.stringify(tap)}`);
+          t.assert(!!tap, `${w}×${h}: the stone projects on screen (${JSON.stringify(tap)})`);
+          t.assert(lit, `${w}×${h}: a tap on the Vigil Stone lights it`);
+          await s.shot(`world/touch-${w}x${h}-vigil2`);
+          // the Standing Stones hint on a phone (dist 15, clamped by the cat-size rule)
+          await s.G(() => { const g = window.__GAME__, p = g.ctx.player; p.teleport({ pos: new g.THREE.Vector3(-20, g.ctx.physics.heightAt(-20, -9), -9), facing: Math.PI }); });
+          await s.frames(200);                                         // 2 s calm + the 1.2 s blend (sim frames: the phone page may be slow)
+          const z = await s.G(() => { const c = window.__GAME__.ctx; return { zone: c.levels.current.camZone?.id, iso: c.cam.iso?.() }; });
+          t.log(`${w}×${h} stones: ${JSON.stringify(z)}`);
+          t.assert(z.zone === 'stones', `${w}×${h}: the stones hint applies on a phone (${z.zone})`);
+          if (z.iso) t.assert(z.iso.catPx >= 26, `${w}×${h}: she stays ≥ 26 px tall (${z.iso.catPx})`);
+          await s.shot(`world/touch-${w}x${h}-stones`);
+          t.assert(!s.errors.length, `${w}×${h}: no page errors (${s.errors.slice(0, 3).join(' | ')})`);
+        } finally { await s.close(); }
+      }
+    },
+  },
+  {
+    // CONTROLS_SPEC §5 click-to-move: a click on the Lantern Camp fire / the Square fountain walks to the ground beside
+    // it (level navBlock discs), never hops into the stone ring or up onto the fountain rim / statue base
+    name: 'world:nav-props', order: 96, level: null, timeout: 240000,
+    async run(t) {
+      const TOWN_FREE = { 'prologue.done': true, 'meadow.done': true, 'forest.done': true, 'forest.boss': true, 'town.marmalade': true, 'town.clover': true, 'town.free': true };
+      const cases = [
+        { level: 'forest', flags: { 'prologue.done': true, 'meadow.mochi': true, 'meadow.done': true, 'forest.sage': true, 'forest.camp': true }, from: [6, 34], click: [6, 40], centre: [6, 40], keep: 1.3, maxY: 0.35 },
+        { level: 'town', flags: TOWN_FREE, from: [0, -2], click: [0, 8], centre: [0, 8], keep: 3.1, maxY: 0.35 },
+        { level: 'town', flags: TOWN_FREE, from: [9, 8], click: [-9, 8], centre: [0, 8], keep: 3.1, maxY: 0.35, through: true },
+      ];
+      for (const c of cases) {
+        await freshAt(t, c.level, 'start', c.flags);
+        await t.G(() => { const g = window.__GAME__; g.story?.skip?.(); g.setMode?.('play'); });
+        await tp(t, c.from[0], c.from[1], 0);
+        const ground = await t.G(([x, z]) => window.__GAME__.ctx.physics.heightAt(x, z), c.click);
+        const ok = await t.G(([x, z]) => window.__GAME__.ctx.player.orders.order('move', { x, z }, { source: 'api' }), c.click);
+        const o = await t.G(() => window.__GAME__.orders());
+        const hops = o.path.filter((q) => q[2]).length;
+        t.log(`${c.level} click ${c.click}: ok ${ok} path ${o.path.length} pts, ${hops} links, partial ${o.partial}`);
+        if (!ok) throw new Error(`${c.level}: the move order was rejected ${JSON.stringify(await t.G(() => { const g = window.__GAME__, p = g.ctx.player; return { mode: g.ctx.game?.mode, scripted: p.scripted, alive: p.alive, pos: p.pos.toArray(), nav: !!g.ctx.physics.nav }; }))}`);
+        if (hops) throw new Error(`${c.level}: the path to ${c.click} uses ${hops} hop links`);
+        for (const q of o.path) if (Math.hypot(q[0] - c.centre[0], q[1] - c.centre[1]) < c.keep - 0.05) throw new Error(`${c.level}: path point ${q[0].toFixed(2)},${q[1].toFixed(2)} inside the no-go disc`);
+        let st;
+        for (let i = 0; i < 60; i++) { await t.frames(10); st = await t.G(() => ({ o: window.__GAME__.orders(), pos: window.__GAME__.ctx.player.pos.toArray() })); if (!st.o.kind) break; }
+        const [px, py, pz] = st.pos, d = Math.hypot(px - c.centre[0], pz - c.centre[1]);
+        t.log(`${c.level}: stopped at ${px.toFixed(2)}, ${py.toFixed(2)}, ${pz.toFixed(2)} (r ${d.toFixed(2)}, ground ${ground.toFixed(2)}) order ${st.o.kind}`);
+        if (py - ground > c.maxY && !c.through) throw new Error(`${c.level}: she ended ${(py - ground).toFixed(2)} m above the ground`);
+        if (d < c.keep - 0.3) throw new Error(`${c.level}: she ended ${d.toFixed(2)} m from the centre`);
+        if (c.through && px > -6) throw new Error(`${c.level}: she never got round the fountain (x ${px.toFixed(2)})`);
+        await t.shot(`${shotDir(t)}nav-props-${c.level}-${c.through ? 'round' : 'centre'}`);
+      }
     },
   },
 ];

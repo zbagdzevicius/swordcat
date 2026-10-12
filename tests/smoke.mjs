@@ -116,6 +116,7 @@ const t = {
    */
   async shot(name, { freeze = false } = {}) {
     const p = path.join(SHOTS, `${name}.png`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
     if (!freeze) { await page.screenshot({ path: p }); return p; }
     const prev = await G(() => { const g = window.__GAME__?.game; const s = g?.baseTimeScale ?? 1; g?.setTimeScale?.(0); return s; }).catch(() => 1);
     try { await page.screenshot({ path: p }); } finally { await G((s) => window.__GAME__?.game?.setTimeScale?.(s), prev).catch(() => {}); }
@@ -150,13 +151,75 @@ const t = {
   tapAt: (x, z, kind = 'tap') => G(([a, b, c]) => window.__GAME__.tapAt(a, b, c), [x, z, kind]),
   /** Point the mouse at world (x, z) (cursor aim). */
   aimAt: (x, z) => G(([a, b]) => window.__GAME__.aimAt(a, b), [x, z]),
-  /** Resize the page (the iso rig re-fits). */
-  async viewport(w, h) { await page.setViewportSize({ width: w, height: h }); await t.frames(10); },
+  /**
+   * Resize the page (the iso rig re-fits). With `{ touch: true }` the main page is left alone and a separate phone
+   * session is booted instead (Playwright cannot add touch to a live page): a `hasTouch` + `isMobile` context at
+   * w × h, at `?test=1&seed=1`, with the same error policy as the main page. Returns that session:
+   *   { page, G, shot(name), frames(n), screen(x, z, y?) → CSS px, tapAt(x, z) (a real touchscreen tap at the
+   *     projected world point), touch(type, x, y, id) (a synthetic touch PointerEvent on the touch layer, for
+   *     drags), close() }
+   * Always `close()` it (try / finally).
+   */
+  async viewport(w, h, { touch = false, scale = 2, level = 'meadow', spawn = 'start' } = {}) {
+    if (!touch) { await page.setViewportSize({ width: w, height: h }); await t.frames(10); return null; }
+    const context = await browser.newContext({ viewport: { width: w, height: h }, hasTouch: true, isMobile: true, deviceScaleFactor: scale });
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => fail(`[${w}×${h} touch] pageerror: ${e.message}`));
+    pg.on('console', (m) => { if (m.type() === 'error') fail(`[${w}×${h} touch] console.error: ${m.text()}`); });
+    pg.on('response', (r) => { if (r.status() >= 400) fail(`[${w}×${h} touch] HTTP ${r.status()}: ${r.url()}`); });
+    const MG = async (fn, arg) => {
+      const hd = await pg.evaluateHandle(fn, arg);
+      try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); }
+    };
+    const s = {
+      page: pg, context, G: MG, w, h,
+      frames: (n = 1) => MG((k) => window.__GAME__.waitFrames(k), n),
+      async shot(name) {
+        const p = path.join(SHOTS, `${name}.png`);
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        try { await pg.screenshot({ path: p }); } catch (e) { t.warn(`touch shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); }
+        return p;
+      },
+      screen: (x, z, y) => MG(([a, b, c]) => window.__GAME__.screen(a, b, c), [x, z, y]),
+      async tapAt(x, z) {
+        const p = await s.screen(x, z);
+        if (!p) return null;
+        await pg.touchscreen.tap(Math.round(p.x), Math.round(p.y));
+        return p;
+      },
+      touch: (type, x, y, id = 11) => MG(([tp, px, py, pid]) => {
+        const caps = (window.__ptrCap ??= {});
+        const el = tp === 'pointerdown'
+          ? (document.elementFromPoint(px, py)?.closest?.('.tbtn, .touch-root') ?? document.querySelector('.touch-root'))
+          : (caps[pid] ?? document.querySelector('.touch-root'));
+        if (!el) return null;
+        if (tp === 'pointerdown') caps[pid] = el;
+        el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: pid, clientX: px, clientY: py, pointerType: 'touch', isPrimary: pid === 11 }));
+        if (tp === 'pointerup' || tp === 'pointercancel') delete caps[pid];
+        return el.className;
+      }, [type, x, y, id]),
+      close: () => context.close().catch(() => {}),
+    };
+    await pg.goto(`${base}?test=1&seed=1`, { timeout: Math.max(BOOT_TIMEOUT, 200000) });
+    await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: Math.max(BOOT_TIMEOUT, 200000) });
+    if (level) {
+      await MG(async ([id, sp]) => {
+        const g = window.__GAME__, c = g.ctx;
+        g.story.skip?.(); g.setMode('play');
+        for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) c.state.setFlag?.(k, true);
+        await g.loadLevel(id, sp);
+        g.story.skip?.(); g.setMode('play');
+        return true;
+      }, [level, spawn]);
+      await s.frames(10);
+    }
+    return s;
+  },
 };
 
 async function boot() {
   current = 'boot';
-  await page.goto(`${base}?test=1&seed=1`);
+  await page.goto(`${base}?test=1&seed=1`, { timeout: BOOT_TIMEOUT });
   await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: BOOT_TIMEOUT });
   await t.shot('00-boot');
   await t.blankCheck('boot');
@@ -179,7 +242,7 @@ try {
     const bt = Date.now();
     console.log(`▶ ${b.name}`);
     try {
-      if (b.reload) { await page.reload(); await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: BOOT_TIMEOUT }); }
+      if (b.reload) { await page.reload({ timeout: BOOT_TIMEOUT }); await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: BOOT_TIMEOUT }); }
       if (b.level) {
         // hermetic blocks: every block with a `level` starts from boot-like progress (default §19.7 state, settings
         // kept, no party, no stray enemies, real-time sim, no held input), exactly as when it runs alone. Blocks

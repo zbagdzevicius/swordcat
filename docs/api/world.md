@@ -272,3 +272,40 @@ World's own fallback warm-up now skips `boss_*` types too (it spawned B1 at the 
   forest fireflies are yours (world's own Fireflies class is not used by any level).
 - **To camera:** town houses now have box colliders (shrink 0.86). The gate castle pieces and the town terrace are
   merged stone meshes (`merged:castle`, `merged:terrace`, not fadeable); fences, street lanterns and trees fade.
+
+## Controls rework (research/CONTROLS_SPEC.md §4, §11, §12 world)
+- **Level camera data:** `level.cam = { yaw, fog: { clear, clearCombat, topMul, <preset>: {...} }, light: { <preset>:
+  { hemiMul, sunMul, envMul, hemiSky, hemiGround, sunAz } } }` (meadow / forest / town yaw π, gate yaw 0, bog / keep
+  rows for M3). Env mixes the light row in with the focus-fog mode (eye-level shots keep the authored look). The night
+  rows (meadow_night ×2.4, forest_night ×3.2–3.4 moon / hemisphere, lifted cool sky fill) keep the ground ≥ ~12 %
+  luminance 8 m from her from above.
+- **Arena look:** `ARENA.wall` = fog-wall opts passed to `fx.mistRing` (`alpha` 0.35, `width` 3.5; `bandW` 1.2 /
+  `bandA` 0.12 once fx honours them). `level.cam.fog` is the level's own copy (`arenaAwareFog`): its `mist` (fx
+  GroundMist's per-level factor) drops to `ARENA_MIST` 0.3 while an arena is locked.
+- **Gate deck:** `texturedMaterial(…, { joint, jointLo, jointHi })` lifts a map's dark joints toward a pale mortar; the
+  causeway uses gain 2.45 (×1.27) + joint 0.38, with a pale kerb inside the parapets and rims on the ledge drops.
+- **Zone hints:** `zone.cam = { yaw?, pitch?, dist?, clear? }`, optional `camIf` (flag expression); zones of
+  `kind: 'camera'` are hint-only. `level.zoneAt(pos)` (pure `isoView.pickZone`: hint zones first, then the smallest,
+  1.5 m hysteresis), `level.camZone`. World calls `cam.setHint({ yaw, pitch, dist, clear, zone }, blend)` on a zone
+  change once no alerted hostile has been within 10 m for 2 s (snap at load and with *Reduce camera motion*); a
+  camera that reads `zoneAt` itself sets `cam.zoneHints = true`. Env applies `clear` itself.
+  Hints: meadow practice 12, stones / glade / Crow Fields / bridge 15; forest Mushroom Ring (yaw 1.75, 44°, 11 m,
+  clear 7), Spider Hollow 12, Treetop (38°, 10 m); town square 16, hub 15 (`town.free`); gate The Line (17 m, 56°,
+  while it can run), the raft view 14.
+- **`level.memeSpot`** `{ at, yaw, r }`: meadow Tallbert knoll, forest Mushroom Ring, town fountain, gate rampart, bog pool.
+- **Nav data** (physics reads it): `level.navLinks` (meadow fence `kind: 'fence'`, `when: 'tut.jump.done'`, gate line
+  along the fence; Treetop root ledges ground → step → ledge; Stump Crossing bank → 6 stumps → bank, ends inset 0.5 m
+  inside the stump tops; Waffles' crate steps → balcony), `level.navBlock` (rects).
+- **Occlusion tags:** `place(..., { camFade: 'roof' })` splits a building template into body + roof faces
+  (`Props.splitRoofTemplate`: up-facing triangles above 42 % of the height) and lists the roof instances in
+  `batch.userData.camFadeRoofIds`; `camFade: 'solid'` and the §11 camera-side clutter audit (> 2.2 m within 6 m
+  camera-side of the spine / an arena centre; `level.audit.clutter`) go to `camFadeSolidIds`. `camFade: true` (town bunting) goes to `camFadeIds` (capsule fade only). Trees are
+  `camFade: 'crown'` with `userData.crownFrac` (`Props.crownFraction`). Gate: `merged:gate_towers` and
+  `merged:gatehouse` (+ the arch) are `'solid'`; B1 pillars, town towers / castle / South Gate / Bell Tower solid.
+- **Far group:** `levels.setVisible('far', true | false | null)` (sky dome, skyline, Dawnstone); null = automatic,
+  hidden while the fog mode is iso.
+- **Interact:** `level.interactables` entries `{ id, kind, pos, r, enabled(), use(), usePos? }`; with two in reach E
+  prefers `player.hover`. PropActor `assistable` (= breakable).
+- **Look:** grass tiles and LOD follow `cam.focus` (near tile 36 m, blades ×1.25 wider), ground under grass −10 %;
+  wheat trample field (`Wheat.TRAMPLE`: her + 4 enemies, bend within 1.4 m, flatten to 40 % within 0.9 m); shadow box
+  16 m (boss 20 m) around the focus; the gate deck bricks ×1.1; bounce caps carry an up-arrow facing screen-up.

@@ -9,12 +9,19 @@
 //     def.active → follow-through), with both arms solved onto the grip by two-bone IK; full-circle attacks spin her;
 //   • holy glow (charge tier 2, Holy Slash, Golden Hour), Valor blade glow, i-frame blink, ground blob, Meme Cam cape.
 // Visual only: reads player fields, never mutates simulation state.
+//   • Phase W (WA §3.6 / §5.6 / §5.7) and ART §6.5: the Squash spring driven from the event table, head follow lag,
+//     the +8° face pitch toward the lens, the idle ladder steps (glance, look-around, groom, twirl, sneeze, hub sit),
+//     the order head snap + bow bounce + happy hop, and the knock-out dizzy sit with the dropped sword + respawn pop;
+//   • PERF L1 / L2 / L3: the hero build waits for the title (idle slice), her glow position goes to ENV_U.uGlow (no
+//     PointLight), her contact blob registers with fx.blobs when it exists, a baked hero re-bakes outside combat.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
-import { damp, clamp, lerp, easeSwing, easeOutCubic, easeInOutSine, wrapAngle, Spring } from '../core/math.js';
+import { damp, clamp, lerp, easeSwing, easeOutCubic, easeInOutSine, wrapAngle, dampAngle, Spring } from '../core/math.js';
 import { KittenView, MEME_CAPE, visualDt, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, POSES, mulberry32, SWORD_SKINS, CAPES } from '../characters/index.js';
+import * as WorldEnv from '../world/Env.js';
 import { TUNING } from './tuning.js';
+import { Squash, SQUASH, FEEL, ORDER_FX } from './juice.js';
 
 // ------------------------------------------------------------------ visual swing profiles (look only; hit arcs are config)
 // e0 → e1: blade elevation (rad above horizontal) across the active window; eb: wind-up elevation; r: grip reach;
@@ -28,7 +35,10 @@ const VIS = {
   holy:     { e0: 0.25, e1: 0.05, eb: 0.95, r: 1.1, h: 0.52, spin: true, hop: 0.12 },
   sunburst: { e0: 0.30, e1: 0.00, eb: 1.05, r: 1.1, h: 0.52, spin: true, hop: 0.16 },
   pounce:   { e0: -1.15, e1: -1.15, eb: 1.25, r: 0.9, h: 0.48, twist: 0 },
+  twirl:    { e0: 0.55, e1: 0.45, eb: 0.7, r: 1, h: 0.54, spin: true, hop: 0.06 },
 };
+/** WA §5.6 idle twirl: a 0.6 s flourish (visual clip only; never a Combat swing). */
+const TWIRL = Object.freeze({ id: 'twirl', dur: FEEL.twirl.dur, active: [0.08, FEEL.twirl.dur - 0.1], arc: { from: Math.PI, to: -Math.PI } });
 /** Running carry (look only): both paws low on the grip, blade forward-up and out to her right so the face stays clear. */
 const CARRY = { a: -0.55, e: 0.55, reach: 0.9, h: 0.40, bob: 0.07, minSpeed: 2.2 };
 /**
@@ -45,8 +55,10 @@ const ANTIC = 0.35;          // extra wind-up beyond the arc start (rad), tech.m
 const SIDE = 1.25;           // max sword angle relative to the body before the body turns with it
 const GRIP_X = 0.17, GRIP_Z = 0.12, GRIP_Z0 = 0.1;
 const SWING_POSE_BLEND = 0.06;
-const POSE_BLEND = { vigil: PLAYER.guard.enter, oath: 0.14, ready: 0.14, idle: 0.35, faint: 0.35, sip: 0.12, kneel: 0.08 };
-const SWING_IDS = new Set(Object.keys(VIS));
+const POSE_BLEND = { vigil: PLAYER.guard.enter, oath: 0.14, ready: 0.14, idle: 0.35, faint: 0.35, sip: 0.12, kneel: 0.08, sit: 0.3, groom: 0.18 };
+const SWING_IDS = new Set(Object.keys(VIS).filter((k) => k !== 'twirl'));
+/** The groom (paw lick) pose: characters' `groom` once it lands, else the sip pose's paw-to-mouth. */
+const GROOM_POSE = POSES.groom ? 'groom' : 'sip';
 const SWORD_GLB = { diamond: 'models/weapons/quaternius/Sword_Diamond.glb', toobig: 'models/weapons/quaternius/Claymore.glb' };
 
 /** The sword skin to show (§13.4): `state.cosmetics.sword` when it is a known skin, else the Borrowed Blade. */
@@ -101,8 +113,18 @@ export class SwordcatModel {
     this.capeApplied = null; this.swordApplied = null; this._cosmeticT = 0;
     /** shader warm-up frames left (first Holy charge / Golden Hour programs; requests/player.md) */
     this._warm = 0; this._warmSaved = [];
-    // secondary motion
-    this.squash = new Spring(320, 11);
+    // secondary motion (ART §6.5 Squash: kicks from the event table, targets per state)
+    this.squash = new Squash();
+    this.jumpHoldT = 0; this.happyT = 0; this.relSerial = -1;
+    /** head follow lag (world yaw the head trails toward), face pitch weight, the order head snap */
+    this.headLag = null; this.facePitch = 0;
+    this.snapT = 0; this.snapYaw = 0; this.snapPt = new THREE.Vector3();
+    /** WA §5.6 idle step running: { name, t, dur, hold?, side? } or null; `idlePose` = the hub sit ('sit' | null) */
+    this.idleAnim = null; this.idlePose = null; this.glanceW = 0; this.glanceYaw = 0;
+    /** WA §5.7 the dropped sword weight (knock-out) */
+    this.dropW = 0;
+    /** PERF L2: registered with fx.blobs; L3: a re-bake is pending (cosmetics changed in combat) */
+    this._blobReg = false; this._rebake = false;
     this.earSpring = new Spring(140, 9); this.tailSpring = new Spring(60, 7); this.headSpring = new Spring(160, 14);
     this.gaitAmp = 0; this.air = 0; this.zoom = 0; this.turn = 0; this.lean = 0; this.prevYaw = null; this.prevSpeed = 0;
     this.flinch = 0; this.recoil = 0; this.parryKick = 0; this.headYaw = 0; this.charge = 0;
@@ -123,20 +145,26 @@ export class SwordcatModel {
 
   // ------------------------------------------------------------------ lifecycle
   async init() {
-    const ctx = this.ctx, bus = ctx.bus;
-    this._build();
+    const ctx = this.ctx, bus = ctx.bus, S = SQUASH;
+    // PERF L1 (§9.2): outside ?test the procedural hero build waits until the title level is up and the browser is
+    // idle (requestIdleCallback), so it never sits on the boot path before T_title. Everything that arrives meanwhile
+    // (outfit, cape override, props, poses, Meme Cam) is stored and applied by the build.
+    if (this._deferBuild()) {
+      const off = bus.on(E.LEVEL_LOADED, () => { off(); this._idleBuild(); });
+      this._offs.push(off);
+    } else this._build();
     this._offs.push(
-      bus.on(E.PLAYER_JUMP, () => this._squashTo(PLAYER.stretchJump)),
-      bus.on(E.PLAYER_LAND, (p) => this._squashTo(PLAYER.squashLand * clamp((p?.impact ?? 6) / PLAYER.hardLandSpeed, 0.45, 1.25))),
-      bus.on(E.PLAYER_SWING, (p) => { if (p?.attackId !== 'pounce') this._squashTo(0.06); }),
-      bus.on(E.PLAYER_DAMAGED, (p) => { if ((p?.amount ?? 0) > 0 || p?.broke) { this.flinch = 1; this.flash = 1; this._squashTo(-0.14); } }),
-      bus.on(E.PLAYER_PARRY, () => { this.parryKick = 1; this._squashTo(0.08); }),
-      bus.on(E.PLAYER_DODGE, () => this._squashTo(-0.12)),
+      bus.on(E.PLAYER_JUMP, () => { this.jumpHoldT = S.jump.hold; }),
+      bus.on(E.PLAYER_LAND, (p) => this.squash.kick(S.land.kick * Math.min(1, (p?.impact ?? S.land.fallRef) / S.land.fallRef))),
+      bus.on(E.PLAYER_DAMAGED, (p) => { if ((p?.amount ?? 0) > 0 || p?.broke) { this.flinch = 1; this.flash = 1; this.squash.kick(S.hit); } }),
+      bus.on(E.PLAYER_PARRY, () => { this.parryKick = 1; this.squash.kick(S.parry); }),
+      bus.on(E.PLAYER_MEOW, () => this.happy()),
       bus.on(E.PLAYER_STILL_STANDING, () => { this.holyVis = Math.max(this.holyVis, 0.6); }),
       bus.on(E.HIT, (h) => {
-        if (h?.target === this.player && h.blocked) { this.recoil = 1; this._squashTo(-0.07); }
-        else if (h?.attacker === this.player && !h.blocked) this._squashTo(h.killed ? -0.1 : -0.05);
+        if (h?.target === this.player && h.blocked) { this.recoil = 1; this.squash.kick(S.block); }
+        else if (h?.attacker === this.player && !h.blocked) this.squash.kick(h.killed ? S.kill : S.dealt);
       }),
+      bus.on(E.PLAYER_ORDER, (o) => this._onOrder(o)),
       bus.on(E.PLAYER_SPAWNED, () => this.snap()),
       bus.on(E.LEVEL_LOADED, () => { this._warm = 1; }),
       bus.on(E.QUALITY, () => { this._warm = 1; }),
@@ -144,6 +172,64 @@ export class SwordcatModel {
     );
     this._warm = 1;
     this.sneezeNext = TUNING.sneezeEvery * (0.6 + 0.8 * this.rand());
+  }
+
+  /** PERF L1: defer the hero build past the title? (never in ?test, tools or without requestIdleCallback; `?heroSync`). */
+  _deferBuild() {
+    const ctx = this.ctx;
+    return !ctx.params?.test && !ctx.params?.heroSync && typeof requestIdleCallback === 'function' && !!ctx.renderer;
+  }
+
+  /** PERF L1: build in the first idle slice after the title level is loaded (≤ 0.5 s later at the latest). */
+  _idleBuild() {
+    if (this.ready || this._disposed) return;
+    requestIdleCallback(() => { if (!this.ready && !this._disposed) { this._build(); this._warm = 1; } }, { timeout: 500 });
+  }
+
+  /** WA §3.6 order feedback: the head snaps toward the goal before the body turns, the bow bounces; a double tap hops. */
+  _onOrder(o) {
+    if (!o?.valid || o.queued || !o.point || o.kind === 'stop') return;
+    this.snapT = ORDER_FX.snapT; this.snapPt.copy(o.point);
+    this.emote('bowBounce');
+    if (o.double) this.hop();
+  }
+
+  /** A visual happy hop (no physics): stretch kick + a root hop. */
+  hop() { this.squash.kick(SQUASH.hopKick); this.hopT = SQUASH.hopDur; }
+
+  /** Meow / happy (ART §6.5): stretch kick + ears perk for the meow's length. */
+  happy() { this.squash.kick(SQUASH.happy); this.happyT = PLAYER.meow.dur; }
+
+  /** WA §5.7 the respawn pop: Squash +2 and a hop; the dropped sword is back in her paws. */
+  respawnPop() { this.dropW = 0; this.squash.kick(SQUASH.respawn); this.hopT = SQUASH.hopDur; this.emote('bowBounce'); }
+
+  /**
+   * WA §5.6 idle ladder step from the player ('glance' | 'look' | 'groom' | 'twirl' | 'sneeze' | 'sit'; null cancels).
+   * Visual only; procedural on the existing rig (no clips, no draws).
+   */
+  idleStep(name) {
+    if (!name) { this.idleAnim = null; this.idlePose = null; return; }
+    const F = FEEL;
+    switch (name) {
+      case 'sneeze': this.emote('sneeze'); return;
+      case 'sit': this.idlePose = 'sit'; return;
+      case 'glance': {
+        const h = F.glance.hold;
+        this.idleAnim = { name, t: 0, dur: h[0] + (h[1] - h[0]) * this.rand() };
+        this.emote('blink');
+        return;
+      }
+      case 'look': this.idleAnim = { name, t: 0, dur: F.look.dur, side: this.rand() < 0.5 ? -1 : 1 }; return;
+      case 'groom': this.idleAnim = { name, t: 0, dur: F.groom.dur }; return;
+      case 'twirl': {
+        this.idleAnim = { name, t: 0, dur: F.twirl.dur };
+        if (this.clip?.resolve) this.clip.resolve();
+        this.clip = { kind: 'swing', def: TWIRL, vis: VIS.twirl, t: 0, speed: 1, dur: TWIRL.dur, resolve: null, idle: true };
+        this.ctx.bus.emit(E.BURST, { kind: 'sparkle', position: _v.set(this.player.pos.x, this.player.pos.y + this.player.height * 0.6, this.player.pos.z).clone(), count: 6 });
+        return;
+      }
+      default: return;
+    }
   }
 
   _config() {
@@ -158,8 +244,10 @@ export class SwordcatModel {
     const root = this.player.object3d;
     this._disposeKitten();
     try {
-      this.view = new KittenView(this.ctx, this._config(), { actor: this.player, parent: root, memeCam: false });
+      // glance: false: her lens glances are the idle ladder's (WA §5.6), not KittenView's own timer
+      this.view = new KittenView(this.ctx, this._config(), { actor: this.player, parent: root, memeCam: false, glance: false });
       const k = this.k = this.view.kitten;
+      if (this._blobReg && k.blob) k.blob.visible = false;          // fx.blobs draws her contact shadow (PERF L2)
       if (this.meme) this.view.setMemeCam(true);
       this.poseName = null; this.expr = null;
       this.capeApplied = equippedCape(this.ctx.state?.cosmetics, this.capeOverride);
@@ -196,6 +284,8 @@ export class SwordcatModel {
   }
 
   dispose() {
+    this._disposed = true;
+    if (this._blobReg) { try { this.ctx.fx?.blobs?.remove?.(this.player.object3d); } catch { /* fx gone */ } this._blobReg = false; }
     this._warmEnd();
     for (const off of this._offs) off();
     this._offs.length = 0;
@@ -210,7 +300,15 @@ export class SwordcatModel {
   /** Wardrobe / unlocks change `state.cosmetics`: apply cape and sword skin (checked twice a second). */
   _applyCosmetics(force = false) {
     const k = this.k, cos = this.ctx.state?.cosmetics;
+    // PERF L3: a baked hero (characters H7) re-bakes after a cape / skin swap, never in a fight
+    if (this._rebake && typeof this.view?.rebake === 'function' && !this.player.inCombat?.()) { this._rebake = false; this.view.rebake(); }
     if (!k || (!cos && !this.capeOverride)) return;
+    const capeBefore = this.capeApplied, swordBefore = this.swordApplied;
+    this._applyCosmeticsNow(force, k, cos);
+    if (!force && (capeBefore !== this.capeApplied || swordBefore !== this.swordApplied) && typeof this.view?.rebake === 'function') this._rebake = true;
+  }
+
+  _applyCosmeticsNow(force, k, cos) {
     const capeWant = equippedCape(cos, this.capeOverride);
     if (this.outfit === 'armour' && (force || capeWant !== this.capeApplied)) {
       this.capeApplied = capeWant;
@@ -266,19 +364,25 @@ export class SwordcatModel {
       case 'meow': return timed(PLAYER.meow.dur, () => this.emote('meow'));
       case 'sneeze': return timed(0.5, () => this.emote('sneeze'));
       case 'nod': case 'shake': case 'blink': case 'earsFlat': case 'tailPuff': case 'bowBounce': return timed(0.6, () => this.emote(name));
-      case 'jump': case 'hop': return timed(0.5, () => { this._squashTo(PLAYER.stretchJump); this.sw.hop = 0.12; });
+      case 'jump': case 'hop': return timed(0.5, () => this.hop());
+      case 'twirl': case 'groom': case 'glance': case 'look': return timed(name === 'twirl' ? FEEL.twirl.dur : name === 'groom' ? FEEL.groom.dur : FEEL.look.dur, () => this.idleStep(name));
+      case 'cheer': case 'boop': case 'pawBump':
+        // characters' WA poses (characters.W2) when they exist; else a happy bounce
+        if (POSES[name]) { this.setScriptPose(name); return timed(1.2, null); }
+        return timed(0.6, () => { this.happy(); this.emote('bowBounce'); });
       default:
         if (POSES[name]) { this.setScriptPose(name === 'idle' ? null : name); return Promise.resolve(); }
         return Promise.resolve();
     }
   }
 
+  /** Legacy: set the stretch outright (scripted beats). Prefer squash.kick(). */
   _squashTo(v) { this.squash.x = v; this.squash.v = 0; }
 
   // ------------------------------------------------------------------ per frame
   render(alpha, frameDt) {
     const p = this.player, ctx = this.ctx, game = ctx.game;
-    if (!this.ready) return;
+    if (!this.ready) { if (this.clip) { const r = this.clip.resolve; this.clip = null; r?.(); } return; }
     const dt = Math.min(visualDt(ctx, frameDt), 0.1);          // 0 in hitstop / pause, × slow motion
     this.t += dt;
     if (this.fallback) { this._renderFallback(dt); return; }
@@ -315,9 +419,12 @@ export class SwordcatModel {
     this._layerReactions(J, dt);
     this._layerStates(J, dt, alpha);
 
-    // squash & stretch (volume preserving) on the body pivot at the feet — before the IK reads the chain
-    const sq = clamp(this.squash.step(0, dt), -0.4, 0.4);
-    const sy = 1 + sq, sxz = 1 / Math.sqrt(Math.max(0.3, sy));
+    this._layerHead(J, dt);
+    this._layerIdle(J, dt);
+    this._layerKO(J, dt);
+
+    // squash & stretch (ART §6.5, volume preserving) on the body pivot at the feet — before the IK reads the chain
+    const sy = Math.max(0.3, this.squash.update(dt, this._squashTarget(dt))), sxz = 1 / Math.sqrt(sy);
     J.body.scale.set(sxz, sy, sxz);
 
     this._layerRoll(J, alpha);
@@ -325,7 +432,7 @@ export class SwordcatModel {
 
     // whole-body spin (full-circle attacks) and hop live on the kitten root (actor yaw is the sim facing)
     k.root.rotation.y = this.sw.spin;
-    k.root.position.y = Math.max(0, this.sw.hop) + this._stepSmooth(dt);
+    k.root.position.y = Math.max(0, this.sw.hop) + this._stepSmooth(dt) + this._hopY(dt);
 
     this._glow(dt);
     if (k.cape) k.cape.windMul = this.meme ? MEME_CAPE.windMul : p.standingGround ? TUNING.standCapeWind : 1;
@@ -333,8 +440,12 @@ export class SwordcatModel {
     p.object3d.updateWorldMatrix(true, false);
     this.view.simulate({ velocity: p.attachedTo ? _zero : p.vel, airborne: !p.onGround && !p.attachedTo });
     this._blinkAndBlob(dt);
+    this._glowPos();
     if (this._warm > 0 && this.holyVis < 0.005) { this._warm--; this._warmBegin(); }
   }
+
+  /** Which kitten pose the gameplay state shows (public: tests and debug read it). */
+  basePose() { return this._basePose(); }
 
   /** Which kitten pose the gameplay state shows. */
   _basePose() {
@@ -344,14 +455,16 @@ export class SwordcatModel {
       return Math.hypot(p.vel.x, p.vel.z) > 0.3 || this.clip ? 'ready' : 'idle';
     }
     switch (p.state) {
-      case 'dead': return 'faint';
+      case 'dead': return 'sit';                     // WA §5.7: a dizzy sit, never lying flat
       case 'guard': case 'vigil': return 'vigil';
       case 'charge': case 'golden': case 'memecam': return 'oath';
       case 'sip': return 'sip';
       case 'rise': return p.stateT < PLAYER.stillStanding.riseDur * 0.45 ? 'kneel' : 'ready';
       case 'move': {
         if (!p.onGround || Math.hypot(p.vel.x, p.vel.z) > 0.3) return 'ready';
-        return p.combatT > 0 || p.threatened || p.golden ? 'ready' : 'idle';
+        if (p.combatT > 0 || p.threatened || p.golden) return 'ready';
+        if (this.idleAnim?.name === 'groom') return GROOM_POSE;      // WA §5.6 paw lick
+        return this.idlePose ?? 'idle';                               // the hub sit, else idle
       }
       default: return 'ready';
     }
@@ -361,7 +474,7 @@ export class SwordcatModel {
     const p = this.player, k = this.k;
     let x = 'neutral';
     switch (p.state) {
-      case 'dead': x = 'faint'; break;
+      case 'dead': x = 'faint'; break;                // dizzy, eyes squeezed shut (stars circle her head: fx)
       case 'hurt': case 'stagger': x = 'surprised'; break;
       case 'guard': x = p.standingGround ? 'determined' : 'worried'; break;
       case 'charge': case 'golden': case 'attack': case 'pounce': case 'rise': x = 'determined'; break;
@@ -369,7 +482,7 @@ export class SwordcatModel {
       case 'sip': x = 'happy'; break;
       case 'vigil': x = 'earnest'; break;
       default:
-        if (p.meowT > 0 || p.zoomies) x = 'happy';
+        if (p.meowT > 0 || p.zoomies || this.happyT > 0 || this.idleAnim?.name === 'groom' || this.idlePose === 'sit') x = 'happy';
         else if (this.slowBlinkT > 0) x = 'sleepy';
         else if (p.hp <= 2 && p.alive) x = 'worried';
         else if (p.golden || p.combatT > 0) x = 'determined';
@@ -518,6 +631,132 @@ export class SwordcatModel {
     if (pk > 0) { rot(J.chest, 0.12 * pk, 0, 0); rot(J.head, -0.1 * pk, 0, 0); }
   }
 
+  /**
+   * ART §6.3 / §6.5 head: follow lag behind body turns (λ 18 ≈ 0.06 s), the +8° chin-up toward the high lens when
+   * idle or walking (not in the Stand, swings or combat), and WA §3.6 the order head snap (70 % toward the goal, λ 24,
+   * before the body turns). Ears perk while happy (meow).
+   */
+  _layerHead(J, dt) {
+    const p = this.player, F = FEEL;
+    const bodyYaw = p.object3d.rotation.y + this.sw.spin;
+    // follow lag: the head's world yaw trails the body's (rolls / spins excluded: the head rides those)
+    if (this.headLag == null || p.state === 'dodge' || Math.abs(this.sw.spin) > 1e-3 || dt <= 0) this.headLag = bodyYaw;
+    else this.headLag = dampAngle(this.headLag, bodyYaw, F.headLagLambda, dt);
+    const lag = clamp(wrapAngle(this.headLag - bodyYaw), -F.headLagMax, F.headLagMax);
+    // face pitch: calm idle / walking, out of the Stand and swings
+    const calmPose = this.poseName === 'idle' || (this.poseName === 'ready' && p.combatT <= 0 && !p.threatened);
+    const pitchOn = !p.scripted && p.state === 'move' && p.onGround && !p.swing && calmPose && this.sw.w < 0.05;
+    this.facePitch = damp(this.facePitch, pitchOn ? F.facePitch : 0, F.facePitchLambda, dt);
+    // order head snap
+    let snap = 0;
+    if (this.snapT > 0) {
+      this.snapT = Math.max(0, this.snapT - dt);
+      const rel = wrapAngle(Math.atan2(this.snapPt.x - p.pos.x, this.snapPt.z - p.pos.z) - bodyYaw);
+      snap = clamp(rel * ORDER_FX.snapK, -ORDER_FX.snapMax, ORDER_FX.snapMax);
+    }
+    this.snapYaw = damp(this.snapYaw, snap, ORDER_FX.snapLambda, dt);
+    rot(J.head, -this.facePitch, lag + this.snapYaw, 0);
+    if (this.happyT > 0) {
+      this.happyT = Math.max(0, this.happyT - dt);
+      const e = SQUASH.earsHappy * Math.sin(Math.PI * this.happyT / Math.max(1e-3, PLAYER.meow.dur));
+      rot(J.earL, e, 0, 0); rot(J.earR, e, 0, 0);
+    }
+  }
+
+  /**
+   * WA §5.6 idle ladder steps on the rig: glance (head + chest toward the lens, eyes finish the look), look-around (a
+   * slow left → right sweep), groom (the paw-to-mouth pose with little lick nods), twirl (the sword flourish clip), and
+   * the hub sit's tail swish. Anything but a calm standing idle cancels a step at once.
+   */
+  _layerIdle(J, dt) {
+    const p = this.player, a = this.idleAnim, k = this.k, F = FEEL;
+    const calm = !p.scripted && p.state === 'move' && p.onGround && Math.hypot(p.vel.x, p.vel.z) < 0.3 && !p.swing;
+    if (a && !calm) { this.idleAnim = null; if (this.clip?.idle) this.clip = null; }
+    else if (a) {
+      a.t += dt;
+      const u = clamp(a.t / a.dur, 0, 1);
+      if (a.name === 'look') {
+        const env = Math.sin(Math.PI * u);
+        const yaw = a.side * F.look.yaw * Math.sin(2 * Math.PI * u) * env;
+        rot(J.chest, 0, yaw * 0.25, 0); rot(J.head, -0.06 * env, yaw * 0.75, 0);
+        k.eyes?.lookAt?.(clamp(yaw, -1, 1) * 0.6, 0.1 * env);
+      } else if (a.name === 'groom') {
+        const lick = Math.max(0, Math.sin(Math.PI * F.groom.licks * 2 * u));
+        rot(J.head, F.groom.tilt * Math.sin(Math.PI * u) + 0.1 * lick, 0, 0.12 * Math.sin(Math.PI * u));
+      }
+      if (a.t >= a.dur) {
+        this.idleAnim = null;
+        if (a.name === 'twirl') this.ctx.bus.emit(E.BURST, { kind: 'sparkle', position: _v.set(p.pos.x, p.pos.y + p.height * 0.7, p.pos.z).clone(), count: 6 });
+        if (a.name === 'look') k.eyes?.lookAt?.(0, 0);
+      }
+    }
+    // glance at the lens (ART §6.6 / WA §5.6): smooth in, hold, smooth out
+    const g = a?.name === 'glance' ? a : null;
+    this.glanceW = damp(this.glanceW, g && g.t < g.dur ? 1 : 0, F.glance.rate, dt);
+    if (this.glanceW > 1e-3) {
+      const cam = this.ctx.camera?.position;
+      if (g && cam) {
+        const bodyYaw = p.object3d.rotation.y + this.sw.spin;
+        this.glanceYaw = clamp(wrapAngle(Math.atan2(cam.x - p.pos.x, cam.z - p.pos.z) - bodyYaw), -F.glance.maxYaw, F.glance.maxYaw);
+      }
+      const w = this.glanceW * this.glanceW * (3 - 2 * this.glanceW), yaw = this.glanceYaw * w;
+      rot(J.chest, 0, yaw * 0.3, 0);
+      rot(J.head, F.glance.chin * w, yaw * 0.7, 0);
+      const rest = clamp((Math.abs(this.glanceYaw) - 0.3) / F.glance.maxYaw, 0, 1);
+      k.eyes?.lookAt?.((Math.sign(this.glanceYaw) || 1) * (0.5 * rest + F.glance.eyes) * w, 0.5 * w);
+      this._glanceEyes = true;
+    } else if (this._glanceEyes) { this._glanceEyes = false; k.eyes?.lookAt?.(0, 0); }
+    // the hub sit: a lazy tail swish
+    if (this.idlePose === 'sit' && this.poseName === 'sit') {
+      const s = Math.sin(this.t * Math.PI * 2 * F.tailSwish.hz) * F.tailSwish.amp;
+      rot(J.tail1, 0, s, 0); rot(J.tail3, 0, s * 0.8, 0);
+    }
+  }
+
+  /** WA §5.7 knock-out: the sit pose gets a 15° dizzy head tilt (stars: fx; the dropped sword: _swordDriver). */
+  _layerKO(J, dt) {
+    const p = this.player, ko = p.state === 'dead' && !p.scripted;
+    this.koW = damp(this.koW ?? 0, ko ? 1 : 0, 10, dt);
+    if (this.koW < 1e-3) return;
+    const wob = Math.sin(this.t * 5.2) * 0.05;
+    rot(J.head, 0.08 * this.koW, wob * this.koW, (FEEL.koTilt + wob) * this.koW);
+  }
+
+  /** ART §6.5 squash targets for this frame (the kicks come from events); the jump's pre-squash ends in its kick. */
+  _squashTarget(dt) {
+    const p = this.player, S = SQUASH, s = p.state;
+    if (this.jumpHoldT > 0) {
+      this.jumpHoldT -= dt;
+      if (this.jumpHoldT <= 0) { this.jumpHoldT = 0; this.squash.kick(S.jump.kick); }
+      else return S.jump.target;
+    }
+    if (s === 'dodge') return S.tumble;
+    if (s === 'charge') {
+      const c = clamp(this.charge, 0, 1), holy = p.chargeTier >= 2 ? 1 : 0;
+      return S.holy.target * c + holy * S.holy.shiver * Math.sin(this.t * Math.PI * 2 * S.holy.hz);
+    }
+    const src = this._srcLast;
+    if (src && !src.pounce && src.def?.active) {
+      const t0 = src.def.active[0];
+      if (src.t < t0) return S.windup;
+      const key = src === this.clip ? -2 : this.player.swingSerial;
+      if (this.relSerial !== key) { this.relSerial = key; this.squash.kick(S.release); }
+      return 0;
+    }
+    this.relSerial = -1;
+    if (this.gaitAmp > 0.05) return S.gait * Math.abs(Math.sin(Math.PI * p.gait)) * Math.min(1, this.gaitAmp);
+    if (this.poseName === 'idle' || this.poseName === 'sit') return S.breathe.amp * Math.sin(2 * Math.PI * S.breathe.hz * this.t);
+    return 0;
+  }
+
+  /** PERF L2 / ART §2.5 [X6]: her glow position into ENV_U.uGlow (no PointLight); radius / colour belong to HolyFX. */
+  _glowPos() {
+    const u = WorldEnv.ENV_U?.uGlow?.value;
+    if (!u) return;
+    const o = this.player.object3d.position;
+    u.x = o.x; u.y = o.y + this.player.height * FEEL.glowUp; u.z = o.z;
+  }
+
   /** Per-state accents that are not swings: charge tremble, guard crouch, Standing Ground billow, stagger wobble. */
   _layerStates(J, dt, alpha) {
     const p = this.player, s = p.state;
@@ -574,6 +813,7 @@ export class SwordcatModel {
   _swingSource(alpha) {
     const p = this.player, frozen = this.ctx.game.hitstopT > 0;
     const a = frozen ? 1 : alpha;
+    if (this.clip?.idle && (p.swing || p.state === 'pounce' || p.state === 'dodge')) this.clip = null;   // play wins over a twirl
     if (this.clip?.kind === 'swing') return this.clip;
     if (p.state === 'pounce') return { def: ATTACKS.pounce, vis: VIS.pounce, t: p.stateT, pounce: p.pouncePhase };
     const s = p.swing;
@@ -632,10 +872,16 @@ export class SwordcatModel {
     const k = this.k, g = k.sword?.group;
     const sw = this.sw;
     const src = this._swingSource(alpha);
+    this._srcLast = src;
     if (this.clip?.kind === 'swing') {
       this.clip.t += dt * this.clip.speed;
       if (this.clip.t >= this.clip.dur) { const r = this.clip.resolve; this.clip = null; r?.(); }
     }
+    // WA §5.7 knock-out: the sword lies on the ground beside her (no physics), back in her paws at the respawn pop
+    const p0 = this.player;
+    this.dropW = damp(this.dropW, p0.state === 'dead' && !p0.scripted && !src ? 1 : 0, 10, dt);
+    if (this.dropW < 0.002) this.dropW = 0;
+    if (this.dropW > 0 && g?.visible && g.parent) { this._dropSword(J, g, easeInOutSine(this.dropW)); return; }
     const prof = this._prof || (this._prof = { a: 0, e: 0, c: 0, reach: 1, h: 0.5, spin: 0, hop: 0, twist: 0, lean: 0 });
     const active = !!src && !!g && g.visible;
     const p = this.player;
@@ -728,6 +974,33 @@ export class SwordcatModel {
     _mTmp.decompose(g.position, g.quaternion, _s);
   }
 
+  /**
+   * The dropped sword (WA §5.7): lying flat on the ground beside her at FEEL.koSword (root space), blended from the
+   * pose's own placement by `w`. The arms keep the sit pose (no IK).
+   */
+  _dropSword(J, g, w) {
+    const k = this.k, D = FEEL.koSword;
+    _mBody.compose(J.body.position, J.body.quaternion, J.body.scale);
+    _mHips.multiplyMatrices(_mBody, _mTmp.compose(J.hips.position, J.hips.quaternion, J.hips.scale));
+    _mChest.multiplyMatrices(_mHips, _mTmp.compose(J.chest.position, J.chest.quaternion, J.chest.scale));
+    const parentIsHand = g.parent === k.rig.swordSocket;
+    if (parentIsHand) this._handMatrix(J, _mHand); else _mHand.identity();
+    _mPose.multiplyMatrices(_mHand, _mTmp.compose(g.position, g.quaternion, _one));
+    _mPose.decompose(_posP, _quatP, _s);
+    // blade flat (its face up), pointing out to her right-front; the grip at D
+    const sy = Math.sin(D.yaw), cy = Math.cos(D.yaw);
+    _Y.set(sy, 0, cy); _Z.set(0, 1, 0); _X.set(-cy, 0, sy);
+    _P.set(D.x, D.y, D.z);
+    _O.copy(_P).addScaledVector(_Y, -SWORD_PTS.gripMid);
+    _mSW.makeBasis(_X, _Y, _Z).setPosition(_O);
+    _mSW.decompose(_posS, _quatS, _s);
+    _posS.lerpVectors(_posP, _posS, w);
+    _quatS.copy(_quatP.slerp(_quatS, w));
+    _mSW.compose(_posS, _quatS, _one);
+    _mTmp.copy(_mHand).invert().multiply(_mSW);
+    _mTmp.decompose(g.position, g.quaternion, _s);
+  }
+
   /** Root-space matrix of the sword socket (chest → shoulderR → elbowR → pawR → socket). Requires _mChest. */
   _handMatrix(J, out) {
     out.copy(_mChest);
@@ -804,6 +1077,13 @@ export class SwordcatModel {
     k.sword?.setValorGlow?.(p.valor / PLAYER.valor.max);
   }
 
+  /** A visual happy hop (no physics): a sine arc of SQUASH.hop m over SQUASH.hopDur s. */
+  _hopY(dt) {
+    if (!(this.hopT > 0)) return 0;
+    this.hopT = Math.max(0, this.hopT - dt);
+    return SQUASH.hop * Math.sin(Math.PI * (1 - this.hopT / SQUASH.hopDur));
+  }
+
   /** Physics step-ups (stepY) snap the feet up 0.3 m in one step: ease the body up over ~0.1 s instead. */
   _stepSmooth(dt) {
     const p = this.player, acc = p.stepAccum ?? 0;
@@ -823,7 +1103,11 @@ export class SwordcatModel {
     if (dt > 0 || this.flash === 1) this.flash = Math.max(0, this.flash - (dt > 0 ? dt : 0) / TUNING.hurtFlash);
     const f = this.flash > 0 ? Math.min(1, this.flash * 1.5) : 0;
     if (Math.abs(f - this.flashLast) > 0.01) { this.flashLast = f; k.setFlash(f); }
-    if (k.blob) {
+    // PERF L2 / K5: fx draws her contact blob once fx.blobs exists (the kitten's own blob then hides)
+    if (!this._blobReg && typeof ctx.fx?.blobs?.add === 'function') {
+      try { ctx.fx.blobs.add(p.object3d, FEEL.blobR); this._blobReg = true; if (k.blob) k.blob.visible = false; } catch (e) { console.warn('[player] blob', e); this._blobReg = true; }
+    }
+    if (k.blob && k.blob.visible) {
       const ground = ctx.physics?.heightAt?.(p.object3d.position.x, p.object3d.position.z) ?? p.object3d.position.y;
       const h = p.object3d.position.y + k.root.position.y - ground;
       k.blob.position.y = 0.004 - Math.max(0, h);

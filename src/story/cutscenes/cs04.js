@@ -1,15 +1,17 @@
 // src/story/cutscenes/cs04.js  (owner: story) — CS-04 Lantern Night (GAME_DESIGN §5.4) [MVP] [TREND V6], ~40 s.
-// `forest` trigger `camp` (disc r 6 at (6,40)); the env lerps to night over 4 s.
+// `forest` trigger `camp` (disc r 6 at (6,40)); the env lerps to `forest_twilight` over 4 s (WA §8.6a: never night).
 //   1 CRANE_DOWN into the clearing: Pudding sleeps curled around it (Pudding's 'sleep' mode: the clamped last frame of
-//     Death), snoring; Clem sits by his nose with a lantern (PointLight #FFC46B, 1.5, 6 m); fireflies; Mochi and Sage
+//     Death), snoring; Clem sits by his nose with a lantern (#FFC46B, 1.5, 6 m: the cutscene
+//     lamp slot in ENV_U.uLamps, no PointLight, PERF S5t); fireflies; Mochi and Sage
 //     lie by the fire. Purr loop + low fire crackle.
 //   2 TWO_SHOT_LOW (Sage, Clem): "Can I ask something? Why you? You're the smallest of us." "Because I was there."
 //   3 ECU_EYES, 2 s of silence: "I'm not brave. I'm just... here."
 //   4 wide: Mochi, half asleep, rolls over: "That's what brave is, I think. Being scared and being here."
 //     Sage: "...Don't tell anyone I cried."
 //   5 slow push-out (the tail curl is [unverified] on Dragon_Evolved's Body bones: skipped, push-out only); fade out.
-// end: flag forest.camp; Vigil Stone `vigil_3` lit; env forest_night; music dark_forest_creepy (its map volume 0.6).
+// end: flag forest.camp; Vigil Stone `vigil_3` lit; env forest_twilight; music field_of_dreams + crickets (WA §9).
 import * as THREE from 'three';
+import { FADE_COLOR } from '../../core/config.js';
 import { say, cam, wait, sfx, yawOf } from './lib.js';
 import { castFriend, buildLanternLight, buildFireflies, animateBuilt, activateVigil, hideParty, showParty } from './cast.js';
 
@@ -49,7 +51,8 @@ function castCamp(ctx, cs) {
     // the lantern's light sits a little in front of her and low, so it warms her face instead of blowing it out
     const lx = SEAT[0] + Math.sin(FACE_FIRE) * 0.65, lz = SEAT[1] + Math.cos(FACE_FIRE) * 0.65;
     cs.spawnOne({ id: 'lantern_light', kind: 'object', build: buildLanternLight, at: [lx, lz] });
-    // fx's warm glow halo + embers on the held lantern (requests/fx.md); our PointLight stays the real light
+    animateBuilt(cs, 'lantern_light');
+    // fx's warm glow halo + embers on the held lantern (requests/fx.md); the lamp slot is the light
     cs.spawnOne({ id: 'lantern_glow', kind: 'object', at: [lx, lz], build: (c) => {
       const holder = new THREE.Object3D();
       let h = null;
@@ -65,10 +68,11 @@ function castCamp(ctx, cs) {
 export default {
   id: 'cs04', kind: 'cutscene', skippable: true,
   steps: [
-    { t: 'ui', letterbox: true, hud: false, fade: { to: '#000', alpha: 1, dur: 0.6 } },
+    { t: 'ui', letterbox: true, hud: false, fade: { to: FADE_COLOR, alpha: 1, dur: 0.6 } },
     wait(0.65),
     { t: 'music', track: null, fade: 2 },
-    { t: 'env', preset: 'forest_night', dur: 4, nowait: true },
+    { t: 'env', preset: 'forest_twilight', dur: 4, nowait: true },
+    { t: 'sfx', id: 'crickets', vol: 0.05, handle: 'crickets' },
     { t: 'actor', id: 'swordcat', at: SEAT, facing: FACE_FIRE, pose: 'sit', prop: 'lantern', expression: 'sleepy' },
     { t: 'call', fn: castPudding },
     { t: 'call', fn: castCamp },
@@ -111,10 +115,10 @@ export default {
     say('sage', 'cs04.5', 2.6),
     { t: 'actor', id: 'swordcat', expression: 'happy' },
 
-    // ---- 5 · the slow push-out over the sleeping dragon; fade to black
+    // ---- 5 · the slow push-out over the sleeping dragon; a soft cream fade
     { t: 'cam', anchor: 'swordcat', mode: 'rail', pos: [0.4, 1.0, 2.6], to: [2.5, 6.5, 11], look: [0, 0.6, -1], lookTo: [0, 0.8, -3.5], fov: [38, 46], dur: 7, ease: 'inOutSine', nowait: true },
     wait(4.5),
-    { t: 'ui', fade: { to: '#000', alpha: 1, dur: 2.0 } },
+    { t: 'ui', fade: { to: FADE_COLOR, alpha: 1, dur: 2.0 } },
     wait(2.2),
     { t: 'sfx', stop: 'purr', fade: 1.0 },
     { t: 'sfx', stop: 'camp', fade: 1.0 },
@@ -127,8 +131,8 @@ export default {
     flags: { 'forest.camp': true },
     // hand-back south of the fire facing on up the path (+Z): the follow camera behind her must not sit inside the sleeping Pudding
     actors: { swordcat: { prop: { lantern: false }, pos: END_AT, facing: yawOf([PUD[0] - END_AT[0], PUD[1] - END_AT[1]]) }, pudding: { pose: 'sleep' } },
-    env: 'forest_night',
-    music: { track: 'dark_forest_creepy', fade: 2 },
+    env: 'forest_twilight',
+    music: { track: 'field_of_dreams', fade: 2 },
     ui: { letterbox: false, hud: true, fade: { alpha: 0, dur: 1.2 } },
     cam: 'follow',
     save: true,

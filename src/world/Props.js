@@ -9,18 +9,98 @@ import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { resolveFit } from '../core/Assets.js';
 
-/** Kenney Nature Kit material recolours (their unlit teal-greens → art.md misty meadow palette). */
+/**
+ * Kenney Nature Kit material recolours → the warm picture-book palette (ART_WARM_SPEC §2.6 shared tokens: honey wood,
+ * sandstone, leaf greens shifted warm, candy accents). Shade colours are hue-shifted toward red / violet, never grey.
+ */
 export const RECOLOR = {
-  grass: '#55622F', leafsGreen: '#4F5C2A', leafsDark: '#3B4724', leafsFall: '#9A6E3A', dirt: '#5B4A36', dirtDark: '#45382A',
-  stone: '#8C8F88', stoneDark: '#6C6F69', _defaultMat: '#9A9C8E', woodBark: '#5A4632', woodBarkDark: '#46382B', wood: '#8A6B4A',
-  woodDark: '#5E4634', woodInner: '#C2AE7A', woodBirch: '#D8D2C2', water: '#2F3B33', colorRed: '#B05A54', colorRedDark: '#8A3E3C',
-  colorPurple: '#C77DA8', colorYellow: '#E8C547', colorWhite: '#EDEFE6', colorTan: '#C9A27A', corn: '#D9B860',
+  grass: '#8DB65A', leafsGreen: '#58A84A', leafsDark: '#2F7A45', leafsFall: '#E8963A', dirt: '#9C7650', dirtDark: '#7E6248',
+  stone: '#C9BCA6', stoneDark: '#9C8E7C', _defaultMat: '#D8CCB4', woodBark: '#7E4E2A', woodBarkDark: '#5E3A22', wood: '#B7773F',
+  woodDark: '#7E4E2A', woodInner: '#E8B87A', woodBirch: '#F2EAD8', water: '#3FA8C8', colorRed: '#E0605A', colorRedDark: '#C0484A',
+  colorPurple: '#C9A8FF', colorYellow: '#FFD84A', colorWhite: '#FFFFFF', colorTan: '#E0B884', corn: '#F2D27A',
 };
+
+/**
+ * LI W17: the one proc-prop palette the levels import (was a per-level `C` table of browns, iron and dried-blood red).
+ * Two colours + one accent per prop; nothing darker than luma 0.12 except deliberate ink.
+ */
+export const PROP_PAL = Object.freeze({
+  wood: '#B7773F', woodDark: '#7E4E2A', plank: '#E8B87A',
+  straw: '#F2D27A', burlap: '#D8B880', rope: '#C9A06A',
+  red: '#E0605A', iron: '#6E7A8E', steel: '#C9D0D8',
+  stone: '#C9BCA6', stoneDark: '#9C8E7C', stoneLight: '#E6DAC4', moss: '#8DB65A', dirt: '#9C7650',
+  hyena: '#7A4E9A', cream: '#FFF3E2', plaster: '#FFF0D6', timber: '#7A4A2E',
+  roofTerracotta: '#E0794F', roofSlate: '#6F8FC4', roofMoss: '#4FA39A', roofButter: '#F2C14E',
+  canopyLight: '#9AD663', canopyMid: '#58A84A', canopyDark: '#2F7A45',
+  mushroomCap: '#E8553F', mushroomSpot: '#FFF4E0', glowMint: '#8FF0D8', lilac: '#C9A8FF', windowLit: '#FFD38A',
+  pink: '#FF8FB1', sky: '#8FD3FF', butter: '#FFD84A', mint: '#9BE3C4', teal: '#3FA59A', mustard: '#E0B043', cork: '#C99A6A',
+  ink: '#4A2A1F',
+});
+
+/** ART §2.6 level stone tints (`kit.tpl(path, { tint })`). */
+export const STONE_TINT = Object.freeze({ meadow: '#E3CFAE', town: '#E3CFAE', forest: '#D8D2B0', gate: '#E8B898', bog: '#B8D2C4', keep: '#C8A486', wall: '#E8D6B4' });
+
+/**
+ * ART §4.2: world materials are Lambert + the global toon patch (core `installToon`) + height fog (`withHeightFog`),
+ * vertex coloured, dithered on every tier (X3). No Standard / Physical in play.
+ * @param {THREE.MeshLambertMaterialParameters} [o]
+ */
+export function worldMaterial(o = {}) {
+  const m = new THREE.MeshLambertMaterial({ vertexColors: true, ...o });
+  m.dithering = true;
+  m.userData.owned = true;
+  return m;
+}
+
+/**
+ * ART §4.3 ink rim (0 draws): darkens bevelled silhouette edges seen at a grazing angle; flat faces unaffected.
+ * Appends to the material's existing onBeforeCompile and cache key. `k` = edge multiplier (spec 0.68).
+ * @template {THREE.Material} M @param {M} m @param {number} [k] @returns {M}
+ */
+export function applyInkRim(m, k = 0.68) {
+  if (!m || m.userData.inkRim) return m;
+  const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey !== THREE.Material.prototype.customProgramCacheKey ? m.customProgramCacheKey() : '';
+  m.onBeforeCompile = function (sh, r) {
+    if (prev && prev !== THREE.Material.prototype.onBeforeCompile) prev.call(this, sh, r);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `{
+  float inkE = smoothstep(0.62, 0.92, 1.0 - saturate(dot(normalize(vNormal), normalize(vViewPosition))));
+  outgoingLight *= mix(1.0, ${k.toFixed(3)}, inkE);
+}
+#include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey = () => prevKey + '|ink' + k.toFixed(2);
+  m.userData.inkRim = true;
+  m.needsUpdate = true;
+  return m;
+}
+
+/**
+ * PERF §3.5: never share one material between a Mesh, an InstancedMesh, a SkinnedMesh or a BatchedMesh (three
+ * re-resolves the program every frame). `matFor(base, kind)` returns one clone per kind, cached on the base.
+ * @param {THREE.Material} base @param {'plain'|'instanced'|'skinned'|'batched'} kind
+ */
+export function matFor(base, kind) {
+  if (kind === 'plain' || !base) return base;
+  const cache = base.userData.kinds ??= {};
+  let m = cache[kind];
+  if (!m) {
+    m = base.clone();
+    m.onBeforeCompile = base.onBeforeCompile;
+    m.customProgramCacheKey = base.customProgramCacheKey;
+    m.userData = { ...base.userData, kinds: undefined, kindOf: base.uuid };
+    cache[kind] = m;
+  }
+  return m;
+}
 
 const _v = new THREE.Vector3(), _n = new THREE.Vector3(), _m = new THREE.Matrix4(), _nm = new THREE.Matrix3();
 const _col = new THREE.Color(), _c2 = new THREE.Color(), _uv = new THREE.Vector2();
 const _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _e = new THREE.Euler();
 const _box = new THREE.Box3(), _sph = new THREE.Sphere();
+/** Batched-prop detail noise (± brightness; was 0.16: the ground stays calm under the toon ramp). */
+export const DETAIL_NOISE = 0.08;
+/** Ink-rim strength on the batched props (spec 0.68 is for chunky interactables; buildings share the batch). */
+export const INK_BATCH = 0.8;
 
 // ------------------------------------------------------------------ texture sampling (CPU)
 const _pixels = new WeakMap();
@@ -261,7 +341,7 @@ export function withDetailNoise(m, amount = 0.15) {
  * any scale reads right.
  */
 export function makeStoneMaterial({ block = [0.62, 0.45], course = 0.3 } = {}) {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, envMapIntensity: 0.5 });
+  const m = worldMaterial();
   m.onBeforeCompile = (sh) => {
     patchWorldPos(sh);
     sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
@@ -278,11 +358,11 @@ export function makeStoneMaterial({ block = [0.62, 0.45], course = 0.3 } = {}) {
   vec2 f = fract(b), id = floor(b);
   float e = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y) * 1.3);
   float groove = 1.0 - smoothstep(0.015, 0.06, e);
-  float tint = 0.88 + 0.22 * wdH(id + 17.0);
+  float tint = 0.94 + 0.12 * wdH(id + 17.0);
   float n = wdN(wp.xz * 1.3 + wp.y) * 0.5 + wdN(wp.xz * 4.7 - wp.y * 2.0) * 0.3 + wdN(wp.xz * 13.0) * 0.2;
   float moss = smoothstep(0.62, 0.8, wdN(wp.xz * 0.6 + 3.0)) * (0.35 + 0.65 * top);
-  vec3 c = diffuseColor.rgb * tint * (0.78 + 0.4 * n) * (1.0 - groove * 0.5);
-  c = mix(c, c * vec3(0.78, 0.92, 0.62), moss * 0.55);
+  vec3 c = diffuseColor.rgb * tint * (0.9 + 0.2 * n) * (1.0 - groove * 0.28);
+  c = mix(c, c * vec3(0.86, 1.0, 0.72), moss * 0.45);
   diffuseColor.rgb = c;
 }`);
   };
@@ -315,7 +395,8 @@ export class PropBatch {
     this.geos = new Map();
     /** @type {{geo: THREE.BufferGeometry, matrix: THREE.Matrix4, color: THREE.Color|null, id: number, cull: boolean, radius: number, center: THREE.Vector3, hidden: boolean, culled: boolean}[]} */
     this.items = [];
-    this.material = withDetailNoise(new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, envMapIntensity: 0.6 }), 0.16);
+    // ART §4.2 / §8.3: Lambert + toon patch, calm world-space detail (low hue noise from 50° above), ink edges
+    this.material = applyInkRim(withDetailNoise(worldMaterial(), DETAIL_NOISE), INK_BATCH);
     this.material.userData.owned = true;
     this.mesh = null;
     this._cullT = 0;
@@ -388,15 +469,18 @@ export class PropBatch {
     if (it.id >= 0) this.mesh.setColorAt(it.id, it.color);
   }
 
-  /** Fog-distance culling (every few frames): instances whose sphere lies beyond `maxDist` of `pos` are hidden. */
-  cull(pos, maxDist, frameDt = 0.016) {
+  /**
+   * Fog-distance culling at 4 Hz (PERF §8.3): instances whose sphere lies beyond `maxDist` of `pos` are hidden; with
+   * `hyst` they show again only inside maxDist − hyst (no flicker at the edge).
+   */
+  cull(pos, maxDist, frameDt = 0.016, hyst = 0) {
     if (!this.mesh) return;
     if ((this._cullT -= frameDt) > 0) return;
-    this._cullT = 0.2;
+    this._cullT = 0.25;
     for (const it of this.items) {
       if (it.id < 0 || !it.cull) continue;
       const d = it.center.distanceTo(pos) - it.radius;
-      const culled = d > maxDist;
+      const culled = it.culled ? d > maxDist - hyst : d > maxDist;
       if (culled !== it.culled) { it.culled = culled; this.mesh.setVisibleAt(it.id, !culled && !it.hidden); }
     }
   }

@@ -7,6 +7,19 @@
 // Rows: [id, at [x, z], hide, opts]. Opts are spawnKitten's (see CompanionManager.spawnKitten).
 import { KITTENS_BY_LEVEL } from '../core/config.js';
 
+/**
+ * WA12 / ON §6.2: carriers whose latch is cracked (only a Bright Slash / Holy opens them; other blows "tink"). Mochi's,
+ * so the skill is taught where it matters.
+ */
+export const CRACKED_LOCKS = Object.freeze({ mochi: true });
+/**
+ * WA16: rescues that wait for a story flag on a level (Mochi's tipped cart is on the prologue's lane: he is carried off
+ * in CS-02, so his carrier appears only once Chapter 1 starts). level → kittenId → flag.
+ */
+export const RESCUE_AFTER = Object.freeze({ meadow: Object.freeze({ mochi: 'prologue.done' }) });
+/** ON §6.1: carts that fell off the wagon (tipped 8°, a loose broken wheel beside them). */
+export const TIPPED_CARTS = Object.freeze({ mochi: true });
+
 /** Sage's treetop rope posts (§12.4 `treetop`): 30 HP each; 3/3 cut → the cage lowers over 2 s → D-02. */
 export const TREETOP_ROPES = Object.freeze([[13, -8], [23, -8], [18, -13]]);
 

@@ -1,15 +1,18 @@
 // Palette tokens for every procedural character (research/art.md §6.2, §7, §11; GAME_DESIGN §3, §13.5, §18.3).
 // Pure data: safe to import in node tests.
 
-/** art.md §6.2 game palette (Swordcat + shared). */
+/**
+ * art.md §6.2 game palette (Swordcat + shared), with the ART_WARM_SPEC §2.6 "hero lifts" applied (warmer, brighter,
+ * never 90s-dark): ginger, cream, steel, mail, brass, cape, bow and leather all moved up the value ladder.
+ */
 export const PAL = Object.freeze({
   // Swordcat
-  furGinger: '#D4935A', furGingerLight: '#F0C08F', furGingerDeep: '#A65E2E', furCream: '#EFE3D2', furCreamShade: '#C9B8A3',
+  furGinger: '#E89A55', furGingerLight: '#FFD3A0', furGingerDeep: '#C66E32', furCream: '#FFF3E2', furCreamShade: '#D9C8B2',
   earInner: '#EBB0A6', nose: '#C97F7A', mouth: '#5A3A34', irisInner: '#8DB3C2', irisOuter: '#3F6170', irisRing: '#1B262C',
   pupil: '#0D1114', eyeLine: '#2A1E18',
-  bow: '#F2A2B8', bowLight: '#FFD2DE', bowShade: '#C76E8A', bowKnot: '#E88AA6', whisker: '#F5EEE6',
-  steel: '#A2A8B1', steelDark: '#737983', mail: '#4E535A', brass: '#D9B26A', brassDeep: '#A87C32',
-  leather: '#6B4429', leatherDark: '#4A2E1F', capeRed: '#A3202C', capeLining: '#6B0F1A', capeSheen: '#E0525A',
+  bow: '#FF9EC0', bowLight: '#FFD2DE', bowShade: '#D9668A', bowKnot: '#F28AAE', whisker: '#F5EEE6',
+  steel: '#C9D0D8', steelDark: '#8E96A2', mail: '#7C8494', brass: '#E8C27A', brassDeep: '#B88E46',
+  leather: '#8A5A36', leatherDark: '#6A4430', capeRed: '#D9323F', capeLining: '#9A1F3A', capeSheen: '#F06A72',
   capeCream: '#E2D6C0', capeCreamHem: '#CDBB9C', blade: '#B6BCC4',
   holyCore: '#FFF6DA', holy: '#FFE3A3', holyEdge: '#E8A95A', holyRim: '#FFD98A', sparkle: '#FFF1C4', sparkleWarm: '#FFD57A',
   tuftRoot: '#EFE3D2', tuftTip: '#FFF6EA',
@@ -23,14 +26,14 @@ export const PAL = Object.freeze({
 /** Cape colours (GAME_DESIGN §13.5; §13.3 shop capes). id → { color, lining, sheen, hem }. */
 export const CAPES = Object.freeze({
   cream:     { color: '#CDBB98', lining: '#A08C68', sheen: '#EADCC0', hem: '#B09A72' },   // Marmalade's faded cape
-  red:       { color: '#A3202C', lining: '#6B0F1A', sheen: '#E0525A', hem: '#D9B26A' },
-  memeWhite: { color: '#F2EFE8', lining: '#CFCAC0', sheen: '#FFFFFF', hem: '#D9B26A' },
+  red:       { color: '#D9323F', lining: '#9A1F3A', sheen: '#F06A72', hem: '#E8C27A' },      // ART §2.6 lift, gold hem trim
+  memeWhite: { color: '#FFF3E2', lining: '#F2DCC8', sheen: '#FFFFFF', hem: '#FF9EC0' },      // WA §3.3: cream + pink hem stripe
   blue:      { color: '#3F6FB5', lining: '#25426E', sheen: '#8DB0E8', hem: '#D9B26A' },
   green:     { color: '#5E7F3E', lining: '#3A4F26', sheen: '#A9C57E', hem: '#D9B26A' },
-  midnight:  { color: '#22242A', lining: '#141519', sheen: '#6C74A8', hem: '#C9CED8' },   // §13.3 Midnight #22242A
+  midnight:  { color: '#3A3F5E', lining: '#2A2E48', sheen: '#7C84B8', hem: '#C9CED8' },   // §13.3 Midnight, lifted (no near-black, ART §2.3)
   gold:      { color: '#D9B26A', lining: '#A87C32', sheen: '#FFE9B0', hem: '#FFF1C4' },
   pilgrim:   { color: '#E2D6C0', lining: '#C4B497', sheen: '#FFF6E6', hem: '#CDBB9C' },
-  black:     { color: '#22242A', lining: '#141519', sheen: '#555A66', hem: '#8E1B22' },
+  black:     { color: '#4A3A5E', lining: '#3A2E4A', sheen: '#7A6890', hem: '#C2353B' },   // villains' capes: soft plum
   rust:      { color: '#7A3B22', lining: '#4D2414', sheen: '#B5714E', hem: '#C9A26A' },
 });
 
@@ -51,3 +54,16 @@ export const VILLAGER_COATS = Object.freeze({
 
 /** Accessory colour pool for villagers. */
 export const VILLAGER_CLOTH = Object.freeze(['#B0503C', '#3F6FB5', '#5E7F3E', '#D9B26A', '#7A5C9C', '#C2353B', '#E9E2D2', '#8C6A4A', '#4E8C8A']);
+
+/**
+ * Mischief family (ART_WARM_SPEC §2.6, mirrored from enemies/props.js ENEMY_PAL for the beast heads): cute-menacing
+ * plums and slates, top colours (mustard, teal) that read from above, nothing darker than luma 0.12 except pupils.
+ */
+export const MISCHIEF = Object.freeze({
+  mischiefPlum: '#6E5A86', mischiefPlumLight: '#9C88B4', slate: '#5D6C88', slateLight: '#8E9CB8', mustard: '#E0B043',
+  teal: '#3FA59A', olive: '#8C9A48', oliveTop: '#B7C46A', cork: '#C99A6A', bossCrown: '#F2D06B', cream: '#F6EFE4', peach: '#D9A494',
+});
+/** Phase W looks (WARM_ADVENTURE_SPEC §2, §8): Squeakybone bone + red rubber knob, Sir Sacky, the Big Squeaky Bone. */
+export const WARM_LOOKS = Object.freeze({
+  squeakyBone: '#F3E6C8', squeakyKnob: '#E46A5A', sirSacky: '#E8A46B', sirSackyStitch: '#A8643A', wobbleSmile: '#4A2A1F',
+});

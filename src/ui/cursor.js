@@ -1,16 +1,17 @@
 // src/ui/cursor.js  (owner: ui) — research/CONTROLS_SPEC.md §10.2 context cursors over the game canvas.
 //
-//   ground       the gauntlet paw (silver plate, a pink bow ribbon on the cuff)
-//   enemy        a red sword (also breakables)
-//   interact     paw + a wax seal (interactables, NPCs, cages)
+//   ground       a soft ginger paw pointer with toe beans and a pink bow cuff (WA §3.6 / CL §5.4: no gauntlet metal)
+//   enemy        a candy sword tilted 30° with a white shine (also breakables)
+//   interact     the paw + a mint speech-dot (interactables, NPCs, carriers; WA2: mint = "you can use this")
 //   pickup       a sparkle paw
 //   attackMove   sword + arrow while attack-move is armed
 //   aim          a ring reticle while an ability / aim indicator is open
 //   unreachable  a grey paw with an ✕ over ground with no walkable cell within 2 m (a partial path with a gap > 2 m)
 //   none         cutscenes and the Meme Cam;   default   the plain arrow in menus
 //
-// CSS cursors drawn as inline SVG at 32 px, ×1.5 and ×2 (settings.cursorSize) and a high-contrast variant
-// (settings.cursorContrast: a thick black outline over white / yellow fills). The kind is also written to
+// CSS cursors drawn as inline SVG at 32 px, ×1.5 and ×2 (settings.cursorSize): chunky and rounded with a ~3 px cocoa
+// outline, and a high-contrast variant (settings.cursorContrast: a thicker dark-cocoa outline over white / butter
+// fills; WA §2.7: no black anywhere). The kind is also written to
 // `#app[data-cursor]` (spec: "ui sets a class on #game from player.hover.kind") so CSS / smoke can read it.
 // `cursorKind` is pure (node-tested); `CursorController` owns the per-frame DOM write (only on change).
 
@@ -40,35 +41,36 @@ export function cursorKind(s) {
 }
 
 // ------------------------------------------------------------------ art (32 × 32 viewBox)
-const INK = '#2A1E18';
-/** The gauntlet pointer: a silver plate arrow (tip at 3,2), knuckle ridges and a pink bow ribbon on the cuff. */
-const pawBody = (fill, ink, w) => `<path d="M3 2l4.2 22.4 4.6-6.1 5.6 9.6 4.4-2.6-5.5-9.5 7.6-1z" fill="${fill}" stroke="${ink}" stroke-width="${w}" stroke-linejoin="round"/>`
-  + `<path d="M6.3 8.5l8.4 7.6" stroke="${ink}" stroke-opacity=".35" stroke-width="1.1" fill="none"/>`;
-const ribbon = (ink, hc) => `<g stroke="${ink}" stroke-width="${hc ? 1.6 : 1.1}" stroke-linejoin="round"><path d="M19 25.3l-3.1-3.9 1.2 5.6z" fill="#F7A8C4"/><path d="M19 25.3l4.6-1.9-3.4 4.8z" fill="#F7A8C4"/><circle cx="19" cy="25.3" r="1.6" fill="#E46A93"/></g>`;
-const sword = (blade, ink, w) => `<g stroke="${ink}" stroke-width="${w}" stroke-linejoin="round"><path d="M2.5 2.5l4.5.6 13.3 13.3-3.9 3.9L3.1 7z" fill="${blade}"/>`
-  + `<path d="M15.2 21.6l6.4-6.4 2.4 2.4-6.4 6.4z" fill="#D9B26A"/><path d="M21 21l6.2 6.2" stroke-width="${w * 2.1}" stroke-linecap="round"/><circle cx="28.2" cy="28.2" r="2" fill="#D9B26A"/></g>`;
-const seal = (ink, w) => `<g stroke="${ink}" stroke-width="${w}"><path d="M23.5 16.6l2 1.6 2.5-.4.6 2.5 2.1 1.4-1 2.3.6 2.5-2.4.9-1.1 2.3-2.4-.8-2.3 1.1-1.2-2.2-2.4-.8.4-2.5-1.2-2.2 2.1-1.4.3-2.5 2.5.2z" fill="#D9566F"/></g>`
-  + '<path d="M21.6 23.6c.6-1.9 3.3-1.9 3.8 0c.4 1.6-1.9 2.4-1.9 2.4s-2.4-.8-1.9-2.4z" fill="#F7A8C4"/>';
+const INK = '#5A3B2E';
+/** The paw pointer: a rounded ginger arrow (tip at 3,2) with three toe beans and a pink bow cuff. */
+const pawBody = (fill, ink, w) => `<path d="M3 2l4.2 22.4 4.6-6.1 5.6 9.6 4.4-2.6-5.5-9.5 7.6-1z" fill="${fill}" stroke="${ink}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`
+  + '<g fill="#FFB8CF"><circle cx="7.4" cy="10.6" r="1.25"/><circle cx="10.2" cy="13.2" r="1.25"/><circle cx="8.6" cy="15.9" r="1.4"/></g>';
+const ribbon = (ink, hc) => `<g stroke="${ink}" stroke-width="${hc ? 1.6 : 1.2}" stroke-linejoin="round"><path d="M19 25.3l-3.1-3.9 1.2 5.6z" fill="#FF9EC0"/><path d="M19 25.3l4.6-1.9-3.4 4.8z" fill="#FF9EC0"/><circle cx="19" cy="25.3" r="1.6" fill="#FF6F9C"/></g>`;
+const sword = (blade, ink, w) => `<g stroke="${ink}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"><path d="M2.5 2.5l4.5.6 13.3 13.3-3.9 3.9L3.1 7z" fill="${blade}"/>`
+  + `<path d="M15.2 21.6l6.4-6.4 2.4 2.4-6.4 6.4z" fill="#FFD86B"/><path d="M21 21l6.2 6.2" stroke-width="${w * 2.1}"/><circle cx="28.2" cy="28.2" r="2" fill="#FFD86B"/></g>`
+  + '<path d="M5.2 4.6l10.6 10.6" stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round" opacity=".8"/>';
+const seal = (ink, w) => `<g stroke="${ink}" stroke-width="${w}"><path d="M20 17.5c0-2.6 2.3-4.3 5.3-4.3s5.3 1.7 5.3 4.3-2.3 4.3-5.3 4.3c-.8 0-1.6-.1-2.3-.4l-2.6 1.6.7-2.6c-.7-.8-1.1-1.8-1.1-2.9z" fill="#9BE3C4"/></g>`
+  + '<g fill="#FFFFFF"><circle cx="23.2" cy="17.5" r="1"/><circle cx="25.4" cy="17.5" r="1"/><circle cx="27.6" cy="17.5" r="1"/></g>';
 const sparkle = (ink, w) => `<g stroke="${ink}" stroke-width="${w}" stroke-linejoin="round" fill="#FFD34D"><path d="M24.5 13l1.6 4.4 4.4 1.6-4.4 1.6-1.6 4.4-1.6-4.4-4.4-1.6 4.4-1.6z"/><path d="M28.5 4.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></g>`;
 const arrow = (ink, w) => `<g fill="none" stroke="${ink}" stroke-width="${w + 1.6}" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 28h11M25.5 24l4 4-4 4"/></g>`
   + '<g fill="none" stroke="#FFF6E6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 28h11M25.5 24l4 4-4 4"/></g>';
-const reticle = (hc) => `<g fill="none" stroke="${INK}" stroke-width="${hc ? 5 : 4}" stroke-linecap="round"><circle cx="16" cy="16" r="9"/><path d="M16 2.5v5M16 24.5v5M2.5 16h5M24.5 16h5"/></g>`
+const reticle = (hc) => `<g fill="none" stroke="${hc ? '#2A1E18' : INK}" stroke-width="${hc ? 5 : 4}" stroke-linecap="round"><circle cx="16" cy="16" r="9"/><path d="M16 2.5v5M16 24.5v5M2.5 16h5M24.5 16h5"/></g>`
   + `<g fill="none" stroke="${hc ? '#FFE14D' : '#FFF6E6'}" stroke-width="2.2" stroke-linecap="round"><circle cx="16" cy="16" r="9"/><path d="M16 2.5v5M16 24.5v5M2.5 16h5M24.5 16h5"/></g>`
-  + '<circle cx="16" cy="16" r="2.2" fill="#FF6A3D" stroke="#2A1E18" stroke-width=".8"/>';
-const cross = (ink) => `<g stroke-linecap="round"><path d="M20 19l8 8M28 19l-8 8" stroke="${ink}" stroke-width="5"/><path d="M20 19l8 8M28 19l-8 8" stroke="#E7EAEE" stroke-width="2.2"/></g>`;
+  + '<circle cx="16" cy="16" r="2.2" fill="#FF8FB1" stroke="#5A3B2E" stroke-width=".8"/>';
+const cross = (ink) => `<g stroke-linecap="round"><path d="M20 19l8 8M28 19l-8 8" stroke="${ink}" stroke-width="5"/><path d="M20 19l8 8M28 19l-8 8" stroke="#FFF6E6" stroke-width="2.2"/></g>`;
 
 /** SVG markup + hotspot (in the 32-unit space) per kind and contrast. */
 function art(kind, hc) {
-  const w = hc ? 2.4 : 1.5, ink = hc ? '#000000' : INK;
-  const plate = hc ? '#FFFFFF' : '#E7EAEE';
+  const w = hc ? 3 : 2.2, ink = hc ? '#2A1E18' : INK;
+  const fur = hc ? '#FFFFFF' : '#E89A55';
   switch (kind) {
-    case 'enemy': return { svg: sword(hc ? '#FF3B30' : '#FF6A3D', ink, w), hx: 3, hy: 3 };
-    case 'interact': return { svg: pawBody(plate, ink, w) + seal(ink, hc ? 1.6 : 1.1), hx: 3, hy: 2 };
-    case 'pickup': return { svg: pawBody(plate, ink, w) + sparkle(ink, hc ? 1.5 : 1), hx: 3, hy: 2 };
-    case 'attackMove': return { svg: sword(hc ? '#FF3B30' : '#FF3B30', ink, w) + arrow(ink, w), hx: 3, hy: 3 };
+    case 'enemy': return { svg: sword(hc ? '#FF5A4E' : '#FF8FB1', ink, w), hx: 3, hy: 3 };
+    case 'interact': return { svg: pawBody(fur, ink, w) + seal(ink, hc ? 1.6 : 1.2), hx: 3, hy: 2 };
+    case 'pickup': return { svg: pawBody(fur, ink, w) + sparkle(ink, hc ? 1.5 : 1), hx: 3, hy: 2 };
+    case 'attackMove': return { svg: sword(hc ? '#FF5A4E' : '#FF7A6B', ink, w) + arrow(ink, w), hx: 3, hy: 3 };
     case 'aim': return { svg: reticle(hc), hx: 16, hy: 16 };
-    case 'unreachable': return { svg: `<g opacity="${hc ? 1 : 0.9}">${pawBody(hc ? '#BDBDBD' : '#A9ADB2', ink, w)}</g>` + cross(ink), hx: 3, hy: 2 };
-    default: return { svg: pawBody(plate, ink, w) + ribbon(ink, hc), hx: 3, hy: 2 };
+    case 'unreachable': return { svg: `<g opacity="${hc ? 1 : 0.9}">${pawBody(hc ? '#E9DCCB' : '#D8C8B6', ink, w)}</g>` + cross(ink), hx: 3, hy: 2 };
+    default: return { svg: pawBody(fur, ink, w) + ribbon(ink, hc), hx: 3, hy: 2 };
   }
 }
 

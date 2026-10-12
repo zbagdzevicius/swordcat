@@ -1,5 +1,6 @@
-// src/world/Water.js  (owner: world) — GAME_DESIGN §18.3 water: MeshStandardMaterial #2F3B33, roughness 0.12, with a
-// procedural scrolling normal (no texture), so the overcast PMREM sky and the fog colour reflect in it. One mesh per
+// src/world/Water.js  (owner: world) — GAME_DESIGN §18.3 water, warm-toon (ART_WARM_SPEC §2.6, §4.2): Lambert + the
+// toon patch in a clear sky-blue (deep #3FA8C8 ↔ shallow #8FE0E0 by a slow world-space pattern) with a procedural
+// scrolling normal (no texture, no env map) and a white specular sparkle term (the only non-Lambert bit). One mesh per
 // water entry of a level (`water: [{ kind: 'stream' | 'rect' | 'disc' | 'plane', ... }]`, Appendix B.1):
 //   stream { from, to (or pts), width, y, deep, flow? }   a strip along the polyline, 3 m wider each side (the banks
 //                                                         hide the edges)
@@ -7,11 +8,15 @@
 // Visual only; physics / player read Level.waterLevelAt / isDeepWater. No DOM at import.
 import * as THREE from 'three';
 
+/** ART §2.6 water colours (bog lagoon `#2FAE9E` through `def.waterColor`) and the glint strength. */
+export const WATER = Object.freeze({ deep: '#3FA8C8', shallow: '#8FE0E0', foam: '#FFFFFF', bog: '#2FAE9E', sparkle: 0.55 });
+
 const WATER_VERT_PARS = /* glsl */`
 varying vec3 vWWorld;
 `;
 const WATER_FRAG_PARS = /* glsl */`
 uniform float uWTime, uWWind;
+uniform vec3 uWDeep, uWShallow;
 uniform vec2 uWFlow;
 varying vec3 vWWorld;
 float wH(vec2 p) { p = fract(p * vec2(234.34, 435.345)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
@@ -34,10 +39,29 @@ const WATER_FRAG_NORMAL = /* glsl */`
   normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
 }
 `;
+/** Deep ↔ shallow tint and the white glints (emissive: they read in shade and at night too). */
+const WATER_FRAG_COLOR = /* glsl */`
+#include <color_fragment>
+{
+  vec2 wp = vWWorld.xz;
+  float m = wF(wp * 0.12 + uWFlow * uWTime * 0.02);
+  diffuseColor.rgb = mix(uWDeep, uWShallow, smoothstep(0.35, 0.75, m));
+}
+`;
+const WATER_FRAG_SPARKLE = /* glsl */`
+#include <emissivemap_fragment>
+{
+  vec2 wp = vWWorld.xz * 3.1 + uWFlow * uWTime * 0.6;
+  float s = smoothstep(0.82, 0.97, wN(wp) * wN(wp * 1.9 + 5.3) * 1.9);
+  totalEmissiveRadiance += vec3(s * ${WATER.sparkle.toFixed(3)});
+}
+`;
+
 
 /** Shared water material (one program for every water mesh of a level). */
 export function makeWaterMaterial(uniforms) {
-  const m = new THREE.MeshStandardMaterial({ color: '#2F3B33', roughness: 0.12, metalness: 0.0, envMapIntensity: 1.1 });
+  const m = new THREE.MeshLambertMaterial({ color: '#FFFFFF' });
+  m.dithering = true;
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
@@ -45,9 +69,11 @@ export function makeWaterMaterial(uniforms) {
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + WATER_FRAG_PARS)
-      .replace('#include <normal_fragment_maps>', WATER_FRAG_NORMAL);
+      .replace('#include <normal_fragment_maps>', WATER_FRAG_NORMAL)
+      .replace('#include <color_fragment>', WATER_FRAG_COLOR)
+      .replace('#include <emissivemap_fragment>', WATER_FRAG_SPARKLE);
   };
-  m.customProgramCacheKey = () => 'world-water-v1';
+  m.customProgramCacheKey = () => 'world-water-v2';
   m.userData.owned = true;
   return m;
 }
@@ -74,9 +100,10 @@ export function stripGeometry(pts, w) {
 
 export class WaterSet {
   /** @param {any[]} entries level water entries @param {number} levelSize */
-  constructor(entries, levelSize = 200) {
+  constructor(entries, levelSize = 200, { deep = WATER.deep, shallow = WATER.shallow } = {}) {
     this.group = new THREE.Group(); this.group.name = 'water';
-    this.uniforms = { uWTime: { value: 0 }, uWWind: { value: 0.6 }, uWFlow: { value: new THREE.Vector2(1, 0) } };
+    this.uniforms = { uWTime: { value: 0 }, uWWind: { value: 0.6 }, uWFlow: { value: new THREE.Vector2(1, 0) },
+      uWDeep: { value: new THREE.Color(deep) }, uWShallow: { value: new THREE.Color(shallow) } };
     this.material = makeWaterMaterial(this.uniforms);
     this.meshes = [];
     for (const w of entries ?? []) {

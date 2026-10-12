@@ -2,15 +2,17 @@
 //   1 wide on the wall (`gate`): kittens cheer, then go quiet. Mochi: "Where's Sir Marmalade?"
 //     → the Chapter 4 results card (§12.1: gate ends in this scene) → load `town` spawn `bakery_cot`
 //   2 bakery doorway, exterior (no interior is built): Marmalade on a cot under the awning, bandaged, a bowl of soup.
-//     "Eighth life. Gone. Worth it, mind."
+//     "Eighth life. Used it up. Best catch of my career." (bedside: tavern_old_tower_inn, cozy, WA §9)
 //   3 TWO_SHOT_LOW: she takes the yellowed letter from her belt and gives it to him. He reads. Long pause.
 //     "...Seven months old. Look at that handwriting." "Doctor says bed and soup. You'll have to finish this one, Dame—"
 //     Clem: "I'm not a dame."  Marmalade: "...Yet."
-//   4 from the window toward the north: the Gloom rolls in (grade grey, fog 0.025 → 0.05 over 4 s).
-//   5 medium (Earl Grey, Pip): "That's the Warlord's doing…Houndhold Keep, north across the Bogmire." "And the
-//     smugglers' landing in the bog is where they ship the kittens."  Clem: "Pearl."
-// end: flag gate.done; env hub_grey (until ending.seen); the Lookout (Pip) opens on gate.done; she stands at `town`
+//   4 from the window toward the north: Barkus pulls the curtains, the Big Yawn rolls in (`hub_hush` lavender, fog
+//     0.025 → 0.05 over 4 s); the lament only for this 4 s window shot (WA §8.6a).
+//   5 medium (Earl Grey, Pip): "That's Barkus, pulling the curtains…" "And the ferry dock is where they send the
+//     kittens…"  Clem: "Pearl."  Then home's tune, sleepy (village_bards_tale).
+// end: flag gate.done; env hub_hush (until ending.seen); the Lookout (Pip) opens on gate.done; she stands at `town`
 // spawn `hub`; save.
+import { FADE_COLOR } from '../../core/config.js';
 import { say, cam, wait, sfx } from './lib.js';
 import { castFriend, hideParty, showParty, spoonRows, levelResults } from './cast.js';
 
@@ -72,13 +74,13 @@ export default {
     say('mochi', 'cs10.1', 2.4),
     { t: 'actor', id: 'swordcat', expression: 'worried', emote: 'earsFlat' },
     wait(0.6),
-    { t: 'ui', fade: { to: '#000', alpha: 1, dur: 0.9 } },
+    { t: 'ui', fade: { to: FADE_COLOR, alpha: 1, dur: 0.9 } },
     wait(1.0),
     { t: 'call', fn: toTown, max: 20 },
 
     // ---- 2 · the bakery awning: Marmalade on a cot
     { t: 'load', level: 'town', spawn: 'bakery_cot' },
-    { t: 'music', track: 'story_lament_warriors_soul', fade: 1.5 },
+    { t: 'music', track: 'tavern_old_tower_inn', fade: 1.5 },
     { t: 'call', fn: bakeryCast },
     { t: 'actor', id: 'swordcat', at: ME_TOWN, facing: -Math.PI / 2, pose: 'idle', expression: 'worried', prop: { 'letter@belt': true } },
     cam(null, 'swordcat', { pos: [1.4, 1.4, 1.2], look: [0, 0.55, 2.0], fov: 44 }),
@@ -103,14 +105,16 @@ export default {
     { t: 'actor', id: 'marmalade', expression: 'happy' },
     say('marmalade', 'cs10.6', 1.4),
 
-    // ---- 4 · the Gloom rolls in from the north
+    // ---- 4 · the Big Yawn rolls in from the north (the only lament: this window shot)
     { t: 'cam', anchor: [0, 0, 0], mode: 'cut', pos: [-21.6, 1.3, -21.4], look: [-12, 5, 30], fov: 50 },
-    { t: 'env', preset: 'hub_grey', dur: 4 },
+    { t: 'music', track: 'story_lament_warriors_soul', fade: 1.0 },
+    { t: 'env', preset: 'hub_hush', dur: 4 },
     { t: 'env', fogDensity: 0.05, dur: 4 },
     sfx('cs10.gloom'),
     wait(4.2),
 
-    // ---- 5 · Earl Grey and Pip
+    // ---- 5 · Earl Grey and Pip (home's tune again, sleepy)
+    { t: 'music', track: 'village_bards_tale', fade: 2.0 },
     { t: 'actor', id: 'earlgrey', visible: true },
     { t: 'actor', id: 'pip', visible: true },
     cam(null, 'swordcat', { pos: [-1.6, 1.0, 2.4], look: [0.6, 0.6, 0.2], fov: 44 }),
@@ -122,7 +126,7 @@ export default {
     cam('ECU_EYES', 'swordcat', {}),
     say('swordcat', 'cs10.9', 1.6),
     wait(0.6),
-    { t: 'ui', fade: { to: '#000', alpha: 1, dur: 1.0 } },
+    { t: 'ui', fade: { to: FADE_COLOR, alpha: 1, dur: 1.0 } },
     wait(1.1),
   ],
   end: {
@@ -135,8 +139,8 @@ export default {
     },
     player: { spawn: 'hub' },
     actors: { swordcat: { prop: { 'letter@belt': false, letter: false } } },
-    env: 'hub_grey',
-    music: { track: 'story_lament_warriors_soul', fade: 2 },
+    env: 'hub_hush',
+    music: { track: 'village_bards_tale', fade: 2 },
     ui: { letterbox: false, hud: true, fade: { alpha: 0, dur: 1.2 } },
     cam: 'follow',
     save: true,

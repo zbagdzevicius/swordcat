@@ -14,11 +14,14 @@
 //   this.view.simulate();                    // cape, fur drag, eyes, bow, props
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { buildKitten, Kitten } from './KittenBuilder.js';
+import { buildKitten, Kitten, PLAY_LOD } from './KittenBuilder.js';
 import { catConfig } from './configs.js';
 import { FUR_WIND } from './Fur.js';
 import { initCharacters, characterFrame, visualDt } from './runtime.js';
 import { setProxyXray, ringAnchor, XRAY } from './Readability.js';
+import { READABILITY, TOP_VIEW } from './materials.js';
+import { CHAR_Q } from './util.js';
+import { OUTLINE, outlineAllowed, inkFor } from './Outline.js';
 
 /** Meme Cam cape settings (GAME_DESIGN §7.8: 3.8 s loop, gust peak at 1.2 s; 0.3 s in, 0.6 s out; §5.2 cape wind ×1.6). */
 export const MEME_CAPE = Object.freeze({ in: { blend: 0.3, period: 3.8, gustPeak: 1.2 }, out: { blend: 0.6 }, windMul: 1.6 });
@@ -45,8 +48,10 @@ export class KittenView {
    * @param {any} ctx game ctx (null in tools)
    * @param {object | string | Kitten} what a buildKitten config, a cat id (configs.catConfig) or a built Kitten
    * @param {{ actor?: any, parent?: THREE.Object3D, pose?: string, expression?: string, memeCam?: boolean,
-   *           castShadow?: boolean, glance?: boolean }} [o]  memeCam: follow camera:meme; glance: idle camera
-   *           glance (GLANCE). Both default to true for the player.
+   *           castShadow?: boolean, glance?: boolean, role?: 'hero'|'companion'|'npc', lod?: 'play'|'full',
+   *           outline?: boolean }} [o]  memeCam: follow camera:meme; glance: idle camera glance (GLANCE); both default
+   *           to true for the player. role: hero pop-out scale / outline tier (default from the actor's tags);
+   *           lod: 'play' in game (the play-LOD set, ART §6.4), 'full' in tools.
    */
   constructor(ctx, what, o = {}) {
     this.ctx = ctx ?? null;
@@ -56,7 +61,7 @@ export class KittenView {
     if (!(what instanceof Kitten)) {
       const cfg = typeof what === 'string' ? catConfig(what) : what;
       if (!cfg) throw new Error(`[characters] unknown cat id "${what}"`);
-      kitten = buildKitten(cfg);
+      kitten = buildKitten(cfg, { lod: o.lod ?? (this.ctx?.game && CHAR_Q.playLod ? 'play' : 'full') });
     }
     /** @type {Kitten} */
     this.kitten = kitten;
@@ -70,6 +75,15 @@ export class KittenView {
     this._dt = 0;
     this._meme = false;
     this._offs = [];
+    // hero pop-out (WARM_ADVENTURE_SPEC §3.3): the visual root grows in the iso gameplay modes (hitboxes unchanged)
+    const tags = this.actor?.tags;
+    this.role = o.role ?? (tags?.has?.('player') || kitten.tier === 'hero' ? 'hero' : tags?.has?.('companion') ? 'companion' : 'npc');
+    this._baseScale = kitten.root.scale.x;
+    this._playK = 1;
+    this._actOverride = null;
+    this._frames = 0; this._idleQueued = false;
+    this._outlineWant = o.outline;
+    this._outlineTier = null;
     // the hero's x-ray proxy is built now (level load), not on the first occlusion mid-fight (CONTROLS_SPEC §3)
     if (this.ctx && kitten.tier === 'hero') kitten.getSilhouetteProxy();
     // shader warm-up (requests/fx.md, player.md): the first frames, then every level load and quality change
@@ -105,13 +119,56 @@ export class KittenView {
    */
   animate(frameDt, o = {}) {
     characterFrame(this.ctx);
+    const k = this.kitten;
     // the shadow proxy (shells don't cast) only feeds the shadow pass: with shadows off (Low) skip its draw call too
-    const sp = this.kitten.shadowProxy, sm = this.ctx?.renderer?.shadowMap;
-    if (sp && sm) sp.visible = sm.enabled !== false;
+    const sp = k.shadowProxy, sm = this.ctx?.renderer?.shadowMap;
+    if (sp && sm) sp.visible = sm.enabled !== false && k.root.visible;
     this._dt = visualDt(this.ctx, frameDt);
-    this.kitten.animate(this._dt, o);
+    if (this.ctx) this._lodFrame(frameDt);
+    k.animate(this._dt, o);
     return this._dt;
   }
+
+  /** Per-frame LOD glue: activity tier, close-up flag, hero pop-out scale, outline tier, idle close-up build. */
+  _lodFrame(frameDt) {
+    const k = this.kitten, cam = this.ctx.cam;
+    // activity (PERF §4.3, X13): camera's activityOf(actor) unless someone set a tier explicitly
+    const act = this._actOverride ?? (this.actor && typeof cam?.activityOf === 'function' ? cam.activityOf(this.actor) | 0 : 0);
+    k.setActivity(act);
+    // close-up (ART §6.1): camera's cam.closeUp, else the lens hysteresis Readability computes
+    if (typeof TOP_VIEW.closeUp === 'boolean') k.setCloseUp(TOP_VIEW.closeUp);
+    // the full-detail close-up set builds in an idle slice after the first frames (never on the close-up frame)
+    if (!this._idleQueued && k.lod === 'play' && ++this._frames >= PLAY_LOD.idleAfter) {
+      this._idleQueued = true;
+      const run = () => { if (this.kitten === k && !this._disposed) k.prepareCloseUp(); };
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 });
+      else if (typeof setTimeout === 'function') setTimeout(run, 0);
+    }
+    // hero pop-out: ×1.12 hero / ×1.08 companions in the iso modes, 1.0 in cutscenes, blended over scaleBlend
+    const want = this.playScaleTarget();
+    if (this._playK !== want) {
+      const step = Math.abs(READABILITY.playScale - 1) * (frameDt / READABILITY.scaleBlend);
+      this._playK = want > this._playK ? Math.min(want, this._playK + step) : Math.max(want, this._playK - step);
+      k.root.scale.setScalar(this._baseScale * this._playK);
+    }
+    // outline hull per QUALITY.outline (X9): hero (+ boss) always; companions on Med; everyone on High
+    if (this._outlineTier !== CHAR_Q.outline) {
+      this._outlineTier = CHAR_Q.outline;
+      const on = this._outlineWant ?? outlineAllowed(CHAR_Q.outline, this.role);
+      if (on || k.outline) {
+        const hero = this.role === 'hero';
+        k.setOutline(on, { px: hero ? OUTLINE.px.hero : OUTLINE.px.companion, color: hero ? OUTLINE.hero : inkFor(k.coat?.base ?? OUTLINE.ink) });
+      }
+    }
+  }
+
+  /** The pop-out scale this view is heading to (1 outside the iso gameplay modes and for other cats). */
+  playScaleTarget() {
+    if (!TOP_VIEW.iso) return 1;
+    return this.role === 'hero' ? READABILITY.playScale : this.role === 'companion' ? READABILITY.playScaleCompanion : 1;
+  }
+  /** Current visual pop-out factor (1 = cutscene size). */
+  get playScale() { return this._playK; }
 
   /**
    * Secondary motion after the joints are final: cape, fur drag, eyes, bow, props.
@@ -186,8 +243,35 @@ export class KittenView {
     g.driving = true;
   }
 
-  /** animate() + simulate() for actors that only use poses (NPCs, scripted cats, lost kittens). */
-  render(frameDt, o = {}) { this.animate(frameDt, o); return this.simulate(o); }
+  /**
+   * animate() + simulate() for actors that only use poses (NPCs, scripted cats, lost kittens). Off-screen tiers
+   * (PERF §4.3): tier 2 animates every 4th frame with the summed dt, tier 3 not at all.
+   */
+  render(frameDt, o = {}) {
+    const k = this.kitten;
+    if (k.activity >= 2) {
+      const d = k.activityDt(frameDt);
+      if (d === 0) { characterFrame(this.ctx); if (this.ctx) this._lodFrame(frameDt); return this; }
+      frameDt = d;
+    }
+    this.animate(frameDt, o); return this.simulate(o);
+  }
+
+  /**
+   * Activity tier override (PERF §4.3, X13; replaces the draft setOffscreen). null = follow camera's activityOf(actor).
+   * @param {0|1|2|3|null} tier
+   */
+  setActivity(tier) { this._actOverride = tier === null || tier === undefined ? null : tier | 0; if (this._actOverride !== null) this.kitten.setActivity(this._actOverride); return this; }
+  /** Close-up on / off by hand (camera normally drives it through cam.closeUp). @param {boolean} on */
+  setCloseUp(on) { this.kitten.setCloseUp(on); return this; }
+  /** Squash kick (ART §6.5): jump +3.5, land −2.5 × min(1, fallSpeed / 6), hit −2.0, meow +2.0. */
+  squashKick(dv) { this.kitten.squashKick(dv); return this; }
+  /** Squash target for this frame (gait bounce, wind-up −0.08, Holy charge −0.10, tumble −0.2; 0 = rest). */
+  setSquashTarget(v) { this.kitten.squashTarget = v; return this; }
+  /** Outline hull on / off by hand (null = follow QUALITY.outline). */
+  setOutline(on) { this._outlineWant = on === null ? undefined : !!on; this._outlineTier = null; return this; }
+  /** Feature summary for smoke / debug (Kitten.debugFeatures + view state). */
+  debugFeatures() { return { ...this.kitten.debugFeatures(), role: this.role, playScale: this._playK }; }
 
   /** Snap secondary motion after a teleport or a camera cut. */
   snap() { this.kitten.snap(); return this; }
@@ -254,6 +338,7 @@ export class KittenView {
   }
 
   dispose() {
+    this._disposed = true;
     this.kitten.warmEnd();
     for (const off of this._offs.splice(0)) off();
     this.kitten.dispose();

@@ -20,10 +20,12 @@ import { E } from '../core/events.js';
 import { hostileTo } from '../core/ActorRegistry.js';
 import { wrapAngle } from '../core/math.js';
 import { autoTarget, hopSpeed } from './Aim.js';
+import { ORDER_FX } from './juice.js';
 
 const _hostile = hostileTo('player');
 const SWING = ATTACKS.slash1;
 const ORDER_KINDS = new Set(['move', 'follow', 'attack', 'attackMove', 'use', 'stop']);
+const _sp = new THREE.Vector3();
 
 export class Orders {
   /** @param {import('./Player.js').Player} p */
@@ -69,6 +71,10 @@ export class Orders {
     this._endAt = null;
     /** a hurt stun paused the order: re-plan from the knockback spot when it ends */
     this._hurtPause = false;
+    /** WA §3.6 double tap: the last accepted ground order (point + wall-clock s) */
+    this._lastTap = { x: 0, z: 0, t: -Infinity };
+    /** the pick ray's camera-side ground point for findPath's wall-face snap hint (physics `toward`) */
+    this._toward = { x: 0, z: 0 };
   }
 
   get active() { return this.kind !== null; }
@@ -103,10 +109,17 @@ export class Orders {
     const pt = kind === 'attack' ? arg.pos : kind === 'use' ? (arg.usePos ?? arg.pos) : arg;
     this.point.set(pt.x, pt.y ?? p.pos.y, pt.z);
     if (kind === 'attack') this.ctx.cam?.select?.(arg, o.source === 'touch' ? 'tap' : 'click');
-    const ok = this._plan(this.point);
+    const ok = this._plan(this.point, o.toward);
     if (p.state === 'attack' && (kind === 'move' || kind === 'attackMove')) this.pendingSwingCancel = true;
     if (p.state === 'guard' && kind !== 'attack') { /* the Stand plants her: the order waits until she lets go */ }
-    this._emit(kind, this.point, this.target, ok, false);
+    // WA §3.6: a second ground order on the same spot within 0.35 s → double paw + a happy hop (feedback only)
+    let double = false;
+    if (ok && (kind === 'move' || kind === 'attackMove') && (o.source === 'mouse' || o.source === 'touch')) {
+      const now = performance.now() / 1000, L = this._lastTap;
+      double = now - L.t <= ORDER_FX.doubleT && Math.hypot(this.point.x - L.x, this.point.z - L.z) <= ORDER_FX.doubleR;
+      L.x = this.point.x; L.z = this.point.z; L.t = double ? -Infinity : now;
+    }
+    this._emit(kind, this.point, this.target, ok, false, double);
     if (!ok || this.partial) this._rejectFx(ok);
     return ok;
   }
@@ -152,12 +165,15 @@ export class Orders {
 
   _validTarget(a) { return !!a && a.alive !== false && !!a.pos && a.hurtable !== false; }
 
-  _emit(kind, point, target, valid, queued) {
-    this.ctx.bus?.emit?.(E.PLAYER_ORDER, { kind, point: point ? new THREE.Vector3(point.x, point.y ?? this.p.pos.y, point.z) : null, target: target ?? null, valid: !!valid, queued: !!queued, partial: !!this.partial });
+  _emit(kind, point, target, valid, queued, double = false) {
+    this.ctx.bus?.emit?.(E.PLAYER_ORDER, { kind, point: point ? new THREE.Vector3(point.x, point.y ?? this.p.pos.y, point.z) : null, target: target ?? null, valid: !!valid, queued: !!queued, partial: !!this.partial, double: !!double });
   }
 
-  /** Path to `goal` (a nav path, else a straight line). Returns false when nothing at all is reachable. */
-  _plan(goal) {
+  /**
+   * Path to `goal` (a nav path, else a straight line). Returns false when nothing at all is reachable. `toward` ({x, z},
+   * optional): the camera side of the pick ray, physics' snap hint for clicks on the far face of a wall.
+   */
+  _plan(goal, toward = null) {
     const p = this.p, ph = this.ctx.physics;
     this._goal.copy(goal);
     this.wp = 0;
@@ -167,7 +183,7 @@ export class Orders {
       this.path.push({ x: goal.x, y: goal.y, z: goal.z });
       return true;
     }
-    const r = ph.findPath(p.pos, goal);
+    const r = toward ? ph.findPath(p.pos, goal, { toward }) : ph.findPath(p.pos, goal);
     this._pathsThisSec++;
     if (!r?.points?.length) {
       // she stands on the goal cell already, or nothing is reachable
@@ -256,8 +272,9 @@ export class Orders {
     if (isMove) {
       if (pk.kind === 'enemy' || pk.kind === 'breakable') { this.order('attack', pk.actor, { source: 'mouse' }); return; }
       if ((pk.kind === 'interact' || pk.kind === 'npc') && this._useTarget(pk)) { this.order('use', this._useTarget(pk), { source: 'mouse' }); return; }
+      if (this._isSelf(c, pk)) { this.p.onSelfTap?.(); return; }          // WA §5.6: a click on her is a pat, not an order
       if (point) {
-        this.order('move', point, { queued: !!c.mods?.ctrl, source: 'mouse' });
+        this.order('move', point, { queued: !!c.mods?.ctrl, source: 'mouse', toward: this._towardPoint() });
         if (!c.mods?.ctrl) { this.follow = true; this._followSrc = 'mouse'; this._followT = NAV.follow * 2; }
       }
       return;
@@ -296,8 +313,40 @@ export class Orders {
     }
     if (pk.kind === 'breakable') { this.order('attack', pk.actor, { source: 'touch' }); return; }
     if ((pk.kind === 'interact' || pk.kind === 'npc') && this._useTarget(pk)) { this.order('use', this._useTarget(pk), { source: 'touch' }); return; }
+    if (this._isSelf(c, pk)) { this.p.onSelfTap?.(); return; }            // WA §5.6: a tap on her is a pat, not an order
     if (cam.lockTarget) cam.select?.(null, 'tap');
-    if (st.tapToMove !== false && point) this.order('move', point, { source: 'touch' });
+    if (st.tapToMove !== false && point) this.order('move', point, { source: 'touch', toward: this._towardPoint() });
+  }
+
+  /**
+   * WA §5.6 "tap / click her": a ground pick within ORDER_FX.selfR m of her feet, or (with a renderer) a press within
+   * ORDER_FX.selfPx CSS px of her body on screen. The picker never returns her, so this is decided here.
+   */
+  _isSelf(c, pk) {
+    const p = this.p, ctx = this.ctx;
+    if (pk?.kind && pk.kind !== 'ground') return false;
+    const pt = pk?.point;
+    if (pt && Number.isFinite(pt.x) && Math.hypot(pt.x - p.pos.x, pt.z - p.pos.z) <= ORDER_FX.selfR) return true;
+    const cam = ctx.camera, el = ctx.renderer?.domElement;
+    if (!cam?.isCamera || !el || !Number.isFinite(c?.x)) return false;
+    const r = el.getBoundingClientRect?.(), w = r?.width || el.clientWidth, h = r?.height || el.clientHeight;
+    if (!(w > 0 && h > 0)) return false;
+    const H = p.height ?? 0.8;
+    for (const f of ORDER_FX.selfH) {
+      _sp.set(p.pos.x, p.pos.y + H * f, p.pos.z).project(cam);
+      if (_sp.z > 1) continue;
+      const sx = (r?.left ?? 0) + (_sp.x * 0.5 + 0.5) * w, sy = (r?.top ?? 0) + (0.5 - _sp.y * 0.5) * h;
+      if (Math.hypot(sx - c.x, sy - c.y) <= ORDER_FX.selfPx) return true;
+    }
+    return false;
+  }
+
+  /** The camera's ground position (the pick ray's camera side) for findPath's `toward` hint, or null. */
+  _towardPoint() {
+    const cp = this.ctx.camera?.position;
+    if (!cp || !Number.isFinite(cp.x)) return null;
+    this._toward.x = cp.x; this._toward.z = cp.z;
+    return this._toward;
   }
 
   /** The use-order target of a pick: the level interactable, else the NPC / kitten actor. */
@@ -648,6 +697,53 @@ export class Orders {
     }
     if (last && !this.follow && this.kind !== 'use' && d < NAV.slowR) return Math.max(0.3, d / NAV.slowR);
     return 1;
+  }
+
+  // ------------------------------------------------------------------ AUTOCAM §5.3 (the camera reads these)
+  /**
+   * The point `dist` m ahead of her along the live path into `out` ({x, z} or a Vector3; y = that path point's y).
+   * The direct-line follower (one point) returns the point on that segment; a hop in flight looks at its landing.
+   * Returns false (out = her position) when no order is walking. Zero allocation.
+   * @param {number} dist @param {{x:number, y?:number, z:number}} out @returns {boolean}
+   */
+  lookAhead(dist, out) {
+    const p = this.p, hasY = 'y' in out;
+    out.x = p.pos.x; out.z = p.pos.z; if (hasY) out.y = p.pos.y;
+    if (!this.moving) return false;
+    let px = p.pos.x, pz = p.pos.z, left = Math.max(0, dist);
+    if (this._hop && !p.onGround) {
+      const dx = this._hop.x - px, dz = this._hop.z - pz, d = Math.hypot(dx, dz);
+      if (d > 1e-4) { const k = Math.min(1, left / d); out.x = px + dx * k; out.z = pz + dz * k; }
+      return true;
+    }
+    for (let i = this.wp; i < this.path.length; i++) {
+      const w = this.path[i], dx = w.x - px, dz = w.z - pz, d = Math.hypot(dx, dz);
+      if (d >= left) {
+        const k = d > 1e-6 ? left / d : 0;
+        out.x = px + dx * k; out.z = pz + dz * k; if (hasY) out.y = w.y ?? p.pos.y;
+        return true;
+      }
+      left -= d; px = w.x; pz = w.z;
+      out.x = px; out.z = pz; if (hasY) out.y = w.y ?? p.pos.y;
+    }
+    return true;
+  }
+
+  /** Metres left along the live path (her → the waypoints → the end, an attack order to its reach); 0 when idle. */
+  remaining() {
+    if (!this.moving) return 0;
+    const p = this.p;
+    let px = p.pos.x, pz = p.pos.z, sum = 0;
+    for (let i = this.wp; i < this.path.length; i++) {
+      const w = this.path[i];
+      sum += Math.hypot(w.x - px, w.z - pz); px = w.x; pz = w.z;
+    }
+    if (this.kind === 'attack' && this.target?.pos) {
+      const t = this.target, reach = SWING.arc.range + (t.radius ?? 0.3) - 0.25;
+      sum = Math.min(sum, Math.max(0, Math.hypot(t.pos.x - p.pos.x, t.pos.z - p.pos.z) - reach));
+    }
+    if (this.follow) return Math.max(sum, NAV.slowR);           // hold-to-follow never "arrives"
+    return sum;
   }
 }
 

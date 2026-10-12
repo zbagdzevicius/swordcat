@@ -28,7 +28,7 @@ const ARENA_LEAVE = 4;
 /** The flag that marks an arena cleared (pure; the same `<level>.cleared.<id>` convention as the open zones). */
 export const arenaFlag = (levelId, arenaId) => `${levelId}.cleared.${arenaId}`;
 
-export const ARENA = Object.freeze({ waveDelay: 1.5, exploreAfter: 4, ringInset: 1.5, triggerInset: 2, wallPad: 0.4, clearJingle: 'jingles/jingles_STEEL00',
+export const ARENA = Object.freeze({ waveDelay: 1.5, firstWave: 1.2 /* AUTOCAM §8 room read: the first wave ≥ 1.2 s after the lock */, exploreAfter: 4, ringInset: 1.5, triggerInset: 2, wallPad: 0.4, clearJingle: 'jingles/jingles_STEEL00',
   /** fog wall look (fx.mistRing opts): card alpha (fx default 0.62) and width (5.5 m), the iso ground band 1.2 m / 0.12 */
   wall: Object.freeze({ alpha: 0.35, width: 3.5, bandW: 1.2, bandA: 0.12 }) });
 const _v = new THREE.Vector3();
@@ -65,6 +65,9 @@ export class Arena {
     this.boss = zone.boss ?? null;
     this.waves = zone.waves ?? [];
     this.lockOn = zone.lockOn ?? null;
+    /** world.W6 soft arena (Mochi's cart): no fog wall, no wall colliders, she is never pulled or kept inside */
+    this.soft = !!zone.soft;
+    this._firstT = 0;
     this.wave = 0; this.locked = false; this.cleared = false;
     /** @type {any[]} */
     this.enemies = [];
@@ -162,14 +165,19 @@ export class Arena {
     return pts.slice(0, n);
   }
 
-  /** Start the fight: fog wall, music, boss at the centre or wave 1. Idempotent. Pulls her inside if needed. */
-  lock() {
+  /**
+   * Start the fight: fog wall, music, boss at the centre or wave 1 (after the ARENA.firstWave room read; `now` spawns
+   * it at once). Idempotent. Pulls her inside if needed (never for a soft arena).
+   * @param {{now?: boolean}} [o]
+   */
+  lock({ now = false } = {}) {
     if (this.locked || this.cleared) return this;
     this.locked = true; this._exploreT = -1; this._waitT = 0;
     const p = this.ctx.player;
-    if (p?.alive !== false && p?.pos && !this.contains(p.pos, 0.8)) this._pullInside(p);
-    this.ctx.bus.emit(E.ARENA_LOCK, { id: this.id });
-    this._raiseWall();
+    if (!this.soft && p?.alive !== false && p?.pos && !this.contains(p.pos, 0.8)) this._pullInside(p);
+    // IMPLEMENTATION_PLAN §7.1 (X23): the camera's room-read beat frames { center, r }
+    this.ctx.bus.emit(E.ARENA_LOCK, { id: this.id, center: this.center.clone(), r: this.r, size: this.size ? [...this.size] : null, soft: this.soft });
+    if (!this.soft) this._raiseWall();
     const music = this.level?.music ?? {};
     const track = this.boss ? (music.boss ?? music.combat) : music.combat;
     if (track) this.ctx.bus.emit(E.MUSIC, { track, fade: this.boss ? 0.3 : 1.0 });
@@ -180,7 +188,7 @@ export class Arena {
         const e = this.ctx.enemies?.spawn?.(this.boss, this.center.clone(), { facing, arena: this.id, alerted: true });
         if (e) this.enemies.push(e);
       }
-    } else if (this.wave === 0) this._nextWave();
+    } else if (this.wave === 0) { if (now) this._nextWave(); else this._firstT = ARENA.firstWave; }     // the room read first, then wave 1
     return this;
   }
 
@@ -265,7 +273,7 @@ export class Arena {
       this.enemies.length = 0;
       this.wave = 0;
     }
-    this.locked = false; this._waitT = 0;
+    this.locked = false; this._waitT = 0; this._firstT = 0;
     this._dropWall();
     const explore = this._explore();
     if (explore) this.ctx.bus.emit(E.MUSIC, { track: explore, fade: 1.5 });
@@ -295,7 +303,9 @@ export class Arena {
     // death does instead of dragging her back to the ring edge (which can be the stream at the Old Bridge)
     const p = this.ctx.player;
     if (p?.alive && p.pos && !this.boss && this.distanceTo(p.pos) > ARENA_LEAVE) { this.reset(); return; }
-    this._keepInside();
+    if (!this.soft) this._keepInside();
+    // AUTOCAM §8 room read: the camera frames the ring first; wave 1 follows ARENA.firstWave s after the lock
+    if (this._firstT > 0) { if ((this._firstT -= dt) <= 0) { this._firstT = 0; this._nextWave(); } return; }
     const alive = this.aliveCount();
     if (this.boss) { if (alive === 0 && this.enemies.length) this.clear(); return; }
     if (alive <= 1) {

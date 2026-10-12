@@ -320,7 +320,7 @@ export function mergeSkinnedMeshes(root) {
   const merged = mergeGeometries(geos, false);
   for (const g of geos) g.dispose();
   if (!merged) return null;
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true }); mat.dithering = true;   // ART §4.2: no Standard in play
   const first = list[0];
   const mesh = new THREE.SkinnedMesh(merged, mat);
   mesh.name = first.name + ':merged';

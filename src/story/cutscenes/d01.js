@@ -1,9 +1,12 @@
-// src/story/cutscenes/d01.js  (owner: story) — D-01 Mochi Joins (GAME_DESIGN §5.4) [MVP], ~10 s dialogue.
-// `meadow` Old Bridge: companions call `story.play('d01')` when the cage lock breaks and Mochi has hopped out (he is
-// the cutscene actor `mochi` wherever he landed); they add him to the party when the promise resolves.
-//   Mochi: "Squire Mochi reporting! Well. Reject Mochi. Too clumsy, they said."   Clem: "Too small, they said."
-//   Mochi: "Then we're a team!"   Mochi: "I'll do the shield. You do the... pointy part."
-//   Toast: "Mochi joined! [Ability] Shield Wall" (ui resolves the glyph per preset / device)
+// src/story/cutscenes/d01.js  (owner: story) — D-01 Mochi Joins (GAME_DESIGN §5.4; WA16, ON §6.3) [MVP], ~10 s dialogue.
+// `meadow` Mochi's tipped cart at `STORY.mochiCage` (−14, −41), ~45 m up the lane from the barn: 3 rats, Mochi cheering
+// each bonk from his carrier; normal hits "tink" off the cracked lock (Mochi: "It's a tough one! Do the shiny swing!",
+// the `tut.bright` hint), Bright Slash breaks it. Companions call `story.play('d01')` when the lock breaks and Mochi has
+// hopped out (he is the cutscene actor `mochi` wherever he landed); they add him to the party when the promise resolves.
+//   Mochi: "Squire Mochi, reporting! ...Almost-squire. Too clumsy, they said."   Clem: "Too small, they said."
+//   Mochi: "Then we're the Almost Knights!"   Mochi: "I'll do the shield. You do the... pointy part."
+// end: flag meadow.mochi; the biggest celebration of the first ten minutes: the `friend` card "Mochi joined the party!"
+// (E.REWARD; the old toast only while ui has no celebration layer). From here Mochi speaks the contextual hints.
 import * as THREE from 'three';
 import { say, cam, wait } from './lib.js';
 
@@ -46,7 +49,7 @@ export default {
   ],
   end: {
     flags: { 'meadow.mochi': true },
-    toasts: ['toast.mochi'],
+    toasts: ['toast.mochi'],      // → the `friend` reward (rewards.js), plus the toast until ui celebrates
     cam: 'follow',
     save: true,
   },

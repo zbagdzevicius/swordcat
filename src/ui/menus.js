@@ -1,10 +1,14 @@
-// src/ui/menus.js  (owner: ui) — every menu screen of §14.3: Title (over the live CS-00, "Press any key / Tap to
-// start", the first input unlocks audio and on touch asks for fullscreen), Main menu (Continue · New Game · Settings ·
-// Credits), New Game (Kitten / Knight / Nine Lives with one-line descriptions; "Skip the prologue?" when a save
-// exists), Settings (§14.3 list + §14.4 accessibility, saved immediately), Pause (Resume · Kittens · Letters · Settings
-// · Return to Pawsbury · Quit to Title; book sounds), the Kittens grid (18 portraits, "???" when missing), Letters
-// (parchment cards), Credits (scrolls the asset attribution from LICENSES.md), the Vigil Stone menu (Rest · Swap
-// kitten · Difficulty) and Game over ("Time for a cat nap.": Wake up · Back to Pawsbury).
+// src/ui/menus.js  (owner: ui) — every menu screen of §14.3 in the candy skin: the Title (WA §4.3 / ON §3: over the
+// live CS-00 with a warm peach rim, the logo pops in at 1.0 s and bobs; NO main-menu panel and NO difficulty picker on a
+// new save: one candy button "Tap to play!" / "Press any key to play!" appears at 1.4 s and the whole screen is the hit
+// target; with a save, "Keep going!" (with the save line) + "New adventure" (asks "Skip the prologue?" only when the
+// save is past the prologue); a 48 px Settings gear top-right (Credits live inside Settings); the footer "Made with
+// lots of purrs"), Settings (§14.3 list + §14.4 accessibility + the camera / performance / calm-HUD rows, saved
+// immediately), Pause (Resume · Kittens · Letters · Sticker book · Settings · Return to Pawsbury · Quit to Title), the
+// Kittens grid (18 portraits, "???" when missing), Letters, the Sticker book (WA §5.4: flags `sticker.<id>`), Credits
+// (scrolls the asset attribution from LICENSES.md), the Vigil Stone menu (Rest · Swap kitten · Difficulty) and Game
+// over ("Time for a cat nap.": Wake up · Back to Pawsbury). The first title input unlocks audio and on touch asks for
+// fullscreen. New games start at Knight; Kitten mode is offered later, never asked (offer.js).
 //
 // One stack of screens; keyboard / gamepad navigate through input actions (navUp/Down/Left/Right, confirm, back,
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
@@ -15,6 +19,24 @@ import { SETTINGS, SETTING_GROUPS, visibleSettings, readSetting, stepSetting, fo
 import { defaultState } from '../core/GameState.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
+import { REWARD_ART } from './celebrate.js';
+
+/** WA §4.3 title timings: the logo pops at `logo` s, the button(s) appear at `buttons` s. */
+export const TITLE = Object.freeze({ logo: 1.0, buttons: 1.4, quick: 0.35 });
+
+/** The sticker book (ON §7.2 sticker set, in the order they are earned). */
+export const STICKER_IDS = Object.freeze(['bonk', 'bow', 'hop', 'roll', 'stand', 'parry', 'found', 'knight', 'mochi']);
+
+/** Sticker-book cells: id, label, colour, owned (flag `sticker.<id>`). Pure. */
+export function stickerCells(ctx) {
+  return STICKER_IDS.map((id) => ({ id, owned: !!ctx.state?.getFlag?.(`sticker.${id}`), label: tx(ctx, `sticker.${id}`), color: REWARD_ART[id]?.color ?? '#FFE9A8' }));
+}
+
+/**
+ * The title's buttons for the save state (WA §4.3). Pure: ids only; labels resolve in the menu.
+ * @param {boolean} hasSave @returns {string[]}
+ */
+export function titleButtons(hasSave) { return hasSave ? ['continue', 'newAdventure'] : ['play']; }
 
 export const NAV = Object.freeze({ repeatDelay: 0.38, repeatEvery: 0.11, stick: 0.55 });
 
@@ -86,17 +108,32 @@ export class Menus {
     this.root = el('div', 'ui-menus', { parent });
     this.backdrop = el('div', 'menu-backdrop', { parent: this.root });
     this.titleEl = el('div', 'ui-title', { parent: this.root });
-    this.titleEl.innerHTML = `<div class="title-shade"></div><div class="title-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}</div>`
-      + `<div class="title-press"><span class="press-paw">${I.paw('#FFF6DA')}</span><span class="press-txt"></span></div><div class="title-foot"></div>`;
+    // WA §4.3: no dark `.title-shade` any more: a static warm peach rim
+    this.titleEl.innerHTML = `<div class="title-rim"></div><div class="title-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}</div>`
+      + `<div class="title-press"><span class="press-paw">${I.paw('#FFF6DA')}</span><span class="press-txt"></span></div>`
+      + `<button type="button" class="title-gear" aria-label="${esc(tx(ctx, 'title.settings'))}">${I.gear()}</button>`
+      + `<div class="title-foot">${esc(tx(ctx, 'title.foot'))}</div>`;
     this.pressTxt = this.titleEl.querySelector('.press-txt');
+    this.gearEl = this.titleEl.querySelector('.title-gear');
     this.stack = /** @type {Screen[]} */ ([]);
     this.titleActive = false; this.titleT = 0; this.titlePress = false;
     this._inputGuard = 0;
     this._rep = { dir: 0, t: 0, axis: '' };
     this._domOffs = [];
     if (typeof window !== 'undefined') {
-      const onKey = (e) => { if (this.titleActive && !this.stack.length && !e.repeat) this._titleGo(e); };
-      const onPtr = (e) => { if (this.titleActive && !this.stack.length) this._titleGo(e); };
+      // WA §4.3: before the buttons, any key / tap opens them (or, without a save, plays); on the one-button home any
+      // key plays ("Press any key to play!") and the whole screen is the hit target
+      const onKey = (e) => {
+        if (!this.titleActive || e.repeat) return;
+        if (!this.stack.length) this._titleGo(e);
+        else if (this.top?.anyKey && e.key !== 'Escape' && e.key !== 'Tab') this._homePlay(e);
+      };
+      const onPtr = (e) => {
+        if (!this.titleActive || e.target?.closest?.('.title-gear')) return;
+        if (!this.stack.length) this._titleGo(e);
+        else if (this.top?.anyKey) this._homePlay(e);
+      };
+      this.gearEl?.addEventListener('click', (e) => { e.stopPropagation(); if (this.titleActive && !this.has('settings')) { this.sfx('ui.confirm'); this.openSettings(); } });
       window.addEventListener('keydown', onKey);
       this._ptr = null;   // last known cursor position (hover arming compares against it when a screen opens)
       const onMove = (e) => { this._ptr = { x: e.clientX, y: e.clientY }; };
@@ -162,7 +199,8 @@ export class Menus {
     flag(this.root, 'is-on', this.active);
     flag(this.backdrop, 'is-on', any && !this.titleActive);
     flag(this.backdrop, 'is-dark', this.stack.some((s) => s.dark));
-    flag(this.titleEl, 'has-menu', this.titleActive && any);
+    flag(this.titleEl, 'has-menu', this.titleActive && any && this.top?.id !== 'main');   // the home keeps the big logo
+    flag(this.titleEl, 'has-home', this.titleActive && this.has('main'));
   }
 
   _focus(s, i, sound = true) {
@@ -189,6 +227,8 @@ export class Menus {
     }
     const s = this.top;
     if (!s) return;
+    // WA §4.3: "Press any key to play!" on the one-button home also means any pad button
+    if (s.anyKey && input.device === 'pad' && this.titleT > 0.4 && (input.pressed('confirm') || input.pressed('jump') || input.pressed('attack') || input.pressed('pause'))) { this._homePlay(null); return; }
     // vertical navigation with hold-repeat (keys / d-pad; the left stick when a pad is in use)
     const pad = input.device === 'pad';
     const my = pad ? (input.move?.y ?? 0) : 0, mx = pad ? (input.move?.x ?? 0) : 0;
@@ -232,7 +272,12 @@ export class Menus {
   render(dt) {
     if (this.titleActive) {
       this.titleT += dt;
-      if (this.pressForced == null) flag(this.titleEl, 'is-ready', this.titleT > (this.titleEl.classList.contains('is-quick') ? 1.2 : 2.6));
+      const quick = this.titleEl.classList.contains('is-quick');
+      const dev = this.ctx.input?.device ?? 'kbm';
+      if (this._lblDev !== dev) { this._lblDev = dev; this._homeLabel(); this._pressLabel(); }
+      flag(this.titleEl, 'is-logo', this.titleT >= (quick ? 0 : TITLE.logo));
+      // WA §4.3: the candy button(s) appear by themselves at 1.4 s (story's press:false holds them back)
+      if (!this.stack.length && this.pressForced !== false && this.titleT >= (quick ? TITLE.quick : TITLE.buttons)) this._openHome();
     }
   }
 
@@ -260,16 +305,29 @@ export class Menus {
 
   _pressLabel() {
     const dev = this.ctx.input?.device ?? 'kbm';
-    setText(this.pressTxt, dev === 'touch' ? tx(this.ctx, 'title.tap') : dev === 'pad' ? tx(this.ctx, 'title.press') : (this.pressText ?? tx(this.ctx, 'title.press')));
+    setText(this.pressTxt, dev === 'touch' ? tx(this.ctx, 'title.tap') : tx(this.ctx, 'title.press'));
   }
 
+  /** The first title input: audio unlock, fullscreen on touch, then the home (or play, without a save). */
   _titleGo(e) {
     if (this.titleT < 0.25) return;
+    this._unlock(e);
+    this.openMain();
+  }
+
+  _unlock(e) {
     try { this.ctx.audio?.unlock?.(); } catch { /* audio optional */ }
     if (e && e.pointerType === 'touch' && typeof document !== 'undefined' && !document.fullscreenElement) {
       try { document.documentElement.requestFullscreen?.()?.catch?.(() => {}); } catch { /* not allowed */ }
     }
-    this.openMain();
+  }
+
+  /** "Tap to play!" / any key on the one-button home (no save). */
+  _homePlay(e) {
+    if (this._starting || this.titleT < 0.25) return;
+    this._unlock(e);
+    const it = this.top?.items?.[0];
+    if (it?.activate) { this.sfx('ui.confirm'); it.activate(); }
   }
 
   // ------------------------------------------------------------------ builders
@@ -317,18 +375,63 @@ export class Menus {
     return s;
   }
 
+  /**
+   * The title input (story's "any key" → ui.openMainMenu, or our own listeners): open the home; without a save a
+   * gesture IS "Tap to play!" (WA §4.3: the whole screen is the hit target).
+   */
   openMain() {
     this.setTitle(true);
+    if (!this.ui.hasSave?.()) { if (!this._starting) this._play(); return; }
+    this._openHome();
+  }
+
+  /** WA §4.3 the title home: one candy button (no save) or "Keep going!" + "New adventure"; no panel, no picker. */
+  _openHome() {
     if (this.has('main')) return;
     const ctx = this.ctx;
-    const { e, body } = this._panel('main', '', 'menu--title');
+    const e = el('div', 'ui-screen menu-screen menu--main menu--home menu--title');
+    const row = el('div', 'home-row', { parent: e });
     const items = [];
-    const hasSave = this.ui.hasSave?.();
-    if (hasSave) items.push(this._button(body, tx(ctx, 'menu.continue'), () => this.ui.continueGame(), { sub: continueSub(ctx, this.ui.resumePoint ?? this.ui.saveSummary?.()) }));
-    items.push(this._button(body, tx(ctx, 'menu.newGame'), () => this.openNewGame()));
-    items.push(this._button(body, tx(ctx, 'menu.settings'), () => this.openSettings()));
-    items.push(this._button(body, tx(ctx, 'menu.credits'), () => this.openCredits()));
-    this.push(this._wire({ id: 'main', el: e, items, layer: 'title', back: () => { this.pop(); } }), { sound: 'ui.confirm' });
+    const hasSave = !!this.ui.hasSave?.();
+    for (const id of titleButtons(hasSave)) {
+      if (id === 'play') {
+        const it = this._button(row, '', () => this._play(), { cls: 'btn--home btn--play' });
+        it.el.insertAdjacentHTML('afterbegin', `<span class="btn-paw">${I.paw('#FFFFFF')}</span>`);
+        this._playLbl = it.el.querySelector('.btn-lbl');
+        items.push(it);
+      } else if (id === 'continue') items.push(this._button(row, tx(ctx, 'menu.continue'), () => this._go(() => this.ui.continueGame()), { cls: 'btn--home', sub: continueSub(ctx, this.ui.resumePoint ?? this.ui.saveSummary?.()) }));
+      else items.push(this._button(row, tx(ctx, 'menu.newGame'), () => this._newAdventure(), { cls: 'btn--home btn--sky' }));
+    }
+    this._homeLabel();
+    this.push(this._wire({ id: 'main', el: e, items, layer: 'title', anyKey: !hasSave, back: () => false }), { sound: null });
+  }
+
+  /** The one button follows the device: "Tap to play!" / "Press any key to play!". */
+  _homeLabel() {
+    if (!this._playLbl) return;
+    setText(this._playLbl, (this.ctx.input?.device ?? 'kbm') === 'touch' ? tx(this.ctx, 'title.tap') : tx(this.ctx, 'title.press'));
+  }
+
+  /** Run a start flow once (a double tap / key repeat must not start two games). */
+  _go(fn) {
+    if (this._starting) return;
+    this._starting = true;
+    Promise.resolve().then(fn).catch((e) => console.warn('[ui] start failed', e)).finally(() => { this._starting = false; });
+  }
+
+  /** A new save: straight into Morning Practice at Knight (ON §3.3: offer, don't ask). */
+  _play() { this._go(() => this.ui.startNewGame({ difficulty: 'knight', skipPrologue: false })); }
+
+  /** "New adventure" with a save: ask "Skip the prologue?" only when that save is past the prologue (ON §3.3). */
+  _newAdventure() {
+    if (!this.ui.savePastPrologue?.()) { this._play(); return; }
+    const ctx = this.ctx;
+    const { e, body } = this._panel('skip', tx(ctx, 'newgame.skipPrologue'), 'menu--title menu--small');
+    const items = [
+      this._button(body, tx(ctx, 'menu.yes'), () => this._go(() => this.ui.startNewGame({ difficulty: 'knight', skipPrologue: true }))),
+      this._button(body, tx(ctx, 'menu.no'), () => this._play(), { cls: 'btn--sky' }),
+    ];
+    this.push(this._wire({ id: 'skip', el: e, items, layer: 'title', focus: 1 }));
   }
 
   openNewGame() {
@@ -387,6 +490,8 @@ export class Menus {
       cardBtn();
       if (canEdit) editBtn();
     }
+    // WA §4.3: Credits live inside Settings now
+    items.push(this._button(body, tx(ctx, 'menu.credits'), () => this.openCredits(), { cls: 'btn--plain' }));
     items.push(this._button(body, tx(ctx, 'ui.settings.reset'), () => this.openConfirm(tx(ctx, 'ui.settings.resetConfirm'), () => {
       resetSettings(ctx, defaultState().settings);
       if (this.top) this._refresh(this.top);
@@ -519,11 +624,30 @@ export class Menus {
       this._button(body, tx(ctx, 'pause.resume'), () => this.ui.resume()),
       this._button(body, tx(ctx, 'pause.kittens'), () => this.openKittens(), { sub: tx(ctx, 'pause.kittensCount', { n: (st?.kittens ?? []).length, max: KITTEN_IDS.length }) }),
       this._button(body, tx(ctx, 'pause.letters'), () => this.openLetters(), { sub: tx(ctx, 'pause.lettersCount', { n: (st?.letters ?? []).filter((l) => /^l\d$/.test(l)).length, max: LEVEL_IDS.length }) }),
+      this._button(body, tx(ctx, 'menu.stickers'), () => this.openStickers(), { sub: tx(ctx, 'ui.stickers.count', { n: stickerCells(ctx).filter((c) => c.owned).length, max: STICKER_IDS.length }) }),
       this._button(body, tx(ctx, 'pause.settings'), () => this.openSettings()),
     ];
     if (st?.cond?.('town.free') && !inBoss && ctx.levels?.current?.id !== 'town') items.push(this._button(body, tx(ctx, 'pause.hub'), () => this.ui.toHub()));
     items.push(this._button(body, tx(ctx, 'pause.quit'), () => this.openConfirm(tx(ctx, 'menu.quitConfirm'), () => this.ui.quitToTitle())));
     this.push(this._wire({ id: 'pause', el: e, items, layer: 'pause', back: () => this.ui.resume() }), { sound: 'ui.bookOpen' });
+  }
+
+  /** WA §5.4 the sticker book: every sticker earned (flags `sticker.<id>`), the rest as soft silhouettes. */
+  openStickers() {
+    const ctx = this.ctx;
+    const cells = stickerCells(ctx), n = cells.filter((c) => c.owned).length;
+    const { e, body } = this._panel('stickers', `${tx(ctx, 'ui.stickers.title')} ${n}/${cells.length}`, 'menu--wide');
+    const grid = el('div', 'stk-grid', { parent: body });
+    for (const c of cells) {
+      const art = REWARD_ART[c.id];
+      const cell = el('div', `stk-cell${c.owned ? ' is-owned' : ''}`, { parent: grid });
+      cell.innerHTML = `<div class="stk-art">${I.sticker(c.owned ? c.color : '#E9DCCB', c.owned ? (art?.icon ? art.icon() : art?.portrait ? '' : '') : I.paw('#FFF8EE'))}</div>`
+        + `<div class="stk-lbl">${esc(c.owned ? c.label : tx(ctx, 'pause.missing'))}</div>`;
+      if (c.owned && art?.portrait) cell.querySelector('.stk-art').insertAdjacentHTML('beforeend', `<div class="stk-face">${portraitSVG(art.portrait, { expression: 'happy' })}</div>`);
+    }
+    if (!n) el('div', 'stk-none', { parent: body, text: tx(ctx, 'ui.stickers.none') });
+    const items = [this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' })];
+    this.push(this._wire({ id: 'stickers', el: e, items, layer: this.top?.layer ?? 'pause' }));
   }
 
   openKittens() {

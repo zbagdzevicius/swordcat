@@ -25,7 +25,7 @@ function smooth01(a, b, x) { const t = Math.max(0, Math.min(1, (x - a) / (b - a)
 /** Wheat look + build knobs. */
 export const WHEAT = Object.freeze({
   stalks: 10, spread: 0.3, height: [0.82, 1.06], head: 0.2, headW: 0.03, stalkW: [0.018, 0.008], awn: 0.11,
-  colors: { base: '#6C7034', stalk: '#C2A85E', head: '#DDBE6E', headDark: '#AE9050', awn: '#E2CB86' },
+  colors: { base: '#8CA848', stalk: '#E8CC78', head: '#F6DA88', headDark: '#D8B060', awn: '#FFE8A8' },
 });
 
 /**
@@ -175,7 +175,7 @@ export class WheatField {
     mesh.name = this.name; mesh.castShadow = false; mesh.receiveShadow = true;
     mesh.userData.owned = true;
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), p = new THREE.Vector3();
-    const c = new THREE.Color(), warm = new THREE.Color('#FFE2A0'), cool = new THREE.Color('#B8C08A');
+    const c = new THREE.Color(), warm = new THREE.Color('#FFE2A0'), cool = new THREE.Color('#D8D89A');
     this.items.forEach((it, i) => {
       e.set(it.tiltX, it.yaw, it.tiltZ, 'YXZ'); q.setFromEuler(e);
       mesh.setMatrixAt(i, m.compose(p.set(it.x, it.y, it.z), q, s.setScalar(it.h)));

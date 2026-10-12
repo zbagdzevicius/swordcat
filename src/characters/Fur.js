@@ -34,7 +34,7 @@ export const FUR_LOD = { near: 2.6, far: 8, min: 4 };
  * `heroLens` m of the lens; every other cat ramps from full (≤ `near` m from the focus) to the base layer (≥ `far`),
  * and drops one furShells tier (kitten → npc counts) while the camera is farther than `dropAt` m from the focus.
  */
-export const FUR_LOD_ISO = Object.freeze({ near: 5, far: 14, min: 3, heroLens: 25, dropAt: 12 });
+export const FUR_LOD_ISO = Object.freeze({ near: 5, far: 14, min: 3, heroLens: 0, dropAt: 12 });   // heroLens 0: ART §6.1 / X8
 /**
  * Which rule the per-draw LOD uses this frame. runtime.characterFrame() writes it from ctx.cam every frame: `focus`
  * on (iso gameplay camera) or off (cutscenes, Meme Cam, `?cam=classic`, tools: the lens rule above).
@@ -58,8 +58,22 @@ export function setFurQuality(q) {
     _quality = 'custom';
   } else if (FUR_QUALITY[q]) _quality = q;
   else return;
-  for (const p of _parts) p.setShells(shellsFor(p.tier));
+  for (const p of _parts) (p.owner ? p.owner._applyLod() : p.setShells(shellsFor(p.tier)));
 }
+
+/**
+ * Shells drawn in iso PLAY (ART §6.1, X8: QUALITY.furShellsIso / kittenShellsIso, 0 on every tier today; High hero 4
+ * only if PERF S2 passes). `shellsFor` / `setFurQuality` above are the CLOSE-UP counts (cam.closeUp, cutscenes,
+ * Meme Cam, tools). Kittens built for play (`lod: 'play'`) switch between the two on `setCloseUp`.
+ */
+let _iso = { hero: 0, kitten: 0, npc: 0 };
+/** @param {{hero?: number, kitten?: number, npc?: number}} o */
+export function setFurIsoShells(o = {}) {
+  _iso = { hero: Math.max(0, o.hero ?? 0), kitten: Math.max(0, o.kitten ?? 0), npc: Math.max(0, o.npc ?? 0) };
+  for (const p of _parts) if (p.owner) p.owner._applyLod();
+}
+/** Iso play shell count for a tier. */
+export function isoShellsFor(tier) { return _iso[tier] ?? 0; }
 
 // ---------------------------------------------------------------- shared uniforms
 
@@ -121,8 +135,9 @@ export function strandTexture() { return _strandTex || (_strandTex = makeStrandT
 /** Face feature anchors in HEAD space (head bone at the neck, y = 0.62 H). */
 export const FACE = Object.freeze({
   skull: [0, 0.165, 0], skullScale: [1.18, 0.96, 1.0], skullR: 0.145,
-  eyeL: [0.074, 0.158, 0.118], eyeR: [-0.074, 0.158, 0.118], nose: [0, 0.12, 0.158],
-  mouth: [0, 0.1, 0.15], muzzle: [0, 0.097, 0.135], chin: [0, 0.064, 0.108], pad: [0.028, 0.097, 0.125], eyeR0: 0.045,
+  // ART_WARM §6.3 / §5.3: bigger, a touch wider-set, slightly lower eyes (with the ×1.17 head: ≈ 0.12 H across)
+  eyeL: [0.081, 0.15, 0.118], eyeR: [-0.081, 0.15, 0.118], nose: [0, 0.12, 0.158],
+  mouth: [0, 0.1, 0.15], muzzle: [0, 0.097, 0.135], chin: [0, 0.064, 0.108], pad: [0.028, 0.097, 0.125], eyeR0: 0.051,
   cheek: [0.118, 0.08, 0.022], cheekR: 0.093, cheekScale: [1, 0.9, 0.82],
 });
 const _d3 = (p, a) => Math.hypot(p.x - a[0], p.y - a[1], p.z - a[2]);
@@ -412,6 +427,8 @@ export class FurPart {
    */
   constructor(geo, o) {
     this.tier = o.tier || 'kitten';
+    /** The kitten that owns this part (its LOD decides the shell count on quality changes), or null. */
+    this.owner = o.owner ?? null;
     this.furMat = o.furMat; this.sheenMat = o.sheenMat;
     this.maxShells = o.maxShells ?? MAX_SHELLS;
     if (o.skeleton) {
@@ -471,6 +488,23 @@ export class FurPart {
     this.mesh.geometry = bakeShells(this._src, n);
     this.bakedShells = n;
     old.dispose();
+  }
+  /**
+   * Swap the surface geometry (the close-up set replaces the play-detail one, ART §6.4). Baked parts re-bake the copies
+   * they hold; instanced parts just point at the new base geometry. The old geometry is disposed.
+   * @param {THREE.BufferGeometry} geo
+   */
+  setSource(geo) {
+    if (this.baked) {
+      const oldSrc = this._src; this._src = geo; this.idxPerShell = geo.index.count;
+      this._rebake(this.bakedShells);
+      if (oldSrc && oldSrc !== geo) oldSrc.dispose();
+    } else {
+      const old = this.mesh.geometry; this.mesh.geometry = geo;
+      if (old !== geo) old.dispose();
+    }
+    this._lodN = -1;
+    const n = this.shells; this.shells = -1; this.setShells(n);
   }
   /** Shells allocated on the GPU (baked parts; instanced parts allocate instances only). */
   get allocatedShells() { return this.baked ? this.bakedShells : this.maxShells; }

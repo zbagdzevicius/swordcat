@@ -6,6 +6,8 @@
 import * as THREE from 'three';
 import { E } from '../../core/events.js';
 import { KITTEN_IDS } from '../../core/config.js';
+import { claimLamp, releaseLamp } from './rig.js';
+import { announce } from '../rewards.js';
 
 // ==================================================================================================== pure layout
 /**
@@ -176,16 +178,24 @@ const disposeTree = (g) => () => g.traverse((o) => {
   for (const m of [].concat(o.material ?? [])) { m.map?.dispose?.(); m.dispose?.(); }
 });
 
-/** CS-04: the lantern's warm light (§5.4: PointLight #FFC46B, intensity 1.5, distance 6) plus a soft glow ball. */
-export function buildLanternLight() {
+/**
+ * CS-04: the lantern's warm light (§5.4 #FFC46B, 1.5, 6 m). PERF S5t / ART X6: no PointLight; the holder claims the
+ * cutscene lamp (`ENV_U.uLamps` slot 0, uniforms only) at its world position on its first render and gives it back on
+ * dispose. Returns a builder for the cutscene `spawn` step: `build: buildLanternLight` (called with ctx).
+ */
+export function buildLanternLight(ctx) {
   const g = new THREE.Group();
   g.name = 'story:lanternLight';
-  const l = new THREE.PointLight('#FFC46B', 1.5, 6, 1.5);
-  l.position.set(0, 0.32, 0);
-  l.castShadow = false;
-  g.add(l);
-  g.userData.light = l;
-  g.userData.dispose = disposeTree(g);
+  const owner = g, w = new THREE.Vector3();
+  let claimed = false;
+  g.userData.lamp = { color: '#FFC46B', r: 6, str: 1 };
+  g.userData.tick = () => {
+    if (claimed || !g.parent) return;
+    g.updateWorldMatrix(true, false);
+    w.set(0, 0.32, 0); g.localToWorld(w);
+    claimed = claimLamp(ctx, owner, w, g.userData.lamp) || true;
+  };
+  g.userData.dispose = () => releaseLamp(ctx, owner);
   return g;
 }
 
@@ -306,7 +316,7 @@ export function stepUp(ctx, cs, who, gap = 1.4, speed = 1.6) {
 
 /** Emit strings-key toasts (`{ text, key, icon }`). */
 export function toast(ctx, keys, icon = null) {
-  for (const k of [].concat(keys)) ctx.bus.emit(E.TOAST, { text: ctx.strings?.t?.(k) ?? k, key: k, ...(icon ? { icon } : {}) });
+  for (const k of [].concat(keys)) announce(ctx, k, null, icon);
 }
 
 /** Show `cape` on her now and make it the equipped (saved) cape (CS-07: cream → red). */

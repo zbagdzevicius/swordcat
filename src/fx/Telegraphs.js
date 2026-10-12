@@ -5,12 +5,15 @@
 //   kind     visual (this file)                                                  shape(s)
 //   parry    white 4-point glint on the weapon + white "!" over the head          glint
 //   gold     gold #FFD34D slowly rotating 8-point star on the weapon              glint
-//   red      red-orange #FF3B30 glow on the weapon and body + jagged "!!"         glint (or any decal shape, tinted red)
-//   aoe      ground decal filling from the centre outward, #FF6A3D @ 0.45, white rim; full = it hits   circle | lane | cone | ring
+//   red      warm red #FF5A4E glow on the weapon and body + jagged "!!"           glint (or any decal shape, tinted red)
+//   aoe      ground decal filling from the centre outward, #FF9A3D @ 0.45, cream rim; full = it hits  circle | lane | cone | ring
 //   aim      dotted white line from the shooter; stops tracking 0.2 s before the shot               line
 //   grab     purple #9B5CFF swirl around the hands                                 swirl
 //   jeer     purple #B07CFF expanding sound-wave rings around the hyena            rings
-//   shadow   dark circle decal that grows; tracks for the first 60%, then freezes  shadow
+//   shadow   plum #3A2346 disc that shrinks 1.6 r → r; tracks the first 60%, then freezes   shadow
+// WA §3.4: every disc / lane / aim line also queues its kind's glyph (TELEGRAPH.glyph: 6-dot burst, crow foot,
+// arrowhead, ...) into GroundDecals, so the danger reads by SHAPE as well as by colour (colour-blind safe).
+// PERF §8.4 (F4): all decals are ONE batched draw (DecalBatch) and all aim lines another (LineBatch).
 //
 // Descriptor (combat:telegraph payload, §19.5): { id, actor, kind, shape, pos, dir, size, duration } plus optional
 // { r, w|width, l|length|range, angle, inner, target, follow }. `size` may be a number, [a, b] or an object (see
@@ -23,7 +26,8 @@
 // stop tracking 0.2 s before the shot; decal rims are ≥ 0.12 m wide; the jeer gets a faint purple ground disc.
 import * as THREE from 'three';
 import { TELEGRAPH } from '../core/config.js';
-import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial, withFxFog } from './shaders.js';
+import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
+import { FX_COLORS } from './palette.js';
 import { MARK } from './Marks.js';
 import { toVec3, actorWorldPos, weaponPoint, headPoint, groundY, isActor } from './util.js';
 
@@ -111,27 +115,40 @@ export function decalBounds(n) {
   }
 }
 
-// ------------------------------------------------------------------ ground decal
+// ------------------------------------------------------------------ ground decals: ONE batched draw (PERF §8.4 F4)
+// Every telegraph decal is a GRID × GRID slot conformed to the terrain inside one shared BufferGeometry; its shape
+// numbers live in uniform arrays indexed by the slot (`aSlot`), so a live fight with 8 aoe / shadow / jeer decals is
+// one draw call instead of eight, and a fill / fade update writes a few floats instead of re-uploading a mesh.
 const DECAL_VERT = /* glsl */`
 attribute vec2 aLocal;
+attribute float aSlot;
+uniform vec4 uD0[ @N@ ];   // shape, r, w, l
+uniform vec4 uD1[ @N@ ];   // angle, inner, fill, alpha
+uniform vec4 uD2[ @N@ ];   // colour rgb, pattern
+uniform vec4 uD3[ @N@ ];   // time, jeer disc, 0, 0
 varying vec2 vLocal;
+varying vec4 vD0, vD1, vD2, vD3;
 #include <fog_pars_vertex>
 void main() {
+  int i = int( aSlot + 0.5 );
+  vD0 = uD0[ i ]; vD1 = uD1[ i ]; vD2 = uD2[ i ]; vD3 = uD3[ i ];
   vLocal = aLocal;
   vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
-  gl_Position = projectionMatrix * mvPosition;
+  gl_Position = vD1.w > 0.0 ? projectionMatrix * mvPosition : vec4( 2.0, 2.0, 2.0, 1.0 );   // idle slot: clipped
   #include <fog_vertex>
 }`;
 
 const DECAL_FRAG = /* glsl */`
-uniform int uShape;
-uniform vec3 uColor;
 uniform vec3 uRim;
-uniform float uFill, uAlpha, uR, uW, uL, uAngle, uInner, uTime, uPattern, uDisc;
 varying vec2 vLocal;
+varying vec4 vD0, vD1, vD2, vD3;
 #include <fog_pars_fragment>
 ${FOG_FACTOR}
 void main() {
+  int shape = int( vD0.x + 0.5 );
+  float uR = vD0.y, uW = vD0.z, uL = vD0.w, uAngle = vD1.x, uInner = vD1.y, uFill = vD1.z, uAlpha = vD1.w;
+  vec3 uColor = vD2.rgb;
+  float uPattern = vD2.w, uTime = vD3.x, uDisc = vD3.y;
   vec2 p = vLocal;
   float d = length( p );
   float aa = 0.035;
@@ -140,32 +157,29 @@ void main() {
   float baseA = 0.12, fillA = 0.45;
   vec3 col = uColor;
   float rimW = max( 0.12, 0.06 + 0.012 * uR );     // §8.2.5: rim ≥ 0.12 m
-  if ( uShape == 0 ) {
+  if ( shape == 0 ) {
     edge = uR - d;
     fillM = smoothstep( -aa, aa, uR * uFill - d );
-  } else if ( uShape == 1 ) {                        // ring wave: annulus inner..r fills outward, a front sweeps 0 → r
+  } else if ( shape == 1 ) {                         // ring wave: annulus inner..r fills outward, a front sweeps 0 → r
     edge = uR - d;
     float band = smoothstep( -aa, aa, d - uInner );
     fillM = band * smoothstep( -aa, aa, mix( uInner, uR, uFill ) - d );
     fillM = max( fillM, 1.0 - smoothstep( 0.0, 0.08, abs( d - uR * uFill ) ) );
     fillM = max( fillM, ( 1.0 - smoothstep( 0.0, rimW * 0.7, abs( d - uInner ) ) ) * 0.8 );
     baseA = 0.03 + 0.09 * band;
-  } else if ( uShape == 2 ) {
+  } else if ( shape == 2 ) {
     edge = min( uW * 0.5 - abs( p.x ), min( p.y, uL - p.y ) );
     fillM = smoothstep( -aa, aa, uL * uFill - p.y );
-  } else if ( uShape == 3 ) {
+  } else if ( shape == 3 ) {
     float ang = abs( atan( p.x, p.y ) );
     float ha = uAngle * 0.5;
     edge = min( uR - d, ( ha - ang ) * max( d, 0.25 ) );
     fillM = smoothstep( -aa, aa, uR * uFill - d );
-  } else if ( uShape == 4 ) {                        // shadow: grows and darkens; a faint pale rim keeps it readable on dark grass
-    float R = uR * ( 0.35 + 0.65 * uFill );
-    float a = ( 0.3 + 0.45 * uFill ) * ( 1.0 - smoothstep( R * 0.7, R, d ) );
-    float rimM = ( 1.0 - smoothstep( 0.0, 0.05 + 0.04 * uR, abs( d - R * 0.97 ) ) ) * ( 0.25 + 0.2 * uFill );
-    col = mix( col, vec3( 0.78, 0.8, 0.84 ), rimM / max( rimM + a, 1e-3 ) );
-    a = max( a, rimM ) * uAlpha;
+  } else if ( shape == 4 ) {                         // crow shadow (WA §3.4): plum, shrinks 1.6 r → r, darkens to α 0.55
+    float R = uR * ( 1.6 - 0.6 * uFill );
+    float a = ( 0.3 + 0.25 * uFill ) * ( 1.0 - smoothstep( R * 0.72, R, d ) ) * uAlpha;
     if ( a < 0.004 ) discard;
-    gl_FragColor = vec4( col, a );
+    gl_FragColor = vec4( mix( col, fxFogColor(), fxFog() * 0.5 ), a );
     ${OUTPUT}
     return;
   } else {                                           // rings: jeer sound waves
@@ -188,8 +202,10 @@ void main() {
   float a = mix( baseA, fillA, fillM );
   if ( uPattern > 0.5 && uPattern < 1.5 ) a *= 0.6 + 0.4 * step( 0.5, fract( ( p.x + p.y ) * 1.6 ) );
   else if ( uPattern > 1.5 ) { vec2 g = fract( p * 2.2 ) - 0.5; a = max( a * 0.75, ( 1.0 - smoothstep( 0.14, 0.2, length( g ) ) ) * 0.6 ); }
+  // ART §8.4: a thin cream rim (uRim #FFF6E8) on the very edge, then the kind's own colour band inside it
   float rim = 1.0 - smoothstep( rimW * 0.55, rimW, edge );
-  col = mix( col, uRim, rim );
+  float cream = 1.0 - smoothstep( rimW * 0.12, rimW * 0.3, edge );
+  col = mix( mix( col, mix( col, vec3( 1.0 ), 0.25 ), rim ), uRim, cream );
   a = max( a, rim * 0.95 );
   a *= inside * uAlpha;
   col = mix( col, fxFogColor(), fxFog() * 0.5 );
@@ -197,47 +213,35 @@ void main() {
   ${OUTPUT}
 }`;
 
-let _decalBase = null;
-function decalMaterial() {
-  if (!_decalBase) {
-    _decalBase = fxShaderMaterial({
-      name: 'fx.telegraph.decal', vertexShader: DECAL_VERT, fragmentShader: DECAL_FRAG, fog: true,
-      uniforms: { ...fogUniforms(), uShape: { value: 0 }, uColor: { value: new THREE.Color() }, uRim: { value: new THREE.Color('#FFFFFF') },
-        uFill: { value: 0 }, uAlpha: { value: 0 }, uR: { value: 1 }, uW: { value: 1 }, uL: { value: 1 }, uAngle: { value: 1 },
-        uInner: { value: 0 }, uTime: { value: 0 }, uPattern: { value: 0 }, uDisc: { value: 0 } },
-      transparent: true, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
-    });
-  }
-  return withFxFog(_decalBase.clone());
-}
-
 const GRID = 17;
 const LIFT = 0.035;
+const GV = GRID * GRID;
 
-/** A pooled ground decal conformed to the terrain (grid of GRID × GRID vertices). */
-class Decal {
-  constructor() {
-    const g = new THREE.BufferGeometry();
-    const n = GRID * GRID;
-    this.pos = new Float32Array(n * 3); this.loc = new Float32Array(n * 2);
-    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
-    g.setAttribute('aLocal', new THREE.BufferAttribute(this.loc, 2).setUsage(THREE.DynamicDrawUsage));
-    const idx = [];
-    for (let j = 0; j < GRID - 1; j++) for (let i = 0; i < GRID - 1; i++) {
-      const a = j * GRID + i, b = a + 1, c = a + GRID, d = c + 1;
-      idx.push(a, c, b, b, c, d);
-    }
-    g.setIndex(idx);
-    this.geometry = g;
-    this.material = decalMaterial();
-    this.mesh = new THREE.Mesh(g, this.material);
-    this.mesh.name = 'fx.telegraph.decal';
-    this.mesh.frustumCulled = false;
-    this.mesh.matrixAutoUpdate = false;
-    this.mesh.renderOrder = 3;
-    this.mesh.visible = false;
-    this.busy = false;
+/** One telegraph decal slot inside the batch (the old per-mesh Decal API: busy, visible, place(), reset()). */
+class DecalSlot {
+  /** @param {DecalBatch} batch @param {number} i */
+  constructor(batch, i) {
+    this.batch = batch; this.i = i;
+    this.busy = false; this.visible = false;
     this._key = [NaN, NaN, NaN, NaN];
+    /** the slot's uniform vectors (shared with the batch material) */
+    this.d0 = batch.u.uD0.value[i]; this.d1 = batch.u.uD1.value[i]; this.d2 = batch.u.uD2.value[i]; this.d3 = batch.u.uD3.value[i];
+    this.material = batch.material;
+  }
+
+  /** Set the slot's shape (DECAL_SHAPE id), colour and dimensions (`n` = normalizeTelegraph output). */
+  setup(shape, color, n) {
+    this.d0.set(shape, n.r, n.w, n.l);
+    this.d1.set(n.angle, n.inner, 0, 0);
+    _col.set(color);
+    this.d2.set(_col.r, _col.g, _col.b, 0);
+    this.d3.set(0, 0, 0, 0);
+  }
+
+  /** Per-frame state: fill 0..1, alpha, time, pattern (0 / 1 stripes / 2 dots), the jeer disc. */
+  set(fill, alpha, time, pattern, disc) {
+    this.d1.z = fill; this.d1.w = alpha; this.d2.w = pattern; this.d3.x = time; this.d3.y = disc;
+    this.visible = alpha > 0;
   }
 
   /** Lay the decal at origin (ox, oz) facing (fx, fz); `bounds` from decalBounds; heights from `ground`. */
@@ -246,43 +250,108 @@ class Decal {
     if (Math.abs(k[0] - ox) < 0.01 && Math.abs(k[1] - oz) < 0.01 && Math.abs(k[2] - fx) < 0.005 && Math.abs(k[3] - fz) < 0.005) return;
     k[0] = ox; k[1] = oz; k[2] = fx; k[3] = fz;
     const x0 = bounds[0], x1 = bounds[1], z0 = bounds[2], z1 = bounds[3], sx = fz, sz = -fx;     // side vector ⟂ dir
-    const P = this.pos, L = this.loc;
+    const B = this.batch, P = B.pos, L = B.loc, o = this.i * GV;
     for (let j = 0; j < GRID; j++) {
       const lz = z0 + (z1 - z0) * (j / (GRID - 1));
       for (let i = 0; i < GRID; i++) {
-        const lx = x0 + (x1 - x0) * (i / (GRID - 1)), v = j * GRID + i;
+        const lx = x0 + (x1 - x0) * (i / (GRID - 1)), v = o + j * GRID + i;
         const wx = ox + sx * lx + fx * lz, wz = oz + sz * lx + fz * lz;
         P[v * 3] = wx; P[v * 3 + 1] = ground(wx, wz, oy) + LIFT; P[v * 3 + 2] = wz;
         L[v * 2] = lx; L[v * 2 + 1] = lz;
       }
     }
-    this.geometry.attributes.position.needsUpdate = true;
-    this.geometry.attributes.aLocal.needsUpdate = true;
+    B.dirtyMin = Math.min(B.dirtyMin, this.i); B.dirtyMax = Math.max(B.dirtyMax, this.i);
   }
 
-  reset() { this._key[0] = NaN; this.busy = false; this.mesh.visible = false; }
+  reset() { this._key[0] = NaN; this.busy = false; this.visible = false; this.d1.w = 0; }
+}
+
+/** The telegraph decal batch: N slots, one mesh, one draw. */
+class DecalBatch {
+  constructor(n) {
+    this.n = n;
+    const g = new THREE.BufferGeometry();
+    this.pos = new Float32Array(n * GV * 3); this.loc = new Float32Array(n * GV * 2);
+    const slot = new Float32Array(n * GV);
+    for (let s = 0; s < n; s++) slot.fill(s, s * GV, (s + 1) * GV);
+    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aLocal', new THREE.BufferAttribute(this.loc, 2).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aSlot', new THREE.BufferAttribute(slot, 1));
+    const per = (GRID - 1) * (GRID - 1) * 6, idx = new Uint32Array(n * per);
+    let q = 0;
+    for (let s = 0; s < n; s++) {
+      const o = s * GV;
+      for (let j = 0; j < GRID - 1; j++) for (let i = 0; i < GRID - 1; i++) {
+        const a = o + j * GRID + i, b = a + 1, c = a + GRID, d = c + 1;
+        idx[q++] = a; idx[q++] = c; idx[q++] = b; idx[q++] = b; idx[q++] = c; idx[q++] = d;
+      }
+    }
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.setDrawRange(0, 0);
+    this.per = per;
+    this.geometry = g;
+    const vec = () => Array.from({ length: n }, () => new THREE.Vector4());
+    this.material = fxShaderMaterial({
+      name: 'fx.telegraph.decal', vertexShader: DECAL_VERT.replaceAll('@N@', String(n)), fragmentShader: DECAL_FRAG, fog: true,
+      uniforms: { ...fogUniforms(), uRim: { value: new THREE.Color(FX_COLORS.creamRim) },
+        uD0: { value: vec() }, uD1: { value: vec() }, uD2: { value: vec() }, uD3: { value: vec() } },
+      transparent: true, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    });
+    this.u = this.material.uniforms;
+    this.mesh = new THREE.Mesh(g, this.material);
+    this.mesh.name = 'fx.telegraph.decal';
+    this.mesh.frustumCulled = false; this.mesh.matrixAutoUpdate = false; this.mesh.renderOrder = 3; this.mesh.visible = false;
+    this.slots = Array.from({ length: n }, (_, i) => new DecalSlot(this, i));
+    this.dirtyMin = Infinity; this.dirtyMax = -1;
+  }
+
+  /** Upload what moved; draw up to the last visible slot. */
+  commit() {
+    let last = -1;
+    for (const s of this.slots) if (s.visible) last = s.i;
+    this.geometry.setDrawRange(0, (last + 1) * this.per);
+    this.mesh.visible = last >= 0;
+    if (this.dirtyMax >= 0) {
+      const pa = this.geometry.attributes.position, la = this.geometry.attributes.aLocal;
+      pa.clearUpdateRanges(); la.clearUpdateRanges();
+      pa.addUpdateRange(this.dirtyMin * GV * 3, (this.dirtyMax - this.dirtyMin + 1) * GV * 3);
+      la.addUpdateRange(this.dirtyMin * GV * 2, (this.dirtyMax - this.dirtyMin + 1) * GV * 2);
+      pa.needsUpdate = true; la.needsUpdate = true;
+      this.dirtyMin = Infinity; this.dirtyMax = -1;
+    }
+  }
 
   dispose() { this.mesh.removeFromParent(); this.geometry.dispose(); this.material.dispose(); }
 }
 
-// ------------------------------------------------------------------ aim line (dotted)
+// ------------------------------------------------------------------ aim lines (dotted): ONE batched draw
 const LINE_VERT = /* glsl */`
 attribute vec2 aLine;     // x = metres along, y = across (−1..1)
+attribute float aSlot;
+uniform vec4 uA0[ @N@ ];   // colour rgb, alpha
+uniform vec4 uA1[ @N@ ];   // crawl, lock, width, len
+uniform vec4 uA2[ @N@ ];   // solid, cap, hole, 0
 varying vec2 vLine;
+varying vec4 vA0, vA1, vA2;
 #include <fog_pars_vertex>
 void main() {
+  int i = int( aSlot + 0.5 );
+  vA0 = uA0[ i ]; vA1 = uA1[ i ]; vA2 = uA2[ i ];
   vLine = aLine;
   vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
-  gl_Position = projectionMatrix * mvPosition;
+  gl_Position = vA0.w > 0.0 ? projectionMatrix * mvPosition : vec4( 2.0, 2.0, 2.0, 1.0 );
   #include <fog_vertex>
 }`;
 const LINE_FRAG = /* glsl */`
-uniform vec3 uColor;
-uniform float uAlpha, uCrawl, uLock, uWidth, uLen, uSolid, uCap, uHole;
 varying vec2 vLine;
+varying vec4 vA0, vA1, vA2;
 #include <fog_pars_fragment>
 ${FOG_FACTOR}
 void main() {
+  vec3 uColor = vA0.rgb;
+  float uAlpha = vA0.w, uCrawl = vA1.x, uLock = vA1.y, uWidth = vA1.z, uLen = vA1.w, uSolid = vA2.x, uCap = vA2.y, uHole = vA2.z;
+  // WA §3.4: the halo is cocoa, never near-black
+  vec3 ink = vec3( 0.29, 0.16, 0.12 );
   float spacing = 0.32;
   float s = fract( ( vLine.x - uCrawl ) / spacing ) - 0.5;
   vec2 q = vec2( s * spacing, vLine.y * uWidth * 0.5 );
@@ -292,15 +361,15 @@ void main() {
   float halo = 1.0 - smoothstep( dotR, dotR + 0.03, dd );
   float core = ( 1.0 - smoothstep( 0.0, 0.3, abs( vLine.y ) ) ) * 0.18;
   float ends = smoothstep( 0.0, 0.3, vLine.x ) * ( 1.0 - smoothstep( uLen - 0.4, uLen, vLine.x ) );
-  vec3 col = mix( vec3( 0.04, 0.025, 0.02 ), uColor * ( 1.4 + 1.2 * uLock ), max( dotM, core / 0.18 * 0.6 ) );
+  vec3 col = mix( ink, uColor * ( 1.4 + 1.2 * uLock ), max( dotM, core / 0.18 * 0.6 ) );
   float a = max( max( dotM, halo * 0.45 ), core ) * ends * uAlpha;
   if ( uSolid > 0.5 ) {                             // iso, locked: a solid white bar (it fires along this now)
     float bar = 1.0 - smoothstep( 0.5, 0.85, abs( vLine.y ) );
-    col = mix( vec3( 0.04, 0.025, 0.02 ), uColor * 1.8, bar );
+    col = mix( ink, uColor * 1.8, bar );
     a = max( bar, ( 1.0 - smoothstep( 0.85, 1.0, abs( vLine.y ) ) ) * 0.5 ) * ends * uAlpha;
   }
-  // iso: kept under the bloom threshold (a flat ground strip must not bloom into a wide white bar), and faded
-  // around her (uHole = metres along the line nearest her) so her silhouette stays readable on top of it
+  // iso: a flat ground strip kept from glaring into a wide white bar, and faded around her (uHole = metres along the
+  // line nearest her) so her silhouette stays readable on top of it
   col = min( col, vec3( uCap ) );
   a *= mix( 0.12, 1.0, smoothstep( 0.35, 1.05, abs( vLine.x - uHole ) ) );
   if ( a < 0.004 ) discard;
@@ -308,26 +377,16 @@ void main() {
   ${OUTPUT}
 }`;
 
-let _lineBase = null;
+/** One aim line slot inside the line batch (the old per-mesh AimLine API: busy, pos, set(), reset()). */
 class AimLine {
-  constructor() {
-    const g = new THREE.BufferGeometry();
-    this.pos = new Float32Array(12); this.uv = new Float32Array(8);
-    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
-    g.setAttribute('aLine', new THREE.BufferAttribute(this.uv, 2).setUsage(THREE.DynamicDrawUsage));
-    g.setIndex([0, 2, 1, 1, 2, 3]);
-    this.geometry = g;
-    _lineBase ??= fxShaderMaterial({
-      name: 'fx.telegraph.aim', vertexShader: LINE_VERT, fragmentShader: LINE_FRAG, fog: true,
-      uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color('#FFFFFF') }, uAlpha: { value: 1 }, uCrawl: { value: 0 }, uLock: { value: 0 },
-        uWidth: { value: 0.16 }, uLen: { value: 1 }, uSolid: { value: 0 }, uCap: { value: 100 }, uHole: { value: -1e4 } },
-      transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
-    });
-    this.material = withFxFog(_lineBase.clone());
-    this.mesh = new THREE.Mesh(g, this.material);
-    this.mesh.name = 'fx.telegraph.aim';
-    this.mesh.frustumCulled = false; this.mesh.matrixAutoUpdate = false; this.mesh.renderOrder = 8; this.mesh.visible = false;
-    this.busy = false;
+  /** @param {LineBatch} batch @param {number} i */
+  constructor(batch, i) {
+    this.batch = batch; this.i = i;
+    this.busy = false; this.visible = false;
+    this.pos = batch.pos.subarray(i * 12, i * 12 + 12);
+    this.uv = batch.uv.subarray(i * 8, i * 8 + 8);
+    this.a0 = batch.u.uA0.value[i]; this.a1 = batch.u.uA1.value[i]; this.a2 = batch.u.uA2.value[i];
+    this.material = batch.material;
   }
 
   /** Billboard the strip around the segment a→b, facing the camera (`flat`: lying on the ground, iso). */
@@ -346,13 +405,46 @@ class AimLine {
     P[6] = b.x - _s.x; P[7] = b.y - _s.y; P[8] = b.z - _s.z;
     P[9] = b.x + _s.x; P[10] = b.y + _s.y; P[11] = b.z + _s.z;
     U[0] = 0; U[1] = -1; U[2] = 0; U[3] = 1; U[4] = len; U[5] = -1; U[6] = len; U[7] = 1;
-    this.geometry.attributes.position.needsUpdate = true;
-    this.geometry.attributes.aLine.needsUpdate = true;
-    this.material.uniforms.uLen.value = len;
-    this.material.uniforms.uWidth.value = width;
+    this.a1.z = width; this.a1.w = len;
+    this.batch.dirty = true;
   }
 
-  reset() { this.busy = false; this.mesh.visible = false; }
+  reset() { this.busy = false; this.visible = false; this.a0.w = 0; }
+}
+
+/** The aim-line batch: 8 strips, one mesh, one draw. */
+class LineBatch {
+  constructor(n) {
+    const g = new THREE.BufferGeometry();
+    this.pos = new Float32Array(n * 12); this.uv = new Float32Array(n * 8);
+    const slot = new Float32Array(n * 4), idx = [];
+    for (let s = 0; s < n; s++) { slot.fill(s, s * 4, s * 4 + 4); const o = s * 4; idx.push(o, o + 2, o + 1, o + 1, o + 2, o + 3); }
+    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aLine', new THREE.BufferAttribute(this.uv, 2).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aSlot', new THREE.BufferAttribute(slot, 1));
+    g.setIndex(idx);
+    this.geometry = g;
+    const vec = () => Array.from({ length: n }, () => new THREE.Vector4());
+    this.material = fxShaderMaterial({
+      name: 'fx.telegraph.aim', vertexShader: LINE_VERT.replaceAll('@N@', String(n)), fragmentShader: LINE_FRAG, fog: true,
+      uniforms: { ...fogUniforms(), uA0: { value: vec() }, uA1: { value: vec() }, uA2: { value: vec() } },
+      transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+    });
+    this.u = this.material.uniforms;
+    this.mesh = new THREE.Mesh(g, this.material);
+    this.mesh.name = 'fx.telegraph.aim';
+    this.mesh.frustumCulled = false; this.mesh.matrixAutoUpdate = false; this.mesh.renderOrder = 8; this.mesh.visible = false;
+    this.slots = Array.from({ length: n }, (_, i) => new AimLine(this, i));
+    this.dirty = false;
+  }
+
+  commit() {
+    let any = false;
+    for (const s of this.slots) if (s.visible) any = true;
+    this.mesh.visible = any;
+    if (this.dirty) { this.geometry.attributes.position.needsUpdate = true; this.geometry.attributes.aLine.needsUpdate = true; this.dirty = false; }
+  }
+
   dispose() { this.mesh.removeFromParent(); this.geometry.dispose(); this.material.dispose(); }
 }
 
@@ -411,7 +503,9 @@ export class Telegraphs {
     /** @type {Map<any, Live>} */
     this.active = new Map();
     this._free = [];
+    /** decal / aim-line slots (the batches' per-telegraph handles) */
     this.decals = []; this.lines = [];
+    this.decalBatch = null; this.lineBatch = null;
     this.scene = null;
     this.started = 0;          // total telegraphs started (tests/smoke)
     this.byKind = Object.fromEntries(KINDS.map((k) => [k, 0]));
@@ -421,9 +515,10 @@ export class Telegraphs {
   /** Build the pools (call from FX.init). */
   init(scene) {
     this.scene = scene;
-    const nDecals = TELEGRAPH.decalPool ?? 32;
-    for (let i = 0; i < nDecals; i++) { const d = new Decal(); this.decals.push(d); scene.add(d.mesh); }
-    for (let i = 0; i < 8; i++) { const l = new AimLine(); this.lines.push(l); scene.add(l.mesh); }
+    this.decalBatch = new DecalBatch(TELEGRAPH.decalPool ?? 32);
+    this.lineBatch = new LineBatch(8);
+    this.decals = this.decalBatch.slots; this.lines = this.lineBatch.slots;
+    scene.add(this.decalBatch.mesh, this.lineBatch.mesh);
   }
 
   get count() { return this.active.size; }
@@ -455,15 +550,11 @@ export class Telegraphs {
       const d = this.decals.find((x) => !x.busy);
       if (d) {
         d.busy = true; d._key[0] = NaN; L.decal = d;
-        const u = d.material.uniforms;
-        u.uShape.value = DECAL_SHAPE[n.shape];
-        u.uColor.value.set(n.kind === 'shadow' || n.shape === 'shadow' ? '#05070A' : n.color);
-        u.uR.value = n.r; u.uW.value = n.w; u.uL.value = n.l; u.uAngle.value = n.angle; u.uInner.value = n.inner;
-        u.uFill.value = 0; u.uAlpha.value = 0; u.uTime.value = 0;
+        d.setup(DECAL_SHAPE[n.shape], n.kind === 'shadow' || n.shape === 'shadow' ? TELEGRAPH.colors.shadow : n.color, n);
       }
     } else if (n.shape === 'line') {
       const l = this.lines.find((x) => !x.busy);
-      if (l) { l.busy = true; L.line = l; l.material.uniforms.uColor.value.set(n.color); }
+      if (l) { l.busy = true; L.line = l; _col.set(n.color); l.a0.set(_col.r, _col.g, _col.b, 0); }
     }
     this.active.set(id, L);
     this.started++;
@@ -525,20 +616,38 @@ export class Telegraphs {
       else if (L.trackTarget && tracking && L.target) actorWorldPos(L.target, L.origin);
       if (L.liveDir && (L.liveDir.x * L.liveDir.x + L.liveDir.z * L.liveDir.z) > 1e-8) L.dir.set(L.liveDir.x, 0, L.liveDir.z).normalize();
       else if (L.follow && L.actor && n.shape === 'cone') { const f = L.actor.object3d.rotation.y; L.dir.set(Math.sin(f), 0, Math.cos(f)); }
-      // ---- ground decal
+      // ---- ground decal (+ its glyph: WA §3.4)
       if (L.decal) {
         const d = L.decal;
         d.place(L.origin.x, L.origin.y, L.origin.z, L.dir.x, L.dir.z, L.bounds, this._ground);
-        const u = d.material.uniforms;
-        u.uFill.value = prog; u.uAlpha.value = alpha; u.uTime.value = L.real; u.uPattern.value = pattern;
-        u.uDisc.value = this._isoNow && n.kind === 'jeer' ? TELE_ISO.jeerDisc : 0;
-        d.mesh.visible = true;
+        d.set(prog, alpha, L.real, pattern, this._isoNow && n.kind === 'jeer' ? TELE_ISO.jeerDisc : 0);
+        this._glyph(L, alpha, prog);
       }
       // ---- aim line
       if (L.line) this._aim(L, cam, alpha, tracking);
       // ---- marks (glints, "!", "!!", swirls, rings)
       this._marks(L, alpha, pattern);
     }
+    this.decalBatch?.commit();
+    this.lineBatch?.commit();
+  }
+
+  /**
+   * WA §3.4: queue the telegraph's glyph into GroundDecals: at the centre of a disc / ring / shadow, at the far end of
+   * a lane or cone (the jeer's sound rings carry none). The shadow's crow foot shrinks with the disc.
+   */
+  _glyph(L, alpha, prog) {
+    const dec = this.ctx.fx?.decals, n = L.n;
+    if (!dec?.glyph || n.kind === 'jeer' || n.shape === 'rings') return;
+    const g = TELEGRAPH.glyph?.[n.kind] ?? TELEGRAPH.glyph?.aoe;
+    if (!g) return;
+    const o = L.origin, yaw = Math.atan2(L.dir.x, L.dir.z);
+    let x = o.x, z = o.z, size = 0;
+    if (n.shape === 'lane' || n.shape === 'cone') {
+      const reach = (n.shape === 'lane' ? n.l : n.r) - 0.45;
+      x += L.dir.x * reach; z += L.dir.z * reach;
+    } else if (n.shape === 'shadow') size = Math.min(1.2, n.r * (1.6 - 0.6 * prog) * 0.9);
+    dec.glyph(g, x, this._ground(x, z, o.y) + LIFT, z, yaw, Math.min(1, alpha * 1.05), size);
   }
 
   _aim(L, cam, alpha, tracking) {
@@ -584,7 +693,6 @@ export class Telegraphs {
       _b.copy(_a).addScaledVector(_d, len);
       _b.y = Math.max(this._ground(_b.x, _b.z, gA), gA - 1) + TELE_ISO.aimLift;
     }
-    const u = l.material.uniforms;
     let width = 0.16, hole = -1e4;
     if (iso) {
       width = this._aimWidth(_a, _b, cam);
@@ -597,14 +705,18 @@ export class Telegraphs {
       }
     }
     l.set(_a, _b, cam.position, width, iso);
-    l.material.depthTest = !iso;
-    u.uCap.value = iso ? TELE_ISO.aimCap : 100;
-    u.uHole.value = hole;
-    u.uSolid.value = iso && L.frozen ? 1 : 0;
-    u.uAlpha.value = alpha;
-    u.uLock.value = L.frozen ? 0.6 + 0.4 * Math.sin(L.real * 40) : 0;
-    if (!L.frozen) u.uCrawl.value = L.real * 1.4;
-    l.mesh.visible = true;
+    l.material.depthTest = !iso;             // shared by the batch: every line is in the same camera mode
+    l.a2.set(iso && L.frozen ? 1 : 0, iso ? TELE_ISO.aimCap : 100, hole, 0);
+    l.a0.w = alpha;
+    l.a1.y = L.frozen ? 0.6 + 0.4 * Math.sin(L.real * 40) : 0;
+    if (!L.frozen) l.a1.x = L.real * 1.4;
+    l.visible = alpha > 0;
+    // WA §3.4: the aim glyph (arrowhead) at the far end of the ground strip
+    if (iso && this.ctx.fx?.decals?.glyph) {
+      _d.subVectors(_b, _a); _d.y = 0;
+      const len = _d.length();
+      if (len > 0.5) this.ctx.fx.decals.glyph(TELEGRAPH.glyph?.aim ?? 'arrow', _b.x - _d.x / len * 0.3, _b.y, _b.z - _d.z / len * 0.3, Math.atan2(_d.x, _d.z), alpha);
+    }
   }
 
   /**
@@ -794,8 +906,8 @@ export class Telegraphs {
 
   dispose() {
     this.clear();
-    for (const d of this.decals) d.dispose();
-    for (const l of this.lines) l.dispose();
-    this.decals.length = 0; this.lines.length = 0;
+    this.decalBatch?.dispose(); this.lineBatch?.dispose();
+    this.decalBatch = null; this.lineBatch = null;
+    this.decals = []; this.lines = [];
   }
 }

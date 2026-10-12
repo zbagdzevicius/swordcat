@@ -8,7 +8,7 @@ import { catConfig } from './configs.js';
 import { KittenView } from './KittenView.js';
 
 /** Inner kitten scale per cage style (the cage is sized in metres; kittens are ~0.7–1.1 m tall). */
-const FIT = { carry: 0.62, hanging: 0.8, cart: 0.95, kennel: 0.78 };
+const FIT = { carry: 0.62, hanging: 0.8, cart: 0.93, kennel: 0.78 };
 
 /**
  * @param {any} ctx game ctx (or null)

@@ -12,10 +12,17 @@
 //  • ❚❚ at the top centre (tap = pause, hold 1 s = skip a cutscene), the ✕ chip while aiming;
 //  • shown when (pointer: coarse) matches or on the first touchstart; portrait shows a one-time "plays best sideways"
 //    toast (no blocking card any more, C8).
-import { PLAYER, TOUCH as TC } from '../core/config.js';
+// AUTOCAM §10.3 pinch: two fingers on the free area (neither in the joystick zone; the second within pinch.secondMs of
+// the first, which cancels the first one's pending tap / long-press), zoom only after pinch.startPx of distance change,
+// log scaling, a two-finger double-tap resets to 1.0 (per orientation: camZoom / camZoomPortrait), a haptic tick at a
+// limit; a pinch never pans. AUTOCAM §7.1: `thumbs` (live joystick base / held button, read-only) and `stickRest()`
+// (the joystick's static rest zone, a SafeFrame occluder). WA §7.5: lesson buttons can be veiled (`veil` / `reveal`:
+// `visibility: hidden`, geometry unchanged) and pulse three rings for 1.6 s when they first appear.
+import { PLAYER, TOUCH as TC, CAMERA } from '../core/config.js';
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
-import { el, flag, setVar, place } from './dom.js';
+import { el, flag, setVar, place, pulse } from './dom.js';
+import { applySetting } from './settings.js';
 import { tx } from './text.js';
 import { portraitSVG } from './portraits.js';
 import { computeLayout, buttonAt, inDeadRing, inStickZone, classifyGesture, stickVector as stickVec, clampTs, clampStickBase } from './touchLayout.js';
@@ -60,6 +67,20 @@ const BUTTONS = [
 const nowS = () => performance.now() / 1000;
 /** A second finger within this long of the stick's touch-down (or before the stick goes live) starts a pinch instead. */
 const STICK_PINCH_S = 0.2;
+/** AUTOCAM §10.3 pinch recognition (config CAMERA.iso.pinch; fallbacks for older configs). */
+export const PINCH = Object.freeze({ startPx: 16, secondMs: 400, ...(CAMERA?.iso?.pinch ?? {}) });
+/** One reused gesture query (pointer handlers fire at 120 Hz on many phones: no per-event allocation, PERF §10.5). */
+const _gq = { dt: 0, dist: 0, up: false, sinceButton: 0 };
+function gesture(dt, dist, up, sinceButton) { _gq.dt = dt; _gq.dist = dist; _gq.up = up; _gq.sinceButton = sinceButton; return _gq; }
+
+/** WA §7.5: the cluster buttons a lesson can veil (the others are contextual already). */
+export const LESSON_BUTTONS = Object.freeze(['attack', 'guard', 'dodge', 'jump', 'meow']);
+
+/**
+ * Has a two-finger pinch moved far enough to start zooming? Pure.
+ * @param {number} d0 finger distance when the second finger landed @param {number} d now
+ */
+export function pinchStarted(d0, d) { return Math.abs(d - d0) >= PINCH.startPx; }
 /** ⚔ flick-aim (§9.4): the first slash waits this long (or for a 16 px drag) so a quick drag can aim it. */
 const FLICK_S = 0.1;
 
@@ -77,6 +98,10 @@ export class TouchControls {
     this.free = new Map();
     this.pinch = null;
     this._two = null; this._twoTapT = -1;
+    /** AUTOCAM §7.1 live thumb state (read-only; updated in render): the joystick base disc and the held button rect */
+    this.thumbs = { stick: { on: false, x: 0, y: 0, r: 0 }, held: { on: false, action: '', x: 0, y: 0, w: 0, h: 0 } };
+    /** WA §7.5 veiled lesson buttons (null = none veiled) */
+    this.veiled = null;
     this.cluster = el('div', 'touch-cluster', { parent: this.root });
     this.btns = new Map();
     /** a cluster button being held / dragged: action → { id, x0, y0, t0, aiming, dx, dy } */
@@ -353,8 +378,11 @@ export class TouchControls {
     flag(this.cancelChip, 'is-hot', this._overCancel(x, y));
   }
 
+  /** Is any held cluster button aiming? (allocation-free) */
+  _anyAiming() { for (const h of this.held.values()) if (h.aiming) return true; return false; }
+
   _hideAim() {
-    if ([...this.held.values()].some((v) => v.aiming)) return;
+    if (this._anyAiming()) return;
     flag(this.aimPad, 'is-on', false);
     flag(this.cancelChip, 'is-on', false);
     flag(this.root, 'is-aiming', false);
@@ -419,10 +447,15 @@ export class TouchControls {
     if (!fromStick && inDeadRing(L, x, y, (n) => this._visible(n)) && (this.ctx.cam?.pick?.(x, y, { touch: true, ground: false })?.kind ?? 'ground') === 'ground') return;
     this.free.set(e.pointerId, { x0: x, y0: y, x, y, t0: nowS(), moved: 0, long: false, lastMoveT: 0, swiped: false });
     if (this.free.size === 2) {
-      const [a, b] = [...this.free.values()];
-      this.pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), last: Math.hypot(a.x - b.x, a.y - b.y) };
-      for (const f of this.free.values()) f.pinching = true;
-      this._two = { t0: nowS(), moved: 0 };                              // a two-finger tap candidate (double-tap = reset)
+      let a = null, b = null;
+      for (const f of this.free.values()) { if (!a) a = f; else b = f; }
+      // AUTOCAM §10.3: a pinch needs the second finger within secondMs of the first (else it is just another tap)
+      if (fromStick || (nowS() - Math.min(a.t0, b.t0)) * 1000 <= PINCH.secondMs) {
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        this.pinch = { d0: d, last: d, live: false, limitTick: false };
+        for (const f of this.free.values()) { if (f.long) this.ctx.input?.addTap?.(f.x, f.y, 'longEnd'); f.long = false; f.pinching = true; }
+        this._two = { t0: nowS(), moved: 0 };                            // a two-finger tap candidate (double-tap = reset)
+      }
     }
   }
 
@@ -464,15 +497,25 @@ export class TouchControls {
     f.x = e.clientX; f.y = e.clientY;
     f.moved = Math.max(f.moved, Math.hypot(f.x - f.x0, f.y - f.y0));
     if (this.pinch && this.free.size >= 2) {
-      const [a, b] = [...this.free.values()];
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (this.pinch.last > 8 && d > 8) {
-        const ratio = d / this.pinch.last;
-        if (Math.abs(ratio - 1) > 0.01) { inp?.addZoom?.(Math.log(ratio) / -Math.log(1 - (this.ctx.config?.CAMERA?.iso?.zoomStep ?? 0.07))); this.pinch.last = d; }
+      let a = null, b = null;
+      for (const g of this.free.values()) { if (!g.pinching) continue; if (!a) a = g; else if (!b) b = g; }
+      if (!a || !b) return;
+      const d = Math.hypot(a.x - b.x, a.y - b.y), pc = this.pinch;
+      if (!pc.live) { if (!pinchStarted(pc.d0, d)) return; pc.live = true; pc.last = d; }   // AUTOCAM §10.3: 16 px first
+      if (pc.last > 8 && d > 8) {
+        const ratio = d / pc.last;
+        if (Math.abs(ratio - 1) > 0.01) {
+          inp?.addZoom?.(Math.log(ratio) / -Math.log(1 - (CAMERA?.iso?.zoomStep ?? 0.07)));
+          pc.last = d;
+          // a haptic tick when the zoom runs into its limit (the camera clamps; we only feel it)
+          const z = this.ctx.cam?.zoomMul, lim = CAMERA?.iso?.zoom ?? [0.7, 1.4];
+          const atLimit = Number.isFinite(z) && ((ratio > 1 && z <= lim[0] + 1e-3) || (ratio < 1 && z >= lim[1] - 1e-3));
+          if (atLimit && !pc.limitTick) { pc.limitTick = true; inp?.haptic?.('button'); } else if (!atLimit) pc.limitTick = false;
+        }
       }
       return;
     }
-    const g = classifyGesture({ dt: nowS() - f.t0, dist: f.moved, up: false, sinceButton: nowS() - this._lastButtonUp });
+    const g = classifyGesture(gesture(nowS() - f.t0, f.moved, false, nowS() - this._lastButtonUp));
     if (g === 'swipe' && !f.swiped && !f.long && this.ctx.state?.settings?.swipeTumble !== false) {
       f.swiped = true;
       this._swipeTumble(f.x - f.x0, f.y - f.y0);
@@ -487,7 +530,7 @@ export class TouchControls {
       // a quick touch in the stick zone that never became a drag is a tap (tap-to-move / tap a foe works everywhere)
       const s = this.stick, moved = Math.max(s.moved, Math.hypot(e.clientX - s.x0, e.clientY - s.y0));
       s.live = false;
-      if (e.type === 'pointerup' && classifyGesture({ dt: nowS() - s.t0, dist: moved, up: true, sinceButton: nowS() - this._lastButtonUp }) === 'tap') this.tapAt(s.x0, s.y0);
+      if (e.type === 'pointerup' && classifyGesture(gesture(nowS() - s.t0, moved, true, nowS() - this._lastButtonUp)) === 'tap') this.tapAt(s.x0, s.y0);
       return;
     }
     const f = this.free.get(e.pointerId);
@@ -498,7 +541,7 @@ export class TouchControls {
     if (f.pinching || e.type !== 'pointerup') { if (f.long) this.ctx.input?.addTap?.(f.x, f.y, 'longEnd'); return; }
     if (f.long) { this.ctx.input?.addTap?.(f.x, f.y, 'longEnd'); return; }
     if (f.swiped) return;
-    const g = classifyGesture({ dt: nowS() - f.t0, dist: f.moved, up: true, sinceButton: nowS() - this._lastButtonUp });
+    const g = classifyGesture(gesture(nowS() - f.t0, f.moved, true, nowS() - this._lastButtonUp));
     if (g === 'tap') this.tapAt(f.x0, f.y0);
   }
 
@@ -518,7 +561,11 @@ export class TouchControls {
     if (this._twoTapT >= 0 && two.t0 - this._twoTapT <= 0.35) {
       this._twoTapT = -1;
       this.ctx.input?.consumeZoom?.();                                   // drop any pinch jitter from the taps
-      this.ctx.cam?.zoom?.(this.ctx.state?.settings?.camZoom ?? 1);
+      // AUTOCAM §10.3: reset to 1.0, stored per orientation
+      const portrait = window.innerHeight > window.innerWidth * 1.05;
+      const key = portrait ? 'camZoomPortrait' : 'camZoom';
+      if (this.ctx.state?.settings && this.ctx.state.settings[key] !== 1) applySetting(this.ctx, key, 1);
+      this.ctx.cam?.zoom?.(1);
       this.ctx.input?.haptic?.('button');
     } else this._twoTapT = t;
   }
@@ -543,7 +590,7 @@ export class TouchControls {
     const st = this.ctx.state?.settings ?? {};
     for (const f of this.free.values()) {
       if (f.long || f.swiped || f.pinching || this.free.size > 1) continue;
-      const g = classifyGesture({ dt: nowS() - f.t0, dist: f.moved, up: false, sinceButton: nowS() - this._lastButtonUp });
+      const g = classifyGesture(gesture(nowS() - f.t0, f.moved, false, nowS() - this._lastButtonUp));
       if (g === 'long' && st.tapToMove !== false) { f.long = true; f.lastMoveT = nowS(); this.ctx.input?.addTap?.(f.x, f.y, 'long'); }
     }
   }
@@ -563,13 +610,15 @@ export class TouchControls {
     if (!vis.play && (this.stick.id !== null || this.free.size)) this._release();
     const fc = ctx.game?.frameCount ?? 0;
     if (this._swipeRelease && fc >= this._swipeRelease) { this._swipeRelease = 0; inp?.setVirtual('dodge', false); inp?.setVirtualAim(0, 0, false); }
-    if (this._clearAimAt >= 0 && fc >= this._clearAimAt) { this._clearAimAt = -1; if (![...this.held.values()].some((h) => h.aiming)) inp?.setVirtualAim(0, 0, false); }
+    if (this._clearAimAt >= 0 && fc >= this._clearAimAt) { this._clearAimAt = -1; if (!this._anyAiming()) inp?.setVirtualAim(0, 0, false); }
     if (vis.play) this._longPress();
     if (this.stick.id !== null && !this.stick.live) this._applyStick();            // a thumb resting past a tap goes live
     for (const [a, h] of this.held) if (h.pending && nowS() - h.t0 >= FLICK_S) { h.pending = false; inp?.setVirtual(a, true); }
-    // attack charge ring
+    this._thumbs();
+    // attack charge ring (written only on change)
     const ch = p?.charge ?? 0;
-    this.attackRing?.setAttribute('stroke-dashoffset', (I.RING_LEN * (1 - Math.min(1, ch))).toFixed(1));
+    const off = (I.RING_LEN * (1 - Math.min(1, ch))).toFixed(1);
+    if (this._atkOff !== off) { this._atkOff = off; this.attackRing?.setAttribute('stroke-dashoffset', off); }
     flag(this.btns.get('attack'), 'is-charge', ch > 0.02);
     flag(this.btns.get('attack'), 'is-gold', (p?.chargeTier ?? 0) >= 2);
     // ability portrait + ring + seconds
@@ -580,7 +629,8 @@ export class TouchControls {
       const id = c.kittenId ?? c.id;
       if (ab._id !== id) { ab._id = id; ab.querySelector('.tb-ico').innerHTML = portraitSVG(id, { expression: 'happy' }); setVar(ab, '--sig', SIGNATURE[id] ?? '#D9B26A'); }
       const r = Math.max(0, Math.min(1, comp.readiness?.() ?? c.readiness ?? 1));
-      this.abilityRing?.setAttribute('stroke-dashoffset', (I.RING_LEN * (1 - r)).toFixed(1));
+      const aoff = (I.RING_LEN * (1 - r)).toFixed(1);
+      if (this._abOff !== aoff) { this._abOff = aoff; this.abilityRing?.setAttribute('stroke-dashoffset', aoff); }
       const left = comp.cooldownLeft?.() ?? 0;
       const txt = (c.napT ?? 0) > 0 ? 'zzz' : left >= 1 ? String(Math.ceil(left)) : '';
       if (this.abilityCd.textContent !== txt) this.abilityCd.textContent = txt;
@@ -601,6 +651,62 @@ export class TouchControls {
       ctx.state?.setFlag?.('seen.tut.rotate', true);
       ctx.bus.emit(E.TOAST, { text: tx(ctx, 'tut.rotate') });
     }
+  }
+
+  /** Refresh the read-only live thumb state (AUTOCAM §7.1 live holes: stickR + thumbPad around the base; the held button). */
+  _thumbs() {
+    const T = this.thumbs, s = this.stick, pad = CAMERA?.iso?.frame?.thumbPad ?? 36;
+    T.stick.on = s.id !== null;
+    if (T.stick.on) { T.stick.x = s.ox; T.stick.y = s.oy; T.stick.r = TC.stickR * this._ts() + pad; }
+    T.held.on = false;
+    for (const [a, h] of this.held) {
+      const b = this.layout?.buttons?.[a];
+      if (!b || h == null) continue;
+      T.held.on = true; T.held.action = a;
+      T.held.x = b.x - b.r - pad; T.held.y = b.y - b.r - pad; T.held.w = 2 * (b.r + pad); T.held.h = T.held.w;
+      break;
+    }
+  }
+
+  /**
+   * The joystick's static rest zone (AUTOCAM §7.1 kind 'stick'): a disc of stickR + thumbPad around where a thumb rests
+   * in the stick zone (one stick radius off the bottom-left safe corner, mirrored when left-handed), or null.
+   * @returns {{x:number, y:number, r:number}|null}
+   */
+  stickRest() {
+    if (!this.enabled || !this.layout) return null;
+    const R = TC.stickR * this._ts(), pad = CAMERA?.iso?.frame?.thumbPad ?? 36, sf = this._safe();
+    const W = window.innerWidth, H = window.innerHeight, left = !this.ctx.state?.settings?.leftHanded;
+    const o = this._rest ?? (this._rest = { x: 0, y: 0, r: 0 });
+    o.r = R + pad;
+    o.x = left ? sf.left + R * 1.6 : W - sf.right - R * 1.6;
+    o.y = H - sf.bottom - R * 1.6;
+    return o;
+  }
+
+  /** Does a cluster button count as a SafeFrame occluder? Every laid-out button does, shown or not (stable geometry). */
+  occludes(name) { return !!this.layout?.buttons?.[name]; }
+
+  /**
+   * WA §7.5: veil the lesson buttons not yet taught (`visibility: hidden`, geometry unchanged). `taught` = the actions
+   * already introduced; null lifts the veil.
+   * @param {string[]|null} taught
+   */
+  veil(taught) {
+    if (!taught) { this.veiled = null; for (const a of LESSON_BUTTONS) flag(this.btns.get(a), 'is-veiled', false); return; }
+    this.veiled = new Set(LESSON_BUTTONS.filter((a) => !taught.includes(a)));
+    for (const a of LESSON_BUTTONS) flag(this.btns.get(a), 'is-veiled', this.veiled.has(a));
+  }
+
+  /** WA §7.5: a lesson starts: its button appears with a pop and a 3-ring pulse (1.6 s). */
+  reveal(action) {
+    const e = this.btns.get(action === 'chargeRelease' ? 'attack' : action);
+    if (!e) return false;
+    const was = this.veiled?.has(action) || e.classList.contains('is-veiled');
+    this.veiled?.delete(action);
+    flag(e, 'is-veiled', false);
+    if (was) pulse(e, 'is-reveal');
+    return was;
   }
 
   dispose() {

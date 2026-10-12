@@ -432,6 +432,16 @@ export default {
       const hat = makeProp('featherHat');
       attachAligned(space, head, hat, { pos: [hp.x, hp.y + 0.13 * k, hp.z - 0.05 * k], rot: [-0.2, 0, 0.08], scale: k * 0.7 });
       e.helmet = hat;                                        // spins off on defeat (§10.1)
+      // ART §7.2: a monocle over his right eye and a moustache card on the snout (Barkus keeps the eyepatch)
+      const he = bone(m.scene, 'Head_end');
+      const ep = he ? posIn(space, he) : null;
+      const ey = ep ? THREE.MathUtils.lerp(hp.y, ep.y, 0.3) + 0.075 * k : hp.y + 0.08 * k;
+      const ez = ep ? THREE.MathUtils.lerp(hp.z, ep.z, 0.32) : hp.z + 0.1 * k;
+      const mono = makeProp('monocle');
+      attachAligned(space, head, mono, { pos: [hp.x - 0.062 * k, ey, ez + 0.035 * k], scale: k });
+      const mo = makeProp('moustache');
+      const sz = ep ? THREE.MathUtils.lerp(hp.z, ep.z, 0.78) : hp.z + 0.22 * k, sy = ep ? THREE.MathUtils.lerp(hp.y, ep.y, 0.78) : hp.y;
+      attachAligned(space, head, mo, { pos: [hp.x, sy - 0.01 * k, sz + 0.02 * k], rot: [-0.1, 0, 0], scale: k * 1.1 });
     }
     const lp = bone(m.scene, 'FrontLowLeg.L'), rp = bone(m.scene, 'FrontLowLeg.R');
     if (lp) {

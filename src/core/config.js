@@ -73,7 +73,11 @@ CAMERA.iso = {
   // integration: the clamp measures her APPARENT size (feet → ear tips ≈ 1.0 m × cos pitch; 0.98 keeps a margin), what a screenshot shows
   catHView: 0.98,
   focusY: 0.6, followDamp: 12, followDampY: 6, jumpFollow: 0.3, bounceFollow: 0.5,
-  lead: { vel: 0.25, velMax: 1.6, cursor: 0.15, cursorMax: 2.0, max: 2.5, up: 0.8, damp: 4 },
+  // lead: AUTOCAM §12 table merged below; vel / velMax / up / damp / cursor are RETIRED (read with fallbacks until
+  // camera moves to the new gains). AUTOCAM's cursor lead is 0 by default and comes from the camCursorLead setting
+  // (0–0.15); the 0.15 here is what the current IsoRig reads, kept so behaviour is unchanged until then.
+  lead: { vel: 0.25, velMax: 1.6, cursor: 0.15, cursorMax: 2.0, max: 2.5, up: 0.8 /* retired, not read (IsoRig FRAME) */, damp: 4 },
+  // frameOffset / frameOffsetPortrait: RETIRED (not read; IsoRig FRAME / AUTOCAM derived anchor). Kept, never removed.
   frameOffset: 0.04, frameOffsetPortrait: -0.10, frameOffsetTouchX: 0.08 /* integration: touch landscape, left of the cluster */, near: 0.3, far: 90, refit: 0.4,
   hint: { blend: 1.2, calmFor: 2.0, maxPerLevel: 3 }, stickRelatch: 0.15,
   combat: { radius: 10, bias: 0.3, biasMax: 2.5, inner: 0.8, margin: 1.2, zoomOut: 3, outDamp: 2.5, holdIn: 1.5, selWeight: 1.5 },
@@ -86,11 +90,66 @@ CAMERA.iso = {
   shake: { rotMul: 0.5, transMul: 2.0, rotMaxDeg: 1.2, transMax: 0.35, scale: 0.6 },
   cut: { blendIn: 0.8, handback: 1.0, cutAngle: 2.094, cutDist: 30, veil: 0.25 },
   meme: { exitPx: 40, idlePxPerSec: 24, spotR: 4 },
-  occl: { opacity: 0.22, fadeIn: 0.15, fadeOut: 0.40, herR: 1.0, enemyR: 0.6, enemies: 4, enemyRange: 8, pathR: 0.4,
+  // archOpacity (requests/core.md, camera occlusion review): roofs / solid occluders fade to 2 of 16 dither cells
+  occl: { opacity: 0.22, archOpacity: 0.1, fadeIn: 0.15, fadeOut: 0.40, herR: 1.0, enemyR: 0.6, enemies: 4, enemyRange: 8, pathR: 0.4,
           crownR: 3.5, roofPad: 1.5, xrayFrac: 0.3, xrayDelay: 0.1 },
   fog: { clear: 5, clearCombat: 7, topMul: 1.5, lowMix: 0.45, ease: 0.6, goldenClearMul: 1.5 },
   shadowHalf: 16, shadowHalfBoss: 20, lodFromFocus: true,
 };
+
+/**
+ * research/next/AUTOCAM_SPEC.md §12 (binding; IMPLEMENTATION_PLAN §4 "AUTOCAM wins on overlap"): the MOBA auto-camera
+ * tables, merged into `CAMERA.iso`. Retired CONTROLS §13 keys stay above with their old values so current readers keep
+ * working (`followDamp`, `followDampY`, `lead.vel / velMax / up / damp`, `combat.inner / outDamp / biasMax`,
+ * `boss.herInner` (numeric 0.6; AUTOCAM's `'frame'` = the `herFrame` clamp once camera reads `frame.herInner`),
+ * `frameOffset*`, `shadowHalf*` (footprint-fit fallback), `far` (→ `foot.far`)).
+ */
+Object.assign(CAMERA.iso, {
+  distRangePortrait: [16, 26],                                         // D19; landscape keeps distMin 9 / distMax 18
+  follow: { rigidXZ: true, groundST: 0.18, resetJump: 4, veilJump: 8, dtMax: 0.1 },
+  aimPan: { minRange: 5, gain: 0.40, dead: 3.0, in: 0.30, hold: 0.35, out: 0.6,
+            cap: { desktop: 2.5, tablet: 2.0, phone: 1.6, portrait: 1.0 } },
+  frame: { coreInset: 0.04, threatInset: 0.02, holePad: 12, thumbPad: 36, maxShiftX: 0.06, maxShiftY: 0.12,
+           landBiasY: 0.04, herInner: 0.75, herHeadPad: 0.6, herFeetPad: 0.3, herSidePad: 0.4,
+           fitScale: 0.90, fitBottomExtra: 0.04, hysteresisFrame: 0.92, anchorEase: 0.4, grid: [32, 18] },
+  framing: { solver: true, hz: 20, maxSubjects: 16, ternarySteps: 10, pitchPasses: 2, holeRepair: [0.5, 4],
+             engage: { in: 10, out: 12.5, hold: 1.5 }, selHard: 12, selSoft: 16,
+             pad: { threat: 0.8, enemy: 0.6, boss: 1.5, lane: 1.0, her: 0.6 },
+             w: { threat: 2.0, preAttend: 1.0, boss: 1.0, lane: 1.0, selected: 1.5, engaged: 1.0, add: 0.5 },
+             weightIn: 0.35, weightOut: 0.5, hardMinW: 0.5,
+             lean: { bias: 0.5, kappa: 0.10, capUp: 2.5, capDown: { desktop: 4.0, tablet: 3.0, phone: 2.0, portrait: 2.0 },
+                     capDownCalm: { desktop: 2.5, tablet: 2.5, phone: 2.0, portrait: 2.0 }, boss: 5.0, st: 0.45, vmax: 5 },
+             crowd: { per: 0.25, after: 2, max: 1.5 }, zoomOut: 3,
+             dist: { outST: 0.35, outVmax: 6, inST: 1.2, inVmax: 1.5, holdIn: 1.5 },
+             hysteresis: { d: 0.35, lean: 0.30 }, rate: { pitchDeg: 20, fovDeg: 12 },
+             orbitPenalty: { k: 1.5, free: 3.0 } },                                       // enemies read orbitPenalty
+  beats: { maxLean: 2.5, maxDd: 1.5, cancelFade: 0.3,
+           peekaboo: { frac: 0.6, lean: 2.5, dd: 0.5, t: [0.6, 1.0, 0.8] },
+           cosy: { dd: -1.5, dMin: 10, dfov: -1.5, t: [0.5, 1.2, 0.9], calmR: 12 },
+           roomRead: { lean: 3, ddMax: 3, t: [0.5, 0.7, 0.6] },
+           exhale: { dd: 0.8, t: [0.4, 0.6, 1.5] } },
+  snuggle: { after: 5, dd: -0.6, st: 1.2, back: 0.35 },
+  reduce: { anchorY: 0.50, combatFitEase: 0.6 },
+  touchShakeRot: 0,
+  pinch: { startPx: 16, secondMs: 400, rubber: 0.25, rubberBack: 0.6, elastic: 0.06 },
+  semi: { returnST: 0.4, returnMove: 2, returnIdle: 3, edgeAccel: 0.35 },
+  foot: { casterH: 6, shadowPad: 1.5, shadowQuant: 1, shadowShrink: [2, 1.0],
+          shadowCacheMargin: 8, shadowCacheSnap: 8,                                       // X7 stage 2 (world reads)
+          farMul: 1.25, farPad: 25, farQuant: 5, far: [45, 90], farFallback: 60, fogFarPad: 4,   // X12
+          grassPad: 3, mistQuant: 1 },
+  budget: { msDesktop: 0.08, msPhone: 0.15, heapKB: 64 },
+});
+Object.assign(CAMERA.iso.lead, {
+  gainUp: 0.12, gainDown: 0.42, gainSide: 0.26, gainSidePortrait: 0.10,
+  caps: { desktop: [1.7, 0.8, 2.4], tablet: [1.4, 0.8, 2.0], phone: [1.4, 0.8, 2.0], portrait: [0.8, 1.2, 2.0] },   // [side, up, down]
+  speedRamp: [1.2, 4.0], build: 0.55, release: 0.80, vmax: 4.5,
+  debounce: 0.20, debounceCone: 0.873 /* 50° */, reverse: 2.094 /* 120° */, orderLook: 2.5,
+  biasST: 1.0,
+});
+Object.assign(CAMERA.iso.boss, {
+  establish: { in: 0.6, hold: 0.8 }, phaseBreath: { dd: 1.5, t: 1.0 },
+  dizzy: { dd: -1.0, in: 0.4, maxHold: 3, out: 0.6 }, defeatHold: 0.6,
+});
 
 /** §5.3 nav grid + §5.2 order follower (physics/NavGrid.js, physics/Pathfind.js, player/Orders.js). */
 export const NAV = {
@@ -185,13 +244,14 @@ export const ENEMIES = {
   spider:    { model: 'models/creatures/polypizza/Spider.glb', fit: { h: 0.5 }, tint: '#4E5A2C', radius: .35, height: .5, mass: .6, hp: 35, poise: 2, burst: { speed: 5, move: 1.2, pause: 1.0 }, sight: 10, fov: 3.14, leash: 16,
                attacks: [{ id: 'spider_web', weight: 1, range: 7 }, { id: 'spider_bite', weight: 2, range: 1.3 }], fish: [3, 3] },
   hyena:     { model: 'models/characters/kaykit/Barbarian.glb', fit: { h: 1.35 }, head: 'hyena', plateWords: ['HATER', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER'],
+               plateWordsFriend: ['FAN', 'GIGGLER', 'YAYSAYER', 'HUGGER', 'CHEERER', 'SPOONER'],   // WA §12 (index-paired with plateWords)
                hide: ['Barbarian_Head', 'Barbarian_Hat', '1H_Axe', '1H_Axe_Offhand', '2H_Axe', 'Mug', 'Barbarian_Round_Shield'],
                weapon: { model: 'models/weapons/skeleton/Skeleton_Blade.glb', bone: 'handslot.r', fit: { max: 0.9 } },
                radius: .40, height: 1.35, mass: 1.4, hp: 50, poise: 3, walk: 2.0, run: 5.0, sight: 14, fov: 2.44, leash: 22,
                attacks: [{ id: 'hyena_slash', weight: 3, range: 1.9 }, { id: 'hyena_lunge', weight: 1, range: 5, minRange: 3, cooldown: 4 }],
                gloat: { dur: 1.0, chokeStagger: 1.0, chokeValor: 10 },
                jeer: { windup: .5, dur: 2.0, r: 8, cooldown: 12, onlyWithin: 10, fogAdd: .01, maxPerPack: 1 }, flank: { giggleLead: .6 }, fish: [4, 6] },
-  stealer:   { model: 'models/characters/kaykit/Rogue_Hooded.glb', fit: { h: 1.2 }, head: 'hyena', plateWords: ['POST STEALER'], hide: ['Rogue_Head_Hooded', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
+  stealer:   { model: 'models/characters/kaykit/Rogue_Hooded.glb', fit: { h: 1.2 }, head: 'hyena', plateWords: ['POST STEALER'], plateWordsFriend: ['POSTMASTER'], hide: ['Rogue_Head_Hooded', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
                radius: .35, height: 1.2, mass: 1.0, hp: 30, poise: 1, walk: 2.0, run: 6.0, sight: 16, fov: 2.79, leash: 30,
                attacks: [{ id: 'stealer_snatch', weight: 1, range: 4 }], fish: [3, 3] },
   pug:       { model: 'models/characters/kaykit/Knight.glb', fit: { h: 1.25 }, head: 'pug', show: ['Rectangle_Shield', '1H_Sword', 'Knight_Helmet'], helmetScale: .9,
@@ -266,13 +326,18 @@ export const LINE = { durationAtFullRate: 240, winch: [0, 41], winchRadius: 4, l
            { at: .85, cutscene: 'g02' } ],
   trickle: { every: 15, spawn: [['hyena', 2]], runners: 1 } };
 
-export const TELEGRAPH = { colors: { parry: '#FFFFFF', gold: '#FFD34D', red: '#FF3B30', aoe: '#FF6A3D', aim: '#FFFFFF', grab: '#9B5CFF', jeer: '#B07CFF', shadow: '#000000' },
-                           minLead: { parry: .45, gold: .6, red: .6, aoe: .5, aim: .8, grab: .6, jeer: .5, shadow: 1.0 }, arrowRadius: 15, maxArrows: 4, decalPool: 32 };
+// WA §12 (core.W1): warm danger hues (red #FF3B30 → #FF5A4E, aoe #FF6A3D → #FF9A3D), the crow shadow plum #3A2346 (never
+// black, WA §2.7); `glyph` = the shape language of WA §3.4 (fx maps each to a GroundDecals SDF), `ink` = the cocoa sandwich
+export const TELEGRAPH = { colors: { parry: '#FFFFFF', gold: '#FFD34D', red: '#FF5A4E', aoe: '#FF9A3D', aim: '#FFFFFF', grab: '#9B5CFF', jeer: '#B07CFF', shadow: '#3A2346' },
+                           minLead: { parry: .45, gold: .6, red: .6, aoe: .5, aim: .8, grab: .6, jeer: .5, shadow: 1.0 }, arrowRadius: 15, maxArrows: 4, decalPool: 32,
+                           glyph: { parry: 'shield', gold: 'star8', red: 'chevron2', aoe: 'dots6', grab: 'paw', shadow: 'crowfoot', aim: 'arrow' },
+                           ink: { color: '#4A2A1F', width: 0.03, alpha: 0.35 }, glyphSize: 0.45, glyphSizeTouch: 0.55, rimMinTouch: 0.14 };
 
 export const JUICE = { light: { hitstop: .05, shake: .15, rumble: [.25, 0, 60] }, heavy: { hitstop: .09, shake: .35, rumble: [.4, .5, 120] },
                        holy: { hitstop: .14, shake: .6, rumble: [.8, .8, 250], bloom: [.55, 1.2, .4], fovPunch: 5 }, parry: { hitstop: .12, shake: .25, rumble: [.3, .7, 90] },
                        block: { hitstop: .04, shake: .1, rumble: [.2, .2, 60] }, guardBreak: { hitstop: .08, shake: .4, rumble: [.5, .5, 150] },
-                       kill: { hitstopAdd: .04, shakeAdd: .1 }, hurt: { hitstop: .07, shakeMul: 1.4, rumble: [.6, .3, 150] }, dizzy: { hitstop: .1, shake: .3, rumble: [.3, .3, 120] } };
+                       kill: { hitstopAdd: .04, shakeAdd: .1 }, hurt: { hitstop: .07, shakeMul: 1.4, rumble: [.6, .3, 150] }, dizzy: { hitstop: .1, shake: .3, rumble: [.3, .3, 120] },
+                       finalBlow: { hitstopAdd: 0.06, slowMo: 0.25, timeScale: 0.35 } };   // WA §12: the last alerted enemy of an encounter (via game.slowMo)
 
 
 /**
@@ -344,30 +409,108 @@ export const KITTENS_BY_LEVEL = { meadow: KITTEN_IDS.slice(0, 3), forest: KITTEN
 /** Game modes (§19.1 A7). */
 export const MODES = ['play', 'dialog', 'cutscene', 'menu', 'memecam'];
 
-/** Fixed-step loop (tech.md §6). */
-export const LOOP = { step: 1 / 60, maxSteps: 5, maxFrameDt: 0.1 };
+/**
+ * Fixed-step loop (tech.md §6; PERF_SPEC §4.1): 60 Hz everywhere; when the step cap is hit the remainder is dropped
+ * (game time dilates for that frame). `maxStepsLow` applies on the Low preset.
+ */
+export const LOOP = { step: 1 / 60, maxSteps: 4, maxStepsLow: 3, maxFrameDt: 0.1 };
 
-/** Renderer / post (tech.md §13, art.md §9.1 + §10.1, GAME_DESIGN §17). */
+/**
+ * Renderer / post (tech.md §13; PERF_SPEC §2 + §6; ART_WARM_SPEC §3 + §4.1).
+ * - `toneMapping` 'neutral' (K1: ACES → Neutral; Game.js applies it in S1), `medAA` 'canvas' | 'fxaa' (build-time,
+ *   decided once by the PERF §6.1 A/B), `toon` = the global toon ramp (core/toon.js; `sat` never above 1.15).
+ * - RETIRED (read with fallbacks until PostFX drops the composer in S1): `bloom`, `vignette` (K1: no vignette pass;
+ *   ui draws a warm CSS vignette), `dynamicRes` (→ QUALITY.*.dynRes, PERF §5).
+ */
 export const RENDER = {
   fov: CAMERA.fov, near: 0.1, far: 600, exposure: 1.0,
+  toneMapping: 'neutral', medAA: 'canvas',
+  toon: { band: [0, 0.07], step: [0.42, 0.50, 0.86], shadow: [0.38, 0.62], sat: 1.12 },
+  /** first-frame clear colour until Env sets `scene.background` (= `meadow_day` fog; WA §2.1, never grey) */
+  background: '#F6E4C0',
+  /**
+   * High-only cinematic chain (ART §3.3, PERF §6.1; core/postfx/PostChain.js): bloom [strength, radius, threshold],
+   * soft knee, the seamless on/off fade (s), and the optional uber grades (sat, gain rgb; identity = none).
+   */
+  cinematic: { bloom: [0.6, 0.4, 0.9], knee: 0.5, fade: 0.6, maxBloom: 1.2, nanClamp: 64,
+    grades: { none: [1, 1, 1, 1], warm: [1.04, 1.03, 1.0, 0.97], gold: [1.06, 1.05, 1.0, 0.92], night: [0.96, 0.97, 0.99, 1.04], hush: [0.92, 1.0, 0.98, 1.02] } },
   bloom: { strength: 0.6, radius: 0.4, threshold: 0.85 },
   vignette: { offset: 0.95, darkness: 1.15 },
   dynamicRes: { slowMs: 18, fastMs: 12, window: 2.0, step: 0.1 },
 };
 
 /**
- * Quality presets (tech.md §18; R15). 'auto' picks low on coarse pointers, high on discrete GPUs, else med.
- * Agents read ctx.quality (the active preset) and listen to E.QUALITY for changes. charDetail: tessellation factor for
- * cats built under the preset (characters: armour / body / head-fur segments; Low ≈ the lite tier's 0.55).
+ * Performance controller + instrumentation (PERF_SPEC §5, §12; IMPLEMENTATION_PLAN §5). core/pacing.js reads
+ * `dynRes`, `pacing`, `thermal`; core/perf.js reads `ring`, `overlayHz`, `stage`, `budgets`.
+ * - `stage`: which §5 budget column this build is gated against ('I1' → 'I2' → 'End'); `perf().stage` reports it.
+ * - `dynRes`: the asymmetric render-scale controller (§5.2). `thermal`: the shedding ladder + the 30 fps fallback (§5.4).
+ */
+export const PERF = deepFreeze({
+  stage: 'I1',
+  budgets: {
+    I1: { frameCalls: { low: 70, med: 120, high: 150 } },
+    I2: { frameCalls: { low: 60, med: 90, high: 110 } },
+    End: { sceneCalls: { low: 40, med: 60, high: 90 }, tris: { low: 80000, med: 150000, high: 260000 } },
+    bossExtra: 15,
+  },
+  dynRes: { ema: 0.1, gpuDownMs: 12.5, rafDownMs: 17.5, downHold: 1.0, gpuUpMs: 9.0, upHold: 3.0,
+    probeEvery: 5, probeWindow: 2, probeMax: 40, minInterval: 2 },
+  pacing: { refreshSamples: 60, highRefreshHz: 100, baseFps: 60 },
+  thermal: { floorHold: 10, grassScale: 0.5, particleScale: 0.5, lock30Ms: 18.5, lock30Hold: 20,
+    retryAfter: 120, retryWorkMs: 12, retryHold: 30 },
+  ring: 600, overlayHz: 4,
+});
+
+/**
+ * Quality presets: the ONE merged key set (IMPLEMENTATION_PLAN §4 / PERF_SPEC §2, values binding). 'auto' picks low on
+ * coarse pointers, high on discrete GPUs, else med. Agents read ctx.quality (the active preset) and listen to
+ * E.QUALITY for changes.
+ * - `shadows` is a string now (K3): 'none' | 'sun'. Use `qualityShadowsOn(preset)` instead of a truthiness test.
+ * - `furShellsIso` / `furShellsClose` / `kittenShellsIso`: shell counts at the iso lens / in close-ups (X8).
+ * - `outline`: 'hero' | 'heroCompanionsEngaged' | 'all'. `programs`: the per-level program budget (PERF §1.2).
+ * - `charDetail`: tessellation factor for cats built under the preset (characters; Low ≈ the lite tier's 0.55).
+ * - RETIRED (kept with their old values until every reader moved; never removed): `composer`, `msaa`, `bloom`,
+ *   `furShells`, `kittenShells`, `grass`, `minDpr` (→ `dynRes.min`), `dynamicRes`.
  */
 export const QUALITY = {
-  low:  { id: 'low',  maxDpr: 1.0, minDpr: 0.6, composer: false, msaa: 0, bloom: false, shadows: false, shadowMap: 1024,
-          grass: 4000, furShells: 0, kittenShells: 0, charDetail: 0.55, maxEnemies: 6, maxSkinned: 6, particles: 500, dynamicRes: true },
-  med:  { id: 'med',  maxDpr: 1.5, minDpr: 0.7, composer: true, msaa: 4, bloom: true, shadows: true, shadowMap: 2048,
-          grass: 30000, furShells: 16, kittenShells: 10, charDetail: 1, maxEnemies: 8, maxSkinned: 12, particles: 2000, dynamicRes: true },
-  high: { id: 'high', maxDpr: 2.0, minDpr: 0.8, composer: true, msaa: 4, bloom: true, shadows: true, shadowMap: 2048,
-          grass: 45000, furShells: 16, kittenShells: 10, charDetail: 1, maxEnemies: 8, maxSkinned: 12, particles: 2000, dynamicRes: true },
+  low: { id: 'low',
+    maxDpr: 1.25, dynRes: { min: 0.6, max: 1.0, step: 0.05 },
+    aa: 'canvas', cinematic: false,
+    toneMapping: 'neutral', dither: true, cssVignette: true, glowCards: true,
+    shadows: 'none', shadowMap: 0, vertexAO: 'height',
+    furShellsIso: 0, furShellsClose: 8, kittenShellsIso: 0, charTufts: false,
+    outline: 'hero', grassTufts: 1300, groundMist: 4, particles: 300,
+    maxEnemies: 6, maxSkinned: 6, fpsCap: 60, programs: 30, charDetail: 0.55,
+    // retired
+    minDpr: 0.6, composer: false, msaa: 0, bloom: false, grass: 4000, furShells: 0, kittenShells: 0, dynamicRes: true },
+  med: { id: 'med',
+    maxDpr: 1.25, dynRes: { min: 0.7, max: 1.0, step: 0.05 },
+    aa: 'canvas' /* RENDER.medAA decides 'canvas' | 'fxaa' */, cinematic: false,
+    toneMapping: 'neutral', dither: true, cssVignette: true, glowCards: true,
+    shadows: 'sun', shadowMap: 1024, vertexAO: 'none',
+    furShellsIso: 0, furShellsClose: 16, kittenShellsIso: 0, charTufts: true,
+    outline: 'heroCompanionsEngaged', grassTufts: 4000, groundMist: 8, particles: 1500,
+    maxEnemies: 8, maxSkinned: 12, fpsCap: 60, programs: 40 /* → 30 after WarmToon */, charDetail: 1,
+    // retired
+    minDpr: 0.7, composer: true, msaa: 4, bloom: true, grass: 30000, furShells: 16, kittenShells: 10, dynamicRes: true },
+  high: { id: 'high',
+    maxDpr: 1.5, dynRes: { min: 0.8, max: 1.0, step: 0.05 },
+    aa: 'canvas', cinematic: true, cinematicSamples: 4, bloomRes: 0.5, bloomMips: 3,
+    toneMapping: 'neutral', dither: true, cssVignette: true, glowCards: true,
+    shadows: 'sun', shadowMap: 2048, vertexAO: 'none',
+    furShellsIso: 0 /* 4 only if PERF S2 passes */, furShellsClose: 16, kittenShellsIso: 0, charTufts: true,
+    outline: 'all', grassTufts: 8000, groundMist: 8, particles: 2000,
+    maxEnemies: 8, maxSkinned: 12, fpsCap: 0 /* uncapped */, programs: 36, programsCinematic: 36, charDetail: 1,
+    // retired
+    minDpr: 0.8, composer: true, msaa: 4, bloom: true, grass: 45000, furShells: 16, kittenShells: 10, dynamicRes: true },
 };
+
+/**
+ * K3 helper: does this QUALITY preset render a sun shadow map? Accepts the new string ('sun' | 'none') and the
+ * retired boolean, so every reader can switch to it before the presets change again.
+ * @param {{shadows?: string|boolean}|null|undefined} preset
+ */
+export const qualityShadowsOn = (preset) => preset?.shadows === true || preset?.shadows === 'sun';
 
 /**
  * Input bindings (GAME_DESIGN §15 + §19.1 A2; tech.md §7). Keyboard entries are KeyboardEvent.code;
@@ -551,3 +694,73 @@ export const PHYSICS = Object.freeze({
   ceilingNormalY: -0.2,
   edgeSlip: 2.0,           // m/s: a grounded actor resting on a ledge edge (capsule rim) rolls off it at this speed
 });
+
+// ---------------------------------------------------------------------------------------------
+// Phase W: Warm Adventure (research/next/WARM_ADVENTURE_SPEC.md §12; core.W1, one commit). Binding on tone, clarity,
+// onboarding and story. Every table is deep-frozen. TELEGRAPH (glyph / ink / colours), JUICE.finalBlow and
+// ENEMIES.*.plateWordsFriend are merged into their tables above.
+// ---------------------------------------------------------------------------------------------
+/** @template T @param {T} o @returns {Readonly<T>} */
+function deepFreeze(o) {
+  for (const v of Object.values(o)) if (v && typeof v === 'object' && !Object.isFrozen(v)) deepFreeze(v);
+  return Object.freeze(o);
+}
+
+/**
+ * WA §3.2 / §3.5a class marks (fx GroundDecals; 0 draws): her pink ring, the dashed companion ring, the mint interact
+ * ring, pickup twinkles and her in-world heart arc (shown `show` s after an HP change and while HP ≤ 1).
+ */
+export const CLASS_MARKS = deepFreeze({
+  hero: { color: '#FF8FB1', alpha: 0.55, width: 0.08, r: 0.75 },
+  companion: { color: '#8FD3FF', alpha: 0.35, r: 0.5, dashes: 8 },
+  interact: { color: '#9BE3C4', alpha: 0.30, hz: 0.8, pulse: 0.06, twinkleEvery: 2.5, range: 8, maxZones: 6 },
+  pickup: { twinkle: '#FFF1C4', gold: '#FFD57A', every: 1.2, goldEvery: 0.6, spin: 1.2 },
+  heroHearts: { full: '#FF6F9C', fullA: 0.75, empty: '#4A2A1F', emptyA: 0.18, r0: 0.82, r1: 0.92, spreadDeg: 120, gapDeg: 4, show: 2.5, lowHz: 1.4 },
+});
+
+/** WA §5.7 knock-out look (player-owned timings, read by fx / ui): sit, dizzy stars, then the respawn pop at sitT + wipeT. */
+export const KO = deepFreeze({ sitT: 1.2, wipeT: 0.35, starR: 0.35, starRev: 2.5, hearts: 6 });
+
+/** WA §2.6 `world/Bunting.js` (the one added play draw; no shadow). Low halves pennants and lanterns. */
+export const BUNTING = deepFreeze({ max: 240, maxLow: 120, lanternMax: 60, lanternMaxLow: 30, sag: 0.12, spacing: 0.55, minH: 3.2, flutter: 0.06 });
+
+/** WA §5 idle ladder (s of no input; player): every step before the Meme Cam (`PLAYER.memeCam.idle`), loops from `loopFrom`. */
+export const IDLE = deepFreeze({ glance: 4, look: 7, groom: 10, twirl: 12.5, loopFrom: 7, sneezeP: 0.1, hubSit: 20 });
+
+/** WA §4.1 calm HUD (the hudMode setting, 'calm' by default): tuck `after` s out of combat (no alerted enemy within `combatR` m). */
+export const HUD = deepFreeze({ tuck: { combatR: 15, after: 4, fade: 0.3, popShow: 3 } });
+
+/** WA §6 one reward system (`ui/celebrate.js`): durations per size, combat dock, confetti cap; never pauses the game. */
+export const CELEBRATE = deepFreeze({ skipAfter: 0.6, sticker: 1.6, card: 2.2, friend: 2.6, dockScale: 0.6, dockFly: 1.2, safeR: 15, confettiMax: 24 });
+
+/** WA §5 pickups: hop, fly-to-HUD, pitch ladder (rate = 1 + pitchStep × n, n ≤ pitchMax, reset after pitchReset s). */
+export const PICKUP_FX = deepFreeze({ hop: 0.35, flyMs: 450, flyLift: 120, pool: 8, pitchStep: 0.06, pitchMax: 8, pitchReset: 1.5 });
+
+/** fx-wide design numbers. `comicPops`: parry pops always; other pops only the first time within `firstMinutes`. */
+export const FX = deepFreeze({ comicPops: { parry: 'always', other: 'first', firstMinutes: 10 } });
+
+/**
+ * Story switches (WA §12 + §13 default sign-offs). `cs02Cut`: the shortened CS-02 (≤ 55 s); `kittenOffer`: offer
+ * Kitten mode after `knockouts` KOs or `failedParries` failed parries within `windowS` s (once per save);
+ * `mochiCage`: Mochi's tipped cart on the meadow ([x, z]; D-01 triggers there, WA20).
+ */
+export const STORY = deepFreeze({ cs02Cut: true, kittenOffer: { knockouts: 2, windowS: 180, failedParries: 3 }, mochiCage: [-14, -41] });
+
+/** WA §2.7: load / cutscene fades are cream, never black (core.W3; ui `cinema.js` and world LevelManager read it). */
+export const FADE_COLOR = '#FFF1DE';
+
+/**
+ * IMPLEMENTATION_PLAN §7.4 + Phase W: the settings added by this phase and their allowed values (GameState holds the
+ * defaults, save validates with these lists, ui builds its panel from them). Numeric entries are [min, max].
+ */
+export const SETTING_VALUES = deepFreeze({
+  camLockMode: ['locked', 'semi', 'free'],            // AUTOCAM §10.4 (X19; replaces the boolean camLock, K7)
+  camCursorLead: [0, 0.15],                           // AUTOCAM §5.4
+  camZoomPortrait: [0.7, 1.4],                        // AUTOCAM §10.3
+  fpsCap: ['auto', 30, 60, 'off'],                    // PERF §5.3
+  quality: ['auto', 'low', 'med', 'high'],
+  hudMode: ['calm', 'full'],                          // WA §4.1
+  pathPreview: ['auto', 'on', 'off'],                 // WA §3.6 ('auto' = touch during the prologue and Chapter 1)
+});
+
+for (const t of [ENEMIES.hyena.plateWordsFriend, ENEMIES.stealer.plateWordsFriend, TELEGRAPH.glyph, TELEGRAPH.ink, JUICE.finalBlow]) Object.freeze(t);

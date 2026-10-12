@@ -7,7 +7,7 @@
 //   3 low: Coo hops onto the bag (Pigeon `Jump`). "Coo." "Every knight. Fast as you can." "Coo." Coo flutters off
 //     (Jump + an upward tween over 2 s).
 //   4 ECU_EYES: a yellowed envelope; the full-screen parchment card (Uncial Antiqua) shows `letter.marmalade`; 4 s of
-//     silence, then story_lament_warriors_soul fades in softly.
+//     1.5 s of silence, then tavern_old_tower_inn fades in over 2 s (homesick, not mournful; WA §8.6a).
 //   5 medium: she folds it and tucks it into her belt.
 // end: flag town.letters; the letter rides on her belt (StoryManager re-attaches it after loads until CS-10);
 // music back to the level's explore track.
@@ -103,15 +103,15 @@ export default {
     { t: 'call', fn: cooFliesOff, max: 3 },
     { t: 'actor', id: 'coo', visible: false },
 
-    // ---- 4 · Marmalade's letter: the parchment card, 4 s of silence, then the lament
+    // ---- 4 · Marmalade's letter: the parchment card, a breath of silence, then the tavern tune
     { t: 'actor', id: 'swordcat', prop: 'letter', expression: 'surprised', face: FACE_BAG, faceDur: 0.3 },
     cam('ECU_EYES', 'swordcat', { mode: 'handheld', noise: 0.002 }),
     wait(1.0),
     { t: 'ui', letter: { key: 'letter.marmalade', title: 'letter.marmalade.title', label: 'letter.card.label' } },
     { t: 'actor', id: 'swordcat', expression: 'glisten' },
-    wait(4.0),
-    { t: 'music', track: 'story_lament_warriors_soul', fade: 3.5 },
-    wait(3.0),
+    wait(1.5),
+    { t: 'music', track: 'tavern_old_tower_inn', fade: 2.0 },
+    wait(4.5),
     { t: 'ui', letter: null },
     wait(0.6),
 

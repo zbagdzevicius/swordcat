@@ -1,24 +1,67 @@
-// src/ui/hud.js  (owner: ui) — the §14.2 HUD: portrait (worried at HP ≤ 2, determined + glowing in Golden Hour),
-// hearts (half-hearts, wobble on hit, pulse at HP ≤ 2), Grit shields (flash in the Stand, cracked at 0), the sword-
-// shaped Valor meter (fills from the hilt; gold notch at 50; all gold with sparkles + the Golden Hour glyph at 100 once Shard 2 is held),
-// lives (cat head + ×9, a ghost kitten floats up on a lost life), milk bottles (sip drains one), fish / kittens n/3 /
-// letter seal (pop on change), the companion portrait with its radial cooldown ring and "zzz", the boss bar (name
-// ribbon, red fill + white chip trail, phase pips, gold Dizzy bar), the objective line + bar, the lock-on reticle with
-// enemy HP pips (shown on the first hit, fade after 3 s) and the "⚔ Riposte!" prompt.
+// src/ui/hud.js  (owner: ui) — the §14.2 HUD in the candy skin (ART §9.1, WA §4): portrait (worried at HP ≤ 2,
+// determined + glowing in Golden Hour), hearts (half-hearts, wobble on hit, a soft coral pulse at HP ≤ 2), Grit shields,
+// the sword-shaped Valor meter (lilac well, fills from the hilt; butter notch at 50; all gold with a CSS shine at 100),
+// lives (cat head + ×9; the badge pops on a lost life, WA §5.7), milk bottles, fish / kittens n/3 / letter / the
+// sticker-book corner (bump when a fly-to-HUD icon lands, WA §5.5), the companion portrait with its cooldown ring, the
+// boss bar (plum ribbon, coral fill + butter chip trail, phase pips, Dizzy bar, the "BONKED!" stamp), the objective
+// line + bar, the classic-camera lock reticle / pips and the "⚔ Riposte!" prompt.
+// WA §4.1 calm HUD (`settings.hudMode`, HudTuck): Grit / Valor / lives / counters tuck away out of combat (class
+// toggles only). DOM writes only on change; counters polled at 10 Hz (PERF §10.5).
 // Reads player / companion / boss fields (§19.4) + bus events; counters from ctx.state at 10 Hz (tech.md §15).
 import * as THREE from 'three';
-import { PLAYER } from '../core/config.js';
+import { PLAYER, HUD as HUD_CFG } from '../core/config.js';
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
 import { el, setText, setHtml, flag, setVar, pulse, place } from './dom.js';
 import { tx, heartStates, frac, objectiveText, levelKittens, levelLetterId, actionGlyph, esc } from './text.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
+import { alertedNear } from './celebrate.js';
 
 const PIP_LIFE = 3.0;          // §14.2: the pip bar fades 3 s after the last hit
 const CHIP_HOLD = 0.55, CHIP_RATE = 0.45;
 export const HUD_SAVE_SEC = 1.8;  // the "Saved" seal stays up this long
 const _v = new THREE.Vector3();
+
+/** WA §4.1 calm-HUD numbers (config HUD.tuck; fallbacks for older configs). */
+export const TUCK = Object.freeze({ combatR: 15, after: 4, fade: 0.3, popShow: 3, livesLow: 3, valorShow: 50, ...(HUD_CFG?.tuck ?? {}) });
+
+/**
+ * WA §4.1 the calm HUD (`settings.hudMode` 'calm', the default; 'full' shows everything as before). Pure model:
+ * portrait + hearts always; Grit / Valor while in combat (an alerted enemy within TUCK.combatR m), the Stand is held,
+ * and TUCK.after s past the last of it (Valor also at ≥ TUCK.valorShow); lives on change (TUCK.popShow s), in menus
+ * and at ≤ TUCK.livesLow; fish / kittens / letter on change (TUCK.popShow s), in the hub and while peeked.
+ */
+export class HudTuck {
+  constructor() {
+    this.calmT = TUCK.after;       // starts calm: nothing to fight yet
+    this.livesT = 0; this.countsT = 0;
+    this.show = { grit: true, valor: true, lives: true, counts: true };
+  }
+
+  /** Something the counters show changed (pickup, rescue, letter): show them for TUCK.popShow s. */
+  countsChanged() { this.countsT = TUCK.popShow; }
+  livesChanged() { this.livesT = TUCK.popShow; }
+
+  /**
+   * @param {number} dt @param {{ mode?: string, combat?: boolean, guarding?: boolean, valor?: number, lives?: number,
+   *   menu?: boolean, hub?: boolean, peek?: boolean }} s
+   * @returns {{ grit: boolean, valor: boolean, lives: boolean, counts: boolean }}
+   */
+  update(dt, s) {
+    const o = this.show;
+    if (s.combat || s.guarding) this.calmT = 0; else this.calmT += dt;
+    if (this.livesT > 0) this.livesT -= dt;
+    if (this.countsT > 0) this.countsT -= dt;
+    if (s.mode === 'full') { o.grit = o.valor = o.lives = o.counts = true; return o; }
+    const fight = this.calmT < TUCK.after;
+    o.grit = fight || !!s.guarding;
+    o.valor = fight || (s.valor ?? 0) >= TUCK.valorShow;
+    o.lives = this.livesT > 0 || !!s.menu || (Number.isFinite(s.lives) && s.lives <= TUCK.livesLow);
+    o.counts = this.countsT > 0 || !!s.hub || !!s.peek || !!s.menu;
+    return o;
+  }
+}
 
 /** The sword-shaped Valor meter (viewBox 0 0 220 40). Blade 40 → 204 (tip 214). */
 const BLADE = { x0: 40, x1: 204, tip: 214 };
@@ -30,19 +73,19 @@ function valorSvg() {
     + `<linearGradient id="${g}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF6DA"/><stop offset=".45" stop-color="#FFD34D"/><stop offset="1" stop-color="#D99A2B"/></linearGradient>`
     + `<clipPath id="${g}c"><path d="${blade}"/></clipPath></defs>`
     // blade well
-    + `<path d="${blade}" fill="#2A211B" fill-opacity=".55"/>`
+    + `<path d="${blade}" fill="#5A4A7A" fill-opacity=".35"/>`
     + `<g clip-path="url(#${g}c)"><rect class="v-fill" x="${BLADE.x0}" y="10" width="0" height="20" fill="url(#${g}s)"/>`
     + `<rect class="v-gold" x="${BLADE.x0}" y="10" width="0" height="20" fill="url(#${g}g)"/>`
-    + `<rect class="v-shine" x="${BLADE.x0}" y="10" width="26" height="20" fill="#fff" opacity="0"/></g>`
-    + `<path d="M${BLADE.x0 + 2} 20H${BLADE.x1 - 4}" stroke="#2A211B" stroke-width="1.2" opacity=".35"/>`
-    + `<path d="${blade}" fill="none" stroke="#2A1E18" stroke-width="2" stroke-linejoin="round"/>`
+    + `<rect class="v-shine" x="${BLADE.x0 - 30}" y="10" width="26" height="20" fill="#fff"/></g>`
+    + `<path d="M${BLADE.x0 + 2} 20H${BLADE.x1 - 4}" stroke="#5A3B2E" stroke-width="1.2" opacity=".35"/>`
+    + `<path d="${blade}" fill="none" stroke="#5A3B2E" stroke-width="2" stroke-linejoin="round"/>`
     // the 50 notch
-    + `<path class="v-notch" d="M${(BLADE.x0 + BLADE.x1) / 2} 8.5l3.6 4.6-3.6 4.6-3.6-4.6Z" stroke="#2A1E18" stroke-width="1.4"/>`
+    + `<path class="v-notch" d="M${(BLADE.x0 + BLADE.x1) / 2} 8.5l3.6 4.6-3.6 4.6-3.6-4.6Z" stroke="#5A3B2E" stroke-width="1.4"/>`
     // hilt: pommel, grip, crossguard
-    + '<circle cx="8.5" cy="20" r="6" fill="#D9B26A" stroke="#2A1E18" stroke-width="1.8"/><circle cx="7" cy="18.4" r="1.8" fill="#FFF1C4"/>'
-    + '<rect x="13.5" y="16" width="20" height="8" rx="3" fill="#6B4429" stroke="#2A1E18" stroke-width="1.8"/>'
-    + '<path d="M17 16.5v7M21.5 16.5v7M26 16.5v7" stroke="#4A2E1F" stroke-width="1.6"/>'
-    + '<rect x="33.5" y="5" width="7" height="30" rx="3.2" fill="#D9B26A" stroke="#2A1E18" stroke-width="1.8"/><path d="M35.6 8v8" stroke="#FFF1C4" stroke-width="1.6" stroke-linecap="round"/>'
+    + '<circle cx="8.5" cy="20" r="6" fill="#FFD86B" stroke="#5A3B2E" stroke-width="1.8"/><circle cx="7" cy="18.4" r="1.8" fill="#FFF8EE"/>'
+    + '<rect x="13.5" y="16" width="20" height="8" rx="3" fill="#FF9EC0" stroke="#5A3B2E" stroke-width="1.8"/>'
+    + '<path d="M17 16.5v7M21.5 16.5v7M26 16.5v7" stroke="#E07396" stroke-width="1.6"/>'
+    + '<rect x="33.5" y="5" width="7" height="30" rx="3.2" fill="#FFD86B" stroke="#5A3B2E" stroke-width="1.8"/><path d="M35.6 8v8" stroke="#FFF8EE" stroke-width="1.6" stroke-linecap="round"/>'
     + '<g class="v-sparks" fill="#FFF6DA"><path d="M70 9l1.4 3.4 3.4 1.4-3.4 1.4L70 18.6l-1.4-3.4-3.4-1.4 3.4-1.4Z"/><path d="M128 25l1.2 2.8 2.8 1.2-2.8 1.2-1.2 2.8-1.2-2.8-2.8-1.2 2.8-1.2Z"/><path d="M176 8l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1Z"/></g>'
     + '</svg>';
 }
@@ -53,13 +96,12 @@ export class Hud {
     this.ctx = ctx;
     const root = this.root = el('div', 'hud', { parent });
     // ---- top-left cluster
-    const tl = el('div', 'hud-tl', { parent: root });
+    const tl = this.tlEl = el('div', 'hud-tl', { parent: root });
     this.portraitWrap = el('div', 'hud-portrait', { parent: tl });
     this.portraitImg = el('div', 'hud-portrait-img', { parent: this.portraitWrap });
     el('div', 'hud-portrait-bow', { html: I.bowSvg(), parent: this.portraitWrap });
     this.livesEl = el('div', 'hud-lives', { parent: this.portraitWrap, html: `<span class="lives-ico">${I.catHead()}</span><span class="lives-n"></span>` });
     this.livesN = this.livesEl.querySelector('.lives-n');
-    this.ghost = el('div', 'hud-ghost', { html: I.ghostKitten(), parent: this.livesEl });
     const stats = el('div', 'hud-stats', { parent: tl });
     this.heartsEl = el('div', 'hud-hearts', { parent: stats });
     this.gritEl = el('div', 'hud-grit', { parent: stats });
@@ -70,10 +112,12 @@ export class Hud {
     // ---- bottom-left: milk
     this.milkEl = el('div', 'hud-milk', { parent: root });
     // ---- top-right: fish, kittens, letter
-    const tr = el('div', 'hud-tr', { parent: root });
+    const tr = this.trEl = el('div', 'hud-tr', { parent: root });
     this.fishEl = el('div', 'hud-count hud-fish', { parent: tr, html: `<span class="c-ico">${I.fish()}</span><span class="c-n">0</span>` });
     this.kitEl = el('div', 'hud-count hud-kits', { parent: tr, html: `<span class="c-ico">${I.catHead({ fur: '#E3C9A2', deep: '#C9A47A', bow: false, eyes: '#5E8FA8' })}</span><span class="c-n">0/3</span>` });
     this.letterEl = el('div', 'hud-count hud-letter', { parent: tr, html: `<span class="c-ico"></span>` });
+    /** the sticker book's corner (WA §5.4: stickers fly here) */
+    this.stickerEl = el('div', 'hud-stickers', { parent: tr, html: I.sticker('#FFD86B', I.star4('#FFF8EE')) });
     // ---- bottom-right: companion
     this.compEl = el('div', 'hud-comp', { parent: root });
     this.compEl.innerHTML = `<div class="comp-ring">${I.ring('comp-ring-svg')}</div><div class="comp-face"></div><div class="comp-key"></div><div class="comp-zzz">z<span>z</span><span>z</span></div>`;
@@ -91,7 +135,7 @@ export class Hud {
       + '<div class="boss-row"><div class="boss-medal"><div class="boss-face"></div></div><div class="boss-bars">'
       + '<div class="boss-bar"><div class="boss-chip"></div><div class="boss-fill"></div><div class="boss-shine"></div><div class="boss-pips"></div></div>'
       + `<div class="boss-dizzy"><span class="dizzy-ico">${I.dizzyStars()}</span><div class="dizzy-track"><div class="dizzy-fill"></div></div><span class="dizzy-lbl"></span></div>`
-      + '</div><div class="boss-cap"></div></div>';
+      + '</div><div class="boss-cap"></div></div><div class="boss-bonked"></div>';
     this.bossFace = this.bossEl.querySelector('.boss-face');
     this.bossName = this.bossEl.querySelector('.boss-name span');
     this.bossFill = this.bossEl.querySelector('.boss-fill');
@@ -99,6 +143,7 @@ export class Hud {
     this.bossPips = this.bossEl.querySelector('.boss-pips');
     this.dizzyFill = this.bossEl.querySelector('.dizzy-fill');
     this.dizzyLbl = this.bossEl.querySelector('.dizzy-lbl');
+    this.bonkedEl = this.bossEl.querySelector('.boss-bonked');
     this.objEl = el('div', 'hud-obj', { parent: tc });
     this.objEl.innerHTML = `<div class="obj-line"><span class="obj-ico">${I.flag()}</span><span class="obj-txt"></span><span class="obj-pct"></span></div><div class="obj-bar"><div class="obj-fill"></div><div class="obj-marks"></div></div>`;
     this.objPct = this.objEl.querySelector('.obj-pct');
@@ -111,6 +156,12 @@ export class Hud {
     this.retPips = this.reticle.querySelector('.ret-pips');
     this.pipEls = [0, 1, 2, 3].map(() => el('div', 'hud-epips', { parent: root }));
     this.riposte = el('div', 'hud-riposte', { parent: root });
+    /** the blocks the SafeFrame reads (occluders.js: the union of the shown parts) */
+    this.tlParts = [this.portraitWrap, this.heartsEl, this.gritEl, this.valorEl];
+    this.trParts = [this.fishEl, this.kitEl, this.letterEl, this.stickerEl];
+    /** WA §4.1 calm HUD */
+    this.tuck = new HudTuck();
+    this._tuckKey = '';
 
     // ---- model
     this.v = {};                 // last written values (DOM writes only on change)
@@ -129,15 +180,17 @@ export class Hud {
     on(E.PLAYER_VALOR, () => this.poll(true));
     on(E.PLAYER_GOLDEN, () => this.poll(true));
     on(E.PLAYER_MILK, (p) => this._milkEvent(p));
-    on(E.PLAYER_LIFE_LOST, () => { pulse(this.ghost, 'is-float'); this.poll(true); });
+    // WA §5.7: no ghost; the lives badge pops (scale 1.25 → 1, 0.2 s) and shows for a moment
+    on(E.PLAYER_LIFE_LOST, () => { this.tuck.livesChanged(); pulse(this.livesEl, 'is-pop'); this.poll(true); });
     on(E.PLAYER_STILL_STANDING, () => { this.stillT = 1.4; pulse(this.heartsEl, 'is-still'); });
-    on(E.ITEM_PICKUP, (p) => { if (p?.item === 'fish') this._pop(this.fishEl); this.poll(true); });
-    on(E.KITTEN_RESCUED, () => { this._pop(this.kitEl); this.poll(true); });
+    on(E.ITEM_PICKUP, (p) => { if (p?.item === 'fish' || p?.item === 'letter') this.tuck.countsChanged(); this.poll(true); });
+    on(E.KITTEN_RESCUED, () => { this.tuck.countsChanged(); this._pop(this.kitEl); this.poll(true); });
     on(E.HIT, (h) => this._onHit(h));
     on(E.BOSS_START, (p) => this._bossStart(p));
     on(E.BOSS_PHASE, () => pulse(this.bossEl, 'is-phase'));
     on(E.BOSS_DIZZY, (p) => this._bossDizzy(p));
-    on(E.BOSS_DEFEATED, () => { this.bossOut = 1.6; });
+    // WA §4.2: the final hit stamps "BONKED!" on the boss bar (hud.boss.bonked)
+    on(E.BOSS_DEFEATED, () => { this.bossOut = 1.6; setText(this.bonkedEl, tx(ctx, 'hud.boss.bonked')); pulse(this.bossEl, 'is-bonked'); });
     on(E.OBJECTIVE, (p) => this._objective(p));
     on(E.LEVEL_LOADING, () => { this._bossHide(); this.objs.clear(); this.objCur = null; flag(this.objEl, 'is-on', false); this.hits.clear(); });
     on(E.LEVEL_LOADED, () => this.poll(true));
@@ -151,6 +204,42 @@ export class Hud {
   setMeme(on) { this.meme = on; flag(this.root, 'is-meme', on); }
 
   _pop(e) { pulse(e, 'is-pop'); }
+
+  /** A counter bump when a fly-to-HUD icon lands (WA §5.5: 1.25 → 1 over 0.2 s). */
+  bump(key) {
+    const e = key === 'fish' ? this.fishEl : key === 'kits' ? this.kitEl : key === 'hearts' ? this.heartsEl : key === 'milk' ? this.milkEl
+      : key === 'valor' ? this.valorEl : key === 'comp' ? this.compEl : key === 'stickers' ? this.stickerEl : key === 'portrait' ? this.portraitWrap : null;
+    if (e) { if (key === 'fish' || key === 'kits' || key === 'stickers') this.tuck.countsChanged(); pulse(e, 'is-bump'); }
+  }
+
+  /** The HUD element a reward / icon flies to (WA §5.4 / §5.5), or null. */
+  homeEl(key) {
+    switch (key) {
+      case 'fish': return this.fishEl; case 'kits': return this.kitEl; case 'hearts': return this.heartsEl; case 'milk': return this.milkEl;
+      case 'valor': return this.valorEl; case 'comp': return this.compEl; case 'stickers': return this.stickerEl; case 'portrait': return this.portraitWrap;
+      default: return null;
+    }
+  }
+
+  /** WA §4.1: apply the calm-HUD tuck (class toggles only; 'full' mode shows everything). Called at 10 Hz. */
+  _tick(dt) {
+    const ctx = this.ctx, p = ctx.player, st = ctx.state;
+    const lvl = ctx.levels?.current?.id ?? st?.levelId;
+    const o = this.tuck.update(dt, {
+      mode: st?.settings?.hudMode ?? 'calm',
+      combat: alertedNear(ctx, TUCK.combatR) || !!this.boss,
+      guarding: !!p?.guarding,
+      valor: p?.valor ?? 0,
+      lives: p?.infiniteLives ? Infinity : p?.lives,
+      menu: ctx.game?.mode === 'menu',
+      hub: lvl === 'town' && !!st?.cond?.('town.free'),
+      peek: ctx.input?.device === 'kbm' && !!ctx.input?.down?.('lockon'),
+    });
+    flag(this.root, 'tuck-grit', !o.grit);
+    flag(this.root, 'tuck-valor', !o.valor);
+    flag(this.root, 'tuck-lives', !o.lives);
+    flag(this.root, 'tuck-counts', !o.counts);
+  }
 
   /** Flash the "Saved" wax seal for HUD_SAVE_SEC. */
   showSaved() {
@@ -275,6 +364,8 @@ export class Hud {
       const inf = !!p.infiniteLives || !Number.isFinite(p.lives);
       flag(this.livesEl, 'is-inf', inf);
       const ln = inf ? '' : tx(ctx, 'hud.lives', { n: p.lives ?? 9 });
+      if (v.lives != null && v.lives !== p.lives) this.tuck.livesChanged();
+      v.lives = p.lives;
       setText(this.livesN, ln);
       flag(this.livesEl, 'is-last', !inf && p.lives === 1);
       // milk
@@ -291,12 +382,12 @@ export class Hud {
     // counters (§14.2: pop and bounce on change)
     if (st) {
       const fish = st.fish ?? 0;
-      if (v.fish !== fish) { if (v.fish != null && fish !== v.fish) this._pop(this.fishEl); v.fish = fish; setText(this.fishEl.lastChild, String(fish)); }
+      if (v.fish !== fish) { if (v.fish != null && fish !== v.fish) { this.tuck.countsChanged(); this._pop(this.fishEl); } v.fish = fish; setText(this.fishEl.lastChild, String(fish)); }
       const lvl = ctx.levels?.current?.id ?? st.levelId;
       const k = levelKittens(st, lvl), ks = `${k.n}/${k.max}`;
       if (v.kits !== ks) { v.kits = ks; setText(this.kitEl.lastChild, tx(ctx, 'hud.kittens', { n: k.n, max: k.max })); }
       const lid = levelLetterId(lvl), has = !!lid && (st.letters ?? []).includes(lid);
-      if (v.letter !== has) { if (v.letter === false && has) this._pop(this.letterEl); v.letter = has; this.letterEl.firstChild.innerHTML = I.letter(has); flag(this.letterEl, 'is-found', has); }
+      if (v.letter !== has) { if (v.letter === false && has) { this.tuck.countsChanged(); this._pop(this.letterEl); } v.letter = has; this.letterEl.firstChild.innerHTML = I.letter(has); flag(this.letterEl, 'is-found', has); }
     }
     // save seal: a successful write since the last poll (the first poll only records the count)
     const ls = ctx.save?.lastSave;
@@ -324,7 +415,7 @@ export class Hud {
   /** @param {number} dt real seconds */
   render(dt) {
     this._pollT += dt;
-    if (this._pollT >= 0.1) { this._pollT = 0; this.poll(false); }
+    if (this._pollT >= 0.1) { const pt = this._pollT; this._pollT = 0; this.poll(false); this._tick(pt); }
     const ctx = this.ctx, p = ctx.player;
     // valor: ease toward the target; gold state at 100 / Golden Hour drain
     const vt = this.valorTarget ?? 0;
@@ -344,12 +435,7 @@ export class Hud {
     flag(this.valorEl, 'is-full', full || this.golden);
     // the sun glyph promises Golden Hour: only once it is possible (Shard 2, same check as the touch Golden button)
     flag(this.valorEl, 'can-golden', this.golden || (full && (ctx.state?.shards ?? 0) >= 2));
-    // a shine sweeps the blade while full
-    if (full || this.golden) {
-      this._shine = ((this._shine ?? 0) + dt * 0.8) % 1.6;
-      const x = BLADE.x0 - 30 + this._shine * (w + 60) / 1.6;
-      this.vShine.setAttribute('x', x.toFixed(1)); this.vShine.setAttribute('opacity', '0.45');
-    } else if (this._shine != null) { this._shine = null; this.vShine.setAttribute('opacity', '0'); }
+    // a shine sweeps the blade while full: a CSS animation on .is-full (PERF §10.5: no per-frame attribute writes)
     // companion ring
     const c = ctx.companions?.active?.[0];
     if (c && this.compRing) {

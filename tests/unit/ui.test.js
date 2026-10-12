@@ -33,7 +33,7 @@ const ctx0 = () => fakeCtx({ systems: false });
 test('tx resolves strings keys, fills vars, falls back to the key', () => {
   const ctx = ctx0();
   assert.equal(tx(ctx, 'region.meadow'), 'Purrdale Meadows');
-  assert.equal(tx(ctx, 'life.lost', { n: 8 }), '8 lives left');
+  assert.match(tx(ctx, 'life.lost', { n: 8 }), /8 lives left/);
   assert.equal(tx(ctx, 'no.such.key.xyz'), 'no.such.key.xyz');
   assert.equal(tx(null, 'hud.riposte'), 'Riposte!');                      // ui fallback strings without ctx
   assert.equal(tx(ctx, null), '');
@@ -106,9 +106,9 @@ test('objective text, chapter cards, ranks, level counters', () => {
   assert.ok(c1.title.length > 3 && c1.label.length > 3);
   assert.equal(chapterInfo(ctx, 'forest').region, tx(ctx, 'region.forest'));
   assert.equal(chapterInfo(ctx, { n: 2, title: 'Custom', region: 'Somewhere' }).title, 'Custom');
-  // §6.8: by lives lost: Paw-some 0–1, Purr-fect 2–4, Mew-tiful 5+
-  assert.deepEqual([0, 1, 2, 4, 5, 9].map(rankFor), ['pawsome', 'pawsome', 'purrfect', 'purrfect', 'mewtiful', 'mewtiful']);
-  for (const k of Object.values(RANK_KEYS)) assert.ok(ctx.strings.has(k), k);
+  // §6.8 + WA §4.4: by lives lost: PAW-SOME! 0–1, PURR-FECT! 2–3, CLAW-SOME! 4–5, Good kitty! 6+ (words, no letter grades)
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 9].map(rankFor), ['pawsome', 'pawsome', 'purrfect', 'purrfect', 'clawsome', 'clawsome', 'mewtiful', 'mewtiful']);
+  for (const k of Object.values(RANK_KEYS)) { assert.ok(/^results\.rank\./.test(k), k); assert.notEqual(tx(ctx, k), k, `${k} resolves`); assert.ok(!/^[A-F][+-]?$/.test(tx(ctx, k)), 'no letter grade'); }
   const st = { kittens: ['noodle', 'biscuit', 'pickles'] };
   assert.deepEqual(levelKittens(st, 'meadow'), { n: 2, max: 3 });
   assert.deepEqual(levelKittens(st, 'nowhere'), { n: 0, max: 0 });
@@ -130,7 +130,8 @@ test('results rows (§14.3: time, kittens n/3, letter, fish, lives left, rank)',
   assert.equal(d.rows[3].value, '+128');
   assert.equal(d.rows[4].value, '8');
   assert.equal(d.rank, 'pawsome');
-  assert.equal(d.rankText, 'Paw-some');
+  assert.equal(d.rankText, tx(ctx, 'results.rank.pawsome'));
+  assert.ok(/paw-some/i.test(d.rankText));
   // Kitten difficulty: infinite lives; an explicit rank wins; missing fields are safe
   const k = resultRows(ctx, { lives: Infinity, livesLost: 7, rank: 'purrfect' });
   assert.equal(k.rank, 'purrfect');
@@ -314,12 +315,17 @@ test('threat arrows: edge placement, behind-camera flip, on-screen test (§8.1)'
 
 test('parseFade normalises cutscene fades', () => {
   assert.equal(parseFade(null), null);
-  assert.deepEqual(parseFade('black'), { color: '#000000', alpha: 1, dur: 0.6 });
+  // WA §2.7 (ui.W7): the 'black' fade spec resolves to cream #FFF1DE; near-black colours too; cocoa-plum stays
+  assert.deepEqual(parseFade('black'), { color: '#FFF1DE', alpha: 1, dur: 0.6 });
+  assert.equal(parseFade(true).color, '#FFF1DE');
+  assert.equal(parseFade({ to: '#0B0908' }).color, '#FFF1DE');
+  assert.equal(parseFade('dark').color, '#3A2630');
+  assert.equal(parseFade({ to: '#3A2630' }).color, '#3A2630');
   assert.deepEqual(parseFade('in'), { color: null, alpha: 0, dur: 0.6 });
   assert.deepEqual(parseFade(0.5), { color: null, alpha: 0.5, dur: 0.6 });
   assert.deepEqual(parseFade({ to: '#fff', dur: 2 }), { color: '#fff', alpha: 1, dur: 2 });
   assert.deepEqual(parseFade({ to: null, dur: 1 }), { color: null, alpha: 0, dur: 1 });
-  assert.deepEqual(parseFade({ to: '#000', alpha: 3 }), { color: '#000', alpha: 1, dur: 0.6 });
+  assert.deepEqual(parseFade({ to: '#000', alpha: 3 }), { color: '#FFF1DE', alpha: 1, dur: 0.6 });
   assert.equal(CINEMA.chapterSec, 3.0);
   assert.equal(CINEMA.lifeLostSec, 1.5);
 });
@@ -350,7 +356,11 @@ test('interaction tag label: short prompt.<kind>, else the prompt without its [k
 test('fonts: every §14.1 face is in the manifest and on disk', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  assert.equal(FONT_FILES.length, 6);
+  // ART §9.2 / K9: Fredoka only (a woff2 Latin subset of the variable font; PERF I2)
+  assert.equal(FONT_FILES.length, 1);
+  assert.equal(FONT_FILES[0].family, 'Fredoka');
+  assert.match(FONT_FILES[0].file, /\.woff2$/);
+  assert.ok(!manifest.some((f) => /Cinzel|Uncial|MedievalSharp/.test(f)), 'no medieval faces in the ui manifest');
   for (const f of FONT_FILES) {
     assert.ok(manifest.includes(f.file), f.file);
     assert.ok(fs.existsSync(path.join('public/assets', f.file)), `${f.file} exists`);
@@ -690,7 +700,9 @@ test('§10.2 cursors: kind from the frame state; sizes x1 / x1.5 / x2 and a high
   }
   assert.equal(cursorCss('none'), 'none');
   assert.equal(cursorCss('default'), 'default');
-  assert.ok(decodeURIComponent(cursorCss('ground')).includes('#F7A8C4'), 'the paw wears a pink bow ribbon');
+  assert.ok(decodeURIComponent(cursorCss('ground')).includes('#FF9EC0'), 'the paw wears a pink bow cuff');
+  assert.ok(decodeURIComponent(cursorCss('ground')).includes('#E89A55'), 'a soft ginger paw, no gauntlet metal (WA §3.6)');
+  assert.ok(decodeURIComponent(cursorCss('interact')).includes('#9BE3C4'), 'interactables: the mint speech-dot (WA2)');
   assert.match(cursorCss('aim', 1), /\) 16 16,/);       // the hotspot scales with the size (reticle centred)
   assert.match(cursorCss('aim', 2), /\) 32 32,/);
 });
@@ -760,14 +772,15 @@ test('§9.3 gesture classifier: strict thresholds', () => {
 });
 
 test('§10.7 settings: every new controls / accessibility row exists with save defaults; invertY is classic-only', () => {
-  for (const k of ['controlPreset', 'camZoom', 'camLock', 'autoAttack', 'castMode', 'edgePanSpeed', 'touchSize', 'tapToMove', 'swipeTumble',
+  for (const k of ['controlPreset', 'camZoom', 'camLockMode', 'autoAttack', 'castMode', 'edgePanSpeed', 'touchSize', 'tapToMove', 'swipeTumble',
     'leftHanded', 'buttonOpacity', 'haptics', 'hapticTaps', 'autoRiposte', 'standAutoFace', 'pathPreview', 'parryRing', 'reduceCameraMotion',
     'cursorSize', 'cursorContrast']) assert.ok(SETTING_BY_KEY[k], `setting row ${k}`);
   const st = defaultState();
   for (const d of SETTINGS) if (d.key !== 'difficulty') assert.ok(d.key in (st.settings ?? {}), `default for ${d.key}`);
   assert.equal(settingVisible(SETTING_BY_KEY.invertY, true), false);
   assert.equal(settingVisible(SETTING_BY_KEY.invertY, false), true);
-  assert.equal(settingVisible(SETTING_BY_KEY.camLock, false), false);
+  assert.equal(settingVisible(SETTING_BY_KEY.camLockMode, false), false);
+  assert.equal(SETTING_BY_KEY.camLock, undefined, 'K7: the boolean camLock row is replaced by camLockMode');
   assert.equal(settingVisible(SETTING_BY_KEY.haptics, true), true);
   assert.equal(stepSetting(SETTING_BY_KEY.cursorSize, 1, 1), 1.5);
   assert.equal(formatSetting(SETTING_BY_KEY.cursorSize, 2), '×2');
@@ -788,7 +801,10 @@ test('settings rows filter by input device; on touch the Controls group (touch r
   assert.equal(touch[0], 'touchSize');
   const firstNonCtl = visibleSettings(true, 'touch').findIndex((d) => d.group !== 'controls');
   assert.ok(visibleSettings(true, 'touch').slice(firstNonCtl).every((d) => d.group !== 'controls'), 'controls contiguous');
-  assert.deepEqual(keys(true, null), SETTINGS.filter((d) => settingVisible(d, true)).map((d) => d.key), 'no device = old behaviour');
+  const groupOrder = ['audio', 'controls', 'camera', 'game', 'perf', 'access'];
+  const all = visibleSettings(true, null);
+  assert.deepEqual(all.map((d) => d.key).sort(), SETTINGS.filter((d) => settingVisible(d, true)).map((d) => d.key).sort(), 'no device = every row');
+  for (let i = 1; i < all.length; i++) assert.ok(groupOrder.indexOf(all[i].group) >= groupOrder.indexOf(all[i - 1].group), `one header per group (${all[i].key})`);
   assert.ok(touch.length < keys(true, null).length && kbm.length < keys(true, null).length);
 });
 
@@ -856,4 +872,277 @@ test('§10.2 cursor probe: no walkable cell within 2 m, or only cells on islands
   delete physics.reachableFrom; near.yes = true; assert.equal(probe(), false, 'older physics: nearestWalkable only');
   physics.reachableFrom = () => { throw new Error('x'); }; assert.equal(probe(), false, 'a throwing query never sticks the grey paw');
   cam.hover.kind = 'enemy'; physics.reachableFrom = () => false; assert.equal(probe(), false, 'only over ground');
+});
+
+// ====================================================================================================== warm adventure + perf + auto-camera
+// (IMPLEMENTATION_PLAN §6 ui: A:ui.1–2, M:ui.1–4, P:I1–I4; Phase W ui.W1–W7)
+import nfs from 'node:fs';
+import npath from 'node:path';
+import { flashSpec, FLASH, LAYERS } from '../../src/ui/layers.js';
+import { snapRect, rectsHash, OCCL } from '../../src/ui/occluders.js';
+import { CelebrateQueue, alertedNear, rewardInfo, REWARD_ART, CELEBRATE_TIMING } from '../../src/ui/celebrate.js';
+import { GuideModel, dotFills, GUIDE } from '../../src/ui/guide.js';
+import { offerDue, OFFER } from '../../src/ui/offer.js';
+import { flyPoint } from '../../src/ui/flyIcons.js';
+import { HudTuck, TUCK } from '../../src/ui/hud.js';
+import { countText, resultRows as resultRows2 } from '../../src/ui/results.js';
+import { borderPlace, inHoles, perimeterPoint, perimeterS, ARROW_GLYPHS, ARROW } from '../../src/ui/threatArrows.js';
+import { pinchStarted, PINCH, LESSON_BUTTONS, TouchControls } from '../../src/ui/touch.js';
+import { cooldownStart } from '../../src/ui/abilityBar.js';
+import { titleButtons, stickerCells, STICKER_IDS, TITLE } from '../../src/ui/menus.js';
+import { GLYPH_NAMES } from '../../src/ui/icons.js';
+import { CELEBRATE, HUD as HUD_CFG, SETTING_VALUES, STORY, FADE_COLOR, CAMERA } from '../../src/core/config.js';
+
+test('A:ui.1 #ui-flash: presets per ART §9.1, opacity-only spec, reduceFlashes ×0.3; the vignette is pure CSS', () => {
+  assert.deepEqual(flashSpec('hurt'), { color: '#FF8FB1', alpha: 0.18, dur: 0.25 });
+  assert.deepEqual(flashSpec('storm'), { color: '#E8DCFF', alpha: 0.25, dur: 0.12 });
+  assert.equal(flashSpec('rescue').alpha, 0.22);
+  assert.equal(flashSpec('card').color, FLASH.rescue[0], 'celebration cards flash white-gold');
+  assert.ok(Math.abs(flashSpec('hurt', undefined, undefined, true).alpha - 0.18 * LAYERS.reduce) < 1e-9, 'reduce flashes scales alpha ×0.3');
+  assert.deepEqual(flashSpec('#FFFFFF', 2, 9), { color: '#FFFFFF', alpha: 1, dur: LAYERS.maxDur }, 'clamped');
+  assert.equal(flashSpec('', 0.5), null);
+  assert.equal(flashSpec('#fff', 0), null, 'a zero-alpha flash is a no-op');
+  const css = nfs.readFileSync('src/ui/ui.css', 'utf8');
+  assert.match(css, /\.ui-vignette \{[^}]*radial-gradient\(120% 95% at 50% 46%, transparent 62%, #B4664A2E 100%\)/);
+  assert.match(css, /@keyframes uiFlash \{ 0% \{ opacity: var\(--fa/, 'the flash animates opacity only');
+});
+
+test('UI facade: flash / screenOccluders / safeArea / celebrate / offerKitten exist and are node-safe', async () => {
+  const ui = new UI(fakeCtx());
+  assert.deepEqual(ui.screenOccluders(), { version: 0, rects: [] });
+  assert.equal(ui.flash('hurt'), null, 'no DOM: no layer, no throw');
+  assert.deepEqual(ui.safeArea, { top: 0, right: 0, bottom: 0, left: 0 });
+  assert.equal(ui.celebrate('card', 'holy'), false);
+  assert.equal(await ui.offerKitten(), null);
+  assert.equal(ui.thumbs, null);
+});
+
+test('M:ui.1 screenOccluders: rects snap outward to the quantum; the version only bumps on a rect change', () => {
+  const r = snapRect({}, 10.6, 20.2, 30.1, 41.9, 'cluster');
+  assert.deepEqual(r, { x: 10, y: 20, w: 22, h: 22, kind: 'cluster' });
+  assert.equal(OCCL.quantum, 2);
+  const a = [snapRect({}, 0, 0, 100, 40, 'hud'), snapRect({}, 700, 300, 790, 390, 'cluster')];
+  const b = [snapRect({}, 0, 0, 100, 40, 'hud'), snapRect({}, 700, 300, 790, 390, 'cluster')];
+  assert.equal(rectsHash(a, 2), rectsHash(b, 2), 'same rects: same version');
+  b[1].x += 2;
+  assert.notEqual(rectsHash(a, 2), rectsHash(b, 2), 'a moved rect: a new version');
+  b[1].x -= 2; b[1].kind = 'bar';
+  assert.notEqual(rectsHash(a, 2), rectsHash(b, 2), 'the kind counts');
+  assert.ok(OCCL.maxRects >= 20 && OCCL.hz <= 4, 'measured at most 4 Hz (layout reads)');
+});
+
+test('WA §7.5 / M:ui.1: lesson-veiled buttons keep their geometry: screenOccluders() rects are unchanged by reveal', () => {
+  const layout = { buttons: { attack: { x: 776, y: 322, r: 48 }, jump: { x: 776, y: 198, r: 32 }, dodge: { x: 676, y: 230, r: 32 } } };
+  const tc = { layout, veiled: new Set(['jump', 'dodge']) };
+  const before = Object.keys(layout.buttons).filter((n) => TouchControls.prototype.occludes.call(tc, n));
+  tc.veiled = null;
+  const after = Object.keys(layout.buttons).filter((n) => TouchControls.prototype.occludes.call(tc, n));
+  assert.deepEqual(before, after);
+  assert.deepEqual(before, ['attack', 'jump', 'dodge']);
+  assert.deepEqual([...LESSON_BUTTONS].sort(), ['attack', 'dodge', 'guard', 'jump', 'meow']);
+});
+
+test('M:ui.3 pinch (AUTOCAM §10.3): zoom starts only after 16 px of distance change; second finger within 400 ms', () => {
+  assert.equal(PINCH.startPx, CAMERA.iso.pinch?.startPx ?? 16);
+  assert.equal(PINCH.secondMs, CAMERA.iso.pinch?.secondMs ?? 400);
+  assert.equal(pinchStarted(200, 210), false);
+  assert.equal(pinchStarted(200, 216), true);
+  assert.equal(pinchStarted(200, 184), true, 'pinch in counts too');
+});
+
+test('M:ui.2 / ui.W5 threat arrows: one glyph per telegraph kind; placed on the SafeFrame border, sliding out of holes', () => {
+  for (const [kind, g] of Object.entries(TELEGRAPH.glyph)) {
+    assert.equal(ARROW_GLYPHS[kind], g, `${kind} glyph follows config`);
+    assert.ok(GLYPH_NAMES.includes(g), `${g} is drawn`);
+  }
+  const rect = { x: 10, y: 10, w: 800, h: 360 }, out = { x: 0, y: 0 };
+  borderPlace(rect, 0, [], 0, out);                                   // straight right: the right border midpoint
+  assert.ok(Math.abs(out.x - 810) < 1e-6 && Math.abs(out.y - 190) < 1e-6);
+  const holes = new Float32Array([790, 150, 40, 80]);                 // a cluster button over that spot
+  assert.equal(inHoles(810, 190, holes, 1), true);
+  borderPlace(rect, 0, holes, 1, out);
+  assert.equal(inHoles(out.x, out.y, holes, 1), false, 'slid out of the hole');
+  assert.ok(Math.abs(out.x - 810) < 1e-6, 'still on the right border');
+  assert.ok(Math.abs(out.y - 190) <= 2 * (rect.w + rect.h) * ARROW.slideMax);
+  for (const sArc of [0, 100, 805, 1000, 1500, 2000]) { const p = perimeterPoint(rect, sArc, {}); assert.ok(Math.abs(perimeterS(rect, p.x, p.y) - sArc) < 1e-6, `s ${sArc}`); }
+  const wall = new Float32Array([700, 0, 200, 400]);                  // a covered stretch: the nearest free corner
+  borderPlace(rect, 0, wall, 1, out);
+  assert.equal(inHoles(out.x, out.y, wall, 1), false);
+  assert.equal(ARROW.sizeTouch, 28, '28 px on touch (AUTOCAM §7.4)');
+});
+
+test('M:ui.4 / PERF I4 / WA settings rows: camera, quality panel, calm HUD; options inside config SETTING_VALUES', () => {
+  for (const k of ['camLockMode', 'camCursorLead', 'camZoom', 'camZoomPortrait', 'biggerHero', 'quality', 'fpsCap', 'batterySaver', 'hudMode', 'hitWords', 'tutorialHints', 'reduceFlashes', 'reduceCameraMotion']) {
+    assert.ok(SETTING_BY_KEY[k], `row ${k}`);
+  }
+  for (const k of ['camLockMode', 'fpsCap', 'quality', 'hudMode']) assert.deepEqual(SETTING_BY_KEY[k].options, [...SETTING_VALUES[k]], `${k} options`);
+  for (const k of ['camCursorLead', 'camZoomPortrait']) { assert.equal(SETTING_BY_KEY[k].min, SETTING_VALUES[k][0]); assert.equal(SETTING_BY_KEY[k].max, SETTING_VALUES[k][1]); }
+  assert.equal(SETTING_BY_KEY.camLockMode.dev, 'kbm', 'lock modes are a desktop setting (pad / touch stay locked)');
+  assert.equal(SETTING_GROUPS.perf, 'Performance');
+  const ctx = ctx0();                                                 // camLockMode keeps the retired boolean in sync (K7)
+  ctx.state.settings.camLock = true;
+  applySetting(ctx, 'camLockMode', 'semi');
+  assert.equal(ctx.state.settings.camLock, false);
+  applySetting(ctx, 'camLockMode', 'locked');
+  assert.equal(ctx.state.settings.camLock, true);
+  assert.match(formatSetting(SETTING_BY_KEY.camLockMode, 'free', (k) => tx(ctx, k)), /^Free/);
+});
+
+test('ui.W2 celebrate: one queue, one at a time, in order; docked in combat; skip after 0.6 s; never touches time', () => {
+  const q = new CelebrateQueue();
+  assert.equal(q.push('card', 'holy'), true);
+  assert.equal(q.push('card', 'golden'), true);
+  assert.equal(q.push('card', 'golden'), false, 'duplicate dropped');
+  let ev = q.update(0, false);
+  assert.equal(ev.started.id, 'holy', 'first card first');
+  let t = 0;
+  const later = [];
+  while (t < 10 && (q.cur || q.items.length)) { ev = q.update(0.05, false); t += 0.05; if (ev.started) later.push(ev.started.id); }
+  assert.deepEqual(later, ['golden'], 'then the second');
+  assert.ok(t >= CELEBRATE.card * 2 - 0.2, 'each card runs its 2.2 s');
+  q.push('friend', 'mochi');                                          // an alerted foe within 15 m: docked
+  ev = q.update(0, true);
+  assert.equal(ev.started.docked, true);
+  assert.equal(ev.started.fly, CELEBRATE.dockFly);
+  q.clear(); q.push('sticker', 'bonk');                              // stickers never dock
+  assert.equal(q.update(0, true).started.docked, false);
+  assert.equal(q.skip(), false);                                      // skip only after skipAfter
+  q.update(CELEBRATE.skipAfter + 0.01, false);
+  assert.equal(q.skip(), true);
+  assert.ok(q.cur.dur <= q.cur.t + CELEBRATE_TIMING.fly + 1e-9, 'skipping flies home now');
+  const ctx = { player: { pos: { x: 0, y: 0, z: 0 } }, enemies: { list: [{ alive: true, alerted: true, pos: { x: 10, z: 0 } }, { alive: true, alerted: false, pos: { x: 1, z: 0 } }] } };
+  assert.equal(alertedNear(ctx, 15), true);
+  assert.equal(alertedNear(ctx, 9), false, 'an unalerted foe next to her does not count');
+  for (const id of STICKER_IDS) { assert.ok(REWARD_ART[id], id); assert.notEqual(rewardInfo(ctx0(), 'sticker', id).title, `sticker.${id}`); }
+  const k = rewardInfo(ctx0(), 'card', 'kitten', { n: 2, max: 3 }, 1);
+  assert.match(k.title, /2\/3/); assert.ok(k.line.length > 0, 'a rotating kitten line (WA23)');
+  const src = nfs.readFileSync('src/ui/celebrate.js', 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/timeScale|setTimeScale|setMode\(|\.pause\(/.test(src), 'celebrate.js never changes time or mode');
+  assert.ok(CELEBRATE.confettiMax <= 24);
+});
+
+test('ui.W3 guide bubble: the second prompt replaces the first (one bubble); progress wiggles; done ticks; paw dots', () => {
+  const g = new GuideModel();
+  assert.equal(g.prompt({ speaker: 'pearl', textKey: 'tut.move', step: 1 }), 'new');
+  const first = g.cur;
+  assert.equal(g.prompt({ speaker: 'pearl', textKey: 'tut.move', step: 1 }), null, 'the same prompt again: nothing');
+  assert.equal(g.prompt({ speaker: 'pearl', textKey: 'tut.move', step: 1, progress: 0.5 }), 'progress');
+  assert.equal(g.prompt({ speaker: 'pearl', textKey: 'tut.bonk', step: 2 }), 'new');
+  assert.notEqual(g.cur, first, 'replaced, never stacked');
+  assert.equal(g.prompt({ speaker: 'pearl', done: true }), 'done');
+  assert.equal(g.cur.doneT, GUIDE.doneShow);
+  assert.deepEqual(dotFills({ n: 2, of: 7, half: true }), [1, 1, 0.5, 0, 0, 0, 0]);
+  assert.deepEqual(dotFills([1, 0.5, 0]), [1, 0.5, 0]);
+  assert.deepEqual(dotFills(null), []);
+  assert.equal(GUIDE.chipAfter, 6); assert.equal(GUIDE.idleDemo, 8); assert.equal(GUIDE.demoCycles, 2);
+});
+
+test('ui.W4 calm HUD: combat, then 4 s calm, then tucked; Valor >= 50 stays; lives at <= 3; counters on change; full mode', () => {
+  assert.equal(TUCK.after, HUD_CFG.tuck.after);
+  const h = new HudTuck(), s = { mode: 'calm', combat: true, valor: 0, lives: 9 };
+  let o = h.update(0.1, s);
+  assert.equal(o.grit, true); assert.equal(o.valor, true);
+  s.combat = false;
+  for (let t = 0; t < TUCK.after - 0.2; t += 0.1) o = h.update(0.1, s);
+  assert.equal(o.grit, true, 'still up just before 4 s');
+  for (let t = 0; t < 0.5; t += 0.1) o = h.update(0.1, s);
+  assert.equal(o.grit, false, 'tucked after 4 s calm'); assert.equal(o.valor, false); assert.equal(o.lives, false); assert.equal(o.counts, false);
+  o = h.update(0.1, { ...s, valor: 50 }); assert.equal(o.valor, true, 'Valor >= 50 shows');
+  o = h.update(0.1, { ...s, guarding: true }); assert.equal(o.grit, true, 'the Stand shows Grit');
+  o = h.update(0.1, { ...s, lives: 3 }); assert.equal(o.lives, true, 'lives at <= 3');
+  h.countsChanged(); o = h.update(0.1, s); assert.equal(o.counts, true, 'a pickup pops the counters');
+  for (let t = 0; t < TUCK.popShow; t += 0.1) o = h.update(0.1, s);
+  assert.equal(o.counts, false, 'for 3 s');
+  o = h.update(0.1, { ...s, hub: true }); assert.equal(o.counts, true, 'always in the hub');
+  o = h.update(0.1, { ...s, mode: 'full' }); assert.ok(o.grit && o.valor && o.lives && o.counts, 'full = the old HUD');
+});
+
+test('X21 cooldown sweeps: one CSS animation per cooldown start, never per-frame writes', () => {
+  const sl = { wasCd: false, lastCd: 0 };
+  assert.deepEqual(cooldownStart(sl, 3, 6), { deg: 180, dur: 3 });
+  Object.assign(sl, { wasCd: true, lastCd: 3 });
+  assert.equal(cooldownStart(sl, 2.98, 6), null, 'a running cooldown: nothing to write');
+  assert.deepEqual(cooldownStart(sl, 5, 6), { deg: 300, dur: 5 }, 're-triggered: restart');
+  assert.equal(cooldownStart(sl, 0, 6), null);
+  const src = nfs.readFileSync('src/ui/abilityBar.js', 'utf8');
+  assert.ok(!/SWEEP_DT|setVar\(sl\.sweep, '--cd'/.test(src), 'no 30 Hz --cd writes');
+  assert.match(nfs.readFileSync('src/ui/ui.css', 'utf8'), /@property --cd \{ syntax: '<angle>'/);
+});
+
+test('ui.W5 results: every rank maps to a results.rank.* word; rows count up; no backdrop-filter; no letter grades', () => {
+  const ctx = ctx0();
+  for (const [id, key] of Object.entries(RANK_KEYS)) {
+    assert.equal(key, `results.rank.${id}`);
+    assert.equal(resultRows2(ctx, { rank: id }).rankText, tx(ctx, key));
+  }
+  assert.deepEqual(Object.keys(RANK_KEYS).sort(), ['clawsome', 'mewtiful', 'pawsome', 'purrfect']);
+  const row = { id: 'fish', value: '+128', num: 128 };
+  assert.equal(countText(row, 0), '+0'); assert.equal(countText(row, 0.5), '+64'); assert.equal(countText(row, 1), '+128');
+  assert.equal(countText({ id: 'time', value: '12:34', num: 754 }, 0.5), '6:17');
+  assert.equal(countText({ id: 'letter', value: '✓', num: null }, 0), '✓', 'non-numeric rows just pop in');
+  const css = nfs.readFileSync('src/ui/ui.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/backdrop-filter\s*:/.test(css), 'no backdrop-filter over the canvas (ART §9.1)');
+  assert.match(css, /\.ui-results \{ background: radial-gradient\(circle at 50% 40%, #FFF1E2CC, #FFB98ACC\)/);
+});
+
+test('ui.W6 Kitten-mode offer: after 2 knock-outs in 3 min, once per save, never on Kitten / Nine Lives', () => {
+  assert.equal(OFFER.knockouts, STORY.kittenOffer.knockouts);
+  assert.equal(OFFER.flag, 'seen.offer.kitten');
+  assert.equal(offerDue({ difficulty: 'knight', kos: [10], now: 20 }), false, 'one knock-out');
+  assert.equal(offerDue({ difficulty: 'knight', kos: [10, 100], now: 120 }), true, 'two within the window');
+  assert.equal(offerDue({ difficulty: 'knight', kos: [10, 300], now: 320 }), false, 'too far apart');
+  assert.equal(offerDue({ difficulty: 'knight', kos: [10, 100], now: 120, seen: true }), false, 'not shown twice');
+  assert.equal(offerDue({ difficulty: 'kitten', force: true }), false);
+  assert.equal(offerDue({ difficulty: 'nine', force: true }), false);
+  assert.equal(offerDue({ difficulty: 'knight', force: true }), true, "story's practice rule forces it");
+});
+
+test('ui.W1 title: one button without a save, two with one; no picker; the dark shade is gone', () => {
+  assert.deepEqual(titleButtons(false), ['play']);
+  assert.deepEqual(titleButtons(true), ['continue', 'newAdventure']);
+  assert.ok(TITLE.logo === 1.0 && TITLE.buttons === 1.4);
+  assert.match(tx(ctx0(), 'title.tap'), /tap/i);
+  const src = nfs.readFileSync('src/ui/menus.js', 'utf8');
+  assert.ok(!/class="title-shade"/.test(src), 'no .title-shade element');
+  const home = src.slice(src.indexOf('_openHome() {'), src.indexOf('_homeLabel() {'));
+  assert.ok(home.length > 100 && !/openNewGame|difficulty\./.test(home), 'no difficulty picker on the title home');
+  const css = nfs.readFileSync('src/ui/ui.css', 'utf8');
+  assert.match(css, /\.title-rim \{[^}]*radial-gradient\(120% 90% at 50% 40%, #FFF8EE00 55%, #FFD9B866 100%\)/);
+});
+
+test('ui.W7 / WA §2.7 dark-literal lint: no colour with HSV V < 0.20 in src/ui outside the cocoa ink family', () => {
+  const allow = new Set(['#2A1E18', '#3A2A1F', '#4A2A1F', '#5A3B2E', '#3A2630', '#3A2346']);
+  const bad = [];
+  for (const f of nfs.readdirSync('src/ui')) {
+    if (!/\.(js|css)$/.test(f)) continue;
+    const s = nfs.readFileSync(npath.join('src/ui', f), 'utf8');
+    for (const m of s.matchAll(/#([0-9a-fA-F]{3,8})\b/g)) {
+      const h = m[1];
+      if (![3, 4, 6, 8].includes(h.length)) continue;
+      const full = (h.length <= 4 ? [...h.slice(0, 3)].map((c) => c + c).join('') : h.slice(0, 6)).toUpperCase();
+      const v = Math.max(parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)) / 255;
+      if (v < 0.2 && !allow.has(`#${full}`)) bad.push(`${f}: ${m[0]}`);
+    }
+  }
+  assert.deepEqual(bad, []);
+  assert.equal(CINEMA.fade, FADE_COLOR);
+  assert.match(nfs.readFileSync('src/ui/ui.css', 'utf8'), /\.cin-bar \{ background: #3A2630; \}/, 'cocoa-plum letterbox');
+});
+
+test('WA §5.4 sticker book + §5.5 fly-to-HUD: stickers read save flags; the flight is the quadratic Bézier 120 px above', () => {
+  const ctx = ctx0();
+  ctx.state.setFlag?.('sticker.bonk', true);
+  const cells = stickerCells(ctx);
+  assert.equal(cells.length, STICKER_IDS.length);
+  assert.equal(cells.find((c) => c.id === 'bonk').owned, !!ctx.state.getFlag?.('sticker.bonk'));
+  const mid = flyPoint(0.5, 200, 100, 120);
+  assert.equal(mid.x, 100); assert.equal(mid.y, 50 - 60, 'apex lifted by half the control offset');
+  const end = flyPoint(1, 200, 100, 120);
+  assert.deepEqual([end.x, end.y], [200, 100]);
+});
+
+test('PERF I2 / ART G17: the boot font is one Fredoka woff2 (no Cinzel / Uncial / MedievalSharp in ui code)', () => {
+  assert.ok(!/Cinzel|Uncial|MedievalSharp/.test(nfs.readFileSync('src/ui/fonts.css', 'utf8')));
+  const sz = nfs.statSync(npath.join('public/assets', FONT_FILES[0].file)).size;
+  assert.ok(sz < 100 * 1024, `woff2 subset ${sz} B`);
 });

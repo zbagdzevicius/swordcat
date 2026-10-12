@@ -1,5 +1,5 @@
 // src/world/VigilStone.js  (owner: world) — checkpoints (GAME_DESIGN §7.6, §12.1 `kind: 'checkpoint'`, ids vigil_1..n):
-// `env/nature/statue_obelisk.glb` + `env/graveyard/lantern-candle.glb` [verified]. Walk within 1.5 m and press E
+// a waystone (`env/nature/stone_tallB.glb`, sandstone) + a paper lantern on a crook (LI W10; LevelKit places both). Walk within 1.5 m and press E
 // (interact): she plants the sword in Vigil (player handles the 0.8 s pose on `checkpoint`), the lantern lights gold.
 // Effect: save (save autosaves on `checkpoint`), full heal + milk refill + Still Standing re-arm (player), companion
 // swap (ui), and the respawn point. Every stone is also a spawn id (`vigil_n`, standing 1.4 m in front of it) so
@@ -8,7 +8,11 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { makeGlowSprite } from './Sky.js';
 
-export const VIGIL = Object.freeze({ radius: 1.5, obeliskH: 1.7, lanternH: 0.42, glow: '#FFD98A', unlit: '#3A3326', lit: '#FFC46B' });
+/**
+ * Vigil look: the paper lantern hangs `paperOff` m out on the crook arm at `lanternH` m; unlit it is plain paper, lit
+ * it glows lantern gold and feeds the lamp pools (`env.lamps`, radius from `lampDist`).
+ */
+export const VIGIL = Object.freeze({ radius: 1.5, lanternH: 0.86, paperOff: 0.26, glow: '#FFD98A', unlit: '#F2E4C6', lit: '#FFC46B', litMul: 2.2, lampDist: 7, lampI: 1.6 });
 
 export class VigilStone {
   /**
@@ -30,9 +34,14 @@ export class VigilStone {
     const side = this._lanternOffset();
     this.flameMat = new THREE.MeshBasicMaterial({ color: VIGIL.unlit, fog: true });
     this.flameMat.userData.owned = true;
-    this.flame = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), this.flameMat);
-    this.flame.scale.set(1, 1.5, 1);
-    this.flame.position.set(side.x, this.pos.y + VIGIL.lanternH * 0.45, side.z);
+    this.flame = new THREE.Mesh(new THREE.SphereGeometry(0.118, 12, 8), this.flameMat);
+    this.flame.scale.set(1, 1.35, 1);          // the paper shade itself: plain paper unlit, glowing gold when lit
+    // the paper hangs on the crook arm (LevelKit yaws the lantern template facing + π/2)
+    const ly = this.facing + Math.PI / 2;
+    this.flame.position.set(side.x + Math.cos(ly) * VIGIL.paperOff, this.pos.y + VIGIL.lanternH, side.z - Math.sin(ly) * VIGIL.paperOff);
+    /** lamp-pool source (ENV_U.uLamps) while lit */
+    this.lamp = { pos: this.flame.position.clone(), on: false, intensity: VIGIL.lampI, distance: VIGIL.lampDist, flicker: 0.15 };
+    ctx.env?.lamps?.add?.(this.lamp);
     this.flame.userData.owned = true;
     this.glow = makeGlowSprite({ color: VIGIL.glow, size: 0.9, intensity: 1.6, fog: true });
     this.glow.position.copy(this.flame.position).setY(this.flame.position.y + 0.3);
@@ -74,7 +83,8 @@ export class VigilStone {
   setLit(on) {
     this.lit = !!on;
     this.flameMat.color.set(on ? VIGIL.lit : VIGIL.unlit);
-    if (on) this.flameMat.color.multiplyScalar(2.2);
+    if (on) this.flameMat.color.multiplyScalar(VIGIL.litMul);
+    if (this.lamp) this.lamp.on = this.lit;
     this.glow.visible = this.lit;
   }
 
@@ -85,10 +95,11 @@ export class VigilStone {
     this.flash = Math.max(0, this.flash - dt * 1.5);
     const flick = 1 + Math.sin(t * 13.1 + this.pos.x) * 0.06 + Math.sin(t * 7.3) * 0.05;
     this.glow.scale.setScalar(0.9 * flick * (1 + this.flash * 1.2));
-    this.flame.scale.set(flick, 1.5 * flick, flick);
+    const k = 1 + (flick - 1) * 0.4; this.flame.scale.set(k, 1.35 * k, k);
   }
 
   dispose() {
+    this.ctx.env?.lamps?.remove?.(this.lamp);
     this.group.removeFromParent();
     this.flame.geometry.dispose(); this.flameMat.dispose();
     this.glow.material.dispose();

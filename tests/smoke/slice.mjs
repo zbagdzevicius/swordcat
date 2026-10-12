@@ -2,7 +2,9 @@
 // meadow vertical slice, driven by hooks. Midnight Practice (from spawn `practice`) → gate → G-01 at Sir Tallbert →
 // CS-02 on the lane (level reloads by day) → crossroads rats + Noodle + Letter #1 → vigil_1 → Standing Stones arena +
 // Button → vigil_2 → CS-03 at the picnic bale → glade arena + the 3 net ropes → the Pudding follow beat → Crow Fields
-// (crows, crossbows) + Biscuit → vigil_3 → Old Bridge arena (3 waves) → Mochi's cage → D-01 → exit → results → forest.
+// (crows, crossbows) → vigil_3 → Old Bridge arena (3 waves) → Biscuit's carrier → exit → results → forest.
+// WA16 (companions.W2): Mochi's tipped cart is on the lane at STORY.mochiCage: the crossroads leg fights its soft `cart`
+// arena, a normal slash tinks off the cracked latch, a Bright Slash opens it → D-01 → Mochi joins before the Stones.
 // The area blocks test each piece in depth; this one checks that they chain with no softlock, runtime error or stuck
 // mode, and that progress (flags, kittens, letter, fish, party) adds up on the results card.
 // Fights use the real combat path (combat.applyHit from her, so enemy:died drops, Valor, arena waves all run).
@@ -200,6 +202,44 @@ export default [
       await t.tap('KeyE');
       t.assert(await t.waitForEvent('checkpoint', 3000), 'vigil_1 lit (E)');
 
+      // ---------------------------------------------------------------- WA16: Mochi's tipped cart, the cracked latch, D-01
+      step('Mochi cart');
+      await tp(t, -12.3, -43.4, Math.atan2(-1.7, 2.4));
+      await until(t, () => { const a = window.__GAME__.ctx.levels.current.arena('cart'); return !a || a.locked || a.cleared; }, null, { sim: 3 });
+      const ca = await clearArena(t, 'cart', 20);
+      if (!ca.cleared) { t.warn('cart arena did not lock / clear on its own: clearing it'); await t.G(() => window.__GAME__.ctx.levels.current.arena('cart')?.clear?.()); }
+      await smite(t, 14);
+      const tink = await t.G(() => {
+        const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi');
+        if (!m?.lock) return null;
+        m.lock.invulnT = 0;
+        return { r: c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.slash1), opened: m.lock.opened, cracked: m.lock.cracked };
+      });
+      await must(!!tink, 'Mochi waits in his carrier at the cart');
+      t.assert(tink.cracked && !tink.opened && tink.r === 'block', `a normal slash tinks off the cracked latch (${JSON.stringify(tink)})`);
+      await t.wait(600);
+      await shot(t, '06b-mochi-cart');
+      let opened = false;
+      for (let i = 0; i < 4 && !opened; i++) {
+        const r = await t.G(() => {
+          const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi');
+          if (!m?.lock) return { opened: false, gone: true };
+          if (!m.lock.opened) c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.bright);
+          return { opened: !!m.lock.opened, t: window.__GAME__.game.time };
+        });
+        if (r.gone) break;
+        opened = r.opened;
+        if (!opened) await until(t, (t0) => window.__GAME__.game.time - t0 >= 0.2, r.t, { sim: 2, every: 50 });
+      }
+      await must(opened, 'a Bright Slash opens Mochi\'s carrier');
+      const d01 = await until(t, () => window.__GAME__.ctx.story.playingId === 'd01', null, { sim: 8 });
+      t.assert(!!d01, 'D-01 plays when the carrier opens');
+      if (d01 && await until(t, () => window.__GAME__.ctx.story.line?.key === 'd01.1', null, { sim: 8 })) { await t.wait(1000); await shot(t, '13-d01-mochi'); }
+      const joined = await until(t, () => window.__GAME__.mode === 'play' && !window.__GAME__.ctx.story.isPlaying && window.__GAME__.ctx.companions.active[0]?.kittenId === 'mochi', null, { sim: 40, real: 120000 });
+      await must(!!joined, 'D-01 ends with Mochi in the party');
+      await t.wait(1200);
+      await shot(t, '14-mochi-joined');
+
       // ---------------------------------------------------------------- Standing Stones arena + Button
       step('stones');
       await tp(t, -20, -12, 0);                                     // inside the trigger disc (r − 2)
@@ -260,16 +300,12 @@ export default [
       await shot(t, '11-crowfields');
       const n2 = await smite(t, 40);
       t.assert(n2 >= 4, `Crow Fields: ${n2} enemies defeated`);
-      await tp(t, 36.5, 28.5, Math.atan2(5, 1.5));
-      await meow(t);
-      t.assert(!!(await until(t, () => !window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'biscuit')?.hidden, null, { sim: 6 })), 'Meow wakes the cow and reveals Biscuit');
-      t.assert(await touchKitten(t, 'biscuit'), 'Biscuit rescued');
       await tp(t, 28, 53.2, Math.PI);
       await t.clearEvents();
       await t.tap('KeyE');
       t.assert(await t.waitForEvent('checkpoint', 3000), 'vigil_3 lit');
 
-      // ---------------------------------------------------------------- Old Bridge arena, Mochi's cage, D-01
+      // ---------------------------------------------------------------- Old Bridge arena, Biscuit's carrier (WA16)
       step('Old Bridge');
       await tp(t, 30, 58, 0);
       await walkUntil(t, () => window.__GAME__.ctx.player.pos.z > 61.5, null, 4000);
@@ -284,26 +320,24 @@ export default [
       await tp(t, 28.2, 70.2, Math.atan2(1.8, 4.3));
       // one blow at a time with ≥ 0.2 s of sim between them: the lock ticks its own anti-multi-hit invulnT, and
       // resetting it here would hide a lock that never recovers (requests/companions.md)
-      let opened = false;
-      for (let i = 0; i < 8 && !opened; i++) {
+      let bOpen = false;
+      for (let i = 0; i < 8 && !bOpen; i++) {
         const r = await t.G(() => {
-          const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'mochi');
+          const c = window.__GAME__.ctx, m = c.companions.kittens.find((x) => x.kittenId === 'biscuit');
           if (!m?.lock) return { opened: false, gone: true };
           if (!m.lock.opened) c.combat.applyHit(c.player, m.lock, c.config.ATTACKS.slash1);
           return { opened: !!m.lock.opened, t: window.__GAME__.game.time };
         });
         if (r.gone) break;
-        opened = r.opened;
-        if (!opened) await until(t, (t0) => window.__GAME__.game.time - t0 >= 0.2, r.t, { sim: 2, every: 50 });
+        bOpen = r.opened;
+        if (!bOpen) await until(t, (t0) => window.__GAME__.game.time - t0 >= 0.2, r.t, { sim: 2, every: 50 });
       }
-      await must(opened, 'her slashes open Mochi\'s cage');
-      const d01 = await until(t, () => window.__GAME__.ctx.story.playingId === 'd01', null, { sim: 8 });
-      t.assert(!!d01, 'D-01 plays when the cage opens');
-      if (d01 && await until(t, () => window.__GAME__.ctx.story.line?.key === 'd01.1', null, { sim: 8 })) { await t.wait(1000); await shot(t, '13-d01-mochi'); }
-      const joined = await until(t, () => window.__GAME__.mode === 'play' && !window.__GAME__.ctx.story.isPlaying && window.__GAME__.ctx.companions.active[0]?.kittenId === 'mochi', null, { sim: 40, real: 120000 });
-      await must(!!joined, 'D-01 ends with Mochi in the party');
+      await must(bOpen, 'her slashes open Biscuit\'s carrier');
+      const bis = await until(t, () => window.__GAME__.ctx.state.kittens.includes('biscuit'), null, { sim: 6 });
+      t.assert(!!bis, 'Biscuit hops out and is rescued');
       await t.wait(1200);
-      await shot(t, '14-mochi-joined');
+      await shot(t, '14b-biscuit');
+
 
       // ---------------------------------------------------------------- the exit → results → forest
       step('exit');

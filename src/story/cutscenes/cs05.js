@@ -95,10 +95,25 @@ export default {
     say('grizzlechop', 'cs05.3', 3.6),
     { t: 'actor', id: 'swordcat', expression: 'determined' },
     say('swordcat', 'cs05.4', 2.0),
-    wait(0.3),
+
+    // ---- 5 · bonk, then befriend (WA §8.1): milk for the cheese; monocle polish, salute
+    { t: 'actor', id: 'swordcat', prop: 'milk_cup', expression: 'happy' },
+    say('swordcat', 'cs05.5', 1.8),
+    { t: 'actor', id: 'grizzlechop', expression: 'happy', emote: 'blink' },
+    say('grizzlechop', 'cs05.6', 2.4),
+    { t: 'actor', id: 'grizzlechop', clip: 'Yes', nowait: true },
+    { t: 'fx', burst: 'heart', at: 'grizzlechop', count: 5, color: '#FF8FB1' },
+    { t: 'actor', id: 'swordcat', prop: { milk_cup: false } },
+    wait(0.6),
   ],
   end: {
-    call: (ctx, cs, skipped, phase) => { if (phase === 'after' && skipped) toastOnce(ctx, cs); },
+    call: (ctx, cs, skipped, phase) => {
+      if (phase !== 'after') return;
+      if (skipped) toastOnce(ctx, cs);
+      const t = ctx.strings?.t;
+      ctx.bus.emit(E.TOAST, { text: t?.('toast.friend', { name: t?.('name.grizzlechop') }) ?? 'toast.friend', key: 'toast.friend' });
+    },
+    actors: { swordcat: { prop: { milk_cup: false } } },
     flags: { 'forest.boss': true },
     shards: 1,
     env: { contribute: { cs05: null } },

@@ -113,3 +113,16 @@ test('EventBus: on / emit / off / once / wait / tap; handler errors are isolated
   bus.emit(E.INTERACT, {}); bus.emit(E.INTERACT, {});
   assert.deepEqual(order, ['b', 'c', 'c']);
 });
+
+test('IMPLEMENTATION_PLAN §7.1 + core.W2: Phase W events exist; payload JSDoc documents the new fields', () => {
+  assert.equal(E.REWARD, 'reward');
+  assert.equal(E.TELEGRAPH_FIRST, 'telegraph:first');
+  assert.ok(KNOWN.has('reward') && KNOWN.has('telegraph:first'));
+  const src = fs.readFileSync(path.join(ROOT, 'src/core/events.js'), 'utf8');
+  const line = (name) => src.split('\n').find((l) => l.trimStart().startsWith(`${name}:`)) ?? '';
+  assert.match(line('KITTEN_RESCUED'), /kittenId, position/);
+  assert.match(line('ARENA_LOCK'), /id, center, r/);
+  assert.match(line('TELEGRAPH'), /targetsPlayer/); assert.match(line('TELEGRAPH'), /end\?/); assert.match(line('TELEGRAPH'), /glyph/);
+  assert.match(line('PROMPT'), /speaker\?, say\?, stepDots\?/);
+  assert.match(line('REWARD'), /'sticker'\|'card'\|'friend'/);
+});

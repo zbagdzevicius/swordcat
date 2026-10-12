@@ -30,6 +30,8 @@ export class MemeCam {
     this.anchor = null;
     this.pose = new CamPose();
     this.origin = new THREE.Vector3();
+    /** loop sway scale: ×0.3 with Reduce camera motion (AUTOCAM §10.1); FollowCamera sets it on entry */
+    this.swayMul = 1;
   }
 
   get phase() { return this.t / this.period; }
@@ -72,6 +74,8 @@ export class MemeCam {
   sample(t = this.t, out = this.pose) {
     const P = PRESETS.MEME_LOOP;
     memeSway(t, this.period, P.sway, _s);
+    const k = this.swayMul;
+    if (k !== 1) { _s.x *= k; _s.y *= k; _s.z *= k; }
     _l[0] = P.pos[0] + _s.x; _l[1] = P.pos[1] + _s.y; _l[2] = P.pos[2] + _s.z;
     localToWorld(_l, this.origin, this.yaw, out.pos);
     // the look point sways at a third of the amplitude: a hint of handheld rotation, never a wobble

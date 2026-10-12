@@ -85,3 +85,38 @@ export class Spring {
   step(target, dt) { this.v += (this.k * (target - this.x) - this.c * this.v) * dt; this.x += this.v * dt; return this.x; }
   reset(x = 0) { this.x = x; this.v = 0; }
 }
+
+/**
+ * Critically damped smoothing (AUTOCAM §4.3; Game Programming Gems 4 §1.10, Unity SmoothDamp form). Exact for any
+ * dt, never overshoots, velocity stays continuous. Zero allocation.
+ * @param {number} cur @param {number} target
+ * @param {{v: number}} state  velocity carried between calls (start at { v: 0 })
+ * @param {number} st  smooth time (s) @param {number} dt @param {number} [vmax]  rate cap (units/s)
+ * @returns {number} the new value
+ */
+export function smoothDamp(cur, target, state, st, dt, vmax = Infinity) {
+  st = Math.max(1e-4, st);
+  const w = 2 / st, x = w * dt, e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  let ch = cur - target; const maxCh = vmax * st; ch = Math.min(maxCh, Math.max(-maxCh, ch));
+  const tgt = cur - ch, tmp = (state.v + w * ch) * dt;
+  state.v = (state.v - w * tmp) * e;
+  let out = tgt + (ch + tmp) * e;
+  if ((target - cur > 0) === (out > target)) { out = target; state.v = 0; }   // no overshoot
+  return out;
+}
+
+/**
+ * 2D smoothDamp (XZ, or screen right/up) with a radial rate cap (no diagonal speed-up). Writes `o` in place; zero alloc.
+ * @param {{x: number, z: number}} o @param {number} tx @param {number} tz
+ * @param {{vx: number, vz: number}} s  velocity state @param {number} st @param {number} dt @param {number} [vmax]
+ */
+export function smoothDamp2(o, tx, tz, s, st, dt, vmax = Infinity) {
+  st = Math.max(1e-4, st); const w = 2 / st, x = w * dt, e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  let cx = o.x - tx, cz = o.z - tz; const m = Math.hypot(cx, cz), maxCh = vmax * st;
+  if (m > maxCh) { cx *= maxCh / m; cz *= maxCh / m; }
+  const ax = (s.vx + w * cx) * dt, az = (s.vz + w * cz) * dt;
+  s.vx = (s.vx - w * ax) * e; s.vz = (s.vz - w * az) * e;
+  let nx = (o.x - cx) + (cx + ax) * e, nz = (o.z - cz) + (cz + az) * e;
+  if ((tx - o.x) * (nx - tx) + (tz - o.z) * (nz - tz) > 0) { nx = tx; nz = tz; s.vx = s.vz = 0; }
+  o.x = nx; o.z = nz;
+}

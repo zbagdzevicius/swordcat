@@ -24,13 +24,15 @@
 //   objective { id, textKey, max, value, complete, add }   arena { id, lock, clear }   load { level, spawn }
 //   par { steps } · seq { steps } · if { cond, then, else } · call { fn(ctx, cutscene, step) → value | Promise }
 // Scene options: { id, kind: 'cutscene' | 'dialog' | 'ambient', skippable, prologue (skippable on the first viewing),
-//   letterbox (default true for full scenes), hud, player (false = don't script her), inputSkip (s: any input after it
-//   skips, G-01), steps, end }. `cs.every(fn(dt, cs))` registers a per-step ticker for the scene's lifetime.
+//   letterbox (default true for full scenes), hud (true: a full scene keeps the HUD), player (false = don't script her),
+//   inputSkip (s: any input after it skips, G-01), once (StoryManager plays it once per save), cinematic (true | opts:
+//   postfx.setCinematic for the scene's length, the ending only), steps, end }. `cs.every(fn(dt, cs))` registers a per-step ticker for the scene's lifetime.
 import * as THREE from 'three';
 import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
 import { clamp01, lerp, easeInOutSine } from '../core/math.js';
 import { text as stext, speakerName } from './strings.js';
+import { announce } from './rewards.js';
 
 /** Every step type the runner knows (U13: cutscene data may use only these). */
 export const STEP_TYPES = Object.freeze(['cam', 'actor', 'say', 'sfx', 'music', 'env', 'fx', 'ui', 'time', 'spawn', 'despawn', 'flag',
@@ -70,6 +72,38 @@ export function isInstant(step) {
     case 'actor': return step.moveTo == null && !(step.clip && step.once) && !((step.faceDur ?? 0) > 0);
     case 'cam': return !step.dur && !step.wait;
     default: return false;
+  }
+}
+
+/** Seconds a move step is assumed to take when its ends are not known statically (sceneLength). */
+export const MOVE_GUESS = 1.5;
+
+/**
+ * Rough length of a step list in sim seconds, for authoring checks (WA27: CS-02 ≤ 55 s with the cut; no prologue scene
+ * > 25 s before practice is done). Waits, auto lines (max(auto, reveal + tail)), timed cams / faces / once clips, moves
+ * (MOVE_GUESS); `par` = its longest member, `if` = its longer branch; `nowait` steps add nothing. Pure.
+ */
+export function sceneLength(steps) {
+  let t = 0;
+  for (const s of steps ?? []) t += stepLength(s);
+  return t;
+}
+
+/** One step's rough length (see sceneLength). Pure. */
+export function stepLength(s) {
+  if (!s || typeof s !== 'object' || s.nowait) return 0;
+  switch (s.t) {
+    case 'par': return Math.max(0, ...(s.steps ?? []).map(stepLength));
+    case 'seq': return sceneLength(s.steps);
+    case 'if': return Math.max(sceneLength(s.then), sceneLength(s.else));
+    case 'wait': return typeof s.dur === 'number' && Number.isFinite(s.dur) ? s.dur : 0;
+    case 'say': {
+      const n = s.key ? String(stext(s.key)).replace(/\*/g, '').length : 0;
+      return Math.max(s.auto || 0, revealTime(n) + AUTO_TAIL);
+    }
+    case 'cam': return typeof s.dur === 'number' ? s.dur : 0;
+    case 'actor': return s.moveTo != null ? MOVE_GUESS : s.clip && s.once ? 0.6 : (s.faceDur ?? 0);
+    default: return typeof s.dur === 'number' ? s.dur : 0;
   }
 }
 
@@ -242,7 +276,9 @@ export class Cutscene {
     if (this.kind === 'cutscene') {
       ctx.cam?.mode?.('cutscene');
       if (this.def.letterbox !== false) this.host?.cinema?.letterbox(true);
-      this.host?.cinema?.hud(false);
+      if (this.def.hud !== true) this.host?.cinema?.hud(false);       // in-engine beats (tutbow) keep the HUD
+      // PERF §3.3 / AUTOCAM: the ending asks for the High-tier cinematic composer (Low / Med accept and fall back)
+      if (this.def.cinematic) { try { ctx.postfx?.setCinematic?.(true, typeof this.def.cinematic === 'object' ? this.def.cinematic : {}); } catch (e) { console.warn(e); } }
     } else if (this.kind === 'dialog' && this.def.hud === false) this.host?.cinema?.hud(false);
     ctx.bus.emit(E.CUTSCENE_START, { id: this.id, kind: this.kind });
     this.root = new SeqTask(this, this.def.steps ?? []);
@@ -833,12 +869,16 @@ export class Cutscene {
     this.sounds.clear();
     if (this.timeScaled) ctx.game?.setTimeScale?.(1);
     if (typeof end.call === 'function') { try { end.call(ctx, this, skipped, 'before'); } catch (e) { console.error(e); } }
+    if (this.def.cinematic) { try { ctx.postfx?.setCinematic?.(false); } catch (e) { console.warn(e); } }
     // the cast goes (unless kept)
     for (const r of [...this.spawned]) if (!r.keep && !keep.has(r.id)) this._despawnRec(r);
     for (const id of [].concat(end.despawns ?? [])) this.despawnId(id);
     // flags
     for (const [k, v] of Object.entries(end.flags ?? {})) host?.flag?.(k, v);
-    if (end.shards != null && ctx.state) { ctx.state.shards = Math.max(ctx.state.shards ?? 0, end.shards); ctx.bus.emit(E.SHARD, { n: ctx.state.shards }); }
+    if (end.shards != null && ctx.state) {
+      const was = ctx.state.shards ?? 0;
+      ctx.state.shards = Math.max(was, end.shards); ctx.bus.emit(E.SHARD, { n: ctx.state.shards });   // ui's card follows story:shard
+    }
     for (const u of [].concat(end.unlock ?? [])) host?.unlock?.(u.kind, u.id);
     // actor final states (an explicit end pose survives the release below)
     const posed = new Set();
@@ -881,7 +921,12 @@ export class Cutscene {
     if (camOpt !== false) {
       const m = typeof camOpt === 'string' ? camOpt : camOpt.mode ?? 'follow';
       const blend = skipped ? false : (typeof camOpt === 'object' && camOpt.blend != null ? camOpt.blend : undefined);
-      try { ctx.cam?.mode?.(m, blend === undefined ? {} : { blend }); } catch (e) { console.warn(e); }
+      const ease = typeof camOpt === 'object' ? camOpt.ease : undefined;
+      try {
+        // AUTOCAM camera.W1: a timed blend with an ease when the rig has one (the title → follow move), else mode()
+        if (typeof blend === 'number' && ease && typeof ctx.cam?.blendTo === 'function') ctx.cam.blendTo(m, blend, ease);
+        else ctx.cam?.mode?.(m, blend === undefined ? {} : ease ? { blend, ease } : { blend });
+      } catch (e) { console.warn(e); }
     }
     // level change
     // (a function may decide at run time and await things first, e.g. CS-10's results card when skipped early)
@@ -896,7 +941,7 @@ export class Cutscene {
     }
     if (end.player?.outfit) ctx.player?.setOutfit?.(end.player.outfit);
     if (typeof end.call === 'function') { try { end.call(ctx, this, skipped, 'after'); } catch (e) { console.error(e); } }
-    for (const k of [].concat(end.toasts ?? end.toast ?? [])) ctx.bus.emit(E.TOAST, { text: stext(k), key: k });
+    for (const k of [].concat(end.toasts ?? end.toast ?? [])) announce(ctx, k);   // WA §5.4: friend / card rewards
     if (end.chapter) host?.chapterCard?.(end.chapter);
     // back to play (the host clears `current`, restores the mode or starts the next queued scene)
     host?.seenSet?.(this.id);

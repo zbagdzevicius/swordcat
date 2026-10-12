@@ -413,7 +413,7 @@ test('Player: hurt → stun + blink i-frames; Still Standing once per segment; t
   ctx.combat.applyHit(e, p, big);
   assert.equal(p.alive, false); assert.equal(p.state, 'dead');
   assert.deepEqual([r.last(E.PLAYER_LIFE_LOST).lives, p.lives], [8, 8]);
-  r.seconds(TUNING.faintDur + 0.1);
+  r.seconds(koRespawnT() + 0.1);
   assert.equal(p.alive, true); assert.equal(p.hp, p.maxHp); assert.equal(p.state, 'move');
   assert.equal(p.valor, 25, 'respawn halves Valor (60 − 10 → 25)');
   // checkpoint re-arms Still Standing
@@ -1196,4 +1196,233 @@ test('Pounce aim §6.2/§6.4: touch magnetises a crow in the 3 m disc (flyers fi
   const crow2 = r.enemy(3.0, deg(-80)); crow2.tags.add('flyer');
   const k2 = p.pouncePlan({});
   assert.equal(k2.target, crow2, 'a crow near the cursor point');
+});
+
+// ================================================================== Phase W (WA) + ART §6.5 + AUTOCAM §5.3 (player)
+import { IdleLadder, Squash, SQUASH, HIT_WORDS, ORDER_FX, koRespawnT, wordFor } from '../../src/player/juice.js';
+import { IDLE, KO, FADE_COLOR, CAMERA } from '../../src/core/config.js';
+
+/** Step a pure IdleLadder `sec` seconds at 60 Hz; returns [[t, step], …]. */
+function runLadder(L, sec, s, t0 = 0) {
+  const out = [];
+  let t = t0;
+  for (let i = 0; i < Math.round(sec / DT); i++) { t += DT; const st = L.update(DT, s); if (st) out.push([t, st]); }
+  return out;
+}
+
+test('player.W1 idle ladder (pure): glance 4 s, look 7 s, groom 10 s, twirl 12.5 s, all before the 15 s Meme Cam', () => {
+  assert.ok(IDLE.twirl < PLAYER.memeCam.idle, 'every step before the Meme Cam');
+  const L = new IdleLadder({ rand: () => 0.99 });
+  const fired = runLadder(L, 14, { still: true, calm: true });
+  assert.deepEqual(fired.map((f) => f[1]), ['glance', 'look', 'groom', 'twirl']);
+  const at = [IDLE.glance, IDLE.look, IDLE.groom, IDLE.twirl];
+  fired.forEach(([t], i) => near(t, at[i], DT + 1e-9, `step ${i} on time`));
+  // moving or a fight resets the clock; nothing fires in combat
+  assert.deepEqual(runLadder(new IdleLadder(), 20, { still: true, calm: false }), [], 'none in combat');
+  const M = new IdleLadder(); runLadder(M, 6, { still: true, calm: true }); M.update(DT, { still: false, calm: true });
+  assert.equal(M.t, 0); assert.equal(runLadder(M, 3.9, { still: true, calm: true }).length, 0, 'a move restarts the ladder');
+});
+
+test('player.W1 idle ladder (pure): after the Meme Cam it loops from 7 s (10 % sneezes); the hub sits at 20 s', () => {
+  const L = new IdleLadder({ rand: () => 0.99 });
+  runLadder(L, 15, { still: true, calm: true });
+  runLadder(L, 3, { still: false, calm: true, meme: true });            // the Meme Cam runs (paused, not reset)
+  const loop = runLadder(L, 6, { still: true, calm: true });
+  assert.deepEqual(loop.map((f) => f[1]), ['look', 'groom', 'twirl'], 'loops from loopFrom (glance is before it)');
+  near(loop[0][0], DT, 1e-9, 'look fires as the loop starts at 7 s');
+  const S = new IdleLadder({ rand: () => 0.01 });
+  runLadder(S, 15, { still: true, calm: true }); S.update(DT, { meme: true, still: false, calm: true });
+  assert.deepEqual(runLadder(S, 6, { still: true, calm: true }).map((f) => f[1]), ['sneeze', 'sneeze', 'sneeze'], 'sneezeP applies to looped steps');
+  const H = new IdleLadder({ rand: () => 0.99 });
+  const hub = runLadder(H, 22, { still: true, calm: true, hub: true });
+  assert.deepEqual(hub.map((f) => f[1]), ['glance', 'look', 'groom', 'twirl', 'sit']);
+  near(hub[4][0], IDLE.hubSit, DT + 1e-9, 'sit at 20 s');
+});
+
+test('player.W1 idle ladder in the Player: fake clock → emotes at 4 / 7 / 10 / 12.5 s on the model; none with a foe near', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.params.idleLadder = true;                                        // ?test never counts idle time unless opted in
+  const steps = [];
+  p.model.idleStep = (n) => { if (n) steps.push([ctx.game.time, n]); };
+  r.seconds(13);
+  assert.deepEqual(steps.map((s) => s[1]), ['glance', 'look', 'groom', 'twirl']);
+  const at = [IDLE.glance, IDLE.look, IDLE.groom, IDLE.twirl];
+  steps.forEach(([t], i) => near(t, at[i], 2 * DT, `step ${i}`));
+  const r2 = await rig(); r2.ctx.params.idleLadder = true;
+  const s2 = []; r2.p.model.idleStep = (n) => { if (n) s2.push(n); };
+  const foe = r2.enemy(8, 0); foe.alerted = true; r2.ctx.enemies = { list: [foe] };
+  r2.seconds(13);
+  assert.deepEqual(s2, [], 'none in combat (an alerted enemy within 15 m)');
+});
+
+test('player.W2 tap on self: in combat → no emote, no order; calm → a pat (meow + bow bounce + heart); 3 taps → twirl', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const emotes = [], steps = [];
+  p.model.emote = (n) => emotes.push(n);
+  p.model.idleStep = (n) => { if (n) steps.push(n); };
+  ctx.cam = { pick: () => ({ kind: 'ground', point: new THREE.Vector3(p.pos.x + 0.2, 0, p.pos.z), actor: null }), lockTarget: null };
+  const orders = () => r.count(E.PLAYER_ORDER);
+  // in combat (combat activity + an alerted foe 5 m away)
+  const foe = r.enemy(5, 0); foe.alerted = true; ctx.enemies = { list: [foe] };
+  p.combatT = 2;
+  p.orders._tap({ kind: 'tap', x: 100, y: 100 });
+  assert.deepEqual(emotes, [], 'no emote in combat'); assert.equal(orders(), 0, 'no order'); assert.equal(p.orders.kind, null);
+  // out of combat
+  ctx.enemies = { list: [] }; p.combatT = 0; p.threatened = false;
+  p.orders._tap({ kind: 'tap', x: 100, y: 100 });
+  assert.ok(emotes.includes('meow') && emotes.includes('bowBounce'), `pat: ${emotes}`);
+  assert.equal(orders(), 0, 'a pat is never an order');
+  assert.equal(r.events.filter((e) => e[0] === E.BURST && e[1].kind === 'heart').length, 1, 'a heart');
+  p.orders._tap({ kind: 'tap', x: 100, y: 100 }); p.orders._tap({ kind: 'tap', x: 100, y: 100 });
+  assert.deepEqual(steps, ['twirl'], 'the third tap within 1.5 s twirls');
+  // a tap away from her is still a move order (the ground 3 m off)
+  ctx.cam.pick = () => ({ kind: 'ground', point: new THREE.Vector3(p.pos.x + 3, 0, p.pos.z), actor: null });
+  p.orders._tap({ kind: 'tap', x: 300, y: 100 });
+  assert.equal(p.orders.kind, 'move');
+});
+
+test('player.W2 order feedback: a second tap on the same spot within 0.35 s is a double (hop), outcomes unchanged', async () => {
+  const r = await rig(), { p } = r;
+  assert.equal(p.order('move', new THREE.Vector3(0, 0, 6), { source: 'touch' }), true);
+  assert.equal(r.last(E.PLAYER_ORDER).double, false);
+  assert.equal(p.order('move', new THREE.Vector3(0.2, 0, 6), { source: 'touch' }), true);
+  assert.equal(r.last(E.PLAYER_ORDER).double, true, 'double paw + happy hop');
+  assert.equal(p.orders.kind, 'move', 'the order itself is unchanged');
+  assert.equal(p.order('move', new THREE.Vector3(4, 0, 6), { source: 'touch' }), true);
+  assert.equal(r.last(E.PLAYER_ORDER).double, false, 'another spot');
+  assert.ok(ORDER_FX.doubleT === 0.35 && ORDER_FX.snapK === 0.7 && ORDER_FX.snapLambda === 24);
+});
+
+test('player.W3 words: a 3-hit combo says Snip!, Snap!, Swoosh! in order (≤ 1 per 0.25 s); the last foe says Bonk!', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const words = [];
+  ctx.fx = { word: (pos, text) => words.push([ctx.game.time, text]) };
+  const e = r.enemy(1.2, 0); e.hp = e.maxHp = 500;
+  // the dummy is not stepped here: clear its anti-multi-hit i-frames between the swings
+  const sec = (s) => { for (let i = 0; i < Math.round(s / DT); i++) { e.invulnT = 0; r.step(); } };
+  r.tap('attack'); sec(0.2); r.tap('attack'); sec(0.4); r.tap('attack'); sec(1.2);
+  assert.deepEqual(words.map((w) => w[1]), [HIT_WORDS.slash1, HIT_WORDS.slash2, HIT_WORDS.slash3]);
+  assert.deepEqual(words.map((w) => w[1]), ['Snip!', 'Snap!', 'Swoosh!']);
+  for (let i = 1; i < words.length; i++) assert.ok(words[i][0] - words[i - 1][0] >= HIT_WORDS.every - 1e-6, 'rate limit');
+  // the rate limit itself
+  words.length = 0; p._wordT = -Infinity;
+  assert.equal(p.sayWord('parry'), true); assert.equal(p.sayWord('perfectDodge'), false, 'a second word inside 0.25 s');
+  // hitWords off
+  words.length = 0; ctx.state.settings.hitWords = false; ctx.game.time += 1;
+  assert.equal(p.sayWord('parry'), false); ctx.state.settings.hitWords = true;
+  // the final blow of an encounter
+  words.length = 0; ctx.game.time += 1;
+  r.seconds(1);
+  const last = r.enemy(1.2, 0); last.alerted = true; last.hp = last.maxHp = 1; ctx.enemies = { list: [last] };
+  e.pos.set(50, 0, 50);
+  r.tap('attack'); r.seconds(0.4);
+  assert.equal(words.at(-1)?.[1], 'Bonk!');
+  assert.equal(wordFor('nope'), null);
+});
+
+test('player.W4 knock-out: onDeath() → pose sit (never lying flat), the cream wipe at 1.2 s, respawned and alive at 1.55 s', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const fades = [];
+  ctx.ui = { fade: (f) => fades.push(f) };
+  const dizzy = []; ctx.fx = { dizzyFor: (a, s) => dizzy.push([a, s]) };
+  p.hp = 0; p.alive = false; p.onDeath();
+  assert.equal(p.state, 'dead'); assert.equal(p.model.basePose(), 'sit');
+  assert.equal(dizzy[0]?.[0], p, 'dizzy stars on her');
+  near(koRespawnT(), KO.sitT + KO.wipeT, 1e-9); near(koRespawnT(), 1.55, 1e-9);
+  r.seconds(KO.sitT - 0.05);
+  assert.equal(fades.length, 0, 'no wipe before 1.2 s'); assert.equal(p.alive, false);
+  r.seconds(0.1);
+  assert.equal(fades[0]?.to, FADE_COLOR, 'cream wipe, never black'); near(fades[0].dur, KO.wipeT, 1e-9);
+  r.seconds(KO.wipeT);
+  assert.equal(p.alive, true); assert.equal(p.state, 'move'); assert.equal(p.hp, p.maxHp);
+  assert.equal(fades.at(-1)?.to, null, 'the wipe clears over her');
+  assert.ok(r.events.some((e) => e[0] === E.BURST && e[1].kind === 'hearts' && e[1].count === KO.hearts), '6 hearts');
+  assert.equal(r.count(E.PLAYER_LIFE_LOST), 1, 'life logic unchanged');
+  // game over: she stays seated, no wipe
+  const g = await rig(); const f2 = []; g.ctx.ui = { fade: (f) => f2.push(f) };
+  g.p.livesState.lives = 1; g.p.hp = 0; g.p.alive = false; g.p.onDeath();
+  assert.equal(g.p.livesState.gameOver, true);
+  g.seconds(2);
+  assert.equal(g.p.state, 'dead'); assert.equal(f2.length, 0);
+});
+
+test('AUTOCAM §5.3 moveIntent + orders.lookAhead: order → 2.5 m along the path; walk / run / stick; Tumble other; idle', async () => {
+  const r = await rig(), { p, ctx } = r;
+  r.step();
+  assert.equal(p.moveIntent.kind, 'idle'); assert.equal(p.moveIntent.speed, 0);
+  // a two-leg path: (0,0,2) then (4,0,2)
+  ctx.physics.findPath = () => ({ points: [{ x: 0, y: 0, z: 2 }, { x: 4, y: 0, z: 2 }] });
+  ctx.physics.nav = {};
+  assert.equal(p.order('move', new THREE.Vector3(4, 0, 2)), true);
+  const la = { x: 0, z: 0 };
+  assert.equal(p.orders.lookAhead(CAMERA.iso.lead.orderLook, la), true);
+  near(la.x, 0.5, 1e-6, 'past the corner'); near(la.z, 2, 1e-6);
+  near(p.orders.remaining(), 6, 1e-6);
+  r.step();
+  assert.equal(p.moveIntent.kind, 'order'); near(p.moveIntent.speed, PLAYER.run, 1e-6);
+  near(Math.hypot(p.moveIntent.x, p.moveIntent.z), 1, 1e-6, 'unit direction');
+  r.seconds(3);
+  assert.equal(p.orders.kind, null); assert.equal(p.moveIntent.kind, 'idle');
+  const none = { x: 9, z: 9 }; assert.equal(p.orders.lookAhead(2.5, none), false); near(none.x, p.pos.x, 1e-9);
+  // the direct-line follower (no nav): the point on the segment
+  delete ctx.physics.findPath; delete ctx.physics.nav;
+  p.order('move', new THREE.Vector3(p.pos.x, 0, p.pos.z + 10));
+  p.orders.lookAhead(2.5, la); near(la.z - p.pos.z, 2.5, 1e-6);
+  p.order('stop');
+  // keyboard: run at her speed
+  holdKey(r, 'KeyW'); r.seconds(0.5);
+  assert.equal(p.moveIntent.kind, 'run'); near(p.moveIntent.speed, Math.hypot(p.vel.x, p.vel.z), 1e-9);
+  holdKey(r, 'KeyW', false); r.seconds(0.5);
+  // touch stick: before her velocity, the dead zone ramps the speed
+  r.input.device = 'touch'; r.input.move.x = 0; r.input.move.y = 0.6; p.vel.set(0, 0, 0);
+  p._updateIntent();
+  assert.equal(p.moveIntent.kind, 'stick'); assert.ok(p.moveIntent.speed > 0 && p.moveIntent.speed < PLAYER.run);
+  r.input.move.y = 0; r.input.device = 'kbm';
+  // Tumble → other
+  r.seconds(0.3); r.tap('dodge'); assert.equal(p.state, 'dodge'); assert.equal(p.moveIntent.kind, 'other');
+});
+
+test('AUTOCAM §4 groundY = last ground contact; D1 render pose is the interpolated sim pose', async () => {
+  const r = await rig(), { p } = r;
+  r.step();
+  assert.equal(p.groundY, 0);
+  r.tap('jump'); r.seconds(0.2);
+  assert.ok(!p.onGround && p.pos.y > 0.3, `airborne ${p.pos.y}`); assert.equal(p.groundY, 0, 'airborne keeps the last contact');
+  r.seconds(1.5); assert.ok(p.onGround);
+  // interpolation: render(alpha) puts object3d between the last two sim steps
+  holdKey(r, 'KeyW'); r.seconds(0.4);
+  p.beginStep(); r.input.update(DT); p.update(DT); r.input.endStep();
+  const a = p.prevPos.clone(), b = p.pos.clone();
+  assert.ok(a.distanceTo(b) > 0.01, 'she moved this step');
+  p.render(0.5, DT);
+  near(p.object3d.position.x, (a.x + b.x) / 2, 1e-9); near(p.object3d.position.z, (a.z + b.z) / 2, 1e-9);
+  holdKey(r, 'KeyW', false);
+});
+
+test('AUTOCAM §5.5 aim.range: a held Holy charge with Shard 2 → the 10 m wave (held), Golden Hour gleam 8 m, else melee', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.state.shards = 2; p.setValor(80);
+  r.press('attack'); r.seconds(1.2);
+  assert.equal(p.state, 'charge'); assert.equal(p.chargeTier, 2);
+  assert.equal(p.aim.held, true); assert.equal(p.aim.range, ATTACKS.holyWave.range);
+  r.release('attack'); r.seconds(1.2);
+  assert.equal(p.aim.held, false); assert.ok(p.aim.range < 5, 'melee reach only');
+  ctx.state.shards = 1; p.setValor(80); r.press('attack'); r.seconds(1.2);
+  assert.equal(p.aim.held, false, 'Shard 1: no wave, no aim pan'); r.release('attack'); r.seconds(1.2);
+  p.golden = true; p.goldenT = 10; r.press('attack'); r.seconds(0.45);
+  assert.equal(p.state, 'charge'); assert.equal(p.heldAimRange(), ATTACKS.gleam.range);
+  assert.equal(p.aim.held, true); assert.equal(p.aim.range, ATTACKS.gleam.range); r.release('attack');
+});
+
+test('ART §6.5 Squash: kicks stretch then settle, clamped to ±0.35, frozen at dt 0', () => {
+  const s = new Squash();
+  s.kick(SQUASH.jump.kick);
+  let peak = 0;
+  for (let i = 0; i < 30; i++) peak = Math.max(peak, s.update(DT) - 1);
+  assert.ok(peak > 0.08 && peak <= SQUASH.limit, `stretch peak ${peak.toFixed(3)}`);
+  for (let i = 0; i < 120; i++) s.update(DT);
+  near(s.x, 0, 1e-3, 'settles');
+  s.kick(-50); for (let i = 0; i < 5; i++) s.update(DT);
+  assert.ok(s.x >= -SQUASH.limit - 1e-9, 'clamped');
+  const before = s.x; s.update(0); assert.equal(s.x, before, 'frozen in hitstop (dt 0)');
 });

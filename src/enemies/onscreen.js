@@ -27,8 +27,13 @@ export function insideFrustum(frustum, p, margin = 0) {
   return true;
 }
 
-/** The camera's frustum, rebuilt at most once per sim step / rendered frame (cached on stepCount + frameCount). */
+/**
+ * The camera's frustum: the rig's own once-per-frame `cam.frustum` when it ships one (AUTOCAM §9.6: one frustum per
+ * frame, reused by everyone), else ours, rebuilt at most once per sim step / rendered frame.
+ */
 function frustumOf(ctx, cam) {
+  const shared = ctx?.cam?.frustum;
+  if (shared?.planes?.length === 6 && ctx.cam.frameId !== undefined) return shared;
   const key = (ctx.game?.stepCount ?? 0) * 4096 + ((ctx.game?.frameCount ?? 0) & 4095);
   if (cam !== _cacheCam || key !== _cacheKey) {
     cam.updateMatrixWorld?.();

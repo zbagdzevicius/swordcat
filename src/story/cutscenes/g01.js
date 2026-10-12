@@ -1,5 +1,7 @@
 // src/story/cutscenes/g01.js  (owner: story) — G-01 Sir Tallbert (GAME_DESIGN §5.4) [MVP], ~8 s gameplay gag [TREND V5].
-// Trigger `tallbert` (the practice field's north gate; armed by world while `prologue.tutorial && !prologue.done`).
+// Chapter 1 (WA §8.4, ON §5.5): armed on `prologue.done`, right on her way north from the barn. World's `tallbert`
+// trigger plays it; StoryManager's prologue director plays it by proximity when the level's trigger is still keyed to the
+// old prologue flags. Once per save (`seen.g01`).
 //   1 her input is ignored for 1.0 s; she is moved to G01_SPOT (2.65, −57.5; see below) with her back to the statue; MEME_LOOP
 //     holds 2.0 s while she stands in Vigil
 //   2 PULLBACK over 6.0 s reveals the 6 m stone knight right behind her, in the same pose
@@ -21,7 +23,7 @@ export const G01_STATUE = Object.freeze([4, -55.5]);
 export const G01_FACING = Math.atan2(G01_SPOT[0] - G01_STATUE[0], G01_SPOT[1] - G01_STATUE[1]);
 
 export default {
-  id: 'g01', kind: 'cutscene', skippable: true, prologue: true, letterbox: false, inputSkip: 1.0,
+  id: 'g01', kind: 'cutscene', skippable: true, prologue: true, letterbox: false, inputSkip: 1.0, once: true,
   steps: [
     { t: 'ui', hud: false },
     { t: 'actor', id: 'swordcat', at: G01_SPOT, facing: G01_FACING, pose: 'vigil' },

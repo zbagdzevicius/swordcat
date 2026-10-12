@@ -2,19 +2,23 @@
 // Sword space: origin at the crossguard centre, +Y toward the tip, blade flat facing ±Z. Total ≈ 1.0 H.
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { GeoBuilder, mat, rgb, mixRgb, smoothstep } from './util.js';
-import { own, TOP_VIEW, READABILITY, kitMaterial, RM } from './materials.js';
+import { GeoBuilder, mat, rgb, mixRgb, smoothstep, segScale } from './util.js';
+import { own, TOP_VIEW, READABILITY, kitMaterial, RM, makeMetalMaterial, makeToonMaterial } from './materials.js';
 import { FUR_TIME } from './Fur.js';
 
-export const SWORD = Object.freeze({ blade: 0.85, gripLen: 0.11, guardW: 0.21, pommelY: -0.132, gripY: -0.055 });
+export const SWORD = Object.freeze({ blade: 0.85, gripLen: 0.11, guardW: 0.24, pommelY: -0.132, gripY: -0.055 });
 export const SWORD_SKINS = Object.freeze(['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
 
 const easeIn = (t) => t * t;
 
-/** Blade outline (art.md §4.3). */
-function bladeShape(len = 0.85, w0 = 0.033, w1 = 0.025, point = 0.1) {
+/** Blade outline (art.md §4.3; ART_WARM §6.3: width ×1.25, a rounded tip of radius `tipR`, length unchanged). */
+export const BLADE = Object.freeze({ w0: 0.041, w1: 0.031, point: 0.1, tipR: 0.01 });
+function bladeShape(len = 0.85, w0 = BLADE.w0, w1 = BLADE.w1, point = BLADE.point, r = BLADE.tipR) {
   const s = new THREE.Shape();
-  s.moveTo(-w0, 0); s.lineTo(-w1, len - point); s.lineTo(0, len); s.lineTo(w1, len - point); s.lineTo(w0, 0); s.closePath();
+  s.moveTo(-w0, 0); s.lineTo(-w1, len - point);
+  // the point ends in a soft round (a toy-safe tip that still reads as a sword point)
+  s.lineTo(-r, len - r * 1.2); s.quadraticCurveTo(0, len + r * 0.35, r, len - r * 1.2);
+  s.lineTo(w1, len - point); s.lineTo(w0, 0); s.closePath();
   return s;
 }
 
@@ -87,26 +91,26 @@ export function makeBladeSparkles(len = 0.85, count = DAWN_SPARKLES.count) {
   return pts;
 }
 
-/** Blade material per sword instance (emissive tracks Valor and the holy charge). */
+/**
+ * Blade material per sword instance (emissive tracks Valor and the holy charge). Steel blades: the warm steel matcap
+ * (`sc-metal-v2`, ART §5.2, X27); wood / bone / bread: WarmToon. Both keep the old `emissive` / `emissiveIntensity`
+ * surface (setCharge / setValorGlow write it) and get the silver top-view self-light (READABILITY.bladeGlow).
+ */
 function bladeMaterial(kind) {
-  const base = {
-    metal: { color: '#ffffff', metalness: 1, roughness: 0.17, envMapIntensity: 0.85 },
-    wood: { color: '#ffffff', metalness: 0, roughness: 0.82 },
-    bone: { color: '#ffffff', metalness: 0, roughness: 0.55, sheen: 0.4, sheenColor: new THREE.Color('#FFFFFF') },
-    bread: { color: '#ffffff', metalness: 0, roughness: 0.7, sheen: 0.6, sheenColor: new THREE.Color('#FFE2B0') },
-  }[kind] || {};
-  const m = new THREE.MeshPhysicalMaterial({ vertexColors: true, emissive: new THREE.Color(PAL.holy), emissiveIntensity: 0, ...base });
-  if (kind === 'metal') { m.clearcoat = 0.2; m.clearcoatRoughness = 0.15; }
-  // readability from above (CONTROLS_SPEC §12 characters 3): at the iso distance the blade is a few pixels wide, so it
-  // gets a little silver self-light (READABILITY.bladeGlow × the shared top-view factor; 0 in close-ups)
-  m.onBeforeCompile = (sh) => {
-    sh.uniforms.uTopView = TOP_VIEW;
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uTopView;')
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * ${READABILITY.bladeGlow.toFixed(3)} * uTopView;`);
-  };
-  m.customProgramCacheKey = () => 'sc-blade-v1';
-  return own(m);
+  if (kind === 'metal') {
+    const m = makeMetalMaterial({ emissive: true, topGlow: READABILITY.bladeGlow });
+    const out = m.userData.uniforms.uEmissive.value, col = new THREE.Color(PAL.holy);
+    let k = 0;
+    // three's emissive API on a matcap material: the colour and intensity fold into the uEmissive uniform
+    Object.defineProperty(m, 'emissive', { get: () => col, configurable: true });
+    Object.defineProperty(m, 'emissiveIntensity', {
+      get: () => k, set: (v) => { k = v; out.copy(col).multiplyScalar(v); }, configurable: true,
+    });
+    return m;
+  }
+  const m = makeToonMaterial({ topGlow: READABILITY.bladeGlow });
+  m.emissive.set(PAL.holy); m.emissiveIntensity = 0;
+  return m;
 }
 
 /** Borrowed Blade geometry pieces → { blade: BufferGeometry, hilt: GeoBuilder pieces }. */
@@ -114,7 +118,7 @@ function borrowedBlade(gbBlade, gbHilt, o = {}) {
   const len = o.len ?? SWORD.blade;
   // (a touch wider than art.md's first pass, with a wide bevel: from the gameplay follow camera, 3-4 m behind her,
   // the blade must read as a bright line, not a hairline)
-  const ex = new THREE.ExtrudeGeometry(bladeShape(len), { depth: 0.008, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.0075, bevelSegments: 1, curveSegments: 1 });
+  const ex = new THREE.ExtrudeGeometry(bladeShape(len), { depth: 0.008, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.0075, bevelSegments: 1, curveSegments: 3 });
   ex.computeBoundingBox(); const cz = (ex.boundingBox.max.z + ex.boundingBox.min.z) / 2; ex.translate(0, 0, -cz);
   // the honed edge is over-bright (linear > 1): the metal reflects the overcast sky ~1.5x, so the bevel glints even
   // edge-on and from behind
@@ -130,17 +134,18 @@ function hilt(gb, o = {}) {
   const brass = o.brass ?? PAL.brass;
   const w = (o.guardW ?? SWORD.guardW) / 2 - 0.016;
   const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(-w, -0.012, 0), new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(w, -0.012, 0)]);
-  gb.add(new THREE.TubeGeometry(curve, 16, 0.011, 8, false), { color: brass, rmse: RM.brass });
-  for (const s of [1, -1]) gb.add(new THREE.SphereGeometry(0.016, 12, 10), { matrix: mat([s * (w + 0.008), -0.014, 0]), color: brass, rmse: RM.brass });
-  gb.add(new THREE.SphereGeometry(0.018, 12, 8).scale(1.2, 0.7, 0.9), { matrix: mat([0, -0.002, 0]), color: brass, rmse: RM.brass }); // guard block
+  const d = o.detail ?? 1, sg = (n, m = 4) => segScale(n, d, m);   // play LOD (the kitten's detail factor)
+  gb.add(new THREE.TubeGeometry(curve, sg(16, 6), 0.011, sg(8), false), { color: brass, rmse: RM.brass });
+  for (const s of [1, -1]) gb.add(new THREE.SphereGeometry(0.016, sg(12, 6), sg(10)), { matrix: mat([s * (w + 0.008), -0.014, 0]), color: brass, rmse: RM.brass });
+  gb.add(new THREE.SphereGeometry(0.018, sg(12, 6), sg(8)).scale(1.2, 0.7, 0.9), { matrix: mat([0, -0.002, 0]), color: brass, rmse: RM.brass }); // guard block
   const leather = rgb(o.grip ?? PAL.leatherDark), lightL = rgb(PAL.leather);
-  gb.add(new THREE.CylinderGeometry(0.014, 0.016, SWORD.gripLen, 12, 8), {
+  gb.add(new THREE.CylinderGeometry(0.014, 0.016, SWORD.gripLen, sg(12, 6), sg(8, 2)), {
     matrix: mat([0, SWORD.gripY, 0]),
     color: (v) => mixRgb(leather, lightL, smoothstep(0.3, 0.9, 0.5 + 0.5 * Math.sin(v.y * 260 + Math.atan2(v.z, v.x) * 1.0))),
     rmse: RM.leather,
   });
-  gb.add(new THREE.CylinderGeometry(0.018, 0.018, 0.012, 12), { matrix: mat([0, -0.006, 0]), color: brass, rmse: RM.brass }); // ferrule
-  gb.add(new THREE.SphereGeometry(0.026, 16, 12).scale(1, 0.85, 0.7), { matrix: mat([0, SWORD.pommelY, 0]), color: brass, rmse: RM.brass });
+  gb.add(new THREE.CylinderGeometry(0.018, 0.018, 0.012, sg(12, 6)), { matrix: mat([0, -0.006, 0]), color: brass, rmse: RM.brass }); // ferrule
+  gb.add(new THREE.SphereGeometry(0.026, sg(16, 6), sg(12)).scale(1, 0.85, 0.7), { matrix: mat([0, SWORD.pommelY, 0]), color: brass, rmse: RM.brass });
 }
 
 function twigBlade(gbBlade, gbHilt) {
@@ -209,15 +214,15 @@ export function buildSword(skin = 'borrowed', o = {}) {
     case 'twig': twigBlade(gbBlade, gbHilt); kind = 'wood'; break;
     case 'fishbone': fishboneBlade(gbBlade, gbHilt); kind = 'bone'; break;
     case 'baguette': baguetteBlade(gbBlade, gbHilt); kind = 'bread'; break;
-    case 'dawnblade': borrowedBlade(gbBlade, gbHilt, { brass: '#F0CF7A' }); baseGlow = 1.1; break;
-    case 'diamond': case 'toobig': if (!o.model) borrowedBlade(gbBlade, gbHilt); break;
-    default: borrowedBlade(gbBlade, gbHilt);
+    case 'dawnblade': borrowedBlade(gbBlade, gbHilt, { brass: '#F0CF7A', detail: o.detail }); baseGlow = 1.1; break;
+    case 'diamond': case 'toobig': if (!o.model) borrowedBlade(gbBlade, gbHilt, { detail: o.detail }); break;
+    default: borrowedBlade(gbBlade, gbHilt, { detail: o.detail });
   }
   const bladeMat = bladeMaterial(kind);
   const blade = new THREE.Mesh(gbBlade.empty ? new THREE.BufferGeometry() : gbBlade.build(), bladeMat);
-  blade.name = 'blade'; blade.castShadow = true; blade.visible = !gbBlade.empty;
+  blade.name = 'blade'; blade.castShadow = false; blade.visible = !gbBlade.empty;
   const hiltMesh = new THREE.Mesh(gbHilt.empty ? new THREE.BufferGeometry() : gbHilt.build(), kitMaterial());
-  hiltMesh.name = 'hilt'; hiltMesh.castShadow = true; hiltMesh.visible = !gbHilt.empty;
+  hiltMesh.name = 'hilt'; hiltMesh.castShadow = false; hiltMesh.visible = !gbHilt.empty;
   group.add(blade, hiltMesh);
   if (o.model) {
     const m = mountModel(o.model, { length: o.modelLength ?? (skin === 'toobig' ? 1.6 : 1.0), flip: o.flip ?? 'auto' });

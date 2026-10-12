@@ -7,7 +7,7 @@ import { FOG_FACTOR, SHAPES, OUTPUT, fogUniforms, fxShaderMaterial } from './sha
 import { setColor } from './util.js';
 
 /** Sprite shapes (fxShape in shaders.js). */
-export const SHAPE = Object.freeze({ SOFT: 0, PUFF: 1, STAR4: 2, STAR5: 3, RING: 4, SPARK: 5, HEART: 6, FEATHER: 7, DROPLET: 8, SHARD: 9, STAR8: 10, FISH: 11 });
+export const SHAPE = Object.freeze({ SOFT: 0, PUFF: 1, STAR4: 2, STAR5: 3, RING: 4, SPARK: 5, HEART: 6, FEATHER: 7, DROPLET: 8, SHARD: 9, STAR8: 10, FISH: 11, CONFETTI: 12 });
 /** Alpha-over-life curves. */
 export const FADE = Object.freeze({ LINEAR: 0, POP: 1, HOLD: 2, TWINKLE: 3, IN_OUT: 4 });
 /** Size-over-life curves (size0 → size1). */
@@ -35,8 +35,10 @@ void main() {
     vec2 ay = vec2( -ax.y, ax.x );
     c = ax * corner.y * iPar.y + ay * corner.x;
   } else {
+    // CONFETTI (shape 12): iPar.y (0..1) is the paper's flip, squashing its width before the spin (ART §8.6)
+    vec2 k = abs( iPar.w - 12.0 ) < 0.5 ? vec2( corner.x * max( 0.08, iPar.y ), corner.y ) : corner;
     float cs = cos( iPar.z ), sn = sin( iPar.z );
-    c = vec2( cs * corner.x - sn * corner.y, sn * corner.x + cs * corner.y );
+    c = vec2( cs * k.x - sn * k.y, sn * k.x + cs * k.y );
   }
   mvPosition.xy += c * size;
   // never fill the lens: fade sprites that are almost touching the camera
@@ -93,6 +95,9 @@ export class ParticlePool {
     this.grav = new Float32Array(n); this.drag = new Float32Array(n);
     this.col = new Float32Array(n * 4); this.shape = new Float32Array(n); this.stretch = new Float32Array(n);
     this.fade = new Uint8Array(n); this.floor = new Float32Array(n); this.bounce = new Float32Array(n);
+    this.seed = new Float32Array(n);   // per-particle phase (the confetti flip)
+    /** Low tier: confetti stays flat, no flip (ART §8.6) */
+    this.flat = false;
     // GPU attributes
     const g = new THREE.InstancedBufferGeometry();
     const q = quadGeometry();
@@ -129,6 +134,7 @@ export class ParticlePool {
     const k = s.intensity;
     this.col[i4] = s.r * k; this.col[i4 + 1] = s.g * k; this.col[i4 + 2] = s.b * k; this.col[i4 + 3] = s.a;
     this.shape[i] = s.shape; this.stretch[i] = s.stretch; this.fade[i] = s.fade; this.floor[i] = s.floor; this.bounce[i] = s.bounce;
+    this.seed[i] = (i * 0.618034 + s.rot * 0.1591549) % 1;
     return i;
   }
 
@@ -141,7 +147,7 @@ export class ParticlePool {
     this.age[i] = this.age[last]; this.life[i] = this.life[last]; this.size0[i] = this.size0[last]; this.size1[i] = this.size1[last];
     this.grow[i] = this.grow[last]; this.rot[i] = this.rot[last]; this.spin[i] = this.spin[last]; this.grav[i] = this.grav[last];
     this.drag[i] = this.drag[last]; this.shape[i] = this.shape[last]; this.stretch[i] = this.stretch[last]; this.fade[i] = this.fade[last];
-    this.floor[i] = this.floor[last]; this.bounce[i] = this.bounce[last];
+    this.floor[i] = this.floor[last]; this.bounce[i] = this.bounce[last]; this.seed[i] = this.seed[last];
   }
 
   /** Advance the simulation by dt and upload the live set. */
@@ -188,7 +194,8 @@ export class ParticlePool {
       const C = this.col;
       aC[i4] = C[i4]; aC[i4 + 1] = C[i4 + 1]; aC[i4 + 2] = C[i4 + 2]; aC[i4 + 3] = C[i4 + 3] * (fa < 0 ? 0 : fa);
       let st = this.stretch[i];
-      if (st > 1) { const sp = Math.hypot(V[i3], V[i3 + 1], V[i3 + 2]); st = 1 + (st - 1) * Math.min(1, sp / 6); if (st < 1.01) st = 1.01; }
+      if (this.shape[i] === SHAPE.CONFETTI) st = this.flat ? 1 : Math.abs(Math.cos(age * 9 + this.seed[i] * 6.2831853));
+      else if (st > 1) { const sp = Math.hypot(V[i3], V[i3 + 1], V[i3 + 2]); st = 1 + (st - 1) * Math.min(1, sp / 6); if (st < 1.01) st = 1.01; }
       aR[i4] = size > 0 ? size : 0; aR[i4 + 1] = st; aR[i4 + 2] = this.rot[i]; aR[i4 + 3] = this.shape[i];
       i++;
     }
@@ -218,7 +225,18 @@ export class Particles {
     this.add = new ParticlePool({ capacity: 1200, additive: true, name: 'add', renderOrder: 7 });
     this.alpha = new ParticlePool({ capacity: 800, additive: false, name: 'alpha', renderOrder: 6 });
     this.spec = particleSpec();
+    /** PERF `perf.particleScale` / ART §8.6 "Low tier: counts ×0.5": every burst count is scaled by this */
+    this.countScale = 1;
   }
+
+  /** Quality tier switches: the burst count multiplier and flat confetti (Low). */
+  setTier({ countScale = 1, flat = false } = {}) {
+    this.countScale = Math.max(0.1, Math.min(1, countScale));
+    this.add.flat = this.alpha.flat = !!flat;
+  }
+
+  /** A burst count under the tier's scale (never below 1 for a requested burst). */
+  scaled(n) { return n > 0 ? Math.max(1, Math.round(n * this.countScale)) : 0; }
 
   attach(scene) { scene.add(this.alpha.mesh, this.add.mesh); }
 
@@ -268,10 +286,11 @@ export class Particles {
   /**
    * Generic burst: `n` particles from `pos`, speed range, cone around `dir`.
    * @param {object} o  { additive, n, shape, color, intensity, size:[a,b], sizeEnd (mul), life:[a,b], speed:[a,b], dir, spread,
-   *                      gravity, drag, spin, stretch, fade, grow, jitter (m), up (added vy), floor (bool) }
+   *                      gravity, drag, spin, stretch, fade, grow, jitter (m), up (added vy), floor (bool),
+   *                      exact (true: ignore the tier's count scale) }
    */
   burst(pos, o) {
-    const r = this.rng, n = o.n ?? 6;
+    const r = this.rng, n = o.exact ? (o.n ?? 6) : this.scaled(o.n ?? 6);
     setColor(_c, o.color ?? 0xffffff);
     const floorY = o.floor ? (this.groundY?.(pos.x, pos.z, pos.y - 10) ?? -Infinity) + (o.floorLift ?? 0.02) : -Infinity;
     for (let k = 0; k < n; k++) {
@@ -310,7 +329,7 @@ export class Particles {
 
   /** `n` sprites on a horizontal ring of radius r0 moving outward (dust rings, shockwaves). */
   ring(pos, o) {
-    const r = this.rng, n = o.n ?? 10;
+    const r = this.rng, n = this.scaled(o.n ?? 10);
     setColor(_c, o.color ?? 0xffffff);
     const floorY = o.floor ? (this.groundY?.(pos.x, pos.z, pos.y - 10) ?? -Infinity) + 0.02 : -Infinity;
     for (let k = 0; k < n; k++) {

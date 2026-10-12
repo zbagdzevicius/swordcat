@@ -40,7 +40,7 @@ export const E = Object.freeze({
 
   // ---- combat (tech.md §4.4 + §19.5) ----
   HIT: 'combat:hit',                        // { attacker, target, attackId, damage, position, dir, killed, blocked, parried, crit, popsSlime }
-  TELEGRAPH: 'combat:telegraph',            // { id, actor, kind, shape, pos, dir, size, duration, attackId?, arc?, range?, windup?, activeAt?, targetsPlayer? }  shape: glint|circle|lane|cone|ring|line|swirl|rings|shadow  (CONTROLS_SPEC §8.5 fields: activeAt = absolute game.time)
+  TELEGRAPH: 'combat:telegraph',            // { id, actor, kind, shape, pos, dir, size, duration, windup, activeAt, targetsPlayer, glyph?, end?, attackId?, arc?, range? }  shape: glint|circle|lane|cone|ring|line|swirl|rings|shadow  (CONTROLS_SPEC §8.5: activeAt = absolute game.time; IMPLEMENTATION_PLAN §7.1: targetsPlayer / activeAt / windup GUARANTEED, `end` (Vector3, the lane end point = pos + dir × length) guaranteed for shape lane|line; WA §12: glyph = config TELEGRAPH.glyph[kind])
   TELEGRAPH_END: 'combat:telegraphEnd',     // { id }
   REFLECT: 'combat:reflect',                // { projectile, by }
 
@@ -62,7 +62,7 @@ export const E = Object.freeze({
   COMPANION_NAP: 'companion:nap',           // { kittenId, on }
   COMPANION_CHANGED: 'companion:changed',   // { active }
   KITTEN_REVEAL: 'kitten:reveal',           // { kittenId, position }
-  KITTEN_RESCUED: 'kitten:rescued',         // { kittenId }
+  KITTEN_RESCUED: 'kitten:rescued',         // { kittenId, position }  (IMPLEMENTATION_PLAN §7.1 / X23: companions fill position (Vector3) for the ART burst + Cosy beat; may be absent from older emitters)
 
   // ---- world ----
   INTERACT_AVAILABLE: 'interact:available', // { target, prompt }
@@ -71,7 +71,7 @@ export const E = Object.freeze({
   ITEM_PICKUP: 'item:pickup',               // { item: 'fish'|'letter'|'heartBell'|'milk'|'smallHeart', id?, amount, position }
   ENV_SET: 'env:set',                       // { ...fields, dur }   request (story, enemies) → world Env
   ENV_CHANGED: 'env:changed',               // { fogDensity, grade, wind }
-  ARENA_LOCK: 'arena:lock',                 // { id }
+  ARENA_LOCK: 'arena:lock',                 // { id, center, r }  (IMPLEMENTATION_PLAN §7.1: world fills center (Vector3) and r (m) for the camera's room read)
   ARENA_WAVE: 'arena:wave',                 // { id, wave, total }
   ARENA_CLEAR: 'arena:clear',               // { id }
   OBJECTIVE: 'objective:progress',          // { id, value, max, textKey, frozen, done }
@@ -84,7 +84,7 @@ export const E = Object.freeze({
   FLAG_SET: 'story:flag',                   // { key, value }
   CUTSCENE_START: 'cutscene:start',         // { id }
   CUTSCENE_END: 'cutscene:end',             // { id, skipped }
-  PROMPT: 'story:prompt',                   // { action, hold, textKey, progress, done }
+  PROMPT: 'story:prompt',                   // { action, hold, textKey, progress, done, speaker?, say?, stepDots? }  (WA §7.2: speaker 'pearl'|'mochi'|… = guide bubble, say = its line key, stepDots = { n, of, half? } paw dots; without speaker ui renders the old card)
   SHARD: 'story:shard',                     // { n }
   UNLOCK: 'state:unlock',                   // { kind: 'skin' | 'cape' | 'ability', id }
 
@@ -110,6 +110,7 @@ export const E = Object.freeze({
   SETTINGS_CHANGED: 'settings:changed',     // { key, value }   a state.settings entry changed (ui emits after writing state)
   INPUT_DEVICE: 'input:device',             // { device: 'kbm' | 'pad' | 'touch' }  last-used input device changed
   INPUT_POINTER_LOCK: 'input:pointerLock',  // { locked }  core+: mouse capture gained / lost (lost mid-play → ui.pause())
+  PERF_THERMAL: 'perf:thermal',             // { rung: 0..3, grassScale, particleScale, outline: null|'hero', lock30 }  PERF §5.4 shedding ladder changed (rare; world grass, fx pools, characters outlines)
 
   // ---- CONTROLS_SPEC §12 core 3 (iso controls; additive) ----
   PLAYER_ORDER: 'player:order',             // { kind: 'move'|'follow'|'attack'|'attackMove'|'use'|'stop', point?: Vector3, target?: Actor|null, valid, queued, partial? }
@@ -117,6 +118,10 @@ export const E = Object.freeze({
   CAM_ZOOM: 'camera:zoom',                  // { dist, mul }  the iso zoom changed
   INPUT_SCHEME: 'input:scheme',             // { preset }  the KBM control preset changed
   NAV_READY: 'nav:ready',                   // { level, cells, links, ms }  the level's nav grid is built
+
+  // ---- Phase W: Warm Adventure (WA §12, IMPLEMENTATION_PLAN core.W2; additive) ----
+  REWARD: 'reward',                         // { kind: 'sticker'|'card'|'friend', id }  one reward system (ui/celebrate.js shows it; story / world / companions emit)
+  TELEGRAPH_FIRST: 'telegraph:first',       // { kind }  the first sighting of a telegraph kind in this save (combat; story shows the glyph one-shot)
 });
 
 /** Every known event string (EventBus warns on unknown names). */

@@ -1,30 +1,57 @@
 // src/ui/cinema.js  (owner: ui) — full-screen overlays: the cutscene layer (§14.3 "Cutscene overlay": letterbox bars
-// 10% each, captions, title and chapter cards, colour fades, the "Hold to skip" ring), the Boot / Loading veil
-// (parchment, a paw progress bar fed by ui:progress, a random loading tip), the Life-lost card (soft pink-white flash,
-// "{n} lives left", the ghost kitten waving; 1.5 s) and the Meme Cam caption (Uncial Antiqua italic, bottom-left).
+// 10% each in cocoa-plum with a scalloped inner edge, captions, title and chapter cards, colour fades, the "Hold to
+// skip" ring), the Boot / Loading veil (the warm cream card with a paw progress bar fed by ui:progress, a random
+// loading tip) and the Meme Cam caption (Fredoka, bottom-left).
+// WA §2.7 / §4.2: every load / cutscene fade is cream FADE_COLOR (#FFF1DE), never black: `'black'`, `'out'`, `true`
+// and any near-black colour resolve to cream; a scene that really wants a dark fade asks for cocoa-plum #3A2630.
+// WA §5.7: a lost life shows no card and no ghost any more (the ui toasts `life.lost` and pops the lives badge).
 //
 // `Cinema.api` is the object story's Cutscene runner talks to as `host.cinema` (requests/ui.md):
 //   letterbox(on) · hud(on) · apply(step, cutscene, isEnd) for `ui` steps { letterbox, hud, title, caption, chapter,
 //   fade, toast } · clear()
 import { E } from '../core/events.js';
+import { FADE_COLOR } from '../core/config.js';
 import { el, flag, setText, setHtml, setVar, pulse } from './dom.js';
 import { tx, txt, chapterInfo, esc } from './text.js';
 import * as I from './icons.js';
 
-export const CINEMA = Object.freeze({ chapterSec: 3.0, lifeLostSec: 1.5, tipCount: 12, skipHold: 1.0, ringDelay: 0.12 });
+export const CINEMA = Object.freeze({ chapterSec: 3.0, lifeLostSec: 1.5, tipCount: 12, skipHold: 1.0, ringDelay: 0.12, fade: FADE_COLOR ?? '#FFF1DE', darkFade: '#3A2630' });
+
+/** Relative luma (0..1) of a #rgb / #rrggbb colour, or null for anything else. Pure. */
+function hexLuma(c) {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(c).trim());
+  if (!m) return null;
+  const h = m[1].length === 3 ? m[1].replace(/./g, (x) => x + x) : m[1];
+  const r = parseInt(h.slice(0, 2), 16) / 255, g = parseInt(h.slice(2, 4), 16) / 255, b = parseInt(h.slice(4, 6), 16) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * WA §2.7: the colour a fade really uses. 'black' / near-black (luma < 0.12, except the allowed cocoa-plum dark fade)
+ * becomes the cream FADE_COLOR. Pure.
+ */
+export function fadeColor(c) {
+  if (c == null) return null;
+  const s = String(c).trim();
+  if (/^(black|out)$/i.test(s)) return CINEMA.fade;          // (near-black hex is caught by the luma test below)
+  if (s.toUpperCase() === CINEMA.darkFade) return CINEMA.darkFade;
+  const l = hexLuma(s);
+  return l != null && l < 0.12 ? CINEMA.fade : s;
+}
 
 /** Normalise a cutscene `fade` field → { color, alpha, dur } or null (no change). Pure. */
 export function parseFade(f) {
   if (f == null) return null;
   if (f === false || f === 'none' || f === 'clear' || f === 'in') return { color: null, alpha: 0, dur: 0.6 };
-  if (f === true || f === 'out' || f === 'black') return { color: '#000000', alpha: 1, dur: 0.6 };
+  if (f === true || f === 'out' || f === 'black' || f === 'cream') return { color: CINEMA.fade, alpha: 1, dur: 0.6 };
   if (f === 'white') return { color: '#FFFFFF', alpha: 1, dur: 0.6 };
+  if (f === 'dark') return { color: CINEMA.darkFade, alpha: 1, dur: 0.6 };
   if (typeof f === 'number') return { color: null, alpha: Math.max(0, Math.min(1, f)), dur: 0.6 };
-  if (typeof f === 'string') return { color: f, alpha: 1, dur: 0.6 };
+  if (typeof f === 'string') return { color: fadeColor(f), alpha: 1, dur: 0.6 };
   if (typeof f === 'object') {
     const to = f.to ?? f.color;
     const clear = to == null || to === false || to === 'none' || to === 'clear' || f.alpha === 0;
-    return { color: clear ? null : String(to), alpha: clear ? 0 : Math.max(0, Math.min(1, f.alpha ?? 1)), dur: Math.max(0, f.dur ?? 0.6) };
+    return { color: clear ? null : fadeColor(to === 'black' ? CINEMA.fade : to === 'dark' ? CINEMA.darkFade : String(to)), alpha: clear ? 0 : Math.max(0, Math.min(1, f.alpha ?? 1)), dur: Math.max(0, f.dur ?? 0.6) };
   }
   return null;
 }
@@ -47,10 +74,6 @@ export class Cinema {
     this.skip = el('div', 'cin-skip', { parent: root, html: `${I.ring('skip-ring')}<span class="skip-txt"></span>` });
     this.skipRing = this.skip.querySelector('.ring-fg');
     this.skipTxt = this.skip.querySelector('.skip-txt');
-    // life lost
-    this.life = el('div', 'cin-life', { parent: root });
-    this.life.innerHTML = `<div class="life-flash"></div><div class="life-card"><div class="life-ghost">${I.ghostKitten()}</div><div class="life-txt"></div></div>`;
-    this.lifeTxt = this.life.querySelector('.life-txt');
     // loading veil
     this.veil = el('div', 'ui-loading', { parent: root });
     this.veil.innerHTML = '<div class="load-card"><div class="load-title"></div><div class="load-paws"></div><div class="load-tip"></div></div>';
@@ -65,7 +88,6 @@ export class Cinema {
     this.letterboxOn = false; this.hudOn = true;
     this.loadingOn = false; this.loadT = 0; this.prog = 0; this.progTarget = 0; this._p0 = null;
     this.chapterT = 0; this._chapterResolve = null;
-    this.lifeT = 0;
     this.memeT = -1;
     this.skipHold = 0;
     this._tipI = -1;
@@ -192,16 +214,12 @@ export class Cinema {
     else flag(this.memeCap, 'is-on', false);
   }
 
-  // ------------------------------------------------------------------ life lost (§14.3)
-  lifeLost(lives, { infinite = false } = {}) {
-    const reduce = !!this.ctx.state?.settings?.reduceFlashes;
+  // ------------------------------------------------------------------ life lost (WA §5.7)
+  /** The `life.*` line for a lost life (the ui toasts it; no card, no ghost). Pure on ctx. */
+  lifeLostText(lives, { infinite = false } = {}) {
+    if (infinite) return '';
     const n = lives | 0;
-    const s = infinite ? '' : n === 1 ? tx(this.ctx, 'life.last') : tx(this.ctx, 'life.lost', { n });
-    setText(this.lifeTxt, s);
-    flag(this.life, 'no-flash', reduce);
-    flag(this.life, 'is-on', true);
-    pulse(this.life, 'is-play');
-    this.lifeT = CINEMA.lifeLostSec;
+    return n <= 1 ? tx(this.ctx, n === 1 ? 'life.lost1' : 'life.last', { n }) : tx(this.ctx, 'life.lost', { n });
   }
 
   // ------------------------------------------------------------------ loading veil (§14.3 Boot / Loading)
@@ -243,7 +261,6 @@ export class Cinema {
       }
       if ((this.chapterT -= dt) <= 0) this._endChapter();
     }
-    if (this.lifeT > 0 && (this.lifeT -= dt) <= 0) flag(this.life, 'is-on', false);
     if (this._fadeT != null && (this._fadeT -= dt) <= 0) { this._fadeT = null; const r = this._fadeResolve; this._fadeResolve = null; r?.(); }
     // loading bar: creep while waiting so it never looks frozen; snap to full at the end
     if (this.loadingOn || this.prog < 1) {

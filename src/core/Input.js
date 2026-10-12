@@ -48,7 +48,14 @@ export class Input {
     /** Seconds (sim) since any input activity / any look input (Meme Cam idle, camera auto-follow). */
     this.idleTime = 0; this.lookIdleTime = 0;
     this._activity = false; this._lookActivity = false;
-    this._padPrev = new Map();
+    /**
+     * PERF §11 A5 (C14): precomputed pad bindings ({action, idx, src}) and numeric prev state per binding. Pads are
+     * read every frame only while one is live (after `gamepadconnected` or a probe found one); otherwise
+     * `navigator.getGamepads()` (a sync IPC) runs every PAD_PROBE_FRAMES-th frame as a probe.
+     */
+    this._padBind = [];
+    this._padPrev = new Uint8Array(0);
+    this._padLive = false; this._padProbe = 0;
     this._wheelCooldown = 0;
     this._listeners = [];
     this.canvas = null;
@@ -107,6 +114,7 @@ export class Input {
     this.lmbMoves = this.iso && !!P.lmbMoves;
     this._moveCodes = new Set(this.wasd ? Object.values(INPUT.move).flat() : []);
     this.padTable = this.iso ? INPUT.pad : { ...INPUT.pad, ...INPUT.classicPad };
+    this._buildPadBindings();
     const next = this.iso ? (INPUT.presets?.[name] ? name : 'hybrid') : 'classic';
     const changed = next !== this.preset;
     this.preset = next;
@@ -320,11 +328,28 @@ export class Input {
   }
 
   // ------------------------------------------------------------------ per-frame poll (gamepads)
+  /** Flatten `padTable` into `_padBind` (one entry per action × button) with a numeric prev-state slot each. */
+  _buildPadBindings() {
+    const prev = new Map();
+    for (let k = 0; k < this._padBind.length; k++) prev.set(this._padBind[k].src + this._padBind[k].action, this._padPrev[k]);
+    const out = [];
+    for (const action of Object.keys(this.padTable ?? INPUT.pad)) {
+      for (const idx of this.padTable[action] ?? []) out.push({ action, idx, src: PAD_SRC[idx] ?? ('p' + idx) });
+    }
+    this._padBind = out;
+    this._padPrev = new Uint8Array(out.length);
+    for (let k = 0; k < out.length; k++) this._padPrev[k] = prev.get(out[k].src + out[k].action) ?? 0;
+  }
+
   /** Called once per rendered frame before the fixed steps. */
   poll(frameDt) {
     if (this._wheelCooldown > 0) this._wheelCooldown -= frameDt;
     const nav = typeof navigator !== 'undefined' ? navigator : null;
-    const pads = nav?.getGamepads ? nav.getGamepads() : null;
+    // pads: every frame while one is live, else a probe every PAD_PROBE_FRAMES frames (stub pads, missed events)
+    const probe = !this._padLive && (++this._padProbe >= PAD_PROBE_FRAMES);
+    if (probe) this._padProbe = 0;
+    const pads = (this._padLive || probe) && nav?.getGamepads ? nav.getGamepads() : null;
+    if (!pads && !this._padLive && !this.padConnected) { this._padIdle(); return; }
     let any = false;
     const merged = this._mergedButtons || (this._mergedButtons = new Array(20).fill(false));
     merged.fill(false);
@@ -344,16 +369,14 @@ export class Input {
         if (Math.abs(ax[3] ?? 0) > Math.abs(ry)) ry = ax[3] ?? 0;
       }
     }
-    this.padConnected = any;
+    if (pads) { this.padConnected = any; this._padLive = any; }
     let padUsed = false;
-    for (const [action, idxs] of Object.entries(this.padTable ?? INPUT.pad)) {
-      for (const i of idxs) {
-        const now = merged[i] ?? false, src = 'p' + i;
-        const prev = this._padPrev.get(src + action) ?? false;
-        if (now && !prev) { this._press(action, src); padUsed = true; }
-        else if (!now && prev) this._release(action, src);
-        this._padPrev.set(src + action, now);
-      }
+    const B = this._padBind, P = this._padPrev;
+    for (let k = 0; k < B.length; k++) {
+      const b = B[k], now = merged[b.idx] ? 1 : 0, prev = P[k];
+      if (now && !prev) { this._press(b.action, b.src); padUsed = true; }
+      else if (!now && prev) this._release(b.action, b.src);
+      P[k] = now;
     }
     const ls = deadZone(lx, ly, INPUT.deadZone, _dz), mx = ls.x, my = ls.y;
     this.padMove.x = mx; this.padMove.y = -my;
@@ -375,6 +398,13 @@ export class Input {
     }
     if (mx || my) { this._activity = true; padUsed = true; }
     if (padUsed) this.setDevice('pad');
+    this._composeMove();
+  }
+
+  /** No pad and no probe this frame: keep the pad contributions at zero and compose the keyboard / touch move. */
+  _padIdle() {
+    if (this.padMove.x || this.padMove.y) { this.padMove.x = 0; this.padMove.y = 0; }
+    if (this.iso && (this.aimStick.x || this.aimStick.y)) { this.aimStick.x = 0; this.aimStick.y = 0; }
     this._composeMove();
   }
 
@@ -474,7 +504,7 @@ export class Input {
     on(window, 'auxclick', (e) => { if (e.button === 1 || e.button === 3 || e.button === 4) e.preventDefault(); });
     on(document, 'pointerlockchange', () => this._onPointerLockChange(document.pointerLockElement === canvas));
     on(window, 'touchstart', () => { this._touchT = nowMs(); this.setDevice('touch'); }, { passive: true });
-    on(window, 'gamepadconnected', () => { this.padConnected = true; });
+    on(window, 'gamepadconnected', () => { this.padConnected = true; this._padLive = true; });
     on(window, 'gamepaddisconnected', () => this.releaseAll());
   }
 
@@ -602,6 +632,10 @@ export class Input {
 }
 
 const _dz = { x: 0, y: 0 };
+/** Frames between `getGamepads()` probes while no pad is live (≈ 4 Hz at 60 fps). */
+const PAD_PROBE_FRAMES = 15;
+/** Precomputed pad source keys ('p0' … 'p19'): no string building per frame. */
+const PAD_SRC = Array.from({ length: 20 }, (_, i) => 'p' + i);
 const NO_MODS = Object.freeze({ ctrl: false, shift: false, alt: false });
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 /** Radial dead zone with rescale, written into `out` ({x, y}). */

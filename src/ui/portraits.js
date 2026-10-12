@@ -56,8 +56,8 @@ function eyeColours(cfg) {
   const e = cfg?.eyes ?? {};
   const one = e.L ?? e;
   const two = e.R ?? e;
-  return [{ inner: one.inner ?? '#8DB3C2', outer: one.outer ?? '#3F6170', ring: one.ring ?? '#1B262C' },
-    { inner: two.inner ?? one.inner ?? '#8DB3C2', outer: two.outer ?? one.outer ?? '#3F6170', ring: two.ring ?? one.ring ?? '#1B262C' }];
+  return [{ inner: one.inner ?? '#8DB3C2', outer: one.outer ?? '#3F6170', ring: one.ring ?? '#2A1E18' },
+    { inner: two.inner ?? one.inner ?? '#8DB3C2', outer: two.outer ?? one.outer ?? '#3F6170', ring: two.ring ?? one.ring ?? '#2A1E18' }];
 }
 
 function accIds(cfg) {
@@ -76,7 +76,7 @@ function catFace(cfg, id, o) {
   let cream = coat.white ?? coat.cream ?? light;
   const pattern = coat.pattern ?? 'solid';
   const dark = luminance(base) < 0.25;
-  const ink = dark ? '#0B0C0F' : INK;
+  const ink = dark ? '#2A1E18' : INK;
   const ears = eyeColours(cfg);
   const acc = accIds(cfg);
   const expr = o.expression ?? 'normal';
@@ -136,11 +136,11 @@ function eyes(expr, p, ink, acc) {
   let s = '';
   [[L, 0], [R, 1]].forEach(([cx, i]) => {
     if (acc.has('eyepatch') && ((acc.get('eyepatch').side ?? -1) < 0 ? i === 0 : i === 1)) {
-      s += `<ellipse cx="${cx}" cy="${Y}" rx="11.5" ry="10" fill="#1E1A18" stroke="${ink}" stroke-width="1.6"/><path d="M${cx - 18} ${Y - 14}L${cx + 18} ${Y - 4}" stroke="#1E1A18" stroke-width="2.4"/>`;
+      s += `<ellipse cx="${cx}" cy="${Y}" rx="11.5" ry="10" fill="#3A2A1F" stroke="${ink}" stroke-width="1.6"/><path d="M${cx - 18} ${Y - 14}L${cx + 18} ${Y - 4}" stroke="#3A2A1F" stroke-width="2.4"/>`;
       return;
     }
     s += `<circle cx="${cx}" cy="${Y}" r="10.8" fill="url(#${p}e${i})" stroke="${ink}" stroke-width="1.6"/>`;
-    s += `<ellipse cx="${cx}" cy="${Y + 0.6}" rx="${pr[0]}" ry="${pr[1]}" fill="#0D1114"/>`;
+    s += `<ellipse cx="${cx}" cy="${Y + 0.6}" rx="${pr[0]}" ry="${pr[1]}" fill="#2A1E18"/>`;
     s += `<circle cx="${cx - 3.6}" cy="${Y - 4.2}" r="3.1" fill="#fff"/><circle cx="${cx + 3.6}" cy="${Y + 3.8}" r="1.4" fill="#fff" opacity=".9"/>`;
     if (expr === 'worried') s += `<path d="M${cx - 7} ${Y + 8.2}q7 2.4 14 0" stroke="#fff" stroke-width="1.3" fill="none" opacity=".75" stroke-linecap="round"/>`;
     s += `<path d="M${cx - 11.4} ${Y - 1.5}q11.4-13.5 22.8 0" fill="none" stroke="${ink}" stroke-width="2.6" stroke-linecap="round"/>`;
@@ -172,7 +172,7 @@ function coatPattern(coat, pattern, deep, light, cream) {
     case 'tuxedo':
       return `<path d="M50 40c-5 9-11 16-22 22-4 12 2 30 22 30s26-18 22-30c-11-6-17-13-22-22Z" fill="${cream}"/>`;
     case 'calico': {
-      const [a, b] = coat.patches ?? ['#E09A4E', '#2A2624'];
+      const [a, b] = coat.patches ?? ['#E09A4E', '#5A4A44'];
       return `<ellipse cx="30" cy="38" rx="18" ry="14" fill="${a}"/><ellipse cx="72" cy="46" rx="15" ry="12" fill="${b}"/><ellipse cx="80" cy="30" rx="10" ry="8" fill="${a}" opacity=".9"/>`;
     }
     case 'siamese': {
@@ -285,7 +285,7 @@ function hyenaFace(o, rogue) {
     + '<g fill="#6B4A2E" opacity=".75"><circle cx="30" cy="40" r="3"/><circle cx="68" cy="36" r="3.4"/><circle cx="74" cy="50" r="2.4"/><circle cx="24" cy="54" r="2.6"/><circle cx="58" cy="30" r="2"/></g>'
     + (rogue ? `<path d="M14 54C10 26 30 10 50 10s40 16 36 44l-6-2C80 30 66 18 50 18S20 30 20 52Z" fill="#3E4A3E" stroke="${INK}" stroke-width="2"/>` : '')
     + `<path d="M30 66c4-10 12-14 20-14s16 4 20 14c-4 14-12 20-20 20s-16-6-20-20Z" fill="#4A3426" stroke="${INK}" stroke-width="1.8"/>`
-    + `<ellipse cx="50" cy="62" rx="6" ry="4.4" fill="#1E1412"/><path d="M34 72q16 14 32 0Z" fill="#7A2A30" stroke="${INK}" stroke-width="1.6"/>`
+    + `<ellipse cx="50" cy="62" rx="6" ry="4.4" fill="#3A2A1F"/><path d="M34 72q16 14 32 0Z" fill="#7A2A30" stroke="${INK}" stroke-width="1.6"/>`
     + '<path d="M37 73l3 4 3-3.4 3 4 4-4 4 4 3-4 3 3.4 3-4" fill="#fff" stroke="#3A2A1F" stroke-width="1"/>'
     + `<circle cx="36" cy="46" r="5" fill="#F4C04A" stroke="${INK}" stroke-width="1.6"/><circle cx="64" cy="46" r="5" fill="#F4C04A" stroke="${INK}" stroke-width="1.6"/><circle cx="36" cy="46.5" r="2.2" fill="${INK}"/><circle cx="64" cy="46.5" r="2.2" fill="${INK}"/>`
     + `<path d="M28 38 42 41M72 38 58 41" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>`;
@@ -296,7 +296,7 @@ function ratFace(o, captain) {
     + `<circle cx="22" cy="30" r="15" fill="#9A9AA0" stroke="${INK}" stroke-width="2"/><circle cx="78" cy="30" r="15" fill="#9A9AA0" stroke="${INK}" stroke-width="2"/><circle cx="22" cy="30" r="9" fill="#E8A9B0"/><circle cx="78" cy="30" r="9" fill="#E8A9B0"/>`
     + `<path d="M50 24c18 0 30 12 30 28 0 10-8 18-18 26l-12 12-12-12c-10-8-18-16-18-26 0-16 12-28 30-28Z" fill="#A6A6AC" stroke="${INK}" stroke-width="2.2"/>`
     + `<ellipse cx="50" cy="88" rx="5" ry="4" fill="#E58A9A" stroke="${INK}" stroke-width="1.4"/>`
-    + `<circle cx="38" cy="54" r="5" fill="#1A1A1E"/><circle cx="62" cy="54" r="5" fill="#1A1A1E"/><circle cx="36.5" cy="52.5" r="1.6" fill="#fff"/><circle cx="60.5" cy="52.5" r="1.6" fill="#fff"/>`
+    + `<circle cx="38" cy="54" r="5" fill="#2A1E18"/><circle cx="62" cy="54" r="5" fill="#2A1E18"/><circle cx="36.5" cy="52.5" r="1.6" fill="#fff"/><circle cx="60.5" cy="52.5" r="1.6" fill="#fff"/>`
     + '<g stroke="#F5EEE6" stroke-width="1.1" stroke-linecap="round"><path d="M44 82 20 76M44 85 22 88M56 82 80 76M56 85 78 88"/></g>'
     + (captain ? `<path d="M26 30c4-14 14-20 24-20s20 6 24 20Z" fill="#3E2C1E" stroke="${INK}" stroke-width="2"/><path d="M60 14c8-10 22-10 26 0-8-2-16 0-22 6Z" fill="#E8C66A" stroke="${INK}" stroke-width="1.4"/>` : '');
 }
@@ -307,8 +307,8 @@ function dogFace(o, id) {
   let s = '<circle cx="50" cy="50" r="50" fill="#D6CEC2"/>'
     + `<path d="M22 24C8 30 6 52 14 62c6-4 10-14 12-26Z" fill="#4A3828" stroke="${INK}" stroke-width="2"/><path d="M78 24c14 6 16 28 8 38-6-4-10-14-12-26Z" fill="#4A3828" stroke="${INK}" stroke-width="2"/>`
     + `<path d="M50 20c18 0 30 12 30 30 0 18-12 32-30 32S20 68 20 50c0-18 12-30 30-30Z" fill="${fur}" stroke="${INK}" stroke-width="2.2"/>`
-    + `<ellipse cx="50" cy="68" rx="16" ry="12" fill="${pug ? '#2A2220' : '#E8D9C4'}" stroke="${INK}" stroke-width="1.6"/>`
-    + `<ellipse cx="50" cy="61" rx="7" ry="5" fill="#1E1614"/><path d="M50 66v6M42 74q8 6 16 0" fill="none" stroke="${INK}" stroke-width="1.8" stroke-linecap="round"/>`
+    + `<ellipse cx="50" cy="68" rx="16" ry="12" fill="${pug ? '#5A4A44' : '#E8D9C4'}" stroke="${INK}" stroke-width="1.6"/>`
+    + `<ellipse cx="50" cy="61" rx="7" ry="5" fill="#3A2A1F"/><path d="M50 66v6M42 74q8 6 16 0" fill="none" stroke="${INK}" stroke-width="1.8" stroke-linecap="round"/>`
     + `<circle cx="38" cy="46" r="5" fill="#2A1E18"/><circle cx="62" cy="46" r="5" fill="#2A1E18"/><circle cx="36.6" cy="44.6" r="1.8" fill="#fff"/><circle cx="60.6" cy="44.6" r="1.8" fill="#fff"/>`;
   if (barkus) s += `<path d="M20 34C20 16 34 8 50 8s30 8 30 26Z" fill="#5A5E66" stroke="${INK}" stroke-width="2"/><path d="M22 22 8 6l18 8M78 22 92 6 74 14" fill="#F1E6CF" stroke="${INK}" stroke-width="1.8" stroke-linejoin="round"/>`;
   if (brutus) s += `<path d="M22 36C22 18 34 10 50 10s28 8 28 26Z" fill="#B8BEC6" stroke="${INK}" stroke-width="2"/><path d="M28 30h44" stroke="${INK}" stroke-width="3"/>`;
@@ -321,7 +321,7 @@ function birdFace(o, pigeon) {
     + `<path d="M50 16c20 0 32 16 32 34s-14 34-32 34-32-16-32-34 12-34 32-34Z" fill="${c}" stroke="${INK}" stroke-width="2.2"/>`
     + (pigeon ? '<path d="M24 66q26 18 52 0v10q-26 14-52 0Z" fill="#6FA59A" opacity=".8"/>' : '')
     + `<path d="M42 52 50 72 58 52Z" fill="#E8A33A" stroke="${INK}" stroke-width="1.8" stroke-linejoin="round"/>`
-    + '<circle cx="36" cy="42" r="6" fill="#F4E7C9"/><circle cx="64" cy="42" r="6" fill="#F4E7C9"/><circle cx="36" cy="42" r="3" fill="#111"/><circle cx="64" cy="42" r="3" fill="#111"/>';
+    + '<circle cx="36" cy="42" r="6" fill="#F4E7C9"/><circle cx="64" cy="42" r="6" fill="#F4E7C9"/><circle cx="36" cy="42" r="3" fill="#2A1E18"/><circle cx="64" cy="42" r="3" fill="#2A1E18"/>';
 }
 
 function statueFace() {

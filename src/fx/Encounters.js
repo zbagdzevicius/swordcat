@@ -178,9 +178,9 @@ export class Encounters {
     this.counts.vanishes++;
     const P = this.particles;
     _q.copy(pos); _q.y += 0.55 * S;
-    P.burst(_q, { n: Math.round(12 * S), shape: SHAPE.PUFF, color: '#8F88A0', tint: 0.12, alpha: 0.9, size: [0.3 * S, 0.5 * S], sizeEnd: 2.2, grow: GROW.OUT,
+    P.burst(_q, { n: Math.round(12 * S), shape: SHAPE.PUFF, color: '#C9B6E6', tint: 0.12, alpha: 0.9, size: [0.3 * S, 0.5 * S], sizeEnd: 2.2, grow: GROW.OUT,
       life: [0.6, 1.0], speed: [1.2, 2.6], spread: Math.PI, drag: 3.2, fade: FADE.HOLD, jitter: 0.25 * S });
-    P.burst(_q, { n: Math.round(5 * S), shape: SHAPE.PUFF, color: '#5E5770', alpha: 0.85, size: [0.25 * S, 0.4 * S], sizeEnd: 2.4, grow: GROW.OUT,
+    P.burst(_q, { n: Math.round(5 * S), shape: SHAPE.PUFF, color: '#9B84C2', alpha: 0.85, size: [0.25 * S, 0.4 * S], sizeEnd: 2.4, grow: GROW.OUT,
       life: [0.7, 1.1], speed: [0.4, 1.2], up: 0.5, spread: Math.PI, drag: 2.5, fade: FADE.HOLD });
     P.single(_q, { shape: SHAPE.STAR8, color: '#FFFFFF', intensity: 2.6, size0: 0.4 * S, size1: 1.6 * S, life: 0.2, fade: FADE.POP });
     P.burst(_q, { additive: true, n: 5, shape: SHAPE.STAR5, color: '#FFE88A', intensity: 1.8, size: [0.12, 0.18], sizeEnd: 0.4, life: [0.45, 0.7],
@@ -252,9 +252,9 @@ export class Encounters {
   _stall() {
     const L = this.line;
     _q.copy(L.site); _q.y += 1.1;
-    this.particles.burst(_q, { n: 4, shape: SHAPE.PUFF, color: '#9A968E', alpha: 0.7, size: [0.16, 0.24], sizeEnd: 2.2, grow: GROW.OUT,
+    this.particles.burst(_q, { n: 4, shape: SHAPE.PUFF, color: '#E6D2BE', alpha: 0.7, size: [0.16, 0.24], sizeEnd: 2.2, grow: GROW.OUT,
       life: [0.7, 1.0], speed: [0.3, 0.8], up: 0.6, spread: Math.PI, drag: 2.2, fade: FADE.HOLD });
-    this.particles.burst(_q, { n: 4, shape: SHAPE.STAR5, color: '#B9B2A4', alpha: 0.9, size: [0.1, 0.14], sizeEnd: 0.5, life: [0.4, 0.6],
+    this.particles.burst(_q, { n: 4, shape: SHAPE.STAR5, color: '#F2DDBB', alpha: 0.9, size: [0.1, 0.14], sizeEnd: 0.5, life: [0.4, 0.6],
       speed: [1.0, 1.8], dir: _up, spread: 0.9, gravity: 5, spin: 6, fade: FADE.HOLD });
   }
 

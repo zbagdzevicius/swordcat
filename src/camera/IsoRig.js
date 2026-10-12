@@ -2,29 +2,35 @@
 // §2.4). Pure functions on plain numbers / {x, y, z} objects: node-safe, unit-tested, allocation-free. FollowCamera
 // runs them for the gameplay modes (`follow` / `lock` / `boss`); `?cam=classic` keeps the old orbit.
 //
+// AUTOCAM additions (research/next/AUTOCAM_SPEC.md §4–§5, §9): device profiles + distance ranges (D19), the
+// direction-weighted intent lead and its debounce (§5.2–§5.3), the herFrame offset limits (§4.4), the visible ground
+// footprint (§9.1, analytic: the same rays three.js unprojects, incl. the view offset) and the merged far plane (§9.3 X12).
+//
 // Conventions (tech.md §8): the camera sits at focus + (sin yaw · cos pitch, sin pitch, cos yaw · cos pitch) · d and
 // looks at the focus; screen-up on the ground = (−sin yaw, 0, −cos yaw); screen-right = (cos yaw, 0, −sin yaw).
 // The default yaw π puts the camera south of her looking +Z (W walks +Z).
 import { CAMERA } from '../core/config.js';
-import { clamp, lerp } from '../core/math.js';
+import { clamp, lerp, smoothstep } from '../core/math.js';
 
 const ISO = CAMERA.iso;
 const DEG = Math.PI / 180;
 
 /**
- * Landscape framing (camera-owned; supersedes CAMERA.iso.frameOffset 0.04 and lead.up 0.8, see requests/core.md).
+ * Landscape framing (camera-owned; supersedes CAMERA.iso.frameOffset 0.04, see requests/core.md). Since AUTOCAM the
+ * live anchor comes from SafeFrame (FollowCamera); `isoFrameOffset` stays for ui/touchLayout.heroPoint's fallback.
  * Playtest: with her 4 % low plus a 0.8 m screen-up bias she stood at 66 % of a 720p frame and the ability bar hid
  * most of the 2.5 m of ground below her, so down-screen click-moves were short and blind. Now her focus sits at `herY`
  * of the band ABOVE the bottom safe inset (the desktop / pad ability bar), her feet ≈ 45 % from the top on 720p,
  * leaving ≈ 4 m of clickable ground below her above the bar (≈ 5 m to the screen edge) and ≈ 6 m ahead.
  *   herY: focus height within the usable band (0 top, 1 the inset's top edge)
  *   insetMax: the inset never takes more than this fraction of the height
- *   upBias: landscape screen-up lead (m); 0 = symmetric
+ *   upBias: landscape explore screen-up bias (m): AUTOCAM §5.6 keeps the spec's 0.8 m (CAMERA.iso.lead.up) in explore;
+ *     with SafeFrame's anchor the HUD / ability bar no longer eat the ground below her (the playtest that set it to 0)
  *   cursorDownMul: the KBM cursor lead's down-screen part is scaled up by this, because the foreshortened ground
  *     below her is shorter (≈ 4–5 m to the edge vs ≈ 6–7 m ahead): pointing at the bottom edge leads about as far as
  *     pointing at the top edge
  */
-export const FRAME = { herY: 0.48, insetMax: 0.25, upBias: 0, cursorDownMul: 1.5 };
+export const FRAME = { herY: 0.48, insetMax: 0.25, upBias: ISO.lead.up ?? 0.8, cursorDownMul: 1.5 };
 
 /**
  * Vertical frame offset (fraction of the view height; + = she sits below centre) for setViewOffset.
@@ -81,7 +87,8 @@ export function deviceClass(w, h, device) {
  * The resting rig for a viewport (§2.1): FOV, base distance (desktop 13 / phone 12 / portrait width fit) × zoom,
  * clamped to [distMin, distMax] and to the cat-size clamp; pitch from the distance (portrait: fixed 58°).
  * @param {{w:number, h:number, device?:string, zoom?:number, boss?:boolean, extra?:number, hintDist?:number,
- *   hintDistW?:number, hintPitch?:number, hintPitchW?:number, insetBottom?:number}} v
+ *   hintDistW?:number, hintPitch?:number, hintPitchW?:number, insetBottom?:number, bigger?:boolean}} v
+ *   bigger: settings.biggerHero (AUTOCAM §10.3)
  *   insetBottom: CSS px of the view's bottom covered by the ability bar (framing only, see isoFrameOffset)
  *   extra: metres added after the zoom (combat zoom-out, boss fit) but still under the clamps;
  *   hintDist / hintPitch: a §2.2 zone hint (base distance before the zoom; pitch in rad) blended in by its weight
@@ -99,11 +106,15 @@ export function isoFrame(v, out = {}, I = ISO) {
   const zoom = clamp(v.zoom ?? 1, I.zoom[0], I.zoom[1]);
   // zoom first, clamped to [9, 18] (a portrait width fit may sit above 18), then the combat / boss extra on top
   let d = base * zoom;
-  d = portrait ? Math.max(I.distMin, d) : clamp(d, I.distMin, I.distMax);
+  // D19: portrait [16, 26] m, landscape [9, 18] m (the cat clamp still applies on top)
+  const rng = distRange(portrait, I);
+  d = clamp(d, rng[0], rng[1]);
   const extra = Math.max(0, v.extra ?? 0);
-  if (extra > 0) d = Math.min(d + extra, Math.max(d, v.boss ? I.boss.dist[1] : I.distMax + I.combat.zoomOut));
+  if (extra > 0) d = Math.min(d + extra, Math.max(d, v.boss ? I.boss.dist[1] : rng[1] + I.combat.zoomOut));
   if (v.boss) d = clamp(d, I.boss.dist[0], I.boss.dist[1]);
-  const minPx = portrait ? I.minCatPxPortrait : v.boss ? I.minCatPxBoss : I.minCatPx;
+  // §10.3 Bigger hero: minCatPx 30 → 40 (the same ratio on the portrait / boss floors); it caps the zoom-out
+  const big = v.bigger ? (I.minCatPxBigger ?? BIGGER_PX) / I.minCatPx : 1;
+  const minPx = (portrait ? I.minCatPxPortrait : v.boss ? I.minCatPxBoss : I.minCatPx) * big;
   // the cat-size clamp on her APPARENT height from above (feet → ear tips × cos pitch: she is foreshortened as the
   // camera tilts down); the pitch depends on the distance, so two passes settle it
   // §2.2 zone hint pitch (landscape, not in boss fights), blended over the distance curve by hintPitchW
@@ -114,7 +125,7 @@ export function isoFrame(v, out = {}, I = ISO) {
     const pitch = pitchAt(Math.min(d, dMax));
     dMax = catClampDist(fov, v.h, minPx, apparentH(pitch, I));
   }
-  d = Math.max(Math.min(d, dMax), Math.min(I.distMin, dMax));
+  d = Math.max(Math.min(d, dMax), Math.min(rng[0], dMax));
   out.fov = fov; out.dist = d; out.dMax = dMax; out.portrait = portrait; out.phone = phone; out.aspect = aspect;
   out.pitch = pitchAt(d);
   out.frameOffset = isoFrameOffset(v.h, v.insetBottom ?? 0, portrait, I);
@@ -279,4 +290,208 @@ export function craneArc(a, b, pivot, k, out) {
   return out;
 }
 
+// ==================================================================== AUTOCAM (research/next/AUTOCAM_SPEC.md)
+
+/** §10.3 Bigger hero floor (CSS px) until core adds CAMERA.iso.minCatPxBigger (requests/core.md). */
+export const BIGGER_PX = 40;
+
+/**
+ * Device profile for the AUTOCAM per-device tables (lead caps, lean caps, aim pan): 'portrait' (h > 1.05 w), 'phone'
+ * (touch, short side ≤ 500 CSS px), 'tablet' (other touch), 'desktop' (KBM / pad).
+ * @param {number} w @param {number} h @param {string} device 'kbm' | 'pad' | 'touch'
+ * @returns {'desktop'|'tablet'|'phone'|'portrait'}
+ */
+export function camProfile(w, h, device) {
+  if (h > w * 1.05) return 'portrait';
+  if (device !== 'touch') return 'desktop';
+  return Math.min(w, h) <= 500 ? 'phone' : 'tablet';
+}
+
+const _portraitRange = [16, 26], _landRange = [9, 18];
+/** Lens-distance range for an orientation (D19): portrait [16, 26], landscape [distMin, distMax] = [9, 18]. */
+export function distRange(portrait, I = ISO) {
+  if (portrait) return I.distRangePortrait ?? _portraitRange;
+  _landRange[0] = I.distMin; _landRange[1] = I.distMax;
+  return _landRange;
+}
+
+/** Intent kinds that lead (AUTOCAM §5.3); tumble / Pounce / knockback / slide / scripted are 'other' → 0. */
+export const LEAD_KINDS = Object.freeze(new Set(['walk', 'run', 'order', 'stick']));
+
+/**
+ * The direction-weighted intent lead TARGET (§5.2), before the debounce: per-direction gains (up 0.12 s, down 0.42 s,
+ * side 0.26 s; portrait side 0.10 s) and per-device caps [side, up, down], × smoothstep(1.2, 4.0, |I|), radial ≤ 2.5 m.
+ * Writes the world XZ offset (focus − her) into `out` { x, z }.
+ * @param {number} vx @param {number} vz intent velocity (m/s, world XZ) @param {string} kind
+ * @param {number} yaw @param {string} profile camProfile()
+ */
+export function intentLead(vx, vz, kind, yaw, profile, out, I = ISO) {
+  out.x = 0; out.z = 0;
+  if (!LEAD_KINDS.has(kind)) return out;
+  const L = I.lead, caps = L.caps[profile] ?? L.caps.desktop;
+  const sp = Math.hypot(vx, vz);
+  const k = smoothstep(L.speedRamp[0], L.speedRamp[1], sp);
+  if (!(k > 0)) return out;
+  const ux = -Math.sin(yaw), uz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const vu = vx * ux + vz * uz, vr = vx * rx + vz * rz;
+  const gs = profile === 'portrait' ? L.gainSidePortrait : L.gainSide;
+  let tu = vu >= 0 ? Math.min(caps[1], vu * L.gainUp) : -Math.min(caps[2], -vu * L.gainDown);
+  let tr = clamp(vr * gs, -caps[0], caps[0]);
+  tu *= k; tr *= k;
+  const m = Math.hypot(tu, tr);
+  if (m > L.max) { tu *= L.max / m; tr *= L.max / m; }
+  out.x = tu * ux + tr * rx; out.z = tu * uz + tr * rz;
+  return out;
+}
+
+/**
+ * §5.3 lead debounce: the target passes only after `debounce` (0.20 s) of continuous intent within ±`debounceCone`
+ * (50°) of the current lead direction (or, with no lead yet, any direction); a turn of more than `reverse` (120°)
+ * against the intent being timed resets the timer, so the lead releases first. Combat taps of 0.1–0.3 s never move
+ * the camera.
+ */
+export class LeadGate {
+  constructor() { this.t = 0; this.dx = 0; this.dz = 0; }
+  reset() { this.t = 0; this.dx = 0; this.dz = 0; return this; }
+  /**
+   * @param {{x:number,z:number}} target the raw lead target (written to 0 in place while gated)
+   * @param {{x:number,z:number}} cur the current lead (spring value) @param {number} dt
+   */
+  step(target, cur, dt, I = ISO) {
+    const L = I.lead, tm = Math.hypot(target.x, target.z);
+    if (tm < 1e-3) { this.t = 0; return target; }
+    const tx = target.x / tm, tz = target.z / tm;
+    const cm = Math.hypot(cur.x, cur.z);
+    if (this.t > 0 && (this.dx || this.dz) && Math.acos(clamp(tx * this.dx + tz * this.dz, -1, 1)) > L.reverse) this.t = 0;
+    const within = cm < 0.05 || Math.acos(clamp((tx * cur.x + tz * cur.z) / cm, -1, 1)) <= L.debounceCone;
+    this.t = within ? this.t + dt : 0;
+    this.dx = tx; this.dz = tz;
+    if (this.t < L.debounce) { target.x = 0; target.z = 0; }
+    return target;
+  }
+}
+
+/** ground point on her feet plane (h below the focus) drawn at NDC y `yEdge` (herLimits). */
+function uAtEdge(yEdge, offY, tanV, s, c, d, h) {
+  const k = (yEdge - offY) * tanV, den = s - k * c;
+  return den > 1e-4 ? (k * (d - h * s) - h * c) / den : (k > 0 ? 1e3 : -1e3);
+}
+
+/**
+ * §4.4 the herFrame offset limits (m along the ground screen axes), so no combination of lead, lean, aim pan, peek and
+ * beat can push her out of `herFrame`. `frame` is the normalised herFrame rect (y down); the anchor (fx, fy) is where
+ * the focus is drawn. Her feet plane is focusY below the focus. Writes out { up, down, left, right } (≥ 0):
+ *   offset·U ∈ [−down, up],  offset·R ∈ [−left, right]   (offset = focus − her)
+ * @param {number} theta pitch @param {number} d lens distance @param {number} tanV @param {number} tanH
+ * @param {number} fx @param {number} fy anchor @param {{x0:number,y0:number,x1:number,y1:number}} frame
+ */
+export function herLimits(theta, d, tanV, tanH, fx, fy, frame, out, I = ISO) {
+  const F = I.frame, s = Math.sin(theta), c = Math.cos(theta), h = -(I.focusY ?? 0.6);
+  const offX = 2 * fx - 1, offY = 1 - 2 * fy;
+  // up-screen she is bounded by her HEAD (catHView above her feet: exact, so herHeadPad's estimate of it is not
+  // needed and the margin is herFeetPad), down-screen by her feet
+  const hHead = h + (I.catHView ?? 1);
+  const uTop = uAtEdge(1 - 2 * frame.y0, offY, tanV, s, c, d, hHead), uBot = uAtEdge(1 - 2 * frame.y1, offY, tanV, s, c, d, h);
+  out.down = Math.max(0, uTop - F.herFeetPad);
+  out.up = Math.max(0, -uBot - F.herFeetPad);
+  // sideways: her lateral room shrinks as she comes toward the lens (down-screen) and her head is nearer than her
+  // feet, so clampToLimits re-evaluates it at her actual depth: right/left = k · (z0 − u·cos θ − headH·sin θ) − pad
+  out.kR = Math.max(0, -(2 * frame.x0 - 1 - offX) * tanH); out.kL = Math.max(0, (2 * frame.x1 - 1 - offX) * tanH);
+  out.z0 = d - h * s; out.cosT = c; out.headS = (I.catHView ?? 1) * s; out.sidePad = F.herSidePad;
+  const z = out.z0 - out.headS;
+  out.right = Math.max(0, out.kR * z - F.herSidePad);
+  out.left = Math.max(0, out.kL * z - F.herSidePad);
+  return out;
+}
+
+/**
+ * Clamp a world XZ offset (focus − her; in place) to herLimits along U, then along R at her resulting depth (the
+ * lateral room shrinks as she comes toward the lens).
+ */
+export function clampToLimits(off, yaw, lim) {
+  const ux = -Math.sin(yaw), uz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const u = clamp(off.x * ux + off.z * uz, -lim.down, lim.up);
+  let right = lim.right, left = lim.left;
+  if (Number.isFinite(lim.kR)) {
+    const z = Math.max(0.5, lim.z0 - u * lim.cosT - lim.headS);
+    right = Math.max(0, lim.kR * z - lim.sidePad); left = Math.max(0, lim.kL * z - lim.sidePad);
+  }
+  const r = clamp(off.x * rx + off.z * rz, -left, right);
+  off.x = u * ux + r * rx; off.z = u * uz + r * rz;
+  return off;
+}
+
+const _fq = new Float64Array(18);
+/** one footprint ray (footprintOf) → _fq[k..k+2] = hit x, z, slant distance; false when it misses the ground */
+function fpHit(nx, ny, k, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy) {
+  const a = (nx - offX) * tanH, b = (ny - offY) * tanV;
+  const dy = b * c - s;
+  if (dy > -1e-4) return false;
+  const dx = rx * a + ux * (b * s + c), dz = rz * a + uz * (b * s + c), t = (gy - Ly) / dy;
+  _fq[k] = Lx + dx * t; _fq[k + 1] = Lz + dz * t; _fq[k + 2] = t * Math.hypot(dx, dy, dz);
+  return true;
+}
+
+/**
+ * §9.1 the visible ground footprint of the iso pose: the four view-corner rays (incl. the view offset, i.e. the rays
+ * three.js `unproject` gives) hit the plane y = gy. Writes out { q: Float32Array(8) [BL, BR, TR, TL as x, z], cx, cz,
+ * ahead, behind (along U from the focus), halfW (at the anchor row), halfWTop, slantMax (farthest corner from the lens),
+ * d }. Returns false (out untouched) when a ray misses the ground (never in iso: the top ray is ≥ 27° below the horizon).
+ * @param {{x:number,y:number,z:number}} F focus @param {number} yaw @param {number} theta @param {number} d
+ * @param {number} tanV @param {number} tanH @param {number} fx @param {number} fy anchor (normalised)
+ * @param {number} gy ground height
+ */
+export function footprintOf(F, yaw, theta, d, tanV, tanH, fx, fy, gy, out) {
+  const s = Math.sin(theta), c = Math.cos(theta), ux = -Math.sin(yaw), uz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const offX = 2 * fx - 1, offY = 1 - 2 * fy;
+  const Lx = F.x - ux * c * d, Ly = F.y + s * d, Lz = F.z - uz * c * d;
+  // ray for NDC (nx, ny): dir = R·a + Up·b + f, a = (nx − offX)·tanH, b = (ny − offY)·tanV; Up = (U s, c), f = (U c, −s)
+  if (!fpHit(-1, -1, 0, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy)
+    || !fpHit(1, -1, 3, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy)
+    || !fpHit(1, 1, 6, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy)
+    || !fpHit(-1, 1, 9, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy)
+    || !fpHit(-1, offY, 12, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy)
+    || !fpHit(1, offY, 15, offX, offY, tanH, tanV, s, c, ux, uz, rx, rz, Lx, Ly, Lz, gy)) return false;
+  const q = out.q;
+  q[0] = _fq[0]; q[1] = _fq[1]; q[2] = _fq[3]; q[3] = _fq[4]; q[4] = _fq[6]; q[5] = _fq[7]; q[6] = _fq[9]; q[7] = _fq[10];
+  out.cx = (q[0] + q[2] + q[4] + q[6]) / 4; out.cz = (q[1] + q[3] + q[5] + q[7]) / 4;
+  const topX = (q[4] + q[6]) / 2, topZ = (q[5] + q[7]) / 2, botX = (q[0] + q[2]) / 2, botZ = (q[1] + q[3]) / 2;
+  out.ahead = (topX - F.x) * ux + (topZ - F.z) * uz;
+  out.behind = (F.x - botX) * ux + (F.z - botZ) * uz;
+  out.halfW = Math.hypot(_fq[15] - _fq[12], _fq[16] - _fq[13]) / 2;
+  out.halfWTop = Math.hypot(q[4] - q[6], q[5] - q[7]) / 2;
+  out.slantMax = Math.max(_fq[2], _fq[5], _fq[8], _fq[11]);
+  out.d = d;
+  return true;
+}
+
+/** Point-in-convex-quad (q as footprintOf writes it, either winding) after growing the quad by `pad` m. */
+export function inQuad(q, x, z, pad = 0) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4, ax = q[i * 2], az = q[i * 2 + 1], ex = q[j * 2] - ax, ez = q[j * 2 + 1] - az, L = Math.hypot(ex, ez) || 1;
+    if (sign === 0) { const k = (i + 2) % 4; sign = Math.sign(ex * (q[k * 2 + 1] - az) - ez * (q[k * 2] - ax)) || 1; }
+    if (((ex * (z - az) - ez * (x - ax)) / L) * sign < -pad) return false;
+  }
+  return true;
+}
+
+/** PERF §8.3 fog radius (98 % fog): R = clear + √(−ln 0.02) / (ρ · topMul). */
+export function fogRadius(rho, clear, topMul) {
+  return clear + 1.978 / Math.max(1e-4, rho * Math.max(1e-3, topMul));
+}
+
+/**
+ * The merged iso far plane (X12, AUTOCAM §9.3 = PERF §8.3): far = clamp(ceil5(max(slantMax·1.25 + 25, fogFar)), 45, 90),
+ * fogFar = √((d cos p + R)² + (d sin p)²) + 4. `R` not finite → the footprint term only.
+ */
+export function farPlane(slantMax, d, pitch, R, I = ISO) {
+  const f = I.foot;
+  const footFar = slantMax * f.farMul + f.farPad;
+  const fogFar = Number.isFinite(R) ? Math.hypot(d * Math.cos(pitch) + R, d * Math.sin(pitch)) + f.fogFarPad : 0;
+  const q = f.farQuant;
+  return clamp(Math.ceil(Math.max(footFar, fogFar) / q - 1e-9) * q, f.far[0], f.far[1]);
+}
+
 export { ISO };
+

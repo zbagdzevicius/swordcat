@@ -1,11 +1,12 @@
 // src/main.js  (owner: core) — boot: new Game(#app).start()
-import { Game } from './core/Game.js';
+import { Game, dropSplash } from './core/Game.js';
 
 const host = document.getElementById('app') ?? document.body;
 const game = new Game(host);
 
 game.start().catch((e) => {
   console.error('[boot] failed to start', e);
+  dropSplash();
   const el = document.createElement('div');
   el.id = 'boot-error';
   el.textContent = 'Swordcat could not start: ' + (e?.message ?? e);

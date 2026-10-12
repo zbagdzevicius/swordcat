@@ -146,6 +146,9 @@ function shootable(e) {
   return !!e && e.alive && e.faction === 'enemy' && e.hurtable !== false && !e.scripted && e.hidden !== true && !!e.pos;
 }
 
+/** Volley targets must be this far (m) inside the visible frame (CONTROLS §8.5 / requests/fx.md). */
+export const VOLLEY_SCREEN_MARGIN = 0.5;
+
 const _cand = [];
 const _score = new Map();
 
@@ -213,10 +216,13 @@ export function planAbility(ctx, c, req = null, out = newPlan()) {
       out.shape = 'targets'; out.range = cfg.range;
       const sel = selectedTarget(ctx), max = cfg.targets ?? 3;
       _cand.length = 0; _score.clear();
+      // §8.5 no off-screen snipes (requests/fx.md): only what the player can see (SafeFrame-visible, K4) is a target
+      const onScreen = typeof ctx.cam?.onScreen === 'function' ? ctx.cam : null;
       for (const e of ctx.enemies?.list ?? []) {
         if (!shootable(e)) continue;
         const d = hyp(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
         if (d > cfg.range) continue;
+        if (onScreen && !onScreen.onScreen(e.pos, VOLLEY_SCREEN_MARGIN)) continue;
         let s;
         if (aimed) s = hyp(e.pos.x - out.point.x, e.pos.z - out.point.z);
         else {

@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { SHAPE, FADE, GROW } from './Particles.js';
+import { FX_COLORS } from './palette.js';
 
 /** Radius of a shockwave at time t (linear expansion r0 → r1 over dur; pure, unit-tested). */
 export function shockRadius(t, r0, r1, dur) {
@@ -252,7 +253,7 @@ export class Shockwaves {
     for (let k = 0; k < 3; k++) {
       const a = L * (0.25 + 0.3 * k);
       _p.set(pos.x + dx * a, 0, pos.z + dz * a); _p.y = this.groundY(_p.x, _p.z, pos.y) + 0.1;
-      this.particles.burst(_p, { n: 4, shape: SHAPE.SHARD, color: '#7A6A58', tint: 0.15, size: [0.05, 0.09], life: [0.45, 0.7], speed: [1.5, 2.8],
+      this.particles.burst(_p, { n: 4, shape: SHAPE.SHARD, color: FX_COLORS.sand, tint: 0.15, size: [0.05, 0.09], life: [0.45, 0.7], speed: [1.5, 2.8],
         up: 2.4, spread: Math.PI, gravity: 12, drag: 0.5, spin: 10, fade: FADE.HOLD, floor: true });
     }
     return c;
@@ -285,7 +286,7 @@ export class Shockwaves {
         _p.set(r.cx, r.mesh.position.y, r.cz);
         const n = Math.min(12, Math.max(4, Math.ceil(rad * 1.8)));
         this.particles.ring(_p, { n, r0: rad, speed: [0.6, 1.4], up: 0.6, y: 0.08, size: [0.18, 0.3], sizeEnd: 2.2, life: [0.35, 0.55],
-          color: '#CBBFA9', alpha: 0.55, tint: 0.08, drag: 3, fade: FADE.LINEAR, floor: true });
+          color: FX_COLORS.sandLight, alpha: 0.55, tint: 0.08, drag: 3, fade: FADE.LINEAR, floor: true });
       }
     }
     for (const c of this.cracks) {
@@ -305,8 +306,8 @@ export class Shockwaves {
     _p.copy(pos); _p.y += 0.15;
     P.single(_p, { shape: SHAPE.RING, color, intensity: 1.6, size0: 0.4 * S, size1: 2.6 * S, life: 0.25, grow: GROW.OUT, alpha: 0.8 });
     P.ring(pos, { n: Math.round(14 * S), r0: 0.4 * S, speed: [2.2 * S, 3.6 * S], up: 0.5, y: 0.1, size: [0.26, 0.4], sizeEnd: 2.4, life: [0.5, 0.75],
-      color: '#C9BDA6', alpha: 0.75, tint: 0.1, drag: 3.2, fade: FADE.HOLD, floor: true });
-    P.burst(_p, { n: Math.round(8 * S), shape: SHAPE.SHARD, color: '#8C8A84', tint: 0.2, size: [0.07, 0.13], life: [0.55, 0.85], speed: [2.0, 4.0],
+      color: FX_COLORS.sandPale, alpha: 0.75, tint: 0.1, drag: 3.2, fade: FADE.HOLD, floor: true });
+    P.burst(_p, { n: Math.round(8 * S), shape: SHAPE.SHARD, color: FX_COLORS.sandDust, tint: 0.2, size: [0.07, 0.13], life: [0.55, 0.85], speed: [2.0, 4.0],
       up: 3.0, spread: Math.PI, gravity: 13, drag: 0.4, spin: 9, fade: FADE.HOLD, floor: true, jitter: 0.3 * S });
   }
 

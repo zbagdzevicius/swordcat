@@ -14,12 +14,19 @@ import * as THREE from 'three';
 import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { PLAYER } from '../core/config.js';
 import { groundY, toVec3, hash01, actorWorldPos } from './util.js';
+import { SHAPE, FADE } from './Particles.js';
 
-export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.62, rise: 0.8, dissolve: 1.5,
+/** Warm default mist tint before the level's fog colour is known (never the old grey-green #9AA196). */
+const MIST_DEFAULT = '#EED6A6';   // WA §2.1: the meadow_day fogLow row
+
+// WA fx.W4: fog walls are a friendly lilac "giggle mist" (α 0.48, tint lilac blended with the fog) with slow sparkles
+// twinkling along the wall line (Particles pool, ≤ 3 / s per wall; Low ×0.5)
+export const WALL = Object.freeze({ spacing: 1.5, w: 5.5, h: 4.6, maxA: 0.48, rise: 0.8, dissolve: 1.5, lilac: '#D8C8F4', lilacMix: 0.6, sparkEvery: 0.35,
   near: 5,          // camera near-fade (m): wall cards are tall and dense, the ambient 3 m is too short for them
   focusIn: 0.5, focusOut: 1.2, focusMin: 0.08 });   // cards up to her depth (+ a margin) fade to focusMin
 
-export const AMBIENT = Object.freeze({ w: 8, h: 2.5, maxA: 0.22, radius: 34 });
+// ART §8.1: the ambient mist alpha is capped at 0.14 (the spec range 0.10–0.22 clamped), tinted fog lifted 6 % to the sun
+export const AMBIENT = Object.freeze({ w: 8, h: 2.5, maxA: 0.14, radius: 34, sunLift: 0.06 });
 /** Iso placement (CONTROLS_SPEC §4.2): lean toward the lens, base lift and height caps (m), the wall's ground band. */
 // ambientA: the ambient field's alpha in the iso view. Its wide cards, leaned toward a lens 50° above them, read as long
 // pale streaks over the ground; the GroundMist sheets carry the iso mist instead, so the field only lingers faintly.
@@ -137,7 +144,7 @@ export class CardSet {
     this.geometry = g;
     this.material = fxShaderMaterial({
       name, vertexShader: VERT, fragmentShader: FRAG, fog: true,
-      uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color('#9AA196') }, uTime: { value: 0 }, uMaxA: { value: maxA },
+      uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color(MIST_DEFAULT) }, uTime: { value: 0 }, uMaxA: { value: maxA },
         uNear: { value: 3 }, uFocus: { value: new THREE.Vector2() }, uScroll: { value: new THREE.Vector2() }, uLoop: { value: new THREE.Vector2() },
         uLoopDrift: { value: new THREE.Vector2() }, uTilt: { value: 0 }, uIsoH: { value: new THREE.Vector2() } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
@@ -194,7 +201,9 @@ varying float vAcross;
 ${NOISE}
 void main() {
   float n = fxFbm2( vW.xz * 0.35 + uScroll );
-  float a = ( 1.0 - smoothstep( 0.35, 1.0, abs( vAcross ) ) ) * smoothstep( 0.2, 0.75, n ) * uAlpha;
+  // a soft outer side, a crisp inner edge (requests/world.md): the band reads as a boundary, not a smear
+  float k = abs( vAcross );
+  float a = ( 1.0 - smoothstep( vAcross < 0.0 ? 0.75 : 0.35, vAcross < 0.0 ? 0.95 : 1.0, k ) ) * smoothstep( 0.2, 0.75, n ) * uAlpha;
   if ( a < 0.003 ) discard;
   gl_FragColor = vec4( uColor, a );
   ${OUTPUT}
@@ -204,7 +213,7 @@ void main() {
  * A closed band `width` m wide along the card line `pts` ([x, z, …]), heights from `ground` (pure geometry; one draw).
  * @returns {THREE.BufferGeometry}
  */
-export function bandGeometry(pts, width, ground) {
+export function bandGeometry(pts, width, ground, center = null) {
   const n = pts.length / 2, pos = new Float32Array(n * 2 * 3), acr = new Float32Array(n * 2), idx = [];
   for (let i = 0; i < n; i++) {
     const ip = (i - 1 + n) % n, inx = (i + 1) % n;
@@ -213,7 +222,9 @@ export function bandGeometry(pts, width, ground) {
     const nx = tz, nz = -tx, x = pts[i * 2], z = pts[i * 2 + 1];
     for (let s = 0; s < 2; s++) {
       const k = s ? 1 : -1, vx = x + nx * k * width / 2, vz = z + nz * k * width / 2, v = i * 2 + s;
-      pos[v * 3] = vx; pos[v * 3 + 1] = ground(vx, vz) + 0.06; pos[v * 3 + 2] = vz; acr[v] = k;
+      // aAcross < 0 on the arena side (ring walls with a centre): the shader keeps that edge crisp
+      const inward = center ? nx * (center.x - x) + nz * (center.z - z) > 0 : false;
+      pos[v * 3] = vx; pos[v * 3 + 1] = ground(vx, vz) + 0.06; pos[v * 3 + 2] = vz; acr[v] = inward ? -k : k;
     }
     const a = i * 2, b = inx * 2;
     idx.push(a, b, a + 1, a + 1, b, b + 1);
@@ -226,11 +237,16 @@ export function bandGeometry(pts, width, ground) {
 }
 
 const _v = new THREE.Vector3();
-const _fogLow = new THREE.Color(), _white = new THREE.Color('#FFFFFF');
+const _fogLow = new THREE.Color(), _white = new THREE.Color('#FFFFFF'), _wall = new THREE.Color(), _lilac = new THREE.Color(WALL.lilac);
 
-/** Fog-low tint derived from the current fog colour (greener and darker near the ground, art.md §9.2). */
-function fogLowFrom(fogColor, out) {
-  return out.setRGB(fogColor.r * 0.84, fogColor.g * 0.88, fogColor.b * 0.8);
+/**
+ * Mist tint from the current fog colour: ART §8.1 "fogColor lifted 6 % toward sunColor" (warm, never the old grey-green
+ * darkening). `sun` may be null.
+ */
+function fogLowFrom(fogColor, out, sun = null) {
+  out.copy(fogColor);
+  if (sun) out.lerp(sun, AMBIENT.sunLift);
+  return out;
 }
 
 export class MistCards {
@@ -240,7 +256,10 @@ export class MistCards {
     this.ambient = null;
     this.ambientOn = false;
     this.density = 1;
-    this.walls = new Set();
+    /** live fog walls (an array: no iterator allocation per frame; PERF F7) */
+    this.walls = [];
+    /** the shared particle pool (wall sparkles); FX sets it */
+    this.particles = null;
     this.speedMul = 1;           // Meme Cam / Standing Ground
     this._speed = 1;
     this.loopW = 0;              // Meme Cam loop weight (0 free drift … 1 locked to the camera's 3.8 s loop)
@@ -288,7 +307,7 @@ export class MistCards {
     const radius = rect ? Math.hypot(rect[0], rect[1]) / 2 : Math.max(1, +r || 10);
     const spacing = opts.spacing ?? WALL.spacing;
     const pts = rect ? rectCardPositions(c.x, c.z, rect[0], rect[1], spacing, opts.yaw ?? 0) : ringCardPositions(c.x, c.z, radius, spacing);
-    const n = pts.length / 2, set = new CardSet(n, { name: 'fx.mist.wall', maxA: opts.alpha ?? WALL.maxA, renderOrder: 4 });
+    const n = pts.length / 2, set = new CardSet(n, { name: 'fx.mist.wall', maxA: Math.min(opts.alpha ?? WALL.maxA, WALL.maxA), renderOrder: 4 });
     set.material.uniforms.uNear.value = WALL.near;
     const w = opts.width ?? WALL.w, h = opts.height ?? WALL.h;
     for (let i = 0; i < n; i++) {
@@ -298,36 +317,39 @@ export class MistCards {
     set.dirty();
     this.scene?.add(set.mesh);
     // iso: a 2 m-wide ground mist band along the wall line (shown with the iso weight)
-    const band = new THREE.Mesh(bandGeometry(pts, MIST_ISO.bandW, (x, z) => groundY(this.ctx, x, z, c.y)), new THREE.ShaderMaterial({
+    // world's Arena passes its own band width / alpha per wall (requests/world.md)
+    const band = new THREE.Mesh(bandGeometry(pts, opts.bandW ?? MIST_ISO.bandW, (x, z) => groundY(this.ctx, x, z, c.y), rect ? null : c), new THREE.ShaderMaterial({
       name: 'fx.mist.band', vertexShader: BAND_VERT, fragmentShader: BAND_FRAG, fog: false, transparent: true, depthWrite: false,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
-      uniforms: { uColor: { value: new THREE.Color('#9AA196') }, uScroll: { value: new THREE.Vector2() }, uAlpha: { value: 0 } },
+      uniforms: { uColor: { value: new THREE.Color(MIST_DEFAULT) }, uScroll: { value: new THREE.Vector2() }, uAlpha: { value: 0 } },
     }));
     band.material.userData.noHeightFog = true;
     band.name = 'fx.mist.band'; band.frustumCulled = false; band.matrixAutoUpdate = false; band.renderOrder = 2; band.visible = false;
     this.scene?.add(band);
-    const wall = { set, band, t: 0, rise: opts.rise ?? WALL.rise, out: -1, outDur: WALL.dissolve, alpha: 0 };
-    this.walls.add(wall);
+    const wall = { set, band, bandA: opts.bandA ?? MIST_ISO.bandA, pts, t: 0, rise: opts.rise ?? WALL.rise, out: -1, outDur: WALL.dissolve, alpha: 0, sparkT: 0, sparkI: 0 };
+    this.walls.push(wall);
     const self = this;
     return {
       center: c, r: radius, size: rect,
-      get alive() { return self.walls.has(wall); },
-      dissolve(sec = WALL.dissolve) { if (self.walls.has(wall) && wall.out < 0) { wall.out = 0; wall.outDur = Math.max(0.01, sec); } },
+      get alive() { return self.walls.includes(wall); },
+      dissolve(sec = WALL.dissolve) { if (self.walls.includes(wall) && wall.out < 0) { wall.out = 0; wall.outDur = Math.max(0.01, sec); } },
       dispose(sec = WALL.dissolve) { this.dissolve(sec); },
       remove() { self._removeWall(wall); },
     };
   }
 
   _removeWall(wall) {
-    if (!this.walls.delete(wall)) return;
+    const i = this.walls.indexOf(wall);
+    if (i < 0) return;
+    this.walls.splice(i, 1);
     wall.set.dispose();
     if (wall.band) { wall.band.removeFromParent(); wall.band.geometry.dispose(); wall.band.material.dispose(); }
   }
 
   /** Remove every wall immediately (level unload). */
-  clearWalls() { for (const w of [...this.walls]) this._removeWall(w); }
+  clearWalls() { while (this.walls.length) this._removeWall(this.walls[this.walls.length - 1]); }
 
-  get wallCount() { return this.walls.size; }
+  get wallCount() { return this.walls.length; }
 
   /** Per frame. `dt` = visual dt. */
   render(dt) {
@@ -341,7 +363,8 @@ export class MistCards {
     const period = PLAYER.memeCam?.loop ?? 3.8, free = 1 - this.loopW;
     const wind = Math.max(0.15, ctx.env?.wind ?? 0.6);
     this._drift.x += dt * this._speed * wind * 0.9 * free; this._drift.y += dt * this._speed * wind * 0.35 * free;
-    if (fog?.color) fogLowFrom(fog.color, _fogLow); else _fogLow.set('#9AA196');
+    if (fog?.color) fogLowFrom(fog.color, _fogLow, ctx.env?.sunLight?.color ?? null); else _fogLow.set(MIST_DEFAULT);
+    _wall.copy(_fogLow).lerp(_lilac, WALL.lilacMix);
     // iso weight: the play camera's three-quarter top-down view (eased, so a cutscene hand-off never pops the cards)
     const c = ctx.cam, isoOn = !!c?.isIso && ctx.params?.cam !== 'classic' && (c.modeName === 'follow' || c.modeName === 'lock' || c.modeName === 'boss');
     this.iso += ((isoOn ? 1 : 0) - this.iso) * (dt > 0 ? 1 - Math.exp(-MIST_ISO.ease * dt) : 1);
@@ -373,25 +396,43 @@ export class MistCards {
     // ---- walls
     const pl = ctx.player, camPos = ctx.camera?.position;
     const focus = pl?.object3d && camPos ? actorWorldPos(pl, _v).setY(_v.y + 0.5 * (pl.height ?? 0.6)).distanceTo(camPos) : 0;
-    for (const w of this.walls) {
+    for (let wi = this.walls.length - 1; wi >= 0; wi--) {
+      const w = this.walls[wi];
       w.t += dt;
       let a = Math.min(1, w.t / Math.max(0.01, w.rise));
       if (w.out >= 0) { w.out += dt; a *= Math.max(0, 1 - w.out / w.outDur); if (w.out >= w.outDur) { this._removeWall(w); continue; } }
       if (Math.abs(a - w.alpha) > 0.002) { w.alpha = a; w.set.setAlpha(a); }
+      this._wallSparkle(w, a, dt);
       const u = w.set.material.uniforms;
-      u.uColor.value.copy(_fogLow); u.uTime.value = time;
+      u.uColor.value.copy(_wall); u.uTime.value = time;
       u.uFocus.value.set(focus, focus > 0 ? 1 : 0);
       w.set.scroll.set(time * 0.06 * this._speed, -time * 0.02 * this._speed);
       w.set.setLoop(this._loopPhase, this.loopW, 0.06 * this.speedMul, -0.02 * this.speedMul, period);
       w.set.setIso(this.iso, MIST_ISO.wallH);
       if (w.band) {
         const bu = w.band.material.uniforms;
-        bu.uAlpha.value = MIST_ISO.bandA * a * this.iso;
-        bu.uColor.value.copy(_fogLow).lerp(_white, 0.15);
+        bu.uAlpha.value = w.bandA * a * this.iso;
+        bu.uColor.value.copy(_wall).lerp(_white, 0.15);
         bu.uScroll.value.set(time * 0.05 * this._speed, -time * 0.02 * this._speed);
         w.band.visible = bu.uAlpha.value > 0.003;
       }
     }
+  }
+
+  /**
+   * WA fx.W4 wall sparkle: a white → lilac STAR4 twinkle at a pseudo-random card of the wall every ~0.35 s (Low ×0.5),
+   * through the shared particle pool (`this.particles`, set by FX) — 0 extra draws.
+   */
+  _wallSparkle(w, a, dt) {
+    const P = this.particles;
+    if (!P || !(dt > 0) || a < 0.3) return;
+    if ((w.sparkT -= dt) > 0) return;
+    w.sparkT = WALL.sparkEvery / Math.max(0.25, P.countScale ?? 1) * (0.6 + 0.8 * hash01(w.sparkI * 13 + 5));
+    const n = w.pts.length / 2, i = Math.floor(hash01(w.sparkI++ * 7 + 1) * n) % n;
+    const x = w.pts[i * 2], z = w.pts[i * 2 + 1];
+    _v.set(x, groundY(this.ctx, x, z, 0) + 0.6 + 1.4 * hash01(w.sparkI * 3 + 2), z);
+    P.burst(_v, { additive: true, n: 1, exact: true, shape: SHAPE.STAR4, color: w.sparkI & 1 ? '#FFFFFF' : WALL.lilac, intensity: 2.2, size: [0.16, 0.26], sizeEnd: 0.2,
+      life: [0.5, 0.8], speed: [0.05, 0.2], up: 0.25, drag: 1, fade: FADE.TWINKLE });
   }
 
   dispose() { this.clearWalls(); this.ambient?.dispose(); this.ambient = null; }

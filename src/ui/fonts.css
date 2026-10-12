@@ -1,15 +1,16 @@
-/* src/ui/fonts.css  (owner: ui) — GAME_DESIGN §14.1 font roles. The faces themselves are registered by fonts.js
-   (FontFace + ctx.assets.url, so the relative build base always resolves); these stacks fall back to system serif /
-   rounded sans until they arrive (font-display: swap). */
+/* src/ui/fonts.css  (owner: ui) — font roles. ART §9.2 (X18, K9): Fredoka for every role, logo included; titles 700,
+   buttons 600, body 500 (WA §4.2). The face is registered by fonts.js (FontFace + ctx.assets.url, so the relative build
+   base always resolves); the stacks fall back to rounded system faces until it arrives (font-display: swap). */
 :root {
-  --f-logo: 'Cinzel Decorative', 'Cinzel', 'Trajan Pro', Georgia, serif;      /* logo, boss names, chapter cards */
-  --f-head: 'Cinzel', 'Trajan Pro', Georgia, serif;                           /* menus and headings */
-  --f-body: 'Fredoka', 'Nunito', 'Varela Round', 'Segoe UI Rounded', system-ui, sans-serif;  /* HUD, dialogue, numbers */
-  --f-lore: 'Uncial Antiqua', 'Luminari', Georgia, serif;                     /* letters, lore, Meme Cam captions */
-  --f-sign: 'MedievalSharp', 'Luminari', Georgia, serif;                      /* shop signs, quest names */
+  --f-round: 'Fredoka', 'Nunito', 'Varela Round', 'Segoe UI Rounded', 'SF Pro Rounded', system-ui, sans-serif;
+  --f-logo: var(--f-round);     /* logo, boss names, chapter cards (700, butter → gold fill, cocoa stroke) */
+  --f-head: var(--f-round);     /* menus and headings (700) */
+  --f-body: var(--f-round);     /* HUD, dialogue, numbers (500 / 600) */
+  --f-lore: var(--f-round);     /* letters, lore, Meme Cam captions (500, a gentle skew on letter bodies) */
+  --f-sign: var(--f-round);     /* shop signs, quest names (600) */
 }
 .f-logo { font-family: var(--f-logo); font-weight: 700; }
 .f-head { font-family: var(--f-head); font-weight: 700; }
 .f-body { font-family: var(--f-body); }
 .f-lore { font-family: var(--f-lore); }
-.f-sign { font-family: var(--f-sign); }
+.f-sign { font-family: var(--f-sign); font-weight: 600; }

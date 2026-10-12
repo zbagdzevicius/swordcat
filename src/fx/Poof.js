@@ -29,17 +29,25 @@ export function helmetFor(type) {
 }
 
 const DEBRIS_STYLE = {
-  feathers: { n: 12, shape: SHAPE.FEATHER, color: '#2B2A36', size: [0.13, 0.2], life: [1.0, 1.5], speed: [1.4, 2.8], gravity: 1.6, drag: 2.6, spin: 5, up: 1.2 },
+  feathers: { n: 12, shape: SHAPE.FEATHER, color: '#6A5A8A', size: [0.13, 0.2], life: [1.0, 1.5], speed: [1.4, 2.8], gravity: 1.6, drag: 2.6, spin: 5, up: 1.2 },
   droplets: { n: 10, shape: SHAPE.DROPLET, color: '#7FD38A', size: [0.08, 0.14], life: [0.6, 0.9], speed: [2.0, 3.8], gravity: 10, drag: 0.6, spin: 0, up: 2.0, floor: true },
   bones:    { n: 7, shape: SHAPE.SHARD, color: '#EFE6D4', size: [0.08, 0.13], life: [0.7, 1.0], speed: [2.0, 3.5], gravity: 12, drag: 0.5, spin: 10, up: 2.5, floor: true },
-  dirt:     { n: 6, shape: SHAPE.SHARD, color: '#6B5A44', size: [0.05, 0.09], life: [0.5, 0.8], speed: [1.8, 3.0], gravity: 12, drag: 0.5, spin: 9, up: 2.2, floor: true },
+  dirt:     { n: 6, shape: SHAPE.SHARD, color: '#C49A6C', size: [0.05, 0.09], life: [0.5, 0.8], speed: [1.8, 3.0], gravity: 12, drag: 0.5, spin: 9, up: 2.2, floor: true },
   fur:      { n: 8, shape: SHAPE.FEATHER, color: '#A88A5E', size: [0.08, 0.12], life: [0.8, 1.2], speed: [1.2, 2.4], gravity: 1.8, drag: 3.0, spin: 6, up: 1.0 },
   wood:     { n: 8, shape: SHAPE.SHARD, color: '#8A6A44', size: [0.07, 0.13], life: [0.6, 0.9], speed: [2.0, 3.6], gravity: 12, drag: 0.4, spin: 10, up: 2.4, floor: true },
   leaves:   { n: 10, shape: SHAPE.FEATHER, color: '#5E7A3A', size: [0.1, 0.16], life: [1.0, 1.6], speed: [1.0, 2.2], gravity: 1.2, drag: 2.8, spin: 5, up: 1.0 },
-  rocks:    { n: 10, shape: SHAPE.SHARD, color: '#8C8A84', size: [0.08, 0.16], life: [0.6, 0.95], speed: [2.2, 4.0], gravity: 13, drag: 0.4, spin: 8, up: 2.6, floor: true },
+  rocks:    { n: 10, shape: SHAPE.SHARD, color: '#C9B8A8', size: [0.08, 0.16], life: [0.6, 0.95], speed: [2.2, 4.0], gravity: 13, drag: 0.4, spin: 8, up: 2.6, floor: true },
   straw:    { n: 12, shape: SHAPE.FEATHER, color: '#D9BE72', size: [0.09, 0.15], life: [0.9, 1.4], speed: [1.2, 2.6], gravity: 2.2, drag: 2.6, spin: 7, up: 1.4 },
-  metal:    { n: 7, shape: SHAPE.SHARD, color: '#9EA4AA', size: [0.05, 0.09], life: [0.45, 0.7], speed: [2.4, 4.2], gravity: 13, drag: 0.4, spin: 14, up: 2.2, floor: true },
+  metal:    { n: 7, shape: SHAPE.SHARD, color: '#E2C98E', size: [0.05, 0.09], life: [0.45, 0.7], speed: [2.4, 4.2], gravity: 13, drag: 0.4, spin: 14, up: 2.2, floor: true },
 };
+
+/**
+ * ART §7.1 "faint and poof": 4 faction-colour confetti per defeat (WA §2.5 mischief colours: rat mustard, hyena prank
+ * plum, crow sky, jelly mint, Squeakybone cream). Keyed by debris kind.
+ */
+export const FACTION_CONFETTI = Object.freeze({ dirt: '#E0B043', fur: '#9B6CC8', feathers: '#8FD3FF', droplets: '#9BE3C4', bones: '#F3E6C8', default: '#FFD84A' });
+/** ART §8.4 dust: cream / honey, never grey. */
+export const DUST = Object.freeze({ spawnRing: '#F2DDBB', spawnPuff: '#FFF4E0', step: '#E6C590', ring: '#EFD8B4' });
 export const DEBRIS_KINDS = Object.keys(DEBRIS_STYLE);
 
 /**
@@ -72,11 +80,12 @@ export class HelmetPops {
   constructor({ rng, groundY, max = 6 }) {
     this.rng = rng; this.groundY = groundY;
     this.geos = { kettle: helmGeometry('kettle'), sallet: helmGeometry('sallet') };
-    this.mat = new THREE.MeshStandardMaterial({ name: 'fx.helmet', color: '#8A8D90', metalness: 0.65, roughness: 0.42 });
+    // K6: no Standard / Physical in play: a warm pewter Lambert (one program shared with the world's Lambert)
+    this.mat = new THREE.MeshLambertMaterial({ name: 'fx.helmet', color: '#C8B9A6' });
     this.list = [];
     for (let i = 0; i < max; i++) {
       const m = new THREE.Mesh(this.geos.kettle, this.mat);
-      m.name = 'fx.helmet'; m.visible = false; m.castShadow = true;
+      m.name = 'fx.helmet'; m.visible = false; m.castShadow = false;   // K5: props are grounded by their blob, never the sun map
       m.userData = { t: 0, vel: new THREE.Vector3(), axis: new THREE.Vector3(1, 0, 0), spin: 0, size: 0.3, floor: 0, bounced: false };
       this.list.push(m);
     }
@@ -158,6 +167,11 @@ export class Poof {
       life: [0.55, 0.8], speed: [2.4, 3.8], dir: _up, spread: 1.2, gravity: 7, drag: 1.2, spin: 7, fade: FADE.HOLD });
     const debris = o.debris ?? debrisFor(o.type);
     if (debris) this.debris(_p, debris, S);
+    // ART §7.1: 4 faction-colour confetti, flipping (Low: flat)
+    if (o.confetti !== false && (o.type || o.debris)) {
+      P.burst(_p, { n: 4, shape: SHAPE.CONFETTI, color: FACTION_CONFETTI[debris] ?? FACTION_CONFETTI.default, size: [0.09 * S, 0.12 * S],
+        life: [0.9, 1.3], speed: [1.6, 2.8], dir: _up, spread: 1.0, gravity: 4, drag: 1.6, spin: 6, fade: FADE.HOLD, exact: true });
+    }
     // helmets: enemies pop their own real helmet (EnemyManager.spawnDebris); fx adds one only when asked (`o.helmet`)
     const helm = o.helmet === true ? helmetFor(o.type) ?? 'kettle' : o.helmet || null;
     if (helm && this.helmets) {
@@ -178,21 +192,21 @@ export class Poof {
   /** Arena spawn poof (§12.1): a ground ring of dust plus a short rising column. */
   spawn(pos, S = 1) {
     this.p.ring(pos, { n: 10, r0: 0.25 * S, speed: [2.2, 3.2], size: [0.3 * S, 0.42 * S], sizeEnd: 2.0, life: [0.5, 0.7],
-      color: '#D7CFBF', tint: 0.06, alpha: 0.85, y: 0.12, up: 0.35 });
+      color: DUST.spawnRing, tint: 0.06, alpha: 0.85, y: 0.12, up: 0.35 });
     _p.copy(pos); _p.y += 0.4 * S;
-    this.p.burst(_p, { n: 7, shape: SHAPE.PUFF, color: '#E9E3D6', tint: 0.05, size: [0.28 * S, 0.4 * S], sizeEnd: 1.6, grow: GROW.OUT,
+    this.p.burst(_p, { n: 7, shape: SHAPE.PUFF, color: DUST.spawnPuff, tint: 0.05, size: [0.28 * S, 0.4 * S], sizeEnd: 1.6, grow: GROW.OUT,
       fade: FADE.HOLD, life: [0.45, 0.65], speed: [0.4, 1.0], dir: _up, spread: 0.6, up: 1.4, drag: 2.5, jitter: 0.3 * S });
   }
 
   /** Soft dust puff at the feet (dodge, landing, zoomies steps). */
   dust(pos, S = 1, n = 5) {
     this.p.ring(pos, { n, r0: 0.08, speed: [0.8 * S, 1.6 * S], size: [0.14 * S, 0.22 * S], sizeEnd: 2.2, life: [0.35, 0.55],
-      color: '#BDB39E', tint: 0.08, alpha: 0.6, y: 0.06, up: 0.25, drag: 4 });
+      color: DUST.step, tint: 0.08, alpha: 0.55, y: 0.06, up: 0.25, drag: 4 });
   }
 
   /** Heavy-hit dust ring (juice table: "8 stars, dust ring"). */
   dustRing(pos, S = 1) {
     this.p.ring(pos, { n: 12, r0: 0.3, speed: [2.6 * S, 3.6 * S], size: [0.22 * S, 0.32 * S], sizeEnd: 2.1, life: [0.4, 0.6],
-      color: '#C6BCA6', tint: 0.07, alpha: 0.75, y: 0.08, up: 0.4 });
+      color: DUST.ring, tint: 0.07, alpha: 0.75, y: 0.08, up: 0.4 });
   }
 }

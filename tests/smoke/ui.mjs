@@ -2,7 +2,7 @@
 // Screenshots → tests/shots/ui/*.png. Blocks: HUD (+ boss bar, objective, toasts, threat arrows, interaction tag, story
 // prompt, tutorial hint, lock pips), dialogue + cinema (letterbox, caption, chapter card, life lost), menus (pause,
 // settings, kittens, letters, vigil, game over → retry), title flow (title → main → new game → settings → credits),
-// results (showResults resolves on confirm), touch controls, Meme Cam caption.
+// results (showResults resolves on confirm), touch controls, Meme Cam caption, ui:warm (the warm-adventure layers).
 // CONTROLS_SPEC (iso controls): ui:ability-bar (desktop bar: glyphs per preset, Tumble + kitten cooldown sweeps,
 // tooltip, Grit arc, cursors, HP pills, controls card per preset, §10.7 settings), ui:touch-cluster (844 × 390 hasTouch:
 // ⚔ tap swings, 🛡 hold guards, a swipe tumbles, the kitten drag aims and ✕ cancels, smart cast, Edit layout) and
@@ -275,16 +275,16 @@ export default [
       t.assert(cin.hud, 'HUD hidden by the cutscene ui step');
       await shot(t, '05-chapter-letterbox');
       await inPage(t, () => { const ui = window.__GAME__.ctx.ui; ui.cinema.apply({ letterbox: false, hud: true, caption: null }, null, true); ui.cinema.clear(); });
-      // life lost card
+      // WA §5.7 knock-out: no card, no ghost; a cream wipe at KO.sitT, then the life toast and the lives-badge pop
       await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_LIFE_LOST, { lives: 8, gameOver: false }); });
-      await t.wait(380);
-      await freezeAnims(t, '.cin-life', true);
-      const life = await inPage(t, () => document.querySelector('.cin-life.is-on .life-txt')?.textContent ?? '');
-      t.assert(/8/.test(life), `life lost card "${life}"`);
+      await t.wait(1350);
+      const wipe = await inPage(t, () => { const f = document.querySelector('.cin-fade'); const cs = getComputedStyle(f); return { o: +cs.opacity, bg: cs.backgroundColor, card: !!document.querySelector('.cin-life.is-on') }; });
+      t.assert(wipe.o > 0.05 && /255, 241, 222/.test(wipe.bg), `cream wipe (${wipe.o.toFixed(2)} ${wipe.bg})`);
+      t.assert(!wipe.card, 'no life-lost card');
+      await t.wait(700);
+      const life = await inPage(t, () => [...document.querySelectorAll('.ui-toast')].map((e) => e.textContent).join(' | '));
+      t.assert(/8/.test(life), `life toast "${life}"`);
       await shot(t, '06-life-lost');
-      await freezeAnims(t, '.cin-life', false);
-      await t.wait(1600);
-      t.assert(!(await inPage(t, () => !!document.querySelector('.cin-life.is-on'))), 'life lost card clears after 1.5 s');
     },
   },
   {
@@ -377,12 +377,12 @@ export default [
       });
       await t.wait(2600);
       const r = await inPage(t, () => ({ on: !!document.querySelector('.ui-results.is-on'), rows: document.querySelectorAll('.res-row.is-in').length,
-        stamp: document.querySelector('.res-stamp span')?.textContent, mode: window.__GAME__.mode }));
+        stamp: document.querySelector('.res-stamp .res-word')?.textContent, mode: window.__GAME__.mode }));
       t.assert(r.on && r.rows === 5, `results rows ${r.rows}`);
-      t.assert(r.stamp === 'Paw-some', `rank stamp "${r.stamp}"`);
+      t.assert(/paw-some/i.test(r.stamp ?? ''), `rank stamp "${r.stamp}"`);
       await fontAudit(t, 'results');
       const stampFit = await inPage(t, () => {
-        const p = document.querySelector('.res-panel').getBoundingClientRect(), s = document.querySelector('.res-stamp span').getBoundingClientRect();
+        const p = document.querySelector('.res-panel').getBoundingClientRect(), s = document.querySelector('.res-stamp .res-word').getBoundingClientRect();
         return s.left >= p.left && s.right <= p.right && s.bottom <= p.bottom;
       });
       t.assert(stampFit, 'rank ribbon inside the results card');
@@ -428,51 +428,131 @@ export default [
     },
   },
   {
+    // WA §4.3 (ui.W1): no main-menu panel and no difficulty picker on a new save: ONE candy button at 1.4 s; with a
+    // save "Keep going!" + "New adventure"; the gear opens Settings (Credits inside); the button starts at Knight.
     name: 'ui:title', order: 45, level: null, timeout: 90000,
     async run(t) {
-      await inPage(t, () => { const g = window.__GAME__; g.story.skip(); g.setMode('play'); g.ctx.ui.showTitle(); });
-      await t.wait(2900);
-      const s = await inPage(t, () => ({ on: !!document.querySelector('.ui-title.is-on.is-ready'), mode: window.__GAME__.mode, hud: !!document.querySelector('.hud.is-hidden') }));
-      t.assert(s.on, 'title screen with the press prompt');
+      await inPage(t, () => { const g = window.__GAME__; g.story.skip(); g.setMode('play'); const ui = g.ctx.ui; ui._hasSaveReal ??= ui.hasSave; ui.hasSave = () => false; ui.showTitle(); });
+      await t.wait(2200);
+      const s = await inPage(t, () => ({ on: !!document.querySelector('.ui-title.is-on.is-logo'), mode: window.__GAME__.mode, hud: !!document.querySelector('.hud.is-hidden'),
+        btns: [...document.querySelectorAll('.menu--home .btn--home .btn-lbl')].map((b) => b.textContent), panel: !!document.querySelector('.menu--home .menu-panel'),
+        shade: !!document.querySelector('.title-shade'), gear: !!document.querySelector('.ui-title .title-gear'), foot: document.querySelector('.title-foot')?.textContent ?? '' }));
+      t.assert(s.on, 'title screen with the logo');
       t.assert(s.mode !== 'play', `world held still under the title (mode ${s.mode})`);
       t.assert(s.hud, 'HUD hidden on the title');
+      t.assert(s.btns.length === 1 && /play/i.test(s.btns[0]), `one button without a save: ${s.btns.join(' · ')}`);
+      t.assert(!s.panel && !s.shade, 'no main-menu panel, no dark shade');
+      t.assert(s.gear && /purr/i.test(s.foot), `gear + footer "${s.foot}"`);
+      await fontAudit(t, 'title');
       await shot(t, '16-title');
-      await t.page.keyboard.press('Enter');
+      // with a save: two buttons
+      await inPage(t, () => { const ui = window.__GAME__.ctx.ui; ui.hasSave = () => true; ui.menus.closeAll(); ui.showTitle({ fromStory: true }); });
+      await t.wait(900);
+      const two = await inPage(t, () => [...document.querySelectorAll('.menu--home .btn--home .btn-lbl')].map((b) => b.textContent));
+      t.assert(two.length === 2, `two buttons with a save: ${two.join(' · ')}`);
+      await shot(t, '17-title-save');
+      // the gear: Settings with Credits inside
+      await t.page.click('.title-gear');
       await t.wait(600);
-      const main = await inPage(t, () => [...document.querySelectorAll('.menu--main .btn-lbl')].map((b) => b.textContent));
-      t.assert(main.includes('New Game') && main.includes('Settings') && main.includes('Credits'), `main menu: ${main.join(' · ')}`);
-      await shot(t, '17-main-menu');
-      // New Game (navigate by label: a stored save adds Continue above it)
-      const ngAt = main.indexOf('New Game');
-      for (let i = 0; i < ngAt; i++) { await t.page.keyboard.press('ArrowDown'); await t.wait(120); }
-      await t.page.keyboard.press('Enter');
-      await t.wait(500);
-      const diff = await inPage(t, () => document.querySelectorAll('.menu--newgame .btn--card').length);
-      t.assert(diff === 3, 'difficulty cards: Kitten / Knight / Nine Lives');
-      await shot(t, '18-new-game');
-      await t.page.keyboard.press('Escape'); await t.wait(300);
-      for (let i = ngAt; i < main.indexOf('Credits'); i++) { await t.page.keyboard.press('ArrowDown'); await t.wait(120); }
-      await t.page.keyboard.press('Enter'); await t.wait(700);  // Credits
-      t.assert(await inPage(t, () => !!document.querySelector('.menu--credits.is-on')), 'credits open');
+      const set = await inPage(t, () => ({ on: !!document.querySelector('.menu--settings.is-on'), credits: [...document.querySelectorAll('.menu--settings .btn-lbl')].some((b) => /credit/i.test(b.textContent)) }));
+      t.assert(set.on && set.credits, 'the gear opens Settings, with Credits inside');
+      await shot(t, '18-title-settings');
+      await inPage(t, () => window.__GAME__.ctx.ui.menus.openCredits());
       await t.wait(1800);
       await fontAudit(t, 'credits');
       const crFit = await inPage(t, () => document.querySelector('.menu--credits .menu-panel').getBoundingClientRect().bottom <= innerHeight + 1);
       t.assert(crFit, 'credits panel fits the viewport');
       await shot(t, '19-credits');
-      await t.page.keyboard.press('Escape'); await t.wait(300);
-      // New Game → Kitten: the ui starts the game (story.newGame, else the prologue load)
+      // no save again: "Tap to play!" starts the game at Knight, no picker
+      await inPage(t, () => { const ui = window.__GAME__.ctx.ui; ui.hasSave = () => false; ui.menus.closeAll(); ui.showTitle({ fromStory: true }); });
+      await t.wait(900);
       await t.clearEvents();
-      await inPage(t, () => window.__GAME__.ctx.ui.menus.openNewGame());
-      await t.wait(400);
-      await t.page.keyboard.press('ArrowUp'); await t.wait(150);
-      await t.page.keyboard.press('Enter');
+      await t.page.click('.btn--play');
       const loaded = await t.waitForEvent('level:loaded', 40000);
-      t.assert(loaded, 'New Game loads the first level');
+      t.assert(loaded, 'Tap to play loads the first level');
       await t.wait(600);
-      const ng = await inPage(t, () => ({ title: !!document.querySelector('.ui-title.is-on'), diff: window.__GAME__.ctx.state.difficulty, level: window.__GAME__.levelId }));
-      t.assert(!ng.title, 'title closed after New Game');
-      t.assert(ng.diff === 'kitten', `difficulty set (${ng.diff})`);
-      await inPage(t, () => { const g = window.__GAME__; g.story.skip(); g.ctx.state.difficulty = 'knight'; g.ctx.bus.emit(g.E.SETTINGS_CHANGED, { key: 'difficulty', value: 'knight' }); g.setMode('play'); });
+      const ng = await inPage(t, () => ({ title: !!document.querySelector('.ui-title.is-on'), diff: window.__GAME__.ctx.state.difficulty, picker: !!document.querySelector('.menu--newgame') }));
+      t.assert(!ng.title, 'title closed after play');
+      t.assert(ng.diff === 'knight' && !ng.picker, `Knight, no picker (${ng.diff})`);
+      await inPage(t, () => { const g = window.__GAME__; const ui = g.ctx.ui; if (ui._hasSaveReal) ui.hasSave = ui._hasSaveReal; g.story.skip(); g.setMode('play'); });
+    },
+  },
+  {
+    // The warm phase in one pass (IMPLEMENTATION_PLAN §6 ui + Phase W): #ui-vignette / #ui-flash, screenOccluders,
+    // the calm HUD tuck, a celebration card + sticker, the guide bubble + paw dots, the Kitten-mode offer chips, a
+    // fly-to-HUD fish, the candy ability bar, the warm results card.
+    name: 'ui:warm', order: 51, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await inPage(t, () => { const g = window.__GAME__; g.god(true); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); g.setMode('play'); });
+      await t.wait(400);
+      const lay = await inPage(t, () => {
+        const ui = window.__GAME__.ctx.ui, v = document.getElementById('ui-vignette'), f = document.getElementById('ui-flash');
+        const spec = ui.flash('hurt');
+        return { v: !!v && getComputedStyle(v).pointerEvents === 'none', f: !!f && getComputedStyle(f).pointerEvents === 'none', spec };
+      });
+      t.assert(lay.v && lay.f, '#ui-vignette and #ui-flash exist, pointer-events none');
+      t.assert(lay.spec?.color === '#FF8FB1', `hurt flash ${JSON.stringify(lay.spec)}`);
+      await t.wait(500);
+      const occ = await inPage(t, () => { const o = window.__GAME__.ctx.ui.screenOccluders(); return { v: o.version, kinds: o.rects.map((r) => r.kind), n: o.rects.length }; });
+      t.assert(occ.v > 0 && occ.n >= 2 && occ.kinds.every((k) => ['hud', 'cluster', 'stick', 'bar', 'dialog', 'chip'].includes(k)), `occluders v${occ.v}: ${occ.kinds.join(',')}`);
+      const v0 = occ.v;
+      await t.wait(600);
+      t.assert((await inPage(t, () => window.__GAME__.ctx.ui.screenOccluders().version)) === v0, 'a steady layout keeps its version');
+      // calm HUD: out of combat for 4 s → Grit / Valor / counters tucked; 'full' shows them
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.state.settings.hudMode = 'calm'; });
+      await t.wait(4600);
+      const tuck = await inPage(t, () => { const h = document.querySelector('.hud'); return { grit: h.classList.contains('tuck-grit'), counts: h.classList.contains('tuck-counts') }; });
+      t.assert(tuck.grit && tuck.counts, `calm HUD tucked (${JSON.stringify(tuck)})`);
+      await shot(t, '30-calm-hud');
+      // fly-to-HUD: a fish picked up near her flies to the counter (and the counters show)
+      await inPage(t, () => { const g = window.__GAME__, p = g.ctx.player.pos; g.ctx.bus.emit(g.E.ITEM_PICKUP, { item: 'fish', amount: 1, position: { x: p.x + 1, y: p.y, z: p.z + 1 } }); });
+      await t.wait(120);
+      t.assert(await inPage(t, () => !!document.querySelector('.fly-ico.is-on')), 'a fish flies to its counter');
+      // a celebration card (docks in combat; here it pops big)
+      await inPage(t, () => window.__GAME__.ctx.ui.celebrate('card', 'holy'));
+      await t.wait(450);
+      const card = await inPage(t, () => ({ on: !!document.querySelector('.cel-card.is-on.is-card'), title: document.querySelector('.cel-title')?.textContent, ts: window.__GAME__.ctx.game.timeScale, mode: window.__GAME__.mode }));
+      t.assert(card.on && /holy/i.test(card.title ?? ''), `card "${card.title}"`);
+      t.assert(card.ts === 1 && card.mode === 'play', 'a celebration never pauses the game');
+      await shot(t, '31-card');
+      await t.wait(2200);
+      await inPage(t, () => window.__GAME__.ctx.ui.celebrate('sticker', 'bonk'));
+      await t.wait(450);
+      t.assert(await inPage(t, () => !!document.querySelector('.cel-card.is-on.is-sticker')), 'sticker');
+      t.assert(await inPage(t, () => !!window.__GAME__.ctx.state.getFlag('sticker.bonk')), 'the sticker book flag');
+      await shot(t, '32-sticker');
+      await t.wait(1800);
+      // the guide bubble: Pearl + chip + paw dots; a second prompt replaces it (one bubble)
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PROMPT, { kind: 'tutorial', speaker: 'pearl', say: 'Race you to the sun-ring!', textKey: 'tut.move', step: 1, stepDots: { n: 1, of: 7, half: true }, action: 'move' }); });
+      await t.wait(400);
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PROMPT, { kind: 'tutorial', speaker: 'pearl', say: 'Bonk the dummy!', textKey: 'tut.bonk', step: 2, stepDots: { n: 2, of: 7 }, action: 'attack' }); });
+      await t.wait(400);
+      const gd = await inPage(t, () => ({ n: document.querySelectorAll('.ui-guide.is-on').length, say: document.querySelector('.gd-say')?.textContent, dots: document.querySelectorAll('.gd-dot.is-full').length,
+        pe: getComputedStyle(document.querySelector('.ui-guide')).pointerEvents, occl: window.__GAME__.ctx.ui.screenOccluders().rects.some((r) => r.kind === 'chip') }));
+      t.assert(gd.n === 1 && /Bonk/.test(gd.say ?? '') && gd.dots === 2, `one bubble, replaced (${JSON.stringify(gd)})`);
+      t.assert(gd.pe === 'none' && !gd.occl, 'the bubble is never an occluder');
+      await shot(t, '33-guide');
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PROMPT, { kind: 'tutorial', speaker: 'pearl', textKey: 'tut.bonk', step: 2, done: true }); });
+      await t.wait(800);
+      // the Kitten-mode offer (once per save): chips are a `chip` occluder while open
+      const offerP = inPage(t, () => { window.__GAME__.ctx.state.setFlag('seen.offer.kitten', false); window.__GAME__.ctx.ui.offerKitten(); return true; });
+      await offerP; await t.wait(500);
+      const of = await inPage(t, () => ({ on: !!document.querySelector('.ui-offer.is-on'), chips: document.querySelectorAll('.ui-offer .of-chip').length, occl: window.__GAME__.ctx.ui.screenOccluders().rects.some((r) => r.kind === 'chip') }));
+      t.assert(of.on && of.chips === 2 && of.occl, `offer chips (${JSON.stringify(of)})`);
+      await shot(t, '34-offer');
+      await t.page.click('.of-no');
+      await t.wait(300);
+      t.assert(await inPage(t, () => window.__GAME__.ctx.state.difficulty !== 'kitten'), '"I got this" keeps the difficulty');
+      t.assert((await inPage(t, () => window.__GAME__.ctx.ui.offerKitten().then((v) => v))) === null, 'not offered twice');
+      // results: warm scrim, count-up, the rank stamp
+      const resP = inPage(t, () => { window.__GAME__.ctx.ui.showResults({ levelId: 'meadow', time: 512, kittens: 2, kittensTotal: 3, letter: true, fish: 64, lives: 7, livesLost: 2 }); return true; });
+      await resP; await t.wait(1600);
+      const res = await inPage(t, () => ({ title: document.querySelector('.res-title')?.textContent, word: document.querySelector('.res-word')?.textContent, bf: getComputedStyle(document.querySelector('.ui-results')).backdropFilter }));
+      t.assert(/clear/i.test(res.title ?? '') && /PURR/i.test(res.word ?? ''), `results "${res.title}" ${res.word}`);
+      t.assert(!res.bf || res.bf === 'none', 'no backdrop blur');
+      await shot(t, '35-results');
+      await inPage(t, () => window.__GAME__.ctx.ui.results.close());
+      await inPage(t, () => { const g = window.__GAME__; g.setMode('play'); g.ctx.state.settings.hudMode = 'calm'; });
     },
   },
   {
@@ -635,7 +715,7 @@ export default [
       await t.wait(2600);
       const rb = await inPage(t, () => ({ r: [...document.querySelectorAll('.res-ribbon')].map((e) => e.textContent), best: document.querySelector('.res-best')?.textContent }));
       t.assert(rb.r.length === 2, `results ribbons: ${rb.r.join(', ')}`);
-      t.assert(/22:00|Paw-some/.test(rb.best ?? ''), `best line (${rb.best})`);
+      t.assert(/22:00|paw-some/i.test(rb.best ?? ''), `best line (${rb.best})`);
       await shot(t, '28-results-best');
       await t.page.keyboard.press('Enter'); await t.wait(400);
       await inPage(t, () => { window.__GAME__.ctx.ui.results.autoContinue = true; });
@@ -696,8 +776,9 @@ export default [
       await inPage(t, () => {
         const e = document.querySelector('.ab-dodge'), sw = e.querySelector('.ab-sweep');
         window.__dodgeSeen = { cd: false, sweep: 0 };
+        // X21: the sweep is one CSS animation per cooldown start (--cd0 = the start angle, --cdd = its length)
         const mo = new MutationObserver(() => {
-          if (e.classList.contains('is-cd')) { window.__dodgeSeen.cd = true; window.__dodgeSeen.sweep = Math.max(window.__dodgeSeen.sweep, parseFloat(sw.style.getPropertyValue('--cd')) || 0); }
+          if (e.classList.contains('is-cd')) { window.__dodgeSeen.cd = true; window.__dodgeSeen.sweep = Math.max(window.__dodgeSeen.sweep, parseFloat(sw.style.getPropertyValue('--cd0')) || 0); }
         });
         mo.observe(e, { attributes: true, attributeFilter: ['class'] }); mo.observe(sw, { attributes: true, attributeFilter: ['style'] });
         window.__dodgeMo = mo;
@@ -716,11 +797,13 @@ export default [
       await t.wait(400);
       const kcd = await inPage(t, () => {
         const e = document.querySelector('.ab-ability');
-        return { cd: e.classList.contains('is-cd'), sweep: parseFloat(e.querySelector('.ab-sweep').style.getPropertyValue('--cd')) || 0, num: e.querySelector('.ab-num').textContent,
-          left: window.__GAME__.ctx.companions.cooldownLeft?.() ?? 0, op: getComputedStyle(e.querySelector('.ab-sweep')).opacity };
+        const sw = e.querySelector('.ab-sweep');
+        return { cd: e.classList.contains('is-cd'), sweep: parseFloat(getComputedStyle(sw).getPropertyValue('--cd')) || 0, start: parseFloat(sw.style.getPropertyValue('--cd0')) || 0,
+          run: sw.classList.contains('is-run'), num: e.querySelector('.ab-num').textContent,
+          left: window.__GAME__.ctx.companions.cooldownLeft?.() ?? 0, op: getComputedStyle(sw).opacity };
       });
       t.log(`kitten slot ${JSON.stringify(kcd)}`);
-      t.assert(kcd.cd && kcd.sweep > 30 && +kcd.op > 0.5, `kitten cooldown sweep (${JSON.stringify(kcd)})`);
+      t.assert(kcd.cd && kcd.run && kcd.start > 30 && kcd.sweep > 30 && +kcd.op > 0.5, `kitten cooldown sweep (${JSON.stringify(kcd)})`);
       t.assert(/^\d+$/.test(kcd.num) && +kcd.num >= 1, `whole seconds on the slot ("${kcd.num}")`);
       await shot(t, '40-ability-bar-cooldown');
       // ---- hover tooltip (parchment, the move's rule + its key)

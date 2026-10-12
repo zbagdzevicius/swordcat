@@ -10,8 +10,13 @@ import * as THREE from 'three';
 /** Sword-local landmarks (must match Sword.js). */
 export const SWORD_PTS = Object.freeze({ pommel: -0.132, gripTop: -0.012, gripMid: -0.055, gripLow: -0.1 });
 
-/** The nine contract poses (GAME_DESIGN §19.4) + extras ('ready', 'guard', 'selfie_sit', 'cheer', 'walkHold', 'hug'). */
-export const POSE_NAMES = Object.freeze(['vigil', 'oath', 'sip', 'selfie', 'faint', 'kneel', 'sit', 'sleep', 'idle']);
+/**
+ * The nine contract poses (GAME_DESIGN §19.4) + the Phase W procedural poses (WARM_ADVENTURE_SPEC §5.6, characters.W2:
+ * 'cheer', 'groom', 'twirl', 'boop', 'pawBump'; their motion is the same-named emote on top of the held pose).
+ */
+export const POSE_NAMES = Object.freeze(['vigil', 'oath', 'sip', 'selfie', 'faint', 'kneel', 'sit', 'sleep', 'idle', 'cheer', 'groom', 'twirl', 'boop', 'pawBump']);
+/** Phase W poses (a subset of POSE_NAMES): hold the pose, play `kitten.emote(name)` for the motion. */
+export const WARM_POSE_NAMES = Object.freeze(['cheer', 'groom', 'twirl', 'boop', 'pawBump']);
 /** Extra poses beyond the contract nine (M1 extras + M2 activity poses). */
 export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
 
@@ -123,6 +128,44 @@ export const POSES = {
   },
   // Sitting selfie (CS-03 on the hay bale): sit legs + selfie arms.
   selfie_sit: null,
+  // ---- Phase W poses (WARM_ADVENTURE_SPEC §5.6): held bases; the motion is the same-named emote.
+  // Groom: left paw up at the mouth (the paw lick), head tipped into it; sword resting like idle.
+  groom: {
+    joints: { chest: [0.06, 0.12, 0], head: [0.22, 0.25, 0.12], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
+    sword: { mode: 'hand', guard: [-0.19, 0.31, 0.13], dir: [-0.06, -1, 0.42], face: [0.45, 0, 1] },
+    arms: {
+      R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.2, -0.6], twist: [0, 0, 0] },
+      L: { paw: [0.03, 0.66, 0.2], pole: [1, -0.6, -0.3], twist: [0, 0, 0] },
+    },
+    expr: 'happy',
+  },
+  // Twirl: blade held out to her right side at shoulder height (the emote spins it around the grip).
+  twirl: {
+    joints: { chest: [-0.04, -0.18, 0], head: [-0.06, -0.2, 0], thighL: [0, 0.05, 0.06], thighR: [0, -0.05, -0.06], footL: [0, 0.3, 0], footR: [0, -0.3, 0] },
+    sword: { mode: 'hand', guard: [-0.36, 0.52, 0.1], dir: [-0.6, 0.75, 0.25], face: [0, 0, 1] },
+    arms: {
+      R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.6, -0.5], twist: [0, 0, 0] },
+      L: { fk: { shoulder: [-0.2, 0, 0.5], elbow: [-0.4, 0, 0] } },
+    },
+    expr: 'happy',
+  },
+  // Boop: leaning in, nose first, head tilted (kitten rescue reunion); sword stuck in the ground beside her.
+  boop: {
+    joints: { body: [0.12, 0, 0], chest: [0.18, 0, 0], head: [0.1, 0, 0.21], thighL: [-0.1, 0.05, 0.05], thighR: [-0.1, -0.05, -0.05] },
+    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
+    arms: { L: { fk: { shoulder: [-0.5, 0, 0.2], elbow: [-0.6, 0, 0] } }, R: { fk: { shoulder: [-0.5, 0, -0.2], elbow: [-0.6, 0, 0] } } },
+    expr: 'happy',
+  },
+  // Paw bump: right paw held out forward at chest height (companions after an encounter clear).
+  pawBump: {
+    joints: { chest: [0.05, 0.12, 0], head: [0.02, 0.1, 0], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
+    sword: { mode: 'root', pommel: [0.32, 0.5, -0.05], dir: [-0.06, -1, 0.0], face: [0.2, 0, 1] },
+    arms: {
+      R: { paw: [-0.08, 0.55, 0.36], pole: [-1, -0.6, -0.3], twist: [0, 0, 0] },
+      L: { fk: { shoulder: [0.05, 0, 0.12], elbow: [-0.25, 0, 0], paw: [0, 0, 0] } },
+    },
+    expr: 'happy',
+  },
   // Victory cheer: sword raised high in the right paw.
   cheer: {
     joints: { chest: [-0.12, 0, 0], head: [-0.2, 0, 0], thighL: [0, 0.05, 0.06], thighR: [0, -0.05, -0.06], footL: [0, 0.3, 0], footR: [0, -0.3, 0] },

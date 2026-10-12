@@ -10,8 +10,9 @@ import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { E } from '../core/events.js';
-import { PLAYER, ATTACKS, ECONOMY, COMPANIONS, JUICE, ENEMIES, AIM, GRAVITY } from '../core/config.js';
-import { wrapAngle, dampAngle } from '../core/math.js';
+import { PLAYER, ATTACKS, ECONOMY, COMPANIONS, JUICE, ENEMIES, AIM, GRAVITY, NAV, TOUCH, KO, FADE_COLOR, HUD, CAMERA } from '../core/config.js';
+import { wrapAngle, dampAngle, smoothstep } from '../core/math.js';
+import { IdleLadder, HIT_WORDS, ORDER_FX, wordFor, koRespawnT } from './juice.js';
 import { hostileTo } from '../core/ActorRegistry.js';
 import { GuardState, parryWindowFor } from './Guard.js';
 import { Valor } from './Valor.js';
@@ -32,6 +33,8 @@ const _hostile = hostileTo('player');
 const AIM_RECENT = 2.0;
 const COMBO_INDEX = { slash1: 1, slash2: 2, slash3: 3 };
 const JEER_R = ENEMIES.hyena?.jeer?.r ?? 8;
+/** AUTOCAM §5.3: an order's intent points at the path 2.5 m ahead (CAMERA.iso.lead.orderLook). */
+const CAMERA_ORDER_LOOK = CAMERA.iso?.lead?.orderLook ?? 2.5;
 
 export class Player extends ScriptedActorMixin(Actor) {
   constructor(ctx) {
@@ -93,7 +96,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     /** point-and-go orders (move / attack / attackMove / use / stop) and their path follower */
     this.orders = new Orders(this);
     /** the resolved aim (§7.1) of the current / last directional verb: fx draws the aim ring notch from it */
-    this.aim = { active: false, kind: 'attack', dir: { x: 0, z: 1 }, point: null, target: null, range: 0, width: 0, source: 'facing' };
+    this.aim = { active: false, held: false, kind: 'attack', dir: { x: 0, z: 1 }, point: null, target: null, range: 0, width: 0, source: 'facing' };
     this._aimOut = { dir: { x: 0, z: 1 }, point: null, target: null, source: 'facing' };
     /** soft auto-target memory (§7.2 sticky) and the cursor position the Stand re-aims after (§8.1: 30 px) */
     this._autoPrev = null;
@@ -113,6 +116,84 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.airAssist = { x: 0, z: 0, on: false };
     /** §5.4 Pounce dive point while airborne with Pounce ready (fx draws the 0.9 m dive circle): { x, z, valid } */
     this.diveAt = { x: 0, z: 0, valid: false };
+    // ---- AUTOCAM §5.3 / §4 (the camera reads these every frame; written every sim step, zero allocation)
+    /**
+     * Where she means to go: `kind` 'stick' (touch joystick, before her velocity), 'walk' / 'run' (WASD / pad), 'order'
+     * (click / tap path: toward the path point 2.5 m ahead), 'other' (Tumble, Pounce, swings, knockback, scripted
+     * motion) or 'idle'; (x, z) a unit XZ direction (0, 0 when idle / other); `speed` m/s.
+     */
+    this.moveIntent = { x: 0, z: 0, speed: 0, kind: 'idle' };
+    /** The Y of her last ground contact (heightfield or a collider top: bridges, decks), updated every step. */
+    this.groundY = 0;
+    this._la = { x: 0, z: 0 };
+    // ---- WA §5.6 life between fights
+    /** the hero idle ladder (glance → look → groom → twirl → Meme Cam; hub: sit) */
+    this.idleLadder = new IdleLadder({ rand: ctx.rng?.fork ? ctx.rng.fork('idle') : undefined });
+    /** taps on her (WA §5.6, wall-clock s), the word rate limit (WA §5.3) and the knock-out wipe flag (WA §5.7) */
+    this._selfTaps = [];
+    this._wordT = -Infinity; this._wordSerial = -1;
+    this._koWiped = false;
+  }
+
+  /** WA §5.6 "in combat": recent combat activity, a Standing Ground threat, or an alerted enemy within 15 m. */
+  inCombat() {
+    return this.combatT > 0 || this.threatened || this._alertedWithin(HUD?.tuck?.combatR ?? ORDER_FX.combatR);
+  }
+
+  /**
+   * WA §5.6 a click / tap on her (Orders decides): out of combat a meow + bow bounce + a heart; three within 1.5 s →
+   * a twirl. In combat it is ignored (no emote, no order). Returns what played ('pat' | 'twirl' | null).
+   */
+  onSelfTap() {
+    if (!this.alive || this.scripted || this.state !== 'move' || this.inCombat()) return null;
+    const now = performance.now() / 1000, T = this._selfTaps;
+    while (T.length && now - T[0] > ORDER_FX.tripleT) T.shift();
+    T.push(now);
+    if (T.length >= ORDER_FX.tripleN) {
+      T.length = 0;
+      this.model.idleStep('twirl');
+      this.selfTapped = 'twirl';
+      return 'twirl';
+    }
+    this.model.emote('meow'); this.model.emote('bowBounce'); this.model.happy?.();
+    try { this.ctx.audio?.play2D?.('meow', { volume: 0.55 }); } catch { /* audio not ready */ }
+    this.ctx.bus.emit(E.BURST, { kind: 'heart', position: _v.set(this.pos.x, this.pos.y + this.height * 1.1, this.pos.z).clone() });
+    this.selfTapped = 'pat';
+    return 'pat';
+  }
+
+  /**
+   * WA §5.3 one comic word above her head ("Snip!", "Ting!", "Bonk!"): `settings.hitWords`, at most one per 0.25 s.
+   * fx draws it (`fx.word` once fx ships the word style, else a damage number). Returns true when shown.
+   */
+  sayWord(key, force = false) {
+    const S = this.ctx.strings, sk = 'word.' + key;
+    const text = S?.has?.(sk) ? S.t(sk) : wordFor(key);              // story may own the strings (word.<kind>)
+    if (!text || this.ctx.state?.settings?.hitWords === false) return false;
+    const now = this.ctx.game?.time ?? 0;
+    if (!force && now - this._wordT < HIT_WORDS.every - 1e-6) return false;
+    this._wordT = now;
+    const at = _v.set(this.pos.x, this.pos.y + this.height + HIT_WORDS.lift, this.pos.z);
+    const fx = this.ctx.fx;
+    try {
+      if (typeof fx?.word === 'function') fx.word(at, text, { kind: key, actor: this });
+      else fx?.damageNumber?.(at, text, 'word');
+    } catch (e) { console.warn('[player] word failed', e); }
+    this.lastWord = text;
+    this.words = (this.words ?? 0) + 1;
+    return true;
+  }
+
+  /** Is this kill the last of the encounter (no other awake hostile near her)? WA §5.1 final blow. */
+  _finalBlow(target) {
+    if (!target?.alerted && !target?.tags?.has?.('boss')) return false;
+    const list = this.ctx.enemies?.list;
+    if (list) for (const e of list) {
+      if (e === target || !e.alive || !e.alerted || e.hidden || e.dormant) continue;
+      if (e.stateName === 'die' || e.stateName === 'dead') continue;
+      if (Math.hypot(e.pos.x - this.pos.x, e.pos.z - this.pos.z) <= (HUD?.tuck?.combatR ?? ORDER_FX.combatR) * 2) return false;
+    }
+    return true;
   }
 
   /** §7.2: remember who just attacked her (the auto-target prefers them for 2 s). */
@@ -136,6 +217,9 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (v === false || v === 'off') return false;
     return this.ctx.input?.device === 'touch';
   }
+
+  /** ART G14 probes (core's __GAME__.art.featurePx): her view's { eyeL, eyeR, bow } once characters ship them. */
+  debugFeatures() { return this.model?.view?.debugFeatures?.() ?? null; }
 
   /** The hover pick under the cursor (camera's Picker, once per rendered frame): { kind, actor, id, point }. */
   get hover() { return this.ctx.cam?.hover ?? null; }
@@ -197,9 +281,30 @@ export class Player extends ScriptedActorMixin(Actor) {
       const arc = st === 'guard' ? null : ATTACKS.slash1.arc;
       a.width = arc ? Math.abs(arc.from - arc.to) : 2 * (this.guardState.arc ?? PLAYER.guard.arc);
     }
-    a.active = st === 'attack' || st === 'charge' || st === 'guard' || st === 'pounce' || !!this.ctx.companions?.aim?.active;
+    const comp = this.ctx.companions?.aim;
+    a.active = st === 'attack' || st === 'charge' || st === 'guard' || st === 'pounce' || !!comp?.active;
+    // AUTOCAM §5.5 aim pan: `range` is the reach of the HELD aimed action (Holy wave 10 m, Golden Hour gleam 8 m, a
+    // companion ability's own reach); `held` says one is being held right now
+    const held = st === 'charge' ? this.heldAimRange() : comp?.active ? (comp.range ?? comp.plan?.range ?? 0) : 0;
+    a.held = held > 0;
+    if (a.held) a.range = Math.max(a.range ?? 0, held);
     if (!this.onGround && this.pounceReady && st === 'move' && this.alive) this.pouncePlan(this.diveAt);
     else this.diveAt.valid = false;
+  }
+
+  /**
+   * The reach of the aimed shot the current charge would release (AUTOCAM §5.5): tier 2 Holy Slash with Shard 2 → the
+   * holy wave (10 m, the Wave Reach upgrade 15 m); in Golden Hour every slash sends a gleam (8 m); else 0 (melee only).
+   */
+  heldAimRange() {
+    if (this.state !== 'charge') return 0;
+    const holy = ATTACKS.holy, wave = ATTACKS[holy.projectile];
+    if (this.chargeTier >= 2 && wave && this.shards >= (holy.projectileMinShards ?? 2)) {
+      const R = ECONOMY.shops.waveReach;
+      return this.ctx.state?.upgrades?.waveReach && this.shards >= (R?.needShards ?? 2) ? (R?.range ?? wave.range) : wave.range;
+    }
+    if (this.golden && ATTACKS.gleam) return ATTACKS.gleam.range;
+    return 0;
   }
 
   /** Face the resolved aim now (her facing = the aim direction). */
@@ -262,6 +367,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.livesState.setDifficulty(st?.difficultyCfg);
     if (this.livesState.scope === 'game' && Number.isFinite(st?.lives)) this.livesState.lives = st.lives;
     this.object3d.name = 'swordcat';
+    this.object3d.userData.perfCat = 'hero';                           // PERF perf() categories (requests/characters.md)
     ctx.scene.add(this.object3d);
     ctx.actors.register(this, 'swordcat');
     this._offs.push(
@@ -279,6 +385,8 @@ export class Player extends ScriptedActorMixin(Actor) {
       bus.on(E.CUTSCENE_START, () => this.memeCamTrigger.reset()),
       bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'difficulty') this.livesState.setDifficulty(ctx.state.difficultyCfg); }),
       bus.on(E.SAVE_LOADED, () => { this._upgSatchel = -1; this._upgValorGain = null; this.applyUpgrades(); }),
+      bus.on(E.PLAYER_PARRY, () => this.sayWord('parry')),
+      bus.on(E.PLAYER_PERFECT_DODGE, (p) => { if (!p?.graze) this.sayWord('perfectDodge'); }),
     );
     await this.model.init();
   }
@@ -302,6 +410,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.state !== 'dead' && this.state !== 'scripted' && this.state !== 'memecam') this.setState('move');
     this.safeGround.clear();
     this.zoomies = false; this.zoomT = 0;
+    this.groundY = this.pos.y;
     this.snap();
     this.model.snap();
     this.ctx.bus.emit(E.PLAYER_SPAWNED, { player: this });
@@ -419,7 +528,11 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.state === 'guard') this.stopGuard();
     this.memeCamTrigger.reset();
     const r = this.livesState.loseLife();
+    this._koWiped = false;
+    this.idleLadder.reset();
     this.setState('dead');
+    // WA §5.7 knock-out look: a dizzy sit (the model) with stars circling her head until the cream wipe
+    try { ctx.fx?.dizzyFor?.(this, r.gameOver ? KO.sitT : koRespawnT()); } catch (e) { console.warn('[player] dizzy stars', e); }
     ctx.bus.emit(E.PLAYER_DIED, {});
     ctx.bus.emit(E.PLAYER_LIFE_LOST, { lives: r.lives, gameOver: r.gameOver, infinite: this.livesState.infinite });
     this._syncState();
@@ -477,6 +590,9 @@ export class Player extends ScriptedActorMixin(Actor) {
       this.scriptedStep(dt);
       if (!this.attachedTo) ctx.physics.moveActor(this, dt);
       STATES.scripted.update(this, dt);
+      if (this.onGround) this.groundY = this.pos.y;
+      this._setIntent('other', 0, 0, 0);
+      this.idleLadder.reset();
       return;
     }
     if (this.state === 'scripted') this.setState('move');
@@ -502,8 +618,68 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.stepY > 0) this.stepAccum += this.stepY;                   // visual step-up smoothing (model)
     if (this.bounced > 0) this._bounced();
     else if (!wasGround && this.onGround) this._landed();
+    if (this.onGround) this.groundY = this.pos.y;                       // AUTOCAM §4: the same contact physics used
     this._postStep(dt);
+    this._updateIntent();
+    this._idleTick(dt);
     this._syncState();
+  }
+
+  /** @private write moveIntent in place (no allocation). */
+  _setIntent(kind, x, z, speed) {
+    const m = this.moveIntent;
+    m.kind = kind; m.x = x; m.z = z; m.speed = speed;
+  }
+
+  /**
+   * AUTOCAM §5.3 move intent, after the step. Direct input wins (touch stick → 'stick' with the thumb-wobble deadzone,
+   * else 'walk' / 'run' at her locomotion speed); a walking order → 'order' toward the path point 2.5 m ahead at run
+   * speed, easing to 0 inside NAV.slowR of the end; swings, Tumble, Pounce, knockback, the hop of a nav link → 'other'.
+   */
+  _updateIntent() {
+    const st = this.state, input = this.ctx.input;
+    if (!this.alive || st === 'dead' || st === 'memecam' || st === 'vigil' || st === 'golden' || st === 'rise') { this._setIntent('idle', 0, 0, 0); return; }
+    if (st === 'dodge' || st === 'pounce' || st === 'attack' || st === 'hurt' || st === 'stagger' || this.moveLockT > 0) {
+      this._setIntent('other', 0, 0, 0); return;
+    }
+    const mx = input?.move?.x ?? 0, my = input?.move?.y ?? 0, mag = Math.min(1, Math.hypot(mx, my));
+    if (mag >= 0.15) {
+      const l = this.wishDir(_dir);
+      if (l < 1e-3) { this._setIntent('idle', 0, 0, 0); return; }
+      const n = Math.hypot(_dir.x, _dir.z) || 1;
+      if (input.device === 'touch') {
+        this._setIntent('stick', _dir.x / n, _dir.z / n, PLAYER.run * smoothstep(TOUCH.stickDead ?? 0.1, 1, mag));
+      } else {
+        this._setIntent(mag > TUNING.walkStick ? 'run' : 'walk', _dir.x / n, _dir.z / n, Math.hypot(this.vel.x, this.vel.z));
+      }
+      return;
+    }
+    const o = this.orders;
+    if (o.moving && o.lookAhead(CAMERA_ORDER_LOOK, this._la)) {
+      const dx = this._la.x - this.pos.x, dz = this._la.z - this.pos.z, d = Math.hypot(dx, dz);
+      if (d > 1e-3) {
+        const left = o.remaining();
+        this._setIntent('order', dx / d, dz / d, PLAYER.run * Math.min(1, left / (NAV.slowR || 1)));
+        return;
+      }
+    }
+    this._setIntent('idle', 0, 0, 0);
+  }
+
+  /** WA §5.6 idle ladder (fixed step): fires glance / look / groom / twirl / sneeze / sit on the model. */
+  _idleTick(dt) {
+    const ctx = this.ctx;
+    // ?test never counts real idle time (deterministic smoke, like the Meme Cam), unless a test opts in
+    if (ctx.params?.test && !ctx.params?.idleLadder) { this.idleLadder.reset(); return; }
+    const st = this.state;
+    const still = st === 'move' && this.alive && this.onGround && !this.swing && !this.orders.kind && !this.scripted &&
+      Math.hypot(this.vel.x, this.vel.z) < 0.1 && ctx.game?.mode === 'play';
+    const meme = st === 'memecam' || this.memeCamTrigger.active;
+    const calm = still && !this.inCombat();
+    const hub = !!(ctx.companions?.hub?.isHub?.() ?? ctx.levels?.current?.hub?.active?.());
+    const step = this.idleLadder.update(dt, { still, calm, meme, hub });
+    if (step) { this.model.idleStep(step); this.idleEmote = step; }
+    else if (!still && this.model.idlePose) this.model.idleStep(null);
   }
 
   _tickTimers(dt) {
@@ -1161,7 +1337,26 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.setState('move');
     this.teleport({ pos: this.respawnPoint.pos, facing: this.respawnPoint.facing });
     ctx.bus.emit(E.PLAYER_HEALED, { amount: this.maxHp, hp: this.hp, maxHp: this.maxHp });
+    // WA §5.7 boing back: the cream wipe clears over her and she pops up (Squash +2, hearts, a hop)
+    if (this._koWiped) { this._koWiped = false; this._wipe(false); }
+    this.model.respawnPop?.();
+    ctx.bus.emit(E.BURST, { kind: 'hearts', position: this.pos.clone(), count: KO.hearts });
     this._syncState();
+  }
+
+  /** The WA §5.7 cream wipe (ui cinema fade, FADE_COLOR, KO.wipeT): `on` covers, else clears. */
+  _wipe(on) {
+    const ui = this.ctx.ui;
+    try {
+      if (typeof ui?.fade === 'function') ui.fade(on ? { to: FADE_COLOR, alpha: 1, dur: KO.wipeT } : { to: null, dur: KO.wipeT });
+    } catch (e) { console.warn('[player] knock-out wipe', e); }
+  }
+
+  /** dead state (fixed step): at KO.sitT the cream wipe starts (not on a game over); the respawn follows at sitT + wipeT. */
+  koTick() {
+    if (this.livesState.gameOver) return;
+    if (!this._koWiped && this.stateT >= KO.sitT) { this._koWiped = true; this._wipe(true); }
+    if (this.stateT >= koRespawnT() - 1e-9) this.respawn();
   }
 
   /**
@@ -1262,6 +1457,14 @@ export class Player extends ScriptedActorMixin(Actor) {
   _onHitEvent(h) {
     if (!h || h.attacker !== this || h.blocked) return;
     const tgt = h.target;
+    // WA §5.3 / §5.1 words: the first hit of each swing says its word; the kill that ends an encounter says "Bonk!"
+    if (!tgt?.breakable) {
+      if (h.killed && this._finalBlow(tgt)) { this.sayWord('finalBlow', true); this._wordSerial = this.swingSerial; }
+      else if (this._wordSerial !== this.swingSerial && !h.projectile) {
+        this._wordSerial = this.swingSerial;
+        this.sayWord(h.attackId === 'pounce' || this.swing?.def?.id === 'pounce' ? 'pounce' : (h.attackId ?? this.swing?.def?.id));
+      }
+    }
     if (tgt && (tgt.breakable || tgt.tags?.has?.('prop'))) return;      // cage locks, crates, boulders: no Valor
     const def = ATTACKS[h.attackId];
     this.combatT = TUNING.combatStance;
@@ -1344,6 +1547,8 @@ export class Player extends ScriptedActorMixin(Actor) {
 
   _onLevelLoading() {
     this.orders.clear('level');
+    if (this._koWiped) { this._koWiped = false; this._wipe(false); }
+    this.idleLadder.reset();
     if (this.golden) this.endGolden(false);
     this.memeCamTrigger.reset();
     if (this.swing) this.endSwing();

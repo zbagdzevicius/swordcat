@@ -12,11 +12,16 @@ import { Input } from '../../src/core/Input.js';
 import { GameState } from '../../src/core/GameState.js';
 import { Actor } from '../../src/core/Actor.js';
 import { PRESETS, PRESET_NAMES, localToWorld, worldToLocal, memeSway, handheld, MEME_PERIOD, DEG } from '../../src/camera/presets.js';
-import { CamPose, blendPose, applyPose, resolveEase } from '../../src/camera/pose.js';
+import { CamPose, blendPose, blendPoseIso, applyPose, resolveEase } from '../../src/camera/pose.js';
 import { CameraShake } from '../../src/camera/CameraShake.js';
 import { relYaw, pickLockTarget, switchLockTarget, nearestLockTarget, handoverLockTarget, acquireLockTarget, LOCK_FALLBACK_RANGE, FlickDetector, StickFlick } from '../../src/camera/LockOn.js';
 import { segmentHitsBox, distSqPointSegment, OccluderFader, SOLID_MIN_H } from '../../src/camera/Occluders.js';
-import { ISO, isoProject, isoPosition, subjectOverflow, safeFitDist } from '../../src/camera/IsoRig.js';
+import { ISO, isoProject, isoPosition, subjectOverflow, safeFitDist, isoFrame, isoPitch, pxAt, apparentH, camProfile, intentLead, LeadGate,
+  herLimits, clampToLimits, footprintOf, inQuad, farPlane, fogRadius, BIGGER_PX } from '../../src/camera/IsoRig.js';
+import { SafeFrame, fallbackOccluders } from '../../src/camera/SafeFrame.js';
+import { makeView, setYaw, needDAt, dropOne, STRIDE, F_HARD, F_DROP, CLS } from '../../src/camera/framing/FramingSolver.js';
+import { Subjects } from '../../src/camera/framing/Subjects.js';
+import { beatEnvelope } from '../../src/camera/framing/beats.js';
 import { CutsceneCamera, normalizeShot, bezier2, shotScale } from '../../src/camera/CutsceneCamera.js';
 import { MemeCam } from '../../src/camera/MemeCam.js';
 import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, ARM_GOOD, HANDOVER_RATE, FADE_MAX_DIST, FADE_COLLIDERS, LOCK_SEP, LOCK_BIAS_MAX, COMBAT_PITCH, COMBAT_LIFT, lockYawBias, lockScreenSep, lockSepGoal,
@@ -1280,4 +1285,508 @@ test('OccluderFader: capsules only fade what is lens-side of the subject; roofs 
   assert.ok(uF.f > 0.95, `the stone between the lens and her fades (${uF.f.toFixed(2)})`);
   near(front.material.opacity, 0.1, 1e-6, 'solid units fade to archOpacity');
   fader.clear();
+});
+
+// ================================================================== AUTOCAM (research/next/AUTOCAM_SPEC.md §11.1)
+const DEGR = Math.PI / 180;
+
+/** Synthetic occluder sets for the §7.2 fixture profiles (CSS px): the geometry cam_2 measured the table from. */
+function fixtureRects(profile, w, h) {
+  const R = (x0, y0, x1, y1, kind) => ({ x: x0 * w, y: y0 * h, w: (x1 - x0) * w, h: (y1 - y0) * h, kind });
+  switch (profile) {
+    case 'desktop': return [R(0, 0, 0.30, 0.07, 'hud'), R(0.30, 0.93, 0.70, 1, 'bar')];
+    case 'phone': return [R(0, 0, 0.42, 0.13, 'hud'), R(0, 0.13, 0.19, 1, 'stick'), R(0, 0.87, 0.62, 1, 'stick'), R(0.655, 0.32, 1, 1, 'cluster'), R(0.82, 0.13, 1, 0.32, 'cluster')];
+    case 'lefty': return [R(0.58, 0, 1, 0.13, 'hud'), R(0.81, 0.13, 1, 1, 'stick'), R(0.38, 0.87, 1, 1, 'stick'), R(0, 0.32, 0.345, 1, 'cluster'), R(0, 0.13, 0.18, 0.32, 'cluster')];
+    case 'portrait': return [R(0, 0, 1, 0.08, 'hud'), R(0, 0.655, 1, 1, 'cluster')];
+    case 'tablet': return [R(0, 0, 0.40, 0.09, 'hud'), R(0, 0.09, 0.13, 1, 'stick'), R(0, 0.89, 0.75, 1, 'stick'), R(0.75, 0.25, 1, 1, 'cluster')];
+    default: return [];
+  }
+}
+
+test('AUTOCAM 11.1-7 SafeFrame: §7.2 core / anchor fixtures ±0.02; visible() false on the HUD and buttons; live holes never move core', () => {
+  const T = {
+    desktop: { w: 1920, h: 1080, core: [0.06, 0.94, 0.12, 0.88], a: [0.50, 0.54] },
+    phone: { w: 844, h: 390, core: [0.24, 0.60, 0.20, 0.80], a: [0.46, 0.54] },
+    lefty: { w: 844, h: 390, core: [0.40, 0.76, 0.20, 0.80], a: [0.54, 0.54] },
+    portrait: { w: 390, h: 844, core: [0.08, 0.92, 0.13, 0.60], a: [0.50, 0.40] },
+    tablet: { w: 1180, h: 820, core: [0.18, 0.70, 0.14, 0.84], a: [0.47, 0.53] },
+  };
+  const sf = new SafeFrame();
+  for (const [k, f] of Object.entries(T)) {
+    sf.rebuild(f.w, f.h, null, fixtureRects(k, f.w, f.h));
+    const c = sf.core;
+    near(c.x0, f.core[0], 0.021, `${k} core.x0`); near(c.x1, f.core[1], 0.021, `${k} core.x1`);
+    near(c.y0, f.core[2], 0.021, `${k} core.y0`); near(c.y1, f.core[3], 0.021, `${k} core.y1`);
+    // (the §7.2 tablet row's fx 0.47 contradicts its own rule: clamp(centre(core) 0.44, 0.5 ± 0.06) = 0.44)
+    near(sf.ax, f.a[0], k === 'tablet' ? 0.031 : 0.021, `${k} anchor x`); near(sf.ay, f.a[1], 0.021, `${k} anchor y`);
+    assert.ok(sf.herFrame.x0 >= c.x0 && sf.herFrame.x1 <= c.x1 && sf.herFrame.y0 >= 0.125 - 1e-9 && sf.herFrame.y1 <= 0.875 + 1e-9, `${k}: herFrame = core ∩ inner 75 %`);
+  }
+  // the real ui touch layout at touch size 0.8 / 1.0 / 1.4: buttons are holes, her core stays clear of them
+  for (const ts of [0.8, 1.0, 1.4]) {
+    const rects = fallbackOccluders({ w: 844, h: 390, touch: true, touchSize: ts });
+    sf.rebuild(844, 390, null, rects);
+    for (const r of rects.filter((q) => q.kind === 'cluster')) {
+      const cx = (r.x + r.w / 2) / 844, cy = (r.y + r.h / 2) / 390;
+      assert.equal(sf.visible(cx, cy), false, `ts ${ts}: a button centre is hidden`);
+      assert.ok(!(cx > sf.core.x0 && cx < sf.core.x1 && cy > sf.core.y0 && cy < sf.core.y1), `ts ${ts}: no button inside core`);
+    }
+    assert.ok(sf.ax > 0.40 && sf.ax < 0.5 && sf.ay > 0.45 && sf.ay < 0.62, `ts ${ts}: anchor left of centre (${sf.ax.toFixed(2)}, ${sf.ay.toFixed(2)})`);
+  }
+  // mirrored (left-handed) layout: she moves right of centre
+  sf.rebuild(844, 390, null, fallbackOccluders({ w: 844, h: 390, touch: true, leftHanded: true }));
+  assert.ok(sf.ax > 0.5, `left-handed: anchor right of centre (${sf.ax.toFixed(2)})`);
+  // desktop fallback: the ability bar and the HUD block are holes
+  sf.rebuild(1280, 720, null, fallbackOccluders({ w: 1280, h: 720, barInset: 90 }));
+  assert.equal(sf.visible(0.5, 0.97), false, 'under the ability bar = hidden');
+  assert.equal(sf.visible(0.05, 0.03), false, 'under the HUD block = hidden');
+  assert.equal(sf.visible(0.5, 0.5), true);
+  // a live thumb hole changes visible(), never core or the anchor
+  const core0 = { ...sf.core }, ax = sf.ax, ay = sf.ay, v0 = sf.version;
+  sf.addLive(560, 300, 700, 420);
+  assert.equal(sf.visible(630 / 1280, 360 / 720), false, 'under the thumb');
+  assert.deepEqual(sf.core, core0); assert.equal(sf.ax, ax); assert.equal(sf.ay, ay); assert.equal(sf.version, v0);
+  sf.clearLive();
+  assert.equal(sf.visible(630 / 1280, 360 / 720), true);
+});
+
+test('AUTOCAM 11.1-2 lead: run down-screen → 2.31 m (desktop cap 2.4), 2.0 phone; up → 0.66; taps, tumbles and reversals never lead', () => {
+  const v = {};
+  intentLead(0, -5.5, 'run', Math.PI, 'desktop', v);                // yaw π: −Z = down-screen
+  near(v.z, -2.31, 1e-6, 'desktop down'); near(v.x, 0, 1e-9);
+  intentLead(0, -5.5, 'stick', Math.PI, 'phone', v); near(v.z, -2.0, 1e-6, 'phone down cap');
+  intentLead(0, 5.5, 'order', Math.PI, 'desktop', v); near(v.z, 0.66, 1e-6, 'up-screen');
+  intentLead(-5.5, 0, 'run', Math.PI, 'desktop', v); near(Math.hypot(v.x, v.z), 1.43, 1e-6, 'side 0.26 s × 5.5');
+  intentLead(-7.2, -7.2, 'run', Math.PI, 'desktop', v); assert.ok(Math.hypot(v.x, v.z) <= ISO.lead.max + 1e-9, 'radial cap 2.5 m');
+  intentLead(0, -2, 'walk', Math.PI, 'desktop', v); assert.ok(Math.abs(v.z) < 0.84 * 0.3, `a 2 m/s walk leads a little (${v.z.toFixed(2)})`);
+  for (const k of ['other', 'idle']) { intentLead(0, -5.5, k, Math.PI, 'desktop', v); assert.equal(Math.hypot(v.x, v.z), 0, `${k} → 0`); }
+  // debounce: a 0.15 s tap never passes; 0.25 s of steady intent does; a 130° reversal resets the timer
+  const gate = new LeadGate(), cur = { x: 0, z: 0 }, t = { x: 0, z: 0 };
+  let passed = false;
+  for (let i = 0; i < 9; i++) { t.x = 0; t.z = -2.31; gate.step(t, cur, 1 / 60); passed ||= t.z !== 0; }
+  assert.equal(passed, false, 'a 0.15 s tap → no lead');
+  t.x = 0; t.z = 0; gate.step(t, cur, 1 / 60);
+  for (let i = 0; i < 15; i++) { t.x = 0; t.z = -2.31; gate.step(t, cur, 1 / 60); }
+  near(t.z, -2.31, 1e-9, 'steady intent passes after 0.20 s');
+  cur.z = -2.0;                                                      // the lead is now down-screen
+  const a = 130 * DEGR; t.x = Math.sin(a) * 2; t.z = -Math.cos(a) * 2;
+  gate.step(t, cur, 1 / 60);
+  assert.equal(Math.hypot(t.x, t.z), 0, 'a 130° reversal resets the debounce');
+  assert.equal(gate.t, 0);
+});
+
+/** A THREE camera posed exactly as the iso rig poses it (focus, yaw, pitch, d, fov, anchor). */
+function rigCamera(F, yaw, pitch, d, fov, W, H, fx, fy) {
+  const cam = new THREE.PerspectiveCamera(fov, W / H, 0.3, 200);
+  const p = isoPosition(F, yaw, pitch, d, {});
+  cam.position.set(p.x, p.y, p.z); cam.up.set(0, 1, 0); cam.lookAt(F.x, F.y, F.z);
+  const ox = Math.round((0.5 - fx) * W), oy = Math.round((0.5 - fy) * H);
+  if (ox || oy) cam.setViewOffset(W, H, ox, oy, W, H); else cam.updateProjectionMatrix();
+  cam.updateMatrixWorld();
+  return cam;
+}
+const projN = (cam, x, y, z) => { const v = new THREE.Vector3(x, y, z).project(cam); return [(v.x + 1) / 2, (1 - v.y) / 2]; };
+
+test('AUTOCAM 11.1-3 exhaustive core sweep: lead × combat lean × aim pan, clamped by herLimits, keeps her feet and head in herFrame', () => {
+  const profiles = [[1920, 1080, 'kbm', false], [1180, 820, 'touch', false], [844, 390, 'touch', false], [844, 390, 'touch', true], [390, 844, 'touch', false]];
+  const sf = new SafeFrame(), lim = {}, off = { x: 0, z: 0 };
+  let n = 0;
+  for (const [W, H, dev, lefty] of profiles) {
+    sf.rebuild(W, H, null, fallbackOccluders({ w: W, h: H, touch: dev === 'touch', leftHanded: lefty, barInset: dev === 'touch' ? 0 : 90 }));
+    const prof = camProfile(W, H, dev), caps = ISO.lead.caps[prof], fx = sf.ax, fy = sf.ay;
+    for (const zoom of [0.7, 1.0, 1.4]) {
+      const fr = isoFrame({ w: W, h: H, device: dev, zoom });
+      const tanV = Math.tan((fr.fov * Math.PI) / 360), tanH = tanV * (W / H);
+      herLimits(fr.pitch, fr.dist, tanV, tanH, fx, fy, sf.herFrame, lim);
+      const cam = rigCamera({ x: 0, y: ISO.focusY, z: 0 }, Math.PI, fr.pitch, fr.dist, fr.fov, W, H, fx, fy);
+      for (let li = 0; li < 8; li++) for (let ci = -1; ci < 8; ci++) for (const aimOn of [0, 1]) {
+        const la = (li * Math.PI) / 4, ca = (ci * Math.PI) / 4;
+        // full-cap lead (screen axes at yaw π: up = +Z, right = −X), full combat lean, max aim pan, + the bias
+        const lu = Math.cos(la) >= 0 ? Math.cos(la) * caps[1] : Math.cos(la) * caps[2], lr = Math.sin(la) * caps[0];
+        const cu = ci < 0 ? 0 : Math.cos(ca) * (Math.cos(ca) >= 0 ? ISO.framing.lean.capUp : ISO.framing.lean.capDown[prof]);
+        const cr = ci < 0 ? 0 : Math.sin(ca) * ISO.framing.lean.capUp;
+        const ap = aimOn ? ISO.aimPan.cap[prof] : 0;
+        const u = lu + cu + ap * Math.cos(la) + (prof === 'portrait' ? 0 : ISO.lead.up), r = lr + cr + ap * Math.sin(la);
+        off.x = -r; off.z = u;
+        clampToLimits(off, Math.PI, lim);
+        // her = focus − offset
+        const hx = -off.x, hz = -off.z;
+        const fs = projN(cam, hx, 0, hz), hs = projN(cam, hx, ISO.catHView ?? 1, hz);
+        const F = sf.herFrame, inF = (s) => s[0] >= F.x0 - 1e-3 && s[0] <= F.x1 + 1e-3 && s[1] >= F.y0 - 1e-3 && s[1] <= F.y1 + 1e-3;
+        assert.ok(inF(fs) && inF(hs), `${W}×${H}${lefty ? ' L' : ''} zoom ${zoom} lead ${li} lean ${ci} aim ${aimOn}: feet ${fs.map((q) => q.toFixed(3))} head ${hs.map((q) => q.toFixed(3))} herFrame ${JSON.stringify(F)}`);
+        n++;
+      }
+    }
+  }
+  assert.equal(n, 5 * 3 * 8 * 9 * 2);
+});
+
+test('AUTOCAM 11.1-4 needD: the closed form matches a brute-force sweep (three.js projection + view offset) within ±0.05 m', () => {
+  const W = 1920, H = 1080, fov = 38, yaw = Math.PI;
+  const v = setYaw(makeView(), yaw);
+  v.tanV = Math.tan((fov * Math.PI) / 360); v.tanH = v.tanV * W / H;
+  const pool = new Float32Array(STRIDE * 2);
+  for (const [fx, fy] of [[0.5, 0.54], [0.44, 0.5], [0.56, 0.4]]) {
+    v.offX = 2 * fx - 1; v.offY = 1 - 2 * fy; v.xL = -0.85; v.xR = 0.85; v.yB = -0.78; v.yT = 0.86;
+    for (const fixed of [isoPitch(13), NaN]) {
+      v.pitchOf = (d) => (Number.isFinite(fixed) ? fixed : isoPitch(d));
+      for (const [ex, ez, ey] of [[-7, 0, 0.4], [7, 0, 0.4], [0, 9, 0.4], [0, -6, 0.4], [3, -5, 1.2]]) {
+        const F = { x: 0.5, y: 0.6, z: 0.2 }, rho = 0.9;
+        pool[0] = F.x + ex; pool[1] = ey; pool[2] = F.z + ez; pool[3] = rho; pool[4] = 1; pool[5] = F_HARD;
+        const closed = needDAt(pool, 1, F.x, F.y, F.z, 0, 0, v, v.pitchOf(14));
+        // brute: smallest d (1 cm steps) where the sphere's conservative extremes sit inside the frame
+        let brute = NaN;
+        for (let d = 2; d < 60; d += 0.01) {
+          const cam = rigCamera(F, yaw, v.pitchOf(14), d, fov, W, H, fx, fy);
+          const q = new THREE.Vector3(pool[0], pool[1], pool[2]).applyMatrix4(cam.matrixWorldInverse);
+          const P = cam.projectionMatrix.elements, z = -q.z - rho;
+          if (z <= 0) continue;
+          const nxR = P[0] * (q.x + rho) / z - P[8], nxL = P[0] * (q.x - rho) / z - P[8];
+          const nyT = P[5] * (q.y + rho) / z - P[9], nyB = P[5] * (q.y - rho) / z - P[9];
+          if (nxR <= v.xR && nxL >= v.xL && nyT <= v.yT && nyB >= v.yB) { brute = d; break; }
+        }
+        near(closed, brute, 0.05, `anchor (${fx}, ${fy}) subject (${ex}, ${ez})`);
+      }
+    }
+  }
+});
+
+test('AUTOCAM 11.1-5 engage hysteresis: enters at 9.5 m, stays at 11 m, leaves at 12.6 m; 1.5 s not alerted drops it', async () => {
+  const { ctx, cam } = await makeIsoCamA();
+  const e = enemyAt(ctx, 0, 9.5); e.alerted = true;
+  const feet = ctx.player.object3d.position;
+  cam._engagedSet(feet, 1 / 60);
+  assert.ok(cam.engaged.includes(e), 'enters at 9.5 m');
+  e.pos.z = 11; e.object3d.position.z = 11;
+  cam._engagedSet(feet, 1 / 60);
+  assert.ok(cam.engaged.includes(e), 'stays at 11 m');
+  e.pos.z = 12.6; e.object3d.position.z = 12.6;
+  cam._engagedSet(feet, 1 / 60);
+  assert.ok(!cam.engaged.includes(e), 'leaves at 12.6 m');
+  e.pos.z = 11; e.object3d.position.z = 11;
+  cam._engagedSet(feet, 1 / 60);
+  assert.ok(!cam.engaged.includes(e), 'does not re-enter at 11 m (enter radius 10)');
+  e.pos.z = 8; e.object3d.position.z = 8;
+  cam._engagedSet(feet, 1 / 60);
+  e.alerted = false; e.stateName = 'patrol';
+  for (let i = 0; i < 80; i++) cam._engagedSet(feet, 1 / 60);
+  assert.ok(cam.engaged.includes(e), 'kept for 1.33 s without the alert');
+  for (let i = 0; i < 15; i++) cam._engagedSet(feet, 1 / 60);
+  assert.ok(!cam.engaged.includes(e), 'dropped after 1.5 s not alerted');
+});
+
+test('AUTOCAM 11.1-6 applyAnchor: the focus projects to (fx, fy) ± 0.5 px for 5 anchors; whole pixels, only on change', async () => {
+  const { ctx, cam } = await makeIsoCamA();
+  const W = 1280, H = 720, c = ctx.camera;
+  c.aspect = W / H;
+  for (const [fx, fy] of [[0.5, 0.5], [0.5, 0.54], [0.46, 0.54], [0.54, 0.54], [0.5, 0.4]]) {
+    c.position.set(0, 10, -8); c.lookAt(0, 0.6, 0); c.updateMatrixWorld();
+    cam._vo.x = NaN;
+    assert.equal(cam._applyAnchor(c, W, H, fx, fy), true);
+    assert.equal(cam._applyAnchor(c, W, H, fx, fy), false, 'no change → no projection rebuild');
+    const v = new THREE.Vector3(0, 0.6, 0).project(c);
+    near((v.x + 1) / 2 * W, fx * W, 0.5, `x at (${fx}, ${fy})`); near((1 - v.y) / 2 * H, fy * H, 0.5, `y at (${fx}, ${fy})`);
+  }
+});
+
+test('AUTOCAM 11.1-8 cat clamp at every zoom (≥ 30 px landscape, ≥ 28 portrait, ≥ 26 boss); portrait d ∈ [16, 26]; Bigger hero caps the zoom-out', () => {
+  for (const zoom of [0.7, 1.0, 1.4]) {
+    const a = isoFrame({ w: 1920, h: 1080, device: 'kbm', zoom }), b = isoFrame({ w: 844, h: 390, device: 'touch', zoom });
+    const p = isoFrame({ w: 390, h: 844, device: 'touch', zoom }), bo = isoFrame({ w: 844, h: 390, device: 'touch', zoom, boss: true });
+    for (const [f, H, min] of [[a, 1080, 30], [b, 390, 30], [p, 844, 28], [bo, 390, 26]]) assert.ok(pxAt(apparentH(f.pitch), f.dist, f.fov, H) >= min - 0.05, `zoom ${zoom}: ${pxAt(apparentH(f.pitch), f.dist, f.fov, H).toFixed(1)} px ≥ ${min}`);
+    assert.ok(p.dist >= 16 - 1e-9 && p.dist <= 26, `portrait d ${p.dist.toFixed(2)} in [16, 26] (cat clamp on top)`);
+    const big = isoFrame({ w: 844, h: 390, device: 'touch', zoom, bigger: true });
+    assert.ok(pxAt(apparentH(big.pitch), big.dist, big.fov, 390) >= BIGGER_PX - 0.05 || big.dist <= ISO.distMin + 1e-9, 'Bigger hero ≥ 40 px');
+  }
+});
+
+test('AUTOCAM 11.1-9 footprint = the three.js unprojected corners; ahead / behind / halfW at the §3 case; far is a multiple of 5 in [45, 90]', () => {
+  const W = 1920, H = 1080, fov = 38, d = 13, pitch = isoPitch(13), F = { x: 1, y: 0.6, z: 2 }, fx = 0.5, fy = 0.54;
+  const cam = rigCamera(F, Math.PI, pitch, d, fov, W, H, fx, fy);
+  const tanV = Math.tan((fov * Math.PI) / 360), out = { q: new Float32Array(8) };
+  assert.equal(footprintOf(F, Math.PI, pitch, d, tanV, tanV * W / H, fx, fy, 0, out), true);
+  [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([nx, ny], i) => {
+    const v = new THREE.Vector3(nx, ny, 0.5).unproject(cam).sub(cam.position).normalize();
+    const t = -cam.position.y / v.y, hit = v.multiplyScalar(t).add(cam.position);
+    near(out.q[i * 2], hit.x, 0.05, `corner ${i} x`); near(out.q[i * 2 + 1], hit.z, 0.05, `corner ${i} z`);
+  });
+  // the §3 desktop case (d 13, her 4 % low): ≈ 3.2 m below the focus row, ≈ 8.4 m half width
+  assert.ok(out.behind > 3 && out.behind < 4.5 && out.ahead > 8.5 && out.ahead < 11.5, `ahead ${out.ahead.toFixed(2)} behind ${out.behind.toFixed(2)}`);
+  near(out.halfW, 8.43, 0.15, 'half width');
+  assert.equal(inQuad(out.q, F.x, F.z + 2), true); assert.equal(inQuad(out.q, F.x + 30, F.z), false); assert.equal(inQuad(out.q, out.q[0] - 0.5, out.q[1], 1), true, 'pad grows the quad');
+  for (const [dd, rho] of [[9, 0.045], [13, 0.045], [22, 0.02], [13, 0.12]]) {
+    const o = { q: new Float32Array(8) };
+    footprintOf(F, Math.PI, isoPitch(dd), dd, tanV, tanV * W / H, fx, fy, 0, o);
+    const f = farPlane(o.slantMax, dd, isoPitch(dd), fogRadius(rho, 5, 1.5));
+    assert.ok(f % 5 === 0 && f >= 45 && f <= 90, `far ${f}`);
+  }
+  assert.equal(farPlane(24, 13, isoPitch(13), fogRadius(0.045, 5, 1.5)), 55, 'meadow day at d 13: ≈ 55 m (fogFar 48)');
+});
+
+test('AUTOCAM 11.1-10 zero allocation: 10 000 rig + solver steps grow the heap < 64 KB', async () => {
+  const v8 = await import('node:v8'), vm = await import('node:vm');
+  v8.setFlagsFromString('--expose_gc');
+  const gc = vm.runInNewContext('gc');
+  const { ctx, cam } = await makeIsoCamA();
+  for (let i = 0; i < 4; i++) { const e = enemyAt(ctx, Math.sin(i) * 5, Math.cos(i) * 5); e.alerted = true; }
+  const p = ctx.player;
+  const step = (k) => { p.object3d.position.x = Math.sin(k * 0.01) * 3; p.pos.x = p.object3d.position.x; cam.update(1 / 60); cam.render(0, 1 / 60); };
+  for (let i = 0; i < 15000; i++) step(i);                         // warm up (JIT code + feedback settle; pools)
+  gc(); const h0 = process.memoryUsage().heapUsed;
+  for (let i = 0; i < 10000; i++) step(i);
+  gc(); const grow = process.memoryUsage().heapUsed - h0;
+  assert.ok(grow < ISO.budget.heapKB * 1024, `heap grew ${(grow / 1024).toFixed(1)} KB`);
+});
+
+/** FollowCamera iso on the tiny ctx, with a 1280 × 720 view and Env-less physics. */
+async function makeIsoCamA() {
+  const ctx = makeCtx();
+  ctx.params = { cam: 'iso' }; ctx.player.onGround = true; ctx.physics.raycast = () => null;
+  ctx.game.time = 0; ctx.game.frameCount = 1;
+  ctx.renderer = { domElement: { clientWidth: 1280, clientHeight: 720, getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) } };
+  ctx.camera.aspect = 1280 / 720; ctx.camera.updateProjectionMatrix();
+  ctx.player.pos.set(0, 0, 0); ctx.player.object3d.position.set(0, 0, 0);
+  const cam = new FollowCamera(ctx);
+  ctx.cam = cam;
+  await cam.init();
+  const step = (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) { ctx.game.time += dt; cam.update(dt); cam.render(0, dt); } };
+  step(3);
+  return { ctx, cam, step };
+}
+
+test('AUTOCAM D1 / §4.2: rigid XZ follow, the bias up-screen, the lead from intent (down-screen biggest), no overshoot on stop', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  const p = ctx.player;
+  near(cam.focus.x, 0, 1e-6); near(cam.focus.z, ISO.lead.up, 0.02, 'the 0.8 m explore bias (screen-up = +Z)');
+  // run down-screen (−Z) at 5.5 m/s for 2 s (WASD: move y −1)
+  ctx.input.device = 'kbm'; ctx.input.move.x = 0; ctx.input.move.y = -1; p.stateName = 'move';
+  let z = 0, maxLead = 0;
+  for (let i = 0; i < 120; i++) {
+    z -= 5.5 / 60; p.pos.z = z; p.object3d.position.z = z; p.vel.set(0, 0, -5.5);
+    step(1);
+    near(cam.focus.x - p.object3d.position.x, 0, 1e-6, 'rigid XZ: no lag sideways');
+    maxLead = Math.max(maxLead, -(cam.focus.z - z));
+  }
+  assert.ok(maxLead > 1.2 && maxLead <= 2.4 + 1e-6, `down-screen lead builds toward 2.31 m (−bias), got ${maxLead.toFixed(2)}`);
+  // stop: the lead releases over ≈ 0.8 s with no overshoot past the bias
+  ctx.input.move.y = 0; p.vel.set(0, 0, 0); p.stateName = 'idle';
+  let minOff = Infinity, prevOff = -Infinity, reversals = 0, dir = 0;
+  for (let i = 0; i < 180; i++) {
+    step(1);
+    const o = cam.focus.z - z;
+    minOff = Math.min(minOff, o);
+    const d = Math.sign(o - prevOff); if (prevOff > -Infinity && d && dir && d !== dir) reversals++; if (d) dir = d; prevOff = o;
+  }
+  near(cam.focus.z - z, ISO.lead.up, 0.05, 'back to the bias');
+  assert.ok(cam.focus.z - z <= ISO.lead.up + 1e-6, 'never past the bias (no overshoot)');
+  assert.equal(reversals, 0, 'monotonic return');
+});
+
+test('AUTOCAM §6 solver: a THREAT winding up down-screen is framed (lean down / zoom out ≤ +3 m); hysteresis; out fast, in slow', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  ctx.ui = { bar: { insetBottom: 90 } }; cam.safeFrame.key = '';
+  step(2);
+  const d0 = cam.iso().dist;
+  const e = enemyAt(ctx, 0, -6, 0.8); e.radius = 0.3;
+  // a wind-up aimed at her (combat:telegraph with targetsPlayer, activeAt / windup)
+  ctx.bus.emit(E.TELEGRAPH, { id: 't1', actor: e, kind: 'red', shape: 'lane', pos: e.pos.clone(), end: new THREE.Vector3(0, 0, -2), windup: 0.8, activeAt: ctx.game.time + 0.8, targetsPlayer: true });
+  step(48);
+  const fr = cam.framing();
+  assert.ok(fr.subjects.some((s) => s.cls === 'threat' && s.hard), 'THREAT subject (hard)');
+  const H = 720, chest = new THREE.Vector3(e.pos.x, e.pos.y + 0.4, e.pos.z), sy = () => (1 - chest.clone().project(ctx.camera).y) / 2 * H;
+  assert.ok(sy() < H, `its chest is on screen within 0.8 s (${sy().toFixed(0)} px of ${H})`);
+  step(24);
+  assert.ok(cam.onScreen(chest, 0), `and clear of the ability bar within 1.2 s (${sy().toFixed(0)} px)`);
+  assert.ok(cam.iso().dist <= d0 + 3 + 1e-6 && cam.iso().dist <= 16 + 1e-6, `d ${cam.iso().dist.toFixed(2)} ≤ dBase + 3`);
+  assert.ok(cam._lean.z < -0.2 || cam.iso().dist > d0 + 0.3, 'it leans down-screen or zooms out');
+  // hysteresis: a tiny move keeps the goal
+  const g0 = { ...cam._goal };
+  e.pos.x += 0.1; e.object3d.position.x = e.pos.x;
+  step(6);
+  assert.equal(cam._goal.d, g0.d, 'goal held for a 0.1 m nudge');
+  // end: hold 1.5 s, then ease back in (≤ 1.5 m/s)
+  ctx.bus.emit(E.TELEGRAPH_END, { id: 't1' });
+  e.alive = false;
+  step(30);
+  const dHold = cam.iso().dist;
+  step(50);
+  assert.ok(Math.abs(cam.iso().dist - dHold) < 0.05, 'held ~1.5 s before zooming in');
+  let prev = cam.iso().dist, maxRate = 0;
+  for (let i = 0; i < 300; i++) { step(1); maxRate = Math.max(maxRate, (prev - cam.iso().dist) * 60); prev = cam.iso().dist; }
+  near(cam.iso().dist, d0, 0.05, 'back to the rest distance');
+  assert.ok(maxRate <= ISO.framing.dist.inVmax + 0.05, `zoom-in rate ${maxRate.toFixed(2)} m/s ≤ 1.5`);
+});
+
+test('AUTOCAM §6.2 subjects: weights fade in 0.35 s / out 0.5 s; hard only at w ≥ 0.5; the drop ladder keeps token holders', () => {
+  const S = new Subjects(), a = { id: 'a' }, b = { id: 'b' };
+  S.setHer(0, 0.4, 0, 0.6);
+  for (let i = 0; i < 6; i++) { S.begin(); S.want(a, CLS.ENGAGED, 2, 0.5, 2, 0.9, 1, true); S.end(0.05); }
+  const ia = S.indexOf(a);
+  near(S.data[ia * STRIDE + 4], 0.3 / 0.35 > 1 ? 1 : 0.3 / 0.35, 1e-5, 'w after 0.3 s');
+  assert.ok(S.data[ia * STRIDE + 5] & F_HARD, 'hard once w ≥ 0.5');
+  for (let i = 0; i < 3; i++) { S.begin(); S.end(0.1); }
+  assert.ok(S.data[S.indexOf(a) * STRIDE + 4] > 0.2, 'still fading out after 0.3 s (from 0.86 at 2 / s)');
+  assert.ok(!(S.data[S.indexOf(a) * STRIDE + 5] & F_HARD) || S.data[S.indexOf(a) * STRIDE + 4] >= 0.5);
+  for (let i = 0; i < 4; i++) { S.begin(); S.end(0.1); }
+  assert.equal(S.indexOf(a), -1, 'freed after 0.5 s');
+  // drop ladder: soft first, then the farthest tokenless ENGAGED
+  S.begin(); S.want(a, CLS.ENGAGED, 9, 0.5, 0, 0.9, 1, true, true); S.want(b, CLS.ENGAGED, 12, 0.5, 0, 0.9, 1, true); S.want({ id: 'c' }, CLS.PRE, 3, 0.5, 0, 0.9, 1, false); S.end(0);
+  const F = { x: 0, y: 0.6, z: 0 };
+  assert.equal(dropOne(S.data, S.n, F), true);
+  assert.ok(S.data[S.indexOf(S.keys.find((k) => k?.id === 'c')) * STRIDE + 5] & F_DROP, 'soft dropped first');
+  assert.equal(dropOne(S.data, S.n, F), true);
+  assert.ok(S.data[S.indexOf(b) * STRIDE + 5] & F_DROP, 'then the farthest without a token');
+  assert.equal(dropOne(S.data, S.n, F), false, 'the token holder is never dropped');
+});
+
+test('AUTOCAM §8.1 beats: Peekaboo leans toward the kitten and comes back; no beat while a THREAT winds up; Reduce camera motion: none', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  const f0 = cam.focus.clone();
+  ctx.bus.emit(E.KITTEN_REVEAL, { kittenId: 'k1', position: new THREE.Vector3(6, 0, 0) });
+  step(60);
+  assert.equal(cam.beat.id, 'peekaboo');
+  assert.ok(cam.focus.x - f0.x > 1.5, `leans toward the kitten (${(cam.focus.x - f0.x).toFixed(2)} m)`);
+  step(90);
+  assert.equal(cam.beat.active, false, 'ends after in + hold + out');
+  step(40);
+  near(cam.focus.x, f0.x, 0.05, 'back on her');
+  ctx.bus.emit(E.KITTEN_REVEAL, { kittenId: 'k1', position: new THREE.Vector3(6, 0, 0) });
+  step(5);
+  assert.equal(cam.beat.active, false, 'once per kitten');
+  // a live THREAT blocks beats
+  const e = enemyAt(ctx, 0, 5);
+  ctx.bus.emit(E.TELEGRAPH, { id: 't2', actor: e, kind: 'red', shape: 'cone', pos: e.pos.clone(), windup: 1, activeAt: ctx.game.time + 1, targetsPlayer: true });
+  step(2);
+  ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: 'k2', position: new THREE.Vector3(-3, 0, 0) });
+  step(10);
+  assert.equal(cam.beat.active, false, 'never during a live THREAT');
+  ctx.bus.emit(E.TELEGRAPH_END, { id: 't2' }); e.alive = false;
+  step(60);
+  ctx.state.settings.reduceCameraMotion = true;
+  step(30);
+  assert.equal(cam.beat.active, false, 'Reduce camera motion fades a running beat out (0.3 s)');
+  ctx.bus.emit(E.KITTEN_REVEAL, { kittenId: 'k3', position: new THREE.Vector3(6, 0, 0) });
+  step(10);
+  assert.equal(cam.beat.active, false, 'Reduce camera motion: no beats');
+  near(beatEnvelope(0.3, 0.6, 1, 0.8), 0.5, 1e-9); assert.equal(beatEnvelope(1.0, 0.6, 1, 0.8), 1); assert.equal(beatEnvelope(9, 0.6, 1, 0.8), 0);
+});
+
+test('AUTOCAM §7.3 onScreen = SafeFrame-visible: a foe under the ability bar is hidden; inView / activityOf use the plain frustum', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  ctx.ui = { bar: { insetBottom: 110 }, safeInsets: { top: 0, bottom: 110, left: 0, right: 0, w: 1280, h: 720 } };
+  cam.safeFrame.key = '';
+  step(3);
+  const c = ctx.camera, p = new THREE.Vector3();
+  // the ground point drawn at screen (0.5, 0.95) → under the bar
+  const v = new THREE.Vector3(0, -0.9, 0.5).unproject(c).sub(c.position).normalize();
+  p.copy(c.position).addScaledVector(v, -c.position.y / v.y);
+  assert.equal(cam.onScreen(p, 0), false, 'under the bar = not visible (no off-screen snipe)');
+  assert.equal(cam.inView(p, 0.3), true, 'but drawn (perf: full rate)');
+  const e = enemyAt(ctx, p.x, p.z);
+  assert.equal(cam.activityOf(e), 0, 'tier 0 in view');
+  const far = enemyAt(ctx, 0, -45), farther = enemyAt(ctx, 70, -60);
+  assert.equal(cam.activityOf(far), 2, 'tier 2: off screen ≤ 60 m'); assert.equal(cam.activityOf(farther), 3);
+  const near1 = enemyAt(ctx, 25, -14);
+  assert.equal(cam.activityOf(near1), 1, 'tier 1: off screen ≤ 30 m');
+  assert.equal(cam.onScreen(cam.focus, 0.5), true, 'her focus is visible');
+  assert.ok(cam.footprint.valid && cam.footprint.version > 0, 'footprint published');
+  assert.equal(cam.inFootprint(cam.focus.x, cam.focus.z), true);
+  const U = { x: 0, z: 0 }, R = { x: 0, z: 0 }; cam.groundAxes(U, R);
+  near(U.z, 1, 1e-9); near(R.x, -1, 1e-9);
+});
+
+test('AUTOCAM §10 comfort: Reduce camera motion = no lead, anchor y 0.50, discrete combat zoom; touch shake has no rotation', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  ctx.state.settings.reduceCameraMotion = true;
+  cam._onSetting({ key: 'reduceCameraMotion' });
+  step(300);                                                        // the 0.8 m bias releases (biasST 1 s)
+  near(cam._anc.toY, ISO.reduce.anchorY, 1e-9, 'static compensation: her at y 0.50');
+  const p = ctx.player;
+  ctx.input.device = 'kbm'; ctx.input.move.y = -1; p.stateName = 'move';
+  let z = 0;
+  for (let i = 0; i < 90; i++) { z -= 5.5 / 60; p.pos.z = z; p.object3d.position.z = z; p.vel.set(0, 0, -5.5); step(1); }
+  near(cam.focus.z - z, 0, 1e-3, 'no animated lead and no bias');
+  ctx.input.move.y = 0; p.vel.set(0, 0, 0); p.stateName = 'idle';
+  // touch: shake translation only
+  ctx.input.device = 'touch';
+  cam.shake(1); step(1);
+  const q0 = ctx.camera.quaternion.clone();
+  cam.shaker.reset(); step(1);
+  near(q0.angleTo(ctx.camera.quaternion), 0, 1e-6, 'no rotation from the shake on touch');
+});
+
+test('AUTOCAM §10.4 lock modes: Y toggles locked ↔ the last unlocked mode; settings.camLockMode + camLock written', async () => {
+  const { ctx, cam } = await makeIsoCamA();
+  const seen = [];
+  ctx.bus.on(E.SETTINGS_CHANGED, (p) => seen.push(p.key + ':' + p.value));
+  assert.equal(cam.camLockMode, 'locked');
+  assert.equal(cam.setCamLock(false, false), false);
+  assert.equal(cam.camLockMode, 'free'); assert.equal(ctx.state.settings.camLockMode, 'free'); assert.equal(ctx.state.settings.camLock, false);
+  cam.setCamLockMode('semi', false); cam.setCamLock(true, false);
+  assert.equal(cam.camLockMode, 'locked');
+  cam.setCamLock(false, false);
+  assert.equal(cam.camLockMode, 'semi', 'Y returns to the last unlocked mode');
+  ctx.state.settings.camLockMode = 'locked'; ctx.bus.emit(E.SETTINGS_CHANGED, { key: 'camLockMode', value: 'locked' });
+  assert.equal(cam.camLocked, true, 'settings drive the mode');
+  assert.ok(seen.includes('camLockMode:free') && seen.includes('camLockMode:semi'));
+});
+
+test('WA camera.W2: framing reads her capsule, never the visual bbox (identical at playScale 1.0 and 1.12)', async () => {
+  const run = async (scale) => {
+    const { ctx, cam, step } = await makeIsoCamA();
+    ctx.player.object3d.scale.setScalar(scale);
+    const e = enemyAt(ctx, 3, -6); e.alerted = true;
+    step(40);
+    const f = cam.framing();
+    return JSON.stringify({ need: f.need.toFixed(4), d: f.d.toFixed(4), lean: f.lean.map((q) => q.toFixed(4)), her: f.subjects[0] });
+  };
+  assert.equal(await run(1.12), await run(1.0));
+});
+
+test('AUTOCAM §8.3 / WA camera.W1: blendPoseIso eases distance in log space; blendTo(follow) from a shot lands on the gameplay frame', async () => {
+  const a = new CamPose(), b = new CamPose();
+  a.look.set(0, 1, 0); a.pos.set(0, 1 + 3.5 * Math.sin(0.2), 3.5 * Math.cos(0.2));
+  b.look.set(0, 0.6, 0); b.pos.set(0, 0.6 + 13 * Math.sin(0.9), -13 * Math.cos(0.9));
+  const m = blendPoseIso(a, b, 0.5, new CamPose());
+  near(m.pos.distanceTo(m.look), Math.sqrt(3.5 * 13), 1e-6, 'geometric mean at k 0.5');
+  for (let k = 0; k <= 1.0001; k += 0.1) assert.ok(blendPoseIso(a, b, k, new CamPose()).pos.y > 0.5, 'never through the ground');
+  const { ctx, cam, step } = await makeIsoCamA();
+  const calls = [];
+  ctx.postfx = { setCinematic: (on) => calls.push(on) };
+  cam.shot({ preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut', loop: true });
+  step(5);
+  cam.preset('HERO_LOW', 'swordcat', { mode: 'cut' });
+  step(5);
+  cam.blendTo('follow', 1.1, 'inOutSine');
+  assert.equal(cam.modeName, 'follow');
+  step(Math.round(1.1 * 60) + 2);
+  const pose = cam._gamePose;
+  near(ctx.camera.position.distanceTo(pose.pos), 0, 1e-3, 'the blend lands on the gameplay pose (no second move)');
+  assert.deepEqual(calls, [true, false], 'setCinematic on the shot (not the looping title shot), off on the hand-back');
+});
+
+test('AUTOCAM ui ask: heroScreen() is the SafeFrame anchor in CSS px; mirrored for a left-handed touch layout', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  ctx.renderer.domElement.clientWidth = 844; ctx.renderer.domElement.clientHeight = 390;
+  ctx.input.device = 'touch';
+  step(3);
+  const r = cam.heroScreen();
+  assert.ok(r.x < 844 * 0.5 && r.x > 844 * 0.38, `right-handed: left of centre (${r.x.toFixed(0)})`);
+  ctx.state.settings.leftHanded = true; cam._onSetting({ key: 'leftHanded' });
+  step(3);
+  assert.ok(cam.heroScreen().x > 844 * 0.5, `left-handed: right of centre (${cam.heroScreen().x.toFixed(0)})`);
+});
+
+test('ART §6.1 closeUp: on below 6.0 m, off above 6.3 m (hysteresis); the framed character view gets setCloseUp', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  const got = [];
+  ctx.player.model = { setCloseUp: (on) => got.push(on) };
+  step(2);
+  assert.equal(cam.closeUp, false, 'iso play is never a close-up');
+  cam.shot({ preset: 'ECU_EYES', anchor: 'swordcat', mode: 'cut' });
+  step(2);
+  assert.equal(cam.closeUp, true);
+  cam.mode('follow', { blend: false });
+  step(2);
+  assert.equal(cam.closeUp, false);
+  assert.deepEqual(got.filter((x, i) => i === 0 || got[i - 1] !== x), [true, false]);
 });

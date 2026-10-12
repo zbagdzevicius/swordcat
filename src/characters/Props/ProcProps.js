@@ -8,13 +8,16 @@ import { kitMaterial, RM } from '../materials.js';
 import { potHelmGeometry, flipShell } from '../Accessories.js';
 import { bowGeometry, bowMaterial } from '../Bow.js';
 import { M2_BUILDERS, M2_MOUNTS } from './M2Props.js';
+import { WARM_BUILDERS } from './WarmProps.js';
 
 /** Contract prop names (GAME_DESIGN §19.4) + extras. */
 export const PROP_NAMES = Object.freeze(['milk_cup', 'lantern', 'spoon', 'letter', 'pot_helm',
   'milk_bottle', 'colander', 'signpost', 'post_bag', 'cot', 'soup_bowl', 'jester_hat', 'postmaster_hat', 'cage', 'helmet',
   // M2: hub activity props (§12.5) and B1 Grizzlechop's gear (§11.2)
   'book', 'fishing_rod', 'bread_basket', 'teacup', 'hammer', 'butterfly',
-  'feathered_hat', 'cheese_shield', 'cheese_wheel', 'cheese_wheel_giant', 'cheese_wedge']);
+  'feathered_hat', 'cheese_shield', 'cheese_wheel', 'cheese_wheel_giant', 'cheese_wedge',
+  // Phase W (WARM_ADVENTURE_SPEC §2.5 / §8): squeaky bones, the practice props' faces
+  'squeaky_bone', 'big_squeaky_bone', 'sacky_face', 'wobble_smile']);
 
 /**
  * Where a kitten holds / wears each prop (joint + local transform). `name@at` variants override (e.g. letter@belt).
@@ -83,7 +86,10 @@ export function milkBottle() {
   return makeUpright(mesh(gb, 'milk_bottle'));
 }
 
-/** Lantern (CS-04, CS-15): brass frame, warm glowing panes; opts.light adds PointLight #FFC46B (1.5, d 6). */
+/**
+ * Lantern (CS-04, CS-15): brass frame, warm glowing panes. K2 (no PointLights in the game scene): `opts.light` no longer
+ * adds a PointLight; it publishes `userData.lamp` { color, intensity, distance, object } for world's ENV_U lamp slots.
+ */
 export function lantern(o = {}) {
   const gb = new GeoBuilder(), brass = rgb(PAL.brass), glow = rgb('#FFC46B');
   const h = 0.12, r = 0.045;
@@ -97,10 +103,7 @@ export function lantern(o = {}) {
   gb.add(new THREE.TorusGeometry(0.022, 0.004, 6, 16), { matrix: mat([0, 0.0, 0]), color: brass, rmse: RM.brass });
   gb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.035, 8), { matrix: mat([0, -h * 0.72, 0]), color: rgb('#FFF4DA'), rmse: [0.6, 0, 0, 1.5] });
   const m = mesh(gb, 'lantern');
-  if (o.light) {
-    const L = new THREE.PointLight('#FFC46B', o.intensity ?? 1.5, o.distance ?? 6, 2);
-    L.position.set(0, -h * 0.5, 0); L.castShadow = false; m.add(L); m.userData.light = L;
-  }
+  if (o.light) m.userData.lamp = { color: '#FFC46B', intensity: o.intensity ?? 1.5, distance: o.distance ?? 6, object: m, offset: [0, -h * 0.5, 0] };
   return makeUpright(m);
 }
 
@@ -326,6 +329,7 @@ const BUILDERS = {
   post_bag: postBag, cot, soup_bowl: soupBowl, jester_hat: jesterHatProp, postmaster_hat: postmasterHat, cage: buildCage,
   helmet: knightHelm,
   ...M2_BUILDERS,
+  ...WARM_BUILDERS,
 };
 
 /**

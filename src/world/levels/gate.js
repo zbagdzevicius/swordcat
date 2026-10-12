@@ -18,12 +18,19 @@ const K = (n) => `models/env/castle/${n}.glb`;
 const G = (n) => `models/env/graveyard/${n}.glb`;
 const M = {
   tower: K('tower-square'), wall: K('wall'), portcullis: K('metal-gate'), banner: K('flag-banner-long'), flag: K('flag'),
-  siegeTower: K('siege-tower-demolished'), catapult: K('siege-catapult-demolished'), ram: K('siege-ram-demolished'), ballista: K('siege-ballista'), ballistaWreck: K('siege-ballista-demolished'),
-  rocksL: K('rocks-large'), rocksS: K('rocks-small'), debris: G('debris'), debrisWood: G('debris-wood'), brazier: G('fire-basket'), hay: G('hay-bale'),
-  crate: 'models/env/village-kaykit/decoration/crate_A_big.glb', barrel: 'models/env/village-kaykit/decoration/barrel.glb', cart: 'models/env/town/cart-high.glb',
+  // LI W15 "Hyena Toy Fort": intact, cork-and-coral siege toys with pennants (no wrecks, no debris, no craters)
+  siegeTower: K('siege-tower'), catapult: K('siege-catapult'), ram: K('siege-ram'), ballista: K('siege-ballista'), pennant: K('flag-pennant'),
+  rocksL: K('rocks-large'), rocksS: K('rocks-small'), hay: G('hay-bale'),
+  crate: 'models/env/village-kaykit/decoration/crate_A_big.glb', crateS: 'models/env/village-kaykit/decoration/crate_A_small.glb', barrel: 'models/env/village-kaykit/decoration/barrel.glb', cart: 'models/env/town/cart-high.glb',
   stoneL: 'models/env/nature/stone_largeA.glb', stoneL2: 'models/env/nature/stone_largeB.glb', reeds: 'models/env/nature/grass_large.glb',
 };
 const BRICKS = 'textures/bricks076c/color.jpg';
+/** LI W4 / W15 looks: coral sandstone, cork toys, foam lances, painted shields, sunset lamps, the steel-blue portcullis. */
+const LOOK = Object.freeze({
+  stone: { tint: '#E8B898', sat: 0.9, mul: 1.0 }, tower: { tint: '#E8B898', sat: 0.9 }, toy: { tint: '#F2C8A0', sat: 1.0 }, toyCork: { tint: '#E0B888', sat: 1.0 },
+  hay: { sat: 0.6, tint: '#F2D27A' }, portcullis: { tint: '#8E96A2' }, banner: { tint: '#FF9E7A' },
+  lamp: '#FFB070', lampGlass: '#FFD9A0', shaft: '#C99A6A', foam: '#FFF6E8', teal: '#3FA59A', mustard: '#E0B043',
+});
 /** The causeway's pale kerb / ledge rim colour (vertex colour × the brick map). */
 const LIP = '#FFFDF6';
 
@@ -58,9 +65,9 @@ const gateGrass = (x, z, h) => (h < -0.45 ? 0 : Math.abs(x) <= 6.4 && z > -61.5 
 const gateGround = (x, z, h, out) => {
   if (h < -0.6) out.lerp(_sand, Math.min(1, (-0.6 - h) * 1.2));
 };
-const _sand = new THREE.Color('#5E5848');
+const _sand = new THREE.Color('#B8A078');
 
-const C = { wood: '#7A5B3E', woodDark: '#4E3A28', plank: '#9C7E58', iron: '#4A4C50', rope: '#8C6A4A', chalk: '#F2EEE2', stone: '#9C9A92', hyena: '#5A5650', red: '#8A2E2A', cream: '#EFE3CF' };
+const C = { wood: '#B7773F', woodDark: '#7E4E2A', plank: '#D9A86A', iron: '#6E7A8E', rope: '#C9A06A', chalk: '#F2EEE2', stone: '#C9BCA6', hyena: '#7A4E9A', red: '#E0605A', cream: '#FFF3E2' };
 
 // ---------------------------------------------------------------------------------------------- procedural parts
 const box = (w, h, d, x = 0, y = 0, z = 0, ry = 0) => { const g = new THREE.BoxGeometry(w, h, d); if (ry) g.rotateY(ry); return g.translate(x, y, z); };
@@ -72,7 +79,7 @@ function winchParts() {
   for (const sx of [-1.15, 1.15]) {
     for (const dz of [-0.4, 0.4]) { const g = new THREE.BoxGeometry(0.14, 1.35, 0.14); g.rotateX(dz > 0 ? -0.28 : 0.28); p.push([g.translate(sx, 0.75, dz * 0.6), C.wood]); }
   }
-  const drum = new THREE.CylinderGeometry(0.42, 0.42, 2.0, 16); drum.rotateZ(Math.PI / 2); p.push([drum.translate(0, 1.0, 0), '#8A6B4A']);
+  const drum = new THREE.CylinderGeometry(0.42, 0.42, 2.0, 16); drum.rotateZ(Math.PI / 2); p.push([drum.translate(0, 1.0, 0), '#B7773F']);
   for (const x of [-0.6, 0, 0.6]) { const r = new THREE.TorusGeometry(0.43, 0.04, 5, 16); r.rotateY(Math.PI / 2); p.push([r.translate(x, 1.0, 0), C.iron]); }
   const wheel = new THREE.TorusGeometry(0.55, 0.05, 6, 18); wheel.rotateY(Math.PI / 2); p.push([wheel.translate(1.35, 1.0, 0), C.iron]);
   for (let i = 0; i < 4; i++) { const s = new THREE.BoxGeometry(0.04, 1.1, 0.06); s.rotateX((i / 4) * Math.PI); p.push([s.translate(1.35, 1.0, 0), C.iron]); }
@@ -96,32 +103,34 @@ function ringParts(r, n = 28) {
 /** The hyena ballista raft: planks 4 × 3 m on two logs, a mooring post. */
 function raftParts() {
   const p = [];
-  for (let i = 0; i < 9; i++) p.push([box(0.42, 0.1, 3.0, -1.8 + i * 0.45, 0.25, 0), i % 2 ? C.plank : '#8A6E4C']);
+  for (let i = 0; i < 9; i++) p.push([box(0.42, 0.1, 3.0, -1.8 + i * 0.45, 0.25, 0), i % 2 ? C.plank : '#C9965E']);
   for (const z of [-1.1, 1.1]) { const g = new THREE.CylinderGeometry(0.22, 0.22, 4.3, 8); g.rotateZ(Math.PI / 2); p.push([g.translate(0, 0.05, z), C.woodDark]); }
   p.push([cyl(0.08, 0.08, 1.0, 1.9, 0.2, 1.3), C.woodDark], [box(0.9, 0.7, 0.03, -1.2, 1.4, -1.2), C.hyena]);
   return p;
 }
 
-/** Battlefield junk: a broken spear stuck in the ground, a dropped round shield, a cracked helmet. */
-function spearParts() { return [[cyl(0.03, 0.03, 1.6), '#6E5238'], [new THREE.ConeGeometry(0.06, 0.25, 4).translate(0, 1.72, 0), C.iron]]; }
-function shieldParts() { return [[new THREE.CylinderGeometry(0.42, 0.42, 0.06, 14).rotateX(0.2).translate(0, 0.08, 0), '#7A5B3E'], [new THREE.SphereGeometry(0.1, 8, 6).translate(0, 0.14, 0.02), C.iron]]; }
+/** Toy-fort practice gear (LI W15): a foam-tipped practice lance and a round shield painted in two halves. */
+function spearParts() { return [[cyl(0.035, 0.035, 1.6), LOOK.shaft], [new THREE.SphereGeometry(0.11, 10, 8).translate(0, 1.68, 0), LOOK.foam]]; }
+function shieldParts() {
+  const a = new THREE.CylinderGeometry(0.42, 0.42, 0.06, 14, 1, false, 0, Math.PI).rotateX(0.2).translate(0, 0.08, 0);
+  const b = new THREE.CylinderGeometry(0.42, 0.42, 0.06, 14, 1, false, Math.PI, Math.PI).rotateX(0.2).translate(0, 0.08, 0);
+  return [[a, LOOK.teal], [b, LOOK.mustard], [new THREE.SphereGeometry(0.1, 8, 6).translate(0, 0.14, 0.02), LOOK.foam]];
+}
 function hyenaBannerParts() {
   return [[cyl(0.05, 0.06, 3.2), C.woodDark], [box(0.8, 0.05, 0.05, 0, 3.0, 0), C.woodDark], [box(0.72, 1.5, 0.03, 0, 2.2, 0), C.hyena],
-    [box(0.42, 0.08, 0.035, 0, 2.35, 0.02), '#C9C2A0'], [box(0.08, 0.32, 0.035, -0.13, 2.15, 0.02), '#C9C2A0'], [box(0.08, 0.32, 0.035, 0.13, 2.15, 0.02), '#C9C2A0'],
+    [box(0.42, 0.08, 0.035, 0, 2.35, 0.02), LOOK.mustard], [box(0.08, 0.32, 0.035, -0.13, 2.15, 0.02), LOOK.mustard], [box(0.08, 0.32, 0.035, 0.13, 2.15, 0.02), LOOK.mustard],
     [new THREE.ConeGeometry(0.1, 0.4, 4).translate(0, 3.35, 0), C.iron]];
 }
-/** An iron brazier on three legs (the yard, by the gatehouse). */
-function brazierParts() {
-  const p = [[new THREE.CylinderGeometry(0.42, 0.24, 0.36, 12, 1, true).translate(0, 1.0, 0), '#3E3A36'], [new THREE.TorusGeometry(0.42, 0.04, 5, 14).rotateX(Math.PI / 2).translate(0, 1.18, 0), '#5A5650']];
-  for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2, g = new THREE.CylinderGeometry(0.035, 0.035, 0.95, 5).translate(0, 0.47, 0); g.rotateZ(0.18); g.rotateY(a); p.push([g.translate(Math.sin(a) * 0.2, 0, Math.cos(a) * 0.2), '#3E3A36']); }
-  p.push([new THREE.DodecahedronGeometry(0.22, 0).translate(0, 1.02, 0), '#2A221C']);
-  return p;
+/** A warm sunset lamp post (honey wood, glass lantern) by the gatehouse (LI W15: lamps, not fire baskets). */
+function lampPostParts() {
+  return [[cyl(0.07, 0.09, 1.9), C.wood], [box(0.34, 0.06, 0.34, 0, 1.92, 0), C.woodDark], [box(0.26, 0.32, 0.26, 0, 2.11, 0), LOOK.lampGlass],
+    [new THREE.ConeGeometry(0.22, 0.16, 4).rotateY(Math.PI / 4).translate(0, 2.35, 0), C.woodDark]];
 }
 
 /** The gatehouse arch's crenellations (world boxes on the lintel top at y, centred on z). */
 function archCrenels(x0, x1, y, z) {
   const p = [];
-  for (let x = x0 + 0.4; x < x1; x += 1.1) p.push({ x0: x - 0.3, x1: x + 0.3, y0: y, y1: y + 0.7, z0: z - 0.45, z1: z + 0.45, color: '#8E8C84' });
+  for (let x = x0 + 0.4; x < x1; x += 1.1) p.push({ x0: x - 0.3, x1: x + 0.3, y0: y, y1: y + 0.7, z0: z - 0.45, z1: z + 0.45, color: '#C9BCA6' });
   return p;
 }
 /** CONTROLS_SPEC §3: the arch and the raised portcullis fade (roof rule) while she is in the passage or this close
@@ -133,7 +142,7 @@ const SETPIECES = {
   /** The causeway: textured deck, sides, parapets, tower piers, the ledge and its steps; pillars underneath; the Line. */
   async causeway(kit) {
     const ctx = kit.ctx, level = kit.level, d = GATE.deck, L = GATE.ledge;
-    const top = 0.02, bot = GATE.seabed - 0.6, stone = '#D8D1C4', dark = '#ADA79B';   // ×1.1 from above (CONTROLS_SPEC §4.2)
+    const top = 0.02, bot = GATE.seabed - 0.6, stone = '#EAD8C0', dark = '#D2B89C';   // ×1.1 from above (CONTROLS_SPEC §4.2)
     const boxes = [
       { x0: -d.x, x1: d.x, y0: bot, y1: top, z0: d.z0, z1: d.z1, color: stone },                        // deck + its sides
       { x0: L.x0 + 1.5, x1: L.x1, y0: bot, y1: L.y + 0.02, z0: L.z0, z1: L.z1, color: dark },              // the ledge
@@ -162,7 +171,7 @@ const SETPIECES = {
     // §4.2 iso: the deck read dark and muddy from above (it is most of the frame): ×1.27 albedo (1.93 → 2.45) and the
     // brick map's dark joints lifted to a pale mortar (joint) so the courses read against her dark armour and the hyenas
     const mat = await texturedMaterial(ctx, BRICKS, { tint: '#FFF8EC', mapMix: 0.45, key: 'deck', gain: 2.45, joint: 0.38 });
-    if (!mat.map) mat.color.set('#CCC6BA');   // no map (slow load): the same ×1.27 lift
+    if (!mat.map) mat.color.set('#E8D2B8');   // no map (slow load): the same ×1.27 lift
     kit.castle = kit.merged('castle');
     // CONTROLS_SPEC §3 solids: the flanking towers and the gatehouse are their own merged meshes so the iso camera can
     // fade them (camFade 'solid') when they stand between the lens and her; the long shore walls stay in 'castle'
@@ -179,7 +188,7 @@ const SETPIECES = {
     }
     for (let i = 0; i < 3; i++) kit.collider({ x: d.x + (i + 0.5) * 0.5, z: -52, hx: 0.25, hz: 1.6, y0: -2, y1: -(i + 1) * 0.27 });
     // pillars under the deck every 10 m (both sides)
-    const pillar = await kit.tpl(K('bridge-straight-pillar'), { sat: 0.15, mul: 0.6 });
+    const pillar = await kit.tpl(K('bridge-straight-pillar'), LOOK.stone);
     if (pillar) for (let z = d.z0 + 5; z < d.z1 - 2; z += 10) for (const sx of [-1, 1]) kit.place(pillar, sx * (d.x + 0.2), z, { fit: { h: 2.4 }, y: GATE.seabed - 0.2, yaw: Math.PI / 2, collider: false, clear: false, occupy: false, jitter: 0.05, ground: true });
     // the chalk Line at z +10 and the winch zone ring
     kit.place(kit.proc('chalk_line', () => lineParts(11.4)), 0, GATE.line, { y: top, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
@@ -195,7 +204,7 @@ const SETPIECES = {
   /** The two flanking towers (10 m, on piers at x ±8.6, z +8) narrowing the causeway, banners, a parapet torch each. */
   async towers(kit) {
     const level = kit.level;
-    const [tower, banner] = await Promise.all([kit.tpl(M.tower, { sat: 0.25, mul: 0.95 }), kit.tpl(M.banner)]);
+    const [tower, banner] = await Promise.all([kit.tpl(M.tower, LOOK.tower), kit.tpl(M.banner, LOOK.banner)]);
     for (const [x, z] of GATE.towers) {
       if (tower) {
         const p = kit.place(tower, x, z, { fit: { h: GATE.towerH }, y: 0, yaw: x < 0 ? Math.PI / 2 : -Math.PI / 2, collider: 'box', shrink: 0.98, jitter: 0.03, clear: false, occupy: 4.5, into: kit.gateTowers ?? kit.castle });
@@ -210,16 +219,16 @@ const SETPIECES = {
   /** The gatehouse: two towers, the arch over the 6.4 m passage, the portcullis (animated), walls along the shore, torches. */
   async gatehouse(kit) {
     const ctx = kit.ctx, level = kit.level, gh = GATE.gatehouse;
-    const [tower, wall, port, banner, brazier] = await Promise.all([kit.tpl(M.tower, { sat: 0.25, mul: 0.95 }), kit.tpl(M.wall, { sat: 0.25, mul: 0.95 }), kit.tpl(M.portcullis),
-      kit.tpl(M.banner), kit.tpl(M.brazier)]);
+    const [tower, wall, port, banner] = await Promise.all([kit.tpl(M.tower, LOOK.tower), kit.tpl(M.wall, LOOK.tower), kit.tpl(M.portcullis, LOOK.portcullis),
+      kit.tpl(M.banner, LOOK.banner)]);
     for (const sx of [-1, 1]) if (tower) kit.place(tower, sx * gh.towerX, gh.z, { fit: { h: gh.towerH }, yaw: 0, collider: 'box', shrink: 0.98, jitter: 0.03, clear: 3, into: kit.gatehouseTowers ?? kit.castle });
     // the arch: a stone lintel block over the passage, with crenellations (one mesh: they fade together)
     const [a0, a1] = gh.arch, [y0, y1] = gh.archY;
-    const lintel = worldBoxesGeometry([{ x0: a0 - 0.3, x1: a1 + 0.3, y0, y1, z0: gh.z - 1.9, z1: gh.z + 1.9, color: '#C4BEB2' },
-      { x0: a0 - 0.5, x1: a1 + 0.5, y0: y0 - 0.25, y1: y0, z0: gh.z - 2.0, z1: gh.z + 2.0, color: '#A9A498' },
+    const lintel = worldBoxesGeometry([{ x0: a0 - 0.3, x1: a1 + 0.3, y0, y1, z0: gh.z - 1.9, z1: gh.z + 1.9, color: '#E8CDB0' },
+      { x0: a0 - 0.5, x1: a1 + 0.5, y0: y0 - 0.25, y1: y0, z0: gh.z - 2.0, z1: gh.z + 2.0, color: '#D2B494' },
       ...archCrenels(a0 - 0.3, a1 + 0.3, y1, gh.z)], { tile: 2.2 });
     const lmat = await texturedMaterial(ctx, BRICKS, { tint: '#FFF8EC', mapMix: 0.45, key: 'bricks', gain: 1.93 /* §4.2: ×1.1, the deck read dark in gate_dusk */ });
-    if (!lmat.map) lmat.color.set('#B8B2A6');
+    if (!lmat.map) lmat.color.set('#E2C8AC');
     const lmesh = new THREE.Mesh(lintel, lmat); lmesh.name = 'gatehouseArch'; lmesh.castShadow = true; lmesh.receiveShadow = true; lmesh.userData.camFade = 'roof'; lmesh.userData.roofPad = ARCH_ROOF_PAD;
     kit.object(lmesh);
     // the portcullis (Kenney metal gate stretched over the passage): raised; the 100 % test drops and lifts it
@@ -268,14 +277,13 @@ const SETPIECES = {
     for (const sx of [-1, 1]) {
       const x = sx * 4.0, z = gh.z - 2.4;
       kit.place(kit.proc('wall_torch', () => [[box(0.1, 0.1, 0.5, 0, 0, 0.25), C.iron], [cyl(0.09, 0.06, 0.32, 0, -0.1, 0.5, 8), C.woodDark]]), x, z, { y: 3.0, yaw: Math.PI, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
-      addFlame(level, level.lightPool, x, 3.32, z - 0.5, { size: 0.7, light: 2.2, distance: 10, glow: 1.5, color: '#FF8A3D' });
+      addFlame(level, level.lightPool, x, 3.32, z - 0.5, { size: 0.7, light: 2.2, distance: 10, glow: 1.5, color: LOOK.lamp });
     }
-    const braz = kit.proc('brazier', brazierParts);
+    const lamp = kit.proc('gate_lamp', lampPostParts);
     for (const [x, z] of [[-4.6, 54.2], [4.6, 54.2]]) {
-      const p = kit.place(braz, x, z, { collider: 'circle', shrink: 0.6, jitter: 0 });
-      if (p) addFlame(level, level.lightPool, x, p.top - 0.1, z, { size: 1.1, light: 1.6, distance: 8, glow: 1.3, color: '#FF9A4A' });
+      const p = kit.place(lamp, x, z, { collider: 'circle', shrink: 0.6, jitter: 0 });
+      if (p) addFlame(level, level.lightPool, x, p.top - 0.32, z, { size: 0.6, light: 1.6, distance: 8, glow: 1.2, color: LOOK.lamp });
     }
-    void brazier;
   },
 
   /** The winch (0, +41): the drum and crank, the chain to the gatehouse; Earl Grey and Pip work it (anchors). */
@@ -296,22 +304,30 @@ const SETPIECES = {
 
   /** The yard (0, +57): crates, barrels, a cart, hay, sandbag barricade, the road north to town. */
   async yard(kit) {
-    const [crate, barrel, cart, hay] = await Promise.all([kit.tpl(M.crate), kit.tpl(M.barrel), kit.tpl(M.cart), kit.tpl(M.hay, { sat: 0.12, tint: '#E6CF8C' })]);
+    const [crate, barrel, cart, hay] = await Promise.all([kit.tpl(M.crate), kit.tpl(M.barrel), kit.tpl(M.cart), kit.tpl(M.hay, LOOK.hay)]);
     const put = (t, list, fit) => { if (t) for (const [x, z, yaw] of list) kit.place(t, x, z, { fit, yaw, collider: 'box', shrink: 0.95, jitter: 0.08 }); };
     put(crate, [[6.5, 56, 0.2], [7.3, 56.8, 0.9], [6.8, 57.6, 1.7], [-9.5, 61, 0.4]], { h: 0.85 });
     put(barrel, [[-7.6, 55.4, 0], [-8.4, 56.2, 1], [8.8, 61.5, 0.3]], { h: 0.95 });
     put(hay, [[10.5, 58.6, 0.4], [-12, 57, 1.2]], { h: 1.0 });
     if (cart) kit.place(cart, -10.4, 63.5, { fit: { max: 2.4 }, yaw: 0.5, collider: 'box', shrink: 0.9, jitter: 0.04 });
-    kit.paint(0, 57, 9, '#6A6450', 0.4, 3);
+    kit.paint(0, 57, 9, '#D6B276', 0.4, 3);
   },
 
-  /** The Old Battlefield (0, −72): siege wrecks, debris, spears, shields, craters, hyena banners by the war-wagon. */
+  /**
+   * The "Hyena Toy Fort" (0, −72; LI W15, was the Old Battlefield): intact cork-and-coral siege toys with pennants, crates /
+   * barrels / hay where the debris lay, foam-tipped practice lances, painted shields, prank banners by the war-wagon.
+   * Gameplay footprints and colliders are the same as the old wrecks (same spots, fits and collider boxes).
+   */
   async battlefield(kit) {
-    const tpls = await Promise.all([M.siegeTower, M.catapult, M.ram, M.ballistaWreck, M.debris, M.debrisWood, M.rocksL].map((m) => kit.tpl(m, { sat: 0.55, mul: 0.85 })));
-    const [tw, cat, ram, bw, deb, debW, rocks] = tpls;
-    const put = (t, x, z, max, yaw) => { if (t) kit.place(t, x, z, { fit: { max }, yaw, collider: 'box', shrink: 0.75, jitter: 0.06 }); };
-    put(tw, -17, -72, 7, 0.6); put(cat, 15, -66, 5, 2.1); put(ram, -6, -84, 5, -0.4); put(bw, 18, -84, 4.2, 1.1); put(cat, -24, -84, 5, 3.6);
-    for (const [x, z, y] of [[-10, -76, 0.3], [9, -71, 1.4], [-2, -66, 2.2], [20, -76, 0.9], [-20, -64, 1.8], [4, -88, 0.2]]) put(x > 0 ? deb : debW, x, z, 2.2, y);
+    const tpls = await Promise.all([[M.siegeTower, LOOK.toy], [M.catapult, LOOK.toyCork], [M.ram, LOOK.toyCork], [M.ballista, LOOK.toyCork], [M.crateS, {}], [M.barrel, {}],
+      [M.hay, LOOK.hay], [M.rocksL, LOOK.stone], [M.pennant, LOOK.banner]].map(([m, o]) => kit.tpl(m, o)));
+    const [tw, cat, ram, bw, crateS, barrel, hay, rocks, pennant] = tpls;
+    const put = (t, x, z, max, yaw) => (t ? kit.place(t, x, z, { fit: { max }, yaw, collider: 'box', shrink: 0.75, jitter: 0.06 }) : null);
+    const toys = [put(tw, -17, -72, 7, 0.6), put(cat, 15, -66, 5, 2.1), put(ram, -6, -84, 5, -0.4), put(bw, 18, -84, 4.2, 1.1), put(cat, -24, -84, 5, 3.6)];
+    // a pennant on top of each toy
+    if (pennant) for (const t of toys) if (t) kit.place(pennant, t.x, t.z, { y: t.top - 0.1, fit: { h: 1.4 }, yaw: t.yaw, collider: false, clear: false, occupy: false, jitter: 0 });
+    const junk = [crateS, barrel, hay];
+    [[-10, -76, 0.3], [9, -71, 1.4], [-2, -66, 2.2], [20, -76, 0.9], [-20, -64, 1.8], [4, -88, 0.2]].forEach(([x, z, y], i) => put(junk[i % 3], x, z, i % 3 === 2 ? 1.4 : 1.1, y));
     put(rocks, 24, -70, 3.2, 0.4); put(rocks, -28, -76, 3.6, 2.0);
     const spear = kit.proc('bf_spear', spearParts), shield = kit.proc('bf_shield', shieldParts);
     const rng = kit.rng.fork('battlefield');
@@ -321,10 +337,9 @@ const SETPIECES = {
       if (i % 3) kit.place(spear, x, z, { yaw: rng.angle(), tiltX: (rng() - 0.5) * 0.7, tiltZ: (rng() - 0.5) * 0.7, collider: false, clear: 0.2, occupy: false, jitter: 0.1 });
       else kit.place(shield, x, z, { yaw: rng.angle(), collider: false, clear: 0.3, occupy: false, jitter: 0.1, sink: 0.04 });
     }
-    for (let i = 0; i < 9; i++) kit.paint(-22 + rng() * 44, -86 + rng() * 22, 1.6 + rng() * 2, '#3A3428', 0.55, 1.2);
     const hb = kit.proc('hyena_banner', hyenaBannerParts);
     for (const [x, z, yaw] of [[3.2, -77.6, 0.4], [9.2, -82.6, 2.8], [-6.5, -63.8, 0.2], [12.5, -79.5, 1.5]]) kit.place(hb, x, z, { yaw, collider: 'circle', shrink: 0.2, jitter: 0.04 });
-    kit.paint(0, -74, 18, '#4A4634', 0.3, 4);
+    kit.paint(0, -74, 18, '#D6B276', 0.3, 4);
     kit.anchor('wagon', GATE.wagon[0], GATE.wagon[1], undefined, Math.PI);
     kit.anchor('horde', 0, -68);
     kit.anchor('horde_a', -22, -70); kit.anchor('horde_b', 22, -72);
@@ -333,7 +348,7 @@ const SETPIECES = {
   /** The hyena ballista raft (−16, −4), bobbing 0.1 m at 0.3 Hz, aimed north-east (scenery; fires in G-02). */
   async raft(kit) {
     const level = kit.level, [x, z] = GATE.raft;
-    const ballista = await kit.tpl(M.ballista, { sat: 0.6 });
+    const ballista = await kit.tpl(M.ballista, LOOK.toyCork);
     const g = new THREE.Group(); g.name = 'raft';
     g.add(kit.mesh(kit.proc('raft', raftParts), { name: 'raftPlanks' }));
     if (ballista) {
@@ -389,6 +404,13 @@ export default defineLevel({
   id: 'gate', size: 180, res: 120, seed: 41, hills: { amp: 0.6 }, pathWidth: 8, rim: 4,
   shape: gateShape, grassMask: gateGrass, groundColor: gateGround,
   env: { default: 'gate_dusk' },
+  // WA §2.6: the toy fort's pennant strings (coral / sea-teal / cream) between the siege toys
+  accent: 'gate',
+  bunting: [
+    { a: [-17, 6.5, -72], b: [-6, 4.4, -84] },
+    { a: [15, 4.8, -66], b: [18, 4.0, -84] },
+    { a: [-6, 4.4, -84], b: [-24, 4.6, -84] },
+  ],
   // CONTROLS_SPEC §11: the causeway runs toward −z, so the iso camera sits north (yaw 0): screen-up = onward;
   // The Line needs width (clear 8 in the arena)
   // §4.2 gate_dusk: the low sun along the causeway draws long shadows (good height cues), so its azimuth stays
@@ -438,6 +460,6 @@ export default defineLevel({
   horizon: false,
   lights: 2,
   grass: { height: 0.24, near: 0.7 },
-  models: [M.tower, M.wall, M.portcullis, M.banner, M.brazier, M.crate, M.barrel, M.cart, M.hay, M.siegeTower, M.catapult, M.ram, M.ballistaWreck, M.debris, M.debrisWood,
+  models: [M.tower, M.wall, M.portcullis, M.banner, M.crate, M.crateS, M.barrel, M.cart, M.hay, M.siegeTower, M.catapult, M.ram, M.pennant,
     M.rocksL, M.ballista, K('bridge-straight-pillar')],
 });

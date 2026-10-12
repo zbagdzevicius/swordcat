@@ -345,12 +345,15 @@ export const STATES = {
     },
   },
 
-  // ------------------------------------------------------------------ faint (§7.6 Nine Lives)
+  // ------------------------------------------------------------------ knock-out (§7.6 Nine Lives, WA §5.7 dizzy sit)
+  // The state id and the life logic are unchanged; she sits dizzy (never lies flat), the cream wipe starts at KO.sitT
+  // and she boings back at KO.sitT + KO.wipeT (1.55 s). A game over stays seated (ui takes over).
   dead: {
     enter(p) { p.stateName = 'dead'; p.swing = null; },
     update(p, dt) {
       brake(p, dt, 8);
-      if (p.stateT >= TUNING.faintDur && !p.livesState.gameOver) p.respawn();
+      if (typeof p.koTick === 'function') p.koTick();
+      else if (p.stateT >= TUNING.faintDur && !p.livesState.gameOver) p.respawn();
     },
   },
 

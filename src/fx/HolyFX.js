@@ -1,6 +1,12 @@
 // src/fx/HolyFX.js  (owner: fx) — the holy ladder's fx side (GAME_DESIGN §17, art.md §8 + §10.2):
-//   sparkles (art.md §8 shader, 160 HDR motes rising around her), the warm point light (~0.6 cd, decay 2, ~0.5 m in front
-//   of her face; requests/characters.md), the aura and the blade streak, plus the bloom level for ScreenFX.
+//   sparkles (art.md §8 shader, 160 HDR motes rising around her), the warm glow on the world around her, the aura and
+//   the blade streak, plus the holy level ScreenFX reads (bloom only in High cinematics now).
+//   - ART §8.5 / PERF F5 "glow without bloom": every tier draws GLOW CARDS that read at bloom 0: an additive core
+//     sprite #FFF6DA at ×2.0 intensity at her chest and 6–12 STAR4 / STAR8 sparkles orbiting her (marks batch, 0 draws);
+//     the aura hull (α 0.35, fresnel edge) is the characters rig's own `setHoly`.
+//   - PERF F6 / ART X6: no PointLight once world's `ENV_U` exists: the holy ladder widens (+radius) and gilds the
+//     shared `ENV_U.uGlow` pool that already follows her (world writes the base every step; fx adds its share on
+//     top and takes it back when the level drops). Without ENV_U the old pooled PointLight is kept (legacy fallback).
 //   - Actors that render their own aura hull + blade streak (they expose `setHoly(v)`, e.g. a characters buildKitten
 //     rig) get explicit levels forwarded; fx then only adds sparkles, light and bloom.
 //   - Actors without `setHoly` (the M0 placeholder, NPC stand-ins) get fx's fallback: a silhouette halo (a soft gold
@@ -14,10 +20,22 @@ import { FOG_FACTOR, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js'
 import { MARK } from './Marks.js';
 import { SHAPE, FADE, GROW } from './Particles.js';
 import { actorWorldPos, resolveBlade, isActor, auraOwner } from './util.js';
+import * as TONE_MOD from '../world/tone.js';
+
+/** World's shared ENV_U uniforms (null until world provides them: then fx falls back to its PointLight). */
+const ENV_U = TONE_MOD.ENV_U ?? null;
 
 const GOLD = new THREE.Color('#FFD57A'), GOLD_CORE = new THREE.Color('#FFF1C4'), SILVER = new THREE.Color('#E4EAF6');
 const HALO_GOLD = new THREE.Color('#FFD98A');
 export const HOLY_LIGHT = { color: '#FFD38A', intensity: 0.6, distance: 3, decay: 2, ahead: 0.5 };
+/**
+ * ART §8.5 glow cards + the ENV_U glow share (fx-owned numbers): core sprite colour / intensity / size (× her height),
+ * sparkles 6..12 orbiting at `orbit` × height, and the uGlow boost at full holy (radius m, colour).
+ */
+export const HOLY_GLOW = Object.freeze({ core: '#FFF6DA', coreI: 2.0, coreSize: 1.1, coreA: 0.55, sparkMin: 6, sparkMax: 12, orbit: 0.55, spin: 1.6,
+  glowR: 1.6, glowCol: '#FFD38A', glowMix: 0.75 });
+/** Glow-card sparkle count for a holy level 0..1 (pure; unit-tested): 0 when off, else 6 → 12. */
+export const glowSparkles = (L) => (L > 0.02 ? Math.round(HOLY_GLOW.sparkMin + (HOLY_GLOW.sparkMax - HOLY_GLOW.sparkMin) * Math.min(1, L)) : 0);
 
 /**
  * Player charge → holy visual state (pure; unit-tested). Prefers the player's own `chargeTier` / `chargeFizzled`
@@ -183,6 +201,9 @@ export class HolyFX {
     this.fields = []; this.arcs = [];
     this.light = null;
     this.bloomLevel = 0;
+    /** what fx last added to ENV_U.uGlow (radius m, colour mix) and the values it wrote, to take its share back */
+    this.glow = { add: 0, mix: 0, wroteW: NaN, base: new THREE.Color(), wrote: new THREE.Color(), on: false };
+    this.cards = 0;            // glow-card sparkles drawn last frame (tests)
     this.fizzles = 0; this.flashes = 0; this.casts = 0;   // counts (tests/smoke)
   }
 
@@ -191,11 +212,14 @@ export class HolyFX {
     const count = (q.particles ?? 2000) < 1000 ? 80 : 160;
     for (let i = 0; i < 3; i++) { const f = new SparkleField(count, this.rng); this.fields.push(f); scene.add(f.points); }
     for (let i = 0; i < 12; i++) { const a = new GoldArc(); this.arcs.push(a); scene.add(a.mesh); }
-    // one persistent point light (intensity 0 when idle): adding / removing lights at runtime recompiles every material
-    this.light = new THREE.PointLight(HOLY_LIGHT.color, 0, HOLY_LIGHT.distance, HOLY_LIGHT.decay);
-    this.light.name = 'fx.holy.light';
-    this.light.castShadow = false;
-    scene.add(this.light);
+    // legacy only (no ENV_U yet): one persistent point light, intensity 0 when idle (adding / removing lights at
+    // runtime recompiles every material)
+    if (!ENV_U) {
+      this.light = new THREE.PointLight(HOLY_LIGHT.color, 0, HOLY_LIGHT.distance, HOLY_LIGHT.decay);
+      this.light.name = 'fx.holy.light';
+      this.light.castShadow = false;
+      scene.add(this.light);
+    }
   }
 
   /** Explicit level for an actor (0 removes it). Forwards to `actor.setHoly(v)` when the actor renders its own aura. */
@@ -265,6 +289,7 @@ export class HolyFX {
     this.states.clear();
     for (const a of this.arcs) a.mesh.visible = false;
     if (this.light) this.light.intensity = 0;
+    this._glowShare(null, 0, 0);
     this.bloomLevel = 0;
   }
 
@@ -296,22 +321,13 @@ export class HolyFX {
       this._sparkles(actor, s, time);
       const own = !!auraOwner(actor);
       if (!own) { this._halo(actor, s); this._streak(actor, s, dt); }
+      this._cards(actor, s, time);
       const L = s.level * s.gold;
       if (L > bestL) { bestL = L; best = actor; }
       bloom = Math.max(bloom, L);
     }
-    // ---- light (strongest gold actor)
-    if (this.light) {
-      if (best) {
-        actorWorldPos(best, _p);
-        const h = (best.height ?? 1) * (best.object3d?.scale?.y ?? 1);
-        _d.subVectors(ctx.camera.position, _p); _d.y = 0;
-        const l = _d.length();
-        if (l > 1e-3) _d.multiplyScalar(1 / l); else _d.set(Math.sin(best.facing ?? 0), 0, Math.cos(best.facing ?? 0));
-        this.light.position.set(_p.x + _d.x * HOLY_LIGHT.ahead, _p.y + h * 0.78, _p.z + _d.z * HOLY_LIGHT.ahead);
-        this.light.intensity = HOLY_LIGHT.intensity * bestL * (0.92 + 0.08 * Math.sin(time * 9));
-      } else this.light.intensity = 0;
-    }
+    // ---- the warm world glow: ENV_U.uGlow share (or the legacy light) on the strongest gold actor
+    this._glowShare(best, bestL, time);
     this.bloomLevel = bloom;
     // ---- arcs
     for (const a of this.arcs) {
@@ -348,6 +364,66 @@ export class HolyFX {
     const r = this.ctx.renderer;
     u.uPx.value = 36 * (r ? Math.max(0.5, r.getContext().drawingBufferHeight / 1080) : 1) * 1.6;
   }
+
+  /**
+   * ART §8.5 glow cards (every tier, 0 draws): an additive #FFF6DA core at her chest (×2.0) and 6–12 STAR4 / STAR8
+   * sparkles orbiting her, so charge / Golden Hour / holy read without any bloom pass.
+   */
+  _cards(actor, s, time) {
+    const G = HOLY_GLOW, L = s.level;
+    if (L < 0.02) return;
+    actorWorldPos(actor, _p);
+    const h = (actor.height ?? 1) * (actor.object3d?.scale?.y ?? 1);
+    _p.y += h * 0.55;
+    this.marks.push(_p.x, _p.y, _p.z, h * G.coreSize * (0.7 + 0.3 * L), MARK.SOFT, _c.set(G.core), G.coreI, Math.min(1, G.coreA * L * 1.2));
+    const n = glowSparkles(L), r = h * G.orbit;
+    for (let k = 0; k < n; k++) {
+      const a = time * G.spin + (k / n) * Math.PI * 2, bob = Math.sin(time * 2.3 + k * 1.7) * 0.18 * h;
+      const tw = 0.55 + 0.45 * Math.sin(time * (5 + k) + k * 2.1);
+      _c.copy(SILVER).lerp(k & 1 ? GOLD : GOLD_CORE, s.gold);
+      this.marks.push(_p.x + Math.sin(a) * r, _p.y + bob, _p.z + Math.cos(a) * r, (k & 1 ? 0.2 : 0.15) * (0.8 + 0.4 * L), k % 3 === 0 ? MARK.STAR8 : MARK.STAR4,
+        _c, 2.2, Math.min(1, L * tw * 1.3), a * 2);
+    }
+    if (actor === this.ctx.player) this.cards = n;
+  }
+
+  /**
+   * The warm pool on the ground and the bodies around the strongest holy / Golden actor. With world's ENV_U: widen
+   * `uGlow.w` by up to HOLY_GLOW.glowR and gild `uGlowCol`; world rewrites the base every fixed step, so fx detects
+   * whether its last write is still there before taking its share back. Legacy: the pooled PointLight.
+   */
+  _glowShare(best, L, time) {
+    const ctx = this.ctx, G = this.glow;
+    if (!ENV_U) {
+      if (!this.light) return;
+      if (best) {
+        actorWorldPos(best, _p);
+        const h = (best.height ?? 1) * (best.object3d?.scale?.y ?? 1);
+        _d.subVectors(ctx.camera.position, _p); _d.y = 0;
+        const l = _d.length();
+        if (l > 1e-3) _d.multiplyScalar(1 / l); else _d.set(Math.sin(best.facing ?? 0), 0, Math.cos(best.facing ?? 0));
+        this.light.position.set(_p.x + _d.x * HOLY_LIGHT.ahead, _p.y + h * 0.78, _p.z + _d.z * HOLY_LIGHT.ahead);
+        this.light.intensity = HOLY_LIGHT.intensity * L * (0.92 + 0.08 * Math.sin(time * 9));
+      } else this.light.intensity = 0;
+      return;
+    }
+    const gw = ENV_U.uGlow.value, gc = ENV_U.uGlowCol.value;
+    // take back last frame's share if world has not rewritten the base since
+    const baseW = gw.w === G.wroteW ? gw.w - G.add : gw.w;
+    if (!G.on || !gc.equals(G.wrote)) G.base.copy(gc);
+    const add = best ? HOLY_GLOW.glowR * L * (0.94 + 0.06 * Math.sin(time * 9)) : 0;
+    const mix = best ? HOLY_GLOW.glowMix * L : 0;
+    if (best && best !== ctx.player) { actorWorldPos(best, _p); gw.x = _p.x; gw.y = _p.y; gw.z = _p.z; }
+    gw.w = baseW + add;
+    if (mix > 0.001) {
+      _c.set(HOLY_GLOW.glowCol).multiplyScalar(Math.max(G.base.r, G.base.g, G.base.b, 0.4));
+      gc.copy(G.base).lerp(_c, mix);
+    } else if (G.on) gc.copy(G.base);
+    G.add = add; G.mix = mix; G.wroteW = gw.w; G.wrote.copy(gc); G.on = add > 0 || mix > 0;
+  }
+
+  /** The current fx share of the world glow (stats / tests): radius added (m) and colour mix 0..1. */
+  get glowLevel() { return this.glow.add; }
 
   /** Fallback aura: a soft gold silhouette halo behind the actor (bloom does the rest). */
   _halo(actor, s) {
@@ -398,7 +474,7 @@ export class HolyFX {
       this.fizzles++;
       this.particles.burst(at, { additive: true, n: 16, shape: SHAPE.SPARK, color: '#E8B04A', intensity: 1.4, size: [0.05, 0.08], sizeEnd: 0.2,
         life: [0.35, 0.6], speed: [0.8, 2.0], spread: 1.2, dir: _q.set(0, 1, 0), gravity: 9, drag: 1.5, stretch: 3, fade: FADE.TWINKLE });
-      this.particles.burst(at, { n: 3, shape: SHAPE.PUFF, color: '#9C968A', alpha: 0.5, size: [0.08, 0.12], sizeEnd: 2.2, grow: GROW.OUT,
+      this.particles.burst(at, { n: 3, shape: SHAPE.PUFF, color: '#E6D2BE', alpha: 0.5, size: [0.08, 0.12], sizeEnd: 2.2, grow: GROW.OUT,
         life: [0.4, 0.6], speed: [0.2, 0.5], up: 0.6, drag: 2 });
     } else if (lvl >= 1 || e.holy) {
       this.flashes++;

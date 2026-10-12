@@ -451,9 +451,10 @@ export default [
     },
   },
   {
-    // Ch. 1 in world's real meadow (§12.3): the zones call spawnKitten after the prologue. Noodle (barrel, Meow),
-    // Biscuit (behind the Crow Fields cow, Meow), Button (stone ring Stand after the arena), Mochi in the cage on
-    // world's cart at the Old Bridge → D-01 → party. Flags / kittens / party are restored afterwards.
+    // Ch. 1 in world's real meadow (§12.3, WA16): the zones call spawnKitten after the prologue. Noodle (barrel, Meow),
+    // Button (stone ring Stand after the arena), Biscuit in the Old Bridge carrier (3 blows after the bridge fight),
+    // Mochi in the cracked carrier on his tipped cart at STORY.mochiCage (normal blows tink, a Bright Slash opens it)
+    // → D-01 → party. Flags / kittens / party are restored afterwards.
     name: 'companions:meadow', order: 78, level: null, timeout: 240000,
     async run(t) {
       shotDir(t);
@@ -469,6 +470,9 @@ export default [
       try {
         await t.loadLevel('meadow', 'vigil_1');
         await t.G(() => window.__GAME__.god(true));
+        // vigil_1 stands next to Mochi's cart: clear its soft arena first (the walk below visits the other zones)
+        await t.G(() => { const g = window.__GAME__, a = g.ctx.levels.arena?.('cart'); if (a) a.clear(); else g.ctx.bus.emit(g.E.ARENA_CLEAR, { id: 'cart' }); });
+        await clearEnemies(t);
         let ids = [];
         for (let i = 0; i < 120; i++) {
           ids = await t.G(() => window.__GAME__.ctx.companions.kittens.map((k) => k.kittenId));
@@ -497,15 +501,24 @@ export default [
         await t.wait(400);
         await shot(t, 'companions/meadow-noodle-rescued');
 
-        // Biscuit: behind the sleeping cow in the Crow Fields; her Meow wakes the cow (world) and reveals Biscuit (us)
-        await clearEnemies(t);
-        await put(t, 36.5, 28.5, Math.atan2(5, 1.5));
-        await t.wait(500);
-        await t.clearEvents();
-        await meow(t);
-        t.assert(await t.waitForEvent('kitten:reveal', 6000), 'Meow in the Crow Fields did not reveal Biscuit');
+        // Biscuit (WA16): in the Old Bridge carrier on the cart; after the bridge fight 3 of her blows open it
         k = await kitten(t, 'biscuit');
-        t.assert(k && !k.hidden, `biscuit still hidden (${JSON.stringify(k)})`);
+        t.assert(k?.st === 'caged' && k.perchY > 0.3, `biscuit should wait in the bridge carrier on the cart bed (${JSON.stringify(k)})`);
+        await t.G(() => { const g = window.__GAME__, a = g.ctx.levels.arena?.('bridge'); if (a) a.clear(); else g.ctx.bus.emit(g.E.ARENA_CLEAR, { id: 'bridge' }); });
+        await clearEnemies(t);
+        await put(t, 28.2, 70.2, Math.atan2(1.8, 4.3));
+        await t.wait(900);
+        await shot(t, 'companions/meadow-biscuit-carrier');
+        await t.clearEvents();
+        await t.G(() => { const c = window.__GAME__.ctx; window.__cmpResc = null; window.__cmpRescOff?.(); window.__cmpRescOff = c.bus.on('kitten:rescued', (p) => { window.__cmpResc = { id: p?.kittenId, pos: !!p?.position }; }); });
+        for (let i = 0; i < 6; i++) {
+          const open = await t.G(() => { const c = window.__GAME__.ctx, b = c.companions.kittens.find((x) => x.kittenId === 'biscuit'); if (!b?.lock || b.lock.opened) return true; c.combat.applyHit(c.player, b.lock, c.config.ATTACKS.slash1); return false; });
+          if (open) break;
+          await t.wait(300);
+        }
+        t.assert(await t.waitForEvent('kitten:rescued', 8000), 'Biscuit not rescued from the bridge carrier');
+        const pay = await t.G(() => { window.__cmpRescOff?.(); window.__cmpRescOff = null; return window.__cmpResc; });
+        t.assert(pay?.id === 'biscuit' && pay.pos, `kitten:rescued {kittenId, position} (${JSON.stringify(pay)})`);
         await t.wait(1200);
         await shot(t, 'companions/meadow-biscuit');
 
@@ -522,16 +535,15 @@ export default [
         await t.wait(500);
         await shot(t, 'companions/meadow-button');
 
-        // Mochi: the cage cart at the Old Bridge (ours: cart + bars; or the level's cart when world passes its bed height
-        // `y`: bars only), opens after the bridge arena
+        // Mochi (WA16): the cracked carrier on his tipped cart at STORY.mochiCage, opens to a Bright Slash after `cart`
         k = await kitten(t, 'mochi');
-        t.assert(k?.st === 'caged' && k.perchY > 0.3, `mochi should sit caged on a cart bed (${JSON.stringify(k)})`);
-        const cart = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { ours: !!m?.cartCollider || !!m?.cart, y: m?.opts?.y ?? null }; });
+        t.assert(k?.st === 'caged' && k.perchY > 0.3, `mochi should sit in his carrier on the cart bed (${JSON.stringify(k)})`);
+        const cart = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { ours: !!m?.cartCollider || !!m?.cart, y: m?.opts?.y ?? null, x: m?.home.x, z: m?.home.z, tipped: !!m?.tipped, cracked: !!m?.lock?.cracked }; });
         t.assert(!(cart.ours && cart.y > 0), 'built our own cart although the level gave a bed height (two carts)');
-        t.log(`bridge cage on ${cart.ours ? 'our cart' : `the level's cart (bed ${cart.y} m)`}`);
-        await t.G(() => { const g = window.__GAME__, a = g.ctx.levels.arena?.('bridge'); if (a) a.clear(); else g.ctx.bus.emit(g.E.ARENA_CLEAR, { id: 'bridge' }); });
+        t.assert(Math.hypot(cart.x + 14, cart.z + 41) < 1, `Mochi's cart at STORY.mochiCage (${cart.x}, ${cart.z})`);
+        t.assert(cart.tipped && cart.cracked, `tipped cart + cracked latch (${JSON.stringify(cart)})`);
         await clearEnemies(t);
-        await put(t, 28.2, 70.2, Math.atan2(1.8, 4.3));
+        await put(t, -12.3, -43.4, Math.atan2(-1.7, 2.4));
         await t.wait(900);
         await shot(t, 'companions/meadow-cage');
         // real input: stand ~1 m from the lock facing it and press J (the lock ticks its own anti-multi-hit window)
@@ -542,15 +554,23 @@ export default [
           c.player.teleport({ pos: new g.THREE.Vector3(px, c.physics.heightAt(px, pz), pz), facing: Math.atan2(L.x - px, L.z - pz) });
         });
         await t.wait(300);
+        // a normal slash tinks off the cracked latch (and Mochi asks for the shiny swing)
+        await t.tap('KeyJ'); await t.wait(600);
+        const tink = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { tinks: m.lock.tinks, opened: m.lock.opened, bubble: !!m.bubble?.on }; });
+        t.assert(!tink.opened, 'a normal slash opened the cracked latch');
+        if (tink.tinks < 1) t.warn(`the slash did not reach the latch (tinks ${tink.tinks})`);
+        await shot(t, 'companions/meadow-cage-tink');
+        // Bright Slash: hold J till it shines (charge tier 1, 0.6 s), let go
         const hits = { out: [], opened: false };
-        for (let i = 0; i < 8 && !hits.opened; i++) {
-          await t.tap('KeyJ'); await t.wait(450);
-          const r = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { hp: m.lock.hp, opened: m.lock.opened }; });
-          hits.out.push(r.hp); hits.opened = r.opened;
+        for (let i = 0; i < 4 && !hits.opened; i++) {
+          await t.hold('KeyJ', 850); await t.wait(700);
+          const r = await t.G(() => { const m = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return { tinks: m.lock.tinks, opened: m.lock.opened }; });
+          hits.out.push(r.tinks); hits.opened = r.opened;
         }
-        t.assert(hits.opened, `her slashes did not open the cage (${hits.out.join(', ')})`);
+        t.assert(hits.opened, `her Bright Slash did not open the cracked latch (tinks ${hits.out.join(', ')})`);
         const joined = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'mochi'; }, null, { sim: 8, every: 250 });
-        t.assert(joined, 'Mochi did not join after the bridge cage opened');
+        t.assert(joined, 'Mochi did not join after his carrier opened');
+
         await t.G(() => window.__GAME__.setMode('play'));
         await follow(t);
         await t.wait(1500);

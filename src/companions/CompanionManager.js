@@ -28,6 +28,9 @@
 // Listens: level load/unload, her Meow and swings, arena clears/waves, story flags (join flags, meadow.pudding),
 // objectives (net_ropes, the treetop ropes), interact (vigil / barracks), enemy deaths (the giant jelly), cutscene
 // start/end (D-03, CS-08), boss start/defeat (B2), quality changes. Reads the `ability` input (Q / LT) during play.
+// Warm adventure (WA §5.6–5.7): `party` (party.js PartyLife: paw-bumps after a clear, parry meow, kill-streak cheer,
+// the KO run / boing-back landing, banter pairs). Auto-camera (AUTOCAM §13 companions 2): while an ability is aimed,
+// `player.aim.range` / `dir` carry its reach so the camera's aim pan can lead it.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { COMPANIONS } from '../core/config.js';
@@ -39,11 +42,13 @@ import { BARKS, lineText } from './lines.js';
 import { BarkGate, COMPANION_IDS, JOIN_FLAGS, JOIN_SCENES, followSlot, groundY, nextCompanion, FOLLOW_SIDE, SLOT } from './steering.js';
 import { SpoonBrigade } from './SpoonBrigade.js';
 import { HubKittens } from './HubKittens.js';
-import { RESCUES, rowWanted } from './rescues.js';
-import { CATS } from '../characters/index.js';
+import { RESCUES, RESCUE_AFTER, rowWanted } from './rescues.js';
+import { CATS, visualDt } from '../characters/index.js';
+
 import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } from './abilityAim.js';
 import { AbilityIndicator } from './AbilityIndicator.js';
 import { setBubbleSafeInsets } from './Bubble.js';
+import { PartyLife } from './party.js';
 
 const _slot = { x: 0, z: 0 };
 const _ex = { x: 0, z: 0, mag: 0, source: '' };
@@ -88,12 +93,16 @@ export class CompanionManager {
      * Iso controls: the kitten ability being aimed (CONTROLS_SPEC §7.5). `plan` is abilityAim.js planAbility's output
      * (shape, center, yaw, width, length, range, targets, dir, point, valid); fx's GroundDecals and ui read it.
      */
-    this.aim = { active: false, kind: 'ability', kittenId: null, ability: null, shape: null, valid: false, source: null, plan: newPlan() };
+    this.aim = { active: false, kind: 'ability', kittenId: null, ability: null, shape: null, valid: false, source: null, range: 0, plan: newPlan() };
     /** the press being held: { t, shown, cancelled, device, req } */
     this._cast = null;
     this.indicator = new AbilityIndicator(ctx, this);
+    /** WA §5.6 life between fights + banter */
+    this.party = new PartyLife(ctx, this);
     /** pending timed calls (sim s): [{ t, fn }] */
     this._later = [];
+    /** rescues waiting for a story flag on this level (RESCUE_AFTER): [{ flag, args }] */
+    this._waiting = [];
     this._offs = [];
   }
 
@@ -122,6 +131,7 @@ export class CompanionManager {
       bus.on(E.ENEMY_DIED, (p) => this._safe('enemy died', () => this._onEnemyDied(p))),
       bus.on(E.BOSS_START, (p) => this._safe('boss start', () => { if (this._levelId() === 'gate' && /cacklejaw/.test(String(p?.id ?? p?.boss?.def?.id ?? ''))) this.spoons.start({ arm: true }); })),
       bus.on(E.BOSS_DEFEATED, () => { if (this.spoons.active) this.spoons.stop(); }),
+      ...this.party.bind(bus),
     );
   }
 
@@ -135,7 +145,10 @@ export class CompanionManager {
   // ------------------------------------------------------------------ party
 
   _spawnCompanion(id, pos, facing = 0) {
-    const c = new Companion(this.ctx, id, { pos, facing });
+    // a caged squire who just joined hands over his cat look (no buildKitten on the join frame)
+    const h = this._handoff?.id === id ? this._handoff.visual : null;
+    this._handoff = null;
+    const c = new Companion(this.ctx, id, h ? { pos, facing, visual: h } : { pos, facing });
     this.ctx.actors.register(c, id);
     this.ctx.scene.add(c.object3d);
     return c;
@@ -201,10 +214,13 @@ export class CompanionManager {
     const full = this.active.length >= this.maxActive;
     if (!activate || (full && !(fresh || caged))) return true;
     const pos = caged ? caged.pos.clone() : null, facing = caged?.facing ?? 0;
+    const vis = caged?.kittenId === id ? caged.takeVisual?.() ?? null : null;
     if (caged && this.actors.includes(caged)) this.despawn(caged);
+    if (vis) this._handoff = { id, visual: vis };
     const keep = this.active.map((c) => c.kittenId);
     if (full) { for (const c of keep.splice(this.maxActive - 1)) this._poofOut(this.active.find((x) => x.kittenId === c)); }
     this.setActive([...keep, id], { place: !pos, quiet: true });
+    if (this._handoff) { this._handoff.visual.dispose(); this._handoff = null; }   // not used (already in the party)
     const c = this.active.find((x) => x.kittenId === id);
     if (c && pos) {
       pos.y = groundY(this.ctx, pos.x, pos.z, pos.y);
@@ -331,7 +347,7 @@ export class CompanionManager {
     return true;
   }
 
-  _endAim() { this._cast = null; this.aim.active = false; this.aim.kittenId = null; }
+  _endAim() { this._cast = null; this.aim.active = false; this.aim.kittenId = null; this.aim.range = 0; }
 
   /** The castMode setting (§7.5): 'smart' (default) | 'indicator' | 'dragOnly'. */
   get castMode() { const m = this.ctx.state?.settings?.castMode; return CAST_MODES.includes(m) ? m : 'smart'; }
@@ -356,6 +372,22 @@ export class CompanionManager {
     planAbility(this.ctx, c, this._castReq(cast), a.plan);
     a.active = true; a.kittenId = c.kittenId; a.ability = a.plan.ability; a.shape = a.plan.shape; a.valid = a.plan.valid;
     a.source = a.plan.source;
+    this._shareAim(a.plan);
+  }
+
+  /**
+   * AUTOCAM §13 companions 2: the held ability's reach into `player.aim` (range: the wall's far edge, Volley's range,
+   * the purr's radius; dir: the aim) so the camera's aim pan leads it. The player re-resolves her own aim every step.
+   */
+  _shareAim(plan) {
+    if (!plan) return;
+    const r = plan.shape === 'rect' ? (plan.range ?? 0) + (plan.length ?? 0) / 2 : plan.shape === 'self' ? (plan.width ?? 0) / 2 : plan.range ?? 0;
+    this.aim.range = Number.isFinite(r) ? r : 0;
+    const pa = this.ctx.player?.aim;
+    if (!pa) return;
+    if (Number.isFinite(r) && r > 0) pa.range = r;
+    if (plan.dir && Number.isFinite(plan.dir.x) && Number.isFinite(plan.dir.z) && pa.dir && (plan.dir.x || plan.dir.z)) { pa.dir.x = plan.dir.x; pa.dir.z = plan.dir.z; }
+    pa.active = true;
   }
 
   /**
@@ -475,6 +507,12 @@ export class CompanionManager {
    * hits, hp, play: cutsceneId (companion join scene), y: perch height }.
    */
   spawnKitten(kittenId, pos, hide = null, opts = {}) {
+    const after = RESCUE_AFTER[this._levelId()]?.[kittenId];
+    if (after && this.ctx.state && !this.ctx.state.getFlag?.(after)) {         // WA16: not before its story beat
+      this._waiting = this._waiting.filter((w) => w.args[0] !== kittenId);
+      this._waiting.push({ flag: after, args: [kittenId, pos, hide, opts] });
+      return null;
+    }
     const prev = this.actors.find((a) => a instanceof LostKitten && a.kittenId === kittenId);
     // a level re-placing a kitten replaces ours outright (no second hiding barrel / cage left behind)
     if (prev) this.despawn(prev, { keepDressing: prev.rescued });
@@ -523,6 +561,8 @@ export class CompanionManager {
     this.spoons.reset();
     this.hub.residents.length = 0; this.hub.active = false;
     this._later.length = 0;
+    this._waiting.length = 0;
+    this.party.reset();
     for (const c of this.active) { c._endAbility(); c.clearArrows(); c.target = null; }
     this.cleared.clear();
   }
@@ -606,6 +646,12 @@ export class CompanionManager {
 
   _onFlag(key, value) {
     const on = value !== undefined && value !== null && value !== false && value !== 0;
+    if (on && this._waiting.length) {
+      for (const w of this._waiting.filter((x) => x.flag === key)) {
+        this._waiting.splice(this._waiting.indexOf(w), 1);
+        this._safe('waiting rescue', () => this.spawnKitten(...w.args));
+      }
+    }
     if (JOIN_FLAGS[key] && on) this.unlock(JOIN_FLAGS[key]);
     if (key === 'meadow.pudding' && this.ctx.levels?.current?.id === 'meadow') {
       if (value === 'netted') {
@@ -744,6 +790,8 @@ export class CompanionManager {
     }
     this.spoons.update(dt);
     this.hub.update(dt);
+    this.party.update(dt);
+    if (this.aim.active && this._cast) this._shareAim(this.aim.plan);       // after her own step re-resolved it
   }
 
   render(alpha, dt) {
@@ -752,12 +800,14 @@ export class CompanionManager {
     for (const w of this.walls) w.render(dt);
     this.spoons.render(dt);
     this.indicator.render(dt ?? 0);
+    this.party.render(visualDt(this.ctx, dt ?? 0));
   }
 
   dispose() {
     this._endAim();
     this.indicator.dispose();
     this.clearLevel();
+    this.party.dispose();
     for (const c of this.active) { this.ctx.actors.unregister(c); c.dispose(); }
     this.active = [];
     for (const off of this._offs) off();

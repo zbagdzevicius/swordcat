@@ -4,6 +4,8 @@
 // story's handle on them; when not scripted they idle, turn to watch her when she is near, and can wave.
 // Iso controls (CONTROLS_SPEC §7.6, §12 companions 3): clickable (`pickKind` 'npc', `useR`, `interactId`, `use()`: she
 // walks up and they turn, nod and say their line), and far-culled by the distance from the camera focus (§2.8).
+// Perf / warm art (PERF §4.3, ART §6.6): the cat look runs the KittenVisual activity tier + NPC band (≤ 8 m full,
+// > 8 m 30 / 15 Hz, off screen 10 Hz / off) and glances at the camera when calm.
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
@@ -56,13 +58,15 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
     this.interactId = null;
     /** far cull by the focus distance (HubResident: the hub's own LOD does it) */
     this.farCull = true; this._far = false; this._lodT = 0;
+    /** ART §6.6: may this NPC glance at the camera when calm (HubResident turns it off for sleepers, readers, fishers) */
+    this.glance = true;
     this._faceHerT = 0;
     this.object3d.name = 'npc:' + npcId;
     this.visual = null; this.anim = null; this.glb = glb; this.model = null;
     this._clipWaits = [];
     if (opts.visual !== false) {
       if (glb) this._loadGlb();
-      else { this.visual = new KittenVisual(ctx, look); this.object3d.add(this.visual.root); }
+      else { this.visual = new KittenVisual(ctx, look, { actor: this, blobR: this.radius * 1.6 }); this.object3d.add(this.visual.root); }
     }
     this.bubble = new TextSprite({ kind: 'bubble', y: this.height + 0.3 });
     this.object3d.add(this.bubble.object);
@@ -186,7 +190,8 @@ export class NpcActor extends ScriptedActorMixin(Actor) {
         if (d < LOOK_RADIUS + 1.5) look = wrapAngle(Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z) - this.facing);
       }
       this.visual.lookAt(look);
-      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo });
+      const calm = this.glance && !this.scripted && look === 0 && Math.hypot(this.vel.x, this.vel.z) < 0.2;
+      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo, calm });
     } else if (this.anim) {
       const moving = Math.hypot(this.vel.x, this.vel.z) > 0.3;
       const want = moving ? this.glb.walk : (this._loopClip ?? this.glb.idle);

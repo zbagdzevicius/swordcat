@@ -133,6 +133,10 @@ vec2 fxShape( float shape, vec2 uv ) {
     float tail = max( t.y - 0.05 - t.x * 1.2, -t.x ) ;
     float a = max( fxAA( body, 0.12 ), fxAA( max( tail, t.x - 0.32 ), 0.04 ) );
     return vec2( a, 0.85 + 0.25 * step( uv.y, 0.0 ) );
+  } else if ( s == 12 ) {                           // CONFETTI: rounded paper rect (the flip squashes the quad's width)
+    vec2 q = abs( uv ) - vec2( 0.5, 0.82 );
+    float sd = length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - 0.14;
+    return vec2( fxAA( sd, 0.06 ), 0.82 + 0.3 * step( 0.0, uv.x * uv.y ) );
   }
   return vec2( 0.0, 1.0 );
 }`;

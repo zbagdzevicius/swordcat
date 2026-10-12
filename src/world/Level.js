@@ -18,6 +18,8 @@ import { pickZone } from './isoView.js';
 import { CAMERA } from '../core/config.js';
 
 const _v = new THREE.Vector3();
+/** PERF §8.3 iso cull: hide props past R + pad (m), show again inside R (hysteresis), never closer than minIso. */
+export const CULL = Object.freeze({ pad: 2, hyst: 2, minIso: 30, max: 160 });
 const GROUPS = ['terrain', 'props', 'grass', 'water', 'skyline', 'dawnstone', 'pickups', 'actors'];
 
 /** Evaluate a zone condition: undefined → true, function(state, ctx) → bool, string → state.cond(). */
@@ -277,6 +279,26 @@ export class Level {
   }
 
   onLoaded(fn) { this._loaded.push(fn); }
+  /**
+   * A conditional load hook: `fn` runs at activate when `test()` holds, else it waits for `refresh()` (story's Chapter 1
+   * hand-off switches the `prologue.done` zones on live: open fights, kittens, letters, without a reload).
+   * @param {() => boolean} test @param {(level: Level) => void} fn
+   */
+  onCond(test, fn) { (this._condLoads ??= []).push({ test, fn, done: false }); }
+
+  /** Run every conditional load hook whose condition holds now (once each). Returns how many ran. */
+  refresh() {
+    let n = 0;
+    for (const c of this._condLoads ?? []) {
+      if (c.done) continue;
+      let ok = false;
+      try { ok = !!c.test(); } catch { ok = false; }
+      if (!ok) continue;
+      c.done = true; n++;
+      try { c.fn(this); } catch (e) { console.error(`[world] ${this.id}: refresh hook failed`, e); }
+    }
+    return n;
+  }
   /** Run `fn` after `sec` seconds of level play time (fixed steps; paused in cutscenes / menus). */
   after(sec, fn) { this._timers.push({ t: Math.max(0, sec), fn }); }
   onUpdate(fn) { this._updaters.push(fn); }
@@ -307,6 +329,7 @@ export class Level {
     this.run = levelRun(ctx.state, this.id, spawnId === 'title');
     this.startTime = this.run.runT0; this.fishAtStart = this.run.runFish0;
     for (const fn of this._loaded.splice(0)) { try { fn(this); } catch (e) { console.error(`[world] ${this.id}: onLoaded failed`, e); } }
+    this.refresh();
     this.listen(E.PLAYER_LIFE_LOST, () => { this.run.runLost = (this.run.runLost ?? 0) + 1; });
     this.listen(E.PLAYER_MEOW, (p) => { const pos = p?.position ?? ctx.player?.pos; if (pos) for (const c of this.critters) c.hearMeow?.(pos); });
     this.listen(E.PLAYER_DIED, () => { for (const a of this.arenas) if (a.locked) a.reset(); });
@@ -406,9 +429,14 @@ export class Level {
     this._applyFar();
     // §4.2 grass tiles and LOD follow the iso focus (what the lens looks at), the trample follows her
     const focus = ctx.cam?.focus?.isVector3 && (ctx.env?._focusMode ?? 0) > 0.5 ? ctx.cam.focus : center;
-    this.grass?.update(t, ctx.env, focus, p && p.alive !== false ? p.object3d.position : null);
+    this.grass?.update(t, ctx.env, focus, p && p.alive !== false ? p.object3d.position : null, cam, focus === center ? null : ctx.cam?.footprint);
     if (cam && this.groundLod) Terrain.updateGroundLod(this.groups.terrain, focus === center ? cam.position : focus, this.groundLod);
-    if (this.batch && cam) this.batch.cull(cam.position, this.cullDist(), dt);
+    // PERF §8.3: one 4 Hz fog-radius cull keyed to the iso focus (hide past R + 2 m, show again inside R); the
+    // classic / cutscene lens keeps the lens-distance rule
+    if (this.batch && cam) {
+      const iso = focus !== center;
+      this.batch.cull(iso ? focus : cam.position, this.cullDist(iso), dt, iso ? CULL.hyst : 0);
+    }
     for (const a of this.animators) a.render(vdt, t);
     for (const a of this.actors) a.render(alpha, vdt);
     for (const v of this.vigils) v.render(vdt, t);
@@ -419,9 +447,13 @@ export class Level {
     if (this.treeUniforms) { this.treeUniforms.uTime.value = t; this.treeUniforms.uWind.value = ctx.env?.wind ?? 0.6; }
   }
 
-  /** Props beyond this distance are invisible in the fog anyway (FogExp2 > 99.5%). */
-  cullDist() {
-    const d = this.ctx.env?.fogDensity ?? 0.045;
+  /**
+   * Props beyond this distance are invisible in the fog anyway. Iso: PERF §8.3 fog radius R (98 % fog from the focus)
+   * + CULL.pad; lens views: FogExp2 > 99.5 % from the camera.
+   */
+  cullDist(iso = false) {
+    const env = this.ctx.env, d = env?.fogDensity ?? 0.045;
+    if (iso && Number.isFinite(env?.fogRadius)) return Math.min(CULL.max, Math.max(CULL.minIso, env.fogRadius + CULL.pad));
     return Math.min(160, Math.max(45, 2.3 / Math.max(d, 1e-3)));
   }
 
@@ -438,6 +470,8 @@ export class Level {
     for (const e of this.spawnedEnemies) if (this.ctx.enemies?.list?.includes(e)) this.ctx.enemies.despawn(e);
     this.spawnedEnemies.length = 0;
     this.pickups?.dispose();
+    this.lightPool?.dispose?.();
+    this.bunting?.dispose?.();
     this.grass?.dispose();
     this.terrain?.dataTexture?.dispose?.();     // the grass ground-data texture (a uniform, not a material map)
     this.wheat?.dispose?.();

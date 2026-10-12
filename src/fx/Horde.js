@@ -1,7 +1,8 @@
 // src/fx/Horde.js  (owner: fx) — GAME_DESIGN §18.3 "Horde silhouettes": a low-poly bipedal hyena silhouette (the
 // beast-head Barbarian read: hunched torso, snout, round ears, mane, tail; some carry spears or a cage on a shoulder
-// pole) drawn as ONE instanced draw call (40 on Med/High, 24 on Low) with a vertex-shader walk cycle, unlit dark
-// #2A2A2E, living inside the fog beyond 18 m (instances closer to the camera fade out with real alpha, sinking into the fog colour).
+// pole) drawn as ONE instanced draw call (40 on Med/High, 24 on Low) with a vertex-shader walk cycle, unlit plum
+// #5A3E6A (WA §2.7: a cartoon "dust-cloud army", never black) with a cream dust band kicked up at their feet (same
+// draw), living inside the fog beyond 18 m (instances closer to the camera fade out with real alpha, sinking into the fog colour).
 //
 // Used by CS-02 (shot 4: the horde marches along the lane carrying cages; shot 8 REVERSE_HORDE; shot 10: it parts
 // around her like a river around a stone), CS-08 / `gate` (the horde in the fog bank at z −58 … −75) and CS-09 (it
@@ -20,7 +21,7 @@ import { OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
 import { resolveAnchor, resolveActor, toVec3, groundY, hash01, isActor } from './util.js';
 
 export const HORDE = Object.freeze({
-  count: 40, countLow: 24, color: '#2A2A2E', near: 18, speed: 1.6, width: 7, length: 64, laugh: 0.35,
+  count: 40, countLow: 24, color: '#5A3E6A', dust: '#F2DDBB', dustH: 0.32, near: 18, speed: 1.6, width: 7, length: 64, laugh: 0.35,
   cageEvery: 5, spearEvery: 3, avoidR: 3.2, fadeIn: 1.2, fadeOut: 1.4, fleeSpeed: 4.2, fleeFade: 2.6, fogMul: 0.55,
 });
 
@@ -146,6 +147,7 @@ attribute vec4 iB;      // cycle phase (rad), scale, alpha, variant (0 plain, 1 
 attribute vec4 iC;      // gait (0 shuffle … 1 march, >1 run), laugh, sway seed, 0
 uniform float uTime;
 varying float vAlpha;
+varying float vH;
 #include <fog_pars_vertex>
 mat3 rotX( float a ) { float c = cos( a ), s = sin( a ); return mat3( 1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c ); }
 mat3 rotZ( float a ) { float c = cos( a ), s = sin( a ); return mat3( c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0 ); }
@@ -183,6 +185,7 @@ void main() {
     p.y += bob;
     p = rotX( 0.12 * min( stride, 1.0 ) + 0.18 * max( stride - 1.0, 0.0 ) ) * ( p - vec3( 0.0, 0.7, 0.0 ) ) + vec3( 0.0, 0.7, 0.0 );
   }
+  vH = p.y;
   p *= iB.y;
   float c = cos( iA.w ), s = sin( iA.w );
   p = vec3( c * p.x + s * p.z, p.y, -s * p.x + c * p.z ) + iA.xyz;
@@ -193,15 +196,16 @@ void main() {
 }`;
 
 const FRAG = /* glsl */`
-uniform vec3 uColor;
+uniform vec3 uColor, uDust;
 uniform float uFogMul;
 #include <fog_pars_fragment>
 varying float vAlpha;
+varying float vH;
 void main() {
   // Real alpha (not a screen-door): partially faded members (path ends, near-camera, flee, master fade) blend
   // smoothly and also sink toward the fog colour, so they read as shapes dissolving into the mist.
   if ( vAlpha < 0.004 ) discard;
-  vec3 col = uColor;
+  vec3 col = mix( uDust, uColor, smoothstep( ${(HORDE.dustH * 0.25).toFixed(3)}, ${HORDE.dustH.toFixed(3)}, vH ) );
 #ifdef USE_FOG
   // world's fog maths (CONTROLS_SPEC §4.1, C4: lens or focus fog, height-weighted); the horde's own thinner lens fog
   // (uFogMul) scales the lens depth only, so the iso stage stays exactly as clear as the level around it
@@ -252,7 +256,7 @@ export class Horde {
       name: 'fx.horde', vertexShader: VERT, fragmentShader: FRAG, fog: true,
       // blended so near-camera / edge members fade smoothly; depthWrite keeps each silhouette self-occluding
       transparent: true, depthWrite: true,
-      uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color(HORDE.color) }, uTime: { value: 0 }, uFogMul: { value: HORDE.fogMul } },
+      uniforms: { ...fogUniforms(), uColor: { value: new THREE.Color(HORDE.color) }, uDust: { value: new THREE.Color(HORDE.dust) }, uTime: { value: 0 }, uFogMul: { value: HORDE.fogMul } },
     });
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.name = 'fx.horde';

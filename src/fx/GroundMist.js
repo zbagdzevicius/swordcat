@@ -12,14 +12,18 @@ import { HFOG } from '../world/HeightFog.js';
 import { groundY, hash01 } from './util.js';
 
 export const GROUND_MIST = Object.freeze({
-  count: 8, countLow: 4, size: 12, hMin: 0.4, hMax: 1.3, aMin: 0.10, aMax: 0.22,
+  count: 8, countLow: 4, size: 12, hMin: 0.4, hMax: 1.3, aMin: 0.10, aMax: 0.14, sunLift: 0.06,
   ringIn: 4, ringOut: 16, ringR: 9.5, clear: 3.5, clearSoft: 1.6, hole: 1.6, holes: 4,
   scale: 0.11, drift: 0.55, edge: 0.32, lighten: 0.14,
-  /** mist factor per env preset (× the sheet alpha); unknown presets use `def` */
+  /**
+   * mist factor per env preset (× the sheet alpha); unknown presets use `def`. WA §2.1 (LI W3): the spooky levels are
+   * no longer the densest: bog 0.8, forest_twilight 0.7, gate_dusk 0.6, keep_* 0.5, meadow_night 0.6,
+   * meadow_morning 0.7, bog_dusk 0.8, hub_hush 0.5 (legacy names alias their new rows).
+   */
   byPreset: Object.freeze({
-    meadow_day: 1, meadow_evening: 0.85, meadow_night: 1, forest_day: 0.9, forest_night: 1.1, town_occupied: 0.55,
-    hub_gold: 0.4, hub_grey: 0.6, ending_gold: 0.3, gate_dusk: 1, bog: 1.4, keep_storm: 0.75, keep_cellar: 0.3,
-    sky_night: 0, sky_sunrise: 0,
+    meadow_day: 1, meadow_morning: 0.7, meadow_evening: 0.85, meadow_giggle: 0.7, meadow_night: 0.6, forest_day: 0.9, forest_twilight: 0.7,
+    forest_night: 0.7, town_occupied: 0.55, hub_gold: 0.4, hub_hush: 0.5, hub_grey: 0.5, ending_gold: 0.3, gate_dusk: 0.6, bog: 0.8, bog_dusk: 0.8,
+    keep_twilight: 0.5, keep_storm: 0.5, keep_cellar: 0.5, sky_night: 0, sky_sunrise: 0,
   }),
   def: 0.8,
 });
@@ -107,6 +111,12 @@ void main() {
 
 const _c = new THREE.Color(), _white = new THREE.Color('#FFFFFF');
 
+/** Sheets per quality preset: `QUALITY.groundMist` (X35: Low 4, Med / High 8), else the Low / full counts. */
+export function sheetCount(q) {
+  if (Number.isFinite(q?.groundMist)) return Math.max(0, Math.min(GROUND_MIST.count, q.groundMist));
+  return (q?.id === 'low' || (q?.particles ?? 2000) < 1000) ? GROUND_MIST.countLow : GROUND_MIST.count;
+}
+
 export class GroundMist {
   /** @param {any} ctx */
   constructor(ctx) {
@@ -123,7 +133,7 @@ export class GroundMist {
   }
 
   init(scene, quality) {
-    const n = (quality?.id === 'low' || (quality?.particles ?? 2000) < 1000) ? GROUND_MIST.countLow : GROUND_MIST.count;
+    const n = sheetCount(quality);
     const plane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     const g = new THREE.InstancedBufferGeometry();
     g.index = plane.index; g.setAttribute('position', plane.getAttribute('position'));
@@ -136,7 +146,7 @@ export class GroundMist {
     const holes = []; for (let i = 0; i < GROUND_MIST.holes; i++) holes.push(new THREE.Vector4());
     this.material = new THREE.ShaderMaterial({
       name: 'fx.groundMist', vertexShader: VERT, fragmentShader: FRAG, fog: false,
-      uniforms: { uColor: { value: new THREE.Color('#B7C0C3') }, uScroll: { value: this._scroll }, uFocus: { value: new THREE.Vector3() },
+      uniforms: { uColor: { value: new THREE.Color('#F6E4C0') }, uScroll: { value: this._scroll }, uFocus: { value: new THREE.Vector3() },
         uHoles: { value: holes }, uAlpha: { value: 0 }, uScale: { value: GROUND_MIST.scale } },
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
     });
@@ -151,7 +161,7 @@ export class GroundMist {
 
   setQuality(q) {
     if (!this.geometry) return;
-    this.count = (q?.id === 'low' || (q?.particles ?? 2000) < 1000) ? GROUND_MIST.countLow : GROUND_MIST.count;
+    this.count = sheetCount(q);
     this.geometry.instanceCount = this.count;
   }
 
@@ -172,9 +182,9 @@ export class GroundMist {
     const u = this.material.uniforms;
     u.uFocus.value.set(f.x, f.y, f.z);
     u.uAlpha.value = this.alpha;
-    // tint: the fog colour, a touch lighter (mist reads as a pale veil over the ground)
-    const fog = ctx.scene?.fog?.color;
-    if (fog) u.uColor.value.copy(_c.copy(fog).lerp(_white, GROUND_MIST.lighten));
+    // tint (ART §8.1): the fog colour lifted 6 % toward the sun, a touch lighter (a pale warm veil over the ground)
+    const fog = ctx.scene?.fog?.color, sun = env?.sunLight?.color;
+    if (fog) { _c.copy(fog); if (sun) _c.lerp(sun, GROUND_MIST.sunLift); u.uColor.value.copy(_c.lerp(_white, GROUND_MIST.lighten)); }
     // drift with the wind (×2 Standing Ground / Meme Cam)
     this._speed += (this.speedMul - this._speed) * k;
     const w = Math.max(0.15, env?.wind ?? 0.6), wd = env?.windDir;

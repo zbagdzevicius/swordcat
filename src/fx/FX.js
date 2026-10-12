@@ -9,7 +9,11 @@
 //   mistRing(center, r, opts) → handle { dissolve(sec), dispose(sec), remove(), alive }   (fog walls; rect via opts.size)
 //   horde(on, anchor, opts)           instanced hyena silhouettes (Horde.js: 'march' | 'mill' | 'flee' | false)
 // Additive helpers: telegraphEnd(id), bloomSpike(peak, dur), fovPunch(deg, dur), poof(pos, opts),
-// damageNumber(pos, text, style), setAmbient(preset | null), clear(), stats().
+// damageNumber(pos, text, style, key?, value?), setAmbient(preset | null), clear(), stats().
+// Warm phase (ART_WARM_SPEC §8, WARM_ADVENTURE_SPEC §3 / §5, PERF F1–F7, AUTOCAM fx): word(id, at?), pop(id, target),
+// flash(kind | colour, alpha, dur), ghostPaw(pos | null), `blobs` (BlobShadows: add(object3d, r) / remove), the
+// beats (kitten:rescued / kitten:reveal / arena:clear / reward / player:died bursts), twinkles, butterflies, ground
+// light pools, cloud shadows, the `?debug` framing overlay, and `warmSet(on)` for core / world's batched prewarm.
 // M2 additions: shockwave(pos, opts), crack(pos, dir, opts), webPatch(pos, opts) -> handle, lantern(at, opts) -> handle,
 // purchase(opts), jeerFog(enemy, on, opts), repairSite(pos); automatic: jeer fog (enemy:jeer), theft loot (item:stolen /
 // item:returned / a stealer despawning with loot), jelly split / pop (enemy:died + combat:hit popsSlime), The Line
@@ -23,7 +27,13 @@ import { GroundDecals } from './GroundDecals.js';
 import { GroundMist } from './GroundMist.js';
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { ATTACKS, JUICE, PLAYER } from '../core/config.js';
+import { ATTACKS, JUICE, PLAYER, FX as FX_CFG, KO, QUALITY } from '../core/config.js';
+import { BlobShadows } from './BlobShadows.js';
+import { Beats } from './Beats.js';
+import { Butterflies } from './Butterflies.js';
+import { LightPools, CloudShadows } from './LightPools.js';
+import { DebugOverlay } from './DebugOverlay.js';
+import { CONFETTI_COLORS } from './palette.js';
 import { Particles, SHAPE, FADE, GROW } from './Particles.js';
 import { Marks, MARK } from './Marks.js';
 import { SwordTrail } from './SwordTrail.js';
@@ -47,7 +57,19 @@ import { toVec3, resolveActor, resolveAnchor, isActor, actorWorldPos, headPoint,
 export const BURST_KINDS = Object.freeze(['poof', 'hit', 'heavyHit', 'stars', 'spark', 'sparks', 'sparkle', 'sparkles', 'gold', 'dust',
   'dustRing', 'splash', 'heart', 'hearts', 'heal', 'spawn', 'spawnBones', 'smoke', 'helmet', 'fish', 'ring', 'confetti', 'shatter',
   'holy', 'sunburst', 'flash', 'choke', 'shockwave', 'slam', 'crack', 'jellySplit', 'jellyPop', 'jellySlam', 'web', 'webCut', 'stealerPoof',
-  'purchase', 'lanternLight', ...DEBRIS_KINDS, ...Object.keys(DEBRIS_ALIAS)]);
+  'purchase', 'lanternLight', 'rescue', 'reveal', 'petals', 'celebrate', 'pawBump', 'boop', 'cheer', 'ripple', 'collect', 'hitSpark', 'kittenTrail',
+  'straw', ...DEBRIS_KINDS, ...Object.keys(DEBRIS_ALIAS)]);
+
+/**
+ * WA §5.3 `FX.comicPops`: may this comic pop show? Parries always; the others only the first time each (per session)
+ * within the save's first `firstMinutes` minutes of play (pure; unit-tested).
+ */
+export function comicPopAllowed(id, playtime, seen, cfg = FX_CFG.comicPops) {
+  const policy = id === 'parry' ? cfg?.parry : cfg?.other;
+  if (policy === 'always' || policy == null) return true;
+  if (policy === 'never') return false;
+  return !seen?.has?.(id) && (playtime ?? 0) <= (cfg.firstMinutes ?? 10) * 60;
+}
 
 /** Mist-card budget per quality preset (art.md §9.2: 30–60). */
 export const MIST_COUNT = Object.freeze({ low: 24, med: 44, high: 56 });
@@ -114,6 +136,11 @@ export class FX {
     this.holyFx = null; this.poofs = null; this.helmets = null; this.mist = null; this.hordeFx = null; this.screen = null;
     this.ambient = null;
     this.shock = null; this.webs = null; this.sunRays = null; this.lanterns = null; this.encounters = null; this.shop = null;
+    /** PERF §7.2 contact blobs: `fx.blobs.add(object3d, r)` / `remove(object3d)` */
+    this.blobs = null;
+    this.beats = null; this.butterflies = null; this.lightPools = null; this.clouds = null; this.debugFrame = null;
+    this._popsSeen = new Set();
+    this._arena = { x: 0, y: 0, z: 0, r: 6, on: false };
     this._pops = new WeakMap();  // enemy -> popsSlime of its killing hit (jelly pop vs split)
     this._goldT = 0;
     this.dizzy = new Map();      // actor → { t, dur, gold }
@@ -154,6 +181,7 @@ export class FX {
     this.poofs = new Poof({ particles: this.particles, helmets: this.helmets });
     this.mist = new MistCards(ctx);
     this.mist.init(scene, MIST_COUNT[ctx.quality?.id] ?? MIST_COUNT.med);
+    this.mist.particles = this.particles;
     this.hordeFx = new Horde(ctx);
     this.hordeFx.init(scene, ctx.quality);
     this.ambient = new Ambient(ctx);
@@ -174,6 +202,17 @@ export class FX {
     // CONTROLS_SPEC §4.2 ground mist sheets (the iso play camera's misty screen edges)
     this.groundMist = new GroundMist(ctx);
     this.groundMist.init(scene, ctx.quality);
+    // PERF §7.2 the contact-blob pool; ART §8.6 / WA §5 beats; ART §8.7 ambient life; ART §8.1 light pools
+    this.blobs = new BlobShadows(ctx);
+    this.blobs.init(scene);
+    this.beats = new Beats(ctx, { particles: this.particles, marks: this.marks, holyFx: this.holyFx, screen: this.screen });
+    this.butterflies = new Butterflies(ctx);
+    this.butterflies.init(scene);
+    this.lightPools = new LightPools(ctx);
+    this.lightPools.init(scene);
+    this.clouds = new CloudShadows(ctx);
+    this.clouds.init(scene);
+    if (ctx.params?.debug && !ctx.params?.test) { this.debugFrame = new DebugOverlay(ctx); this.debugFrame.init(scene); }
     this._applyQuality(ctx.quality);
     this._offs.push(ctx.game?.addFrameHook?.(() => { this.screen.afterFrame(); this._warmEnd(); }) ?? (() => {}));
     this._warm = 1;
@@ -184,6 +223,13 @@ export class FX {
     on(E.TELEGRAPH_END, (p) => { if (p) this.telegraphs.end(p.id); });
     on(E.HIT, (h) => this._onHit(h));
     on(E.PLAYER_PARRY, (p) => this._onParry(p));
+    on(E.KITTEN_RESCUED, (p) => this._onRescue(p));
+    on(E.KITTEN_REVEAL, (p) => { if (toVec3(p?.position, _p)) this.beats.reveal(_p); });
+    on(E.ARENA_LOCK, (p) => { const A = this._arena; if (toVec3(p?.center, _p)) { A.x = _p.x; A.y = _p.y; A.z = _p.z; A.r = p.r ?? 6; A.on = true; } });
+    on(E.ARENA_CLEAR, () => { const A = this._arena; if (A.on) { this.beats.arenaClear(_p.set(A.x, A.y, A.z), A.r); A.on = false; } });
+    on(E.REWARD, (p) => { if (p?.kind) this.beats.reward(p.kind); });
+    on(E.PLAYER_DIED, () => this.beats.knockOut());
+    on(E.PLAYER_ORDER, (p) => { if (p?.kind === 'move' && p.valid !== false && !p.partial && toVec3(p.point, _p)) this.beats.small('ripple', _p.setY(_p.y + 0.15)); });
     on(E.PLAYER_HOLY, (p) => this._onHoly(p));
     on(E.PLAYER_SWING, (p) => { if (p?.attackId === 'sunburst') this._afterSim(ATTACKS.sunburst.active?.[0] ?? 0.2, () => this._sunburst()); });
     on(E.ENEMY_JEER, (p) => { if (isActor(p?.enemy)) this.encounters.jeer(p.enemy, !!p.on, p); });
@@ -199,7 +245,7 @@ export class FX {
     on(E.PLAYER_HEALED, (p) => this._onHeal(p));
     on(E.PLAYER_DODGE, () => { const pl = ctx.player; if (pl) this.poofs.dust(actorWorldPos(pl, _p), 1, 6); });
     on(E.PLAYER_LAND, (p) => { const pl = ctx.player; if (pl && (p?.impact ?? 0) > PLAYER.hardLandSpeed * 0.75) this.poofs.dustRing(actorWorldPos(pl, _p), 0.8); });
-    on(E.PLAYER_PERFECT_DODGE, (p) => this._onPerfectDodge(p));
+    on(E.PLAYER_PERFECT_DODGE, (p) => { this._onPerfectDodge(p); if (!p?.graze) this.word('perfectDodge'); });
     on(E.PLAYER_GRIT, (p) => { if (p?.broken && ctx.player) this._guardBreak(ctx.player); });
     on(E.PLAYER_STILL_STANDING, () => this._stillStanding());
     on(E.PLAYER_MEOW, (p) => this._meow(p));
@@ -211,7 +257,7 @@ export class FX {
     on(E.ITEM_PICKUP, (p) => this._onPickup(p));
     on(E.LEVEL_UNLOAD, () => this.clear());
     on(E.LEVEL_LOADED, (p) => { this._onLevel(p?.id); this._warm = 1; });
-    on(E.ENV_CHANGED, (p) => { if (this.levelId) this.ambient.set(motesFor(this.levelId, p?.grade ?? ctx.env?.grade)); });
+    on(E.ENV_CHANGED, (p) => { if (this.levelId) this._onLevel(this.levelId, p?.grade); });
     on(E.QUALITY, (p) => { this._applyQuality(p?.preset ?? ctx.quality); this._warm = 1; });
     on(E.MEME_CAM, (p) => { this._memeMist = !!p?.on; this.mist.speedMul = p?.on ? (PLAYER.memeCam.mist ?? 2) : 1; });
     if (ctx.levels?.current?.id) this._onLevel(ctx.levels.current.id);
@@ -267,12 +313,12 @@ export class FX {
       case 'spawn': this.poofs.spawn(_p, S); return;
       case 'spawnBones': this.poofs.spawn(_p, S); _p.y += 0.4; this.poofs.debris(_p, 'bones', S); return;
       case 'smoke':
-        P.burst(mid(), { n: n(6), shape: SHAPE.PUFF, color: opts.color ?? '#8E8C86', tint: 0.08, alpha: 0.7, size: [0.25 * S, 0.4 * S], sizeEnd: 2.2,
+        P.burst(mid(), { n: n(6), shape: SHAPE.PUFF, color: opts.color ?? '#E8D8C8', tint: 0.08, alpha: 0.7, size: [0.25 * S, 0.4 * S], sizeEnd: 2.2,
           grow: GROW.OUT, fade: FADE.HOLD, life: [0.7, 1.1], speed: [0.3, 0.8], up: 0.8, drag: 2, jitter: 0.25 * S });
         return;
       case 'choke':
         if (actor) headPoint(actor, _p, -0.1);
-        P.burst(_p, { n: n(4), shape: SHAPE.PUFF, color: '#B9B2A4', alpha: 0.75, size: [0.12, 0.18], sizeEnd: 2.0, grow: GROW.OUT, fade: FADE.HOLD,
+        P.burst(_p, { n: n(4), shape: SHAPE.PUFF, color: '#EAD9C2', alpha: 0.75, size: [0.12, 0.18], sizeEnd: 2.0, grow: GROW.OUT, fade: FADE.HOLD,
           life: [0.5, 0.8], speed: [0.6, 1.2], dir: _up, spread: 1.0, drag: 3, jitter: 0.1 });
         P.burst(_p, { additive: true, n: 3, shape: SHAPE.STAR5, color: '#FFE88A', intensity: 1.6, size: [0.1, 0.14], sizeEnd: 0.5, life: [0.5, 0.7],
           speed: [1.0, 1.6], dir: _up, spread: 0.8, gravity: 4, spin: 6, fade: FADE.HOLD });
@@ -305,6 +351,16 @@ export class FX {
       case 'stealerPoof': this.encounters.stealerPoof(actor ? actorWorldPos(actor, _p) : _p, S); return;
       case 'purchase': this._purchaseWorld(mid(), S, opts.color); if (opts.el) this.shop.burst({ el: opts.el, color: opts.color }); return;
       case 'lanternLight': this.lanterns.ignite(mid()); return;
+      // ART §8.6 / WA §5 beats (0 new draws)
+      case 'rescue': this.beats.rescue(actor ? actorWorldPos(actor, _p) : _p); return;
+      case 'reveal': this.beats.reveal(actor ? actorWorldPos(actor, _p) : _p); return;
+      case 'petals': this.beats.arenaClear(actor ? actorWorldPos(actor, _p) : _p, opts.r ?? 6); return;
+      case 'celebrate': this.beats.reward(opts.size ?? 'card'); return;
+      case 'pawBump': case 'boop': case 'cheer': case 'ripple': this.beats.small(kind, actor ? headPoint(actor, _p, 0.1) : _p); return;
+      case 'collect': this.beats.collect(mid(), !!opts.gold); return;
+      case 'hitSpark': this.beats.hitSpark(mid(), S); return;
+      case 'kittenTrail': this.beats.trail(mid(), opts.to && toVec3(opts.to, _q) ? _q : null); return;
+      case 'straw': mid(); this.poofs.debris(_p, 'straw', S); this._confetti(_p, n(12), S); return;
       default: {
         if (DEBRIS_KINDS.includes(kind)) { this.poofs.debris(mid(), kind, S, opts.color ?? null, opts.count ?? null); return; }
         const al = DEBRIS_ALIAS[kind];
@@ -406,22 +462,60 @@ export class FX {
     if (o.fish > 0) { _q.copy(_v); if (!o.centre) _q.y += (o.height ?? 1) * 0.5; this._fish(_q, Math.min(6, o.fish)); }
   }
 
-  /** A floating number at a world position (`style`: DamageNumbers.DAMAGE_STYLE key). */
-  damageNumber(pos, text, style = 'normal') {
+  /**
+   * A floating number at a world position (`style`: DamageNumbers.DAMAGE_STYLE key). With a `key` (the target) and a
+   * numeric `value`, hits on one target within 0.35 s merge into one number (WA §5.2).
+   */
+  damageNumber(pos, text, style = 'normal', key = null, value = NaN) {
     if (!this.numbers || !toVec3(pos, _v)) return;
     this.counts.numbers++;
-    this.numbers.show(_v, String(text), style);
+    this.numbers.show(_v, String(text), style, key, value);
   }
+
+  /**
+   * WA §5.3 a word over HER head: `id` a DamageNumbers WORDS key ('slash1', 'slash2', 'slash3', 'bright', 'holy',
+   * 'parry', 'perfectDodge', 'riposte', 'finalBlow') or literal text. ≤ 1 per 0.25 s; off with settings.hitWords
+   * false. Player emits the combo / final-blow words; fx adds parry and perfect-dodge itself. → shown?
+   */
+  word(id, at = null) {
+    const pl = this.ctx.player;
+    if (!this.numbers) return false;
+    if (at && toVec3(at, _q)) return this.numbers.word(id, _q);
+    if (!isActor(pl)) return false;
+    return this.numbers.word(id, headPoint(pl, _q, 0));
+  }
+
+  /**
+   * WA §5.3 a comic pop over a target (actor / position): 'bonk', 'parry', 'clank', 'boing' (or text). Parries always;
+   * the others the first time within the first 10 minutes (`FX.comicPops`). → shown?
+   */
+  pop(id, target) {
+    if (!this.numbers) return false;
+    if (!comicPopAllowed(id, this.ctx.state?.playtime, this._popsSeen)) return false;
+    const a = resolveActor(this.ctx, target);
+    if (a) headPoint(a, _q, 0.2); else if (!toVec3(target, _q)) return false;
+    this._popsSeen.add(id);
+    return this.numbers.pop(id, _q);
+  }
+
+  /** ART §9.1 a full-screen flash: a ScreenFX FLASH kind ('hurt' | 'rescue' | 'card' | 'storm') or (colour, alpha, dur). */
+  flash(kind, alpha, dur) { this.screen?.flash(kind, alpha, dur); }
+
+  /** WA §7.5 the tutorial ghost-paw ground spot (ui's ghost paw points here); null hides it. */
+  ghostPaw(pos) { if (!pos) this.decals?.setGhostPaw(null); else if (toVec3(pos, _q)) this.decals?.setGhostPaw(_q); }
 
   /** Ambient mote preset ('fluff', 'fireflies', 'embers', 'spores', 'dust', 'ash') or null. */
   setAmbient(name) { this.ambient?.set(name); }
 
-  /** Stun stars circling an actor's head for `sec` (Infinity = until removed; boss Dizzy uses a gold "!"). */
-  dizzyFor(actor, sec, { gold = false } = {}) {
+  /**
+   * Stun stars circling an actor's head for `sec` (Infinity = until removed; boss Dizzy uses a gold "!"). `r` / `rev`
+   * override the orbit radius (m) and speed (rev/s) (WA §5.7 knock-out: 0.35 m at 2.5 rev/s).
+   */
+  dizzyFor(actor, sec, { gold = false, r = 0, rev = 0 } = {}) {
     if (!isActor(actor)) return;
     const d = this.dizzy.get(actor);
-    if (d) { d.dur = Math.max(d.dur - d.t, sec); d.t = 0; d.gold ||= gold; return; }
-    this.dizzy.set(actor, { t: 0, dur: sec, gold });
+    if (d) { d.dur = Math.max(d.dur - d.t, sec); d.t = 0; d.gold ||= gold; if (r) d.r = r; if (rev) d.rev = rev; return; }
+    this.dizzy.set(actor, { t: 0, dur: sec, gold, r, rev });
   }
 
   /** Drop every transient effect (level unload). Fog walls and the horde go too; holy states reset. */
@@ -429,7 +523,8 @@ export class FX {
     this.particles?.clear(); this.trail?.clear(); this.numbers?.clear(); this.telegraphs?.clear(); this.holyFx?.clear();
     this.helmets?.clear(); this.mist?.clearWalls(); this.hordeFx?.clear(); this.screen?.clear();
     this.shock?.clear(); this.webs?.clear(); this.sunRays?.clear(); this.lanterns?.clear(); this.encounters?.clear(); this.shop?.clear();
-    this.dizzy.clear(); this._later.length = 0;
+    this.beats?.clear(); this.decals?.setGhostPaw(null);
+    this.dizzy.clear(); this._later.length = 0; this._arena.on = false;
   }
 
   /** Small summary for smoke tests / the debug overlay. */
@@ -441,7 +536,13 @@ export class FX {
       ambientMist: !!this.mist?.ambient?.mesh.visible, motes: this.ambient?.preset ?? null,
       horde: { mode: this.hordeFx?.mode ?? 'off', count: this.hordeFx?.count ?? 0, visible: this.hordeFx?.visibleCount ?? 0 },
       holy: { casts: this.holyFx?.casts ?? 0, flashes: this.holyFx?.flashes ?? 0, fizzles: this.holyFx?.fizzles ?? 0, bloomLevel: this.holyFx?.bloomLevel ?? 0,
-        light: this.holyFx?.light?.intensity ?? 0, player: this.ctx.player ? this.holyFx?.level(this.ctx.player) ?? 0 : 0 },
+        light: this.holyFx?.light?.intensity ?? this.holyFx?.glowLevel ?? 0, glow: this.holyFx?.glowLevel ?? 0, cards: this.holyFx?.cards ?? 0,
+        player: this.ctx.player ? this.holyFx?.level(this.ctx.player) ?? 0 : 0 },
+      blobs: this.blobs?.count ?? 0, flashes: this.screen?.flashes ?? 0,
+      beats: { ...(this.beats?.counts ?? {}), twinkles: this.beats?.twinkles ?? 0 },
+      words: this.numbers?.words ?? 0, pops: this.numbers?.pops ?? 0, merged: this.numbers?.merged ?? 0,
+      life: { flyers: this.butterflies?.mesh?.visible ? this.butterflies.count : 0, kind: this.butterflies?.set?.kind ?? null,
+        pools: !!this.lightPools?.mesh?.visible, clouds: !!this.clouds?.mesh?.visible },
       bloom: this.ctx.postfx?.bloom ?? 0, peakBloom: this.screen?.peakBloom ?? 0, vignette: this.screen?.vignette ?? 0,
       dizzy: this.dizzy.size, marks: this.marks?.count ?? 0, marksTop: this.marksTop?.count ?? 0, counts: { ...this.counts }, warmups: this.warmups,
       mistLoop: this.mist?.loopW ?? 0,
@@ -500,8 +601,14 @@ export class FX {
     this.lanterns.render(dt, time);
     this.encounters.render(dt, time);
     this._goldenPulse(dt);
+    this.beats.render(dt, frameDt);
+    this.butterflies.render(dt);
+    this.lightPools.render(dt);
+    this.clouds.render(dt);
     this.numbers.render(dt);
     this.decals?.render(dt);              // visual dt: order markers and pulses freeze with the pause menu / hitstop
+    this.blobs.render();
+    this.debugFrame?.render();
     this.marks.end();
     this.marksTop.end();
     this.screen.render(frameDt);
@@ -514,9 +621,21 @@ export class FX {
    */
   warmObjects() {
     return [this.particles?.add.mesh, this.particles?.alpha.mesh, this.marks?.mesh, this.marksTop?.mesh, this.trail?.mesh,
-      this.holyFx?.fields[0]?.points, this.holyFx?.arcs[0]?.mesh, this.helmets?.list[0], this.telegraphs?.decals[0]?.mesh,
-      this.telegraphs?.lines[0]?.mesh, this.mist?.ambient?.mesh, this.hordeFx?.mesh, this.ambient?.points,
-      this.shock?.rings[0]?.mesh, this.shock?.cracks[0]?.mesh, this.webs?.mesh, this.sunRays?.follow.mesh, this.groundMist?.mesh].filter(Boolean);
+      this.holyFx?.fields[0]?.points, this.holyFx?.arcs[0]?.mesh, this.helmets?.list[0], this.telegraphs?.decalBatch?.mesh,
+      this.telegraphs?.lineBatch?.mesh, this.mist?.ambient?.mesh, this.hordeFx?.mesh, this.ambient?.points,
+      this.shock?.rings[0]?.mesh, this.shock?.cracks[0]?.mesh, this.webs?.mesh, this.sunRays?.follow.mesh, this.groundMist?.mesh,
+      this.decals?.mesh, this.blobs?.mesh, this.butterflies?.mesh, this.lightPools?.mesh, this.clouds?.mesh].filter(Boolean);
+  }
+
+  /**
+   * PERF §3.3 / F1: put every fx program into a batched prewarm. `warmSet(true)` shows each hidden fx object with an
+   * empty draw range (compile walks visible objects; nothing is drawn); `warmSet(false)` restores them. Core / world
+   * call it around `prewarm()` / `renderer.compileAsync` under the veil. → the objects made visible.
+   */
+  warmSet(on) {
+    if (on) { this._warmEnd(); this._warmBegin(); return this._warmSaved.filter((_, i) => i % 4 === 0); }
+    this._warmEnd();
+    return [];
   }
 
   /**
@@ -556,6 +675,8 @@ export class FX {
     this.holyFx?.dispose(); this.helmets?.dispose(); this.mist?.dispose(); this.hordeFx?.dispose(); this.ambient?.dispose(); this.screen?.dispose();
     this.shock?.dispose(); this.webs?.dispose(); this.sunRays?.dispose(); this.lanterns?.dispose(); this.encounters?.clear(); this.shop?.dispose();
     this.decals?.dispose(); this.groundMist?.dispose();
+    this.blobs?.dispose(); this.butterflies?.dispose(); this.lightPools?.dispose(); this.clouds?.dispose(); this.debugFrame?.dispose();
+    this.beats?.clear();
     this.dizzy.clear(); this._later.length = 0;
     this.ready = false;
   }
@@ -563,22 +684,41 @@ export class FX {
   // ================================================================== event handlers
   _afterSim(sec, fn) { if (sec > 0) this._later.push({ t: sec, fn }); else fn(); }
 
+  /** Low tier (ART §8.6): counts ×0.5 and flat confetti everywhere. */
+  _low(q = this.ctx.quality) { return q?.id === 'low' || (q?.particles ?? 2000) < 1000; }
+
   _applyQuality(q) {
     if (!q || !this.particles) return;
+    const low = this._low(q);
     this.particles.setBudget(q.particles ?? 2000);
+    this.particles.setTier({ countScale: low ? 0.5 : 1, flat: low });
     this.mist.setCount(MIST_COUNT[q.id] ?? MIST_COUNT.med);
     this.groundMist?.setQuality(q);
-    this.ambient.setBudget((q.particles ?? 2000) / 2000);
-    if (this.encounters) this.encounters.lowQ = (q.particles ?? 2000) < 1000;
+    this.ambient.setBudget(low ? 0.5 : 1);
+    if (this.encounters) this.encounters.lowQ = low;
+    if (this.levelId) this._onLevel(this.levelId);
   }
 
-  _onLevel(id) {
+  _onLevel(id, grade = undefined) {
     this.levelId = id ?? null;
+    const ctx = this.ctx, low = this._low(), g = grade ?? ctx.env?.grade, preset = ctx.env?.presetName ?? null;
     const dens = AMBIENT_DENSITY[id] ?? 1;
     this.mist.setAmbient(dens > 0, dens);
-    this.ambient.set(motesFor(id, this.ctx.env?.grade));
+    this.ambient.set(motesFor(id, g, preset));
+    const night = g === 'night' || /_(night|twilight)$/.test(String(preset ?? ''));
+    const hub = !!(ctx.state?.cond?.('town.free') ?? ctx.state?.getFlag?.('town.free'));
+    this.butterflies?.setLevel(id, { hub, low, night });
+    this.lightPools?.setLevel(id, low);
+    this.clouds?.setLevel(id, low);
     // a level without light-casting fx lanterns drops the pooled lantern lights (one less light in every program)
     if (this.lanterns && !this.lanterns.castCount) this.lanterns.dropLights();
+  }
+
+  /** ART §8.6 kitten rescue burst at the carrier / kitten (payload `position`, else the kitten actor). */
+  _onRescue(p) {
+    const at = p?.position ?? resolveActor(this.ctx, p?.kittenId) ?? null;
+    if (!at || !toVec3(at, _p)) { const pl = this.ctx.player; if (!isActor(pl)) return; actorWorldPos(pl, _p); }
+    this.beats.rescue(_p);
   }
 
   _isDupPoof(pos) {
@@ -611,12 +751,13 @@ export class FX {
             life: [0.35, 0.6], speed: [2.5, 4.5], dir, spread: 1.2, drag: 3, fade: FADE.TWINKLE });
         }
         this._stars(_p, dir, J.stars, S, J.kind === 'holy' ? '#FFD34D' : null);
+        this.beats.hitSpark(_p, S);                       // WA §5.1: 3 STAR4 + the cream ring
         if (J.crit) this.particles.single(_q.copy(_p).setY(_p.y + 0.15), { shape: SHAPE.STAR8, color: '#FFD34D', intensity: 3, size0: 0.25, size1: 1.1, life: 0.28, fade: FADE.POP, spin: 3 });
         if (J.dust && isActor(h.target)) this.poofs.dustRing(actorWorldPos(h.target, _q), 0.9);
         if (J.number) {
           const T = h.target;
           if (isActor(T)) headPoint(T, _q, 0.12); else _q.copy(_p).setY(_p.y + 0.6);
-          this.damageNumber(_q, J.number.text, J.number.style);
+          this.damageNumber(_q, J.number.text, J.number.style, T ?? null, J.number.value ?? Number(J.number.text));
         }
         return;
       }
@@ -696,6 +837,9 @@ export class FX {
       life: [0.4, 0.7], speed: [1.2, 2.6], spread: Math.PI, drag: 2.5, fade: FADE.TWINKLE });
     this.bloomSpike(gold ? 1.1 : 0.9, gold ? 0.35 : 0.25);
     if (isActor(p?.attacker) && !p.projectile) this.dizzyFor(p.attacker, gold ? PLAYER.guard.goldParryStagger : PLAYER.guard.parryStagger * 0.8);
+    // WA §5.3: "Ting!" over her, "PARRY!" over the attacker (every parry)
+    this.word('parry');
+    if (isActor(p?.attacker)) this.pop('parry', p.attacker);
   }
 
   _onHoly(p) {
@@ -780,16 +924,16 @@ export class FX {
     this.dizzy.delete(e);
   }
 
+  /** WA §5.5 collect: 4 STAR4 + 1 ring (gold fish gold), hearts for hearts, a bigger sparkle for letters. */
   _onPickup(p) {
     if (!p) return;
     const pos = p.position ?? p.pos;
-    if (!pos) return;
+    if (!pos || !toVec3(pos, _v)) return;
+    _v.y += 0.3;
     switch (p.item) {
-      case 'fish': this.burst('sparkle', pos, { count: 4, color: '#DDF2FF' }); break;
-      case 'smallHeart': case 'heartBell': this.burst('heart', pos, { count: 1 }); break;
-      case 'letter': this.burst('sparkle', pos, { count: 10 }); break;
-      case 'milk': this.burst('sparkle', pos, { count: 6, color: '#FFFFFF' }); break;
-      default: this.burst('sparkle', pos, { count: 5 });
+      case 'smallHeart': case 'heartBell': this.beats.collect(_v); this.burst('heart', _v, { count: 1 }); break;
+      case 'letter': this.beats.collect(_v, true); this.burst('sparkle', _v, { count: 10 }); break;
+      default: this.beats.collect(_v, p.gold === true || (p.amount ?? 1) > 1);
     }
   }
 
@@ -856,10 +1000,11 @@ export class FX {
       life: [0.4, 0.6], speed: [1.0, 2.0], spread: Math.PI, drag: 2, fade: FADE.TWINKLE });
   }
 
+  /** ART §8.6 confetti: SHAPE.CONFETTI paper in the six warm colours (flips; flat on Low). */
   _confetti(pos, n, S) {
-    const cols = ['#FF8FB1', '#FFD34D', '#7FD38A', '#8FC8FF', '#FFFFFF'];
+    const cols = CONFETTI_COLORS, per = Math.ceil(this.particles.scaled(n) / cols.length);
     for (let k = 0; k < cols.length; k++) {
-      this.particles.burst(pos, { n: Math.ceil(n / cols.length), shape: SHAPE.SHARD, color: cols[k], size: [0.06 * S, 0.1 * S], life: [0.9, 1.4],
+      this.particles.burst(pos, { n: per, exact: true, shape: SHAPE.CONFETTI, color: cols[k], size: [0.08 * S, 0.12 * S], life: [0.9, 1.4],
         speed: [2.5, 4.5], dir: _up, spread: 0.9, gravity: 5, drag: 2.2, spin: 12, fade: FADE.HOLD });
     }
   }
@@ -873,10 +1018,11 @@ export class FX {
       if (a.alive === false || !a.object3d?.parent || d.t >= d.dur) { this.dizzy.delete(a); continue; }
       const big = d.gold;
       headPoint(a, _p, big ? 0.22 : 0.12);
-      const r = (a.radius ?? 0.35) * (big ? 1.1 : 0.9) + 0.12, fade = Math.min(1, d.t / 0.1, (d.dur - d.t) / 0.25);
+      const r = d.r || (a.radius ?? 0.35) * (big ? 1.1 : 0.9) + 0.12, fade = Math.min(1, d.t / 0.1, (d.dur - d.t) / 0.25);
+      const w = d.rev ? d.rev * Math.PI * 2 : 4.2;
       for (let k = 0; k < 3; k++) {
-        const ang = time * 4.2 + (k / 3) * Math.PI * 2;
-        M.push(_p.x + Math.cos(ang) * r, _p.y + Math.sin(ang * 2) * 0.05, _p.z + Math.sin(ang) * r, big ? 0.26 : 0.18, MARK.STAR5, STAR_COL, 1.5,
+        const ang = time * w + (k / 3) * Math.PI * 2;
+        M.push(_p.x + Math.cos(ang) * r, _p.y + Math.sin(ang * 2) * 0.05, _p.z + Math.sin(ang) * r, big ? 0.26 : 0.18, d.rev ? MARK.STAR4 : MARK.STAR5, STAR_COL, 1.5,
           fade, ang * 1.5);
       }
       if (big && d.t < 0.9) {

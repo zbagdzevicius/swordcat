@@ -71,6 +71,8 @@ export class MemeCamTrigger {
     const p = this.player, ctx = p.ctx;
     if (p.golden || p.goldenActivating) return true;                     // never mid Golden Hour
     if (ctx.story?.tutorial?.active) return true;
+    // WA §5.6: the hub has no Meme Cam (her idle ladder ends in a sit there)
+    if (ctx.companions?.hub?.isHub?.() ?? ctx.levels?.current?.hub?.active?.()) return true;
     if (ctx.levels?.current?.id === 'meadow' && inPractice(p.pos.x, p.pos.z)) return true;
     let kittens = [];
     try { kittens = ctx.companions?.kittens ?? []; } catch { kittens = []; }

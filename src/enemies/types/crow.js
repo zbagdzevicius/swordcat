@@ -2,7 +2,7 @@
 // Circles its post (r 5 m, 4 m up), then circles her. crow_dive: a `shadow` decal grows under her for 1.0 s and
 // TRACKS for the first 0.6 s, then freezes; the crow dives at 12 m/s to the decal centre (r 0.9), and, hit or miss,
 // lands and pecks for 1.2 s, when anything can hit it. In the air it is hittable only below 2.2 m (Pounce), by
-// projectiles, or while grounded by Sage (`groundFlyer(sec)`). Defeat: the poof (fx bursts the feathers by type), it tumbles down.
+// projectiles, or while grounded by Sage (`groundFlyer(sec)`). Defeat: it faints as it drops, then the poof (ART §7.1).
 import * as THREE from 'three';
 import { ENEMIES, ATTACKS } from '../../core/config.js';
 import { E } from '../../core/events.js';
@@ -15,11 +15,9 @@ import { attachAligned, bone, posIn } from '../rig.js';
 
 const def = ENEMIES.crow;
 const DIVE = ATTACKS.crow_dive;
-/** Multiply over the blue Pigeon atlas (→ near-black feathers) and the violet sheen (art.md §11). */
-const CROW_TINT = '#4A4B58';
-const CROW_SHEEN = '#120C1E';
-/** Gear on the round pigeon body (metres at the 1.2 m wingspan): iron hood on the crown, eye glints on the face. */
-const CROW_FACE = { hoodY: 0.36, hoodZ: 0.05, hoodScale: 1.9, eyeY: 0.27, eyeZ: 0.27, eyeScale: 1.5 };
+/** Gear on the round pigeon body (metres at the 1.2 m wingspan): the mustard crest on the crown, friendly eyes on the
+ * face (ART §7.2; the head bone is ×1.35 after dressing, so both grow with it). */
+const CROW_FACE = { hoodY: 0.34, hoodZ: 0.03, hoodScale: 1.6, eyeY: 0.27, eyeZ: 0.25, eyeScale: 0.9 };
 const _d = new THREE.Vector3();
 const _s = new THREE.Vector3();
 
@@ -71,6 +69,7 @@ export default {
   walk: 1.2, run: def.fly.speed * 0.8,
   anims: { ...CLIP_MAPS.pigeon.roles },
   smallHeart: true,
+  tint: undefined,                       // ART §7.3: the Pigeon atlas is palette-remapped (slate / mustard), not multiplied
   init(e) {
     const rng = e.ctx.rng;
     e.circleA = rng.angle(); e.circleDir = rng.sign(); e.diveTarget = new THREE.Vector3(); e.grounded = false; e.peckDur = def.peck; e.dived = false;
@@ -82,22 +81,21 @@ export default {
   async build(e, m) {
     const space = m.root, head = bone(m.scene, 'Head'), k = (m.size?.x ?? 1.2) / 1.2;
     if (!head) return;
-    // §10.2 / art.md §11: black feathers with a violet sheen. The Pigeon atlas is already blue-violet, so the row's
-    // #17181C is reached by a softer multiply (CROW_TINT) plus a faint violet emissive lift; beak and eyes stay legible.
+    // ART §2.6 / §7.2: slate body, slateLight wings, mustard beak and feet come from the atlas remap (Enemy.loadVisual,
+    // palette.js); here only a matte finish (no near-black feathers, no sheen)
     m.scene.traverse((o) => {
       if (!o.isMesh) return;
       for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
         if (!mat?.userData?.enemyOwned) continue;
-        if (mat.color) mat.color.set(CROW_TINT);
-        if (mat.emissive) mat.emissive.set(CROW_SHEEN);
-        mat.roughness = 0.55; mat.metalness = 0;
+        if (mat.color) mat.color.set('#FFFFFF');
+        mat.roughness = 0.8; mat.metalness = 0;
       }
     });
     const hp = posIn(space, head);
     const hood = makeProp('crowHood');
     attachAligned(space, head, hood, { pos: [hp.x, CROW_FACE.hoodY * k, CROW_FACE.hoodZ * k], rot: [-0.25, 0, 0], scale: k * CROW_FACE.hoodScale });
     e.helmet = hood;
-    const eyes = makeProp('eyes', { material: 'eyeCrow' });
+    const eyes = makeProp('eyes');
     attachAligned(space, head, eyes, { pos: [hp.x, CROW_FACE.eyeY * k, CROW_FACE.eyeZ * k], scale: k * CROW_FACE.eyeScale });
   },
 
@@ -252,8 +250,9 @@ export default {
         e.grounded = false;
       },
       update(e, dt) {
-        e.brake(dt, 3);
         e.vel.y = damp(e.vel.y, -3, 3, dt);
+        if (e.faint) { BASE_STATES.die.update(e, dt); return; }      // ART §7.1 faint and poof (it drops as it faints)
+        e.brake(dt, 3);
         if (e.stateT >= e.dieDur()) e.ctx.enemies?.despawn?.(e);
       },
     },

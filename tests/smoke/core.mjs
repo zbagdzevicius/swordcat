@@ -18,6 +18,41 @@ async function until(t, fn, arg, ms = 6000) {
   while (!v && Date.now() - t0 < ms) { await t.wait(100); v = await t.G(fn, arg); }
   return v;
 }
+/**
+ * WA §2.3a frame targets (binding; core.W4). luma [min, max], dark max, black max (fraction), R − B [min, max],
+ * fog HSV sat min. Each row is measured at the level's start spawn with the preset applied instantly.
+ */
+export const WARM_ROWS = [
+  { preset: 'meadow_morning', level: 'meadow', band: { luma: [0.52, 0.62], dark: 0.06, black: 0.005, rb: [0.08, 0.16], fogSat: 0.15 } },
+  { preset: 'meadow_day', level: 'meadow', band: { luma: [0.52, 0.60], dark: 0.06, black: 0.005, rb: [0.08, 0.14], fogSat: 0.15 } },
+  { preset: 'meadow_evening', level: 'meadow', band: { luma: [0.48, 0.58], dark: 0.08, black: 0.005, rb: [0.12, 0.20], fogSat: 0.18 } },
+  { preset: 'meadow_giggle', level: 'meadow', band: { luma: [0.44, 1], dark: 0.10, black: 0.005, rb: [-0.02, 1], fogSat: 0.15 } },
+  { preset: 'meadow_night', level: 'meadow', band: { luma: [0.36, 1], dark: 0.15, black: 0.005, rb: [-0.06, 1], fogSat: 0.25 } },
+  { preset: 'sky_night', level: 'meadow', band: { luma: [0.36, 1], dark: 0.15, black: 0.005, rb: [-0.06, 1], fogSat: 0.25 } },
+  { preset: 'ending_gold', level: 'meadow', band: { luma: [0.55, 0.65], dark: 0.05, black: 0.005, rb: [0.12, 0.20], fogSat: 0.18 } },
+  { preset: 'forest_day', level: 'forest', band: { luma: [0.48, 0.58], dark: 0.08, black: 0.005, rb: [0.06, 0.14], fogSat: 0.12 } },
+  { preset: 'forest_twilight', level: 'forest', band: { luma: [0.36, 1], dark: 0.15, black: 0.005, rb: [0, 1], fogSat: 0.25 } },
+  { preset: 'town_occupied', level: 'town', band: { luma: [0.50, 0.60], dark: 0.06, black: 0.005, rb: [0.08, 0.16], fogSat: 0.15 } },
+  { preset: 'hub_gold', level: 'town', band: { luma: [0.50, 0.60], dark: 0.06, black: 0.005, rb: [0.08, 0.16], fogSat: 0.15 } },
+  { preset: 'hub_hush', level: 'town', band: { luma: [0.44, 1], dark: 0.10, black: 0.005, rb: [-0.02, 1], fogSat: 0.12 } },
+  { preset: 'gate_dusk', level: 'gate', band: { luma: [0.50, 0.58], dark: 0.08, black: 0.005, rb: [0.10, 0.16], fogSat: 0.18 } },
+  { preset: 'bog_dusk', level: 'bog', band: { luma: [0.40, 1], dark: 0.12, black: 0.005, rb: [-0.04, 1], fogSat: 0.15 } },
+  { preset: 'keep_twilight', level: 'keep', band: { luma: [0.36, 1], dark: 0.15, black: 0.005, rb: [0, 1], fogSat: 0.20 } },
+  { preset: 'keep_cellar', level: 'keep', band: { luma: [0.38, 1], dark: 0.12, black: 0.005, rb: [0.04, 1], fogSat: 0.20 } },
+  { preset: 'keep_storm', level: 'keep', band: { luma: [0.34, 1], dark: 0.18, black: 0.01, rb: [0, 1], fogSat: 0.12 } },
+];
+
+/** The WA §2.3a metrics of a frameStats() result that miss their band (empty = pass). */
+export function warmFailures(s, b) {
+  const f = [];
+  if (!(s.luma >= b.luma[0] && s.luma <= b.luma[1])) f.push(`luma ${s.luma.toFixed(3)} ∉ [${b.luma}]`);
+  if (!(s.dark <= b.dark)) f.push(`dark ${(s.dark * 100).toFixed(1)} % > ${b.dark * 100} %`);
+  if (!(s.black < b.black)) f.push(`black ${(s.black * 100).toFixed(2)} % ≥ ${b.black * 100} %`);
+  if (!(s.warmth >= b.rb[0] && s.warmth <= b.rb[1])) f.push(`R−B ${s.warmth.toFixed(3)} ∉ [${b.rb}]`);
+  if (s.fogSat != null && !(s.fogSat >= b.fogSat)) f.push(`fog sat ${s.fogSat.toFixed(2)} < ${b.fogSat}`);
+  return f;
+}
+
 /** CSS px of world (x, z) on the main page. */
 const screenOf = (t, x, z) => t.G(([a, b]) => window.__GAME__.screen(a, b), [x, z]);
 
@@ -42,6 +77,33 @@ export default [
       t.assert(s.hooks.length === 0, `__GAME__ missing §12 core 5 hooks: ${s.hooks.join(', ')}`);
       t.assert(!!s.camIso && Number.isFinite(s.camIso.dist), '__GAME__.cam.iso() returns the framing');
       t.log(`boot mode=${s.mode} cam=${s.cam ?? 'iso'} yaw=${s.camIso?.yaw?.toFixed(2)} d=${s.camIso?.dist?.toFixed(1)} catPx=${s.camIso?.catPx?.toFixed(1)}`);
+    },
+  },
+  {
+    // S1 (PERF C3/C6/C11, ART §3.1–3.2, K1): play renders straight to an antialiased canvas with Neutral tone mapping,
+    // no post chain on Low / Med, the toon chunks patched, shader checks on under ?test, and a warm (never grey) clear.
+    name: 'core:render', order: 1, level: 'meadow', spawn: 'start',
+    async run(t) {
+      const r = await t.G(() => {
+        const g = window.__GAME__, c = g.ctx, R = c.renderer, T = g.THREE, attrs = R.getContext().getContextAttributes();
+        const bg = c.scene.background?.isColor ? '#' + c.scene.background.getHexString() : null;
+        const p = g.perf();
+        return { aa: attrs.antialias, tm: R.toneMapping === T.NeutralToneMapping, checks: R.debug.checkShaderErrors,
+          toon: /toonRamp/.test(T.ShaderChunk.lights_pars_begin), chain: !!c.postfx.chain, composer: c.postfx.composer,
+          active: c.postfx.composerActive, q: c.postfx.qualityName, bg, path: p.path, stage: p.stage, calls: p.calls,
+          splash: !!document.getElementById('splash') && !document.getElementById('splash').classList.contains('out'),
+          marks: performance.getEntriesByName('play').length + performance.getEntriesByName('title').length };
+      });
+      t.assert(r.aa, 'canvas antialias is off (X1: on for every tier)');
+      t.assert(r.tm, 'tone mapping is not Neutral (K1)');
+      t.assert(r.checks === true, 'checkShaderErrors must stay on under ?test (PERF §3.2)');
+      t.assert(r.toon, 'toon chunks not installed before the first compile');
+      t.assert(r.q === 'high' || (!r.chain && !r.active && r.composer == null), `a post chain exists in play on ${r.q} (K1)`);
+      t.assert(r.path === 'canvas', `render path ${r.path} in play (want canvas)`);
+      t.assert(!r.splash, 'the warm splash still covers the game after boot');
+      t.assert(r.marks >= 1, 'no performance.mark title / play');
+      t.assert(r.bg && r.bg !== '#b7c0c3', `scene background ${r.bg} (never the old grey)`);
+      t.log(`render: aa ${r.aa}, Neutral ${r.tm}, path ${r.path}, q ${r.q}, bg ${r.bg}, calls ${r.calls} [${r.stage}]`);
     },
   },
   {
@@ -329,6 +391,31 @@ export default [
         await t.blankCheck(`lvl-${id}`);
         t.log(`${id}: calls ${s.calls} tris ${s.tris} q=${s.quality}`);
         if (s.calls > 150) t.warn(`${id}: draw calls ${s.calls} over the Med budget (150)`);
+      }
+      await t.loadLevel('meadow', 'start');
+    },
+  },
+  {
+    // core.W4 (WA §2.3a): one frame per preset row; mean luma, dark % (< 0.2), black % (< 0.06), R − B and the fog's
+    // HSV saturation, all on a 64 × 36 readback with actors excluded. A row outside its band may not ship; the fix is
+    // preset data (world Env), never a post pass. Screenshots: tests/shots/core/warm-<preset>.png.
+    name: 'art:warm', order: 63, level: null, timeout: 600000,
+    async run(t) {
+      let last = null;
+      for (const row of WARM_ROWS) {
+        if (row.level !== last) {
+          await t.loadLevel(row.level, 'start');
+          await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.skipDialog?.(); g.setMode('play'); g.god(true); });
+          last = row.level;
+        }
+        const ok = await t.G((p) => { const e = window.__GAME__.ctx.env; e.preset(p, 0); return e.presetName; }, row.preset);
+        await t.frames(30);
+        const s = await t.G(() => window.__GAME__.art.frameStats({ exclude: 'actors' }));
+        await t.shot(`core/warm-${row.preset}`);
+        const b = row.band, tag = `${row.preset} (${row.level})`;
+        const fails = warmFailures(s, b);
+        t.log(`${tag}${ok !== row.preset ? ` [env reports ${ok}]` : ''}: luma ${s.luma.toFixed(3)} dark ${(s.dark * 100).toFixed(1)}% black ${(s.black * 100).toFixed(2)}% R−B ${s.warmth.toFixed(3)} fogSat ${s.fogSat?.toFixed(2)}${fails.length ? '  ✗ ' + fails.join('; ') : '  ✓'}`);
+        for (const f of fails) t.fail(`art:warm ${tag}: ${f}`);
       }
       await t.loadLevel('meadow', 'start');
     },

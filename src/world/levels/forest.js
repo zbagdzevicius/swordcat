@@ -15,19 +15,22 @@ import { E } from '../../core/events.js';
 
 const N = (n) => `models/env/nature/${n}.glb`;
 const M = {
-  oak: N('tree_oak'), fat: N('tree_fat'), detailed: N('tree_detailed'), oakDark: N('tree_oak_dark'),
+  oak: N('tree_oak'), fat: N('tree_fat'), detailed: N('tree_detailed'),
+  // LI §5: warm autumn accents between the greens (≥ 6 m off the path) instead of the dark oaks
+  oakFall: N('tree_oak_fall'), defaultFall: N('tree_default_fall'),
   mushRedTall: N('mushroom_redTall'), mushRedGroup: N('mushroom_redGroup'), mushTanTall: N('mushroom_tanTall'), mushRed: N('mushroom_red'), mushTanGroup: N('mushroom_tanGroup'),
   stumpRound: N('stump_round'), stumpOld: N('stump_old'), stumpOldTall: N('stump_oldTall'), log: N('log'), logLarge: N('log_large'), logStack: N('log_stack'),
   campfire: N('campfire_logs'), tent: N('tent_detailedOpen'), tentSmall: N('tent_smallOpen'),
   bush: N('plant_bush'), bushLarge: N('plant_bushLarge'), fern: N('plant_flatTall'), boulder: N('rock_largeA'), rockTallA: N('rock_tallA'), rockTallB: N('rock_tallB'),
-  torch: 'models/env/dungeon-kaykit/torch_lit.glb', mill: 'models/env/village-kaykit/buildings/building_watermill_red.glb',
+  // LI §4.2: the rat camp's dungeon torches become stakes with an uncarved pumpkin lantern on top (warm, not grim)
+  pumpkin: 'models/env/graveyard/pumpkin.glb', mill: 'models/env/village-kaykit/buildings/building_watermill_red.glb',
   wheel: 'models/env/town/watermill.glb', lily: N('lily_large'), reeds: N('grass_large'),
 };
 const ROCKS = ['A', 'B', 'C', 'D', 'E'].map((k) => N('rock_small' + k));
 const STONES = ['A', 'B', 'C'].map((k) => N('stone_large' + k));
 
-const C = { bark: '#4E3B2A', barkDark: '#3A2C20', wood: '#7A5B3E', woodDark: '#4E3A28', plank: '#9C7E58', rope: '#8C6A4A', stone: '#8E918A', stoneDark: '#6E716B',
-  cream: '#EFE3CF', capRed: '#B4473E', capTan: '#C9A27A', stem: '#E6DCC4', leaf: '#4F6A2E', leafDark: '#3B5226', cheese: '#E8C35A', cheeseDark: '#C99A34', web: '#D8DCD6', moss: '#5E6A3A' };
+const C = { bark: '#7E4E2A', barkDark: '#5E3A22', wood: '#B7773F', woodDark: '#7E4E2A', plank: '#D9A86A', rope: '#C9A06A', stone: '#C9BCA6', stoneDark: '#9C8E7C',
+  cream: '#FFF3E2', capRed: '#E8553F', capTan: '#C9A27A', stem: '#E6DCC4', leaf: '#58A84A', leafDark: '#2F7A45', cheese: '#E8C35A', cheeseDark: '#C99A34', web: '#D8DCD6', moss: '#8DB65A' };
 
 /** §12.4 spine (+ a bend at (27, 0) so the path passes beside the giant oak instead of through its trunk). */
 const SPINE = [[0, -85], [-20, -58], [-10, -30], [18, -8], [27, 0], [24, 18], [6, 40], [-16, 56], [-10, 84]];
@@ -63,9 +66,9 @@ function capParts(h, bounce, arrowYaw = 0) {
   const capCol = bounce ? C.capRed : C.capTan;
   const cap = new THREE.SphereGeometry(CAP_R * 1.06, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2); cap.scale(1, 0.42, 1); cap.translate(0, h - 0.34, 0);
   const rim = new THREE.CylinderGeometry(CAP_R * 1.06, CAP_R * 0.9, 0.16, 18).translate(0, h - 0.42, 0);
-  const p = [[cyl(0.26, 0.38, h - 0.3, 0, 0, 0, 10), C.stem], [cap, capCol], [rim, '#D9CDB0']];
+  const p = [[cyl(0.26, 0.38, h - 0.3, 0, 0, 0, 10), C.stem], [cap, capCol], [rim, '#F0E4C8']];
   // a little skirt ring on the stem, spots on the cap
-  p.push([new THREE.TorusGeometry(0.3, 0.05, 5, 12).rotateX(Math.PI / 2).translate(0, h * 0.62, 0), '#D9CDB0']);
+  p.push([new THREE.TorusGeometry(0.3, 0.05, 5, 12).rotateX(Math.PI / 2).translate(0, h * 0.62, 0), '#F0E4C8']);
   // CONTROLS_SPEC §11: bounce caps carry a pale up-arrow on top (readable from the iso camera: "this one bounces")
   if (bounce) {
     const top = h - 0.34 + CAP_R * 1.06 * 0.42 + 0.015;
@@ -84,9 +87,9 @@ function capParts(h, bounce, arrowYaw = 0) {
 
 /** The mushroom house (procedural): a cream stem cottage, round door facing +Z, two windows, a red spotted cap, a chimney. */
 function mushroomHouseParts() {
-  const p = [[cyl(1.35, 1.55, 2.5), C.stem], [cyl(1.6, 1.65, 0.18), '#B5A88C']];
+  const p = [[cyl(1.35, 1.55, 2.5), C.stem], [cyl(1.6, 1.65, 0.18), '#D8C8A8']];
   const cap = new THREE.SphereGeometry(2.9, 22, 10, 0, Math.PI * 2, 0, Math.PI / 2); cap.scale(1, 0.62, 1); cap.translate(0, 2.3, 0);
-  p.push([cap, C.capRed], [new THREE.CylinderGeometry(2.9, 2.6, 0.22, 22).translate(0, 2.25, 0), '#D9CDB0']);
+  p.push([cap, C.capRed], [new THREE.CylinderGeometry(2.9, 2.6, 0.22, 22).translate(0, 2.25, 0), '#F0E4C8']);
   for (let i = 0; i < 9; i++) { const a = i * 2.39, rr = 0.6 + (i % 3) * 0.7, y = 2.3 + Math.sqrt(Math.max(0, 1 - (rr / 2.9) ** 2)) * 2.9 * 0.62; p.push([new THREE.SphereGeometry(0.26, 8, 5).scale(1, 0.35, 1).translate(Math.sin(a) * rr, y, Math.cos(a) * rr), C.cream]); }
   // door (round top) facing +Z
   p.push([box(0.82, 1.15, 0.12, 0, 0.6, 1.47), C.woodDark], [new THREE.CylinderGeometry(0.41, 0.41, 0.12, 14, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(Math.PI / 2).translate(0, 1.18, 1.47), C.woodDark]);
@@ -106,9 +109,9 @@ function webParts(r = 1.0) {
 
 /** A root ledge (top at `y`): a gnarled wooden shelf on two root legs, plus a lower root step at y / 2. */
 function rootLedgeParts(y, yaw = 0) {
-  const p = [[box(1.9, 0.3, 1.5, 0, y - 0.15, 0), C.bark], [box(1.7, 0.08, 1.3, 0, y + 0.02, 0), '#5A4632']];
+  const p = [[box(1.9, 0.3, 1.5, 0, y - 0.15, 0), C.bark], [box(1.7, 0.08, 1.3, 0, y + 0.02, 0), '#8A5A36']];
   p.push([cyl(0.22, 0.32, y - 0.2, -0.6, 0, 0.4), C.barkDark], [cyl(0.2, 0.3, y - 0.2, 0.55, 0, -0.45), C.barkDark]);
-  p.push([box(1.0, y / 2, 0.9, 0, y / 4, 1.15), C.bark], [box(0.9, 0.06, 0.8, 0, y / 2 + 0.03, 1.15), '#5A4632']);
+  p.push([box(1.0, y / 2, 0.9, 0, y / 4, 1.15), C.bark], [box(0.9, 0.06, 0.8, 0, y / 2 + 0.03, 1.15), '#8A5A36']);
   p.push([box(0.9, 0.5, 0.5, 0.5, 0.25, -1.0, 0.4), C.mossDark ?? C.moss]);
   return p.map(([g, c]) => [yaw ? g.rotateY(yaw) : g, c]);
 }
@@ -138,8 +141,8 @@ function millstoneParts() {
   const p = [];
   for (let i = 0; i < 3; i++) {
     const r = 0.8 - (i === 1 ? 0.06 : 0), y = i * 0.83;
-    p.push([cyl(r, r, 0.78, 0, y, 0, 18), i === 1 ? C.stone : C.stoneDark], [cyl(0.16, 0.16, 0.8, 0, y, 0, 8), '#3E3A34']);
-    p.push([new THREE.TorusGeometry(r - 0.02, 0.04, 4, 18).rotateX(Math.PI / 2).translate(0, y + 0.78, 0), '#5E615B']);
+    p.push([cyl(r, r, 0.78, 0, y, 0, 18), i === 1 ? C.stone : C.stoneDark], [cyl(0.16, 0.16, 0.8, 0, y, 0, 8), '#7E6A58']);
+    p.push([new THREE.TorusGeometry(r - 0.02, 0.04, 4, 18).rotateX(Math.PI / 2).translate(0, y + 0.78, 0), '#9C8E7C']);
   }
   const wedge = new THREE.CylinderGeometry(0.42, 0.42, 0.24, 12, 1, false, 0, Math.PI * 0.45).translate(0, 2.5 + 0.12, 0);
   p.push([wedge, C.cheese]);
@@ -171,7 +174,7 @@ function campRingParts() {
   for (let i = 0; i < 9; i++) { const a = (i / 9) * Math.PI * 2; p.push([new THREE.DodecahedronGeometry(0.18 + (i % 3) * 0.03, 0).scale(1.2, 0.7, 1).translate(Math.sin(a) * 0.85, 0.08, Math.cos(a) * 0.85), i % 2 ? C.stone : C.stoneDark]); }
   const leg = (a) => { const g = new THREE.CylinderGeometry(0.03, 0.03, 1.5, 5).translate(0, 0.75, 0); g.rotateZ(0.32); g.rotateY(a); return g.translate(Math.sin(a) * 0.42, 0, Math.cos(a) * 0.42); };
   for (let i = 0; i < 3; i++) p.push([leg((i / 3) * Math.PI * 2 + 0.4), C.woodDark]);
-  p.push([new THREE.SphereGeometry(0.2, 10, 6, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.65).translate(0, 0.98, 0), '#3A3C40']);
+  p.push([new THREE.SphereGeometry(0.2, 10, 6, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.65).translate(0, 0.98, 0), '#6E7A8E']);
   return p;
 }
 
@@ -182,8 +185,13 @@ function cheeseStackParts() {
   return p;
 }
 function ratBannerParts() {
-  return [[cyl(0.05, 0.06, 2.8), C.woodDark], [box(0.9, 0.05, 0.05, 0.3, 2.6, 0), C.woodDark], [box(0.7, 1.1, 0.03, 0.42, 2.0, 0), '#8A2E2A'],
+  // LI §5: a silly, readable faction mark: a cheese wedge on Snickerpack teal (was dried-blood red)
+  return [[cyl(0.05, 0.06, 2.8), C.woodDark], [box(0.9, 0.05, 0.05, 0.3, 2.6, 0), C.woodDark], [box(0.7, 1.1, 0.03, 0.42, 2.0, 0), '#3FA59A'],
     [new THREE.CylinderGeometry(0.22, 0.22, 0.04, 3).rotateX(Math.PI / 2).translate(0.42, 2.05, 0.03), C.cheese]];
+}
+/** The pumpkin-lantern stake (LI §4.2): a honey-wood stake, the pumpkin sits on top (base at 0, 1.7 m). */
+function lanternStakeParts() {
+  return [[cyl(0.07, 0.09, 1.7), C.wood], [box(0.34, 0.05, 0.34, 0, 1.7, 0), C.woodDark]];
 }
 /** Pointed stake palisade segment (4 stakes). */
 function stakesParts() {
@@ -195,7 +203,7 @@ function stakesParts() {
 /** The gate sign "Whiskerwood": a post with an arrow plank. */
 function gateSignParts() {
   return [[cyl(0.08, 0.1, 2.2), C.woodDark], [box(1.4, 0.36, 0.06, 0.45, 1.85, 0), C.plank], [new THREE.ConeGeometry(0.24, 0.3, 3).rotateZ(-Math.PI / 2).translate(1.27, 1.85, 0), C.plank],
-    [box(1.0, 0.05, 0.065, 0.4, 1.88, 0), '#6E5238'], [box(0.7, 0.05, 0.065, 0.3, 1.78, 0), '#6E5238']];
+    [box(1.0, 0.05, 0.065, 0.4, 1.88, 0), '#9A6A40'], [box(0.7, 0.05, 0.065, 0.3, 1.78, 0), '#9A6A40']];
 }
 
 // ---------------------------------------------------------------------------------------------- setpieces
@@ -208,7 +216,7 @@ const SETPIECES = {
       kit.place(oak, 5.8, -84.2, { fit: { h: 14.5 }, tree: true, yaw: 2.2, tiltZ: 0.15, sink: 0.3, trunk: 0.9, jitter: 0.04 });
     }
     kit.place(kit.proc('forest_sign', gateSignParts), -3.2, -88.5, { yaw: Math.PI * 0.08, collider: 'circle', shrink: 0.2, jitter: 0 });
-    kit.paint(0, -85, 6, '#3A3624', 0.35, 3);
+    kit.paint(0, -85, 6, '#8E9A54', 0.35, 3);
   },
 
   /** Mushroom Ring (−20, −58): 5 cap platforms (caps 2 and 4 bounce), the mushroom house, a fairy ring. */
@@ -225,7 +233,7 @@ const SETPIECES = {
     const house = kit.proc('mushroom_house', mushroomHouseParts);
     kit.place(house, -12, -53.6, { yaw: 0, collider: 'circle', shrink: 0.5, jitter: 0, height: 3.6, clear: 2.6 });
     kit.anchor('mushroom_door', -12, -51.9, undefined, 0);
-    kit.paint(-12, -51, 1.6, '#4A4030', 0.5);
+    kit.paint(-12, -51, 1.6, '#A88A5E', 0.5);
     // the fairy ring: small mushrooms on a circle around the caps
     const [r1, r2] = await Promise.all([kit.tpl(M.mushRed), kit.tpl(M.mushTanGroup)]);
     const rng = kit.rng.fork('fairy');
@@ -235,7 +243,7 @@ const SETPIECES = {
       const t = i % 3 ? r1 : r2;
       if (t) kit.place(t, x, z, { fit: { h: 0.35 + rng() * 0.35 }, yaw: rng.angle(), collider: false, clear: 0.3, occupy: false, jitter: 0.1 });
     }
-    kit.paint(-26.8, -58.6, 7.5, '#33402A', 0.3, 2);
+    kit.paint(-26.8, -58.6, 7.5, '#8E9A54', 0.3, 2);
   },
 
   /** Spider Hollow (−10, −30): web patches, dead roots, the cracked boulder (Bright / Holy only) before Pebble's nook. */
@@ -247,7 +255,7 @@ const SETPIECES = {
     for (let i = 0; i < 6; i++) {
       const a = i * 1.05 + 0.3, R = 4 + (i % 3) * 2.4, x = zone.at[0] + Math.sin(a) * R, z = zone.at[1] + Math.cos(a) * R;
       const p = kit.place(web, x, z, { yaw: rng.angle(), scale: 1 + rng() * 0.3, collider: false, clear: 1.1, occupy: false, lift: 0.01, jitter: 0.03 });
-      kit.paint(x, z, 1.4, '#3A3A2A', 0.35);
+      kit.paint(x, z, 1.4, '#8E9A54', 0.35);
       if (p) webs.push({ x, y: p.y, z, handle: p.handle });
     }
     // §12.4: the patches slow her (enemies' WebPatches: a slash cuts one); our decal goes when it is cut
@@ -261,16 +269,16 @@ const SETPIECES = {
         } catch (e) { console.warn('[world] web patch', e); }
       }
     });
-    kit.paint(zone.at[0], zone.at[1], 11, '#2E3624', 0.35, 3);
+    kit.paint(zone.at[0], zone.at[1], 11, '#8E9A54', 0.35, 3);
     // the nook: tall rocks around Pebble's hiding spot, the cracked boulder in its mouth
     const [boulder, ra, rb] = await Promise.all([kit.tpl(M.boulder), kit.tpl(M.rockTallA), kit.tpl(M.rockTallB)]);
     for (const [x, z, t, yaw, h] of [[-24.6, -24.4, ra, 0.6, 3.2], [-24.2, -28.4, rb, 2.1, 2.8], [-26.2, -26.6, ra, 4.0, 3.6]]) if (t) kit.place(t, x, z, { fit: { h }, yaw, collider: 'circle', shrink: 0.7, jitter: 0.05 });
     if (boulder) {
-      const bp = kit.place(boulder, -21.6, -26, { fit: { h: 1.8 }, yaw: 0.7, collider: 'circle', shrink: 0.82, color: '#9A968C', jitter: 0 });
+      const bp = kit.place(boulder, -21.6, -26, { fit: { h: 1.8 }, yaw: 0.7, collider: 'circle', shrink: 0.82, color: '#C9BCA6', jitter: 0 });
       if (bp) {
         const bpos = new THREE.Vector3(-21.6, bp.y, -26);
         // a crack: a dark sliver down its face
-        kit.place(kit.proc('crack_mark', () => [[box(0.06, 1.2, 0.04, 0, 0.6, 0, 0.2), '#2E2A24'], [box(0.04, 0.5, 0.04, 0.12, 0.9, 0.02, -0.6), '#2E2A24']]), -20.7, -25.6, { yaw: 1.1, collider: false, clear: false, occupy: false, jitter: 0 });
+        kit.place(kit.proc('crack_mark', () => [[box(0.06, 1.2, 0.04, 0, 0.6, 0, 0.2), '#7E6248'], [box(0.04, 0.5, 0.04, 0.12, 0.9, 0.02, -0.6), '#7E6248']]), -20.7, -25.6, { yaw: 1.1, collider: false, clear: false, occupy: false, jitter: 0 });
         const rock = new PropActor(ctx, { id: 'hollow_boulder', kind: 'boulder', hp: 1, breaks: 'cracked', radius: bp.radius * 0.8, height: 1.8, pos: bpos, wobble: 0.05,
           visual: { batch: kit.batch, handle: bp.handle, base: bp.matrix },
           onBreak: (self) => {
@@ -309,7 +317,7 @@ const SETPIECES = {
       kit.collider({ x: x + s * 1.15, z: z + c * 1.15, hx: 0.5, hz: 0.45, yaw, y0: y0 - 0.6, y1: y0 + TREETOP.ledgeY / 2 });
       kit.anchor(`root_ledge_${i + 1}`, x, z, y0 + TREETOP.ledgeY, yaw);
     });
-    kit.paint(tx, tz, 6, '#33301F', 0.4, 3);
+    kit.paint(tx, tz, 6, '#8E9A54', 0.4, 3);
   },
 
   /** Stump Crossing (24, 18): 6 stumps over the deep stream, reeds and lilies, the fallen-log bridge at x 40. */
@@ -360,7 +368,7 @@ const SETPIECES = {
     if (tent) kit.place(tent, CAMP.tent[0], CAMP.tent[1], { fit: { h: 2.4 }, yaw: Math.PI + 0.5, collider: 'box', shrink: 0.85, jitter: 0.03 });
     if (log) { kit.place(log, 3.2, 41.6, { fit: { max: 1.9 }, yaw: 1.1, collider: 'box', jitter: 0.05 }); kit.place(log, 8.8, 37.6, { fit: { max: 1.7 }, yaw: -0.5, collider: 'box', jitter: 0.05 }); }
     if (stack) kit.place(stack, 12.4, 41.2, { fit: { max: 1.6 }, yaw: 0.2, collider: 'box', jitter: 0.05 });
-    kit.paint(fx, fz, 4.5, '#4A4030', 0.55, 2.5);
+    kit.paint(fx, fz, 4.5, '#A88A5E', 0.55, 2.5);
     kit.clear(fx, fz, 3.4, 0.15);
     kit.clear(CAMP.pud[0], CAMP.pud[1], 4.5, 0.4);
     kit.anchor('camp_fire', fx, fz, fy, 0);
@@ -372,17 +380,17 @@ const SETPIECES = {
     kit.anchor('camp_crane', 6, 32, 8);
   },
 
-  /** Rat Camp (−16, 56): stake palisade, 6 lit torches (the 2 nearest light), tents, crates, cheese, banners. */
+  /** Rat Camp (−16, 56): stake palisade, 6 pumpkin lanterns on stakes (lamp pools), tents, crates, cheese, banners. */
   async ratCamp(kit, zone) {
     const level = kit.level, [cx, cz] = zone.at, R = zone.r;
-    const [torch, tentS] = await Promise.all([kit.tpl(M.torch), kit.tpl(M.tentSmall)]);
+    const [pumpkin, tentS] = await Promise.all([kit.tpl(M.pumpkin, { tint: '#FF9A3C', key: 'pumpkin_lantern' }), kit.tpl(M.tentSmall)]);
+    const stake = kit.proc('lantern_stake', lanternStakeParts);
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 + Math.PI / 6, x = cx + Math.sin(a) * (R - 1.6), z = cz + Math.cos(a) * (R - 1.6);
-      const g = kit.h(x, z);
-      if (torch) {
-        const p = kit.place(torch, x, z, { fit: { h: 2.1 }, yaw: a, collider: 'circle', shrink: 0.25, jitter: 0, clear: 0.6 });
-        if (p) addFlame(level, level.lightPool, x, p.top - 0.12, z, { size: 1.0, light: 2.0, distance: 9, glow: 1.5 });
-      } else addFlame(level, level.lightPool, x, g + 2.0, z, { size: 1.0, light: 2.0, distance: 9 });
+      const p = kit.place(stake, x, z, { yaw: a, collider: 'circle', shrink: 1, jitter: 0, clear: 0.6 });
+      const top = p ? p.top : kit.h(x, z) + 1.75;
+      if (pumpkin) kit.place(pumpkin, x, z, { y: top, fit: { h: 0.42 }, yaw: a, collider: false, clear: false, occupy: false, jitter: 0 });
+      addFlame(level, level.lightPool, x, top + 0.42, z, { size: 0.55, light: 2.0, distance: 9, glow: 1.2, color: '#FFC46B' });
     }
     if (tentS) for (const [x, z, yaw] of [[-25.6, 51.5, 1.0], [-6.8, 50.2, -1.2], [-22.6, 67.6, Math.PI * 0.9]]) kit.place(tentS, x, z, { fit: { h: 2.0 }, yaw, collider: 'box', shrink: 0.85, jitter: 0.04 });
     kit.place(kit.proc('cheese_stack', cheeseStackParts), cx - 4.5, cz - 6.5, { yaw: 0.4, collider: 'circle', shrink: 0.7, jitter: 0.03 });
@@ -394,7 +402,7 @@ const SETPIECES = {
       if (kit.roadClearance(x, z) < 1.6) continue;
       kit.place(stakes, x, z, { yaw: a + Math.PI / 2, collider: 'box', shrink: 0.9, jitter: 0.05, tiltX: (kit.rng() - 0.5) * 0.12, clear: 0.8 });
     }
-    kit.paint(cx, cz, R - 1, '#4A4030', 0.42, 3);
+    kit.paint(cx, cz, R - 1, '#A88A5E', 0.42, 3);
   },
 
   /** Cheese Mill (−10, 84): the watermill (wheel turning) on the north edge, 6 millstone pillars, the deck and stairs. */
@@ -442,7 +450,7 @@ const SETPIECES = {
     kit.anchor('mill_deck_b', d.x1 - 3.5, (d.z0 + d.z1) / 2, g0 + d.y, Math.PI);
     kit.place(kit.proc('cheese_stack', cheeseStackParts), cx + 9.6, cz + 7.0, { yaw: 1.2, collider: 'circle', shrink: 0.7, jitter: 0.03 });
     kit.place(kit.proc('rat_banner', ratBannerParts), cx - 11.2, cz + 5.0, { yaw: 1.0, collider: 'circle', shrink: 0.2, jitter: 0.03 });
-    kit.paint(cx, cz, zone.r, '#5A5040', 0.45, 3);
+    kit.paint(cx, cz, zone.r, '#A88A5E', 0.45, 3);
   },
 };
 
@@ -496,17 +504,17 @@ export default defineLevel({
   id: 'forest', size: 200, res: 200, seed: 23, hills: { amp: 3.0, octaves: 3, freq: 0.014 }, pathWidth: 5, rim: 6,
   // the forest floor: thinner grass under the canopy, leaf litter where it is driest
   grassMask: (x, z) => 0.55 + 0.45 * Math.max(0, Math.sin(x * 0.07 + 1.1) * Math.cos(z * 0.06 - 0.4)),
-  env: { default: 'forest_day', byFlag: [['forest.camp', 'forest_night']] }, moodLive: true,
-  music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop', byFlag: [['forest.camp', 'dark_forest_creepy']] },
+  // WA §2.2: Lantern Night is a cozy periwinkle twilight with its own lamps (forest_twilight; `forest_night` is its alias)
+  env: { default: 'forest_day', byFlag: [['forest.camp', 'forest_twilight']] }, moodLive: true,
+  music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop', byFlag: [['forest.camp', 'field_of_dreams']] },
   spine: SPINE,
   // CONTROLS_SPEC §11 iso camera: yaw π (the spine runs north). §4.2 fog: forest_day ρ 0.06 clear 5.5 / 7 topMul 1.35;
-  // forest_night clear 4.5 / 6 (the lantern pools are the stage); from above the lens sees mostly the (very dark) forest
-  // floor, so the moon, hemisphere (a lifted cool sky fill) and environment light rise ×2.4–3.4 in iso (ground ≥ ~12 %
-  // luminance 8 m from her; cutscenes and Meme Cam keep the eye-level night);
+  // forest_twilight clear 4.5 / 6 (the lantern pools are the stage; the warm-toon twilight preset is bright on its own);
   // by day the sun swings to the side of the view (crowns fade from above, their shadows fall across the screen)
   cam: { yaw: Math.PI,
-    fog: { clear: 5.5, clearCombat: 7, topMul: 1.35, forest_night: { clear: 4.5, clearCombat: 6, topMul: 1.35 } },
-    light: { forest_day: { sunAz: -1.35 }, forest_night: { hemiMul: 3.4, sunMul: 3.2, envMul: 2.4, hemiSky: '#B0C0D8', hemiGround: '#3A4636' } } },
+    fog: { clear: 5.5, clearCombat: 7, topMul: 1.35, forest_twilight: { clear: 4.5, clearCombat: 6, topMul: 1.35 } },
+    // the twilight row is lifted in the preset (periwinkle, lamp pools); from above only a little more fill
+    light: { forest_day: { sunAz: -1.35 }, forest_twilight: { hemiMul: 1.2 } } },
   // §2.7 the Meme Cam spot: the Mushroom Ring (the caps and the mushroom house behind her)
   memeSpot: { at: [-20.5, -57], yaw: 1.5, r: 4 },
   // §5.4 authored links: the Treetop root ledges (ground → the 0.75 m step → the 1.5 m ledge) and Stump Crossing
@@ -557,7 +565,7 @@ export default defineLevel({
     // §12.4: 120 giant oaks (12–18 m); half of them line the path so the trunks frame it
     { model: [M.oak, M.fat, M.detailed], n: 60, fit: { h: [12, 18] }, along: [6.5, 16], minDistFromPath: 6.5, minDist: 6, tree: true },
     { model: [M.oak, M.fat, M.detailed], n: 60, fit: { h: [13, 18] }, minDistFromPath: 9, minDist: 7, tree: true },
-    { model: [M.oakDark], n: 18, fit: { h: [10, 14] }, minDistFromPath: 9, minDist: 7, tree: true, warn: false },
+    { model: [M.oakFall, M.defaultFall], n: 6, fit: { h: [10, 14] }, minDistFromPath: 9, minDist: 7, tree: true, warn: false },
     { model: [M.mushRedTall, M.mushRedGroup, M.mushTanTall], n: 80, fit: { h: [2, 6] }, minDistFromPath: 4, minDist: 2.6, shrink: 0.25, sink: 0.08, tilt: 0.12 },
     { model: [M.bush, M.bushLarge], n: 80, fit: { h: [0.7, 1.6] }, along: [3.4, 12], minDistFromPath: 3.4, minDist: 1.8, collider: false, clear: 0.6 },
     { model: M.fern, n: 140, fit: { h: [0.6, 1.3] }, along: [3.0, 14], minDistFromPath: 3.0, minDist: 1.1, collider: false, clear: 0.4 },
@@ -570,11 +578,18 @@ export default defineLevel({
     [[0, -74], [-8, -66], 5], [[-14, -54], [-17, -46], 5], [[-12, -40], [-11, -34], 4], [[6, -20], [14, -12], 6],
     [[26, 2], [25, 9], 4], [[22, 28], [14, 34], 5], [[0, 46], [-8, 50], 4], [[-12, 72], [-11, 76], 3], [[38, 12], [38, 24], 5],
   ],
-  horizon: { n: 90, h: [14, 24] }, horizonFog: 0.86, horizonColor: '#1E2A1E',
+  horizon: { n: 90, h: [14, 24] }, horizonFog: 0.65,                 // LI W6: teal aerial perspective (Sky SILHOUETTE.forest)
+  // LI §4.2: Lantern Night's paper lanterns on strings around the camp (bunting lantern variant, ≤ 60)
+  accent: 'forest',
+  bunting: [
+    { a: [-1, 3.6, 35], b: [6, 4.2, 31.5], kind: 'lantern', set: ['#FFC46B', '#FFD84A', '#FF8A7A'] },
+    { a: [6, 4.2, 31.5], b: [13, 3.6, 35.5], kind: 'lantern', set: ['#FFC46B', '#FFD84A', '#9BE3C4'] },
+    { a: [13, 3.6, 46], b: [6, 4.0, 49.5], kind: 'lantern', set: ['#FFC46B', '#FF8A7A', '#FFD84A'] },
+  ],
   grass: { height: 0.26, near: 0.8 },
   // loaded by the setpieces above (listed for the manifest test and per-level preloading)
   models: [M.oak, M.fat, M.mushRed, M.mushTanGroup, M.boulder, M.rockTallA, M.rockTallB, M.stumpRound, M.logLarge, M.lily, M.reeds, M.campfire, M.tent, M.log,
-    M.logStack, M.torch, M.tentSmall, M.mill, M.wheel],
+    M.logStack, M.pumpkin, M.tentSmall, M.mill, M.wheel],
 });
 
 export { STREAM_Z };

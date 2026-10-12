@@ -14,7 +14,7 @@ import { E } from '../../core/events.js';
 import { clamp, damp, dampAngle } from '../../core/math.js';
 import { TUNING, M2, rangeOf } from '../tuning.js';
 import { BASE_STATES, windupFor } from '../Enemy.js';
-import { makeProp } from '../props.js';
+import { makeProp, propMaterial, FACE_PARTS } from '../props.js';
 import { loadedCharacters } from './kaykitGear.js';
 
 const J = ENEMIES.jelly;
@@ -49,8 +49,30 @@ export function childBudget(want, alive, max = J.maxAlive ?? 12) { return Math.m
 
 // ------------------------------------------------------------------ visuals (shared + pooled)
 const TIME = { value: 0, frame: -1 };
-let _sphere = null, _eyeGeo = null, _eyeMat = null, _glintMat = null;
+let _sphere = null;
 const POOL = new Map();
+/** One merged face per size (ART §7.2: pupils with 2 catchlights each, a small smile; the giant's gold crown). */
+const FACES = new Map();
+
+/**
+ * The Wobblejelly face for a body of half-extents (rx, ry): ONE vertex-coloured unlit geometry (was 4 draws), cached
+ * per size. Eyes sit on the front surface (+Z) a little above the middle.
+ */
+function faceGeometry(size, rx, ry) {
+  if (FACES.has(size)) return FACES.get(size);
+  const parts = [];
+  const surfZ = (x, y) => Math.sqrt(Math.max(0, 1 - (x / rx) ** 2 - ((y - ry) / ry) ** 2)) * rx + M2.jelly.wobble * rx;
+  for (const s of [-1, 1]) {
+    const ex = s * rx * 0.32, ey = ry * 1.25;
+    parts.push(...FACE_PARTS.jellyEye(ex, ey, surfZ(ex, ey), rx * 0.12));
+  }
+  const sy = ry * 0.98;
+  parts.push(...FACE_PARTS.smile(0, sy, surfZ(0, sy), rx * 0.3));
+  if (size === 'GIANT') parts.push(...FACE_PARTS.crown(0, ry * 2 - ry * 0.06, -rx * 0.05, rx * 0.26));
+  const g = FACE_PARTS.merge(parts);
+  FACES.set(size, g);
+  return g;
+}
 
 function bodyMaterial() {
   const m = new THREE.MeshStandardMaterial({
@@ -76,9 +98,6 @@ function bodyMaterial() {
 /** A jelly visual of height `h` (body + eyes + something swallowed). */
 function buildVisual(size, h, r) {
   _sphere ??= new THREE.SphereGeometry(1, 28, 20);
-  _eyeGeo ??= new THREE.SphereGeometry(1, 10, 8);
-  _eyeMat ??= new THREE.MeshBasicMaterial({ name: 'jelly-eye', color: '#101014' });
-  _glintMat ??= new THREE.MeshBasicMaterial({ name: 'jelly-glint', color: '#FFFFFF' });
   const g = new THREE.Group();
   g.name = 'gloomjelly:' + size;
   const ry = h / 2, rx = Math.max(r, ry) * 1.05;
@@ -89,20 +108,12 @@ function buildVisual(size, h, r) {
   body.castShadow = true;
   body.renderOrder = 3;
   g.add(body);
-  // eyes on the front surface (+Z), slightly above the middle
-  for (const s of [-1, 1]) {
-    const ex = s * rx * 0.32, ey = ry * 1.25, ez = Math.sqrt(Math.max(0, 1 - (ex / rx) ** 2 - ((ey - ry) / ry) ** 2)) * rx + M2.jelly.wobble * rx;
-    const eye = new THREE.Mesh(_eyeGeo, _eyeMat);
-    eye.scale.set(rx * 0.11, ry * 0.16, rx * 0.06);
-    eye.position.set(ex, ey, ez);
-    eye.userData.sharedProp = true;
-    g.add(eye);
-    const gl = new THREE.Mesh(_eyeGeo, _glintMat);
-    gl.scale.setScalar(rx * 0.035);
-    gl.position.set(ex + rx * 0.03, ey + ry * 0.06, ez + rx * 0.04);
-    gl.userData.sharedProp = true;
-    g.add(gl);
-  }
+  // the face: eyes with 2 catchlights each and a small smile on the front surface (+Z); the giant wears a crown
+  const face = new THREE.Mesh(faceGeometry(size, rx, ry), propMaterial('eyes'));
+  face.name = 'jelly-face';
+  face.userData.sharedProp = true;
+  face.castShadow = false;
+  g.add(face);
   // something it swallowed (art.md §11): a rat's kettle helm, tipped over
   if (size !== 'S') {
     const helm = makeProp('kettleHelm', { castShadow: false });

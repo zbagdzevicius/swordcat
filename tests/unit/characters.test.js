@@ -61,17 +61,25 @@ test('HARD RULE: Swordcat wears a pink bow on her LEFT ear (+X)', () => {
   assert.ok(p.y > 0.85 && p.y < 1.0, `bow at the ear base, got y=${p.y.toFixed(3)}`);
 });
 
-test('proportions follow art.md §2.1 (head ~0.38-0.40 H, eyes ~0.09 H, sword ~1 H)', () => {
+test('proportions follow ART_WARM §6.3 (head ~0.46 H, eyes ~0.12 H, total height unchanged, sword ~1 H)', () => {
   const k = getSwordcat();
   k.setPose('idle', { blend: 0 }); k.update(1 / 60);
-  // eye diameter
+  // eye diameter (head space × the head scale)
   const eye = k.eyes.eyes[0].eye; eye.geometry.computeBoundingBox();
-  const eb = eye.geometry.boundingBox; assert.ok(Math.abs((eb.max.x - eb.min.x) - 0.09) < 0.005, 'eye diameter 0.09 H');
+  const eb = eye.geometry.boundingBox, eyeD = (eb.max.x - eb.min.x) * k.headScale;
+  assert.ok(eyeD > 0.11 && eyeD < 0.14, `eye diameter ${eyeD.toFixed(3)} H`);
+  assert.equal(k.headScale, C.PROPORTIONS.head.hero);
   // head: chin fur bottom to ear tips
   const headBox = new THREE.Box3().setFromObject(k.headFur.mesh);
-  const earTip = worldPos(k.rig.earL).y + 0.1;
+  const earTip = worldPos(k.rig.earL).y + 0.1 * k.headScale;
   const headH = Math.max(earTip, headBox.max.y) - headBox.min.y;
-  assert.ok(headH > 0.33 && headH < 0.46, `head height ${headH.toFixed(3)}`);
+  assert.ok(headH > 0.4 && headH < 0.55, `head height ${headH.toFixed(3)}`);
+  // total height unchanged (ears ~1.0 H): the neck shortens instead of her growing taller
+  const top = worldPos(k.rig.earL).y + 0.13 * k.headScale;   // ear tip ≈ the ear joint + its cone
+  assert.ok(top > 0.92 && top < 1.06, `ear tips at ${top.toFixed(3)} H`);
+  const legacy = C.buildKitten({ ...C.swordcatConfig(), proportions: 'legacy' });
+  assert.equal(legacy.headScale, 1); assert.equal(legacy.bodyDrop, 0);
+  legacy.dispose();
   // sword length ~1.0
   const sw = C.buildSword('borrowed'); const sb = new THREE.Box3().setFromObject(sw.blade).union(new THREE.Box3().setFromObject(sw.hilt));
   const len = sb.max.y - sb.min.y; assert.ok(len > 0.95 && len < 1.05, `sword length ${len.toFixed(3)}`);
@@ -93,7 +101,8 @@ test('all contract poses resolve; Vigil puts both paws on the pommel, Oath raise
   k.setPose('vigil', { blend: 0 }); k.update(1 / 60);
   k.root.updateMatrixWorld(true);
   const pommel = worldPos(k.sword.pommel), tip = worldPos(k.sword.tip);
-  assert.ok(pommel.y > 0.44 && pommel.y < 0.56, `vigil pommel height ${pommel.y.toFixed(3)}`);
+  // (ART §6.3 proportions: the torso sits k.bodyDrop lower, and the root-space pose targets follow it)
+  assert.ok(pommel.y > 0.44 + k.bodyDrop && pommel.y < 0.56 + k.bodyDrop, `vigil pommel height ${pommel.y.toFixed(3)}`);
   assert.ok(tip.y < pommel.y - 0.5, 'vigil: point down');
   const pawC = (side) => { const p = k.rig['paw' + side]; return new THREE.Vector3(...C.ARM.pawCentre).applyMatrix4(p.matrixWorld); };
   assert.ok(pawC('R').distanceTo(pommel) < 0.07, `right paw on the pommel (${pawC('R').distanceTo(pommel).toFixed(3)})`);
@@ -246,18 +255,27 @@ test('cape hangs BEHIND her even when the kitten spawns far from the origin (tel
   k.dispose(); k2.dispose();
 });
 
-test('runtime: core QUALITY presets drive fur shells; E.QUALITY switches them live', () => {
-  assert.deepEqual(C.furShellsForPreset(QUALITY.med), { hero: QUALITY.med.furShells, kitten: QUALITY.med.kittenShells, npc: 0 });
+test('runtime: core QUALITY presets drive close-up / iso shells, tufts, outline tier; E.QUALITY switches them live', () => {
+  // close-up counts = furShellsClose (kittens ×0.6), iso play counts = furShellsIso / kittenShellsIso (ART §6.1, X8)
+  assert.deepEqual(C.furShellsForPreset(QUALITY.med), { hero: QUALITY.med.furShellsClose, kitten: Math.round(QUALITY.med.furShellsClose * 0.6), npc: 0 });
+  assert.deepEqual(C.furIsoForPreset(QUALITY.high), { hero: QUALITY.high.furShellsIso, kitten: QUALITY.high.kittenShellsIso, npc: 0 });
   const ctx = miniCtx();
   ctx.quality = QUALITY.high;
   const st = C.initCharacters(ctx);
   assert.ok(st && C.initCharacters(ctx) === st, 'idempotent per ctx');
-  assert.equal(C.shellsFor('hero'), QUALITY.high.furShells);
-  const k = C.buildKitten(C.swordcatConfig());
+  assert.equal(C.shellsFor('hero'), QUALITY.high.furShellsClose);
+  assert.equal(C.CHAR_Q.outline, QUALITY.high.outline); assert.equal(C.CHAR_Q.tufts, true); assert.equal(C.CHAR_Q.playLod, true);
+  const k = C.buildKitten(C.swordcatConfig());           // tools LOD ('full'): always "close"
   ctx.bus.emit(E.QUALITY, { name: 'low', preset: QUALITY.low });
-  assert.equal(k.headFur.shells, QUALITY.low.furShells);
+  assert.equal(k.headFur.shells, QUALITY.low.furShellsClose);
+  assert.equal(C.CHAR_Q.tufts, false, 'Low: no tuft cards');
   ctx.bus.emit(E.QUALITY, { name: 'med', preset: QUALITY.med });
-  assert.equal(k.headFur.shells, QUALITY.med.furShells);
+  assert.equal(k.headFur.shells, QUALITY.med.furShellsClose);
+  // a play-LOD cat draws the iso count (0) with the fur base merged into the body draw
+  const p = C.buildKitten(C.swordcatConfig(), { lod: 'play' });
+  assert.equal(p.headFur.mesh.visible, false); assert.equal(p.kitMesh.geometry, p._playGeo);
+  p.setCloseUp(true); assert.equal(p.headFur.shells, QUALITY.med.furShellsClose); assert.ok(p.headFur.mesh.visible);
+  p.dispose();
   // visual dt: frozen in hitstop and the pause menu, scaled by slow motion
   ctx.game.loop = { timeScale: 0.5 };
   assert.equal(C.visualDt(ctx, 0.02), 0.01);
@@ -273,9 +291,9 @@ test('Low quality: lighter cat meshes (charDetail) and shell fur baked only as f
   const st = C.initCharacters(ctx);
   assert.equal(C.charDetail(), QUALITY.low.charDetail);
   const lo = C.buildKitten(C.swordcatConfig()), loMochi = C.buildKitten(C.CATS.mochi);
-  // no shells on Low: the skinned tail holds the base layer only (one copy), not MAX_SHELLS + 1 copies
-  assert.equal(lo.tailFur.allocatedShells, 0);
-  assert.equal(lo.tailFur.mesh.geometry.index.count, lo.tailFur.idxPerShell);
+  // Low bakes only what Low draws: the close-up count (8), not MAX_SHELLS + 1 copies
+  assert.equal(lo.tailFur.allocatedShells, QUALITY.low.furShellsClose);
+  assert.equal(lo.tailFur.mesh.geometry.index.count, lo.tailFur.idxPerShell * (QUALITY.low.furShellsClose + 1));
   ctx.bus.emit(E.QUALITY, { name: 'med', preset: QUALITY.med });
   assert.equal(C.charDetail(), 1);
   const hi = C.buildKitten(C.swordcatConfig()), hiMochi = C.buildKitten(C.CATS.mochi);
@@ -283,12 +301,12 @@ test('Low quality: lighter cat meshes (charDetail) and shell fur baked only as f
   assert.ok(tris(loMochi) < tris(hiMochi) * 0.6, `Low Mochi kit mesh ${tris(loMochi)} vs ${tris(hiMochi)}`);
   assert.ok(lo.headFur.mesh.geometry.index.count < hi.headFur.mesh.geometry.index.count * 0.5, 'Low head fur is lighter');
   // raising the quality re-bakes the Low-built tail on demand: the shells really draw
-  assert.equal(lo.tailFur.shells, QUALITY.med.furShells);
+  assert.equal(lo.tailFur.shells, QUALITY.med.furShellsClose);
   assert.equal(lo.tailFur.allocatedShells, C.MAX_SHELLS);
-  assert.equal(lo.tailFur.mesh.geometry.drawRange.count, lo.tailFur.idxPerShell * (QUALITY.med.furShells + 1));
+  assert.equal(lo.tailFur.mesh.geometry.drawRange.count, lo.tailFur.idxPerShell * (QUALITY.med.furShellsClose + 1));
   assert.ok(lo.tailFur.mesh.geometry.index.count >= lo.tailFur.idxPerShell * (C.MAX_SHELLS + 1));
   // Med builds bake what Med draws (16 + base), not the Ultra maximum
-  assert.equal(hi.tailFur.allocatedShells, QUALITY.med.furShells);
+  assert.equal(hi.tailFur.allocatedShells, QUALITY.med.furShellsClose);
   for (const k of [lo, loMochi, hi, hiMochi]) k.dispose();
   st.dispose(); C.setCharDetail(1);
 });
@@ -323,15 +341,45 @@ test('KittenView binds a kitten to an Actor: parenting, ScriptedActor hooks, Mem
   assert.equal(view.root.parent, null);
 });
 
-test('character env map is applied to every lit material we own', () => {
-  const tex = new THREE.Texture();
-  const k = C.buildKitten(C.CATS.pearl);
-  C.setCharacterEnvMap(tex);
-  assert.equal(k.kitMat.envMap, tex);
-  assert.equal(C.kitMaterial().envMap, tex);
-  C.setCharacterEnvMap(null);
-  assert.equal(k.kitMat.envMap, null);
+test('K6: no PBR in play: kit / lids / bow / cape / blade are WarmToon or matcap, eyes unlit, no PMREM users', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  assert.equal(k.kitMat.type, 'MeshToonMaterial');
+  assert.equal(k.kitMat.customProgramCacheKey(), 'sc-toon-v2');
+  assert.equal(k.kitMatInst.type, 'MeshToonMaterial');
+  assert.notEqual(k.kitMat, k.kitMatInst, 'per mesh kind: skinned and instanced never share one material (H3)');
+  assert.equal(k.kitMatInst.userData.uniforms, k.kitMat.userData.uniforms, 'one holy / flash / highlight value');
+  assert.equal(k.eyes.eyeMeshes[0].material.type, 'MeshBasicMaterial');
+  let bowMat = null; k.bow.traverse((o) => { if (o.isMesh && !bowMat) bowMat = o.material; });
+  assert.equal(bowMat.type, 'MeshToonMaterial');
+  assert.equal(k.cape.mesh.material.type, 'MeshToonMaterial');
+  assert.equal(k.sword.bladeMat.type, 'MeshMatcapMaterial');
+  assert.equal(k.sword.bladeMat.customProgramCacheKey().split(':')[0], 'sc-metal-v2');
+  let pbr = 0;
+  k.root.traverse((o) => { const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) if (m?.isMeshStandardMaterial) pbr++; });
+  assert.equal(pbr, 0, 'no Standard / Physical material on her');
+  assert.equal(C.envMapUsers(), 0, 'the character PMREM is never rebuilt in play');
+  for (const m of [k.kitMat, k.cape.mesh.material, bowMat]) assert.equal(m.dithering, true, 'X3 dithering');
   k.dispose();
+});
+
+test('WarmToon library: softRamp, per-kind toonLib, pooled per-actor materials, steel matcap, metal', () => {
+  const r = C.softRamp();
+  assert.equal(r.image.width, 4); assert.deepEqual([...r.image.data.filter((_, i) => i % 4 === 0)], C.TOON.ramp);
+  assert.equal(C.makeToonMaterial().customProgramCacheKey(), 'sc-toon-v2');
+  const plain = C.toonLib('plain'), skinned = C.toonLib('skinned');
+  assert.notEqual(plain, skinned); assert.equal(C.toonLib('plain'), plain); assert.equal(C.kitMaterial(), plain);
+  assert.ok(C.isSharedKit(plain));
+  const a = C.getToonMaterial('rat_pike:skinned');
+  a.userData.uniforms.uFlash.value = 0.35;
+  C.releaseToonMaterial(a);
+  const b = C.getToonMaterial('rat_pike:skinned');
+  assert.equal(a, b, 'the pool hands the same material back (no compile, no clone on hit)');
+  assert.equal(b.userData.uniforms.uFlash.value, 0, 'reset on reuse');
+  const m = C.makeMetalMaterial({ emissive: true });
+  assert.ok(m.isMeshMatcapMaterial && m.matcap === C.steelMatcap());
+  assert.ok(m.userData.uniforms.uEmissive);
+  C.setToonRim('#FFEEDD', 0.5); assert.equal(C.TOON_ENV.uRimK.value, 0.5);
+  C.setToonRim(C.TOON.rim, C.TOON.rimK);
 });
 
 /** A tiny stand-in for a fitted KayKit clone: head/chest/hand bones + head/body meshes, scaled like fitToHeight. */
@@ -678,12 +726,24 @@ test('cape never folds over her head: Tumble roll (body flips over) and a deep h
   k.dispose();
 });
 
-test('tuft wisps render in a single pass (no per-draw program re-resolve from transparent DoubleSide)', async () => {
+test('tuft cards: toon-lit alpha-test cut-outs in one pass (no sorting, no re-resolve); 32 hero / 20 kitten crossed pairs', async () => {
   const { tuftMaterial } = await import('../../src/characters/materials.js');
   const m = tuftMaterial();
   assert.equal(m.side, THREE.DoubleSide);
-  assert.ok(m.transparent && m.depthWrite === false && m.alphaTest > 0);
-  assert.equal(m.forceSinglePass, true, 'transparent+DoubleSide without forceSinglePass draws twice and flips needsUpdate every draw');
+  assert.equal(m.type, 'MeshToonMaterial');
+  assert.ok(!m.transparent && m.depthWrite && m.alphaTest === C.TUFT.alphaTest);
+  assert.equal(m.forceSinglePass, true, 'DoubleSide without forceSinglePass draws twice and flips needsUpdate every draw');
+  assert.notEqual(tuftMaterial('plain'), m, 'per mesh kind');
+  const hero = C.buildKitten(C.swordcatConfig());
+  assert.equal(hero.tuftMesh.userData.cards, 32);
+  assert.equal(hero.tuftMesh.geometry.index.count / 3, 32 * 4, 'crossed pair of quads = 4 tris each (128 tris, 1 draw)');
+  const mochi = C.buildKitten(C.CATS.mochi);
+  assert.equal(mochi.tuftMesh.userData.cards, 20);
+  C.setCharQuality({ tufts: false });
+  const low = C.buildKitten(C.swordcatConfig());
+  assert.equal(low.tuftMesh, undefined, 'Low: no tuft cards');
+  C.setCharQuality({ tufts: true });
+  for (const k of [hero, mochi, low]) k.dispose();
 });
 
 // ================================================================== M2 (Acts I–II)
@@ -811,7 +871,9 @@ test('M2: all 7 sword skins and 7 capes (§13.4 / §13.5); the bow stays pink on
   assert.ok(k.sword.sparkles?.isPoints, 'Dawnblade has sparkles');
   assert.equal(k.sword.sparkles.geometry.attributes.position.count, 20, '20 sparkles (§13.4)');
   assert.ok(k.sword.bladeMat.emissiveIntensity > 1, 'permanent gold emissive');
-  const spec = { red: '#A3202C', memeWhite: '#F2EFE8', blue: '#3F6FB5', green: '#5E7F3E', midnight: '#22242A', gold: '#D9B26A' };
+  // §13.3 / §13.5 hues, with the ART §2.6 lifts (red) and WA §3.3 (Meme White → cream + pink hem; no near-black capes)
+  const spec = { red: '#D9323F', memeWhite: '#FFF3E2', blue: '#3F6FB5', green: '#5E7F3E', midnight: '#3A3F5E', gold: '#D9B26A' };
+  assert.equal(C.CAPES.memeWhite.hem.toUpperCase(), '#FF9EC0');
   for (const id of ['cream', ...Object.keys(spec)]) {
     assert.ok(C.CAPES[id], id);
     if (spec[id]) assert.equal(C.CAPES[id].color.toUpperCase(), spec[id], `${id} colour per §13.3/§13.5`);
@@ -1059,12 +1121,13 @@ test('controls: helmet top tint on per-instance (enemy-owned) materials patches 
   assert.equal(h3.material, c);
 });
 
-test('controls: fur LOD keyed to cam.focus — hero full within 25 m of the lens, others drop a tier past 12 m', () => {
+test('controls: fur LOD keyed to cam.focus — hero shells only in close-ups (heroLens 0, X8), others drop a tier past 12 m', () => {
   resetView();
   const lens = new THREE.Vector3(0, 10, -8), at = new THREE.Vector3(0, 0.8, 0);
   assert.equal(C.furLodShells('hero', 16, at, lens), 0, 'lens rule (classic, cutscenes) unchanged');
   C.FUR_VIEW.focusOn = true; C.FUR_VIEW.focus.set(0, 0, 0); C.FUR_VIEW.camDist = 13;
-  assert.equal(C.furLodShells('hero', 16, at, lens), 16, 'hero full at the iso distance');
+  assert.equal(C.FUR_LOD_ISO.heroLens, 0);
+  assert.equal(C.furLodShells('hero', 16, at, lens), 0, 'iso play: no hero shells (close-ups only)');
   assert.equal(C.furLodShells('hero', 16, at, new THREE.Vector3(0, 30, -30)), 0, 'past 25 m: base layer');
   const npc = Math.min(10, C.shellsFor('npc'));
   assert.equal(C.furLodShells('kitten', 10, new THREE.Vector3(2, 0.5, 0), lens), npc, 'one tier down at d 13 > 12');

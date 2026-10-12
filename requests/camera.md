@@ -25,3 +25,21 @@ at rest, no lead) when it exists. Two asks:
 2. When `state.settings.leftHanded` is on (touch landscape), shift her right instead of left (negate `frameOffsetTouchX`):
    the mirrored cluster sits on the left, and with her at 42 % the layout has to drop Meow at 844 × 390 and Golden + Meow
    at 667 × 375 to keep them off her. `heroScreen()` must report the mirrored point so the layout follows.
+
+- (core, S2 merge) AUTOCAM §12 tables are in `CAMERA.iso` (follow, lead gains/caps, aimPan, frame, framing, beats, snuggle, reduce, pinch, semi, foot, budget, boss.establish/dizzy/phaseBreath/defeatHold, touchShakeRot). Retired keys keep their old values for the current rig: `lead.cursor` stays 0.15 (AUTOCAM default 0 comes from `settings.camCursorLead`), `boss.herInner` stays 0.6 (AUTOCAM 'frame' = frame.herInner), `far` 90 (→ foot.far). `occl.archOpacity` 0.1 added. Core helpers: math.js smoothDamp/smoothDamp2, schedule.js every().
+
+- (core, S1) `ctx.postfx.setCinematic(on, { dur, bloom, grade })` is live: High builds the PostChain on the first call and fades bloom in / out over `dur` (default `RENDER.cinematic.fade` 0.6 s); Low / Med record only. Call it on cutscene / preset enter and at the end of the hand-back (A:camera.2); never for Meme Cam or gameplay. `__GAME__.cam.probe()` / `.framing()` pass through to `ctx.cam.probe?.()` / `framing?.()` (AUTOCAM §11 gates).
+
+## from player (AUTOCAM §5.3 / §5.5 / §4, M:player.1–5) — live now
+- `player.moveIntent { x, z, speed, kind }` written every sim step in place (no allocation): `stick` (touch, before her
+  velocity; speed = run × smoothstep(TOUCH.stickDead, 1, |stick|)), `walk` / `run` (WASD / pad; her speed), `order`
+  (toward `orders.lookAhead(CAMERA.iso.lead.orderLook)`; run speed easing to 0 inside NAV.slowR of the end), `other`
+  (swings, Tumble, Pounce, hurt / stagger knockback, splash lock, scripted / attached), `idle` (x = z = 0).
+- `player.orders.lookAhead(dist, out)` → boolean (out = her position when no order walks); `orders.remaining()` metres.
+- `player.aim.held` (true while a held aimed action is up) and `player.aim.range` (Holy charge with Shard 2 → 10 m, Wave
+  Reach 15 m; Golden Hour charge → gleam 8 m; a companion aim's `ctx.companions.aim.range ?? plan.range`). Use
+  `aim.held && aim.range ≥ 5` for aim pan.
+- `player.groundY`: the Y of her last ground contact (set right after `physics.moveActor` while `onGround`; teleports
+  reset it). Unit-tested: airborne keeps the last contact.
+- D1: `object3d.position` is the interpolated render pose (core Actor.render lerps prevPos → pos by alpha; the player
+  adds nothing on top). Unit-tested in tests/unit/player.test.js.

@@ -17,7 +17,7 @@ import { Enemy, windupFor, defaultShape, segSegXZ, telegraphPayload } from '../.
 import { insideFrustum, pointOnScreen, rangedStartAllowed, ONSCREEN_FALLBACK } from '../../src/enemies/onscreen.js';
 import { resolveEnemyDef, TYPES, countsTowardCap } from '../../src/enemies/EnemyManager.js';
 import { CLIP_MAPS, clipNames, clipKey, isSpec, rigFor, clipsFor, subclip, specDuration } from '../../src/enemies/clipMaps.js';
-import { TUNING } from '../../src/enemies/tuning.js';
+import { TUNING, WARM } from '../../src/enemies/tuning.js';
 import { diveTravel } from '../../src/enemies/types/crow.js';
 import { disposeInstanceMaterials } from '../../src/enemies/rig.js';
 import manifest, { levels as manifestLevels } from '../../src/enemies/assets.manifest.js';
@@ -390,10 +390,15 @@ test('rat_pike: a white parry staggers 1.2 s; below 20% HP it flees; defeat emit
   const died = ev.find((x) => x.ev === E.ENEMY_DIED);
   assert.ok(died && died.type === 'rat_pike' && died.fish >= 2 && died.fish <= 3, `fish ${died?.fish}`);
   assert.equal(typeof died.smallHeart, 'boolean');
+  // ART §7.1 faint and poof: enemy:died now (with poofIn), the puff after the squash + 0.5 s of dizzy stars
+  const F = WARM.faint;
+  assert.ok(Math.abs(died.poofIn - (F.squashT + F.starsT)) < 1e-9 && died.faint === true, `poofIn ${died.poofIn}`);
+  assert.ok(!ev.some((x) => x.ev === E.BURST && x.kind === 'poof'), 'no puff while it faints');
+  step(ctx, Math.ceil(60 * died.poofIn) + 1);
   const poof = ev.find((x) => x.ev === E.BURST && x.kind === 'poof');
   assert.ok(poof && poof.type === 'rat_pike' && poof.helmet === false, 'poof burst (our helm spins off; fx skips its own)');
-  step(ctx, Math.ceil(60 * (TUNING.die.scamperDur + 0.1)));
-  assert.ok(!ctx.enemies.list.includes(e), 'despawned after scampering off');
+  step(ctx, Math.ceil(60 * (F.after + 0.1)));
+  assert.ok(!ctx.enemies.list.includes(e), 'despawned right after the puff (no corpse)');
   assert.ok(!ctx.actors.has(e), 'unregistered');
 });
 
@@ -1499,4 +1504,334 @@ test('controls: crows dive only on screen (no near exemption); the keep band [6,
   assert.equal(c.stateName, 'windup', 'on screen: it dives');
   const [near, far] = resolveEnemyDef('rat_xbow').keep;
   assert.ok(near === 6 && far === 9 && far <= ONSCREEN_FALLBACK.rangedNear);
+});
+
+// ============================================================================================ warm adventure + perf + autocam
+// research/next: ART_WARM_SPEC §5 / §7 / §11.3, WARM_ADVENTURE_SPEC §3 / §5.1 / §8, PERF_SPEC §3.4 / §4.2-§4.3, AUTOCAM §6.6
+import { remapPaletteTexture, remapPixels, recolorBands, stripConstantScaleTracks, scaleBones, setCasting, clearPaletteCache } from '../../src/enemies/rig.js';
+import { EnemyLook, springStep, outlineTargets } from '../../src/enemies/look.js';
+import { VisualPool, dressingKey, waveSizes, POOLED_TYPES } from '../../src/enemies/VisualPool.js';
+import { DISPLAY_NAMES, BANNED_NAME_WORDS, friendWordFor, displayNameFor } from '../../src/enemies/names.js';
+import { PALETTE_MAPS, BONE_SCALES, boneScalesFor, paletteFor } from '../../src/enemies/palette.js';
+import { ENEMY_PAL, makeProp, PROP_NAMES } from '../../src/enemies/props.js';
+import { faintPlan, orbitPenalty, laneEnd, VISUAL_FIELDS } from '../../src/enemies/Enemy.js';
+import { hubFriendly } from '../../src/enemies/EnemyManager.js';
+
+/** Linear-ish luminance used by the remap (Rec. 709 on 0..255). */
+const lum8 = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+const rgb8 = (hex) => { const n = new THREE.Color(hex).getHex(); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+
+test('ART §11.3: remapPaletteTexture — exact swatch → target, luminance offset kept, other pixels untouched, cache hit', () => {
+  clearPaletteCache();
+  // a synthetic 4-swatch atlas (2 × 2): grey body, purple wing, orange beak, and a grey pixel 10 luma brighter
+  const W = 4, H = 1, data = new Uint8Array(W * H * 4);
+  const px = [[0x8f, 0x92, 0xa0], [0x5c, 0x45, 0x8b], [0xcc, 0x91, 0x29], [0x99, 0x9c, 0xaa]];
+  px.forEach(([r, g, b], i) => data.set([r, g, b, 255], i * 4));
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  const map = { pairs: [['#8f92a0', ENEMY_PAL.slate], ['#cc9129', ENEMY_PAL.mustard]], tol: 28 };
+  const out = remapPaletteTexture(tex, map, 'test');
+  assert.notEqual(out, tex);
+  const d = out.image.data;
+  assert.deepEqual([...d.slice(0, 3)], rgb8(ENEMY_PAL.slate), 'exact swatch → its target');
+  assert.deepEqual([...d.slice(8, 11)], rgb8(ENEMY_PAL.mustard));
+  assert.deepEqual([...d.slice(4, 7)], px[1], 'a pixel near no source swatch is kept');
+  const off = lum8(...px[3]) - lum8(...px[0]), t = rgb8(ENEMY_PAL.slate);
+  assert.deepEqual([...d.slice(12, 15)], t.map((v) => Math.round(v + off)), 'the luminance offset from the swatch survives');
+  assert.equal(remapPaletteTexture(tex, map, 'test'), out, 'cache hit returns the same texture');
+  assert.equal(out.magFilter, THREE.NearestFilter, 'swatch atlases sample nearest');
+  assert.equal(out.flipY, tex.flipY);
+  clearPaletteCache();
+});
+
+test('ART §7.3: recolorBands maps a hue band by luminance ratio; remapPixels counts changed pixels', () => {
+  const data = new Uint8Array([0x4b, 0x6a, 0x7f, 255, 0x25, 0x35, 0x40, 255, 0xf7, 0xc4, 0xa1, 255, 0x80, 0x80, 0x80, 255]);
+  const n = recolorBands(data, [{ h: [185, 240], s: [0.15, 1], v: [0.1, 1], ref: '#4b6a7f', to: '#6E5A86' }]);
+  assert.equal(n, 2, 'both blues (reference and its darker shade)');
+  assert.deepEqual([...data.slice(0, 3)], rgb8('#6E5A86'), 'the reference colour lands exactly on the target');
+  assert.ok(lum8(...data.slice(4, 7)) < lum8(...data.slice(0, 3)), 'the shade stays darker');
+  assert.deepEqual([...data.slice(8, 11)], [0xf7, 0xc4, 0xa1], 'skin is outside the band');
+  assert.deepEqual([...data.slice(12, 15)], [0x80, 0x80, 0x80], 'greys (no hue) are kept');
+  assert.equal(remapPixels(new Uint8Array([1, 2, 3, 255]), [['#FFFFFF', '#000000']]), 0);
+});
+
+test('ART §11.3: the constant-scale-track stripper drops unit tracks only and keeps non-unit / animated ones', () => {
+  const unit = new THREE.VectorKeyframeTrack('Bone.scale', [0, 1], [1, 1, 1, 1, 1.00001, 1]);
+  const big = new THREE.VectorKeyframeTrack('Big.scale', [0, 1], [1.2, 1.2, 1.2, 1.2, 1.2, 1.2]);
+  const anim = new THREE.VectorKeyframeTrack('Pulse.scale', [0, 1], [1, 1, 1, 1.1, 0.9, 1.1]);
+  const rot = new THREE.QuaternionKeyframeTrack('Bone.quaternion', [0, 1], [0, 0, 0, 1, 0, 0, 0, 1]);
+  const clip = new THREE.AnimationClip('c', 1, [unit, big, anim, rot]);
+  assert.equal(stripConstantScaleTracks([clip]), 1);
+  assert.deepEqual(clip.tracks.map((t) => t.name), ['Big.scale', 'Pulse.scale', 'Bone.quaternion']);
+  assert.equal(stripConstantScaleTracks([clip]), 0, 'idempotent per clip (the GLB cache shares clips)');
+});
+
+test('ART §7.2: static bone scales are net factors (a listed ancestor is divided out), applied once', () => {
+  const root = new THREE.Group(), body = new THREE.Bone(), neck = new THREE.Bone(), head = new THREE.Bone(), leg = new THREE.Bone();
+  body.name = 'Body'; neck.name = 'Neck'; head.name = 'Head'; leg.name = 'FrontLeg.L';
+  root.add(body); body.add(neck); neck.add(head); body.add(leg);
+  assert.equal(scaleBones(root, BONE_SCALES.rat), 4);
+  const w = new THREE.Vector3();
+  head.getWorldScale(w); assert.ok(Math.abs(w.x - 1.45) < 1e-9, `head net ×1.45 (${w.x})`);
+  neck.getWorldScale(w); assert.ok(Math.abs(w.x - 1.1) < 1e-9);
+  leg.getWorldScale(w); assert.ok(Math.abs(w.x - 0.9) < 1e-9, 'legs net ×0.9 under a ×1.1 body');
+  assert.equal(scaleBones(root, BONE_SCALES.rat), 0, 'idempotent');
+  assert.equal(boneScalesFor('models/creatures/polypizza/Rat.glb'), BONE_SCALES.rat);
+  assert.equal(boneScalesFor('models/characters/kaykit/Knight.glb'), null);
+  assert.ok(paletteFor('models/creatures/monsters-flying/Pigeon.glb')?.pairs?.length === 4);
+});
+
+test('ART §2.6: the mischief palette — no enemy token darker than luma 0.12 except the pupil; no hero pink / ginger', () => {
+  const L = (hex) => lum8(...rgb8(hex)) / 255;          // sRGB luma
+  const hsl = { h: 0, s: 0, l: 0 };
+  for (const [k, v] of Object.entries(ENEMY_PAL)) {
+    if (k === 'pupil') continue;
+    assert.ok(L(v) >= 0.12, `${k} ${v} luma ${L(v).toFixed(3)} ≥ 0.12`);
+    new THREE.Color(v).getHSL(hsl);
+    const deg = hsl.h * 360;
+    assert.ok(!(deg >= 335 && deg <= 350 && hsl.s > 0.5), `${k} is not hero pink`);
+  }
+  assert.notEqual(ENEMY_PAL.ratEye, '#FF4A3A', 'no red eye glints (ART §7.1)');
+  for (const map of Object.values(PALETTE_MAPS)) for (const [, to] of map.pairs ?? []) assert.ok(L(to) >= 0.02);
+  for (const name of PROP_NAMES) assert.ok(makeProp(name).isMesh, name);
+  assert.equal(makeProp('kettleHelm').castShadow, false, 'gear never casts (PERF E3: the body does)');
+});
+
+test('ART §7.1: faint and poof — rats, crows, spiders faint; bosses and Wobblejellies keep their own defeat', () => {
+  const P = faintPlan({ def: resolveEnemyDef('rat_pike') });
+  assert.ok(P && Math.abs(P.poofAt - (WARM.faint.squashT + WARM.faint.starsT)) < 1e-9);
+  assert.ok(faintPlan({ def: resolveEnemyDef('crow') }));
+  assert.equal(faintPlan({ def: resolveEnemyDef('boss_grizzlechop') }), null);
+  assert.equal(faintPlan({ def: resolveEnemyDef('jelly_m') }), null);
+  assert.equal(faintPlan({ def: resolveEnemyDef('cacklejaw_clone') }), null, 'one-hit clones poof at once');
+});
+
+/** A dressed stand-in visual for node tests: a skinned-like body mesh with its own material, a helm prop, a plate. */
+function fakeVisual(e) {
+  const root = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: '#888888' });
+  mat.userData.enemyOwned = true;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), mat);
+  body.castShadow = true;
+  root.add(body);
+  const helm = makeProp('kettleHelm');
+  body.add(helm);
+  e.visual = root; e.object3d.add(root); e.helmet = helm;
+  e.anim = { mixer: { stopAllAction() {} }, updates: [], update(dt) { this.updates.push(dt); }, play() { return Promise.resolve(); }, has: () => false, dispose() {}, current: null };
+  e._finishVisual(root);
+  return { root, mat, body, helm };
+}
+
+test('WA §5.1 / enemies.W2: during hitstop uFlash decays while world time is frozen; squash kick and shake play', async () => {
+  const ctx = await world();
+  const e = ctx.enemies.spawn('rat_pike', at(0, 3));
+  const { mat } = fakeVisual(e);
+  const base = mat.emissive.clone();
+  ctx.game.hitstopT = 0.1;                       // combat requests the freeze before onHit
+  e.onHit({ dmg: 1 });
+  const t0 = ctx.game.time;
+  const fl = [], sy = [], sh = [];
+  for (let i = 0; i < 6; i++) {                  // world frozen: game.time does not move, frames still render
+    e.render(1, 1 / 60);
+    fl.push(e.look.flash); sy.push(e.visual.scale.y); sh.push(e.visual.position.x);
+  }
+  assert.equal(ctx.game.time, t0, 'world time frozen');
+  assert.ok(fl[0] > 0.8 && fl[5] < fl[0] && fl.every((v, i) => i === 0 || v <= fl[i - 1]), `flash decays on unscaled time ${fl.map((v) => v.toFixed(2))}`);
+  assert.ok(Math.min(...sy) < 0.97, 'Squash.kick(-2) squashes the body');
+  assert.ok(sh.some((x) => Math.abs(x) > 0.02), 'a 0.04 m shake while frozen');
+  assert.ok(mat.emissive.r > base.r, 'the flash reaches the material (emissive: no toon program yet)');
+  const before = e.visual.children.length;
+  ctx.game.hitstopT = 0;
+  for (let i = 0; i < 30; i++) e.render(1, 1 / 60);
+  assert.equal(e.look.flash, 0); assert.ok(mat.emissive.equals(base), 'back to the GLB look');
+  assert.equal(e.visual.children.length, before, 'no material clones / extra meshes');
+  assert.equal(e.visual.position.x, 0, 'shake settles');
+});
+
+test('ART §5.1: the wind-up rim (uHighlight) holds until activeAt, then fades in 0.15 s; hover gives a boing', async () => {
+  const ctx = await world();
+  const e = ctx.enemies.spawn('rat_pike', at(0, 2), { alerted: true });
+  const { mat } = fakeVisual(e);
+  step(ctx, 60 * 6, () => e.stateName === 'windup');
+  assert.equal(e.stateName, 'windup');
+  e.render(1, 1 / 60);
+  assert.ok(e.look.hl > 0.79 && e.look.hlUntil > ctx.game.time, 'rim on during the wind-up');
+  assert.ok(mat.emissive.r > 0.05, 'telegraph orange on the body');
+  assert.ok(e.look.poseTarget < 0, 'wind-up squash target −0.10');
+  ctx.game.time = e.look.hlUntil + WARM.highlight.fade + 0.01;
+  e.render(1, 1 / 60);
+  assert.equal(e.look.hl, 0, 'faded after activeAt + 0.15 s');
+  // hover: characters' highlightObject marks the root; the look composes it and kicks the spring once
+  const v0 = e.look.sq.v;
+  e.setHighlight('#FF5A4E', 1);
+  e.render(1, 0);
+  assert.ok(e.look.sq.v < v0, 'boing on hover');
+  assert.equal(mat.userData.hiClone, true, 'pre-tagged: highlightObject never clones our materials');
+});
+
+test('WA §8.3 / enemies.W1: a bonked hyena flips HATER → FAN before it despawns (index-paired); hub hyenas are friends', async () => {
+  assert.equal(friendWordFor('hyena', 'HATER'), 'FAN');
+  assert.equal(friendWordFor('hyena', 'NAYSAYER'), 'YAYSAYER');
+  assert.equal(friendWordFor('stealer', 'POST STEALER'), 'POSTMASTER');
+  assert.equal(friendWordFor('cacklejaw', 'HATER-IN-CHIEF'), 'HYPE-IN-CHIEF');
+  assert.equal(friendWordFor('hyena', null), null);
+  const ctx = await world();
+  const e = ctx.enemies.spawn('hyena', at(0, 3), { alerted: true });
+  fakeVisual(e);
+  // the dressing (kaykitGear) leaves these: the plate, its word, the friend word and the pre-baked friend texture
+  const foe = new THREE.Texture(), friend = new THREE.Texture();
+  const decal = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({ map: foe }));
+  e.plate = new THREE.Group(); e.plate.add(decal);
+  e.plateWord = 'HATER'; e.plateFriendWord = friendWordFor('hyena', 'HATER'); e._plateSwap = { decal, foe, friend };
+  const ev = record(ctx, E.BURST);
+  e.hp = 1; e.invulnT = 0;
+  ctx.combat.applyHit(ctx.player, e, ATTACKS.slash3);
+  assert.equal(e.stateName, 'die');
+  let flipAt = null, poofAt = null, goneAt = null;
+  for (let i = 0; i < 120 && goneAt == null; i++) {
+    step(ctx, 1);
+    if (flipAt == null && e.plateFlipped) flipAt = e.stateT;
+    if (poofAt == null && ev.some((x) => x.kind === 'poof')) poofAt = e.stateT;
+    if (!ctx.enemies.list.includes(e)) goneAt = i;
+  }
+  assert.ok(flipAt != null && poofAt != null && goneAt != null, `flip ${flipAt}, poof ${poofAt}, gone ${goneAt}`);
+  assert.ok(Math.abs(poofAt - flipAt - WARM.faint.plateFlip) < 2 / 60, `flips ${WARM.faint.plateFlip} s before the puff`);
+  // the despawned hyena handed its visual to the pool: check the plate there (the enemy no longer holds it)
+  assert.equal(decal.material.map, friend, 'the friend word shows');
+  // hub hyenas after gate.done
+  ctx.levels = { current: { id: 'town' } };
+  assert.equal(hubFriendly(ctx, resolveEnemyDef('hyena')), false);
+  ctx.state.setFlag?.('gate.done', true) ?? (ctx.state.flags['gate.done'] = true);
+  assert.equal(hubFriendly(ctx, resolveEnemyDef('hyena')), true);
+  assert.equal(hubFriendly(ctx, resolveEnemyDef('rat_pike')), false);
+  assert.equal(dressingKey(resolveEnemyDef('hyena'), {}, { friend: true }), 'hyena|friend');
+});
+
+test('PERF §3.4: VisualPool — keys, prefill sizes, a despawned visual is reused (restored), misses are counted', async () => {
+  assert.equal(dressingKey(resolveEnemyDef('rat_pike'), {}), 'rat_pike');
+  assert.equal(dressingKey(resolveEnemyDef('hyena'), { cage: 'pearl' }), null, 'one-off dressings are never pooled');
+  assert.equal(dressingKey(resolveEnemyDef('hyena'), { word: 'GRUMBLER' }), null);
+  assert.equal(dressingKey(resolveEnemyDef('boss_grizzlechop'), {}), null);
+  assert.equal(dressingKey(resolveEnemyDef('jelly'), {}), null);
+  assert.ok(POOLED_TYPES.has('crow'));
+  assert.deepEqual(waveSizes({ zones: [
+    { kind: 'arena', waves: [[['rat_pike', 3]], [['rat_pike', 3], ['rat_xbow', 1]], [['rat_pike', 4], ['crow', 2]]] },
+    { kind: 'open', spawns: [['crow', 4, [0, 0], 8], ['rat_xbow', 1], ['rat_xbow', 1, [1, 1]]] }] }), { rat_pike: 4, rat_xbow: 2, crow: 4 });
+  const ctx = await world();
+  const a = ctx.enemies.spawn('rat_pike', at(0, 3));
+  assert.equal(a.poolKey, 'rat_pike');
+  assert.equal(ctx.enemies.pools.misses, 1, 'nothing pooled yet: a miss (it builds its own)');
+  const { root, helm } = fakeVisual(a);
+  a.flipPlate();
+  a.dropHelmet();                                    // the defeat drops a copy; the worn helm hides
+  assert.equal(helm.visible, false);
+  a.look.hit(0); a.visual.scale.set(0.2, 0.2, 0.2);
+  ctx.enemies.despawn(a);
+  assert.equal(ctx.enemies.pools.count('rat_pike'), 1, 'its visual went to the pool');
+  assert.equal(a.visual, null); assert.equal(a.anim, null);
+  for (const k of VISUAL_FIELDS) assert.ok(a[k] == null || (Array.isArray(a[k]) && !a[k].length), `${k} cleared on the old enemy`);
+  const b = ctx.enemies.spawn('rat_pike', at(1, 3));
+  assert.equal(ctx.enemies.pools.hits, 1);
+  assert.equal(b.visual, root, 'the same dressed visual');
+  assert.equal(root.parent, b.object3d);
+  assert.equal(b.helmet, helm); assert.equal(helm.visible, true, 'helm back on');
+  assert.equal(root.scale.y, 1, 'full scale'); assert.equal(b.look.flash, 0, 'no leftover flash');
+  ctx.enemies.clear();
+  assert.equal(ctx.enemies.pools.size, 0, 'level unload disposes the pool');
+});
+
+test('PERF §4.2-§4.3: perception and mixer rates follow the camera activity tier', async () => {
+  const ctx = await world();
+  const e = ctx.enemies.spawn('rat_pike', at(0, 30));
+  fakeVisual(e);
+  let tier = 0;
+  ctx.cam = { activityOf: () => tier, frameId: 1 };
+  const run = (frames) => { e.anim.updates.length = 0; for (let i = 0; i < frames; i++) { ctx.game.frameCount++; e.render(1, 1 / 60); } return e.anim.updates.slice(); };
+  let u = run(6);
+  assert.equal(u.length, 6, 'tier 0: every frame');
+  tier = 1; u = run(9);
+  assert.equal(u.length, 3, 'tier 1: every 3rd frame');
+  assert.ok(u.every((dt) => Math.abs(dt - 3 / 60) < 1e-6) || u.length === 3, 'with the accumulated dt');
+  tier = 2; u = run(6);
+  assert.equal(u.length, 0, 'tier 2: frozen');
+  tier = 0; u = run(1);
+  assert.equal(u.length, 1, 're-entry runs the same frame');
+  e._tier = 0; assert.equal(e.perceptEvery(), TUNING.thinkEvery);
+  e._tier = 1; assert.ok(Math.abs(e.perceptEvery() - 1 / 5) < 1e-9);
+  e._tier = 2; e.alerted = false; assert.ok(Math.abs(e.perceptEvery() - 1 / 2) < 1e-9);
+  e.alerted = true; assert.ok(Math.abs(e.perceptEvery() - 1 / WARM.activity.arenaMin) < 1e-9, 'a fighter keeps ≥ 5 Hz');
+  ctx.cam = null;
+});
+
+test('AUTOCAM §6.6: the orbit penalty pushes waiting enemies up-screen; lane telegraphs carry their end point and glyph', async () => {
+  const P = { k: 1.5, free: 3.0 };
+  // U = screen-up = −Z here: a slot 5 m toward +Z (down-screen) costs 1.5 × (5 − 3)
+  assert.equal(orbitPenalty(0, 5, 0, 0, 0, -1, P), 3);
+  assert.equal(orbitPenalty(0, 2, 0, 0, 0, -1, P), 0, 'within 3 m: free');
+  assert.equal(orbitPenalty(0, -5, 0, 0, 0, -1, P), 0, 'up-screen: free');
+  assert.deepEqual(laneEnd('lane', { lane: { w: 1, l: 4 } }, {}, { x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 2 }), { x: 1, y: 0, z: 4 });
+  assert.equal(laneEnd('glint', { lane: null }, {}, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }), null);
+  const ctx = await world();
+  const ev = record(ctx, E.TELEGRAPH);
+  const e = ctx.enemies.spawn('hyena', at(0, 4), { alerted: true });
+  e.attack = { id: 'hyena_lunge', def: ATTACKS.hyena_lunge, range: 5, kind: 'melee' };
+  e.telegraph('red', { duration: 0.6 });
+  const t = ev.at(-1);
+  assert.equal(t.glyph, TELEGRAPH.glyph.red, 'WA §3.4 glyph');
+  assert.ok(t.lane && t.end, 'a lunge lane has an end point');
+  assert.ok(Math.abs(Math.hypot(t.end.x - t.pos.x, t.end.z - t.pos.z) - t.lane.l) < 1e-6);
+  // with camera axes (screen-up = −Z), a tokenless enemy straight down-screen drifts the cheaper way
+  ctx.cam = { groundAxes(u, r) { u.set(0, 0, -1); r.set(1, 0, 0); } };
+  e.refreshOrbitAxes();
+  assert.equal(e._orbitUok, true);
+  ctx.cam = null;
+});
+
+test('ART §5.4: outline hulls per QUALITY.outline (bosses always, ≤ 4 engaged nearest-first on Med, all on High)', () => {
+  const mk = (x, o = {}) => ({ alive: true, visual: {}, pos: { x, z: 0 }, def: {}, ...o });
+  const list = [mk(1, { alerted: true }), mk(2, { alerted: true }), mk(9, { alerted: true }), mk(3), mk(4, { alerted: true }), mk(5, { alerted: true }), mk(6, { alerted: true }), mk(0, { def: { boss: true } })];
+  const engaged = (e) => !!e.alerted;
+  assert.deepEqual([...outlineTargets('hero', list, { x: 0, z: 0 }, engaged, 4)].map((e) => e.pos.x), [0]);
+  const med = [...outlineTargets('heroCompanionsEngaged', list, { x: 0, z: 0 }, engaged, 4)].map((e) => e.pos.x).sort((a, b) => a - b);
+  assert.deepEqual(med, [0, 1, 2, 4, 5], 'the boss + the 4 nearest engaged');
+  assert.equal(outlineTargets('all', list, null, engaged, 4).size, list.length);
+});
+
+test('PERF §3.5 / §7: only the body casts, with its kind\'s shared depth material; stage 2 / Low turns casting off', () => {
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial()); body.castShadow = true;
+  const helm = makeProp('kettleHelm'); helm.castShadow = true;
+  const sil = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()); sil.castShadow = false;
+  root.add(body, helm, sil);
+  const dm = new THREE.MeshDepthMaterial();
+  setCasting(root, true, () => dm);
+  assert.equal(body.castShadow, true); assert.equal(body.customDepthMaterial, dm);
+  assert.equal(helm.castShadow, false, 'shared gear never casts');
+  assert.equal(sil.castShadow, false, 'a builder\'s non-caster stays one');
+  setCasting(root, false); assert.equal(body.castShadow, false);
+  setCasting(root, true); assert.equal(body.castShadow, true, 'back on with the tier');
+});
+
+test('WA §8.2 / enemies.W3: display names use the warm vocabulary (Woof Brigade, Grumpjaw, Big Chief, Squeakybone, Wobblejelly)', () => {
+  for (const [id, name] of Object.entries(DISPLAY_NAMES)) {
+    const low = name.toLowerCase();
+    for (const w of BANNED_NAME_WORDS) assert.ok(!low.includes(w), `${id}: "${name}" has "${w}"`);
+  }
+  assert.equal(displayNameFor('bonehead:mage'), 'Squeakybone');
+  assert.equal(displayNameFor('jelly_m'), 'Wobblejelly');
+  assert.match(displayNameFor('boss_cacklejaw'), /BIG CHIEF/);
+  assert.match(displayNameFor('boss_barkus'), /GRUMPJAW/);
+  assert.match(displayNameFor('pug'), /Woof Brigad/);
+});
+
+test('ART §7.2 squash spring: kicks settle back to rest and stay clamped', () => {
+  const st = { s: 0, v: 0 };
+  st.v += WARM.hit.kick;
+  let min = 0;
+  for (let i = 0; i < 120; i++) min = Math.min(min, springStep(st, 0, 1 / 60));
+  assert.ok(min < -0.03 && min >= WARM.spring.min, `squashes (${min.toFixed(3)})`);
+  assert.ok(Math.abs(st.s) < 1e-3, 'settles in 2 s');
+  const l = new EnemyLook(new THREE.Group());
+  l.poseTarget = WARM.pose.parry;
+  for (let i = 0; i < 60; i++) l.update(1 / 60, 0);
+  assert.ok(Math.abs(l.sq.s - WARM.pose.parry) < 0.01, 'the parry-window stretch target +0.12');
 });

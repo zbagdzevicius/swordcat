@@ -1,14 +1,16 @@
 // src/world/Dressing.js  (owner: world) — shared M2 level dressing (GAME_DESIGN §12.4–§12.6, art.md §9 / §12):
-//   LightPool        a fixed number of PointLights (the light count, and so every compiled program, never changes)
-//                    that follow the nearest lit sources: torches, the campfire, lit lanterns, gate braziers
+//   LightPool        the level's lit sources (torches, the campfire, lit lanterns, gate lamps) registered as lamp
+//                    pools: Env writes the 4 nearest the iso focus into ENV_U.uLamps (K2 / PERF §8.2: no PointLights,
+//                    so lighting a lantern or the forest day → night switch only changes uniforms, never a program)
 //   addFlame         a flickering flame (emissive cone + additive glow sprites) registered as a light source
 //   Fireflies        drifting additive points around the camera (forest `#E8FF9A`, brighter at night)
 //   paveRibbons      textured street / deck ribbons that follow the terrain (town cobbles `pavingstones070`)
-//   texturedMaterial a vertex-coloured MeshStandardMaterial with a world-UV colour map (awaited with a timeout)
+//   texturedMaterial a vertex-coloured Lambert (toon-patched) material with a world-UV colour map (awaited with a timeout)
 //   ropeLine         a sagging rope between two points (a thin tube)
 // Everything is `userData.owned` (LevelManager disposes it with the level); shared textures are never disposed.
 import * as THREE from 'three';
 import { makeGlowSprite } from './Sky.js';
+import { LampSet } from './Env.js';
 
 const _v = new THREE.Vector3(), _c = new THREE.Color();
 
@@ -23,19 +25,25 @@ export function within(p, ms = 4000) {
  * lifts the map's darkest values (mortar joints, cracks) toward that pale level (linear, before `gain`) over the map
  * luminance band `jointLo`..`jointHi`, so a dark-jointed photo texture reads as pale-mortared blocks from the iso camera.
  */
-export async function texturedMaterial(ctx, path, { tint = '#FFFFFF', mapMix = 0.65, roughness = 0.95, key = 'tex', gain = 1.15, joint = 0, jointLo = 0.03, jointHi = 0.1 } = {}) {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, envMapIntensity: 0.45, color: new THREE.Color(tint) });
+export async function texturedMaterial(ctx, path, { tint = '#FFFFFF', mapMix = 0.65, roughness = 0.95, key = 'tex', gain = 1.15, joint = 0, jointLo = 0.03, jointHi = 0.1, contrast = 1 } = {}) {
+  // ART §4.2: Lambert + the global toon patch (no Standard in play); `roughness` is accepted for old callers and ignored
+  void roughness;
+  const m = new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tint) });
+  m.dithering = true;
   m.userData.owned = true;
   const tex = path && ctx?.assets?.texture ? await within(ctx.assets.texture(path, { srgb: true, repeat: true })) : null;
   if (tex) {
     m.map = tex;
-    const mix = mapMix.toFixed(3), jk = joint > 0 ? `j${joint.toFixed(3)}_${jointLo.toFixed(3)}_${jointHi.toFixed(3)}` : '';
+    const mix = mapMix.toFixed(3), jk = (joint > 0 ? `j${joint.toFixed(3)}_${jointLo.toFixed(3)}_${jointHi.toFixed(3)}` : '') + (contrast !== 1 ? 'c' + contrast.toFixed(3) : '');
+    // LI §4.3 / ART §8.3 rule 5: kept textures read as soft pattern, not noise (contrast squeezed around the mid-grey)
+    const squeeze = contrast !== 1 ? `
+  sampledDiffuseColor.rgb = mix(vec3(0.5), sampledDiffuseColor.rgb, ${contrast.toFixed(3)});` : '';
     const lift = joint > 0 ? `\n  sampledDiffuseColor.rgb = mix(vec3(${joint.toFixed(3)}), sampledDiffuseColor.rgb, smoothstep(${jointLo.toFixed(3)}, ${jointHi.toFixed(3)}, lum));` : '';
     m.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
   float lum = dot(sampledDiffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-  sampledDiffuseColor.rgb = mix(vec3(lum), sampledDiffuseColor.rgb, ${mix});${lift}
+  sampledDiffuseColor.rgb = mix(vec3(lum), sampledDiffuseColor.rgb, ${mix});${lift}${squeeze}
   sampledDiffuseColor.rgb *= ${gain.toFixed(3)};
   diffuseColor *= sampledDiffuseColor;
 #endif`);
@@ -122,7 +130,7 @@ export function paveGeometry(o) {
 export async function paveRibbons(ctx, o) {
   const g = paveGeometry(o);
   if (!g) return null;
-  const mat = await texturedMaterial(ctx, o.texture, { tint: o.tint ?? '#FFFFFF', mapMix: o.mapMix ?? 0.55, key: 'pave' });
+  const mat = await texturedMaterial(ctx, o.texture, { tint: o.tint ?? '#FFFFFF', mapMix: o.mapMix ?? 0.55, key: 'pave', contrast: o.contrast ?? 1, gain: o.gain ?? 1.15 });
   mat.polygonOffset = true; mat.polygonOffsetFactor = -2; mat.polygonOffsetUnits = -2;
   if (!o.texture || !mat.map) mat.color.set(o.tint ?? '#9C927C');
   const mesh = new THREE.Mesh(g, mat);
@@ -132,40 +140,32 @@ export async function paveRibbons(ctx, o) {
 }
 
 /**
- * A fixed pool of point lights (created once per level, so the light count never changes mid-level) that follow
- * the `n` lit sources nearest to the player each frame, with a gentle flicker.
+ * The level's lamp sources (K2: no PointLights). Every source is a lamp pool in `ENV_U.uLamps`: Env picks the
+ * `LAMPS.max` lit ones nearest the iso focus at 4 Hz (`lamps` = ctx.env.lamps; a private LampSet without an Env).
+ * `n` / `distance` are kept for old level data (`def.lights`) and only set the default pool radius.
  */
 export class LightPool {
-  constructor(parent, n = 2, { distance = 9, decay = 1.6 } = {}) {
+  constructor(parent, n = 2, { distance = 9, lamps = null } = {}) {
+    void parent;
+    this.n = n;
+    this.distance = distance;
+    this.lamps = lamps ?? new LampSet();
     this.sources = [];
-    this.lights = [];
-    for (let i = 0; i < n; i++) {
-      const L = new THREE.PointLight('#FF9A4A', 0, distance, decay);
-      L.name = 'world:light' + i; L.castShadow = false; L.userData.owned = true;
-      parent.add(L);
-      this.lights.push(L);
-    }
-    this._pick = [];
   }
 
   /** Register a source { pos: Vector3, color, intensity, distance?, on: bool, flicker?: 0..1 } and return it. */
-  add(src) { const s = { on: true, flicker: 0.25, intensity: 1.6, color: '#FF9A4A', ...src }; s._c = new THREE.Color(s.color); this.sources.push(s); return s; }
-
-  update(focus, t) {
-    const pick = this._pick; pick.length = 0;
-    for (const s of this.sources) if (s.on && s.intensity > 0) pick.push(s);
-    if (focus) pick.sort((a, b) => a.pos.distanceToSquared(focus) - b.pos.distanceToSquared(focus));
-    this.lights.forEach((L, i) => {
-      const s = pick[i];
-      if (!s) { L.intensity = 0; return; }
-      L.position.copy(s.pos);
-      L.color.copy(s._c);
-      if (s.distance) L.distance = s.distance;
-      const ph = s.pos.x * 1.7 + s.pos.z * 0.9;
-      const f = 1 - s.flicker * (0.5 + 0.5 * Math.sin(t * 13 + ph) * Math.sin(t * 7.3 + ph * 2.1));
-      L.intensity = s.intensity * f;
-    });
+  add(src) {
+    const s = { on: true, flicker: 0.25, intensity: 1.6, color: '#FF9A4A', distance: this.distance, ...src };
+    this.sources.push(s);
+    this.lamps.add(s);
+    return s;
   }
+
+  /** Kept for old callers: Env updates the lamp uniforms itself. */
+  update() {}
+
+  /** Unregister every source (level unload). */
+  dispose() { for (const s of this.sources) this.lamps.remove(s); this.sources.length = 0; }
 }
 
 /** Flame cone geometry (one per level: LevelManager disposes everything under the level root). */
@@ -173,7 +173,7 @@ function flameGeometry(level) {
   if (level._flameGeo) return level._flameGeo;
   const outer = new THREE.ConeGeometry(0.11, 0.34, 7, 1, true).translate(0, 0.17, 0);
   const inner = new THREE.ConeGeometry(0.06, 0.2, 6, 1, true).translate(0, 0.1, 0);
-  const pos = [], cols = [], a = new THREE.Color('#FF7A2A'), b = new THREE.Color('#FFE6A0');
+  const pos = [], cols = [], a = new THREE.Color('#FF9A3D'), b = new THREE.Color('#FFEFB8');
   for (const [g, c] of [[outer, a], [inner, b]]) {
     const ng = g.toNonIndexed(), p = ng.attributes.position;
     for (let i = 0; i < p.count; i++) { pos.push(p.getX(i), p.getY(i), p.getZ(i)); cols.push(c.r, c.g, c.b); }

@@ -25,7 +25,9 @@ import { ECONOMY } from '../core/config.js';
 import { Level, condOk } from './Level.js';
 import { Terrain } from './Terrain.js';
 import { Grass, GRASS_COLORS } from './Grass.js';
-import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial, crownFraction, splitRoofTemplate } from './Props.js';
+import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial, crownFraction, splitRoofTemplate, worldMaterial, matFor, applyInkRim, PROP_PAL, STONE_TINT } from './Props.js';
+import { depthFor } from '../core/depth.js';
+import { Bunting } from './Bunting.js';
 import { clutterAnchors, isClutter } from './isoView.js';
 export { procTemplate };
 import { PropActor, Critter } from './PropActor.js';
@@ -33,7 +35,7 @@ import { Pickups } from './Pickups.js';
 import { Arena } from './Arena.js';
 import { VigilStone, VIGIL } from './VigilStone.js';
 import { WaterSet } from './Water.js';
-import { Silhouettes, makeGlowSprite } from './Sky.js';
+import { Silhouettes, makeGlowSprite, SILHOUETTE } from './Sky.js';
 import { distToPolyline, inBox, pointAlong, polylineLength } from './noise.js';
 import { LightPool, Fireflies, paveRibbons } from './Dressing.js';
 
@@ -47,23 +49,36 @@ export const OPEN_ZONE = Object.freeze({ safeLoadR: 17 });
 export const openZoneFlag = (levelId, zoneId) => `${levelId}.cleared.${zoneId}`;
 
 export const KIT_MODELS = {
-  obelisk: 'models/env/nature/statue_obelisk.glb',
-  lantern: 'models/env/graveyard/lantern-candle.glb',
+  // LI W10: every Vigil Stone is a waystone (a sandstone standing stone + a paper lantern on a crook + a pink ribbon),
+  // never graveyard furniture (the obelisk + candle lantern)
+  waystone: 'models/env/nature/stone_tallB.glb',
+  cloudBig: 'models/env/village-kaykit/decoration/cloud_big.glb',
+  cloudSmall: 'models/env/village-kaykit/decoration/cloud_small.glb',
   crate: 'models/env/village-kaykit/decoration/crate_A_big.glb',
   crateB: 'models/env/village-kaykit/decoration/crate_B_big.glb',
   barrel: 'models/env/village-kaykit/decoration/barrel.glb',
 };
 
 
-/** Per-biome defaults (grass, horizon tree silhouettes). */
+/**
+ * Per-biome defaults (grass, horizon tree silhouettes and their lilac / blue aerial colour, LI W6; the bog's dark
+ * trees are gone: LI W13).
+ */
 const BIOME = {
-  meadow: { grass: true, horizon: ['models/env/nature/tree_oak.glb', 'models/env/nature/tree_default.glb', 'models/env/nature/tree_detailed.glb'] },
-  forest: { grass: true, horizon: ['models/env/nature/tree_oak.glb', 'models/env/nature/tree_fat.glb', 'models/env/nature/tree_detailed.glb'] },
-  town: { grass: true, horizon: ['models/env/nature/tree_default.glb', 'models/env/nature/tree_oak.glb'] },
-  gate: { grass: true, horizon: [] },
-  bog: { grass: true, horizon: ['models/env/nature/tree_default_dark.glb', 'models/env/nature/tree_oak_dark.glb'] },
-  keep: { grass: false, horizon: [] },
+  meadow: { grass: true, horizon: ['models/env/nature/tree_oak.glb', 'models/env/nature/tree_default.glb', 'models/env/nature/tree_detailed.glb'], horizonColor: SILHOUETTE.horizon },
+  forest: { grass: true, horizon: ['models/env/nature/tree_oak.glb', 'models/env/nature/tree_fat.glb', 'models/env/nature/tree_detailed.glb'], horizonColor: SILHOUETTE.forest },
+  town: { grass: true, horizon: ['models/env/nature/tree_default.glb', 'models/env/nature/tree_oak.glb'], horizonColor: SILHOUETTE.horizon },
+  gate: { grass: true, horizon: [], horizonColor: SILHOUETTE.horizon },
+  bog: { grass: true, horizon: ['models/env/nature/tree_default.glb', 'models/env/nature/tree_oak.glb'], horizonColor: SILHOUETTE.bog },
+  keep: { grass: false, horizon: [], horizonColor: SILHOUETTE.night },
 };
+
+/** LI W10 waystone look (paper lantern on a crook, pink ribbon) and its trodden paint. */
+export const WAYSTONE = Object.freeze({ h: 1.3, tint: '#E3CFAE', paper: '#FFF0D6', cap: '#E0794F', ribbon: '#FF8FB1', crook: '#7E4E2A', paint: '#D8C49A' });
+/** WA §3.5 / LI W20 arena stage floor: path lifted +8 % L, weight 0.35, soft 3 m, out to r + pad, grass density × 0.4. */
+export const STAGE = Object.freeze({ lift: 0.08, weight: 0.35, soft: 3, pad: 1, grass: 0.4 });
+/** WA §2.8 cutscene clouds (the 'far' group only; 0 iso draws): count, ring radius and height bands, size, fog lerp. */
+export const CLOUDS = Object.freeze({ n: 5, r: [120, 190], y: [38, 60], scale: [14, 24], toFog: 0.25 });
 
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _c = new THREE.Color(), _v = new THREE.Vector3();
 
@@ -93,7 +108,8 @@ export function levelModelPaths(def, { bake = false } = {}) {
   for (const s of def.skyline ?? []) add(s.model);
   if (!bake) [].concat(def.models ?? []).forEach(add);
   for (const p of BIOME[def.biome ?? def.id]?.horizon ?? []) if (def.horizon !== false) add(p);
-  if ((def.zones ?? []).some((z) => z.kind === 'checkpoint')) { add(KIT_MODELS.obelisk); if (!bake) add(KIT_MODELS.lantern); }
+  if ((def.zones ?? []).some((z) => z.kind === 'checkpoint')) add(KIT_MODELS.waystone);
+  if (!bake && def.clouds !== false && (def.skyline?.length || def.horizon !== false)) { add(KIT_MODELS.cloudBig); add(KIT_MODELS.cloudSmall); }
   if (def.crates) { add(KIT_MODELS.crate); add(KIT_MODELS.crateB); add(KIT_MODELS.barrel); }
   return [...out];
 }
@@ -114,11 +130,16 @@ export function posedScene(gltf, clip, t = 0.5) {
 
 /** Tree material: vertex colours + gentle canopy sway (world-space, per instance phase). */
 export function makeTreeMaterial(uniforms) {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, envMapIntensity: 0.5 });
+  // ART §4.2 / §8.3: Lambert + the toon patch; canopies shade dark (bottom / inside) → light (top) by the normal
+  const m = worldMaterial();
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vUpK;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.86, 1.12, vUpK);');
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime, uWind, uTreeH;')
+      .replace('#include <common>', '#include <common>\nuniform float uTime, uWind, uTreeH;\nvarying float vUpK;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvUpK = clamp(objectNormal.y * 0.5 + 0.5, 0.0, 1.0);')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 {
   #ifdef USE_INSTANCING
@@ -134,7 +155,7 @@ export function makeTreeMaterial(uniforms) {
   transformed.z += (cos(uTime * 0.7 + ph * 1.3) * 0.6) * k;
 }`);
   };
-  m.customProgramCacheKey = () => 'world-tree-v1';
+  m.customProgramCacheKey = () => 'world-tree-v2';
   m.userData.owned = true;
   return m;
 }
@@ -195,6 +216,8 @@ export class Kit {
     return o;
   }
   onLoaded(fn) { this.level.onLoaded(fn); }
+  /** Run `fn` once the zone condition `cond` holds: at load, or later through `level.refresh()` (Chapter 1 live). */
+  onCond(cond, fn) { this.level.onCond((c) => this.cond(c ?? cond), fn); }
   /** Call fn(value) when story flag `key` changes (and once at load with the current value). */
   onFlag(key, fn) {
     this.level.onLoaded(() => fn(this.ctx.state?.getFlag?.(key), true));
@@ -254,19 +277,21 @@ export class Kit {
     return t;
   }
 
-  /** Shared vertex-colour material for standalone (animated) prop meshes. */
-  material() {
-    if (!this._vcMat) {
-      this._vcMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, envMapIntensity: 0.55 });
-      this._vcMat.userData.owned = true;
-    }
-    return this._vcMat;
+  /**
+   * Shared vertex-colour material for standalone props (Lambert, ink-rimmed chunky props). PERF §3.5: one clone per
+   * mesh kind ('plain' Mesh, 'instanced' fade sets), never one material across kinds.
+   * @param {'plain'|'instanced'|'skinned'|'batched'} [kind]
+   */
+  material(kind = 'plain') {
+    if (!this._vcMat) this._vcMat = applyInkRim(worldMaterial());
+    return matFor(this._vcMat, kind);
   }
 
   /** A standalone mesh of a template (animated props: gates, sacks, dummies). Not added to the scene. */
   mesh(tpl, { castShadow = true, name } = {}) {
-    const m = new THREE.Mesh(tpl.geometry, this.material());
+    const m = new THREE.Mesh(tpl.geometry, this.material('plain'));
     m.castShadow = castShadow; m.receiveShadow = true;
+    if (castShadow) m.customDepthMaterial = depthFor(m);
     m.name = name ?? tpl.key;
     m.userData.owned = true;
     return m;
@@ -392,6 +417,7 @@ export class Kit {
         mat.userData.owned = true;
         const mesh = new THREE.Mesh(merged, mat);
         mesh.name = 'merged:' + name; mesh.castShadow = true; mesh.receiveShadow = true;
+        mesh.customDepthMaterial = depthFor(mesh); mesh.userData.static = true;
         kit.object(mesh);
         return mesh;
       },
@@ -473,7 +499,7 @@ export class Kit {
     // 2. pickups (needs the root) + every directly referenced model, loaded in parallel
     level.pickups = new Pickups(ctx, { heightAt: (x, z) => this.h(x, z), levelId: def.id, root: level.groups.pickups });
     await Promise.all([...levelModelPaths(def, { bake: true }).map((p) => this.tpl(p)),
-      (def.zones ?? []).some((z) => z.kind === 'checkpoint') ? this.tpl(KIT_MODELS.lantern, { sat: 0.15, mul: 0.8, key: 'vigil_lantern' }) : null]);
+      (def.zones ?? []).some((z) => z.kind === 'checkpoint') ? this.tpl(KIT_MODELS.waystone, { tint: WAYSTONE.tint, key: 'waystone' }) : null]);
     mark('models');
 
     // 3. keep-out areas: arenas, checkpoints, spawns, water, setpiece boxes
@@ -484,12 +510,10 @@ export class Kit {
     }
     for (const s of Object.values(def.spawns ?? {})) this.block({ x: s[0], z: s[1], r: 2 });
 
-    // 3b. level lights (a fixed pool that follows the nearest lit flames) and fireflies
+    // 3b. level lamps (K2: no PointLights; lit flames feed ENV_U.uLamps through env.lamps, the 4 nearest the focus)
+    // and fireflies
     const focus = () => ctx.player?.object3d?.position ?? ctx.camera?.position ?? null;
-    if (def.lights) {
-      const pool = level.lightPool = new LightPool(level.groups.props, def.lights.n ?? def.lights, def.lights.opts ?? {});
-      level.animators.push({ render: (dt, t) => pool.update(focus(), t) });
-    }
+    if (def.lights) level.lightPool = new LightPool(level.groups.props, def.lights.n ?? def.lights, { ...(def.lights.opts ?? {}), lamps: ctx.env?.lamps ?? null });
     if (def.fireflies) {
       const ff = level.fireflies = new Fireflies(def.fireflies === true ? {} : def.fireflies);
       level.groups.props.add(ff.points);
@@ -502,7 +526,7 @@ export class Kit {
       for (const p of zn.placed ?? []) await this._placed(p, zn);
     }
     mark('setpieces');
-    for (const zn of def.zones ?? []) this._zone(zn);
+    for (const zn of def.zones ?? []) { if (zn.kind === 'arena' && zn.stage !== false) this._stage(zn); this._zone(zn); }
     if (typeof def.decorate === 'function') { try { await def.decorate(this); } catch (e) { console.error(`[world] ${def.id}: decorate failed`, e); } }
 
     // 5. scatter, crates, fish lines, breadcrumbs
@@ -533,7 +557,9 @@ export class Kit {
     // 7. render outputs: ground, grass, water, props batch, trees
     // §18 budget: Low draws the ground at half resolution in one call; Med / High in 2 × 2 frustum-culled tiles
     const lowQ = ctx.quality?.id === 'low';
-    const out = this.terrain.finalize(lowQ ? { step: 2, chunks: 1 } : { step: 1, chunks: 2, lod: ctx.quality?.id !== 'high' });
+    // PERF §7.3: Low has no shadow map; a height-term vertex AO (QUALITY.vertexAO 'height') grounds hollows instead
+    const ao = ctx.quality?.vertexAO === 'height';
+    const out = this.terrain.finalize(lowQ ? { step: 2, chunks: 1, ao } : { step: 1, chunks: 2, lod: ctx.quality?.id !== 'high', ao });
     mark('ground');
     this.terrain.dataTexture = out.dataTexture;
     level.groups.terrain.add(out.mesh);
@@ -545,7 +571,7 @@ export class Kit {
       const lines = [{ pts: this.terrain.spine, width: (def.pathWidth ?? 6) + (pv.widen ?? 0.6) }, ...this.terrain.paths.map((p) => ({ pts: p.pts, width: p.width + (pv.widen ?? 0.6) })), ...(pv.extra ?? [])];
       try {
         const mesh = await paveRibbons(ctx, { lines, discs: pv.discs ?? [], heightAt: (x, z) => this.terrain.heightAt(x, z), texture: pv.texture, tint: pv.tint, tile: pv.tile ?? 2.6,
-          color: pv.color ?? '#FFFFFF', edge: pv.edge ?? '#9A9078', rng, name: 'pave:' + def.id });
+          color: pv.color ?? '#FFFFFF', edge: pv.edge ?? '#D8C4A0', rng, name: 'pave:' + def.id, mapMix: pv.mapMix, contrast: pv.contrast, gain: pv.gain });
         if (mesh) { level.groups.terrain.add(mesh); level.pave = mesh; }
       } catch (e) { console.warn(`[world] ${def.id}: paving failed`, e); }
       mark('pave');
@@ -554,10 +580,10 @@ export class Kit {
       const g = def.grass ?? {};
       level.grass = new Grass({ ground: out.dataTexture, size: this.terrain.size, res: this.terrain.res, quality: ctx.quality,
         colors: g.colors ?? GRASS_COLORS[def.biome ?? def.id] ?? GRASS_COLORS.meadow, seed: (def.seed ?? 7) * 31 + 7,
-        height: g.height, near: g.near, far: g.far, flowers: g.flowers });
+        height: g.height, near: g.near, flowers: g.flowers });
       level.groups.grass.add(level.grass.group);
     }
-    if (def.water?.length) { level.waterMeshes = new WaterSet(def.water, def.size ?? 200); level.groups.water.add(level.waterMeshes.group); }
+    if (def.water?.length) { level.waterMeshes = new WaterSet(def.water, def.size ?? 200, def.waterColor ? { deep: def.waterColor, shallow: def.waterShallow ?? def.waterColor } : {}); level.groups.water.add(level.waterMeshes.group); }
     level.batch = this.batch;
     this.batch.build(level.groups.props, { spareInstances: 64, spareVertices: 6000 });
     // §3 occlusion tags on the batch (instance ids exist only after the build): roof faces, solid occluders
@@ -566,6 +592,19 @@ export class Kit {
     if (this._solidHandles.length) this.batch.mesh.userData.camFadeSolidIds = ids(this._solidHandles);
     if (this._fadeHandles.length) this.batch.mesh.userData.camFadeIds = ids(this._fadeHandles);
     this._buildTrees();
+    // WA §2.6: the level's candy bunting strings (the one added play draw; no shadow)
+    if (def.bunting?.length) {
+      level.bunting = new Bunting(def.bunting, { quality: ctx.quality, heightAt: (x, z) => this.h(x, z), seed: def.seed ?? 1, accent: def.accent });
+      if (level.bunting.mesh) {
+        level.groups.props.add(level.bunting.mesh);
+        level.animators.push({ render: (dt, t) => level.bunting.update(t, ctx.env) });
+        // `buntingWhen`: festival strings that appear with a story flag (the town once free)
+        if (def.buntingWhen != null) {
+          const show = () => { level.bunting.mesh.visible = this.cond(def.buntingWhen); };
+          show(); this.onLoaded(show); level.listen(E.FLAG_SET, show);
+        }
+      }
+    }
     mark('batch');
 
     // 8. spawns, anchors (+ fog_edge_0..7), checkpoints as spawns
@@ -586,6 +625,9 @@ export class Kit {
     // 9. mark everything level-built as owned (LevelManager disposes it); keep the templates for dispose
     level.templates = this.templates;
     level.root.traverse((o) => { o.userData.owned = true; });
+    // PERF §8.5: never-moving render outputs stop recomputing their matrices every frame (terrain tiles, the props
+    // batch, tree sets, merged architecture, far silhouettes); animated props keep auto-updating matrices
+    freezeStatics(level);
     return level;
   }
 
@@ -635,11 +677,11 @@ export class Kit {
       case 'kitten': this._kitten(zn); break;
       case 'letter':
         // `y` lifts it above the ground (a stump top, a ledge); `yAbs` puts it at an absolute height
-        this.onLoaded(() => { if (this.cond(zn.onlyIf)) this._lift(level.pickups.placeLetter(zn.letterId ?? zn.id, zn.at[0], zn.at[1]), zn); });
+        this.onCond(zn.onlyIf, () => this._lift(level.pickups.placeLetter(zn.letterId ?? zn.id, zn.at[0], zn.at[1]), zn));
         this.clear(zn.at[0], zn.at[1], 0.7, 0.3);
         break;
       case 'heartBell':
-        this.onLoaded(() => { if (this.cond(zn.onlyIf)) this._lift(level.pickups.placeHeartBell(zn.bellId ?? zn.id, zn.at[0], zn.at[1]), zn); });
+        this.onCond(zn.onlyIf, () => this._lift(level.pickups.placeHeartBell(zn.bellId ?? zn.id, zn.at[0], zn.at[1]), zn));
         this.clear(zn.at[0], zn.at[1], 0.8, 0.2);
         break;
       case 'exit':
@@ -661,6 +703,25 @@ export class Kit {
     }
     if (zn.interact && zn.kind !== 'arena' && zn.kind !== 'interact') this._interactZone(zn.interact);
     for (const h of zn.hints ?? []) this._hint(zn, h);
+  }
+
+  /**
+   * WA §3.5 / LI W20 arena stage floor: a lighter, calmer disc (or rectangle) out to r + 1 painted with the level's
+   * path colour lifted +8 % L, grass thinned to x 0.4, so fights, telegraphs and the hero sit on a bright plate.
+   */
+  _stage(zn) {
+    const t = this.terrain, P = t.palette, S = STAGE;
+    const col = '#' + _c.set(P.path).offsetHSL(0, 0, S.lift).getHexString();
+    const [x, z] = zn.at;
+    if (zn.size) {
+      const hw = zn.size[0] / 2 + S.pad, hd = zn.size[1] / 2 + S.pad;
+      t.paintBox(x - hw, z - hd, x + hw, z + hd, { color: col, weight: S.weight, density: S.grass });
+    } else {
+      const r = (zn.r ?? 12) + S.pad;
+      this.paint(x, z, r, col, S.weight, S.soft);
+      t.scaleGrass(x, z, r, S.grass);
+    }
+    (this.level.stages ??= []).push({ id: zn.id, at: zn.at, r: zn.r ?? null, size: zn.size ?? null, color: col });
   }
 
   /**
@@ -717,10 +778,10 @@ export class Kit {
     const v = new VigilStone(ctx, level, { id: zn.id, at: zn.at, facing: facing ?? 0, heightAt: (px, pz) => this.h(px, pz) });
     level.vigils.push(v);
     level.interactables.push(v.interactable);
-    this.place(KIT_MODELS.obelisk, x, z, { fit: { h: VIGIL.obeliskH }, yaw: facing ?? 0, collider: 'circle', shrink: 0.7, jitter: 0 });
+    this.place('waystone', x, z, { fit: { h: WAYSTONE.h }, yaw: facing ?? 0, collider: 'circle', shrink: 0.7, jitter: 0 });
     const lo = v._lanternOffset();
-    this.place('vigil_lantern', lo.x, lo.z, { fit: { h: VIGIL.lanternH }, yaw: facing ?? 0, collider: false, jitter: 0, occupy: 0.3 });
-    this.paint(x, z, 2.2, '#4A4632', 0.55, 1.2);
+    this.place(this.proc('vigil_lantern', waystoneLanternParts), lo.x, lo.z, { yaw: (facing ?? 0) + Math.PI / 2, collider: false, jitter: 0, occupy: 0.3 });
+    this.paint(x, z, 2.2, WAYSTONE.paint, 0.45, 1.2);
     this.clear(x, z, 1.6, 0.25);
     this.occupy(x, z, 2.2);
     this.onLoaded(() => {
@@ -738,8 +799,8 @@ export class Kit {
       this.clear(at[0], at[1], 0.5, 0.6);
       level.enemySpawns.push({ type: s[0], n, pos: new THREE.Vector3(at[0], this.h(at[0], at[1]), at[1]), patrolRadius: s[3] ?? 0, zone: zn.id });
     }
-    this.onLoaded(() => {
-      if (!this.cond(zn.onlyIf) || !ctx.enemies?.spawn) return;
+    this.onCond(zn.onlyIf, () => {
+      if (!ctx.enemies?.spawn) return;
       const st = ctx.state, flag = openZoneFlag(level.id ?? this.def.id, zn.id);
       if (st?.getFlag?.(flag)) { try { ctx.companions?.markCleared?.(zn.id); } catch { /* optional */ } return; }   // cleared on an earlier visit (saved)
       // loading at a Vigil Stone (Continue / reload): it is a safe spot, so groups near it stay away this load
@@ -785,9 +846,9 @@ export class Kit {
     this.occupy(zn.at[0], zn.at[1], 1.2);
     level.kittens.push({ id: zn.kittenId ?? zn.id, at: zn.at, hide: zn.hide });
     level.npcs.push({ id: zn.kittenId ?? zn.id, kind: 'kitten', pos: new THREE.Vector3(zn.at[0], this.h(zn.at[0], zn.at[1]), zn.at[1]) });
-    this.onLoaded(() => {
+    this.onCond(zn.onlyIf, () => {
       const id = zn.kittenId ?? zn.id;
-      if (!this.cond(zn.onlyIf) || ctx.state?.kittens?.includes?.(id) || !ctx.companions?.spawnKitten) return;
+      if (ctx.state?.kittens?.includes?.(id) || !ctx.companions?.spawnKitten) return;
       const opts = { prop: zn.prop === 'cow' ? null : zn.prop, standTime: zn.standTime, needClear: zn.needClear, y: zn.y, facing: zn.facing,
         zoneR: zn.zoneR, hits: zn.hits, cage: zn.cage, ribbon: zn.ribbon, ...(zn.opts ?? {}) };
       for (const k of Object.keys(opts)) if (opts[k] == null) delete opts[k];
@@ -931,10 +992,12 @@ export class Kit {
   // ------------------------------------------------------------------ far dressing
   async _farDressing() {
     const { def, level } = this;
-    const sky = new Silhouettes({ base: def.skylineColor ?? '#2F363C', toFog: def.skylineFog ?? 0.7 });
-    const hor = new Silhouettes({ base: def.horizonColor ?? '#283026', toFog: def.horizonFog ?? 0.8 });
-    level.skyline = { update: (fc) => { sky.update(fc); hor.update(fc); }, dispose: () => { sky.dispose(); hor.dispose(); } };
-    level.groups.skyline.add(sky.group, hor.group);
+    const sky = new Silhouettes({ base: def.skylineColor ?? SILHOUETTE.skyline, toFog: def.skylineFog ?? SILHOUETTE.skylineFog });
+    const hor = new Silhouettes({ base: def.horizonColor ?? this.biome.horizonColor ?? SILHOUETTE.horizon, toFog: def.horizonFog ?? SILHOUETTE.horizonFog });
+    // WA §2.8 / LI W23: 3–6 cartoon clouds, unlit white lerped toward the fog, merged into one draw (cutscenes only)
+    const cloud = new Silhouettes({ base: '#FFFFFF', toFog: CLOUDS.toFog });
+    level.skyline = { update: (fc) => { sky.update(fc); hor.update(fc); cloud.update(fc); }, dispose: () => { sky.dispose(); hor.dispose(); cloud.dispose(); } };
+    level.groups.skyline.add(sky.group, hor.group, cloud.group);
     const bake = (out, tpl, m) => {
       const g = tpl.geometry.clone(); g.applyMatrix4(m); out.push(g);
       for (const p of tpl.parts) { const pg = p.geometry.clone(); pg.applyMatrix4(_m2.copy(m).multiply(_m.makeTranslation(p.pivot.x, p.pivot.y, p.pivot.z))); out.push(pg); }
@@ -974,6 +1037,17 @@ export class Kit {
       }
       finish(geos, hor, 'horizon');
     }
+    if (def.clouds !== false && (def.skyline?.length || def.horizon !== false)) {
+      const ctpl = (await Promise.all([this.tpl(KIT_MODELS.cloudBig), this.tpl(KIT_MODELS.cloudSmall)])).filter(Boolean);
+      const rng = this.rng.fork('clouds'), geos = [];
+      const n = def.clouds?.n ?? CLOUDS.n;
+      for (let i = 0; i < n && ctpl.length; i++) {
+        const tpl = ctpl[i % ctpl.length], a = (i / n) * Math.PI * 2 + rng() * 0.6, rr = CLOUDS.r[0] + rng() * (CLOUDS.r[1] - CLOUDS.r[0]);
+        const sc = (CLOUDS.scale[0] + rng() * (CLOUDS.scale[1] - CLOUDS.scale[0])) / Math.max(0.01, tpl.box.max.x - tpl.box.min.x);
+        bake(geos, tpl, trs(new THREE.Matrix4(), Math.sin(a) * rr, CLOUDS.y[0] + rng() * (CLOUDS.y[1] - CLOUDS.y[0]), Math.cos(a) * rr, rng.angle(), sc));
+      }
+      finish(geos, cloud, 'clouds');
+    }
     // the Dawnstone: a warm emissive glow at an anchor (fog-proof)
     if (def.dawnstone) {
       const a = def.anchors?.[def.dawnstone.anchor ?? 'bell_far'];
@@ -996,14 +1070,18 @@ export class Kit {
     for (const set of this.treeSets.values()) {
       const tpl = set.tpl;
       const uni = { ...u, uTreeH: { value: Math.max(0.01, tpl.box.max.y - tpl.box.min.y) } };
-      const mat = set.sway ? makeTreeMaterial(uni) : this.material();
+      const mat = set.sway ? makeTreeMaterial(uni) : this.material('instanced');
       const mesh = new THREE.InstancedMesh(tpl.geometry, mat, set.items.length);
       mesh.name = set.name;
       set.items.forEach((it, i) => { mesh.setMatrixAt(i, it.m); mesh.setColorAt(i, it.c ?? _c.setRGB(1, 1, 1)); });
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere(); mesh.computeBoundingBox?.();
-      mesh.castShadow = true; mesh.receiveShadow = true;
+      // PERF §7.1 cast trim: trees and props >= 1 m tall cast; low fade sets (fences, small stones) only receive
+      const sy = set.items.length ? _v.setFromMatrixScale(set.items[0].m).y : 1;
+      mesh.castShadow = set.sway || (tpl.box.max.y - tpl.box.min.y) * sy >= SHADOW_CASTER_MIN_H;
+      if (mesh.castShadow) mesh.customDepthMaterial = depthFor(mesh);
+      mesh.receiveShadow = true;
       // §3: tree crowns fade from above, trunks never (`crownFrac` = where the leaves start, per template)
       if (set.sway) { mesh.userData.camFade = 'crown'; mesh.userData.crownFrac = crownFraction(tpl.geometry); }
       else mesh.userData.camFade = true;
@@ -1029,10 +1107,41 @@ export const SETPIECES = {
       kit.place(tpl, x, z, { fit: zone.stoneFit ?? { h: 3.0 }, yaw: a + Math.PI / 2 + (kit.rng() - 0.5) * 0.4, collider: 'circle', shrink: 0.75,
         fade: zone.stoneFade ?? true,   // M2: the follow camera fades a stone it is behind / inside (was a flat grey face)
         tiltX: (kit.rng() - 0.5) * 0.08, tiltZ: (kit.rng() - 0.5) * 0.08, sink: 0.15, jitter: 0.05 });
-      kit.paint(x, z, 1.6, '#3B3A26', 0.35);
+      kit.paint(x, z, 1.6, PROP_PAL.dirt, 0.25);
     }
   },
 };
+
+/** PERF §7.1: instanced fade sets lower than this (m) do not cast sun shadows (fences, low stones). */
+export const SHADOW_CASTER_MIN_H = 1.0;
+
+/** LI W10 paper lantern on a crook (cream paper, terracotta cap and base, pink ribbon), base at y 0, about 1.2 m. */
+export function waystoneLanternParts() {
+  const W = WAYSTONE;
+  const crook = new THREE.CylinderGeometry(0.035, 0.045, 1.15, 6).translate(0, 0.575, 0);
+  const arm = new THREE.BoxGeometry(0.32, 0.06, 0.06).translate(0.13, 1.12, 0);
+  const paper = new THREE.CylinderGeometry(0.11, 0.11, 0.32, 10).translate(0.26, 0.86, 0);
+  const cap = new THREE.CylinderGeometry(0.05, 0.13, 0.07, 10).translate(0.26, 1.05, 0);
+  const base = new THREE.CylinderGeometry(0.13, 0.1, 0.05, 10).translate(0.26, 0.68, 0);
+  const ribbon = new THREE.BoxGeometry(0.06, 0.16, 0.04).translate(0, 0.98, 0.05);
+  return [[crook, W.crook], [arm, W.crook], [paper, W.paper], [cap, W.cap], [base, W.cap], [ribbon, W.ribbon]];
+}
+
+/**
+ * PERF §8.5: matrices of never-moving render outputs are computed once (terrain tiles, pave, the props batch, tree /
+ * fade sets, merged architecture, skyline silhouettes). Animated props (gates, sacks, dummies, flames) keep updating.
+ * @param {Level} level @returns {number} frozen objects
+ */
+export function freezeStatics(level) {
+  let n = 0;
+  const freeze = (o) => { o.updateMatrix(); o.matrixAutoUpdate = false; n++; };
+  level.groups.terrain?.traverse((o) => freeze(o));
+  level.groups.skyline?.traverse((o) => freeze(o));
+  if (level.batch?.mesh) freeze(level.batch.mesh);
+  for (const t of level.trees ?? []) freeze(t);
+  level.groups.props?.traverse((o) => { if (o.userData?.static) freeze(o); });
+  return n;
+}
 
 /** Crate fish value range (for tests / docs). */
 export const CRATE_FISH = ECONOMY.fish.crate;

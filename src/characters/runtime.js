@@ -8,10 +8,11 @@
 // Idempotent per ctx; node-safe (no DOM / WebGL at import).
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { setFurQuality, FUR_WIND } from './Fur.js';
-import { setAssetResolver, setCharDetail } from './util.js';
-import { setCharacterEnvMap } from './materials.js';
+import { setFurQuality, setFurIsoShells, FUR_WIND } from './Fur.js';
+import { setAssetResolver, setCharDetail, setCharQuality } from './util.js';
+import { setCharacterEnvMap, envMapUsers } from './materials.js';
 import { updateReadability } from './Readability.js';
+import { OUTLINE_U } from './Outline.js';
 
 /** Wind direction for fur and capes (world XZ, normalised at use) and m/s-ish gain per unit of env.wind. */
 export const WIND = Object.freeze({ dir: [0.82, 0, 0.45], gain: 0.22, gustAmp: 0.35, gustPeriod: 3.8 });
@@ -19,14 +20,35 @@ export const WIND = Object.freeze({ dir: [0.82, 0, 0.45], gain: 0.22, gustAmp: 0
 const _states = new WeakMap();
 const _dir = new THREE.Vector3();
 
+/** Kittens draw this share of the hero's close-up shells (ART §6.1: "kittens ×0.6"). */
+export const KITTEN_CLOSE_SHARE = 0.6;
 /**
- * Fur shell counts for a core QUALITY preset (config.QUALITY.low/med/high: furShells = hero, kittenShells = companions).
- * @param {{furShells?: number, kittenShells?: number}|null|undefined} preset
+ * CLOSE-UP fur shell counts for a core QUALITY preset (ART §6.1, X8: `furShellsClose` Low 8 / Med 16 / High 16, kittens
+ * ×0.6; the retired `furShells` / `kittenShells` are the fallback for presets without the new keys).
+ * @param {{furShellsClose?: number, furShells?: number, kittenShells?: number}|null|undefined} preset
  * @returns {{hero: number, kitten: number, npc: number}}
  */
 export function furShellsForPreset(preset) {
   if (!preset) return { hero: 16, kitten: 10, npc: 0 };
+  if (Number.isFinite(preset.furShellsClose)) {
+    const h = Math.max(0, preset.furShellsClose);
+    return { hero: h, kitten: Math.round(h * KITTEN_CLOSE_SHARE), npc: 0 };
+  }
   return { hero: Math.max(0, preset.furShells ?? 16), kitten: Math.max(0, preset.kittenShells ?? 10), npc: 0 };
+}
+/**
+ * Iso PLAY fur shell counts for a preset (`furShellsIso` hero, `kittenShellsIso` others; 0 on every tier today).
+ * @param {object|null|undefined} preset @returns {{hero: number, kitten: number, npc: number}}
+ */
+export function furIsoForPreset(preset) {
+  return { hero: Math.max(0, preset?.furShellsIso ?? 0), kitten: Math.max(0, preset?.kittenShellsIso ?? 0), npc: 0 };
+}
+/** Map a core QUALITY preset onto every characters quality switch (fur, detail, tufts, outline tier). */
+function applyPreset(preset, game) {
+  setFurQuality(furShellsForPreset(preset));
+  setFurIsoShells(furIsoForPreset(preset));
+  setCharDetail(preset?.charDetail ?? 1);   // cats built from now on (Low: lighter armour / body / head meshes)
+  setCharQuality({ tufts: preset?.charTufts ?? true, outline: preset?.outline ?? 'hero', playLod: !!game });
 }
 
 /**
@@ -48,15 +70,12 @@ export function initCharacters(ctx) {
   };
   _states.set(ctx, st);
   if (typeof ctx.assets?.url === 'function') setAssetResolver((p) => ctx.assets.url(p));
-  setFurQuality(furShellsForPreset(ctx.quality));
-  setCharDetail(ctx.quality?.charDetail ?? 1);
+  applyPreset(ctx.quality, ctx.game);
   if (ctx.renderer && ctx.scene) noteRender(ctx.renderer, ctx.scene);
   const bus = ctx.bus;
   if (bus?.on) {
     offs.push(bus.on(E.QUALITY, (p) => {
-      const preset = p?.preset ?? ctx.quality;
-      setFurQuality(furShellsForPreset(preset));
-      setCharDetail(preset?.charDetail ?? 1);   // cats built from now on (Low: lighter armour / body / head meshes)
+      applyPreset(p?.preset ?? ctx.quality, ctx.game);
     }));
     offs.push(bus.on(E.ENV_CHANGED, () => { _env.countdown = 0; }));
   }
@@ -79,6 +98,9 @@ export function characterFrame(ctx) {
   if (ctx.renderer && ctx.scene) noteRender(ctx.renderer, ctx.scene);   // Kitten.simulate() runs envTick() once per frame
   // readability from the iso camera: the top-view factor (bow, ears, cape trim) and fur LOD from cam.focus
   st.view = updateReadability(ctx);
+  // outline hulls: constant CSS px × the live pixel ratio (dynamic resolution steps included, X4)
+  const pr = ctx.renderer?.getPixelRatio?.();
+  if (Number.isFinite(pr) && pr > 0) OUTLINE_U.uPxScale.value = pr;
   const env = ctx.env;
   // world's Env may own FUR_WIND (it writes it every frame after us): if the value changed since our last write,
   // someone else drives it and we stop writing for good.
@@ -197,6 +219,8 @@ function colorDelta(a, b) {
  */
 export function envTick(renderer = _seen.renderer, scene = _seen.scene) {
   if (!renderer || !scene) return false;
+  // WarmToon / matcap materials need no PMREM (K6); only a legacy Standard material would (none in play)
+  if (!envMapUsers()) return false;
   if (_env.countdown-- > 0) return false;
   _env.countdown = CHAR_ENV.every;
   if (renderer !== _env.renderer) { _env.pmrem?.dispose(); _env.pmrem = null; _env.renderer = renderer; _env.colors = null; }

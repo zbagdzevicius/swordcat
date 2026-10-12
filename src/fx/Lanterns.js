@@ -3,12 +3,11 @@
 // active"), vigil-camp lanterns and any later rally (L6). Visuals only: world / story decide when a lantern is lit.
 //
 // Any number of lantern handles. Every lit lantern draws a flickering glow halo in fx's marks batch (no extra draw call)
-// and the occasional rising ember. Real light is opt-in (`light: true`): world's Dressing LightPool and the CS-04 prop
-// already own the level / cutscene PointLights, so fx adds none unless asked. When asked, at most LANTERN.lights
-// PointLights are pooled and kept in the scene with intensity 0 when idle (adding / removing lights recompiles every
-// lit material: create such lanterns while the level builds, under the loading veil); they go to the nearest lit
-// light-casting lanterns (to her / the camera focus), fading over, never popping, and are dropped on the next level
-// that has none.
+// and the occasional rising ember. Real light is opt-in (`light: true`). PERF §8.2 / F6 (no PointLights in play or
+// cutscenes): a light-casting lantern registers a lamp source with world's `ctx.env.lamps` (LampSet → the 4
+// `ENV_U.uLamps` pools nearest the iso focus, a uniform write, never a recompile). Only when world has no lamp set
+// (legacy) are at most LANTERN.lights PointLights pooled, kept in the scene at intensity 0 when idle, given to the
+// nearest lit light-casting lanterns, and dropped on the next level that has none.
 import * as THREE from 'three';
 import { SHAPE, FADE, GROW } from './Particles.js';
 import { MARK } from './Marks.js';
@@ -51,7 +50,11 @@ export class Lanterns {
   get count() { return this.list.length; }
   get litCount() { return this.list.filter((l) => l.lit).length; }
   get castCount() { return this.list.filter((l) => l.casts).length; }
-  get lightsOn() { return this.pool.filter((s) => s.owner && s.light.intensity > 0.01).length; }
+  get lightsOn() { return this.pool.filter((s) => s.owner && s.light.intensity > 0.01).length + this.list.filter((l) => l.lamp?.on).length; }
+  /** World's lamp registry (ENV_U.uLamps), or null (legacy PointLight pool). */
+  get lampSet() { const s = this.ctx.env?.lamps; return s && typeof s.add === 'function' ? s : null; }
+  /** Light-casting lanterns registered as world lamp sources. */
+  get lampCount() { return this.list.filter((l) => l.lamp).length; }
 
   /** Create the pooled lights (idempotent). */
   ensureLights() {
@@ -79,13 +82,15 @@ export class Lanterns {
    * → handle { lit, light(), out(), set(), remove(), alive, pos }.
    */
   add(at, opts = {}) {
-    if (opts.light === true) this.ensureLights();
+    const lamps = opts.light === true ? this.lampSet : null;
+    if (opts.light === true && !lamps) this.ensureLights();
     const ref = typeof at === 'string' ? (resolveActor(this.ctx, at) ?? at) : at;
     const L = {
       ref, actor: isActor(ref) ? ref : null, obj: !isActor(ref) && ref?.isObject3D ? ref : null, child: null,
       offset: opts.offset ?? null, pos: new THREE.Vector3(), lit: opts.lit !== false, casts: opts.light === true, w: 0,
       intensity: opts.intensity ?? LANTERN.intensity, distance: opts.distance ?? LANTERN.distance,
       color: new THREE.Color(opts.color ?? LANTERN.color), glow: opts.glow ?? LANTERN.glow, seed: this.rng() * 100, emberT: this.rng(), handle: null,
+      lamp: null,
     };
     if (!L.actor && !L.obj) {
       if (typeof ref === 'string') { if (resolveAnchor(this.ctx, ref, L.pos) === null) L.pos.set(0, 0, 0); else L.pos.y += opts.height ?? 0; }
@@ -93,15 +98,23 @@ export class Lanterns {
     }
     if (L.actor) L.actor.object3d.traverse((o) => { if (!L.child && o !== L.actor.object3d && /lantern/i.test(o.name ?? '')) L.child = o; });
     this._place(L);
+    if (lamps) { L.lamp = { pos: L.pos, on: L.lit, intensity: L.intensity, distance: L.distance, flicker: 0.35, owner: 'fx.lantern' }; lamps.add(L.lamp); }
     const self = this;
     L.handle = {
       get lit() { return L.lit; },
       get alive() { return self.list.includes(L); },
       get pos() { return L.pos; },
-      light(o = {}) { if (!L.lit) { L.lit = true; if (o.ignite !== false) self.ignite(L.pos); } return this; },
-      out() { if (L.lit) { L.lit = false; self.puff(L.pos); } return this; },
-      set(o = {}) { if (o.intensity != null) L.intensity = o.intensity; if (o.color) L.color.set(o.color); if (o.glow != null) L.glow = o.glow; return this; },
-      remove() { const i = self.list.indexOf(L); if (i >= 0) self.list.splice(i, 1); for (const s of self.pool) if (s.owner === L) s.owner = null; },
+      light(o = {}) { if (!L.lit) { L.lit = true; if (L.lamp) L.lamp.on = true; if (o.ignite !== false) self.ignite(L.pos); } return this; },
+      out() { if (L.lit) { L.lit = false; if (L.lamp) L.lamp.on = false; self.puff(L.pos); } return this; },
+      set(o = {}) {
+        if (o.intensity != null) { L.intensity = o.intensity; if (L.lamp) L.lamp.intensity = o.intensity; }
+        if (o.color) L.color.set(o.color); if (o.glow != null) L.glow = o.glow; return this;
+      },
+      remove() {
+        const i = self.list.indexOf(L); if (i >= 0) self.list.splice(i, 1);
+        for (const s of self.pool) if (s.owner === L) s.owner = null;
+        if (L.lamp) { self.lampSet?.remove?.(L.lamp); L.lamp = null; }
+      },
     };
     this.list.push(L);
     if (L.lit && opts.ignite) this.ignite(L.pos);
@@ -123,7 +136,7 @@ export class Lanterns {
 
   /** A lantern going out: a curl of smoke. */
   puff(pos) {
-    this.particles.burst(pos, { n: 4, shape: SHAPE.PUFF, color: '#8E8C86', alpha: 0.6, size: [0.1, 0.16], sizeEnd: 2.4, grow: GROW.OUT,
+    this.particles.burst(pos, { n: 4, shape: SHAPE.PUFF, color: '#E8D8C8', alpha: 0.6, size: [0.1, 0.16], sizeEnd: 2.4, grow: GROW.OUT,
       life: [0.8, 1.2], speed: [0.2, 0.5], up: 0.7, dir: _up, spread: 0.6, drag: 2, fade: FADE.HOLD });
   }
 
@@ -187,7 +200,12 @@ export class Lanterns {
   }
 
   /** Level unload: every lantern belongs to its level. The pooled lights stay until the next level decides. */
-  clear() { this.list.length = 0; for (const s of this.pool) { s.owner = null; s.k = 0; s.light.intensity = 0; } }
+  clear() {
+    const lamps = this.lampSet;
+    for (const l of this.list) if (l.lamp) { lamps?.remove?.(l.lamp); l.lamp = null; }
+    this.list.length = 0;
+    for (const s of this.pool) { s.owner = null; s.k = 0; s.light.intensity = 0; }
+  }
 
   dispose() { this.clear(); this.dropLights(); }
 }

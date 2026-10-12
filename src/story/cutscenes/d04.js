@@ -105,9 +105,4 @@ export const d04clover = {
 };
 
 /** The D-04 rescue that comes next (for a generic `play('d04')`). Pure-ish (reads flags). */
-export function nextD04(state) {
-  if (!state?.getFlag?.('town.tofu')) return 'd04tofu';
-  if (!state?.getFlag?.('town.earlgrey')) return 'd04earlgrey';
-  if (!state?.getFlag?.('town.clover')) return 'd04clover';
-  return null;
-}
+export { nextD04 } from './registry.js';

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as THREE from 'three';
 import { MODEL_FIT, LEVEL_IDS } from '../../src/core/config.js';
 import { fitToHeight, measure, resolveFit, extentOf, findNode } from '../../src/core/Assets.js';
-import { normalizeAssetPath, normalizeManifest, levelAssets } from '../../src/core/manifests.js';
+import { normalizeAssetPath, normalizeManifest, levelAssets, TIERS } from '../../src/core/manifests.js';
 import { collectManifests, computeKeep, norm } from '../../scripts/prune-assets.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -50,9 +50,12 @@ test('manifest `levels` subsets use real level ids (or "*") and are listed in th
     if (!fs.existsSync(f)) continue;
     const mod = await import(pathToFileURL(f).href);
     const m = normalizeManifest(dir, mod);
-    for (const [k, list] of Object.entries(m.levels)) {
-      assert.ok(k === '*' || LEVEL_IDS.includes(k), `${dir}: unknown level key "${k}"`);
-      for (const p of list) assert.ok(m.all.includes(p), `${dir}: levels.${k} path ${p} not in the default export`);
+    for (const [k, tiers] of Object.entries(m.tiers)) {
+      assert.ok(k === '*' || k === 'title' || LEVEL_IDS.includes(k), `${dir}: unknown level key "${k}"`);
+      for (const [tier, list] of Object.entries(tiers)) {
+        assert.ok(TIERS.includes(tier), `${dir}: levels.${k} unknown tier ${tier}`);
+        for (const p of list) assert.ok(m.all.includes(p), `${dir}: levels.${k}.${tier} path ${p} not in the default export`);
+      }
     }
   }
 });
@@ -123,4 +126,54 @@ test('manifest path normalisation and per-level union', () => {
     normalizeManifest('b', { default: ['m/3.glb'], levels: { forest: ['m/3.glb'] } })];
   assert.deepEqual(levelAssets('meadow', ms).sort(), ['m/1.glb', 'm/2.glb']);
   assert.deepEqual(levelAssets('forest', ms).sort(), ['m/2.glb', 'm/3.glb']);
+});
+
+test('PERF §10.3 manifest tiers: object form {p0, p1, p2}, title key, array = p0; levelAssets by tier', () => {
+  const ms = [normalizeManifest('a', { default: ['m/1.glb', 'm/2.glb', 'm/4.glb', 'm/5.glb'], levels: { meadow: { p0: ['m/1.glb'], p1: ['m/4.glb'], p2: ['m/5.glb'] }, '*': { p0: ['m/2.glb'] }, title: ['m/5.glb'] } }),
+    normalizeManifest('b', { default: ['m/3.glb'], levels: { meadow: ['m/3.glb'] } })];
+  assert.deepEqual(levelAssets('meadow', ms).sort(), ['m/1.glb', 'm/2.glb', 'm/3.glb'], 'p0 + legacy arrays + * p0');
+  assert.deepEqual(levelAssets('meadow', ms, 'p1'), ['m/4.glb']);
+  assert.deepEqual(levelAssets('meadow', ms, 'all').sort(), ['m/1.glb', 'm/2.glb', 'm/3.glb', 'm/4.glb', 'm/5.glb']);
+  assert.deepEqual(levelAssets('title', ms), ['m/5.glb'], 'title has no "*"');
+  assert.deepEqual(ms[0].levels.meadow, ['m/1.glb'], '`levels` keeps the p0 list for old readers');
+});
+
+test('PERF §10.3 tier budgets: title <= 1.2 MB, p0 <= 4 MB per level, "*" p0 <= 0.4 MB (tiered manifests gate; legacy arrays report)', async () => {
+  const mods = [];
+  for (const dir of fs.readdirSync(path.join(ROOT, 'src'))) {
+    const f = path.join(ROOT, 'src', dir, 'assets.manifest.js');
+    if (fs.existsSync(f)) mods.push(normalizeManifest(dir, await import(pathToFileURL(f).href)));
+  }
+  const size = (p) => { try { return fs.statSync(path.join(PUBLIC, p)).size; } catch { return 0; } };
+  const MB = 1048576, sum = (list) => list.reduce((a, p) => a + size(p), 0) / MB;
+  // only areas that declared tiers (object form) are gated; array-form manifests are the legacy "everything is p0"
+  const tiered = mods.map((m) => ({ ...m, tiers: Object.fromEntries(Object.entries(m.tiers).filter(([k]) => !Array.isArray(m.levels[k]) || m.tiers[k].p1 || m.tiers[k].p2 || k === 'title')) }));
+  const title = sum(levelAssets('title', tiered));
+  assert.ok(title <= 1.2, `title tier ${title.toFixed(2)} MB > 1.2 MB`);
+  const star = new Set(); for (const m of tiered) for (const p of m.tiers['*']?.p0 ?? []) star.add(p);
+  if ([...star].length && tiered.some((m) => m.tiers['*']?.p2)) assert.ok(sum([...star]) <= 0.4, `"*" p0 ${sum([...star]).toFixed(2)} MB > 0.4 MB`);
+  for (const id of LEVEL_IDS) {
+    const gated = tiered.filter((m) => m.tiers[id]?.p1 || m.tiers[id]?.p2);
+    if (!gated.length) continue;
+    const p0 = sum(levelAssets(id, gated, 'p0'));
+    assert.ok(p0 <= 4, `${id} p0 ${p0.toFixed(2)} MB > 4 MB`);
+  }
+});
+
+test('PERF §10.2 bundle guard: chunk groups summed and gated against their gzip budgets', async () => {
+  const os = await import('node:os');
+  const { checkBundle, BUDGETS } = await import('../../scripts/bundle-budget.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-bundle-'));
+  fs.mkdirSync(path.join(dir, 'bundle'));
+  const rnd = (n) => { let s = ''; let x = 1; for (let i = 0; i < n; i++) { x = (x * 48271) % 2147483647; s += String.fromCharCode(33 + (x % 90)); } return s; };
+  fs.writeFileSync(path.join(dir, 'bundle', 'boot-abc.js'), rnd(1000));
+  fs.writeFileSync(path.join(dir, 'bundle', 'meadow-abc.js'), rnd(40000));
+  fs.writeFileSync(path.join(dir, 'bundle', 'index-abc.js'), 'x');
+  const r = checkBundle(dir);
+  assert.ok(r.rows.find((x) => x.group === 'boot').ok);
+  const lvl = r.rows.find((x) => x.group === 'level');
+  assert.ok(lvl && !lvl.ok && lvl.gate, 'a 40 KB-random level chunk is over its 15 KB gz budget');
+  assert.equal(r.fail, true); assert.equal(r.unmatched.length, 1);
+  assert.ok(BUDGETS.find((b) => b.name === 'three').kb === 215);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

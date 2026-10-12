@@ -20,7 +20,7 @@ import { BOSSES, ENEMIES } from '../../core/config.js';
 import { E } from '../../core/events.js';
 import { dampAngle } from '../../core/math.js';
 import { CLIP_MAPS } from '../clipMaps.js';
-import { TUNING, M2, rangeOf } from '../tuning.js';
+import { TUNING, M2, WARM, rangeOf } from '../tuning.js';
 import { windupFor } from '../Enemy.js';
 import { bossDef } from '../bossBase.js';
 import { CHAIN_STATE, laneTo, minLead, ringAt } from '../moves.js';
@@ -329,7 +329,7 @@ export const CACKLEJAW_CLONE = {
   async build(e, m) {
     await dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' });
     if (e.disposed) return;
-    (await characters()).silhouette(m.root, BM.cloneTint, { fog: true, castShadow: false });
+    (await characters()).silhouette(m.root, WARM.boss.cloneTint, { fog: true, castShadow: false });   // ART §7.1: plum, never black
     m.root.traverse((o) => { if (o.isMesh) o.castShadow = false; });
   },
 };

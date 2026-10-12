@@ -26,7 +26,10 @@ import { E } from '../core/events.js';
 import { ENEMIES, PLAYER, GRAVITY } from '../core/config.js';
 import { Enemy, visualDt } from './Enemy.js';
 import { Boss } from './Boss.js';
-import { TUNING, M2, rangeOf } from './tuning.js';
+import { TUNING, M2, WARM, rangeOf } from './tuning.js';
+import { VisualPool, dressingKey, waveSizes } from './VisualPool.js';
+import { outlineTargets } from './look.js';
+import { loadedCharacters } from './types/kaykitGear.js';
 import ratPike from './types/rat_pike.js';
 import ratXbow from './types/rat_xbow.js';
 import crow from './types/crow.js';
@@ -59,7 +62,7 @@ const KNIGHT_PROPS = ['1H_Sword', '1H_Sword_Offhand', '2H_Sword', 'Badge_Shield'
 const BOSS_LOOKS = {
   brutus: { hide: ['Knight_Head', '1H_Sword', '1H_Sword_Offhand', 'Badge_Shield', 'Round_Shield', 'Spike_Shield'], show: ['2H_Sword', 'Rectangle_Shield', 'Knight_Helmet'],
     build: (e, m) => dressKayKit(e, m, { look: 'brutus', headNode: 'Knight_Head', expression: 'neutral', plate: false }) },
-  barkus: { hide: ['Knight_Head', 'Knight_Helmet', ...KNIGHT_PROPS], show: ['Knight_Cape'], tint: { Knight_Cape: '#22242A' },
+  barkus: { hide: ['Knight_Head', 'Knight_Helmet', ...KNIGHT_PROPS], show: ['Knight_Cape'], tint: { Knight_Cape: WARM.boss.barkusCape },
     build: (e, m) => dressKayKit(e, m, { look: 'barkus', headNode: 'Knight_Head', expression: 'angry', plate: false,
       weapon: { model: 'models/weapons/quaternius/Claymore.glb', bone: 'handslot.r', fit: 'barkus' } }) },
 };
@@ -87,6 +90,16 @@ export function resolveEnemyDef(type) {
     return { ...GENERIC_GRUNT, ...row, anims: row.model ? animsFor(row.model) : {}, id: t };
   }
   return { ...GENERIC_GRUNT, id: t, unknown: true };
+}
+
+/**
+ * WA §8.3: from `gate.done` on, hyenas in the hub (the town) are friends and wear their friend words. Pure on ctx.
+ * @param {any} ctx @param {any} def
+ */
+export function hubFriendly(ctx, def) {
+  if (def?.id !== 'hyena' && def?.id !== 'stealer') return false;
+  const level = ctx?.levels?.current?.id ?? ctx?.state?.levelId;
+  return level === 'town' && !!ctx?.state?.getFlag?.('gate.done');
 }
 
 /** Is `e` an AI combatant that counts against the §8.3 arena budget? */
@@ -130,6 +143,11 @@ export class EnemyManager {
     this.pinThief = null;
     /** prewarm stand-ins kept (materials alive) until the level unloads */
     this._warmKeep = [];
+    /** PERF §3.4 dressed visuals waiting for a spawn (per type + dressing key); perf() reads `pools.misses` */
+    this.pools = new VisualPool();
+    /** ART §5.4 enemies wearing an outline hull this frame (QUALITY.outline), re-picked at WARM.outline.hz */
+    this.outlined = new Set();
+    this._outlineNext = new Set(); this._outlineScratch = []; this._outlineT = 0;
   }
 
   async init() {
@@ -138,6 +156,8 @@ export class EnemyManager {
     this._offs.push(
       bus.on(E.LEVEL_UNLOAD, () => this.clear()),
       bus.on(E.CUTSCENE_START, () => this.interruptAll()),
+      // PERF §7 / K3: a tier change may turn sun shadows on or off: re-apply every enemy's casting
+      bus.on(E.QUALITY, () => { for (const e of this.list) e.applyCasting?.(); }),
       bus.on(E.PLAYER_MEOW, (p) => this.onMeow(p?.position ?? this.ctx.player?.pos)),
       // hyena Gloat (§10.3): an enemy that lands a hit on her (not blocked / parried; god mode still counts) hears about it
       bus.on(E.HIT, (h) => {
@@ -242,7 +262,8 @@ export class EnemyManager {
     else p.y = Number.isFinite(p.y) ? Math.max(p.y, ground) : ground;
     const facing = opts.facing ?? (ctx.player ? Math.atan2(ctx.player.pos.x - p.x, ctx.player.pos.z - p.z) : 0);
     const Cls = def.boss ? Boss : Enemy;
-    const e = new Cls(ctx, def, { ...opts, pos: p, facing, y: opts.y ?? 0 });
+    const friend = opts.friend ?? hubFriendly(ctx, def);
+    const e = new Cls(ctx, def, { ...opts, pos: p, facing, y: opts.y ?? 0, friend });
     if (opts.home) toPos(ctx, opts.home, e.home);
     if (opts.ai === false) e.ai = false;
     const held = !opts.noCap && !def.boss && !opts.scripted && e.ai && !e.tags.has('cutscene') && TUNING.pending && this.countNear(p) >= this.cap;
@@ -257,9 +278,24 @@ export class EnemyManager {
     if (opts.scripted) e.setScripted(true);
     if (opts.alerted && !held) { e.alerted = true; if (e.ai && !e.scripted) e.setState('chase'); }
     if (def.boss) { this.boss = /** @type {Boss} */ (e); e.start(); }
-    e.loadVisual();
+    // PERF §3.4: a dressed, compiled visual from the pool when there is one (no clone / dress / recolour this frame)
+    e.poolKey = dressingKey(def, opts, { friend });
+    const rec = e.poolKey ? this.pools.take(e.poolKey) : null;
+    if (rec) e.attachVisual(rec); else e.loadVisual();
     ctx.bus.emit(E.ENEMY_SPAWNED, { enemy: e });
     return e;
+  }
+
+  /**
+   * PERF §3.4 / E5: make sure the models of `types` are loaded (GLB cache) before a fight needs them. Resolves with
+   * the model paths once they are (unknown and procedural types are skipped).
+   * @param {string[]} types
+   */
+  async preloadTypes(types) {
+    const paths = new Set();
+    for (const t of types ?? []) { const d = resolveEnemyDef(t); if (!d.unknown && d.model) paths.add(d.model); }
+    await Promise.all([...paths].map((p) => Promise.resolve(this.ctx.assets?.gltf?.(p)).catch(() => null)));
+    return [...paths];
   }
 
   /**
@@ -308,15 +344,25 @@ export class EnemyManager {
    * @returns {Promise<() => void>}
    */
   async prewarm(list, at) {
-    const ctx = this.ctx, made = [], n = Math.max(1, list?.length ?? 0), W = M2.prewarm;
-    (list ?? []).forEach(({ type, opts } = {}, i) => {
+    const ctx = this.ctx, made = [], W = M2.prewarm;
+    // PERF §3.4: each poolable type is built max(waveSize) times (capped) so the level's biggest wave spawns from the
+    // pool; the rest (bosses, cutscene casts) once, as before
+    const sizes = waveSizes(ctx.levels?.current?.def), jobs = [];
+    for (const { type, opts } of list ?? []) {
+      const def = resolveEnemyDef(type);
+      if (def.unknown) continue;
+      const friend = hubFriendly(ctx, def), key = dressingKey(def, opts ?? {}, { friend });
+      const want = key ? Math.max(1, Math.min(WARM.pool.prefillCap, sizes[type] ?? 1)) - this.pools.count(key) : 1;
+      for (let k = 0; k < Math.max(key ? 0 : 1, want); k++) jobs.push({ type, def, opts, key, friend });
+    }
+    const n = Math.max(1, jobs.length);
+    jobs.forEach(({ type, def, opts, key, friend }, i) => {
       try {
-        const def = resolveEnemyDef(type);
-        if (def.unknown) return;
-        const a = (i / n) * Math.PI * 2;
-        const pos = new THREE.Vector3(at.x + Math.sin(a) * W.ring, at.y ?? 0, at.z + Math.cos(a) * W.ring);
-        const e = new Enemy(ctx, { ...def, boss: false }, { ...(opts ?? {}), pos, facing: a + Math.PI, ai: false });
+        const a = (i / n) * Math.PI * 2, ring = W.ring + (i % 3) * 0.6;
+        const pos = new THREE.Vector3(at.x + Math.sin(a) * ring, at.y ?? 0, at.z + Math.cos(a) * ring);
+        const e = new Enemy(ctx, { ...def, boss: false }, { ...(opts ?? {}), pos, facing: a + Math.PI, ai: false, friend });
         e.ai = false; e.hurtable = false; e.tags.add('warm');
+        e.poolKey = key;
         e.object3d.name = `warm:${def.id}`;
         ctx.scene?.add(e.object3d);
         e.loadVisual();
@@ -330,10 +376,17 @@ export class EnemyManager {
     for (const e of made) {
       e.bangT = TUNING.bang.dur;
       try { e.render(1, 1 / 60); } catch { /* not dressed in time */ }
-      e.object3d.traverse((o) => { if (o.isMesh && !o.userData.sharedProp) o.castShadow = true; });
+      // the shadow-depth variants are warmed only where enemies still cast (shadow stage 1, a tier with a map)
+      e.applyCasting?.();
     }
     return () => {
-      for (const e of made) { e.object3d.removeFromParent(); this._warmKeep.push(e); }
+      for (const e of made) {
+        e.object3d.removeFromParent();
+        // poolable stand-ins hand their dressed, compiled visual to the pool (programs stay alive with it)
+        const rec = e.poolKey ? e.detachVisual() : null;
+        if (rec && this.pools.put(rec)) { e.dispose(); continue; }
+        this._warmKeep.push(e);
+      }
       made.length = 0;
     };
   }
@@ -348,6 +401,10 @@ export class EnemyManager {
     if (this.boss === e) this.boss = null;
     this.ctx.combat?.tokens?.release?.(e);
     this.ctx.actors.unregister(e);
+    this.outlined.delete(e);
+    if (e._hull) { e._hull.visible = false; e._hull = null; }
+    // PERF §3.4: the dressed visual goes back to its pool (unless it is a one-off dressing or never finished)
+    if (!e.disposed && e.poolKey) { const rec = e.detachVisual(); if (rec) this.pools.put(rec); }
     if (!e.disposed) e.dispose();
   }
 
@@ -362,6 +419,8 @@ export class EnemyManager {
     this.pinThief = null;
     this.webs.clear();
     for (const e of this._warmKeep.splice(0)) if (!e.disposed) e.dispose();
+    this.pools.clear();
+    this.outlined.clear();
   }
 
   /** Pack alert: idle / patrolling enemies within `r` of `pos` join the fight after a short, staggered beat. */
@@ -402,7 +461,7 @@ export class EnemyManager {
   spawnDebris(obj, e, dir = null, o = {}) {
     const scene = this.ctx.scene;
     if (!obj || !scene) return;
-    obj.updateWorldMatrix(true, false);
+    if (obj.parent) obj.updateWorldMatrix(true, false);             // a detached copy (Enemy.dropHelmet) brings its own
     const pos = new THREE.Vector3(), base = new THREE.Vector3();
     obj.matrixWorld.decompose(pos, _q, base);
     obj.removeFromParent();
@@ -549,6 +608,33 @@ export class EnemyManager {
     const vdt = visualDt(this.ctx, dt);
     this._updateDebris(vdt);
     this.webs.render(vdt);
+    this._updateOutlines(dt);
+  }
+
+  /**
+   * ART §5.4 [X9]: outline hulls per QUALITY.outline ('hero' → bosses, 'heroCompanionsEngaged' → bosses + the ≤ 4
+   * engaged enemies nearest the focus, 'all' → every enemy), re-picked at WARM.outline.hz. The hull itself is
+   * characters' `buildOutline(view, { px, color })` (characters/Outline.js); without it this is a no-op.
+   */
+  _updateOutlines(dt) {
+    const build = loadedCharacters()?.buildOutline;
+    if (typeof build !== 'function') return;
+    if ((this._outlineT -= dt) > 0) return;
+    const O = WARM.outline;
+    this._outlineT = 1 / O.hz;
+    const mode = this.ctx.quality?.outline ?? 'hero';
+    const focus = this.ctx.cam?.focus ?? this.ctx.player?.pos ?? null;
+    const camEngaged = this.ctx.cam?.engaged;
+    const engaged = (e) => (Array.isArray(camEngaged) ? camEngaged.includes(e) : e.alerted && !!focus && Math.hypot(e.pos.x - focus.x, e.pos.z - focus.z) <= O.engagedR);
+    const next = outlineTargets(mode, this.list, focus, engaged, O.maxEngaged, this._outlineNext, this._outlineScratch);
+    for (const e of this.outlined) if (!next.has(e) && e._hull) e._hull.visible = false;
+    for (const e of next) {
+      if (!e._hull) {
+        try { e._hull = build(e.dress ?? e.visual, { px: e.def.boss ? O.bossPx : O.px, fadeIn: O.fadeIn }) ?? null; } catch { e._hull = null; }
+      }
+      if (e._hull) e._hull.visible = true;
+    }
+    this._outlineNext = this.outlined; this.outlined = next;
   }
 
   dispose() {

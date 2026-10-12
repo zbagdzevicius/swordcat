@@ -1,0 +1,13 @@
+import * as C from '../../src/characters/index.js';
+C.setCharDetail(1); C.setFurQuality({hero:16,kitten:10,npc:0}); C.setFurIsoShells({});
+const t0=performance.now();
+const k=C.buildKitten(C.swordcatConfig({cape:'red'}), {lod:'play'});
+const t1=performance.now();
+console.log('play', JSON.stringify(k.debugFeatures()), (t1-t0).toFixed(0)+'ms');
+k.prepareCloseUp(); const t2=performance.now();
+console.log('prep', (t2-t1).toFixed(0)+'ms');
+k.setCloseUp(true); console.log('close', JSON.stringify(k.debugFeatures()));
+k.setCloseUp(false); console.log('play2', JSON.stringify(k.debugFeatures()));
+k.root.traverseVisible(o=>{ if(o.isMesh) process.stdout.write(o.name+' '); }); console.log();
+k.dispose();
+const m=C.buildKitten(C.CATS.mochi, {lod:'play'}); console.log('mochi', JSON.stringify(m.debugFeatures()));

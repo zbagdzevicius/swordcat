@@ -11,8 +11,8 @@
 // next level), results(), interact(id), spawnProp(name, at, opts) / despawnProp(obj) (story's placed props: signpost,
 // post bag, cot...), setDawnstone(on). Level triggers / interacts / arenas run inside Level.update (play mode only).
 import { E } from '../core/events.js';
-import { KITTENS_BY_LEVEL, BOSSES } from '../core/config.js';
-import { ENV_PRESETS } from './Env.js';
+import { KITTENS_BY_LEVEL, BOSSES, FADE_COLOR } from '../core/config.js';
+import { ENV_PRESETS, resolvePreset } from './Env.js';
 import { buildProp } from '../characters/index.js';
 import { endLevelRun } from './Level.js';
 import { disposeInstanceMaterials } from '../enemies/rig.js';
@@ -95,7 +95,7 @@ export class LevelManager {
     const ctx = this.ctx, { bus, scene } = ctx;
     if (!LEVELS[id]) throw new Error(`[levels] unknown level "${id}"`);
     this.loading = true;
-    ctx.ui?.loading?.(true);
+    ctx.ui?.loading?.(true, { color: FADE_COLOR });     // core.W3 / WA §2.7: load veils are cream, never black
     try {
       bus.emit(E.LEVEL_LOADING, { id, spawnId });
       this._unload();
@@ -247,9 +247,9 @@ export class LevelManager {
   /** Env preset for a level: the first `byFlag` row whose condition holds, else `default`. */
   pickEnv(env) {
     if (!env) return 'meadow_day';
-    if (typeof env === 'string') return env;
-    for (const [cond, name] of env.byFlag ?? []) if (this.ctx.state?.cond?.(cond) && ENV_PRESETS[name]) return name;
-    return env.default ?? 'meadow_day';
+    if (typeof env === 'string') return resolvePreset(env);
+    for (const [cond, name] of env.byFlag ?? []) if (this.ctx.state?.cond?.(cond) && ENV_PRESETS[name]) return resolvePreset(name);
+    return resolvePreset(env.default ?? 'meadow_day');
   }
 
   /** Explore track on load: the first `music.byFlag` [cond, track] row that holds (meadow prologue), else `explore`. */
@@ -284,6 +284,8 @@ export class LevelManager {
     const g = this.current?.groups?.[group];
     if (g) g.visible = !!on;
     if (group === 'props') for (const t of this.current?.trees ?? []) t.visible = !!on;
+    // a caster set changed visibility: the cached sun map (shadow stage 2) re-renders once
+    if (group === 'props' || group === 'terrain') this.ctx.env?.staticShadow?.invalidate?.();
   }
 
   setDawnstone(on) { this.current?.setDawnstone?.(on); }

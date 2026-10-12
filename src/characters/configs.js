@@ -24,12 +24,17 @@ const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade:
 /** Swordcat's cape drape (overrides CAPE_DEFAULTS). */
 export const SWORDCAT_CAPE = Object.freeze({ topW: 0.18, botW: 0.4, len: 0.4 });
 
-export function swordcatConfig({ cape = 'cream', armour = true, bow = true, sword = 'borrowed', tier = 'hero' } = {}) {
+/**
+ * Swordcat's config. `tunicSword`: the Morning Practice outfit (WARM_ADVENTURE_SPEC §13 sign-off 3, characters.W3): the
+ * practice tunic with her sword in paw (the plain tunic carries none), so the practice swings show a blade.
+ * @param {{ cape?: string|null, armour?: boolean, bow?: boolean, sword?: string, tier?: string, tunicSword?: boolean }} [o]
+ */
+export function swordcatConfig({ cape = 'cream', armour = true, bow = true, sword = 'borrowed', tier = 'hero', tunicSword = false } = {}) {
   return {
     id: 'swordcat', name: 'Clementine', tier, scale: 1, width: 1, headScale: 1.0,
     coat: SWORDCAT_COAT,
     eyes: { inner: PAL.irisInner, outer: PAL.irisOuter, ring: PAL.irisRing, pupil: PAL.pupil, size: 1.0 },
-    fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 0.88 },
+    fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 1.15 },   // ART §6.3: a fuller tail (r ≈ 0.08 H)
     bow: bow ? SWORDCAT_BOW : null,
     outfit: { armour: armour ? 'plate' : null },
     accessories: armour ? [] : [{ id: 'tunic', color: '#9C7B57', trim: '#6E5638' }],
@@ -37,7 +42,7 @@ export function swordcatConfig({ cape = 'cream', armour = true, bow = true, swor
     // narrower, shorter hero cape: from the gameplay (behind) view the pauldrons must stand clear of it and the
     // back plate / belt show at its sides (art.md §1 silhouette: wide steel shoulder line, cape as a V frame)
     capeDims: SWORDCAT_CAPE,
-    sword: armour ? sword : null,
+    sword: armour || tunicSword ? sword : null,
     expression: 'worried',
     holy: true,
   };
@@ -51,6 +56,9 @@ export const CATS = {
   swordcat_red: swordcatConfig({ cape: 'red' }),
   swordcat_tunic: swordcatConfig({ armour: false, bow: false }),
   swordcat_tunic_bow: swordcatConfig({ armour: false, bow: true }),
+  // Morning Practice (WA §6 / ON §4): the practice tunic WITH the sword (sign-off 3 default: the tunic hid it)
+  swordcat_tunic_sword: swordcatConfig({ armour: false, bow: true, tunicSword: true }),
+  swordcat_tunic_sword_nobow: swordcatConfig({ armour: false, bow: false, tunicSword: true }),
 
   // ---- family, mentors, court (§3.2)
   pearl: {
@@ -203,13 +211,13 @@ export function villagerConfig(seed, o = {}) {
 /** Config for one of the 18 lost kittens (stable per id). */
 export function lostKittenConfig(kittenId, o = {}) {
   const look = KITTEN_LOOKS[kittenId] || [];
-  return villagerConfig('kitten:' + kittenId, { id: kittenId, name: KITTEN_NAMES[kittenId] || kittenId, coat: look[0], accessory: look[1] ?? null, scale: 0.72, tier: o.tier || 'lite', ...o });
+  return villagerConfig('kitten:' + kittenId, { id: kittenId, name: KITTEN_NAMES[kittenId] || kittenId, coat: look[0], accessory: look[1] ?? null, scale: 0.72, tier: o.tier || 'lite', kid: true, ...o });
 }
 
 /** The 6 squire kittens at the height chart (CS-01). Wooden swords, plain tunics. */
 export const SQUIRE_IDS = Object.freeze(['squire_1', 'squire_2', 'squire_3', 'squire_4', 'squire_5', 'squire_6']);
 export function squireConfig(i, o = {}) {
-  const c = villagerConfig('squire:' + i, { id: SQUIRE_IDS[i % 6], name: 'Squire', accessory: null, scale: 0.86 + (i % 3) * 0.06, ...o });
+  const c = villagerConfig('squire:' + i, { id: SQUIRE_IDS[i % 6], name: 'Squire', accessory: null, scale: 0.86 + (i % 3) * 0.06, kid: true, ...o });
   c.accessories = [{ id: 'tunic', color: ['#9C7B57', '#7A6A4A', '#8A5A3A'][i % 3], trim: '#5A4630' }, 'woodenSword'];
   return c;
 }

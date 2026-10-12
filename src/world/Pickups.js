@@ -3,15 +3,41 @@
 // Heart Bells (gold bell + pink ribbon on a pedestal). Fish and hearts drop from defeated enemies (E.ENEMY_DIED,
 // def.fish) and from crates; letters/bells are placed by level zones. Collecting updates GameState / the player and
 // emits item:pickup. Fish render as ONE InstancedMesh; letters/bells/bottles are a few small meshes.
+// WA §5.5 / CL §6 juice (0 draws): pickups spin (CLASS_MARKS.pickup.spin), kill drops pop out in a hop arc (apex 0.9 m,
+// 0.45 s, 2 bounces), the magnet pull is a 0.35 m hop arc (PICKUP_FX.hop), collecting squashes 1.3 → 0 over 0.1 s,
+// and `twinkles` lists the resting pickups fx sparkles (`STAR4` cream / gold). Materials are Lambert (ART §4.2).
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { ECONOMY, PLAYER, GRAVITY } from '../core/config.js';
+import { ECONOMY, PLAYER, CLASS_MARKS, PICKUP_FX } from '../core/config.js';
 import { mulberry32, hashSeed } from '../core/rng.js';
 import { procTemplate } from './Props.js';
 
 const MAX_FISH = 240;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _v = new THREE.Vector3();
-const _silver = new THREE.Color('#D7DEE6'), _gold = new THREE.Color('#F2C94C');
+const _silver = new THREE.Color('#E8EEF4'), _gold = new THREE.Color('#FFD57A');
+
+/**
+ * Pickup motion (WA §5.5): the kill-drop pop (apex `popApex` m in `popT` s → its gravity, `bounces` hops each keeping
+ * `bounceK` of the speed), the collect squash (`squash` → 0 over `collectT` s), the bob, and the magnet hop speed.
+ */
+export const PICKUP_MOTION = Object.freeze({ popApex: 0.9, popT: 0.45, bounces: 2, bounceK: 0.45, rest: 0.35, collectT: 0.1, squash: 1.3,
+  bob: 0.06, magnetSpeed: 4, magnetGain: 6 });
+/** Gravity of the pop arc: apex h in half of T → g = 8 h / T². */
+export const POP_G = (8 * PICKUP_MOTION.popApex) / (PICKUP_MOTION.popT * PICKUP_MOTION.popT);
+
+/**
+ * The magnet hop (WA §5.5): height above the straight pull at progress u (0 = where the pull began, 1 = at her). Pure.
+ * @param {number} u 0..1 @param {number} [hop] apex (m)
+ */
+export const magnetHop = (u, hop = PICKUP_FX?.hop ?? 0.35) => 4 * hop * Math.max(0, Math.min(1, u)) * (1 - Math.max(0, Math.min(1, u)));
+
+/** One Lambert material for pickup meshes (dithered, toon-patched like the world). */
+function pickupMat(color, emissive = '#000000', ei = 0) {
+  const m = new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: ei });
+  m.dithering = true;
+  m.userData.owned = true;
+  return m;
+}
 
 /** Save flag of a placed fish line (bitmask of the fish collected). Pure. */
 export const placedFishFlag = (levelId, key) => `${levelId}.fish.${key}`;
@@ -57,10 +83,11 @@ export function makeLetterMesh() {
   const flap = new THREE.ConeGeometry(0.17, 0.09, 4, 1);
   flap.rotateX(Math.PI / 2); flap.rotateZ(Math.PI / 4); flap.scale(1.4, 1, 0.12); flap.translate(0, 0.012, 0.04);
   const seal = new THREE.CylinderGeometry(0.035, 0.035, 0.016, 14); seal.translate(0, 0.02, 0);
-  const t = procTemplate('letter', [[new THREE.BoxGeometry(0.34, 0.012, 0.24), '#F4E7C9'], [flap, '#E8D5AA'], [seal, '#E86A92']]);
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, emissive: '#3A1E24', emissiveIntensity: 0.25 });
+  const t = procTemplate('letter', [[new THREE.BoxGeometry(0.34, 0.012, 0.24), '#FFF6E0'], [flap, '#F2DFB4'], [seal, '#FF6F9C']]);
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, emissive: '#FFE6C8', emissiveIntensity: 0.18 });
+  mat.dithering = true;
   const m = new THREE.Mesh(t.geometry, mat);
-  m.name = 'pickup:letter'; m.castShadow = true;
+  m.name = 'pickup:letter'; m.castShadow = false;
   m.userData.owned = true; mat.userData.owned = true;
   return m;
 }
@@ -68,15 +95,15 @@ export function makeLetterMesh() {
 /** Heart Bell: a small gold bell with a pink ribbon on a stone pedestal (≈1.0 m). */
 export function makeHeartBellMesh() {
   const g = new THREE.Group(); g.name = 'pickup:heartbell';
-  const stone = new THREE.MeshStandardMaterial({ color: '#8C8F88', roughness: 0.9 });
+  const stone = pickupMat('#E6DAC4');
   const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.7, 8), stone); ped.position.y = 0.35;
   const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 8), stone); cap.position.y = 0.74;
   const bellG = new THREE.LatheGeometry([[0.0, 0.0], [0.14, 0.0], [0.13, 0.04], [0.1, 0.14], [0.08, 0.22], [0.04, 0.26], [0, 0.27]].map(([x, y]) => new THREE.Vector2(x, y)), 16);
-  const bell = new THREE.Mesh(bellG, new THREE.MeshStandardMaterial({ color: '#D9B26A', metalness: 0.85, roughness: 0.3, emissive: '#6A4A10', emissiveIntensity: 0.35 }));
+  const bell = new THREE.Mesh(bellG, pickupMat('#E8C27A', '#FFD57A', 0.3));
   bell.position.y = 0.95; bell.name = 'bell';
-  const ribbon = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.022, 6, 12), new THREE.MeshStandardMaterial({ color: '#F2A2B8', roughness: 0.55 }));
+  const ribbon = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.022, 6, 12), pickupMat('#FF9EC0'));
   ribbon.position.y = 1.23; ribbon.scale.set(1.6, 1, 0.6);
-  for (const m of [ped, cap, bell, ribbon]) { m.castShadow = true; g.add(m); }
+  for (const m of [ped, cap, bell, ribbon]) { m.castShadow = m === ped; g.add(m); }
   g.traverse((o) => { o.userData.owned = true; });
   return g;
 }
@@ -85,13 +112,16 @@ export function makeHeartBellMesh() {
 export function makeMilkMesh() {
   const g = new THREE.Group(); g.name = 'pickup:milk';
   const glass = new THREE.Mesh(new THREE.LatheGeometry([[0, 0], [0.07, 0], [0.075, 0.14], [0.04, 0.2], [0.035, 0.26], [0, 0.26]].map(([x, y]) => new THREE.Vector2(x, y)), 14),
-    new THREE.MeshStandardMaterial({ color: '#F6F1E4', roughness: 0.25 }));
-  const capM = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 12), new THREE.MeshStandardMaterial({ color: '#C2353B', roughness: 0.5 }));
+    pickupMat('#FFFBF2', '#FFF6E8', 0.15));
+  const capM = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 12), pickupMat('#E0605A'));
   capM.position.y = 0.27;
-  for (const m of [glass, capM]) { m.castShadow = true; g.add(m); }
+  for (const m of [glass, capM]) { m.castShadow = false; g.add(m); }
   g.traverse((o) => { o.userData.owned = true; });
   return g;
 }
+
+/** Upward speed of a kill-drop pop (apex PICKUP_MOTION.popApex ± 15 % by `r` in 0..1). */
+function popVy(r) { return Math.sqrt(2 * POP_G * PICKUP_MOTION.popApex * (0.85 + 0.3 * r)); }
 
 /** Remove a pickup mesh (group) from the scene and free its geometry / materials. */
 function disposeMesh(o) {
@@ -108,18 +138,23 @@ export class Pickups {
   constructor(ctx, { heightAt, levelId, root }) {
     this.ctx = ctx; this.heightAt = heightAt; this.levelId = levelId; this.root = root;
     this.items = [];
+    /** collected items squashing out (WA §5.5) */
+    this._fading = [];
     this.collected = { fish: 0, letters: [], heartBells: [], milk: 0, hearts: 0 };
     this.rnd = mulberry32(hashSeed('pickups:' + levelId));
-    this.fishMat = new THREE.MeshStandardMaterial({ color: '#FFFFFF', metalness: 0.65, roughness: 0.3, emissive: '#2A2A20', emissiveIntensity: 0.25 });
+    this.fishMat = pickupMat('#FFFFFF', '#FFF1C4', 0.22);
     this.fishMesh = new THREE.InstancedMesh(makeFishGeometry(), this.fishMat, MAX_FISH);
-    this.fishMesh.name = 'pickups:fish'; this.fishMesh.count = 0; this.fishMesh.castShadow = true; this.fishMesh.frustumCulled = false;
+    // PERF §7.1: pickups never cast (a blob / their twinkle grounds them)
+    this.fishMesh.name = 'pickups:fish'; this.fishMesh.count = 0; this.fishMesh.castShadow = false; this.fishMesh.frustumCulled = false;
     this.fishMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_FISH * 3), 3);
-    this.heartMat = new THREE.MeshStandardMaterial({ color: '#F0668E', roughness: 0.4, emissive: '#7A1F3A', emissiveIntensity: 0.5 });
+    this.heartMat = pickupMat('#FF6F9C', '#FF8FB1', 0.35);
     this.heartMesh = new THREE.InstancedMesh(makeHeartGeometry(), this.heartMat, 24);
     this.heartMesh.name = 'pickups:hearts'; this.heartMesh.count = 0; this.heartMesh.frustumCulled = false;
     root.add(this.fishMesh, this.heartMesh);
     for (const o of [this.fishMesh, this.heartMesh, this.fishMat, this.heartMat]) o.userData.owned = true;
     this._t = 0;
+    /** WA §3.2 / W21: resting pickups fx twinkles (`STAR4` cream, gold fish faster); rebuilt in render, no allocation */
+    this.twinkles = [];
     this._offs = [ctx.bus.on(E.ENEMY_DIED, (p) => this._onEnemyDied(p))];
   }
 
@@ -128,9 +163,9 @@ export class Pickups {
     let live = 0, made = 0;
     for (const it of this.items) if (it.alive && it.kind === 'fish') live++;
     for (let i = 0; i < n && live < MAX_FISH; i++, live++) {
-      const a = this.rnd() * Math.PI * 2, sp = pop ? 1.2 + this.rnd() * 2 : 0;
-      this.items.push({ kind: 'fish', value, gold: value >= ECONOMY.fish.gold, pos: new THREE.Vector3(pos.x, pos.y + (pop ? 0.6 : 0.35), pos.z),
-        vel: new THREE.Vector3(Math.sin(a) * sp, pop ? 3.5 + this.rnd() * 2 : 0, Math.cos(a) * sp), air: pop, t: this.rnd() * 6, delay: pop ? 0.35 : 0, alive: true });
+      const a = this.rnd() * Math.PI * 2, sp = pop ? 1.6 + this.rnd() * 2.2 : 0;
+      this.items.push({ kind: 'fish', value, gold: value >= ECONOMY.fish.gold, pos: new THREE.Vector3(pos.x, pos.y + (pop ? PICKUP_MOTION.rest : 0.35), pos.z),
+        vel: new THREE.Vector3(Math.sin(a) * sp, pop ? popVy(this.rnd()) : 0, Math.cos(a) * sp), air: pop, bounces: 0, t: this.rnd() * 6, delay: pop ? 0.35 : 0, alive: true });
       made++;
     }
     return made;
@@ -153,13 +188,13 @@ export class Pickups {
   }
 
   spawnHeart(pos) {
-    this.items.push({ kind: 'heart', pos: new THREE.Vector3(pos.x, pos.y + 0.6, pos.z), vel: new THREE.Vector3(0, 4, 0), air: true, t: 0, delay: 0.35, alive: true });
+    this.items.push({ kind: 'heart', pos: new THREE.Vector3(pos.x, pos.y + PICKUP_MOTION.rest, pos.z), vel: new THREE.Vector3(0, popVy(0.5), 0), air: true, bounces: 0, t: 0, delay: 0.35, alive: true });
   }
 
   spawnMilk(pos) {
     const mesh = makeMilkMesh();
     this.root.add(mesh);
-    this.items.push({ kind: 'milk', pos: new THREE.Vector3(pos.x, pos.y + 0.6, pos.z), vel: new THREE.Vector3(0, 3.5, 0), air: true, t: 0, delay: 0.35, alive: true, mesh });
+    this.items.push({ kind: 'milk', pos: new THREE.Vector3(pos.x, pos.y + PICKUP_MOTION.rest, pos.z), vel: new THREE.Vector3(0, popVy(0.5), 0), air: true, bounces: 0, t: 0, delay: 0.35, alive: true, mesh });
   }
 
   /** A Lost Letter on the ground (skipped if already collected this save). */
@@ -216,25 +251,34 @@ export class Pickups {
     const p = this.ctx.player, st = this.ctx.state;
     this._t += dt;
     const pp = p?.alive ? p.pos : null;
+    const PM = PICKUP_MOTION;
     for (const it of this.items) {
       if (!it.alive) continue;
       it.t += dt;
       if (it.delay > 0) it.delay -= dt;
       if (it.air) {
-        it.vel.y -= GRAVITY * 0.7 * dt;
+        // WA §5.5 kill-drop hop arc: apex 0.9 m, 0.45 s, then 2 smaller bounces
+        it.vel.y -= POP_G * dt;
         it.pos.addScaledVector(it.vel, dt);
-        const g = this.heightAt(it.pos.x, it.pos.z) + 0.35;
-        if (it.pos.y <= g && it.vel.y < 0) { it.pos.y = g; it.vel.set(0, 0, 0); it.air = false; }
+        const g = this.heightAt(it.pos.x, it.pos.z) + PM.rest;
+        if (it.pos.y <= g && it.vel.y < 0) {
+          it.pos.y = g;
+          if ((it.bounces ?? PM.bounces) < PM.bounces) { it.bounces = (it.bounces ?? 0) + 1; it.vel.y *= -PM.bounceK; it.vel.x *= PM.bounceK; it.vel.z *= PM.bounceK; }
+          else { it.vel.set(0, 0, 0); it.air = false; }
+        }
       }
       if (!pp || it.delay > 0) continue;
       const dx = pp.x - it.pos.x, dz = pp.z - it.pos.z, dy = (pp.y + 0.4) - it.pos.y, d = Math.hypot(dx, dz);
       const magnet = it.kind === 'fish' ? ECONOMY.fish.magnet : it.kind === 'heart' ? PLAYER.smallHeart.magnet : 0;
       if (magnet && d < magnet && Math.abs(dy) < 2) {
-        it.air = false;
-        const sp = 4 + (magnet - d) * 6;
+        // the magnet pull is a little hop toward her (PICKUP_FX.hop), radius unchanged
+        if (!it.mag) { it.mag = { d0: Math.max(d, 0.05), y0: it.pos.y }; it.air = false; it.vel.set(0, 0, 0); }
+        const sp = PM.magnetSpeed + (magnet - d) * PM.magnetGain;
         it.pos.x += (dx / Math.max(d, 1e-3)) * Math.min(d, sp * dt); it.pos.z += (dz / Math.max(d, 1e-3)) * Math.min(d, sp * dt);
-        it.pos.y += dy * Math.min(1, dt * 8);
-      }
+        const nd = Math.hypot(pp.x - it.pos.x, pp.z - it.pos.z), u = 1 - nd / it.mag.d0;
+        it.mag.y0 += ((pp.y + 0.4) - it.mag.y0) * Math.min(1, dt * 8);
+        it.pos.y = it.mag.y0 + magnetHop(u);
+      } else if (it.mag) { it.mag = null; it.air = true; it.bounces = PICKUP_MOTION.bounces; }     // out of reach: drop back down
       const reach = it.kind === 'letter' ? 0.5 + p.radius : it.kind === 'heartBell' ? 0.9 : 0.55;
       if (Math.hypot(pp.x - it.pos.x, pp.z - it.pos.z) <= reach && Math.abs(dy) < 1.6) this._collect(it, p, st);
     }
@@ -243,7 +287,8 @@ export class Pickups {
 
   _collect(it, p, st) {
     it.alive = false;
-    disposeMesh(it.mesh);
+    // WA §5.5: the item squashes 1.3 → 0 over 0.1 s where it was caught (visual only; the effect applies now)
+    if (it.mesh) { it.collectT = PICKUP_MOTION.collectT; this._fading.push(it); } else if (it.kind === 'fish' || it.kind === 'heart') { it.collectT = PICKUP_MOTION.collectT; this._fading.push(it); }
     const bus = this.ctx.bus, position = it.pos.clone();
     switch (it.kind) {
       case 'fish':
@@ -283,22 +328,39 @@ export class Pickups {
   }
 
   render(alpha, dt) {
-    const t = this._t;
+    const t = this._t, spin = CLASS_MARKS?.pickup?.spin ?? 1.2, PM = PICKUP_MOTION;
     let nf = 0, nh = 0;
+    const tw = this.twinkles; tw.length = 0;
+    // collected items squash out (0.1 s) where they were caught
+    for (let i = this._fading.length - 1; i >= 0; i--) {
+      const it = this._fading[i];
+      it.collectT -= dt;
+      const k = Math.max(0, it.collectT / PM.collectT) * PM.squash;
+      if (it.collectT <= 0) { this._fading.splice(i, 1); disposeMesh(it.mesh); it.mesh = null; continue; }
+      if (it.mesh) it.mesh.scale.setScalar(k);
+      else if (it.kind === 'fish' && nf < MAX_FISH) {
+        _e.set(0.25, t * spin + it.t, 0); _q.setFromEuler(_e); _s.setScalar((it.gold ? 1.35 : 1) * k);
+        this.fishMesh.setMatrixAt(nf, _m.compose(_v.copy(it.pos), _q, _s)); this.fishMesh.setColorAt(nf, it.gold ? _gold : _silver); nf++;
+      } else if (it.kind === 'heart' && nh < 24) {
+        _e.set(0, t * spin, 0); _q.setFromEuler(_e); _s.setScalar(k);
+        this.heartMesh.setMatrixAt(nh++, _m.compose(_v.copy(it.pos), _q, _s));
+      }
+    }
     for (const it of this.items) {
       if (!it.alive) continue;
-      const bob = it.air ? 0 : Math.sin(t * 2.2 + it.t * 0.3) * 0.06;
+      const bob = it.air || it.mag ? 0 : Math.sin(t * 2.2 + it.t * 0.3) * PM.bob;
+      if (!it.air && !it.mag && it.delay <= 0) tw.push(it);
       if (it.kind === 'fish' && nf < MAX_FISH) {
-        _e.set(0.25, t * 2.4 + it.t, Math.sin(t * 3 + it.t) * 0.2); _q.setFromEuler(_e);
+        _e.set(0.25, t * spin + it.t, Math.sin(t * 3 + it.t) * 0.2); _q.setFromEuler(_e);
         _s.setScalar(it.gold ? 1.35 : 1);
         this.fishMesh.setMatrixAt(nf, _m.compose(_v.set(it.pos.x, it.pos.y + bob, it.pos.z), _q, _s));
         this.fishMesh.setColorAt(nf, it.gold ? _gold : _silver);
         nf++;
       } else if (it.kind === 'heart' && nh < 24) {
-        _e.set(0, t * 2.6, 0); _q.setFromEuler(_e); _s.setScalar(1 + Math.sin(t * 6) * 0.08);
+        _e.set(0, t * spin * 2, 0); _q.setFromEuler(_e); _s.setScalar(1 + Math.sin(t * 6) * 0.08);
         this.heartMesh.setMatrixAt(nh++, _m.compose(_v.set(it.pos.x, it.pos.y + bob, it.pos.z), _q, _s));
       } else if (it.mesh) {
-        if (it.kind === 'milk') { it.mesh.position.set(it.pos.x, it.pos.y - 0.15 + bob, it.pos.z); it.mesh.rotation.y = t * 1.5; }
+        if (it.kind === 'milk') { it.mesh.position.set(it.pos.x, it.pos.y - 0.15 + bob, it.pos.z); it.mesh.rotation.y = t * spin; }
         else if (it.kind === 'letter') it.mesh.position.y = it.pos.y + 0.03 + Math.max(0, Math.sin(t * 2 + it.t)) * 0.02;
         else if (it.kind === 'heartBell') { const b = it.mesh.getObjectByName('bell'); if (b) b.rotation.z = Math.sin(t * 2.4) * 0.12; }
       }
@@ -316,7 +378,8 @@ export class Pickups {
     for (const off of this._offs) off();
     this._offs.length = 0;
     for (const it of this.items) disposeMesh(it.mesh);
-    this.items.length = 0;
+    for (const it of this._fading) disposeMesh(it.mesh);
+    this.items.length = 0; this._fading.length = 0; this.twinkles.length = 0;
     this.fishMesh.removeFromParent(); this.heartMesh.removeFromParent();
     this.fishMesh.geometry.dispose(); this.heartMesh.geometry.dispose();
     this.fishMesh.dispose?.(); this.heartMesh.dispose?.();

@@ -55,8 +55,17 @@ export function updateReadability(ctx) {
   if (iso) FUR_VIEW.focus.copy(focus);
   FUR_VIEW.camDist = iso ? dist : 0;
   TOP_VIEW.value = topViewFactor(classic ? 0 : dist);
-  return { iso, dist, top: TOP_VIEW.value };
+  // bow ×1.4 at lens ≥ 12 m (WARM_ADVENTURE_SPEC §3.3), on top of the top-view ×1.25
+  TOP_VIEW.far = classic ? 0 : smoothstep(READABILITY.bowFarFrom, READABILITY.bowFarAt, dist || 0);
+  TOP_VIEW.dist = classic ? 0 : dist;
+  TOP_VIEW.iso = iso;
+  // close-up flag (ART §6.1, X8): camera's own `cam.closeUp` when it publishes one, else lens → focus hysteresis
+  if (typeof cam?.closeUp === 'boolean') TOP_VIEW.closeUp = cam.closeUp;
+  else TOP_VIEW.closeUp = !iso && dist > 0 ? (TOP_VIEW.closeUp ? dist < CLOSE.off : dist < CLOSE.on) : !iso && !lens;
+  return { iso, dist, top: TOP_VIEW.value, far: TOP_VIEW.far, closeUp: TOP_VIEW.closeUp };
 }
+/** Close-up hysteresis (lens → her, m) when camera publishes no `cam.closeUp` (ART §6.1: on < 6.0, off > 6.3). */
+export const CLOSE = Object.freeze({ on: 6.0, off: 6.3 });
 
 /** Top-view factor for a lens → focus distance (0 inside READABILITY.from, 1 past READABILITY.to). */
 export function topViewFactor(dist) { return smoothstep(READABILITY.from, READABILITY.to, dist || 0); }
@@ -265,6 +274,7 @@ export function silhouetteParts(root, o = {}) {
 /** `c` or any ancestor below `root` is excluded from proxies by name / flag. */
 function skippedChain(c, root) { for (let p = c; p && p !== root; p = p.parent) if (isSkippable(p)) return true; return false; }
 
+const _n3 = new THREE.Matrix3();
 const _ell = new THREE.SphereGeometry(1, 12, 8);
 const _cube = new THREE.BoxGeometry(2, 2, 2);
 
@@ -279,20 +289,24 @@ const _cube = new THREE.BoxGeometry(2, 2, 2);
 export function buildSilhouetteProxy(root, o = {}) {
   const { anchors, parts } = silhouetteParts(root, o);
   if (!parts.length || anchors.length > XRAY.maxBones) return null;
-  const pos = [], idx = [], si = [], sw = [];
+  const pos = [], idx = [], si = [], sw = [], nrm = o.normals ? [] : null;
   for (const p of parts) {
-    const src = p.shape === 'box' ? _cube : _ell, P = src.attributes.position, I = src.index.array;
+    const src = p.shape === 'box' ? _cube : _ell, P = src.attributes.position, N = src.attributes.normal, I = src.index.array;
     const base = pos.length / 3;
     // part space (unit shape → anchor-local) → proxy bind space (anchor-local → inverse(boneInverse))
     _m.copy(anchors[p.anchor].inverse).invert().multiply(p.matrix);
+    if (nrm) _n3.getNormalMatrix(_m);
     for (let i = 0; i < P.count; i++) {
       _v.fromBufferAttribute(P, i).applyMatrix4(_m);
       pos.push(_v.x, _v.y, _v.z); si.push(p.anchor, 0, 0, 0); sw.push(1, 0, 0, 0);
+      // outward normals (the outline hull pushes along them; the x-ray pass ignores them)
+      if (nrm) { _v.fromBufferAttribute(N, i).applyMatrix3(_n3).normalize(); nrm.push(_v.x, _v.y, _v.z); }
     }
     for (let i = 0; i < I.length; i++) idx.push(base + I[i]);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (nrm) g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
   g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));

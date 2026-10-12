@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { E } from './events.js';
 import { KITTEN_IDS, MODEL_FIT, QUALITY } from './config.js';
 import { measure, resolveFit } from './Assets.js';
+import { uViewport } from './uniforms.js';
 
 const RING = 200;            // §19.8
 /** High-frequency names kept out of the name ring (still in lastEvent). */
@@ -69,8 +70,15 @@ export function installDebug(game) {
     // ---- §19.8 ----
     story: { play: (id) => ctx.story.play(id), flag: (k, v) => ctx.story.flag(k, v), skip: () => ctx.story.skip() },
     player: { setValor: (n) => ctx.player.setValor(n), setShards: (n) => { ctx.state.shards = n; }, setHp: (n) => { ctx.player.hp = n; } },
+    // ---- PERF §12 / IMPLEMENTATION_PLAN §5 (C1): perf(), .snapshot(), .reset(), .setScale(s) ----
+    perf: makePerfHook(game),
+    // ---- ART §11.1 (A:core.6): numeric look gates ----
+    art: makeArtHooks(game),
     cam: {
       mode: (m) => ctx.cam.mode(m),
+      // AUTOCAM §11 (M:core.5): the camera's probe trace and framing solution (camera owns them)
+      probe: (...a) => ctx.cam.probe?.(...a) ?? null,
+      framing: (...a) => ctx.cam.framing?.(...a) ?? null,
       // CONTROLS_SPEC §12 core 5: the live iso framing and the zoom
       iso: () => ctx.cam.iso?.() ?? null,
       zoom: (mul) => ctx.cam.zoom?.(mul),
@@ -161,6 +169,178 @@ export function installDebug(game) {
   window.__GAME__ = api;
   if (params.debug) loadDebugUi(game).catch((e) => console.warn('[debug] ui failed', e));
   return api;
+}
+
+/**
+ * `?perf` without ?test / ?debug: only `window.__GAME__.perf` (no event ring, no mutation hooks).
+ * @param {import('./Game.js').Game} game
+ */
+export function installPerfOnly(game) {
+  const api = { ready: false, perf: makePerfHook(game), get frame() { return game.frameCount; } };
+  window.__GAME__ = api;
+  return api;
+}
+
+/** `__GAME__.perf()` = the PERF §12 report; `.snapshot()`, `.reset()`, `.setScale(s)` (gate `perf:dynres-step`). */
+function makePerfHook(game) {
+  const ctx = game.ctx;
+  const perf = () => game.perf.report();
+  perf.snapshot = () => game.perf.snapshot();
+  perf.reset = () => { game.perf.reset(); return true; };
+  /** Force a render scale; returns the scale, the shared uViewport and the drawing buffer (same frame). */
+  perf.setScale = (s) => {
+    const scale = ctx.postfx.setScale(s);
+    const gl = ctx.renderer.getContext();
+    return { scale, dpr: ctx.renderer.getPixelRatio(), viewport: uViewport.value.toArray(), buffer: [gl.drawingBufferWidth, gl.drawingBufferHeight] };
+  };
+  /** The uViewport / drawing-buffer pair right now. */
+  perf.viewport = () => { const gl = ctx.renderer.getContext(); return { viewport: uViewport.value.toArray(), buffer: [gl.drawingBufferWidth, gl.drawingBufferHeight] }; };
+  return perf;
+}
+
+// ------------------------------------------------------------------ ART §11.1 numeric look hooks
+const _p = new THREE.Vector3(), _bb = new THREE.Box3(), _c = new THREE.Color();
+
+/** sRGB 0..1 → { luma (Rec. 709), chroma (max − min), warmth (R − B) } — the art2_frame_stats.py definitions. */
+export function pixelStats(r, g, b) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  return { luma: 0.2126 * r + 0.7152 * g + 0.0722 * b, chroma: max - min, warmth: r - b };
+}
+
+/** HSV saturation of a THREE.Color in sRGB (fog colour checks, WA §2.3a). */
+export function hsvSat(color) {
+  color.getRGB(_rgb, THREE.SRGBColorSpace);
+  const max = Math.max(_rgb.r, _rgb.g, _rgb.b), min = Math.min(_rgb.r, _rgb.g, _rgb.b);
+  return max > 0 ? (max - min) / max : 0;
+}
+const _rgb = { r: 0, g: 0, b: 0 };
+
+function makeArtHooks(game) {
+  const ctx = game.ctx;
+  /** Render one frame and read the whole buffer back in the same task (sampleCanvas pattern). */
+  const grab = () => {
+    game.frame(1, 0);
+    const gl = ctx.renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return { px, w, h, dpr: w / Math.max(1, ctx.renderer.domElement.clientWidth || w) };
+  };
+  /** World point → drawing-buffer px (origin top-left), or null behind the camera. */
+  const toPx = (v, w, h) => {
+    _p.copy(v).project(ctx.camera);
+    if (_p.z > 1 || _p.z < -1) return null;
+    return { x: (_p.x * 0.5 + 0.5) * w, y: (0.5 - _p.y * 0.5) * h };
+  };
+  /** Screen-space px box of a world Box3. */
+  const boxPx = (box, w, h) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, any = false;
+    for (let i = 0; i < 8; i++) {
+      _p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+      const s = toPx(_p, w, h);
+      if (!s) continue;
+      any = true; x0 = Math.min(x0, s.x); y0 = Math.min(y0, s.y); x1 = Math.max(x1, s.x); y1 = Math.max(y1, s.y);
+    }
+    return any ? { x0, y0, x1, y1 } : null;
+  };
+  const actorBox = (a, out) => out.set(_p.set(a.pos.x - a.radius, a.pos.y, a.pos.z - a.radius), new THREE.Vector3(a.pos.x + a.radius, a.pos.y + (a.height ?? 1), a.pos.z + a.radius));
+  const sample = (px, w, x, y) => {
+    const o = ((Math.min(Math.max(0, y | 0), (px.length / 4 / w) - 1)) * w + Math.min(Math.max(0, x | 0), w - 1)) * 4;
+    return [px[o] / 255, px[o + 1] / 255, px[o + 2] / 255];
+  };
+  const art = {
+    /**
+     * Mean luma / chroma / warmth and dark (< 0.2) / black (< 0.06) fractions over a 64 × 36 grid (ART G1–G5,
+     * WA §2.3a). `exclude: 'actors'` skips cells within 40 CSS px of any actor's projected bounds.
+     * @param {{exclude?: 'actors'|null, cols?: number, rows?: number}} [opts]
+     */
+    frameStats: ({ exclude = null, cols = 64, rows = 36 } = {}) => {
+      const { px, w, h, dpr } = grab();
+      const boxes = [];
+      if (exclude === 'actors') {
+        const pad = 40 * dpr;
+        for (const a of ctx.actors.list) {
+          if (!a.object3d?.visible || !a.pos) continue;
+          const b = boxPx(actorBox(a, _bb), w, h);
+          if (b) boxes.push({ x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad });
+        }
+      }
+      let n = 0, L = 0, C = 0, W = 0, dark = 0, black = 0;
+      for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+        const x = (i + 0.5) * w / cols, yTop = (j + 0.5) * h / rows;
+        let skip = false;
+        for (const b of boxes) if (x >= b.x0 && x <= b.x1 && yTop >= b.y0 && yTop <= b.y1) { skip = true; break; }
+        if (skip) continue;
+        const [r, g, bl] = sample(px, w, x, h - 1 - yTop);
+        const s = pixelStats(r, g, bl);
+        n++; L += s.luma; C += s.chroma; W += s.warmth;
+        if (s.luma < 0.2) dark++;
+        if (s.luma < 0.06) black++;
+      }
+      const fog = ctx.scene.fog?.color ?? (ctx.scene.background?.isColor ? ctx.scene.background : null);
+      return { n, luma: n ? L / n : 0, chroma: n ? C / n : 0, warmth: n ? W / n : 0, dark: n ? dark / n : 0, black: n ? black / n : 0,
+        fogSat: fog ? hsvSat(_c.copy(fog)) : null, preset: ctx.env?.presetName ?? ctx.env?.preset ?? null, excluded: boxes.length };
+    },
+    /** ART G8: mean chroma inside her projected box vs a 1.5–3 m ground ring around her feet. */
+    heroChroma: () => {
+      const p = ctx.player;
+      if (!p) return null;
+      const { px, w, h } = grab();
+      const b = boxPx(actorBox(p, _bb), w, h);
+      let hc = 0, hn = 0, gc = 0, gn = 0;
+      if (b) {
+        const sx = Math.max(1, (b.x1 - b.x0) / 12), sy = Math.max(1, (b.y1 - b.y0) / 12);
+        for (let y = b.y0; y <= b.y1; y += sy) for (let x = b.x0; x <= b.x1; x += sx) {
+          const [r, g, bl] = sample(px, w, x, h - 1 - y); hc += pixelStats(r, g, bl).chroma; hn++;
+        }
+      }
+      for (let k = 0; k < 48; k++) {
+        const a = (k / 48) * Math.PI * 2, rr = 1.5 + (k % 4) * 0.5;
+        _p.set(p.pos.x + Math.cos(a) * rr, p.pos.y, p.pos.z + Math.sin(a) * rr);
+        const s = toPx(_p, w, h);
+        if (!s || s.x < 0 || s.y < 0 || s.x >= w || s.y >= h) continue;
+        if (b && s.x >= b.x0 && s.x <= b.x1 && s.y >= b.y0 && s.y <= b.y1) continue;
+        const [r, g, bl] = sample(px, w, s.x, h - 1 - s.y); gc += pixelStats(r, g, bl).chroma; gn++;
+      }
+      return { hero: hn ? hc / hn : 0, ground: gn ? gc / gn : 0, heroN: hn, groundN: gn };
+    },
+    /**
+     * Projected size (CSS px) of a hero feature ('eyeL' | 'eyeR' | 'bow') from `debugFeatures()`, or an enemy's 'top'
+     * (pass the enemy actor or its index in ctx.enemies.list).
+     */
+    featurePx: (name, who = null) => {
+      const actor = who == null ? ctx.player : typeof who === 'number' ? ctx.enemies?.list?.[who] : who;
+      const f = actor?.debugFeatures?.() ?? actor?.view?.debugFeatures?.() ?? actor?.visual?.debugFeatures?.() ?? null;
+      const o = f?.[name];
+      if (!o?.isObject3D) return null;
+      ctx.camera.updateMatrixWorld(); o.updateWorldMatrix(true, true);
+      const box = new THREE.Box3().setFromObject(o, true);
+      const cw = ctx.renderer.domElement.clientWidth || 1, ch = ctx.renderer.domElement.clientHeight || 1;
+      const b = boxPx(box, cw, ch);
+      return b ? { w: b.x1 - b.x0, h: b.y1 - b.y0 } : null;
+    },
+    /** ART G6: luma(shade) / luma(lit) at the level's `art.shadowProbe` ({ lit: [x, z], shade: [x, z] }). */
+    shadowRatio: () => {
+      const L = ctx.levels?.current;
+      const probe = L?.art?.shadowProbe ?? L?.def?.art?.shadowProbe ?? null;
+      if (!probe) return null;
+      const { px, w, h } = grab();
+      const lumaAt = ([x, z]) => {
+        _p.set(x, ctx.physics?.heightAt?.(x, z) ?? 0, z);
+        const s = toPx(_p, w, h);
+        if (!s) return null;
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const [r, g, b] = sample(px, w, s.x + dx * 2, h - 1 - s.y + dy * 2); sum += pixelStats(r, g, b).luma; }
+        return sum / 9;
+      };
+      const lit = lumaAt(probe.lit), shade = lumaAt(probe.shade);
+      return lit && shade != null ? shade / lit : null;
+    },
+    /** ART G13: is a post chain rendering this frame? */
+    get composerActive() { return !!ctx.postfx?.composerActive; },
+    /** ART G11: the linked programs (name + cache key + users). */
+    programs: () => (ctx.renderer.info.programs ?? []).map((p) => ({ name: p.name, key: p.cacheKey?.slice?.(0, 120) ?? null, used: p.usedTimes })),
+  };
+  return art;
 }
 
 const PLAIN_MAX_DEPTH = 6, PLAIN_MAX_ITEMS = 200;

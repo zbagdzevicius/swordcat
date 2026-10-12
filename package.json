@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/prune-assets.mjs",
+    "build": "vite build && node scripts/prune-assets.mjs && node scripts/bundle-budget.mjs dist",
+    "glb:optimize": "node scripts/optimize-glb.mjs",
     "preview": "vite preview --port 4173 --strictPort",
     "test:unit": "node --import ./tests/unit/_setup.mjs --test \"tests/unit/**/*.test.js\"",
     "smoke": "node tests/smoke.mjs",

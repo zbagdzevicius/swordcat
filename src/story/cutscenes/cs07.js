@@ -1,10 +1,10 @@
 // src/story/cutscenes/cs07.js  (owner: story) — CS-07 The Red Cape (GAME_DESIGN §5.4) [MVP], ~35 s.
 // `town` trigger `steps` (disc r 5 at (0,34), active after the square is clear and Clover is free); env hub_gold.
-//   1 CRANE_DOWN from the dark Sunbell to the Castle Steps: the cellar door opens, Princess Snowpaw with Marmalade.
+//   1 CRANE_DOWN from the sleepy Sunbell (warm brass, eyes closed; world's bell, WA §8.6a) to the Castle Steps: the cellar door opens, Princess Snowpaw with Marmalade.
 //     "You chased off the Legion. All of them. By yourself?"  Clem: "With friends."  Mochi: "Mostly her."
 //   2 TWO_SHOT_LOW: Snowpaw unfolds a red cloth; the cape swaps cream → red (ref2). "The Royal Wardrobe has nothing your
 //     size. Except this." "It was a tablecloth. Velvet, mostly."  Clem: "...Thank you, Your Highness."
-//   3 low, up at the dark bell; Marmalade points with his walking-stick sword: "The Dawnstone's in three pieces now…"
+//   3 low, up at the sleepy bell; Marmalade points with his walking-stick sword: "The Dawnstone's in three pieces now…"
 //     "The rats say the hyenas have the second…"  Clem: "Then I'll be at the gate."
 //   4 wide: villagers peek out, kittens run to the fountain. Toasts: "Pawsbury is free!" · "Shops are open." ·
 //     "Kittens you rescue will live here."
@@ -13,7 +13,7 @@
 import { say, cam, wait, sfx, yawOf } from './lib.js';
 import { castFriend, hideParty, showParty, toast, equipCape } from './cast.js';
 
-/** §12.5 Castle Steps: Snowpaw (0,40), the trigger disc (0,34); the Bell Tower with the dark Sunbell at (0,54). */
+/** §12.5 Castle Steps: Snowpaw (0,40), the trigger disc (0,34); the Bell Tower with the sleepy Sunbell at (0,54). */
 export const STEPS = [0, 36.4];
 const SNOWPAW = [-0.5, 39.6];
 const MARMALADE = [1.1, 40.4];

@@ -1,29 +1,35 @@
 // Public API of the characters area (GAME_DESIGN §19.2 characters row). Import from 'src/characters/index.js' only.
-export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELEASE } from './KittenBuilder.js';
-export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
+export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELEASE, Squash, SQUASH, PROPORTIONS, PLAY_LOD, TUFTS, mergeSkinnedParts } from './KittenBuilder.js';
+export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, WARM_POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
 export {
   CATS, SWORDCAT, swordcatConfig, villagerConfig, lostKittenConfig, squireConfig, spoonBrigadeConfig, catConfig, eyeSet,
   LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY,
 } from './configs.js';
-export { PAL, CAPES, SIGNATURE, VILLAGER_COATS } from './palette.js';
+export { PAL, CAPES, SIGNATURE, VILLAGER_COATS, MISCHIEF, WARM_LOOKS } from './palette.js';
 export {
-  FUR_QUALITY, setFurQuality, getFurQuality, shellsFor, FUR_WIND, FUR_TIME, makeStrandTexture, makeFurMaterial, coatColor, headFurMask, FurPart, MAX_SHELLS,
+  FUR_QUALITY, setFurQuality, getFurQuality, shellsFor, setFurIsoShells, isoShellsFor, FUR_WIND, FUR_TIME, makeStrandTexture, makeFurMaterial, coatColor, headFurMask, FurPart, MAX_SHELLS,
 } from './Fur.js';
-export { makeEyeTexture, eyeGeometry, eyeMaterial, EyePair, EXPRESSIONS } from './Eyes.js';
+export { makeEyeTexture, eyeGeometry, eyeMaterial, EyePair, EXPRESSIONS, EYE } from './Eyes.js';
 export { buildBow, bowGeometry, bowMaterial } from './Bow.js';
 export { HeroCape, ClothSim, buildSwayCape, capeMaterial, capeGeometry, CAPE_DEFAULTS, CAPE_TIME, CAPE_WIND } from './Cape.js';
-export { buildSword, mountModel, makeStreak, SWORD, SWORD_SKINS, DAWN_SPARKLES, makeBladeSparkles, restyleClaymore, guardHeight } from './Sword.js';
-export { makePlateTexture, buildPlate, attachPlate, ensurePlateFont, pickPlateWord, PLATE_WORDS } from './Plate.js';
+export { buildSword, mountModel, makeStreak, SWORD, BLADE, SWORD_SKINS, DAWN_SPARKLES, makeBladeSparkles, restyleClaymore, guardHeight } from './Sword.js';
+export { makePlateTexture, buildPlate, attachPlate, ensurePlateFont, pickPlateWord, PLATE_WORDS, PLATE, FRIEND_WORDS, friendWordFor, setPlateRow } from './Plate.js';
 export { buildBeastHead, attachBeastHead, BEAST_PRESETS, KAYKIT_HEADS } from './BeastHead.js';
 export { addPlateArmour, addGauntlet } from './Armour.js';
 export { ACCESSORIES } from './Accessories.js';
 export { buildProp, buildCage, PROP_NAMES, PROP_MOUNTS } from './Props/ProcProps.js';
 export { CHEESE, M2_BUILDERS, M2_MOUNTS } from './Props/M2Props.js';
 export { registerMaterialPatcher, makeKitMaterial, kitMaterial, RM, HOLY_COLOR, setCharacterEnvMap, getCharacterEnvMap } from './materials.js';
-export { assetUrl, setAssetResolver, mulberry32, hashString, setCharDetail, charDetail } from './util.js';
+// ---- WarmToon (ART_WARM_SPEC §5, PERF H5; IMPLEMENTATION_PLAN §7.2 characters surface)
+export {
+  makeToonMaterial, getToonMaterial, releaseToonMaterial, toonPoolStats, makeMetalMaterial, makeSteelMatcap, steelMatcap, softRamp,
+  toonLib, toonUniforms, setToonRim, TOON, TOON_ENV, TOON_KEY, METAL_KEY, MESH_KINDS, meshKind, isSharedKit, envMapUsers, BLOB, TUFT,
+} from './materials.js';
+export { buildOutline, outlineMaterial, outlineAllowed, inkFor, setOutlineAlpha, OUTLINE, OUTLINE_U } from './Outline.js';
+export { assetUrl, setAssetResolver, mulberry32, hashString, setCharDetail, charDetail, CHAR_Q, setCharQuality } from './util.js';
 // ---- in-game glue (M1)
-export { KittenView, MEME_CAPE, POSE_BLEND } from './KittenView.js';
-export { initCharacters, disposeCharacters, characterFrame, visualDt, furShellsForPreset, WIND } from './runtime.js';
+export { KittenView, MEME_CAPE, POSE_BLEND, GLANCE } from './KittenView.js';
+export { initCharacters, disposeCharacters, characterFrame, visualDt, furShellsForPreset, furIsoForPreset, KITTEN_CLOSE_SHARE, WIND } from './runtime.js';
 export { dressBeast, BEAST_LOOKS, holdOnBone, silhouette } from './BeastDress.js';
 export { cagedKitten } from './Cages.js';
 export { noteRender, envTick, envColorsFromLights, characterEnvColors, resetCharacterEnv, CHAR_ENV } from './runtime.js';
@@ -33,10 +39,19 @@ export { BOW_SELF_LIGHT } from './Bow.js';
 // ---- readability from the iso camera (research/CONTROLS_SPEC.md §3, §7.4, §12 characters)
 export {
   getSilhouetteProxy, setHighlight, setXray, ringAnchor, topTint, topTintMaterial, highlightObject, buildSilhouetteProxy,
-  silhouetteParts, xrayMaterial, setProxyXray, updateReadability, topViewFactor, resolveTarget, XRAY, HIGHLIGHT, TOP_TINT,
+  silhouetteParts, xrayMaterial, setProxyXray, updateReadability, topViewFactor, resolveTarget, XRAY, HIGHLIGHT, TOP_TINT, CLOSE,
 } from './Readability.js';
 export { READABILITY, TOP_VIEW } from './materials.js';
 export { FUR_LOD_ISO, FUR_VIEW, furLodShells } from './Fur.js';
+
+// ---- §7.2 conveniences on any target (actor, KittenView, Kitten, dressed beast)
+import { resolveTarget as _rt } from './Readability.js';
+/** Close-up on / off for a target's kitten (camera calls it on cam.closeUp changes). */
+export function setCloseUp(target, on) { const r = _rt(target); (r?.view ?? r?.kitten)?.setCloseUp?.(on); return !!(r?.view || r?.kitten); }
+/** Activity tier 0..3 for a target (KittenView / Kitten / dressed beast; X13, replaces setOffscreen). */
+export function setActivity(target, tier) { const r = _rt(target); const t = r?.view ?? r?.kitten ?? r?.dress; t?.setActivity?.(tier); return !!t; }
+/** Feature summary of a target's kitten (draws, tris, shells, tufts, outline, LOD, activity), or null. */
+export function debugFeatures(target) { const r = _rt(target); return (r?.view ?? r?.kitten)?.debugFeatures?.() ?? null; }
 
 // ---- test / debug handle: the library reachable from any built kitten (`root.userData.kitten.constructor.lib`), so
 // smoke tests driving the BUNDLED game (no /src imports there) can build props, cages and cats next to the player.

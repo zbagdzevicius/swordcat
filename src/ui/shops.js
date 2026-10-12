@@ -21,7 +21,7 @@ import * as I from './icons.js';
 /** Sword skins in display order (§13.4) and capes (§13.5). */
 export const SKINS = Object.freeze(['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
 export const CAPE_IDS = Object.freeze(['cream', 'red', 'memeWhite', 'blue', 'green', 'midnight', 'gold']);
-export const CAPE_COLORS = Object.freeze({ cream: '#E2D6C0', red: '#A3202C', memeWhite: '#F2EFE8', blue: '#3F6FB5', green: '#5E7F3E', midnight: '#22242A', gold: '#D9B26A' });
+export const CAPE_COLORS = Object.freeze({ cream: '#E2D6C0', red: '#A3202C', memeWhite: '#F2EFE8', blue: '#3F6FB5', green: '#5E7F3E', midnight: '#3E3F66', gold: '#D9B26A' });
 
 /** Station id → keeper, sign key, item ids, preview kind. */
 export const STATIONS = Object.freeze({

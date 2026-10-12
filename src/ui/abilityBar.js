@@ -2,10 +2,12 @@
 // touch cluster shows the same states). The §10.2 cursors are in cursor.js.
 //
 //   [Stand + 3 Grit pips] [Tumble] [Jump] [Kitten portrait] [Golden Hour] | [Milk ×n] [Meow] [Interact]
-// Bottom centre, parchment and gold; 56 px slots (48 under 900 px width). Key glyphs follow the preset / device.
-// Cooldowns: a clockwise dark sweep (conic-gradient, 55 %, written at ≤ 30 Hz) + whole seconds when ≥ 1 s is left,
-// a white "ready" flash and a soft tick (ui/glass_001 at −20 dB) for cooldowns ≥ 2 s.
-// Hover a slot: a parchment tooltip with the move's one-line rule (`bar.*` strings).
+// Bottom centre, candy skin (WA §4.2: cream slots, 3 px cocoa border, a cocoa lip; geometry unchanged, X22): 56 px
+// slots (48 under 900 px width). Key glyphs (white pill keycaps) follow the preset / device.
+// Cooldowns [X21]: a clockwise lilac sweep (55 %) run as ONE CSS animation per cooldown start (`@property --cd`,
+// `animation-duration` = the time left), never per-frame style writes; whole seconds when ≥ 1 s is left (written on
+// whole-second changes only); on ready a scale 1.12 pop + a white shine stripe + a soft tick (ui/glass_001 at −20 dB)
+// for cooldowns ≥ 2 s. Hover a slot: a cream tooltip with the move's one-line rule (`bar.*` strings).
 // The companion portrait and the Milk bottles live here on desktop / pad (the HUD hides its own copies).
 // Clicking a slot fires it (the `mouseOnly` preset relies on it; harmless elsewhere).
 // Data: player.abilityState(out), companions.cooldownLeft / readiness / canCast.
@@ -38,8 +40,19 @@ export function slotGlyph(input, action) {
   return key ? codeLabel(key) : actionGlyph(action, 'kbm');
 }
 
-/** Cooldown sweep refresh period (s): §10.1 "30 Hz". */
-const SWEEP_DT = 1 / 30;
+/**
+ * [X21] Should a cooldown sweep (re)start this frame? Pure on the slot record `sl` ({ wasCd, lastCd }): a cooldown
+ * that just began, or one that jumped up (re-triggered), returns { deg, dur } (the sweep's start angle and the
+ * seconds left); otherwise null (the running CSS animation carries on by itself).
+ * @param {{ wasCd?: boolean, lastCd?: number }} sl @param {number} cd seconds left @param {number} max full length
+ */
+export function cooldownStart(sl, cd, max) {
+  if (!(cd > 0.02)) return null;
+  if (sl.wasCd && !(cd > (sl.lastCd ?? 0) + 0.05)) return null;
+  const f = max > 0 ? Math.max(0, Math.min(1, cd / max)) : 1;
+  return { deg: +(f * 360).toFixed(1), dur: +cd.toFixed(2) };
+}
+
 /** Tick volume: −20 dB. */
 const TICK_VOL = 0.1;
 
@@ -67,7 +80,6 @@ export class AbilityBar {
       sl.el.addEventListener('pointerenter', (ev) => { if (ev.pointerType !== 'touch') this._showTip(id, def.tip); });
       sl.el.addEventListener('pointerleave', () => this._showTip(null));
     }
-    this._sweepT = 0;
     const g = this.slots.get('guard');
     this.gritPips = el('span', 'ab-grit', { parent: g.el });
     this.milkN = el('span', 'ab-count', { parent: this.slots.get('milk').el });
@@ -149,33 +161,20 @@ export class AbilityBar {
     flag(this.root, 'is-small', small);
     flag(this.root, 'is-pad', input?.device === 'pad');
     flag(this.root, 'is-mouse-only', input?.preset === 'mouseOnly' || ctx.state?.settings?.controlPreset === 'mouseOnly');
-    this._sweepT += dt;
-    const sweep = this._sweepT >= SWEEP_DT;
-    if (sweep) this._sweepT = 0;
-    const set = (id, cd, max, extra = {}) => {
-      const sl = this.slots.get(id);
-      const f = max > 0 ? Math.max(0, Math.min(1, cd / max)) : 0;
-      if (sweep || cd <= 0.02) setVar(sl.sweep, '--cd', (f * 360).toFixed(1) + 'deg');
-      setText(sl.num, cd >= 1 ? String(Math.ceil(cd)) : '');
-      flag(sl.el, 'is-cd', cd > 0.02);
-      if (cd > 0.02) sl.maxSeen = Math.max(sl.maxSeen ?? 0, max);
-      if (sl.wasCd && cd <= 0.02) {
-        if ((sl.maxSeen ?? 0) >= 2) { pulse(sl.el, 'is-flash-ready'); try { ctx.audio?.play2D?.('ui/glass_001', { volume: TICK_VOL }); } catch { /* audio optional */ } }
-        sl.maxSeen = 0;
-      }
-      sl.wasCd = cd > 0.02;
-      setText(sl.key, slotGlyph(input, id));
-      for (const [k, v] of Object.entries(extra)) flag(sl.el, k, v);
-    };
-    set('guard', 0, 0, { 'is-active': !!s.guard, 'is-broken': (s.grit ?? 1) <= 0, 'is-holy': !!s.holyReady });
-    set('dodge', s.dodgeCd, s.dodgeMax);
-    set('jump', 0, 0);
-    set('meow', s.meowCd, s.meowMax);
-    set('golden', 0, 0, { 'is-ready': !!s.goldenReady, 'is-locked': !s.goldenReady && s.golden < 1 });
-    setVar(this.slots.get('golden').el, '--fill', (s.golden ?? 0).toFixed(3));
-    set('milk', 0, 0, { 'is-empty': (s.milk ?? 0) <= 0 });
-    setText(this.milkN, `×${s.milk ?? 0}`);
-    set('interact', 0, 0, { 'is-lit': this.interactOn });
+    this._keysDue = (this._keyT = (this._keyT ?? 0) - dt) <= 0;
+    if (this._keysDue) this._keyT = 0.5;
+    const gd = this._set('guard', 0, 0);
+    flag(gd, 'is-active', !!s.guard); flag(gd, 'is-broken', (s.grit ?? 1) <= 0); flag(gd, 'is-holy', !!s.holyReady);
+    this._set('dodge', s.dodgeCd, s.dodgeMax);
+    this._set('jump', 0, 0);
+    this._set('meow', s.meowCd, s.meowMax);
+    const go = this._set('golden', 0, 0);
+    flag(go, 'is-ready', !!s.goldenReady); flag(go, 'is-locked', !s.goldenReady && s.golden < 1);
+    setVar(go, '--fill', (s.golden ?? 0).toFixed(2));
+    flag(this._set('milk', 0, 0), 'is-empty', (s.milk ?? 0) <= 0);
+    const mn = s.milk ?? 0;
+    if (this._milk !== mn) { this._milk = mn; setText(this.milkN, `×${mn}`); }
+    flag(this._set('interact', 0, 0), 'is-lit', this.interactOn);
     // grit pips
     const gk = `${s.grit}/${s.gritMax}`;
     if (this.gritPips._k !== gk) {
@@ -193,9 +192,33 @@ export class AbilityBar {
       if (ks._id !== id) { ks._id = id; ks.ico.innerHTML = portraitSVG(id, { expression: 'happy' }); setVar(ks.el, '--sig', SIGNATURE[id] ?? '#D9B26A'); }
       const left = comp.cooldownLeft?.() ?? 0, r = comp.readiness?.() ?? 1;
       const max = left > 0 && r < 1 ? left / Math.max(1e-3, 1 - r) : 0;
-      set('ability', left, max, { 'is-nap': (c.napT ?? 0) > 0 });
+      flag(this._set('ability', left, max), 'is-nap', (c.napT ?? 0) > 0);
       if ((c.napT ?? 0) > 0) setText(ks.num, 'zzz');
-    } else set('ability', 0, 0);
+    } else this._set('ability', 0, 0);
+  }
+
+  /**
+   * One slot's cooldown state. [X21] A cooldown that starts (or jumps up) launches one CSS sweep animation from the
+   * current fraction to 0 over the time left; nothing is written per frame after that. Returns the slot element.
+   */
+  _set(id, cd, max) {
+    const sl = this.slots.get(id), on = cd > 0.02;
+    if (on) {
+      const st = cooldownStart(sl, cd, max);
+      if (st) { setVar(sl.sweep, '--cd0', `${st.deg}deg`); setVar(sl.sweep, '--cdd', `${st.dur}s`); pulse(sl.sweep, 'is-run'); }
+      sl.maxSeen = Math.max(sl.maxSeen ?? 0, max);
+    } else if (sl.wasCd) {
+      flag(sl.sweep, 'is-run', false);
+      if ((sl.maxSeen ?? 0) >= 2) { pulse(sl.el, 'is-flash-ready'); try { this.ctx.audio?.play2D?.('ui/glass_001', { volume: TICK_VOL }); } catch { /* audio optional */ } }
+      sl.maxSeen = 0;
+    }
+    flag(sl.el, 'is-cd', on);
+    sl.wasCd = on;
+    sl.lastCd = on ? cd : 0;
+    const n = cd >= 1 ? Math.ceil(cd) : 0;                       // the label on whole seconds only
+    if (sl.n !== n) { sl.n = n; setText(sl.num, n ? String(n) : ''); }
+    if (this._keysDue) setText(sl.key, slotGlyph(this.ctx.input, id));   // key glyphs re-read at 2 Hz (no per-frame strings)
+    return sl.el;
   }
 
   dispose() {

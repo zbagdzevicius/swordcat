@@ -14,13 +14,14 @@
 // (everything in ONE skinned mesh, vertex-coloured eyes: villagers, hub residents, riders, spoon brigade).
 import * as THREE from 'three';
 import { PAL } from './palette.js';
-import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32, charDetail, segScale } from './util.js';
-import { makeKitMaterial, kitMaterial, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR, TOP_VIEW, READABILITY } from './materials.js';
+import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32, charDetail, segScale, CHAR_Q } from './util.js';
+import { makeKitMaterial, kitMaterial, makeToonMaterial, isSharedKit, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR, TOP_VIEW, READABILITY } from './materials.js';
 import { buildSilhouetteProxy, HIGHLIGHT } from './Readability.js';
-import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
-import { EyePair, EXPRESSIONS, eyePivotMatrix, ringGeometry } from './Eyes.js';
+import { buildOutline, OUTLINE } from './Outline.js';
+import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, isoShellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
+import { EyePair, EXPRESSIONS, EYE, eyePivotMatrix, ringGeometry } from './Eyes.js';
 import { buildBow } from './Bow.js';
-import { HeroCape, buildSwayCape, capeMaterial, CAPE_TIME } from './Cape.js';
+import { HeroCape, buildSwayCape, capeMaterial, CAPE_TIME, CAPE_DEFAULTS } from './Cape.js';
 import { buildSword } from './Sword.js';
 import { addPlateArmour, addGauntlet } from './Armour.js';
 import { ACCESSORIES } from './Accessories.js';
@@ -41,26 +42,50 @@ export const ARM = Object.freeze({ upper: 0.115, fore: 0.11, pawCentre: [0, -0.0
 /** Rest tail curve (art.md §2.4), in root space. */
 export const TAIL_CURVE = [[0, 0.2, -0.13], [0.05, 0.1, -0.28], [0.18, 0.05, -0.36], [0.32, 0.06, -0.30]];
 
+/** Quaternion from XYZ euler. Pose snapshots are cached per kitten, so this builds only at build / first pose use. */
 const E = (x = 0, y = 0, z = 0) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, 'XYZ'));
+/** Scratch-writing variant for per-frame code (H2: no allocation in animate): returns a shared quaternion. */
+const _eq = new THREE.Quaternion(), _ee = new THREE.Euler();
+const Es = (x = 0, y = 0, z = 0) => _eq.setFromEuler(_ee.set(x, y, z, 'XYZ'));
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
 
-/** Rest (local) transforms for a kitten of width w. */
-function restPose(w, earsLow = 0) {
+/**
+ * Proportions (ART_WARM_SPEC §6.3, D15; total height ~1.0 H unchanged, physics / hitboxes / MODEL_FIT untouched):
+ * a bigger head (×`head[tier]`, kids ×`head.kid`), a shorter body (hips / chest heights, legs ×`leg`). `legacy`
+ * keeps the M1/M2 rest pose (cfg.proportions === 'legacy'). Root-space pose targets shift with the torso (`drop`).
+ */
+export const PROPORTIONS = Object.freeze({
+  head: Object.freeze({ hero: 1.17, kitten: 1.17, npc: 1.12, lite: 1.05, kid: 1.22 }),
+  hipsY: 0.27, chestY: 0.085, leg: 0.85, kidScale: 0.75, neckMin: 0.15,
+  /** M1/M2 rest pose; `headTop` = head pivot → ear tip at head scale 1 (H). */
+  legacy: Object.freeze({ hipsY: 0.30, chestY: 0.10, neckY: 0.22, leg: 1, headTop: 0.38 }),
+});
+/**
+ * Play-LOD (ART §6.4): in-game cats are built at `detail` (× the preset's charDetail) with the fur base layers merged
+ * into the body draw; the full-detail close-up set (`setCloseUp`) is built in idle slices after `idleAfter` frames.
+ * `closeOn` / `closeOff`: the close-up hysteresis (lens → her focus, m) used when camera publishes no `cam.closeUp`.
+ */
+export const PLAY_LOD = Object.freeze({ detail: 0.4, idleAfter: 60, closeOn: 6.0, closeOff: 6.3, sliceMs: 2 });
+
+/** Rest (local) transforms for a kitten of width w. @param {{hipsY:number, chestY:number, leg:number}} [pr] */
+function restPose(w, earsLow = 0, pr = PROPORTIONS) {
+  const L = pr.leg ?? 1;
   const P = {
-    body: [0, 0, 0], hips: [0, 0.30, 0], chest: [0, 0.10, 0], head: [0, 0.22, 0], mouth: [...FACE.mouth],
+    body: [0, 0, 0], hips: [0, pr.hipsY, 0], chest: [0, pr.chestY, 0], head: [0, pr.neckY ?? 0.22, 0], mouth: [...FACE.mouth],
     earL: [0.132, 0.256, -0.014], earR: [-0.132, 0.256, -0.014], eyeL: [...FACE.eyeL], eyeR: [...FACE.eyeR],
     shoulderL: [0.135 * w, 0.15, 0.0], elbowL: [0, -ARM.upper, 0], pawL: [0, -ARM.fore, 0],
     shoulderR: [-0.135 * w, 0.15, 0.0], elbowR: [0, -ARM.upper, 0], pawR: [0, -ARM.fore, 0],
-    thighL: [0.085 * w, -0.06, 0], kneeL: [0, -0.10, 0], footL: [0, -0.11, 0],
-    thighR: [-0.085 * w, -0.06, 0], kneeR: [0, -0.10, 0], footR: [0, -0.11, 0],
+    thighL: [0.085 * w, -0.06 * L, 0], kneeL: [0, -0.10 * L, 0], footL: [0, -0.11 * L, 0],
+    thighR: [-0.085 * w, -0.06 * L, 0], kneeR: [0, -0.10 * L, 0], footR: [0, -0.11 * L, 0],
   };
   const R = {
     earL: [-0.1, -0.08, -0.45 - earsLow * 0.6], earR: [-0.1, 0.08, 0.45 + earsLow * 0.6],
     shoulderL: [0, 0, 0.12], shoulderR: [0, 0, -0.12],
   };
   // tail joints along the rest curve
-  const curve = new THREE.CatmullRomCurve3(TAIL_CURVE.map((p) => new THREE.Vector3(...p)));
-  let prev = new THREE.Vector3(0, 0.30, 0);
+  const dy = pr.hipsY - PROPORTIONS.legacy.hipsY;
+  const curve = new THREE.CatmullRomCurve3(TAIL_CURVE.map((p) => new THREE.Vector3(p[0], p[1] + dy, p[2])));
+  let prev = new THREE.Vector3(0, pr.hipsY, 0);
   for (let i = 0; i < 6; i++) {
     const pt = curve.getPointAt(i / 5);
     P['tail' + i] = [pt.x - prev.x, pt.y - prev.y, pt.z - prev.z];
@@ -76,18 +101,25 @@ function restPose(w, earsLow = 0) {
  * @param {object} cfg see configs.js (id, tier, scale, width, headScale, coat, eyes, fur, ears, bow, outfit, accessories, cape, sword, expression)
  * @returns {Kitten}
  */
-export function buildKitten(cfg = {}) {
-  return new Kitten(cfg);
+export function buildKitten(cfg = {}, o = {}) {
+  return new Kitten(cfg, o);
 }
 
 export class Kitten {
-  constructor(cfg) {
+  /**
+   * @param {object} cfg see buildKitten
+   * @param {{ lod?: 'play'|'full', detail?: number }} [o] lod 'play' (in game: KittenView) = the play-LOD set + merged
+   *   fur base, close-up set built later; 'full' (default in tools / tests) = the full set, always "close".
+   */
+  constructor(cfg, o = {}) {
     this.cfg = cfg;
     const tier = cfg.tier || 'kitten';
     this.tier = tier;
     this.lite = tier === 'lite';
-    // tessellation factor: the lite tier's fixed 0.55, else the quality preset's charDetail (Low ~0.55, Med/High 1)
-    this.detail = this.lite ? 0.55 : charDetail();
+    this.lod = this.lite ? 'full' : (o.lod ?? cfg.lod ?? 'full');
+    // tessellation factor: the lite tier's fixed 0.55, else the quality preset's charDetail (Low ~0.55, Med/High 1);
+    // play LOD scales it down (ART §6.4: the iso set; the close-up set is rebuilt at the full factor)
+    this.detail = this.lite ? 0.55 : (o.detail ?? (this.lod === 'play' ? Math.min(charDetail(), PLAY_LOD.detail) : charDetail()));
     const w = cfg.width ?? 1;
     this.w = w;
     const root = new THREE.Group();
@@ -104,7 +136,17 @@ export class Kitten {
         : acc.some((a) => ['coif'].includes(a.id)) ? 0.25 : acc.some((a) => a.id === 'hood') ? 0.2 : 0;
 
     // ---- skeleton
-    const { P, R, curve } = restPose(w, earsLowHint);
+    const legacy = cfg.proportions === 'legacy';
+    const kid = cfg.kid === true;   // lost kittens, squires (configs mark them)
+    const headK = legacy ? 1 : (kid ? PROPORTIONS.head.kid : PROPORTIONS.head[tier] ?? 1);
+    this.headScale = (cfg.headScale ?? 1) * headK;
+    // the neck shortens so the ear tips stay at the M1/M2 height (total height unchanged, ART §6.3): the bigger head
+    // sits lower on the shoulders instead of growing her taller (cages, doors, camera catH keep working)
+    const L0 = PROPORTIONS.legacy, prop = legacy ? L0
+      : { ...PROPORTIONS, neckY: Math.max(PROPORTIONS.neckMin, L0.hipsY + L0.chestY + L0.neckY + L0.headTop * (cfg.headScale ?? 1) - PROPORTIONS.hipsY - PROPORTIONS.chestY - L0.headTop * this.headScale) };
+    const { P, R, curve } = restPose(w, earsLowHint, prop);
+    /** Torso height change vs the M1/M2 rest pose (root-space pose targets and the cape neckline follow it). */
+    this.bodyDrop = (prop.hipsY + prop.chestY) - (PROPORTIONS.legacy.hipsY + PROPORTIONS.legacy.chestY);
     this.tailCurve = curve;
     const joints = {}, bones = [];
     for (const n of BONE_NAMES) {
@@ -114,7 +156,7 @@ export class Kitten {
       joints[n] = b; bones.push(b);
     }
     for (const n of BONE_NAMES) (PARENT[n] ? joints[PARENT[n]] : root).add(joints[n]);
-    if (cfg.headScale) joints.head.scale.setScalar(cfg.headScale);
+    if (this.headScale !== 1) joints.head.scale.setScalar(this.headScale);
     const bodyScale = cfg.bodyScale ?? 1;
     if (bodyScale !== 1) joints.hips.scale.set(bodyScale, bodyScale, bodyScale);
     const saveScale = root.scale.clone(); root.scale.set(1, 1, 1);
@@ -138,7 +180,10 @@ export class Kitten {
 
     // ---- materials
     const holyCapable = tier === 'hero' || cfg.holy;
-    this.kitMat = holyCapable ? makeKitMaterial() : kitMaterial();
+    // WarmToon per mesh kind (H3): the skinned body and the instanced fur base layer never share one material object;
+    // a holy-capable cat's two variants share ONE uniform set (one holy / flash / highlight value)
+    this.kitMat = holyCapable ? makeKitMaterial({ kind: 'skinned' }) : kitMaterial('skinned');
+    this.kitMatInst = holyCapable ? makeToonMaterial({ kind: 'instanced', uniforms: this.kitMat.userData.uniforms }) : kitMaterial('instanced');
     const furTier = tier === 'hero' ? 'hero' : tier === 'kitten' ? 'kitten' : 'npc';
     this.furTier = furTier;
     this.furMat = null; this.furMatBaked = null;
@@ -190,7 +235,7 @@ export class Kitten {
       const combFor = (region) => (v, n, lp) => (region === 'cheek' ? [Math.sign(lp.x) * 0.55, -0.85, -0.25]
         : region === 'muzzle' ? [Math.sign(lp.x) * 0.9, -0.35, 0.1] : [lp.x * 2.0, -0.45, -1]);
       for (const hp of headPieces) gb.add(hp.geo, { color: coatAt(hp.region), rmse: RM.fur, fur: (v, n, lp) => headFurMask(lp, hp.region, eyeScale), comb: combFor(hp.region) });
-      this.headFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMat, tier: furTier, name: 'furHead' });
+      this.headFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMatInst, tier: furTier, name: 'furHead', owner: this });
       joints.head.add(this.headFur.mesh);
     }
 
@@ -212,7 +257,7 @@ export class Kitten {
 
     // ---- eyes
     const eyeCfg = cfg.eyes || {};
-    const eyeR = 0.045 * eyeScale;
+    const eyeR = FACE.eyeR0 * eyeScale;
     const eyeColors = eyeCfg.L || eyeCfg.R ? { L: { ...eyeCfg, ...(eyeCfg.L || {}) }, R: { ...eyeCfg, ...(eyeCfg.R || {}) } } : eyeCfg;
     const posL = [FACE.eyeL[0] * (0.97 + 0.03 * eyeScale), FACE.eyeL[1], this._eyeZ(FACE.eyeL[0], FACE.eyeL[1], eyeScale)];
     const posR = [-posL[0], posL[1], posL[2]];
@@ -220,8 +265,12 @@ export class Kitten {
       this._liteEyes(A, posL, posR, eyeR, eyeColors);
     } else {
       const lidC = coatColor(coat, 'head', new THREE.Vector3(FACE.eyeL[0], FACE.eyeL[1] + 0.07, FACE.eyeL[2] - 0.02));
-      const lidMat = own(new THREE.MeshStandardMaterial({ color: new THREE.Color(lidC[0], lidC[1], lidC[2]).multiplyScalar(0.78), roughness: 0.95 }));
-      this.eyes = new EyePair({ r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat, detail: this.detail, slit: eyeCfg.slit, lash: eyeCfg.lash ?? 1, seed: (cfg.id || 'kitten') + ':eyes' });
+      // lids, lashes and brows: vertex-coloured, drawn by the cat's own instanced WarmToon (no extra program)
+      const pupilR = eyeCfg.pupilR ?? (tier === 'hero' ? EYE.pupil.hero : tier === 'kitten' ? EYE.pupil.kitten : EYE.pupil.default);
+      this.eyes = new EyePair({
+        r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat: this.kitMatInst, lidColor: lidC.map((c) => c * 0.86), detail: this.detail,
+        slit: eyeCfg.slit, sclera: eyeCfg.sclera, pupilR, lash: eyeCfg.lash ?? 1, brows: eyeCfg.brows, seed: (cfg.id || 'kitten') + ':eyes',
+      });
       joints.head.add(this.eyes.group);
       for (const [pos, side] of [[posL, 1], [posR, -1]]) A.add('head', ringGeometry(eyeR, this.detail), { m: eyePivotMatrix(pos, side, 0.3), color: rgb(PAL.eyeLine), rmse: RM.eyeLine });
       if (flags.hideEye) { /* set after accessories */ }
@@ -232,7 +281,8 @@ export class Kitten {
     // skinned shell-fur surfaces (ear backs + tail) share one FurPart / draw call
     this._skinFurGB = this.lite ? null : new GeoBuilder({ skinned: true, fur: true });
     this._ears(A, cfg, bind, boneIndex, earS);
-    if (!this.lite && cfg.ears?.tufts !== false) this._tufts(tufts, bind, boneIndex, earS);
+    // tuft cards (ART §6.2): Med / High only (QUALITY.charTufts), never on villagers (lite)
+    if (!this.lite && cfg.ears?.tufts !== false && CHAR_Q.tufts) this[cfg.tuftsLegacy ? '_tuftsLegacy' : '_tufts'](tufts, bind, boneIndex, earS);
 
     // ---- bib, torso, limbs
     const armour = cfg.outfit?.armour || null;
@@ -266,11 +316,12 @@ export class Kitten {
     if (!tufts.empty) {
       const tm = new THREE.SkinnedMesh(tufts.build(), tuftMaterial());
       tm.name = 'tufts'; tm.castShadow = false; tm.frustumCulled = false; tm.renderOrder = FUR_RENDER_ORDER + 1;
+      tm.userData.cards = this._tuftCards ?? 0;
       root.add(tm); tm.bind(skeleton, new THREE.Matrix4());
       this.tuftMesh = tm;
     }
     if (this.tailFurGeo) {
-      this.tailFur = new FurPart(this.tailFurGeo, { bakedMat: this.furMatBaked, sheenMat: this.kitMat, tier: furTier, skeleton, name: 'furTail' });
+      this.tailFur = new FurPart(this.tailFurGeo, { bakedMat: this.furMatBaked, sheenMat: this.kitMat, tier: furTier, skeleton, name: 'furTail', owner: this });
       this.tailFur.mesh.renderOrder = FUR_RENDER_ORDER - 0.3;
       root.add(this.tailFur.mesh);
     }
@@ -303,6 +354,7 @@ export class Kitten {
       const headQ = new THREE.Quaternion(); bind.head.decompose(_v, headQ, _v2);
       bow.quaternion.copy(earQ.invert().multiply(headQ).multiply(E(0.25, -0.25, -(cfg.bow.tilt ?? 0.32))));
       if (cfg.bow.scale2) bow.scale.setScalar(cfg.bow.scale2);
+      bow.traverse((c) => { if (c.isMesh) c.castShadow = false; });   // H3: the bow never casts
       this._bowBase = bow.scale.x;
       joints.earL.add(bow);
       this.bow = bow; rig.bowAnchor = bow;
@@ -318,7 +370,7 @@ export class Kitten {
     if (cfg.cape) this.setCape(cfg.cape.style ?? cfg.cape, cfg.cape.sim);
 
     // ---- eyes hidden by an eyepatch
-    if (flags.hideEye && this.eyes) { const e = this.eyes.eyes.find((x) => x.side === flags.hideEye); if (e) e.pivot.visible = false; }
+    if (flags.hideEye && this.eyes) this.eyes.hideEye(flags.hideEye);
 
     // ---- aura hull (holy) + blob shadow
     if (holyCapable) this._aura();
@@ -330,6 +382,24 @@ export class Kitten {
 
     root.scale.copy(saveScale);
 
+    // ---- play LOD (ART §6.4): the fur base layers merge into the body draw while no shells are drawn
+    this._kitGeo = kitGeo;
+    this._playGeo = this.lod === 'play' ? this._mergePlayGeometry(kitGeo, bind, boneIndex) : null;
+    this._closeSet = null;
+    this._playEyes = null;
+    /** Close-up state (camera's cam.closeUp: shells, whiskers, full-detail set). Tools / tests ('full' LOD) stay close. */
+    this.closeUp = this.lod !== 'play';
+    /** Activity tier (PERF §4.3, X13): 0 full, 1 no cape verlet / secondary motion, 2 every 4th frame, 3 frozen. */
+    this.activity = 0;
+    this._actAcc = 0; this._actN = 0;
+    /** Volume-preserving squash on the body joint (ART §6.5; the player drives kicks and targets). */
+    this.squash = new Squash();
+    this.squashTarget = 0;
+    this.squashScale = 1;
+    /** Breathing squash target amplitude (ART §6.5 idle row; 0 turns it off). */
+    this.breathe = this.lite ? 0 : SQUASH.breathe;
+    this.outline = null;
+
     // ---- runtime state
     this.props = {};
     // visual-only randomness, seeded per cat id (deterministic screenshots; never Math.random)
@@ -337,7 +407,7 @@ export class Kitten {
     this.time = this.rnd() * 10;
     this.holy = 0;
     this.expr = cfg.expression || 'neutral';
-    this.emotes = { earsFlat: 0, tailPuff: 0, nod: 0, shake: 0, meow: 0, sneeze: 0, wave: 0, throw: 0 };
+    this.emotes = { earsFlat: 0, tailPuff: 0, nod: 0, shake: 0, meow: 0, sneeze: 0, wave: 0, throw: 0, groom: 0, twirl: 0, boop: 0, pawBump: 0, cheer: 0 };
     this.earTwitch = { L: 0, R: 0, next: 2 + this.rnd() * 4 };
     this.springs = { head: new Spring(90, 12), tail: new Spring(40, 6) };
     this.idleLife = true;
@@ -357,6 +427,140 @@ export class Kitten {
     this._proxyDirty = false;
     this.highlight = null;
     this._topK = 0;
+    this._applyLod();
+  }
+
+  // ------------------------------------------------------------------ play LOD / close-up (ART §6.1, §6.4)
+
+  /**
+   * One skinned geometry = kit + the fur base layers (head + bib rigid on their bones, tail + ear backs already
+   * skinned). Drawn while no shells are (iso play on every tier): head / bib / tail fur cost 0 extra draws.
+   */
+  _mergePlayGeometry(kitGeo, bind, boneIndex) {
+    const parts = [{ g: kitGeo }];
+    if (this.headFur) parts.push({ g: this.headFur.mesh.geometry, m: bind.head, bone: boneIndex.head });
+    if (this.bibFur) parts.push({ g: this.bibFur.mesh.geometry, m: bind.chest, bone: boneIndex.chest });
+    if (this.tailFur) parts.push({ g: this.tailFur._src });
+    return mergeSkinnedParts(parts);
+  }
+
+  /** Shells this kitten draws right now (close-up count or the iso play count). */
+  shellTarget() {
+    const ft = this.furTier;
+    return this.closeUp ? shellsFor(ft) : isoShellsFor(ft);
+  }
+
+  /** Apply the close-up / play state: body geometry, fur shells, whiskers. Cheap: pointer swaps only. */
+  _applyLod() {
+    if (this.lite || !this.kitMesh) return this;
+    const n = this.shellTarget();
+    const merged = !!this._playGeo && !this.closeUp && n === 0;
+    const close = this.closeUp && this._closeSet;
+    this.kitMesh.geometry = merged ? this._playGeo : close ? this._closeSet.kit : this._kitGeo;
+    for (const f of [this.headFur, this.bibFur, this.tailFur]) {
+      if (!f) continue;
+      f.mesh.visible = !merged;
+      if (!merged) f.setShells(n);
+    }
+    if (this.eyes && this._closeSet?.eyes && this._playEyes) this.eyes.useGeometries(this.closeUp ? this._closeSet.eyes : this._playEyes);
+    if (this.whiskerMesh) this.whiskerMesh.visible = this.closeUp;   // close-up LOD only (ART §6.3)
+    return this;
+  }
+
+  /**
+   * Build the full-detail close-up set (body, fur surfaces, eyes) for a play-LOD kitten. KittenView calls it in an idle
+   * slice after the level's first frames (ART §6.1: never on the close-up frame); setCloseUp(true) falls back to it.
+   * @returns {boolean} true when it built something
+   */
+  prepareCloseUp() {
+    if (this._closeSet || this.lod !== 'play' || this.lite) return false;
+    const t = new Kitten({ ...this.cfg, sword: null, cape: null, props: [], blob: false, whiskers: false, pose: 'idle' }, { lod: 'full' });
+    const set = { kit: t.kitMesh.geometry, eyes: t.eyes?.geometries() ?? null };
+    // steal the geometries the close-up shows; the temp kitten disposes what is left (dummies stand in)
+    t.kitMesh.geometry = _DUMMY; t._kitGeo = _DUMMY;
+    if (this.headFur && t.headFur) { this.headFur.setSource(t.headFur.mesh.geometry); t.headFur.mesh.geometry = _DUMMY; }
+    if (this.bibFur && t.bibFur) { this.bibFur.setSource(t.bibFur.mesh.geometry); t.bibFur.mesh.geometry = _DUMMY; }
+    if (this.tailFur && t.tailFur) { this.tailFur.setSource(t.tailFur._src); t.tailFur._src = null; }
+    if (t.eyes) t.eyes.releaseGeometries();
+    t.dispose();
+    this._playEyes = this.eyes?.geometries() ?? null;
+    this._closeSet = set;
+    this._applyLod();
+    return true;
+  }
+
+  /**
+   * Close-up on / off (camera's cam.closeUp, ART §6.1): shells (QUALITY.furShellsClose), whiskers, the full-detail
+   * geometry set. Off = the play set (fur base merged into the body draw, no shells unless furShellsIso > 0).
+   * @param {boolean} on
+   */
+  setCloseUp(on) {
+    on = !!on;
+    if (on === this.closeUp) return this;
+    if (on && this.lod === 'play' && !this._closeSet) this.prepareCloseUp();
+    this.closeUp = on;
+    this._applyLod();
+    return this;
+  }
+
+  /**
+   * Activity tier (PERF §4.3, X13; replaces the draft setOffscreen): 0 = full; ≥ 1 = the cape sways in the shader (no
+   * verlet) and secondary motion (fur drag, blinks, bow bounce) pauses; 2 = animated every 4th frame with the summed
+   * dt; 3 = frozen. Coming back to 0 restores everything the same frame (the cloth re-seeds from the current pose).
+   * @param {0|1|2|3} tier
+   */
+  setActivity(tier) {
+    tier = Math.max(0, Math.min(3, tier | 0));
+    if (tier === this.activity) return this;
+    const was = this.activity;
+    this.activity = tier;
+    if (this.cape) {
+      if (tier >= 1 && was === 0) this.cape.setMode('sway', { blend: 1e-3 });
+      else if (tier === 0) { this.cape.snap(); this.cape.setMode(this._capeMode ?? 'verlet', { blend: 1e-3 }); }
+    }
+    if (tier === 0) { this._actAcc = 0; this._actN = 0; }
+    return this;
+  }
+
+  /**
+   * Activity gate for a frame: how much dt to advance now (0 = skip this frame). Tier 2 runs every 4th frame with the
+   * accumulated dt, tier 3 never.
+   * @param {number} dt @returns {number}
+   */
+  activityDt(dt) {
+    if (this.activity <= 1) return dt;
+    this._actAcc += dt;
+    if (this.activity >= 3) return 0;
+    if (++this._actN % 4 !== 0) return 0;
+    const d = this._actAcc; this._actAcc = 0; return d;
+  }
+
+  /** Squash kick (ART §6.5): negative = squash, positive = stretch (jump +3.5, land −2.5, hit −2.0, meow +2.0). */
+  squashKick(dv) { this.squash.kick(dv); return this; }
+
+  /**
+   * Which features this cat has right now (ART §11 / smoke `characters:*`): draws, triangles, shells, tufts, outline,
+   * LOD, activity, squash. Cheap enough for a debug hook; never call per frame.
+   */
+  debugFeatures() {
+    let draws = 0, tris = 0;
+    this.root.traverseVisible((o) => {
+      if (!(o.isMesh || o.isLine || o.isPoints)) return;
+      draws++;
+      const g = o.geometry; if (!g || o.isLine || o.isPoints || o.material?.colorWrite === false) return;
+      let n = (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3;
+      if (g.drawRange && Number.isFinite(g.drawRange.count)) n = Math.min(n, g.drawRange.count / 3);
+      if (o.isInstancedMesh) n *= o.count;
+      tris += n;
+    });
+    return {
+      id: this.cfg.id ?? null, tier: this.tier, lod: this.lod, closeUp: this.closeUp, closeSetBuilt: !!this._closeSet,
+      merged: this.kitMesh.geometry === this._playGeo, detail: this.detail, draws, tris: Math.round(tris),
+      shells: this.headFur?.mesh.visible ? this.headFur.shells : 0, tufts: !!this.tuftMesh, tuftCards: this.tuftMesh?.userData.cards ?? 0,
+      whiskers: !!this.whiskerMesh?.visible, outline: !!this.outline?.visible, activity: this.activity,
+      squash: this.squashScale, headScale: this.headScale, bodyDrop: this.bodyDrop,
+      materials: { body: this.kitMat.customProgramCacheKey?.() ?? this.kitMat.type, eyes: this.eyes?.eyeMeshes[0].material.type ?? null },
+    };
   }
 
   /** Duck-typing flag for characters' resolvers (Readability.resolveTarget). */
@@ -454,8 +658,66 @@ export class Kitten {
     }
   }
 
-  /** Ear tufts, cheek wisps, crown and bib fluff, tail-tip wisp (art.md §3.4). */
+  /**
+   * Tuft cards (ART_WARM_SPEC §6.2, D16: the fluffy silhouette from above): each tuft is a CROSSED PAIR of quads (4 tris),
+   * rigid on one bone, tilted `TUFTS.tilt` toward world-up so it reads from 50° above. Hero 32 tufts (cheek ruff 2×6,
+   * crown 3, inner ear 2×3, bib 5, tail tip 6), other cats 20; one skinned draw, zero CPU per frame.
+   */
   _tufts(gb, bind, idx, earS) {
+    const root = rgb(this.coat.cream ?? PAL.tuftRoot), tip = rgb(this.cfg.tuftTip ?? PAL.tuftTip);
+    const baseC = rgb(this.coat.base);
+    const rnd = mulberry32(hashString(this.cfg.id || 'kitten'));
+    const T = TUFTS, N = this.tier === 'hero' ? T.hero : T.other;
+    const up = new THREE.Vector3(0, 1, 0);
+    let cards = 0;
+    const tuft = (bone, at, dir, [w, h], c0, c1) => {
+      // direction in bone space → bind space, tilted toward world up by T.tilt, back to bone space
+      const bq = _q.setFromRotationMatrix(_m2.extractRotation(bind[bone]));
+      const d = _v.set(dir[0], dir[1], dir[2]).normalize().applyQuaternion(bq);
+      const ang = d.angleTo(up), tilt = Math.min(T.tilt, ang);
+      if (ang > 1e-4) d.applyAxisAngle(_v2.crossVectors(d, up).normalize(), tilt);
+      d.applyQuaternion(bq.invert());
+      const yAx = d.clone(), side = new THREE.Vector3(1, 0, 0);
+      if (Math.abs(yAx.dot(side)) > 0.9) side.set(0, 0, 1);
+      const zAx = new THREE.Vector3().crossVectors(side, yAx).normalize(), xAx = new THREE.Vector3().crossVectors(yAx, zAx);
+      for (const twist of [0, Math.PI / 2]) {
+        const g = new THREE.PlaneGeometry(w, h, 1, 1).translate(0, h / 2, 0).rotateY(twist + (rnd() - 0.5) * 0.4);
+        const m = new THREE.Matrix4().makeBasis(xAx, yAx, zAx).setPosition(at[0], at[1], at[2]);
+        gb.add(g, { matrix: _m.multiplyMatrices(bind[bone], m).clone(), bone: idx[bone], color: (v, n, lp) => mixRgb(c0, c1, smoothstep(0, h, lp.y)), rmse: RM.fur });
+        g.dispose();
+      }
+      cards++;
+    };
+    const S = T.size;
+    // cheek ruff edge: the wide face from above
+    for (const s of [1, -1]) for (let i = 0; i < N.cheek; i++) {
+      const a = -0.85 + (i / Math.max(1, N.cheek - 1)) * 1.3 + (rnd() - 0.5) * 0.1;
+      tuft('head', [s * (0.11 + 0.06 * Math.cos(a)), 0.08 + 0.06 * Math.sin(a), 0.04 + rnd() * 0.02], [s * Math.cos(a), Math.sin(a) * 0.9 - 0.1, 0.2],
+        S.cheek, mixRgb(baseC, root, 0.3 + 0.5 * (i / N.cheek)), mixRgb(baseC, tip, 0.45));
+    }
+    // crown cowlick
+    for (let i = 0; i < N.crown; i++) tuft('head', [(i - (N.crown - 1) / 2) * 0.035, 0.29, 0.01], [(i - (N.crown - 1) / 2) * 0.5, 1, -0.35], S.crown, baseC, mixRgb(baseC, tip, 0.35));
+    // inner ear (cream)
+    for (const bone of ['earL', 'earR']) for (let i = 0; i < N.ear; i++) {
+      const x = (i - (N.ear - 1) / 2) * 0.014 * earS;
+      tuft(bone, [x, 0.012 + rnd() * 0.012, 0.014], [x * 4, 1, 0.5], S.ear.map((v) => v * earS), root, tip);
+    }
+    // bib spilling over the breastplate
+    for (let i = 0; i < N.bib; i++) {
+      const x = (i - (N.bib - 1) / 2) * 0.028;
+      tuft('chest', [x, 0.2 + rnd() * 0.02, 0.1 - Math.abs(x) * 0.2], [x * 2, -0.6, 1], S.bib, root, tip);
+    }
+    // tail tip (cream), in tail5's frame
+    const tipP = this.tailCurve.getPointAt(1), inv = _m2.copy(bind.tail5).invert();
+    const tl = tipP.clone().applyMatrix4(inv);
+    for (let i = 0; i < N.tail; i++) {
+      const a = (i / N.tail) * TAU;
+      tuft('tail5', [tl.x, tl.y, tl.z], [Math.cos(a) * 0.6, 0.8, Math.sin(a) * 0.6 - 0.3], S.tail, mixRgb(baseC, root, 0.6), tip);
+    }
+    this._tuftCards = cards;
+  }
+  /** (M1 wisp cards, kept for reference tools: `cfg.tuftsLegacy`.) */
+  _tuftsLegacy(gb, bind, idx, earS) {
     const root = rgb(this.coat.cream ?? PAL.tuftRoot), tip = rgb(this.cfg.tuftTip ?? PAL.tuftTip);
     const baseC = rgb(this.coat.base);
     const rnd = mulberry32(hashString(this.cfg.id || 'kitten'));
@@ -524,7 +786,7 @@ export class Kitten {
       const gb = new GeoBuilder({ fur: true });
       gb.add(bibGeo, { color: (v, n, lp) => coatColor(this.coat, 'bib', lp), rmse: RM.fur, fur: (v, n, lp) => [smoothstep(-0.02, 0.06, lp.z) * smoothstep(0.15, 0.2, lp.y), 0.8], comb: [0, -0.45, 0.85] });
       if (!armour && !clothed) gb.add(bodyGeo, { color: bellyColor, rmse: RM.fur, fur: [1, 0.9], comb: [0, -1, -0.3] });
-      this.bibFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMat, tier: this.furTier, name: 'furBib' });
+      this.bibFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMatInst, tier: this.furTier, name: 'furBib', owner: this });
       this.bibFur.mesh.renderOrder = FUR_RENDER_ORDER - 0.4; // under the chin: draw before the head shells blend over it
       this.rig.chest.add(this.bibFur.mesh);
       if (!armour && clothed) A.add('chest', bodyGeo, { color: bellyColor, rmse: RM.fur });
@@ -636,6 +898,7 @@ export class Kitten {
     if (this._snapshots.has(name)) return this._snapshots.get(name);
     const P = POSES[name] || POSES.idle;
     const q = {}, p = {};
+    const drop = this.bodyDrop || 0;   // root-space targets follow the shorter torso (PROPORTIONS)
     for (const n of BONE_NAMES) { q[n] = this.rest[n].q.clone(); p[n] = this.rest[n].p.clone(); }
     if (P.body) {
       if (P.body.p) p.body.add(_v.fromArray(P.body.p));
@@ -650,6 +913,7 @@ export class Kitten {
     const chestRot = new THREE.Quaternion(); Mchest.decompose(_v, chestRot, _v2);
     const chestRotInv = chestRot.clone().invert();
     const SW = swordMatrix(P.sword);
+    if (SW && drop) SW.elements[13] += drop;   // (a fresh matrix per call: swordMatrix allocates its default out)
     const centreLocal = new THREE.Vector3(...ARM.pawCentre);
     for (const s of ['L', 'R']) {
       const arm = P.arms?.[s];
@@ -665,6 +929,7 @@ export class Kitten {
       if (arm.paw) target.fromArray(arm.paw);
       else if (SW && arm.grip !== undefined) target.set(0, arm.grip, 0).applyMatrix4(SW);
       if (arm.off) target.add(_v.fromArray(arm.off));
+      if (arm.paw) target.y += drop;
       const Tc = target.clone().applyMatrix4(chestInv);
       const pole = new THREE.Vector3(...(arm.pole || [s === 'L' ? 1 : -1, -0.3, -0.5])).applyQuaternion(chestRotInv);
       const qS = new THREE.Quaternion(), qE = new THREE.Quaternion(), qP = arm.twist ? E(...arm.twist) : new THREE.Quaternion();
@@ -765,11 +1030,16 @@ export class Kitten {
       case 'blink': this.eyes?.blink(); this._liteBlink = 0.14; break;
       case 'nod': this.emotes.nod = 0.6; break;
       case 'shake': this.emotes.shake = 0.7; break;
-      case 'meow': this.emotes.meow = 0.6; break;
+      case 'meow': this.emotes.meow = 0.6; this.squash.kick(SQUASH.happyKick); break;
       case 'sneeze': this.emotes.sneeze = 0.5; break;
       case 'bowBounce': this.bow?.userData.bounce(1); break;
       case 'wave': this.emotes.wave = EMOTE_DUR.wave; break;
       case 'throw': this.emotes.throw = EMOTE_DUR.throw; break;
+      case 'groom': this.emotes.groom = EMOTE_DUR.groom; break;
+      case 'twirl': this.emotes.twirl = EMOTE_DUR.twirl; break;
+      case 'boop': this.emotes.boop = EMOTE_DUR.boop; break;
+      case 'pawBump': this.emotes.pawBump = EMOTE_DUR.pawBump; break;
+      case 'cheer': this.emotes.cheer = EMOTE_DUR.cheer; this.squash.kick(SQUASH.happyKick); break;
       default: break;
     }
     return this;
@@ -782,7 +1052,7 @@ export class Kitten {
     if (this.sword) { this.sword.group.removeFromParent(); this.sword.dispose(); this.sword = null; }
     this._proxyDirty = true;
     if (!skin) return this;
-    this.sword = buildSword(typeof skin === 'string' ? skin : skin.skin, typeof skin === 'object' ? { ...skin, ...o } : o);
+    this.sword = buildSword(typeof skin === 'string' ? skin : skin.skin, { detail: this.detail, ...(typeof skin === 'object' ? { ...skin, ...o } : o) });
     if (this.cfg.swordScale) this.sword.group.scale.setScalar(this.cfg.swordScale);
     this.rig.sword = this.sword.group;
     if (this._to) this._swordPose(this._to.sword, 0);
@@ -806,20 +1076,33 @@ export class Kitten {
     if (sim === 'verlet') {
       if (this.cape) { this.cape.setStyle(style); this.capeStyle = style; return this; }
       if (this.swayCape) this.setCape(null);
-      this.cape = new HeroCape({ style, rig: this.rig, root: this.root, dims: this.cfg.capeDims });
+      this.cape = new HeroCape({ style, rig: this.rig, root: this.root, dims: this._capeDims() });
+      this.cape.mesh.castShadow = false;   // H3: the cape never casts
       this.root.add(this.cape.mesh);
+      if (this.activity >= 1) this.cape.setMode('sway', { blend: 1e-3 });
     } else {
       if (this.swayCape) { this.swayCape.material = capeMaterial(style, { sway: true }); this.capeStyle = style; return this; }
       if (this.cape) this.setCape(null);
       const toChest = new THREE.Matrix4().copy(this.rig.chestBind).invert();
-      this.swayCape = buildSwayCape(style, this.cfg.capeDims, toChest);
+      this.swayCape = buildSwayCape(style, this._capeDims(), toChest);
+      this.swayCape.castShadow = false;
       this.rig.chest.add(this.swayCape);
     }
     this.capeStyle = style;
     return this;
   }
+  /** Cape dims with the neckline following the torso height (PROPORTIONS: the shorter body lowers the shoulders). */
+  _capeDims() {
+    const d = this.cfg.capeDims || {};
+    return this.bodyDrop ? { ...d, anchorY: (d.anchorY ?? CAPE_DEFAULTS.anchorY) + this.bodyDrop } : d;
+  }
   /** Meme Cam: cross-fade the hero cape to the looping sway (GAME_DESIGN §7.8) and back. */
-  setCapeMode(mode, o) { this.cape?.setMode(mode, o); return this; }
+  setCapeMode(mode, o) {
+    this._capeMode = mode;
+    // an off-screen cat (activity ≥ 1) keeps the shader sway; the requested mode applies when it comes back
+    if (this.activity === 0 || mode === 'sway') this.cape?.setMode(mode, o);
+    return this;
+  }
 
   /**
    * Show / hide a procedural prop ('milk_cup', 'lantern', 'spoon', 'letter', 'pot_helm', 'helmet', ...). The mount
@@ -851,6 +1134,23 @@ export class Kitten {
   /** Fur quality for this kitten only (0 = sheen). Global switch: Fur.setFurQuality. */
   setFurShells(n) { this.headFur?.setShells(n); this.bibFur?.setShells(n); this.tailFur?.setShells(n); return this; }
   /**
+   * A cat on the shared per-kind kit materials gets its own pair first (same GPU program: no compile), so a hover rim
+   * or a hurt flash on one villager never lights every villager.
+   */
+  _ownKitMaterials() {
+    if (!isSharedKit(this.kitMat)) return;
+    const m = makeKitMaterial({ kind: 'skinned' });
+    const mi = makeToonMaterial({ kind: 'instanced', uniforms: m.userData.uniforms });
+    this.kitMat = m; this.kitMatInst = mi; this.kitMesh.material = m;
+    if (this.eyes) for (const em of [this.eyes.upMesh, this.eyes.loMesh, this.eyes.browMesh]) if (em) em.material = mi;
+    for (const f of [this.headFur, this.bibFur, this.tailFur]) {
+      if (!f) continue;
+      const nm = f.mesh.isInstancedMesh ? mi : m;
+      if (f.mesh.material === f.sheenMat) f.mesh.material = nm;
+      f.sheenMat = nm;
+    }
+  }
+  /**
    * Hover / selection rim (research/CONTROLS_SPEC.md §7.4): `color` (null clears) x `strength`, on the kit body and the
    * shell fur. A cat on the shared kit material gets its own clone first (same GPU program, no compile).
    * @param {THREE.ColorRepresentation|null} color @param {number} [strength=1]
@@ -858,15 +1158,7 @@ export class Kitten {
   setHighlight(color, strength = 1) {
     const on = color !== null && color !== undefined && strength > 0;
     if (!on && !this.highlight) return this;
-    if (on && this.kitMat === kitMaterial()) {
-      const m = makeKitMaterial();
-      this.kitMat = m; this.kitMesh.material = m;
-      for (const f of [this.headFur, this.bibFur, this.tailFur]) {
-        if (!f) continue;
-        if (f.mesh.material === f.sheenMat) f.mesh.material = m;
-        f.sheenMat = m;
-      }
-    }
+    if (on) this._ownKitMaterials();
     const c = this.kitMat.userData.uniforms?.uHighlight?.value;
     if (c) { if (on) c.set(color).multiplyScalar(HIGHLIGHT.gain * strength); else c.setRGB(0, 0, 0); }
     for (const fm of [this.furMat, this.furMatBaked]) {
@@ -891,23 +1183,46 @@ export class Kitten {
   }
 
   /**
+   * Warm ink outline hull (ART §5.4, PERF H8): a back-faced skinned hull built from a tight silhouette proxy, extruded a
+   * constant `px` in screen space. On / off; built on first use, rebuilt in place after a sword / prop / bow change.
+   * @param {boolean} on @param {{ px?: number, color?: THREE.ColorRepresentation }} [o]
+   */
+  setOutline(on, o = {}) {
+    if (on && !this.outline) {
+      this.outline = buildOutline(this, { px: o.px ?? OUTLINE.px.hero, color: o.color ?? OUTLINE.hero, skeleton: this.skeleton });
+    }
+    if (this.outline) {
+      this.outline.visible = !!on;
+      if (o.px !== undefined) this.outline.material.userData.uniforms.uOutlinePx.value = o.px;
+      if (o.color !== undefined) this.outline.material.color.set(o.color);
+    }
+    return this;
+  }
+  _rebuildOutline() {
+    if (this.outline) buildOutline(this, { into: this.outline, skeleton: this.skeleton });
+  }
+
+  /**
    * Readability from above (CONTROLS_SPEC §12 characters 3): bow x1.25 (its extra self-light is in the bow shader),
    * ears x1.1, at top-view factor `k` (0 = the close-up look). Kitten.simulate applies TOP_VIEW.value every frame.
    * @param {number} k 0..1
    */
-  setTopView(k) {
-    k = clamp(k, 0, 1);
-    if (k === this._topK) return this;
-    this._topK = k;
+  setTopView(k, far = 0) {
+    k = clamp(k, 0, 1); far = clamp(far, 0, 1);
+    if (k === this._topK && far === this._topFar) return this;
+    this._topK = k; this._topFar = far;
     const ear = 1 + (READABILITY.earScale - 1) * k;
     this.rig.joints.earL.scale.setScalar(ear); this.rig.joints.earR.scale.setScalar(ear);
-    if (this.bow) this.bow.scale.setScalar((this._bowBase ?? 1) * (1 + (READABILITY.bowScale - 1) * k) / ear);
+    // ×1.25 from above, growing to ×1.4 past 12 m (WARM_ADVENTURE_SPEC §3.3)
+    const bowK = (1 + (READABILITY.bowScale - 1) * k) * (1 + (READABILITY.bowScaleFar / READABILITY.bowScale - 1) * far);
+    if (this.bow) this.bow.scale.setScalar((this._bowBase ?? 1) * bowK / ear);
     return this;
   }
 
   /** Mesh-wide flash (hurt blink / poof) 0..1. */
   setFlash(v) {
-    if (this.kitMat.userData.uniforms && this.kitMat !== kitMaterial()) this.kitMat.userData.uniforms.uFlash.value = v * 0.6;
+    if (v > 0) this._ownKitMaterials();
+    if (!isSharedKit(this.kitMat)) this.kitMat.userData.uniforms.uFlash.value = v * 0.6;
     if (this.furMat) { this.furMat.uniforms.uFlash.value = v * 0.6; this.furMatBaked.uniforms.uFlash.value = v * 0.6; }
     return this;
   }
@@ -945,9 +1260,9 @@ export class Kitten {
     if (idle) {
       const lying = this.poseName === 'faint' || this.poseName === 'sleep';
       const br = Math.sin(t * (lying ? 1.4 : 2.1));
-      J.chest.quaternion.multiply(E(br * 0.012, 0, 0));
-      J.head.quaternion.multiply(E(-br * 0.008 + Math.sin(t * 0.7) * 0.01, Math.sin(t * 0.43) * 0.02, Math.sin(t * 0.37) * 0.015));
-      for (let i = 0; i < 6; i++) J['tail' + i].quaternion.multiply(E(0, Math.sin(t * 1.3 - i * 0.55) * (lying ? 0.03 : 0.07) * (0.5 + i * 0.12), 0));
+      J.chest.quaternion.multiply(Es(br * 0.012, 0, 0));
+      J.head.quaternion.multiply(Es(-br * 0.008 + Math.sin(t * 0.7) * 0.01, Math.sin(t * 0.43) * 0.02, Math.sin(t * 0.37) * 0.015));
+      for (let i = 0; i < 6; i++) J[TAIL_NAMES[i]].quaternion.multiply(Es(0, Math.sin(t * 1.3 - i * 0.55) * (lying ? 0.03 : 0.07) * (0.5 + i * 0.12), 0));
       this.earTwitch.next -= dt;
       if (this.earTwitch.next <= 0) { this.earTwitch[this.rnd() < 0.5 ? 'L' : 'R'] = 0.18; this.earTwitch.next = 2.5 + this.rnd() * 5; }
     }
@@ -956,30 +1271,32 @@ export class Kitten {
       const tw = this.earTwitch[s] > 0 ? Math.sin((this.earTwitch[s] / 0.18) * Math.PI) * 0.35 : 0;
       const flat = em.earsFlat > 0 ? Math.min(1, em.earsFlat / 0.1) : 0;
       const sign = s === 'L' ? -1 : 1;
-      J['ear' + s].quaternion.multiply(E(-0.7 * flat + this._earMood * 0.8 - tw * 0.3, 0, sign * (0.6 * flat - this._earMood * 0.6 + tw)));
+      J[s === 'L' ? 'earL' : 'earR'].quaternion.multiply(Es(-0.7 * flat + this._earMood * 0.8 - tw * 0.3, 0, sign * (0.6 * flat - this._earMood * 0.6 + tw)));
     }
     // waving: the 'wave' pose waves on its own; the emote raises the paw and waves whatever the pose
     if (this.poseName === 'wave' || em.wave > 0) {
       const w = Math.sin(t * 9) * 0.35;
       if (this.poseName !== 'wave') {
         const up = Math.min(1, em.wave / 0.15, (EMOTE_DUR.wave - em.wave) / 0.15);
-        J.shoulderR.quaternion.multiply(E(-0.25 * up, 0, -2.3 * up));
+        J.shoulderR.quaternion.multiply(Es(-0.25 * up, 0, -2.3 * up));
       }
-      J.shoulderR.quaternion.multiply(E(0, 0, w * 0.3));
-      J.elbowR.quaternion.multiply(E(w * 0.5, 0, 0));
+      J.shoulderR.quaternion.multiply(Es(0, 0, w * 0.3));
+      J.elbowR.quaternion.multiply(Es(w * 0.5, 0, 0));
     }
     // overarm throw: wind up behind the head, snap forward at the release, follow through
     if (em.throw > 0) {
       const k = 1 - em.throw / EMOTE_DUR.throw, rel = EMOTE_RELEASE.throw;
       const back = smoothstep(0, rel, k), fwd = smoothstep(rel, rel + 0.2, k), settle = smoothstep(0.75, 1, k);
-      J.shoulderR.quaternion.multiply(E((-2.8 * back + 2.0 * fwd) * (1 - settle), 0, -0.3 * back * (1 - settle)));
-      J.elbowR.quaternion.multiply(E(-1.2 * back * (1 - fwd), 0, 0));
-      J.chest.quaternion.multiply(E(0.12 * fwd * (1 - settle), (0.35 * back - 0.6 * fwd) * (1 - settle), 0));
+      J.shoulderR.quaternion.multiply(Es((-2.8 * back + 2.0 * fwd) * (1 - settle), 0, -0.3 * back * (1 - settle)));
+      J.elbowR.quaternion.multiply(Es(-1.2 * back * (1 - fwd), 0, 0));
+      J.chest.quaternion.multiply(Es(0.12 * fwd * (1 - settle), (0.35 * back - 0.6 * fwd) * (1 - settle), 0));
     }
+    // Phase W procedural emotes (WARM_ADVENTURE_SPEC §5.6): groom, twirl, boop, pawBump, cheer
+    this._warmEmotes(J, em);
     // emotes
-    if (em.nod > 0) J.head.quaternion.multiply(E(Math.sin((1 - em.nod / 0.6) * Math.PI * 2) * 0.22, 0, 0));
-    if (em.shake > 0) J.head.quaternion.multiply(E(0, Math.sin((1 - em.shake / 0.7) * Math.PI * 4) * 0.25, 0));
-    if (em.sneeze > 0) { const k = Math.sin((1 - em.sneeze / 0.5) * Math.PI); J.head.quaternion.multiply(E(k * 0.35, 0, 0)); }
+    if (em.nod > 0) J.head.quaternion.multiply(Es(Math.sin((1 - em.nod / 0.6) * Math.PI * 2) * 0.22, 0, 0));
+    if (em.shake > 0) J.head.quaternion.multiply(Es(0, Math.sin((1 - em.shake / 0.7) * Math.PI * 4) * 0.25, 0));
+    if (em.sneeze > 0) { const k = Math.sin((1 - em.sneeze / 0.5) * Math.PI); J.head.quaternion.multiply(Es(k * 0.35, 0, 0)); }
     const mouthOpen = em.meow > 0 ? Math.sin((1 - em.meow / 0.6) * Math.PI) : em.sneeze > 0 ? 0.6 : 0;
     J.mouth.scale.set(0.3 + 0.7 * mouthOpen, 0.05 + 0.95 * mouthOpen, 1);
     J.mouth.position.z = this.rest.mouth.p.z + 0.004 * mouthOpen;
@@ -994,7 +1311,53 @@ export class Kitten {
       const open = 1 - Math.max(b, this._liteLid ?? 0) * 0.92;
       J.eyeL.scale.set(1, open, 1); J.eyeR.scale.set(1, open, 1);
     }
+    // squash & stretch on the body joint, pivot at the feet (ART §6.5): volume-preserving
+    const lyingSq = this.poseName === 'faint' || this.poseName === 'sleep';
+    const breathe = idle && !lyingSq ? this.breathe * Math.sin(TAU * SQUASH.breatheHz * t) : 0;
+    const s = dt > 0 ? this.squash.update(dt, this.squashTarget + breathe) : 1 + this.squash.x;
+    this.squashScale = s;
+    const xz = 1 / Math.sqrt(s);
+    J.body.scale.set(xz, s, xz);
     return this;
+  }
+
+  /**
+   * Phase W procedural emotes on the existing rig (WARM_ADVENTURE_SPEC §5.6; no clips, no draws): `groom` (paw lick,
+   * 1.4 s), `twirl` (sword spin, 0.6 s), `boop` (nose-boop head tilt 12°, 0.4 s), `pawBump` (0.8 s), `cheer` (0.9 s
+   * paws up). Additive on the final joints; scratch math only.
+   */
+  _warmEmotes(J, em) {
+    const D = EMOTE_DUR;
+    if (em.groom > 0) {
+      const k = 1 - em.groom / D.groom, inOut = Math.min(1, k / 0.15, (1 - k) / 0.15), lick = Math.sin(k * Math.PI * 7) * 0.5 + 0.5;
+      J.shoulderL.quaternion.multiply(Es(-1.55 * inOut, 0.2 * inOut, -0.55 * inOut));
+      J.elbowL.quaternion.multiply(Es(-1.9 * inOut, 0, 0));
+      J.pawL.quaternion.multiply(Es(-0.35 * inOut * lick, 0, 0));
+      J.head.quaternion.multiply(Es(0.22 * inOut + 0.06 * lick * inOut, 0.28 * inOut, 0.14 * inOut));
+    }
+    if (em.twirl > 0) {
+      const k = 1 - em.twirl / D.twirl, inOut = Math.min(1, k / 0.12, (1 - k) / 0.12);
+      J.shoulderR.quaternion.multiply(Es(-0.9 * inOut, 0, -0.5 * inOut));
+      J.pawR.quaternion.multiply(Es(0, k * TAU, 0));                       // the blade spins once around the grip
+      J.chest.quaternion.multiply(Es(0, Math.sin(k * Math.PI) * 0.25, 0));
+    }
+    if (em.boop > 0) {
+      const k = 1 - em.boop / D.boop, b = Math.sin(k * Math.PI);
+      J.head.quaternion.multiply(Es(0.12 * b, 0, 0.21 * b));                // 12° head tilt into the boop
+      J.chest.quaternion.multiply(Es(0.1 * b, 0, 0));
+    }
+    if (em.pawBump > 0) {
+      const k = 1 - em.pawBump / D.pawBump, up = Math.min(1, k / 0.25, (1 - k) / 0.2), tap = k > 0.45 && k < 0.6 ? 1 : 0;
+      J.shoulderR.quaternion.multiply(Es(-1.35 * up - 0.12 * tap, 0, -0.25 * up));
+      J.elbowR.quaternion.multiply(Es(-0.35 * up, 0, 0));
+      J.chest.quaternion.multiply(Es(0.06 * tap, 0, 0));
+    }
+    if (em.cheer > 0) {
+      const k = 1 - em.cheer / D.cheer, up = Math.min(1, k / 0.15, (1 - k) / 0.2), bob = Math.sin(k * Math.PI * 4) * 0.12;
+      J.shoulderL.quaternion.multiply(Es(0, 0, (2.4 + bob) * up));
+      J.shoulderR.quaternion.multiply(Es(0, 0, -(2.4 + bob) * up));
+      J.head.quaternion.multiply(Es(-0.2 * up, 0, 0));
+    }
   }
 
   /**
@@ -1005,18 +1368,23 @@ export class Kitten {
   simulate(dt, o = {}) {
     // parents first: the actor root may have been teleported / turned this frame (level load, respawn), and the cape
     // pins + colliders read the joints' matrixWorld (requests/player.md: the cloth re-initialised on the wrong side)
-    this.setTopView(TOP_VIEW.value);
+    this.setTopView(TOP_VIEW.value, TOP_VIEW.far);
     this.root.updateWorldMatrix(true, true);
-    if (this.silhouetteProxy?.visible && this._proxyDirty) this.getSilhouetteProxy();
+    if (this._proxyDirty && (this.silhouetteProxy?.visible || this.outline?.visible)) { this.getSilhouetteProxy(); this._rebuildOutline(); }
+    const lite = this.activity >= 1;                  // off-screen: no secondary motion (PERF §4.3)
     if (this.sword && this.sword.skin === 'toobig' && this.sword.group.parent) this._dragTip();
     if (tickFurTime(dt, o.frameId)) { CAPE_TIME.value += dt; envTick(); }
-    if (this.furMat) {
+    if (this.furMat && !lite) {
       const vel = o.velocity;
       this.drag.set(vel ? -vel.x * 0.15 : 0, vel ? -vel.y * 0.08 : 0, vel ? -vel.z * 0.15 : 0);
       this.furMat.uniforms.uDrag.value.copy(this.drag); this.furMatBaked.uniforms.uDrag.value.copy(this.drag);
     }
-    this.eyes?.update(dt);
-    for (const u of this.updaters) u(dt);
+    if (this.eyes) {
+      // expressions read stronger from the far iso lens (ART §5.3 `expressionGain`)
+      this.eyes.setGain((TOP_VIEW.dist ?? 0) > EYE.gainFrom ? EYE.gain : 1);
+      if (!lite) this.eyes.update(dt);
+    }
+    if (!lite) for (const u of this.updaters) u(dt);
     if (this.cape) {
       const speed = o.velocity ? Math.hypot(o.velocity.x, o.velocity.z) : 0;
       this.cape.update(dt, { wind: o.wind || FUR_WIND.value, speed });
@@ -1111,7 +1479,13 @@ export class Kitten {
   dispose() {
     this.warmEnd();
     this.headFur?.dispose(); this.bibFur?.dispose(); this.tailFur?.dispose();
-    this.kitMesh.geometry.dispose(); this.tuftMesh?.geometry.dispose();
+    for (const g of new Set([this.kitMesh.geometry, this._kitGeo, this._playGeo, this._closeSet?.kit])) if (g && g !== _DUMMY) g.dispose();
+    if (this.eyes && this._closeSet?.eyes && this._playEyes) {
+      const cur = this.eyes.geometries(), other = cur.eye === this._playEyes.eye ? this._closeSet.eyes : this._playEyes;
+      for (const g of Object.values(other)) g?.dispose();
+    }
+    this.tuftMesh?.geometry.dispose();
+    this.outline?.userData.dispose?.(); this.outline = null;
     this.cape?.dispose(); this.sword?.dispose(); this.eyes?.dispose();
     this.swayCape?.geometry.dispose();
     this.whiskerMesh?.geometry.dispose();
@@ -1119,7 +1493,7 @@ export class Kitten {
     for (const m of this.auraMeshes || []) m.geometry.dispose();
     disown(this.auraMat); this.auraMat = null;
     disown(this.furMat); disown(this.furMatBaked);
-    if (this.kitMat !== kitMaterial()) disown(this.kitMat);
+    if (!isSharedKit(this.kitMat)) { disown(this.kitMat); disown(this.kitMatInst); }
     this.silhouetteProxy?.userData.dispose?.(); this.silhouetteProxy = null;
     this.skeleton?.dispose();
     this.root.removeFromParent();
@@ -1127,8 +1501,94 @@ export class Kitten {
 }
 
 const DRAG_TIP_FLOOR = 0.012;
-/** M2 emote lengths (s) and the throw's release point (fraction of the emote where the spoon leaves the paw). */
-export const EMOTE_DUR = Object.freeze({ wave: 1.2, throw: 0.5 });
+/** Tuft cards (ART §6.2): counts per cluster (hero 32, others 20), sizes [w, h] in H, tilt toward world-up (rad). */
+export const TUFTS = Object.freeze({
+  tilt: 35 * Math.PI / 180,
+  hero: Object.freeze({ cheek: 6, crown: 3, ear: 3, bib: 5, tail: 6 }),
+  other: Object.freeze({ cheek: 4, crown: 2, ear: 2, bib: 3, tail: 3 }),
+  size: Object.freeze({ cheek: [0.05, 0.09], crown: [0.04, 0.07], ear: [0.03, 0.08], bib: [0.05, 0.08], tail: [0.05, 0.10] }),
+});
+/**
+ * Emote lengths (s): M2 `wave` / `throw`; Phase W `groom` (paw lick 1.4 s), `twirl` (sword spin 0.6 s), `boop` (0.4 s),
+ * `pawBump` (0.8 s), `cheer` (0.9 s) (WARM_ADVENTURE_SPEC §5.6). The throw's release point is a fraction of its length.
+ */
+export const EMOTE_DUR = Object.freeze({ wave: 1.2, throw: 0.5, groom: 1.4, twirl: 0.6, boop: 0.4, pawBump: 0.8, cheer: 0.9 });
+const TAU = Math.PI * 2;
+const TAIL_NAMES = Object.freeze(['tail0', 'tail1', 'tail2', 'tail3', 'tail4', 'tail5']);
+/** Placeholder geometry handed to a temp kitten whose real geometries were stolen (dispose() is a no-op on it). */
+const _DUMMY = new THREE.BufferGeometry();
+
+/**
+ * Squash & stretch tuning (ART §6.5): spring stiffness / damping, the clamp on x, the idle breathing (amplitude 0.025 at
+ * 0.45 Hz), and the event table the player drives (targets and kicks; hero gait 0.04, kittens 0.06).
+ */
+export const SQUASH = Object.freeze({
+  k: 320, c: 16, clamp: 0.35, breathe: 0.025, breatheHz: 0.45,
+  gait: 0.04, gaitKitten: 0.06, jumpPre: -0.15, jumpPreT: 0.06, jumpKick: 3.5, landKick: -2.5, landRef: 6,
+  windup: -0.08, release: 1.5, holy: -0.10, holyShiver: 0.01, holyHz: 9, hitKick: -2.0, tumble: -0.2, happyKick: 2.0,
+});
+
+/**
+ * Volume-preserving squash spring (ART §6.5): `x` around a target; the body joint gets scale.y = 1 + x and
+ * scale.x = scale.z = 1/√(1 + x). Plain numbers, no allocation.
+ */
+export class Squash {
+  constructor(k = SQUASH.k, c = SQUASH.c) { this.k = k; this.c = c; this.x = 0; this.v = 0; }
+  /** @param {number} dv velocity kick: negative = squash, positive = stretch */
+  kick(dv) { this.v += dv; }
+  /** @param {number} dt @param {number} [target] @returns {number} the y scale (1 + x) */
+  update(dt, target = 0) {
+    // semi-implicit Euler in ≤ 1/120 s sub-steps: stable for long frames (a 0.3 s hitch never explodes the spring)
+    const n = Math.min(64, Math.max(1, Math.ceil(dt * 120))), h = dt / n;
+    for (let i = 0; i < n; i++) {
+      this.v += (-this.k * (this.x - target) - this.c * this.v) * h; this.x += this.v * h;
+      if (this.x > SQUASH.clamp) { this.x = SQUASH.clamp; if (this.v > 0) this.v = 0; }
+      else if (this.x < -SQUASH.clamp) { this.x = -SQUASH.clamp; if (this.v < 0) this.v = 0; }
+    }
+    return 1 + this.x;
+  }
+  reset() { this.x = 0; this.v = 0; }
+}
+
+/**
+ * Merge skinned / rigid geometries into one skinned geometry (position, normal, uv, color, rmse, skinIndex, skinWeight).
+ * Rigid parts give `m` (bind matrix of their bone) + `bone` (index); skinned parts carry their own skin attributes.
+ * @param {{ g: THREE.BufferGeometry, m?: THREE.Matrix4, bone?: number }[]} parts
+ */
+export function mergeSkinnedParts(parts) {
+  let vc = 0, ic = 0;
+  for (const p of parts) { vc += p.g.attributes.position.count; ic += p.g.index ? p.g.index.count : p.g.attributes.position.count; }
+  const pos = new Float32Array(vc * 3), nrm = new Float32Array(vc * 3), uv = new Float32Array(vc * 2), col = new Float32Array(vc * 3);
+  const rm = new Float32Array(vc * 4), si = new Uint16Array(vc * 4), sw = new Float32Array(vc * 4);
+  const idx = vc > 65535 ? new Uint32Array(ic) : new Uint16Array(ic);
+  const nm = new THREE.Matrix3(), v = new THREE.Vector3();
+  let vo = 0, io = 0;
+  for (const p of parts) {
+    const A = p.g.attributes, n = A.position.count;
+    if (p.m) nm.getNormalMatrix(p.m);
+    for (let i = 0; i < n; i++) {
+      const o3 = (vo + i) * 3, o4 = (vo + i) * 4;
+      v.fromBufferAttribute(A.position, i); if (p.m) v.applyMatrix4(p.m); pos[o3] = v.x; pos[o3 + 1] = v.y; pos[o3 + 2] = v.z;
+      if (A.normal) { v.fromBufferAttribute(A.normal, i); if (p.m) v.applyMatrix3(nm).normalize(); nrm[o3] = v.x; nrm[o3 + 1] = v.y; nrm[o3 + 2] = v.z; }
+      if (A.uv) { uv[(vo + i) * 2] = A.uv.getX(i); uv[(vo + i) * 2 + 1] = A.uv.getY(i); }
+      if (A.color) { col[o3] = A.color.getX(i); col[o3 + 1] = A.color.getY(i); col[o3 + 2] = A.color.getZ(i); } else col.fill(1, o3, o3 + 3);
+      if (A.rmse) { rm[o4] = A.rmse.getX(i); rm[o4 + 1] = A.rmse.getY(i); rm[o4 + 2] = A.rmse.getZ(i); rm[o4 + 3] = A.rmse.getW(i); } else rm[o4] = 0.8;
+      if (p.m || !A.skinIndex) { si[o4] = p.bone ?? 0; sw[o4] = 1; }
+      else for (let k = 0; k < 4; k++) { si[o4 + k] = A.skinIndex.getComponent(i, k); sw[o4 + k] = A.skinWeight.getComponent(i, k); }
+    }
+    if (p.g.index) { const I = p.g.index.array; for (let i = 0; i < I.length; i++) idx[io + i] = I[i] + vo; io += I.length; }
+    else { for (let i = 0; i < n; i++) idx[io + i] = vo + i; io += n; }
+    vo += n;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('rmse', new THREE.BufferAttribute(rm, 4));
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.computeBoundingSphere(); g.computeBoundingBox();
+  return g;
+}
 export const EMOTE_RELEASE = Object.freeze({ throw: 0.42 });
 const _dtA = new THREE.Vector3(), _dtO = new THREE.Vector3(), _dtD = new THREE.Vector3(), _dtK = new THREE.Vector3();
 const _dtQ = new THREE.Quaternion(), _dtP = new THREE.Quaternion(), _UP = new THREE.Vector3(0, 1, 0);

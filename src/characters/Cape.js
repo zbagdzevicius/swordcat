@@ -8,7 +8,7 @@
 // cloth under flat overcast light (a 9-column grid alone aliased the folds into a flat board).
 import * as THREE from 'three';
 import { CAPES } from './palette.js';
-import { own, TOP_VIEW, READABILITY } from './materials.js';
+import { own, TOP_VIEW, READABILITY, softRamp } from './materials.js';
 import { clamp, smoothstep } from './util.js';
 
 export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.3, botW: 0.6, len: 0.47, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.61, anchorZ: -0.12,
@@ -30,12 +30,10 @@ export function capeMaterial(style = 'red', o = {}) {
   const key = style + (o.sway ? ':sway' : '');
   if (_mats.has(key)) return _mats.get(key);
   const spec = CAPES[style] || { color: style, lining: style, sheen: '#ffffff', hem: '#D9B26A' };
-  const m = new THREE.MeshPhysicalMaterial({
-    color: spec.color, roughness: 0.88, sheen: 0.7, sheenColor: new THREE.Color(spec.sheen), sheenRoughness: 0.6, side: THREE.DoubleSide,
-    // wool takes the soft ambient from the hemisphere light; the character env map (lifted for readable steel at
-    // night) made pale capes glow like paper, so cloth takes only half of it (like the kit's fur / cloth damping)
-    envMapIntensity: 0.5,
-  });
+  // WarmToon wool (ART §5.1 family; K6: no Physical in play). One program for every cape colour (uniforms differ).
+  const m = new THREE.MeshToonMaterial({ color: spec.color, gradientMap: softRamp(), side: THREE.DoubleSide });
+  m.forceSinglePass = true;
+  m.dithering = true;
   const uniforms = {
     uLining: { value: new THREE.Color(spec.lining) }, uHem: { value: new THREE.Color(spec.hem) },
     uTime: CAPE_TIME, uSpeed: { value: 0 }, uSwayAmp: { value: 1 }, uTopView: TOP_VIEW,
@@ -75,7 +73,7 @@ export function capeMaterial(style = 'red', o = {}) {
         #include <opaque_fragment>`);
   };
   if (o.sway) m.defines = { CAPE_SWAY: '' };
-  m.customProgramCacheKey = () => 'sc-cape-v5' + (o.sway ? '-sway' : '');
+  m.customProgramCacheKey = () => 'sc-cape-v6' + (o.sway ? '-sway' : '');
   _mats.set(key, own(m));
   return m;
 }

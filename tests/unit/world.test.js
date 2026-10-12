@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { fakeCtx } from './_fakeCtx.mjs';
 import { E } from '../../src/core/events.js';
 import { ENEMIES, BOSSES, KITTENS_BY_LEVEL, KITTEN_IDS, LEVEL_IDS, ATTACKS } from '../../src/core/config.js';
-import { ENV_PRESETS, finalFog, toState } from '../../src/world/Env.js';
+import { ENV_PRESETS, finalFog, toState, resolvePreset } from '../../src/world/Env.js';
 import { Objectives } from '../../src/world/Objectives.js';
 import { Arena, arenaRingPoints, ARENA, arenaFlag } from '../../src/world/Arena.js';
 import { Level, condOk, waterEntryLevel, colliderList, levelRun, endLevelRun, arenaAwareFog, ARENA_MIST } from '../../src/world/Level.js';
@@ -28,6 +28,7 @@ import manifest, { levels as manifestLevels } from '../../src/world/assets.manif
 import { LINE_RULES, COUNTERS } from '../../src/world/Objectives.js';
 import { STATIONS, stationOpen, nextLevel, questBoard, HUB_KITTEN_SPOTS, SOUTH_GATE_EXIT } from '../../src/world/Hub.js';
 import { paveGeometry, worldBoxesGeometry, LightPool } from '../../src/world/Dressing.js';
+import { LampSet } from '../../src/world/Env.js';
 import { LINE } from '../../src/core/config.js';
 import forestDef, { MUSHROOM_CAPS, CAP_R, STUMPS, STUMP, MILL_PILLARS, TREETOP } from '../../src/world/levels/forest.js';
 import townDef, { LANTERNS, BALCONY, CRATE_STEPS, SQUARE, TOWER, CHASE } from '../../src/world/levels/town.js';
@@ -63,20 +64,26 @@ test('Env: §12.2 fog = (base × story) + Σ adds, × muls, fogSet override, cla
   assert.equal(finalFog(0.001, []), 0.005);
 });
 
-test('Env: every §5.3 / §12.2 preset exists with the art.md values', () => {
-  const need = ['meadow_day', 'meadow_evening', 'meadow_night', 'forest_day', 'forest_night', 'town_occupied', 'hub_gold', 'hub_grey', 'ending_gold',
-    'gate_dusk', 'bog', 'keep_storm', 'keep_cellar', 'sky_night', 'sky_sunrise'];
+test('Env: every preset exists with the ART §2.5 / WA §2.3 warm values (aliases resolve)', () => {
+  const need = ['meadow_day', 'meadow_morning', 'meadow_evening', 'meadow_giggle', 'meadow_night', 'forest_day', 'forest_twilight', 'forest_night', 'town_occupied',
+    'hub_gold', 'hub_hush', 'hub_grey', 'ending_gold', 'gate_dusk', 'bog', 'bog_dusk', 'keep_twilight', 'keep_storm', 'keep_cellar', 'sky_night', 'sky_sunrise'];
   for (const n of need) assert.ok(ENV_PRESETS[n], `preset ${n}`);
   const d = ENV_PRESETS.meadow_day;
-  assert.equal(d.fogColor, '#B7C0C3'); assert.equal(d.fogDensity, 0.045); assert.equal(d.skyTop, '#C3CCD3');
-  assert.equal(d.hemiSky, '#D5DDE3'); assert.equal(d.hemiGround, '#4A5230'); assert.equal(d.sunColor, '#FFF2E0'); assert.equal(d.sun, 1.4);
-  assert.equal(ENV_PRESETS.meadow_night.fogColor, '#8C97A6'); assert.equal(ENV_PRESETS.meadow_night.grade, 'night');
+  assert.equal(d.fogColor, '#F6E4C0'); assert.equal(d.fogDensity, 0.045); assert.equal(d.skyTop, '#8FCBF2');
+  assert.equal(d.hemiSky, '#C4D9FF'); assert.equal(d.hemiGround, '#C9A46A'); assert.equal(d.sunColor, '#FFE7C2'); assert.equal(d.sun, 2.4);
+  assert.deepEqual([d.shadowI, d.exposure, d.rim, d.hero], [0.60, 1.00, 'day', 0.40]);
+  assert.equal(ENV_PRESETS.meadow_night.fogColor, '#5A64A8'); assert.equal(ENV_PRESETS.meadow_night.grade, 'night');
   assert.equal(ENV_PRESETS.meadow_evening.fogDensity, 0.020);
   assert.equal(ENV_PRESETS.bog.fogFalloff, 1.2);
-  assert.equal(ENV_PRESETS.hub_grey.grade, 'grey');
+  assert.equal(ENV_PRESETS.hub_grey, ENV_PRESETS.hub_hush, 'hub_grey → hub_hush');
+  assert.equal(ENV_PRESETS.forest_night, ENV_PRESETS.forest_twilight, 'forest_night → forest_twilight');
+  assert.equal(resolvePreset('hub_grey'), 'hub_hush'); assert.equal(resolvePreset('forest_night'), 'forest_twilight'); assert.equal(resolvePreset('gate_dusk'), 'gate_dusk');
+  assert.ok(!Object.keys(ENV_PRESETS).includes('hub_grey'), 'aliases are not listed as their own rows');
   assert.equal(ENV_PRESETS.ending_gold.grade, 'gold');
+  // X16 / D13 gameplay densities: keep 0.042, bog 0.058
+  assert.equal(ENV_PRESETS.keep_twilight.fogDensity, 0.042); assert.equal(ENV_PRESETS.bog_dusk.fogDensity, 0.058);
   const s = toState(d);
-  assert.ok(s.fogColor.isColor && near(s.fogDensity, 0.045));
+  assert.ok(s.fogColor.isColor && s.rim.isColor && near(s.fogDensity, 0.045));
 });
 
 test('Env: contributions and presets tween, env:changed is emitted', async () => {
@@ -159,6 +166,13 @@ test('Arena: lock → waves at the 3 farthest points, next wave 1.5 s after aliv
   assert.ok(a.contains(new THREE.Vector3(0, 0, -9.9), 2) && !a.contains(new THREE.Vector3(0, 0, -10.1), 2), 'trigger disc r − 2');
   a.lock();
   assert.equal(bus.count(E.ARENA_LOCK), 1);
+  // IMPLEMENTATION_PLAN §7.1: the lock carries { center, r } for the camera's room read; wave 1 waits >= 1.2 s
+  const lk = bus.last(E.ARENA_LOCK);
+  assert.ok(lk.center?.isVector3 && near(lk.center.x, 0) && lk.r === 12);
+  assert.equal(enemies.list.length, 0, 'the room read first');
+  for (let i = 0; i < 70; i++) a.update(1 / 60);
+  assert.equal(enemies.list.length, 0, 'not before 1.2 s');
+  for (let i = 0; i < 4; i++) a.update(1 / 60);
   assert.equal(enemies.list.length, 3);
   for (const e of enemies.list) assert.ok(e.pos.z > 0, 'spawned on the far side from her');
   enemies.despawn(enemies.list[0]); enemies.despawn(enemies.list[0]);       // 1 alive → wave 2 after 1.5 s
@@ -171,7 +185,7 @@ test('Arena: lock → waves at the 3 farthest points, next wave 1.5 s after aliv
   // death inside → wave 1 again, enemies gone, re-entering locks again
   a.reset();
   assert.equal(a.wave, 0); assert.equal(a.locked, false); assert.equal(enemies.list.length, 0);
-  a.lock(); enemies.killAll();
+  a.lock({ now: true }); enemies.killAll();
   for (let i = 0; i < 100; i++) a.update(1 / 60);
   enemies.killAll();
   for (let i = 0; i < 100; i++) a.update(1 / 60);
@@ -390,7 +404,7 @@ test('Pickups: fish magnet + collect, letters / Heart Bells update the save stat
 
 // ---------------------------------------------------------------------------------------------- level definitions (U12, M1 scope)
 const VALID_TYPE = (t) => !!ENEMIES[t] || /^bonehead:(minion|warrior|rogue|mage)$/.test(t) || /^jelly(_[lms]|_giant)?$/.test(t) || (t.startsWith('boss_') && !!BOSSES[t.slice(5)]);
-const CUTSCENES = new Set(['cs00', 'cs01', 'cs02', 'cs03', 'cs04', 'cs05', 'cs06', 'cs07', 'cs08', 'cs09', 'cs10', 'cs11', 'cs12', 'cs13', 'cs14', 'cs15', 'cs16',
+const CUTSCENES = new Set(['cs00', 'cs01', 'cs01b', 'tutbow', 'cs02', 'cs03', 'cs04', 'cs05', 'cs06', 'cs07', 'cs08', 'cs09', 'cs10', 'cs11', 'cs12', 'cs13', 'cs14', 'cs15', 'cs16',
   'd01', 'd02', 'd03', 'd04', 'd05', 'd06', 'g01', 'g02']);
 
 test('U12 (M1): every level defines start, boss levels define boss; enemy types exist; positions in bounds; cutscene ids exist', async () => {
@@ -427,15 +441,19 @@ test('U12 (meadow, complete in M1): §12.3 layout — 3 kittens + letter l1, pra
   const z = Object.fromEntries(def.zones.map((x) => [x.id, x]));
   const kittens = def.zones.filter((x) => x.kind === 'kitten');
   assert.deepEqual(kittens.map((k) => k.kittenId).sort(), [...KITTENS_BY_LEVEL.meadow].sort());
-  assert.deepEqual([z.noodle.hide, z.button.hide, z.biscuit.hide], ['meow', 'stand', 'meow']);
+  // WA16 (companions.W2): Biscuit waits in the Old Bridge carrier (after the bridge fight)
+  assert.deepEqual([z.noodle.hide, z.button.hide, z.biscuit.hide], ['meow', 'stand', 'cage']);
+  assert.deepEqual([z.biscuit.at, z.biscuit.needClear], [[30, 74], 'bridge']);
   assert.equal(z.button.needClear, 'stones');
-  assert.deepEqual(z.letter_1.at, [-18, -24]); assert.equal(z.letter_1.letterId, 'l1');
+  assert.deepEqual(z.letter_1.at, [41.5, 30]); assert.equal(z.letter_1.letterId, 'l1');      // ON §6.1: by the Crow Fields cow
   assert.deepEqual([z.tallbert.play, z.tallbert.at, z.tallbert.r], ['g01', [0, -61], 2.5]);
   assert.deepEqual([z.lane.play, z.lane.at, z.lane.r], ['cs02', [-6, -52], 3]);
   for (const id of ['vigil_1', 'vigil_2', 'vigil_3']) assert.equal(z[id].kind, 'checkpoint');
   assert.deepEqual([z.stones.r, z.stones.waves.length], [12, 2]);
   assert.deepEqual([z.glade.r, z.glade.lockOn, z.glade.interact.play, z.glade.waves.length], [14, 'cs03:end', 'cs03', 2]);
-  assert.deepEqual([z.bridge.r, z.bridge.waves.length, z.bridge.rescue.companion, z.bridge.rescue.play], [12, 3, 'mochi', 'd01']);
+  assert.deepEqual([z.bridge.r, z.bridge.waves.length, z.bridge.rescue ?? null], [12, 3, null]);
+  // WA16: Mochi's tipped cart on the lane at STORY.mochiCage, its soft `cart` arena (3 rats) → D-01
+  assert.deepEqual([z.cart.at, z.cart.r, z.cart.rescue.companion, z.cart.rescue.play, z.cart.rescue.cage], [[-14, -41], 9, 'mochi', 'd01', [-14, -41]]);
   assert.deepEqual([z.exit.to, z.exit.spawnId, z.exit.at], ['forest', 'start', [30, 92]]);
   assert.deepEqual(def.anchors.bell_far, [-130, -20, 30]);
   for (const a of ['pud_1', 'pud_2', 'pud_3', 'pud_4', 'crane_bell', 'crane_field', 'horde_a', 'horde_b']) assert.ok(def.anchors[a], `anchor ${a}`);
@@ -446,7 +464,7 @@ test('U12 (meadow, complete in M1): §12.3 layout — 3 kittens + letter l1, pra
     for (const [t, n = 1] of zz.spawns ?? []) tally[t] = (tally[t] ?? 0) + n;
     for (const w of zz.waves ?? []) for (const [t, n = 1] of w) tally[t] = (tally[t] ?? 0) + n;
   }
-  assert.deepEqual(tally, { rat_pike: 27, rat_xbow: 8, crow: 6 });
+  assert.deepEqual(tally, { rat_pike: 30, rat_xbow: 8, crow: 6 });   // §12.3 + WA16's 3 cart rats
   const fish = def.fishLines.reduce((s, l) => s + l[2], 0);
   assert.ok(fish >= 60 && fish <= 75, `about 66 fish in lines (${fish})`);
   assert.equal(def.crates.n, 12); assert.equal(def.crates.milk, 2);
@@ -500,12 +518,18 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.ok(L instanceof Level);
   for (const g of ['terrain', 'props', 'grass', 'water', 'skyline', 'dawnstone', 'pickups', 'actors']) assert.ok(L.groups[g]?.isObject3D, `group ${g}`);
   assert.equal(L.heightfield.res, 200);
-  assert.deepEqual(L.arenas.map((a) => a.id).sort(), ['bridge', 'glade', 'stones']);
+  assert.deepEqual(L.arenas.map((a) => a.id).sort(), ['bridge', 'cart', 'glade', 'stones']);
   assert.equal(L.arena('glade').canAutoLock(), false, 'glade waits for CS-03');
+  assert.equal(L.arena('cart').soft, true, 'WA16: the cart fight has no fog wall');
+  // WA §3.5 arena stage floors: one bright paint per arena zone
+  assert.deepEqual(L.stages.map((s) => s.id).sort(), ['bridge', 'cart', 'glade', 'stones']);
   assert.deepEqual(L.vigils.map((v) => v.id), ['vigil_1', 'vigil_2', 'vigil_3']);
   for (const id of ['title', 'practice', 'start', 'boss', 'vigil_1', 'vigil_2', 'vigil_3']) assert.ok(L.spawns[id], `spawn ${id}`);
   assert.ok(near(L.spawns.start.pos.x, -1.5) && near(L.spawns.start.pos.z, -54.5));
-  assert.deepEqual(L.triggers.map((t) => t.id).sort(), ['exit', 'exit:blocked', 'lane', 'tallbert']);
+  assert.deepEqual(L.triggers.map((t) => t.id).sort(), ['chart', 'exit', 'exit:blocked', 'lane', 'tallbert']);
+  assert.ok(L.interactables.some((i) => i.id === 'barn_chest'), 'ON §5.4: the Suit Up chest is an interactable');
+  assert.ok(L.anchor('chest'));
+  assert.ok(L.bunting?.mesh?.isInstancedMesh && L.bunting.mesh.castShadow === false, 'WA §2.6 barn → gate bunting, no shadow');
   assert.ok(L.wheat && L.wheat.count > 200 && L.wheat.mesh?.isInstancedMesh, `swaying wheat clumps (${L.wheat?.count})`);
   assert.ok(L.interactables.some((i) => i.id === 'picnic'));
   for (let i = 0; i < 8; i++) { const a = L.anchor('fog_edge_' + i); assert.ok(a && Math.max(Math.abs(a.pos.x), Math.abs(a.pos.z)) <= 94.01, `fog_edge_${i}`); }
@@ -527,7 +551,7 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   }
   const perch = def.zones.find((zz) => zz.id === 'crossroads').spawns.find(([t]) => t === 'rat_xbow');
   assert.ok(walls.some((sg) => distToSegment(perch[2], sg) < 0.25), 'the crossbow perch is on a wall top');
-  assert.ok(L.grass && L.grass.count > 10000);
+  assert.ok(L.grass && L.grass.count >= 1000 && L.grass.mesh.isMesh, 'PERF §8.4: one tuft mesh with the quality count');
   assert.ok(L.waterMeshes?.count === 1);
   assert.equal(L.isDeepWater(10, 62), true);
   assert.equal(L.surfaceAt(30, 62), 'stone', 'bridge deck');
@@ -622,7 +646,7 @@ test('Arena waves spawn already alerted (ring points sit beyond sight range)', (
   const enemies = fakeEnemies(); ctx.enemies = enemies;
   ctx.player = { pos: new THREE.Vector3(0, 0, 0), alive: true };
   const a = new Arena(ctx, { id: 'x', at: [0, 0], r: 12, waves: [[['rat_pike', 3]]] });
-  a.lock();
+  a.lock({ now: true });
   assert.equal(enemies.list.length, 3);
   assert.ok(enemies.list.every((e) => e.opts.alerted === true && e.opts.arena === 'x'));
 });
@@ -808,11 +832,14 @@ test('LevelManager: warm-up enemy types cover arena waves, open zones and the le
   assert.ok(night.includes('hyena') && !day.includes('hyena'));
 });
 
-test('Env: the warm hero key light is on in the night presets only (art.md mood rule)', () => {
+test('Env: her warm pool (uGlow) is on in every preset, full at twilight / night; lamps glow only at dusk / night (WA4, §2.3a)', () => {
   for (const [name, p] of Object.entries(ENV_PRESETS)) {
-    const night = p.grade === 'night';
-    assert.equal((toState(p).hero ?? 0) > 0, night, `${name}: hero light ${night ? 'on' : 'off'}`);
+    const st = toState(p);
+    assert.ok(st.hero > 0, `${name}: hero glow on`);
+    if (p.grade === 'night') assert.equal(st.hero, 1, `${name}: full glow at night`);
   }
+  const LAMP_ON = { meadow_night: 1, forest_twilight: 1, bog_dusk: 1, keep_twilight: 1, keep_storm: 1, keep_cellar: 1, gate_dusk: 0.35 };
+  for (const [name, p] of Object.entries(ENV_PRESETS)) assert.equal(p.lamps, LAMP_ON[name] ?? 0, `${name}: uLampStr`);
 });
 
 // ============================================================================================== M2: Acts I–II
@@ -998,7 +1025,7 @@ const Z = (def) => Object.fromEntries(def.zones.map((z) => [z.id, z]));
 test('U12 forest (§12.4): layout, caps, stumps, Treetop, Cheese Mill, 3 kittens + letter, enemy totals', () => {
   const d = forestDef, z = Z(d);
   assert.deepEqual([d.size, d.res, d.seed, d.hills.amp, d.pathWidth], [200, 200, 23, 3.0, 5]);
-  assert.equal(d.env.default, 'forest_day'); assert.deepEqual(d.env.byFlag[0], ['forest.camp', 'forest_night']);
+  assert.equal(d.env.default, 'forest_day'); assert.deepEqual(d.env.byFlag[0], ['forest.camp', 'forest_twilight']);   // WA §2.2
   for (const p of [[0, -85], [-20, -58], [-10, -30], [18, -8], [24, 18], [6, 40], [-10, 84]]) assert.ok(d.spine.some((q) => q[0] === p[0] && q[1] === p[1]), `spine ${p}`);
   assert.deepEqual(d.spawns.start.slice(0, 2), [0, -92]); assert.ok(Math.hypot(d.spawns.boss[0] + 10, d.spawns.boss[1] - 70) < 1.2, 'boss spawn at the boss door');
   // mushroom caps: heights, bounce, spacing; Heart Bell #1 on cap 5
@@ -1030,7 +1057,7 @@ test('U12 forest (§12.4): layout, caps, stumps, Treetop, Cheese Mill, 3 kittens
 test('U12 town (§12.5): streets, Lantern Alley, balcony, square, steps, tower ledge, hub spawns, enemy totals', () => {
   const d = townDef, z = Z(d);
   assert.deepEqual([d.size, d.res, d.seed, d.hills.amp, d.pathWidth, d.pathSurface], [140, 140, 31, 0.4, 6, 'stone']);
-  assert.deepEqual(d.env.byFlag.map((r) => r[1]), ['ending_gold', 'hub_grey', 'hub_gold']); assert.equal(d.env.default, 'town_occupied');
+  assert.deepEqual(d.env.byFlag.map((r) => r[1]), ['ending_gold', 'hub_hush', 'hub_gold']); assert.equal(d.env.default, 'town_occupied');   // WA §2.2
   assert.deepEqual(d.spawns.start.slice(0, 2), [0, -66]); assert.deepEqual(d.spawns.hub.slice(0, 2), [0, -46]);
   assert.deepEqual(d.spawns.bakery_cot, [-22, -20, -Math.PI / 2]); assert.deepEqual(d.spawns.belltower.slice(0, 2), [0, 50.5]);
   assert.deepEqual(LANTERNS, [[-3, -40], [3, -34], [-3, -28]]);
@@ -1102,7 +1129,7 @@ test('Hub (§12.5): stations open by flag, Quest Board next chapter, kitten spot
   assert.equal(STATIONS.find((s) => s.id === 'questboard').opens, 'town.free');
 });
 
-test('Dressing: paved ribbons follow the ground; world-UV boxes; the light pool follows the nearest lit sources', () => {
+test('Dressing: paved ribbons follow the ground; world-UV boxes; lamp pools follow the nearest lit sources (no PointLights)', () => {
   const g = paveGeometry({ lines: [{ pts: [[0, 0], [10, 0], [20, 5]], width: 4 }], discs: [[0, 20, 5]], heightAt: (x, z) => x * 0.1 + z * 0.05, lift: 0.03, rng: () => 0.5 });
   const p = g.attributes.position;
   for (let i = 0; i < p.count; i++) assert.ok(near(p.getY(i), p.getX(i) * 0.1 + p.getZ(i) * 0.05 + 0.03, 1e-5));
@@ -1110,13 +1137,20 @@ test('Dressing: paved ribbons follow the ground; world-UV boxes; the light pool 
   const b = worldBoxesGeometry([{ x0: 0, x1: 4, y0: -1, y1: 0, z0: 0, z1: 2 }], { tile: 2 });
   const uv = b.attributes.uv, pp = b.attributes.position, n = b.attributes.normal;
   for (let i = 0; i < uv.count; i++) if (n.getY(i) > 0.5) { assert.ok(near(uv.getX(i), pp.getX(i) / 2)); assert.ok(near(uv.getY(i), pp.getZ(i) / 2)); }
-  const parent = new THREE.Group(), pool = new LightPool(parent, 2);
+  // K2 / PERF §8.2: sources become ENV_U lamp slots (4 nearest the focus, radius 0 = off); no light is ever added
+  const parent = new THREE.Group(), lamps = new LampSet(), pool = new LightPool(parent, 2, { lamps });
   const s = [pool.add({ pos: new THREE.Vector3(0, 1, 0) }), pool.add({ pos: new THREE.Vector3(5, 1, 0) }), pool.add({ pos: new THREE.Vector3(50, 1, 0), on: true })];
-  pool.update(new THREE.Vector3(40, 0, 0), 0);
-  assert.deepEqual(pool.lights.map((L) => L.position.x).sort((a, c) => a - c), [5, 50]);
-  s[2].on = false; pool.update(new THREE.Vector3(40, 0, 0), 0);
-  assert.deepEqual(pool.lights.map((L) => L.position.x).sort((a, c) => a - c), [0, 5]);
-  assert.equal(parent.children.length, 2, 'a fixed number of lights');
+  const slots = Array.from({ length: 2 }, () => new THREE.Vector4());
+  lamps.pick(new THREE.Vector3(40, 0, 0), slots, 0);
+  assert.deepEqual(slots.map((v) => v.x).sort((a, c) => a - c), [5, 50]);
+  assert.ok(slots.every((v) => v.w > 0), 'lit slots have a radius');
+  s[2].on = false; lamps.pick(new THREE.Vector3(40, 0, 0), slots, 0);
+  assert.deepEqual(slots.map((v) => v.x).sort((a, c) => a - c), [0, 5]);
+  s[0].on = false; s[1].on = false; lamps.pick(null, slots, 0);
+  assert.ok(slots.every((v) => v.w === 0), 'nothing lit: every slot off');
+  assert.equal(parent.children.length, 0, 'no PointLights');
+  pool.dispose();
+  assert.equal(lamps.sources.length, 0, 'the level unload unregisters its lamps');
 });
 
 // ---------------------------------------------------------------------------------------------- headless M2 builds
@@ -1149,7 +1183,9 @@ test('forest builds headless: arenas, vigils, caps (bounce colliders), stumps, t
   assert.deepEqual(kittens.map((k) => k.id).sort(), ['pebble', 'pickles', 'sprout']);
   assert.equal(enemies.list.length, 2 + 2 + 6, 'gate + mushroom patrols + treetop guards');
   assert.ok(L.actors.some((a) => a.propId === 'hollow_boulder' && a.breaks === 'cracked'), 'the cracked boulder');
-  assert.ok(L.lightPool?.lights.length === 2, 'the light pool (campfire + rat-camp torches)');
+  assert.ok(L.lightPool?.sources.length >= 7, 'lamp sources: the campfire + the rat-camp pumpkin lanterns');
+  assert.ok(!L.root.getObjectsByProperty('isPointLight', true).length, 'K2: no PointLights in the level');
+  assert.ok(L.bunting?.layout.lanterns > 0 && L.bunting.layout.pennants === 0, 'Lantern Night paper lanterns (one draw)');
   assert.ok(L.trees.length >= 3);
   assert.ok(L.triggers.some((t) => t.id === 'camp'));
   L.dispose();
@@ -1244,7 +1280,7 @@ test('Arena: a wave row with `at: center` spawns at the arena centre (the town f
   const enemies = fakeEnemies(); ctx.enemies = enemies;
   ctx.player = { pos: new THREE.Vector3(0, 0, -10), alive: true };
   const a = new Arena(ctx, { id: 'sq', at: [3, 8], r: 15, waves: [[['jelly_giant', 1, { at: 'center' }]]] });
-  a.lock();
+  a.lock({ now: true });
   assert.equal(enemies.list.length, 1);
   const e = enemies.list[0];
   assert.ok(near(e.pos.x, 3) && near(e.pos.z, 8), 'at the centre');
@@ -1256,7 +1292,7 @@ test('town: CS-07 frees the town in place (occupiers leave, arenas count as clea
   const { ctx, L, enemies } = await buildM2('town');
   const n = enemies.list.length;
   assert.ok(n > 0);
-  L.arena('square').lock();
+  L.arena('square').lock({ now: true });
   assert.ok(enemies.list.length > n, 'square wave 1 up');
   ctx.state.setFlag('town.free', true);
   ctx.bus.emit(E.FLAG_SET, { key: 'town.free', value: true });
@@ -1526,4 +1562,302 @@ test('arenaAwareFog: cam.fog.mist drops to ARENA_MIST while an arena is locked; 
 
 test('ARENA.wall: the fog wall is lighter and narrower than the fx defaults (iso readability)', () => {
   assert.ok(ARENA.wall.alpha <= 0.4 && ARENA.wall.width <= 4 && ARENA.wall.bandW <= 1.2 && ARENA.wall.bandA <= 0.15);
+});
+
+// ============================================================================================ warm look + perf + auto-camera
+// IMPLEMENTATION_PLAN §6 world (A:world.1–8, P:W1–W10, M:world.1–5) and Phase W (world.W1–W10)
+import { TONE, ENV_U, isoSunAz, fogRadius, ISO_SUN, rimColor, presetNames } from '../../src/world/Env.js';
+import { footprintCorners, fitShadowBox, stepShadowFit, cacheBox, StaticShadow } from '../../src/world/StaticShadow.js';
+import { withHeightFog, patchGlow } from '../../src/world/HeightFog.js';
+import { Grass, GRASS, GRASS_COLORS, FLOWER_COLORS, makeTuftGeometry, grassTile } from '../../src/world/Grass.js';
+import { Bunting, layoutBunting, makeBuntingGeometry, BUNTING_SHAPE } from '../../src/world/Bunting.js';
+import { GROUND } from '../../src/world/Terrain.js';
+import { matFor, worldMaterial, applyInkRim, PROP_PAL, RECOLOR } from '../../src/world/Props.js';
+import { magnetHop, POP_G, PICKUP_MOTION } from '../../src/world/Pickups.js';
+import { WAYSTONE, STAGE, freezeStatics } from '../../src/world/LevelKit.js';
+import { BUNTING, QUALITY, FADE_COLOR } from '../../src/core/config.js';
+
+/** HSV saturation / value and Rec.709 luma (sRGB components) of a hex colour. */
+const hsv = (hex) => {
+  const n = parseInt(hex.slice(1), 16), R = ((n >> 16) & 255) / 255, G = ((n >> 8) & 255) / 255, B = (n & 255) / 255;
+  const mx = Math.max(R, G, B), mn = Math.min(R, G, B);
+  return { s: mx > 0 ? (mx - mn) / mx : 0, v: mx, luma: 0.2126 * R + 0.7152 * G + 0.0722 * B };
+};
+/** WA §2.3a fog HSV saturation minimum per preset (ART floor 0.12 for the rest). */
+const FOG_SAT = { meadow_morning: 0.15, meadow_day: 0.15, meadow_evening: 0.18, meadow_giggle: 0.15, forest_day: 0.12, forest_twilight: 0.25, town_occupied: 0.15,
+  hub_gold: 0.15, hub_hush: 0.12, gate_dusk: 0.18, bog_dusk: 0.15, keep_twilight: 0.20, keep_cellar: 0.20, keep_storm: 0.12, meadow_night: 0.25, sky_night: 0.25, ending_gold: 0.18 };
+const SRC = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+const listJs = (dir) => fs.readdirSync(path.join(ROOT, dir)).filter((f) => f.endsWith('.js')).map((f) => path.join(dir, f));
+
+test('world.W1 / ART §11.3: every preset has shadowI, exposure, rim; warm haze (fog sat per WA §2.3a); no dark hemiGround; no near-black colour', () => {
+  for (const [name, p] of Object.entries(ENV_PRESETS)) {
+    for (const k of ['shadowI', 'exposure', 'rim', 'hero', 'lamps']) assert.ok(p[k] != null, `${name}: ${k}`);
+    const f = hsv(p.fogColor);
+    assert.ok(f.s >= (FOG_SAT[name] ?? 0.12) - 1e-3, `${name}: fog HSV sat ${f.s.toFixed(3)} ≥ ${FOG_SAT[name] ?? 0.12}`);
+    assert.ok(hsv(p.hemiGround).v >= 0.25, `${name}: hemiGround V ${hsv(p.hemiGround).v.toFixed(2)} ≥ 0.25`);
+    for (const k of ['fogColor', 'fogLow', 'skyTop', 'hemiSky', 'hemiGround', 'sunColor']) assert.ok(hsv(p[k]).luma >= 0.08, `${name}.${k} not near-black`);
+    assert.ok(p.exposure >= 0.95 && p.exposure <= 1.15, `${name}: exposure`);
+  }
+  assert.deepEqual(presetNames('hub_hush').sort(), ['hub_grey', 'hub_hush']);
+  assert.equal(rimColor('night'), TONE.rimNight); assert.equal(rimColor('#FFD8A0'), '#FFD8A0'); assert.equal(rimColor('day'), TONE.rimDay);
+  assert.ok(Object.isFrozen(TONE) && TONE.ink === '#4A2A1E' && TONE.blob === '#5A4E7A');
+  assert.equal(ENV_U.uLamps.value.length, 4);
+});
+
+test('world.W2: the mood timeline — no playable level default or byFlag pick is night (meadow_night / sky_night)', async () => {
+  const NIGHT = new Set(['meadow_night', 'sky_night']);
+  for (const id of LEVEL_IDS) {
+    const env = (await loadDef(id)).env ?? {};
+    const picks = [env.default, ...(env.byFlag ?? []).map((r) => r[1])].filter(Boolean).map(resolvePreset);
+    for (const p of picks) { assert.ok(ENV_PRESETS[p], `${id}: ${p} exists`); assert.ok(!NIGHT.has(p), `${id}: ${p} is a callback-only night`); }
+  }
+  const d = await loadDef('meadow');
+  assert.deepEqual(d.env.byFlag, [['!prologue.done', 'meadow_morning']]);
+  assert.equal((await loadDef('bog')).env.default, 'bog_dusk'); assert.equal((await loadDef('keep')).env.default, 'keep_twilight');
+  const lm = new LevelManager(fakeCtx({ systems: false }));
+  assert.equal(lm.pickEnv('forest_night'), 'forest_twilight', 'pickEnv returns canonical names');
+  assert.ok(!SRC('src/world/levels/forest.js').includes("'dark_forest_creepy'"), 'WA §9: Lantern Night music is not creepy');
+});
+
+test('world.W3 / LI W1: no grey defaults left in src/world (#B7C0C3 / #9AA196)', () => {
+  const files = [...listJs('src/world'), ...listJs('src/world/levels')];
+  for (const f of files) { const t = SRC(f); assert.ok(!/#B7C0C3|#9AA196/i.test(t), `${f} has a grey default`); }
+});
+
+test('world.W4 lints: kit.tpl never sat < 0.5 / mul < 0.8 without a // mood: note; kit.paint luma ≥ 0.30', () => {
+  for (const f of listJs('src/world/levels')) {
+    const lines = SRC(f).split('\n');
+    lines.forEach((ln, i) => {
+      for (const m of ln.matchAll(/\b(sat|mul):\s*([0-9.]+)/g)) {
+        const v = Number(m[2]), bad = m[1] === 'sat' ? v < 0.5 : v < 0.8;
+        if (bad) assert.ok(/\/\/\s*mood:/.test(ln), `${f}:${i + 1}: ${m[0]} without a // mood: note`);
+      }
+      for (const m of ln.matchAll(/kit\.paint\([^)]*'(#[0-9A-Fa-f]{6})'/g)) assert.ok(hsv(m[1]).luma >= 0.30, `${f}:${i + 1}: paint ${m[1]} luma ${hsv(m[1]).luma.toFixed(2)} < 0.30`);
+    });
+  }
+});
+
+test('ART §2.6 palettes: warm grounds, grass, flowers (no pink / orange near the path), shared prop tokens', () => {
+  for (const [biome, g] of Object.entries(GROUND)) {
+    assert.ok(hsv(g.path).luma >= 0.45, `${biome} path is bright (${hsv(g.path).luma.toFixed(2)})`);
+    assert.ok(hsv(g.mid).luma >= 0.3 && hsv(g.root).luma >= 0.2, `${biome} grass ground is not near-black`);
+  }
+  for (const [biome, c] of Object.entries(GRASS_COLORS)) assert.ok(hsv(c.tip).luma > hsv(c.root).luma, `${biome}: tips lighter than roots`);
+  for (const f of FLOWER_COLORS) { const c = new THREE.Color(f), h = c.getHSL({}).h * 360, s = c.getHSL({}).s; assert.ok(!(s > 0.35 && (h < 40 || h > 320)), `flower ${f} is not pink / orange (G19)`); }
+  for (const k of ['wood', 'straw', 'iron', 'stone', 'hyena']) assert.ok(hsv(PROP_PAL[k]).luma >= 0.2, `PROP_PAL.${k}`);
+  for (const [k, v] of Object.entries(RECOLOR)) assert.ok(hsv(v).luma >= 0.12, `RECOLOR.${k} ${v} not near-black`);
+});
+
+test('Env: iso sun from the level yaw (+1.75 day / +1.20 night, never a zone hint), background = fog, exposure eased, Low has no shadow map', async () => {
+  assert.ok(near(isoSunAz(Math.PI), Math.PI + ISO_SUN.day) && near(isoSunAz(0, true), ISO_SUN.night));
+  const ctx = fakeCtx({ systems: false });
+  ctx.renderer = { toneMappingExposure: 1, shadowMap: { autoUpdate: true, needsUpdate: false } };
+  ctx.quality = QUALITY.low;
+  const env = new Env(ctx); await env.init();
+  assert.equal(env.sunLight.castShadow, false, 'K3: Low (shadows none, map 0) never casts');
+  assert.equal(ctx.scene.environment, null, 'no PMREM in play');
+  assert.ok(!ctx.scene.getObjectsByProperty('isPointLight', true).length, 'K2: no PointLights');
+  env.applyQuality(QUALITY.med);
+  assert.equal(env.sunLight.castShadow, true); assert.equal(env.sunLight.shadow.mapSize.x, 1024);
+  ctx.levels = { current: { cam: { yaw: Math.PI }, camYaw: Math.PI, camZone: { cam: { yaw: 0.3 } } } };
+  env.preset('gate_dusk', 0); env._focusMode = 1;
+  const d = env.sunDir(new THREE.Vector3()), az = Math.atan2(d.x, d.z);
+  assert.ok(near(Math.cos(az), Math.cos(Math.PI + ISO_SUN.day), 1e-6) && near(Math.sin(az), Math.sin(Math.PI + ISO_SUN.day), 1e-6), 'level yaw + 1.75, the zone hint ignored');
+  assert.equal(ctx.scene.background.getHexString(), ENV_PRESETS.gate_dusk.fogColor.slice(1).toLowerCase(), 'clear colour = fog colour');
+  env.preset('forest_night', 0);
+  assert.equal(env.presetName, 'forest_twilight');
+  assert.ok(near(ctx.renderer.toneMappingExposure, 1.10, 1e-6), 'exposure from the preset');
+  assert.ok(near(ENV_U.uLampStr.value, 1) && near(ENV_U.uGlow.value.w, 3.5), 'twilight: lamps on, full-radius glow');
+  env.preset('meadow_day', 0);
+  assert.ok(near(ENV_U.uLampStr.value, 0) && near(ENV_U.uGlow.value.w, 2.6), 'day: no lamp pools, the 2.6 m sun spot (WA4)');
+  assert.ok(near(env.sunLight.shadow.intensity, 0.6), 'shadowI → shadow.intensity');
+  assert.ok(near(fogRadius(0.045, 5, 1.5), 5 + 1.978 / (0.045 * 1.5)), 'PERF §8.3 fog radius');
+  env.dispose();
+});
+
+test('HeightFog `hfog3`: ENV_U delivered, glow + lamp pools only in lit programs; constant cache key', () => {
+  const lam = withHeightFog(new THREE.MeshLambertMaterial());
+  assert.ok(lam.customProgramCacheKey().endsWith('|hfog3'));
+  const lit = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader };
+  lam.onBeforeCompile(lit);
+  assert.ok(lit.fragmentShader.includes('hfogPool(') && lit.uniforms.uLamps === ENV_U.uLamps && lit.uniforms.uGlow === ENV_U.uGlow);
+  assert.ok(lit.fragmentShader.indexOf('hfogPool(vFogW, uGlow)') < lit.fragmentShader.indexOf('#include <opaque_fragment>'), 'added before opaque_fragment');
+  const basic = { uniforms: {}, vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader };
+  withHeightFog(new THREE.MeshBasicMaterial()).onBeforeCompile(basic);
+  assert.ok(!basic.fragmentShader.includes('hfogPool('), 'unlit programs keep their exact colours');
+  const twice = patchGlow(patchGlow({ ...lit }));
+  assert.equal(twice.fragmentShader.split('hfogPool(vFogW, uGlow)').length, 2, 'idempotent');
+});
+
+test('M:world.1 shadow stage 1: footprint corners from the camera, light-space fit + pad, grow at once / shrink with hysteresis; stage 2 cache box', () => {
+  const cam = new THREE.PerspectiveCamera(38, 16 / 9, 0.1, 200);
+  cam.position.set(0, 9.5, -8); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+  const c = footprintCorners(null, cam, 0, [0, 1, 2, 3].map(() => new THREE.Vector3()));
+  assert.ok(c && c.every((p) => near(p.y, 0)), 'on the ground plane');
+  assert.ok(c[2].z > c[1].z && Math.abs(c[2].x - c[3].x) > Math.abs(c[1].x - c[0].x), 'a trapezoid: wider at the top');
+  const fp = { corners: [[-5, -4], [5, -4], [7, 9], [-7, 9]] };
+  const q = footprintCorners(fp, null, 1, [0, 1, 2, 3].map(() => new THREE.Vector3()));
+  assert.deepEqual(q.map((p) => [p.x, p.y, p.z]), [[-5, 1, -4], [5, 1, -4], [7, 1, 9], [-7, 1, 9]], 'camera-published corners win');
+  const r = new THREE.Vector3(1, 0, 0), u = new THREE.Vector3(0, 0, 1);
+  const box = fitShadowBox(q, r, u, 6, 1.5);
+  assert.ok(near(box.halfX, 7 + 1.5) && near(box.halfY, 6.5 + 1.5) && near(box.cy, 2.5));
+  const fit = { ok: false };
+  stepShadowFit(fit, 10, 10); assert.deepEqual([fit.halfX, fit.halfY], [10, 10]);
+  stepShadowFit(fit, 12, 10); assert.equal(fit.halfX, 12, 'grows at once');
+  stepShadowFit(fit, 11, 10, 2, 1, 0.5); assert.equal(fit.halfX, 12, 'a 1 m shrink is ignored');
+  stepShadowFit(fit, 9, 9, 2, 1, 0.5); assert.equal(fit.halfX, 12, 'a 3 m shrink waits');
+  stepShadowFit(fit, 9, 9, 2, 1, 0.6); assert.equal(fit.halfX, 9, 'then shrinks after 1 s');
+  const cb = {};
+  assert.equal(cacheBox({ cx: 3, cy: 0, halfX: 10, halfY: 10 }, cb, 8, 8), true);
+  assert.deepEqual([cb.hx, cb.cx], [18, 0], 'fit + 8 m margin, centre snapped to 8 m');
+  assert.equal(cacheBox({ cx: 6, cy: 1, halfX: 10, halfY: 10 }, cb, 8, 8), false, 'inside the cached box: no re-render');
+  assert.equal(cacheBox({ cx: 12, cy: 1, halfX: 10, halfY: 10 }, cb, 8, 8), true, 'leaves it: re-render');
+  const st = new StaticShadow({ ctx: {} }); assert.equal(st.place({}, r, u, r, u, new THREE.Vector3()), false, 'no renderer: stage 1 keeps going');
+});
+
+test('PERF §8.4 / AUTOCAM §9.4 grass: one tuft mesh (6 tris + a collapsed petal cap), quality counts, tile ⊇ footprint + 3 m', () => {
+  const g = makeTuftGeometry();
+  assert.equal(g.index.count / 3, 8); assert.equal(g.attributes.aCap.array.filter((v) => v > 0).length, 4);
+  for (let i = 0; i < g.attributes.normal.count; i++) assert.ok(g.attributes.normal.getY(i) > 0.6, 'normals bent toward up');
+  const tex = new THREE.DataTexture(new Uint16Array(4 * 4), 2, 2, THREE.RGBAFormat, THREE.HalfFloatType);
+  for (const q of ['low', 'med', 'high']) {
+    const gr = new Grass({ ground: tex, size: 100, res: 1, quality: QUALITY[q] });
+    assert.equal(gr.count, QUALITY[q].grassTufts, `${q}: fixed count`);
+    assert.equal(gr.group.children.length, 1, '1 draw for grass + flowers');
+    assert.equal(gr.mesh.receiveShadow, false); assert.equal(gr.mesh.castShadow, false);
+    gr.dispose();
+  }
+  // the tile covers the camera footprint + pad for desktop / phone / boss distances
+  for (const d of [9, 12.4, 18, 22]) {
+    const cam = new THREE.PerspectiveCamera(38, 16 / 9, 0.1, 200);
+    cam.position.set(0, d * Math.sin(0.87), -d * Math.cos(0.87)); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+    const gr = new Grass({ ground: tex, size: 200, res: 1, quality: QUALITY.med });
+    gr.update(0, null, new THREE.Vector3(), null, cam, null);
+    const T = gr.uniforms.uTile.value, c = gr.uniforms.uCenter.value;
+    const cs = footprintCorners(null, cam, 0, [0, 1, 2, 3].map(() => new THREE.Vector3()));
+    for (const p of cs) assert.ok(Math.abs(p.x - c.x) <= T / 2 - GRASS.pad + 1e-6 || T === GRASS.tileMax, `d ${d}: corner x inside the tile`);
+    for (const p of cs) assert.ok(Math.abs(p.z - c.y) <= T / 2 - GRASS.pad + 1e-6 || T === GRASS.tileMax, `d ${d}: corner z inside the tile`);
+    assert.ok(T >= GRASS.tileMul * d - 1e-6 || T === GRASS.tileMax, 'T ≥ 1.6 · d');
+    gr.dispose();
+  }
+  assert.ok(grassTile(12.4) >= 19.84 && grassTile(12.4) % GRASS.tileQuant === 0, 'quantised');
+});
+
+test('world.W7 Bunting: one draw, caps (240 / Low 120 pennants, 60 / 30 lanterns), ≤ 480 / 240 tris, no shadow', () => {
+  const long = [{ a: [0, 4, 0], b: [0, 4, 400] }];
+  const hi = layoutBunting(long), lo = layoutBunting(long, { low: true });
+  assert.equal(hi.pennants, BUNTING.max); assert.equal(lo.pennants, BUNTING.maxLow);
+  assert.ok(hi.tris <= BUNTING_SHAPE.maxTris && lo.tris <= BUNTING_SHAPE.maxTrisLow);
+  assert.equal(hi.tris, hi.pennants * 2);
+  const lan = layoutBunting([{ a: [0, 4, 0], b: [0, 4, 400], kind: 'lantern' }]), lanLo = layoutBunting([{ a: [0, 4, 0], b: [0, 4, 400], kind: 'lantern' }], { low: true });
+  assert.equal(lan.lanterns, BUNTING.lanternMax); assert.equal(lanLo.lanterns, BUNTING.lanternMaxLow);
+  assert.equal(lan.tris, lan.lanterns * 8); assert.ok(lan.tris <= 480 && lanLo.tris <= 240);
+  const mixed = layoutBunting([{ a: [0, 4, 0], b: [0, 4, 200] }, { a: [5, 4, 0], b: [5, 4, 200], kind: 'lantern' }]);
+  assert.ok(mixed.tris <= 480, `mixed tri cap (${mixed.tris})`);
+  // the catenary: sags 12 % of the span, never below minH above the ground, 0.55 m spacing
+  const one = layoutBunting([{ a: [0, 6, 0], b: [0, 6, 11] }], { heightAt: () => 1 });
+  const ys = one.items.map((i) => i.y);
+  assert.ok(Math.min(...ys) >= 1 + BUNTING.minH - 1e-9 && Math.min(...ys) < 7, 'sags but stays above minH');
+  assert.equal(one.items.length, Math.floor(11 / BUNTING.spacing) + 1);
+  const b = new Bunting([{ a: [0, 4, 0], b: [0, 4, 10] }]);
+  assert.ok(b.mesh.isInstancedMesh && b.mesh.castShadow === false && b.mesh.receiveShadow === false);
+  assert.equal(makeBuntingGeometry({ pennant: true }).attributes.position.count / 3, 2 / 2);
+  b.update(1, { wind: 0.8 }); assert.equal(b.uniforms.uWind.value, 0.8);
+  b.dispose();
+  assert.equal(new Bunting([]).mesh, null, 'no strings, no draw');
+});
+
+test('world.W8 arena stage floors: every arena zone gets a lighter calm paint (+8 % L) and thinner grass', async () => {
+  const def = { id: 'stagetest', size: 60, res: 30, seed: 3, spine: [[0, -25], [0, 25]], biome: 'meadow', horizon: false, grass: false,
+    zones: [{ id: 'a1', kind: 'arena', at: [10, 0], r: 6, waves: [] }, { id: 'a2', kind: 'arena', at: [-10, 5], size: [8, 6], waves: [] }] };
+  const ctx = fakeCtx(); ctx.assets.gltf = async (p) => stubGltf(p);
+  const L = await buildLevel(ctx, def);
+  assert.deepEqual(L.stages.map((s) => s.id), ['a1', 'a2']);
+  const path = new THREE.Color(GROUND.meadow.path).getHSL({}).l;
+  for (const s of L.stages) assert.ok(new THREE.Color(s.color).getHSL({}).l > path + STAGE.lift - 1e-3, 'lifted path colour');
+  assert.ok(L.terrain.densityAt(10, 0) <= STAGE.grass + 1e-6, 'grass thinned to ≤ 0.4 inside');
+  assert.ok(freezeStatics(L) > 0, 'static render outputs stop updating matrices');
+  assert.equal(L.batch.mesh.matrixAutoUpdate, false);
+  L.dispose();
+});
+
+test('world.W9 pickups: the magnet pull hops (y above the straight pull mid-flight), kill drops pop to 0.9 m and bounce twice', () => {
+  assert.ok(magnetHop(0.5) > 0 && near(magnetHop(0.5), 0.35) && magnetHop(0) === 0 && magnetHop(1) === 0);
+  assert.ok(near(POP_G * PICKUP_MOTION.popT * PICKUP_MOTION.popT / 8, PICKUP_MOTION.popApex));
+  const ctx = fakeCtx({ systems: false });
+  ctx.player = { pos: new THREE.Vector3(0, 0, 0), alive: true, radius: 0.32, hp: 3, maxHp: 6 };
+  const pk = new Pickups(ctx, { heightAt: () => 0, levelId: 'test', root: new THREE.Group() });
+  pk.spawnFish(new THREE.Vector3(2.4, 0, 0), 1, { pop: false });
+  const it = pk.items[0];
+  let maxLift = 0;
+  for (let i = 0; i < 30 && it.alive; i++) { pk.update(1 / 60); maxLift = Math.max(maxLift, it.pos.y - 0.4); }
+  assert.ok(maxLift > 0.05, `the magnet pull hops (${maxLift.toFixed(3)} m)`);
+  // a kill drop: apex ≈ 0.9 m, then two bounces before it rests
+  ctx.player.pos.set(100, 0, 100);
+  pk.spawnFish(new THREE.Vector3(0, 0, 0), 1);
+  const f = pk.items[pk.items.length - 1]; f.delay = 0;
+  let apex = 0, landed = 0, wasAir = true;
+  for (let i = 0; i < 240; i++) { pk.update(1 / 60); apex = Math.max(apex, f.pos.y - PICKUP_MOTION.rest); if (wasAir && f.vel.y > 0 && i > 2) { /* bounce */ } wasAir = f.air; }
+  assert.ok(apex > 0.7 && apex < 1.1, `pop apex ${apex.toFixed(2)} ≈ 0.9 m`);
+  assert.equal(f.air, false); assert.equal(f.bounces, 2, 'two bounces'); void landed;
+  pk.render(1, 1 / 60);
+  assert.ok(pk.twinkles.includes(f), 'resting pickups are listed for the fx twinkles');
+  pk.dispose();
+});
+
+test('PERF §3.5 / ART §4.2 materials: Lambert + dithering, one clone per mesh kind (no re-resolves), ink rim composes', () => {
+  const base = worldMaterial();
+  assert.ok(base.isMeshLambertMaterial && base.dithering && base.vertexColors);
+  const inst = matFor(base, 'instanced'), bat = matFor(base, 'batched');
+  assert.ok(inst !== base && bat !== base && inst !== bat);
+  assert.equal(matFor(base, 'instanced'), inst, 'cached per kind');
+  assert.equal(matFor(base, 'plain'), base);
+  const ink = applyInkRim(worldMaterial(), 0.68);
+  assert.ok(ink.customProgramCacheKey().includes('|ink0.68'));
+  const sh = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader };
+  ink.onBeforeCompile(sh);
+  assert.ok(sh.fragmentShader.includes('inkE'));
+  assert.equal(applyInkRim(ink), ink, 'idempotent');
+});
+
+test('Arena: a soft arena (Mochi cart) has no wall, never pulls her in; the lock payload carries center / r', () => {
+  const ctx = fakeCtx({ systems: false });
+  const enemies = fakeEnemies(); ctx.enemies = enemies;
+  let mist = 0; ctx.fx = { mistRing: () => { mist++; return { dispose() {} }; } };
+  ctx.player = { pos: new THREE.Vector3(0, 0, -20), alive: true, vel: new THREE.Vector3(), teleport() { throw new Error('pulled'); } };
+  const bus = spy(ctx);
+  const a = new Arena(ctx, { id: 'cart', at: [0, 0], r: 9, soft: true, waves: [[['rat_pike', 3]]] }, () => 0, null);
+  a.lock();
+  assert.equal(mist, 0, 'no fog wall'); assert.equal(a._wallColliders.length, 0);
+  const p = bus.last(E.ARENA_LOCK); assert.deepEqual([p.id, p.r, p.soft], ['cart', 9, true]);
+  ctx.player.pos.set(0, 0, -9.6);
+  for (let i = 0; i < 90; i++) a.update(1 / 60);
+  assert.equal(enemies.list.length, 3, 'wave 1 after the room read');
+  assert.ok(near(ctx.player.pos.z, -9.6), 'never kept inside');
+});
+
+test('Level.refresh: zones that wait for a flag (Chapter 1) switch on live, once', () => {
+  const ctx = fakeCtx({ systems: false });
+  const L = new Level(ctx, { id: 't', size: 50, spine: [[0, -20], [0, 20]] });
+  let ran = 0, flag = false;
+  L.onCond(() => flag, () => { ran++; });
+  L.activate('start');
+  assert.equal(ran, 0);
+  flag = true; assert.equal(L.refresh(), 1); assert.equal(ran, 1);
+  assert.equal(L.refresh(), 0, 'once'); assert.equal(ran, 1);
+});
+
+test('LI W10 waystones, meadow warm data (bunting, skyline, chest), cream load veil, clouds in the far group only', async () => {
+  assert.ok(!SRC('src/world/LevelKit.js').includes('statue_obelisk'), 'no graveyard obelisk');
+  assert.equal(WAYSTONE.ribbon, '#FF8FB1');
+  const d = await loadDef('meadow');
+  assert.ok(d.bunting.length >= 1 && d.skyline.every((s) => !/castle/.test(s.model)), 'LI W7: no castle skyline');
+  assert.ok(levelModelPaths(d).some((p) => p.includes('cloud_big')), 'WA §2.8 clouds');
+  assert.equal(FADE_COLOR, '#FFF1DE');
+  assert.ok(SRC('src/world/LevelManager.js').includes('FADE_COLOR'), 'core.W3: LevelManager veils in cream');
+  const ctx = fakeCtx(); ctx.assets.gltf = async (p) => stubGltf(p);
+  const L = await buildLevel(ctx, { id: 'cl', size: 60, res: 20, seed: 2, spine: [[0, -25], [0, 25]], biome: 'meadow', grass: false, skyline: [] });
+  const clouds = L.groups.skyline.getObjectByName('clouds');
+  assert.ok(clouds?.isMesh, 'one merged cloud mesh'); assert.ok(clouds.material.fog === false);
+  L.dispose();
 });

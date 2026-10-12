@@ -16,6 +16,31 @@ export function hostileTo(faction) {
   return f;
 }
 
+/** Kind bits for `queryRadiusTyped` (PERF §11 A15). Faction bits come from `actor.faction`, tag bits from `tags`. */
+export const KIND = Object.freeze({ player: 1, enemy: 2, ally: 4, neutral: 8, boss: 16, flyer: 32, kitten: 64, npc: 128, alive: 256 });
+const FACTION_BIT = Object.freeze({ player: KIND.player, enemy: KIND.enemy, ally: KIND.ally, neutral: KIND.neutral });
+const TAG_MASK = KIND.boss | KIND.flyer | KIND.kitten | KIND.npc;
+
+/** Kind bits of `actor` (tag lookups only when the query asks for tag bits). */
+export function kindBits(actor, withTags = true) {
+  let b = FACTION_BIT[actor.faction] ?? KIND.neutral;
+  const t = withTags ? actor.tags : null;
+  if (t && t.size) {
+    if (t.has('boss')) b |= KIND.boss;
+    if (t.has('flyer')) b |= KIND.flyer;
+    if (t.has('kitten')) b |= KIND.kitten;
+    if (t.has('npc')) b |= KIND.npc;
+  }
+  return b;
+}
+
+/** Mask of the factions hostile to `faction` (typed twin of `hostileTo`). */
+export function hostileMask(faction) {
+  if (faction === 'enemy') return KIND.player | KIND.ally;
+  if (faction === 'player' || faction === 'ally') return KIND.enemy;
+  return 0;
+}
+
 export class ActorRegistry {
   constructor() {
     /** @type {import('./Actor.js').Actor[]} */
@@ -80,6 +105,27 @@ export class ActorRegistry {
       const dx = a.pos.x - pos.x, dz = a.pos.z - pos.z, rr = r + (a.radius ?? 0);
       if (dx * dx + dz * dz > rr * rr) continue;
       if (filter && !filter(a)) continue;
+      out.push(a);
+    }
+    return out;
+  }
+
+  /**
+   * Allocation-free typed query (PERF §11 A15): actors within `r` (XZ) of `pos` whose kind bits intersect `mask`
+   * (faction bits KIND.player/enemy/ally/neutral, tag bits KIND.boss/flyer/kitten/npc); add KIND.alive to require
+   * `alive`. No filter closure. Writes into `out` (default: the shared scratch, reused by the next query).
+   * @param {{x:number, z:number}} pos @param {number} r @param {number} mask @param {any[]} [out]
+   */
+  queryRadiusTyped(pos, r, mask, out = this._scratch) {
+    out.length = 0;
+    const want = mask & ~KIND.alive, needAlive = (mask & KIND.alive) !== 0, tagBits = (want & TAG_MASK) !== 0;
+    const list = this.list;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (needAlive && !a.alive) continue;
+      if ((kindBits(a, tagBits) & want) === 0) continue;
+      const dx = a.pos.x - pos.x, dz = a.pos.z - pos.z, rr = r + (a.radius ?? 0);
+      if (dx * dx + dz * dz > rr * rr) continue;
       out.push(a);
     }
     return out;

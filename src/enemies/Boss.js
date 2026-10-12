@@ -79,6 +79,13 @@ export class Boss extends Enemy {
     this.critBoost = 1; this.critBoostT = 0;
   }
 
+  /**
+   * AUTOCAM §7 BOSS subject size (M:enemies.4): the radius the camera frames (collider, grown by the visual scale and
+   * a ridden prop such as the Wheel Ride) and the full visual height (+ the ride lift).
+   */
+  get frameRadius() { return (this.radius ?? 0.5) * (this.def.visualScale ?? 1) + ((this.rideLift ?? 0) > 0 ? M2.boss.wheelContact : 0); }
+  get frameHeight() { return (this.height ?? 2) * (this.def.visualScale ?? 1) + Math.max(0, this.rideLift ?? 0); }
+
   /** Bosses never queue for attack tokens: they are the fight (adds share the tokens). */
   hasToken() { return true; }
   acquireToken() { return true; }
@@ -120,8 +127,9 @@ export class Boss extends Enemy {
     this.started = true;
     this.alerted = true;
     this._offLife = this.ctx.bus.on(E.PLAYER_LIFE_LOST, () => this.restartPhase());
-    this.ctx.bus.emit(E.BOSS_START, { boss: this, id: this.def.id, name: this.def.name ?? this.def.id, maxHp: this.maxHp,
-      phases: (this.def.phases ?? []).map((p) => p.at), dizzyMax: this.dizzyMax });
+    // WA §8.2 display name (Big Chief Cacklejaw, Lord Barkus Grumpjaw); AUTOCAM §7 / M:enemies.4 the framing size
+    this.ctx.bus.emit(E.BOSS_START, { boss: this, id: this.def.id, name: this.displayName ?? this.def.name ?? this.def.id, maxHp: this.maxHp,
+      phases: (this.def.phases ?? []).map((p) => p.at), dizzyMax: this.dizzyMax, radius: this.frameRadius, height: this.frameHeight });
   }
 
   // ------------------------------------------------------------------ phases

@@ -8,6 +8,7 @@ import { E } from '../core/events.js';
 import { el, flag, setHtml, setText, setVar, place, pulse } from './dom.js';
 import { tx, txt, glyphify, actionGlyph } from './text.js';
 import * as I from './icons.js';
+import { Guide } from './guide.js';
 
 const _v = new THREE.Vector3(), _f = new THREE.Vector3(), _d = new THREE.Vector3();
 const HINT_CALM = 2;      // s clear before a faded hint card comes back
@@ -67,6 +68,8 @@ export class Prompts {
     this.hintStep = this.hintEl.querySelector('.hint-step');
     this.hintTxt = this.hintEl.querySelector('.hint-txt');
     this.hintData = null;         // { text, step, total, t, sec }
+    /** WA §7.5 guide bubble (story:prompt payloads with a `speaker`) */
+    this.guide = new Guide(ctx, parent);
     const bus = ctx.bus;
     this._offs = [
       bus.on(E.INTERACT_AVAILABLE, (p) => { this.target = p?.target ?? null; this.tagPrompt = p?.prompt ?? null; this._drawTag(); }),
@@ -77,13 +80,13 @@ export class Prompts {
       bus.on(E.INPUT_DEVICE, () => this._redraw()),
       bus.on(E.INPUT_SCHEME, () => this._redraw()),          // CONTROLS_SPEC §12 ui 3: glyphs follow the preset
       bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'bindings' || p?.key === 'controlPreset') this._redraw(); }),
-      bus.on(E.LEVEL_LOADING, () => { this.target = null; this.hint(null); this.prState = null; flag(this.prompt, 'is-on', false); }),
+      bus.on(E.LEVEL_LOADING, () => { this.target = null; this.hint(null); this.prState = null; flag(this.prompt, 'is-on', false); this.guide.hide(); }),
     ];
   }
 
   get device() { return this.ctx.input?.device ?? 'kbm'; }
 
-  _redraw() { this._drawTag(); this._drawHint(); this._drawPrompt(); }
+  _redraw() { this._drawTag(); this._drawHint(); this._drawPrompt(); this.guide.redraw(); }
 
   _drawTag() {
     if (!this.target) return;
@@ -96,6 +99,9 @@ export class Prompts {
   // ------------------------------------------------------------------ story:prompt
   _onPrompt(p) {
     if (!p) return;
+    // WA §7.5: a speaker turns the prompt into the guide bubble (one bubble; the old card steps aside)
+    if (p.speaker) { if (this._tutKey) { this._tutKey = null; this.hint(null); } this.guide.onPrompt(p); return; }
+    if (p.kind === 'tutorial' && this.guide.open && !p.done) this.guide.hide();
     if (p.kind === 'tutorial') {                 // Midnight Practice: the parchment hint card (requests/story.md)
       if (p.done || !p.textKey) { if (!this._tutKey || this._tutKey === p.textKey || p.done) { this._tutKey = null; this.hint(null); } return; }
       this._tutKey = p.textKey;
@@ -179,6 +185,8 @@ export class Prompts {
     const h = this.hintData;
     if (h) { h.t += dt; if (h.sec > 0 && h.t >= h.sec) this.hint(null); }
     flag(this.hintEl, 'is-dim', !vis.hint);
+    this.guide.render(dt, !!vis.hint);
+    flag(this.hintEl, 'is-guided', this.guide.open);      // one bubble on screen (WA §6.1 rule 6)
     this._busyHint(dt, !!h && vis.hint);
     setVar(this.hintEl, '--sub', (ctx.state?.settings?.subtitleSize ?? 1).toFixed(2));
   }
@@ -198,6 +206,6 @@ export class Prompts {
     flag(this.hintEl, 'is-busy', this._hintBusyT > 0);
   }
 
-  dispose() { for (const off of this._offs) off(); this.tag.remove(); this.prompt.remove(); this.hintEl.remove(); }
+  dispose() { for (const off of this._offs) off(); this.tag.remove(); this.prompt.remove(); this.hintEl.remove(); this.guide.dispose(); }
 }
 

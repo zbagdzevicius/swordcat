@@ -47,8 +47,8 @@ test('Loop: fixed 1/60 steps, interpolation alpha, maxSteps clamp, timeScale', (
   loop.advance(1 / 60 * 3 + 0.001);
   assert.equal(steps, 3);
   assert.ok(lastAlpha > 0 && lastAlpha < 1);
-  steps = 0; loop.acc = 0; loop.advance(0.5);           // a long frame: clamp to 5 steps, drop the rest
-  assert.equal(steps, 5); assert.equal(loop.acc, 0);
+  steps = 0; loop.acc = 0; loop.advance(0.5);           // a long frame: clamp to LOOP.maxSteps (4, PERF §4.1), drop the rest
+  assert.equal(steps, 4); assert.equal(loop.acc, 0);
   steps = 0; loop.timeScale = 0.5; loop.advance(4 / 60);
   assert.equal(steps, 2);
   steps = 0; loop.timeScale = 0; loop.advance(1 / 60);
@@ -382,4 +382,299 @@ test('Input: the canvas rect is cached (no layout read per mousemove) until a re
   assert.equal(reads, 1);
   inp._rect = null; inp._pointerAt(50, 50, true);
   assert.equal(reads, 2); assert.equal(inp.pointer.ndcX, 0);
+});
+
+test('§7.2 core surface: smoothDamp never overshoots and converges; smoothDamp2 caps the radial rate', async () => {
+  const { smoothDamp, smoothDamp2 } = await import('../../src/core/math.js');
+  const s = { v: 0 }; let x = 0;
+  for (let i = 0; i < 600; i++) { x = smoothDamp(x, 10, s, 0.3, 1 / 60); assert.ok(x <= 10 + 1e-9, 'no overshoot'); }
+  assert.ok(Math.abs(x - 10) < 1e-3);
+  const s1 = { v: 0 }; const y = smoothDamp(0, 100, s1, 0.5, 1 / 60, 2);
+  assert.ok(y > 0 && y <= 2 / 60 + 1e-6, 'vmax respected');
+  const o = { x: 0, z: 0 }, v = { vx: 0, vz: 0 };
+  for (let i = 0; i < 30; i++) smoothDamp2(o, 100, 100, v, 0.5, 1 / 60, 3);
+  assert.ok(Math.hypot(o.x, o.z) <= 3 * 0.5 + 1e-6, 'radial cap');
+  for (let i = 0; i < 2000; i++) smoothDamp2(o, 1, 2, v, 0.2, 1 / 60);
+  assert.ok(Math.abs(o.x - 1) < 1e-3 && Math.abs(o.z - 2) < 1e-3);
+});
+
+test('§7.2 core surface: every(game, hz, phase) is deterministic on stepCount; depthFor shares one material per kind', async () => {
+  const { every } = await import('../../src/core/schedule.js');
+  const { depthFor } = await import('../../src/core/depth.js');
+  let n = 0; for (let i = 0; i < 60; i++) if (every({ stepCount: i }, 20)) n++;
+  assert.equal(n, 20);
+  assert.equal(every({ stepCount: 5 }, 0), false);
+  assert.notEqual(every({ stepCount: 0 }, 10, 0), every({ stepCount: 0 }, 10, 1));
+  const a = depthFor(new THREE.Mesh()), b = depthFor(new THREE.Mesh()), c = depthFor(new THREE.InstancedMesh(undefined, undefined, 1));
+  assert.equal(a, b); assert.notEqual(a, c); assert.ok(a.isMeshDepthMaterial);
+});
+
+test('§7.2 prewarm: compiles hidden roots in batches and restores visibility; uViewport is a shared Vector2', async () => {
+  const { prewarm } = await import('../../src/core/prewarm.js');
+  const { uViewport } = await import('../../src/core/uniforms.js');
+  let compiles = 0, renders = 0;
+  const r = { extensions: { has: () => false }, compile: () => { compiles++; }, render: () => { renders++; }, shadowMap: {} };
+  const roots = [0, 1, 2, 3, 4].map(() => new THREE.Group()); roots[4].visible = false;
+  await prewarm(r, new THREE.Scene(), new THREE.PerspectiveCamera(), roots, { batch: 2 });
+  assert.equal(compiles, 2); assert.equal(renders, 1);
+  assert.deepEqual(roots.map((o) => o.visible), [true, true, true, true, false]);
+  assert.equal(r.shadowMap.needsUpdate, true);
+  assert.ok(uViewport.value.isVector2);
+});
+
+// ------------------------------------------------------------------ S1 / S3 / Phase W core tasks (PERF C1–C18, ART core)
+test('PERF §4.1 Loop: Low caps at 3 steps, the remainder is dropped (capHits), the frame-cap gate skips rAFs', async () => {
+  const { loopStepsFor } = await import('../../src/core/Game.js');
+  assert.equal(loopStepsFor('low'), 3); assert.equal(loopStepsFor('med'), 4); assert.equal(loopStepsFor('high'), 4);
+  let steps = 0;
+  const loop = new Loop(null, { maxSteps: loopStepsFor('low'), update: () => steps++, render: () => {} });
+  loop.advance(0.1);
+  assert.equal(steps, 3); assert.equal(loop.acc, 0); assert.equal(loop.capHits, 1); assert.equal(loop.stepsThisFrame, 3);
+  steps = 0; loop.advance(2 / 60 + 1e-4);
+  assert.equal(steps, 2); assert.equal(loop.capHits, 1, 'no cap hit under the cap');
+  // gate: every second rAF renders (a 60 cap on a 120 Hz display)
+  let renders = 0, k = 0;
+  const g = new Loop(null, { update: () => {}, render: () => renders++, gate: () => (++k % 2) === 0 });
+  for (let i = 0; i < 10; i++) g.tick(i * 8.33);
+  assert.equal(renders, 5);
+});
+
+test('PERF §5.3 frame cap: divisor per refresh and cap; Pacing detects the refresh from 60 rAFs', async () => {
+  const { capDivisor, Pacing } = await import('../../src/core/pacing.js');
+  assert.equal(capDivisor(60, 60), 1); assert.equal(capDivisor(90, 60), 1, '90 Hz renders every rAF');
+  assert.equal(capDivisor(120, 60), 2); assert.equal(capDivisor(144, 60), 2, '144 → 72 fps');
+  assert.equal(capDivisor(60, 30), 2); assert.equal(capDivisor(120, 30), 4); assert.equal(capDivisor(144, 0), 1, 'uncapped');
+  const p = new Pacing({ min: 0.7, max: 1, step: 0.05 });
+  p.setCap({ setting: 'auto', presetCap: 60 });
+  let rendered = 0;
+  for (let i = 0; i < 120; i++) if (p.gate(1000 / 120)) rendered++;
+  assert.equal(p.refreshHz, 120); assert.equal(p.divisor, 2);
+  assert.ok(rendered >= 89 && rendered <= 91, `first 60 render, then every 2nd (${rendered})`);
+  p.setCap({ setting: 'off' }); assert.equal(p.divisor, 1);
+  p.setCap({ setting: 30 }); assert.equal(p.cap, 30); assert.equal(p.divisor, 4);
+  p.setCap({ setting: 'auto', batterySaver: true }); assert.equal(p.cap, 30, 'battery saver = 30 fps lock');
+});
+
+test('PERF §5.2 dynamic resolution: down after 1 s slow, ≤ 1 change / 2 s, floor; GPU up after 3 s; rAF probe backs off', async () => {
+  const { Pacing } = await import('../../src/core/pacing.js');
+  const dt = 1 / 60;
+  const run = (p, sec, frameMs, gpu = null) => { const out = []; for (let i = 0; i < Math.round(sec * 60); i++) { const s = p.sample(dt, frameMs, gpu, 5); if (s != null) out.push(+s.toFixed(2)); } return out; };
+  const p = new Pacing({ min: 0.7, max: 1, step: 0.05 });
+  assert.deepEqual(run(p, 0.9, 20), [], 'not before the 1 s hold');
+  const downs = run(p, 6, 20);
+  assert.equal(downs[0], 0.95);
+  assert.ok(downs.length <= 3, `≤ 1 change per 2 s (${downs})`);
+  run(p, 30, 20);
+  assert.equal(p.scale, 0.7, 'never below the floor');
+  // GPU timer: up one step after 3 s under 9 ms
+  const g = new Pacing({ min: 0.8, max: 1, step: 0.05 }); g.scale = 0.8;
+  assert.deepEqual(run(g, 2.5, 16.7, 5), []);
+  assert.deepEqual(run(g, 1, 16.7, 5), [0.85]);
+  // no timer: probe up every 5 s; a slow probe steps back and doubles the interval
+  const q = new Pacing({ min: 0.7, max: 1, step: 0.05 }); q.scale = 0.8;
+  assert.deepEqual(run(q, 5.1, 16.7), [0.85]);
+  const back = run(q, 2, 25);
+  assert.deepEqual(back, [0.8]); assert.equal(q.probeInterval, 10);
+  q.resetProbe(); assert.equal(q.probeInterval, 5);
+  // disabled (?test): frozen
+  const f = new Pacing(); f.enabled = false; assert.deepEqual(run(f, 5, 30), []); assert.equal(f.scale, 1);
+  assert.equal(f.force(0.5), 0.7, 'force clamps into the preset range');
+});
+
+test('PERF §5.4 thermal ladder: rungs every 10 s at the floor, then the 30 fps lock and its retry', async () => {
+  const { Pacing } = await import('../../src/core/pacing.js');
+  const p = new Pacing({ min: 0.7, max: 1, step: 0.05 }); p.scale = 0.7;
+  const tick = (sec, ms, work = 20) => { for (let i = 0; i < Math.round(sec * 60); i++) p.sample(1 / 60, ms, null, work); };
+  tick(10.1, 20); assert.equal(p.thermalRung, 1); assert.equal(p.grassScale, 0.5); assert.equal(p.particleScale, 1);
+  assert.equal(p.takeThermalChange(), true); assert.equal(p.takeThermalChange(), false);
+  tick(10, 20); assert.equal(p.thermalRung, 2); assert.equal(p.particleScale, 0.5);
+  tick(10, 20); assert.equal(p.thermalRung, 3); assert.equal(p.outlineCap, 'hero');
+  tick(19, 20); assert.equal(p.lock30, false);
+  tick(2, 20); assert.equal(p.lock30, true); assert.equal(p.cap, 30);
+  tick(110, 20, 5); assert.equal(p.lock30, true, 'retry only after 120 s');
+  tick(12, 33, 5); assert.equal(p.lock30, false, 'cool work for 30 s → back to 60');
+});
+
+test('S1 renderer helpers: canvas MSAA on every tier, Neutral tone mapping, ?perf flag, FXAA path only for med+fxaa', async () => {
+  const { wantsCanvasAA, toneMappingOf } = await import('../../src/core/Game.js');
+  const { usesFxaaPath, pickAutoQuality } = await import('../../src/core/PostFX.js');
+  for (const q of [null, 'auto', 'low', 'med', 'high']) assert.equal(wantsCanvasAA(q), true, `AA on for ${q} (RENDER.medAA canvas)`);
+  assert.equal(toneMappingOf('neutral'), THREE.NeutralToneMapping); assert.equal(toneMappingOf(undefined), THREE.NeutralToneMapping);
+  assert.equal(usesFxaaPath({ id: 'med' }, 'fxaa'), true); assert.equal(usesFxaaPath({ id: 'high' }, 'fxaa'), false);
+  assert.equal(usesFxaaPath({ id: 'med' }, 'canvas'), false);
+  assert.equal(parseParams('?perf').perf, true); assert.equal(parseParams('').perf, false);
+  // PERF §2 auto: phones low (coarse + short side ≤ 500, or ≤ 4 GB), software low, discrete high, else med
+  assert.equal(pickAutoQuality(null, { coarse: true, minSide: 390 }), 'low');
+  assert.equal(pickAutoQuality(null, { deviceMemory: 4 }), 'low');
+  assert.equal(pickAutoQuality(null, { coarse: true, minSide: 800, deviceMemory: 8 }), 'med');
+  const gpu = (name) => ({ getContext: () => ({ getExtension: () => ({ UNMASKED_RENDERER_WEBGL: 1 }), getParameter: () => name }) });
+  assert.equal(pickAutoQuality(gpu('ANGLE (NVIDIA GeForce RTX 3060)')), 'high');
+  assert.equal(pickAutoQuality(gpu('ANGLE (Intel(R) Iris(R) Xe Graphics)')), 'med');
+  assert.equal(pickAutoQuality(gpu('Google SwiftShader')), 'low');
+});
+
+/** A renderer stand-in for PostFX (no WebGL). */
+function stubRenderer() {
+  const size = new THREE.Vector2(1, 1);
+  return {
+    pr: 1, shadowMap: { enabled: true, type: 0 }, info: { render: { calls: 0, triangles: 0 } }, toneMappingExposure: 1, renders: 0,
+    setPixelRatio(d) { this.pr = d; }, getPixelRatio() { return this.pr; },
+    setSize(w, h) { size.set(Math.round(w * this.pr), Math.round(h * this.pr)); }, getDrawingBufferSize(v) { return v.copy(size); },
+    render() { this.renders++; this.info.render.calls += 3; }, getRenderTarget: () => null, setRenderTarget() {}, compile() {},
+    extensions: { has: () => false },
+  };
+}
+
+test('K1 / X1 / X2 PostFX: play is direct to the canvas on every tier; cinematic chain only on High; bloom recorded', async () => {
+  const { PostFX } = await import('../../src/core/PostFX.js');
+  const { EventBus } = await import('../../src/core/EventBus.js');
+  const { uViewport } = await import('../../src/core/uniforms.js');
+  const r = stubRenderer();
+  const ctx = { renderer: r, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(), bus: new EventBus(), state: new GameState() };
+  const pf = new PostFX(ctx);
+  pf.setSize(800, 600);
+  for (const q of ['low', 'med']) {
+    pf.setQuality(q);
+    assert.equal(pf.setCinematic(true), false, `${q}: cinematic is recorded only`);
+    assert.equal(pf.chain, null); assert.equal(pf.composerActive, false); assert.equal(pf.composer, null);
+    pf.update(1 / 60); pf.render();
+    assert.equal(pf.path, 'canvas'); assert.equal(pf.sceneStats.calls, 3);
+    pf.setCinematic(false);
+  }
+  pf.setQuality('med'); assert.equal(r.shadowMap.enabled, true, 'med: sun shadows');
+  pf.setQuality('low'); assert.equal(r.shadowMap.enabled, false, 'low: no shadow map (K3)');
+  // bloom is a request in play: recorded, capped by reduceFlashes, reset to the cinematic base
+  pf.setBloom(1.1); assert.equal(pf.bloom, 1.1); assert.equal(pf.bloomRendered, 0);
+  ctx.state.settings.reduceFlashes = true; pf.setBloom(1.1); assert.equal(pf.bloom, 0.8);
+  pf.resetBloom(); assert.equal(pf.bloom, 0.6);
+  pf.setVignette(2, 1); assert.deepEqual(pf.vignette, { darkness: 2, offset: 1 });
+  // uViewport follows every resize and pixel-ratio step in the same call
+  pf.setQuality('med'); pf.setSize(1000, 500);
+  assert.deepEqual(uViewport.value.toArray(), [Math.round(1000 * r.pr), Math.round(500 * r.pr)]);
+  const s = pf.setScale(0.8);
+  assert.equal(s, 0.8); assert.deepEqual(uViewport.value.toArray(), [Math.round(1000 * r.pr), Math.round(500 * r.pr)]);
+  assert.equal(pf.setScale(0.1), 0.7, 'Med floor 0.7');
+  assert.deepEqual(pf.warmTargets(), [null], 'med: canvas variants only');
+});
+
+test('ActorRegistry.queryRadiusTyped: kind bits (faction + tags), alive mask, shared scratch, no closures', async () => {
+  const { KIND, hostileMask, kindBits } = await import('../../src/core/ActorRegistry.js');
+  const reg = new ActorRegistry();
+  const mk = (faction, x, tags = []) => { const a = new Actor(null, { faction }); a.pos.set(x, 0, 0); for (const t of tags) a.tags.add(t); reg.register(a); return a; };
+  const p = mk('player', 0), e1 = mk('enemy', 2), e2 = mk('enemy', 4, ['boss']), k = mk('ally', 1, ['kitten']), far = mk('enemy', 40);
+  e1.alive = false;
+  const at = { x: 0, z: 0 };
+  assert.deepEqual(reg.queryRadiusTyped(at, 5, KIND.enemy), [e1, e2]);
+  assert.deepEqual(reg.queryRadiusTyped(at, 5, KIND.enemy | KIND.alive), [e2]);
+  assert.deepEqual(reg.queryRadiusTyped(at, 5, KIND.boss), [e2]);
+  assert.deepEqual(reg.queryRadiusTyped(at, 5, hostileMask('enemy')), [p, k]);
+  assert.equal(reg.queryRadiusTyped(at, 5, KIND.kitten)[0], k);
+  assert.equal(kindBits(e2) & KIND.boss, KIND.boss); assert.equal(kindBits(e2, false) & KIND.boss, 0);
+  const out = []; assert.equal(reg.queryRadiusTyped(at, 100, KIND.enemy, out), out); assert.equal(out.length, 3); void far;
+  // C13: scratch fields exist from construction (stable hidden class)
+  for (const f of ['_physSep', '_sepX', '_sepZ', '_tier', '_tierFrame', '_mixAcc']) assert.ok(f in p, f);
+});
+
+test('PERF §11 A5 Input: pads are read every frame only while one is live; a probe finds stub pads; numeric prev state', () => {
+  const ctx = { state: new GameState(), bus: null, params: {} };
+  const inp = new Input(ctx);
+  let calls = 0, pad = null;
+  const nav = globalThis.navigator;
+  const stub = { getGamepads: () => { calls++; return pad ? [pad] : []; } };
+  Object.defineProperty(globalThis, 'navigator', { value: stub, configurable: true, writable: true });
+  try {
+    for (let i = 0; i < 30; i++) inp.poll(1 / 60);
+    assert.equal(calls, 2, 'no pad: probe every 15th frame only');
+    pad = { connected: true, axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: i === 2, value: i === 2 ? 1 : 0 })) };
+    for (let i = 0; i < 15; i++) inp.poll(1 / 60);
+    assert.equal(inp._padLive, true); assert.equal(inp.down('attack'), true, 'pad X → attack');
+    const c0 = calls; inp.poll(1 / 60); inp.poll(1 / 60); assert.equal(calls - c0, 2, 'live: every frame');
+    assert.ok(inp._padPrev instanceof Uint8Array && inp._padBind.length > 0);
+    pad.buttons[2] = { pressed: false, value: 0 }; inp.poll(1 / 60);
+    assert.equal(inp.down('attack'), false);
+    pad = null; inp.poll(1 / 60); assert.equal(inp._padLive, false); assert.equal(inp.padConnected, false);
+  } finally { Object.defineProperty(globalThis, 'navigator', { value: nav, configurable: true, writable: true }); }
+});
+
+test('PERF §12 perf.js: rings, percentiles, budget column, report shape; pool misses count', async () => {
+  const { PerfMonitor, percentile, budgetFor, countPoolMiss, counters, PERF_CATS } = await import('../../src/core/perf.js');
+  assert.equal(percentile(new Float32Array([5, 1, 3, 2, 4]), 5, 0.5), 3);
+  assert.deepEqual(budgetFor('low', 'I1'), { stage: 'I1', frameCalls: 70 });
+  assert.deepEqual(budgetFor('high', 'End'), { stage: 'End', sceneCalls: 90, tris: 260000 });
+  assert.deepEqual(PERF_CATS, ['hero', 'enemies', 'companions', 'grass', 'props', 'fx', 'ui3d']);
+  const r = stubRenderer(); r.info.programs = [1, 2]; r.info.memory = { geometries: 3, textures: 4 };
+  const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  const hero = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()); hero.userData.perfCat = 'hero'; hero.position.z = -5; scene.add(hero);
+  const behind = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()); behind.userData.perfCat = 'enemies'; behind.position.z = 20; scene.add(behind);
+  scene.updateMatrixWorld(true);
+  const game = { ctx: { renderer: r, scene, camera: cam, postfx: null }, loop: { stepsLastFrame: 2, capHits: 0 } };
+  const m = new PerfMonitor(game, { detailed: true });
+  for (let i = 0; i < 10; i++) { m.beginFrame(); m.endFrame(1, 2, 3, i % 3); }
+  m.sys('player', 0.5);
+  const rep = m.report();
+  assert.equal(rep.frame.n, 10); assert.equal(rep.steps.max, 2); assert.equal(rep.programs, 2); assert.equal(rep.stage, 'I1');
+  assert.equal(rep.cpu.sim, 1); assert.equal(rep.cpu.bySystem.player, 0.5);
+  assert.equal(rep.byCat.hero, 1); assert.equal(rep.byCat.enemies, 0, 'off-frustum objects add no draws');
+  const c0 = counters.poolMisses; countPoolMiss(); assert.equal(counters.poolMisses, c0 + 1);
+  m.reset(); assert.equal(m.report().frame.n, 0); assert.equal(counters.poolMisses, 0);
+});
+
+test('ART §11.1 pixel metrics match art2_frame_stats.py; fog HSV saturation', async () => {
+  const { pixelStats, hsvSat } = await import('../../src/core/debug.js');
+  const s = pixelStats(1, 0.5, 0.25);
+  assert.ok(Math.abs(s.luma - (0.2126 + 0.7152 * 0.5 + 0.0722 * 0.25)) < 1e-9);
+  assert.equal(s.chroma, 0.75); assert.equal(s.warmth, 0.75);
+  assert.ok(Math.abs(hsvSat(new THREE.Color('#F6E4C0')) - (0xF6 - 0xC0) / 0xF6) < 1e-3);
+  assert.equal(hsvSat(new THREE.Color('#B7B7B7')), 0);
+});
+
+test('core.W3 + PERF §10.1: the first frame and every fade are warm (cream fade, warm clear, splash markup)', async () => {
+  const fs = await import('node:fs');
+  const { FADE_COLOR, RENDER } = await import('../../src/core/config.js');
+  assert.equal(FADE_COLOR, '#FFF1DE');
+  assert.equal(RENDER.background, '#F6E4C0');
+  const html = fs.readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="splash"/); assert.doesNotMatch(html, /#B7C0C3/i, 'no grey first paint');
+  assert.match(html, /Fredoka/); assert.doesNotMatch(html, /cinzel|uncial|medievalsharp/i, 'X18: Fredoka only');
+  const game = fs.readFileSync(new URL('../../src/core/Game.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(game, /#B7C0C3|#000000|'black'/i, 'Game.js has no grey / black clear or fade');
+});
+
+test('X2 PostChain: High cinematic = scene + prefilter + 2 down + 2 up + uber (7 draws); fades in and out; grades are uniforms', async () => {
+  const { PostFX } = await import('../../src/core/PostFX.js');
+  const { PostChain } = await import('../../src/core/postfx/PostChain.js');
+  const { EventBus } = await import('../../src/core/EventBus.js');
+  const r = stubRenderer();
+  const chain = new PostChain(r, { bloom: true, samples: 4, bloomMips: 3 });
+  chain.setSize(1280, 720);
+  assert.deepEqual([chain.rt0.width, chain.rt0.height], [1280, 720]);
+  assert.deepEqual(chain.mipRT.map((t) => t.width), [640, 320, 160]);
+  r.renders = 0; chain.render(new THREE.Scene(), new THREE.PerspectiveCamera(), 0.8);
+  assert.equal(r.renders, 7, 'PERF §6.1: 7 draws');
+  assert.deepEqual([chain.rt0.viewport.z, chain.rt0.viewport.w], [1024, 576], 'dyn-res sub-rect, no reallocation');
+  assert.equal(chain.rt0.width, 1280);
+  assert.equal(chain.materials.length, 4);
+  assert.ok('USE_BLOOM' in chain.uber.defines && !('USE_FXAA' in chain.uber.defines));
+  const fx = new PostChain(r, { bloom: false, fxaa: true, samples: 0, hdr: false });
+  assert.equal(fx.materials.length, 1); assert.ok('USE_FXAA' in fx.uber.defines);
+  r.renders = 0; fx.render(new THREE.Scene(), new THREE.PerspectiveCamera()); assert.equal(r.renders, 2, 'Med FXAA fallback: 2 draws');
+  chain.dispose(); fx.dispose();
+
+  const ctx = { renderer: r, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(), bus: new EventBus(), state: new GameState() };
+  const pf = new PostFX(ctx);
+  pf.setSize(640, 360); pf.setQuality('high');
+  assert.equal(pf.chain, null, 'built lazily on the first request');
+  assert.equal(pf.setCinematic(true, { dur: 0.5, grade: 'gold' }), true);
+  assert.ok(pf.chain && pf.composerActive);
+  assert.equal(pf.bloomRendered, 0, 'starts at strength 0 (seamless)');
+  for (let i = 0; i < 30; i++) pf.update(1 / 60);
+  assert.ok(pf.bloomRendered > 0.5 && pf.bloomRendered <= 0.6 + 1e-9, `faded in (${pf.bloomRendered})`);
+  assert.equal(pf.chain.uber.uniforms.uSat.value, CONFIG.RENDER.cinematic.grades.gold[0]);
+  r.renders = 0; pf.render(); assert.equal(r.renders, 7); assert.equal(pf.path, 'cinematic');
+  pf.setCinematic(false, { dur: 0.5 });
+  assert.equal(pf.composerActive, true, 'stays on through the hand-back fade');
+  for (let i = 0; i < 40; i++) pf.update(1 / 60);
+  assert.equal(pf.composerActive, false); assert.equal(pf.path, 'canvas');
+  assert.equal(pf.warmTargets().length, 2, 'High warms the canvas and the cinematic RT variants');
+  pf.setQuality('med'); assert.equal(pf.chain, null, 'leaving High frees the chain');
 });

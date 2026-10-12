@@ -35,6 +35,10 @@ export class Actor {
     /** @type {Set<string>} */
     this.tags = new Set();                            // §19.4 optional; ActorRegistry.byTag reads it
     this.scripted = false;                            // §19.4 ScriptedActor: AI and input off while true
+    // PERF §4.3 / §11 A3 (C13): scratch fields predeclared so the hidden class never changes after construction
+    this._physSep = 0; this._sepX = 0; this._sepZ = 0;   // physics separateActors
+    this._tier = 0; this._tierFrame = -1;                   // cam.activityOf cache (0 in view … 3 asleep)
+    this._mixAcc = 0;                                       // accumulated mixer dt at activity tier 1
   }
 
   beginStep() { this.prevPos.copy(this.pos); this.prevFacing = this.facing; }   // subclasses tick invulnT/staggerT in update(dt)

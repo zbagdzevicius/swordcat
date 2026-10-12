@@ -274,3 +274,66 @@ export function dizzyStars() {
   return `<svg class="ico-dizzy" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 16c0-2 3-2 3 0 0 3.5-6 3.5-6 0 0-5 9-5 9 0 0 6.5-12 6.5-12 0 0-8 15-8 15 0" fill="none" stroke="#FFD34D" stroke-width="2.4" stroke-linecap="round"/>`
     + `<path d="M5 6l1 2.4 2.4 1-2.4 1L5 13l-1-2.6-2.4-1 2.4-1ZM27 21l.9 2 2 .9-2 .9-.9 2.2-.9-2.2-2-.9 2-.9Z" fill="#FFF6DA" stroke="${GOLD_DEEP}" stroke-width=".8"/></svg>`;
 }
+
+// ------------------------------------------------------------------ Phase W (WARM_ADVENTURE_SPEC §3.4, §4, §5.4, §7.5)
+/** Cocoa ink of the candy skin (WA §2.7 allowlist). */
+export const COCOA = '#5A3B2E';
+
+/**
+ * Telegraph glyph shapes (WA §3.4; the same five-plus-two language fx draws on the ground): drawn in a 24-unit box,
+ * white fill with a cocoa outline so they read on any arrow colour. Unknown names fall back to the chevron pair.
+ */
+const GLYPH = {
+  shield: '<path d="M12 3 19.5 5.6v5.8c0 4.8-3.3 8.1-7.5 9.6-4.2-1.5-7.5-4.8-7.5-9.6V5.6Z"/>',
+  star8: '<path d="M12 2.5l1.9 4.9 4.8-2.1-2.1 4.8 4.9 1.9-4.9 1.9 2.1 4.8-4.8-2.1-1.9 4.9-1.9-4.9-4.8 2.1 2.1-4.8L2.5 12l4.9-1.9-2.1-4.8 4.8 2.1Z"/>',
+  chevron2: '<path d="M4 4.5h4.6L15 12l-6.4 7.5H4L10.4 12Z"/><path d="M11 4.5h4.6L22 12l-6.4 7.5H11L17.4 12Z"/>',
+  dots6: '<circle cx="12" cy="12" r="2.6"/><circle cx="12" cy="4.6" r="2.1"/><circle cx="18.4" cy="8.3" r="2.1"/><circle cx="18.4" cy="15.7" r="2.1"/><circle cx="12" cy="19.4" r="2.1"/><circle cx="5.6" cy="15.7" r="2.1"/><circle cx="5.6" cy="8.3" r="2.1"/>',
+  paw: '<ellipse cx="12" cy="15" rx="4.6" ry="3.9"/><ellipse cx="6.4" cy="9.6" rx="1.9" ry="2.4"/><ellipse cx="9.8" cy="6.2" rx="1.9" ry="2.5"/><ellipse cx="14.2" cy="6.2" rx="1.9" ry="2.5"/><ellipse cx="17.6" cy="9.6" rx="1.9" ry="2.4"/>',
+  crowfoot: '<path d="M12 21V11M12 11 5.5 4.5M12 11V3.2M12 11l6.5-6.5" fill="none" stroke-width="3.2" stroke-linecap="round"/>',
+  arrow: '<path d="M3.5 12h11.5M11 6l7.5 6-7.5 6" fill="none" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>',
+};
+export const GLYPH_NAMES = Object.freeze(Object.keys(GLYPH));
+
+/** One telegraph glyph as an inline SVG (`name` from TELEGRAPH.glyph). */
+export function glyph(name, fill = '#FFFFFF') {
+  const g = GLYPH[name] ?? GLYPH.chevron2;
+  const lineOnly = name === 'crowfoot' || name === 'arrow';
+  return `<svg class="ico-glyph" viewBox="0 0 24 24" aria-hidden="true">`
+    + (lineOnly
+      ? `<g stroke="${COCOA}" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round">${g.replace(/stroke-width="[^"]+"/g, '')}</g><g stroke="${fill}" fill="none">${g}</g>`
+      : `<g fill="${fill}" stroke="${COCOA}" stroke-width="1.8" stroke-linejoin="round" paint-order="stroke fill">${g}</g>`)
+    + '</svg>';
+}
+
+/** Four-point twinkle star (results stamp ring, celebration sparkles). */
+export function star4(color = '#FFE066') {
+  return `<svg class="ico-star4" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.5l2.4 7.1 7.1 2.4-7.1 2.4L12 20.5l-2.4-7.1L2.5 11l7.1-2.4Z" fill="${color}" stroke="${COCOA}" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
+}
+
+/** Settings gear for the title (WA §4.3: 48 px, top-right). */
+export function gear() {
+  let teeth = '';
+  for (let i = 0; i < 8; i++) teeth += `<rect x="13.6" y="1.6" width="4.8" height="6" rx="1.6" transform="rotate(${i * 45} 16 16)"/>`;
+  return `<svg class="ico-gear" viewBox="0 0 32 32" aria-hidden="true"><g fill="#FFF8EE" stroke="${COCOA}" stroke-width="1.8" stroke-linejoin="round">${teeth}<circle cx="16" cy="16" r="10"/></g>`
+    + `<circle cx="16" cy="16" r="4.2" fill="#FF9EC0" stroke="${COCOA}" stroke-width="1.8"/></svg>`;
+}
+
+/** The ghost-paw demo hand (WA §7.5: 64 px cream paw with a cocoa outline). */
+export function ghostPaw() {
+  return `<svg class="ico-ghostpaw" viewBox="0 0 64 64" aria-hidden="true"><g fill="#FFF8EE" stroke="${COCOA}" stroke-width="3" stroke-linejoin="round">`
+    + '<ellipse cx="32" cy="40" rx="13" ry="11"/><ellipse cx="16.5" cy="25" rx="5.2" ry="6.6"/><ellipse cx="26" cy="15.5" rx="5.2" ry="6.8"/>'
+    + '<ellipse cx="38" cy="15.5" rx="5.2" ry="6.8"/><ellipse cx="47.5" cy="25" rx="5.2" ry="6.6"/></g>'
+    + '<g fill="#FFB8CF"><ellipse cx="32" cy="41" rx="7" ry="5.6"/><circle cx="16.5" cy="26" r="2.4"/><circle cx="26" cy="16.6" r="2.4"/><circle cx="38" cy="16.6" r="2.4"/><circle cx="47.5" cy="26" r="2.4"/></g></svg>';
+}
+
+/** Sticker art (WA §5.4 / ON §7.2): a die-cut disc (white 4 px rim) in the sticker colour with an icon inside. */
+export function sticker(color, inner) {
+  return `<svg class="ico-sticker" viewBox="0 0 88 88" aria-hidden="true"><circle cx="44" cy="44" r="40" fill="#FFFFFF" stroke="${COCOA}" stroke-width="2"/>`
+    + `<circle cx="44" cy="44" r="34.5" fill="${color}"/><path d="M22 30a26 26 0 0 1 22-14" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity=".55"/>`
+    + `<g transform="translate(24 24) scale(1.25)">${inner}</g></svg>`;
+}
+
+/** A tick in a mint disc (chip success, WA §7.5). */
+export function tick() {
+  return `<svg class="ico-tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="#9BE3C4" stroke="${COCOA}" stroke-width="1.8"/><path d="M7 12.4l3.2 3.2L17 8.6" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}

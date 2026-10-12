@@ -255,3 +255,16 @@ export function pinchX(geo, width, minScale = 0.4) {
   geo.computeVertexNormals();
   return geo;
 }
+
+/**
+ * Character quality switches read when a cat is BUILT (runtime.initCharacters maps core's QUALITY preset onto them):
+ * `tufts` = QUALITY.charTufts (Low: no tuft cards), `outline` = QUALITY.outline ('hero' | 'heroCompanionsEngaged' |
+ * 'all'), `playLod` = in-game cats build the play-LOD set (ART §6.4; tools / tests default to the full set).
+ */
+export const CHAR_Q = { tufts: true, outline: 'hero', playLod: false };
+/** @param {{ tufts?: boolean, outline?: string, playLod?: boolean }} o */
+export function setCharQuality(o = {}) {
+  if (typeof o.tufts === 'boolean') CHAR_Q.tufts = o.tufts;
+  if (typeof o.outline === 'string') CHAR_Q.outline = o.outline;
+  if (typeof o.playLod === 'boolean') CHAR_Q.playLod = o.playLod;
+}

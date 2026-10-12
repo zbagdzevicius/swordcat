@@ -76,8 +76,9 @@ export const HUB_NPCS = Object.freeze([
 export const HUB = Object.freeze({
   maxOnScreen: { low: 12, med: 20, high: 20 }, talkR: 2.1, npcTalkR: 2.8, repeatAfter: 25, gap: 2.5, lineDur: 2.6,
   tag: { r: 8, speed: 2.4, swapEvery: 7 }, cupEvery: 20, butterflyR: 1.5, copyVigilR: 4,
-  // §18 draw budget: residents farther than cullR from her are hidden (the town fog has swallowed them), only those
-  // within shadowR cast shadows; re-checked every lodEvery s
+  // §18 draw budget: residents farther than cullR from her are hidden (the town fog has swallowed them); re-checked every
+  // lodEvery s. shadowR is retired (K5: no actor casts a sun shadow; KittenVisual registers a contact blob instead).
+  // Inside cullR the PERF §4.3 bands apply per cat (KittenVisual: ≤ 8 m full, > 8 m 30 / 15 Hz, off screen 10 Hz / off).
   cullR: 26, shadowR: 8, lodEvery: 0.25,
   // iso controls: [Interact] / click reach of a resident's talk interactable; a keeper within keeperR of a world
   // interactable stands for it; a resident within clearR of one gets no talk interactable (E stays the station's)
@@ -117,6 +118,7 @@ export class HubResident extends NpcActor {
     this.dress = null;
     this.greet = this.beh === 'station' || this.beh === 'wave';
     this.farCull = false;                       // the hub's own LOD (from the focus) hides far residents
+    this.glance = !['nap', 'read', 'stareUp', 'fish', 'sort'].includes(this.beh);
     /** the `talk_<id>` level interactable while registered */
     this.talkIt = null;
   }
@@ -387,6 +389,7 @@ export class HubKittens {
     const r = new HubResident(this.ctx, id, { pos: new THREE.Vector3(x, y, z), facing: o.facing ?? 0, cfg: o.cfg, beh: o.beh, spot: o.spot, lines: o.lines, perch });
     r.homeFacing = o.facing ?? 0;
     r.bedPose = o.bedPose ?? null;
+    if (r.bedPose) r.glance = false;
     r.setShadows(false);                                         // §18 budget: only residents near her cast shadows
     this.mgr._add(r, id);
     r.dressUp();
@@ -416,7 +419,7 @@ export class HubKittens {
       const vis = d < HUB.cullR || r.scripted;
       r.object3d.visible = vis;
       if (r.fly) r.fly.visible = vis;
-      r.setShadows(vis && d < HUB.shadowR);
+      r.setShadows(false);                                       // K5: actors never cast sun shadows (blobs instead)
       if (vis) shown++;
     }
     this.shown = shown;

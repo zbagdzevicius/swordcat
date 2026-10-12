@@ -47,6 +47,43 @@ export function rangeOf(rng, v) {
 }
 
 /**
+ * Warm look + perf + auto-camera numbers for this area (research/next: ART §5.1 / §5.4 / §7, WARM_ADVENTURE §3.2-§5.1,
+ * §8.3, PERF §3.4 / §4.2-§4.3 / §7, AUTOCAM §6.6). `config.ENEMY_TUNING.warm` overrides them key by key (one level
+ * deep) once core adopts the table (requests/core.md); until then these are the binding spec values.
+ */
+const WARM_DEFAULTS = {
+  // ART §7.1 "faint and poof": squash flat (0.6 over 0.12 s), 3 dizzy stars for 0.5 s, then the puff and gone. Death
+  // clips play 0.25 s at most. WA §8.3: the HATER plate flips to its friend word `plateFlip` s before the puff.
+  faint: { squash: 0.6, squashT: 0.12, starsT: 0.5, stars: 3, clipMax: 0.25, plateFlip: 0.25, after: 0.05, lift: 0.15 },
+  // WA §5.1 hitstop juice (unscaled time): uFlash 1 → 0 over the freeze + `flashTail`, Squash.kick(kick), a `shake` m
+  // jitter at `shakeHz` while the world is frozen. Hits outside hitstop flash for `minFlash` s.
+  hit: { flash: 1.0, flashTail: 0.06, minFlash: 0.12, kick: -2.0, shake: 0.04, shakeHz: 60 },
+  // WA §3.2 / §3.4 motion language: wind-up squash −0.10, parry-window stretch +0.12 (eased in `ease` s);
+  // hover boing (WA §3.6): Squash.kick(hoverKick) + the rim highlight
+  pose: { windup: -0.10, parry: 0.12, ease: 0.08, hoverKick: -0.8 },
+  // volume-preserving squash spring (sy = 1 + s): stiffness, damping, clamp
+  spring: { k: 320, d: 16, min: -0.35, max: 0.35 },   // = characters SQUASH (k, c, clamp)
+  // ART §5.1 wind-up rim: uHighlight = (TONE.telegraph, amount) from wind-up start to activeAt, then → 0 over `fade` s
+  highlight: { color: '#FF8A3D', amount: 0.8, fade: 0.15, emissive: 0.35 },
+  // PERF §4.2 / §4.3 activity tiers: perception rate per tier (Hz; arena-bound fights keep ≥ arenaMin), mixer cadence
+  // per tier (1 = every frame, 3 = every 3rd frame with the accumulated dt, 0 = frozen)
+  activity: { perceptHz: [10, 5, 2, 0], arenaMin: 5, mixEvery: [1, 3, 0, 0], legacyFar: 40 },
+  // ART §5.4 hulls per QUALITY.outline: enemies 1.6 px, bosses 2.4 px; ≤ `maxEngaged` engaged enemies nearest-first on
+  // Med; the hull fades in over `fadeIn` s; checked at `hz`
+  outline: { px: 1.6, bossPx: 2.4, maxEngaged: 4, fadeIn: 0.2, hz: 4, engagedR: 14 },
+  // PERF §3.4 visual pool: prefill max(waveSize) per type under the veil (capped), pool sizes per type
+  pool: { maxPerType: 8, prefillCap: 6 },
+  // AUTOCAM §6.6 orbit penalty fallbacks (CAMERA.iso.framing.orbitPenalty wins): tokenless orbit slots scored by how
+  // far down-screen past `free` m they sit, `k` per metre; `probe` candidate slots each side
+  orbit: { k: 1.5, free: 3.0, probe: 2 },
+  // ART §2.6 / §7.1: no near-black silhouettes — Cacklejaw's shadow clones and Barkus's cape are plum ink
+  boss: { cloneTint: '#4A3A5E', barkusCape: '#4A3A5E' },
+};
+const WOVR = ENEMY_TUNING.warm ?? {};
+/** Warm-adventure / perf / auto-camera tuning (see WARM_DEFAULTS). */
+export const WARM = Object.freeze(Object.fromEntries(Object.entries(WARM_DEFAULTS).map(([k, v]) => [k, Object.freeze({ ...v, ...(WOVR[k] ?? {}) })])));
+
+/**
  * CONTROLS_SPEC §8.5 / §12 enemies (iso camera pacing). `config.ENEMY_TUNING.controls` overrides key by key once core
  * adopts it (requests/core.md). `xbowKeep` replaces ENEMIES.rat_xbow.keep [7, 11]: inside the 9 m "near" band, so a
  * crossbowman in its comfort band can always shoot and is on screen at the default zoom.

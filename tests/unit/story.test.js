@@ -9,18 +9,21 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { fakeCtx } from './_fakeCtx.mjs';
 import { E } from '../../src/core/events.js';
-import { HOMAGE_LINES, PLAYER } from '../../src/core/config.js';
+import { HOMAGE_LINES, PLAYER, FADE_COLOR, STORY } from '../../src/core/config.js';
 import { Actor } from '../../src/core/Actor.js';
 import { ScriptedActorMixin } from '../../src/core/ScriptedActor.js';
 import { S, t, has, pick, fill, text, speakerName } from '../../src/story/strings.js';
-import { Cutscene, STEP_TYPES, END_KEYS, walkSteps, sampleKeys, revealTime, isInstant, layoutPoint, spawnKind, isCat } from '../../src/story/Cutscene.js';
-import { StoryManager, chapterInfo, chapterOf, BOSS_SCENES, SKIP_HOLD } from '../../src/story/StoryManager.js';
+import { Cutscene, STEP_TYPES, END_KEYS, walkSteps, sampleKeys, revealTime, isInstant, layoutPoint, spawnKind, isCat, sceneLength } from '../../src/story/Cutscene.js';
+import { StoryManager, chapterInfo, chapterOf, BOSS_SCENES, SKIP_HOLD, migrateFlags, prologueStage, isBlack } from '../../src/story/StoryManager.js';
+import { EAGER, LAZY, SCENE_LEVEL, loadScene } from '../../src/story/cutscenes/registry.js';
+import { claimLamp, releaseLamp, lampHolder } from '../../src/story/cutscenes/rig.js';
+import { announce, REWARD_TOASTS } from '../../src/story/rewards.js';
 import { CUTSCENES, PLACEHOLDER_ENDS, placeholderScene } from '../../src/story/cutscenes/index.js';
-import { PracticeLog, TUTORIAL_STEPS, PRACTICE, inPractice, HINTS, Tutorial, TALK_TIP_R } from '../../src/story/tutorial.js';
+import { PracticeLog, TUTORIAL_STEPS, PRACTICE, inPractice, HINTS, Tutorial, TALK_TIP_R, GuideClock, ParryFails, GLYPH_HINTS, HINT_SHOW, fenceSide, nearestDummy } from '../../src/story/tutorial.js';
 import { BarkGate, CLEM_BARKS, ENEMY_BARKS, BOSS_BARKS, enemyType, bossKey } from '../../src/story/dialogue/barks.js';
-import { U as HORDE_U, LAT, MARK, FACE as CS02_FACE, FILES, CS02_CAST } from '../../src/story/cutscenes/cs02.js';
+import { U as HORDE_U, LAT, MARK, FACE as CS02_FACE, FILES, CS02_CAST, cs02Steps } from '../../src/story/cutscenes/cs02.js';
 import { CS03_MARKS, NET } from '../../src/story/cutscenes/cs03.js';
-import { titlePulse, TITLE_PULSE } from '../../src/story/cutscenes/cs00.js';
+import { titlePulse, TITLE_PULSE, TITLE_BLEND, pearlHops, playReady } from '../../src/story/cutscenes/cs00.js';
 import { glyphs, revealHtml, visibleLength } from '../../src/story/Overlay.js';
 import { say, along, unit, yawOf } from '../../src/story/cutscenes/lib.js';
 import { CUES } from '../../src/audio/cues.js';
@@ -32,10 +35,11 @@ const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 test('strings: t / has / fill / text / speakerName; missing keys come back as the key', () => {
   assert.equal(t('cs03.1'), 'Day one of rescuing everyone. Morale: high.');
   assert.equal(t('nope.key'), 'nope.key');
-  assert.equal(t('toast.kitten', { n: 2, max: 3 }), 'Lost kitten found! (2/3)');   // M2: the level count, like the HUD
+  assert.equal(t('toast.kitten', { n: 2, max: 3 }), 'Kitten found! 2/3');   // WA23 (the level count, like the HUD)
   assert.equal(fill('{a}-{b}', { a: 1 }), '1-{b}');
   assert.ok(has('ch.prologue') && !has('ch.zzz'));
-  assert.equal(text('cs01.caption'), 'Meow Island. The eve of Knighting Day.');
+  assert.equal(text('cs01.chest'), 'M. — my first');
+  assert.equal(has('cs01.caption'), false, 'WA §8.6: the opening caption is gone');
   assert.equal(text('literal words'), 'literal words');
   assert.equal(speakerName('swordcat'), 'Clem');
   assert.equal(speakerName('squire_3'), 'Squire');
@@ -58,7 +62,7 @@ test('U14: with HOMAGE_LINES = false no homage text is reachable', () => {
 const CUE_FILES = { has: (rel) => rel.startsWith('src/audio/') };
 const NOT_KEYS = /^(prologue|meadow|forest|town|gate|bog|keep|ending|seen|story)\.(armour|tutorial|done|pudding|mochi|sage|camp|boss|marmalade|letters|tofu|earlgrey|clover|free|pip|pin|line|pearl|keys|brutus|seen|card|gate)\b/;
 /** CONTROLS_SPEC: the `tut.jump.done` flag and §10.7 setting names quoted in code / comments. */
-const NOT_KEYS2 = /^(tut\.jump\.done|settings\.(bindings|autoAttack|castMode|parryRing|autoRiposte|controlPreset|camZoom|camLock|touchLayout|tapToMove|swipeTumble|haptics|buttonOpacity|leftHanded|reduceCameraMotion|standAutoFace|edgePanSpeed|pathPreview|cursorSize|cursorContrast|hapticTaps))$/;
+const NOT_KEYS2 = /^(game.(frameCount|stepCount|perf|playReady)|kitten.setOutline|tut\.jump\.done|settings\.(bindings|autoAttack|castMode|parryRing|autoRiposte|controlPreset|camZoom|camLock|touchLayout|tapToMove|swipeTumble|haptics|buttonOpacity|leftHanded|reduceCameraMotion|standAutoFace|edgePanSpeed|pathPreview|cursorSize|cursorContrast|hapticTaps))$/;
 const KEY_RE = /['"`]((?:tut|obj|prompt|toast|bark|kitten|hub|letter|ch|region|name|menu|pause|settings|results|life|gameover|loading|meme|ach|shop|board|difficulty|vigil|hud|credits|title|game|newgame|memecam|rotate|cs\d\d[a-z]?|g\d\d|d\d\d|grizzlechop|cacklejaw|pilfer|brutus|barkus|postcredits|ending)\.[\w.]*\w)['"`]/g;
 
 test('U14: every strings key used anywhere in src/ exists in strings.js', () => {
@@ -119,18 +123,252 @@ test('U13: every scene turns the letterbox off and hands the camera back (ambien
   }
 });
 
-test('§19.7: the M1 scenes set their flags (CS-01 armour, CS-02 done, CS-03 netted, D-01 mochi)', () => {
-  assert.equal(CUTSCENES.cs01.end.flags['prologue.armour'], true);
-  assert.equal(CUTSCENES.cs02.end.flags['prologue.done'], true);
-  assert.deepEqual(CUTSCENES.cs02.end.load, { level: 'meadow', spawn: 'start' });
+test('§19.7 + WA §6.2: the prologue scenes set their flags in the new order (chart → raid → suit up), CS-03 netted, D-01 mochi', () => {
+  assert.equal(CUTSCENES.cs01.end.flags['prologue.chart'], true);
+  assert.equal(CUTSCENES.cs01.end.play, 'cs02', 'the height chart rolls straight into the raid');
+  assert.equal(CUTSCENES.cs02.end.flags['prologue.raid'], true);
+  assert.equal(CUTSCENES.cs02.end.load, undefined, 'no reload after the raid');
+  assert.equal(CUTSCENES.cs02.end.env, 'meadow_evening', 'gold after the raid');
+  for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) assert.equal(CUTSCENES.cs01b.end.flags[k], true, k);
+  assert.equal(CUTSCENES.cs01b.end.chapter, 1);
+  assert.equal(CUTSCENES.cs01b.end.player.outfit, 'armour');
+  assert.equal(typeof CUTSCENES.cs01b.end.load, 'function', 'Chapter 1 zones: level.refresh, else a reload under the wipe');
   assert.equal(CUTSCENES.cs03.end.flags['meadow.pudding'], 'netted');
   assert.deepEqual(CUTSCENES.cs03.end.arena, { id: 'glade', lock: true });
   assert.equal(CUTSCENES.cs03.end.objective.needClear, 'glade');
   assert.equal(CUTSCENES.d01.end.flags['meadow.mochi'], true);
   assert.deepEqual(CUTSCENES.d01.end.toasts, ['toast.mochi']);
-  assert.ok(CUTSCENES.cs01.prologue && CUTSCENES.cs02.prologue && CUTSCENES.g01.prologue, 'the prologue is skippable on the first viewing');
+  assert.ok(CUTSCENES.cs01.prologue && CUTSCENES.cs02.prologue && CUTSCENES.cs01b.prologue && CUTSCENES.g01.prologue, 'the prologue is skippable on the first viewing');
+  for (const id of ['cs01', 'cs02', 'cs01b', 'g01']) assert.equal(CUTSCENES[id].once, true, `${id} once per save`);
   assert.equal(CUTSCENES.cs03.prologue, undefined, 'CS-03 is skippable only after a viewing');
   assert.equal(CUTSCENES.g01.inputSkip, 1.0, 'G-01: any input after 1.0 s');
+  assert.equal(CUTSCENES.tutbow.letterbox, false); assert.equal(CUTSCENES.tutbow.hud, true, 'tutbow keeps the HUD');
+  assert.equal(CUTSCENES.tutbow.end.player.outfit, 'tunic_bow');
+  assert.deepEqual(CUTSCENES.tutpearl.end.keep, ['pearl'], 'Pearl stays as the guide');
+  walkSteps(CUTSCENES.tutpearl.steps, (s) => assert.ok(!(s.t === 'despawn' || (s.t === 'actor' && s.moveTo === 'barn_door')), 'no scamper back to the barn'));
+});
+
+test('WA §6.2: old saves map onto the new prologue order; the stage follows the flags', () => {
+  const st = (flags) => { const f = { ...flags }; return { f, getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; } }; };
+  const a = st({ 'prologue.armour': true });
+  assert.deepEqual(migrateFlags(a), ['prologue.start']); assert.equal(prologueStage(a), 'practice');
+  const b = st({ 'prologue.armour': true, 'prologue.tutorial': true });
+  assert.deepEqual(migrateFlags(b), ['prologue.start', 'prologue.practice', 'prologue.chart']); assert.equal(prologueStage(b), 'raid', 'CS-02 is next');
+  const c = st({ 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true });
+  migrateFlags(c); assert.equal(prologueStage(c), 'done');
+  assert.deepEqual(migrateFlags(c), [], 'idempotent');
+  assert.equal(prologueStage(st({})), 'title');
+  assert.equal(prologueStage(st({ 'prologue.start': true, 'prologue.practice': true })), 'chart');
+  assert.equal(prologueStage(st({ 'prologue.start': true, 'prologue.practice': true, 'prologue.chart': true, 'prologue.raid': true })), 'suit');
+});
+
+test('WA §6.3: new adventure on the title — no fade, no reload; CS-00 ends normally (camera blend), prologue.start, practice outfit', async () => {
+  const ctx = fakeCtx();
+  const loads = [], fades = [], outfits = [], cams = [];
+  ctx.levels.load = async (id, sp) => { loads.push([id, sp]); };
+  ctx.levels.current = { id: 'meadow' };
+  ctx.player.setOutfit = (o) => outfits.push(o);
+  ctx.cam.mode = (m, o) => cams.push([m, o]);
+  const story = new StoryManager(ctx);
+  await story.init();
+  const origApply = story.cinema.apply.bind(story.cinema);
+  story.cinema.apply = (step, ...r) => { if (step?.fade) fades.push(step.fade); return origApply(step, ...r); };
+  story.play('cs00');
+  for (let k = 0; k < 4; k++) story.update(0.05);
+  assert.equal(story.playingId, 'cs00');
+  await story.newGame({ difficulty: 'knight' });
+  assert.deepEqual(loads, [], 'no level reload');
+  assert.ok(!fades.some((f) => (f.alpha ?? 1) > 0), 'no fade to a colour');
+  assert.equal(story.isPlaying, false, 'control at once (the title loop ended)');
+  assert.equal(ctx.state.getFlag('prologue.start'), true);
+  assert.equal(outfits.at(-1), 'tunic', 'practice starts in the tunic (sword on), the bow is the reward');
+  assert.ok(cams.some(([m, o]) => m === 'follow' && o?.blend === 1.1), 'MEME_LOOP → follow blend over 1.1 s');
+  assert.equal(TITLE_BLEND, 1.1);
+});
+
+test('WA §2.7: story fades are cream, never black (a black or colourless fade-in becomes FADE_COLOR)', () => {
+  const ctx = fakeCtx({ systems: false });
+  const seen = [];
+  const story = new StoryManager(ctx);
+  story.cinema.overlay.apply = (c) => { if (c.fade) seen.push(c.fade); };
+  story.cinema.apply({ fade: { to: '#000', alpha: 1, dur: 0.5 } });
+  story.cinema.apply({ fade: { alpha: 1, dur: 0.5 } });
+  story.cinema.apply({ fade: { alpha: 0, dur: 0.5 } });
+  assert.equal(seen[0].to, FADE_COLOR); assert.equal(seen[1].to, FADE_COLOR); assert.equal(seen[2].to, undefined);
+  assert.ok(isBlack('#000') && isBlack('#000000') && isBlack('black') && !isBlack(FADE_COLOR));
+  // no cutscene data asks for black
+  for (const [id, def] of ALL) walkSteps(def.steps, (s, p) => { if (s.t === 'ui' && s.fade?.to) assert.ok(!isBlack(s.fade.to), `${id} ${p}: black fade`); });
+});
+
+test('story.W1: banned words (WA §8.6) absent from display text; vocabulary swaps; the rows the tables missed', () => {
+  const BAN = /\b(cages?|caged|bars|stocks|prison|war|war-wagon|warchief|warlord|legion|battlefield|grimjaw|gloom|bogmire|smugglers?|slain|slay|kill|killed|dead|death|die|died|blood|skull|grave|corpse)\b/i;
+  const bad = [];
+  for (const [k, row] of Object.entries(S)) {
+    if (k.startsWith('cs08.') || k.startsWith('name.')) continue;
+    for (const v of [row.default, row.homage]) if (v && BAN.test(v.replace(/Nine Lives/g, ''))) bad.push(`${k}: ${v}`);
+  }
+  assert.deepEqual(bad, []);
+  assert.ok(!Object.values(S).some((r) => /Midnight Practice/.test(r.default)), 'no Midnight Practice');
+  for (const [k, v] of [['quest.meadow.mochi', 'Help Mochi out of the tipped cart'], ['obj.mochi', "Pop Mochi's carrier open"],
+    ['toast.exit.mochi', "Mochi's still stuck in his carrier! Back to the cart!"], ['name.cacklejaw', 'Big Chief Cacklejaw'], ['region.bog', 'Glimmerbog'],
+    ['d01.3', "Then we're the Almost Knights!"], ['cs01.3', 'Too small for the sword, Clementine. One ear-tuft short. Next year!'],
+    ['cs01.8', "Tomorrow I'm front row. I made a sign!"], ['name.cow', 'Very Suspicious Cow'], ['tut.cow.2', "MOO. (Ooh, you're getting warmer!)"],
+    ['menu.continue', 'Keep going!'], ['menu.newGame', 'New adventure'], ['title.tap', 'Tap to play!'], ['title.press', 'Press any key to play!'],
+    ['life.lost', 'Boing! Back on her paws. {n} lives left'], ['bark.clem.respawn.2', '...Ow. Okay.'], ['hud.boss.bonked', 'BONKED!'],
+    ['cs08.1', "Nobody's coming."], ['cs08.2', "So I'm staying."], ['cs08.3', 'Nobody? Excuse me. We are SOMEBODY.']]) assert.equal(t(k), v, k);
+  assert.ok(!has('cs01.9') && !has('cs01.caption'), 'WA §8.6 deleted rows');
+  // no Mochi string still names the Old Bridge (WA16 moved him to the cart)
+  for (const [k, r] of Object.entries(S)) if (/mochi/i.test(k) || /Mochi/.test(r.default)) assert.ok(!/Old Bridge/.test(r.default), `${k} names the Old Bridge`);
+  for (const k of ['tut.red', 'tut.aoe', 'tut.gold', 'offer.kitten.q', 'offer.kitten.yes', 'offer.kitten.no', 'offer.kitten.toast', 'results.rank.clawsome',
+    'cs05.5', 'cs05.6', 'cs09.7', 'cs09.8', 'cs09.9', 'cs16.17', 'cs16.18', 'cs16.19', 'toast.friend', 'bark.clem.bonk', 'loading.tip.13', 'cs01.helm', 'tutbow.1']) assert.ok(has(k), k);
+});
+
+test('story.W1: practice hints ≤ 7 words (glyph tokens count as one), Pearl lines ≤ 42 chars, Clem lines ≤ 8 words (allowlist)', () => {
+  const words = (s) => s.replace(/\[[^\]]+\]/g, 'G').split(/\s+/).filter(Boolean).length;
+  for (const s of TUTORIAL_STEPS) for (const k of [s.textKey, s.textKey + '.pad', s.textKey + '.touch']) if (has(k)) assert.ok(words(t(k)) <= 7, `${k}: "${t(k)}" has ${words(t(k))} words`);
+  for (const k of ['tut.skip', 'tut.skip.touch', 'tut.done', 'tut.skipped', 'tut.title']) assert.ok(words(t(k)) <= 7, k);
+  for (const k of Object.keys(S).filter((x) => x.startsWith('pearl.') || x.startsWith('tutbow.'))) assert.ok(t(k).length <= 42, `${k}: ${t(k).length} chars`);
+  // Clem's rule: every scene line spoken by swordcat ≤ 8 words, except the ST §6.2 allowlist
+  const ALLOW = new Set(['cs04.2', 'cs04.3', 'cs04.4', 'cs04.5', 'cs16.9', 'cs15.3', 'bark.clem.kitten', 'cs09.4']);
+  for (const [id, def] of ALL) walkSteps(def.steps, (s, p) => {
+    if (s.t !== 'say' || s.who !== 'swordcat' || ALLOW.has(s.key)) return;
+    assert.ok(words(t(s.key)) <= 8, `${id} ${p}: ${s.key} "${t(s.key)}" (${words(t(s.key))} words)`);
+  });
+});
+
+test('story.W5: CS-02 ≤ 55 s with STORY.cs02Cut (the long cut is longer); no prologue scene > 25 s before practice is done', () => {
+  assert.equal(STORY.cs02Cut, true);
+  const cut = sceneLength(cs02Steps(true)), long = sceneLength(cs02Steps(false));
+  assert.ok(cut <= 55, `CS-02 cut ${cut.toFixed(1)} s`);
+  assert.ok(cut >= 38, `CS-02 keeps its beats (${cut.toFixed(1)} s)`);
+  assert.ok(long > cut + 8, 'the long cut restores the trip and REVERSE_HORDE beats');
+  assert.deepEqual(CUTSCENES.cs02.steps.length, cs02Steps(true).length, 'the default export follows STORY.cs02Cut');
+  // WA27: before tut.done only tutbow / tutpearl play (≤ 25 s); the chart (after practice) is ~20 s
+  for (const id of ['tutbow', 'tutpearl']) assert.ok(sceneLength(CUTSCENES[id].steps) <= 25, id);
+  assert.ok(sceneLength(CUTSCENES.cs01.steps) <= 25, `CS-01 ${sceneLength(CUTSCENES.cs01.steps).toFixed(1)} s`);
+  assert.ok(sceneLength(CUTSCENES.cs01b.steps) <= 25, 'Suit Up ~18 s');
+  // every story fact stays: the meme shot, Cacklejaw's lines, Pilfer's two thefts, Pearl's call, her choice
+  const keys = [], presets = [];
+  walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'say') keys.push(s.key); if (s.t === 'cam' && s.preset) presets.push(s.preset); });
+  assert.deepEqual(keys, ['cs02.1', 'cs02.2', 'cs02.3', 'cs02.4', 'cs02.5', 'cs02.6']);
+  assert.ok(presets.includes('MEME_LOOP'));
+});
+
+test('story.W5 / W7: no night or grey preset cue in the prologue scenes; WA §9 banned audio ids and legacy literals absent from cutscenes', () => {
+  const dir = path.join(ROOT, 'src/story/cutscenes');
+  const BANNED_AUDIO = /dark_forest_creepy|victory_8bit_loop|creature\/c80_monster_|impact\/chain_|pickup\/powerup_downer/;
+  const LEGACY = /['"](meadow_night|forest_night|hub_grey)['"]/;
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    assert.ok(!BANNED_AUDIO.test(src), `${f}: banned audio id`);
+    assert.ok(!LEGACY.test(src), `${f}: legacy night / grey preset literal`);
+  }
+  const NIGHT = /night|grey|storm/;
+  for (const id of ['cs00', 'tutbow', 'tutpearl', 'cs01', 'cs02', 'cs01b', 'g01']) {
+    walkSteps(CUTSCENES[id].steps, (s, p) => { if (s.t === 'env' && s.preset) assert.ok(!NIGHT.test(s.preset), `${id} ${p}: ${s.preset}`); });
+    const e = CUTSCENES[id].end.env; if (e) assert.ok(!NIGHT.test(typeof e === 'string' ? e : e.preset ?? ''), `${id} end env`);
+  }
+  const presetOf = (id) => { const out = []; walkSteps(CUTSCENES[id].steps, (s) => { if (s.t === 'env' && s.preset) out.push(s.preset); }); return out; };
+  assert.deepEqual(presetOf('cs00'), ['meadow_morning']); assert.deepEqual(presetOf('cs01'), ['meadow_day']);
+  assert.deepEqual(presetOf('cs02'), ['meadow_giggle']); assert.deepEqual(presetOf('cs01b'), ['meadow_evening']);
+  let fog = null; walkSteps(CUTSCENES.cs00.steps, (s) => { if (s.t === 'env' && s.fogDensity != null) fog = s.fogDensity; });
+  assert.equal(fog, 0.035);
+  // WA §8.6a: the CS-04 / CS-06 / CS-10 swaps
+  const tracks = (id) => { const out = []; walkSteps(CUTSCENES[id].steps, (s) => { if (s.t === 'music') out.push(s.track); }); return out; };
+  assert.equal(CUTSCENES.cs04.end.env, 'forest_twilight'); assert.equal(CUTSCENES.cs04.end.music.track, 'field_of_dreams');
+  assert.ok(tracks('cs06').includes('tavern_old_tower_inn') && !tracks('cs06').includes('story_lament_warriors_soul'));
+  assert.deepEqual(tracks('cs10').filter(Boolean), ['tavern_old_tower_inn', 'story_lament_warriors_soul', 'village_bards_tale'], 'lament only on the window shot');
+  assert.equal(CUTSCENES.cs10.end.env, 'hub_hush'); assert.equal(CUTSCENES.cs10.end.music.track, 'village_bards_tale');
+});
+
+test('story.W6: every boss defeat scene references a befriend key; befriend lines follow the defeat', () => {
+  const BEFRIEND = { cs05: ['cs05.5', 'cs05.6'], cs09: ['cs09.7', 'cs09.8', 'cs09.9'] };
+  for (const [boss, id] of Object.entries(BOSS_SCENES)) {
+    if (!CUTSCENES[id]) { assert.ok(PLACEHOLDER_ENDS[id], `${boss}: ${id} placeholder (M3)`); continue; }
+    const keys = []; walkSteps(CUTSCENES[id].steps, (s) => { if (s.t === 'say') keys.push(s.key); });
+    for (const k of BEFRIEND[id]) assert.ok(keys.includes(k), `${id} says ${k}`);
+    assert.equal(keys.at(-1), BEFRIEND[id].at(-1), `${id} ends on a befriend line`);
+  }
+});
+
+test('PERF S5t: no PointLight in story code; the cutscene lamp claims ENV_U.uLamps slot 0 and gives it back', () => {
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+  for (const f of walk(path.join(ROOT, 'src/story')).filter((x) => x.endsWith('.js'))) assert.ok(!/new THREE\.PointLight|PointLight\(/.test(fs.readFileSync(f, 'utf8')), `${f}: PointLight`);
+  const lamps = [new THREE.Vector4(1, 2, 3, 4), new THREE.Vector4(0, -999, 0, 0)];
+  const U = { uLamps: { value: lamps }, uLampCol: { value: new THREE.Color('#123456') }, uLampStr: { value: 0 } };
+  const ctx = { env: { ENV_U: U } };
+  const owner = {};
+  assert.equal(claimLamp(ctx, owner, [5, 1, 6], { r: 6, str: 1 }), true);
+  assert.deepEqual(lamps[0].toArray(), [5, 1, 6, 6]); assert.equal(U.uLampStr.value, 1); assert.equal(lampHolder(), owner);
+  releaseLamp(ctx, {});                                       // not the owner: nothing changes
+  assert.deepEqual(lamps[0].toArray(), [5, 1, 6, 6]);
+  releaseLamp(ctx, owner);
+  assert.deepEqual(lamps[0].toArray(), [1, 2, 3, 4]); assert.equal(U.uLampStr.value, 0); assert.equal(U.uLampCol.value.getHexString(), '123456');
+  assert.equal(claimLamp({ env: {} }, owner, [0, 0, 0]), false, 'no lamps yet: a no-op');
+});
+
+test('PERF S1t: meadow scenes are bundled, later chapters load lazily (and are prefetched per level); index.js covers them all', async () => {
+  assert.ok(['cs00', 'cs01', 'cs01b', 'cs02', 'tutbow', 'tutpearl', 'g01', 'cs03', 'cs03b', 'd01'].every((id) => EAGER[id]));
+  for (const id of Object.keys(LAZY)) assert.ok(!EAGER[id] && CUTSCENES[id], `${id} lazy + in index.js`);
+  assert.deepEqual([...Object.keys(EAGER), ...Object.keys(LAZY)].sort(), Object.keys(CUTSCENES).sort());
+  for (const ids of Object.values(SCENE_LEVEL)) for (const id of ids) assert.ok(LAZY[id], id);
+  const def = await loadScene('cs04');
+  assert.equal(def, CUTSCENES.cs04);
+  assert.equal(await loadScene('d04earlgrey'), CUTSCENES.d04earlgrey);
+  assert.equal(await loadScene('nope'), null);
+  // the StoryManager plays a lazy scene once it has loaded; isPlaying is true meanwhile
+  const ctx = fakeCtx();
+  ctx.params = { ...(ctx.params ?? {}), test: false };      // ?test prefetches every scene up front
+  const story = new StoryManager(ctx);
+  await story.init();
+  assert.equal(story.registry.cs08, undefined);
+  const p = story.play('cs08');
+  assert.equal(story.isPlaying, true, 'loading counts as playing (triggers wait)');
+  for (let k = 0; k < 200 && story.playingId !== 'cs08'; k++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(story.playingId, 'cs08');
+  story.skipAll();
+  await p;
+});
+
+test('once-per-save scenes: a second request is refused (world trigger + director), except in ?test', async () => {
+  const ctx = fakeCtx();
+  ctx.params = { ...(ctx.params ?? {}), test: false };
+  const story = new StoryManager(ctx);
+  await story.init();
+  story.registry = { ...story.registry, o1: { id: 'o1', once: true, steps: [{ t: 'wait', dur: 0.1 }], end: { cam: 'follow' } } };
+  const a = story.play('o1');
+  for (let k = 0; k < 6; k++) story.update(0.05);
+  await a;
+  const b = await story.play('o1');
+  assert.equal(b.refused, true);
+  ctx.params.test = true;
+  const c = story.play('o1');
+  assert.equal(story.playingId, 'o1');
+  story.skipAll(); await c;
+});
+
+test('rewards: friends and the Holy card are celebrations (E.REWARD + sticker book); the toast stays only until ui celebrates', () => {
+  const ctx = fakeCtx({ systems: false });
+  const ev = []; ctx.bus.on('reward', (p) => ev.push(['reward', p])); ctx.bus.on('ui:toast', (p) => ev.push(['toast', p.key]));
+  announce(ctx, 'toast.mochi');
+  assert.deepEqual(ev, [['reward', { kind: 'friend', id: 'mochi' }], ['toast', 'toast.mochi']]);
+  assert.equal(ctx.state.getFlag('sticker.mochi'), true);
+  ev.length = 0; ctx.ui = { handles: { reward: true } };
+  announce(ctx, 'toast.holy'); announce(ctx, 'toast.golden'); announce(ctx, 'toast.checkpoint');
+  assert.deepEqual(ev, [['reward', { kind: 'card', id: 'holy' }], ['toast', 'toast.checkpoint']], 'golden: ui cards it from state:unlock');
+  assert.ok(Object.values(REWARD_TOASTS).every((r) => has(`card.${r.id}.title`)));
+  for (const s of TUTORIAL_STEPS.filter((x) => x.reward)) assert.ok(has(`sticker.${s.reward}`), s.reward);
+  for (const id of ['bow', 'knight', 'mochi']) assert.ok(has(`sticker.${id}`) && has(`card.${id}.title`), id);
+});
+
+test('AUTOCAM story.2: prologue and M2 hand-backs all end in follow (CS-04, CS-08, CS-10 included)', () => {
+  for (const id of ['cs04', 'cs08', 'cs10', 'cs01b', 'cs02', 'tutbow', 'tutpearl']) {
+    const c = CUTSCENES[id].end.cam;
+    assert.ok(c === 'follow' || c?.mode === 'follow', `${id}: ${JSON.stringify(c)}`);
+  }
+  assert.deepEqual(CUTSCENES.cs00.end.cam, { mode: 'follow', blend: TITLE_BLEND, ease: 'inOutSine' });
+  // the ending asks for the cinematic composer through the runner (ART A3.2)
+  assert.ok(placeholderScene('cs16').cinematic, 'CS-16 placeholder carries cinematic');
 });
 
 test('placeholders: later-milestone scenes apply their §5.4 end state; boss scenes map from boss ids', () => {
@@ -370,8 +608,9 @@ test('StoryManager: a prompt step waits for its hold; releasing early restarts t
 test('chapters: card text and the chapter of a level / flags', () => {
   const c = chapterInfo(1);
   assert.equal(c.label, 'Chapter 1'); assert.equal(c.title, 'Small Paws, Big Sword'); assert.equal(c.region, 'Purrdale Meadows');
-  assert.equal(chapterInfo('prologue').title, 'One Ear-Tuft Short');
+  assert.equal(chapterInfo('prologue').title, 'Knighting Morning', 'WA13');
   assert.equal(chapterInfo('gate').title, 'Where I Stand');
+  assert.equal(chapterInfo('bog').region, 'Glimmerbog');
   const ctx = fakeCtx({ systems: false });
   assert.equal(chapterOf(ctx.state, 'meadow'), 'prologue');
   ctx.state.setFlag('prologue.done', true);
@@ -379,133 +618,240 @@ test('chapters: card text and the chapter of a level / flags', () => {
   assert.equal(chapterOf(ctx.state, 'keep'), 6);
 });
 
-// ====================================================================================================== Midnight Practice
-test('tutorial: the 9 steps advance on their conditions, in order; position facts are latched', () => {
+// ====================================================================================================== Morning Practice
+test('story.W3: PracticeLog completes the 7 WA §7.1 lessons in order; position facts are latched', () => {
+  assert.deepEqual(TUTORIAL_STEPS.map((s) => s.id), ['move', 'bonk', 'jump', 'roll', 'stand', 'parry', 'meow']);
+  assert.ok(TUTORIAL_STEPS.every((s) => s.guide === 'pearl'), 'Pearl guides every lesson');
+  assert.deepEqual(TUTORIAL_STEPS.filter((s) => s.reward).map((s) => s.reward), ['bonk', 'hop', 'roll', 'stand', 'parry', 'found']);
   const log = new PracticeLog();
   assert.equal(log.step.id, 'move');
-  log.note({ type: 'north' });                                  // crossing the fence early counts later
-  log.note({ type: 'moved', d: 2 });
+  log.note({ type: 'moved', d: 4 }); log.note({ type: 'near', d: 5 });
   assert.equal(log.complete(), false);
-  log.note({ type: 'moved', d: 1.5 });
-  assert.equal(log.complete(), true, 'C6: 3 m of movement is enough (no camera look)'); log.advance();
-  assert.equal(log.step.id, 'jump'); assert.equal(log.complete(), true, 'already north of the fence'); log.advance();
+  log.note({ type: 'near', d: PRACTICE.bonkR - 0.1 });
+  assert.equal(log.complete(), true, 'reaching the dummy ring ends the move lesson at once'); log.advance();
   log.note({ type: 'hit', attackId: 'slash1', dummy: true }); assert.equal(log.complete(), false);
+  assert.ok(log.progress() > 0 && log.dots().half, 'a dummy hit half-fills the paw dot');
   log.note({ type: 'hit', attackId: 'slash3', dummy: true }); assert.equal(log.complete(), true); log.advance();
-  assert.equal(log.step.id, 'target');
-  log.note({ type: 'order', kind: 'move', dummy: false }); assert.equal(log.complete(), false, 'a move order is not a target');
-  log.note({ type: 'order', kind: 'attack', dummy: true }); assert.equal(log.complete(), true, 'an attack order on a dummy'); log.advance();
+  assert.equal(log.step.id, 'jump'); assert.equal(log.complete(), false);
+  log.note({ type: 'crossed' }); assert.equal(log.complete(), true); log.advance();
   log.note({ type: 'dodge', nearSack: false }); assert.equal(log.complete(), false);
   log.note({ type: 'dodge', nearSack: true }); assert.equal(log.complete(), true); log.advance();
-  log.note({ type: 'block' }); assert.equal(log.complete(), false);
-  log.note({ type: 'parry' }); assert.equal(log.complete(), true, 'a parry counts as a block'); log.advance();
-  assert.equal(log.step.id, 'parry'); assert.equal(log.complete(), false, 'the earlier parry does not count for step 6');
+  log.note({ type: 'block' }); assert.equal(log.complete(), true, 'stand needs 1 block (was 2)'); log.advance();
+  assert.equal(log.step.id, 'parry'); assert.equal(log.complete(), false);
+  log.note({ type: 'block' }); assert.equal(log.parryFails, 1, 'a plain block in the parry lesson is a failed parry');
   log.note({ type: 'parry' }); assert.equal(log.complete(), true); log.advance();
-  log.note({ type: 'boulder' }); assert.equal(log.complete(), true); log.advance();
   assert.equal(log.step.id, 'meow');
   log.note({ type: 'cow' }); assert.equal(log.complete(), true);
   assert.equal(log.advance(), null); assert.ok(log.finished);
-  assert.equal(TUTORIAL_STEPS.length, 9);
-  assert.deepEqual(TUTORIAL_STEPS.map((s) => s.id), ['move', 'jump', 'combo', 'target', 'roll', 'stand', 'parry', 'bright', 'meow']);
-  assert.ok(inPractice(0, -80) && inPractice(-19, -99) && !inPractice(0, -55));
-  assert.equal(PRACTICE.skipHold, 1.0);
+  assert.deepEqual(log.dots(), { n: 7, of: 7, half: false });
+  assert.ok(inPractice(0, -80) && inPractice(0, -64) && !inPractice(0, -55), 'the title spot is inside the field');
+  assert.equal(PRACTICE.skipHold, 1.0); assert.equal(PRACTICE.nextDelay, 0.6); assert.equal(PRACTICE.idleDemo, 8); assert.equal(PRACTICE.chipAfter, 6);
+  assert.deepEqual({ scale: PRACTICE.parrySlowMo.scale, firstOnly: PRACTICE.parrySlowMo.firstOnly }, { scale: 0.45, firstOnly: true });
 });
 
-test('tutorial: the target step — attack order (latched early), a picked target, or the info timeout without a pointer', () => {
-  const at = () => { const l = new PracticeLog(); l.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target'); return l; };
-  // an attack order on a dummy during the combo step latches the lesson
-  const early = new PracticeLog(); early.i = 2;
-  early.note({ type: 'order', kind: 'attack', dummy: true }); early.advance();
-  assert.equal(early.step.id, 'target'); assert.equal(early.complete(), true, 'latched from the combo step');
-  // a target pick (pad RB / Tab) only counts on the step itself
-  const pre = new PracticeLog(); pre.i = 2; pre.note({ type: 'target' }); pre.advance();
-  assert.equal(pre.complete(), false);
-  pre.note({ type: 'target' }); assert.equal(pre.complete(), true);
-  // attack order on a real foe does not teach "click the dummy"; attack-move neither
-  const l = at();
-  l.note({ type: 'order', kind: 'attack', dummy: false }); l.note({ type: 'order', kind: 'attackMove', dummy: true });
-  assert.equal(l.complete(), false);
-  // informational timeout (pad / keyboard-only): PRACTICE.infoSec of the prompt being up
-  l.note({ type: 'info', t: PRACTICE.infoSec - 0.1 }); assert.equal(l.complete(), false);
-  l.note({ type: 'info', t: PRACTICE.infoSec }); assert.equal(l.complete(), true);
-  l.advance(); assert.equal(l.infoT, 0, 'the info timer resets per step');
-  l.note({ type: 'info', t: 99 }); assert.equal(l.step.id, 'roll'); assert.equal(l.complete(), false, 'info never completes a non-info step');
+test('tutorial: the move lesson also ends after 10 m; 6 dummy hits without a finisher still bonk', () => {
+  const log = new PracticeLog();
+  log.note({ type: 'moved', d: 9.9 }); assert.equal(log.complete(), false);
+  log.note({ type: 'moved', d: 0.2 }); assert.equal(log.complete(), true); log.advance();
+  for (let k = 0; k < 5; k++) log.note({ type: 'hit', attackId: 'slash1', dummy: true });
+  assert.equal(log.complete(), false);
+  log.note({ type: 'hit', attackId: 'slash2', dummy: true });
+  assert.equal(log.complete(), true);
+});
+
+test('tutorial: fence side, nearest dummy, the guide clock (fold 6 s, ghost paw at 8 s, skip hint at 20 s)', () => {
+  assert.equal(fenceSide(-10, -86), 1); assert.equal(fenceSide(-10, -88), -1); assert.equal(fenceSide(5, -88), 0, 'past the fence end: no side');
+  assert.ok(Math.abs(nearestDummy(0, -78) - 2) < 1e-9);
+  const c = new GuideClock();
+  const ev = [];
+  for (let k = 0; k < 220; k++) { const e = c.tick(0.1); if (e.fold) ev.push(['fold', +(c.t.toFixed(1))]); if (e.demo) ev.push(['demo', +(c.t.toFixed(1))]); if (e.skipHint) ev.push(['skip', +(c.t.toFixed(1))]); }
+  assert.equal(ev[0][0], 'fold'); assert.ok(Math.abs(ev[0][1] - 6) <= 0.11, 'speech folds at 6 s');
+  assert.equal(ev[1][0], 'demo'); assert.ok(Math.abs(ev[1][1] - 8) <= 0.11, 'idle demo at 8 s');
+  assert.equal(ev.filter(([k, t]) => k === 'skip' && Math.abs(t - 20) <= 0.11).length, 1, 'skip hint once after 20 s');
+  assert.equal(ev.filter(([k]) => k === 'demo')[1][1] > 8 + PRACTICE.demoCycles * PRACTICE.demoCycle, true, 'then waits 8 s again');
+  const d = new GuideClock(); for (let k = 0; k < 70; k++) d.tick(0.1); d.poke();
+  assert.equal(d.tick(0.1).demo, false, 'progress resets the idle clock');
+  const pf = new ParryFails();
+  assert.deepEqual([pf.fail(), pf.fail(), pf.fail(), pf.fail()], [false, false, true, false], 'the 3rd failed parry asks once');
 });
 
 /** A tiny ctx for driving Tutorial without a game. */
-function tutCtx({ device = 'kbm', preset = 'hybrid', iso = true, flags = {}, interactables = [] } = {}) {
+function tutCtx({ device = 'kbm', preset = 'hybrid', iso = true, flags = {}, interactables = [], party = [] } = {}) {
   const handlers = new Map(), emitted = [];
   const bus = { on: (ev, fn) => { (handlers.get(ev) ?? handlers.set(ev, []).get(ev)).push(fn); return () => {}; }, emit: (ev, p) => { emitted.push([ev, p]); for (const fn of handlers.get(ev) ?? []) fn(p); } };
   const f = { ...flags };
-  const pos = { x: 0, z: -80, y: 0, clone() { return { ...this, copy(o) { this.x = o.x; this.z = o.z; return this; } }; } };
+  const pos = { x: 0, z: -64, y: 0, clone() { return { ...this, copy(o) { this.x = o.x; this.z = o.z; return this; } }; }, copy(o) { this.x = o.x; this.z = o.z; return this; } };
   const ctx = {
     bus, emitted, params: {},
-    state: { getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; } },
+    state: { getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; }, settings: {}, difficulty: 'knight' },
     input: { device, preset, down: () => false },
     cam: { isIso: iso },
     game: { mode: 'play' },
     levels: { current: { id: 'meadow', interactables, actor: () => null, critter: () => null } },
-    player: { pos, onGround: true },
-    strings: { t: (k) => k },
+    companions: { active: party },
+    player: { pos, onGround: true, facing: 0 },
+    strings: { t: (k) => k, has: () => true },
   };
   return { ctx, f };
 }
+const prompts = (ctx) => ctx.emitted.filter(([e]) => e === 'story:prompt').map(([, p]) => p);
+const host = (o = {}) => ({ isPlaying: false, cinema: { skip() {}, apply() {} }, flag(k, v) { this._f?.(k, v); }, play: () => Promise.resolve({}), toChart() { this.charted = true; }, ...o });
 
-test('tutorial: target step times out on a pad / keyboard-only, but waits for a click with a mouse or touch', () => {
-  for (const [opt, waits] of [[{ device: 'kbm' }, true], [{ device: 'touch' }, true], [{ device: 'pad' }, false], [{ device: 'kbm', preset: 'keyboardOnly' }, false], [{ device: 'touch', preset: 'keyboardOnly' }, true], [{ iso: false }, false]]) {
-    const { ctx } = tutCtx({ ...opt, flags: { 'prologue.armour': true } });
-    const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
-    tu.init();
-    tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target');
-    for (let k = 0; k < 120; k++) tu.update(0.05);          // 6 s
-    assert.equal(tu.log.step.id === 'target', waits, JSON.stringify(opt));
-  }
-});
-
-test('tutorial: player:order facts — an attack order on a dummy completes the target step; invalid orders are ignored', () => {
-  const { ctx } = tutCtx({ flags: { 'prologue.armour': true } });
-  const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
+test('story.W3: practice starts on the title spot with Pearl\'s intro, then guide bubbles with paw dots and the ghost-paw data', () => {
+  const { ctx } = tutCtx({ flags: { 'prologue.start': true } });
+  const tu = new Tutorial(ctx, host());
   tu.init();
-  tu.update(0.05);                                            // starts (inside the practice field)
-  assert.ok(tu.active);
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target');
-  ctx.bus.emit('player:order', { kind: 'attack', target: { kind: 'dummy' }, valid: false });
-  assert.equal(tu.log.complete(), false, 'a rejected order');
-  ctx.bus.emit('player:order', { kind: 'attack', target: { kind: 'dummy' }, valid: true });
-  assert.equal(tu.log.complete(), true);
-  assert.equal(tu._ordered, true, 'an order also disarms the tut.click tip');
-});
-
-test('tutorial: the jump step sets flag tut.jump.done (physics opens the fence nav link on it)', () => {
-  const { ctx, f } = tutCtx({ flags: { 'prologue.armour': true } });
-  const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
-  tu.init();
-  tu.log.i = 1; tu.active = true; tu._shown = 1;
-  ctx.player.pos.z = PRACTICE.fenceZ + 1;
+  assert.ok(tu.eligible());
   tu.update(0.05);
-  assert.equal(f['tut.jump.done'], true);
-  assert.equal(tu.log.step.id, 'combo');
+  assert.ok(tu.active);
+  let ps = prompts(ctx);
+  assert.equal(ps.at(-1).speaker, 'pearl'); assert.equal(ps.at(-1).say, 'pearl.start'); assert.equal(ps.at(-1).textKey, null);
+  for (let k = 0; k < 60; k++) tu.update(0.05);                // P0 2.4 s, then the move lesson
+  ps = prompts(ctx);
+  const mv = ps.at(-1);
+  assert.equal(mv.textKey, 'tut.move'); assert.equal(mv.say, 'pearl.race'); assert.equal(mv.speaker, 'pearl');
+  assert.deepEqual(mv.stepDots, { n: 0, of: 7, half: false });
+  assert.equal(mv.demo, 'tap'); assert.equal(mv.target.length, 3); assert.equal(mv.idleDemo, 8); assert.equal(mv.chipAfter, 6);
+  // walking: the same bubble wiggles (same speaker / textKey / say), the dot half-fills
+  ctx.player.pos.z = -66;
+  tu.update(0.05);
+  const up = prompts(ctx).at(-1);
+  assert.equal(up.textKey, 'tut.move'); assert.equal(up.say, 'pearl.race'); assert.ok(up.progress > 0); assert.equal(up.stepDots.half, true);
+  // the 18 % strip rule: no payload ever asks for two bubbles (one speaker at a time)
+  assert.ok(prompts(ctx).every((p) => p.kind === 'tutorial' && p.id === 'tutorial'));
 });
 
-test('tutorial: after the target lesson she lets go of the dummy (order stopped, selection dropped)', () => {
-  const { ctx } = tutCtx({ flags: { 'prologue.armour': true } });
-  const calls = [];
-  const dummy = { kind: 'dummy' };
-  ctx.player.orders = { kind: 'attack', target: dummy };
-  ctx.player.order = (k) => { calls.push('order:' + k); ctx.player.orders.kind = null; };
-  ctx.cam.lockTarget = dummy;
-  ctx.cam.select = (a, src) => { calls.push('select:' + a + ':' + src); ctx.cam.lockTarget = a; };
-  const tu = new Tutorial(ctx, { isPlaying: false, cinema: { skip() {} } });
+test('story.W3: a lesson done → mint ✓ (done), the sticker reward + sticker flag, the next lesson after 0.6 s', () => {
+  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
+  const tu = new Tutorial(ctx, host({ flag: (k, v) => { f[k] = v; } }));
   tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'target'); tu.active = true; tu._shown = tu.log.i;
-  ctx.bus.emit('player:order', { kind: 'attack', target: dummy, valid: true });
-  tu.update(0.05);                                            // completes the step
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'jump'); tu.active = true; tu._intro = true; tu._shown = null; tu.waitT = 0;
+  ctx.player.pos.x = -6; ctx.player.pos.z = -86;
+  tu.update(0.05);                                            // the jump prompt
+  assert.equal(prompts(ctx).at(-1).textKey, 'tut.jump');
+  ctx.player.pos.z = -88;                                     // over the fence
+  tu.update(0.05);
+  tu.update(0.05);
+  const done = prompts(ctx).find((p) => p.done && p.ok);
+  assert.ok(done, 'the chip turns mint');
+  assert.equal(f['tut.jump.done'], true, 'the fence nav link opens');
+  assert.deepEqual(ctx.emitted.filter(([e]) => e === 'reward').map(([, p]) => p), [{ kind: 'sticker', id: 'hop' }]);
+  assert.equal(f['sticker.hop'], true);
   assert.equal(tu.log.step.id, 'roll');
-  tu.update(1.0);
-  assert.deepEqual(calls, [], 'one chain lands first');
-  tu.update(1.1);
-  assert.deepEqual(calls, ['order:stop', 'select:null:clear']);
-  tu.update(1.0);
-  assert.equal(calls.length, 2, 'once');
+  for (let k = 0; k < 14; k++) tu.update(0.05);
+  assert.equal(prompts(ctx).at(-1).textKey, 'tut.roll');
+  assert.equal(prompts(ctx).at(-1).say, 'pearl.sack');
+});
+
+test('story.W3: the bonk lesson plays `tutbow` (Pink Bow) before the jump; the meow lesson plays `tutpearl` and ends practice', async () => {
+  const played = [];
+  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
+  const story = host({ play: (id) => { played.push(id); return Promise.resolve({ id }); }, flag: (k, v) => { f[k] = v; } });
+  const tu = new Tutorial(ctx, story);
+  tu.init();
+  tu.log.i = 1; tu.active = true; tu._intro = true; tu.waitT = 0;
+  tu.update(0.05);
+  ctx.bus.emit('combat:hit', { attacker: ctx.player, target: { kind: 'dummy' }, attackId: 'slash3' });
+  tu.update(0.05);
+  assert.deepEqual(played, ['tutbow']);
+  assert.ok(tu.pending, 'practice waits for the bow scene');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(tu.pending, false); assert.equal(tu.log.step.id, 'jump');
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu._shown = null; tu.waitT = 0;
+  tu.update(0.05);
+  tu.log.note({ type: 'cow' });
+  tu.update(0.05);
+  assert.deepEqual(played, ['tutbow', 'tutpearl']);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(f['prologue.practice'], true, 'practice done');
+  assert.equal(story.charted, true, 'Pearl leads her to the height chart (P8)');
+  assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.done'));
+});
+
+test('story.W3: the first Sir Wobble swing of the parry lesson runs in 0.45 slow motion, once', () => {
+  const { ctx } = tutCtx({ flags: { 'prologue.start': true } });
+  const slow = [];
+  ctx.game.slowMo = (s, t) => slow.push([s, +t.toFixed(2)]);
+  const tu = new Tutorial(ctx, host());
+  tu.init();
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry'); tu.active = true; tu._intro = true;
+  const wk = { kind: 'wobble_knight' };
+  ctx.bus.emit('combat:telegraph', { id: 1, actor: wk, duration: 0.9 });
+  ctx.bus.emit('combat:telegraph', { id: 2, actor: wk, duration: 0.9 });
+  assert.deepEqual(slow, [[0.45, 2]]);
+});
+
+test('story.W3: the cow\'s warmer / colder clues each speak once; the 3rd failed parry asks ui for the kitten offer', () => {
+  const { ctx } = tutCtx({ flags: { 'prologue.start': true } });
+  const said = [], offers = [];
+  const cow = { pos: { x: 12, z: -72 } };
+  ctx.levels.current.critter = (id) => (id === PRACTICE.cowId ? cow : null);
+  ctx.ui = { offerKitten: (o) => { offers.push(o); return Promise.resolve(null); } };
+  const tu = new Tutorial(ctx, host({ barks: { say: (a, k) => said.push(k) } }));
+  tu.init();
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu.active = true; tu._intro = true; tu._shown = tu.log.i;
+  ctx.player.pos.x = 12; ctx.player.pos.z = -95;              // > 14 m away
+  for (let k = 0; k < 220; k++) tu.update(0.05);
+  ctx.player.pos.z = -76;                                     // < 8 m
+  tu.update(0.05); tu.update(0.05);
+  ctx.bus.emit('player:meow', { position: { x: 12, z: -76 } });
+  ctx.bus.emit('player:meow', { position: { x: 12, z: -76 } });
+  assert.deepEqual(said, ['tut.cow.1', 'tut.cow.2', 'tut.cow.3']);
+  // parry lesson: blocked / hit swings are failed parries; the 3rd asks once
+  tu.log = new PracticeLog(); tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry');
+  const wk = { kind: 'wobble_knight' };
+  for (let k = 0; k < 4; k++) ctx.bus.emit('combat:hit', { attacker: wk, target: ctx.player, blocked: k % 2 === 0 });
+  assert.deepEqual(offers, [{ speaker: 'pearl' }]);
+});
+
+test('story.W4: glyph one-shots on telegraph:first — once per save (a second red sighting shows nothing)', () => {
+  const { ctx, f } = tutCtx({ flags: { 'prologue.done': true } });
+  const tu = new Tutorial(ctx, host());
+  tu.init();
+  const shown = () => ctx.emitted.filter(([e, p]) => (e === 'ui:toast' && /^tut\.(red|aoe|gold)$/.test(p.key)) || (e === 'story:prompt' && /^tut\.(red|aoe|gold)$/.test(p.hintKey ?? ''))).length;
+  ctx.bus.emit('telegraph:first', { kind: 'red' });
+  assert.equal(shown(), 1); assert.equal(f['seen.tut.red'], true);
+  ctx.bus.emit('telegraph:first', { kind: 'red' });
+  assert.equal(shown(), 1, 'a second red sighting shows nothing');
+  ctx.bus.emit('telegraph:first', { kind: 'aoe' });
+  ctx.bus.emit('telegraph:first', { kind: 'gold' });
+  ctx.bus.emit('telegraph:first', { kind: 'parry' });
+  assert.equal(shown(), 3);
+  assert.deepEqual(GLYPH_HINTS, { red: 'tut.red', aoe: 'tut.aoe', gold: 'tut.gold' });
+});
+
+test('ON §4.5: with Mochi in the party a post-prologue hint is his guide bubble (then it folds away); before that a toast', () => {
+  const { ctx } = tutCtx({ flags: { 'prologue.done': true }, party: [{ kittenId: 'mochi' }] });
+  const tu = new Tutorial(ctx, host());
+  tu.init();
+  ctx.bus.emit('player:damaged', { hp: 3 });
+  ctx.player.milk = 1;
+  ctx.bus.emit('player:damaged', { hp: 3 });
+  const p = prompts(ctx).find((x) => x.hintKey === 'tut.milk');
+  assert.ok(p, 'Mochi says the milk hint');
+  assert.equal(p.speaker, 'mochi'); assert.equal(p.say, 'mochi.hint.milk'); assert.equal(p.textKey, 'tut.milk');
+  for (let k = 0; k < Math.ceil(HINT_SHOW / 0.5) + 1; k++) tu.update(0.5);
+  assert.ok(prompts(ctx).some((x) => x.id === 'hint' && x.done), 'the bubble folds away');
+  const solo = tutCtx({ flags: { 'prologue.done': true } });
+  const t2 = new Tutorial(solo.ctx, host());
+  t2.init();
+  solo.ctx.player.milk = 1;
+  solo.ctx.bus.emit('player:damaged', { hp: 3 });
+  assert.ok(solo.ctx.emitted.some(([e, q]) => e === 'ui:toast' && q.key === 'tut.milk'), 'a toast before Mochi');
+});
+
+test('tutorial: skipping practice (hold Pause) sets prologue.practice and the fence link, then heads to the chart', () => {
+  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
+  const story = host({ flag: (k, v) => { f[k] = v; } });
+  const tu = new Tutorial(ctx, story);
+  tu.init();
+  tu.update(0.05);
+  ctx.input.down = (a) => a === 'pause';
+  for (let k = 0; k < 25; k++) tu.update(0.05);
+  assert.equal(f['prologue.practice'], true); assert.equal(f['tut.jump.done'], true);
+  assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.skipped'));
+  assert.equal(story.charted, true);
+  assert.equal(tu.eligible(), false);
 });
 
 test('hints: tut.click after 20 s without an order (pointer schemes only); tut.talk near a talkable NPC; tut.zoom on the first arena', () => {
@@ -527,7 +873,7 @@ test('hints: tut.click after 20 s without an order (pointer schemes only); tut.t
     assert.ok(!toasts(ctx).includes('tut.click'), 'no tip once she used an order');
   }
   // tut.talk: proximity scan
-  const npc = { id: 'talk_pip', kind: 'npc', prompt: 'prompt.talk', pos: { x: TALK_TIP_R + 3, z: -80 } };
+  const npc = { id: 'talk_pip', kind: 'npc', prompt: 'prompt.talk', pos: { x: TALK_TIP_R + 3, z: -64 } };
   const { ctx, f } = tutCtx({ flags: { 'prologue.done': true, 'prologue.tutorial': true }, interactables: [npc] });
   const tu = new Tutorial(ctx, { isPlaying: false });
   tu.init();
@@ -549,32 +895,27 @@ test('hints: tut.click after 20 s without an order (pointer schemes only); tut.t
   assert.equal(!!talk.when({}, { prompt: 'prompt.interact', target: { kind: 'vigil' } }), false);
 });
 
-test('CONTROLS_SPEC §14 copy: base / .pad / .touch variants, glyph tokens, no old bindings', () => {
-  for (const k of ['tut.move', 'tut.jump', 'tut.combo', 'tut.target', 'tut.roll', 'tut.stand', 'tut.parry', 'tut.riposte', 'tut.bright', 'tut.pounce',
+test('CONTROLS_SPEC §14 + ON §4.3 copy: base / .pad / .touch variants, glyph tokens, no old bindings', () => {
+  for (const k of ['tut.move', 'tut.bonk', 'tut.jump', 'tut.roll', 'tut.stand', 'tut.parry', 'tut.riposte', 'tut.bright', 'tut.pounce',
     'tut.reflect', 'tut.meow', 'tut.milk', 'tut.vigil', 'tut.companion', 'tut.holy', 'tut.golden', 'tut.zoom', 'tut.click', 'tut.talk', 'tut.rotate',
-    'toast.cam.locked', 'toast.cam.unlocked']) assert.ok(has(k), k);
-  for (const k of ['tut.move', 'tut.combo', 'tut.target', 'tut.roll', 'tut.pounce', 'tut.vigil', 'tut.companion', 'tut.golden', 'tut.zoom', 'tut.talk']) assert.ok(has(k + '.pad'), k + '.pad');
-  for (const k of ['tut.move', 'tut.jump', 'tut.combo', 'tut.target', 'tut.roll', 'tut.stand', 'tut.parry', 'tut.riposte', 'tut.bright', 'tut.pounce',
+    'toast.cam.locked', 'toast.cam.unlocked', 'toast.cam.fitHold']) assert.ok(has(k), k);
+  for (const k of ['tut.move', 'tut.bonk', 'tut.roll', 'tut.pounce', 'tut.vigil', 'tut.companion', 'tut.golden', 'tut.zoom', 'tut.talk']) assert.ok(has(k + '.pad'), k + '.pad');
+  for (const k of ['tut.move', 'tut.bonk', 'tut.jump', 'tut.roll', 'tut.stand', 'tut.parry', 'tut.riposte', 'tut.bright', 'tut.pounce',
     'tut.meow', 'tut.milk', 'tut.vigil', 'tut.companion', 'tut.holy', 'tut.golden', 'tut.zoom', 'tut.click', 'tut.talk']) assert.ok(has(k + '.touch'), k + '.touch');
-  for (let i = 1; i <= 12; i++) assert.ok(has('loading.tip.' + i), 'loading.tip.' + i);
+  for (let i = 1; i <= 13; i++) assert.ok(has('loading.tip.' + i), 'loading.tip.' + i);
   // C1: no copy teaches the old table (Space = jump, RMB = guard, mouse look, Q / E hard-coded keycaps)
   const all = Object.keys(S).filter((k) => /^(tut|toast|prompt|loading)./.test(k)).map((k) => [k, t(k)]);
   for (const [k, s] of all) {
     assert.ok(!/\[(Space|Q|E|J|K|L|RMB|LMB|Mouse)\]/.test(s), `${k}: hard-coded keycap in "${s}"`);
     assert.ok(!/look around with|move the mouse to look|right mouse.*(guard|block)/i.test(s) || k === 'toast.cam.unlocked', `${k}: old camera copy`);
   }
-  assert.equal(t('tut.move'), 'Right-click where to go, or use [WASD]. Hold right-click to keep walking.');
-  assert.equal(t('tut.jump'), 'Jump the fence [Jump].');
-  assert.equal(t('tut.target.touch'), 'Tap a foe to charge in and attack it.');
-});
-
-test('tutorial: dummy hits without a finisher still complete the combo after 6', () => {
-  const log = new PracticeLog();
-  log.i = 2;
-  for (let k = 0; k < 5; k++) log.note({ type: 'hit', attackId: 'slash1', dummy: true });
-  assert.equal(log.complete(), false);
-  log.note({ type: 'hit', attackId: 'slash2', dummy: true });
-  assert.equal(log.complete(), true);
+  assert.equal(t('tut.move'), 'Right-click the ground to walk.');
+  assert.equal(t('tut.jump'), 'Hop the fence! [Jump]');
+  assert.equal(t('tut.bonk.touch'), 'Tap the dummy. Bonk!');
+  assert.equal(t('tut.title'), 'Morning Practice'); assert.equal(t('quest.prologue'), 'Morning Practice');
+  // AUTOCAM story.1: the settings rows ui builds (labels + help)
+  for (const k of ['settings.reduceCameraMotion', 'settings.camZoom', 'settings.biggerHero', 'settings.camLockMode', 'settings.camCursorLead',
+    'settings.camLockMode.locked', 'settings.camLockMode.semi', 'settings.camLockMode.free', 'settings.hudMode', 'settings.tutorialHints', 'settings.hitWords']) assert.ok(has(k), k);
 });
 
 // ====================================================================================================== barks (§6)
@@ -668,7 +1009,7 @@ test('every cutscene sfx id resolves in the audio manifest / SFX map', async () 
   const { SFX } = await import('../../src/audio/sfxMap.js');
   const { CUES } = await import('../../src/audio/cues.js');
   const index = buildIndex(manifest);
-  const PROCEDURAL = new Set(['laugh', 'laughChorus', 'bell', 'sunbell', 'bellClunk', 'heartbeat', 'march', 'shimmer']);   // AudioManager.js header
+  const PROCEDURAL = new Set(['laugh', 'laughChorus', 'bell', 'sunbell', 'bellClunk', 'heartbeat', 'march', 'shimmer', 'crickets']);   // AudioManager.js PROC
   const bad = [];
   for (const [id, def] of Object.entries(CUTSCENES)) {
     walkSteps(def.steps, (s, p) => {

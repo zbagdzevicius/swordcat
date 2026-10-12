@@ -32,11 +32,18 @@ import { nextCompanion, SERVICE_IDS, SERVICE_FLAGS } from '../../src/companions/
 import { spoonRoster, spoonRows, spoonsPerVolley, SPOON_LAYOUT, SPOON_HIT } from '../../src/companions/SpoonBrigade.js';
 import { HUB_SPOTS, HUB_NPCS, VILLAGER_SPOTS, villagerCount, pipVars, HubResident } from '../../src/companions/HubKittens.js';
 import { RESCUES, lostKittenRows, rowWanted, TREETOP_ROPES } from '../../src/companions/rescues.js';
-import { RopePost, HANG } from '../../src/companions/LostKitten.js';
+import { RopePost, HANG, TIP, REUNION } from '../../src/companions/LostKitten.js';
 import { RANGED } from '../../src/companions/Companion.js';
 import { playerAimYaw, playerForwardYaw, explicitAim, planAbility, abilityShape, CAST } from '../../src/companions/abilityAim.js';
 import { idleSlot, inNotch, Trail, lodOrigin } from '../../src/companions/steering.js';
 import { NPC_LOD } from '../../src/companions/NpcActor.js';
+import { buildCarrier, CARRIER, CARRIER_COLORS } from '../../src/companions/dressing.js';
+import { activityTier, npcBand, bandAnimates, thinkDue, ACTIVITY } from '../../src/companions/activity.js';
+import { withHeadScale, roleOf, hullFor, GLANCE } from '../../src/companions/KittenVisual.js';
+import { PARTY } from '../../src/companions/party.js';
+import { LIFE, PERSONAL_IDLE } from '../../src/companions/Companion.js';
+import { BANTER, BANTER_RULE, BanterClock, banterLines } from '../../src/companions/lines.js';
+import { lostKittenConfig } from '../../src/characters/index.js';
 
 const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -62,7 +69,7 @@ class FakeEnemy extends Actor {
   stagger(s) { this.staggered = s; this.staggerT = s; }
 }
 
-function makeCtx({ anchors = {} } = {}) {
+function makeCtx({ anchors = {}, chapter1 = true } = {}) {
   const bus = new EventBus();
   const events = [];
   bus.tap?.((type, payload) => events.push([type, payload]));
@@ -114,6 +121,7 @@ function makeCtx({ anchors = {} } = {}) {
   };
   ctx.player = new FakePlayer(ctx);
   ctx.actors.register(ctx.player, 'swordcat');
+  if (chapter1) ctx.state.setFlag('prologue.done', true);       // Chapter 1 (WA16: Mochi's carrier waits for it)
   ctx.companions = new CompanionManager(ctx);
   ctx.events = events;
   return ctx;
@@ -387,7 +395,9 @@ test('§12.1 meow hide: revealed by a Meow within 10 m only; rescued on contact;
   step(ctx, 2);
   assert.ok(k.rescued);
   assert.ok(ctx.state.kittens.includes('noodle'));
-  assert.deepEqual(emitted(ctx, E.KITTEN_RESCUED).at(-1), { kittenId: 'noodle' });
+  const resc = emitted(ctx, E.KITTEN_RESCUED).at(-1);
+  assert.equal(resc.kittenId, 'noodle');
+  assert.ok(resc.position?.isVector3 && Math.hypot(resc.position.x - 12, resc.position.z) < 1.5, 'X23: the payload carries the position');
   ctx.player.pos.set(0, 0, -30);
   step(ctx, Math.round(7 / DT));
   assert.ok(!m.actors.includes(k), 'walked home and despawned');
@@ -449,21 +459,31 @@ test('§12.1 break hide: a Bright Slash nearby reveals the kitten; a light slash
   assert.ok(!k.hidden);
 });
 
-test('D-01: Mochi caged (hp 30, after the arena) → join scene → active companion where the cage stood', async () => {
+test('D-01 (WA16): Mochi in the cracked carrier (after the cart arena) → Bright Slash only → join scene → party', async () => {
   const ctx = makeCtx(); await ctx.companions.init();
   const m = ctx.companions;
-  const k = m.spawnKitten('mochi', new THREE.Vector3(30, 0, 74), 'cage', { needClear: 'bridge', play: 'd01' });
+  const [cx, cz] = config.STORY.mochiCage;
+  const k = m.spawnKitten('mochi', new THREE.Vector3(cx, 0, cz), 'cage', { needClear: 'cart', play: 'd01' });
   assert.equal(k.companion, true);
   assert.equal(ctx.actors.get('mochi'), k, 'the caged Mochi is the cutscene actor "mochi"');
-  ctx.bus.emit(E.ARENA_CLEAR, { id: 'bridge' });
-  for (let i = 0; i < 3; i++) { assert.equal(ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }), 'hit'); step(ctx, 30); }
-  assert.ok(k.lock.opened);
-  ctx.player.pos.set(30, 0, 71);
+  assert.ok(k.cracked && k.lock.cracked, 'his latch is cracked');
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'cart' });
+  // normal blows "tink" off (a guard bounce) and Mochi asks for the shiny swing
+  for (let i = 0; i < 4; i++) { assert.equal(ctx.combat.applyHit(ctx.player, k.lock, config.ATTACKS.slash1), 'block'); step(ctx, 30); }
+  assert.ok(!k.lock.opened, 'normal hits never open it');
+  assert.equal(k.lock.tinks, 4);
+  assert.ok(k.bubble.on, 'Mochi says something about it');
+  assert.equal(ctx.combat.applyHit(ctx.player, k.lock, config.ATTACKS.bright), 'hit', 'Bright Slash');
+  step(ctx, 1);
+  assert.ok(k.lock.opened, 'one Bright Slash opens it');
+  const vis = k.visual;
+  ctx.player.pos.set(cx, 0, cz - 3);
   step(ctx, 90);
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(ctx.story.played, ['d01']);
   assert.equal(m.active[0]?.kittenId, 'mochi');
-  assert.ok(Math.hypot(m.active[0].pos.x - 30, m.active[0].pos.z - 74) < 2.5, 'appears at the cage');
+  assert.equal(m.active[0].visual, vis, 'the caged cat look is handed over (no second build on the join frame)');
+  assert.ok(Math.hypot(m.active[0].pos.x - cx, m.active[0].pos.z - cz) < 2.5, 'appears at the carrier');
   assert.ok(!m.actors.includes(k), 'caged actor replaced');
   assert.equal(emitted(ctx, E.KITTEN_RESCUED).length, 0, 'squires are not lost kittens');
   assert.ok(!ctx.state.kittens.includes('mochi'));
@@ -602,7 +622,7 @@ test('§9.1 teleport: 4 s out of line of sight → back at her side, never into 
 
 test('cage lock ticks its anti-multi-hit window: repeated real swings keep landing (hp 30 lock opens in 3)', async () => {
   const ctx = makeCtx(); await ctx.companions.init();
-  const k = ctx.companions.spawnKitten('mochi', new THREE.Vector3(5, 0, 5), 'cage', { hp: 30 });
+  const k = ctx.companions.spawnKitten('mochi', new THREE.Vector3(5, 0, 5), 'cage', { hp: 30, cracked: false });
   const lock = k.lock;
   ctx.player.pos.set(5, 0, 3);
   assert.equal(ctx.combat.applyHit(ctx.player, lock, { dmg: 10 }), 'hit');
@@ -631,7 +651,8 @@ test('D-01 cart: Mochi sits on the cart bed; the cart blocks walkers; the empty 
   assert.ok(Math.abs(k.perchY - CAGE_CART.bedY) < 1e-9 && Math.abs(k.pos.y - CAGE_CART.bedY) < 1e-9, 'on the bed');
   const col = [...ctx.physics.colliders][0];
   assert.ok(col && col.walkable === false && col.factions.includes('player') && !col.factions.includes('neutral'), 'cart collider');
-  for (let i = 0; i < 3 && !k.lock.opened; i++) { ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); step(ctx, 30); }
+  assert.ok(k.tipped && Math.abs(k.tilt.rotation.x - TIP.roll) < 1e-9, 'ON §6.1: the cart is tipped 8°');
+  for (let i = 0; i < 3 && !k.lock.opened; i++) { ctx.combat.applyHit(ctx.player, k.lock, config.ATTACKS.bright); step(ctx, 30); }
   assert.ok(k.lock.opened);
   ctx.player.pos.set(30, 0, 71);
   step(ctx, 90);
@@ -670,7 +691,7 @@ test('D-01 on the level\'s cart (world passes the bed height `y`): bars only, no
   ctx.physics.blockedAt = (x, z, r) => (Math.abs(x - 30) < 1.2 + r && Math.abs(z - 74.5) < 1.2 + r) || Math.hypot(x - 30, z - 72.7) < 0.5 + r;
   ctx.bus.emit(E.ARENA_CLEAR, { id: 'bridge' });
   ctx.player.pos.set(30, 0, 70);
-  for (let i = 0; i < 3 && !k.lock.opened; i++) { ctx.combat.applyHit(ctx.player, k.lock, { dmg: 10 }); step(ctx, 30); }
+  for (let i = 0; i < 3 && !k.lock.opened; i++) { ctx.combat.applyHit(ctx.player, k.lock, config.ATTACKS.bright); step(ctx, 30); }
   assert.ok(k.lock.opened);
   let maxY = 0;
   step(ctx, 70, () => { maxY = Math.max(maxY, k.pos.y); });
@@ -1541,4 +1562,255 @@ test('iso AbilityIndicator: draws the aim (rect / ring + pips / self), hides whe
   m.cancelAbilityAim();
   m.dispose();
   assert.equal(m.indicator.root, null);
+});
+
+// ------------------------------------------------------------------ Phase W: warm adventure + perf + auto-camera
+
+test('WA20 carriers: wood / rope / lilac bow / polka-dot cushion, no iron grey, no metal, no member < 0.06 m, ≤ 2 draws', () => {
+  const grey = (hex) => { const c = new THREE.Color(hex), hsl = {}; c.getHSL(hsl); return hsl.s < 0.18; };
+  for (const hex of CARRIER_COLORS) assert.ok(!grey(hex), `carrier colour ${hex} reads as iron grey`);
+  for (const hex of ['#3B3D42', '#5A5D63', '#4A4C52']) assert.ok(!CARRIER_COLORS.includes(hex), `iron ${hex}`);
+  assert.equal(CARRIER.wood, '#B7773F'); assert.equal(CARRIER.rope, '#E8B87A'); assert.equal(CARRIER.bow, '#C9A8FF'); assert.equal(CARRIER.cushion, '#FF9EC0');
+  assert.ok(CARRIER.minMember >= 0.06 && CARRIER.slat >= 0.06 && CARRIER.slatDepth >= 0.06, 'WA20: no bar thinner than 0.06 m');
+  for (const style of ['carry', 'cart', 'hanging']) {
+    const g = buildCarrier({ style, cracked: style === 'cart', wheel: style === 'cart' ? [0.3, -0.5, 1.1] : null });
+    let meshes = 0, metal = 0;
+    g.traverse((o) => {
+      if (!o.isMesh) return;
+      meshes++;
+      const r = o.geometry.attributes.rmse;
+      if (r) for (let i = 0; i < r.count; i++) metal = Math.max(metal, r.getY(i));
+      assert.equal(o.castShadow, false, 'K5: carriers cast no sun shadow');
+    });
+    assert.ok(meshes <= 2, `${style}: ${meshes} draws (the old cage was 3)`);
+    assert.equal(metal, 0, `${style}: no metal`);
+    assert.equal(g.userData.kind, 'carrier');
+    g.userData.setOpen(1);
+    assert.ok(Math.abs(g.userData.door.rotation.y) > 1);
+  }
+  const ctx = makeCtx();
+  const k = ctx.companions.spawnKitten('sprout', new THREE.Vector3(2, 0, 2), 'cage', { ribbon: true });
+  assert.equal(k.cage.userData.kind, 'carrier', 'every rescue cage is a kitten carrier now');
+  assert.ok(!k.cracked && !k.lock.cracked, 'plain carriers open to 3 blows');
+});
+
+test('WA16: Mochi\'s carrier waits for Chapter 1 on the meadow; the meadow data moves him to STORY.mochiCage, Biscuit to the Old Bridge', async () => {
+  const ctx = makeCtx({ chapter1: false }); await ctx.companions.init();
+  const m = ctx.companions;
+  const [cx, cz] = config.STORY.mochiCage;
+  assert.equal(m.spawnKitten('mochi', [cx, 0, cz], 'cage', { needClear: 'cart', play: 'd01', cage: 'cart' }), null, 'not during the prologue');
+  assert.equal(m.kittens.length, 0);
+  ctx.state.setFlag('prologue.done', true);
+  ctx.bus.emit(E.FLAG_SET, { key: 'prologue.done', value: true });
+  const k = m.kittens.find((x) => x.kittenId === 'mochi');
+  assert.ok(k && k.cracked && k.tipped, 'his tipped cart with the cracked latch appears with Chapter 1');
+  const { default: meadow } = await import('../../src/world/levels/meadow.js');
+  const def = meadow.def ?? meadow;
+  const zones = def.zones ?? [];
+  const cart = zones.find((z) => z.rescue?.companion === 'mochi');
+  assert.ok(cart, 'an arena rescues Mochi');
+  assert.deepEqual(cart.rescue.cage, [cx, cz]); assert.equal(cart.rescue.play, 'd01'); assert.equal(cart.id, 'cart');
+  assert.equal(cart.waves.flat().reduce((n, w) => n + (w[1] ?? 1), 0), 3, '3 rats guard the cart');
+  const bridge = zones.find((z) => z.id === 'bridge');
+  assert.ok(!bridge.rescue, 'the Old Bridge no longer holds Mochi');
+  const biscuit = zones.find((z) => z.kittenId === 'biscuit');
+  assert.equal(biscuit.hide, 'cage'); assert.equal(biscuit.needClear, 'bridge'); assert.deepEqual(biscuit.at, [30, 74]);
+});
+
+test('PERF §4.3 activity: camera tier when it has one, our frustum fallback, NPC bands, staggered cadence, 10 Hz think', () => {
+  const ctx = makeCtx();
+  const a = new Actor(ctx, { radius: 0.3, height: 0.8 });
+  ctx.cam.activityOf = () => 2;
+  assert.equal(activityTier(ctx, a), 2, 'camera.activityOf wins');
+  delete ctx.cam.activityOf;
+  const cam = ctx.camera;
+  cam.position.set(0, 10, 10); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+  ctx.game.frameCount = 1;
+  a.pos.set(0, 0, 0);
+  assert.equal(activityTier(ctx, a), 0, 'in view');
+  ctx.game.frameCount = 2; a.pos.set(0, 0, 40);
+  assert.equal(activityTier(ctx, a), 2, 'behind the lens, 40 m from the focus');
+  ctx.game.frameCount = 3; a.pos.set(0, 0, 25);
+  assert.equal(activityTier(ctx, a), 1);
+  ctx.game.frameCount = 4; a.pos.set(0, 0, 200);
+  assert.equal(activityTier(ctx, a), 3);
+  ctx.player.pos.set(0, 0, 0);
+  a.pos.set(5, 0, 0); assert.equal(npcBand(ctx, a, 0), 'full');
+  a.pos.set(12, 0, 0); assert.equal(npcBand(ctx, a, 0), 'half');
+  assert.equal(npcBand(ctx, a, 0, true), 'full', 'a speaker / scripted actor stays full');
+  assert.equal(npcBand(ctx, a, 1), 'slow'); assert.equal(npcBand(ctx, a, 2), 'off');
+  const half = [0, 1, 2, 3].map((f) => bandAnimates('half', 7, f));
+  assert.deepEqual(half, [false, true, false, true], '30 Hz staggered by (id + frame) & 1');
+  assert.equal([0, 1, 2, 3, 4, 5].filter((f) => bandAnimates('slow', 3, f)).length, 1, '10 Hz');
+  assert.ok(!bandAnimates('off', 1, 0));
+  // 10 Hz think on the deterministic step counter (phase = id), timer fallback without one
+  const g = { stepCount: 0 }; let n = 0;
+  for (let i = 0; i < 60; i++) { g.stepCount = i; if (thinkDue(g, 5, null, DT)) n++; }
+  assert.equal(n, 10);
+  const st = { thinkT: 0 }; n = 0;
+  for (let i = 0; i < 60; i++) if (thinkDue({}, 5, st, DT)) n++;
+  assert.ok(n >= 9 && n <= 11, `timer fallback ${n}`);
+  assert.equal(ACTIVITY.thinkHz, 10);
+});
+
+test('PERF §4.3 / K5: a kitten off screen is not drawn and animates at a lower rate; no actor casts a sun shadow', () => {
+  const ctx = makeCtx();
+  const c = new Companion(ctx, 'mochi');
+  let shadow = false;
+  c.object3d.traverse((o) => { if (o.isMesh && o.castShadow) shadow = true; });
+  assert.ok(!shadow, 'K5: castShadow false everywhere');
+  ctx.cam.activityOf = () => 0;
+  c.render(1, DT);
+  assert.ok(c.visual.root.visible && c.visual.band === 'full');
+  ctx.cam.activityOf = () => 2;
+  c.render(1, DT);
+  assert.equal(c.visual.band, 'off');
+  assert.equal(c.visual.root.visible, false, 'tier ≥ 2: not drawn');
+  ctx.cam.activityOf = () => 0;
+  c.render(1, DT);
+  assert.ok(c.visual.root.visible, 'back in view: drawn the same frame');
+  c.dispose();
+});
+
+test('ART §6: role head scale (kittens 1.22, villagers 1.05), hull tiers (X9), camera glance (≤ 25°, calm only)', () => {
+  assert.equal(withHeadScale({ id: 'mochi' }, 'companion').headScale, 1.22);
+  assert.equal(withHeadScale(lostKittenConfig('noodle'), roleOf(lostKittenConfig('noodle'))).headScale, 1.22);
+  const v = withHeadScale({ id: 'villager_3', headScale: 1.03 }, 'villager').headScale;
+  assert.ok(Math.abs(v - 1.05) < 1e-9);
+  assert.equal(roleOf({ id: 'villager_3', tier: 'lite' }), 'villager');
+  assert.ok(hullFor('companion', 'heroCompanionsEngaged') && hullFor('companion', 'all') && !hullFor('companion', 'hero'));
+  assert.ok(!hullFor('kitten', 'heroCompanionsEngaged') && hullFor('villager', 'all'));
+  const ctx = makeCtx();
+  const c = new Companion(ctx, 'mochi');
+  assert.equal(c.visual.cfg.headScale, 1.22);
+  ctx.camera.position.set(4, 10, 10);
+  let held = false, maxYaw = 0;
+  for (let i = 0; i < Math.round(12 / DT); i++) { c.visual.update(DT, { calm: true }); if (c.visual.glancing) { held = true; maxYaw = Math.max(maxYaw, Math.abs(c.visual._gl.yaw)); } }
+  assert.ok(held, 'glanced within 12 s of calm');
+  assert.ok(maxYaw <= GLANCE.maxYaw + 1e-9 && GLANCE.maxYaw <= 25 * Math.PI / 180 + 1e-9);
+  c.visual.update(DT, { calm: false });
+  assert.ok(!c.visual.glancing, 'drops it when not calm');
+  c.dispose();
+});
+
+test('companions.W3: encounter clear → paw-bump only for companions within 8 m; a new alert cancels it', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const [mochi] = m.setActive(['mochi']);
+  const sage = new Companion(ctx, 'sage', { pos: new THREE.Vector3(0, 0, -13) });
+  m.active.push(sage);
+  mochi.pos.set(1.5, 0, -1); sage.pos.set(0, 0, -13);
+  const bumped = m.party.pawBump();
+  assert.deepEqual(bumped.map((c) => c.kittenId), ['mochi'], 'only within PARTY.bumpR');
+  assert.equal(PARTY.bumpR, 8);
+  assert.ok(ctx.fx.bursts.includes('stars') && ctx.fx.bursts.includes('heart'));
+  m.active.pop(); sage.dispose();
+  // via the event: after the beat
+  step(ctx, 60);
+  const before = mochi.stats.bumps;
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'stones' });
+  step(ctx, Math.ceil(PARTY.bumpDelay / DT) + 2);
+  assert.equal(mochi.stats.bumps, before + 1, 'arena clear → paw-bump');
+  step(ctx, 60);
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'glade' });
+  ctx.bus.emit(E.ENEMY_ALERTED, { enemy: null });
+  step(ctx, Math.ceil(PARTY.bumpDelay / DT) + 2);
+  assert.equal(mochi.stats.bumps, before + 1, 'skipped on a new alert');
+});
+
+test('companions.W3: parry → nearest companion meows + heart; ≥ 3 KOs in 4 s → one cheer; KO run and boing-back landing', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const [c] = m.setActive(['mochi']);
+  step(ctx, 30);
+  ctx.fx.bursts.length = 0;
+  ctx.bus.emit(E.PLAYER_PARRY, { attacker: null });
+  assert.ok(ctx.fx.bursts.includes('heart'));
+  for (let i = 0; i < 4; i++) { ctx.bus.emit(E.ENEMY_DIED, { enemy: null, position: new THREE.Vector3(3, 0, 3) }); ctx.game.time += 0.5; }
+  assert.equal(c.stats.cheers, 1, 'one cheer per streak');
+  // KO: he runs to her and shakes his head
+  c.pos.set(6, 0, 0);
+  ctx.bus.emit(E.PLAYER_DIED, {});
+  assert.ok(c.koT > 0);
+  step(ctx, Math.round(2 / DT));
+  assert.ok(dist(c, ctx.player) < 1.6, `ran to her (${dist(c, ctx.player).toFixed(2)} m)`);
+  assert.ok(c._shook);
+  // she boings back at the vigil stone: he lands 1.5 m beside her with a paw-bump
+  ctx.player.pos.set(20, 0, 20);
+  const bumps = c.stats.bumps;
+  ctx.bus.emit(E.PLAYER_SPAWNED, { player: ctx.player });
+  assert.ok(Math.abs(dist(c, ctx.player) - 1.5) < 0.3, `landed ${dist(c, ctx.player).toFixed(2)} m beside her`);
+  assert.equal(c.stats.bumps, bumps + 1);
+});
+
+test('companions.W3: idle ladder 1.5 s behind hers → personal idle (Mochi yawns, Sage reads, Clover chases her tail)', async () => {
+  assert.deepEqual(PERSONAL_IDLE, { mochi: 'yawn', sage: 'nodBook', clover: 'tailChase' });
+  const ctx = makeCtx(); await ctx.companions.init();
+  const [c] = ctx.companions.setActive(['clover']);
+  step(ctx, Math.round(((config.IDLE?.groom ?? 10) + LIFE.offset + 0.5) / DT));
+  assert.ok(c.stats.idles >= 1, 'the personal idle ran');
+  assert.ok(c.spinT > 0 || c.stats.idles >= 1);
+});
+
+test('companions.W4: 25 s calm → exactly one banter pair (companion line, then her reply); never with an alert near', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const [c] = m.setActive(['mochi']);
+  step(ctx, Math.round((BANTER_RULE.calmFor - 1) / DT));
+  assert.equal(m.party.stats.banter, 0, 'not before 25 s');
+  step(ctx, Math.round(1.2 / DT));
+  assert.equal(m.party.stats.banter, 1, 'one pair at 25 s');
+  assert.equal(m.party.talk?.key, 'banter.mochi.1');
+  assert.ok(c.bubble.on, 'his line first');
+  step(ctx, Math.round(BANTER_RULE.lineDur / DT) + 2);
+  assert.ok(m.party.clemBubble?.on && !c.bubble.on, 'then her reply, one bubble at a time');
+  step(ctx, Math.round(10 / DT));
+  assert.equal(m.party.stats.banter, 1, 'exactly one pair');
+  assert.deepEqual(banterLines('banter.sage.1').map((l) => l[0]), ['c', 'clem', 'c']);
+  // the clock: an alert within 20 m resets it; each pair once per level
+  const clock = new BanterClock();
+  for (let i = 0; i < 30 / 0.1; i++) clock.tick(0.1, { id: 'sage', alertNear: i === 200, barkReady: true });
+  assert.equal(clock.used.size, 0, 'an alert at 20 s reset the calm timer');
+  let fired = 0;
+  for (let i = 0; i < 200 / 0.1; i++) if (clock.tick(0.1, { id: 'sage', alertNear: false, barkReady: true })) fired++;
+  assert.equal(fired, BANTER.sage.length, 'each pair once per level');
+  clock.reset(); assert.equal(clock.used.size, 0);
+});
+
+test('companions.W5: rescue reunion: runs ≤ 1.5 m to her, nose-boop + heart, hop ×1.2, sparkle trail; payload has position', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const k = m.spawnKitten('button', new THREE.Vector3(0, 0, 4), null, {});
+  ctx.player.pos.set(0, 0, 2.5);
+  step(ctx, 2);
+  assert.ok(k.rescued);
+  const ev = emitted(ctx, E.KITTEN_RESCUED).at(-1);
+  assert.ok(ev.position?.isVector3, 'payload has position');
+  assert.equal(k.stateName, 'reunion');
+  const from = k.pos.clone();
+  ctx.fx.bursts.length = 0;
+  step(ctx, Math.round((REUNION.maxRun + REUNION.boop + 0.2) / DT));
+  assert.ok(k.pos.distanceTo(from) <= REUNION.run + 0.05, 'ran at most 1.5 m');
+  assert.ok(ctx.fx.bursts.includes('heart'), 'nose-boop heart');
+  assert.ok(k.stateName === 'rescued' || k.stateName === 'leaving');
+  step(ctx, Math.round(REUNION.trailDur / DT) + 2);
+  assert.ok(ctx.fx.bursts.filter((b) => b === 'sparkle').length >= REUNION.trailN, 'the sparkle trail home');
+  assert.equal(REUNION.squash, 1.2);
+});
+
+test('AUTOCAM §13 companions 2 + §8.5: an aimed ability shares its reach in player.aim; Volley skips off-screen foes', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  ctx.player.aim = { active: false, dir: { x: 0, z: 1 }, range: 2, source: 'facing' };
+  const [sage] = m.setActive(['sage']);
+  assert.ok(m.aimAbility({ point: { x: 3, y: 0, z: 3 } }));
+  assert.equal(ctx.player.aim.range, COMPANIONS.sage.range, 'Volley range for the aim pan');
+  m.cancelAbilityAim();
+  const near = new FakeEnemy(ctx, 2, 2, { alerted: true }), far = new FakeEnemy(ctx, 9, 2, { alerted: true });
+  ctx.enemies.list = [near, far];
+  ctx.cam.onScreen = (p) => p.x < 5;
+  const plan = planAbility(ctx, sage, null);
+  assert.deepEqual(plan.targets, [near], 'no off-screen snipes');
+  delete ctx.cam.onScreen;
+  assert.equal(planAbility(ctx, sage, null).targets.length, 2);
 });

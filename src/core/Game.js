@@ -8,27 +8,29 @@ import { Loop } from './Loop.js';
 import { Input } from './Input.js';
 import { Assets } from './Assets.js';
 import { ActorRegistry } from './ActorRegistry.js';
-import { GameState } from './GameState.js';
-import { PostFX } from './PostFX.js';
+import { GameState, OS_SETTINGS, applyOsSettings, osReducedMotion } from './GameState.js';
+import { PostFX, usesFxaaPath } from './PostFX.js';
+import { installToon } from './toon.js';
+import { PerfMonitor, markOnce } from './perf.js';
 import { createRng } from './rng.js';
-import { installDebug } from './debug.js';
 import { SYSTEMS, STEP_ORDER, RENDER_ORDER, INIT_ORDER, MODE_GATES, GAMEPLAY_SYSTEMS } from './systems.js';
 import { S as STRINGS, t as translate, has as hasString } from '../story/strings.js';
 
 /**
  * URL switches: ?test (hooks, auto-start, fixed seed 1, no save load, no pointer lock, no dynamic res),
- * ?debug (hooks + Stats/lil-gui), ?seed=N, ?level=<id>&spawn=<id>, ?quality=low|med|high|auto.
+ * ?debug (hooks + Stats/lil-gui), ?perf (`__GAME__.perf()` + the PERF §12 overlay), ?seed=N, ?level=<id>&spawn=<id>,
+ * ?quality=low|med|high|auto.
  * @param {string} search
  */
 export function parseParams(search = '') {
   const q = new URLSearchParams(search);
   const flag = (k) => q.has(k) && q.get(k) !== '0' && q.get(k) !== 'false';
-  const test = flag('test'), debug = flag('debug');
+  const test = flag('test'), debug = flag('debug'), perf = flag('perf');
   const seedRaw = q.get('seed');
   const seed = seedRaw != null && seedRaw !== '' && Number.isFinite(+seedRaw) ? (+seedRaw >>> 0) : (test ? 1 : (Date.now() >>> 0));
   // CONTROLS_SPEC §15.3: ?cam=classic keeps the M1/M2 orbit camera, lens fog, pointer lock and bindings
   const cam = q.get('cam') === 'classic' ? 'classic' : 'iso';
-  return { test, debug, seed, level: q.get('level') || null, spawn: q.get('spawn') || null, quality: q.get('quality') || null, mute: flag('mute'), cam };
+  return { test, debug, seed, level: q.get('level') || null, spawn: q.get('spawn') || null, quality: q.get('quality') || null, mute: flag('mute'), cam, perf };
 }
 
 /**
@@ -59,9 +61,22 @@ export function parseParams(search = '') {
  * @property {any} story        story/StoryManager.js
  * @property {any} ui           ui/UI.js
  * @property {any} save         save/SaveManager.js
- * @property {PostFX} postfx    + bloom / vignette / quality
- * @property {object} quality   + active QUALITY preset (config.QUALITY.*)
+ * @property {PostFX} postfx    + render path (direct to canvas in play, K1), setCinematic(on, opts) (High PostChain), quality, pacing (dyn-res, fps cap, thermal: particleScale / grassScale), setScale(s), warmTargets() / prewarmCinematic(); setBloom / setVignette / setGrade record only in play
+ * @property {object} quality   + active QUALITY preset (config.QUALITY.*; `shadows` is 'sun'|'none': use config.qualityShadowsOn)
  * @property {ReturnType<typeof parseParams>} params  + URL switches
+ *
+ * IMPLEMENTATION_PLAN §7.2 surface (additive; code defensively with `?.` until each owner lands it):
+ * - core modules: math.js `smoothDamp` / `smoothDamp2`, schedule.js `every(game, hz, phase)`, depth.js `depthFor(o)`,
+ *   prewarm.js `prewarm(renderer, scene, camera, roots, {batch})`, toon.js `installToon()`, uniforms.js `uViewport`
+ *   (drawing-buffer px, written by PostFX on every resize), perf.js `PerfMonitor` (`game.perf`; `__GAME__.perf()`), `countPoolMiss()`, `PERF_CATS` (`userData.perfCat`).
+ * - cam: footprint {q, cx, cz, ahead, behind, halfW, halfWTop, slantMax, d, version}, inFootprint(x, z, pad), frustum,
+ *   frameId, inView(p, r), activityOf(actor), onScreen(p, margin) (= SafeFrame-visible, K4), safeFrame,
+ *   groundAxes(outU, outR), closeUp, probe(), framing().
+ * - player: moveIntent {x, z, speed, kind}, groundY, orders.lookAhead(d, out), aim.range. combat: tokens.holdersInto(kind, out).
+ * - ui: screenOccluders() → {version, rects}, ui.flash(color, alpha, dur). fx: fx.blobs.add(object3d, r) / remove.
+ * - world (modules): Env `TONE`, `ENV_U`, HeightFog `withHeightFog`, `StaticShadow`; characters (modules):
+ *   makeToonMaterial, getToonMaterial, makeMetalMaterial, softRamp, toonLib, setCloseUp, setActivity(tier),
+ *   debugFeatures(), buildOutline, Squash.
  */
 
 export class Game {
@@ -93,11 +108,14 @@ export class Game {
     this.started = true;
     const params = this.params;
 
-    // Low quality renders without the composer, so only then does the default framebuffer need MSAA.
-    const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
-    const renderer = new THREE.WebGLRenderer({ antialias: params.quality === 'low' || (coarse && !params.quality), powerPreference: 'high-performance', stencil: false });
+    // S1 (PERF C3 + C11, ART §3.1): toon chunks patched before the first compile; canvas MSAA on every tier (X1:
+    // play renders straight to the canvas; `antialias` is a context flag, so only the build-time Med FXAA fallback
+    // turns it off); Neutral tone mapping (K1); no synchronous shader checks outside dev / ?debug / ?test.
+    installToon();
+    const renderer = new THREE.WebGLRenderer({ antialias: wantsCanvasAA(params.quality), powerPreference: 'high-performance', stencil: false });
+    renderer.debug.checkShaderErrors = devBuild() || params.debug || params.test;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMapping = toneMappingOf(config.RENDER.toneMapping);
     renderer.toneMappingExposure = config.RENDER.exposure;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -107,7 +125,7 @@ export class Game {
     this.root.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#B7C0C3');
+    scene.background = new THREE.Color(config.RENDER.background);   // warm until Env sets the level's (WA §2.1)
     const camera = new THREE.PerspectiveCamera(config.RENDER.fov, 16 / 9, config.RENDER.near, config.RENDER.far);
     camera.position.set(0, 2, -4);
     scene.add(camera);   // audio listener / camera-attached fx live under it
@@ -133,6 +151,9 @@ export class Game {
     ctx.assets = new Assets(ctx);
     ctx.postfx = new PostFX(ctx);
     ctx.postfx.dynamicRes = !params.test;
+    /** PERF §12 instrumentation; per-system timers only with ?test / ?debug / ?perf */
+    this.perf = new PerfMonitor(this, { detailed: params.test || params.debug || params.perf });
+    this.perf.attach(renderer);
 
     /** @type {Map<string, any>} */
     this.systems = new Map([['input', ctx.input]]);
@@ -144,7 +165,13 @@ export class Game {
     this.stepList = STEP_ORDER.filter((k) => this.systems.has(k)).map((k) => [k, this.systems.get(k)]);
     this.renderList = RENDER_ORDER.filter((k) => this.systems.has(k)).map((k) => [k, this.systems.get(k)]);
 
-    this.debugApi = installDebug(this);
+    // debug.js is its own lazy chunk (PERF §10.2): only ?test / ?debug / ?perf download it
+    this.debugApi = null;
+    if (params.test || params.debug || params.perf) {
+      const { installDebug, installPerfOnly } = await import('./debug.js');
+      this.debugApi = params.test || params.debug ? installDebug(this) : installPerfOnly(this);
+    }
+    if (params.perf) this.perf.showOverlay();
 
     // persistence (never in ?test: runs must be reproducible)
     if (!params.test) {
@@ -153,13 +180,20 @@ export class Game {
     }
 
     ctx.input.attach(renderer.domElement);
-    ctx.postfx.setQuality(params.quality ?? ctx.state.settings.quality ?? 'auto');
+    ctx.postfx.setQuality(this._qualityName());
+    this._applyCap();
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
     this.resize();
 
     bus.on(E.HITSTOP, (p) => this.requestHitstop(p?.seconds ?? 0));
-    bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'quality') ctx.postfx.setQuality(p.value); });
+    bus.on(E.SETTINGS_CHANGED, (p) => {
+      if (p?.key === 'quality' || p?.key === 'batterySaver') ctx.postfx.setQuality(this._qualityName());
+      if (p?.key == null || p.key === 'fpsCap' || p.key === 'batterySaver') this._applyCap();
+    });
+    bus.on(E.QUALITY, (p) => { if (this.loop) this.loop.maxSteps = loopStepsFor(p?.name); this._applyCap?.(); });
+    bus.on(E.LEVEL_LOADED, () => ctx.postfx.pacing.resetProbe());
+    if (!params.test) this._bindOsSettings();
 
     for (const key of INIT_ORDER) {
       const sys = this.systems.get(key);
@@ -169,9 +203,11 @@ export class Game {
     bus.emit(E.QUALITY, { name: ctx.postfx.qualityName, preset: ctx.quality });
 
     this.loop = new Loop(renderer, {
+      maxSteps: loopStepsFor(ctx.postfx.qualityName),
       update: (dt) => this.step(dt),
       render: (alpha, frameDt) => this.frame(alpha, frameDt),
       before: (frameDt) => this.beforeFrame(frameDt),
+      gate: (rafDt) => ctx.postfx.pacing.gate(rafDt),
     });
     bus.emit(E.GAME_READY, {});
     this.loop.start();
@@ -183,8 +219,43 @@ export class Game {
     const p = this.params;
     const level = p.level ?? 'meadow';
     const spawn = p.spawn ?? (p.level ? 'start' : 'title');
-    await this.ctx.levels.load(level, spawn);
+    try {
+      await this.ctx.levels.load(level, spawn);
+    } finally {
+      dropSplash();
+    }
     this.bootedFrame = this.frameCount;
+    markOnce(spawn === 'title' ? 'title' : 'play');   // T_title / T_play (PERF §12; the smoke reads them)
+  }
+
+  /** The preset to run: ?quality, else battery saver → low, else settings.quality ('auto' by default). */
+  _qualityName() {
+    const p = this.params, st = this.ctx?.state?.settings;
+    if (p.quality) return p.quality;
+    if (st?.batterySaver) return 'low';
+    return st?.quality ?? 'auto';
+  }
+
+  /** settings.fpsCap / batterySaver + the preset's cap → the pacing frame cap (PERF §5.3, §5.4). ?test is uncapped. */
+  _applyCap() {
+    const st = this.ctx.state.settings, pf = this.ctx.postfx;
+    pf.pacing.setCap({ setting: this.params.test ? 'off' : (st.fpsCap ?? 'auto'), presetCap: pf.quality.fpsCap ?? 60, batterySaver: !this.params.test && !!st.batterySaver });
+  }
+
+  /**
+   * IMPLEMENTATION_PLAN §7.4 (AUTOCAM §10.1, ART §11): `reduceCameraMotion` / `reduceFlashes` follow the OS
+   * `prefers-reduced-motion` (first run and on its `change` event) until the player edits them; an edit (any
+   * SETTINGS_CHANGED without `source: 'os'`) clears `<key>Auto`. Never in ?test (runs must be reproducible).
+   */
+  _bindOsSettings() {
+    const { bus, state } = this.ctx;
+    const sync = () => {
+      for (const key of applyOsSettings(state.settings, osReducedMotion())) bus.emit(E.SETTINGS_CHANGED, { key, value: state.settings[key], source: 'os' });
+    };
+    sync();
+    bus.on(E.SAVE_LOADED, sync);
+    bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.source !== 'os' && OS_SETTINGS.includes(p?.key)) state.settings[`${p.key}Auto`] = false; });
+    try { matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', sync); } catch { /* no matchMedia */ }
   }
 
   resize() {
@@ -246,6 +317,8 @@ export class Game {
 
   // ------------------------------------------------------------------ loop
   beforeFrame(frameDt) {
+    this.perf.beginFrame();
+    this._simMs = 0;
     this.ctx.input.poll(frameDt);
     if (this._slow.length) {
       for (let i = this._slow.length - 1; i >= 0; i--) if ((this._slow[i].t -= frameDt) <= 0) this._slow.splice(i, 1);
@@ -260,11 +333,15 @@ export class Game {
     if (this.hitstopT > 0) { this.hitstopT = Math.max(0, this.hitstopT - dt); return; }   // world frozen; edges stay latched
     const gate = MODE_GATES[this.mode];
     const loading = !!ctx.levels?.loading;
+    const t0 = now(), timed = this.perf?.detailed;
     for (const [key, sys] of this.stepList) {
       if (gate && !gate.has(key)) continue;
       if (loading && GAMEPLAY_SYSTEMS.has(key)) continue;
+      const ts = timed ? now() : 0;
       try { sys.update(dt); } catch (e) { this._error(key, 'update', e); }
+      if (timed) this.perf.sys(key, now() - ts);
     }
+    this._simMs = (this._simMs ?? 0) + now() - t0;
     ctx.input.endStep();
     this.time += dt; this.stepCount++;
     if (!loading && this.mode !== 'menu') ctx.state.playtime += dt;
@@ -273,13 +350,23 @@ export class Game {
   /** One rendered frame: systems render (actors → camera → fx → ui → audio), then post. */
   frame(alpha, frameDt) {
     this.realTime += frameDt;
+    const perf = this.perf, timed = perf?.detailed, pf = this.ctx.postfx;
+    const t0 = now();
     for (const [key, sys] of this.renderList) {
       if (!sys.render) continue;
+      const ts = timed ? now() : 0;
       try { sys.render(alpha, frameDt); } catch (e) { this._error(key, 'render', e); }
+      if (timed) perf.sys(key + ':render', now() - ts);
     }
-    this.ctx.postfx.update(frameDt);
+    const t1 = now();
+    pf.workMs = perf?.lastWorkMs ?? 0;
+    pf.update(frameDt, perf?.gpuTimer?.lastMs ?? null);
     this.ctx.renderer.info.reset();
-    this.ctx.postfx.render(frameDt);
+    perf?.gpuTimer?.begin();
+    pf.render(frameDt);
+    perf?.gpuTimer?.end();
+    perf?.endFrame(this._simMs ?? 0, t1 - t0, now() - t1, this.loop?.stepsLastFrame ?? 0);
+    this._simMs = 0;
     this.frameCount++;
     for (const fn of this._frameHooks) { try { fn(frameDt); } catch (e) { this._error('hook', 'frame', e); } }
     if (this.debugApi && !this.debugApi.ready && this.bootedFrame >= 0 && this.frameCount - this.bootedFrame >= 10) this.debugApi.ready = true;
@@ -298,6 +385,7 @@ export class Game {
     for (const key of [...INIT_ORDER].reverse()) safe(() => this.systems.get(key)?.dispose?.());
     window.removeEventListener('resize', this._onResize);
     this.ctx.postfx.dispose();
+    this.perf?.dispose();
     this.ctx.renderer.dispose();
     this.ctx.renderer.domElement.remove();
     this._frameHooks.clear();
@@ -305,3 +393,35 @@ export class Game {
 }
 
 function safe(fn, fallback) { try { return fn(); } catch (e) { console.warn('[game]', e); return fallback; } }
+
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** True in the Vite dev server (shader checks stay on there; PERF §3.2). */
+function devBuild() { try { return !!import.meta.env?.DEV; } catch { return false; } }
+
+/** RENDER.toneMapping name → three constant (Neutral by default; K1, PERF §6.2). */
+export function toneMappingOf(name) {
+  return name === 'aces' ? THREE.ACESFilmicToneMapping : name === 'none' ? THREE.NoToneMapping : THREE.NeutralToneMapping;
+}
+
+/**
+ * Canvas MSAA for a requested preset (X1): on for every tier, except the build-time Med FXAA fallback (`RENDER.medAA
+ * === 'fxaa'`) when Med is requested explicitly ('auto' keeps it on: the context flag cannot change later).
+ * @param {string|null|undefined} quality
+ */
+export function wantsCanvasAA(quality) { return !usesFxaaPath({ id: quality }, config.RENDER.medAA); }
+
+/** Fixed-step cap per preset (PERF §4.1): Low 3, else 4. */
+export function loopStepsFor(name) { return name === 'low' ? config.LOOP.maxStepsLow : config.LOOP.maxSteps; }
+
+/**
+ * Fade the warm splash out (PERF §10.1) once the title (or the ?level) is up, then remove it. ui may restyle it;
+ * core guarantees it never covers a running game.
+ */
+export function dropSplash() {
+  if (typeof document === 'undefined') return;
+  const el = document.getElementById('splash');
+  if (!el || el.classList.contains('out')) return;
+  el.classList.add('out');
+  setTimeout(() => el.remove(), 450);
+}

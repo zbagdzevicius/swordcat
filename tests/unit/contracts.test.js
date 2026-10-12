@@ -188,6 +188,12 @@ test('§19.8: __GAME__ test hooks are all installed (and events is a 200-entry r
     for (const k of ['setValor', 'setShards', 'setHp']) assert.ok(fn(G.player, k), `__GAME__.player.${k}`);
     for (const k of ['setHpFrac', 'phase', 'freeShard']) assert.ok(fn(G.boss, k), `__GAME__.boss.${k}`);
     assert.ok(fn(G.cam, 'mode'));
+    // PERF §12 / ART §11.1 / AUTOCAM §11 (C1, A:core.6, M:core.5)
+    assert.equal(typeof G.perf, 'function');
+    for (const k of ['snapshot', 'reset', 'setScale', 'viewport']) assert.ok(fn(G.perf, k), `__GAME__.perf.${k}`);
+    for (const k of ['frameStats', 'heroChroma', 'featurePx', 'shadowRatio', 'programs']) assert.ok(fn(G.art, k), `__GAME__.art.${k}`);
+    assert.ok('composerActive' in G.art);
+    for (const k of ['probe', 'framing']) assert.ok(fn(G.cam, k), `__GAME__.cam.${k}`);
     for (let i = 0; i < 250; i++) ctx.bus.emit('ui:toast', { text: String(i) });
     assert.equal(G.events.length, 200);
     G.kittens(4); assert.deepEqual(ctx.state.kittens, config.KITTEN_IDS.slice(0, 4));
@@ -223,4 +229,141 @@ test('no DOM / WebGL at import: every src module imports under node', async () =
     try { await import(pathToFileURL(f).href); } catch (e) { failures.push(`${path.relative(ROOT, f)}: ${e.message}`); }
   }
   assert.deepEqual(failures, [], 'modules failed to import:\n' + failures.join('\n'));
+});
+
+// ---------------------------------------------------------------------------------------------
+// IMPLEMENTATION_PLAN §4 / §7.4 (S2 config merge) + Phase W core.W1 (WA §12)
+// ---------------------------------------------------------------------------------------------
+test('§4 merged QUALITY: every preset carries the PERF §2 key set; shadows is a string; retired keys kept', () => {
+  const keys = ['maxDpr', 'dynRes', 'aa', 'cinematic', 'toneMapping', 'dither', 'cssVignette', 'glowCards', 'shadows', 'shadowMap',
+    'vertexAO', 'furShellsIso', 'furShellsClose', 'kittenShellsIso', 'charTufts', 'outline', 'grassTufts', 'groundMist', 'particles',
+    'maxEnemies', 'maxSkinned', 'fpsCap', 'programs'];
+  const retired = ['minDpr', 'composer', 'msaa', 'bloom', 'grass', 'furShells', 'kittenShells', 'charDetail'];
+  for (const [id, q] of Object.entries(config.QUALITY)) {
+    assert.equal(q.id, id);
+    for (const k of [...keys, ...retired]) assert.ok(k in q, `QUALITY.${id}.${k}`);
+    assert.ok(['none', 'sun'].includes(q.shadows), `QUALITY.${id}.shadows`);
+    assert.ok(q.dynRes.min > 0 && q.dynRes.min < q.dynRes.max && q.dynRes.max <= 1);
+  }
+  const { low, med, high } = config.QUALITY;
+  assert.deepEqual([low.maxDpr, med.maxDpr, high.maxDpr], [1.25, 1.25, 1.5]);
+  assert.deepEqual([low.shadowMap, med.shadowMap, high.shadowMap], [0, 1024, 2048]);
+  assert.deepEqual([low.cinematic, med.cinematic, high.cinematic], [false, false, true]);
+  assert.deepEqual([low.outline, med.outline, high.outline], ['hero', 'heroCompanionsEngaged', 'all']);
+  assert.deepEqual([low.grassTufts, med.grassTufts, high.grassTufts], [1300, 4000, 8000]);
+  assert.equal(config.qualityShadowsOn(low), false);
+  assert.equal(config.qualityShadowsOn(med), true);
+  assert.equal(config.qualityShadowsOn({ shadows: true }), true, 'the retired boolean still works');
+  assert.equal(config.qualityShadowsOn(null), false);
+});
+
+test('§7.2 core surface: postfx render path API (K1), PERF config + PERF_THERMAL event, perf.js exports', async () => {
+  const { PostFX } = await import('../../src/core/PostFX.js');
+  const proto = PostFX.prototype;
+  for (const k of ['setQuality', 'setSize', 'setPixelRatio', 'setScale', 'setCinematic', 'setBloom', 'resetBloom', 'setVignette', 'setGrade', 'update', 'render', 'warmTargets', 'prewarmCinematic', 'dispose'])
+    assert.equal(typeof proto[k], 'function', `postfx.${k}`);
+  for (const k of ['composerActive', 'particleScale', 'grassScale', 'scale', 'bloom', 'path']) assert.ok(Object.getOwnPropertyDescriptor(proto, k)?.get, `postfx.${k} getter`);
+  assert.equal(config.PERF.stage, 'I1');
+  assert.deepEqual(config.PERF.budgets.I1.frameCalls, { low: 70, med: 120, high: 150 });
+  assert.deepEqual(config.PERF.budgets.I2.frameCalls, { low: 60, med: 90, high: 110 });
+  assert.deepEqual(config.PERF.budgets.End.sceneCalls, { low: 40, med: 60, high: 90 });
+  assert.equal(config.PERF.dynRes.gpuDownMs, 12.5); assert.equal(config.PERF.dynRes.minInterval, 2);
+  assert.ok(Object.isFrozen(config.PERF.thermal));
+  assert.deepEqual(config.RENDER.cinematic.bloom, [0.6, 0.4, 0.9], 'ART §3.3 defaults, threshold 0.9');
+  assert.equal((await import('../../src/core/events.js')).E.PERF_THERMAL, 'perf:thermal');
+  const perf = await import('../../src/core/perf.js');
+  for (const k of ['PerfMonitor', 'GpuTimer', 'countPoolMiss', 'markOnce', 'budgetFor', 'drawsByCat', 'textureMB']) assert.ok(perf[k], `perf.js ${k}`);
+});
+
+test('§4 LOOP / RENDER: maxSteps 4 (Low 3), Neutral tone mapping, medAA, toon ramp with sat <= 1.15', () => {
+  assert.equal(config.LOOP.maxSteps, 4); assert.equal(config.LOOP.maxStepsLow, 3); assert.equal(config.LOOP.maxFrameDt, 0.1);
+  assert.equal(config.RENDER.toneMapping, 'neutral');
+  assert.ok(['canvas', 'fxaa'].includes(config.RENDER.medAA));
+  assert.deepEqual(config.RENDER.toon, { band: [0, 0.07], step: [0.42, 0.50, 0.86], shadow: [0.38, 0.62], sat: 1.12 });
+  assert.ok(config.RENDER.toon.sat <= 1.15, 'oversaturation guard');
+});
+
+test('ART §4.1 toon.js: installToon patches every TOON_KEYS chunk once (idempotent)', async () => {
+  const { installToon, TOON_KEYS } = await import('../../src/core/toon.js');
+  assert.equal(installToon(), true);
+  const C = THREE.ShaderChunk, len = TOON_KEYS.map((k) => C[k].length);
+  for (const k of TOON_KEYS) assert.match(C[k], /toon/i, k);
+  assert.equal(installToon(), true);
+  assert.deepEqual(TOON_KEYS.map((k) => C[k].length), len, 'second call is a no-op');
+});
+
+test('AUTOCAM §12 CAMERA.iso tables merged; retired CONTROLS §13 keys keep their values', () => {
+  const I = config.CAMERA.iso;
+  for (const k of ['distRangePortrait', 'follow', 'aimPan', 'frame', 'framing', 'beats', 'snuggle', 'reduce', 'pinch', 'semi', 'foot', 'budget']) assert.ok(I[k] != null, `CAMERA.iso.${k}`);
+  assert.equal(I.touchShakeRot, 0);
+  for (const k of ['gainUp', 'gainDown', 'gainSide', 'caps', 'speedRamp', 'debounce', 'orderLook', 'biasST', 'max', 'cursorMax']) assert.ok(k in I.lead, `lead.${k}`);
+  for (const k of ['vel', 'velMax', 'damp', 'cursor']) assert.ok(k in I.lead, `retired lead.${k} kept`);
+  assert.deepEqual(I.foot.far, [45, 90]); assert.equal(I.far, 90, 'retired far kept until camera reads foot.far');
+  assert.equal(typeof I.boss.herInner, 'number'); assert.ok(I.boss.establish && I.boss.dizzy && I.boss.phaseBreath);
+  assert.equal(I.framing.orbitPenalty.k, 1.5);
+  assert.equal(I.occl.archOpacity, 0.1);
+});
+
+test('core.W1: WA §12 keys present and frozen; IDLE before the Meme Cam; a glyph for every telegraph kind', () => {
+  const { TELEGRAPH, JUICE, CLASS_MARKS, KO, BUNTING, IDLE, HUD, CELEBRATE, PICKUP_FX, FX, STORY, ENEMIES, ATTACKS, PLAYER } = config;
+  for (const [name, t] of Object.entries({ CLASS_MARKS, KO, BUNTING, IDLE, HUD, CELEBRATE, PICKUP_FX, FX, STORY })) {
+    assert.ok(Object.isFrozen(t), `${name} frozen`);
+    for (const v of Object.values(t)) if (v && typeof v === 'object') assert.ok(Object.isFrozen(v), `${name} nested frozen`);
+  }
+  for (const t of [TELEGRAPH.glyph, TELEGRAPH.ink, JUICE.finalBlow, ENEMIES.hyena.plateWordsFriend, ENEMIES.stealer.plateWordsFriend]) assert.ok(Object.isFrozen(t));
+  // the idle ladder is strictly ascending and every step comes before the Meme Cam trigger
+  assert.ok(IDLE.glance < IDLE.look && IDLE.look < IDLE.groom && IDLE.groom < IDLE.twirl);
+  assert.ok(IDLE.twirl < PLAYER.memeCam.idle, 'IDLE.twirl < memeCam.idle');
+  assert.ok(IDLE.loopFrom >= IDLE.glance && IDLE.loopFrom < IDLE.twirl);
+  // every ATTACKS / BOSSES telegraph kind has a glyph and a colour
+  const kinds = new Set();
+  for (const a of Object.values(ATTACKS)) if (a.telegraph) kinds.add(a.telegraph);
+  for (const b of Object.values(config.BOSSES)) for (const m of Object.values(b.moves ?? {})) if (m?.telegraph) kinds.add(m.telegraph);
+  assert.ok(kinds.size >= 6);
+  for (const k of kinds) {
+    assert.equal(typeof TELEGRAPH.glyph[k], 'string', `TELEGRAPH.glyph.${k}`);
+    assert.match(TELEGRAPH.colors[k], /^#[0-9A-F]{6}$/i);
+  }
+  assert.equal(TELEGRAPH.colors.red, '#FF5A4E'); assert.equal(TELEGRAPH.colors.aoe, '#FF9A3D');
+  assert.equal(TELEGRAPH.colors.shadow, '#3A2346', 'no black (WA §2.7)');
+  assert.deepEqual(JUICE.finalBlow, { hitstopAdd: 0.06, slowMo: 0.25, timeScale: 0.35 });
+  assert.equal(ENEMIES.hyena.plateWordsFriend.length, ENEMIES.hyena.plateWords.length, 'friend words index-paired');
+  assert.deepEqual(ENEMIES.stealer.plateWordsFriend, ['POSTMASTER']);
+  assert.equal(STORY.cs02Cut, true); assert.deepEqual(STORY.mochiCage, [-14, -41]);
+  assert.deepEqual(STORY.kittenOffer, { knockouts: 2, windowS: 180, failedParries: 3 });
+  assert.ok(Math.abs(KO.sitT + KO.wipeT - 1.55) < 1e-9);
+  assert.ok(BUNTING.maxLow <= BUNTING.max / 2 && BUNTING.lanternMaxLow <= BUNTING.lanternMax / 2);
+  assert.equal(HUD.tuck.after, 4); assert.equal(CELEBRATE.confettiMax, 24); assert.equal(PICKUP_FX.pitchMax, 8);
+  assert.equal(FX.comicPops.parry, 'always');
+  assert.equal(CLASS_MARKS.hero.color, '#FF8FB1');
+  assert.equal(config.FADE_COLOR, '#FFF1DE');
+});
+
+test('§7.4 + Phase W settings: defaults, allowed values, camLock -> camLockMode migration, OS-following keys', async () => {
+  const { migrateSettings, applyOsSettings, osReducedMotion, OS_SETTINGS } = await import('../../src/core/GameState.js');
+  const s = defaultState().settings;
+  const want = { reduceCameraMotion: false, camCursorLead: 0, camLockMode: 'locked', camZoomPortrait: 1, biggerHero: false,
+    reduceFlashes: false, quality: 'auto', fpsCap: 'auto', batterySaver: false, hudMode: 'calm', hitWords: true, tutorialHints: true,
+    reduceCameraMotionAuto: true, reduceFlashesAuto: true, camLock: true };
+  for (const [k, v] of Object.entries(want)) assert.equal(s[k], v, `settings.${k}`);
+  for (const [k, allowed] of Object.entries(config.SETTING_VALUES)) {
+    if (typeof allowed[0] === 'string') assert.ok(k === 'pathPreview' || allowed.includes(s[k]), `${k} default allowed`);
+    else assert.ok(s[k] >= allowed[0] && s[k] <= allowed[1], `${k} in range`);
+  }
+  // K7: an old save with the camera unlocked -> camLockMode 'free'; an unlocked mode keeps the retired camLock false
+  assert.equal(new GameState({ settings: { camLock: false } }).settings.camLockMode, 'free');
+  assert.equal(new GameState({ settings: { camLockMode: 'semi' } }).settings.camLock, false);
+  assert.equal(new GameState({ settings: { hudMode: 'loud' } }).settings.hudMode, 'calm', 'bad enum -> default');
+  assert.equal(new GameState({ settings: { fpsCap: 45 } }).settings.fpsCap, 'auto');
+  assert.equal(new GameState({ settings: { fpsCap: 30 } }).settings.fpsCap, 30);
+  assert.deepEqual(migrateSettings({ ...s }), s, 'idempotent on the defaults');
+  // OS preference: followed until the player edits the key
+  const st = { ...s };
+  assert.deepEqual(applyOsSettings(st, true), [...OS_SETTINGS]);
+  assert.equal(st.reduceCameraMotion, true);
+  st.reduceFlashesAuto = false; st.reduceFlashes = false;
+  assert.deepEqual(applyOsSettings(st, false), ['reduceCameraMotion']);
+  assert.equal(st.reduceFlashes, false);
+  assert.equal(osReducedMotion(() => ({ matches: true })), true);
+  assert.equal(osReducedMotion(undefined), false);
 });

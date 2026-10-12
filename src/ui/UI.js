@@ -6,6 +6,10 @@
 //   showResults(payload) → Promise (world: levels.exit awaits it) · cinema (story's `host.cinema`: letterbox, hud,
 //   apply(step), clear) · toast(text, {icon, key}) · hint(keyOrText | null, {step, total, sec}) · chapter(c) → Promise
 //   · fade(f) → Promise · showTitle() · pause() / resume() · openVigil() · busy (a ui screen owns input)
+// IMPLEMENTATION_PLAN §7.2 (warm / perf / auto-camera phase): flash(color, alpha, dur) (ART §9.1 `#ui-flash`; presets
+//   hurt / rescue / card / storm) · screenOccluders() → { version, rects } and safeArea (AUTOCAM §7.1) · thumbs (live
+//   joystick / held-button state, read-only) · celebrate(kind, id, vars) (WA §5.4) · offerKitten({ speaker }) → Promise
+//   (WA §6.3) · touch.reveal(...) (WA §7.5). The splash (`#splash`, PERF §10.1) fades out on game:ready.
 //
 // Modes: the ui freezes the world with game.pause(true) ('menu') for Pause / Vigil / Game over, with 'cutscene' for the
 // title (when no CS-00 runs) and the results card; it hands back what it took. In `update(dt)` (fixed step) it reads
@@ -13,12 +17,9 @@
 import css from './ui.css?inline';
 import fontsCss from './fonts.css?inline';
 import { E } from '../core/events.js';
-import { PLAYER, KITTEN_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
-
-/** kitten id → the level it is lost in */
-const KITTEN_LEVEL = Object.fromEntries(Object.entries(KITTENS_BY_LEVEL).flatMap(([lvl, ids]) => ids.map((id) => [id, lvl])));
+import { PLAYER, KO } from '../core/config.js';
 import { el, flag, setVar, hasDom } from './dom.js';
-import { tx, levelKittens, UI_STRINGS } from './text.js';
+import { tx, UI_STRINGS } from './text.js';
 import { loadFonts } from './fonts.js';
 import { Hud } from './hud.js';
 import { Dialog } from './dialog.js';
@@ -28,7 +29,7 @@ import { Results } from './results.js';
 import { Toasts } from './toasts.js';
 import { Prompts } from './prompts.js';
 import { ThreatArrows } from './threatArrows.js';
-import { TouchControls } from './touch.js';
+import { TouchControls, LESSON_BUTTONS } from './touch.js';
 import { AbilityBar } from './abilityBar.js';
 import { CursorController } from './cursor.js';
 import { HpBars } from './hpBars.js';
@@ -36,8 +37,19 @@ import { applySetting } from './settings.js';
 import { TouchLayoutEditor } from './touchEditor.js';
 import { openShop as buildShop, stationId } from './shops.js';
 import { openQuestBoard as buildBoard, HUB_LEVEL } from './questBoard.js';
+import { ScreenLayers } from './layers.js';
+import { Occluders } from './occluders.js';
+import { Celebrate } from './celebrate.js';
+import { KittenOffer } from './offer.js';
+import { FlyIcons } from './flyIcons.js';
 
-export const UI_TIMING = Object.freeze({ skipHold: 1.0, skipRingAfter: 0.12, pauseTap: 0.3, tutorialTap: 0.35, gameOverDelay: 1.4, vigilDelay: 0.9 });
+export const UI_TIMING = Object.freeze({ skipHold: 1.0, skipRingAfter: 0.12, pauseTap: 0.3, tutorialTap: 0.35, gameOverDelay: 1.4, vigilDelay: 0.9, splashOut: 0.45 });
+
+/** WA §5.7 knock-out timings the ui keys its cream wipe on (config KO; player owns them). */
+const KO_T = { sitT: KO?.sitT ?? 1.2, wipeT: KO?.wipeT ?? 0.35 };
+
+/** The read-only snapshot screenOccluders() returns before the DOM exists (node, tests). */
+const NO_OCCLUDERS = Object.freeze({ version: 0, rects: Object.freeze([]) });
 
 export class UI {
   constructor(ctx) {
@@ -63,6 +75,12 @@ export class UI {
     this._modeTaken = null;         // the mode the ui switched away from (title / results)
     this.rand = ctx?.rng?.fork ? ctx.rng.fork('ui') : Math.random;
     this._licenses = null;
+    /** ART §9.1 #ui-vignette / #ui-flash */ this.layers = null;
+    /** AUTOCAM §7.1 SafeFrame inputs */ this.occluders = null;
+    /** WA §5.4 */ this.celebrations = null;
+    /** WA §6.3 */ this.offer = null;
+    /** WA §5.5 fly-to-HUD */ this.fly = null;
+    this._lastUnlocked = 'free';
     /** requests/story.md: the features the ui draws (story's own fallback Overlay steps aside for each). */
     this.handles = Object.freeze({ dialog: true, cinema: true, prompt: true, skip: true, title: true, tutorial: true });
     /**
@@ -143,7 +161,8 @@ export class UI {
       const sum = this.saveSummary();
       if (sum) this.bootSave = { levelId: sum.levelId ?? 'meadow', spawnId: sum.spawnId ?? 'start' };
     }
-    // layers, back to front
+    // layers, back to front (the vignette + flash first: the HUD paints over them)
+    this.layers = new ScreenLayers(ctx, this.root);
     this.arrows = new ThreatArrows(ctx, this.root);
     this.hud = new Hud(ctx, this.root);
     /** CONTROLS_SPEC §10.4 / §10.5: enemy HP pills and the Grit arc (iso) */
@@ -163,9 +182,15 @@ export class UI {
     this.toasts = new Toasts(this.hud.toastSlot, () => ctx.input?.device ?? 'kbm', () => ctx.input ?? null);
     this.dialog = new Dialog(ctx, this.root);
     this.overlay = new Cinema(ctx, this.root, { onHud: () => {}, rand: this.rand });
-    this.results = new Results(ctx, this.root, { sfx: (id) => this.sfx(id), onClose: () => this._giveBackMode() });
+    this.results = new Results(ctx, this.root, { sfx: (id, o) => this.sfx(id, o), onClose: () => this._giveBackMode() });
+    this.celebrations = new Celebrate(ctx, this.root, this);
+    this.offer = new KittenOffer(ctx, this.root, this);
+    this.fly = new FlyIcons(ctx, this.root, (k) => this.homeRect(k), (k) => this.bumpHome(k));
     this.menus = new Menus(ctx, this.root, this);
     this.touch = new TouchControls(ctx, this.touchHost, this.root);
+    this.occluders = new Occluders(this);
+    this._onResize = () => this.occluders?.invalidate();
+    window.addEventListener('resize', this._onResize);
     this.overlay.loading(this.isLoading || !ctx.levels?.current);   // the boot veil until the first level is in
     this._subscribe();
     this._device(ctx.input?.device ?? 'kbm');
@@ -174,31 +199,34 @@ export class UI {
 
   _subscribe() {
     const ctx = this.ctx, bus = ctx.bus, on = (n, f) => this._offs.push(bus.on(n, f));
-    // §10.7 settings.camLock ↔ the camera's lock (Y toggles it in play; the setting persists it)
-    on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'camLock' && ctx.cam?.setCamLock && ctx.cam.camLocked !== !!p.value) ctx.cam.setCamLock(!!p.value, false); });
-    if (ctx.state?.settings?.camLock === false) ctx.cam?.setCamLock?.(false, false);
+    // AUTOCAM §10.4 / X19: settings.camLockMode ('locked' | 'semi' | 'free'; the retired boolean camLock kept in sync)
+    // ↔ the camera's lock (Y toggles it in play; the setting persists it)
+    on(E.SETTINGS_CHANGED, (p) => {
+      if (p?.key === 'camLockMode' && p.source !== 'camera') this._applyLockMode(p.value);
+      else if (p?.key === 'camLock' && ctx.cam?.setCamLock && ctx.cam.camLocked !== !!p.value) ctx.cam.setCamLock(!!p.value, false);
+      if (p?.key === 'touchSize' || p?.key === 'leftHanded' || p?.key === 'touchLayout' || p?.key === 'hudMode') this.occluders?.invalidate();
+    });
+    { const m = ctx.state?.settings?.camLockMode; if (m && m !== 'locked') this._applyLockMode(m); else if (ctx.state?.settings?.camLock === false) ctx.cam?.setCamLock?.(false, false); }
     const T = (k, v) => tx(ctx, k, v);
     on(E.TOAST, (p) => this.toast(p?.text ?? (p?.key ? T(p.key, p.vars) : ''), { icon: p?.icon, key: p?.key }));
-    // M2 (STATUS known issue): the toast counts the level's kittens like the HUD, Results and Quest Board (n/3);
-    // `{total}` (the whole game, n/18) stays available to the string.
-    on(E.KITTEN_RESCUED, (p) => {
-      const lvl = KITTEN_LEVEL[p?.kittenId ?? p?.id] ?? ctx.levels?.current?.id;
-      const k = levelKittens(ctx.state, lvl);
-      const total = Math.max(1, ctx.state?.kittens?.length ?? 1);
-      const vars = k.max ? { n: Math.max(1, k.n), max: k.max, total } : { n: total, max: KITTEN_IDS.length, total };
-      this.toast(T('toast.kitten', vars), { key: 'toast.kitten' });
-    });
+    // WA §5.4: kitten rescues, Heart Bells and shards are celebration cards now (celebrate.js); letters stay toasts.
+    // WA §5.5: a fish (heart, milk) picked up in the world flies to its HUD counter.
     on(E.ITEM_PICKUP, (p) => {
       if (p?.item === 'letter') this.toast(T('toast.letter', { title: T(`letter.${p.id}.title`) }), { key: 'toast.letter' });
-      else if (p?.item === 'heartBell') this.toast(T('toast.heartbell'), { key: 'toast.heartbell' });
+      else if (p?.position && (p.item === 'fish' || p.item === 'smallHeart' || p.item === 'milk')) this.fly?.launch(p.item, p.position, p.item === 'fish' ? 'fish' : p.item === 'milk' ? 'milk' : 'hearts');
     });
+    on(E.GAME_READY, () => this._splashOut());
+    // WA §7.5: during Morning Practice the touch buttons appear lesson by lesson (visibility only)
+    on(E.PROMPT, (p) => this._lesson(p));
+    on(E.LEVEL_LOADING, () => { if (this.touch?.veiled) this.touch.veil(null); this._taught = null; });
+    on(E.DIALOG_START, () => this.occluders?.invalidate());
+    on(E.DIALOG_END, () => this.occluders?.invalidate());
     on(E.UNLOCK, (p) => {
       if (!p || (p.kind === 'cape' && p.id === 'memeWhite')) return;     // the Meme Cam trigger toasts that one itself
       const name = ctx.strings?.has?.(`${p.kind}.${p.id}`) ? T(`${p.kind}.${p.id}`) : UI_STRINGS[`ui.${p.kind}.${p.id}`] ? T(`ui.${p.kind}.${p.id}`) : titleCaseId(p.id);
       if (p.kind === 'skin') this.toast(T('toast.skin', { name }), { key: 'toast.skin' });
       else if (p.kind === 'cape') this.toast(T('toast.cape', { name }), { key: 'toast.cape' });
     });
-    on(E.SHARD, (p) => this.toast(T('toast.shard', { n: p?.n ?? ctx.state?.shards ?? 1 }), { key: 'toast.shard' }));
     on(E.ITEM_STOLEN, (p) => this.toast(p?.item === 'milk' ? T('toast.stolenMilk') : T('toast.stolen', { n: p?.amount ?? 0 }), { key: 'toast.stolen' }));
     on(E.ITEM_RETURNED, () => this.toast(T('toast.returned'), { key: 'toast.returned' }));
     const doneObj = new Set();
@@ -210,7 +238,7 @@ export class UI {
     });
     on(E.PLAYER_LIFE_LOST, (p) => {
       if (p?.gameOver) this._after(UI_TIMING.gameOverDelay, () => this.gameOver());
-      else this.overlay.lifeLost(p?.lives ?? ctx.player?.lives ?? 0, { infinite: !!p?.infinite });
+      else this._knockOut(p);
     });
     on(E.MEME_CAM, (p) => { this.meme = !!p?.on; this.memeT = 0; this.memeCapShown = false; if (!this.meme) this.overlay.memeCaption(null); });
     on(E.CUTSCENE_START, (p) => {
@@ -241,7 +269,7 @@ export class UI {
       // someone else un-paused (debug, smoke harness, story): close our pause-type screens
       if (p?.prev === 'menu' && p.mode !== 'menu' && this.menus.paused && !this._modeBusy) this.menus.popLayer('pause');
     });
-    on(E.INPUT_DEVICE, (p) => this._device(p?.device));
+    on(E.INPUT_DEVICE, (p) => { this._device(p?.device); this.occluders?.invalidate(); });
     // hub stations (§12.5): world's interactables of kind 'shop' / 'board' (or the station ids themselves) open the
     // panels. world may also call ui.openShop / openQuestBoard from its own use(); the second call is a no-op.
     on(E.INTERACT, (p) => this._onInteract(p?.target));
@@ -263,10 +291,92 @@ export class UI {
     for (const k of ['kbm', 'pad', 'touch']) flag(this.root, `dev-${k}`, d === k);
   }
 
+  /**
+   * WA §5.7 "dizzy sit, boing back": she sits dizzy for KO.sitT s (player / fx), then a cream wipe (KO.wipeT s) covers the
+   * respawn, then it clears and the toast `life.*` and the lives-badge pop (hud.js) land. No card, no ghost, no grey.
+   */
+  _knockOut(p) {
+    const ctx = this.ctx;
+    const text = this.overlay?.lifeLostText(p?.lives ?? ctx.player?.lives ?? 0, { infinite: !!p?.infinite }) ?? '';
+    this._after(KO_T.sitT, () => {
+      if (ctx.levels?.loading || ctx.story?.isPlaying) return;
+      this.overlay?.fade({ to: 'cream', alpha: 1, dur: KO_T.wipeT });
+      this._after(KO_T.wipeT, () => {
+        if (!ctx.levels?.loading) this.overlay?.fade({ to: null, dur: 0.35 });
+        if (text) this.toast(text, { key: 'life.lost', icon: 'heart' });
+      });
+    });
+  }
+
+  /**
+   * WA §7.5 progressive reveal: the first guided practice prompt veils the lesson buttons not taught yet; each step's
+   * `action` reveals its button (pop + 3-ring pulse). Lifted when practice is over (prologue flags, a load, or 3 s with
+   * no guide bubble and no running tutorial).
+   */
+  _lesson(p) {
+    const tc = this.touch, st = this.ctx.state;
+    if (!p?.speaker || !tc) return;
+    if (st?.getFlag?.('prologue.tutorial') || st?.getFlag?.('prologue.done')) { if (tc.veiled) tc.veil(null); return; }
+    if (!tc.veiled) tc.veil(this._taught = []);
+    const a = p.action === 'chargeRelease' ? 'attack' : p.action;
+    if (a && LESSON_BUTTONS.includes(a) && !p.done) { if (!this._taught.includes(a)) this._taught.push(a); tc.reveal(a); }
+    this._veilIdle = 0;
+  }
+
+  /** PERF §10.1: the warm splash (core's inline `#splash`) fades out once the title is interactive, then goes. */
+  _splashOut() {
+    if (typeof document === 'undefined') return;
+    const sp = document.getElementById('splash');
+    if (!sp || sp.classList.contains('out')) return;
+    sp.classList.add('out');
+    setTimeout(() => sp.remove(), UI_TIMING.splashOut * 1000);
+  }
+
+  /** AUTOCAM §10.4: push a lock mode to the camera (KBM only there; pad / touch stay locked by the camera). */
+  _applyLockMode(mode) {
+    const cam = this.ctx.cam;
+    if (mode !== 'locked' && mode) this._lastUnlocked = mode;
+    if (typeof cam?.setLockMode === 'function') { cam.setLockMode(mode); return; }
+    if (cam?.setCamLock && cam.camLocked !== (mode === 'locked')) cam.setCamLock(mode === 'locked', false);
+  }
+
+  // ------------------------------------------------------------------ warm-phase services (IMPLEMENTATION_PLAN §7.2)
+  /** ART §9.1 `#ui-flash`: a full-screen flash, opacity only (presets 'hurt' | 'rescue' | 'card' | 'storm'). */
+  flash(color, alpha, dur) { return this.layers?.flash(color, alpha, dur) ?? null; }
+
+  /** AUTOCAM §7.1: measured occluder rects (CSS px) + a version that bumps only when a rect changes. */
+  screenOccluders() { return this.occluders?.out ?? NO_OCCLUDERS; }
+
+  /** env(safe-area-inset-*) in CSS px (AUTOCAM §7.1; read from a hidden probe div once per layout). */
+  get safeArea() { return this.occluders?.safeArea ?? { top: 0, right: 0, bottom: 0, left: 0 }; }
+
+  /** Live thumb state (read-only): the joystick base and the held cluster button (AUTOCAM §7.1 live holes). */
+  get thumbs() { return this.touch?.thumbs ?? null; }
+
+  /** WA §5.4: queue a reward card ('sticker' | 'card' | 'friend'). */
+  celebrate(kind, id, vars) { return this.celebrations?.show(kind, id, vars) ?? false; }
+
+  /** WA §6.3: the Kitten-mode offer (once per save). Resolves true / false, or null when not shown. */
+  offerKitten(o) { return this.offer?.offer(o) ?? Promise.resolve(null); }
+
+  /** A HUD home's viewport rect for fly-to-HUD (WA §5.4 / §5.5), or null when it is not on screen. */
+  homeRect(key) {
+    const e = this.hud?.homeEl?.(key);
+    const r = e?.getBoundingClientRect?.();
+    if (!r || !(r.width > 0)) {
+      if (key === 'stickers' && this.touch?.enabled) { const b = this.touch.pauseBtn?.getBoundingClientRect?.(); if (b?.width > 0) return { x: b.left, y: b.top, w: b.width, h: b.height }; }
+      return null;
+    }
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  }
+
+  /** A fly-to-HUD icon / reward landed: the counter bumps (and shows itself in the calm HUD). */
+  bumpHome(key) { this.hud?.bump?.(key); }
+
   /** Run `fn` after `sec` real seconds (render-clocked; cleared on dispose). */
   _after(sec, fn) { this._timers.push({ t: sec, fn }); }
 
-  sfx(id) { try { this.ctx.audio?.play2D?.(id); } catch { /* audio optional */ } }
+  sfx(id, o) { try { this.ctx.audio?.play2D?.(id, o); } catch { /* audio optional */ } }
 
   /**
    * §9.2 Edit layout: closes the menus and shows the touch cluster in edit mode (drag buttons; Done saves
@@ -332,6 +442,21 @@ export class UI {
     const sv = this.ctx.save;
     if (typeof sv?.hasSave === 'function') { try { return !!sv.hasSave(); } catch { /* fall through */ } }
     return !!this.bootSave;
+  }
+
+  /**
+   * Is the stored save past the prologue? (ON §3.3: only then does "New adventure" ask "Skip the prologue?".) Reads the
+   * stored flags through save.peek() when it exists, else infers it from the summary (a later level or a clear).
+   */
+  savePastPrologue() {
+    const sv = this.ctx.save;
+    try {
+      const flags = sv?.peek?.()?.data?.flags;
+      if (flags && typeof flags === 'object') return !!flags['prologue.done'];
+    } catch { /* fall through */ }
+    const sum = this.saveSummary();
+    if (!sum) return false;
+    return (Array.isArray(sum.cleared) && sum.cleared.length > 0) || (!!sum.levelId && sum.levelId !== 'meadow') || (sum.spawnId != null && !/^(practice|title|barn)$/.test(sum.spawnId) && sum.levelId === 'meadow' && sum.spawnId !== 'start');
   }
 
   /** save.summary() for the Continue card ({ levelId, kittens, playtime, ... }) or null. */
@@ -555,7 +680,12 @@ export class UI {
       }
     }
     if (mode !== 'play' && mode !== 'memecam' && mode !== 'dialog') return;
-    // Midnight Practice: a 1 s hold skips the tutorial, so pause opens on the release of a short press
+    // WA §5.4: any input after 0.6 s sends a celebration home (it never pauses or eats the input)
+    const cel = this.celebrations;
+    if (cel?.q.cur && input.anyActivity?.() && cel.q.skip()) cel._fly(cel.q.cur);
+    // requests/fx: Esc while a companion ability is held only cancels the aim (CONTROLS_SPEC §7.5)
+    if (ctx.companions?.aim?.active && input.pressed('pause')) return;
+    // Morning Practice: a 1 s hold skips the tutorial, so pause opens on the release of a short press
     if (story?.tutorial?.active) {
       if (input.released('pause') && input.heldTime('pause') < UI_TIMING.tutorialTap) this.pause();
     } else if (input.pressed('pause')) this.pause();
@@ -602,11 +732,31 @@ export class UI {
     this.menus.scrollCredits(dt);
     this.touch.render(dt, { play: world && !this.dialog.visible, any: !title && !this.isLoading && !this.results.open && !this.menus.active });
     this.bar?.render(dt, world && !this.dialog.visible);
+    this.layers?.render(world);
+    this.celebrations?.render(dt);
+    flag(this.celebrations?.root, 'is-dim', !hudOn);
+    this.fly?.render(dt);
+    this.offer?.render(dt, hudOn);
+    this.occluders?.render(dt);
+    if (this.touch?.veiled) {
+      const guided = this.prompts?.guide?.open || this.ctx.story?.tutorial?.active;
+      this._veilIdle = guided ? 0 : (this._veilIdle ?? 0) + dt;
+      if (this._veilIdle > 3) { this.touch.veil(null); this._taught = null; }
+    }
     this._measureSafe(dt);
     // §10.2 context cursor over the canvas (only written on change)
     this.cursor?.update(dt, { menu: !!this.menus.active || title || this.results.open || !!this.touchEditor });
-    const cl = ctx.cam?.camLocked;
-    if (typeof cl === 'boolean' && ctx.state?.settings && ctx.state.settings.camLock !== cl && ctx.cam?.isIso) applySetting(ctx, 'camLock', cl);
+    // the camera's lock (Y) → the settings: camLockMode (the retired boolean camLock in sync until its readers move)
+    const cl = ctx.cam?.camLocked, sts = ctx.state?.settings;
+    if (typeof cl === 'boolean' && sts && ctx.cam?.isIso) {
+      const mode = typeof ctx.cam.lockMode === 'string' ? ctx.cam.lockMode : cl ? 'locked' : (sts.camLockMode && sts.camLockMode !== 'locked' ? sts.camLockMode : this._lastUnlocked);
+      if ('camLockMode' in sts && sts.camLockMode !== mode) {
+        if (mode !== 'locked') this._lastUnlocked = mode;
+        sts.camLockMode = mode;
+        ctx.bus.emit(E.SETTINGS_CHANGED, { key: 'camLockMode', value: mode, source: 'camera' });
+      }
+      if (sts.camLock !== cl) applySetting(ctx, 'camLock', cl);
+    }
   }
 
   /**
@@ -657,7 +807,8 @@ export class UI {
     for (const off of this._offs) off();
     this._offs.length = 0;
     this._timers.length = 0;
-    for (const m of [this.hpBars, this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
+    for (const m of [this.hpBars, this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud, this.layers, this.celebrations, this.offer, this.fly, this.occluders]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
+    if (this._onResize && typeof window !== 'undefined') window.removeEventListener('resize', this._onResize);
     this.toasts?.clear();
     if (this._noMenu) this.root?.removeEventListener('contextmenu', this._noMenu);
     this.style?.remove();

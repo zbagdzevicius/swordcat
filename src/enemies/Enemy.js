@@ -20,13 +20,18 @@ import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
-import { ATTACKS, PLAYER, TELEGRAPH, COMPANIONS } from '../core/config.js';
+import { ATTACKS, PLAYER, TELEGRAPH, COMPANIONS, CAMERA, qualityShadowsOn } from '../core/config.js';
 import { damp, dampAngle, wrapAngle, clamp } from '../core/math.js';
-import { TUNING, M2, rangeOf } from './tuning.js';
+import { depthFor } from '../core/depth.js';
+import { TUNING, M2, WARM, rangeOf } from './tuning.js';
 import { clipKey, clipsFor, isSpec, specDuration } from './clipMaps.js';
-import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright } from './rig.js';
+import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright, applyPalette, stripConstantScaleTracks, scaleBones, setCasting } from './rig.js';
+import { paletteFor, boneScalesFor } from './palette.js';
+import { EnemyLook } from './look.js';
+import { friendWordFor, displayNameFor } from './names.js';
 import { rangedStartAllowed } from './onscreen.js';
 import { topTint } from '../characters/Readability.js';
+import { SHADOW_STAGE } from '../world/StaticShadow.js';
 
 let teleId = 1;
 /** States an open-zone enemy leaves (→ return) when she is walled off inside a locked arena it isn't part of. */
@@ -40,6 +45,13 @@ const _spB = { x0: 0, z0: 0, x1: 0, z1: 0, r: 0 };
 const STEP_PROBE = 0.35;
 const pointSpine = (a, out) => { out.x0 = out.x1 = a.pos.x; out.z0 = out.z1 = a.pos.z; out.r = a.radius ?? 0.35; return out; };
 const WHITE = new THREE.Color(1, 1, 1);
+
+/**
+ * Fields a type's build / the visual load wire onto the enemy; they travel with a pooled visual (PERF §3.4) and are
+ * cleared on the enemy that gave it back.
+ */
+export const VISUAL_FIELDS = Object.freeze(['model', 'visual', 'anim', 'look', 'head', 'dress', 'plate', 'plateWord', 'plateFriendWord',
+  'plateWordShown', 'plateFlipped', '_plateSwap', 'helmet', '_droppedHelmet', 'tipNode', 'weaponRoot', 'uprightProps', '_flash', '_visBaseX', '_visSnapshot']);
 
 /** KayKit head meshes a beast head replaces (characters' attachBeastHead hides them after measuring). */
 const KAYKIT_HEADS = new Set(['Barbarian_Head', 'Knight_Head', 'Rogue_Head_Hooded', 'Rogue_Head', 'Mage_Head']);
@@ -102,6 +114,21 @@ export function windupFor(def, mul = 1) {
   return Math.max(lead, TUNING.windupMin, (def?.windup ?? MELEE_FALLBACK.windup) * mul);
 }
 
+/**
+ * AUTOCAM §7 / M:enemies.4: the far end of a lane / line telegraph (dash lanes, Wheel Ride, aim lines): `pos` +
+ * unit(`dir`) × length (lane.l, desc.l, else the range). Null for other shapes. Pure; exported for tests.
+ * @returns {{x: number, y: number, z: number}|null}
+ */
+export function laneEnd(shape, pay, desc, pos, dir) {
+  const lane = pay?.lane ?? desc?.lane ?? null;
+  if (!lane && shape !== 'lane' && shape !== 'line') return null;
+  if (!pos || !dir) return null;
+  const d = lane?.dir ?? dir, l = lane?.l ?? desc?.l ?? pay?.range ?? null;
+  const n = Math.hypot(d.x, d.z);
+  if (!(n > 1e-6) || !(l > 0)) return null;
+  return { x: pos.x + (d.x / n) * l, y: pos.y, z: pos.z + (d.z / n) * l };
+}
+
 /** Telegraph kinds that come from a melee swing (CONTROLS_SPEC §8.2 strike wedges). */
 export const WEDGE_KINDS = Object.freeze(new Set(['parry', 'gold', 'red', 'grab']));
 
@@ -155,6 +182,33 @@ export function segSegXZ(a0x, a0z, a1x, a1z, b0x, b0z, b1x, b1z, out) {
   return dx * dx + dz * dz;
 }
 const _seg = { ax: 0, az: 0, bx: 0, bz: 0 };
+
+/**
+ * ART §7.1 "faint and poof" timeline for a defeat, or null for the legacy path (bosses sit down for their befriend
+ * beat, Gloomjellies split / pop at once, types with their own `dieDur` or `faint: false`). Pure; exported for tests.
+ * @returns {{poofAt: number, flipped: boolean, poofed: boolean}|null}
+ */
+export function faintPlan(e) {
+  const d = e?.def;
+  if (!d || d.boss || e.isBoss || d.faint === false || d.procedural || d.dieDur) return null;
+  const F = WARM.faint;
+  return { poofAt: F.squashT + F.starsT, flipped: false, poofed: false };
+}
+
+/**
+ * AUTOCAM §6.6 orbit penalty for a tokenless orbit slot (pure; exported for tests): `k × max(0, −(slot − her)·U − free)`
+ * — metres down-screen (toward the lens) past `free`. U = the screen-up ground axis (unit).
+ * @param {number} sx @param {number} sz slot @param {number} hx @param {number} hz her @param {number} ux @param {number} uz
+ * @param {{k: number, free: number}} P
+ */
+export function orbitPenalty(sx, sz, hx, hz, ux, uz, P) {
+  const up = (sx - hx) * ux + (sz - hz) * uz;
+  return P.k * Math.max(0, -up - P.free);
+}
+
+/** Orbit penalty tuning: CAMERA.iso.framing.orbitPenalty (core) over the enemies fallback. */
+const ORBIT = Object.freeze({ ...WARM.orbit, ...(CAMERA?.iso?.framing?.orbitPenalty ?? {}) });
+const _axU = new THREE.Vector3(), _axR = new THREE.Vector3();
 
 /** Base states (tech.md §10 + §10.1). `def.states` entries are merged over these per type. */
 export const BASE_STATES = {
@@ -300,7 +354,8 @@ export const BASE_STATES = {
     },
   },
   die: {
-    anim: (e) => (e.def.scamper ? ['run', { speed: 1.3 }] : ['death', { once: true, clampEnd: true }]),
+    // ART §7.1 "faint and poof": the death clip plays 0.25 s at most (Enemy._updateAnim holds it), then the squash
+    anim: (e) => (e.faint ? ['death', { once: true, clampEnd: true }] : e.def.scamper ? ['run', { speed: 1.3 }] : ['death', { once: true, clampEnd: true }]),
     enter(e) {
       e.hurtable = false; e.endTelegraph(); e.swing = null; e.followUp = null; e.releaseToken();
       if (e.perched) { e.perched = false; e.flying = !!e.def.fly; }        // a perched shooter tumbles off its wall
@@ -311,16 +366,40 @@ export const BASE_STATES = {
       if (p) _d.set(e.pos.x - p.pos.x, 0, e.pos.z - p.pos.z); else _d.set(-Math.sin(e.facing), 0, -Math.cos(e.facing));
       if (_d.lengthSq() < 1e-6) _d.set(0, 0, 1);
       _d.normalize();
-      e.ctx.bus.emit(E.ENEMY_DIED, { enemy: e, type: e.def.id, position: e.deathAt.clone(), fish, smallHeart, height: e.height, ...(e.def.died?.(e) ?? null) });
-      // §8.2 Kill: the poof (fx adds the faction debris by `type`); our own helmet spins off below, so fx's
-      // generic helmet pop is switched off with `helmet: false`
-      e.ctx.bus.emit(E.BURST, { kind: 'poof', position: e.pos.clone(), type: e.def.id, height: e.height, dir: _d.clone(), helmet: false, count: 12 });
+      e.faint = faintPlan(e);
+      // `poofIn`: the puff comes this many seconds after enemy:died (fx defers its own poof; requests/fx.md)
+      e.ctx.bus.emit(E.ENEMY_DIED, { enemy: e, type: e.def.id, position: e.deathAt.clone(), fish, smallHeart, height: e.height,
+        ...(e.faint ? { poofIn: e.faint.poofAt, faint: true } : null), ...(e.def.died?.(e) ?? null) });
       e.dropHelmet(_d);
+      if (e.faint) {
+        e.poofDir = (e.poofDir ?? new THREE.Vector3()).copy(_d);
+        // 3 dizzy stars for WARM.faint.starsT (fx's dizzy ring when it has one, else a star burst over the head)
+        const F = WARM.faint;
+        if (typeof e.ctx.fx?.dizzyFor === 'function') { try { e.ctx.fx.dizzyFor(e, F.squashT + F.starsT); } catch { /* fx optional */ } }
+        else e.ctx.bus.emit(E.BURST, { kind: 'stars', position: _v.set(e.pos.x, e.pos.y + e.height * (1 + F.lift), e.pos.z).clone(), count: F.stars });
+        return;
+      }
+      // legacy defeat (bosses, Gloomjellies, types with their own dieDur): the poof now (fx adds the faction debris by
+      // `type`); our own helmet spins off, so fx's generic helmet pop is switched off with `helmet: false`
+      e.ctx.bus.emit(E.BURST, { kind: 'poof', position: e.pos.clone(), type: e.def.id, height: e.height, dir: _d.clone(), helmet: false, count: 12 });
       if (e.def.scamper) {
         e.scamperYaw = Math.atan2(_d.x, _d.z) + (rng() - 0.5) * 0.8;
       }
     },
     update(e, dt) {
+      if (e.faint) {
+        e.brake(dt, 10);
+        const F = e.faint;
+        if (!F.flipped && e.stateT >= F.poofAt - WARM.faint.plateFlip) { F.flipped = true; e.flipPlate(); }
+        if (!F.poofed && e.stateT >= F.poofAt) {
+          F.poofed = true;
+          e.ctx.bus.emit(E.BURST, { kind: 'poof', position: e.pos.clone(), type: e.def.id, height: e.height, dir: e.poofDir?.clone() ?? null, helmet: false, count: 12, faint: true });
+          if (e.visual) e.visual.visible = false;
+          if (e.bang) e.bang.visible = false;
+        }
+        if (e.stateT >= e.dieDur()) e.ctx.enemies?.despawn?.(e);
+        return;
+      }
       if (e.def.scamper && e.stateT < TUNING.die.scamperDur) {
         e.facing = dampAngle(e.facing, e.scamperYaw, 12, dt);
         e.vel.x = Math.sin(e.facing) * TUNING.die.scamperSpeed; e.vel.z = Math.cos(e.facing) * TUNING.die.scamperSpeed;
@@ -389,6 +468,31 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this._animKey = ''; this._animSerial = 0; this._hitSerial = 0; this._frame = 0; this._farDt = 0; this._wobblePh = 0;
     this.heldClip = null; this._pendingClip = null; this._pendingPose = null;
     this.extraProps = {};
+    /** ART §5.1 / WA §5.1 per-visual look (flash, rims, squash spring, shake); travels with a pooled visual */
+    /** @type {EnemyLook|null} */
+    this.look = null;
+    /** PERF §4.3 activity tier (camera's activityOf; −1 = no camera tiers: the legacy distance LOD) */
+    this._tier = 0; this._tierFrame = -1; this._mixAcc = 0;
+    /** ART §7.1 faint-and-poof timeline while defeated (null = legacy defeat) */
+    this.faint = null; this.poofDir = null;
+    /** WA §8.3 plate words: the friend word for this plate and whether it shows */
+    this.plateFriendWord = null; this.plateFlipped = false;
+    /** VisualPool key this enemy's visual belongs to (null = built and disposed per enemy) */
+    this.poolKey = null;
+    /** WA §8.3 a befriended foe (hub hyenas after gate.done): its plate shows the friend word from the start */
+    this.friendly = !!spawn.friend;
+    /** shake / pose bookkeeping (visual-local x the shake writes over) */
+    this._visBaseX = 0;
+    /** reused candidate list for _pickAttack (no per-step allocation) */
+    this._cands = [];
+    /** AUTOCAM §6.6 screen-up ground axis (refreshed per perception tick) */
+    this._orbitUok = false; this._orbitUx = 0; this._orbitUz = 1;
+    this._lastActiveAt = 0;
+    this._droppedHelmet = null; this._plateSwap = null; this.plateWord = null; this.plateWordShown = null;
+    /** the rendered frame's real dt (the look runs on it through hitstop) */
+    this._rdt = 0;
+    /** dressed-visual visibility snapshot (VisualPool restores it on reuse) */
+    this._visSnapshot = null;
     this.disposed = false; this.dormant = false;
     def.init?.(this);
     this.setState('idle');
@@ -426,6 +530,31 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   }
 
   // ------------------------------------------------------------------ perception
+  /**
+   * Seconds between perception ticks for the current activity tier (PERF §4.2: 10 / 5 / 2 Hz; an arena member or an
+   * alerted fighter never drops below WARM.activity.arenaMin). Tier 0 keeps TUNING.thinkEvery exactly.
+   */
+  perceptEvery() {
+    const t = this._tier;
+    if (!(t > 0)) return TUNING.thinkEvery;
+    const A = WARM.activity;
+    let hz = A.perceptHz[Math.min(t, A.perceptHz.length - 1)] || A.perceptHz[2] || 2;
+    if (this.spawnOpts?.arena || this.alerted) hz = Math.max(hz, A.arenaMin);
+    return 1 / hz;
+  }
+
+  /** AUTOCAM §6.6: the screen-up ground axis from the camera (`cam.groundAxes(outU, outR)`), once per think tick. */
+  refreshOrbitAxes() {
+    const cam = this.ctx.cam;
+    this._orbitUok = false;
+    if (typeof cam?.groundAxes !== 'function') return;
+    try {
+      cam.groundAxes(_axU, _axR);
+      const l = Math.hypot(_axU.x, _axU.z);
+      if (l > 0.5) { this._orbitUx = _axU.x / l; this._orbitUz = _axU.z / l; this._orbitUok = true; }
+    } catch { /* camera without the axes yet */ }
+  }
+
   /** The actor this enemy fights (the player while she's playable). */
   targetActor() {
     const p = this.ctx.player;
@@ -751,8 +880,14 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   _pickAttack(d) {
     if (this.attackChoice && this.stateName === 'chase') return this.attackChoice;
-    const list = (this.def.attacks ?? []).filter((a) => (this.attackCd[a.id] ?? 0) <= 0 && (a.minRange == null || d >= a.minRange * 0.8)
-      && (!a.when || a.when(this)) && (!this.def.canUse || this.def.canUse(this, a, d)));
+    // PERF E4: the candidate list is reused (chase runs this every step)
+    const list = this._cands, all = this.def.attacks ?? [];
+    list.length = 0;
+    for (let i = 0; i < all.length; i++) {
+      const a = all[i];
+      if ((this.attackCd[a.id] ?? 0) <= 0 && (a.minRange == null || d >= a.minRange * 0.8)
+        && (!a.when || a.when(this)) && (!this.def.canUse || this.def.canUse(this, a, d))) list.push(a);
+    }
     if (!list.length) return null;
     let total = 0; for (const a of list) total += a.weight ?? 1;
     let r = this.ctx.rng() * total, pick = list[0];
@@ -887,6 +1022,16 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       this.orbitT -= dt;
       if (this.orbitT <= 0) { this.orbitT = rangeOf(this.ctx.rng, TUNING.orbitRepick); this.orbitDir = this.ctx.rng.sign(); }
       const cur = Math.atan2(this.pos.x - p.pos.x, this.pos.z - p.pos.z);
+      // AUTOCAM §6.6 orbit penalty: drift the way whose next slot sits less far down-screen (toward the lens) past
+      // `free` m, so a waiting pack spreads over the readable half of the screen (U refreshed per perception tick)
+      if (this._orbitUok) {
+        const R = orbitR, d0 = TUNING.orbitDrift * this.orbitDir, ux = this._orbitUx, uz = this._orbitUz;
+        const pa = orbitPenalty(p.pos.x + Math.sin(cur + d0) * R, p.pos.z + Math.cos(cur + d0) * R, p.pos.x, p.pos.z, ux, uz, ORBIT);
+        if (pa > 0) {
+          const pb = orbitPenalty(p.pos.x + Math.sin(cur - d0) * R, p.pos.z + Math.cos(cur - d0) * R, p.pos.x, p.pos.z, ux, uz, ORBIT);
+          if (pb < pa) this.orbitDir = -this.orbitDir;
+        }
+      }
       const a = cur + this.orbitDir * TUNING.orbitDrift;
       const fast = d > orbitR + 2;
       this.steerTo(p.pos.x + Math.sin(a) * orbitR, p.pos.z + Math.cos(a) * orbitR, this.gait(fast ? (this.def.run ?? 3.5) : (this.def.walk ?? 1.6), dt), dt);
@@ -905,6 +1050,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.endTelegraph();
     const id = this._emitTelegraph(kind, desc);
     this.telegraphId = id;
+    // ART §5.1: the wind-up rim (TONE.telegraph at 0.8) until the hit goes live, then a 0.15 s fade
+    this.look?.windup(this._lastActiveAt);
     return id;
   }
 
@@ -923,11 +1070,16 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     const id = teleId++;
     if (!desc.pos) this.updateTell();
     const duration = desc.duration ?? 0.5;
+    const shape = desc.shape ?? defaultShape(kind), pos = desc.pos ?? this.tellPos, dir = desc.dir ?? this.tellDir;
+    const pay = telegraphPayload(this, kind, desc, duration, this.ctx.game?.time ?? 0);
+    this._lastActiveAt = pay.activeAt;
     this.ctx.bus.emit(E.TELEGRAPH, {
-      ...desc, id, actor: this, kind, shape: desc.shape ?? defaultShape(kind),
-      pos: desc.pos ?? this.tellPos, dir: desc.dir ?? this.tellDir,
+      ...desc, id, actor: this, kind, shape, pos, dir,
       size: desc.size ?? desc.r ?? 1, duration,
-      ...telegraphPayload(this, kind, desc, duration, this.ctx.game?.time ?? 0),
+      ...pay,
+      // WA §3.4 the glyph of this kind (fx draws it; combat.W1 may refine) and AUTOCAM §7 the lane end point
+      glyph: desc.glyph ?? TELEGRAPH.glyph?.[kind] ?? null,
+      end: desc.end ?? laneEnd(shape, pay, desc, pos, dir),
     });
     return id;
   }
@@ -1000,7 +1152,9 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   onHit(hit) {
     this.flashT = TUNING.hitFlash;
-    if (this.roleSpec('hit')) this.hitReactT = TUNING.hitReact; else this.squashT = TUNING.squash.dur;
+    // WA §5.1: flash 1 → 0 over the freeze (+0.06 s), Squash.kick(-2), a shake while frozen — on unscaled time
+    this.look?.hit(this.ctx.game?.hitstopT ?? 0);
+    if (this.roleSpec('hit')) this.hitReactT = TUNING.hitReact; else if (!this.look) this.squashT = TUNING.squash.dur;
     if (!this.alive || this.scripted || !this.ai) return;
     this.def.onHit?.(this, hit);
     if (!this.alive || this.disposed) return;
@@ -1034,16 +1188,75 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   /** Combat landed one of our hits on her (EnemyManager relays `combat:hit`): the hyena's Gloat starts here. */
   onDealtHit(h) { if (this.alive && this.ai && !this.scripted) this.def.onDealtHit?.(this, h); }
 
-  dieDur() { return this.def.dieDur ? this.def.dieDur(this) : this.def.scamper ? TUNING.die.scamperDur : TUNING.die.dur; }
+  dieDur() {
+    if (this.def.dieDur) return this.def.dieDur(this);
+    if (this.faint) return this.faint.poofAt + WARM.faint.after;
+    return this.def.scamper ? TUNING.die.scamperDur : TUNING.die.dur;
+  }
 
-  /** §10.1: the helmet spins off, away from the hit (EnemyManager animates the debris). */
+  /**
+   * §10.1: the helmet spins off, away from the hit (EnemyManager animates the debris). The debris is a copy (shared
+   * geometry and material) and the worn helm only hides, so a pooled visual gets it back on its next spawn.
+   */
   dropHelmet(dir = null) {
     const h = this.helmet;
     if (!h || !h.parent) return;
     this.helmet = null;
-    if (this.ctx.enemies?.spawnDebris) this.ctx.enemies.spawnDebris(h, this, dir);
-    else h.visible = false;
+    if (this.ctx.enemies?.spawnDebris) {
+      h.updateWorldMatrix(true, false);
+      const c = h.clone();
+      c.matrixWorld.copy(h.matrixWorld);
+      c.userData = { ...h.userData, debrisOf: h.uuid };
+      h.visible = false;
+      this._droppedHelmet = h;
+      this.ctx.enemies.spawnDebris(c, this, dir);
+    } else { h.visible = false; this._droppedHelmet = h; }
   }
+
+  /**
+   * WA §8.3 the HATER plate flips to its friend word (0.25 s before the puff): characters' flipPlate when it exists
+   * (both words baked in one texture, a UV offset swap), else the friend texture pre-baked at dress time. Idempotent.
+   * @returns {boolean} true when the plate now shows the friend word
+   */
+  flipPlate() {
+    if (this.plateFlipped) return true;
+    const w = this.plateFriendWord;
+    if (!w || !this.plate) return false;
+    let ok = false;
+    try {
+      if (typeof this.dress?.flipPlate === 'function') ok = this.dress.flipPlate(true) !== false;
+      else if (this._plateSwap?.decal && this._plateSwap.friend) {
+        const s = this._plateSwap;
+        s.decal.material.map = s.friend; s.decal.material.needsUpdate = true;
+        ok = true;
+      }
+    } catch (err) { console.warn('[enemies] plate flip', err); }
+    if (ok) { this.plateFlipped = true; this.plateWordShown = w; }
+    return ok;
+  }
+
+  /** Undo flipPlate (VisualPool reuse). */
+  unflipPlate() {
+    if (!this.plateFlipped) return;
+    try {
+      if (typeof this.dress?.flipPlate === 'function') this.dress.flipPlate(false);
+      else if (this._plateSwap?.decal && this._plateSwap.foe) { this._plateSwap.decal.material.map = this._plateSwap.foe; this._plateSwap.decal.material.needsUpdate = true; }
+    } catch { /* cosmetic */ }
+    this.plateFlipped = false; this.plateWordShown = this.plateWord ?? null;
+  }
+
+  /**
+   * Hover / selection rim (CONTROLS_SPEC §7.4, WA §3.6): composed by the look with the hit flash and the wind-up rim,
+   * with a boing on the way in. `color` null clears. Same contract as characters.setHighlight.
+   */
+  setHighlight(color, strength = 1) {
+    if (!this.visual) return false;
+    this.visual.userData.highlight = color === null || color === undefined || !(strength > 0) ? null : { color, strength };
+    return true;
+  }
+
+  /** WA §8.2 display name (Wobblejelly, Squeakybone, Big Chief Cacklejaw...). */
+  get displayName() { return displayNameFor(this.def?.id); }
 
   // ------------------------------------------------------------------ step
   update(dt) {
@@ -1062,7 +1275,11 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     if (!this.ai) { this.brake(dt); this.move(dt); return; }
     this.thinkT -= dt;
     if (this.thinkT <= 0) {
-      this.thinkT += TUNING.thinkEvery; this.sees = this.canSee();
+      // PERF §4.2: perception at 10 Hz on screen, 5 / 2 Hz off screen (arena fights keep ≥ 5 Hz); windups, strikes and
+      // steering stay at 60 Hz
+      this.thinkT = Math.max(this.thinkT + this.perceptEvery(), 0);
+      this.sees = this.canSee();
+      this.refreshOrbitAxes();
       if (this.alerted && DISENGAGE.has(this.stateName) && !this.def.boss && this.targetWalledOff()) { this.interrupt(); this.setState('return'); }
     }
     if (this.staggerT > 0 && this.alive && this.stateName !== 'stagger' && this.stateName !== 'die' && this.stateName !== 'flee' && !this.state.noStagger) this.setState('stagger');
@@ -1146,6 +1363,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
         if (this.disposed || !root) return;
         this.visual = root; this.object3d.add(root);
         this._flash = flashMaterials(root);
+        this._finishVisual(root);
         return;
       }
       if (!def.model) return;
@@ -1155,6 +1373,11 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       if (def.hide && hide.length !== def.hide.length && !def.build) for (const n of def.hide) if (KAYKIT_HEADS.has(n)) { const o = m.scene.getObjectByName(n); if (o) o.visible = false; }
       if (this.disposed) return;
       markOwned(m.scene);
+      // ART §7.3: the atlas → the mischief palette (one remap per (asset, palette), shared by every instance)
+      const pal = paletteFor(def.model);
+      if (pal && !def.noPalette) applyPalette(m.scene, pal, pal.key);
+      // ART §7.3 step 4: KayKit's constant unit scale tracks go before any mixer binds the clips
+      stripConstantScaleTracks(m.animations);
       this.model = m; this.visual = m.root;
       if (def.visualScale) m.root.scale.setScalar(def.visualScale);
       this.object3d.add(m.root);
@@ -1165,16 +1388,41 @@ export class Enemy extends ScriptedActorMixin(Actor) {
         m.root.visible = true;
       }
       if (this.disposed) return;
+      // ART §7.2: big readable heads (static bone scales; the gear on a bone grows with it)
+      const bs = def.boneScales ?? boneScalesFor(def.model);
+      if (bs) scaleBones(m.scene, bs);
       // CONTROLS_SPEC §12 characters 3: helmet tops read from above (owned materials are patched in place, per instance)
       if (this.ctx.cam?.isIso !== false && !def.noTopTint) { try { topTint(m.root); } catch { /* cosmetic only */ } }
       this._flash = def.noFlash ? [] : flashMaterials(m.root);
       this.anim = new Animator(m.scene, clipsFor(def.anims, m.animations));
       this._animKey = '';
+      this._finishVisual(m.root);
       if (this._pendingClip) { const c = this._pendingClip; this._pendingClip = null; this.playClip(c.name, c).then(c.resolve); }
       this.render(1, 0);
     } catch (err) {
       console.error(`[enemy] visual failed for ${def.id}`, err);
     }
+  }
+
+  /** Shared tail of every visual build: the look, shadow casting (PERF §7 / E3 / E6), the plate's friend word. */
+  _finishVisual(root) {
+    this.look = this.def.noFlash ? null : new EnemyLook(root);
+    this._visBaseX = root.position.x;
+    this.applyCasting();
+    if (this.plate && !this.plateFriendWord) this.plateFriendWord = friendWordFor(this.def.plateType ?? this.def.id, this.plateWord);
+    this.plateWordShown = this.plateWord ?? null;
+    if (this.poolKey) this.snapshotVisual();
+    this.ctx.fx?.blobs?.add?.(this.object3d, (this.radius ?? 0.35) * 1.1);
+  }
+
+  /**
+   * PERF §7 / K5: sun-shadow casting for this enemy — only its body and weapon (each with its kind's shared depth
+   * material), and nothing at shadow stage 2 or on a tier without a shadow map (fx contact blobs ground it).
+   */
+  applyCasting() {
+    if (!this.visual) return;
+    const q = this.ctx.quality, on = SHADOW_STAGE < 2 && (q ? qualityShadowsOn(q) : true) && !this.def.noCast;
+    setCasting(this.visual, on, depthFor);
   }
 
   /** Clip spec for a role, honouring per-attack overrides (`anims[attackId].windup`). */
@@ -1235,6 +1483,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       return;
     }
     const [role, opts] = this.animFor();
+    // ART §7.1: a fainting foe's death clip plays WARM.faint.clipMax s at most, then holds (the squash takes over)
+    if (this.faint && this.stateName === 'die' && this.stateT > WARM.faint.clipMax && this._animKey) return;
     const key = role === 'hit' && this.stateName !== 'stagger' ? `hit#${this._hitSerial}` : opts?.once ? `${role}#${this._animSerial}` : role;
     if (key !== this._animKey) {
       this._animKey = key;
@@ -1243,8 +1493,24 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this._tickMixer(dt);
   }
 
+  /**
+   * PERF §4.3 mixer LOD by activity tier (camera's `activityOf`): tier 0 every frame, tier 1 every 3rd frame with the
+   * accumulated dt, tier ≥ 2 frozen (poses stay correct when it comes back; re-entry runs full rate the same frame).
+   * Without camera tiers: the legacy rule (beyond TUNING.animFarDist from the focus, every 2nd frame). During hitstop
+   * `dt` is 0 and the mixer still updates with 0 (tech.md §11.1).
+   */
   _tickMixer(dt) {
     this._frame++;
+    const tier = this._tier;
+    if (tier >= 0 && this._tierFrame >= 0) {
+      const k = WARM.activity.mixEvery[Math.min(tier, WARM.activity.mixEvery.length - 1)];
+      if (!k) { this._mixAcc = 0; return; }
+      this._mixAcc += dt;
+      if (k > 1 && ((this.ctx.game?.frameCount ?? this._frame) + this.id) % k) return;
+      dt = this._mixAcc; this._mixAcc = 0;
+      this.anim.update(dt);
+      return;
+    }
     const cam = this.ctx.cam?.focus ?? this.ctx.camera?.position;        // CONTROLS_SPEC §2.8: LOD from the focus
     if (cam && dt > 0) {
       const dx = cam.x - this.pos.x, dz = cam.z - this.pos.z;
@@ -1258,15 +1524,29 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.anim.update(dt);
   }
 
+  /**
+   * PERF §4.3: this frame's activity tier from the camera (`cam.activityOf`, cached per frame by the camera); −1 when
+   * the camera has no tiers (legacy LOD). Scripted (cutscene) actors always run at full rate.
+   */
+  _updateTier() {
+    const cam = this.ctx.cam;
+    if (this.scripted) { this._tier = 0; this._tierFrame = 0; return; }
+    if (typeof cam?.activityOf !== 'function') { this._tier = -1; this._tierFrame = -1; return; }
+    try { const t = cam.activityOf(this); this._tier = Number.isFinite(t) ? t : 0; this._tierFrame = cam.frameId ?? 0; }
+    catch { this._tier = -1; this._tierFrame = -1; }
+  }
+
   render(alpha, dt) {
     if (this.dormant) return;
     super.render(alpha);
+    this._updateTier();
     const fdt = visualDt(this.ctx, dt);
     if (this.hitReactT > 0) { this.hitReactT -= fdt; if (this.hitReactT <= 0) this._hitSerial = (this._hitSerial ?? 0) + 1; }
     this._updateAnim(fdt);
     this.head?.update?.(fdt);
     this.cagedKitten?.render?.(dt);                 // KittenView applies hitstop / slow motion itself
     this.def.render?.(this, fdt, alpha);
+    this._rdt = dt;
     this._renderFx(fdt);
     this._renderBang(fdt);
     if (this.uprightProps) applyUpright(this);
@@ -1293,32 +1573,70 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.bang.scale.set(size * 0.5 * k, size * k, 1);
   }
 
-  /** Flash, squash, stagger wobble, death shrink. */
+  /**
+   * The rendered frame's real (unscaled) dt for the look: hitstop does NOT stop it (WA §5.1 the flash, squash and shake
+   * play while the world is frozen); the pause menu does.
+   */
+  _lookDt(frameDt) {
+    const g = this.ctx?.game;
+    return g?.mode === 'menu' ? 0 : frameDt;
+  }
+
+  /** WA §3.2 / §3.4 motion language: wind-up squash −0.10, parry-window stretch +0.12 (the squash spring's target). */
+  _poseTarget() {
+    const st = this.stateName, P = WARM.pose;
+    if (!this.alive) return 0;
+    if (st === 'windup') return P.windup;
+    if (st === 'strike' || this.state?.attacking) {
+      const def = this.attack?.def, a1 = def?.active?.[1] ?? 0.12;
+      return this.stateT <= a1 + P.ease ? P.parry : 0;
+    }
+    return 0;
+  }
+
+  /** Flash, rims, squash spring, shake, stagger wobble, faint squash / death shrink. */
   _renderFx(dt) {
     const v = this.visual;
     if (!v) return;
-    // white flash (§8.2: 60 ms)
-    const fl = this.flashT > 0 ? clamp(this.flashT / TUNING.hitFlash, 0, 1) : 0;
-    if (this.flashT > 0) this.flashT -= dt;
-    if (fl !== this._flashOn) {
-      this._flashOn = fl;
-      for (const f of this._flash) {
-        if (fl > 0) { f.mat.emissive.copy(f.base).lerp(WHITE, fl); f.mat.emissiveIntensity = Math.max(f.baseI, 1); }
-        else { f.mat.emissive.copy(f.base); f.mat.emissiveIntensity = f.baseI; }
+    const now = this.ctx.game?.time ?? 0;
+    // ART §5.1 / WA §5.1: flash + wind-up rim + hover, the squash spring and the hitstop shake (unscaled time)
+    let spring = 1;
+    const look = this.look;
+    if (look) {
+      if (look.hlOn && this.telegraphId == null && this.stateName !== 'windup' && this.stateName !== 'strike' && !this.state?.attacking) look.endWindup(now);
+      look.poseTarget = this._poseTarget();
+      spring = look.update(this._lookDt(this._rdt ?? dt), now);
+      if (look.shakeX !== 0 || v.position.x !== this._visBaseX) v.position.x = this._visBaseX + look.shakeX;
+    } else {
+      // no look (noFlash types): the §8.2 60 ms emissive flash
+      const fl = this.flashT > 0 ? clamp(this.flashT / TUNING.hitFlash, 0, 1) : 0;
+      if (this.flashT > 0) this.flashT -= dt;
+      if (fl !== this._flashOn) {
+        this._flashOn = fl;
+        for (const f of this._flash) {
+          if (fl > 0) { f.mat.emissive.copy(f.base).lerp(WHITE, fl); f.mat.emissiveIntensity = Math.max(f.baseI, 1); }
+          else { f.mat.emissive.copy(f.base); f.mat.emissiveIntensity = f.baseI; }
+        }
       }
     }
-    // squash (missing hit clip; §10.1 0.15 s to scale y 0.8), volume-preserving
+    // emote squash (§10.1 0.15 s to scale y 0.8), volume-preserving
     const base = this.def.visualScale ?? 1;
-    let sy = 1;
+    let sy = spring;
     if (this.squashT > 0) {
       this.squashT -= dt;
       const u = 1 - Math.max(0, this.squashT) / TUNING.squash.dur;
-      sy = 1 - (1 - TUNING.squash.y) * Math.sin(Math.PI * u);
+      sy *= 1 - (1 - TUNING.squash.y) * Math.sin(Math.PI * u);
     }
     let k = 1;
     if (this.stateName === 'die') {
-      const left = this.dieDur() - this.stateT;
-      if (left < TUNING.die.shrink) k = Math.max(0.001, left / TUNING.die.shrink);
+      if (this.faint) {
+        // ART §7.1: squash flat to WARM.faint.squash over squashT (ease-out), then hold under the stars
+        const F = WARM.faint, u = clamp(this.stateT / F.squashT, 0, 1), e = 1 - (1 - u) * (1 - u);
+        sy *= 1 - (1 - F.squash) * e;
+      } else {
+        const left = this.dieDur() - this.stateT;
+        if (left < TUNING.die.shrink) k = Math.max(0.001, left / TUNING.die.shrink);
+      }
     }
     const sxz = 1 / Math.sqrt(sy);
     const pl = this.def.pulse ? this.def.pulse(this) : null;          // [sx, sy, sz] multipliers (abdomen pulse, jelly squash)
@@ -1331,15 +1649,71 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     } else if (v.rotation.z !== 0) v.rotation.z = damp(v.rotation.z, 0, 12, dt);
   }
 
+  // ------------------------------------------------------------------ PERF §3.4 visual pool
+  /**
+   * Hand this enemy's dressed visual to the pool (despawn): everything the build wired onto the enemy travels with it
+   * (VISUAL_FIELDS), the enemy keeps nothing. Null when there is nothing poolable (no key, not fully built, disposed).
+   * @returns {object|null} the visual record (VisualPool)
+   */
+  detachVisual() {
+    if (!this.poolKey || !this.visual || this.disposed || (this.def.model && !this.anim)) return null;
+    const rec = { key: this.poolKey, fields: {}, extraProps: { ...this.extraProps }, vis: this._visSnapshot ?? null };
+    for (const k of VISUAL_FIELDS) { rec.fields[k] = this[k]; this[k] = k === '_flash' ? [] : null; }
+    this.extraProps = {};
+    rec.fields.visual.removeFromParent();
+    this.ctx.fx?.blobs?.remove?.(this.object3d);
+    return rec;
+  }
+
+  /**
+   * Take a pooled visual (spawn): restore its fields, reset it to a fresh look (idle pose, no tints, plate unflipped,
+   * gear and helm back, full scale), and parent it. The record must come from the same type + dressing key.
+   * @param {object} rec
+   */
+  attachVisual(rec) {
+    for (const k of VISUAL_FIELDS) this[k] = rec.fields[k];
+    this.extraProps = { ...rec.extraProps };
+    this.poolKey = rec.key;
+    const v = this.visual;
+    // visibility exactly as dressed (shield, bag, helm); transforms the render path writes back to rest
+    if (rec.vis) for (const [o, on] of rec.vis) o.visible = on;
+    this._visSnapshot = rec.vis;
+    this.helmet = this.helmet ?? this._droppedHelmet ?? null;
+    if (this.helmet) this.helmet.visible = true;
+    this._droppedHelmet = null;
+    v.visible = true; v.rotation.z = 0; v.position.x = this._visBaseX;
+    const s = this.def.visualScale ?? 1; v.scale.set(s, s, s);
+    this.unflipPlate();
+    this.look?.reset();
+    this.dress?.setExpression?.(this.def.expression ?? 'neutral');
+    if (this.anim) { this.anim.mixer.stopAllAction(); this.anim.current = null; this.anim.currentName = null; this._animKey = ''; }
+    this.object3d.add(v);
+    this.applyCasting();
+    this.ctx.fx?.blobs?.add?.(this.object3d, (this.radius ?? 0.35) * 1.1);
+    if (this._pendingClip) { const c = this._pendingClip; this._pendingClip = null; this.playClip(c.name, c).then(c.resolve); }
+    this.render(1, 0);
+  }
+
+  /** Remember which nodes of the dressed visual are visible (VisualPool restores it on reuse). */
+  snapshotVisual() {
+    const out = [];
+    this.visual?.traverse((o) => { if (o !== this.visual) out.push([o, o.visible]); });
+    if (this._droppedHelmet) out.push([this._droppedHelmet, true]);
+    this._visSnapshot = out;
+    return out;
+  }
+
   dispose() {
     this.disposed = true;
     this.endTelegraph();
     this.releaseToken();
     this._pendingClip?.resolve(); this._pendingClip = null;
     this._finishMove?.(); this._finishFace?.();
+    this.ctx.fx?.blobs?.remove?.(this.object3d);
     this.anim?.dispose(); this.anim = null;
     this.head?.dispose?.(); this.head = null; this.dress = null; this.plate = null;
     this.cagedKitten?.dispose?.(); this.cagedKitten = null;
+    this._plateSwap?.friend?.dispose?.(); this._plateSwap = null;
     this.def.onDispose?.(this);
     if (this.visual) disposeInstanceMaterials(this.visual);
     super.dispose();

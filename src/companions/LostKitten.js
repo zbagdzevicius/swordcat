@@ -13,18 +13,24 @@
 // `appearOn: <arenaId>` keeps the kitten out of sight until that arena clears (Marmalade peeking out of the bakery).
 // Once visible a kitten waves and is rescued when she comes within 1.3 m: state.addKitten, kitten:rescued, its line
 // in a bubble, then it trots off home and poofs. Contract (§19.4): kittenId, hidden, reveal(), rescue().
+// Warm adventure (WA20, WA16, §5.6; ART §8.6): every cage is a wooden kitten carrier (dressing.js buildCarrier: slats,
+// rope, lilac bow, polka-dot cushion, no metal); Mochi's cart is tipped 8° with a broken wheel and a cracked latch that
+// only a Bright Slash (an attack that `breaks` 'cracked') opens: other blows "tink" off it (a guard bounce) and Mochi
+// says "Do the shiny swing!". A rescued lost kitten's reunion: it runs up to 1.5 m to her, nose-boops (head tilt 12°,
+// 0.4 s, a heart), hops with ×1.2 squash and leaves a sparkle trail toward home; `kitten:rescued` carries `position`.
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { E } from '../core/events.js';
 import { PLAYER, ATTACKS } from '../core/config.js';
 import { damp, dampAngle, wrapAngle, clamp01, easeOutCubic } from '../core/math.js';
-import { CATS, lostKittenConfig, buildCage, visualDt } from '../characters/index.js';
+import { CATS, lostKittenConfig, visualDt } from '../characters/index.js';
 import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { lineText } from './lines.js';
 import { COMPANION_IDS, SERVICE_IDS, SERVICE_FLAGS, SERVICE_SCENES, groundY, lodOrigin } from './steering.js';
-import { buildStocks, buildRopePost, buildRope, disposeDressing } from './dressing.js';
+import { buildStocks, buildRopePost, buildRope, disposeDressing, buildCarrier } from './dressing.js';
+import { CRACKED_LOCKS, TIPPED_CARTS } from './rescues.js';
 
 export const HIDES = Object.freeze(['meow', 'cage', 'stand', 'break', 'climb']);
 
@@ -47,6 +53,21 @@ export const CAGE_CART = {
 export const RESCUE = { standClearR: 15, radius: 1.3, height: 1.6, leaveAfter: 2.8, leaveDur: 2.6, leaveSpeed: 2.2, wobbleEvery: 6, wobbleDur: 0.7, waveRadius: 7,
   knockR: 1.7, talkR: 3.2, guestStagger: 0.18 };
 
+/**
+ * The rescue reunion (WA §5.6): run at `speed` m/s up to `run` m toward her, stopping `stop` m short; nose-boop for
+ * `boop` s; then a hop (`hopH` m, `hopDur` s, ×`squash`); a sparkle trail of `trailN` sparkles over `trailDur` s along a
+ * Bézier toward home (`trailLen` m out, `trailUp` m up).
+ */
+export const REUNION = Object.freeze({ run: 1.5, stop: 0.6, speed: 3.2, maxRun: 0.8, boop: 0.4, hopH: 0.35, hopDur: 0.45, squash: 1.2,
+  trailN: 10, trailDur: 1.2, trailLen: 6, trailUp: 2.2 });
+/**
+ * Mochi's tipped cart (ON §6.1): roll (rad, the low side +z in the carrier frame) and, when the level asks for ours
+ * (`wheel: true`; the meadow places its own), the loose wheel's spot [x, z] in the carrier frame.
+ */
+export const TIP = Object.freeze({ roll: 8 * Math.PI / 180, wheel: [0.35, 1.15], wheelYaw: 0.7 });
+/** The cracked latch: seconds between Mochi's "shiny swing" lines; the `tut.bright` hint shows from this tink on. */
+export const CRACK = Object.freeze({ lineEvery: 4, hintFrom: 2 });
+
 /** Sage's treetop cage (§12.4): hangs at 4 m on a rope over the branch, lowered over 2 s; the rope posts hold 30 HP. */
 export const HANG = { lowerDur: 2.0, ropeTop: 3.2, postHp: 30, size: [0.95, 1.0, 0.95] };
 
@@ -56,7 +77,7 @@ export const HANG = { lowerDur: 2.0, ropeTop: 3.2, postHp: 30, size: [0.95, 1.0,
  */
 export const BARREL_STACK = [[-0.95, 0], [0.95, 0], [-0.95, -0.95], [0, -0.95], [0.95, -0.95]];
 
-const _v = new THREE.Vector3(), _rA = new THREE.Vector3(), _rB = new THREE.Vector3();
+const _v = new THREE.Vector3(), _rA = new THREE.Vector3(), _rB = new THREE.Vector3(), _tp = new THREE.Vector3();
 const _lod = { x: 0, z: 0 };
 /** Hop-out directions tried around "toward her" (radians), nearest first. */
 const HOP_TRIES = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
@@ -65,14 +86,18 @@ const HOP_TRIES = [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.3, -2.3, Math.PI];
  * The breakable cage lock: a fixed `neutral` actor flagged `breakable` (requests/combat.md) so only player-side
  * attacks reach it, and only her blows count (companions, enemies and stray projectiles are immune). Tagged `prop`
  * so lock-on, threat arrows and companion targeting skip it (the world PropActor convention).
+ * `cracked` (WA12 / ON §6.2, Mochi's latch): only an attack that `breaks` 'cracked' (Bright Slash, Holy) counts and one
+ * opens it; any other blow of hers is a 'block' (her blade bounces: the "tink") and the owner reacts (`tink()`).
  */
 export class CageLock extends Actor {
-  constructor(ctx, owner, { pos, facing = 0, radius = 0.45, height = 0.9, hits = 3, hp = null } = {}) {
-    super(ctx, { faction: 'neutral', radius, height, maxHp: hp ?? 1e4, mass: 100, maxPoise: 1e4 });
+  constructor(ctx, owner, { pos, facing = 0, radius = 0.45, height = 0.9, hits = 3, hp = null, cracked = false } = {}) {
+    super(ctx, { faction: 'neutral', radius, height, maxHp: cracked ? 1e4 : hp ?? 1e4, mass: 100, maxPoise: 1e4 });
     this.owner = owner;
     this.fixed = true;
     this.breakable = true;
-    this.hitsNeeded = hp == null ? hits : null;
+    this.cracked = !!cracked;
+    this.tinks = 0;
+    this.hitsNeeded = cracked ? 1 : hp == null ? hits : null;
     this.hits = 0; this.opened = false;
     this.tags.add('breakable'); this.tags.add('cage'); this.tags.add('prop');
     this.home = pos.clone(); this.pos.copy(pos); this.facing = facing;
@@ -80,10 +105,18 @@ export class CageLock extends Actor {
     this.snap();
   }
   /** Only her blows (or her reflected shots) count. */
-  resolveIncoming(att) {
+  resolveIncoming(att, def) {
     const her = att?.faction === 'player' || att?.owner?.faction === 'player' || att?.tags?.has?.('player');
-    return her ? 'hit' : 'immune';
+    if (!her) return 'immune';
+    if (this.cracked && !def?.breaks?.includes?.('cracked')) {
+      this.tinks++; this.hold();
+      try { this.owner.tink?.(this.tinks); } catch (e) { console.warn('[companions] tink failed', e); }
+      return 'block';
+    }
+    return 'hit';
   }
+  /** Combat's guard-bounce hook (a 'block' result): the latch doesn't move. */
+  onBlocked() { this.hold(); }
   onHit() {
     this.hits++; this.hold();
     this.owner.rattle();
@@ -169,7 +202,11 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     this.interactable = null;
     this.object3d.name = 'kitten:' + kittenId;
     this.visual = null;
-    if (o.visual !== false) { this.visual = new KittenVisual(ctx, look); this.object3d.add(this.visual.root); }
+    if (o.visual !== false) {
+      this.visual = new KittenVisual(ctx, look, { role: companion ? 'companion' : 'kitten', actor: this, blobR: this.radius * 1.8 });
+      this.object3d.add(this.visual.root);
+    }
+
     this.bubble = new TextSprite({ kind: 'bubble', y: this.height + 0.3 });
     this.object3d.add(this.bubble.object);
     this.propRoot = null; this.prop = null; this.cage = null; this.lock = null; this.cageOpen = 0; this.rattleT = 0;
@@ -358,18 +395,61 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     if (cart && !(this.perchY > 0)) { this.perchY = CAGE_CART.bedY; this.flying = true; }
     const size = o.size ?? (style === 'hanging' ? HANG.size : style === 'cart' ? CAGE_CART.size : this.companion ? [1.3, 1.2, 1.0] : undefined);
     const root = this._propRoot();
+    this.cracked = !!(o.cracked ?? CRACKED_LOCKS[this.kittenId]);
+    this.tipped = cart && !!(o.tipped ?? TIPPED_CARTS[this.kittenId]);
+    if (this.tipped) {                                           // ON §6.1: the cart fell off the wagon, tipped 8°
+      this.tilt = new THREE.Group(); this.tilt.name = 'tippedCart'; this.tilt.rotation.x = TIP.roll;
+      root.add(this.tilt);
+    }
     try {
-      this.cage = buildCage({ style, size, ribbon: o.ribbon ?? false });
+      // the loose broken wheel is world's (meadow `decorate`); a level without one may ask for ours (`o.wheel`)
+      const wheel = this.tipped && o.wheel ? [TIP.wheel[0], 0.02 - this.perchY, TIP.wheel[1], TIP.wheelYaw] : null;
+      this.cage = buildCarrier({ style, size, ribbon: o.ribbon ?? true, cracked: this.cracked, wheel });
       if (this.perchY > 0) this.cage.position.y = this.perchY;
-      root.add(this.cage);
-    } catch (e) { console.warn('[companions] cage build failed', e); }
+      (this.tilt ?? root).add(this.cage);
+    } catch (e) { console.warn('[companions] carrier build failed', e); }
     const sz = this.cage?.userData?.size ?? size ?? [0.6, 0.75, 0.5];
     if (style === 'hanging' && this.cage) { this.cage.userData.size = sz; this.cage.rotation.y = Math.PI; }   // door toward her path
     this.cageSize = sz;
     if (cart) this._loadCart();
     const lockPos = this.home.clone();
-    this.lock = new CageLock(this.ctx, this, { pos: lockPos, facing: this.facing, radius: Math.max(sz[0], sz[2]) * 0.5, height: sz[1] + this.perchY, hits: o.hits ?? 3, hp: o.hp ?? (this.companion ? 30 : null) });
+    this.lock = new CageLock(this.ctx, this, { pos: lockPos, facing: this.facing, radius: Math.max(sz[0], sz[2]) * 0.5, height: sz[1] + this.perchY, hits: o.hits ?? 3,
+      hp: o.hp ?? (this.companion ? 30 : null), cracked: this.cracked });
   }
+
+  /**
+   * Her blow tinked off the cracked latch (ON §6.2): the carrier rattles, a "tink" pop + sound, Mochi: "It's a tough
+   * one! Do the shiny swing!" (every CRACK.lineEvery s), then the `tut.bright` hint in his bubble.
+   */
+  tink(n = 1) {
+    this.rattle();
+    const ctx = this.ctx, at = _tp.set(this.home.x, this.home.y + this.perchY + (this.cageSize?.[1] ?? 0.8) * 0.55, this.home.z);
+    ctx.audio?.play3D?.('impact/metal_small2', at, { volume: 0.55, rate: 1.5 });
+    try { ctx.fx?.damageNumber?.(at, 'tink!', 'pop'); } catch { /* fx style missing */ }
+    ctx.fx?.burst?.('sparkle', at, { count: 3, color: '#FFF1C4' });
+    const now = this.t;
+    if (now - (this._tinkLineT ?? -Infinity) < CRACK.lineEvery) return;
+    this._tinkLineT = now;
+    const touch = ctx.input?.device === 'touch';
+    const key = n >= CRACK.hintFrom ? (touch && ctx.strings?.has?.('tut.bright.touch') !== false ? 'tut.bright.touch' : 'tut.bright') : null;
+    if (key) { const text = lineText(ctx, key); this.bubble.show(text, 3.0); ctx.companions?.babble?.(this, text); this.visual?.emote('meow'); }
+    else if (!ctx.companions?.bark?.(this, 'lock', { chance: 1, force: true, dur: 2.6 })) this.bubble.show(lineText(ctx, 'bark.mochi.lock'), 2.6);
+  }
+
+  /**
+   * Give our cat look away (a caged squire joining the party: CompanionManager hands it to the new Companion so the
+   * join frame builds no kitten). Returns the KittenVisual or null.
+   */
+  takeVisual() {
+    const v = this.visual;
+    if (!v) return null;
+    this.visual = null;
+    v.root.removeFromParent();
+    return v;
+  }
+
+  /** A KO in the cart fight: Mochi cheers in his carrier (party.js; ON §6.1). */
+  cheer() { this.visual?.hop(0.18, 0.35); this.visual?.setExpression('happy'); this.visual?.emote('meow'); this.rattleT = 0.2; }
 
   /** Clover's town stocks (§12.5): she stands behind the board; 3 blows or E lift it. */
   _buildStocks() {
@@ -503,13 +583,72 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     }
     if (this.service) { this._serviceRescue(); return; }
     this.ctx.state?.addKitten?.(this.kittenId);
-    this.ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: this.kittenId });
-    this.visual?.setPose('cheer', 0.2); this.visual?.setExpression('happy'); this.visual?.hop(0.35);
+    // X23 / ART §8.6: the burst (and AUTOCAM's Cosy beat) at the carrier when there was one, else where the kitten is
+    const at = (this.cage ? this.home : this.pos).clone();
+    if (this.cage) at.y += this.perchY > 0 ? this.perchY : 0;
+    this.ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: this.kittenId, position: at });
+    this.visual?.setExpression('happy');
     const line = lineText(this.ctx, 'kitten.' + this.kittenId);
-    this.bubble.show(line, RESCUE.leaveAfter);
+    this.bubble.show(line, RESCUE.leaveAfter + REUNION.boop + 0.6);
     this.ctx.companions?.babble?.(this, line);
     this.ctx.fx?.burst?.('sparkle', this.pos, { count: 14 });
     this.ctx.companions?.onKittenRescued?.(this);
+    this._startReunion();
+  }
+
+  /** WA §5.6 reunion: run up to REUNION.run m toward her, then boop, hop and the sparkle trail (state 'reunion'). */
+  _startReunion() {
+    const p = this.ctx.player;
+    this.stateName = 'reunion'; this.reunionT = 0; this.booped = false; this.flying = false;
+    this.reunionTo = this.pos.clone();
+    if (p) {
+      const dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, d = Math.hypot(dx, dz);
+      const go = Math.min(REUNION.run, Math.max(0, d - REUNION.stop));
+      if (d > 1e-3) this.reunionTo.set(this.pos.x + (dx / d) * go, this.pos.y, this.pos.z + (dz / d) * go);
+    }
+  }
+
+  /** One reunion step (fixed step). */
+  _reunionStep(dt, p) {
+    this.reunionT += dt;
+    const R = REUNION, to = this.reunionTo;
+    const dx = to.x - this.pos.x, dz = to.z - this.pos.z, d = Math.hypot(dx, dz);
+    if (!this.booped && d > 0.08 && this.reunionT < R.maxRun) {
+      const s = Math.min(R.speed, d / Math.max(dt, 1e-3));
+      this.vel.x = damp(this.vel.x, (dx / d) * s, 14, dt); this.vel.z = damp(this.vel.z, (dz / d) * s, 14, dt);
+      if (p) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 10, dt);
+      return;
+    }
+    this.vel.x = damp(this.vel.x, 0, 12, dt); this.vel.z = damp(this.vel.z, 0, 12, dt);
+    if (!this.booped) {                                          // nose-boop: heads tilt 12°, a heart between them
+      this.booped = true; this.boopT = 0;
+      if (p) this.facing = Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
+      this.visual?.gesture('boop', R.boop);
+      _tp.set(p ? (p.pos.x + this.pos.x) / 2 : this.pos.x, this.pos.y + this.height + 0.15, p ? (p.pos.z + this.pos.z) / 2 : this.pos.z);
+      this.ctx.fx?.burst?.('heart', _tp, { count: 1 });
+      return;
+    }
+    this.boopT += dt;
+    if (this.boopT >= R.boop) {
+      this.visual?.setPose('cheer', 0.2); this.visual?.hop(R.hopH, R.hopDur, R.squash);
+      this.trail = { t: 0, n: 0, x0: this.pos.x, y0: this.pos.y + this.height * 0.6, z0: this.pos.z, yaw: this._homeYaw() };
+      this.stateName = 'rescued'; this.leaveT = 0;
+    }
+  }
+
+  /** The sparkle trail toward home (Particles pool through fx.burst; REUNION.trailN sparkles over trailDur s). */
+  _trailStep(dt) {
+    const tr = this.trail, R = REUNION;
+    tr.t += dt;
+    while (tr.n < R.trailN && tr.t >= (tr.n / R.trailN) * R.trailDur) {
+      const u = tr.n / (R.trailN - 1), a = 1 - u;
+      const ex = tr.x0 + Math.sin(tr.yaw) * R.trailLen, ez = tr.z0 + Math.cos(tr.yaw) * R.trailLen;
+      const cx = (tr.x0 + ex) / 2, cz = (tr.z0 + ez) / 2, cy = tr.y0 + R.trailUp * 1.6;
+      _tp.set(a * a * tr.x0 + 2 * a * u * cx + u * u * ex, a * a * tr.y0 + 2 * a * u * cy + u * u * (tr.y0 + R.trailUp), a * a * tr.z0 + 2 * a * u * cz + u * u * ez);
+      this.ctx.fx?.burst?.('sparkle', _tp, { count: 1, color: '#FFF1C4' });
+      tr.n++;
+    }
+    if (tr.n >= R.trailN) this.trail = null;
   }
 
   /**
@@ -676,10 +815,14 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
         }
         break;
       }
+      case 'reunion':
+        this._reunionStep(dt, p);
+        break;
       case 'gone':
         return;
       default: break;
     }
+    if (this.trail) this._trailStep(dt);
     if (this.sparkleT >= 0) {                    // §7.7: a 3 s sparkle after answering her Meow
       const prev = this.sparkleT; this.sparkleT += dt;
       if (Math.floor(prev / 0.75) !== Math.floor(this.sparkleT / 0.75)) this.ctx.fx?.burst?.('sparkle', this.pos, { count: 5 });
@@ -827,8 +970,12 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
       const p = this.ctx.player;
       const near = p && Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < RESCUE.waveRadius;
       this.visual.setWave((this.stateName === 'waiting' && near) || (this.stateName === 'caged' && near && (this.t % 3) < 1.4));
-      this.visual.lookAt(p && this.stateName !== 'leaving' ? wrapAngle(Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z) - this.facing) : 0);
-      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || this.flying });
+      const watch = p && this.stateName !== 'leaving' && this.stateName !== 'stay';
+      this.visual.lookAt(watch ? wrapAngle(Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z) - this.facing) : 0);
+      // the tipped cart: the kitten inside leans with it
+      this.visual.root.rotation.x = this.tilt && (this.stateName === 'caged' || this.stateName === 'opening') && !this.hop ? TIP.roll * 0.6 : 0;
+      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || this.flying, calm: this.stateName === 'stay',
+        close: this.stateName === 'reunion' || this.stateName === 'opening' });
     }
     this.bubble.update(vdt);
     this._farCull();                                   // last: the visual's own update may re-show its root

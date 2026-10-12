@@ -19,6 +19,8 @@
 //   player:wasd-override D cancels a click-move at once ('direct'); J cancels a move order and swings at the cursor
 //   player:touch         844×390 + 390×844 hasTouch: tap-to-move, tap a rat = loop auto-attack until it falls,
 //                        hold 🛡 → parry → Auto-Riposte by itself, the ±90° touch guard arc
+//   player:warm      Phase W / AUTOCAM: moveIntent order + groundY, idle steps (glance, groom, twirl), the knock-out sit
+//                    + boing back, the Snip! word → warm-*.png
 //   player:look      studio gallery: idle, Big Swoosh, the Stand, Golden Hour Oath, run (SMOKE_PLAYER_LOOK=full: every
 //                    pose / swing — slash1-3, bright, riposte, jump, pounce, sip, charge, holy, hurt, faint)
 import fs from 'node:fs';
@@ -444,7 +446,7 @@ export default [
       const ev = await pev(t);
       t.assert(ev.includes('player:stillStanding'), 'player:stillStanding not emitted');
       t.assert(!r.alive && r.state === 'dead' && ev.includes('player:lifeLost') && r.lives === 8, `faint: alive ${r.alive}, state ${r.state}, lives ${r.lives}`);
-      await until(t, 'p.state === "dead" && p.stateT >= 1.0');
+      await until(t, 'p.state === "dead" && p.stateT >= 0.6');
       await shot(t, 'player/faint');
       const back = await t.G(() => window.__GAME__.__pl.until((p) => p.alive && p.state === 'move', 12000));
       const s = await ps(t);
@@ -573,8 +575,63 @@ export default [
       await pose(t, 'run-side', full ? '' : 'g.ctx.input.setVirtualMove(0, 1)', full ? 'true' : 'Math.hypot(p.vel.x, p.vel.z) > 5.3', [[2.6, 0.7, 0.4], [0, 0.45, 0.2], 36]);
       await t.G(() => { const g = window.__GAME__; g.ctx.input.setVirtualMove(0, 0); g.ctx.input.setDevice('kbm'); return true; });
       await t.frames(30);
-      if (full) await pose(t, 'faint', 'const p = g.ctx.player; p.god = false; p.hp = 0; p.alive = false; p.onDeath()', 'p.state === "dead" && p.stateT > 1.2');
+      if (full) await pose(t, 'faint', 'const p = g.ctx.player; p.god = false; p.hp = 0; p.alive = false; p.onDeath()', 'p.state === "dead" && p.stateT > 0.8');
       if (full) await t.G(() => window.__GAME__.__pl.until((p) => p.alive, 5000));
+    },
+  },
+  // ------------------------------------------------------------------ Phase W + ART §6.5 + AUTOCAM §5.3 (player)
+  {
+    name: 'player:warm', order: 29.5, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      await install(t);
+      await isoPlay(t);
+      // AUTOCAM §5.3 / §4: moveIntent 'order' toward the path 2.5 m ahead, groundY = her contact
+      const mi = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, L = g.__pl, THREE = g.THREE;
+        p.order('move', new THREE.Vector3(p.pos.x + 6, p.pos.y, p.pos.z - 6), { source: 'api' });
+        await L.simWait(0.3);
+        const out = { kind: p.moveIntent.kind, speed: p.moveIntent.speed, gy: p.groundY, y: p.pos.y, la: p.orders.lookAhead(2.5, { x: 0, z: 0 }) };
+        p.orders.clear('smoke');
+        await L.simWait(0.6);
+        out.idle = p.moveIntent.kind;
+        return out;
+      });
+      t.assert(mi.kind === 'order' && mi.speed > 0 && mi.la, `moveIntent ${JSON.stringify(mi)}`);
+      t.assert(Number.isFinite(mi.gy) && Math.abs(mi.gy - mi.y) < 0.5 && mi.idle === 'idle', `groundY ${mi.gy} (feet ${mi.y}), then ${mi.idle}`);
+      await shot(t, 'player/warm-iso');                             // iso: face pitch toward the lens, her ring
+      // WA §5.6 idle ladder steps (visual; ?test never runs the clock, so the steps are fired by hand)
+      await pose(t, 'warm-glance', 'g.ctx.player.model.idleStep("glance")', 'p.model.glanceW > 0.9', [[0.6, 0.9, 2.4], [0, 0.55, 0], 34]);
+      await pose(t, 'warm-groom', 'g.ctx.player.model.idleStep("groom")', 'p.model.idleAnim?.name === "groom" && p.model.idleAnim.t > 0.5', [[1.2, 0.8, 2.0], [0, 0.5, 0], 34]);
+      await pose(t, 'warm-twirl', 'g.ctx.player.model.idleStep("twirl")', 'p.model.clip?.idle && p.model.clip.t > 0.3', [[1.5, 1.0, 2.6], [0, 0.5, 0], 38]);
+      await t.frames(30);
+      // WA §5.7 knock-out: a dizzy sit with the sword beside her, the cream wipe, boing back at 1.55 s
+      await t.G(() => { const g = window.__GAME__; g.god(false); return true; });
+      await pose(t, 'warm-ko', 'const p = g.ctx.player; p.hp = 0; p.alive = false; p.onDeath()', 'p.state === "dead" && p.stateT > 0.7 && p.model.dropW > 0.9', [[1.4, 0.9, 2.2], [0.1, 0.35, 0], 36]);
+      const ko = await t.G(async () => {
+        const g = window.__GAME__, p = g.ctx.player, L = g.__pl;
+        const pose0 = p.model.basePose(), t0 = g.ctx.game.time;
+        const back = await L.until((pl) => pl.alive && pl.state === 'move', 8000);
+        return { pose0, back, dt: g.ctx.game.time - t0, stateT: p.stateT };
+      });
+      t.assert(ko.pose0 === 'sit', `knock-out pose ${ko.pose0} (never lying flat)`);
+      t.assert(ko.back, `respawned (${JSON.stringify(ko)})`);
+      await t.G(() => { window.__GAME__.god(true); return true; });
+      // WA §5.3 words on her hits: Snip! on the first swing at a rat
+      const w = await t.G(async () => {
+        const g = window.__GAME__, L = g.__pl, p = g.ctx.player;
+        await L.simWait(1.2);
+        const rat = L.rat(0, 1.2);
+        await L.frames(3);
+        const n0 = p.words ?? 0;
+        p._wordT = -Infinity;
+        await L.tap('attack');
+        await L.until((pl) => (pl.words ?? 0) > n0, 3000);
+        const out = { words: (p.words ?? 0) - n0, last: p.lastWord };
+        g.ctx.enemies.despawn?.(rat);
+        return out;
+      });
+      t.assert(w.words >= 1 && w.last === 'Snip!', `hit word ${JSON.stringify(w)}`);
+      t.log(`moveIntent ${mi.kind} ${mi.speed.toFixed(1)} m/s; KO back after ${ko.dt.toFixed(2)} s; word ${w.last}`);
     },
   },
   // ------------------------------------------------------------------ M2: shop upgrades (§13.3)

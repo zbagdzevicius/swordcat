@@ -1,0 +1,3 @@
+import * as C from '../../src/characters/index.js';
+function count(k){ let t=0,d=0; const per={}; k.root.traverseVisible(o=>{ if(!(o.isMesh||o.isLine))return; d++; const g=o.geometry; let n=g.index?g.index.count/3:g.attributes.position.count/3; if(g.drawRange&&g.drawRange.count!==Infinity) n=Math.min(n,g.drawRange.count/3); if(o.isInstancedMesh) n*=o.count; if(o.isLine) n=0; t+=n; per[o.name]=(per[o.name]||0)+Math.round(n);}); return {t:Math.round(t),d,per}; }
+for (const det of [1,0.55,0.4,0.3]) { C.setCharDetail(det); C.setFurQuality({hero:0,kitten:0,npc:0}); const k=C.buildKitten(C.swordcatConfig({cape:'red'})); console.log(det, JSON.stringify(count(k))); }

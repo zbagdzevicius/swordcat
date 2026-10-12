@@ -14,16 +14,26 @@
 //   memeYawOffset(actor)      the MEME_LOOP framing's rotation around her that clears walls / fences / trunks in
 //                             front of her face (mode('meme') uses it; opts.yawOffset overrides)
 //   snapBehind(), recenter(), modeName, distance, showLockMarker
+// AUTOCAM additions (research/next/AUTOCAM_SPEC.md, IMPLEMENTATION_PLAN §7.2; the MOBA auto-camera):
+//   footprint {q, cx, cz, ahead, behind, halfW, halfWTop, slantMax, d, version, valid} + inFootprint(x, z, pad)
+//   frustum, frameId (one frustum per rendered frame), inView(p, r), activityOf(actor) (PERF §4.3 tiers 0–3)
+//   onScreen(p, margin)       = SafeFrame-visible (HUD / thumb holes count as hidden; gameplay fairness only, X13)
+//   safeFrame (read-only SafeFrame), groundAxes(outU, outR), heroScreen() → {x, y} CSS px (her rest point)
+//   closeUp (lens < 6.0 m on / > 6.3 m off; calls view.setCloseUp), camLockMode ('locked' | 'semi' | 'free')
+//   blendTo(mode, dur, ease), probe(), framing()  (debug / smoke)
 // Emits E.MEME_CAM { on } entering / leaving 'meme'. Listens: E.SHAKE, E.CAM_MODE, E.BOSS_START / BOSS_DEFEATED,
 // E.ARENA_CLEAR, E.LEVEL_LOADING / LEVEL_LOADED / LEVEL_UNLOAD, E.PLAYER_SPAWNED, E.PLAYER_HOLY (FOV punch),
 // E.PLAYER_GOLDEN (punch-in), E.BOSS_DIZZY (the §8.2 dizzy shake), E.CUTSCENE_END (handback), E.GAME_MODE.
 // Hit / parry / block / guard-break shakes arrive as E.SHAKE from combat (one source, no double shake).
 //
-// Gameplay camera (research/CONTROLS_SPEC.md §2-§3, the default): the fixed-yaw three-quarter top-down ISO RIG
-// (IsoRig.js maths) for `follow` / `lock` / `boss`. The yaw is the level's (level.cam.yaw, default π: the camera south
-// of her looking +Z) and never orbits with her; the pitch / distance ease between the near and combat framings, the
-// fit keeps her, the engaged enemies and the boss on screen (_isoGameplay, _bossFitStep), and zoom / edge pan / the
-// camera lock (Y) / the cursor lead / dialogue and Golden Hour dolly-ins are layered on top. Picking for click-to-move
+// Gameplay camera (research/CONTROLS_SPEC.md §2-§3 + AUTOCAM, the default): the fixed-yaw three-quarter top-down ISO
+// RIG (IsoRig.js maths) for `follow` / `lock` / `boss`. The yaw is the level's (level.cam.yaw, default π: the camera
+// south of her looking +Z) and never orbits with her (R1). AUTOCAM §4.2 per render: her XZ followed RIGIDLY on the
+// interpolated render pose, the ground Y through a spring, then every offset (screen-up bias, intent lead, combat
+// lean, aim pan, beat, peek, semi pan) is its own critically damped spring (core smoothDamp: no overshoot, R2),
+// clamped so she never leaves `herFrame` (R7); the distance is the rest frame (zoom × base × zone hints) plus the
+// FramingSolver fit (20 Hz, out fast / in slow) and the beat / boss / punch envelopes. SafeFrame gives the anchor
+// (setViewOffset, whole px) and the visibility test. Picking for click-to-move
 // and targeting lives in Picker.js (screenToGround / pickAt; the hover pick runs once per rendered frame,
 // _isoCursor). Occlusion (§3, _isoOcclusion): props between the lens and the subject capsules (her chest, engaged
 // enemies, the selection, the next waypoint) fade dithered through OccluderFader; crowns and roofs have their own
@@ -45,18 +55,23 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { CAMERA, PLAYER, JUICE } from '../core/config.js';
-import { damp, dampAngle, clamp, lerp, wrapAngle, easeInOutSine } from '../core/math.js';
+import { damp, dampAngle, clamp, lerp, wrapAngle, easeInOutSine, easeOutCubic, smoothstep, smoothDamp, smoothDamp2 } from '../core/math.js';
 import { hostileTo } from '../core/ActorRegistry.js';
 import { CameraShake } from './CameraShake.js';
-import { CamPose, blendPose, applyPose, resolveEase } from './pose.js';
+import { CamPose, blendPose, blendPoseIso, applyPose, resolveEase } from './pose.js';
 import { CutsceneCamera, SHOT_MODES } from './CutsceneCamera.js';
 import { MemeCam } from './MemeCam.js';
 import { acquireLockTarget, RECENT_ATTACKER_TIME, handoverLockTarget, switchLockTarget, lockable, FlickDetector, StickFlick, LockMarker } from './LockOn.js';
 import { OccluderFader, SOLID_MIN_H } from './Occluders.js';
 import { PRESETS, localToWorld } from './presets.js';
 import { toRecord } from '../physics/StaticColliders.js';
-import { RENDER, AIM, TELEGRAPH } from '../core/config.js';
-import { ISO, isoFrame, isoPosition, isoLead, isoPitch, fitDist, safeFitDist, subjectOverflow, pxAt, apparentH, screenToWorldDir, capXZ } from './IsoRig.js';
+import { RENDER, AIM, TELEGRAPH, TOUCH, NAV, ATTACKS, FADE_COLOR as CORE_FADE } from '../core/config.js';
+import { ISO, isoFrame, isoPosition, isoPitch, pxAt, apparentH, screenToWorldDir, capXZ, camProfile, distRange, intentLead,
+  LeadGate, herLimits, clampToLimits, footprintOf, inQuad, fogRadius, farPlane } from './IsoRig.js';
+import { SafeFrame, fallbackOccluders } from './SafeFrame.js';
+import { Subjects, TelegraphTrack } from './framing/Subjects.js';
+import { makeView, setYaw, solveFrame, holdGoal, allHardInside, needD, CLS, CLS_NAMES, STRIDE, SX, SY, SZ, SR, SW, SF, SC, F_HARD, F_DROP } from './framing/FramingSolver.js';
+import { BeatRunner, BEATS } from './framing/beats.js';
 import { screenToGround, pickAt, worldToScreen as w2s, canvasRect } from './Picker.js';
 import { setXray } from '../characters/Readability.js';
 
@@ -300,46 +315,75 @@ const TELEPORT_SQ = 36;
 const ZERO_LOOK = Object.freeze({ x: 0, y: 0, px: 0, py: 0 });
 
 const _dir = new THREE.Vector3(), _piv = new THREE.Vector3(), _right = new THREE.Vector3(), _tmp = new THREE.Vector3();
-const _org = new THREE.Vector3(), _lookPt = new THREE.Vector3(), _tgt = new THREE.Vector3(), _ray = new THREE.Ray();
+const _org = new THREE.Vector3(), _tgt = new THREE.Vector3(), _ray = new THREE.Ray();
 const _blendPivot = new THREE.Vector3(), _castOrg = new THREE.Vector3(), _sideOrg = new THREE.Vector3(), _losDir = new THREE.Vector3();
 const _subjects = Array.from({ length: 7 }, () => new THREE.Vector3());
 const _radii = new Float32Array(7);
 const _feet = new THREE.Vector3();
 const _xrPt = new THREE.Vector3();
-const _ZV = Object.freeze({ x: 0, y: 0, z: 0 }), _ZV2 = Object.freeze({ x: 0, y: 0 });
-const _bo = { over: 0, dx: 0, dy: 0 }, _shT = new THREE.Vector3(), _shP = new THREE.Vector3();
-/** boss safe fit: px kept clear inside the HUD-free rect; the focus lean is at most this (m) and eases at this rate (1/s) */
-const SAFE_PAD = 8, BOSS_LEAN_MAX = 6, BOSS_LEAN_DAMP = 3;
-/** boss safe fit: the lean slides the focus up to this fraction of the way to the boss; her fallback rect when both cannot fit */
-const BOSS_LEAN_T = 0.85, BOSS_HER_MAX = 0.92;
-/** combat fit (§2.4, exact projection like the boss fit): the engaged hostiles stay inside this share of the HUD-free
- *  rect, her inside ISO.boss.herInner (60 %); the focus may lean toward their centroid up to COMBAT_LEAN_MAX m (the
- *  default bias is ISO.combat.bias × the centroid offset, ≤ biasMax), searched in COMBAT_LEAN_STEP m steps */
-const COMBAT_ENEMY_INNER = 0.92, COMBAT_LEAN_MAX = 5, COMBAT_LEAN_STEP = 0.25, COMBAT_SUBJECTS = 9;
-/** the exact combat fit's widest zoom-out (m over the resting distance; ISO.combat.zoomOut is 3): the ground below her
- *  is foreshortened by the lens tilt, so a crossbow 9–10 m down-screen needs more than 3 m (the clamps still apply) */
-const COMBAT_FIT_OUT = 8;
-/** a ranged hostile (crossbow: attack range 16 m, keeps 7–11 m) counts as engaged up to its attack range, ≤ this (m) */
-const RANGED_ENGAGE_R = 16.5;
-/** per enemy def: its longest attack range (m) */
-const _defRange = new WeakMap();
-function attackRange(a) {
-  const def = a.def;
-  if (!def || typeof def !== 'object') return Number.isFinite(a.attackRange) ? a.attackRange : 0;
-  let r = _defRange.get(def);
-  if (r === undefined) {
-    r = 0;
-    for (const at of def.attacks ?? []) if (Number.isFinite(at?.range)) r = Math.max(r, at.range);
-    _defRange.set(def, r);
-  }
-  return r;
-}
-const _cP = new THREE.Vector3();
+const _ZV2 = Object.freeze({ x: 0, y: 0 });
 const _xrSet = new Set();
 const _projView = new THREE.Matrix4();
 const _lens = LENS_GRID.map(() => new THREE.Vector3());
 const _body = new THREE.Vector3(), _tgtPt = new THREE.Vector3(), _q = new THREE.Vector3();
 const _cOrg = new THREE.Vector3(), _cDir = new THREE.Vector3(), _cRight = new THREE.Vector3();
+
+// ==================== AUTOCAM (research/next/AUTOCAM_SPEC.md) ====================
+const FR = ISO.framing;
+/** the engaged set is capped at this many actors (the subject pool holds 16 incl. her) */
+const MAX_ENG = 24;
+/** her framing subject: ρ = framing.pad.her at feet + this (m; AUTOCAM §6.2 "0.6 at y + 0.4") */
+const HER_CENTRE_Y = 0.4;
+/** player states whose motion is not intent (tumble, Pounce, lunge magnetism, knockback, scripted): lead 0 (D5) */
+const OTHER_STATES = new Set(['dodge', 'pounce', 'attack', 'hurt', 'stagger', 'dead', 'scripted', 'rise', 'vigil', 'memecam', 'sip', 'golden']);
+/** smooth times (s) of the iso springs that AUTOCAM §12 leaves to the rig: zoom / elastic, pitch (≤ 20°/s cap on top),
+ *  the beat lean (the beat envelope already eases), the charge push-in weight */
+const ZOOM_ST = 0.12, PITCH_ST = 0.15, BEAT_ST = 0.12, CHARGE_ST = 0.1;
+/** a beat trigger that cannot fire within this long (s) is dropped (never a late beat) */
+const BEAT_QUEUE_T = 1.0;
+/** PERF §4.3 activity tiers (until core adds CAMERA.iso.activity, requests/core.md): bounding sphere + margin in the
+ *  frustum = 0; ≤ near m from the focus = 1; ≤ far = 2; beyond = 3; classic: tier 0 within `classic` m */
+const ACT = Object.freeze({ margin: 2, near: 30, far: 60, classic: 40, ...(ISO.activity ?? {}) });
+/** ART §6.1 close-up flag hysteresis (lens → her, m) until core adds CAMERA.iso.closeUp */
+const CLOSE = Object.freeze({ on: 6.0, off: 6.3, ...(ISO.closeUp ?? {}) });
+/** Reduce camera motion: Meme Cam sway scale (AUTOCAM §10.1) */
+const REDUCE_MEME_SWAY = ISO.reduce.memeSway ?? 0.3;
+/** cream veil colour (WA §2.7; core FADE_COLOR) */
+const FADE_COLOR = CORE_FADE ?? '#FFF1DE';
+/** zoom changes are written to settings (camZoom / camZoomPortrait) after this long without another (s) */
+const ZOOM_SAVE_T = 0.6;
+const LOCK_MODES = Object.freeze(['locked', 'semi', 'free']);
+const EMPTY = Object.freeze({});
+/** SafeFrame anchor hysteresis (normalised): smaller target moves are ignored for the same viewport, so ui's touch
+ *  layout (which clears a disc around heroScreen()) and the anchor (from that layout's rects) cannot ping-pong */
+const ANCHOR_EPS = 0.012;
+const _look = { x: 0, z: 0, rem: 0 }, _tmp2 = new THREE.Vector3(), _F = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _sph = new THREE.Sphere();
+/** the iso shake mix (CONTROLS §2.5; rotation ×touchShakeRot on touch), refreshed per frame, never reallocated */
+const _shakeMix = { rotMul: 0.5, transMul: 2, rotMaxDeg: 1.2, transMax: 0.35 };
+/** a boss intro / any cutscene that ended this recently (s) counts as "just played" (no room read / establishing read) */
+const CUT_RECENT = 1.5;
+
+/** A live hostile actor (not her, alive, not hidden). */
+function liveHostile(a, me) {
+  return !!a && a !== me && a.alive !== false && !a.dead && !a.hidden && !(a.hp !== undefined && a.hp <= 0) && !!(a.object3d?.position ?? a.pos);
+}
+/** Alerted / engaged (the AI's flag or an engaged state). */
+function isAlerted(a) { return !!(a.alerted || ENGAGED.has(a.stateName)); }
+/** Insert `a` (timer t, distance d) into the parallel arrays by distance. */
+function insertByDist(arr, T, D, a, t, d) {
+  if (arr.length >= MAX_ENG) return;
+  let i = arr.length;
+  arr.push(a); D.push(d);
+  while (i > 0 && D[i - 1] > d) { arr[i] = arr[i - 1]; D[i] = D[i - 1]; T[i] = T[i - 1]; i--; }
+  arr[i] = a; D[i] = d; T[i] = t;
+}
+/** Cheap signature of a ui touch layout (rounded button centres) for the SafeFrame rebuild key. */
+function layoutSig(L) {
+  let h = 0;
+  for (const k in L.buttons) { const b = L.buttons[k]; if (b) h = (h * 31 + Math.round(b.x) * 7 + Math.round(b.y) * 13 + Math.round(b.r)) | 0; }
+  return h;
+}
 
 export class FollowCamera {
   constructor(ctx) {
@@ -429,44 +473,91 @@ export class FollowCamera {
     this.isoYaw = ISO.yaw;
     this.stickYaw = ISO.yaw;
     this._stickFree = 0;
-    /** zoom multiplier (wheel / pinch / R3; starts at settings.camZoom) and its smoothed value */
-    this.zoomMul = 1; this._zoomS = 1; this._zoomSeeded = false;
-    /** §2.3 camera lock (Y): unlocked = edge pan + leash; the pan offset and the peek offset (focus − her) */
-    this.camLocked = true;
-    this._pan = new THREE.Vector3(); this._peek = new THREE.Vector3();
-    this._lead = { x: 0, z: 0 }; this._leadT = { x: 0, z: 0 };
-    /** combat / boss extra distance (m) eased out fast, back in slowly after `holdIn` */
-    this._extraS = 0; this._extraHold = 0;
+    /** zoom multiplier (wheel / pinch / R3 / the Camera distance slider; per orientation: settings.camZoom /
+     *  camZoomPortrait, §10.3) and its smoothed value (+ the elastic give at a limit) */
+    this.zoomMul = 1; this._zoomS = 1; this._zoomSS = { v: 0 }; this._zoomSeeded = false; this._zoomPortrait = false;
+    this._give = 0; this._giveS = { v: 0 }; this._zoomSaveT = -1;
+    /** §10.4 lock modes (KBM): 'locked' | 'semi' | 'free'; `camLocked` = locked (Y toggles locked ↔ the last unlocked) */
+    this.camLocked = true; this.camLockMode = 'locked'; this._lastUnlocked = 'free';
+    /** free-mode leash pan (after the herFrame clamp), the peek offset, the semi pan (inside herFrame) */
+    this._pan = new THREE.Vector3(); this._panS = { vx: 0, vz: 0 }; this._edgeT = 0;
+    this._peek = new THREE.Vector3(); this._peekS = { vx: 0, vz: 0 };
+    this._semi = { x: 0, z: 0 }; this._semiS = { vx: 0, vz: 0 }; this._semiFrom = new THREE.Vector3();
+    this._semiActive = false; this._semiIdle = 0; this._semiReturn = false; this._semiHome = false;
+    // ---- AUTOCAM springs (§4.2; each its own smoothDamp state, zero allocation)
+    /** the spring-smoothed intent lead (world XZ; read-only for others) */
+    this.lead = { x: 0, z: 0 };
+    this._lead = { x: 0, z: 0 }; this._leadT = { x: 0, z: 0 }; this._leadS = { vx: 0, vz: 0 }; this._leadGate = new LeadGate();
+    this._int = { x: 0, z: 0, kind: 'idle' };
+    this._bias = 0; this._biasT = 0; this._biasS = { v: 0 };
+    this._lean = { x: 0, z: 0 }; this._leanT = { x: 0, z: 0 }; this._leanS = { vx: 0, vz: 0 };
+    this._aim = { x: 0, z: 0 }; this._aimT = { x: 0, z: 0 }; this._aimS = { vx: 0, vz: 0 }; this._aimHoldT = 0; this._aimHeld = false;
+    this._beatOff = { x: 0, z: 0 }; this._beatS = { vx: 0, vz: 0 };
+    this._off = { x: 0, z: 0 };
+    /** combat / boss fit above the rest distance (m): out fast, in slowly after holdIn (§6.5) */
+    this._extra = 0; this._extraS = { v: 0 }; this._lastNeedOut = -1e9; this._calmFit = 0;
+    this._snug = 0; this._snugS = { v: 0 }; this._snugArmed = true;
+    this._rubber = 0; this._rubberS = { v: 0 }; this._pinchInT = 0; this._fitToast = false;
+    this._pitch = NaN; this._pitchS = { v: 0 }; this._chargeS = { v: 0 }; this._dCur = 0;
+    this._gy = 0; this._gyS = { v: 0 };
     this._groundY = 0;
+    /** real (rendered) seconds since construction */
+    this._realT = 0;
+    // ---- AUTOCAM framing: SafeFrame, subjects, the solver, beats
+    /** SafeFrame (AUTOCAM §7; read-only for others: ui threat arrows, enemies' fairness rules) */
+    this.safeFrame = new SafeFrame(); this._occl = [];
+    /** the anchor (where her focus is drawn; eased 0.4 s on change, applied in whole px) */
+    this._anc = { x: 0.5, y: 0.54, fromX: 0.5, fromY: 0.54, toX: 0.5, toY: 0.54, t: 1, seeded: false };
+    this._vo = { x: NaN, y: NaN, w: 0, h: 0 };
+    this.subjects = new Subjects();
+    this._tel = new TelegraphTrack();
+    this._laneKeys = Array.from({ length: this._tel.size }, (_, i) => Object.freeze({ lane: i }));
+    this._tok = [];
+    this._view = makeView();
+    this._goal = { d: ISO.dist, need: ISO.dist, leanR: 0, leanU: 0, dropped: 0, holes: 0, capped: false };
+    this._goalNext = { d: ISO.dist, need: ISO.dist, leanR: 0, leanU: 0, dropped: 0, holes: 0, capped: false };
+    this._solveOpts = { dBase: 0, cap: 0, dMin: 0, capUp: 0, capDown: 0, limR: 0, limL: 0, limUp: 0, limDown: 0, nEngaged: 0, crowd: true, visible: null, holeRepair: true };
+    this._visibleFn = (sx, sy) => this.safeFrame.visible(sx, sy);
+    this._solveT = 0; this._forceSolve = true;
+    this._lim = { up: 2, down: 4, left: 3, right: 3 };
+    this._tmpPool = new Float32Array(2 * STRIDE);
+    this.beat = new BeatRunner();
+    this._beatQ = { id: null, x: 0, z: 0, r: 0, t: 0 };
+    /** the locked arena (arena:lock { center, r }) for the room read / establishing read */
+    this._arena = { id: null, x: 0, z: 0, r: 0, locked: false };
+    this._lastCutEnd = -1e9; this._bossHoldT = 0; this._breathT = -1; this._dizzy = { on: false, t: 0, w: 0 };
+    /** engaged-set hysteresis (two swapped arrays + their not-alerted timers) */
+    this._engA = []; this._engB = []; this._engTA = new Float32Array(MAX_ENG); this._engTB = new Float32Array(MAX_ENG);
+    // ---- AUTOCAM perf surface (§9; PERF §4.3 / K1 / K2)
+    /** the visible ground footprint (§9.1), refreshed once per rendered frame from the iso pose */
+    this.footprint = { q: new Float32Array(8), cx: 0, cz: 0, ahead: 0, behind: 0, halfW: 0, halfWTop: 0, slantMax: 0, d: 0, version: 0, valid: false };
+    this._fpQ = new Float64Array(5);
+    /** the merged iso far plane (X12) */
+    this.farPlane = ISO.far;
+    /** increments once per rendered frame after `frustum` is rebuilt */
+    this.frameId = 0;
+    /** ART §6.1: the lens is within 6.0 m of the framed character (off above 6.3 m) */
+    this.closeUp = false; this._closeUpActor = null;
+    this._cinematic = false;
     /** the ground point under the mouse (cached once per rendered frame) */
     this.cursorGround = new THREE.Vector3(); this.cursorValid = false;
     /** the hover pick (§5.5: at most once per rendered frame) */
     this.hover = { kind: 'ground', actor: null, id: null, interact: null, point: new THREE.Vector3(), px: 0 };
-    /** iso weight (1 = gameplay iso, 0 = preset / meme / cutscene): drives the focus-fog mode and the frame offset */
+    /** iso weight (1 = gameplay iso, 0 = preset / meme / cutscene): drives the focus-fog mode and the anchor */
     this._isoW = this.isIso ? 1 : 0;
-    this._viewOff = null;
     this._near = -1; this._far = -1;
-    /** the engaged set (alerted hostiles within combat.radius + the selection) of the last frame */
+    /** the engaged set (AUTOCAM D9 hysteresis) + the selection, of the last frame */
     this.engaged = [];
-    this._engPts = [];
     this._punchT = -1; this._holyT = -1; this._dodgeT = 0;
     this._xrayT = 0; this._xrayOn = false; this._xrayCheckT = 0; this._xrayEnemies = new Set();
     /** last iso framing numbers (cam.iso()) */
-    this.isoInfo = { yaw: ISO.yaw, pitch: 0.9, dist: ISO.dist, fov: ISO.fov, catPx: 0, portrait: false, phone: false, frameOffset: 0 };
-    this._fr0 = {}; this._fr1 = {};
-    /** §2.4 boss safe fit: the widest boss frame (isoFrame), the HUD-free rect (CSS px), her / the boss as fit subjects,
-     *  the eased focus lean toward the boss (m) when even that frame cannot hold him */
-    this._frB = { dist: ISO.boss.dist[1], fov: ISO.fov, pitch: ISO.pitchBoss };
-    this._safeR = { l: 0, t: 0, r: 1280, b: 720 };
-    this._bossSubs = [{ x: 0, z: 0, y0: 0, y1: 1, r: 0.5, inner: ISO.boss.herInner }, { x: 0, z: 0, y0: 0, y1: 1.6, r: 1, inner: ISO.boss.bossInner }];
-    this._bossShift = new THREE.Vector3(); this._bossOut = false;
-    /** §2.4 combat fit: her + the nearest engaged hostiles as fit subjects; the chosen lean (m) and the fitted distance */
-    this._cmbSubs = Array.from({ length: COMBAT_SUBJECTS }, () => ({ x: 0, z: 0, y0: 0, y1: 1, r: 0.5, inner: COMBAT_ENEMY_INNER }));
-    this._cmbLean = 0; this._cmbNeed = 0; this._engD = [];
-    this._pitchHint = NaN; this._pitchHintW = 0; this._pitchPortrait = false; this._pitchFixed = 0;
-    /** the pitch isoFrame gives a (non-boss) distance d under the current hint blend (the combat fit's pitchOf) */
-    this._pitchOf = (d) => this._pitchPortrait ? this._pitchFixed
-      : this._pitchHintW > 0 ? isoPitch(d) + (this._pitchHint - isoPitch(d)) * this._pitchHintW : isoPitch(d);
+    this.isoInfo = { yaw: ISO.yaw, pitch: 0.9, dist: ISO.dist, fov: ISO.fov, catPx: 0, portrait: false, phone: false, frameOffset: 0, profile: 'desktop' };
+    this._fr0 = {};
+    this._engD = [];
+    this._pitchHint = NaN; this._pitchHintW = 0; this._pitchFixed = NaN;
+    /** the pitch the rig gives a lens distance (zone hint blend; portrait / boss fixed): the solver's pitch(d) */
+    this._pitchOf = (d) => this._pitchAt(d);
+    this._view.pitchOf = this._pitchOf;
     this._yawT = 1; this._yawFrom = ISO.yaw; this._yawTo = ISO.yaw; this._yawDur = 1;
     /** §2.2 zone hint dist / pitch blends: { from, to (NaN = no hint), t (0 → 1), dur } */
     this._hDist = { from: NaN, to: NaN, t: 1, dur: 1 }; this._hPitch = { from: NaN, to: NaN, t: 1, dur: 1 };
@@ -474,7 +565,9 @@ export class FollowCamera {
     this.hint = null; this.zoneHints = false;
     this._hv = { dist: NaN, distW: 0, pitch: NaN, pitchW: 0 };
     this._isoD = NaN; this._isoP = NaN;
+    /** one frustum per rendered frame (read-only for others: occluders, onscreen, activity tiers, LOD) */
     this._frustum = new THREE.Frustum(); this._frustumOk = false;
+    this.frustum = this._frustum;
     this._recentrePan = false; this._centreT = 0; this._selSource = null;
     // the arm cast for a physics that honours opts.ignore: camera-transparent statics, plus slender solids in boss fights
     this._armOptsIgnore = Object.freeze({ terrain: true, mesh: true, statics: true, ignore: (src) => this._transparent(src) });
@@ -500,30 +593,66 @@ export class FollowCamera {
       bus.on(E.LEVEL_LOADING, () => this._onLevelUnload()),
       bus.on(E.LEVEL_UNLOAD, () => this._onLevelUnload()),
       bus.on(E.LEVEL_LOADED, (p) => this._onLevelLoaded(p)),
-      bus.on(E.BOSS_START, () => this._setBoss(true)),
-      bus.on(E.BOSS_DEFEATED, () => this._setBoss(false)),
-      bus.on(E.ARENA_CLEAR, () => { if (!this.ctx.enemies?.boss?.alive) this._setBoss(false); }),
+      bus.on(E.BOSS_START, () => { this._setBoss(true); this._onBossStart(); }),
+      bus.on(E.BOSS_DEFEATED, () => { this._setBoss(false); this._bossHoldT = ISO.boss.defeatHold; this._dizzy.on = false; }),
+      bus.on(E.ARENA_CLEAR, (p) => {
+        if (!this.ctx.enemies?.boss?.alive) this._setBoss(false);
+        this._arena.locked = false;
+        this._queueBeat('exhale', 0, 0, 0);
+      }),
+      // AUTOCAM §8: beats and boss moments
+      bus.on(E.KITTEN_REVEAL, (p) => {
+        const k = p?.kittenId ?? null, pos = p?.position;
+        if (!pos || !Number.isFinite(pos.x) || this.beat.fired.has(`peek:${k}`)) return;
+        this.beat.fired.add(`peek:${k}`);
+        this._queueBeat('peekaboo', pos.x, pos.z, 0);
+      }),
+      bus.on(E.KITTEN_RESCUED, (p) => { const pos = p?.position; if (pos && Number.isFinite(pos.x)) this._queueBeat('cosy', pos.x, pos.z, 0); }),
+      bus.on(E.ARENA_LOCK, (p) => {
+        const c = p?.center, r = Number.isFinite(p?.r) ? p.r : 0;
+        const A = this._arena;
+        A.id = p?.id ?? null; A.locked = true;
+        if (c && Number.isFinite(c.x)) { A.x = c.x; A.z = c.z; A.r = r; } else A.r = 0;
+        // room read: once per arena, never right after a boss intro cutscene (the boss establishing read covers it)
+        const key = `room:${A.id}`;
+        if (A.r > 0 && !this.beat.fired.has(key) && this._realT - this._lastCutEnd > CUT_RECENT) { this.beat.fired.add(key); this._queueBeat('roomRead', A.x, A.z, A.r); }
+      }),
+      bus.on(E.BOSS_PHASE, () => { if (!this.ctx.state?.settings?.reduceCameraMotion) this._breathT = 0; }),
+      bus.on(E.TARGET_CHANGED, () => { this._forceSolve = true; }),
       bus.on(E.PLAYER_HOLY, () => { this._fovPunchT = 0.15; }),
       // Golden Hour activation punch-in, unless the player already framed it with a preset shot (§7.5 HERO_LOW)
       bus.on(E.PLAYER_GOLDEN, (p) => { if (p?.on && GAMEPLAY.has(this.modeName)) this._goldenT = this._goldenTotal(); }),
       bus.on(E.DIALOG_LINE, (p) => { this._speakerId = p?.speaker ?? null; }),
       bus.on(E.DIALOG_START, () => { this._speakerId = null; this._dlgMid.set(0, 0, 0); }),
       bus.on(E.DIALOG_END, () => { this._speakerId = null; }),
-      bus.on(E.BOSS_DIZZY, (p) => { if (p?.dizzy && !this._dizzyShaken) { this._dizzyShaken = true; this.shake(JUICE.dizzy.shake); } else if (!p?.dizzy) this._dizzyShaken = false; }),
+      bus.on(E.BOSS_DIZZY, (p) => {
+        if (p?.dizzy && !this._dizzyShaken) { this._dizzyShaken = true; this.shake(JUICE.dizzy.shake); } else if (!p?.dizzy) this._dizzyShaken = false;
+        // §8.2 Dizzy punch (D11): −1.0 m while dizzy (≤ 3 s), only with every hard subject inside fitRect
+        if (p?.dizzy && !this._dizzy.on) { this._dizzy.on = true; this._dizzy.t = 0; } else if (!p?.dizzy) this._dizzy.on = false;
+      }),
       // safety handback when a scene ends with the camera still held (story normally calls mode('follow') itself).
       // Deferred to the next frame so a chained scene (CS-09 → CS-10, `end.cam: false`) keeps its shot instead.
-      bus.on(E.CUTSCENE_END, (p) => { if (this.modeName === 'preset' || this.modeName === 'cutscene') this._handback = p?.skipped ? 0 : this.isIso ? ISO.cut.handback : CAMERA.ease; }),
+      bus.on(E.CUTSCENE_END, (p) => {
+        this._lastCutEnd = this._realT;
+        if (this.modeName === 'preset' || this.modeName === 'cutscene') this._handback = p?.skipped ? 0 : this.isIso ? ISO.cut.handback : CAMERA.ease;
+      }),
       bus.on(E.CUTSCENE_START, () => { this._handback = -1; }),
       bus.on(E.GAME_MODE, (p) => { if (p?.mode === 'cutscene' || p?.mode === 'dialog') this.unlock(); }),
       bus.on(E.HIT, (p) => { if (p && p.target === this.ctx.player) this._noteAttacker(p.attacker); }),
-      bus.on(E.PLAYER_DAMAGED, (p) => { this._noteAttacker(p?.source); if (!this.camLocked) this._recentrePan = true; }),
+      bus.on(E.PLAYER_DAMAGED, (p) => { this._noteAttacker(p?.source); if (!this.camLocked) { this._recentrePan = true; this._semiHome = true; } }),
+      // §10.4 semi: dealing damage springs the pan home too
+      bus.on(E.HIT, (p) => { if (p && p.attacker === this.ctx.player && this.camLockMode === 'semi') this._semiHome = true; }),
       // §2.4 punches (real time): parry −0.6 m, Holy +3° FOV, Purrfect Dodge −0.4 m through its slow motion
       bus.on(E.PLAYER_PARRY, () => { this._punchT = 0; }),
-      bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'camZoom' && Number.isFinite(p.value)) this.zoom(p.value); }),
+      bus.on(E.SETTINGS_CHANGED, (p) => this._onSetting(p)),
       bus.on(E.PLAYER_HOLY, () => { this._holyT = 0; }),
       bus.on(E.PLAYER_PERFECT_DODGE, (p) => { if (!p?.graze) this._dodgeT = PLAYER.dodge.perfectDur; }),
       bus.on(E.ENEMY_ALERTED, (p) => { if (!this.camLocked && p?.enemy?.pos && this.ctx.player && p.enemy.pos.distanceTo(this.ctx.player.pos) < 8) this._recentrePan = true; }),
     );
+    // AUTOCAM §6.2: live wind-ups aimed at her (THREAT) and boss lane ends (BOSS_LANE), with game-time windows
+    this._tel.attach(this.ctx.bus, () => this.ctx.game?.time ?? this._realT, () => this.ctx.player, () => this._liveBoss());
+    this._offs.push(() => this._tel.detach());
+    this._lockModeFromSettings(false);
     this._marker.build(this.ctx.scene);
     this._outPose.pos.copy(this.ctx.camera.position);
     this.ctx.camera.getWorldDirection(_tmp);
@@ -575,12 +704,16 @@ export class FollowCamera {
         if (name === 'follow') { this._bossForced = false; if (!this.ctx.enemies?.boss?.alive) this._setBoss(false); }
         if (!GAMEPLAY.has(prev)) {
           const def = prev === 'meme' ? PLAYER.memeCam.blendOut : this.isIso ? ISO.cut.handback : CAMERA.ease;
-          const blend = opts.blend === false ? 0 : typeof opts.blend === 'number' ? opts.blend : def;
+          let blend = opts.blend === false ? 0 : typeof opts.blend === 'number' ? opts.blend : def;
           if (prev === 'meme') { this._meme.exit(); this.ctx.bus.emit(E.MEME_CAM, { on: false }); }
           else { this._cut.stop(); if (opts.keepYaw !== true) this._behind(); }
-          this._snap = true;
+          // AUTOCAM §8.3 hand-back pre-solve: the springs re-seed and the solver runs on this frame's subjects, so
+          // the blend lands on the real gameplay frame and no second move follows; §10.1: a veil cut instead
+          this._snap = true; this._forceSolve = true;
+          if (this.isIso && blend > 0 && this.ctx.state?.settings?.reduceCameraMotion) { blend = 0; this._veil(); }
           this._markPlayerPos();            // a cutscene may have moved her: that is not a teleport (keep the blend)
-          this._startBlend(blend, opts.ease, this._playerPivot(_blendPivot), false);
+          this._startBlend(blend, opts.ease, this._playerPivot(_blendPivot), false, this.isIso);
+          this._setCinematic(false, blend);
         }
         this.modeName = 'follow';
         this.presetState = null;
@@ -595,10 +728,17 @@ export class FollowCamera {
         if (!p) { console.warn('[camera] meme mode needs the player'); break; }
         this.unlock();
         this._cut.stop();
+        this.beat.stop();
         this.presetState = null;
+        const calm = !!this.ctx.state?.settings?.reduceCameraMotion;
+        this._meme.swayMul = calm ? REDUCE_MEME_SWAY : 1;
         this._meme.enter(p, opts.yawOffset ?? this.memeYawOffset(p));
         this.modeName = 'meme';
-        this._startBlend(typeof opts.blend === 'number' ? opts.blend : PLAYER.memeCam.blendIn, opts.ease ?? 'inOutSine', this._playerPivot(_blendPivot), false);
+        // §10.1: with Reduce camera motion the descent is a veil crossfade
+        let blend = typeof opts.blend === 'number' ? opts.blend : PLAYER.memeCam.blendIn;
+        if (calm && this.isIso && blend > 0) { blend = 0; try { this.ctx.ui?.flash?.(FADE_COLOR, 1, ISO.reduce.memeVeil ?? 0.4); } catch { /* no veil */ } }
+        this._startBlend(blend, opts.ease ?? 'inOutSine', this._playerPivot(_blendPivot), false, this.isIso);
+        this._setCinematic(false, 0);                           // never on the Meme Cam (ART §3.3, X25)
         this.ctx.bus.emit(E.MEME_CAM, { on: true });
         break;
       }
@@ -609,10 +749,12 @@ export class FollowCamera {
         if (prev === 'meme') { this._meme.exit(); this.ctx.bus.emit(E.MEME_CAM, { on: false }); }
         this.unlock();
         this._cut.stop();
+        this.beat.stop();
         this._holdPose.copy(this._outPose);
         this._blend.active = false;
         this.presetState = null;
         this.modeName = 'cutscene';
+        this._setCinematic(true, 0);
         break;
       default:
         console.warn(`[camera] unknown mode "${name}"`);
@@ -644,11 +786,30 @@ export class FollowCamera {
     this.modeName = 'preset';
     /** M0-compatible view of the running shot: { name, anchor, opts } */
     this.presetState = { name: s.preset, anchor: step?.anchor ?? 'swordcat', opts: step ?? {} };
+    this.beat.stop();                                         // entering a shot drops a beat, no exit blend (§8.1)
+    const fromPlay = this._blend.iso || this._isoW > 0.5;
     if (s.mode === 'blend' && s.dur > 0) {
       _blendPivot.copy(this._cut.subject); _blendPivot.y += 0.8;
-      this._startBlend(s.dur, s.ease, _blendPivot, true);
+      // gameplay → shot: the iso pose-space blend (log distance, yaw arc); shot → shot: the cylindrical arc
+      this._startBlend(s.dur, s.ease, _blendPivot, true, this.isIso && fromPlay);
     } else this._blend.active = false;
+    // ART §3.3: the cinematic look on preset / cutscene shots (High only; core no-ops elsewhere), never the title loop
+    if (!this._cut.looping) this._setCinematic(true, s.mode === 'blend' ? s.dur : 0);
     return promise;
+  }
+
+  /**
+   * AUTOCAM / story hand-off helper (WA camera.W1): blend into `mode` over `dur` s with `ease` (e.g. the title
+   * MEME_LOOP → follow over 1.1 s inOutSine on New game). Input never waits for it. Chainable.
+   * @param {string} mode @param {number} dur @param {string|Function} [ease]
+   */
+  blendTo(mode, dur, ease = 'inOutSine') { return this.mode(mode, { blend: Math.max(0, +dur || 0), ease }); }
+
+  /** postfx.setCinematic on change only (ART §3.3: on at shot / cutscene enter, off on the hand-back). */
+  _setCinematic(on, dur) {
+    if (this._cinematic === !!on) return;
+    this._cinematic = !!on;
+    try { this.ctx.postfx?.setCinematic?.(!!on, { dur: Math.max(0, dur || 0) }); } catch (e) { console.warn('[camera] setCinematic', e); }
   }
 
   /** Add camera trauma (0..1). */
@@ -773,10 +934,18 @@ export class FollowCamera {
   /** The lens → focus distance of the iso rig (m; `distance` is the classic arm). */
   get isoDistance() { return this.isoInfo.dist; }
 
-  /** Zoom multiplier (0.70–1.40, × settings.camZoom). Returns the clamped value. Emits E.CAM_ZOOM. */
-  zoom(mul) {
+  /**
+   * Zoom multiplier (0.70–1.40; per orientation, AUTOCAM §10.3). Returns the clamped value. Emits E.CAM_ZOOM. A zoom
+   * from input (`save` true) is written to settings.camZoom / camZoomPortrait a moment later.
+   * @param {number} mul @param {boolean} [save]
+   */
+  zoom(mul, save = true) {
     const z = clamp(+mul || 1, ISO.zoom[0], ISO.zoom[1]);
-    if (z !== this.zoomMul) { this.zoomMul = z; this.ctx.bus?.emit?.(E.CAM_ZOOM, { dist: this.isoInfo.dist, mul: z }); }
+    if (z !== this.zoomMul) {
+      this.zoomMul = z;
+      this.ctx.bus?.emit?.(E.CAM_ZOOM, { dist: this.isoInfo.dist, mul: z });
+      if (save) this._zoomSaveT = ZOOM_SAVE_T;
+    }
     return z;
   }
 
@@ -828,8 +997,12 @@ export class FollowCamera {
   screenToGround(x, y, out = new THREE.Vector3()) { return screenToGround(this.ctx, x, y, out); }
   /** World point → CSS px { x, y, z, on }. */
   worldToScreen(p, out) { return w2s(this.ctx, p, out); }
-  /** Is world point `p` on screen, with the frustum shrunk by `margin` m? (§8.5 no off-screen snipes) */
-  onScreen(p, margin = 0) {
+  /**
+   * Is world point `p` visible to the player (AUTOCAM §7.3, X13: gameplay fairness only)? In the iso rig: projected
+   * inside SafeFrame's `threat` rect and outside every HUD / thumb hole, with `margin` m of clearance around it (metres
+   * → screen via the footprint). Cutscenes / classic: the frustum shrunk by `margin` m. Perf code uses inView / activityOf.
+   */
+  onScreen(p, margin = AIM.onScreenMargin ?? 0) {
     const cam = this.ctx.camera;
     if (!cam || !p) return true;
     if (!this._frustumOk) {                                  // not rendered by this rig yet: the camera as it stands
@@ -838,10 +1011,105 @@ export class FollowCamera {
       _projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
       this._frustum.setFromProjectionMatrix(_projView);
     }
-    const pl = this._frustum.planes;
-    for (let i = 0; i < 6; i++) if (pl[i].distanceToPoint(p) < margin) return false;
-    return true;
+    if (!this.isIso || this._isoW < 0.5) {
+      const pl = this._frustum.planes;
+      for (let i = 0; i < 6; i++) if (pl[i].distanceToPoint(p) < margin) return false;
+      return true;
+    }
+    _v3.set(p.x, p.y, p.z).project(cam);
+    if (_v3.z > 1 || _v3.z < -1) return false;
+    const sx = (_v3.x + 1) / 2, sy = (1 - _v3.y) / 2, f = this.safeFrame, fp = this.footprint;
+    const gw = fp.valid && fp.halfW > 0 ? 2 * fp.halfW : 20, gh = fp.valid && fp.ahead + fp.behind > 0 ? fp.ahead + fp.behind : 14;
+    const mx = Math.max(0, margin) / gw, my = Math.max(0, margin) / gh;
+    return f.visible(sx, sy) && f.visible(sx - mx, sy) && f.visible(sx + mx, sy) && f.visible(sx, sy - my) && f.visible(sx, sy + my);
   }
+
+  /** PERF §4.3 / X13: is the sphere (p, r) inside this frame's frustum? (perf only; true before the first frame) */
+  inView(p, r = 0) {
+    if (!this._frustumOk || !p) return true;
+    _sph.center.set(p.x, p.y, p.z); _sph.radius = Math.max(0, r);
+    return this._frustum.intersectsSphere(_sph);
+  }
+
+  /**
+   * PERF §4.3 activity tier of an actor, cached per frame on the actor (_tier / _tierFrame): 0 = its bounding sphere
+   * (+ 2 m) is in the frustum; 1 = within 30 m of the focus; 2 = within 60 m; 3 = beyond. Classic: 0 within 40 m, 3
+   * beyond. Characters / enemies / companions drive `setActivity(tier)` from it.
+   */
+  activityOf(actor) {
+    if (!actor) return 3;
+    if (actor._tierFrame === this.frameId && actor._tier !== undefined) return actor._tier;
+    const pos = actor.object3d?.position ?? actor.pos;
+    let tier = 0;
+    if (pos && this._frustumOk) {
+      const dx = pos.x - this.focus.x, dz = pos.z - this.focus.z, d = Math.hypot(dx, dz);
+      if (!this.isIso) tier = d <= ACT.classic ? 0 : 3;
+      else {
+        const h = actor.height ?? 1, r = Math.max(actor.radius ?? 0.5, h * 0.5) + ACT.margin;
+        _sph.center.set(pos.x, pos.y + h * 0.5, pos.z); _sph.radius = r;
+        tier = this._frustum.intersectsSphere(_sph) ? 0 : d <= ACT.near ? 1 : d <= ACT.far ? 2 : 3;
+      }
+    }
+    actor._tier = tier; actor._tierFrame = this.frameId;
+    return tier;
+  }
+
+  /** AUTOCAM §9.1: is ground point (x, z) inside the visible footprint grown by `pad` m? (true when unknown) */
+  inFootprint(x, z, pad = 0) {
+    const fp = this.footprint;
+    return fp.valid ? inQuad(fp.q, x, z, pad) : true;
+  }
+
+  /** AUTOCAM §6.6: the ground screen axes at the current yaw → outU (screen-up) / outR (screen-right), {x, z}. */
+  groundAxes(outU, outR) {
+    const y = this.isIso ? this.isoYaw : this.yaw;
+    if (outU) { outU.x = -Math.sin(y); outU.z = -Math.cos(y); if ('y' in outU) outU.y = 0; }
+    if (outR) { outR.x = Math.cos(y); outR.z = -Math.sin(y); if ('y' in outR) outR.y = 0; }
+    return outU;
+  }
+
+  /**
+   * Her resting screen point (CSS px of the canvas: her focus at the SafeFrame anchor, no lead) for ui's touch layout
+   * (requests/camera.md). Follows the mirrored (left-handed) cluster automatically: SafeFrame reads the layout.
+   * @param {{x:number,y:number}} [out]
+   */
+  heroScreen(out = { x: 0, y: 0 }) {
+    const A = this._anc;
+    out.x = A.toX * this._viewW(); out.y = A.toY * this._viewH();
+    return out;
+  }
+
+  /**
+   * Debug / smoke probe (AUTOCAM §11.2): her feet / head on screen (CSS px), d, fov, the anchor, lead, lean, footprint,
+   * the engaged set with their SafeFrame visibility. Allocates (debug only).
+   */
+  probe() {
+    const cam = this.ctx.camera, p = this.ctx.player, W = this._viewW(), H = this._viewH();
+    const scr = (x, y, z) => { _v3.set(x, y, z).project(cam); return [(_v3.x + 1) / 2 * W, (1 - _v3.y) / 2 * H]; };
+    const pos = p?.object3d?.position ?? p?.pos;
+    const fp = this.footprint, A = this._anc, sf = this.safeFrame;
+    return {
+      t: this._realT, frame: this.frameId, mode: this.modeName, yaw: this.yaw,
+      feet: pos ? scr(pos.x, pos.y, pos.z) : null, head: pos ? scr(pos.x, pos.y + (ISO.catHView ?? 1), pos.z) : null,
+      d: this.isoInfo.dist, pitch: this.isoInfo.pitch, fov: this.isoInfo.fov, fx: A.x, fy: A.y, W, H,
+      lead: [this._lead.x, this._lead.z], lean: [this._lean.x, this._lean.z], bias: this._bias, aim: [this._aim.x, this._aim.z],
+      extra: this._extra, snug: this._snug, beat: this.beat.id, beatW: this.beat.w, closeUp: this.closeUp, far: cam?.far,
+      core: { ...sf.core }, herFrame: { ...sf.herFrame }, threat: { ...sf.threat }, profile: this.profile,
+      footprint: { q: Array.from(fp.q), cx: fp.cx, cz: fp.cz, ahead: fp.ahead, behind: fp.behind, halfW: fp.halfW, halfWTop: fp.halfWTop, slantMax: fp.slantMax, d: fp.d, version: fp.version, valid: fp.valid },
+      engaged: this.engaged.map((a) => { const q = a.object3d?.position ?? a.pos; return { id: a.id ?? null, visible: q ? this.onScreen(q, 0) : false }; }),
+    };
+  }
+
+  /** Debug / smoke: the framing solve { need, d, lean, subjects, dropped, beat } (AUTOCAM core.5). Allocates. */
+  framing() {
+    const S = this.subjects, g = this._goal, subs = [];
+    for (let i = 0; i < S.n; i++) {
+      const o = i * STRIDE, d = S.data;
+      subs.push({ cls: CLS_NAMES[d[o + SC]] ?? d[o + SC], x: d[o + SX], y: d[o + SY], z: d[o + SZ], r: d[o + SR], w: d[o + SW], hard: !!(d[o + SF] & F_HARD), dropped: !!(d[o + SF] & F_DROP), id: S.keys[i]?.id ?? null });
+    }
+    return { need: g.need, d: g.d, lean: [g.leanR, g.leanU], subjects: subs, dropped: g.dropped, holes: g.holes, capped: g.capped, beat: this.beat.id, limits: { ...this._lim } };
+  }
+
   /**
    * §7.6 pick at CSS px: { kind, actor, id, interact, point }. `opts.touch` widens the tolerance. Pass `out` (a
    * previous result) to reuse it; a fresh object otherwise (callers may keep it).
@@ -850,29 +1118,85 @@ export class FollowCamera {
   /** Debug / smoke: the live iso framing { yaw, pitch, dist, fov, focus: [x, y, z], catPx, portrait, phone, locked }. */
   iso() {
     const i = this.isoInfo;
-    return { yaw: i.yaw, pitch: i.pitch, dist: i.dist, fov: i.fov, focus: this.focus.toArray(), catPx: i.catPx, portrait: i.portrait, phone: i.phone, locked: this.camLocked, zoom: this.zoomMul, hint: this.hint };
+    return { yaw: i.yaw, pitch: i.pitch, dist: i.dist, fov: i.fov, focus: this.focus.toArray(), catPx: i.catPx, portrait: i.portrait, phone: i.phone, locked: this.camLocked, lockMode: this.camLockMode, zoom: this.zoomMul, hint: this.hint, profile: i.profile, far: this.farPlane, anchor: [this._anc.x, this._anc.y] };
   }
-  /** §2.3 camera lock (Y): locked = always centred on her; unlocked = edge pan within the leash. Toasts the change. */
-  setCamLock(on, toast = true) {
-    this.camLocked = !!on;
-    if (this.camLocked) this._pan.set(0, 0, 0);
-    if (toast) this.ctx.bus?.emit?.(E.TOAST, { text: this.ctx.strings?.t?.(this.camLocked ? 'toast.cam.locked' : 'toast.cam.unlocked') ?? '' });
-    return this.camLocked;
+
+  /**
+   * §2.3 / AUTOCAM §10.4 camera lock (Y): on = 'locked'; off = the last unlocked mode ('free' by default, 'semi' once
+   * chosen in Settings). Toasts the change. Returns whether it is locked.
+   */
+  setCamLock(on, toast = true) { return this.setCamLockMode(on ? 'locked' : this._lastUnlocked, toast) === 'locked'; }
+
+  /**
+   * Set the desktop lock mode ('locked' | 'semi' | 'free'; pad / touch are always locked in play). Writes
+   * settings.camLockMode (+ the retired boolean camLock, kept in sync, K7) and emits settings:changed on change.
+   */
+  setCamLockMode(mode, toast = true) {
+    const m = LOCK_MODES.includes(mode) ? mode : 'locked';
+    const was = this.camLockMode;
+    this.camLockMode = m; this.camLocked = m === 'locked';
+    if (m !== 'locked') this._lastUnlocked = m;
+    if (this.camLocked) { this._pan.set(0, 0, 0); this._semi.x = 0; this._semi.z = 0; }
+    const st = this.ctx.state?.settings;
+    if (st && (st.camLockMode !== m || st.camLock !== this.camLocked)) {
+      st.camLockMode = m; st.camLock = this.camLocked;
+      this._writing = true;
+      try { this.ctx.bus?.emit?.(E.SETTINGS_CHANGED, { key: 'camLockMode', value: m }); } finally { this._writing = false; }
+    }
+    if (toast && was !== m) this.ctx.bus?.emit?.(E.TOAST, { text: this.ctx.strings?.t?.(this.camLocked ? 'toast.cam.locked' : 'toast.cam.unlocked') ?? '' });
+    return m;
+  }
+
+  /**
+   * Read the lock mode from settings: `camLockMode` (GameState migrates the retired boolean on load); a `camLock`
+   * change (ui's legacy toggle) maps true → 'locked', false → the last unlocked mode.
+   * @param {boolean} toast @param {string} [key] the setting that changed
+   */
+  _lockModeFromSettings(toast, key = 'camLockMode') {
+    const st = this.ctx.state?.settings ?? {};
+    let mode;
+    if (key === 'camLock') mode = st.camLock === false ? this._lastUnlocked : 'locked';
+    else mode = LOCK_MODES.includes(st.camLockMode) ? st.camLockMode : st.camLock === false ? 'free' : 'locked';
+    if (mode !== 'locked') this._lastUnlocked = mode;
+    const was = this.camLockMode;
+    this.camLockMode = mode; this.camLocked = mode === 'locked';
+    if (this.camLocked) { this._pan.set(0, 0, 0); this._semi.x = 0; this._semi.z = 0; }
+    if (st.camLockMode !== mode) st.camLockMode = mode;
+    if (st.camLock !== this.camLocked) st.camLock = this.camLocked;
+    if (toast && was !== mode) this.ctx.bus?.emit?.(E.TOAST, { text: this.ctx.strings?.t?.(this.camLocked ? 'toast.cam.locked' : 'toast.cam.unlocked') ?? '' });
+  }
+
+  /** settings:changed → zoom per orientation, lock mode, reduce motion (re-solve + re-anchor). */
+  _onSetting(p) {
+    if (!p || this._writing) return;
+    const k = p.key;
+    if ((k === 'camZoom' && !this._zoomPortrait) || (k === 'camZoomPortrait' && this._zoomPortrait)) { if (Number.isFinite(p.value)) this.zoom(p.value, false); }
+    else if (k === 'camLockMode' || k === 'camLock') this._lockModeFromSettings(false, k);
+    else if (k === 'reduceCameraMotion' || k === 'biggerHero' || k === 'leftHanded' || k === 'touchSize' || k == null) { this._forceSolve = true; this.safeFrame.key = ''; }
   }
 
   /** Fixed step (play): zoom, camera lock, centre, peek bookkeeping and selection input. */
   _isoInput(dt) {
     const input = this.ctx.input, I = ISO;
-    // zoom (wheel ticks / pinch via input.addZoom; pad R3 cycles)
+    // zoom (wheel ticks / pinch via input.addZoom; pad R3 cycles). Zooming in during a fit is the pinch rubber band.
     const z = input.consumeZoom?.() ?? 0;
-    if (z) this.zoom(this.zoomMul * Math.pow(1 - I.zoomStep, z));
+    if (z) {
+      if (z > 0) this._pinchInT = I.pinch.rubberBack * 0.5;
+      const want = this.zoomMul * Math.pow(1 - I.zoomStep, z);
+      // §10.3: at a limit a small elastic give (+ a haptic tick on touch) instead of a dead stop
+      if ((want < I.zoom[0] - 1e-6 && this.zoomMul <= I.zoom[0] + 1e-6) || (want > I.zoom[1] + 1e-6 && this.zoomMul >= I.zoom[1] - 1e-6)) {
+        this._give = Math.sign(want - this.zoomMul) * I.pinch.elastic;
+        if (input.device === 'touch') { try { input.haptic?.('button'); } catch { /* no haptics */ } }
+      }
+      this.zoom(want);
+    }
     if (input.pressed('zoomCycle')) {
       const steps = I.padZoom, cur = this.zoomMul;
       let i = steps.findIndex((s) => s > cur + 1e-3);
       this.zoom(steps[i < 0 ? 0 : i]);
     }
-    if (input.pressed('camLock') && input.device !== 'touch') this.setCamLock(!this.camLocked);
-    if (input.pressed('centre')) { this._pan.set(0, 0, 0); this._centreT = 0.25; }
+    if (input.pressed('camLock') && input.device === 'kbm') this.setCamLock(!this.camLocked);
+    if (input.pressed('centre')) { this._pan.set(0, 0, 0); this._semiHome = true; this._centreT = 0.25; }
     // selection (§7.4): Tab / RB select the best / cycle (Shift+Tab back); D-pad ← → cycle; LMB / RMB / taps select
     // through the player's orders
     if (input.pressed('lockon')) {
@@ -887,6 +1211,18 @@ export class FollowCamera {
     const m = input.move, held = Math.hypot(m?.x ?? 0, m?.y ?? 0) > 0.1;
     if (held) this._stickFree = 0;
     else if ((this._stickFree += dt) >= I.stickRelatch) this.stickYaw = this.isoYaw;
+    // the zoom is saved per orientation a moment after the last change (camZoom / camZoomPortrait)
+    if (this._zoomSaveT > 0 && (this._zoomSaveT -= dt) <= 0) this._saveZoom();
+  }
+
+  /** Write the current zoom to settings (camZoom landscape / camZoomPortrait) and emit settings:changed. */
+  _saveZoom() {
+    this._zoomSaveT = -1;
+    const st = this.ctx.state?.settings, key = this._zoomPortrait ? 'camZoomPortrait' : 'camZoom';
+    if (!st || Math.abs((st[key] ?? 1) - this.zoomMul) < 1e-4) return;
+    st[key] = Math.round(this.zoomMul * 1000) / 1000;
+    this._writing = true;
+    try { this.ctx.bus?.emit?.(E.SETTINGS_CHANGED, { key, value: st[key] }); } finally { this._writing = false; }
   }
 
   /** Tab with nothing selected: the hostile nearest the cursor on screen (KBM), else the nearest to her. */
@@ -915,174 +1251,414 @@ export class FollowCamera {
     this._pan.set(0, 0, 0); this._peek.set(0, 0, 0);
   }
 
+  // ------------------------------------------------------------------ AUTOCAM: engaged set, intent, subjects, solve
   /**
-   * The engaged set (§2.4): alerted / engaged hostiles within combat.radius of her, ranged ones (a crossbow) up to their
-   * attack range (≤ RANGED_ENGAGE_R: they shoot from there), nearest first, plus the selection.
+   * The engaged set (AUTOCAM D9): alerted / engaged hostiles enter within framing.engage.in (10 m) and leave beyond
+   * engage.out (12.5 m) or after engage.hold (1.5 s) without being alerted; nearest first. `this.engaged` (occlusion,
+   * focus fog, ui) also carries the selection. Zero allocation (two swapped arrays).
+   * @param {{x:number,z:number}} feet @param {number} dt
    */
-  _engagedSet(ppos) {
-    const out = this.engaged, D = this._engD, R = ISO.combat.radius;
-    out.length = 0; D.length = 0;
-    const list = this.ctx.actors?.queryRadius?.(ppos, Math.max(R, RANGED_ENGAGE_R), hostileTo('player'));
-    if (list) for (const a of list) {
-      if (!a || a === this.ctx.player || a.alive === false || a.dead || a.hidden || (a.hp !== undefined && a.hp <= 0)) continue;
-      if (!(a.alerted || ENGAGED.has(a.stateName))) continue;
+  _engagedSet(feet, dt) {
+    const EN = FR.engage, me = this.ctx.player;
+    const prev = this._engA, prevT = this._engTA, next = this._engB, nextT = this._engTB, D = this._engD;
+    next.length = 0; D.length = 0;
+    for (let i = 0; i < prev.length; i++) {
+      const a = prev[i];
+      if (!liveHostile(a, me)) continue;
       const ap = a.object3d?.position ?? a.pos;
-      if (!ap) continue;
-      const d = Math.hypot(ap.x - ppos.x, ap.z - ppos.z);
-      if (d > R && d > Math.min(RANGED_ENGAGE_R, attackRange(a) + 0.5)) continue;
-      // insertion by distance (a handful of actors)
-      let i = out.length;
-      out.push(a); D.push(d);
-      while (i > 0 && D[i - 1] > d) { out[i] = out[i - 1]; D[i] = D[i - 1]; i--; }
-      out[i] = a; D[i] = d;
+      const d = Math.hypot(ap.x - feet.x, ap.z - feet.z);
+      if (d > EN.out) continue;
+      const t = isAlerted(a) ? 0 : prevT[i] + dt;
+      if (t > EN.hold) continue;
+      insertByDist(next, nextT, D, a, t, d);
     }
+    const list = this.ctx.actors?.queryRadius?.(feet, EN.in, hostileTo('player'));
+    if (list) for (const a of list) {
+      if (next.length >= MAX_ENG || !liveHostile(a, me) || !isAlerted(a) || next.includes(a)) continue;
+      const ap = a.object3d?.position ?? a.pos;
+      const d = Math.hypot(ap.x - feet.x, ap.z - feet.z);
+      if (d <= EN.in) insertByDist(next, nextT, D, a, 0, d);
+    }
+    this._engA = next; this._engB = prev; this._engTA = nextT; this._engTB = prevT;
+    const out = this.engaged;
+    out.length = 0;
+    for (let i = 0; i < next.length; i++) out.push(next[i]);
     const t = this.lockTarget;
     if (t && !out.includes(t) && lockable(t)) out.push(t);
+    return next;
+  }
+
+  /**
+   * Her movement intent (AUTOCAM §5.3) → out { x, z (m/s, world), kind }. Reads `player.moveIntent` when player
+   * publishes it; until then derives it: tumble / Pounce / lunge / knockback / scripted states → 'other'; a live order
+   * → toward the path point orderLook (2.5 m) ahead at run speed (easing inside NAV.slowR of the end); the stick / WASD
+   * wish direction; else her own walk.
+   */
+  _intent(p, out) {
+    out.x = 0; out.z = 0; out.kind = 'idle';
+    const mi = p.moveIntent;
+    if (mi && typeof mi.kind === 'string') {
+      const L = Math.hypot(mi.x ?? 0, mi.z ?? 0), sp = Number.isFinite(mi.speed) ? mi.speed : L;
+      if (L > 1e-6) { out.x = (mi.x / L) * sp; out.z = (mi.z / L) * sp; }
+      out.kind = mi.kind;
+      return out;
+    }
+    if (OTHER_STATES.has(p.stateName)) { out.kind = 'other'; return out; }
+    const pos = p.object3d?.position ?? p.pos, ord = p.orders;
+    if (ord?.moving && this._orderLook(p, ISO.lead.orderLook, _look)) {
+      const dx = _look.x - pos.x, dz = _look.z - pos.z, L = Math.hypot(dx, dz);
+      if (L > 1e-3) {
+        const sp = (PLAYER.run ?? 5.5) * clamp(_look.rem / Math.max(1e-3, NAV.slowR), 0, 1);
+        out.x = (dx / L) * sp; out.z = (dz / L) * sp; out.kind = 'order';
+      }
+      return out;
+    }
+    const input = this.ctx.input, m = input?.move;
+    const mag = m ? Math.hypot(m.x, m.y) : 0;
+    if (mag > (TOUCH.stickDead ?? 0.1)) {
+      screenToWorldDir(m.x / mag, m.y / mag, this.stickYaw, _tmp);
+      const l = Math.hypot(_tmp.x, _tmp.z) || 1;
+      const touch = input.device === 'touch';
+      const sp = touch ? (PLAYER.run ?? 5.5) * smoothstep(TOUCH.stickDead ?? 0.1, 1, Math.min(1, mag)) : Math.hypot(p.vel?.x ?? 0, p.vel?.z ?? 0);
+      out.x = (_tmp.x / l) * sp; out.z = (_tmp.z / l) * sp;
+      out.kind = touch ? 'stick' : sp > (PLAYER.walk ?? 2) + 0.5 ? 'run' : 'walk';
+      return out;
+    }
+    const vx = p.vel?.x ?? 0, vz = p.vel?.z ?? 0;
+    if (p.stateName === 'move' && Math.hypot(vx, vz) > 0.5) { out.x = vx; out.z = vz; out.kind = 'walk'; }
     return out;
   }
 
-  /** Iso gameplay framing (follow / lock / boss) → this._gamePose. CONTROLS_SPEC §2.1, §2.3, §2.4. */
+  /**
+   * The point `dist` m ahead of her along her live path (player.orders.lookAhead when player has it) → out { x, z, rem }
+   * (rem = path length left). False without a path.
+   */
+  _orderLook(p, dist, out) {
+    const ord = p.orders, pos = p.object3d?.position ?? p.pos;
+    if (typeof ord?.lookAhead === 'function') {
+      const r = ord.lookAhead(dist, _tmp2);
+      if (r && Number.isFinite(_tmp2.x)) { out.x = _tmp2.x; out.z = _tmp2.z; out.rem = Number.isFinite(r.rem) ? r.rem : dist; return true; }
+    }
+    const path = ord?.path;
+    if (!Array.isArray(path) || ord.wp >= path.length) return false;
+    let px = pos.x, pz = pos.z, left = dist, rem = 0, found = false;
+    for (let i = ord.wp; i < path.length; i++) {
+      const q = path[i], dx = q.x - px, dz = q.z - pz, L = Math.hypot(dx, dz);
+      if (!found && L >= left) { out.x = px + (dx / L) * left; out.z = pz + (dz / L) * left; found = true; rem += L; }
+      else if (!found) { left -= L; rem += L; out.x = q.x; out.z = q.z; }
+      else rem += L;
+      px = q.x; pz = q.z;
+    }
+    out.rem = rem;
+    return true;
+  }
+
+  /**
+   * Gather the framing subjects (AUTOCAM §6.2) at the 20 Hz solver tick: her capsule (never the visual bbox, WA5),
+   * live wind-ups on her (THREAT, + lane ends), the boss and its lanes, the selection (hard ≤ 12 m, soft ≤ 16 m),
+   * the engaged set (ENGAGED; soft w 0.5 adds around a boss) and the melee token holders (soft pre-attend).
+   */
+  _gather(feet, boss, tick) {
+    const S = this.subjects, P = FR.pad, Wt = FR.w, now = this.ctx.game?.time ?? this._realT, tel = this._tel;
+    S.setHer(feet.x, feet.y + HER_CENTRE_Y, feet.z, P.her);
+    S.begin();
+    tel.prune(now);
+    for (let i = 0; i < tel.size; i++) {
+      if (!tel.live(i, now)) continue;
+      const a = tel.actor[i];
+      if (tel.lane[i]) S.want(this._laneKeys[i], CLS.LANE, tel.lx[i], tel.ly[i] + 0.5, tel.lz[i], P.lane, Wt.lane, true);
+      if (a && !tel.boss[i]) {
+        const ap = a.object3d?.position ?? a.pos;
+        if (ap) S.want(a, CLS.THREAT, ap.x, ap.y + (a.height ?? 1) * 0.5, ap.z, (a.radius ?? 0.4) + P.threat, Wt.threat, true);
+      }
+    }
+    if (boss) {
+      const bp = boss.object3d?.position ?? boss.pos, h = boss.height ?? 1.6;
+      S.want(boss, CLS.BOSS, bp.x, bp.y + h / 2, bp.z, (boss.radius ?? 1) + P.boss, Wt.boss, true);
+    }
+    const sel = this.lockTarget;
+    if (sel && lockable(sel) && sel !== boss) {
+      const sp = sel.object3d?.position ?? sel.pos, d = Math.hypot(sp.x - feet.x, sp.z - feet.z);
+      if (d <= FR.selSoft) S.want(sel, CLS.SELECTED, sp.x, sp.y + (sel.height ?? 1) * 0.5, sp.z, (sel.radius ?? 0.4) + P.enemy, Wt.selected, d <= FR.selHard);
+    }
+    const tok = this._tok;
+    tok.length = 0;
+    try { this.ctx.combat?.tokens?.holdersInto?.('melee', tok); } catch { tok.length = 0; }
+    const eng = this._engA;
+    for (let i = 0; i < eng.length; i++) {
+      const a = eng[i];
+      if (a === boss) continue;
+      const ap = a.object3d?.position ?? a.pos, held = tok.includes(a);
+      S.want(a, CLS.ENGAGED, ap.x, ap.y + (a.height ?? 1) * 0.5, ap.z, (a.radius ?? 0.4) + P.enemy, boss ? Wt.add : Wt.engaged, !boss, held);
+    }
+    for (let i = 0; i < tok.length; i++) {
+      const a = tok[i];
+      if (!a || a === boss || !liveHostile(a, this.ctx.player)) continue;
+      const ap = a.object3d?.position ?? a.pos;
+      if (ap) S.want(a, CLS.PRE, ap.x, ap.y + (a.height ?? 1) * 0.5, ap.z, (a.radius ?? 0.4) + 0.6, Wt.preAttend, false, true);
+    }
+    S.end(tick);
+  }
+
+  /**
+   * One solve (AUTOCAM §6.3–§6.4, §6.7 reduce-motion discrete mode, §8.2 boss caps) → this._goal. dBase = the rest
+   * distance (zoom × base × hints), dMax = the cat clamp.
+   */
+  _solve(feet, boss, base, prof, calm) {
+    const S = this.subjects, v = this._view, g = this._goal, nx = this._goalNext, L = FR.lean;
+    const combat = S.n > 1;
+    const dBase = base.dist;
+    if (!combat) {
+      g.d = dBase; g.need = dBase; g.leanR = 0; g.leanU = 0; g.dropped = 0; g.holes = 0; g.capped = false;
+      this._calmFit = 0;
+      return g;
+    }
+    const rng = distRange(base.portrait);
+    const cap = boss ? Math.min(ISO.boss.dist[1], Math.max(ISO.boss.dist[0], base.dMax))
+      : Math.max(dBase, Math.min(dBase + FR.zoomOut, base.dMax, rng[1]));
+    // any hard subject down-screen of her → the wide down cap (D7)
+    let down = false;
+    for (let i = 1; i < S.n; i++) {
+      const o = i * STRIDE;
+      if (!(S.data[o + SF] & F_HARD)) continue;
+      if ((S.data[o + SX] - feet.x) * v.Ux + (S.data[o + SZ] - feet.z) * v.Uz < 0) { down = true; break; }
+    }
+    const lim = this._lim, o = this._solveOpts;
+    o.dBase = boss ? Math.max(dBase, ISO.boss.dist[0]) : dBase; o.cap = cap; o.dMin = o.dBase;
+    o.capUp = boss ? L.boss : L.capUp;
+    o.capDown = boss ? L.boss : (down ? L.capDown : L.capDownCalm)[prof] ?? 2;
+    const noLean = calm;
+    o.limR = noLean ? 0 : lim.right; o.limL = noLean ? 0 : lim.left; o.limUp = noLean ? 0 : lim.up; o.limDown = noLean ? 0 : lim.down;
+    o.nEngaged = S.nEngaged; o.crowd = !calm; o.visible = this._visibleFn; o.holeRepair = true;
+    _F.set(feet.x, this._gy, feet.z);
+    solveFrame(S.data, S.n, _F, v, o, nx);
+    if (calm) {
+      // §6.7 discrete: fit once at encounter start; only ever zoom out (a new hard subject); never ease in until the end
+      if (!(this._calmFit > 0) || nx.d > this._calmFit + 1e-3) this._calmFit = Math.max(this._calmFit || 0, nx.d);
+      g.d = this._calmFit; g.need = nx.need; g.leanR = 0; g.leanU = 0; g.dropped = nx.dropped; g.holes = nx.holes; g.capped = nx.capped;
+      return g;
+    }
+    // R5 goal hysteresis: keep the goal for small changes while every hard subject is inside the 92 % frame
+    const inside = allHardInside(S.data, S.n, _F, v, Math.max(this._dCur, o.dBase), g.leanR, g.leanU, ISO.frame.hysteresisFrame);
+    if (!holdGoal(g, nx, inside, S.hardAdded || this._forceSolve)) {
+      g.d = nx.d; g.leanR = nx.leanR; g.leanU = nx.leanU;
+    }
+    g.need = nx.need; g.dropped = nx.dropped; g.holes = nx.holes; g.capped = nx.capped;
+    return g;
+  }
+
+  /**
+   * SafeFrame refresh (AUTOCAM §7): rebuilt only when the occluder set changes (ui.screenOccluders().version when ui has
+   * it, else the fallback rects' signature); the live thumb holes every frame. Sets the anchor target (eased 0.4 s).
+   */
+  _refreshSafeFrame(W, H, dev, st, calm, portrait) {
+    const ui = this.ctx.ui, sf = this.safeFrame, touch = dev === 'touch';
+    let key;
+    const so = typeof ui?.screenOccluders === 'function' ? ui.screenOccluders() : null;
+    if (so && Array.isArray(so.rects)) {
+      key = -((((so.version | 0) * 4099 + W) * 4099 + H) | 0) - 1;
+      if (key !== sf.key) { sf.rebuild(W, H, ui?.safeArea ?? null, so.rects, portrait); sf.key = key; }
+    } else {
+      const si = ui?.safeInsets, k = si?.h > 0 ? H / si.h : 1;
+      const lay = touch ? ui?.touch?.layout ?? null : null;
+      const bar = touch ? 0 : Math.max((si?.bottom ?? 0) * k, Number.isFinite(ui?.bar?.insetBottom) ? ui.bar.insetBottom : 0);
+      const top = touch ? 0 : (si?.top ?? 0) * k;
+      // numeric signature (no per-frame string): viewport, device, bar / plate px, touch size, mirror, layout
+      let h = (W * 4099 + H) | 0;
+      h = (h * 31 + (touch ? 1 : 2)) | 0; h = (h * 31 + Math.round(bar)) | 0; h = (h * 31 + Math.round(top)) | 0;
+      h = (h * 31 + Math.round((st.touchSize ?? 1) * 100)) | 0; h = (h * 31 + (st.leftHanded ? 7 : 3)) | 0;
+      h = (h * 31 + (lay ? layoutSig(lay) : 0)) | 0;
+      key = h;
+      if (key !== sf.key) {
+        fallbackOccluders({ w: W, h: H, touch, layout: lay, touchSize: st.touchSize, leftHanded: !!st.leftHanded, hudTop: top, barInset: bar }, this._occl);
+        sf.rebuild(W, H, null, this._occl, portrait);
+        sf.key = key;
+      }
+    }
+    // live thumb holes (visible() only; never core / anchor)
+    sf.clearLive();
+    const stick = touch ? ui?.touch?.stick : null;
+    if (stick && stick.id != null && Number.isFinite(stick.ox)) {
+      const R = (TOUCH.stickR ?? 60) * (st.touchSize ?? 1) + ISO.frame.thumbPad;
+      sf.addLive(stick.ox - R, stick.oy - R, stick.ox + R, stick.oy + R);
+    }
+    const held = touch ? ui?.touch?.heldRect?.() : null;
+    if (held && Number.isFinite(held.x)) { const p = ISO.frame.thumbPad; sf.addLive(held.x - p, held.y - p, held.x + held.w + p, held.y + held.h + p); }
+    // the anchor target: SafeFrame's; Reduce camera motion puts her at y 0.50 in landscape (static compensation)
+    const tx = sf.ax, ty = calm && !portrait ? ISO.reduce.anchorY : sf.ay, A = this._anc;
+    const eps = A.seeded && A.vw === W && A.vh === H && A.calm === calm ? ANCHOR_EPS : 1e-4;
+    if (Math.abs(tx - A.toX) > eps || Math.abs(ty - A.toY) > eps) {
+      A.fromX = A.x; A.fromY = A.y; A.toX = tx; A.toY = ty; A.vw = W; A.vh = H; A.calm = calm;
+      const instant = !A.seeded || calm;
+      A.t = instant ? 1 : 0;
+      if (instant) { A.x = tx; A.y = ty; }
+      if (calm && A.seeded) this._veil();
+      A.seeded = true;
+      this._forceSolve = true;
+    }
+  }
+
+  /** Reduce camera motion: a 0.25 s cream veil instead of a camera move (AUTOCAM §10.1). */
+  _veil() {
+    try { this.ctx.ui?.flash?.(FADE_COLOR, 1, ISO.cut.veil); } catch { /* no veil layer */ }
+  }
+
+  /** Iso gameplay framing (follow / lock / boss) → this._gamePose. AUTOCAM §4.2 per-render pipeline. */
   _isoGameplay(dt) {
     const ctx = this.ctx, p = ctx.player, out = this._gamePose, I = ISO, input = ctx.input;
     if (!p) return out.copy(this._outPose);
-    const ppos = p.object3d?.position ?? p.pos;
+    const feet = p.object3d?.position ?? p.pos;
+    // §4.2 discontinuities: > resetJump (4 m) in one frame → every spring resets to its goal
     if (!this._hadPlayer) this._snap = true;
-    else if (ppos.distanceToSquared(this._lastPlayerPos) > TELEPORT_SQ) { this._snap = true; this._blend.active = false; }
+    else if (feet.distanceToSquared(this._lastPlayerPos) > I.follow.resetJump * I.follow.resetJump) { this._snap = true; this._blend.active = false; }
     this._hadPlayer = true;
-    this._lastPlayerPos.copy(ppos);
-    const snap = this._snap, st = ctx.state?.settings ?? {};
-    const calm = !!st.reduceCameraMotion;
-    if (!this._zoomSeeded) { this._zoomSeeded = true; this.zoomMul = clamp(st.camZoom ?? 1, I.zoom[0], I.zoom[1]); this._zoomS = this.zoomMul; }
+    this._lastPlayerPos.copy(feet);
+    const snap = this._snap, st = ctx.state?.settings ?? EMPTY;
+    const calm = !!st.reduceCameraMotion, gmPlay = (ctx.game?.mode ?? 'play') === 'play';
+    if (this._bossHoldT > 0) this._bossHoldT = Math.max(0, this._bossHoldT - dt);
+    // D12: the goals freeze in hitstop (and through the boss-defeat hold); springs and shake keep running
+    const frozen = !snap && ((ctx.game?.hitstopT ?? 0) > 0 || this._bossHoldT > 0);
     // yaw (zone hints blend; the level yaw otherwise)
     if (this._yawT < 1) {
       this._yawT = Math.min(1, this._yawT + dt / this._yawDur);
       this.isoYaw = this._yawFrom + wrapAngle(this._yawTo - this._yawFrom) * easeInOutSine(this._yawT);
     }
-    const yaw = this.isoYaw;
+    const yaw = this.isoYaw, v = this._view;
     this.yaw = yaw;
-
-    // ---- the vertical follow: during a jump the focus takes 30 % of her rise (50 % off a mushroom bounce)
-    if (p.onGround || snap) { this._groundY = ppos.y; this._bounceRise = false; }
-    if (p.bounced > 0) this._bounceRise = true;
-    const rise = ppos.y - this._groundY;
-    const fy = rise > 0 ? this._groundY + rise * (this._bounceRise ? I.bounceFollow : I.jumpFollow) : ppos.y;
-
-    // ---- framing targets
-    const W = this._viewW(), H = this._viewH();
-    const boss = this.bossActive ? this._liveBoss() : null;
-    const eng = this._engagedSet(ppos);
-    const combat = eng.length > 0;
-    const still = p.stateName === 'guard' || p.stateName === 'charge' || (p.charge ?? 0) > 0;
-    const portrait = H > W * 1.05;
-    // the resting frame (zoom × base, zone hints; isoFrame): the combat fit below searches from it
-    this._zoomS = snap ? this.zoomMul : damp(this._zoomS, this.zoomMul, I.zoomDamp, dt);
-    const dev = input?.device ?? 'kbm';
+    setYaw(v, yaw);
+    const ux = v.Ux, uz = v.Uz;
+    const W = this._viewW(), H = this._viewH(), dev = input?.device ?? 'kbm';
+    const prof = camProfile(W, H, dev), portrait = prof === 'portrait';
+    this.profile = prof;
+    this._zoomOrientation(st, portrait);
+    // zoom (wheel / pinch / slider) and its elastic give: smoothDamp, never a lerp
+    if (snap) { this._zoomS = this.zoomMul; this._zoomSS.v = 0; this._give = 0; this._giveS.v = 0; }
+    else {
+      this._give = smoothDamp(this._give, 0, this._giveS, ZOOM_ST, dt);
+      this._zoomS = smoothDamp(this._zoomS, this.zoomMul * (1 + this._give), this._zoomSS, ZOOM_ST, dt);
+    }
     const hv = this._hv;
     this._hintStep(this._hDist, dt, hv, 'dist', 'distW');
     this._hintStep(this._hPitch, dt, hv, 'pitch', 'pitchW');
-    const base = isoFrame({ w: W, h: H, device: dev, zoom: this._zoomS, hintDist: hv.dist, hintDistW: hv.distW, hintPitch: hv.pitch, hintPitchW: hv.pitchW }, this._fr0);
-    // lead (explore only): velocity + the KBM cursor; damped λ4; off with Reduce camera motion
-    let cursorRel = null;
-    if (input?.device === 'kbm' && this.cursorValid && (input.pointerIdle?.() ?? 99) < AIM.cursorIdle) {
-      _q.set(this.cursorGround.x - ppos.x, 0, this.cursorGround.z - ppos.z); cursorRel = _q;
+    const boss = this.bossActive ? this._liveBoss() : null;
+    const base = isoFrame({ w: W, h: H, device: dev, zoom: this._zoomS, boss: !!boss, hintDist: hv.dist, hintDistW: hv.distW, hintPitch: hv.pitch, hintPitchW: hv.pitchW, bigger: !!st.biggerHero }, this._fr0);
+    // the pitch the rig gives a distance (zone hint blend; portrait / boss fixed): the solver's and the springs' curve
+    this._pitchFixed = portrait ? I.pitchPortrait : boss ? I.pitchBoss : NaN;
+    this._pitchHintW = !portrait && !boss && Number.isFinite(hv.pitch) ? clamp(hv.pitchW ?? 1, 0, 1) : 0;
+    this._pitchHint = hv.pitch;
+    // SafeFrame + anchor, the view for the solver
+    this._refreshSafeFrame(W, H, dev, st, calm, portrait);
+    const A = this._anc;
+    v.tanV = Math.tan((base.fov * Math.PI) / 360); v.tanH = v.tanV * base.aspect;
+    v.offX = 2 * A.toX - 1; v.offY = 1 - 2 * A.toY;
+    this.safeFrame.fitRectNdc(v);
+    // ---- §4.2 step 3: the ground under her (player.groundY when published; the last grounded feet Y otherwise) +
+    // focusY + a jump lift (30 %, 50 % off a mushroom bounce); a tall boss lifts the focus
+    if (p.onGround || snap) { this._groundY = feet.y; this._bounceRise = false; }
+    if (p.bounced > 0) this._bounceRise = true;
+    const gy0 = Number.isFinite(p.groundY) ? p.groundY : this._groundY, rise = Math.max(0, feet.y - gy0);
+    const lift = boss ? Math.max(0, (boss.height ?? 1.6) - I.boss.liftAbove) * I.boss.lift : 0;
+    const gyT = gy0 + I.focusY + rise * (this._bounceRise ? I.bounceFollow : I.jumpFollow) + lift;
+    this._gy = snap ? gyT : smoothDamp(this._gy, gyT, this._gyS, I.follow.groundST, dt);
+    if (snap) this._gyS.v = 0;
+    // ---- engaged set, subjects and the 20 Hz solve (an immediate one on a hard add / snap)
+    this._engagedSet(feet, frozen ? 0 : dt);
+    const still = p.stateName === 'guard' || p.stateName === 'charge' || (p.charge ?? 0) > 0;
+    this._solveT -= dt;
+    if (!frozen && (snap || this._solveT <= 0 || this._forceSolve || this._tel.dirty)) {
+      const tick = snap ? 0 : Math.max(dt, 1 / FR.hz - Math.max(0, this._solveT));
+      this._solveT = 1 / FR.hz;
+      this._tel.dirty = false;
+      this._gather(feet, boss, tick);
+      herLimits(this._pitch || base.pitch, Math.max(base.dist, this._dCur || base.dist), v.tanV, v.tanH, A.toX, A.toY, this.safeFrame.herFrame, this._lim);
+      this._solve(feet, boss, base, prof, calm);
+      this._forceSolve = false;
     }
-    if (calm || combat || boss) { this._leadT.x = 0; this._leadT.z = 0; }
-    else isoLead(p.vel ?? _ZV, cursorRel, yaw, { portrait, still }, this._leadT);
-    if (snap) { this._lead.x = this._leadT.x; this._lead.z = this._leadT.z; }
-    else { this._lead.x = damp(this._lead.x, this._leadT.x, I.lead.damp, dt); this._lead.z = damp(this._lead.z, this._leadT.z, I.lead.damp, dt); }
-    _piv.set(ppos.x + this._lead.x, fy + I.focusY, ppos.z + this._lead.z);
-    // combat bias: 0.3 × (centroid of the engaged set − her), ≤ 2.5 m (the selection weighs 1.5); then the exact fit
-    // (_combatFitStep) may lean it further toward them, or pull it back, so that she stays in her inner 60 % and they
-    // stay inside the HUD-free rect at the fitted distance
-    if (combat && !boss) {
-      let cx = 0, cz = 0, w = 0;
-      for (const a of eng) { const k = a === this.lockTarget ? I.combat.selWeight : 1; cx += a.pos.x * k; cz += a.pos.z * k; w += k; }
-      _tgt.set((cx / w - ppos.x) * I.combat.bias, 0, (cz / w - ppos.z) * I.combat.bias);
-      capXZ(_tgt, I.combat.biasMax);
-      this._combatFitStep(eng, ppos, yaw, W, H, base, hv, calm, cx / w - ppos.x, cz / w - ppos.z);
-    } else { this._cmbLean = 0; this._cmbNeed = 0; }
-    // boss: focus = lerp(her, boss, 0.35), ≤ 5 m from her; a tall boss lifts the focus
-    if (boss) {
-      const bp = boss.object3d?.position ?? boss.pos;
-      _tgt.set((bp.x - ppos.x) * I.boss.weight, 0, (bp.z - ppos.z) * I.boss.weight);
-      capXZ(_tgt, I.boss.maxOff);
-      _piv.x = ppos.x + _tgt.x; _piv.z = ppos.z + _tgt.z;
-      _piv.y += Math.max(0, ((boss.height ?? 1.6) - I.boss.liftAbove)) * I.boss.lift;
-      // §2.4 safe fit: when even the widest boss distance leaves him outside the HUD-free frame, lean the focus his way
-      this._bossFitStep(dt, snap, boss, ppos, yaw, W, H);
-      _piv.x += this._bossShift.x; _piv.z += this._bossShift.z;
-    } else if (this._bossShift.x || this._bossShift.z) {
-      this._bossShift.multiplyScalar(snap ? 0 : 1 - Math.min(1, dt * 4));
-      if (this._bossShift.lengthSq() < 1e-4) this._bossShift.set(0, 0, 0);
+    const combat = this.subjects.n > 1;
+    // ---- goals (frozen in hitstop)
+    const L = I.lead, aim = this._aimStep(p, dt, prof, frozen, calm);
+    if (!frozen) {
+      const leadOn = !calm && !combat && !still && !aim && !this.beat.active && this.modeName === 'follow' && gmPlay;
+      if (leadOn) { this._intent(p, this._int); intentLead(this._int.x, this._int.z, this._int.kind, yaw, prof, this._leadT); }
+      else { this._leadT.x = 0; this._leadT.z = 0; }
+      this._leadGate.step(this._leadT, this._lead, dt);
+      this._biasT = !calm && !portrait && !combat && !boss && !this._arena.locked ? (L.up ?? 0.8) : 0;
+      const g = this._goal;
+      this._leanT.x = g.leanR * v.Rx + g.leanU * v.Ux; this._leanT.z = g.leanR * v.Rz + g.leanU * v.Uz;
     }
+    // ---- beats (§8.1) and the boss envelopes (§8.2)
+    this._beatStep(dt, p, feet, calm, gmPlay);
+    const bw = this.beat.w, beat = this.beat;
+    // ---- springs (real dt; each its own smoothDamp state)
+    if (snap) {
+      this._lead.x = this._leadT.x; this._lead.z = this._leadT.z; this._leadS.vx = this._leadS.vz = 0;
+      this._bias = this._biasT; this._biasS.v = 0;
+      this._lean.x = this._leanT.x; this._lean.z = this._leanT.z; this._leanS.vx = this._leanS.vz = 0;
+      this._aim.x = this._aimT.x; this._aim.z = this._aimT.z; this._aimS.vx = this._aimS.vz = 0;
+      this._beatOff.x = beat.lx * bw; this._beatOff.z = beat.lz * bw; this._beatS.vx = this._beatS.vz = 0;
+      this._peek.set(0, 0, 0); this._peekS.vx = this._peekS.vz = 0;
+    } else {
+      const grow = Math.hypot(this._leadT.x, this._leadT.z) >= Math.hypot(this._lead.x, this._lead.z);
+      smoothDamp2(this._lead, this._leadT.x, this._leadT.z, this._leadS, grow ? L.build : L.release, dt, L.vmax);
+      this._bias = smoothDamp(this._bias, this._biasT, this._biasS, L.biasST, dt);
+      smoothDamp2(this._lean, this._leanT.x, this._leanT.z, this._leanS, FR.lean.st, dt, FR.lean.vmax);
+      smoothDamp2(this._aim, this._aimT.x, this._aimT.z, this._aimS, aim || this._aimHoldT > 0 ? I.aimPan.in : I.aimPan.out, dt, FR.lean.vmax);
+      smoothDamp2(this._beatOff, beat.lx * bw, beat.lz * bw, this._beatS, BEAT_ST, dt, FR.lean.vmax);
+    }
+    // §2.3 peek (Alt / MMB / pad D-pad ↓ + RS), out of combat
+    this._peekStep(dt, p, feet, combat, snap);
+    // desktop lock modes (§10.4): semi = a pan inside herFrame that springs home; free = the leash pan (after the clamp)
+    this._panStep(dt, feet, W, H, yaw, combat);
+    // ---- compose the offset (focus − her), clamp it to the herFrame limits (R7: she always wins)
+    const off = this._off;
+    off.x = ux * this._bias + this._lead.x + this._lean.x + this._aim.x + this._beatOff.x + this._peek.x + this._semi.x;
+    off.z = uz * this._bias + this._lead.z + this._lean.z + this._aim.z + this._beatOff.z + this._peek.z + this._semi.z;
+    clampToLimits(off, yaw, this._lim);
+    this.lead.x = this._lead.x; this.lead.z = this._lead.z;
+    _piv.set(feet.x + off.x + this._pan.x, this._gy, feet.z + off.z + this._pan.z);
     // §2.4 dialogue: the focus eases to the speaker midpoint and d × 0.8 over 0.5 s (no cut)
     const dlg = ctx.game?.mode === 'dialog';
-    this._dlgW = snap ? (dlg ? 1 : 0) : Math.max(0, Math.min(1, this._dlgW + (dlg ? dt : -dt) / I.dialog.t));
+    this._dlgW = snap ? (dlg ? 1 : 0) : clamp(this._dlgW + (dlg ? dt : -dt) / I.dialog.t, 0, 1);
     const dlgW = calm ? (dlg ? 1 : 0) : easeInOutSine(this._dlgW);
     if (dlgW > 0) {
-      const sp = this._speaker(ppos);
-      // her own lines (and the ease back) keep the last midpoint: no ping-pong between speakers
-      if (sp) this._dlgMid.set((sp.x - ppos.x) * 0.5, 0, (sp.z - ppos.z) * 0.5);
+      const sp = this._speaker(feet);
+      if (sp) this._dlgMid.set((sp.x - feet.x) * 0.5, 0, (sp.z - feet.z) * 0.5);
       _piv.x += this._dlgMid.x * dlgW; _piv.z += this._dlgMid.z * dlgW;
     }
-    // §2.3 unlocked camera: edge pan (KBM), leash 25 m; peek (Alt / MMB / pad D-pad ↓ + RS)
-    this._panStep(dt, ppos, W, H, yaw);
-    _piv.add(this._pan);
-    const peeking = input?.down?.('peek') && !combat;
-    if (peeking) {
-      if (input.device === 'pad') {
-        const a = input.aimStick ?? _ZV2;
-        screenToWorldDir(a.x, a.y, yaw, _tmp); _tmp.y = 0; _tmp.multiplyScalar(I.peek.max);
-      } else if (this.cursorValid) _tmp.set(this.cursorGround.x - ppos.x, 0, this.cursorGround.z - ppos.z);
-      else _tmp.set(0, 0, 0);
-      capXZ(_tmp, I.peek.max);
-      this._peek.x = damp(this._peek.x, _tmp.x, I.peek.damp, dt); this._peek.z = damp(this._peek.z, _tmp.z, I.peek.damp, dt);
-    } else {
-      const k = Math.min(1, dt / Math.max(1e-3, I.peek.back) * 4);
-      this._peek.x += (0 - this._peek.x) * k; this._peek.z += (0 - this._peek.z) * k;
+    this.focus.copy(_piv);
+    // ---- distance: rest (zoom × base × hints) + the combat / boss fit (out fast, in slow after a 1.5 s hold, §6.5)
+    const dBase = base.dist, g = this._goal, D = FR.dist;
+    const extraGoal = combat ? Math.max(0, g.d - dBase) : 0;
+    const outward = extraGoal > this._extra + 1e-3;
+    if (outward) this._lastNeedOut = this._realT;
+    let tgt = extraGoal;
+    if (!outward && this._realT - this._lastNeedOut < D.holdIn && combat) tgt = this._extra;
+    if (!combat && this._realT - this._lastNeedOut < D.holdIn) tgt = this._extra;      // after a fight: hold, then ease in
+    if (snap) { this._extra = extraGoal; this._extraS.v = 0; }
+    else if (calm) this._extra = smoothDamp(this._extra, tgt, this._extraS, I.reduce.combatFitEase / 3, dt);
+    else this._extra = smoothDamp(this._extra, tgt, this._extraS, outward ? D.outST : D.inST, dt, outward ? D.outVmax : D.inVmax);
+    // §10.3 pinch rubber band below an active fit: visible d may drop to fit − 0.25·(fit − dUser), springs back 0.6 s
+    this._rubberStep(dt, combat);
+    let d = dBase + this._extra * (1 - I.pinch.rubber * this._rubber);
+    // snuggle (§5.6): one-shot −0.6 m after 5 s idle out of combat (never below the range minimum)
+    this._snuggleStep(dt, p, combat, calm, gmPlay, snap);
+    const rng = distRange(portrait);
+    d = Math.max(Math.min(d, dBase), d + this._snug);
+    if (this._snug < 0) d = Math.max(d, rng[0]);
+    // beat Δd (the Cosy two-shot never goes below beats.cosy.dMin)
+    if (bw > 0 && beat.dd) {
+      const dd = beat.dd * bw;
+      d = dd < 0 ? Math.max(d + dd, Math.min(d, beat.id === 'cosy' ? BEATS.cosy.dMin : rng[0])) : d + dd;
     }
-    _piv.add(this._peek);
-    if (snap) this.focus.copy(_piv);
-    else {
-      this.focus.x = damp(this.focus.x, _piv.x, I.followDamp, dt);
-      this.focus.z = damp(this.focus.z, _piv.z, I.followDamp, dt);
-      this.focus.y = damp(this.focus.y, _piv.y, I.followDampY, dt);
-    }
-
-    // ---- distance: zoom × base (the resting frame above), combat zoom-out / boss fit (extra), punches; cat-size clamp last
-    let extraWant = 0;
-    if (!calm && boss) {
-      // adds around a boss: the coarse symmetric fit (the boss fit below is exact for him and her)
-      const pts = this._engPts; let n = 0;
-      pts[n++] = ppos;
-      for (const a of eng) { if (n >= 12) break; if (a !== boss) pts[n++] = a.pos; }
-      const need = n > 1 ? fitDist(pts, n, this.focus, yaw, this._frB.pitch, base.fov, base.aspect, I.combat.inner, I.combat.margin) : 0;
-      extraWant = Math.max(0, need - base.dist);
-    } else if (!calm && combat) extraWant = Math.min(Math.max(0, this._cmbNeed - base.dist), COMBAT_FIT_OUT);
-    // §2.4 boss fit (also with Reduce camera motion: he must stay on screen): exact projection against the HUD-free
-    // safe rect, her in the inner 60 %, him in the inner 85 %, for both the focus target and the lagging actual focus
-    let bossOut = false;
-    if (boss) {
-      const fB = this._frB, S = this._safeR, offX = this._offPxX ?? 0, offY = this._offPxY ?? 0, dCap = fB.dist;
-      const dLo = Math.min(I.boss.dist[0], dCap);
-      const need = Math.max(
-        safeFitDist(this._bossSubs, 2, _piv, yaw, fB.pitch, fB.fov, W, H, offX, offY, S, dLo, dCap),
-        safeFitDist(this._bossSubs, 2, this.focus, yaw, fB.pitch, fB.fov, W, H, offX, offY, S, dLo, dCap));
-      extraWant = Math.max(extraWant, Math.min(need, dCap) - base.dist);
-      // the frame actually on screen (last pose): is he outside his rect now? then catch up fast
-      if (Number.isFinite(this._isoD)) {
-        subjectOverflow(this._bossSubs[1], this.focus, yaw, this._isoP, this._isoD, fB.fov, W, H, offX, offY, S, I.boss.bossInner, _bo);
-        bossOut = _bo.over > 0.5;
-      }
-    }
-    this._bossOut = bossOut;
-    if (extraWant >= this._extraS) { this._extraS = snap ? extraWant : damp(this._extraS, extraWant, bossOut ? 8 : I.combat.outDamp, dt); this._extraHold = I.combat.holdIn; }
-    else if ((this._extraHold -= dt) <= 0) this._extraS = damp(this._extraS, extraWant, I.combat.outDamp * 0.5, dt);
-    const fr = isoFrame({ w: W, h: H, device: dev, zoom: this._zoomS, boss: !!boss, extra: this._extraS, hintDist: hv.dist, hintDistW: hv.distW, hintPitch: hv.pitch, hintPitchW: hv.pitchW, insetBottom: this._insetBottom() }, this._fr1);
-    // charge push-in, parry punch, Holy, Purrfect Dodge, Golden Hour dolly (real time; none with Reduce camera motion)
+    // boss: phase breath (+1.5 m for 1 s), Dizzy punch (−1.0 m)
+    d += this._bossEnvelopes(dt, calm);
+    if (boss) d = clamp(d, I.boss.dist[0], I.boss.dist[1]);
+    d = Math.min(d, Math.max(base.dMax, Math.min(dBase, base.dMax)));
+    const dCurve = d;
+    // ---- punches (exempt from the rate caps): charge push-in, parry, Holy, Purrfect Dodge; Golden Hour; dialogue
     const charging = p.stateName === 'charge' || (p.charge ?? 0) > 0;
-    this._chargeW = damp(this._chargeW, charging && !calm ? 1 : 0, 5, dt);
-    let dd = I.charge.dd * this._chargeW, dfov = I.charge.dfov * this._chargeW;
+    this._chargeW = snap ? (charging && !calm ? 1 : 0) : smoothDamp(this._chargeW, charging && !calm ? 1 : 0, this._chargeS, CHARGE_ST, dt);
+    let dd = I.charge.dd * this._chargeW, dfov = calm ? 0 : I.charge.dfov * this._chargeW;
     if (!calm) {
       if (this._punchT >= 0) {
         const P = I.parryPunch, t = (this._punchT += dt);
@@ -1096,57 +1672,249 @@ export class FollowCamera {
         else if (t > Math.max(I.holy.fovT, I.holy.ddT)) this._holyT = -1;
       }
       if (this._dodgeT > 0) { this._dodgeT = Math.max(0, this._dodgeT - dt); dd += I.perfectDodge.dd; }
-    }
-    let d = Math.max(I.distMin * 0.7, fr.dist + dd), pitch = fr.pitch;
-    const g = calm ? 0 : this._goldenEnvelope();
-    if (g > 0) { d = lerp(d, Math.min(d, I.golden.dist), g); pitch = lerp(pitch, I.golden.pitch, g); }
+    } else { this._punchT = -1; this._holyT = -1; this._dodgeT = 0; }
+    if (bw > 0 && beat.dfov && !calm) dfov += beat.dfov * bw;
+    d = Math.max(I.distMin * 0.7, d + dd);
+    // pitch from the distance curve, rate-capped (R3 ≤ 20°/s); boss / portrait fixed
+    const pitchGoal = this._pitchOf(dCurve);
+    if (snap || !Number.isFinite(this._pitch)) { this._pitch = pitchGoal; this._pitchS.v = 0; }
+    else this._pitch = smoothDamp(this._pitch, pitchGoal, this._pitchS, PITCH_ST, dt, (FR.rate.pitchDeg * Math.PI) / 180);
+    let pitch = this._pitch;
+    const gw = calm ? 0 : this._goldenEnvelope();
+    if (gw > 0) { d = lerp(d, Math.min(d, I.golden.dist), gw); pitch = lerp(pitch, I.golden.pitch, gw); }
     d *= 1 + (I.dialog.mul - 1) * dlgW;
-    if (snap || !Number.isFinite(this._isoD)) this._isoD = d;
-    else this._isoD = damp(this._isoD, d, d < this._isoD ? 10 : 6, dt);
-    if (snap || !Number.isFinite(this._isoP)) this._isoP = pitch;
-    else this._isoP = damp(this._isoP, pitch, 6, dt);
-
-    isoPosition(this.focus, yaw, this._isoP, this._isoD, out.pos);
+    this._dCur = dCurve;
+    isoPosition(this.focus, yaw, pitch, d, out.pos);
     out.look.copy(this.focus);
     out.roll = 0;
-    out.fov = fr.fov + dfov;
+    out.fov = base.fov + dfov;
     const info = this.isoInfo;
-    info.yaw = yaw; info.pitch = this._isoP; info.dist = this._isoD; info.fov = out.fov; info.portrait = fr.portrait; info.phone = fr.phone;
-    info.frameOffset = fr.frameOffset;
-    info.catPx = pxAt(apparentH(this._isoP, I), this._isoD, out.fov, H);
-    this.distance = this._isoD;
-    this.pitch = this._isoP;
+    info.yaw = yaw; info.pitch = pitch; info.dist = d; info.fov = out.fov; info.portrait = base.portrait; info.phone = base.phone;
+    info.frameOffset = A.toY - 0.5; info.profile = prof;
+    info.catPx = pxAt(apparentH(pitch, I), d, out.fov, H);
+    this.distance = d;
+    this.pitch = pitch;
+    this._isoD = d; this._isoP = pitch;
     this._snap = false;
     return out;
   }
 
-  /** §2.3 unlocked camera: edge pan within the leash, the auto-recentre, the centre key. */
-  _panStep(dt, ppos, W, H, yaw) {
-    const input = this.ctx.input, U = ISO.unlock, pan = this._pan;
-    if (this.camLocked || input?.device !== 'kbm' || this.ctx.game?.mode !== 'play') {
-      if (pan.lengthSq() > 1e-6) { const k = Math.min(1, dt / U.recentre * 3); pan.multiplyScalar(1 - k); } else pan.set(0, 0, 0);
-      return;
+  /** The pitch the iso rig gives a lens distance (curve + zone-hint blend; portrait / boss: fixed). */
+  _pitchAt(d) {
+    if (Number.isFinite(this._pitchFixed)) return this._pitchFixed;
+    const c = isoPitch(d);
+    return this._pitchHintW > 0 ? c + (this._pitchHint - c) * this._pitchHintW : c;
+  }
+
+  /**
+   * §5.5 aim pan: while an aimed action with player.aim.range ≥ 5 m is held (the Holy wave charge until player
+   * publishes `aim`), pan = aimDir × min(cap, 0.40 × max(0, |aim − her| − 3)); hold 0.35 s after release, then ease
+   * back. Returns whether an aim is held.
+   */
+  _aimStep(p, dt, prof, frozen, calm) {
+    const AP = ISO.aimPan, T = this._aimT;
+    if (frozen) return this._aimHeld;
+    const pos = p.object3d?.position ?? p.pos, aimed = p.aim;
+    let range = Number.isFinite(aimed?.range) ? aimed.range : 0, held = aimed ? aimed.held !== false && range > 0 : false;
+    if (!aimed && p.stateName === 'charge' && (p.charge ?? 0) >= (PLAYER.charge?.tier2 ?? 1.1)) { range = ATTACKS.holyWave?.range ?? 10; held = true; }
+    held = held && range >= AP.minRange && !calm && GAMEPLAY.has(this.modeName);
+    this._aimHeld = held;
+    if (held) {
+      let ax, az;
+      const pt = aimed?.point;
+      if (pt && Number.isFinite(pt.x)) { ax = pt.x; az = pt.z; }
+      else if (this.ctx.input?.device === 'kbm' && this.cursorValid) { ax = this.cursorGround.x; az = this.cursorGround.z; }
+      else { const f = p.facing ?? 0; ax = pos.x + Math.sin(f) * range; az = pos.z + Math.cos(f) * range; }
+      const dx = ax - pos.x, dz = az - pos.z, L = Math.hypot(dx, dz);
+      const cap = AP.cap[prof] ?? AP.cap.desktop, m = Math.min(cap, AP.gain * Math.max(0, Math.min(L, range) - AP.dead));
+      T.x = L > 1e-3 ? (dx / L) * m : 0; T.z = L > 1e-3 ? (dz / L) * m : 0;
+      this._aimHoldT = AP.hold;
+    } else if (this._aimHoldT > 0) this._aimHoldT = Math.max(0, this._aimHoldT - dt);
+    else { T.x = 0; T.z = 0; }
+    return held;
+  }
+
+  /** §2.3 peek offset (smoothDamp; pad: the right stick, KBM: toward the cursor), out of combat only. */
+  _peekStep(dt, p, feet, combat, snap) {
+    const input = this.ctx.input, I = ISO;
+    const peeking = !combat && !!input?.down?.('peek') && GAMEPLAY.has(this.modeName);
+    if (peeking) {
+      if (input.device === 'pad') { const a = input.aimStick ?? _ZV2; screenToWorldDir(a.x, a.y, this.isoYaw, _tmp); _tmp.y = 0; _tmp.multiplyScalar(I.peek.max); }
+      else if (this.cursorValid) _tmp.set(this.cursorGround.x - feet.x, 0, this.cursorGround.z - feet.z);
+      else _tmp.set(0, 0, 0);
+      capXZ(_tmp, I.peek.max);
+    } else _tmp.set(0, 0, 0);
+    if (snap) { this._peek.set(_tmp.x, 0, _tmp.z); return; }
+    smoothDamp2(this._peek, _tmp.x, _tmp.z, this._peekS, peeking ? 1 / I.peek.damp : I.peek.back / 3, dt);
+  }
+
+  /** §10.3 the pinch rubber band weight: 1 while the player zooms in below an active fit, then back over 0.6 s. */
+  _rubberStep(dt, combat) {
+    const on = combat && this._extra > 0.05 && this._pinchInT > 0;
+    if (this._pinchInT > 0) this._pinchInT = Math.max(0, this._pinchInT - dt);
+    if (on && !this._fitToast) {
+      this._fitToast = true;
+      const text = this.ctx.strings?.t?.('toast.cam.fitHold');
+      if (text && text !== 'toast.cam.fitHold') this.ctx.bus?.emit?.(E.TOAST, { text });
     }
-    if (this._recentrePan || input.down?.('centre')) {
-      const k = Math.min(1, dt / U.recentre * 3); pan.multiplyScalar(1 - k);
-      if (pan.lengthSq() < 0.01) { pan.set(0, 0, 0); this._recentrePan = false; }
-      return;
+    this._rubber = on ? 1 : smoothDamp(this._rubber, 0, this._rubberS, ISO.pinch.rubberBack / 3, dt);
+    if (on) this._rubberS.v = 0;
+  }
+
+  /** §5.6 snuggle: after 5 s with no input, no fight, no order and no beat: −0.6 m (st 1.2 s); any input: back (0.35 s). */
+  _snuggleStep(dt, p, combat, calm, gmPlay, snap) {
+    const S = ISO.snuggle, idle = this.ctx.input?.idleTime ?? 0;
+    if (idle < S.after) this._snugArmed = true;
+    const want = !calm && gmPlay && !combat && !p.orders?.active && !this.beat.active && this.modeName === 'follow'
+      && idle >= S.after && this._snugArmed;
+    const tgt = want ? S.dd : 0;
+    if (snap) { this._snug = 0; this._snugS.v = 0; return; }
+    this._snug = smoothDamp(this._snug, tgt, this._snugS, want ? S.st : S.back, dt);
+  }
+
+  /**
+   * §8.1 beats: triggers queued by the listeners, the guards (no live THREAT, gameplay mode in play, Reduce camera
+   * motion off, one at a time), the opposing-input cancel (0.3 s) and the envelope step.
+   */
+  _beatStep(dt, p, feet, calm, gmPlay) {
+    const B = this.beat, q = this._beatQ;
+    const blocked = calm || !gmPlay || !GAMEPLAY.has(this.modeName) || this.subjects.hasThreat();
+    if (B.active) {
+      if (blocked) B.cancel();
+      else {
+        const m = this.ctx.input?.move, L = Math.hypot(B.lx, B.lz);
+        if (m && L > 0.1 && Math.hypot(m.x, m.y) > 0.3) {
+          screenToWorldDir(m.x, m.y, this.isoYaw, _tmp);
+          if ((_tmp.x * B.lx + _tmp.z * B.lz) / (Math.hypot(_tmp.x, _tmp.z) * L) < -0.3) B.cancel();
+        }
+      }
     }
-    const P = input.pointer;
-    if (!P?.inside) return;
-    const r = canvasRect(this.ctx), ex = U.edgePx;
+    if (q.id && !B.active && !blocked) {
+      const id = q.id, pos = feet;
+      if (id === 'peekaboo') {
+        const T = BEATS.peekaboo, dx = (q.x - pos.x) * T.frac, dz = (q.z - pos.z) * T.frac;
+        B.start(id, T.t, dx, dz, T.dd, 0);
+      } else if (id === 'cosy') {
+        if (!this._hostileNear(pos, BEATS.cosy.calmR)) B.start(id, BEATS.cosy.t, (q.x - pos.x) / 2, (q.z - pos.z) / 2, BEATS.cosy.dd, BEATS.cosy.dfov);
+      } else if (id === 'roomRead' || id === 'establish') {
+        const T = BEATS[id], dx = q.x - pos.x, dz = q.z - pos.z;
+        B.start(id, T.t, dx, dz, Math.min(T.ddMax ?? ISO.beats.maxDd, this._fitDd(q.x, q.z, q.r)), 0);
+      } else if (id === 'exhale') B.start(id, BEATS.exhale.t, 0, 0, BEATS.exhale.dd, 0);
+      q.id = null;
+    } else if (q.id && blocked && this._realT - q.t > BEAT_QUEUE_T) q.id = null;    // a stale trigger never fires late
+    B.step(dt);
+  }
+
+  /** Δd (≥ 0) that frames a disc (x, z, r) around her at the current distance (room read / establishing read). */
+  _fitDd(x, z, r) {
+    if (!(r > 0)) return 0;
+    const pool = this._tmpPool, v = this._view, p = this.ctx.player, feet = p?.object3d?.position ?? p?.pos;
+    if (!feet) return 0;
+    pool[SX] = feet.x; pool[SY] = feet.y + 0.4; pool[SZ] = feet.z; pool[SR] = FR.pad.her; pool[SW] = 1; pool[SF] = F_HARD;
+    const o = STRIDE;
+    pool[o + SX] = x; pool[o + SY] = feet.y; pool[o + SZ] = z; pool[o + SR] = r; pool[o + SW] = 1; pool[o + SF] = F_HARD;
+    _F.set(feet.x, this._gy, feet.z);
+    const lx = x - feet.x, lz = z - feet.z, L = Math.hypot(lx, lz), cap = ISO.beats.maxLean, k = L > cap ? cap / L : 1;
+    const lr = (lx * v.Rx + lz * v.Rz) * k, lu = (lx * v.Ux + lz * v.Uz) * k;
+    const need = needD(pool, 2, _F.x, _F.y, _F.z, lr, lu, v, this._dCur || ISO.dist);
+    return Math.max(0, need - (this._dCur || ISO.dist));
+  }
+
+  /** Is any live hostile within r m of `pos`? */
+  _hostileNear(pos, r) {
+    const list = this.ctx.actors?.queryRadius?.(pos, r, hostileTo('player'));
+    if (list) for (const a of list) if (liveHostile(a, this.ctx.player)) return true;
+    return false;
+  }
+
+  /** §8.2 boss envelopes (real time): the phase breath (+dd for t s) and the Dizzy punch (−1.0 m). Returns Δd. */
+  _bossEnvelopes(dt, calm) {
+    const BO = ISO.boss;
+    let dd = 0;
+    if (this._breathT >= 0) {
+      const t = (this._breathT += dt), T = BO.phaseBreath.t;
+      dd += BO.phaseBreath.dd * Math.sin(Math.PI * Math.min(1, t / T));
+      if (t >= T) this._breathT = -1;
+    }
+    const Z = BO.dizzy, dz = this._dizzy;
+    if (dz.on && !calm) {
+      dz.t += dt;
+      if (dz.t > Z.maxHold) dz.on = false;
+    }
+    const want = dz.on && !calm && this._dizzyFits() ? 1 : 0;
+    dz.w = want > dz.w ? Math.min(1, dz.w + dt / Z.in) : Math.max(0, dz.w - dt / Z.out);
+    dd += Z.dd * easeInOutSine(dz.w);
+    return dd;
+  }
+
+  /** Dizzy punch guard: every hard subject stays inside fitRect after the −1 m. */
+  _dizzyFits() {
+    const S = this.subjects, v = this._view, g = this._goal;
+    const feet = this.ctx.player?.object3d?.position;
+    if (!feet) return false;
+    _F.set(feet.x, this._gy, feet.z);
+    return allHardInside(S.data, S.n, _F, v, Math.max(ISO.boss.dist[0], (this._dCur || g.d) + ISO.boss.dizzy.dd), g.leanR, g.leanU, 1);
+  }
+
+  /** Orientation change: the zoom value of that orientation (camZoom / camZoomPortrait, §10.3). */
+  _zoomOrientation(st, portrait) {
+    if (this._zoomPortrait === portrait && this._zoomSeeded) return;
+    const key = portrait ? 'camZoomPortrait' : 'camZoom';
+    this._zoomPortrait = portrait; this._zoomSeeded = true;
+    this.zoomMul = clamp(Number.isFinite(st[key]) ? st[key] : 1, ISO.zoom[0], ISO.zoom[1]);
+  }
+
+  /**
+   * Desktop lock modes (AUTOCAM §10.4; KBM only, pad / touch always locked): `semi` = edge pan into an offset clamped
+   * by herFrame that springs home (st 0.4 s) when she moves > 2 m, takes or deals damage, or after 3 s idle; `free` =
+   * the spec's unlocked leash pan (25 m). Edge speed 18 × edgePanSpeed × easeOutCubic(held / 0.35 s).
+   */
+  _panStep(dt, feet, W, H, yaw, combat) {
+    const input = this.ctx.input, U = ISO.unlock, SM = ISO.semi, pan = this._pan, semi = this._semi;
+    const mode = input?.device === 'kbm' ? this.camLockMode : 'locked';
+    const play = this.ctx.game?.mode === 'play';
+    // edge push (CSS px from the canvas edge) and its ramp
     let sx = 0, sy = 0;
-    if (P.x - r.left <= ex) sx = -1; else if (r.left + r.width - P.x <= ex) sx = 1;
-    if (P.y - r.top <= ex) sy = 1; else if (r.top + r.height - P.y <= ex) sy = -1;
-    if (sx || sy) {
-      const v = U.panSpeed * (this.ctx.state?.settings?.edgePanSpeed ?? 1) * dt;
+    const P = input?.pointer;
+    if (mode !== 'locked' && play && P?.inside) {
+      const r = canvasRect(this.ctx), ex = U.edgePx;
+      if (P.x - r.left <= ex) sx = -1; else if (r.left + r.width - P.x <= ex) sx = 1;
+      if (P.y - r.top <= ex) sy = 1; else if (r.top + r.height - P.y <= ex) sy = -1;
+    }
+    this._edgeT = sx || sy ? this._edgeT + dt : 0;
+    const speed = U.panSpeed * (this.ctx.state?.settings?.edgePanSpeed ?? 1) * easeOutCubic(Math.min(1, this._edgeT / SM.edgeAccel));
+    // free: the leash pan
+    if (mode !== 'free' || !play) {
+      if (pan.lengthSq() > 1e-6) smoothDamp2(pan, 0, 0, this._panS, U.recentre / 3, dt); else { pan.set(0, 0, 0); this._panS.vx = this._panS.vz = 0; }
+    } else if (this._recentrePan || input.down?.('centre')) {
+      smoothDamp2(pan, 0, 0, this._panS, U.recentre / 3, dt);
+      if (pan.lengthSq() < 0.01) { pan.set(0, 0, 0); this._recentrePan = false; }
+    } else if (sx || sy) {
       screenToWorldDir(sx, sy, yaw, _tmp);
       const l = Math.hypot(_tmp.x, _tmp.z) || 1;
-      pan.x += (_tmp.x / l) * v; pan.z += (_tmp.z / l) * v;
+      pan.x += (_tmp.x / l) * speed * dt; pan.z += (_tmp.z / l) * speed * dt;
+      const Lp = Math.hypot(pan.x, pan.z);
+      if (Lp > U.leash) { pan.x *= U.leash / Lp; pan.z *= U.leash / Lp; }
     }
-    // leash: soft over the last 3 m, hard at 25 m
-    const L = Math.hypot(pan.x, pan.z);
-    if (L > U.leash) { pan.x *= U.leash / L; pan.z *= U.leash / L; }
+    // semi: the clamped pan that springs home
+    if (mode !== 'semi' || !play) { semi.x = 0; semi.z = 0; this._semiS.vx = this._semiS.vz = 0; return; }
+    if (sx || sy) {
+      if (!this._semiActive) { this._semiActive = true; this._semiFrom.set(feet.x, 0, feet.z); }
+      this._semiIdle = 0;
+      screenToWorldDir(sx, sy, yaw, _tmp);
+      const l = Math.hypot(_tmp.x, _tmp.z) || 1;
+      semi.x += (_tmp.x / l) * speed * dt; semi.z += (_tmp.z / l) * speed * dt;
+      clampToLimits(semi, yaw, this._lim);
+    } else this._semiIdle += dt;
+    const moved = this._semiActive && Math.hypot(feet.x - this._semiFrom.x, feet.z - this._semiFrom.z) > SM.returnMove;
+    if (moved || this._semiIdle > SM.returnIdle || this._semiHome) {
+      this._semiActive = false; this._semiHome = false;
+      this._semiReturn = true;
+    }
+    if (this._semiReturn) {
+      smoothDamp2(semi, 0, 0, this._semiS, SM.returnST, dt);
+      if (Math.hypot(semi.x, semi.z) < 0.01) { semi.x = 0; semi.z = 0; this._semiReturn = false; }
+    }
   }
 
   _viewW() { const el = this.ctx.renderer?.domElement; return el?.clientWidth || (typeof innerWidth !== 'undefined' ? innerWidth : 1280); }
@@ -1274,123 +2042,6 @@ export class FollowCamera {
     this.modeName = this.lockTarget ? 'lock' : this.bossActive ? 'boss' : 'follow';
   }
 
-  /**
-   * §2.4 boss safe fit, once per frame (reads _piv: the focus target before the lean). Sets the HUD-free safe rect
-   * (ctx.ui.safeInsets: the boss plate on top, the ability bar at the bottom), her / the boss as fit subjects, the
-   * widest boss frame (boss.dist max or the cat-size clamp), and the focus lean: when the boss would sit outside his
-   * inner 85 % (or she outside her inner 60 %) even at that distance, the focus slides along the her → boss line to
-   * the best fit (≤ BOSS_LEAN_MAX from the default lerp, eased).
-   */
-  _bossFitStep(dt, snap, boss, ppos, yaw, W, H) {
-    const I = ISO, B = I.boss, ctx = this.ctx;
-    const fB = isoFrame({ w: W, h: H, device: ctx.input?.device ?? 'kbm', boss: true, extra: 99 }, this._frB);
-    const S = this._updateSafeRect(W, H);
-    // the subjects: her (feet → ear tips) and the boss (his footprint + 0.3 m for swings / glints, feet → head)
-    const her = this._bossSubs[0], bs = this._bossSubs[1], bp = boss.object3d?.position ?? boss.pos;
-    her.x = ppos.x; her.z = ppos.z; her.y0 = ppos.y; her.y1 = ppos.y + (I.catHView ?? 1.03);
-    bs.x = bp.x; bs.z = bp.z; bs.y0 = bp.y; bs.y1 = bp.y + (boss.height ?? 1.6); bs.r = (boss.radius ?? 1) + 0.3;
-    // the lean: the focus slides along the her → boss line (t = 0 her … BOSS_LEAN_T); the default t (the 0.35 lerp) stays
-    // whenever both fit at the widest frame. Otherwise the t that fits both (her in 60 %, him in 85 %) nearest the
-    // default; if no t does (a far boss straight up / down screen), the t that keeps both inside the safe rect best
-    // (him in 85 %, her in 92 %), the 60 % rule as the tie-break
-    const offX = this._offPxX ?? 0, offY = this._offPxY ?? 0, d = fB.dist, pitch = fB.pitch, fov = fB.fov;
-    const lx = bp.x - ppos.x, lz = bp.z - ppos.z, L = Math.hypot(lx, lz);
-    _shT.set(0, 0, 0);
-    if (L > 0.5) {
-      const t0 = Math.hypot(_piv.x - ppos.x, _piv.z - ppos.z) / L;
-      const cost = (t) => {
-        _shP.set(ppos.x + lx * t, _piv.y, ppos.z + lz * t);
-        const b = subjectOverflow(bs, _shP, yaw, pitch, d, fov, W, H, offX, offY, S, B.bossInner, _bo).over;
-        const h = subjectOverflow(her, _shP, yaw, pitch, d, fov, W, H, offX, offY, S, B.herInner, _bo).over;
-        if (b <= 0.5 && h <= 0.5) return Math.abs(t - t0);
-        const h2 = subjectOverflow(her, _shP, yaw, pitch, d, fov, W, H, offX, offY, S, BOSS_HER_MAX, _bo).over;
-        return 1000 + Math.max(b, h2) + 0.1 * h + Math.abs(t - t0);
-      };
-      if (cost(t0) > 0.5) {
-        let best = t0, bc = Infinity;
-        for (let t = 0; t <= BOSS_LEAN_T + 1e-6; t += 0.025) { const c = cost(t); if (c < bc) { bc = c; best = t; } }
-        _shT.set(ppos.x + lx * best - _piv.x, 0, ppos.z + lz * best - _piv.z);
-        capXZ(_shT, BOSS_LEAN_MAX);
-      }
-    }
-    if (snap) this._bossShift.set(_shT.x, 0, _shT.z);
-    else { this._bossShift.x = damp(this._bossShift.x, _shT.x, BOSS_LEAN_DAMP, dt); this._bossShift.z = damp(this._bossShift.z, _shT.z, BOSS_LEAN_DAMP, dt); }
-  }
-
-  /**
-   * The HUD-free safe rect (CSS px of the canvas) → this._safeR: ctx.ui.safeInsets (the boss plate on top, the ability
-   * bar at the bottom) + SAFE_PAD; never thinner than the middle 40 % (a huge HUD must not collapse a fit).
-   */
-  _updateSafeRect(W, H) {
-    const ui = this.ctx.ui, si = ui?.safeInsets, k = si?.h > 0 ? H / si.h : 1, S = this._safeR;
-    const bottom = Math.max((si?.bottom ?? 0) * k, Number.isFinite(ui?.bar?.insetBottom) ? ui.bar.insetBottom : 0);
-    S.l = (si?.left ?? 0) * k + SAFE_PAD; S.r = W - (si?.right ?? 0) * k - SAFE_PAD;
-    S.t = Math.min((si?.top ?? 0) * k + SAFE_PAD, H * 0.3); S.b = Math.max(H - bottom - SAFE_PAD, H * 0.7);
-    return S;
-  }
-
-  /**
-   * §2.4 combat fit, once per frame in a (non-boss) fight. Reads _piv (the focus target before the bias) and _tgt (the
-   * default bias); adds the chosen bias to _piv and sets this._cmbNeed (the lens distance that frames the fight).
-   * Exact perspective (isoProject via safeFitDist / subjectOverflow) with the view offset and the HUD-free safe rect,
-   * so a crossbow 10 m below her on screen (nearer the lens: it spreads further) is framed, not just estimated. The
-   * focus leans along her → centroid line: the default bias when it fits; else the lean nearest it that fits at the
-   * widest combat distance (base + COMBAT_FIT_OUT, under the clamps); else the one that keeps her in her 60 % and
-   * leaves the hostiles least outside. (cdx, cdz): the engaged centroid − her.
-   */
-  _combatFitStep(eng, ppos, yaw, W, H, base, hv, calm, cdx, cdz) {
-    const I = ISO, C = I.combat, S = this._updateSafeRect(W, H), subs = this._cmbSubs;
-    const her = subs[0];
-    her.x = ppos.x; her.z = ppos.z; her.y0 = ppos.y; her.y1 = ppos.y + (I.catHView ?? 1.03); her.r = 0.4; her.inner = I.boss.herInner;
-    let n = 1;
-    for (const a of eng) {
-      if (n >= subs.length) break;
-      const ap = a.object3d?.position ?? a.pos;
-      if (!ap) continue;
-      const s = subs[n++];
-      s.x = ap.x; s.z = ap.z; s.y0 = ap.y; s.y1 = ap.y + Math.max(0.3, a.height ?? 1); s.r = (a.radius ?? 0.5) + 0.2; s.inner = COMBAT_ENEMY_INNER;
-    }
-    // the pitch follows the distance as isoFrame's does (zone hint blend; portrait fixed)
-    this._pitchPortrait = !!base.portrait; this._pitchFixed = base.pitch;
-    this._pitchHintW = !base.portrait && Number.isFinite(hv.pitch) ? Math.max(0, Math.min(1, hv.pitchW ?? 1)) : 0;
-    this._pitchHint = hv.pitch;
-    const pOf = this._pitchOf, fov = base.fov, offX = this._offPxX ?? 0, offY = this._offPxY ?? 0;
-    const dLo = base.dist;
-    const dHi = calm ? dLo : Math.max(dLo, Math.min(dLo + COMBAT_FIT_OUT, I.distMax + C.zoomOut, Number.isFinite(base.dMax) ? base.dMax : Infinity));
-    const pHi = pOf(dHi);
-    const L = Math.hypot(cdx, cdz), ux = L > 1e-3 ? cdx / L : 0, uz = L > 1e-3 ? cdz / L : 0;
-    const s0 = Math.hypot(_tgt.x, _tgt.z);
-    // a lean s at the widest distance: 0 = all fit; else her overflow (hard) outweighs the hostiles' overflow
-    const cost = (s) => {
-      _cP.set(_piv.x + ux * s, _piv.y, _piv.z + uz * s);
-      const h = subjectOverflow(her, _cP, yaw, pHi, dHi, fov, W, H, offX, offY, S, her.inner, _bo).over;
-      let e = 0;
-      for (let i = 1; i < n; i++) e = Math.max(e, subjectOverflow(subs[i], _cP, yaw, pHi, dHi, fov, W, H, offX, offY, S, COMBAT_ENEMY_INNER, _bo).over);
-      return (h > 0.5 ? 1e4 + Math.min(h, 1e4) : 0) + (e > 0.5 ? Math.min(e, 1e4) : 0);
-    };
-    let lean = s0;
-    if (L > 0.5 && n > 1 && cost(s0) > 0) {
-      // the fitting lean nearest the default (the last one gets a small bonus: no flip-flop); else the least bad
-      let best = s0, bc = Infinity;
-      const prev = this._cmbLean, sMax = Math.max(s0, Math.min(COMBAT_LEAN_MAX, L));
-      for (let s = 0; s <= sMax + 1e-6; s += COMBAT_LEAN_STEP) {
-        const c = cost(s);
-        const k = (c > 0 ? c + 1e3 : 0) + Math.abs(s - s0) - (Math.abs(s - prev) < COMBAT_LEAN_STEP ? 0.1 : 0);
-        if (k < bc) { bc = k; best = s; }
-      }
-      lean = best;
-    }
-    this._cmbLean = lean;
-    if (lean === s0) { _piv.x += _tgt.x; _piv.z += _tgt.z; }       // the default bias, exactly
-    else { _piv.x += ux * lean; _piv.z += uz * lean; }
-    // the distance that frames them, for the target focus and for the lagging actual focus
-    if (n > 1 && dHi > dLo) {
-      const a = safeFitDist(subs, n, _piv, yaw, base.pitch, fov, W, H, offX, offY, S, dLo, dHi, pOf);
-      const b = safeFitDist(subs, n, this.focus, yaw, base.pitch, fov, W, H, offX, offY, S, dLo, dHi, pOf);
-      this._cmbNeed = Math.min(dHi, Math.max(a, b));
-    } else this._cmbNeed = dLo;
-  }
-
   /** The live boss (enemies.boss while alive), or null. */
   _liveBoss() {
     const b = this.ctx.enemies?.boss;
@@ -1426,11 +2077,15 @@ export class FollowCamera {
     return out;
   }
 
-  _startBlend(dur, ease, pivot, sim) {
+  /**
+   * Start a pose blend from the current output pose. `iso`: the AUTOCAM §8.3 pose-space blend (log distance, yaw arc)
+   * for the iso rig's hand-offs; otherwise the cylindrical arc around `pivot`.
+   */
+  _startBlend(dur, ease, pivot, sim, iso = false) {
     const b = this._blend;
-    if (!(dur > 0)) { b.active = false; return; }
+    if (!(dur > 0)) { b.active = false; b.iso = false; return; }
     this._blendFrom.copy(this._outPose);
-    b.active = true; b.t = 0; b.dur = dur; b.ease = resolveEase(ease); b.sim = !!sim;
+    b.active = true; b.t = 0; b.dur = dur; b.ease = resolveEase(ease); b.sim = !!sim; b.iso = !!iso;
     b.pivot = pivot ? (b._pv ?? (b._pv = new THREE.Vector3())).copy(pivot) : null;
   }
 
@@ -1442,6 +2097,29 @@ export class FollowCamera {
     this._bossForced = false;
     this._setBoss(false);
     this._fader.clear();
+    // AUTOCAM state of the old level: subjects, wind-ups, beats, the arena, the engaged set
+    this.subjects.clear(); this._tel.clearAll(); this.beat.stop(); this.beat.fired.clear();
+    this._arena.locked = false; this._arena.r = 0; this._engA.length = 0; this.engaged.length = 0;
+    this._dizzy.on = false; this._breathT = -1; this._bossHoldT = 0; this._calmFit = 0;
+    this.footprint.valid = false;
+  }
+
+  /** boss:start without an intro cutscene: the establishing read (lean to the arena centre, fit its radius; §8.2). */
+  _onBossStart() {
+    this._forceSolve = true;
+    const story = this.ctx.story;
+    if (story?.isPlaying || this._realT - this._lastCutEnd < CUT_RECENT || this.modeName === 'preset' || this.modeName === 'cutscene') return;
+    const A = this._arena, b = this._liveBoss(), bp = b?.object3d?.position ?? b?.pos;
+    const x = A.r > 0 ? A.x : bp?.x, z = A.r > 0 ? A.z : bp?.z;
+    if (!Number.isFinite(x)) return;
+    this.beat.stop();
+    this._queueBeat('establish', x, z, A.r > 0 ? A.r : (b?.radius ?? 1) + ISO.framing.pad.boss);
+  }
+
+  /** Queue a beat trigger (fired by _beatStep when its guards allow, within BEAT_QUEUE_T s). */
+  _queueBeat(id, x, z, r) {
+    const q = this._beatQ;
+    q.id = id; q.x = x; q.z = z; q.r = r; q.t = this._realT;
   }
 
   _onLevelLoaded(p) {
@@ -1872,7 +2550,8 @@ export class FollowCamera {
   // ------------------------------------------------------------------ per frame
   render(alpha, frameDt) {
     const ctx = this.ctx, cam = ctx.camera, game = ctx.game;
-    const dt = Math.min(Math.max(frameDt || 0, 0), 0.1);
+    const dt = Math.min(Math.max(frameDt || 0, 0), ISO.follow.dtMax ?? 0.1);    // D12: real time, clamped
+    this._realT += dt;
     const paused = game?.mode === 'menu';
     const sdt = paused ? 0 : dt * (game?.loop?.timeScale ?? 1);         // sim-time for cutscene timelines
     const look = ctx.input?.consumeLook?.() ?? ZERO_LOOK;
@@ -1904,9 +2583,12 @@ export class FollowCamera {
     if (b.active) {
       b.t += b.sim ? sdt : dt;
       const k = b.ease(clamp(b.t / b.dur, 0, 1));
-      if (b.pivot && GAMEPLAY.has(this.modeName)) this._playerPivot(b.pivot);
-      blendPose(this._blendFrom, pose, k, b.pivot, out);
-      if (b.t >= b.dur) b.active = false;
+      if (b.iso) blendPoseIso(this._blendFrom, pose, k, out);
+      else {
+        if (b.pivot && GAMEPLAY.has(this.modeName)) this._playerPivot(b.pivot);
+        blendPose(this._blendFrom, pose, k, b.pivot, out);
+      }
+      if (b.t >= b.dur) { b.active = false; b.iso = false; }
     } else out.copy(pose);
 
     applyPose(cam, out);
@@ -1918,36 +2600,42 @@ export class FollowCamera {
     const fov = lerp(aspectFov(this.fov, cam.aspect), this.fov, this._isoW);
     let proj = false;
     if (Math.abs(fov - this._appliedFov) > 1e-3) { cam.fov = fov; this._appliedFov = fov; proj = true; }
-    // §2.1 near / far 0.3 / 90 in the iso rig (RENDER near / far for presets, Meme Cam and classic)
-    const near = this._isoW > 0.5 ? ISO.near : RENDER.near, far = this._isoW > 0.5 ? ISO.far : RENDER.far;
+    // near / far: the iso rig's 0.3 m and the merged footprint / fog far (X12; quantised to 5 m, so a handful of
+    // projection updates per minute); RENDER near / far for presets, Meme Cam and classic
+    const isoView = this._isoW > 0.5;
+    const near = isoView ? ISO.near : RENDER.near, far = isoView ? this.farPlane : RENDER.far;
     if (near !== this._near || far !== this._far) { cam.near = near; cam.far = far; this._near = near; this._far = far; proj = true; }
-    // §2.1 framing (IsoRig.isoFrameOffset): landscape, her focus at 48 % of the band above the ability bar (her feet
-    // ≈ 45 % from the top on 720p); portrait 40 % from the top. Eased (λ 6) so a device / bar change never jumps.
-    const offT = this.isoInfo.frameOffset ?? 0;
-    if (this._offS == null || this._isoW < 1e-3) this._offS = offT;
-    else this._offS = damp(this._offS, offT, 6, dt);
-    const offK = this._isoW * this._offS;
+    // §5.1 anchor: SafeFrame's (fx, fy), eased 0.4 s on change, weighted to the centre by the iso weight (presets,
+    // cutscenes and the Meme Cam are authored centred); applied as a whole-px setViewOffset, only on change
+    const A = this._anc;
+    if (A.t < 1) {
+      A.t = Math.min(1, A.t + dt / Math.max(1e-3, ISO.frame.anchorEase));
+      const k = easeInOutSine(A.t);
+      A.x = lerp(A.fromX, A.toX, k); A.y = lerp(A.fromY, A.toY, k);
+    } else { A.x = A.toX; A.y = A.toY; }
     const vw = this._viewW(), vh = this._viewH();
-    // touch landscape: the right half belongs to the thumb cluster, so she sits a little left of centre (42 %)
-    const offXK = this._isoW * (ctx.input?.device === 'touch' && !this.isoInfo.portrait ? (ISO.frameOffsetTouchX ?? 0.08) : 0);
-    const offY = Math.abs(offK) < 1e-4 ? 0 : Math.round(offK * vh * 4) / 4, offX = Math.abs(offXK) < 1e-4 ? 0 : Math.round(offXK * vw * 4) / 4;
-    this._offPxX = offX; this._offPxY = offY;                    // the applied shift (CSS px), for the boss safe fit
-    const offKey = offY || offX ? `${offX}|${offY}` : 0;
-    if (offKey !== this._viewOff || (offKey && (cam.view?.fullWidth !== vw || cam.view?.fullHeight !== vh))) {
-      this._viewOff = offKey;
-      if (offKey) cam.setViewOffset(vw, vh, offX, -offY, vw, vh); else cam.clearViewOffset();
-      proj = false;                                              // set/clearViewOffset update the projection
-    }
+    const fx = 0.5 + (A.x - 0.5) * this._isoW, fy = 0.5 + (A.y - 0.5) * this._isoW;
+    if (this._applyAnchor(cam, vw, vh, fx, fy)) proj = false;     // setViewOffset updates the projection
     if (proj) cam.updateProjectionMatrix();
 
-    // camera-space rotations after lookAt; the iso rig mixes less rotation, more screen-plane jolt (§2.5)
-    const isoShake = this._isoW > 0.5;
-    const calmShake = ctx.state?.settings?.reduceCameraMotion && ctx.state?.settings?.shake == null ? 0 : 1;
-    this.shaker.apply(cam, dt, (ctx.state?.settings?.shake ?? 1) * calmShake * (isoShake ? ISO.shake.scale : 1), isoShake ? ISO.shake : null);
+    // camera-space rotations after lookAt; the iso rig mixes less rotation, more screen-plane jolt (§2.5); on touch
+    // no roll / rotation at all (AUTOCAM §10.2: rotation on a small screen reads as nausea)
+    const isoShake = isoView, st = ctx.state?.settings;
+    const calmShake = st?.reduceCameraMotion && st?.shake == null ? 0 : 1;
+    if (isoShake) {
+      const m = _shakeMix, S = ISO.shake;
+      m.rotMul = S.rotMul * (ctx.input?.device === 'touch' ? (ISO.touchShakeRot ?? 0) : 1);
+      m.transMul = S.transMul; m.rotMaxDeg = S.rotMaxDeg; m.transMax = S.transMax;
+    }
+    this.shaker.apply(cam, dt, (st?.shake ?? 1) * calmShake * (isoShake ? ISO.shake.scale : 1), isoShake ? _shakeMix : null);
     cam.updateMatrixWorld();
     _projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(_projView);
     this._frustumOk = true;
+    this.frameId++;
+    // §9.1 footprint + §9.3 far (applied next frame) from the gameplay pose
+    if (this.isIso) this._publishFootprint(isoView, vw, vh, fx, fy);
+    this._closeUpStep(cam);
     // §4.1 focus fog: Env owns the uniforms; mode follows the iso weight, the clear radius widens in combat
     if (this.isIso) {
       const p = ctx.player;
@@ -1978,7 +2666,79 @@ export class FollowCamera {
     }
     this._marker.update(GAMEPLAY.has(this.modeName) ? this.lockTarget : null, cam, dt, this.showLockMarker);
   }
+
+  /**
+   * AUTOCAM §5.1 applyAnchor: the focus drawn at (fx, fy) of the view via a whole-pixel setViewOffset (no sub-pixel
+   * shimmer; frustum culling stays exact), only on change. Returns true when the projection was rebuilt.
+   */
+  _applyAnchor(cam, vw, vh, fx, fy) {
+    const ox = Math.round((0.5 - fx) * vw), oy = Math.round((0.5 - fy) * vh), vo = this._vo;
+    if (ox === vo.x && oy === vo.y && vw === vo.w && vh === vo.h) return false;
+    vo.x = ox; vo.y = oy; vo.w = vw; vo.h = vh;
+    if (ox || oy) cam.setViewOffset(vw, vh, ox, oy, vw, vh); else cam.clearViewOffset();
+    return true;
+  }
+
+  /**
+   * AUTOCAM §9.1 / §9.3: the visible ground footprint of the iso pose (valid in the gameplay rig only; `version` bumps
+   * when a quantised consumer value changes) and the merged far plane for the next frame (X12; farKeep landmarks).
+   */
+  _publishFootprint(isoView, vw, vh, fx, fy) {
+    const fp = this.footprint, info = this.isoInfo, I = ISO;
+    if (!isoView || !GAMEPLAY.has(this.modeName)) { fp.valid = false; return; }
+    const tanV = Math.tan((info.fov * Math.PI) / 360), tanH = tanV * (vw / Math.max(1, vh));
+    const gy = this._gy - (I.focusY ?? 0.6);
+    if (!footprintOf(this.focus, this.isoYaw, info.pitch, info.dist, tanV, tanH, fx, fy, gy, fp)) { fp.valid = false; return; }
+    fp.valid = true;
+    const q = I.foot.shadowQuant || 1, Q = this._fpQ;
+    const a = Math.round(fp.cx / q), b = Math.round(fp.cz / q), c = Math.round(fp.ahead / q), d = Math.round(fp.behind / q), e = Math.round(fp.halfW / q);
+    if (a !== Q[0] || b !== Q[1] || c !== Q[2] || d !== Q[3] || e !== Q[4]) { Q[0] = a; Q[1] = b; Q[2] = c; Q[3] = d; Q[4] = e; fp.version++; }
+    // far: the footprint term and the fog radius (no fog model, e.g. a bare node ctx: the legacy far stays)
+    const env = this.ctx.env, rho = env?.fogDensity;
+    if (!Number.isFinite(rho) || rho <= 0) { this.farPlane = I.far; return; }
+    const F = I.fog, lf = this.ctx.levels?.current?.cam?.fog ?? EMPTY;
+    const combat = this.engaged.length > 0 || this.bossActive;
+    const clear = combat ? (lf.clearCombat ?? F.clearCombat) : (lf.clear ?? F.clear);
+    let far = farPlane(fp.slantMax, info.dist, info.pitch, fogRadius(rho, clear, lf.topMul ?? F.topMul));
+    // world `farKeep` landmarks inside the frustum side planes stay drawn
+    const keep = this.ctx.levels?.current?.farKeep;
+    if (Array.isArray(keep) && keep.length) {
+      const cam = this.ctx.camera, pl = this._frustum.planes, fq = I.foot.farQuant;
+      for (let i = 0; i < keep.length; i++) {
+        const k = keep[i], p = k?.position ?? k, r = k?.r ?? k?.userData?.farKeepR ?? 2;
+        if (!p || !Number.isFinite(p.x)) continue;
+        _v3.set(p.x, p.y ?? 0, p.z);
+        let inside = true;
+        for (let j = 0; j < 4 && inside; j++) if (pl[j].distanceToPoint(_v3) < -r) inside = false;
+        if (inside) far = Math.max(far, Math.ceil((cam.position.distanceTo(_v3) + r) / fq) * fq);
+      }
+    }
+    this.farPlane = far;
+  }
+
+  /**
+   * ART §6.1 `closeUp`: the lens within CLOSE.on (6.0 m) of the framed character (her; a shot's anchor actor), off
+   * beyond CLOSE.off (6.3 m); on change the character's view gets setCloseUp(on) (shells, cape grid, close-up set).
+   */
+  _closeUpStep(cam) {
+    const p = this.ctx.player;
+    const a = this.modeName === 'preset' ? (this._cut.frame?.actor ?? p) : p;
+    let on = false;
+    if (a) {
+      const pos = a.object3d?.position ?? a.pos;
+      const d = pos ? Math.hypot(cam.position.x - pos.x, cam.position.y - (pos.y + (a.height ?? 1) * 0.5), cam.position.z - pos.z) : Infinity;
+      on = this.closeUp && a === this._closeUpActor ? d <= CLOSE.off : d < CLOSE.on;
+    }
+    if (on === this.closeUp && a === this._closeUpActor) return;
+    const prev = this._closeUpActor;
+    if (prev && this.closeUp && prev !== a) viewOf(prev)?.setCloseUp?.(false);
+    this.closeUp = on; this._closeUpActor = a;
+    try { viewOf(a)?.setCloseUp?.(on); } catch (e) { console.warn('[camera] setCloseUp', e); }
+  }
 }
+
+/** The character view of an actor (player.model / companion.visual / view). */
+function viewOf(a) { return a ? (a.view ?? a.model ?? a.visual ?? null) : null; }
 
 /**
  * Keep at least a 4:3 horizontal field on narrow screens (portrait phones): the vertical FOV grows so the

@@ -18,13 +18,14 @@ import { normalizeTelegraph, isTracking, fillProgress, decalBounds, defaultShape
 import { trailStyle, trailWindow, TRAIL_COLORS } from '../../src/fx/SwordTrail.js';
 import { formatDamage, formatHeal, DAMAGE_STYLE } from '../../src/fx/DamageNumbers.js';
 import { chargeState } from '../../src/fx/HolyFX.js';
-import { bloomTarget, vignetteOpacity, LOW_HP } from '../../src/fx/ScreenFX.js';
+import { bloomTarget, vignetteOpacity, LOW_HP, FLASH } from '../../src/fx/ScreenFX.js';
 import { debrisFor, helmetFor, DEBRIS_KINDS, DEBRIS_ALIAS } from '../../src/fx/Poof.js';
 import { ringCardPositions, rectCardPositions, AMBIENT_DENSITY } from '../../src/fx/MistCards.js';
 import { hordeLayout, hordeMode, partOffset, buildHordeGeometry, HORDE } from '../../src/fx/Horde.js';
-import { motesFor, MOTES } from '../../src/fx/Ambient.js';
+import { motesFor, MOTES, AMBIENT_PROFILES, profileLayers } from '../../src/fx/Ambient.js';
 import { ParticlePool, particleSpec, SHAPE } from '../../src/fx/Particles.js';
 import { toVec3, hash01, spikeEnvelope, visualDt, auraOwner, resolveBlade } from '../../src/fx/util.js';
+import { ENV_U } from '../../src/world/tone.js';
 
 const DT = 1 / 60;
 
@@ -58,8 +59,8 @@ test('telegraph: every kind defaults to its §8.1 shape and colour; min lead is 
   }
   assert.deepEqual([...SHAPES].sort(), ['circle', 'cone', 'glint', 'lane', 'line', 'ring', 'rings', 'shadow', 'swirl']);
   assert.equal(TELEGRAPH.colors.gold, '#FFD34D');
-  assert.equal(TELEGRAPH.colors.red, '#FF3B30');
-  assert.equal(TELEGRAPH.colors.aoe, '#FF6A3D');
+  assert.equal(TELEGRAPH.colors.red, '#FF5A4E');   // WA §12 warm danger hues (core.W1)
+  assert.equal(TELEGRAPH.colors.aoe, '#FF9A3D');
 });
 
 test('telegraph: size forms → explicit dimensions (circle, ring, lane, cone, line)', () => {
@@ -120,15 +121,16 @@ test('sword trail: style per attack / skin / Golden Hour; sampling window follow
 });
 
 test('damage numbers: rounded ×10 damage, crits gold, heals green, nothing for blocks or 0', () => {
-  assert.deepEqual(formatDamage({ damage: 10 }), { text: '10', style: 'normal' });
-  assert.deepEqual(formatDamage({ damage: 19.6, crit: true }), { text: '20', style: 'crit' });
+  assert.deepEqual(formatDamage({ damage: 10 }), { text: '10', style: 'normal', value: 10 });
+  assert.deepEqual(formatDamage({ damage: 19.6, crit: true }), { text: '20', style: 'crit', value: 20 });
   assert.equal(formatDamage({ damage: 20, heavy: true }).style, 'heavy');
   assert.equal(formatDamage({ damage: 10, blocked: true }), null);
   assert.equal(formatDamage({ damage: 0 }), null);
-  assert.deepEqual(formatHeal(4), { text: '+4', style: 'heal' });
+  assert.deepEqual(formatHeal(4), { text: '+4', style: 'heal', value: 4 });
   assert.equal(formatHeal(0), null);
-  assert.equal(DAMAGE_STYLE.crit.color, '#FFD34D');
-  assert.equal(DAMAGE_STYLE.heal.color, '#7FD38A');
+  // WA §5.2 colours: white / cream heavy / gold crit / mint heal / pink hurt-to-her
+  assert.equal(DAMAGE_STYLE.normal.color, '#FFFFFF'); assert.equal(DAMAGE_STYLE.heavy.color, '#FFF1C4');
+  assert.equal(DAMAGE_STYLE.crit.color, '#FFD34D'); assert.equal(DAMAGE_STYLE.heal.color, '#9BE3C4'); assert.equal(DAMAGE_STYLE.hurt.color, '#FF8FB1');
 });
 
 test('holy ladder: charge → silver, tier 2 + ready → gold, fizzle stays silver, Golden Hour full', () => {
@@ -156,15 +158,18 @@ test('bloom director and vignette maths', () => {
   assert.equal(spikeEnvelope(0, 0.4), 0);
   assert.ok(Math.abs(spikeEnvelope(0.1, 0.4, 0.25) - 1) < 1e-9);
   assert.equal(spikeEnvelope(0.4, 0.4), 0);
-  // red hurt vignette lasts PLAYER.hurt.vignette; low HP pulses at 1 Hz; reduce flashes halves it
+  // ART §9.1: a soft PINK hurt flash (peak 0.18 over 0.25 s, never a red vignette); low HP pulses ≤ 0.12 at 1 Hz;
+  // reduce flashes ×0.3
+  assert.equal(FLASH.hurt.color, '#FF8FB1'); assert.equal(FLASH.hurt.alpha, 0.18); assert.equal(FLASH.hurt.dur, 0.25);
   assert.equal(vignetteOpacity(Infinity, 8, 0), 0);
-  assert.ok(vignetteOpacity(0.05, 8, 0) > 0.5);
-  assert.equal(vignetteOpacity(PLAYER.hurt.vignette + 0.01, 8, 0), 0);
+  assert.ok(vignetteOpacity(0.05, 8, 0) > 0.12 && vignetteOpacity(0.05, 8, 0) <= 0.18 + 1e-9);
+  assert.equal(vignetteOpacity(FLASH.hurt.dur + 0.01, 8, 0), 0);
   const lo0 = vignetteOpacity(Infinity, LOW_HP, 0.25), lo1 = vignetteOpacity(Infinity, LOW_HP, 0.75);
   assert.ok(lo0 > lo1 && lo1 > 0, 'low-HP pulse');
+  assert.ok(lo0 <= FLASH.lowHp.max + 1e-9, 'low-HP pulse ≤ 0.12');
   assert.ok(Math.abs(vignetteOpacity(Infinity, LOW_HP, 1.25) - lo0) < 1e-9, '1 Hz period');
   assert.equal(vignetteOpacity(Infinity, LOW_HP + 1, 0.25), 0);
-  assert.ok(Math.abs(vignetteOpacity(0.05, 8, 0, { reduce: true }) - vignetteOpacity(0.05, 8, 0) / 2) < 1e-9);
+  assert.ok(Math.abs(vignetteOpacity(0.05, 8, 0, { reduce: true }) - vignetteOpacity(0.05, 8, 0) * 0.3) < 1e-9);
   assert.equal(vignetteOpacity(Infinity, 1, 0.25, { alive: false }), 0);
 });
 
@@ -241,12 +246,29 @@ test('horde: modes, deterministic layout with cages / spears, the stream parts a
   g.dispose();
 });
 
-test('ambient motes per level / night', () => {
-  assert.equal(motesFor('meadow'), 'fluff');
-  assert.equal(motesFor('meadow', 'night'), 'fireflies');
-  assert.equal(motesFor('keep'), 'embers');
+test('ambient motes per level / night (WA §2.4 profiles; fx.W4: gate motes are not ash)', () => {
+  assert.equal(motesFor('meadow'), 'meadow');
+  assert.deepEqual(profileLayers('meadow').map((l) => l.name), ['fluff', 'petals']);
+  assert.equal(motesFor('meadow', 'night'), 'meadow_night');
+  assert.equal(motesFor('forest'), 'forest_day');
+  assert.equal(motesFor('forest', 'night'), 'forest_twilight');
+  assert.deepEqual(profileLayers('forest_twilight'), [{ name: 'fireflies', count: 64 }]);
+  assert.deepEqual(profileLayers('bog_dusk'), [{ name: 'fireflies', count: 56 }, { name: 'spores', count: 30 }]);
+  assert.deepEqual(profileLayers('keep'), [{ name: 'sparks', count: 40 }, { name: 'fireflies', count: 24 }]);
+  assert.deepEqual(profileLayers('town'), [{ name: 'dust', count: 40 }, { name: 'petals', count: 20 }]);
   assert.equal(motesFor('sky'), null);
-  for (const id of ['meadow', 'forest', 'town', 'gate', 'bog', 'keep']) assert.ok(MOTES[motesFor(id)], id);
+  const gate = profileLayers(motesFor('gate'));
+  assert.ok(gate.length && gate.every((l) => l.name !== 'ash' && l.name !== 'embers'), 'gate: warm dust, no ash');
+  assert.equal(MOTES[gate[0].name].color, '#FFE0C0');
+  assert.equal(MOTES.sparks.color, '#FFC46B');
+  for (const id of ['meadow', 'forest', 'town', 'gate', 'bog', 'keep']) {
+    const L = profileLayers(motesFor(id));
+    assert.ok(L.length >= 1 && L.length <= 2 && L.every((l) => MOTES[l.name]), id);
+    assert.ok(L.every((l) => l.name !== 'ash' && l.name !== 'embers'), `${id}: no ash / embers`);
+  }
+  // Low tier ×0.5
+  assert.deepEqual(profileLayers('bog_dusk', 0.5).map((l) => l.count), [28, 15]);
+  for (const k of Object.keys(AMBIENT_PROFILES)) assert.ok(profileLayers(k).reduce((s, l) => s + l.count, 0) <= 128, k);
 });
 
 test('particle pool: spawn, age out with swap-remove, honour the quality limit', () => {
@@ -317,7 +339,12 @@ test('FX service: contract methods exist and init builds every pool without a DO
   const names = new Set();
   ctx.scene.traverse((o) => names.add(o.name));
   for (const n of ['fx.particles.add', 'fx.particles.alpha', 'fx.marks', 'fx.swordTrail', 'fx.telegraph.decal', 'fx.telegraph.aim',
-    'fx.holy.sparkles', 'fx.holy.light', 'fx.horde', 'fx.ambient', 'fx.mist.ambient']) assert.ok(names.has(n), `scene has ${n}`);
+    'fx.holy.sparkles', 'fx.horde', 'fx.ambient', 'fx.mist.ambient', 'fx.blobs', 'fx.butterflies', 'fx.lightPools', 'fx.cloudShadows']) assert.ok(names.has(n), `scene has ${n}`);
+  // PERF §8.2 / K2: no PointLight in the game scene (the holy glow is world's ENV_U.uGlow)
+  let lights = 0;
+  ctx.scene.traverse((o) => { if (o.isPointLight) lights++; });
+  assert.equal(lights, 0, 'no PointLights');
+  assert.ok(!names.has('fx.debugFrame'), 'the framing overlay is ?debug only');
   ctx.fx.dispose();
   let left = 0;
   ctx.scene.traverse((o) => { if (o.name?.startsWith('fx.')) left++; });
@@ -336,8 +363,14 @@ test('FX service: combat:telegraph / telegraphEnd drive the telegraph pool (ever
   const st = ctx.fx.stats();
   assert.equal(st.telegraphs, KINDS.length + 4);
   assert.ok(st.marks > 6, 'glints / "!" / swirls / rings are drawn as marks');
-  assert.ok(ctx.fx.telegraphs.decals.filter((d) => d.mesh.visible).length >= 7, 'decals for aoe shapes, shadow and jeer rings');
-  assert.equal(ctx.fx.telegraphs.lines.filter((l) => l.mesh.visible).length, 1, 'one aim line');
+  assert.ok(ctx.fx.telegraphs.decals.filter((d) => d.visible).length >= 7, 'decals for aoe shapes, shadow and jeer rings');
+  assert.equal(ctx.fx.telegraphs.lines.filter((l) => l.visible).length, 1, 'one aim line');
+  // PERF F4: every decal is ONE batched draw and every aim line another
+  let decalMeshes = 0, aimMeshes = 0;
+  ctx.scene.traverse((o) => { if (o.name === 'fx.telegraph.decal') decalMeshes++; if (o.name === 'fx.telegraph.aim') aimMeshes++; });
+  assert.equal(decalMeshes, 1); assert.equal(aimMeshes, 1);
+  assert.equal(ctx.fx.telegraphs.decalBatch.mesh.visible, true);
+  assert.ok(ctx.fx.telegraphs.decalBatch.geometry.drawRange.count > 0);
   // live vector: the glint follows the emitter's tellPos
   live.set(1, 0.8, 2.6);
   await frames(ctx, 1);
@@ -395,13 +428,13 @@ test('FX service: hits → stars + damage numbers; kills → one poof (enemy:die
   assert.equal(st.counts.parries, 1);
   assert.equal(st.dizzy, 0, 'dead attackers get no stun stars');
   ctx.bus.emit(E.PLAYER_DAMAGED, { amount: 1, hp: 7, maxHp: 8 });
-  await frames(ctx, 1);
-  assert.ok(ctx.fx.stats().vignette > 0.3, 'red hurt vignette');
+  await frames(ctx, 2);
+  assert.ok(ctx.fx.stats().vignette > 0.08 && ctx.fx.stats().vignette <= 0.18, 'soft pink hurt flash');
   await frames(ctx, 30);
   assert.equal(ctx.fx.stats().vignette, 0);
   pl.hp = 2;
   await frames(ctx, 15);
-  assert.ok(ctx.fx.stats().vignette > 0.1, 'low-HP pulse');
+  assert.ok(ctx.fx.stats().vignette > 0.03 && ctx.fx.stats().vignette <= 0.12, 'low-HP pulse');
   // every burst kind draws without throwing
   for (const k of BURST_KINDS) ctx.fx.burst(k, new THREE.Vector3(1, 0.5, 1), { count: 3 });
   ctx.fx.burst('sparkle', pl);
@@ -416,22 +449,31 @@ test('FX service: hits → stars + damage numbers; kills → one poof (enemy:die
 test('FX service: holy() forwards to the actor\'s own aura and drives sparkles / light / bloom', async () => {
   const ctx = setupFx();
   let bloom = null, reset = 0;
-  ctx.postfx = { bloomBase: { strength: 0.6, threshold: 0.85, radius: 0.4 }, setBloom(s) { bloom = s; }, resetBloom() { reset++; bloom = 0.6; }, get bloom() { return bloom ?? 0.6; } };
+  // K1: play renders straight to the canvas: the bloom director only drives a High cinematic composer
+  ctx.postfx = { cinematic: false, bloomBase: { strength: 0.6, threshold: 0.85, radius: 0.4 }, setBloom(s) { bloom = s; }, resetBloom() { reset++; bloom = 0.6; }, get bloom() { return bloom ?? 0.6; } };
   await ctx.fx.init();
   const kit = { v: 0, setHoly(v) { this.v = v; } };
   const pl = actor(ctx, 'player', 0, 0); pl.model = { k: kit }; ctx.player = pl;
   ctx.actors.register(pl, 'swordcat');
+  const base = ENV_U.uGlow.value.w;
   ctx.fx.holy('swordcat', 0.8);
   assert.equal(kit.v, 0.8, 'forwarded by cutscene id');
   await frames(ctx, 30);
-  const st = ctx.fx.stats();
+  let st = ctx.fx.stats();
   assert.ok(st.holy.player > 0.7, 'level eases up');
-  assert.ok(st.holy.light > 0.2, 'warm point light');
-  assert.ok(bloom > 1.0, `bloom raised (${bloom})`);
+  assert.equal(bloom, null, 'no bloom in play');
+  // ART §8.5 glow without bloom: glow cards (core + 6–12 sparkles) and the ENV_U glow share instead of a PointLight
+  assert.ok(st.holy.cards >= 6 && st.holy.cards <= 12, `glow-card sparkles ${st.holy.cards}`);
+  assert.ok(st.holy.glow > 0.2, 'ENV_U.uGlow widened');
+  assert.ok(Math.abs(ENV_U.uGlow.value.w - (base + st.holy.glow)) < 1e-6, 'fx adds its share on top of the base radius');
+  ctx.postfx.cinematic = true;               // a High cinematic: the composer's bloom follows holy
+  await frames(ctx, 2);
+  assert.ok(bloom > 1.0, `cinematic bloom raised (${bloom})`);
   ctx.fx.holy(pl, 0);
   assert.equal(kit.v, 0);
   await frames(ctx, 120);
   assert.equal(ctx.fx.stats().holy.light, 0);
+  assert.ok(Math.abs(ENV_U.uGlow.value.w - base) < 1e-6, 'the glow share is taken back');
   assert.ok(reset >= 1, 'bloom handed back to PostFX');
   // charge events: tier flashes and the fizzle
   ctx.bus.emit(E.PLAYER_CHARGE, { level: 0.5 });
@@ -946,10 +988,12 @@ test('ground decals: a strike wedge per melee wind-up, frozen 0.15 s before the 
   ctx.game.time = 0.75; d.render(DT);
   assert.equal(d.wedgeList[0].yaw, y0, 'frozen yaw');
   assert.equal(d.wedgeList[0].open, true, 'parry window open');
+  assert.equal(d.counts.glyph, 1, 'WA §3.4: the parry shield glyph at the tip');
   const n0 = d.n;
   live.get(1).kind = 'gold';
   d.render(DT);
-  assert.equal(d.n, n0 + 1, 'gold adds its star');
+  assert.equal(d.n, n0, 'gold swaps the glyph for its 8-point star');
+  assert.equal(d.counts.glyph, 1);
   live.clear(); d.render(DT);
   assert.equal(d.counts.wedge ?? 0, 0);
   d.dispose();
@@ -1076,4 +1120,307 @@ test('fog walls in iso (§4.2): a closed 2 m ground band along the card line; ca
   assert.equal(g.index.count, 4 * 6, 'closed loop');
   assert.ok(Math.abs(MIST_ISO.tilt - Math.PI / 3) < 1e-9); assert.equal(MIST_ISO.wallH, 2.5);
   g.dispose();
+});
+
+// ================================================================== warm phase (ART_WARM_SPEC §8, WA §3 / §5, PERF F1–F7)
+const { BlobShadows, blobShape, BLOB } = await import('../../src/fx/BlobShadows.js');
+const { Beats, BEATS, burstParticleCount, twinkleAlpha } = await import('../../src/fx/Beats.js');
+const { flyersFor, FLYER_COUNTS } = await import('../../src/fx/Butterflies.js');
+const { poolsOn, cloudsOn, POOLS } = await import('../../src/fx/LightPools.js');
+const { groundHit } = await import('../../src/fx/DebugOverlay.js');
+const { DamageNumbers, numberCurve, popCurve, DAMAGE_FX, WORDS } = await import('../../src/fx/DamageNumbers.js');
+const { comicPopAllowed } = await import('../../src/fx/FX.js');
+const { glowSparkles, HOLY_GLOW } = await import('../../src/fx/HolyFX.js');
+const { ScreenFX } = await import('../../src/fx/ScreenFX.js');
+const { FACTION_CONFETTI } = await import('../../src/fx/Poof.js');
+
+test('fx.W1: every TELEGRAPH.glyph maps to a GroundDecals shape; a full fight stays ≤ 52 decal instances', () => {
+  for (const [kind, g] of Object.entries(TELEGRAPH.glyph)) {
+    assert.ok(GD.glyphShape(g) >= 0, `${kind} → ${g}`);
+    assert.equal(GD.glyphShape(kind), GD.glyphShape(g), `${kind} by kind`);
+  }
+  assert.equal(GD.glyphShape('nope'), -1);
+  assert.equal(new Set(Object.values(GD.GLYPH_SHAPE)).size, Object.keys(GD.GLYPH_SHAPE).length, 'one shape per glyph');
+  // a full fight: 4 wind-ups, 6 alerted foes, 2 companions, a selection, her ring + hearts, an aoe glyph and a path
+  const { ctx, d, live } = isoDecals();
+  ctx.game.time = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = { id: i, pos: new THREE.Vector3(i * 2 - 3, 0, 3), facing: Math.PI, alive: true, radius: 0.4 };
+    live.set(i, { id: i, actor: a, kind: ['parry', 'gold', 'red', 'grab'][i], windup: 0.8, activeAt: 0.5, payload: { arc: { range: 1.6, from: 0.6, to: -0.6 } } });
+  }
+  ctx.enemies = { list: Array.from({ length: 6 }, (_, i) => ({ alerted: true, alive: true, pos: new THREE.Vector3(i - 3, 0, 4), radius: 0.4 })) };
+  ctx.companions = { active: [{ pos: new THREE.Vector3(1, 0, -1), alive: true }, { pos: new THREE.Vector3(-1, 0, -1), alive: true }] };
+  ctx.cam.lockTarget = ctx.enemies.list[0];
+  ctx.player.hp = 5; ctx.player.maxHp = 10;
+  ctx.bus.emit(E.PLAYER_DAMAGED, { amount: 1, hp: 5, maxHp: 10 });
+  d.glyph('aoe', 0, 0, 5);
+  d.render(DT);
+  assert.equal(d.counts.wedge, 4); assert.equal(d.counts.glyph, 5); assert.equal(d.counts.companions, 2); assert.equal(d.counts.hearts, 1);
+  assert.ok(d.n <= 52, `instances ${d.n}`);
+  d.dispose();
+});
+
+test('fx.W1: WA §3.4 wedge timing (rim α 0.6 → window, glyph pop ×1.3 over 0.08 s, white strike flash) and the WA palette', () => {
+  const w = PLAYER.guard.parryWindow;
+  let L = GD.wedgeLook(GD.wedgeState(10, 1, 9.5, w), w);
+  assert.equal(L.rimA, 0.6); assert.equal(L.glyph, 1); assert.equal(L.strike, 0);
+  L = GD.wedgeLook(GD.wedgeState(10, 1, 10 - w + 1e-9, w), w);
+  assert.ok(Math.abs(L.glyph - 1.3) < 1e-6, 'pop at window open'); assert.ok(L.rimA > 0.9);
+  L = GD.wedgeLook(GD.wedgeState(10, 1, 10 - w + 0.1, w), w);
+  assert.equal(L.glyph, 1, 'settled after 0.08 s');
+  assert.equal(GD.wedgeLook(GD.wedgeState(10, 1, 10.03, w), w).strike, 0.8);
+  assert.ok(GD.wedgeLook(GD.wedgeState(10, 1, 10.1, w), w).strike < 0.8);
+  assert.equal(GD.wedgeLook(GD.wedgeState(10, 1, 10.3, w), w).strike, 0);
+  // the palette: hero pink, warm danger hues, plum blob, cream white, mint interactables, sky companions
+  assert.equal(GD.DECAL_COLORS.hero, '#FF8FB1'); assert.equal(GD.DECAL_COLORS.red, '#FF9A3D'); assert.equal(GD.DECAL_COLORS.aggro, '#FF5A4E');
+  assert.equal(GD.DECAL_COLORS.blob, '#5A4E7A'); assert.equal(GD.DECAL_COLORS.mint, '#9BE3C4'); assert.equal(GD.DECAL_COLORS.sky, '#8FD3FF');
+  assert.equal(GD.DECAL_CFG.heroAlpha, 0.55); assert.equal(GD.DECAL_CFG.heroW, 0.08);
+  // the strike flash draws after the strike, then the wedge is gone
+  const { ctx, d, live } = isoDecals();
+  const rat = { id: 1, pos: new THREE.Vector3(0, 0, 2), facing: Math.PI, alive: true, radius: 0.4 };
+  live.set(1, { id: 1, actor: rat, kind: 'parry', windup: 0.8, activeAt: 1, payload: { arc: { range: 1.6 } } });
+  ctx.game.time = 1.1; d.render(DT);
+  assert.equal(d.counts.strike, 1); assert.equal(d.counts.wedge ?? 0, 0);
+  ctx.game.time = 1.3; d.render(DT);
+  assert.equal(d.counts.strike ?? 0, 0);
+  d.dispose();
+});
+
+test('fx.W7: heart arc at her feet: HP 3/5 → 5 segments, 3 full; shown 2.5 s after a change, always at HP ≤ 1', () => {
+  assert.deepEqual(GD.heartArc(3, 5), { segments: 5, per: 1, full: 3, half: 0 });
+  assert.deepEqual(GD.heartArc(2.5, 4), { segments: 4, per: 1, full: 2, half: 0.5 });
+  assert.equal(GD.heartArc(7, 7).segments, 6, '≤ 6 segments');
+  assert.equal(GD.heartArc(0, 5).full, 0);
+  assert.equal(GD.heartArcVisible(0, 3), true); assert.equal(GD.heartArcVisible(2.4, 3), true);
+  assert.equal(GD.heartArcVisible(2.6, 3), false, 'hidden 2.5 s after a change at HP ≥ 2');
+  assert.equal(GD.heartArcVisible(99, 1), true, 'always at HP ≤ 1');
+  const { ctx, d } = isoDecals();
+  const p = ctx.player; p.hp = 6; p.maxHp = 10;             // half-hearts: 3 of 5 hearts
+  d.render(DT);
+  assert.equal(d.counts.hearts ?? 0, 0, 'calm: hidden');
+  ctx.bus.emit(E.PLAYER_DAMAGED, { amount: 2, hp: 6, maxHp: 10 });
+  const n0 = d.n; d.render(DT);
+  assert.equal(d.counts.hearts, 1);
+  assert.ok(d.n >= 5 + 1 && d.n <= 6 + 1 + 2, `5 segments + her ring (${d.n})`);
+  for (let i = 0; i < Math.ceil(2.6 / DT); i++) d.render(DT);
+  assert.equal(d.counts.hearts ?? 0, 0, 'tucked away again');
+  p.hp = 2; d.render(DT);
+  assert.equal(d.counts.hearts, 1, 'HP 1 heart: always shown');
+  assert.ok(n0 >= 0);
+  d.dispose();
+});
+
+test('fx.W3: damage numbers v2: 3 hits in 0.3 s → one node, summed; overshoot curve; words rate-limited; pops', () => {
+  const ctx = fakeCtx();
+  const N = new DamageNumbers(ctx);
+  const rat = { id: 'rat' };
+  for (let i = 0; i < 3; i++) { ctx.game.realTime = i * 0.1; N.show(new THREE.Vector3(), '10', 'normal', rat, 10); }
+  assert.equal(N.active, 1, 'one node'); assert.equal(N.merged, 2);
+  assert.equal(N.pool.find((n) => n.active).value, 30, 'summed');
+  ctx.game.realTime = 1; N.show(new THREE.Vector3(), '10', 'normal', rat, 10);
+  assert.equal(N.active, 2, 'outside 0.35 s: a new node');
+  N.show(new THREE.Vector3(), '5', 'normal', { id: 'other' }, 5);
+  assert.equal(N.active, 3, 'another target: its own node');
+  for (let i = 0; i < 30; i++) N.show(new THREE.Vector3(), '1', 'normal', null, 1);
+  assert.ok(N.active <= 20, '≤ 20 DOM nodes');
+  // the curve: 0 → 1.35 (0.06 s) → 0.95 (0.14 s) → 1.0, fading over the last 0.25 s
+  assert.equal(numberCurve(0, 1).scale, 0);
+  assert.ok(Math.abs(numberCurve(0.06, 1).scale - 1.35) < 1e-9);
+  assert.ok(Math.abs(numberCurve(0.14, 1).scale - 0.95) < 1e-9);
+  assert.equal(numberCurve(0.5, 1).scale, 1); assert.equal(numberCurve(0.5, 1).alpha, 1);
+  assert.ok(numberCurve(0.9, 1).alpha < 0.5 && numberCurve(0.9, 1).scale < 1);
+  assert.ok(popCurve(0.1).scale > 1.1 && popCurve(0.3).scale === 1 && popCurve(0.7).alpha === 0);
+  // words: ≤ 1 per 0.25 s, off with settings.hitWords false
+  N.clear();
+  ctx.game.realTime = 5;
+  assert.equal(N.word('slash1', new THREE.Vector3()), true);
+  assert.equal(N.word('slash2', new THREE.Vector3()), false, 'rate limit');
+  ctx.game.realTime = 5.3;
+  assert.equal(N.word('slash2', new THREE.Vector3()), true);
+  ctx.state.settings.hitWords = false; ctx.game.realTime = 6;
+  assert.equal(N.word('slash3', new THREE.Vector3()), false, 'hitWords off');
+  assert.equal(WORDS.slash1, 'Snip!'); assert.equal(WORDS.finalBlow, 'Bonk!');
+  assert.equal(N.pop('parry', new THREE.Vector3()), true);
+  assert.ok(DAMAGE_FX.mergeWindow === 0.35 && DAMAGE_FX.bump === 1.15);
+  // WA §5.3 comic pops: parries always; others only the first time in the first 10 minutes
+  const seen = new Set();
+  assert.equal(comicPopAllowed('parry', 9999, seen), true);
+  assert.equal(comicPopAllowed('bonk', 30, seen), true);
+  seen.add('bonk');
+  assert.equal(comicPopAllowed('bonk', 30, seen), false, 'first only');
+  assert.equal(comicPopAllowed('boing', 11 * 60, seen), false, 'after 10 minutes');
+});
+
+test('fx.W5 / ART §8.6: rescue / card bursts stay under the particle pool caps; Low halves them and flattens confetti', async () => {
+  assert.ok(burstParticleCount(1) <= 800, 'alpha pool');
+  assert.equal(SHAPE.CONFETTI, 12);
+  const ctx = setupFx();
+  await ctx.fx.init();
+  const pl = actor(ctx, 'player', 0, 0); ctx.player = pl;
+  ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: 'tofu', position: new THREE.Vector3(2, 0, 2) });
+  await frames(ctx, 20);
+  const st = ctx.fx.stats();
+  assert.equal(st.beats.rescues, 1); assert.equal(st.beats.trails, 1);
+  assert.equal(st.flashes, 1, 'white-gold flash');
+  assert.ok(st.particles >= BEATS.confetti, `confetti + stars + hearts (${st.particles})`);
+  assert.ok(st.particles <= ctx.fx.particles.add.limit + ctx.fx.particles.alpha.limit);
+  ctx.bus.emit(E.REWARD, { kind: 'card', id: 'holy' });
+  assert.equal(ctx.fx.stats().beats.rewards, 1);
+  assert.equal(ctx.fx.stats().flashes, 1, 'ui owns the card flash; rescue + card never double-flash');
+  ctx.fx.particles.clear();
+  ctx.bus.emit(E.QUALITY, { preset: QUALITY.low });
+  assert.equal(ctx.fx.particles.countScale, 0.5); assert.equal(ctx.fx.particles.alpha.flat, true);
+  ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: 'tofu', position: new THREE.Vector3(2, 0, 2) });
+  await frames(ctx, 1);
+  const low = ctx.fx.stats().particles;
+  assert.ok(low < BEATS.confetti, `Low ×0.5 (${low})`);
+  // the other beat twins: reveal, arena clear petals, every new burst kind
+  ctx.bus.emit(E.KITTEN_REVEAL, { kittenId: 'tofu', position: new THREE.Vector3(1, 0, 1) });
+  ctx.bus.emit(E.ARENA_LOCK, { id: 'a', center: new THREE.Vector3(0, 0, 0), r: 8 });
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'a' });
+  const b = ctx.fx.stats().beats;
+  assert.equal(b.reveals, 1); assert.equal(b.clears, 1);
+  for (const k of ['rescue', 'reveal', 'petals', 'celebrate', 'pawBump', 'boop', 'cheer', 'ripple', 'collect', 'hitSpark', 'kittenTrail', 'straw']) {
+    assert.ok(BURST_KINDS.includes(k), k);
+    ctx.fx.burst(k, new THREE.Vector3(1, 0.5, 1));
+  }
+  await frames(ctx, 3);
+  ctx.fx.dispose();
+});
+
+test('fx.W5 / WA §5.7: knock-out = dizzy stars (0.35 m, 2.5 rev/s) while she sits, then hearts when she is back', async () => {
+  const ctx = setupFx();
+  await ctx.fx.init();
+  const pl = actor(ctx, 'player', 0, 0); ctx.player = pl;
+  ctx.bus.emit(E.PLAYER_DIED, {});
+  const d = ctx.fx.dizzy.get(pl);
+  assert.ok(d && d.r === config.KO.starR && d.rev === config.KO.starRev, 'KO stars');
+  pl.alive = false;
+  await frames(ctx, Math.ceil((config.KO.sitT + config.KO.wipeT) / DT) + 2);
+  assert.equal(ctx.fx.stats().beats.respawns, 0, 'still down');
+  pl.alive = true;
+  await frames(ctx, 2);
+  assert.equal(ctx.fx.stats().beats.respawns, 1, 'the boing back');
+  ctx.fx.dispose();
+});
+
+test('PERF §7.2 blob shadows: one instanced draw, plum, shrink + fade with height, registration and the automatic sets', () => {
+  const b = blobShape(0.5, 0);
+  assert.equal(b.size, 1); assert.equal(b.alpha, 1);
+  const hi = blobShape(0.5, 3);
+  assert.ok(Math.abs(hi.size - 0.5) < 1e-9 && Math.abs(hi.alpha - 0.25) < 1e-9);
+  assert.deepEqual(blobShape(0.5, 9), hi, 'clamped at 3 m');
+  const ctx = fakeCtx();
+  ctx.physics = { heightAt: () => 0 };
+  const B = new BlobShadows(ctx);
+  B.init(ctx.scene);
+  assert.ok(B.mesh.isInstancedMesh && B.mesh.name === 'fx.blobs');
+  assert.equal(B.mesh.material.uniforms.uA.value, BLOB.alpha);
+  const o = new THREE.Object3D(); o.position.set(1, 0, 1); ctx.scene.add(o);
+  const off = B.add(o, 0.4);
+  B.render();
+  assert.equal(B.count, 1);
+  ctx.player = { pos: new THREE.Vector3(), object3d: { position: new THREE.Vector3(0, 2, 0) }, onGround: false, alive: true };
+  ctx.enemies = { list: [{ pos: new THREE.Vector3(3, 0, 0), alive: true, object3d: Object.assign(new THREE.Object3D(), { visible: true }), radius: 0.4, alerted: true }] };
+  ctx.enemies.list[0].object3d.position.set(3, 0, 0);
+  B.render();
+  assert.equal(B.count, 3, 'registered + an enemy + her airborne landing disc');
+  off();
+  B.render();
+  assert.equal(B.count, 2);
+  B.dispose();
+});
+
+test('fx.W2-adjacent: the hero ring, glyphs and marks carry the ink sandwich; blobs and fills do not', () => {
+  const { d } = isoDecals();
+  d.render(DT);
+  assert.ok(d.inks.getX(0) > 0 && Math.abs(d.inks.getY(0) - TELEGRAPH.ink.alpha) < 1e-6, 'hero ring inked (0.03 m, α 0.35)');
+  d.dispose();
+});
+
+test('WA §3.6 path preview enum: on / off / auto (touch on the meadow)', () => {
+  assert.equal(GD.pathPreviewOn('on', 'kbm', 'town'), true);
+  assert.equal(GD.pathPreviewOn(true, 'kbm', 'town'), true, 'legacy boolean');
+  assert.equal(GD.pathPreviewOn('off', 'touch', 'meadow'), false);
+  assert.equal(GD.pathPreviewOn(false, 'touch', 'meadow'), false);
+  assert.equal(GD.pathPreviewOn('auto', 'touch', 'meadow'), true);
+  assert.equal(GD.pathPreviewOn('auto', 'kbm', 'meadow'), false);
+  assert.equal(GD.pathPreviewOn('auto', 'touch', 'forest'), false);
+  assert.ok(config.SETTING_VALUES.pathPreview.every((v) => typeof GD.pathPreviewOn(v, 'touch', 'meadow') === 'boolean'));
+});
+
+test('telegraph glyphs: discs queue their glyph at the centre, lanes at the far end; the crow shadow is plum', async () => {
+  const ctx = setupFx();
+  await ctx.fx.init();
+  ctx.cam = { isIso: true, modeName: 'follow', focus: new THREE.Vector3() };
+  const calls = [];
+  const orig = ctx.fx.decals.glyph.bind(ctx.fx.decals);
+  ctx.fx.decals.glyph = (g, x, y, z, ...r) => { calls.push({ g, x, z }); return orig(g, x, y, z, ...r); };
+  ctx.fx.telegraph({ kind: 'aoe', shape: 'circle', pos: [4, 0, 4], size: 2, duration: 1 });
+  ctx.fx.telegraph({ kind: 'red', shape: 'lane', pos: [0, 0, 0], dir: [0, 0, 1], size: [1.5, 6], duration: 1 });
+  ctx.fx.telegraph({ kind: 'shadow', shape: 'shadow', pos: [-3, 0, 0], size: 0.9, duration: 1 });
+  await frames(ctx, 3);
+  const g = new Set(calls.map((c) => c.g));
+  for (const k of ['dots6', 'chevron2', 'crowfoot']) assert.ok(g.has(k), k);
+  const lane = calls.find((c) => c.g === 'chevron2');
+  assert.ok(lane.z > 4, 'at the lane end');
+  const shadowSlot = ctx.fx.telegraphs.decals.find((s) => s.d0.x === 4);
+  const plum = new THREE.Color(TELEGRAPH.colors.shadow);
+  assert.ok(Math.abs(shadowSlot.d2.x - plum.r) < 1e-6 && Math.abs(shadowSlot.d2.z - plum.b) < 1e-6, 'plum #3A2346, never black');
+  ctx.fx.dispose();
+});
+
+test('ART §8.5 glow cards (6–12 sparkles), ART §9.1 flashes through ui.flash, F6 lanterns feed world lamps (no PointLights)', async () => {
+  assert.equal(glowSparkles(0), 0); assert.equal(glowSparkles(0.05), HOLY_GLOW.sparkMin); assert.equal(glowSparkles(1), HOLY_GLOW.sparkMax);
+  const ctx = fakeCtx();
+  const calls = [];
+  ctx.ui = { flash: (c, a, d) => calls.push([c, a, d]) };
+  const S = new ScreenFX(ctx);
+  S.flash('rescue');
+  assert.deepEqual(calls[0], ['#FFF1C4', 0.22, 0.18]);
+  S.hurt();
+  assert.deepEqual(calls[1], ['#FF8FB1', 0.18, 0.25]);
+  // lanterns with world's lamp registry: lamp sources, no PointLights
+  const fctx = setupFx();
+  const sources = [];
+  fctx.env = { lamps: { add: (s) => { sources.push(s); return s; }, remove: (s) => { const i = sources.indexOf(s); if (i >= 0) sources.splice(i, 1); } } };
+  await fctx.fx.init();
+  const h = fctx.fx.lantern([1, 1.5, 0], { light: true });
+  assert.equal(sources.length, 1); assert.equal(sources[0].on, true);
+  h.out(); assert.equal(sources[0].on, false);
+  h.light(); assert.equal(sources[0].on, true);
+  let lights = 0;
+  fctx.scene.traverse((o) => { if (o.isPointLight) lights++; });
+  assert.equal(lights, 0);
+  fctx.bus.emit(E.LEVEL_UNLOAD, {});
+  assert.equal(sources.length, 0, 'lamp sources leave with the level');
+  fctx.fx.dispose();
+});
+
+test('ART §8.7 ambient life: butterfly / dragonfly / swallow sets, Low ×0.5, night off; light pools + cloud shadows rules', () => {
+  assert.deepEqual(flyersFor('meadow'), { kind: 'butterfly', count: 18 });
+  assert.deepEqual(flyersFor('town', { hub: true }), { kind: 'butterfly', count: 14 });
+  assert.deepEqual(flyersFor('bog'), { kind: 'dragonfly', count: 8 });
+  assert.deepEqual(flyersFor('gate'), { kind: 'swallow', count: 6 });
+  assert.equal(flyersFor('meadow', { low: true }).count, 9);
+  assert.equal(flyersFor('meadow', { night: true }), null);
+  assert.equal(flyersFor('keep'), null);
+  assert.ok(Object.values(FLYER_COUNTS).every(([, n]) => n <= 18));
+  assert.equal(poolsOn('meadow', 'none', true), true); assert.equal(poolsOn('meadow', 'none', false), false, 'iso only');
+  assert.equal(poolsOn('town', 'none', true), false); assert.equal(poolsOn('forest', 'night', true), false);
+  assert.equal(POOLS.count, 24); assert.equal(POOLS.countLow, 12); assert.equal(POOLS.alpha, 0.16);
+  assert.equal(cloudsOn('meadow', 'none', false), true); assert.equal(cloudsOn('meadow', 'none', true), false, 'off on Low');
+  assert.equal(cloudsOn('keep', 'none', false), false);
+  // the debug overlay's ground hit
+  const cam = new THREE.PerspectiveCamera(38, 16 / 9, 0.1, 100); cam.position.set(0, 10, 8); cam.lookAt(0, 0, 0); cam.updateMatrixWorld();
+  const out = new THREE.Vector3();
+  assert.ok(groundHit(cam, 0, 0, 0, out) && Math.abs(out.y) < 1e-6 && Math.hypot(out.x, out.z) < 1e-4, 'the centre ray hits the focus');
+});
+
+test('WA §3.2 twinkles: deterministic, one 0.35 s twinkle per period; pickups and interactables draw marks only', () => {
+  let on = 0;
+  for (let t = 0; t < 12; t += 1 / 60) if (twinkleAlpha(t, 1.2, 0.5) > 0) on++;
+  assert.ok(on > 0 && on < 12 * 60 * 0.4, `twinkling ${on}`);
+  assert.equal(twinkleAlpha(3.3, 1.2, 0.25), twinkleAlpha(3.3, 1.2, 0.25), 'deterministic');
+  assert.ok(Object.keys(FACTION_CONFETTI).length >= 5);
 });

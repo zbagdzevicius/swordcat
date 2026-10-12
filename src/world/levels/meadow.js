@@ -4,7 +4,9 @@
 // cracked boulder, sleeping cow), Sir Tallbert's statue, the far Pawsbury skyline + Dawnstone, the lane, crossroads
 // (drystone walls, signposts, rats), the Standing Stones arena, the Picnic Glade (hay bale → CS-03, Pudding's rope
 // posts, arena), the Crow Fields (wheat, hay bales, crows, the second cow), the Old Bridge over the stream (arena,
-// Mochi's cage cart) and the exit to the forest. 3 lost kittens (Noodle, Button, Biscuit) and Letter #1.
+// Biscuit's carrier on the cart) and the exit to the forest. 3 lost kittens (Noodle, Button, Biscuit) and Letter #1.
+// WA16 (companions.W2): Mochi's tipped cart stands on the lane at STORY.mochiCage (first friend by ~6:30), guarded by
+// the soft `cart` arena; the Old Bridge carrier holds kitten Biscuit.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { defineLevel } from '../LevelKit.js';
@@ -12,6 +14,7 @@ import { PropActor, SwingingSack, WobbleKnight } from '../PropActor.js';
 import { WheatField } from '../Wheat.js';
 import { makeStoneMaterial } from '../Props.js';
 import { E } from '../../core/events.js';
+import { STORY } from '../../core/config.js';
 import { smoothPolyline, pointAlong, distToPolyline, inBox } from '../noise.js';
 
 const M = {
@@ -22,8 +25,19 @@ const M = {
   boulder: 'models/env/nature/rock_largeA.glb',
   cow: 'models/creatures/animals/Cow.glb',
   knight: 'models/characters/kaykit/Knight.glb',
-  tower: 'models/env/village-kaykit/buildings/building_tower_A_red.glb',
-  castle: 'models/env/village-kaykit/buildings/building_castle_red.glb',
+  // LI W7: the distant Pawsbury tower (the destination, blue roof) + green mountains, hills and a blue windmill on the
+  // skyline instead of a red castle (the medieval establishing shot); 'far' group only (0 iso draws)
+  tower: 'models/env/village-kaykit/buildings/building_tower_A_blue.glb',
+  mountain: 'models/env/village-kaykit/decoration/mountain_B_grass_trees.glb',
+  hills: 'models/env/village-kaykit/decoration/hills_A_trees.glb',
+  windmillFar: 'models/env/village-kaykit/buildings/building_windmill_blue.glb',
+  flowerY: 'models/env/nature/flower_yellowA.glb',
+  flowerP: 'models/env/nature/flower_purpleA.glb',
+  flowerR: 'models/env/nature/flower_redA.glb',
+  cropCarrot: 'models/env/nature/crop_carrot.glb',
+  cropTurnip: 'models/env/nature/crop_turnip.glb',
+  cropPumpkin: 'models/env/nature/crop_pumpkin.glb',
+  cropRow: 'models/env/nature/crops_dirtRow.glb',
   wall: 'models/env/graveyard/stone-wall.glb',
   hay: 'models/env/graveyard/hay-bale.glb',
   bridge: 'models/env/castle/bridge-straight.glb',
@@ -45,10 +59,12 @@ const STONES_LARGE = ['A', 'B', 'C', 'D'].map((k) => `models/env/nature/stone_la
 const BUSHES = ['models/env/nature/plant_bush.glb', 'models/env/nature/plant_bushLarge.glb', 'models/env/nature/plant_bushDetailed.glb'];
 
 /** Palette bits (art.md §6.2). */
-const C = { wood: '#7A5B3E', woodDark: '#4E3A28', plank: '#A0825A', straw: '#C9B26A', burlap: '#9C8460', rope: '#8C6A4A', red: '#B0453C',
-  cream: '#EFE3CF', steel: '#9EA4AC', stone: '#8E918A', stoneDark: '#6E716B', moss: '#5E6A3A', dirt: '#4A4030', iron: '#4A4C50' };
+const C = { wood: '#B7773F', woodDark: '#7E4E2A', plank: '#E8B87A', straw: '#F2D27A', burlap: '#D8B880', rope: '#C9A06A', red: '#E0605A',
+  cream: '#FFF3E2', steel: '#C9D0D8', stone: '#C9BCA6', stoneDark: '#9C8E7C', moss: '#8DB65A', dirt: '#9C7650', iron: '#6E7A8E' };
 
 const ROPE_POSTS = [[-2, 24], [6, 24], [2, 28]];
+/** LI §5 kitty garden beds (beside the Picnic Glade, outside its arena). */
+const GARDEN = [[18, 6], [18, 9.5]];
 /** §12.3 spine; LANE = the carved path (Terrain smooths the spine the same way: Catmull-Rom, 2 m). */
 const SPINE = [[0, -80], [0, -62], [-6, -50], [-22, -30], [-20, -4], [2, 18], [24, 40], [30, 62], [30, 90]];
 const LANE = smoothPolyline(SPINE, 2);
@@ -63,11 +79,25 @@ function beside(s, off, side) {
 /** The lane's south-west drystone wall (4 m right of the lane) carries the crossbow perch, 1.1 m before the crossroads. */
 const PERCH_WALL = { s0: S_CROSS - 16, s1: S_CROSS + 1, off: 4.0, side: -1 };
 const CROSSROADS_PERCH = beside(S_CROSS - 1.1, PERCH_WALL.off, PERCH_WALL.side).map((v) => Math.round(v * 100) / 100);
-/** The Kenney hay bale keeps its colormap bands: nearly desaturated (its orange reads rust in the fog), then straw-tinted. */
-const HAY = { sat: 0.12, mul: 1.0, tint: '#E6CF8C', key: 'hay' };
+/** LI W4: hay glows butter (was almost fully desaturated: it read rust in the old grey fog). */
+const HAY = { sat: 0.6, mul: 1.0, tint: '#F2D27A', key: 'hay' };
+/** WA §2.5 / LI W10–W17 meadow looks: drystone walls, Tallbert's sandstone, Sir Sacky, Sir Wobble, the barn bunting. */
+const LOOK = Object.freeze({
+  wall: '#E8D6B4', tallbert: '#B9A79A', tallbertMoss: '#8FBF6A', sacky: '#E8A46B', ink: '#4A2A1F', smile: '#E0605A',
+  bridge: { tint: '#E3CFAE', sat: 0.8, mul: 1.0 }, reeds: '#7FB050',
+  flowerEvery: 1.6, flowerSpineMin: 3, chest: '#B7773F', chestBand: '#E8C27A', chestHeart: '#FF8FB1',
+  bunting: Object.freeze(['#FFD84A', '#8FD3FF', '#FF8FB1']),
+});
+/** The barn chest (cs01b Suit Up, story `BARN.chest`) and the height chart spot (cs01 trigger, ON §5.2). */
+const BARN_CHEST = [-12.85, -88.75];
+const CHART_SPOT = [-6, -66.5];
+/** Bunting poles of the practice field (barn → field → the north gate), [x, z, height]. */
+const BUNTING_POLES = [[-18.6, -74.5, 5.6], [-6.4, -61.2, 5.4]];
 const BRIDGE = { x: 30, z0: 57, z1: 67, width: 4, deckY: 0.32 };
-/** Mochi's cage cart (§12.3 Old Bridge). */
-const MOCHI_CAGE = [30, 74];
+/** Mochi's tipped cart on the lane (WA16: STORY.mochiCage; was the Old Bridge [30, 74]). */
+const MOCHI_CAGE = STORY?.mochiCage ?? [-14, -41];
+/** The Old Bridge cart: Biscuit's carrier (WA16). */
+const BRIDGE_CARRIER = [30, 74];
 
 // ---------------------------------------------------------------------------------------------- procedural parts
 const box = (w, h, d, x = 0, y = 0, z = 0, ry = 0, rz = 0) => { const g = new THREE.BoxGeometry(w, h, d); if (rz) g.rotateZ(rz); if (ry) g.rotateY(ry); return g.translate(x, y, z); };
@@ -77,7 +107,7 @@ function heightChartParts() {
   const p = [[cyl(0.06, 0.07, 1.9, -0.44, 0, 0), C.woodDark], [cyl(0.06, 0.07, 1.9, 0.44, 0, 0), C.woodDark],
     [box(0.8, 1.6, 0.05, 0, 0.95, 0.04), C.plank], [box(0.86, 0.06, 0.08, 0, 1.78, 0.04), C.woodDark],
     [box(0.84, 0.035, 0.06, 0, 1.05, 0.075), C.red]];                 // the painted line at 1.05 m
-  for (let i = 0; i < 8; i++) { const y = 0.3 + i * 0.2; if (Math.abs(y - 1.05) < 0.05) continue; p.push([box(i % 2 ? 0.12 : 0.22, 0.015, 0.06, -0.28, y, 0.07), '#3A2A1F']); }
+  for (let i = 0; i < 8; i++) { const y = 0.3 + i * 0.2; if (Math.abs(y - 1.05) < 0.05) continue; p.push([box(i % 2 ? 0.12 : 0.22, 0.015, 0.06, -0.28, y, 0.07), '#4A2A1F']); }
   return p;
 }
 
@@ -86,15 +116,37 @@ function signpostParts() {
 }
 
 function plinthParts() {
-  return [[box(2.6, 0.35, 2.6, 0, 0.175, 0), C.stoneDark], [box(2.1, 0.5, 2.1, 0, 0.6, 0), C.stone], [box(2.3, 0.12, 2.3, 0, 0.9, 0), C.stoneDark]];
+  return [[box(2.6, 0.35, 2.6, 0, 0.175, 0), LOOK.tallbertMoss], [box(2.1, 0.5, 2.1, 0, 0.6, 0), LOOK.tallbert], [box(2.3, 0.12, 2.3, 0, 0.9, 0), C.stone]];
 }
+
+/** Marmalade's chest (Suit Up): honey wood, brass bands, a pink heart on the lid ("M. — my first"), ≈ 0.6 m. */
+function chestParts() {
+  return [[box(0.9, 0.42, 0.55, 0, 0.21, 0), LOOK.chest], [new THREE.CylinderGeometry(0.275, 0.275, 0.9, 12, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).translate(0, 0.42, 0), LOOK.chest],
+    [box(0.06, 0.46, 0.57, -0.3, 0.23, 0), LOOK.chestBand], [box(0.06, 0.46, 0.57, 0.3, 0.23, 0), LOOK.chestBand],
+    [box(0.12, 0.12, 0.04, 0, 0.36, 0.29), LOOK.chestBand], [new THREE.SphereGeometry(0.07, 8, 6).scale(1, 0.8, 0.4).translate(0, 0.62, 0.17), LOOK.chestHeart]];
+}
+
+/** A tall bunting pole (honey wood, butter knob), base at 0. */
+function buntingPoleParts(h) {
+  return [[cyl(0.07, 0.09, h), C.wood], [new THREE.SphereGeometry(0.12, 8, 6).translate(0, h + 0.06, 0), '#FFD84A']];
+}
+
+/** Mochi's cart lost a wheel when it fell off the horde's wagon (ON §6.1): the wheel lies in the grass. */
+function brokenWheelParts() {
+  const rim = new THREE.TorusGeometry(0.42, 0.06, 6, 14).rotateX(Math.PI / 2).translate(0, 0.06, 0);
+  const hub = new THREE.CylinderGeometry(0.09, 0.09, 0.12, 8).translate(0, 0.06, 0);
+  const p = [[rim, C.wood], [hub, C.woodDark]];
+  for (let i = 0; i < 3; i++) { const g = new THREE.BoxGeometry(0.8, 0.05, 0.06); g.rotateY((i / 3) * Math.PI); p.push([g.translate(0, 0.06, 0), C.plank]); }
+  return p;
+}
+
 
 function blanketParts() {
   const p = [];
   for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) p.push([box(0.3, 0.012, 0.3, -0.75 + i * 0.3 + 0.15, 0.006, -0.75 + j * 0.3 + 0.15), (i + j) % 2 ? C.red : C.cream]);
   const basket = new THREE.CylinderGeometry(0.2, 0.16, 0.22, 10).translate(0.45, 0.11, 0.35);
   const handle = new THREE.TorusGeometry(0.16, 0.02, 5, 12, Math.PI).translate(0.45, 0.22, 0.35);
-  p.push([basket, '#8A6A3E'], [handle, '#6B4E2E']);
+  p.push([basket, '#C99A5E'], [handle, '#9A6A40']);
   return p;
 }
 
@@ -127,7 +179,13 @@ function sackFrameParts() {
 /** Sack + rope, origin at the pivot (rope 1.8 m, sack 0.6 m). */
 function sackParts() {
   const sack = new THREE.SphereGeometry(0.3, 12, 10); sack.scale(1, 1.25, 1); sack.translate(0, -2.05, 0);
-  return [[cyl(0.02, 0.02, 1.8, 0, -1.8, 0, 5), C.rope], [sack, C.burlap], [new THREE.CylinderGeometry(0.1, 0.16, 0.12, 8).translate(0, -1.75, 0), C.rope]];
+  // WA §2.5 "Sir Sacky": a peach practice sack with a stitched happy face (both sides, it spins)
+  const face = [];
+  for (const s of [1, -1]) {
+    face.push([box(0.05, 0.07, 0.03, -0.09, -1.98, 0.29 * s), LOOK.ink], [box(0.05, 0.07, 0.03, 0.09, -1.98, 0.29 * s), LOOK.ink],
+      [new THREE.TorusGeometry(0.07, 0.014, 4, 10, Math.PI).rotateZ(Math.PI).translate(0, -2.08, 0.295 * s), LOOK.ink]);
+  }
+  return [[cyl(0.02, 0.02, 1.8, 0, -1.8, 0, 5), C.rope], [sack, LOOK.sacky], [new THREE.CylinderGeometry(0.1, 0.16, 0.12, 8).translate(0, -1.75, 0), C.rope], ...face];
 }
 
 /** Wobble Knight body (spring dummy) and its sword arm (pivot at the shoulder). */
@@ -138,7 +196,8 @@ function wobbleBodyParts() {
   p.push([body, C.burlap], [new THREE.SphereGeometry(0.2, 12, 10).translate(0, 1.36, 0), C.burlap]);
   const helm = new THREE.SphereGeometry(0.24, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2); helm.translate(0, 1.4, 0);
   p.push([helm, C.steel], [new THREE.TorusGeometry(0.24, 0.025, 5, 16).rotateX(Math.PI / 2).translate(0, 1.4, 0), C.iron],
-    [box(0.06, 0.04, 0.05, -0.08, 1.37, 0.19), '#1E1A16'], [box(0.06, 0.04, 0.05, 0.08, 1.37, 0.19), '#1E1A16'],
+    [box(0.06, 0.04, 0.05, -0.08, 1.37, 0.19), '#4A2A1F'], [box(0.06, 0.04, 0.05, 0.08, 1.37, 0.19), '#4A2A1F'],
+    [new THREE.TorusGeometry(0.075, 0.016, 4, 10, Math.PI).rotateZ(Math.PI).translate(0, 1.29, 0.19), LOOK.smile],   // "Sir Wobble": a painted smile
     [box(0.36, 0.3, 0.05, 0.0, 0.92, 0.25), C.red]);                                       // a red tabard patch
   return p;
 }
@@ -155,15 +214,15 @@ const SETPIECES = {
     const ctx = kit.ctx, level = kit.level;
     const [fence, barn, windmill, target, boulder, knight, rack, sack] = await Promise.all([
       kit.tpl(M.fence), kit.tpl(M.barn), kit.tpl(M.windmill, { dynamic: ['building_windmill_top_fan_red'] }), kit.tpl(M.target), kit.tpl(M.boulder),
-      kit.tpl(M.knight, { pose: 'Idle', poseT: 0.1, show: ['2H_Sword', 'Knight_Helmet', 'Knight_Cape'], flatColor: C.stone, key: 'tallbert' }),
+      kit.tpl(M.knight, { pose: 'Idle', poseT: 0.1, show: ['2H_Sword', 'Knight_Helmet', 'Knight_Cape'], flatColor: LOOK.tallbert, key: 'tallbert' }),
       kit.tpl(M.weaponrack), kit.tpl(M.sack)]);
     const [cx, cz] = zone.at, half = zone.size[0] / 2;
     const x0 = cx - half, x1 = cx + half, z0 = cz - half, z1 = cz + half;
     // mown yard, worn patches
     kit.terrain.grassHeight(cx, cz, half - 2, 0.62);
-    kit.paint(0, -76, 6.5, '#4B4630', 0.45, 2.5);
-    kit.paint(-6, -66, 2.2, '#4B4630', 0.5);
-    kit.paint(0, -86, 2.5, '#4B4630', 0.45);
+    kit.paint(0, -76, 6.5, '#B89A64', 0.45, 2.5);
+    kit.paint(-6, -66, 2.2, '#B89A64', 0.5);
+    kit.paint(0, -86, 2.5, '#B89A64', 0.45);
     // perimeter fence 1.5 m (too tall to jump), gap at (0, −60) for the gate
     const fo = { fit: { h: 1.5 }, height: 1.5, fade: true };
     kit.fence(fence, [x0, z0], [x1, z0], fo);
@@ -240,7 +299,7 @@ const SETPIECES = {
     const wkActor = new WobbleKnight(ctx, { id: 'wobble_knight', pos: new THREE.Vector3(0, kit.h(0, -86), -86), facing: 0, mesh: wk, armPivot: arm, delay: 1.0, hint: parryHint });
     kit.onLoaded(() => kit.actor(wkActor, 'wobble_knight'));
     // cracked boulder (−10, −84): only Bright / Holy (`breaks: ['cracked']`)
-    const bp = kit.place(boulder, -10, -84, { fit: { h: 1.2 }, yaw: 0.4, collider: 'circle', shrink: 0.8, color: '#9A968C', jitter: 0 });
+    const bp = kit.place(boulder, -10, -84, { fit: { h: 1.2 }, yaw: 0.4, collider: 'circle', shrink: 0.8, color: '#C9BCA6', jitter: 0 });
     if (bp) {
       const bpos = new THREE.Vector3(-10, bp.y, -84);
       const rock = new PropActor(ctx, { id: 'practice_boulder', kind: 'boulder', hp: 1, breaks: 'cracked', radius: bp.radius * 0.8, height: 1.2, pos: bpos, wobble: 0.05,
@@ -269,13 +328,20 @@ const SETPIECES = {
     }
     kit.anchor('g01_mark', 4, -58, undefined, Math.PI);
     kit.block({ x: 4, z: -55.5, r: 3.4 });               // no crates / scatter crowding the statue (G-01 frames it)
-    kit.paint(4, -55.5, 2.4, '#4B4630', 0.35, 1.5);
+    kit.paint(4, -55.5, 2.4, '#B89A64', 0.35, 1.5);
     // lantern glow on the barn corner post (warm at night)
     kit.place(kit.proc('lantern_post', () => [[cyl(0.06, 0.08, 2.2), C.woodDark], [box(0.5, 0.05, 0.05, 0.22, 2.1, 0), C.woodDark],
       [box(0.16, 0.22, 0.16, 0.42, 1.88, 0), C.iron]]), -12.2, -88.9, { collider: 'circle', jitter: 0, fade: true });   // clear of the `practice` spawn's camera
     // a few hay bales around the yard
     const hay = await kit.tpl(M.hay, HAY);
     for (const [x, z, y] of [[-17.5, -84, 0.3], [-16.6, -82.6, 1.4], [12.5, -66, 2.2], [17, -64, 0.2]]) kit.place(hay, x, z, { fit: { h: 0.9 }, yaw: y, collider: 'box' });
+    // ON §5.4 Suit Up: Marmalade's chest in the barn doorway (the `barn_chest` interactable below plays cs01b)
+    kit.place(kit.proc('barn_chest', chestParts), BARN_CHEST[0], BARN_CHEST[1], { yaw: 0, collider: 'box', jitter: 0, clear: 0.6, occupy: 0.6 });
+    kit.anchor('chest', BARN_CHEST[0], BARN_CHEST[1], undefined, 0);
+    // WA §2.5 / LI W12: bunting from the barn across the field to the north gate (two tall poles carry it)
+    for (const [x, z, h] of BUNTING_POLES) {
+      kit.place(kit.proc('bunting_pole_' + h, () => buntingPoleParts(h)), x, z, { collider: 'circle', shrink: 1, jitter: 0, fade: true, clear: 0.4, occupy: 0.4 });
+    }
   },
 
   /**
@@ -284,15 +350,24 @@ const SETPIECES = {
    * bare signposts in the corners between the roads.
    */
   async crossroads(kit) {
-    const wall = await kit.tpl(M.wall, { flatColor: '#8E9086' });
+    const [wall, flY, flP, flR] = await Promise.all([kit.tpl(M.wall, { flatColor: LOOK.wall }), kit.tpl(M.flowerY), kit.tpl(M.flowerP), kit.tpl(M.flowerR)]);
     const [cx, cz] = CROSSROADS;
     const dir = (to) => { const dx = to[0] - cx, dz = to[1] - cz, l = Math.hypot(dx, dz); return [dx / l, dz / l]; };
     const lane = dir([-6, -50]), north = dir([-20, -4]), west = dir([-38, -27]), east = dir([-9, -23]);
     const skip = (x, z) => kit.roadClearance(x, z) < 0.9 || kit.inArena(x, z, 2.5) || Math.hypot(x + 16, z + 36) < 2.4;
     const wo = { fit: { h: 1.2 }, height: 1.2, walkable: true, wobble: 0.02, jitter: 0.08, thick: 0.22, skip };
     // walls follow the carved lane in 2.5 m chords (so they bend with it), `off` m to its side
+    // WA §2.5: a merged flower strip on top of every wall run (every 1.6 m; red only >= 3 m from the spine, G19)
+    const flowers = (pieces) => {
+      for (const pc of pieces ?? []) {
+        if (!(pc?.top > pc?.y)) continue;
+        const lane = distToPolyline(pc.x, pc.z, LANE);
+        const pick = lane >= LOOK.flowerSpineMin + 3 && kit.rng() < 0.3 ? flR : kit.rng() < 0.5 ? flY : flP;
+        if (pick) kit.place(pick, pc.x + (kit.rng() - 0.5) * 0.4, pc.z + (kit.rng() - 0.5) * 0.4, { y: pc.top - 0.04, fit: { h: 0.35 }, yaw: kit.rng.angle(), collider: false, clear: false, occupy: false, jitter: 0.08 });
+      }
+    };
     const along = ({ s0, s1, off, side }) => {
-      for (let s = s0; s < s1 - 0.05; s += 2.5) kit.fence(wall, beside(s, off, side), beside(Math.min(s1, s + 2.5), off, side), wo);
+      for (let s = s0; s < s1 - 0.05; s += 2.5) flowers(kit.fence(wall, beside(s, off, side), beside(Math.min(s1, s + 2.5), off, side), wo).pieces);
     };
     along(PERCH_WALL);                                                       // lane, south-west: the crossbow perch
     along({ s0: S_CROSS - 21, s1: S_CROSS - 5, off: 4.3, side: 1 });        // lane, north-east (vigil_1 between path and wall)
@@ -300,7 +375,7 @@ const SETPIECES = {
     along({ s0: S_CROSS + 6, s1: S_CROSS + 12, off: 4.2, side: 1 });        // north road, east
     // the west road (a straight side path): its south side
     const wn = [-west[1], west[0]];
-    kit.fence(wall, [cx + west[0] * 5 + wn[0] * 2.9, cz + west[1] * 5 + wn[1] * 2.9], [cx + west[0] * 15 + wn[0] * 2.9, cz + west[1] * 15 + wn[1] * 2.9], wo);
+    flowers(kit.fence(wall, [cx + west[0] * 5 + wn[0] * 2.9, cz + west[1] * 5 + wn[1] * 2.9], [cx + west[0] * 15 + wn[0] * 2.9, cz + west[1] * 15 + wn[1] * 2.9], wo).pieces);
     // signposts: one in each corner between two roads, stepped out along the bisector until clear of both
     const post = kit.proc('signpost_bare', signpostParts);
     for (const [a, b] of [[lane, west], [west, north], [north, east], [east, lane]]) {
@@ -313,7 +388,7 @@ const SETPIECES = {
         break;
       }
     }
-    kit.paint(cx, cz, 5, '#5E5743', 0.4, 3);
+    kit.paint(cx, cz, 5, '#C8B46E', 0.4, 3);
   },
 
   /** Picnic Glade: the hay bale (CS-03 interact), a picnic blanket, and the rope posts (30 HP each) after CS-03. */
@@ -323,7 +398,14 @@ const SETPIECES = {
     kit.place(hay, 0, 16, { fit: { h: 0.75 }, yaw: 0.25, collider: 'box' });
     kit.place(kit.proc('picnic_blanket', blanketParts), 1.6, 14.6, { yaw: -0.3, collider: false, clear: 1.2, jitter: 0 });
     kit.anchor('picnic', 0, 16, undefined, Math.PI);
-    kit.paint(1, 15, 3.2, '#46502A', 0.3);
+    // LI §5 "kitty garden": two crop beds beside the glade (outside the arena, >= 3 m off the lane: orange crops, G19)
+    const [row, carrot, turnip, pumpkin] = await Promise.all([kit.tpl(M.cropRow), kit.tpl(M.cropCarrot), kit.tpl(M.cropTurnip), kit.tpl(M.cropPumpkin)]);
+    for (const [bx, bz] of GARDEN) {
+      if (row) kit.place(row, bx, bz, { fit: { x: 3.2 }, yaw: Math.PI / 2, collider: false, clear: 1.2, occupy: 1.6, jitter: 0.04 });
+      [carrot, turnip, pumpkin].forEach((t, i) => { if (t) kit.place(t, bx - 1 + i, bz + 0.1, { fit: { h: i === 2 ? 0.45 : 0.35 }, yaw: kit.rng.angle(), collider: false, clear: false, occupy: false, jitter: 0.06 }); });
+      kit.paint(bx, bz, 2.2, C.dirt, 0.35, 1);
+    }
+    kit.paint(1, 15, 3.2, '#A6B060', 0.3);
     // rope posts appear with the net (flag meadow.pudding === 'netted'), 30 HP each, her hits only
     const postTpl = kit.proc('rope_post', ropePostParts);
     const live = [];
@@ -390,7 +472,7 @@ const SETPIECES = {
         const h = 0.85 + rng() * 0.35, yaw = rng.angle(), tx = (rng() - 0.5) * 0.16, tz = (rng() - 0.5) * 0.16, tint = (rng() - 0.35) * 0.9;
         if (n % keepEvery === 0) field.add(px, kit.h(px, pz) - 0.02, pz, { h: keepEvery > 1 ? h * 1.08 : h, yaw, tiltX: tx, tiltZ: tz, tint });
         kit.clear(px, pz, 0.55, 0.25);
-        kit.paint(px, pz, 0.8, '#4A4428', 0.55, 0.6);
+        kit.paint(px, pz, 0.8, '#C8B46E', 0.55, 0.6);
         n++;
       }
     }
@@ -417,9 +499,9 @@ const SETPIECES = {
   /** Old Bridge (x = 30, z 57–67, 4 m wide) over the stream; Mochi's cage cart at (30, 74); reeds and lily pads. */
   async oldBridge(kit) {
     const level = kit.level;
-    const stone = { sat: 0.15, mul: 0.46 };
+    const stone = LOOK.bridge;                                // LI W4: sandstone (was sat 0.15, mul 0.46: half-black)
     const [bridge, pillar, cart, lily, reeds] = await Promise.all([kit.tpl(M.bridge, stone), kit.tpl(M.bridgePillar, stone), kit.tpl(M.cart),
-      kit.tpl(M.lily), kit.tpl(M.reeds, { recolorMap: { grass: '#4E5A2E' } })]);
+      kit.tpl(M.lily), kit.tpl(M.reeds, { recolorMap: { grass: LOOK.reeds } })]);
     if (bridge) {
       const len = BRIDGE.z1 - BRIDGE.z0, n = 3, seg = len / n;
       const b = bridge.box, rawW = b.max.x - b.min.x, rawL = b.max.z - b.min.z;
@@ -447,16 +529,15 @@ const SETPIECES = {
       kit.occupy(BRIDGE.x, (BRIDGE.z0 + BRIDGE.z1) / 2, 5.5);
       kit.anchor('bridge_mid', BRIDGE.x, 62, BRIDGE.deckY, 0);
     }
-    // the rat cage cart (2.0 m) at (30, 74). While Mochi is still caged the companions area builds the whole cage cart
-    // (their open `cart` + bars + collider, requests/companions.md), so ours is hidden then; it is the empty cart left
-    // standing on later visits.
+    // the cart (2.0 m) at (30, 74). While Biscuit still waits in her carrier the companions area builds the whole carrier
+    // cart (their open `cart` + carrier + collider), so ours is hidden then; it is the empty cart left standing later.
     if (cart) {
-      const [x, z] = MOCHI_CAGE;
+      const [x, z] = BRIDGE_CARRIER;
       const p = kit.place(cart, x, z, { fit: { h: 2.0 }, yaw: Math.PI / 2, collider: 'box', shrink: 0.9, jitter: 0 });
       if (p) {
         kit.anchor('bridge_cage', x, z, p.y, Math.PI);
         kit.onLoaded(() => {
-          if (!mochiCaged(kit.ctx) || !kit.ctx.companions?.spawnKitten) return;
+          if (!biscuitWaiting(kit.ctx) || !kit.ctx.companions?.spawnKitten) return;
           kit.batch.setVisible(p.handle, false);
           for (const c of p.colliders) level.removeCollider(c);
         });
@@ -477,7 +558,13 @@ const SETPIECES = {
   },
 };
 
-/** Is Mochi still waiting in the Old Bridge cage (not in the party, D-01 not played)? */
+/** Does Biscuit still wait in her Old Bridge carrier (Chapter 1 started, not rescued yet)? */
+function biscuitWaiting(ctx) {
+  const st = ctx.state;
+  return !!st?.getFlag?.('prologue.done') && !st?.kittens?.includes?.('biscuit');
+}
+
+/** Is Mochi still waiting in his tipped cart (not in the party, D-01 not played)? */
 function mochiCaged(ctx) {
   const st = ctx.state;
   return !(st?.companions?.unlocked?.includes?.('mochi') || st?.getFlag?.('meadow.mochi'));
@@ -497,16 +584,18 @@ function distanceTo(pts, x, z) {
 // ---------------------------------------------------------------------------------------------- the level
 export default defineLevel({
   id: 'meadow', size: 200, res: 200, seed: 11, hills: { amp: 1.5, octaves: 3 }, pathWidth: 6, rim: 3.5,
-  env: { default: 'meadow_day', byFlag: [['!prologue.done', 'meadow_night']] },
+  // WA §2.2 mood timeline: the prologue plays in a golden morning (never night); Chapter 1 is a sunny day
+  env: { default: 'meadow_day', byFlag: [['!prologue.done', 'meadow_morning']] },
   music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', prologue: 'village_bards_tale', byFlag: [['!prologue.done', 'village_bards_tale']] },
   spine: SPINE,
   // CONTROLS_SPEC §11 iso camera: yaw π (camera south of her, the spine runs north); §4.2 meadow_day fog is the
   // CAMERA.iso.fog default (clear 5 / 7, topMul 1.5); from above the sun moves to the side (~80° off the view: shadows
   // fall across the screen, not under the props) and the hemisphere lifts ×1.08 (the lens sees mostly ground)
   cam: { yaw: Math.PI, fog: { clear: 5, clearCombat: 7, topMul: 1.5 },
-    light: { meadow_day: { hemiMul: 1.08, sunAz: -1.45 },
+    light: { meadow_day: { hemiMul: 1.08, sunAz: -1.45 }, meadow_morning: { hemiMul: 1.08, sunAz: -1.45 },
       // Midnight Practice: the moon and a lifted cool sky fill so the field reads from above (ground ≥ ~12 % at 8 m)
-      meadow_night: { hemiMul: 2.4, sunMul: 2.4, envMul: 1.8, hemiSky: '#B4C2D6', hemiGround: '#343C2E' } } },
+      // the periwinkle night callback (WA §2.3) is lifted in the preset itself; from above only a touch more fill
+      meadow_night: { hemiMul: 1.15 } } },
   // §2.7 the Meme Cam spot: the Tallbert knoll (she faces south, the statue and the misty lane behind her)
   memeSpot: { at: [2, -58.5], yaw: Math.PI, r: 4 },
   // §5.4 the fence lesson: the 1.0 m inner fence (z −87, x −20…−2) is a gated link; before `tut.jump.done` no automatic
@@ -524,13 +613,18 @@ export default defineLevel({
   zones: [
     { id: 'practice', kind: 'setpiece', at: [0, -80], size: [40, 40], props: 'practiceField', tutorial: true, keepClear: true, flat: 26,
       cam: { dist: 12 } },                                           // §11: tutorial readability (she reads big)
+    // ON §5.2: the height chart ("One Ear-Tuft Short", cs01) after Morning Practice (story's director may play it first; once)
+    { id: 'chart', kind: 'trigger', at: CHART_SPOT, r: 2.5, play: 'cs01', when: 'tut.done && !prologue.chart && !prologue.done', once: true },
+    // ON §5.4: after the raid the chest in the barn doorway is the player's choice to become the knight (cs01b)
+    { id: 'barn_chest', kind: 'interact', at: BARN_CHEST, r: 1.8, play: 'cs01b', when: 'prologue.raid && !prologue.armour', prompt: 'prompt.open' },
     { id: 'tallbert', kind: 'trigger', at: [0, -61], r: 2.5, play: 'g01', when: 'prologue.tutorial && !prologue.done', once: true },
     { id: 'lane', kind: 'trigger', at: [-6, -52], r: 3, play: 'cs02', when: 'prologue.tutorial && !prologue.done', once: true },
     { id: 'vigil_1', kind: 'checkpoint', at: [-16, -36] },
     { id: 'crossroads', kind: 'open', at: [-22, -30], r: 10, props: 'crossroads', onlyIf: 'prologue.done',
       spawns: [['rat_pike', 2, [-9.5, -41], 4], ['rat_pike', 2, [-24, -32], 2], ['rat_xbow', 1, CROSSROADS_PERCH, 0, { y: 1.2 }]] },
     { id: 'noodle', kind: 'kitten', kittenId: 'noodle', at: [-30, -26], hide: 'meow', prop: 'barrel', onlyIf: 'prologue.done' },
-    { id: 'letter_1', kind: 'letter', letterId: 'l1', at: [-18, -24] },
+    // ON §6.1: the Crow Fields' second cow keeps a Meow secret: Letter #1 waits where it dozes
+    { id: 'letter_1', kind: 'letter', letterId: 'l1', at: [41.5, 30] },
     { id: 'stones', kind: 'arena', at: [-20, -4], r: 12, props: 'stoneRing8', stones: STONES_TALL.slice(1, 6),   // same 5 templates as the scatter: 5 fade sets, not 8
       waves: [[['rat_pike', 3]], [['rat_pike', 3], ['rat_xbow', 1]]] },
     { id: 'button', kind: 'kitten', kittenId: 'button', at: [-20, -4], hide: 'stand', standTime: 3.0, zoneR: 1.2, needClear: 'stones', onlyIf: 'prologue.done' },
@@ -546,22 +640,32 @@ export default defineLevel({
       spawns: [['crow', 4, [24, 40], 8], ['rat_xbow', 1, [16, 46], 0, { y: 1.0 }], ['rat_xbow', 1, [32, 34], 0, { y: 1.0 }]],
       hints: [{ key: 'tut.pounce', on: 'alert', type: 'crow' }, { key: 'tut.reflect', on: 'telegraph', type: 'rat_xbow' }],
       placed: [{ id: 'cow_fields', model: M.cow, at: [40, 30], fit: { h: 1.6 }, yaw: -Math.PI / 2, clip: 'Idle_Headlow', meowWakes: true, walkTo: [40, 36], kind: 'cow', radius: 0.9 }] },
-    { id: 'biscuit', kind: 'kitten', kittenId: 'biscuit', at: [41.5, 30], hide: 'meow', prop: 'cow', onlyIf: 'prologue.done' },
+    // WA16: Biscuit waits in the Old Bridge carrier (on the cart), free once the bridge fight is over
+    { id: 'biscuit', kind: 'kitten', kittenId: 'biscuit', at: BRIDGE_CARRIER, hide: 'cage', cage: 'cart', needClear: 'bridge', facing: Math.PI, onlyIf: 'prologue.done' },
     { id: 'vigil_3', kind: 'checkpoint', at: [28, 52] },
     // Crow Fields + the Old Bridge: one closer hint (10.4 m; +3 m combat zoom-out = 13.4 m) so she stays >= 45 px on
     // desktop against the grey-green wheat while crows and bolts frame wide (CONTROLS_SPEC §2.2: 3 hints in all)
     { id: 'fields_view', kind: 'camera', at: [27, 56], size: [54, 72], cam: { dist: 10.4 } },
     { id: 'bridge', kind: 'arena', at: [30, 70], r: 12, props: 'oldBridge',   // framed by fields_view
-      rescue: { companion: 'mochi', cage: MOCHI_CAGE, hp: 30, play: 'd01', flag: 'meadow.mochi', style: 'cart', facing: Math.PI },
       waves: [[['rat_pike', 3], ['rat_xbow', 1]], [['rat_pike', 3], ['rat_xbow', 2]], [['rat_pike', 4], ['crow', 2]]] },
-    // gated on Mochi: the forest expects her in the party (§12.3); reaching the exit early nudges her back to the cage
+    // WA16 / ON §6.1: Mochi's tipped cart on the lane, 3 rats in a soft arena (no wall lock: `soft`, world.W6), the
+    // cracked latch opens to a Bright Slash only (companions) → D-01. Locks only in Chapter 1, until Mochi is free.
+    { id: 'cart', kind: 'arena', at: MOCHI_CAGE, r: 9, soft: true, autoLockWhen: 'prologue.done && !meadow.mochi',
+      rescue: { companion: 'mochi', cage: MOCHI_CAGE, hp: 30, play: 'd01', flag: 'meadow.mochi', style: 'cart', facing: 2.4 },
+      waves: [[['rat_pike', 3]]] },
+    // gated on Mochi: the forest expects her in the party (§12.3); reaching the exit early nudges her back to the cart
     { id: 'exit', kind: 'exit', at: [30, 92], size: [8, 2], to: 'forest', spawnId: 'start', when: (s, c) => !mochiCaged(c),
-      blocked: { toast: 'toast.exit.mochi', text: 'Mochi is still caged at the Old Bridge!' } },
+      blocked: { toast: 'toast.exit.mochi', text: "Mochi's still stuck in his carrier! Back to the cart!" } },
     // the tutorial cow (practice field): Meow → moo, wake, walk 6 m east, reveals Pearl (story)
     { id: 'practice_cow', kind: 'setpiece', at: [12, -72],
       placed: [{ id: 'cow_practice', model: M.cow, at: [12, -72], fit: { h: 1.6 }, yaw: -Math.PI / 2, clip: 'Idle_Headlow', meowWakes: true, walkTo: [18, -72], kind: 'cow', radius: 0.9 }] },
   ],
   setpieces: SETPIECES,
+  // ON §6.1: the wheel Mochi's cart lost when it fell off the horde's wagon lies in the grass beside it
+  decorate: (kit) => {
+    const [x, z] = MOCHI_CAGE;
+    kit.place(kit.proc('broken_wheel', brokenWheelParts), x + 1.9, z + 1.1, { yaw: 0.7, tiltX: 0.06, collider: false, clear: 0.6, occupy: 0.6, jitter: 0 });
+  },
   water: [{ kind: 'stream', pts: [[-100, 60.5], [-70, 63], [-40, 61], [-10, 62.8], [14, 61.4], [30, 62], [46, 62.6], [70, 60.8], [100, 62.5]], width: 8, y: -0.4, deep: true }],
   scatter: [
     { model: STONES_TALL.slice(1, 6), n: 30, fit: { h: [1.5, 3] }, minDistFromPath: 5, minDist: 2.5, fade: true },
@@ -582,11 +686,20 @@ export default defineLevel({
     [[6, 22], [16, 32], 7], [[18, 36], [25, 44], 6], [[26.5, 42.5], [28, 48.5], 6], [[30, 76], [30, 86], 7], [[-28, -30], [-40, -27], 6], [[-6, -24], [6, -27], 7],
   ],
   breadcrumbs: { from: [-6, -50], to: [-21, -32], n: 6 },
-  skyline: [{ model: M.tower, at: [-130, -20], fit: { h: 30 }, yaw: 0.4 }, { model: M.castle, at: [-140, -6], fit: { h: 20 }, yaw: 0.2 }],
+  skyline: [{ model: M.tower, at: [-130, -20], fit: { h: 30 }, yaw: 0.4 }, { model: M.mountain, at: [-150, 30], fit: { h: 26 }, yaw: 0.6 },
+    { model: M.hills, at: [-120, 55], fit: { h: 12 }, yaw: 1.1 }, { model: M.windmillFar, at: [-118, -48], fit: { h: 14 }, yaw: 2.2 }],
+  // WA §2.6: candy bunting (butter / sky / pink) from the barn roof across the field to the north gate
+  accent: LOOK.bunting,
+  bunting: [
+    { a: [-11.6, 4.4, -89.4], b: [BUNTING_POLES[0][0], BUNTING_POLES[0][2], BUNTING_POLES[0][1]] },
+    { a: [BUNTING_POLES[0][0], BUNTING_POLES[0][2], BUNTING_POLES[0][1]], b: [BUNTING_POLES[1][0], BUNTING_POLES[1][2], BUNTING_POLES[1][1]] },
+    { a: [BUNTING_POLES[1][0], BUNTING_POLES[1][2], BUNTING_POLES[1][1]], b: [2.15, 3.4, -60] },
+  ],
   dawnstone: { anchor: 'bell_far', color: '#FFC46B', size: 10, intensity: 2.4, offWhen: 'prologue.done' },
   horizon: { n: 80 }, horizonFog: 0.84,
   grass: { height: 0.27 },
   // loaded by the setpieces above (listed for the manifest test and per-level preloading)
   models: [M.fence, M.barn, M.windmill, M.target, M.boulder, M.knight, M.weaponrack, M.sack, M.wall, M.hay, M.bridge, M.bridgePillar, M.cart,
+    M.flowerY, M.flowerP, M.flowerR, M.cropRow, M.cropCarrot, M.cropTurnip, M.cropPumpkin,
     M.lily, M.reeds, M.cow, ...STONES_TALL],
 });

@@ -1,5 +1,17 @@
-// vite.config.js  (owner: core) — tech.md §1 + GAME_DESIGN §19.1 A9.
+// vite.config.js  (owner: core) — tech.md §1 + GAME_DESIGN §19.1 A9 + PERF_SPEC §10.2 (chunk groups).
 import { defineConfig } from 'vite';
+
+/**
+ * PERF §10.2 chunk groups (Rolldown `codeSplitting.groups`; scripts/bundle-budget.mjs checks each against its gz
+ * budget after `vite build`): `three` (core build) and `three-addons` (loaders, utils, decoders) are long-cached vendor
+ * chunks. The game code stays in the entry chunk until C16's lazy SYSTEMS split lands: a `boot` / `play` group
+ * without lazy loading only moves bytes (groups pull their dependencies in, so `boot` would swallow everything
+ * `core/systems.js` imports). Levels and debug.js / lil-gui / stats stay lazy chunks.
+ */
+export const CHUNK_GROUPS = [
+  { name: 'three', test: /node_modules[\/]three[\/]build[\/]/, priority: 30 },
+  { name: 'three-addons', test: /node_modules[\/]three[\/]examples[\/]jsm[\/](?!libs[\/](?:stats|lil-gui))/, priority: 25 },
+];
 
 export default defineConfig({
   base: './',                       // relative paths: dist/ works from any static host or subfolder
@@ -10,14 +22,8 @@ export default defineConfig({
     assetsDir: 'bundle',            // hashed JS/CSS never mix with the copied dist/assets/ library (R17)
     rolldownOptions: {
       output: {
-        // three.js (core + addons) in its own long-cached vendor chunk; the game code stays in `index`, levels
-        // (src/world/levels/*) are already lazy chunks via LevelManager's dynamic imports.
-        codeSplitting: {
-          groups: [
-            // lil-gui / stats stay lazy (?debug only)
-            { name: 'three', test: /node_modules[\/]three[\/](?!examples[\/]jsm[\/]libs[\/])/, priority: 20 },
-          ],
-        },
+        // levels (src/world/levels/*) are lazy chunks via LevelManager's dynamic imports
+        codeSplitting: { groups: CHUNK_GROUPS },
       },
     },
   },

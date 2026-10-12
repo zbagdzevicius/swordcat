@@ -1,15 +1,12 @@
-// src/ui/fonts.js  (owner: ui) — registers the OFL fonts in public/assets/fonts/ (GAME_DESIGN §14.1) with the
-// FontFace API, URLs through ctx.assets.url() (relative base, works from any static host). fonts.css maps them to the
-// --f-* families every screen uses; a system fallback renders until they arrive.
+// src/ui/fonts.js  (owner: ui) — registers the game font with the FontFace API, URLs through ctx.assets.url() (relative
+// base, works from any static host). ART §9.2 / PLAN X18 / K9: **Fredoka everywhere**, logo included (Cinzel, Uncial
+// Antiqua and MedievalSharp are gone from the ui: −449 KB on the boot path). PERF I2: one woff2 Latin subset of the
+// variable font (≈ 67 KB, weights 300–700, so 500 / 600 / 700 all come from one file; preload it in index.html).
+// fonts.css maps every --f-* role to it; a rounded system fallback renders until it arrives (font-display: swap).
 
 /** family, file (relative to public/assets/), descriptors. */
 export const FONT_FILES = Object.freeze([
-  { family: 'Cinzel Decorative', file: 'fonts/CinzelDecorative-Bold.ttf', weight: '700' },
-  { family: 'Cinzel Decorative', file: 'fonts/CinzelDecorative-Regular.ttf', weight: '400' },
-  { family: 'Cinzel', file: 'fonts/Cinzel-Variable.ttf', weight: '400 900' },
-  { family: 'Fredoka', file: 'fonts/Fredoka-Variable.ttf', weight: '300 700' },
-  { family: 'Uncial Antiqua', file: 'fonts/UncialAntiqua-Regular.ttf', weight: '400' },
-  { family: 'MedievalSharp', file: 'fonts/MedievalSharp-Regular.ttf', weight: '400' },
+  { family: 'Fredoka', file: 'fonts/Fredoka-Latin.woff2', weight: '300 700', format: 'woff2' },
 ]);
 
 /**
@@ -21,8 +18,8 @@ export async function loadFonts(url) {
   let n = 0;
   await Promise.all(FONT_FILES.map(async (f) => {
     try {
-      for (const ff of document.fonts) if (ff.family.replace(/["']/g, '') === f.family && ff.weight === f.weight) return;
-      const face = new FontFace(f.family, `url("${url(f.file)}")`, { weight: f.weight, style: 'normal', display: 'swap' });
+      for (const ff of document.fonts) if (ff.family.replace(/["']/g, '') === f.family && ff.weight === f.weight && ff.status !== 'error') return;
+      const face = new FontFace(f.family, `url("${url(f.file)}") format("${f.format}")`, { weight: f.weight, style: 'normal', display: 'swap' });
       document.fonts.add(face);
       await face.load();
       n++;

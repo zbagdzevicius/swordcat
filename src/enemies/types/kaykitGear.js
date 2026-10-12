@@ -4,6 +4,7 @@
 // carried cage (with a kitten inside: Pearl's has the pink ribbon) or mailbag, kept upright while the arm swings.
 import * as THREE from 'three';
 import { attachAligned, bone, keepUpright, mountNative, posIn, tintAll } from '../rig.js';
+import { friendWordFor } from '../names.js';
 
 import * as CHARS from '../../characters/index.js';
 
@@ -37,10 +38,17 @@ export async function dressKayKit(e, m, o = {}) {
   if (o.look) {
     try {
       const look = BEAST_LOOKS[o.look] ? o.look : 'hyena';
-      const word = e.spawnOpts?.word !== undefined ? e.spawnOpts.word : o.word;
+      let word = e.spawnOpts?.word !== undefined ? e.spawnOpts.word : o.word;
+      // WA §8.3: from gate.done on, hub hyenas wear their friend words (index-paired with the seed's HATER word)
+      if (e.friendly && word === undefined && BEAST_LOOKS[look]?.words?.length) {
+        const foe = C.pickPlateWord(BEAST_LOOKS[look].words, seed >>> 0);
+        word = friendWordFor(e.def.id, foe) ?? foe;
+      }
       e.dress = dressBeast(space, look, { seed, word, plate: o.plate, plateOpts: o.plateOpts, head: { headNode: o.headNode, ...(o.head ?? {}) } });
       e.head = e.dress;
       e.plate = e.dress.plate; e.plateWord = e.dress.word;
+      e.plateFriendWord = e.friendly ? null : friendWordFor(e.def.id, e.plateWord);
+      if (e.plate && e.plateFriendWord) bakeFriendPlate(e, C, look, seed);
       e.dress.setExpression(o.expression ?? 'sneer');
     } catch (err) { console.warn(`[enemies] beast dress failed for ${e.def.id}`, err); }
   }
@@ -49,6 +57,24 @@ export async function dressKayKit(e, m, o = {}) {
   if (o.bag) addHeldProp(e, m, 'post_bag', 'handslot.r', { down: 0.28, scale: 1.1 }, C);
   if (o.weapon) await addWeapon(e, m, o.weapon);
 }
+
+/**
+ * WA §8.3: the friend word baked at dress time, so the bonk flip costs no canvas work. Characters' `dress.flipPlate`
+ * (both words in one texture, a UV swap; characters.W4) wins when it exists; until then the friend word is painted once
+ * into a second texture with the same seed and style and the decal's map is swapped (Enemy.flipPlate).
+ */
+export function bakeFriendPlate(e, C, look, seed) {
+  if (typeof e.dress?.flipPlate === 'function' || typeof C.makePlateTexture !== 'function') return;
+  const decal = e.plate.getObjectByName?.('plateWord');
+  if (!decal?.material?.map) return;
+  const style = CHARS.BEAST_LOOKS?.[look]?.style ?? 'rusty';
+  const tex = C.makePlateTexture(e.plateFriendWord, { seed, ink: style === 'black' ? '#D8CFC0' : undefined, scratch: style === 'black' ? 'rgba(142,27,34,0.7)' : undefined });
+  if (!tex) return;
+  const foe = decal.material.map;
+  tex.wrapS = foe.wrapS; tex.wrapT = foe.wrapT; tex.colorSpace = foe.colorSpace; tex.anisotropy = foe.anisotropy;
+  e._plateSwap = { decal, foe, friend: tex };
+}
+
 
 /** Mount a fitted weapon GLB natively on a KayKit hand slot; its tip becomes the telegraph glint point. */
 export async function addWeapon(e, m, w) {

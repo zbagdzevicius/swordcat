@@ -8,15 +8,25 @@ import * as THREE from 'three';
 import { Heightfield } from '../physics/Heightfield.js';
 import { fbmP, valueNoise, smooth, distToPolyline, smoothPolyline } from './noise.js';
 
-/** Ground palette (art.md §6.2 misty meadow tokens, darkened under the grass so sparse blades read as full). */
+/**
+ * Ground palette (ART_WARM_SPEC §2.6, designed against the §2.3 luma targets: 70–90 % of every iso frame is ground, so
+ * it carries the sunny picture-book read — L* 55–72, medium chroma, low hue noise; LI W19 band 0.45–0.70).
+ */
 export const GROUND = {
-  meadow: { root: '#28311A', mid: '#36421F', dry: '#545335', path: '#625D44', pathDark: '#4C4835', soil: '#3A3220', mud: '#2F2A1E', field: '#4A4A2A' },
-  forest: { root: '#22301C', mid: '#2F4A2A', dry: '#4E5232', path: '#5E4E38', pathDark: '#463A2A', soil: '#30281C', mud: '#262018', field: '#3A4226' },
-  town:   { root: '#3E4228', mid: '#56583A', dry: '#7A7656', path: '#9C927C', pathDark: '#7A725E', soil: '#4A4030', mud: '#3A3226', field: '#5A5A3A' },
-  gate:   { root: '#33372A', mid: '#4A4E3C', dry: '#6A6A52', path: '#7C786C', pathDark: '#5E5A50', soil: '#3E382C', mud: '#2E2A22', field: '#4A4A38' },
-  bog:    { root: '#262E1C', mid: '#34402A', dry: '#505436', path: '#5A4C38', pathDark: '#43392A', soil: '#2C2618', mud: '#221E16', field: '#3A4028' },
-  keep:   { root: '#2A2628', mid: '#3A3638', dry: '#4E4A4A', path: '#5A5658', pathDark: '#444042', soil: '#2E2A28', mud: '#221E1E', field: '#363234' },
+  meadow: { root: '#5C8A36', mid: '#86B44A', dry: '#CFC27A', path: '#E2C996', pathDark: '#C4A574', soil: '#9C7650', mud: '#7E6248', field: '#C8B862' },
+  forest: { root: '#4E7A38', mid: '#6E9E48', dry: '#B8B46E', path: '#D6B88A', pathDark: '#B0946C', soil: '#8A6A4A', mud: '#6E5640', field: '#A6B060' },
+  town:   { root: '#7AA052', mid: '#98BA62', dry: '#D8CC90', path: '#E8D7B6', pathDark: '#CDB894', soil: '#A88A68', mud: '#8A7058', field: '#C6BC80' },
+  gate:   { root: '#7C9A4E', mid: '#A0B05A', dry: '#E0BE84', path: '#EBC69E', pathDark: '#CFA27E', soil: '#A87A5C', mud: '#8A6450', field: '#D6B276' },
+  bog:    { root: '#3E8A6A', mid: '#5AA87A', dry: '#A8C67C', path: '#D2C29A', pathDark: '#B09E7A', soil: '#7A6A50', mud: '#5E5A48', field: '#86B47A' },
+  keep:   { root: '#8A7268', mid: '#A68A7A', dry: '#C8A890', path: '#D8BCA0', pathDark: '#B8987E', soil: '#8A6A5A', mud: '#6E5450', field: '#B09080' },
 };
+
+/**
+ * Ground look constants: world-space detail noise (± brightness; calm from 50° above, ART §2.2 "low hue noise") and
+ * PERF §7.3 Low-tier vertex AO (height-difference term over 8 neighbours at `r` m: ao = clamp(1 − k · max(0, hAvg − h)
+ * / r, min, 1)), which stands in for the shadow map Low does not have.
+ */
+export const GROUND_LOOK = Object.freeze({ noise: 0.16, speck: 0.2, flowerNear: 4, ao: Object.freeze({ r: 1.5, k: 0.35, min: 0.65 }) });
 
 const _a = new THREE.Color(), _c = new THREE.Color();
 
@@ -187,6 +197,11 @@ export class Terrain {
     this._each(x, z, r + 2, (i, d) => { const k = 1 - smooth(r, r + 2, d); this.hmul[i] *= 1 + (mul - 1) * k; });
   }
 
+  /** Multiply grass density inside a disc (soft 1 m edge): the WA §3.5 arena stage (× 0.4). */
+  scaleGrass(x, z, r, mul) {
+    this._each(x, z, r + 1, (i, d) => { const k = 1 - smooth(r, r + 1, d); this.density[i] *= 1 + (mul - 1) * k; });
+  }
+
   /** Paint ground colour in a disc with soft edges (weight 0..1). */
   paintDisc(x, z, r, color, weight = 1, soft = 1.5) {
     _a.set(color);
@@ -238,8 +253,9 @@ export class Terrain {
     // very slight darkening in hollows (cheap AO)
     const h = this.heightfield.h[i];
     if (typeof this.def.groundColor === 'function') this.def.groundColor(x, z, h, out);
-    out.multiplyScalar(0.92 + 0.08 * smooth(-1.5, 1.5, h));
+    out.multiplyScalar(0.95 + 0.05 * smooth(-1.5, 1.5, h));
     if (this.grassDarken > 0) out.multiplyScalar(1 - this.grassDarken * Math.min(1, this.density[i] ?? 0));
+    if (this._ao) out.multiplyScalar(this.aoAt(i));
     return out;
   }
 
@@ -251,8 +267,9 @@ export class Terrain {
    * { full, coarse, box } and Level swaps in the half-resolution geometry for tiles far from the camera
    * (updateGroundLod). `mesh` is the Mesh (chunks 1) or a Group.
    */
-  finalize({ step = 1, chunks = 1, lod = false } = {}) {
+  finalize({ step = 1, chunks = 1, lod = false, ao = false } = {}) {
     const hf = this.heightfield, W = this.W, res = this.res;
+    this._ao = !!ao;
     step = Math.max(1, step | 0); while (step > 1 && res % step) step--;
     const cells = res / step;
     chunks = Math.max(1, chunks | 0); while (chunks > 1 && cells % chunks) chunks--;
@@ -286,7 +303,8 @@ export class Terrain {
       data[i * 4] = toHalf(hf.h[i]);
       data[i * 4 + 1] = toHalf(Math.max(0, Math.min(1, this.density[i])));
       data[i * 4 + 2] = toHalf(Math.max(0, this.hmul[i]));
-      data[i * 4 + 3] = toHalf(this.dry[i]);
+      // A = dryness + 2 × near-spine (path edge + GROUND_LOOK.flowerNear m): the tufts' flower share (8 % / 3 %)
+      data[i * 4 + 3] = toHalf(this.dry[i] + (this._dSpine && this._dSpine[i] < this.pathWidth * 0.5 + GROUND_LOOK.flowerNear ? 2 : 0));
     }
     const tex = new THREE.DataTexture(data, W, W, THREE.RGBAFormat, THREE.HalfFloatType);
     tex.minFilter = tex.magFilter = THREE.LinearFilter;
@@ -355,6 +373,22 @@ export class Terrain {
     return tris;
   }
 
+  /**
+   * PERF §7.3 Low vertex AO at grid index i: hollows (lower than the mean of the 8 neighbours `r` m away) darken,
+   * never below `min`. Pure apart from reading the heightfield.
+   */
+  aoAt(i) {
+    const A = GROUND_LOOK.ao, W = this.W, h = this.heightfield.h;
+    const iz = Math.floor(i / W), ix = i - iz * W, k = Math.max(1, Math.round(A.r / this.cell));
+    let sum = 0, n = 0;
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dz) continue;
+      const jx = Math.min(W - 1, Math.max(0, ix + dx * k)), jz = Math.min(W - 1, Math.max(0, iz + dz * k));
+      sum += h[jz * W + jx]; n++;
+    }
+    return Math.min(1, Math.max(A.min, 1 - A.k * Math.max(0, sum / n - h[i]) / A.r));
+  }
+
   /** Grass density at (x, z) from the paint layer (nearest cell). */
   densityAt(x, z) {
     const i = Math.round((x + this.half) / this.cell), j = Math.round((z + this.half) / this.cell);
@@ -363,9 +397,10 @@ export class Terrain {
   }
 }
 
-/** Lambert ground with vertex colours and world-space detail noise (art.md §9.4: no flat-looking terrain). */
+/** Lambert ground with vertex colours and calm world-space detail noise (art.md §9.4; ART §2.2 low hue noise). */
 export function makeGroundMaterial() {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true });
+  m.dithering = true;
   m.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGWorld;')
@@ -381,11 +416,11 @@ float gN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   vec2 wp = vGWorld.xz;
   float n = gN(wp * 0.35) * 0.5 + gN(wp * 1.3) * 0.3 + gN(wp * 5.1) * 0.2;
   float speck = smoothstep(0.78, 0.95, gN(wp * 9.0));
-  diffuseColor.rgb *= 0.82 + 0.36 * n;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.12, 1.08, 0.9), speck * 0.35);
+  diffuseColor.rgb *= ${(1 - GROUND_LOOK.noise).toFixed(3)} + ${(GROUND_LOOK.noise * 2).toFixed(3)} * n;
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.06, 0.94), speck * ${GROUND_LOOK.speck.toFixed(3)});
 }`);
   };
-  m.customProgramCacheKey = () => 'world-ground-v1';
+  m.customProgramCacheKey = () => 'world-ground-v2';
   m.userData.owned = true;
   return m;
 }

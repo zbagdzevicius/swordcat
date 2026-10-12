@@ -3,13 +3,18 @@
 //   flag(k, v?)                         get / set a story flag (setting emits story:flag)
 //   isPlaying                           a scene is running (world triggers / interacts wait for it)
 //   skip() / skipAll()                  skip the running scene (its `end` block applies) / it and every queued one
-// Additive: current, playingId, line, advance(), seen(id), newGame(opts), continueGame(), toTitle(), chapterCard(n),
-// tutorial (Midnight Practice), barks (§6), cinema (overlay routing: ui when it says it handles a feature, else the
-// story's own Overlay.js). See requests/story.md for the ui contract.
+// Additive: current, playingId, line, advance(), seen(id), newGame(opts), continueGame(at), toTitle(), chapterCard(n),
+// tutorial (Morning Practice), barks (§6), cinema (overlay routing: ui when it says it handles a feature, else the
+// story's own Overlay.js), hint(key, o) (one-time hints; Mochi says them once he has joined), stage (the prologue
+// stage), toChart(), barnSet(on). See requests/story.md for the ui contract.
 //
-// Flow: boot loads `meadow` spawn `title` → CS-00 (title loop) → "Press any key" → ui's main menu (or, until the ui
-// lands, continue / new game) → newGame(): CS-01 → Midnight Practice → G-01 (trigger) → CS-02 (trigger) → Chapter 1:
-// CS-03 (picnic interact) → the net ropes → `cs03b` (Pudding follows) → D-01 (Mochi's cage, companions call it).
+// Flow (WA §6.2, "play first"): boot loads `meadow` spawn `title` → CS-00 (title loop on the sunny practice field,
+// Pearl beside her) → the tap → newGame(): no fade, no reload, the camera blends to follow and she plays at once →
+// Morning Practice (7 lessons, Pearl guiding; `tutbow` after the bonk) → `tutpearl` → Pearl leads her to the height
+// chart → CS-01 (one ear-tuft short, ~20 s) → CS-02 (The Giggling Mist) → she runs to the barn → CS-01b (Suit Up; the
+// chest) → Chapter 1: G-01 on her way north → D-01 (Mochi's cart, companions call it) → CS-03 (picnic interact) → the
+// net ropes → `cs03b` (Pudding follows). The prologue director (`_prologueTick`) plays each beat by position / flag
+// when the level's own triggers do not (or a save resumes mid-prologue). Old saves map through `migrateFlags`.
 // Acts I–II (M2), driven by gameplay events (world / enemies / companions may also call play() directly; a second
 // request for a running or queued id is merged): forest D-02 (Sage's cage, companions) → CS-04 (trigger `camp`) →
 // CS-05 (B1 defeated); town D-03 (Bakery Street cleared) → the Pilfer chase → CS-06 (post bag returned) → D-04 ×3
@@ -18,12 +23,15 @@
 // 100% → B2 → CS-09 → CS-10 (results; `town` hub, grey). The quest log follows the §19.7 flags (quest:update).
 // Boss defeats start CS-05 / CS-09 / D-05; scenes of later milestones run as placeholders that apply their end state.
 import { E } from '../core/events.js';
-import { LEVEL_IDS } from '../core/config.js';
+import { LEVEL_IDS, FADE_COLOR } from '../core/config.js';
 import { Cutscene } from './Cutscene.js';
 import { Overlay } from './Overlay.js';
-import { Tutorial } from './tutorial.js';
+import { Tutorial, PRACTICE, setTimeoutish } from './tutorial.js';
 import { BarkDirector } from './dialogue/barks.js';
-import { CUTSCENES, ALIASES, placeholderScene } from './cutscenes/index.js';
+import { EAGER, LAZY, SCENE_LEVEL, ALIASES, placeholderScene, loadScene } from './cutscenes/registry.js';
+import { BARN, levelChest } from './cutscenes/cs01b.js';
+import { buildSunPatch } from './cutscenes/rig.js';
+import { G01_STATUE } from './cutscenes/g01.js';
 import { t as tr, text as textOf } from './strings.js';
 import { currentQuest, nextLevel, levelCards, entrySpawn } from './quests.js';
 import { hubLine } from './dialogue/hub.js';
@@ -44,6 +52,50 @@ export const TITLE_ACCEPT_AFTER = 1.2;
 /** The Line beats (§12.6): repair fraction → scene, plus the CS-08 pre-roll (≤ 2 alive, no telegraph, ≤ 10 s). */
 export const LINE_BEATS = Object.freeze([{ at: 0.70, id: 'cs08', flag: 'gate.spoons', preroll: true }, { at: 0.85, id: 'g02', flag: 'gate.leap' }]);
 export const PREROLL = Object.freeze({ maxAlive: 2, maxWait: 10 });
+/**
+ * The prologue director (WA §6.2): the height chart (Pearl waits there), the barn chest (fallback when the level has no
+ * chest interactable), G-01's spot (fallback while world's `tallbert` trigger is still keyed to the old flags), and the
+ * barn sunbeam's sparkle period. Radii in metres.
+ */
+export const PROLOGUE = Object.freeze({ chartR: PRACTICE.chartR, chestR: 2.2, g01: Object.freeze([0, -61]), g01R: 2.5, sparkleEvery: 1.6, bellSay: 3.0, pathStep: 0.3 });
+/** Mochi cheers from his carrier when a foe within this many metres of it is bonked (WA §8.4), at most every `gap` s. */
+export const MOCHI_CHEER = Object.freeze({ r: 16, gap: 2.0, n: 3 });
+
+/**
+ * Map pre-Phase-W prologue flags onto the new order (play first; WA §6.2). Old: CS-01 (night barn) set
+ * `prologue.armour`, Midnight Practice set `prologue.tutorial`, CS-02 set `prologue.done`. New: `prologue.start`
+ * (new adventure) → `.practice` → `.chart` (CS-01) → `.raid` (CS-02) → CS-01b sets armour / tutorial / done. Returns
+ * the flags it set. Pure on a GameState-like object.
+ * @returns {string[]}
+ */
+export function migrateFlags(st) {
+  if (typeof st?.getFlag !== 'function' || typeof st?.setFlag !== 'function') return [];
+  const f = (k) => !!st.getFlag(k), out = [];
+  const set = (...ks) => { for (const k of ks) if (!f(k)) { st.setFlag(k, true); out.push(k); } };
+  if (f('prologue.done')) set('prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid');
+  else if (f('prologue.tutorial')) set('prologue.start', 'prologue.practice', 'prologue.chart');   // old: practice done, CS-02 next
+  else if (f('prologue.armour')) set('prologue.start');                                             // old: CS-01 seen, practice running
+  return out;
+}
+
+/** The prologue stage of a save: 'title' | 'practice' | 'chart' | 'raid' | 'suit' | 'done'. Pure. */
+export function prologueStage(st) {
+  const f = (k) => !!st?.getFlag?.(k);
+  if (f('prologue.done')) return 'done';
+  if (f('prologue.raid')) return 'suit';
+  if (f('prologue.chart')) return 'raid';
+  if (f('prologue.practice')) return 'chart';
+  if (f('prologue.start')) return 'practice';
+  return 'title';
+}
+
+/** Is a fade colour black-ish (#000, #000000, black)? Story fades are cream (WA §2.7, core.W3). Pure. */
+export function isBlack(c) {
+  if (c == null) return false;
+  const v = String(c).trim().toLowerCase();
+  return v === 'black' || /^#0{3}(0{3})?$/.test(v) || /^#0{3}f$|^#0{6}ff$/.test(v);
+}
+
 /** Items whose return ends the Pilfer chase (CS-06) / the winch pin (gate.pin). */
 export const POST_ITEMS = Object.freeze(['post_bag', 'postbag', 'mailbag', 'post']);
 export const PIN_ITEMS = Object.freeze(['pin', 'winch_pin']);
@@ -130,8 +182,10 @@ export class Cinema {
     }
     if (step.chapter !== undefined) cmd.chapter = step.chapter == null || step.chapter === false ? null : (typeof step.chapter === 'object' ? step.chapter : chapterInfo(step.chapter));
     if (step.fade !== undefined) {
-      cmd.fade = step.fade;
-      const f = step.fade;
+      // WA §2.7: every story fade is cream, never black (a payload asking for black, or for no colour while fading in)
+      let f = step.fade;
+      if (f && typeof f === 'object' && (isBlack(f.to) || (f.to === undefined && (f.alpha ?? 1) > 0))) f = { ...f, to: FADE_COLOR };
+      cmd.fade = f;
       this.fadeAlpha = f == null || f === false ? 0 : typeof f === 'number' ? f : (f.alpha ?? 1);
     }
     if (step.press !== undefined) cmd.press = step.press ? textOf(typeof step.press === 'string' ? step.press : 'title.prompt') : false;
@@ -188,7 +242,8 @@ export class StoryManager {
     this.current = null;
     /** @type {{id: string, def: any, resolve: Function}[]} */
     this.queue = [];
-    this.registry = CUTSCENES;
+    /** every scene that can start this frame: the bundled ones, plus lazy ones once loaded (tests add their own) */
+    this.registry = { ...EAGER };
     this.cinema = new Cinema(ctx, this);
     this.tutorial = new Tutorial(ctx, this);
     this.barks = new BarkDirector(ctx, this);
@@ -211,14 +266,23 @@ export class StoryManager {
     this.autoBeats = !ctx.params?.test;
     this._lastHub = new Map();
     this._resultsP = null;
+    /** lazy scenes being loaded for a play() (PERF S1t); isPlaying stays true meanwhile */
+    this._loading = new Set();
+    /** the barn sunbeam set piece (Suit Up stage): { obj, off } */
+    this.barn = null;
+    this._raidAsked = false;
+    this._cheer = { t: 0, n: 0 };
+    this._directorT = 0;
   }
 
   // ------------------------------------------------------------------ contract
-  get isPlaying() { return !!this.current; }
+  get isPlaying() { return !!this.current || this._loading.size > 0; }
   get playingId() { return this.current?.id ?? null; }
   /** M0 compatibility: the running scene's handle. */
   get playing() { return this.current; }
   get chapter() { return chapterOf(this.ctx.state, this.ctx.levels?.current?.id); }
+  /** The prologue stage of this save (see prologueStage). */
+  get stage() { return prologueStage(this.ctx.state); }
 
   async init() {
     const ctx = this.ctx, bus = ctx.bus, on = (ev, fn) => this._offs.push(bus.on(ev, fn));
@@ -238,7 +302,10 @@ export class StoryManager {
     on(E.PLAYER_SPAWNED, () => this._beltLetter());
     on(E.PROMPT, (p) => this.cinema.prompt(p));
     on(E.LEVEL_LOADED, (p) => this._onLevelLoaded(p));
-    on(E.LEVEL_LOADING, () => { this.barks.clear(); });
+    on(E.LEVEL_LOADING, (p) => { this.barks.clear(); this.barnSet(false); this._prefetch(p?.id); });
+    on(E.ENEMY_DIED, (p) => this._mochiCheer(p));
+    // ?test: smoke blocks start any scene at any time, so every lazy scene is loaded up front there
+    if (ctx.params?.test) for (const id of Object.keys(LAZY)) this._prefetchOne(id);
     if (HAS_DOM()) {
       this._onGesture = (e) => {
         if (e?.repeat) return;                                       // a held key's auto-repeat is not a new press
@@ -258,13 +325,40 @@ export class StoryManager {
     // the same scene asked for twice (world's Line controller and story's own listener): one run, both promises
     if (this.current?.id === id && !this.current.finished && id !== 'cs00') return this._waitEnd(id);
     if (this.queue.some((e) => e.id === id)) return this._waitEnd(id);
-    const def = this.registry[id] ?? placeholderScene(id);
+    let def = this.registry[id];
+    if (!def && LAZY[id]) return this._playLazy(id);
+    def ??= placeholderScene(id);
+    // once-per-save scenes (the prologue beats, G-01): a second request (world trigger + director) is refused
+    if (def.once && this.seen(id) && !this.ctx.params?.test) return Promise.resolve({ id, skipped: true, refused: true });
     return new Promise((resolve) => {
       const entry = { id, def, resolve };
       if (this.current && this.current.id === 'cs00' && id !== 'cs00') this.current.skip();
       if (this.current) { this.queue.push(entry); return; }
       this._start(entry);
     });
+  }
+
+  /** Load a lazy scene, then play it (isPlaying is true meanwhile so triggers wait). */
+  _playLazy(id) {
+    this._loading.add(id);
+    return loadScene(id).then((def) => {
+      this._loading.delete(id);
+      if (def) this.registry[id] = def;
+      return def ? this.play(id) : this._playMissing(id);
+    });
+  }
+
+  _playMissing(id) { this.registry[id] = placeholderScene(id); return this.play(id); }
+
+  /** Prefetch the scenes of a level that is loading (fire and forget). */
+  _prefetch(levelId) {
+    for (const id of SCENE_LEVEL[levelId] ?? []) this._prefetchOne(id);
+  }
+
+  /** Load one lazy scene into the registry (no-op when it is there already). */
+  _prefetchOne(id) {
+    if (this.registry[id]) return;
+    loadScene(id).then((def) => { if (def && !this.registry[id]) this.registry[id] = def; });
   }
 
   _waitEnd(id) {
@@ -371,7 +465,9 @@ export class StoryManager {
   // ------------------------------------------------------------------ title, new game, continue
   _onLevelLoaded(p) {
     const ctx = this.ctx;
+    this._raidAsked = false;
     if (p?.spawnId === 'title') { if (!this.current || this.current.id !== 'cs00') this.play('cs00'); return; }
+    migrateFlags(ctx.state);
     // later chapters: the card on the first visit (meadow's come from CS-01 / CS-02; not in ?test, where smoke loads
     // levels all the time and the card would sit over every area's screenshots)
     const n = LEVEL_CHAPTER[p?.id];
@@ -387,7 +483,10 @@ export class StoryManager {
   }
 
   /** CS-00 hook: the title is up (story waits for "any key"). */
-  titleBegin() { this.title = { active: true, t: 0, pressed: false, done: false, prompted: false }; }
+  titleBegin() { this.title = { active: true, t: 0, pressed: false, done: false, prompted: false, ready: false }; }
+
+  /** CS-00 hook: the press prompt is up (`game.playReady` was true, PERF S2t). */
+  titlePressReady() { this.title.ready = true; }
 
   /** CS-00's `until`: the title is over (new game / continue chosen). */
   get titleDone() { return this.title.done; }
@@ -399,7 +498,8 @@ export class StoryManager {
     if (!T.active || T.pressed) return;
     T.t += dt;
     const pad = this.ctx.input?.anyActivity?.() && this.ctx.input.device === 'pad';
-    if (T.t < TITLE_ACCEPT_AFTER) { this._gestureSeen = this._gestures; return; }
+    // PERF S2t: the press counts once the prompt is up (CS-00 waits on game.playReady behind the logo)
+    if (T.t < TITLE_ACCEPT_AFTER || T.ready === false) { this._gestureSeen = this._gestures; return; }
     if (this._gestures !== this._gestureSeen || pad) {
       this._gestureSeen = this._gestures;
       T.pressed = true;
@@ -414,7 +514,7 @@ export class StoryManager {
     this.cinema.apply({ press: false });
     if (typeof ctx.ui?.openMainMenu === 'function') { try { ctx.ui.openMainMenu(); return; } catch (e) { console.warn('[story] main menu failed', e); } }
     const st = ctx.state;
-    if (st?.getFlag?.('prologue.armour')) this.continueGame(); else this.newGame();
+    if (st?.getFlag?.('prologue.start') || st?.getFlag?.('prologue.armour')) this.continueGame(); else this.newGame();
   }
 
   /** Wait `sec` real seconds (rendered frames; works in any mode). */
@@ -424,49 +524,86 @@ export class StoryManager {
     return new Promise((resolve) => { let t = 0; const off = g.addFrameHook((dt) => { t += dt; if (t >= sec) { off(); resolve(); } }); });
   }
 
+  /** Start-of-adventure outfit: the tunic with the sword visible (characters' `tunic_sword` when the model has it). */
+  practiceOutfit() {
+    const p = this.ctx.player;
+    const has = p?.hasOutfit?.('tunic_sword') ?? p?.outfits?.includes?.('tunic_sword') ?? p?.model?.outfits?.includes?.('tunic_sword');
+    return has ? 'tunic_sword' : 'tunic';
+  }
+
   /**
-   * New game (§14.3): reset progress (settings kept), then the prologue (CS-01 → Midnight Practice), or straight to
-   * Chapter 1 with `skipPrologue`.
+   * New adventure (§14.3, WA §6.3): reset progress (settings kept), flag `prologue.start`. On the title scene there is
+   * no fade and no reload: CS-00 ends normally (the camera blends MEME_LOOP → follow over 1.1 s), she hops out of the
+   * Oath pose in her practice tunic and Morning Practice starts right there (Pearl is already beside her). Anywhere else
+   * a cream fade covers a load of the practice field. `skipPrologue` goes straight to Chapter 1.
    * @param {{ difficulty?: string, skipPrologue?: boolean }} [o]
    */
   async newGame({ difficulty = null, skipPrologue = false } = {}) {
     const ctx = this.ctx, st = ctx.state;
-    this.cinema.apply({ fade: { to: '#000', alpha: 1, dur: 0.7 } });
-    await this._sleep(0.75);
-    if (this.current?.id === 'cs00') this.current.skip();
-    this._endTitle();
+    const onTitle = !skipPrologue && this.current?.id === 'cs00' && this.levelId === 'meadow';
+    if (!onTitle) {
+      this.cinema.apply({ fade: { to: FADE_COLOR, alpha: 1, dur: 0.5 } });
+      await this._sleep(0.55);
+    }
     this.queue.length = 0;
     if (st) {
       const settings = { ...st.settings };
       st.reset({ settings, difficulty: difficulty ?? st.difficulty ?? 'knight' });
     }
-    try {
-      if (skipPrologue) {
-        for (const k of ['prologue.armour', 'prologue.tutorial', 'prologue.done']) this.flag(k, true);
-        await ctx.levels.load('meadow', 'start');
-        this.cinema.apply({ fade: { alpha: 0, dur: 1.0 } });
-        this.chapterCard(1);
-        ctx.bus.emit(E.SAVE_REQUEST, {});
-        return;
-      }
-      await ctx.levels.load('meadow', 'practice');
-    } catch (e) { console.error('[story] new game load failed', e); }
-    this.play('cs01');
-  }
-
-  /** Continue the saved game: its level and spawn (a save that never got past CS-01 starts the prologue). */
-  async continueGame() {
-    const ctx = this.ctx, st = ctx.state;
-    if (!st?.getFlag?.('prologue.armour')) return this.newGame();
-    this.cinema.apply({ fade: { to: '#000', alpha: 1, dur: 0.6 } });
-    await this._sleep(0.65);
+    this.tutorial.reset();
+    this._raidAsked = false;
+    if (skipPrologue) {
+      if (this.current?.id === 'cs00') this.current.skip();
+      this._endTitle();
+      this._despawnPearl();
+      for (const k of ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid', 'prologue.armour', 'prologue.tutorial', 'prologue.done']) this.flag(k, true);
+      try { await ctx.levels.load('meadow', 'start'); } catch (e) { console.error('[story] new game load failed', e); }
+      this.cinema.apply({ fade: { alpha: 0, dur: 0.8 } });
+      this.chapterCard(1);
+      ctx.bus.emit(E.SAVE_REQUEST, {});
+      return;
+    }
+    this.flag('prologue.start', true);
+    const outfit = this.practiceOutfit();
+    if (onTitle) {
+      this._endTitle();
+      try { ctx.player?.setOutfit?.(outfit); } catch (e) { console.warn(e); }
+      this.current?.finish?.(false);                               // the title loop ends normally: blend, no cut
+      try { ctx.player?.play?.('hop', { once: true }); ctx.fx?.burst?.('sparkle', ctx.player, { count: 12, color: '#FFF1C4' }); } catch { /* optional */ }
+      ctx.bus.emit(E.SAVE_REQUEST, {});
+      return;
+    }
     if (this.current?.id === 'cs00') this.current.skip();
     this._endTitle();
-    const level = LEVEL_IDS.includes(st.levelId) ? st.levelId : 'meadow';
-    let spawn = st.spawnId || 'start';
-    if (spawn === 'title') spawn = st.getFlag('prologue.done') ? 'start' : 'practice';
+    try { await ctx.levels.load('meadow', 'practice'); } catch (e) { console.error('[story] new game load failed', e); }
+    try { ctx.player?.setOutfit?.(outfit); } catch (e) { console.warn(e); }
+    this.cinema.apply({ fade: { alpha: 0, dur: 0.8 } });
+    ctx.bus.emit(E.SAVE_REQUEST, {});
+  }
+
+  /**
+   * Continue the saved game: its level and spawn (`at` = ui's resume point). Old saves map their prologue flags
+   * first (migrateFlags); a save still in the prologue resumes on the practice field, where the director picks the
+   * next beat up. A save that never started an adventure starts one.
+   * @param {{ levelId?: string, spawnId?: string }|null} [at]
+   */
+  async continueGame(at = null) {
+    const ctx = this.ctx, st = ctx.state;
+    migrateFlags(st);
+    if (!st?.getFlag?.('prologue.start')) return this.newGame();
+    this.cinema.apply({ fade: { to: FADE_COLOR, alpha: 1, dur: 0.5 } });
+    await this._sleep(0.55);
+    if (this.current?.id === 'cs00') this.current.skip();
+    this._endTitle();
+    const stage = prologueStage(st);
+    if (stage !== 'practice' && stage !== 'chart') this._despawnPearl();
+    let level = at?.levelId ?? st.levelId, spawn = at?.spawnId ?? st.spawnId ?? 'start';
+    if (!LEVEL_IDS.includes(level)) level = 'meadow';
+    if (stage !== 'done') { level = 'meadow'; if (spawn === 'title' || spawn === 'start') spawn = 'practice'; }
+    if (spawn === 'title') spawn = 'start';
     try { await ctx.levels.load(level, spawn); } catch (e) { console.error('[story] continue failed', e); }
-    this.cinema.apply({ fade: { alpha: 0, dur: 0.9 } });
+    if (stage === 'practice' || stage === 'chart' || stage === 'raid') { try { ctx.player?.setOutfit?.(st.getFlag?.('sticker.bow') ? 'tunic_bow' : this.practiceOutfit()); } catch { /* optional */ } }
+    this.cinema.apply({ fade: { alpha: 0, dur: 0.8 } });
   }
 
   /** Pause → Quit to Title: drop every scene and go back to the title loop. */
@@ -474,7 +611,98 @@ export class StoryManager {
     this.queue.length = 0;
     this.current?.skip();
     this.tutorial.reset();
+    this.barnSet(false);
     try { await this.ctx.levels.load('meadow', 'title'); } catch (e) { console.error('[story] to title failed', e); }
+  }
+
+  /** The title / practice Pearl (an NPC) goes away (continue elsewhere, skip prologue). */
+  _despawnPearl() {
+    const c = this.ctx.companions;
+    const a = (c?.actors ?? []).find?.((x) => x?.npcId === 'pearl');
+    if (a) { try { c.despawn?.(a); } catch { /* gone */ } }
+  }
+
+  // ------------------------------------------------------------------ the prologue director (WA §6.2)
+  /** One-time hint (Mochi's bubble once he is in the party, a toast before). See Tutorial.hint. */
+  hint(key, o) { return this.tutorial.hint(key, o); }
+
+  /**
+   * P8 (ON §4.2): practice is over. The Sunbell rings far away, Pearl says "The bell! It's measuring time! Come ON!"
+   * and runs ahead to the height chart along a little trail of sparkles; CS-01 plays when Clem reaches it.
+   */
+  toChart() {
+    const ctx = this.ctx;
+    ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: PRACTICE.chartPath.length, progress: 1, done: false, speaker: 'pearl', say: 'pearl.bell', stepDots: { n: 7, of: 7, half: false } });
+    setTimeoutish(ctx, PROLOGUE.bellSay, () => ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: 0, progress: 1, done: true, speaker: 'pearl' }));
+    try { ctx.audio?.bell?.({ strikes: 1, volume: 0.55 }); } catch { /* audio optional */ }
+    const pearl = (ctx.companions?.actors ?? []).find?.((a) => a?.npcId === 'pearl') ?? null;
+    const path = PRACTICE.chartPath;
+    path.forEach(([x, z], i) => setTimeoutish(ctx, 0.2 + i * PROLOGUE.pathStep, () => {
+      const y = ctx.physics?.heightAt?.(x, z) ?? ctx.player?.pos?.y ?? 0;
+      try { ctx.fx?.burst?.('sparkle', { x, y: y + 0.2, z }, { count: 6, color: '#FFD57A' }); } catch { /* fx optional */ }
+    }));
+    if (pearl?.moveTo) {
+      pearl.setScripted?.(true);
+      let p = Promise.resolve();
+      for (const pt of path) p = p.then(() => pearl.moveTo(pt, PRACTICE.pearl.speed));
+      p.then(() => { try { pearl.face?.(ctx.player ?? 0, 0.4); pearl.play?.('wave', { once: true }); } catch { /* gone */ } });
+    }
+  }
+
+  /**
+   * The barn set piece of the Suit Up stage: one warm sunbeam on the chest spot and a slow sparkle there (the chest
+   * itself is world's interactable, or CS-01b's own prop). `barnSet(false)` removes it. Idempotent.
+   */
+  barnSet(on) {
+    const ctx = this.ctx;
+    if (!on) {
+      if (!this.barn) return;
+      try { this.barn.off?.(); this.barn.obj?.removeFromParent?.(); this.barn.obj?.userData?.dispose?.(); } catch (e) { console.warn(e); }
+      this.barn = null;
+      return;
+    }
+    if (this.barn || !ctx.scene || this.levelId !== 'meadow') return;
+    const [x, z] = BARN.chest;
+    const y = ctx.physics?.heightAt?.(x, z) ?? 0;
+    let obj = null;
+    try { obj = buildSunPatch(); obj.position.set(x, y + 0.05, z); ctx.scene.add(obj); } catch (e) { console.warn('[story] barn sunbeam failed', e); }
+    let t = 0;
+    const off = ctx.game?.addFrameHook?.((dt) => {
+      if ((t += dt) < PROLOGUE.sparkleEvery) return;
+      t = 0;
+      try { ctx.fx?.burst?.('sparkle', { x, y: y + 0.5, z }, { count: 4, color: '#FFD57A' }); } catch { /* fx optional */ }
+    }) ?? null;
+    this.barn = { obj, off };
+  }
+
+  /** Per step in play: the next prologue beat by stage, flag and position (world triggers may also start them). */
+  _prologueTick(dt) {
+    const ctx = this.ctx, p = ctx.player, st = ctx.state;
+    if (!p || this.levelId !== 'meadow' || this.current || this._loading.size || this.queue.length) return;
+    if ((this._directorT -= dt) > 0) return;
+    this._directorT = 0.1;
+    const stage = prologueStage(st), near = (xz, r) => Math.hypot(p.pos.x - xz[0], p.pos.z - xz[1]) <= r;
+    if (stage === 'chart') { if (near(PRACTICE.chart, PROLOGUE.chartR) || near([PRACTICE.chart[0], PRACTICE.chart[1] + 1.3], PROLOGUE.chartR)) this.play('cs01'); }
+    else if (stage === 'raid') { if (!this._raidAsked) { this._raidAsked = true; this.play('cs02'); } }
+    else if (stage === 'suit') {
+      this.barnSet(true);
+      if (!levelChest(ctx) && near(BARN.chest, PROLOGUE.chestR)) this.play('cs01b');
+    } else if (stage === 'done') {
+      if (!this.seen('g01') && near(PROLOGUE.g01, PROLOGUE.g01R) && p.pos.z < G01_STATUE[1]) this.play('g01');
+    }
+  }
+
+  /** Mochi cheers each bonk at his cart from inside the carrier (WA §8.4 `bark.mochi.cheer.*`). */
+  _mochiCheer(e) {
+    const ctx = this.ctx;
+    if (this.levelId !== 'meadow' || ctx.state?.getFlag?.('meadow.mochi') || !e?.position) return;
+    const now = this.tutorial._gameT ?? 0;
+    if (now - this._cheer.t < MOCHI_CHEER.gap) return;
+    const m = (ctx.companions?.actors ?? []).find?.((a) => a?.kittenId === 'mochi' && a.alive !== false);
+    if (!m?.pos || Math.hypot(m.pos.x - e.position.x, m.pos.z - e.position.z) > MOCHI_CHEER.r) return;
+    this._cheer.t = now;
+    this._cheer.n = (this._cheer.n % MOCHI_CHEER.n) + 1;
+    this.barks.say(m, `bark.mochi.cheer.${this._cheer.n}`, 'mochi', 1.8);
   }
 
   // ------------------------------------------------------------------ M2 beats driven by gameplay events
@@ -613,7 +841,7 @@ export class StoryManager {
     if (cs) {
       this._skipHold(dt, cs);
       if (this.current === cs) cs.update(dt);
-    } else if (mode === 'play' || mode === 'memecam') this.tutorial.update(dt);
+    } else if (mode === 'play' || mode === 'memecam') { this.tutorial.update(dt); if (!this.current) this._prologueTick(dt); }
     if (this.title.active) this._titleTick(dt);
     if (this.preroll && (mode === 'play' || mode === 'memecam')) this._prerollTick(dt);
     this.barks.update(dt);
@@ -649,6 +877,7 @@ export class StoryManager {
     for (const off of this._offs) off();
     this._offs.length = 0;
     if (HAS_DOM() && this._onGesture) for (const ev of ['keydown', 'pointerdown', 'touchstart']) window.removeEventListener(ev, this._onGesture);
+    this.barnSet(false);
     this.tutorial.dispose();
     this.barks.dispose();
     this.cinema.dispose();

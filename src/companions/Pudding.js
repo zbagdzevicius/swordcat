@@ -114,17 +114,20 @@ function buildNet(dome, tethers) {
     tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 56, 0.03, 4, true));
   }
   const domeMesh = new THREE.Group(); domeMesh.name = 'netDome';
-  for (const t of tubes) { const m = new THREE.Mesh(t, mat); m.castShadow = true; domeMesh.add(m); }
+  for (const t of tubes) { const m = new THREE.Mesh(t, mat); m.castShadow = false; domeMesh.add(m); }
   g.add(domeMesh);
   const ropes = [];
   for (const [x, z] of tethers) {
     const a = new THREE.Vector3(x * 0.55, 0.5, z * 0.55), b = new THREE.Vector3(x, 0.9, z);
     const mid = a.clone().lerp(b, 0.5); mid.y -= 0.25;
     const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(a, mid, b), 10, 0.04, 4, false), mat);
-    m.castShadow = true; ropes.push(m); g.add(m);
+    m.castShadow = false; ropes.push(m); g.add(m);
   }
   return { group: g, dome: domeMesh, ropes, mat };
 }
+
+/** Pudding's contact blob radius (m; fx.blobs, P:M3). */
+export const PUDDING_BLOB_R = 2.2;
 
 export class Pudding extends ScriptedActorMixin(Actor) {
   /** @param {any} ctx @param {{pos?: THREE.Vector3, facing?: number}} [o] */
@@ -149,8 +152,13 @@ export class Pudding extends ScriptedActorMixin(Actor) {
 
   async loadVisual() {
     try {
-      const m = await this.ctx.assets.model(PUDDING_MODEL, { cloneMaterials: true, castShadow: true });
+      // K5 / PERF §9: no actor casts a sun shadow; his contact blob comes from fx.blobs (P:M3)
+      const m = await this.ctx.assets.model(PUDDING_MODEL, { cloneMaterials: true, castShadow: false });
       if (this.disposed) return;
+      m.root.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+      if (!this._blob && typeof this.ctx.fx?.blobs?.add === 'function') {
+        try { this.ctx.fx.blobs.add(this.object3d, PUDDING_BLOB_R); this._blob = true; } catch (e) { console.warn('[pudding] blob failed', e); }
+      }
       paintPudding(m.root);
       this.model = m;
       this.object3d.add(m.root);
@@ -450,6 +458,7 @@ export class Pudding extends ScriptedActorMixin(Actor) {
 
   dispose() {
     this.disposed = true;
+    if (this._blob) { try { this.ctx.fx?.blobs?.remove?.(this.object3d); } catch { /* fx gone */ } this._blob = false; }
     this._disposeNet();
     this.anim?.dispose();
     if (this.object3d) disposeInstance(this.object3d, { detach: false });   // bone texture + cloned materials

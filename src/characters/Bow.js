@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, Spring, segScale } from './util.js';
-import { own, TOP_VIEW, READABILITY } from './materials.js';
+import { own, TOP_VIEW, READABILITY, softRamp } from './materials.js';
 
 const _mats = new Map();
 /** Fraction of the bow's albedo added as emission. */
@@ -11,10 +11,10 @@ export const BOW_SELF_LIGHT = 0.22;
 /** Satin material (shared per colour set). Vertex colours carry base/shade/knot. */
 export function bowMaterial(sheenColor = PAL.bowLight) {
   if (_mats.has(sheenColor)) return _mats.get(sheenColor);
-  const m = new THREE.MeshPhysicalMaterial({
-    vertexColors: true, roughness: 0.38, sheen: 1, sheenColor: new THREE.Color(sheenColor), sheenRoughness: 0.3,
-    clearcoat: 0.25, clearcoatRoughness: 0.4, side: THREE.DoubleSide,
-  });
+  // WarmToon satin (ART §5.1 family, K6: no Physical in play); `sheenColor` keys the cache (bow colour sets)
+  const m = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp(), side: THREE.DoubleSide });
+  m.forceSinglePass = true;
+  m.dithering = true;
   // the bow is recognition cue #1 (art.md §0): a touch of self-light keeps it pastel pink in shade, fog and night
   // (+ READABILITY.bowGlow more from above; the top-view factor is a shared uniform object)
   m.onBeforeCompile = (sh) => {
@@ -23,7 +23,7 @@ export function bowMaterial(sheenColor = PAL.bowLight) {
       .replace('#include <common>', '#include <common>\nuniform float uTopView;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (${BOW_SELF_LIGHT.toFixed(3)} + ${READABILITY.bowGlow.toFixed(3)} * uTopView);`);
   };
-  m.customProgramCacheKey = () => 'sc-bow-v3';
+  m.customProgramCacheKey = () => 'sc-bow-v4';
   // own() last: the registered patchers (world's height / focus fog) wrap the hook set above instead of being replaced
   own(m);
   _mats.set(sheenColor, m);

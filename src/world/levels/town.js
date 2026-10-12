@@ -24,8 +24,10 @@ const M = {
   flowers: 'models/env/nature/plant_bush.glb', sack: 'models/env/village-kaykit/decoration/sack.glb',
 };
 const PAVE = 'textures/pavingstones070/color.jpg';
-const C = { wood: '#7A5B3E', woodDark: '#4E3A28', plank: '#A0825A', stone: '#B3AEA2', stoneDark: '#8C887E', cream: '#EFE3CF', red: '#B0453C', gold: '#E8C35A',
-  bronze: '#B98A3E', iron: '#4A4C50', pink: '#C9587C', blue: '#5A6FA0', green: '#6E8A4A' };
+/** Street strings: the prank strings while occupied, the same lines in festival candy (+ Main Street) once free. */
+const PRANK_STRINGS = [[[-5.2, 5.6, -45], [5.2, 5.6, -45]], [[-5.2, 5.4, -22], [5.2, 5.4, -22]], [[-5.0, 5.2, -12], [5.0, 5.6, -12]], [[-11, 5.6, 22.5], [11, 5.6, 22.5]]];
+const C = { wood: '#B7773F', woodDark: '#7E4E2A', plank: '#E8B87A', stone: '#E3CFAE', stoneDark: '#C4AC8E', cream: '#FFF3E2', red: '#E0605A', gold: '#E8C35A',
+  bronze: '#E8C27A', iron: '#6E7A8E', pink: '#FF8FB1', blue: '#6F8FC4', green: '#8DB65A' };
 
 /** §12.5 spine (South road → South Gate → main street → square → Castle Steps). */
 const SPINE = [[0, -69], [0, -60], [0, -46], [0, -34], [0, -10], [0, 8], [0, 20], [0, 36]];
@@ -68,7 +70,7 @@ const cyl = (r0, r1, h, x = 0, y = 0, z = 0, seg = 10) => new THREE.CylinderGeom
 
 /** The cat statue on its pedestal (top 2.5 above the ground; the rim is 0.6): a sitting stone cat with a sword. */
 function statueParts() {
-  const s = SQUARE, st = '#C9C4B6', dk = '#A39E92';
+  const s = SQUARE, st = '#E8D8BC', dk = '#C9B498';
   const p = [[box(1.5, s.base - s.rim, 1.5, 0, (s.base + s.rim) / 2, 0), dk], [box(1.7, 0.12, 1.7, 0, s.base - 0.06, 0), st], [box(1.7, 0.12, 1.7, 0, s.rim + 0.06, 0), st]];
   const b = s.base;
   const body = new THREE.SphereGeometry(0.34, 14, 10); body.scale(1, 1.15, 0.9); body.translate(0, b + 0.36, 0);
@@ -76,14 +78,14 @@ function statueParts() {
   p.push([body, st], [head, st]);
   for (const sx of [-1, 1]) p.push([new THREE.ConeGeometry(0.09, 0.18, 4).translate(sx * 0.13, b + 1.0, 0.04), st]);
   p.push([new THREE.TorusGeometry(0.22, 0.06, 6, 12, Math.PI).rotateY(Math.PI / 2).translate(-0.3, b + 0.12, -0.15), st]);   // tail
-  p.push([box(0.06, 0.62, 0.05, 0.22, b + 0.55, 0.32), '#B8B4A8'], [box(0.26, 0.05, 0.06, 0.22, b + 0.3, 0.32), dk]);   // the stone sword
-  p.push([box(0.2, 0.08, 0.02, -0.1, b + 1.0, 0.0).rotateZ(0.3), '#C9587C']);   // a pink ribbon somebody tied on
+  p.push([box(0.06, 0.62, 0.05, 0.22, b + 0.55, 0.32), '#E2D6C0'], [box(0.26, 0.05, 0.06, 0.22, b + 0.3, 0.32), dk]);   // the stone sword
+  p.push([box(0.2, 0.08, 0.02, -0.1, b + 1.0, 0.0).rotateZ(0.3), '#FF8FB1']);   // a pink ribbon somebody tied on
   return p;
 }
 
 /** Water disc + inner basin lip for the fountain (the Kenney fountain gives the stone ring). */
 function fountainWaterParts() {
-  return [[new THREE.CylinderGeometry(SQUARE.fountainR - 0.35, SQUARE.fountainR - 0.35, 0.04, 28).translate(0, SQUARE.rim - 0.08, 0), '#6E8C96']];
+  return [[new THREE.CylinderGeometry(SQUARE.fountainR - 0.35, SQUARE.fountainR - 0.35, 0.04, 28).translate(0, SQUARE.rim - 0.08, 0), '#8FE0E0']];
 }
 
 /** The Sunbell: a lathe bell (r 1.0), its yoke and beam. */
@@ -91,7 +93,7 @@ function sunbellParts() {
   const pts = [];
   for (let i = 0; i <= 12; i++) { const t = i / 12; pts.push(new THREE.Vector2(0.18 + 0.82 * Math.pow(t, 1.8) + (t > 0.9 ? (t - 0.9) * 1.2 : 0), 1.2 - t * 1.2)); }
   const bell = new THREE.LatheGeometry(pts, 20);
-  return [[bell, C.bronze], [new THREE.SphereGeometry(0.16, 10, 8).translate(0, 0.25, 0), '#8A6A3A'], [box(3.4, 0.22, 0.3, 0, 1.45, 0), C.woodDark], [box(0.2, 0.4, 0.2, 0, 1.25, 0), C.iron]];
+  return [[bell, C.bronze], [new THREE.SphereGeometry(0.16, 10, 8).translate(0, 0.25, 0), '#C99A5E'], [box(3.4, 0.22, 0.3, 0, 1.45, 0), C.woodDark], [box(0.2, 0.4, 0.2, 0, 1.25, 0), C.iron]];
 }
 
 /** The bell platform (r 2.5) at the loft: planks on beams, a rail, two struts into the tower. */
@@ -129,7 +131,7 @@ function balconyParts() {
   const p = [[box(w, 0.14, d, 0, y - 0.07, 0), C.plank], [box(0.08, 0.9, d, -w / 2 + 0.04, y + 0.45, 0), C.wood], [box(w, 0.08, 0.08, 0, y + 0.88, -d / 2 + 0.04), C.wood], [box(w, 0.08, 0.08, 0, y + 0.88, d / 2 - 0.04), C.wood]];
   for (let i = 0; i < 6; i++) p.push([box(0.04, 0.82, 0.04, -w / 2 + 0.05, y + 0.41, -d / 2 + 0.2 + i * 0.32), C.woodDark]);
   for (const z of [-d / 2 + 0.2, d / 2 - 0.2]) { const g = new THREE.BoxGeometry(0.12, 1.6, 0.12); g.rotateZ(-0.55); p.push([g.translate(w / 2 - 0.55, y - 0.75, z), C.woodDark]); }
-  for (const z of [-0.5, 0.4]) p.push([cyl(0.14, 0.11, 0.24, -w / 2 + 0.25, y, z), '#A0583A'], [new THREE.SphereGeometry(0.17, 8, 6).translate(-w / 2 + 0.25, y + 0.32, z), z > 0 ? C.pink : '#E8C35A']);
+  for (const z of [-0.5, 0.4]) p.push([cyl(0.14, 0.11, 0.24, -w / 2 + 0.25, y, z), '#C9784A'], [new THREE.SphereGeometry(0.17, 8, 6).translate(-w / 2 + 0.25, y + 0.32, z), z > 0 ? C.pink : '#E8C35A']);
   return p;
 }
 
@@ -142,15 +144,17 @@ function terraceWallParts(len, h) {
 /** The castle steps: `n` wide stone steps rising +z (0.24 m each). */
 function stepsParts(n, w, run, rise) {
   const p = [];
-  for (let i = 0; i < n; i++) p.push([box(w, rise * (i + 1), run, 0, rise * (i + 1) / 2, run * (i + 0.5)), i % 2 ? C.stone : '#BDB8AC']);
+  for (let i = 0; i < n; i++) p.push([box(w, rise * (i + 1), run, 0, rise * (i + 1) / 2, run * (i + 0.5)), i % 2 ? C.stone : '#E8DAC0']);
   for (const sx of [-1, 1]) p.push([box(0.6, rise * n + 0.5, run * n, sx * (w / 2 + 0.3), (rise * n + 0.5) / 2, run * n / 2), C.stoneDark], [new THREE.SphereGeometry(0.3, 10, 8).translate(sx * (w / 2 + 0.3), rise * n + 0.75, run * n - 0.3), C.stone]);
   return p;
 }
 
 /** Bunting: triangle flags strung between two points (vertex coloured). */
+/** LI W11: the occupiers' prank colours (plum + mustard) and the festival candy set once the town is free. */
+const PRANK = Object.freeze(['#7A4E9A', '#E0B043']);
 function buntingParts(a, b, n = 12) {
   const p = [[ropeGeometry(new THREE.Vector3(...a), new THREE.Vector3(...b), { sag: 0.6, r: 0.02, seg: 12 }), C.woodDark]];
-  const cols = [C.red, C.cream, C.pink, C.gold, C.blue];
+  const cols = PRANK;
   for (let i = 1; i < n; i++) {
     const t = i / n, x = a[0] + (b[0] - a[0]) * t, z = a[2] + (b[2] - a[2]) * t, y = a[1] + (b[1] - a[1]) * t - Math.sin(t * Math.PI) * 0.6;
     const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.16, 0, 0), new THREE.Vector3(0.16, 0, 0), new THREE.Vector3(0, -0.36, 0)]);
@@ -164,13 +168,13 @@ function buntingParts(a, b, n = 12) {
 
 /** A bread sign (bakery) / mail sign (post office): signParts from Hub.js. A flower box for windows. */
 function flowerBoxParts() {
-  return [[box(1.2, 0.22, 0.3, 0, 0.11, 0), '#8A5A3A'], ...[-0.4, -0.13, 0.14, 0.41].map((x, i) => [new THREE.SphereGeometry(0.15, 8, 6).translate(x, 0.3, 0), [C.pink, C.gold, C.red, C.cream][i]])];
+  return [[box(1.2, 0.22, 0.3, 0, 0.11, 0), '#B7773F'], ...[-0.4, -0.13, 0.14, 0.41].map((x, i) => [new THREE.SphereGeometry(0.15, 8, 6).translate(x, 0.3, 0), [C.pink, C.gold, C.red, C.cream][i]])];
 }
 
 /** The forge yard: an anvil on a stump, the forge hearth (flame + light), a quench barrel. */
 function forgeParts() {
-  return [[cyl(0.35, 0.4, 0.6), '#6A4E36'], [box(0.7, 0.16, 0.3, 0, 0.68, 0), C.iron], [box(0.36, 0.14, 0.22, 0, 0.53, 0), C.iron], [new THREE.ConeGeometry(0.12, 0.3, 4).rotateZ(Math.PI / 2).translate(0.48, 0.7, 0), C.iron],
-    [box(1.6, 0.9, 1.2, 1.9, 0.45, -0.4), '#7C756A'], [box(1.7, 0.1, 1.3, 1.9, 0.95, -0.4), '#5E5850'], [box(0.9, 1.6, 0.9, 1.9, 1.7, -0.6), '#6E675C'], [box(0.5, 1.2, 0.5, 1.9, 2.9, -0.7), '#5E5850']];
+  return [[cyl(0.35, 0.4, 0.6), '#9A6A40'], [box(0.7, 0.16, 0.3, 0, 0.68, 0), C.iron], [box(0.36, 0.14, 0.22, 0, 0.53, 0), C.iron], [new THREE.ConeGeometry(0.12, 0.3, 4).rotateZ(Math.PI / 2).translate(0.48, 0.7, 0), C.iron],
+    [box(1.6, 0.9, 1.2, 1.9, 0.45, -0.4), '#B8A890'], [box(1.7, 0.1, 1.3, 1.9, 0.95, -0.4), '#9C8E7C'], [box(0.9, 1.6, 0.9, 1.9, 1.7, -0.6), '#A89884'], [box(0.5, 1.2, 0.5, 1.9, 2.9, -0.7), '#9C8E7C']];
 }
 
 /** fx's lantern handle as a flame ({ set(on), on }) with our light-pool source. */
@@ -179,10 +183,15 @@ function fxLantern(h, src) {
   return { get on() { return lit; }, set(v) { if (v && !lit) { try { h.light?.(); } catch { /* fx */ } } lit = !!v; if (src) src.on = lit; } };
 }
 
-/** Hyena war banners on the occupied town (cleared when free): a tattered grey banner with a cackle mark. */
+/**
+ * LI W11 prank banners on the occupied town (cleared when free): plum cloth with a mustard grinning-hyena doodle (two
+ * eye dots, a big grin, ears), hung crooked by the placement.
+ */
 function hyenaBannerParts() {
-  return [[cyl(0.05, 0.06, 3.0), C.woodDark], [box(0.8, 0.05, 0.05, 0, 2.8, 0), C.woodDark], [box(0.7, 1.4, 0.03, 0, 2.05, 0), '#5A5650'],
-    [box(0.4, 0.08, 0.035, 0, 2.2, 0.02), '#C9C2A0'], [box(0.08, 0.3, 0.035, -0.12, 2.0, 0.02), '#C9C2A0'], [box(0.08, 0.3, 0.035, 0.12, 2.0, 0.02), '#C9C2A0']];
+  const grin = new THREE.TorusGeometry(0.17, 0.035, 4, 12, Math.PI).rotateZ(Math.PI).translate(0, 2.0, 0.025);
+  return [[cyl(0.05, 0.06, 3.0), C.woodDark], [box(0.8, 0.05, 0.05, 0, 2.8, 0), C.woodDark], [box(0.7, 1.4, 0.03, 0, 2.05, 0), PRANK[0]],
+    [box(0.08, 0.08, 0.035, -0.12, 2.22, 0.02), PRANK[1]], [box(0.08, 0.08, 0.035, 0.12, 2.22, 0.02), PRANK[1]], [grin, PRANK[1]],
+    [new THREE.ConeGeometry(0.07, 0.14, 3).translate(-0.2, 2.42, 0.02), PRANK[1]], [new THREE.ConeGeometry(0.07, 0.14, 3).translate(0.2, 2.42, 0.02), PRANK[1]]];
 }
 
 // ---------------------------------------------------------------------------------------------- setpieces
@@ -237,11 +246,15 @@ const SETPIECES = {
     for (const [x, z, yaw, y] of [[-5.6, -41, Math.PI / 2, 2.2], [5.6, -41.2, -Math.PI / 2, 2.2], [-5.7, -24.5, Math.PI / 2, 2.4], [5.8, -19.6, -Math.PI / 2, 2.3], [-14.2, -26.5, 0, 2.2]]) {
       kit.place(fb, x, z, { yaw, lift: y, collider: false, clear: false, occupy: false, jitter: 0.05 });
     }
-    for (const [a, b] of [[[-5.2, 5.6, -45], [5.2, 5.6, -45]], [[-5.2, 5.4, -22], [5.2, 5.4, -22]], [[-5.0, 5.2, -12], [5.0, 5.6, -12]], [[-11, 5.6, 22.5], [11, 5.6, 22.5]]]) {
+    // the occupiers' prank strings (plum + mustard); the festival candy bunting (def.bunting) replaces them once free
+    const prank = [];
+    for (const [a, b] of PRANK_STRINGS) {
       const ya = kit.h(a[0], a[2]), yb = kit.h(b[0], b[2]);
       const g = kit.proc('bunting_' + a.join('_'), () => buntingParts([a[0], a[1] + ya, a[2]], [b[0], b[1] + yb, b[2]]));
-      kit.place(g, 0, 0, { y: 0, ground: false, collider: false, clear: false, occupy: false, jitter: 0, cull: false, camFade: true });   // fades when it crosses her (iso lens)
+      const pl = kit.place(g, 0, 0, { y: 0, ground: false, collider: false, clear: false, occupy: false, jitter: 0, cull: false, camFade: true });   // fades when it crosses her (iso lens)
+      if (pl) prank.push(pl);
     }
+    kit.onFlag('town.free', (v) => { for (const pl of prank) kit.batch.setVisible(pl.handle, !v); });
     // street lanterns (unlit by day), carts, barrels, crates, hedges
     const [lan, cart, barrel, crate, sack, treeD, treeO, fence, well] = await Promise.all([kit.tpl(M.lantern), kit.tpl(M.cart), kit.tpl(M.barrel), kit.tpl(M.crate), kit.tpl(M.sack),
       kit.tpl(M.treeD), kit.tpl(M.treeO), kit.tpl(M.fence), kit.tpl(M.well)]);
@@ -325,7 +338,7 @@ const SETPIECES = {
     kit.anchor('post_office', POST.at[0], POST.at[1], undefined, Math.PI / 2);
     kit.anchor('post_steps', POST.steps[0], POST.steps[1], undefined, Math.PI / 2);
     CHASE.forEach(([x, z], i) => kit.anchor('chase_' + i, x, z));
-    kit.paint(-24, -17, 4, '#7A6A50', 0.3);
+    kit.paint(-24, -17, 4, '#E0C69A', 0.3);
     level.bakery = { door: [-23.2, -19.2] };
   },
 
@@ -364,7 +377,7 @@ const SETPIECES = {
     // the occupiers' banners (only while the town is occupied)
     const hb = kit.proc('hyena_banner', hyenaBannerParts);
     const hbs = [];
-    for (const [x, z, yaw] of [[-6.5, 18.5, 0.5], [7.5, -3.5, 2.6], [-3.5, -47, 0.2], [3.4, -27, -0.4]]) { const p = kit.place(hb, x, z, { yaw, collider: false, clear: 0.4, occupy: 0.5, jitter: 0.03 }); if (p) hbs.push(p); }
+    for (const [x, z, yaw] of [[-6.5, 18.5, 0.5], [7.5, -3.5, 2.6], [-3.5, -47, 0.2], [3.4, -27, -0.4]]) { const p = kit.place(hb, x, z, { yaw, tiltZ: 0.12, collider: false, clear: 0.4, occupy: 0.5, jitter: 0.03 }); if (p) hbs.push(p); }
     kit.onFlag('town.free', (v) => { for (const p of hbs) kit.batch.setVisible(p.handle, !v); });
     if (banner) for (const [x, z, yaw] of [[-2.9, 31.5, 0], [2.9, 31.5, 0]]) kit.place(banner, x, z, { fit: { h: 1.6 }, lift: 2.6, yaw, collider: false, clear: false, occupy: false, jitter: 0 });
     level.square = { at: zone.at };
@@ -449,7 +462,7 @@ const SETPIECES = {
     if (towerBlue) kit.place(towerBlue, 23, 31.5, { fit: { h: 12 }, yaw: -2.4, collider: 'box', shrink: 0.85, jitter: 0, clear: 3, camFade: 'solid' });
     kit.place(kit.proc('sign_eye', () => signParts('eye')), 20.3, 29.0, { yaw: -2.4, lift: 3.0, collider: false, clear: false, occupy: false, jitter: 0 });
     kit.place(kit.proc('sign_hanger', () => signParts('hanger')), -13.6, 29.0, { yaw: Math.PI, lift: 2.8, collider: false, clear: false, occupy: false, jitter: 0 });
-    kit.paint(0, 50, 9, '#8C8470', 0.45, 3);
+    kit.paint(0, 50, 9, '#E0C69A', 0.45, 3);
   },
 
   /** The hub: Quest Board, barracks banner, wardrobe stall, station interactables, the South Gate exit (Hub.js). */
@@ -473,7 +486,8 @@ function decorate(kit) {
 const occupied = '!town.free';
 export default defineLevel({
   id: 'town', size: 140, res: 140, seed: 31, hills: { amp: 0.4 }, pathWidth: 6, rim: 3, pathSurface: 'stone',
-  env: { default: 'town_occupied', byFlag: [['ending.seen', 'ending_gold'], ['gate.done', 'hub_grey'], ['town.free', 'hub_gold']] }, moodLive: true,
+  // WA §2.2: CS-10 "Big Yawn" is lavender (hub_hush; `hub_grey` is its alias), never grey
+  env: { default: 'town_occupied', byFlag: [['ending.seen', 'ending_gold'], ['gate.done', 'hub_hush'], ['town.free', 'hub_gold']] }, moodLive: true,
   music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
     byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'story_lament_warriors_soul'], ['town.free', 'village_bards_tale']] },
   spine: SPINE,
@@ -528,8 +542,16 @@ export default defineLevel({
   ],
   crates: { n: 8, milk: 2 },
   fishLines: [[[0, -60], [0, -52], 4], [[-6, -14], [-16, -16], 5], [[8, -6], [14, -6], 4], [[-30, -12], [-40, -7], 5], [[-44, 4], [-42, 11], 4], [[0, 24], [0, 31], 5], [[16, 24], [19, 28], 3]],
-  pave: { texture: PAVE, tint: '#D8CCB4', tile: 2.6, discs: [[SQUARE.at[0], SQUARE.at[1], SQUARE.r + 2.2]], extra: [{ pts: [[0, 41.5], [0, 60]], width: 22 }] },
-  horizon: { n: 70, h: [8, 14] }, horizonFog: 0.82,
+  // LI §4.3: the cobbles stay, multiplied toward the path cream with their contrast squeezed (≤ ±12 % L) and lifted
+  pave: { texture: PAVE, tint: '#E8D7B6', mapMix: 0.4, contrast: 0.45, gain: 1.7, tile: 2.6, discs: [[SQUARE.at[0], SQUARE.at[1], SQUARE.r + 2.2]], extra: [{ pts: [[0, 41.5], [0, 60]], width: 22 }] },
+  horizon: { n: 70, h: [8, 14] }, horizonFog: 0.6,
+  // LI W11: the free town's festival bunting (full candy set) over the streets and Main Street, shown once `town.free`
+  accent: 'town',
+  buntingWhen: 'town.free',
+  bunting: [
+    ...PRANK_STRINGS.map(([a, b]) => ({ a: [a[0], a[1], a[2]], b: [b[0], b[1], b[2]] })),
+    { a: [-5.2, 5.6, -36], b: [5.2, 5.6, -36] },
+  ],
   lights: 2,
   grass: { height: 0.2, near: 0.6, flowers: 1.6 },
   grassMask: (x, z) => (Math.hypot(x, z) > 58 ? 1 : 0.75),

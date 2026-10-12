@@ -9,9 +9,13 @@
 //   ability Q / LT / the portrait (CompanionManager reads the input and aims) → abilities.js; cooldown in `cooldown`
 // Contract (§19.4): kittenId, napT, cooldown, useAbility(req?) + the ScriptedActor API (core/ScriptedActor.js);
 // iso controls (additive): canCast, cooldownLeft, readiness, pickKind / useR / use() for the camera's picker.
+// Warm adventure (WA §5.6, §5.7; additive): pawBump(her), cheer(), koRun(her), landBeside(her, r) (party.js drives them),
+// the idle ladder 1.5 s behind hers (look around, then a personal idle: Mochi yawns, Sage nods over a tiny book, Clover
+// chases her tail). Perf (PERF §4.2–4.3, K5): thinks at 10 Hz on the deterministic scheduler, no sun shadow (a blob).
 import * as THREE from 'three';
 import { Actor } from '../core/Actor.js';
 import { ScriptedActorMixin } from '../core/ScriptedActor.js';
+import * as CONFIG from '../core/config.js';
 import { COMPANIONS, PLAYER } from '../core/config.js';
 import { E } from '../core/events.js';
 import { damp, dampAngle, clamp, wrapAngle } from '../core/math.js';
@@ -21,6 +25,7 @@ import { TextSprite } from './Bubble.js';
 import { createAbility, updatePassive, COMPANION_HITS, Arrow } from './abilities.js';
 import { followSlot, idleSlot, inNotch, arrive, separation, pickTarget, estimateDamage, groundY, FOLLOW_SIDE, SLOT, Trail } from './steering.js';
 import { planAbility, playerAimYaw, newPlan } from './abilityAim.js';
+import { thinkDue, ACTIVITY } from './activity.js';
 
 const _slot = { x: 0, z: 0, side: 1 }, _des = { x: 0, z: 0 }, _sep = { x: 0, z: 0 }, _alt = { x: 0, z: 0 };
 const _crumb = { x: 0, y: 0, z: 0 };
@@ -29,7 +34,16 @@ const _ray = new THREE.Ray(), _v = new THREE.Vector3(), _from = new THREE.Vector
 const _her = [null];                     // one-element list for separation() (no per-step allocation)
 /** §6 bark rule: 25% per trigger (nap / wake / the Meow answer are status lines and always show). */
 const BARK_CHANCE = 0.25;
-const THINK = 0.2;                       // AI "thinks" (targets, line of sight) at 5 Hz (tech.md §10)
+const THINK = 1 / ACTIVITY.thinkHz;      // AI "thinks" (targets, line of sight) at 10 Hz (PERF §4.2); steering 60 Hz
+/**
+ * Life between fights (WA §5.6): the hero idle ladder (config IDLE) + `offset` s; the personal idle repeats every
+ * `every` s while she stays still; a paw-bump lasts `bump` s; the KO run lasts up to `koRun` s; Clover's tail chase
+ * spins once in `spin` s.
+ */
+export const LIFE = Object.freeze({ offset: 1.5, every: 12, bump: 0.8, koRun: 2.5, koNear: 1.3, spin: 1.2 });
+/** Personal idle per companion (WA §5.6). */
+export const PERSONAL_IDLE = Object.freeze({ mochi: 'yawn', sage: 'nodBook', clover: 'tailChase' });
+const IDLE_LADDER = CONFIG.IDLE ?? { look: 7, groom: 10 };
 /**
  * Path-aware follow (iso controls: she walks clicked paths round fences and houses). Her breadcrumbs every `spacing` m;
  * a crumb counts as reached within `reach`; no progress for `stuckT` s on the trail, or `stuckFree` s pressing toward
@@ -43,7 +57,8 @@ export class Companion extends ScriptedActorMixin(Actor) {
   /**
    * @param {any} ctx
    * @param {string} kittenId 'mochi' | 'sage' | 'clover'
-   * @param {{ pos?: THREE.Vector3, facing?: number, visual?: boolean }} [opts]
+   * @param {{ pos?: THREE.Vector3, facing?: number, visual?: boolean | KittenVisual }} [opts] visual: false = none, a
+   *   KittenVisual = adopt it (the caged squire's cat, handed over on the join)
    */
   constructor(ctx, kittenId, opts = {}) {
     const look = CATS[kittenId] ?? catConfig(kittenId) ?? CATS.mochi;
@@ -73,7 +88,9 @@ export class Companion extends ScriptedActorMixin(Actor) {
     this.passive = {};
     this.arrows = [];
     this._clipWaits = [];
-    this.stats = { hits: 0, abilities: 0, naps: 0, teleports: 0, blocks: 0, trails: 0, pets: 0 };
+    this.stats = { hits: 0, abilities: 0, naps: 0, teleports: 0, blocks: 0, trails: 0, pets: 0, bumps: 0, cheers: 0, idles: 0 };
+    /** WA §5.6 / §5.7 beats: paw-bump hold, KO run, tail-chase spin (s left), the last idle-ladder step done */
+    this.bumpT = 0; this.koT = 0; this.spinT = 0; this.spinFrom = 0; this.ladder = 0; this._shook = false;
     /** her breadcrumbs (path-aware follow) and the crumb we walk to (sequence number; -1 = straight to the slot) */
     this.trail = new Trail(TRAIL.n, TRAIL.spacing);
     this.trailSeq = -1; this.trailT = 0; this.stuckT = 0;
@@ -84,8 +101,12 @@ export class Companion extends ScriptedActorMixin(Actor) {
     this.facing = opts.facing ?? 0;
     this.object3d.name = 'companion:' + kittenId;
     this.visual = null;
-    if (opts.visual !== false) {
-      this.visual = new KittenVisual(ctx, look);
+    if (opts.visual instanceof KittenVisual) {
+      this.visual = opts.visual.rebind(this, { role: 'companion', blobR: this.radius * 1.5 });
+      this.visual.setPose('idle', 0.2); this.visual.setExpression('happy');
+      this.object3d.add(this.visual.root);
+    } else if (opts.visual !== false) {
+      this.visual = new KittenVisual(ctx, look, { role: 'companion', actor: this, blobR: this.radius * 1.5 });
       this.object3d.add(this.visual.root);
     }
     this.bubble = new TextSprite({ kind: 'bubble', y: this.height + 0.32 });
@@ -164,6 +185,95 @@ export class Companion extends ScriptedActorMixin(Actor) {
     const from = this.visual ? this.visual.jointWorld('pawL', _v).clone() : this.pos.clone().setY(this.pos.y + this.height * 0.6);
     this.arrows.push(new Arrow(this.ctx, this, target, def, from, { onHit: (e, r) => { this.stats.hits++; onHit?.(e, r); } }));
     this.visual?.punch(-0.06);
+  }
+
+  // ------------------------------------------------------------------ life between fights (WA §5.6, §5.7)
+
+  /**
+   * Paw-bump with her (an encounter clear, her boing-back): face her, paw up for LIFE.bump s, 3 stars + a heart between
+   * the paws. Returns false when busy (napping, fighting, scripted).
+   */
+  pawBump(p = this.ctx.player) {
+    if (!p || this.napT > 0 || this.scripted || this.target || this.ability?.holds) return false;
+    this.bumpT = LIFE.bump; this.koT = 0;
+    this.facing = Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
+    this.visual?.gesture('pawBump');
+    _v.set((p.pos.x + this.pos.x) / 2, Math.max(p.pos.y, this.pos.y) + this.height * 0.75, (p.pos.z + this.pos.z) / 2);
+    this.ctx.fx?.burst?.('stars', _v, { count: 3 });
+    _v.y += 0.25;
+    this.ctx.fx?.burst?.('heart', _v, { count: 1 });
+    this.stats.bumps++;
+    return true;
+  }
+
+  /** One cheer (her kill streak, WA §5.6): both paws up and a hop. */
+  cheer() {
+    if (this.napT > 0 || this.scripted) return false;
+    this.visual?.gesture('cheer');
+    this.stats.cheers++;
+    return true;
+  }
+
+  /** WA §5.7: she was knocked out: run to her and shake our head when there. */
+  koRun(p = this.ctx.player) {
+    if (!p || this.napT > 0 || this.scripted) return false;
+    this._endAbility(); this.target = null; this.swingT = -1;
+    this.koT = LIFE.koRun; this._shook = false;
+    this.visual?.setExpression('worried');
+    return true;
+  }
+
+  /** WA §5.7: she boings back: land `r` m beside her (her side slot) with a little hop. */
+  landBeside(p = this.ctx.player, r = 1.5) {
+    if (!p) return false;
+    this.koT = 0;
+    followSlot(p.pos, p.facing ?? 0, this.side, _slot, { dist: r, angle: SLOT.regroupAngle });
+    _to.set(_slot.x, groundY(this.ctx, _slot.x, _slot.z, p.pos.y), _slot.z);
+    const ph = this.ctx.physics;
+    if (ph?.isDeepWater?.(_to.x, _to.z) || ph?.blockedAt?.(_to.x, _to.z, this.radius)) this._landingNear(p, _to);
+    this.pos.copy(_to); this.vel.set(0, 0, 0); this.onGround = true;
+    this.facing = Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z); this.heading = p.facing ?? this.heading;
+    this.snap(); this.visual?.snap(); this.visual?.hop(0.3, 0.4, 1.2);
+    this.ctx.fx?.burst?.('dust', this.pos, { scale: 0.5 });
+    this.losT = 0; this.trailSeq = -1; this.stuckT = 0; this._prevX = this.pos.x; this._prevZ = this.pos.z;
+    return true;
+  }
+
+  /** The personal idle (WA §5.6): Mochi yawns, Sage nods over a tiny book, Clover chases her tail. */
+  personalIdle() {
+    const kind = PERSONAL_IDLE[this.kittenId];
+    if (!kind || !this.visual) return null;
+    if (kind === 'tailChase') { this.spinT = LIFE.spin; this.spinFrom = this.facing; this.visual.hop(0.15, 0.35); this.visual.setExpression('happy'); }
+    else this.visual.gesture(kind);
+    this.stats.idles++;
+    return kind;
+  }
+
+  /** Paw-bump hold / KO run for this step. Returns true while it owns the steering. */
+  _beats(dt, p) {
+    if (this.bumpT > 0) {
+      this.bumpT -= dt;
+      this.vel.x = damp(this.vel.x, 0, 10, dt); this.vel.z = damp(this.vel.z, 0, 10, dt);
+      this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 10, dt);
+      this.stateName = 'idle';
+      return true;
+    }
+    if (this.koT > 0) {
+      this.koT -= dt;
+      const dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, d = Math.hypot(dx, dz);
+      if (d > LIFE.koNear) {
+        arrive(this.pos.x, this.pos.z, p.pos.x, p.pos.z, PLAYER.run * 1.15, 2.0, _des, LIFE.koNear);
+        this.vel.x = damp(this.vel.x, _des.x, 8, dt); this.vel.z = damp(this.vel.z, _des.z, 8, dt);
+        this.stateName = 'follow';
+      } else {
+        this.vel.x = damp(this.vel.x, 0, 10, dt); this.vel.z = damp(this.vel.z, 0, 10, dt);
+        if (!this._shook) { this._shook = true; this.visual?.emote('shake'); this.visual?.setExpression('sad'); }
+        this.stateName = 'idle';
+      }
+      if (d > 0.05) this.facing = dampAngle(this.facing, Math.atan2(dx, dz), 10, dt);
+      return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------ nap / damage
@@ -332,12 +442,16 @@ export class Companion extends ScriptedActorMixin(Actor) {
     const want = pSpeed > 0.6 ? Math.atan2(p.vel.x, p.vel.z) : p.facing;
     this.heading = dampAngle(this.heading, want, pSpeed > 0.6 ? 4 : 1.5, dt);
 
-    this.thinkT -= dt;
-    if (this.thinkT <= 0) { this.thinkT += THINK; this._think(p); }
+    if (thinkDue(ctx.game, this.id, this, dt, ACTIVITY.thinkHz) && this.koT <= 0) this._think(p);
 
     if (this.ability?.holds) { this.stateName = 'ability'; }
+    else if (this._beats(dt, p)) { /* paw-bump / KO run own the steering */ }
     else if (this.target) this._engage(dt, p);
     else this._follow(dt, p, pSpeed);
+    if (this.spinT > 0) {                                       // Clover's tail chase: one full turn in place
+      this.spinT = Math.max(0, this.spinT - dt);
+      this.facing = this.spinFrom + (1 - this.spinT / LIFE.spin) * Math.PI * 2;
+    }
 
     this._ambient(dt, p, pSpeed);
     updatePassive(this, dt, this.passive);
@@ -548,7 +662,16 @@ export class Companion extends ScriptedActorMixin(Actor) {
   _ambient(dt, p, pSpeed) {
     this.blinkCd = Math.max(0, this.blinkCd - dt);
     const still = pSpeed < 0.1 && !p.swing && !p.guarding && !this.target;
+    const prevStill = this.stillT;
     this.stillT = still ? this.stillT + dt : 0;
+    if (!still) this.ladder = 0;
+    // WA §5.6 idle ladder, LIFE.offset s behind hers: a look around, then the personal idle (repeats while she waits)
+    const L = IDLE_LADDER, o = LIFE.offset, calm = this.stateName === 'idle' && this.bumpT <= 0 && this.koT <= 0;
+    const lookAt = (L.look ?? 7) + o, at = (L.groom ?? 10) + o;
+    if (calm && this.ladder < 1 && this.stillT >= lookAt) { this.ladder = 1; this.visual?.gesture('look'); }
+    if (calm && this.stillT >= at && (this.ladder < 2 || Math.floor((this.stillT - at) / LIFE.every) > Math.floor((prevStill - at) / LIFE.every))) {
+      this.ladder = 2; this.personalIdle();
+    }
     const d = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
     if (this.stillT >= 3 && d < 3 && this.blinkCd <= 0) {
       this.blinkCd = 25;
@@ -575,9 +698,11 @@ export class Companion extends ScriptedActorMixin(Actor) {
       const tgt = this.target ?? (this.stateName === 'idle' && p ? p : null);
       if (tgt && this.napT <= 0) look = wrapAngle(Math.atan2(tgt.pos.x - this.pos.x, tgt.pos.z - this.pos.z) - this.facing);
       this.visual.lookAt(look);
-      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo });
+      const calm = this.stateName === 'idle' && !this.target && this.napT <= 0 && this.bumpT <= 0 && this.koT <= 0 && !this.scripted;
+      this.visual.update(dt ?? 0, { velocity: this.vel, onGround: this.onGround || !!this.attachedTo, calm });
     }
     this.ability?.render?.(vdt);
+
     for (const a of this.arrows) a.render();
     this.bubble.update(vdt); this.zzz.update(vdt);
   }

@@ -1,5 +1,6 @@
-// src/enemies/types/spider.js  (owner: enemies) — Bramble Spider (GAME_DESIGN §10.2–§10.3; art.md §11).
-// Spider.glb fitted to 0.5 m, tinted moss #4E5A2C, glinting eyes. Moves in skitter bursts: 5.0 m/s for 1.2 s, then a
+// src/enemies/types/spider.js  (owner: enemies) — Bramble Spider, drawn as the Fuzzball (GAME_DESIGN §10.2–§10.3;
+// ART_WARM_SPEC §7.2): Spider.glb fitted to 0.5 m, olive with an oliveTop leaf hat, a round body on short legs (static
+// bone scales, palette.js), 2 big friendly eyes. Moves in skitter bursts: 5.0 m/s for 1.2 s, then a
 // 1.0 s pause (Spider_Walk / Spider_Idle). Attacks:
 //   spider_web  white `parry` glint while the abdomen pulses (0.6 s) → a glob at 10 m/s, range 7: 0 damage, slows her
 //               50% for 2.0 s (a roll clears it), reflectable (10 damage back), and leaves a web patch r 1.0 for 8 s
@@ -13,12 +14,11 @@ import { CLIP_MAPS } from '../clipMaps.js';
 import { M2 } from '../tuning.js';
 import { applySlow } from '../status.js';
 import { makeProp } from '../props.js';
-import { attachAligned, bone, posIn } from '../rig.js';
+import { attachAligned, bone, posIn, recolor } from '../rig.js';
+import { MATERIAL_COLORS } from '../palette.js';
 
 const def = ENEMIES.spider;
 const WEB = ATTACKS.spider_web;
-/** The atlas's second material (legs / underside), a shade under the moss. */
-const SPIDER_DARK = '#2F3820';
 
 /** Skitter-burst speed for this step: `speed` while bursting, 0 in the pause. Pure over e.burstT; exported for tests. */
 export function skitter(e, speed, dt) {
@@ -46,21 +46,24 @@ export default {
   },
 
   async build(e, m) {
-    // §10.2 moss #4E5A2C: set (not multiplied — the atlas is near-black) with a dark underside, matte
+    // ART §2.6 / §7.2 Fuzzball: olive coat, a lighter olive underside (set, not multiplied: the GLB is near-black), matte
+    recolor(m.scene, MATERIAL_COLORS.spider);
     m.scene.traverse((o) => {
       if (!o.isMesh) return;
       for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
         if (!mat?.userData?.enemyOwned || !mat.color) continue;
-        mat.color.set(mat.name === 'Material.001' ? SPIDER_DARK : def.tint);
-        mat.roughness = 0.85; mat.metalness = 0;
+        mat.roughness = 0.9; mat.metalness = 0;
       }
     });
-    // eyes on the head so the glint reads at a distance
+    // 2 big friendly eyes and the leaf hat (top colour) ride the head bone (×1.4 after dressing)
     const head = bone(m.scene, 'Head') ?? bone(m.scene, 'Spider_Head') ?? bone(m.scene, 'Body');
     if (!head) return;
     const hp = posIn(m.root, head), k = (m.size?.y ?? 0.5) / 0.5;
     const eyes = makeProp('eyes');
-    attachAligned(m.root, head, eyes, { pos: [hp.x, hp.y + 0.06 * k, hp.z + 0.16 * k], scale: k * 0.9 });
+    attachAligned(m.root, head, eyes, { pos: [hp.x, hp.y + 0.06 * k, hp.z + 0.15 * k], scale: k * 1.05 });
+    const hat = makeProp('leafHat');
+    attachAligned(m.root, head, hat, { pos: [hp.x, hp.y + 0.13 * k, hp.z + 0.02 * k], rot: [-0.15, 0.3, 0], scale: k * 0.9 });
+    e.helmet = hat;                                           // pops off on the bonk like the rats' helms
   },
 
   /** The web glob: slow on a hit, a patch where it ends (not when reflected). */

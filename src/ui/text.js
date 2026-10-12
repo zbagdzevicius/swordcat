@@ -122,6 +122,78 @@ export const UI_STRINGS = Object.freeze({
   'settings.cursorContrast': 'High-contrast cursor',
   'settings.pathPreview': 'Show the whole path',
   'ui.boss.crit': 'Crits ×2!',
+  // ---- warm adventure phase (WA §4–§8, AUTOCAM §10, PERF I4). strings.js (story) wins as soon as it has the key.
+  'settings.camZoom': 'Camera distance',
+  'settings.camZoomPortrait': 'Camera distance (portrait)',
+  'settings.camLockMode': 'Camera lock',
+  'settings.camLockMode.locked': 'Locked',
+  'settings.camLockMode.semi': 'Semi (edge pan)',
+  'settings.camLockMode.free': 'Free (Y)',
+  'settings.camCursorLead': 'Look toward the cursor',
+  'settings.biggerHero': 'Bigger hero',
+  'settings.hudMode': 'HUD',
+  'settings.hudMode.calm': 'Calm',
+  'settings.hudMode.full': 'Full',
+  'settings.hitWords': 'Hit words (Snip! Snap!)',
+  'settings.tutorialHints': 'Tutorial hints',
+  'settings.fpsCap': 'Frame rate cap',
+  'settings.fpsCap.auto': 'Auto',
+  'settings.fpsCap.off': 'Off',
+  'settings.batterySaver': 'Battery saver',
+  'title.press': 'Press any key to play!',
+  'title.tap': 'Tap to play!',
+  'title.foot': 'Made with lots of purrs',
+  'title.settings': 'Settings',
+  'menu.continue': 'Keep going!',
+  'menu.newGame': 'New adventure',
+  'menu.stickers': 'Sticker book',
+  'ui.stickers.title': 'Sticker book',
+  'ui.stickers.count': '{n}/{max} stickers',
+  'ui.stickers.none': 'Stickers you earn land here.',
+  'hud.boss.bonked': 'BONKED!',
+  'life.lost': 'Boing! Back on her paws. {n} lives left',
+  'life.lost1': 'Boing! 1 life left. Careful-ish!',
+  'life.last': 'Last life! Big brave hops!',
+  'offer.kitten.q': 'Want gentler bonks? You can switch anytime.',
+  'offer.kitten.yes': 'Yes please',
+  'offer.kitten.no': 'I got this',
+  'offer.kitten.toast': 'Kitten mode: gentle hits, wider parries.',
+  'results.title': 'Hooray! Chapter clear!',
+  'results.rank.pawsome': 'PAW-SOME!',
+  'results.rank.purrfect': 'PURR-FECT!',
+  'results.rank.clawsome': 'CLAW-SOME!',
+  'results.rank.mewtiful': 'Good kitty!',
+  'sticker.bonk': 'First Bonk!',
+  'sticker.bow': 'Pink Bow!',
+  'sticker.hop': 'Fence Hopper',
+  'sticker.roll': 'Tumble Pro',
+  'sticker.stand': 'Stand Strong',
+  'sticker.parry': 'Perfect Parry!',
+  'sticker.found': 'Found You!',
+  'sticker.knight': 'Knight-ish!',
+  'sticker.mochi': 'New Friend: Mochi',
+  'card.holy.title': 'Holy Slash!',
+  'card.holy.line': 'Hold [Attack] till you glow, then let go.',
+  'card.golden.title': 'Golden Hour!',
+  'card.golden.line': 'Full Valor: everything sparkles. Including you.',
+  'card.mochi.title': 'Mochi joined the party!',
+  'card.mochi.line': "Shield Wall: tap his portrait and he'll hold the line.",
+  'card.sage.title': 'Sage joined!',
+  'card.sage.line': 'Swap buddies at any Vigil Stone.',
+  'card.clover.title': 'Clover joined!',
+  'card.clover.line': "Three's a party.",
+  'card.heartbell.title': 'Heart Bell!',
+  'card.heartbell.line': 'One more heart. Ding!',
+  'card.shard.title': 'Dawnstone shard!',
+  'card.shard.line': "It's warm. Like a sunny windowsill.",
+  'card.kitten.title': 'Kitten found! {n}/{max}',
+  'card.kitten.line.1': 'Off home you go!',
+  'card.kitten.line.2': 'Safe and snuggly.',
+  'card.kitten.line.3': 'One more for the nap pile.',
+  'card.bow.title': 'Pink Bow!',
+  'card.bow.line': 'Tied on, just right.',
+  'card.knight.title': 'Knight-ish!',
+  'card.knight.line': 'Armour on. Mostly.',
 });
 
 /** Resolve a strings key through ctx.strings (A4); a missing resolver or key falls back to UI_STRINGS, then the key. */
@@ -388,12 +460,19 @@ export function chapterInfo(ctx, chapter, levelId = null) {
 }
 
 /** Rank id → strings key (§6.8 results.ranks). */
-export const RANK_KEYS = Object.freeze({ pawsome: 'results.rank.pawsome', purrfect: 'results.rank.purrfect', mewtiful: 'results.rank.mewtiful' });
+/** WA §4.4: four warm rank words (no letter grades). Ids are save data (`bestRank`): `mewtiful` reads "Good kitty!". */
+export const RANK_KEYS = Object.freeze({ pawsome: 'results.rank.pawsome', purrfect: 'results.rank.purrfect', clawsome: 'results.rank.clawsome', mewtiful: 'results.rank.mewtiful' });
 
-/** §6.8: rank by lives lost in the level (works on every difficulty). */
+/** Rank ids from worst to best (records compare by this order). */
+export const RANK_ORDER = Object.freeze(['mewtiful', 'clawsome', 'purrfect', 'pawsome']);
+
+/**
+ * §6.8 + WA §4.4: rank by lives lost in the level (works on every difficulty): ≤ 1 PAW-SOME!, ≤ 3 PURR-FECT!,
+ * ≤ 5 CLAW-SOME!, else Good kitty! (world's own rankFor still sends three ids; any of the four displays).
+ */
 export function rankFor(livesLost) {
   const l = Math.max(0, livesLost | 0);
-  return l <= 1 ? 'pawsome' : l <= 4 ? 'purrfect' : 'mewtiful';
+  return l <= 1 ? 'pawsome' : l <= 3 ? 'purrfect' : l <= 5 ? 'clawsome' : 'mewtiful';
 }
 
 /** Kittens found in `levelId` out of its 3 (§12.1). */

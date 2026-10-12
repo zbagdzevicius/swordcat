@@ -48,8 +48,9 @@ void main() {
 export class SkyDome {
   constructor(radius = 450) {
     this.uniforms = {
-      uTop: { value: new THREE.Color('#C3CCD3') }, uHorizon: { value: new THREE.Color('#B7C0C3') }, uGround: { value: new THREE.Color('#4A5230') },
-      uSunColor: { value: new THREE.Color('#FFF2E0') }, uSunDir: { value: new THREE.Vector3(-0.5, 0.6, 0.6) },
+      // WA W1: the meadow_day row (never the old grey) until Env writes the live preset
+      uTop: { value: new THREE.Color('#8FCBF2') }, uHorizon: { value: new THREE.Color('#F6E4C0') }, uGround: { value: new THREE.Color('#C9A46A') },
+      uSunColor: { value: new THREE.Color('#FFE7C2') }, uSunDir: { value: new THREE.Vector3(-0.5, 0.6, 0.6) },
       uSunGlow: { value: 1 }, uTime: { value: 0 }, uClouds: { value: 1 }, uExposure: { value: 1 },
     };
     this.material = new THREE.ShaderMaterial({
@@ -74,11 +75,18 @@ export class SkyDome {
 }
 
 /**
+ * LI W6 aerial perspective: far silhouettes go lilac and blue, never slate. Per-biome horizon tree lines (forest teal,
+ * bog sea-green, night / keep indigo); the gate shows hills only.
+ */
+export const SILHOUETTE = Object.freeze({ skyline: '#8E86C0', skylineFog: 0.55, horizon: '#5E9A62', horizonFog: 0.6,
+  forest: '#3E7A62', bog: '#4E8A80', night: '#5A4E90' });
+
+/**
  * Far silhouettes that stay readable at any fog density: `fog: false`, unlit, colour = mix(base, fogColor, k).
  * Add meshes with `add(object)`; call `update(fogColor)` per frame.
  */
 export class Silhouettes {
-  constructor({ base = '#3D454C', toFog = 0.7 } = {}) {
+  constructor({ base = SILHOUETTE.skyline, toFog = SILHOUETTE.skylineFog } = {}) {
     this.base = new THREE.Color(base);
     this.toFog = toFog;
     this.material = new THREE.MeshBasicMaterial({ color: base, fog: false });

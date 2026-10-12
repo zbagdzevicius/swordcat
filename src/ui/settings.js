@@ -38,14 +38,19 @@ export const SETTINGS = Object.freeze([
   // CONTROLS_SPEC §10.7: the iso controls
   { key: 'controlPreset', type: 'choice', label: 'settings.controlPreset', group: 'controls', dev: 'kbm', options: ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly'],
     optionLabels: ['Hybrid', 'MOBA', 'Diablo', 'Mouse only', 'Keyboard only'] },
-  { key: 'camZoom', type: 'slider', label: 'settings.camZoom', group: 'controls', min: 0.7, max: 1.4, step: 0.05, fmt: 'mul' },
-  { key: 'camLock', type: 'toggle', label: 'settings.camLock', group: 'controls', cam: 'iso', onOff: ['Free (Y)', 'Locked'] },
+  // AUTOCAM §10.3 / §10.4 / §12 camera rows (IMPLEMENTATION_PLAN §7.4; camLockMode replaces the camLock toggle, X19)
+  { key: 'camZoom', type: 'slider', label: 'settings.camZoom', group: 'camera', min: 0.7, max: 1.4, step: 0.05, fmt: 'mul' },
+  { key: 'camZoomPortrait', type: 'slider', label: 'settings.camZoomPortrait', group: 'camera', cam: 'iso', dev: 'touch', min: 0.7, max: 1.4, step: 0.05, fmt: 'mul' },
+  { key: 'camLockMode', type: 'choice', label: 'settings.camLockMode', group: 'camera', cam: 'iso', dev: 'kbm', options: ['locked', 'semi', 'free'],
+    optionLabels: ['settings.camLockMode.locked', 'settings.camLockMode.semi', 'settings.camLockMode.free'] },
+  { key: 'camCursorLead', type: 'slider', label: 'settings.camCursorLead', group: 'camera', cam: 'iso', dev: 'kbm', min: 0, max: 0.15, step: 0.05, fmt: 'pct' },
+  { key: 'biggerHero', type: 'toggle', label: 'settings.biggerHero', group: 'camera', cam: 'iso' },
   { key: 'autoAttack', type: 'choice', label: 'settings.autoAttack', group: 'controls', options: ['auto', 'chain', 'loop', 'off'], optionLabels: ['Auto', 'One combo', 'Keep going', 'Off'] },
   { key: 'castMode', type: 'choice', label: 'settings.castMode', group: 'controls', options: ['smart', 'indicator', 'dragOnly'], optionLabels: ['Smart', 'Show first', 'Drag only'] },
   { key: 'autoRiposte', type: 'choice', label: 'settings.autoRiposte', group: 'controls', options: ['auto', 'on', 'off'], optionLabels: ['Auto', 'On', 'Off'] },
   { key: 'standAutoFace', type: 'toggle', label: 'settings.standAutoFace', group: 'controls' },
   { key: 'pathPreview', type: 'toggle', label: 'settings.pathPreview', group: 'controls' },
-  { key: 'edgePanSpeed', type: 'slider', label: 'settings.edgePanSpeed', group: 'controls', cam: 'iso', dev: 'kbm', min: 0.5, max: 2, step: 0.25, fmt: 'mul' },
+  { key: 'edgePanSpeed', type: 'slider', label: 'settings.edgePanSpeed', group: 'camera', cam: 'iso', dev: 'kbm', min: 0.5, max: 2, step: 0.25, fmt: 'mul' },
   { key: 'touchSize', type: 'choice', label: 'settings.touchSize', group: 'controls', dev: 'touch', options: [0.8, 1, 1.2, 1.4], optionLabels: ['S', 'M', 'L', 'XL'] },
   { key: 'tapToMove', type: 'toggle', label: 'settings.tapToMove', group: 'controls', dev: 'touch' },
   { key: 'swipeTumble', type: 'toggle', label: 'settings.swipeTumble', group: 'controls', dev: 'touch' },
@@ -54,8 +59,15 @@ export const SETTINGS = Object.freeze([
   { key: 'haptics', type: 'choice', label: 'settings.haptics', group: 'controls', dev: ['touch', 'pad'], options: [0, 0.5, 1], optionLabels: ['Off', 'Soft', 'On'] },
   { key: 'hapticTaps', type: 'toggle', label: 'settings.hapticTaps', group: 'controls', dev: 'touch' },
   { key: 'difficulty', type: 'choice', label: 'settings.difficulty', group: 'game', options: ['kitten', 'knight'], optionLabels: ['difficulty.kitten', 'difficulty.knight'] },
-  { key: 'quality', type: 'choice', label: 'settings.quality', group: 'game', options: ['auto', 'low', 'med', 'high'],
+  // WA §4.1 / §5.3 / §7.5
+  { key: 'hudMode', type: 'choice', label: 'settings.hudMode', group: 'game', options: ['calm', 'full'], optionLabels: ['settings.hudMode.calm', 'settings.hudMode.full'] },
+  { key: 'hitWords', type: 'toggle', label: 'settings.hitWords', group: 'game' },
+  { key: 'tutorialHints', type: 'toggle', label: 'settings.tutorialHints', group: 'game' },
+  // PERF I4: the quality panel (Low / Med / High / Auto, the FPS cap, Battery saver)
+  { key: 'quality', type: 'choice', label: 'settings.quality', group: 'perf', options: ['auto', 'low', 'med', 'high'],
     optionLabels: ['settings.quality.auto', 'settings.quality.low', 'settings.quality.med', 'settings.quality.high'] },
+  { key: 'fpsCap', type: 'choice', label: 'settings.fpsCap', group: 'perf', options: ['auto', 30, 60, 'off'], optionLabels: ['settings.fpsCap.auto', '30', '60', 'settings.fpsCap.off'] },
+  { key: 'batterySaver', type: 'toggle', label: 'settings.batterySaver', group: 'perf' },
   { key: 'shake', type: 'slider', label: 'settings.shake', group: 'access', min: 0, max: 1, step: 0.1, fmt: 'pct' },
   { key: 'reduceCameraMotion', type: 'toggle', label: 'settings.reduceCameraMotion', group: 'access' },
   { key: 'parryRing', type: 'choice', label: 'settings.parryRing', group: 'access', options: ['auto', 'on', 'off'], optionLabels: ['Auto', 'On', 'Off'] },
@@ -68,7 +80,7 @@ export const SETTINGS = Object.freeze([
 ]);
 
 /** Section headings (literal; menus are English-only until localisation [STRETCH]). */
-export const SETTING_GROUPS = Object.freeze({ audio: 'Sound', controls: 'Controls', game: 'Game', access: 'Accessibility' });
+export const SETTING_GROUPS = Object.freeze({ audio: 'Sound', controls: 'Controls', camera: 'Camera', game: 'Game', perf: 'Performance', access: 'Accessibility' });
 
 export const SETTING_BY_KEY = Object.freeze(Object.fromEntries(SETTINGS.map((d) => [d.key, d])));
 
@@ -93,17 +105,25 @@ export function settingVisible(def, iso = true, device = null) {
 }
 
 /**
- * The rows to show, in display order. On touch the Controls group comes first and its touch rows lead it (CONTROLS_SPEC
- * §9: a phone player opens Settings to resize / move buttons, not to scroll past Sound). Pure.
+ * The rows to show, in display order, grouped (one header per group). On touch the Controls group comes first and its
+ * touch rows lead it (CONTROLS_SPEC §9: a phone player opens Settings to resize / move buttons, not to scroll past
+ * Sound). Pure.
  * @param {boolean} [iso] @param {Dev|null} [device]
  * @returns {SettingDef[]}
  */
 export function visibleSettings(iso = true, device = null) {
   const rows = SETTINGS.filter((d) => settingVisible(d, iso, device));
-  if (device !== 'touch') return rows;
-  const rank = (d) => (d.group !== 'controls' ? 2 : devIn(d.dev, 'touch') ? 0 : 1);
+  const order = device === 'touch' ? GROUP_ORDER_TOUCH : GROUP_ORDER;
+  const rank = (d) => {
+    const g = order.indexOf(d.group);
+    return (g < 0 ? order.length : g) * 2 + (device === 'touch' && d.group === 'controls' && !devIn(d.dev, 'touch') ? 1 : 0);
+  };
   return rows.map((d, i) => [d, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]);
 }
+
+/** Group display order (one header per group); on touch Controls (touch rows first) and Camera lead. */
+const GROUP_ORDER = ['audio', 'controls', 'camera', 'game', 'perf', 'access'];
+const GROUP_ORDER_TOUCH = ['controls', 'camera', 'audio', 'game', 'perf', 'access'];
 
 /** Current value of a setting (difficulty from state.difficulty). */
 export function readSetting(state, key) {
@@ -183,6 +203,8 @@ export function applySetting(ctx, key, value) {
   } else {
     st.settings ??= {};
     st.settings[key] = value;
+    // K7: the retired boolean camLock stays in sync with camLockMode until its readers move
+    if (key === 'camLockMode' && 'camLock' in st.settings) st.settings.camLock = value === 'locked';
   }
   ctx.bus?.emit(E.SETTINGS_CHANGED, { key, value });
   return value;

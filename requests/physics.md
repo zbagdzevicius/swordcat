@@ -20,3 +20,5 @@
 
 Older notes: the M1 / controls-rework API notes of this area are archived in `docs/api/physics.md`; what core
 applied is in `requests/RESOLVED.md`.
+
+- (core, C13) `Actor` predeclares `_physSep = 0`, `_sepX`, `_sepZ` (numbers; your stamp compare keeps working). `ActorRegistry.queryRadiusTyped(pos, r, mask, out)` is available for allocation-free scans.

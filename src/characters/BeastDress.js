@@ -9,7 +9,8 @@
 import * as THREE from 'three';
 import { ENEMIES } from '../core/config.js';
 import { attachBeastHead } from './BeastHead.js';
-import { attachPlate, pickPlateWord } from './Plate.js';
+import { attachPlate, pickPlateWord, friendWordFor } from './Plate.js';
+import { buildOutline, setOutlineAlpha, OUTLINE, inkFor } from './Outline.js';
 import { buildProp, buildCage } from './Props/ProcProps.js';
 import { own } from './materials.js';
 import { buildSilhouetteProxy, highlightObject, XRAY } from './Readability.js';
@@ -60,10 +61,13 @@ export function dressBeast(model, look = 'hyena', o = {}) {
   const seed = (o.seed ?? 0) >>> 0;
   const head = attachBeastHead(model, L.head, { ...L.opts, seed: seed + 1, ...(o.head || {}) });
   const word = o.word !== undefined ? o.word : L.words ? pickPlateWord(L.words, seed) : null;
-  const plate = word && o.plate !== false ? attachPlate(model, word, { seed, style: L.style, ...(o.plateOpts || {}) }) : null;
+  // both words bake into one texture at dress time (WA §8.3): the bonk flip is a UV offset swap, 0 canvas work
+  const friendWord = o.friendWord !== undefined ? o.friendWord : word ? friendWordFor(word) : null;
+  const plate = word && o.plate !== false ? attachPlate(model, word, { seed, style: L.style, friend: friendWord, ...(o.plateOpts || {}) }) : null;
   const held = {};
+  let activity = 0, headAcc = 0, headN = 0;
   const dress = {
-    look: typeof look === 'string' ? look : L.head, head, plate, word, held,
+    look: typeof look === 'string' ? look : L.head, head, plate, word, friendWord, held, outline: null,
     /** The dressed model root and the x-ray proxy (lazy; research/CONTROLS_SPEC.md §3). */
     model, silhouetteProxy: null, _proxyDirty: false, highlight: null,
     get isBeastDress() { return true; },
@@ -87,7 +91,39 @@ export function dressBeast(model, look = 'hyena', o = {}) {
     setExpression(name) { head?.setExpression(name); return dress; },
     /** Barkus phase 2: the horned helm shatters. */
     setHelm(on) { head?.setHelm?.(on); return dress; },
-    update(dt) { head?.update(dt); },
+    /**
+     * Per frame. Off-screen tiers (PERF §4.3, X13): tier 1 runs the head's secondary motion every 3rd frame, tier 2 every
+     * 6th (summed dt), tier 3 never; coming back restores it the same frame.
+     */
+    update(dt) {
+      if (!head) return;
+      if (activity === 0) { head.update(dt); return; }
+      headAcc += dt;
+      if (activity >= 3 || ++headN % (activity === 1 ? 3 : 6) !== 0) return;
+      head.update(headAcc); headAcc = 0;
+    },
+    /** Activity tier 0..3 (camera's activityOf; replaces the draft setOffscreen). */
+    setActivity(tier) { activity = Math.max(0, Math.min(3, tier | 0)); if (activity === 0) { headAcc = 0; headN = 0; } return dress; },
+    get activity() { return activity; },
+    /**
+     * Flip the breastplate to the friend word (true) or back (false): a texture offset swap (characters.W4).
+     * @returns {boolean} false when this plate has no friend word
+     */
+    flipPlate(on = true) { return plate?.userData.flip ? plate.userData.flip(on) : false; },
+    /**
+     * Warm ink outline hull (ART §5.4): enemies 1.6 px, bosses 2.4 px; `alpha` < 1 fades it (engaged: 0.2 s).
+     * @param {boolean} on @param {{ px?: number, color?: THREE.ColorRepresentation, alpha?: number, boss?: boolean }} [o2]
+     */
+    setOutline(on, o2 = {}) {
+      if (on && !dress.outline) {
+        dress.outline = buildOutline(dress, { px: o2.px ?? (o2.boss ? OUTLINE.px.boss : OUTLINE.px.enemy), color: o2.color ?? inkFor(L.ink ?? OUTLINE.ink) });
+      }
+      if (dress.outline) {
+        if (o2.alpha !== undefined) setOutlineAlpha(dress.outline, on ? o2.alpha : 0);
+        else dress.outline.visible = !!on;
+      }
+      return dress;
+    },
     /**
      * Hold a procedural prop ('cage', 'signpost', 'post_bag', 'lantern', ...) or an Object3D in a hand.
      * @param {string|THREE.Object3D} what @param {'l'|'r'} [hand] @param {object} [opts] prop options + { p, r, s }
@@ -106,9 +142,10 @@ export function dressBeast(model, look = 'hyena', o = {}) {
     drop(key) { const h = held[key]; if (h) { h.removeFromParent(); delete held[key]; dress._proxyDirty = true; } return h ?? null; },
     dispose() {
       dress.silhouetteProxy?.userData.dispose?.(); dress.silhouetteProxy = null;
+      dress.outline?.userData.dispose?.(); dress.outline = null;
       head?.dispose(); head?.root.removeFromParent();
       plate?.removeFromParent(); plate?.traverse((c) => { if (c.isMesh) c.geometry.dispose(); });
-      plate?.userData.texture?.dispose?.();
+      plate?.userData.texture?.dispose?.(); plate?.getObjectByName('plateWord')?.material.dispose();
       for (const k of Object.keys(held)) dress.drop(k);
     },
   };
@@ -128,7 +165,7 @@ const _silMats = new Map();
  * Flat silhouette: every mesh under `root` renders in one unlit colour (fogged). Returns a restore function.
  * @param {THREE.Object3D} root @param {string} [color] @param {{ fog?: boolean, castShadow?: boolean }} [o]
  */
-export function silhouette(root, color = '#17171B', o = {}) {
+export function silhouette(root, color = '#3A2E4A', o = {}) {   // a soft plum, never near-black (ART §2.6)
   const matFor = (src) => {
     const cut = src && !Array.isArray(src) && src.alphaTest > 0 && src.map ? src.map : null;   // keep tuft-card cut-outs
     const key = color + (o.fog === false ? ':nofog' : '') + (cut ? ':' + cut.uuid : '');

@@ -4,6 +4,8 @@
 // Every builder returns a THREE.Group whose meshes share module-level geometries / materials (no per-call shader
 // compile); `disposeDressing(root)` frees only what a builder created per call (`userData.owned`).
 import * as THREE from 'three';
+import { kitMaterial, RM } from '../characters/index.js';
+import { GeoBuilder, rgb } from '../characters/util.js';
 
 let _mats = null;
 /** Shared materials (lazy: no WebGL / allocation at import). */
@@ -13,7 +15,7 @@ export function dressingMats() {
   _mats = {
     wood: m('#7A5A3E'), woodDark: m('#5A3E2B'), woodPale: m('#9C7B57'), iron: m('#4A4C52', { r: 0.45, m: 0.7 }),
     rope: m('#B89A6A', { r: 0.95 }), line: new THREE.LineBasicMaterial({ color: '#EDE6D6', transparent: true, opacity: 0.7 }),
-    cup: m('#D9D2C2', { r: 0.4 }), milk: m('#FFFDF6', { r: 0.3 }), cloth: m('#B0503C'),
+    latch: m('#8E5A2E'), bow: m('#C9A8FF', { r: 0.5 }), cup: m('#D9D2C2', { r: 0.4 }), milk: m('#FFFDF6', { r: 0.3 }), cloth: m('#B0503C'),
     wing: new THREE.MeshBasicMaterial({ color: '#FFD34D', side: THREE.DoubleSide, transparent: true, opacity: 0.95, fog: true }),
   };
   for (const k in _mats) _mats[k].userData.shared = true;
@@ -64,7 +66,8 @@ export function buildStocks({ neckY = 0.55, width = 1.3 } = {}) {
   hinge.position.set(-hw, by + 0.12, 0);
   const upper = new THREE.Group(); upper.position.set(hw, 0, 0);
   cutRow(0, true, upper);
-  upper.add(mesh(box(0.06, 0.07, 0.03), M.iron, hw - 0.08, 0, 0.05));                    // the padlock
+  upper.add(mesh(box(0.08, 0.09, 0.06), M.latch, hw - 0.09, 0, 0.05));                   // the wooden latch (WA20: no metal)
+  upper.add(mesh(box(0.14, 0.07, 0.03), M.bow, hw - 0.09, 0.075, 0.07, false));            // + its lilac bow
   hinge.add(upper);
   g.add(hinge);
   g.userData.size = [width + 0.12, postH + 0.06, 0.5];
@@ -165,4 +168,165 @@ export function disposeDressing(root) {
     if (m?.userData?.owned) m.dispose();
   });
   root?.removeFromParent?.();
+}
+
+// ------------------------------------------------------------------ WA20 kitten carriers
+
+/**
+ * WA20 kitten-carrier palette: honey wood slats, rope lashing, a lilac bow, a pink polka-dot cushion with cream dots.
+ * No metal anywhere (the old iron cages read as a prison); the latch is wood. `crack` is the cracked latch inset.
+ */
+export const CARRIER = Object.freeze({
+  wood: '#B7773F', woodDark: '#8E5A2E', rope: '#E8B87A', bow: '#C9A8FF', bowLight: '#E2D2FF', bowKnot: '#A988E8',
+  cushion: '#FF9EC0', dots: '#FFF1DE', crack: '#5A3A20', wheel: '#9C6436', wheelHub: '#E8B87A',
+  /** thinnest structural member (m): no slat, rope or rail below it (WA20) */
+  minMember: 0.06, slat: 0.08, slatDepth: 0.06, gap: 0.15,
+});
+/** Every colour a carrier uses (unit lint: none of them is an iron grey). */
+export const CARRIER_COLORS = Object.freeze(Object.values(CARRIER).filter((v) => typeof v === 'string'));
+
+const _cm = new THREE.Matrix4(), _cq = new THREE.Quaternion(), _ce = new THREE.Euler(), _cs = new THREE.Vector3(), _cp = new THREE.Vector3(), _cu = new THREE.Vector3();
+/** A compose() matrix (a fresh Matrix4: GeoBuilder keeps none of them; build time only). */
+const cmat = (x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) => _cm.compose(_cp.set(x, y, z), _cq.setFromEuler(_ce.set(rx, ry, rz)), _cs.set(sx, sy, sz)).clone();
+
+/** A lilac bow (two loops, a knot, two tails) into `gb`, centred at (x, y, z), facing +z. */
+function addBow(gb, x, y, z, s = 1) {
+  const loop = new THREE.SphereGeometry(0.07 * s, 10, 8);
+  gb.add(loop, { matrix: cmat(x - 0.075 * s, y + 0.01 * s, z, 0, 0, 0.5, 1.15, 0.7, 0.45), color: rgb(CARRIER.bow), rmse: RM.satin });
+  gb.add(loop, { matrix: cmat(x + 0.075 * s, y + 0.01 * s, z, 0, 0, -0.5, 1.15, 0.7, 0.45), color: rgb(CARRIER.bow), rmse: RM.satin });
+  gb.add(new THREE.SphereGeometry(0.035 * s, 8, 6), { matrix: cmat(x, y, z + 0.01 * s), color: rgb(CARRIER.bowKnot), rmse: RM.satin });
+  const tail = new THREE.BoxGeometry(0.035 * s, 0.11 * s, 0.02 * s);
+  gb.add(tail, { matrix: cmat(x - 0.03 * s, y - 0.07 * s, z, 0, 0, 0.35), color: rgb(CARRIER.bowLight), rmse: RM.satin });
+  gb.add(tail, { matrix: cmat(x + 0.03 * s, y - 0.07 * s, z, 0, 0, -0.35), color: rgb(CARRIER.bowLight), rmse: RM.satin });
+}
+
+/** The polka-dot cushion on the carrier floor (pink, cream dots on top). */
+function addCushion(gb, w, d, y, round = false) {
+  const h = 0.07;
+  const g = round ? new THREE.CylinderGeometry(w / 2, w / 2, h, 20) : new THREE.BoxGeometry(w, h, d);
+  gb.add(g, { matrix: cmat(0, y + h / 2, 0), color: rgb(CARRIER.cushion), rmse: RM.velvet });
+  const dot = new THREE.CylinderGeometry(0.03, 0.03, 0.01, 10);
+  const nx = Math.max(2, Math.floor(w / 0.16)), nz = Math.max(2, Math.floor(d / 0.16));
+  for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+    const x = ((i + 0.5 + (j % 2 ? 0.35 : 0)) / nx) * w - w / 2, z = ((j + 0.5) / nz) * d - d / 2;
+    if (round && Math.hypot(x, z) > w / 2 - 0.05) continue;
+    if (Math.abs(x) > w / 2 - 0.04) continue;
+    gb.add(dot, { matrix: cmat(x, y + h + 0.004, z), color: rgb(CARRIER.dots), rmse: RM.cloth });
+  }
+}
+
+/** A loose cart wheel lying on the ground (ON §6.1 "one broken wheel prop") at (x, y, z) in `gb`. */
+function addWheel(gb, x, y, z, yaw = 0) {
+  const r = 0.32;
+  gb.add(new THREE.TorusGeometry(r, 0.045, 6, 18), { matrix: cmat(x, y + 0.045, z, Math.PI / 2, 0, yaw), color: rgb(CARRIER.wheel), rmse: RM.wood });
+  gb.add(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 10), { matrix: cmat(x, y + 0.05, z), color: rgb(CARRIER.wheelHub), rmse: RM.wood });
+  const spoke = new THREE.BoxGeometry(r * 2 - 0.08, 0.06, 0.06);
+  for (let i = 0; i < 2; i++) gb.add(spoke, { matrix: cmat(x, y + 0.045, z, 0, yaw + i * Math.PI / 3, 0), color: rgb(CARRIER.wheel), rmse: RM.wood });
+  // the broken spoke: a short stub
+  const a = yaw + (2 * Math.PI) / 3;
+  gb.add(new THREE.BoxGeometry(r * 0.6, 0.06, 0.06), { matrix: cmat(x + Math.cos(a) * r * 0.35, y + 0.045, z - Math.sin(a) * r * 0.35, 0, a, 0.2), color: rgb(CARRIER.wheel), rmse: RM.wood });
+}
+
+/** The wooden latch on the door (cracked: a dark zigzag split through it), with the lilac bow on it. */
+function addLatch(gb, x, y, z, cracked) {
+  gb.add(new THREE.BoxGeometry(0.12, 0.14, 0.07), { matrix: cmat(x, y, z), color: rgb(CARRIER.woodDark), rmse: RM.wood });
+  if (cracked) {
+    const seg = new THREE.BoxGeometry(0.016, 0.05, 0.012);
+    gb.add(seg, { matrix: cmat(x - 0.01, y + 0.04, z + 0.037, 0, 0, 0.5), color: rgb(CARRIER.crack), rmse: RM.wood });
+    gb.add(seg, { matrix: cmat(x + 0.008, y, z + 0.037, 0, 0, -0.55), color: rgb(CARRIER.crack), rmse: RM.wood });
+    gb.add(seg, { matrix: cmat(x - 0.006, y - 0.045, z + 0.037, 0, 0, 0.45), color: rgb(CARRIER.crack), rmse: RM.wood });
+  }
+  addBow(gb, x, y + 0.11, z + 0.03, 0.85);
+}
+
+/**
+ * WA20 kitten carrier (replaces the iron cage for every rescue: Mochi's tipped cart, Biscuit at the Old Bridge, Sage's
+ * treetop carrier, the snack-wagon carrier, kittens in carriers). Two draws (body, door) on the shared kit material,
+ * one fewer than the old cage (body, door bars, ribbon).
+ * userData: { size: [w, h, d], door, kind: 'carrier', style, cracked, setOpen(t) }.
+ * @param {{ style?: 'carry'|'cart'|'hanging'|'kennel', size?: number[], ribbon?: boolean|string, cracked?: boolean,
+ *   wheel?: number[] }} [o] wheel: [x, y, z, yaw?] of a loose broken wheel in the carrier's frame (Mochi's cart)
+ */
+export function buildCarrier(o = {}) {
+  const style = o.style || 'carry';
+  const group = new THREE.Group(); group.name = 'carrier:' + style;
+  const C = CARRIER, wood = rgb(C.wood), woodD = rgb(C.woodDark), rope = rgb(C.rope), t = C.minMember;
+  const gb = new GeoBuilder(), dgb = new GeoBuilder();
+  const door = new THREE.Group(); door.name = 'carrierDoor';
+  const slat = (g, x, y0, y1, z, ry = 0) => g.add(new THREE.BoxGeometry(C.slat, y1 - y0, C.slatDepth), { matrix: cmat(x, (y0 + y1) / 2, z, 0, ry, 0), color: wood, rmse: RM.wood });
+  let W, H, D;
+  if (style === 'hanging') {
+    W = o.size?.[0] ?? 0.95; H = o.size?.[1] ?? 1.0; D = o.size?.[2] ?? W;
+    const R = W / 2, n = 10;
+    gb.add(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.07, 22), { matrix: cmat(0, 0.035, 0), color: woodD, rmse: RM.wood });
+    gb.add(new THREE.TorusGeometry(R, 0.035, 6, 26), { matrix: cmat(0, H * 0.72, 0, Math.PI / 2), color: rope, rmse: RM.cloth });
+    gb.add(new THREE.TorusGeometry(R, 0.035, 6, 26), { matrix: cmat(0, 0.1, 0, Math.PI / 2), color: rope, rmse: RM.cloth });
+    addCushion(gb, W * 0.82, W * 0.82, 0.07, true);
+    const span = (Math.PI / n) * 1.6, hx = Math.cos(Math.PI / 2 + span) * R, hz = Math.sin(Math.PI / 2 + span) * R;
+    door.position.set(hx, 0, hz);
+    const rib = new THREE.BoxGeometry(t, 1, t);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2, x = Math.cos(a) * R, z = Math.sin(a) * R, ry = -a + Math.PI / 2;
+      if (Math.abs(a - Math.PI / 2) < span) slat(dgb, x - hx, 0.07, H * 0.72, z - hz, ry);
+      else slat(gb, x, 0.07, H * 0.72, z, ry);
+      // dome ribs up to the hook
+      const ax = x * 0.15, az = z * 0.15;
+      _cu.set(ax - x, H * 0.28, az - z);
+      const len = _cu.length();
+      _cq.setFromUnitVectors(_cs.set(0, 1, 0), _cu.normalize());
+      gb.add(rib, { matrix: _cm.compose(_cp.set((x + ax) / 2, H * 0.86, (z + az) / 2), _cq, _cs.set(1, len, 1)).clone(), color: wood, rmse: RM.wood });
+    }
+    gb.add(new THREE.TorusGeometry(0.08, 0.03, 6, 14), { matrix: cmat(0, H + 0.06, 0), color: rope, rmse: RM.cloth });
+    addLatch(dgb, -hx + 0.02, H * 0.42, R - hz + 0.04, !!o.cracked);
+    if (o.ribbon !== false) addBow(gb, 0, H + 0.12, 0.06, 1.2);
+  } else {
+    W = o.size?.[0] ?? (style === 'cart' ? 1.2 : style === 'kennel' ? 0.9 : 0.6);
+    H = o.size?.[1] ?? (style === 'cart' ? 0.9 : style === 'kennel' ? 0.8 : 0.75);
+    D = o.size?.[2] ?? (style === 'cart' ? 0.8 : style === 'kennel' ? 0.9 : 0.5);
+    const hw = W / 2, hd = D / 2;
+    gb.add(new THREE.BoxGeometry(W + 0.06, 0.07, D + 0.06), { matrix: cmat(0, 0.035, 0), color: woodD, rmse: RM.wood });
+    addCushion(gb, W - 0.14, D - 0.14, 0.07);
+    // roof: a solid board (kennel) or a slatted top on a rim
+    if (style === 'kennel') gb.add(new THREE.BoxGeometry(W + 0.08, 0.07, D + 0.1), { matrix: cmat(0, H + 0.035, 0), color: woodD, rmse: RM.wood });
+    else {
+      for (const z of [-hd, hd]) gb.add(new THREE.BoxGeometry(W + 0.04, t, t), { matrix: cmat(0, H, z), color: wood, rmse: RM.wood });
+      for (const x of [-hw, hw]) gb.add(new THREE.BoxGeometry(t, t, D + 0.04), { matrix: cmat(x, H, 0), color: wood, rmse: RM.wood });
+      const nt = Math.max(2, Math.round(W / 0.22));
+      for (let i = 1; i < nt; i++) gb.add(new THREE.BoxGeometry(C.slat, t, D), { matrix: cmat(-hw + (i / nt) * W, H, 0), color: wood, rmse: RM.wood });
+    }
+    // corner posts + rope lashing at the top corners
+    for (const x of [-hw, hw]) for (const z of [-hd, hd]) {
+      gb.add(new THREE.BoxGeometry(0.08, H, 0.08), { matrix: cmat(x, H / 2, z), color: woodD, rmse: RM.wood });
+      gb.add(new THREE.TorusGeometry(0.06, 0.03, 6, 12), { matrix: cmat(x, H - 0.08, z, Math.PI / 2), color: rope, rmse: RM.cloth });
+    }
+    // slats: back and sides (vertical, ≥ CARRIER.minMember thick), the front ones on the door
+    const nx = Math.max(2, Math.round(W / (C.slat + C.gap))), nz = Math.max(2, Math.round(D / (C.slat + C.gap)));
+    for (let i = 1; i < nx; i++) {
+      const x = -hw + (i / nx) * W;
+      slat(dgb, x + hw, 0.07, H - t / 2, 0);
+      if (style !== 'kennel') slat(gb, x, 0.07, H - t / 2, -hd);
+    }
+    if (style === 'kennel') gb.add(new THREE.BoxGeometry(W, H, t), { matrix: cmat(0, H / 2, -hd), color: wood, rmse: RM.wood });
+    for (let i = 1; i < nz; i++) { const z = -hd + (i / nz) * D; slat(gb, -hw, 0.07, H - t / 2, z, Math.PI / 2); slat(gb, hw, 0.07, H - t / 2, z, Math.PI / 2); }
+    // door: a rail across its slats, the latch (+ lilac bow) at the free edge
+    dgb.add(new THREE.BoxGeometry(W, t, t), { matrix: cmat(hw, H * 0.5, 0.02), color: woodD, rmse: RM.wood });
+    addLatch(dgb, W - 0.09, H * 0.5, 0.06, !!o.cracked);
+    door.position.set(-hw, 0, hd);
+    if (style === 'carry') gb.add(new THREE.TorusGeometry(0.1, 0.03, 6, 14, Math.PI), { matrix: cmat(0, H + 0.03, 0), color: rope, rmse: RM.cloth });
+    // a bow on top as well (the "gift" read from the iso camera)
+    if (o.ribbon !== false) addBow(gb, 0.12, H + 0.06, hd - 0.04, 1.2);
+  }
+  group.userData.size = [W, H, D];
+  if (Array.isArray(o.wheel)) addWheel(gb, o.wheel[0], o.wheel[1], o.wheel[2], o.wheel[3] ?? 0.6);
+  const mat = kitMaterial();
+  const body = new THREE.Mesh(gb.build(), mat); body.name = 'carrierBody'; body.castShadow = false; body.receiveShadow = true;
+  group.add(body);
+  const dm = new THREE.Mesh(dgb.build(), mat); dm.name = 'carrierDoorSlats'; dm.castShadow = false; door.add(dm);
+  group.add(door);
+  group.userData.door = door;
+  group.userData.kind = 'carrier';
+  group.userData.style = style;
+  group.userData.cracked = !!o.cracked;
+  group.userData.setOpen = (u) => { door.rotation.y = -Math.max(0, Math.min(1, u)) * 1.9; };
+  return group;
 }

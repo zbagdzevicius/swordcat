@@ -27,6 +27,10 @@ const _v = new THREE.Vector3();
 const _box = new THREE.Box3();
 const _m = new THREE.Matrix4();
 const PRECISE_MAX_VERTS = 60000;
+/** PERF §4.4: skinned culling sphere = the fitted bind-pose bounds' sphere × 1.6 (clips stay inside it). */
+export const SKIN_CULL_PAD = 1.6;
+/** Prefetches in flight at once (PERF §10.3). */
+const PREFETCH_PARALLEL = 2;
 
 /**
  * World-space AABB of the VISIBLE meshes under `object` (bone-deformed for skinned meshes), skipping any
@@ -147,6 +151,8 @@ export class Assets {
     this.manager.onError = (url) => console.error(`[assets] failed to load ${url}`);
     /** @type {Map<string, Promise<any>>} */
     this.cache = new Map();
+    /** paths already prefetched into the HTTP cache (PERF §10.3) */
+    this._prefetched = new Set();
     /** measured raw boxes per template key */
     this._measured = new Map();
     // meshopt only: no shipped GLB uses DRACO (checked 2026-10-07), and DRACOLoader would pull ~1.3 MB of
@@ -215,10 +221,23 @@ export class Assets {
     if (opts.center) { const c = raw.getCenter(_v); fitG.position.x = -c.x * s; fitG.position.z = -c.z * s; }
 
     const cast = opts.castShadow ?? true, recv = opts.receiveShadow ?? false;
+    // PERF §4.4 (C12): skinned meshes keep frustum culling with a conservative bind-pose sphere × SKIN_CULL_PAD in
+    // mesh-local space (three r186 uses a set boundingSphere as is). A culled one skips its draw, bone upload and
+    // setProgram. `opts.cull === false` keeps the old "never culled" behaviour for rigs whose clips leave the sphere.
+    let skinSphere = null;
+    if (opts.cull !== false) {
+      skinSphere = raw.getBoundingSphere(new THREE.Sphere());
+      skinSphere.center.multiplyScalar(s).add(fitG.position);
+      skinSphere.radius *= s * SKIN_CULL_PAD;
+      root.updateMatrixWorld(true);
+    }
     scene.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = cast; o.receiveShadow = recv;
-      if (o.isSkinnedMesh) o.frustumCulled = false;           // animated bounds drift from the bind pose
+      if (!o.isSkinnedMesh) return;
+      if (!skinSphere) { o.frustumCulled = false; return; }
+      o.boundingSphere = skinSphere.clone().applyMatrix4(_m.copy(o.matrixWorld).invert());
+      o.frustumCulled = true;
     });
     if (opts.tint != null || opts.cloneMaterials) this._tint(scene, opts.tint);
     const size = raw.getSize(new THREE.Vector3()).multiplyScalar(s);
@@ -301,5 +320,33 @@ export class Assets {
   }
 
   /** Preload the per-level subsets every area declared (`export const levels` in its manifest). */
-  preloadLevel(levelId) { return this.preload(levelAssets(levelId)); }
+  preloadLevel(levelId, tier = 'p0') { return this.preload(levelAssets(levelId, undefined, tier)); }
+
+  /**
+   * Shared clip library of a rig family (PERF §10.3 step 2): the cached glTF's `animations`. Bind by bone name:
+   * `mixer.clipAction(THREE.AnimationClip.findByName(await assets.animLib(path), 'Running_A'), model.scene)`.
+   * @param {string} path @returns {Promise<THREE.AnimationClip[]>}
+   */
+  async animLib(path) { return (await this.gltf(path)).animations ?? []; }
+
+  /**
+   * Prefetch a level's tier into the HTTP cache without parsing (PERF §10.3): `fetch(url, { priority: 'low' })`,
+   * ≤ PREFETCH_PARALLEL in flight, skipped on `saveData`. Returns the number of files fetched.
+   * @param {string} levelId @param {'p0'|'p1'|'p2'|'all'} [tier]
+   */
+  async prefetch(levelId, tier = 'p0') {
+    if (typeof fetch !== 'function') return 0;
+    if (typeof navigator !== 'undefined' && navigator.connection?.saveData) return 0;
+    const queue = levelAssets(levelId, undefined, tier).filter((p) => !this.cache.has('gltf:' + p) && !this._prefetched.has(p));
+    let done = 0;
+    const worker = async () => {
+      while (queue.length) {
+        const p = queue.shift();
+        this._prefetched.add(p);
+        try { await fetch(this.url(p), { priority: 'low' }); done++; } catch { /* best effort */ }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PREFETCH_PARALLEL, queue.length) }, worker));
+    return done;
+  }
 }

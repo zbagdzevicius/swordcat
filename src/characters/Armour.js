@@ -85,8 +85,21 @@ export function addPlateArmour(A, o = {}) {
     A.add('chest', new THREE.SphereGeometry(0.0065, A.seg(8), A.seg(6)), { m: mat([Math.sin(a) * r * 1.08, -0.072, Math.cos(a) * r * 1.05]), ...L.brass });
   }
 
-  // ---- pauldrons: 4 stacked lames, each larger and lower so they flare (art.md §4.2) -------------
-  if (o.pauldrons !== false) for (const side of [1, -1]) {
+  // ---- pauldrons (ART_WARM §6.3): 2 chunky domes (outer r ×1.1) with a brass rim, no rivets: a toy-knight
+  // shoulder line that reads from 50° above. `o.lames` keeps the M1 4-lame look (tools / comparisons).
+  if (o.pauldrons !== false && !o.lames) for (const side of [1, -1]) {
+    const gx = side * 0.148 * w, gy = 0.17;
+    let lm = null;
+    for (let i = 0; i < 2; i++) {
+      const r = (0.078 + i * 0.012) * 1.1;
+      const geo = dent(new THREE.SphereGeometry(r, A.seg(28), A.seg(12), 0, Math.PI * 2, 0, Math.PI * 0.5).scale(1, 0.85, 1.08), dentAmt, 7 + i);
+      lm = new THREE.Matrix4().makeTranslation(gx, gy, 0).multiply(mat([side * i * 0.012, -i * 0.045, 0], [0, 0, -side * (0.22 + i * 0.22)]));
+      shell(A, 'chest', geo, lm, L.steel, L.inner);
+    }
+    // brass rim along the lower dome's edge (0.012 H)
+    A.add('chest', new THREE.TorusGeometry(0.09 * 1.1, 0.012, A.seg(6), A.seg(28)), { m: lm.clone().multiply(mat([0, 0, 0], [Math.PI / 2, 0, 0], [1, 1.08, 1])), ...L.brass });
+  }
+  if (o.pauldrons !== false && o.lames) for (const side of [1, -1]) {
     const gx = side * 0.148 * w, gy = 0.17;
     for (let i = 0; i < 4; i++) {
       const geo = dent(new THREE.SphereGeometry(0.078 + i * 0.006, A.seg(32), A.seg(13), 0, Math.PI * 2, 0, Math.PI * 0.46).scale(1, 0.8, 1.08), dentAmt, 7 + i);

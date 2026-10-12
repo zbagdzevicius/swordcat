@@ -51,6 +51,32 @@ export function blendPose(from, to, k, pivot, out) {
   return out;
 }
 
+const _fa = new THREE.Vector3();
+
+/**
+ * Pose-space blend for the iso rig hand-offs (AUTOCAM §8.3): each pose is read as (look point, yaw, pitch, lens
+ * distance, FOV, roll) and every channel is eased on its own: the look point linearly, the yaw along the shortest arc,
+ * the pitch linearly and the distance in LOG space (exp(lerp(ln d0, ln d1, k))), so a 13 m → 3.5 m crane feels even
+ * and the lens orbits her instead of cutting through. `out` may be `from` or `to`.
+ * @param {CamPose} from @param {CamPose} to @param {number} k @param {CamPose} out
+ */
+export function blendPoseIso(from, to, k, out) {
+  if (k <= 0) return out === from ? out : out.copy(from);
+  if (k >= 1) return out === to ? out : out.copy(to);
+  const ax = from.pos.x - from.look.x, ay = from.pos.y - from.look.y, az = from.pos.z - from.look.z;
+  const bx = to.pos.x - to.look.x, by = to.pos.y - to.look.y, bz = to.pos.z - to.look.z;
+  const da = Math.max(1e-3, Math.hypot(ax, ay, az)), db = Math.max(1e-3, Math.hypot(bx, by, bz));
+  const ya = Math.atan2(ax, az), yb = Math.atan2(bx, bz);
+  const pa = Math.asin(Math.max(-1, Math.min(1, ay / da))), pb = Math.asin(Math.max(-1, Math.min(1, by / db)));
+  const yaw = ya + wrapAngle(yb - ya) * k, pitch = lerp(pa, pb, k), d = Math.exp(lerp(Math.log(da), Math.log(db), k));
+  _fa.lerpVectors(from.look, to.look, k);
+  const roll = lerp(from.roll, to.roll, k), fov = lerp(from.fov, to.fov, k), cp = Math.cos(pitch);
+  out.look.copy(_fa);
+  out.pos.set(_fa.x + Math.sin(yaw) * cp * d, _fa.y + Math.sin(pitch) * d, _fa.z + Math.cos(yaw) * cp * d);
+  out.roll = roll; out.fov = fov;
+  return out;
+}
+
 /**
  * Write a pose's position + orientation into a camera (FOV is applied by the caller, which adds punches).
  * @param {THREE.Camera} camera @param {CamPose} pose

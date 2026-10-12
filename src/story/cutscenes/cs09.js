@@ -11,7 +11,9 @@
 //   5 TWO_SHOT_LOW on the empty causeway: he laughs, and it cracks into a sob; she sits beside him.
 //     "They used to laugh at me. The runt. So I laughed first. Always first." Clem: "You can stop now. I'll hold it for
 //     a bit." (a real, tiny, wheezy laugh) "...You're very strange." Clem: "I know."
-//   6 wide: he walks off alone into the fog. Wind.
+//   5b bonk, then befriend (WA §8.1): Clem: "...Hee." — "Did you just... laugh? WITH me?" — "LADS! She laughed WITH
+//     me! Best day EVER!" (his plate flips to HYPE-IN-CHIEF through enemies' flipPlate when it exists)
+//   6 wide: he bounds off into the haze to tell the lads. Wind.
 // end: state.shards = 2; Golden Hour unlocked; flag gate.boss; the Horde despawns; CS-10 follows.
 import * as THREE from 'three';
 import { say, cam, wait, sfx, par } from './lib.js';
@@ -163,10 +165,21 @@ export default {
     { t: 'actor', id: 'swordcat', emote: 'blink' },
     say('swordcat', 'cs09.6', 1.2),
 
-    // ---- 6 · he walks off alone into the fog
+    // ---- 5b · bonk, then befriend (WA §8.1): she laughs WITH him; his plate flips to HYPE-IN-CHIEF
+    wait(0.5),
+    { t: 'actor', id: 'swordcat', expression: 'happy', emote: 'blink' },
+    say('swordcat', 'cs09.7', 1.0),
+    { t: 'actor', id: 'cacklejaw', expression: 'surprised' },
+    say('cacklejaw', 'cs09.8', 2.2),
+    { t: 'call', fn: (ctx, cs) => { try { cs.actor('cacklejaw')?.flipPlate?.(true); } catch { /* enemies optional */ } } },
+    { t: 'actor', id: 'cacklejaw', pose: 'laugh', emote: 'laugh', expression: 'happy' },
+    sfx('laugh', 'cacklejaw', { rate: 1.1, vol: 1.0 }),
+    say('cacklejaw', 'cs09.9', 2.4),
+
+    // ---- 6 · he bounds off to tell the lads (a hype-man now)
     { t: 'sfx', stop: 'purr', fade: 1.2 },
     { t: 'cam', anchor: 'swordcat', mode: 'cut', pos: [-1.0, 1.4, 2.6], look: [0, 0.9, -6], fov: 44, track: false },
-    { t: 'actor', id: 'cacklejaw', pose: 'idle', moveTo: FOG_SOUTH, speed: 1.4, nowait: true },
+    { t: 'actor', id: 'cacklejaw', pose: 'idle', moveTo: FOG_SOUTH, speed: 2.4, nowait: true },
     { t: 'actor', id: 'swordcat', pose: 'idle' },
     { t: 'env', wind: 1.2, dur: 2, nowait: true },
     wait(4.0),

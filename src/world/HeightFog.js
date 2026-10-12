@@ -12,11 +12,19 @@
 // For shaders that do their own fog maths (fx/shaders.js `fxFog`, fx/Horde.js): `patchFogVarying(shader)` swaps the
 // fog chunks for the vFogW versions and declares `hfogFactor(vec3 w, float viewDepth)` (= `HFOG_GLSL`) after
 // `<fog_pars_fragment>`; call `hfogFactor(vFogW, vFogDepth)` instead of the exp² of vFogDepth.
+//
+// ART_WARM_SPEC §2.4 [X5] / PERF §8.2: `withHeightFog` also delivers the shared `ENV_U` uniforms and, in lit programs
+// only (where `<lights_fragment_begin>` is included), adds her warm glow pool and the 4 lamp pools before
+// `<opaque_fragment>` from the world position `vFogW` it already provides (no inverse view matrix):
+//   outgoingLight += diffuse × (uGlowCol × g² × 0.6 + uLampCol × Σ l² × uLampStr),  g, l = 1 − smoothstep(0, r, d)
+// One hook, so world Lambert, the actors' toon, grass and water all get warm pools with no light-count change and no
+// recompile. Program cache key suffix: the constant `|hfog3`.
 import * as THREE from 'three';
+import { ENV_U } from './tone.js';
 
 /** Shared uniforms (same objects in every patched program, so one write updates all). */
 export const HFOG = {
-  uFogLow: { value: new THREE.Color('#9AA196') },
+  uFogLow: { value: new THREE.Color('#EED6A6') },          // WA W1: the meadow_day row, never grey
   uFogBase: { value: 0 },
   uFogFalloff: { value: 0.6 },
   uFogLowMix: { value: 0.6 },
@@ -82,6 +90,37 @@ export function patchHeightFogShader(shader) {
   return shader;
 }
 
+/** Glow + lamp pools (lit programs only; needs vFogW, i.e. USE_FOG). Vertical distance counts half (pools spread). */
+export const GLOW_GLSL_PARS = /* glsl */`
+#ifdef USE_FOG
+uniform vec4 uGlow; uniform vec3 uGlowCol; uniform vec4 uLamps[ 4 ]; uniform vec3 uLampCol; uniform float uLampStr;
+float hfogPool(vec3 w, vec4 p) { vec3 d = w - p.xyz; d.y *= 0.5; float l = 1.0 - smoothstep(0.0, max(p.w, 1e-3), length(d)); return l * l * step(0.001, p.w); }
+#endif
+`;
+export const GLOW_GLSL = /* glsl */`
+#ifdef USE_FOG
+{
+  float hfL = hfogPool(vFogW, uLamps[ 0 ]) + hfogPool(vFogW, uLamps[ 1 ]) + hfogPool(vFogW, uLamps[ 2 ]) + hfogPool(vFogW, uLamps[ 3 ]);
+  outgoingLight += diffuseColor.rgb * (uGlowCol * hfogPool(vFogW, uGlow) * 0.6 + uLampCol * hfL * uLampStr);
+}
+#endif
+#include <opaque_fragment>`;
+
+/**
+ * Add the warm glow / lamp pools to a lit onBeforeCompile `shader` (after patchHeightFogShader). Unlit programs
+ * (Basic, Sprite, Points, fx ShaderMaterials) are left alone. Idempotent.
+ */
+export function patchGlow(shader) {
+  if (!shader?.fragmentShader || shader.fragmentShader.includes('hfogPool(')) return shader;
+  const fs = shader.fragmentShader;
+  if (!fs.includes('#include <lights_fragment_begin>') || !fs.includes('#include <opaque_fragment>') || !fs.includes('varying vec3 vFogW')) return shader;
+  shader.uniforms ??= {};
+  Object.assign(shader.uniforms, ENV_U);
+  shader.fragmentShader = fs.replace('#include <fog_pars_fragment>', '#include <fog_pars_fragment>' + GLOW_GLSL_PARS)
+    .replace('#include <opaque_fragment>', GLOW_GLSL);
+  return shader;
+}
+
 /**
  * Patch a material in place (idempotent). Keeps any existing onBeforeCompile and composes the program cache key,
  * so differently-patched materials never share a program. Opt out with `mat.userData.noHeightFog = true`.
@@ -95,8 +134,9 @@ export function withHeightFog(mat) {
   mat.onBeforeCompile = function (shader, renderer) {
     if (prev && prev !== THREE.Material.prototype.onBeforeCompile) prev.call(this, shader, renderer);
     patchHeightFogShader(shader);
+    patchGlow(shader);
   };
-  mat.customProgramCacheKey = () => prevKey + '|hfog2';
+  mat.customProgramCacheKey = () => prevKey + '|hfog3';
   mat.userData.hfog = true;
   mat.needsUpdate = true;          // recompiles if it was already compiled; harmless otherwise
   return mat;

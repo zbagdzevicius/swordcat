@@ -2,5 +2,5 @@
 // fx is procedural (shaders, primitives, pooled sprites); the only file is the damage-number font (§8.3: Fredoka 700),
 // loaded by DamageNumbers when the ui stylesheet has not declared Fredoka yet.
 export default [
-  'fonts/Fredoka-Variable.ttf',
+  'fonts/Fredoka-Latin.woff2',
 ];

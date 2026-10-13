@@ -120,9 +120,9 @@ export function shield() {
 }
 
 /** Cape (cape unlock toast). */
-export function cape(color = '#F2EFE8') {
+export function cape(color = '#FFF3E2', hem = GOLD) {
   return `<svg class="ico-cape" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 4h14l2.5 22c-3 2-6 2.5-9.5 1-3.5 1.5-6.5 1-9.5-1Z" fill="${color}" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`
-    + `<path d="M9 4h14" stroke="${GOLD}" stroke-width="3" stroke-linecap="round"/><path d="M13 9l-1.5 15M19 9l1.5 15" stroke="${INK}" stroke-width="1" opacity=".35"/></svg>`;
+    + `<path d="M9 4h14" stroke="${hem}" stroke-width="3" stroke-linecap="round"/><path d="M13 9l-1.5 15M19 9l1.5 15" stroke="${INK}" stroke-width="1" opacity=".35"/></svg>`;
 }
 
 /** Wax seal with an embossed paw (§13 "pink wax seals with an embossed paw for confirm and save"). */

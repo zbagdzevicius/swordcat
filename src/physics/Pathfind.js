@@ -36,6 +36,8 @@ function scratch(grid) {
   return s;
 }
 
+/** the longest node chain walked back from a goal (a corrupt `from` loop can never hang the query) */
+const MAX_CHAIN = 20000;
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 /** link codes (Uint8 per node): 1 + LINK_KINDS index; AUTHORED bit for designer links */
 const LINK_NAMES = ['', ...LINK_KINDS];
@@ -312,9 +314,12 @@ export function findPath(grid, from, to, opts = {}) {
   res.goal = { x: grid.cx(end), y: grid.h[end], z: grid.cz(end) };
   res.cost = run.cost;                                               // the grid path cost (m, + link costs)
   // walk back
-  const chain = [];
-  for (let k = end; k >= 0 && chain.length < 20000; k = s.from[k]) { chain.push(k); if (k === start) break; }
-  chain.reverse();
+  // walk back into the reused Int32Array (PERF P2: no per-query node arrays): count, then write start → end
+  let len = 0;
+  for (let k = end; k >= 0 && len < MAX_CHAIN; k = s.from[k]) { len++; if (k === start) break; }
+  if (!s.chain || s.chain.length < len) s.chain = new Int32Array(Math.max(len, 1024, (s.chain?.length ?? 0) * 2));
+  for (let k = end, i = len - 1; i >= 0; k = s.from[k], i--) s.chain[i] = k;
+  const chain = s.chain.subarray(0, len);
   res.points = smooth(grid, chain, s, from, found && !snapped ? to : null);
   // out of a trap pocket: the first leg is the step out to the cell outside it
   if (res.unstuck && !(res.points.length && Math.hypot(res.points[0].x - grid.cx(start), res.points[0].z - grid.cz(start)) < 0.3)) {

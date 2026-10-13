@@ -22,21 +22,27 @@ import {
   proceduralFileIds, SHIMMER,
 } from '../../src/audio/procedural.js';
 import { TRACKS, LEVEL_MUSIC, CONTEXT_MUSIC, MUSIC_RULES, MusicDirector, trackId, levelMusic, musicFiles, AMBIENCE, trackGain, MUSIC_TARGET_DB } from '../../src/audio/musicMap.js';
-import { ZZFX_DEFS, zzfxDuration } from '../../src/audio/sfxDefs.js';
+import { ZZFX_DEFS, zzfxDuration, zzfxSamples, PCM_RATE } from '../../src/audio/sfxDefs.js';
+import { Prebaker, bakeTasks, BAKE } from '../../src/audio/bake.js';
 import { MIX, DUCK, MEME } from '../../src/audio/mix.js';
 import { AudioManager } from '../../src/audio/AudioManager.js';
 import { AMBIENT_LAYERS, ambienceFileIds, layerActive, activeLayers, layerPos, nextWait } from '../../src/audio/ambience.js';
-import { CUES, cueFileIds, partOpts } from '../../src/audio/cues.js';
+import { CUES, BEAT_CUES, cueFileIds, partOpts, PitchLadder, LADDER, stickerNote } from '../../src/audio/cues.js';
 import { birdPlan, hootPlan, chirpLength, cricketData, crackleData, rumbleData, CRICKETS } from '../../src/audio/nature.js';
 import { BOSS_MUSIC, bossMusicFor } from '../../src/audio/musicMap.js';
 import { SHOP_SFX, STATION_SFX, OBJECTIVE_SFX, objectiveSfxFor } from '../../src/audio/sfxMap.js';
-import { BELL_PROFILES, tollPlan } from '../../src/audio/procedural.js';
+import { BELL_PROFILES, tollPlan, GLOCK, GLOCK_PHRASES, glockPlan, noteRate, noteSemis, glockData, breezeData, BREEZE, windData } from '../../src/audio/procedural.js';
+import { RUNTIME, ROOM_READ } from '../../src/audio/AudioManager.js';
 import { fakeCtx } from './_fakeCtx.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PUBLIC = path.join(ROOT, 'public', 'assets');
 const INDEX = buildIndex(manifest);
 const close = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
+/** A manifest `levels` entry (array or PERF §10.3 tiers) → every path. */
+const tierList = (v) => (Array.isArray(v) ? v : Object.values(v ?? {}).flat());
+/** Every path a level preloads (all tiers). */
+const lvl = (k) => tierList(manifestLevels[k]);
 
 // ================================================================================================ manifest (U15)
 test('manifest: every path exists on disk, is unique, sorted, audio-only; levels are subsets of the default list', () => {
@@ -46,13 +52,19 @@ test('manifest: every path exists on disk, is unique, sorted, audio-only; levels
   assert.deepEqual([...manifest].sort(), manifest, 'sorted');
   for (const p of manifest) assert.match(p, /^audio\/(music|sfx)\/.+\.(ogg|mp3)$/, p);
   const all = new Set(manifest);
-  for (const [k, list] of Object.entries(manifestLevels)) {
-    assert.ok(k === '*' || LEVEL_IDS.includes(k), `levels key ${k}`);
-    for (const p of list) assert.ok(all.has(p), `levels.${k}: ${p} not in the default list`);
+  for (const [k, v] of Object.entries(manifestLevels)) {
+    assert.ok(k === '*' || k === 'title' || LEVEL_IDS.includes(k), `levels key ${k}`);
+    if (!Array.isArray(v)) for (const t of Object.keys(v)) assert.ok(['p0', 'p1', 'p2'].includes(t), `levels.${k}.${t}: PERF §10.3 tier`);
+    for (const p of tierList(v)) assert.ok(all.has(p), `levels.${k}: ${p} not in the default list`);
   }
-  for (const id of LEVEL_IDS.filter((l) => l !== 'sky')) assert.ok(manifestLevels[id]?.length > 0, `levels.${id} subset`);
+  for (const id of LEVEL_IDS.filter((l) => l !== 'sky')) assert.ok(lvl(id).length > 0, `levels.${id} subset`);
   // streamed music is never preloaded; the buffered loop + sting are
-  for (const t of Object.values(TRACKS)) assert.equal(manifestLevels['*'].includes(t.file), !!t.buffer, `${t.file} preload`);
+  for (const t of Object.values(TRACKS)) assert.equal(lvl('*').includes(t.file), !!t.buffer, `${t.file} preload`);
+  // PERF §10.3 / §10.4: '*'.p0 ≤ 0.4 MB (the veil waits for it), the title set ≤ 0.3 MB of ui sounds only
+  const bytes = (list) => list.reduce((a, p) => a + fs.statSync(path.join(PUBLIC, p)).size, 0);
+  assert.ok(bytes(manifestLevels['*'].p0) <= 0.4 * 1024 * 1024, `'*'.p0 ${bytes(manifestLevels['*'].p0)} B`);
+  assert.ok(manifestLevels.title.length > 0 && bytes(manifestLevels.title) <= 0.3 * 1024 * 1024, 'title set ≤ 0.3 MB');
+  assert.ok(manifestLevels.title.every((p) => p.startsWith('audio/sfx/ui/')), 'the title preloads ui sounds only');
   // the manifest is pure data (§18.4): no imports
   assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'src/audio/assets.manifest.js'), 'utf8'), /^\s*import\s/m);
 });
@@ -64,7 +76,7 @@ test('manifest: every sound id the audio maps name resolves to a listed file (re
   assert.deepEqual(unresolved, [], 'ids with no file in src/audio/assets.manifest.js');
   // and nothing in the manifest is dead weight: each listed file is reachable from some id
   const reach = new Set(ids.flatMap((id) => expandId(id, INDEX)));
-  const levelIds = Object.values(manifestLevels).flat();
+  const levelIds = Object.values(manifestLevels).flatMap(tierList);
   const unused = manifest.filter((p) => !reach.has(p) && !levelIds.includes(p));
   assert.deepEqual(unused, [], 'manifest files no sound id reaches');
 });
@@ -75,24 +87,24 @@ test('§16.2 / §5.4 / §8.1 / §8.2: every file the design names for M1 (meadow
     'sword/swish_01–13', 'sword/swing', 'sword/swing2', 'sword/swing3', 'sword/sword_attack_01–10', 'impact/impactPlate_light_00x',
     'impact/impactPlate_medium_00x', 'impact/impactWood_light_00x', 'creature/creature_die_01', 'pickup/powerup_fx01',
     'impact/impactMetal_medium_00x', 'sword/sword_clash_01–10', 'impact/metal_ringing', 'impact/metal_small1', 'impact/impactPlate_heavy_000',
-    'pickup/powerup_rise01', 'pickup/powerup_rise03', 'ui/glitch_001', 'magic/spell_fire_03', 'impact/impactMetal_heavy_00x', 'magic/magic1',
+    'pickup/powerup_rise01', 'pickup/powerup_rise03', 'magic/spell_fire_03', 'impact/impactMetal_heavy_00x', 'magic/magic1',
     'pickup/powerup_upper01', 'jingles/jingles_STEEL0x', 'magic/spell_fire_07', 'impact/impactPlate_heavy_00x', 'impact/cloth_heavy',
     'impact/chainmail2', 'impact/cloth', 'impact/impactSoft_medium_00x', 'footsteps/footstep_grass_000', 'footsteps/footstep_grass_004',
     'footsteps/stone_l1', 'footsteps/stone_r3', 'footsteps/footstep_wood_000', 'footsteps/sand_l1', 'footsteps/sand_r3', 'impact/armor_light',
-    'cat/cute_creature_0x', 'cat/cat_softmew', 'pickup/powerup_downer01', 'cat/kitten_mew_01', 'cat/meow_baby_01', 'pickup/bubble',
+    'cat/cute_creature_0x', 'cat/cat_softmew', 'cat/cat_mewpurr', 'cat/kitten_mew_01', 'cat/meow_baby_01', 'pickup/bubble',
     'pickup/bubble2', 'pickup/bubble3', 'cat/cat_purrsleepy_loop', 'magic/spell_02', 'pickup/coins_01–04', 'pickup/coin2', 'pickup/gem_01',
-    'pickup/powerup_rise05', 'jingles/jingles_NES02', 'jingles/jingles_PIZZI00–04', 'ui/bookFlip1', 'jingles/jingles_NES00',
+    'pickup/powerup_rise05', 'jingles/jingles_STEEL02', 'jingles/jingles_PIZZI00–04', 'ui/bookFlip1', 'jingles/jingles_PIZZI01',
     'world/wood_hit_0x', 'world/wood_breaking_01–02', 'world/metal_open_01', 'world/lock_open_01', 'world/keys_01', 'world/metal_close_01',
-    'impact/chain_01–03', 'creature/rat_squeak_attack', 'creature/rat_squeak_pain', 'creature/rat_squeak_death', 'creature/c80_scream_01/02',
+    'impact/impactWood_light_00x', 'creature/rat_squeak_attack', 'creature/rat_squeak_pain', 'creature/rat_squeak_death', 'creature/crow_caw_01/02',
     'creature/c80_hurt_0x', 'creature/c80_cough_01', 'creature/c80_eat_01', 'creature/creature_roar_01–03', 'creature/c80_roar_01–03',
     'creature/c80_ooh', 'creature/c80_snore', 'creature/animal_moo', 'creature/animal_peeps', 'ui/click_00x', 'ui/select_00x',
     'ui/confirmation_001', 'ui/back_001', 'ui/bookOpen', 'ui/bookClose', 'ui/scroll_001', 'ui/drop_002',
     // §8.1 telegraphs, §8.2 juice
     'ui/glass_002', 'ui/pluck_001', 'creature/c80_grunt_0x', 'magic/spell_01', 'world/metalClick', 'sword/melee_sword', 'impact/impactPunch_heavy_00x',
-    'jingles/jingles_NES03',
+    'jingles/jingles_PIZZI09',
     // §16.3 laugh build + Sunbell layer; §5.4 CS-01..03 audio columns
     'creature/c80_troll_01–03', 'creature/c80_weird_01–05', 'ui/drop_001', 'world/creak1', 'sword/sword_unsheathe', 'sword/sword_unsheathe2',
-    'cat/cat_purractive_loop', 'creature/c80_monster_0x', 'impact/chain_0x', 'impact/impactSoft_heavy_00x', 'creature/creature_roar_02',
+    'cat/cat_purractive_loop', 'impact/impactWood_heavy_00x', 'impact/impactSoft_heavy_00x', 'creature/creature_roar_02',
     'creature/c80_roar_01', 'creature/creature_roar_01',
     // §16.1 every track
     ...Object.values(TRACKS).map((t) => t.file),
@@ -100,7 +112,7 @@ test('§16.2 / §5.4 / §8.1 / §8.2: every file the design names for M1 (meadow
   const bad = spec.filter((id) => expandId(id, INDEX).length === 0);
   assert.deepEqual(bad, []);
   // meadow / CS sounds preload with the meadow subset (or '*')
-  const pre = new Set([...manifestLevels['*'], ...manifestLevels.meadow]);
+  const pre = new Set([...lvl('*'), ...lvl('meadow')]);
   for (const id of ['creature/c80_troll_01', 'creature/creature_roar_02', 'creature/c80_roar_01', 'pickup/bubble2', 'creature/animal_moo', 'creature/rat_squeak_attack']) {
     assert.ok(expandId(id, INDEX).every((p) => pre.has(p)), `${id} preloads for meadow`);
   }
@@ -110,7 +122,7 @@ test('§16.2 / §5.4 / §8.1 / §8.2: every file the design names for M1 (meadow
 test('ids: short ids, full paths, 0x / 00x / ranges / slash lists, music ids; unknown → null', () => {
   const idx = buildIndex(['audio/sfx/pickup/bubble2.ogg', 'audio/sfx/impact/chain_01.ogg', 'audio/sfx/impact/chain_03.ogg',
     'audio/sfx/impact/impactSoft_heavy_000.ogg', 'audio/sfx/impact/impactSoft_heavy_004.ogg', 'audio/sfx/sword/swish_01.ogg',
-    'audio/sfx/sword/swish_13.ogg', 'audio/sfx/creature/c80_scream_02.ogg', 'audio/music/field_of_dreams.mp3', 'models/x.glb']);
+    'audio/sfx/sword/swish_13.ogg', 'audio/sfx/creature/crow_caw_02.ogg', 'audio/music/field_of_dreams.mp3', 'models/x.glb']);
   assert.equal(resolveId('pickup/bubble2', idx), 'audio/sfx/pickup/bubble2.ogg');
   assert.equal(resolveId('audio/sfx/pickup/bubble2.ogg', idx), 'audio/sfx/pickup/bubble2.ogg');
   assert.equal(resolveId('public/assets/audio/sfx/pickup/bubble2.ogg', idx), 'audio/sfx/pickup/bubble2.ogg');
@@ -119,7 +131,7 @@ test('ids: short ids, full paths, 0x / 00x / ranges / slash lists, music ids; un
   assert.deepEqual(expandId('impact/impactSoft_heavy_00x', idx), ['audio/sfx/impact/impactSoft_heavy_000.ogg', 'audio/sfx/impact/impactSoft_heavy_004.ogg']);
   assert.deepEqual(expandId('sword/swish_01–13', idx), ['audio/sfx/sword/swish_01.ogg', 'audio/sfx/sword/swish_13.ogg']);
   assert.deepEqual(expandId('sword/swish_01-13', idx), ['audio/sfx/sword/swish_01.ogg', 'audio/sfx/sword/swish_13.ogg']);
-  assert.deepEqual(expandId('creature/c80_scream_01/02', idx), ['audio/sfx/creature/c80_scream_02.ogg']);
+  assert.deepEqual(expandId('creature/crow_caw_01/02', idx), ['audio/sfx/creature/crow_caw_02.ogg']);
   assert.equal(resolveId('nope/missing', idx), null);
   assert.equal(resolveId(null, idx), null);
   assert.ok(!idx.has('models/x.glb'));
@@ -147,13 +159,13 @@ test('sfxMap: defs are well formed (files or a zzfx fallback, layers exist, buse
   for (const s of new Set(Object.values(LEVEL_SURFACE))) assert.ok(FOOTSTEP[s], s);
   for (const id of CUTSCENE_SFX) assert.ok(expandId(id, INDEX).length, id);
   // §16.2 numbers: charge fizzle at volume 0.3, kill sparkle at rate 1.3, faint at 0.8, kitten mew at 1.3, Sunbell layer 0.5 / 0.3
-  assert.equal(SFX.chargeFizzle.vol, 0.3);
+  assert.ok(SFX.chargeFizzle.also.includes('chargePfft') && SFX.chargeFizzle.rate === 0.7, 'ART §9.3 pfft + bubble 0.7');
   assert.equal(SFX.killSparkle.rate, 1.3);
   assert.equal(SFX.faint.rate, 0.8);
   assert.equal(SFX.kittenMew.rate, 1.3);
   assert.equal(SFX.hurtVoice.rate, 1.2);
   assert.ok(SFX.bellLayer.rate === 0.5 && SFX.bellLayer.vol === 0.3);
-  assert.equal(SFX.crowCaw.rate, 1.4);
+  assert.ok(SFX.crowCaw.rate === 1.7 && SFX.crowCaw.lowpass === 3000 && SFX.crowCaw.vol === 0.4, 'ART §9.3 crow');
   assert.equal(SFX.spider.rate, 1.3);
   assert.equal(SFX.armorStep.vol, 0.25);
 });
@@ -193,10 +205,14 @@ test('enemy voices: type ids, variants, prefixes, props and bosses map to their 
 });
 
 // ================================================================================================ music
-test('§16.1: all 14 tracks are used, files exist, kinds and the rules match the table', () => {
-  assert.equal(Object.keys(TRACKS).length, 14);
+test('§16.1 + WA §9: every track is used, files exist, kinds and the rules match the table; warm variants', () => {
+  assert.equal(Object.keys(TRACKS).length, 15);
+  assert.equal(new Set(musicFiles()).size, 11, '11 music files (the variants reuse them)');
   for (const t of Object.values(TRACKS)) assert.ok(fs.existsSync(path.join(PUBLIC, t.file)), t.file);
-  assert.equal(TRACKS.dark_forest_creepy.vol, 0.6);
+  assert.ok(TRACKS.lantern_night.rate === 0.94 && TRACKS.lantern_night.file === TRACKS.field_of_dreams.file, 'ART §9.3 Lantern Night');
+  assert.ok(TRACKS.hub_hush.rate === 0.92 && TRACKS.hub_hush.lowpass === 2200 && TRACKS.hub_hush.file === TRACKS.village_bards_tale.file);
+  assert.ok(TRACKS.bog_dreams.rate === 0.96);
+  assert.ok(TRACKS.results_dance.loopEnd === 20 && TRACKS.results_dance.file === TRACKS.festival_minstrel_dance.file, 'WA21');
   assert.equal(TRACKS.victory_fanfare.kind, 'sting');
   assert.equal(TRACKS.victory_fanfare.loop, false);
   assert.ok(TRACKS.battle_fast_fight_loop.buffer, 'the 24 s seamless loop is a decoded buffer');
@@ -218,7 +234,7 @@ test('§16.1: all 14 tracks are used, files exist, kinds and the rules match the
     assert.ok(Math.abs(out - MUSIC_TARGET_DB) < 0.05 || trackGain(t) / (t.vol ?? 1) >= 3.15, `${id}: normalised to ${out.toFixed(1)} dB`);
   }
   assert.ok(trackGain(TRACKS.field_of_dreams) > 2 && trackGain(TRACKS.battle_fast_fight_loop) < 0.4);
-  assert.ok(close(trackGain(TRACKS.dark_forest_creepy) / trackGain({ meanDb: TRACKS.dark_forest_creepy.meanDb }), 0.6));
+  assert.ok(close(trackGain({ vol: 0.6, meanDb: -20 }) / trackGain({ meanDb: -20 }), 0.6), 'design volume multiplies');
   // every track the director can pick for a level exists
   for (const id of Object.keys(LEVEL_MUSIC)) {
     const m = levelMusic(id, null);
@@ -229,7 +245,9 @@ test('§16.1: all 14 tracks are used, files exist, kinds and the rules match the
 test('trackId normalises ids, file paths, context names and silence', () => {
   assert.equal(trackId('field_of_dreams'), 'field_of_dreams');
   assert.equal(trackId('music/field_of_dreams.mp3'), 'field_of_dreams');
-  assert.equal(trackId('audio/music/cave_theme.ogg'), 'cave_theme');
+  assert.equal(trackId('audio/music/cave_theme.ogg'), 'bog_dreams', 'retired id → its warm replacement');
+  assert.equal(trackId('hubGrey'), 'hub_hush');
+  assert.equal(trackId('results'), 'results_dance');
   assert.equal(trackId('title'), 'village_bards_tale');
   assert.equal(trackId({ track: 'boss_epic_battle_loop' }), 'boss_epic_battle_loop');
   assert.equal(trackId(null), null);
@@ -389,6 +407,7 @@ test('§16.3 heartbeat, shimmer, march data', () => {
   assert.deepEqual(SHIMMER.freqs, [880, 1320, 1760]);
   assert.equal(SHIMMER.gain, 0.03);
   for (const id of [...MARCH.stepIds, ...MARCH.chainIds]) assert.ok(expandId(id, INDEX).length, id);
+  assert.ok(MARCH.chainIds.every((id) => id.startsWith('impact/impactWood_')), 'WA §9: wooden carts, no chains');
 });
 
 test('zzfx defs: 21 parameters max, deterministic (randomness 0), positive length', () => {
@@ -397,7 +416,12 @@ test('zzfx defs: 21 parameters max, deterministic (randomness 0), positive lengt
     assert.equal(p[1], 0, `${name}: randomness 0 (variation comes from the seeded playback rate)`);
     assert.ok(zzfxDuration(p) > 0.01 && zzfxDuration(p) < 2, name);
   }
-  for (const k of ['heartThump', 'crowCaw', 'hyenaLaugh', 'blip']) assert.ok(ZZFX_DEFS[k], k);
+  for (const k of ['heartThump', 'crowCaw', 'hyenaLaugh', 'blip', 'pfft', 'squeak']) assert.ok(ZZFX_DEFS[k], k);
+  // the port is pure and deterministic, and the pfft is low-passed (ART §9.3: 1.2 kHz)
+  const a = zzfxSamples(ZZFX_DEFS.pfft), b = zzfxSamples(ZZFX_DEFS.pfft);
+  assert.ok(a.length > 1000 && a.every((v, i) => v === b[i]));
+  assert.equal(ZZFX_DEFS.pfft[20], -1200);
+  assert.ok(Math.abs(zzfxDuration(ZZFX_DEFS.pfft) - a.length / PCM_RATE) < 0.01);
 });
 
 // ================================================================================================ babble
@@ -502,9 +526,10 @@ test('AudioManager bus bindings (§16.2): the right sound for each event, logged
   emit(E.BURST, { kind: 'crate', position: new THREE.Vector3() });
   const n = c();
   for (const k of ['swishLight', 'swishHeavy', 'sunburst', 'holySlash', 'hitFur', 'ratPain', 'block', 'killPoof', 'ratDeath', 'parry', 'guardBreak',
-    'dodge', 'jump', 'land', 'hurt', 'faint', 'ghostLife', 'meow', 'milkSip', 'stillStanding', 'vigil', 'fish', 'goldFish', 'letter', 'heartBell',
-    'kittenMew', 'kittenFound', 'footGrass', 'footWater', 'crowCaw', 'bossDizzy', 'ui.dialogOpen', 'crateBreak']) assert.ok(n[k] >= 1, `${k} requested`);
-  assert.equal(n.heartbeat, 1, 'Still Standing heartbeat (one lub-dub pair ×2)');
+    'dodge', 'jump', 'land', 'hurt', 'faint', 'respawnBoing', 'meow', 'milkSip', 'stillStanding', 'stillStandingBeat', 'vigil', 'fish', 'goldFish',
+    'letter', 'heartBell', 'kittenMew', 'rescueBeat', 'footGrass', 'footWater', 'crowCaw', 'bossDizzy', 'ui.dialogOpen', 'crateBreak']) assert.ok(n[k] >= 1, `${k} requested`);
+  assert.equal(n.heartbeat, undefined, 'ART §9.3: Still Standing is a purr + glock third, not a heartbeat');
+  assert.equal(n.ghostLife, undefined, 'WA §5.7: no downer sting');
   // HIT with heavy flag on a bonehead → bone heavy layers
   emit(E.HIT, { attacker: ctx.player, target: { id: 3, def: { id: 'bonehead:warrior' }, pos: new THREE.Vector3() }, attackId: 'slash1', crit: 2, position: new THREE.Vector3() });
   assert.ok(am.counts.hitBoneHeavy >= 1 && am.counts.hitHeavyPunch >= 1);
@@ -530,7 +555,7 @@ test('AudioManager bus bindings (§16.2): the right sound for each event, logged
   emit(E.MUSIC, { track: 'field_of_dreams', fade: 1.5 });
   assert.equal(am.currentTrack, 'field_of_dreams');
   emit(E.LEVEL_RESULTS, { levelId: 'meadow' });
-  assert.equal(am.currentTrack, 'victory_8bit_loop');
+  assert.equal(am.currentTrack, 'results_dance', 'WA21 festival loop');
   // meme cam: duck to 0, wind ×1.6
   emit(E.MEME_CAM, { on: true });
   assert.ok(am.memeOn && am.duck === 0);
@@ -636,7 +661,7 @@ class FakeAudioContext {
       distanceModel: 'inverse', refDistance: 1, rolloffFactor: 1, maxDistance: 10000 });
     return n;
   }
-  createBiquadFilter() { const n = new FakeNode(this, 'biquad'); n.frequency = new FakeParam(350); n.Q = new FakeParam(1); n.type = 'lowpass'; return n; }
+  createBiquadFilter() { const n = new FakeNode(this, 'biquad'); n.frequency = new FakeParam(350); n.Q = new FakeParam(1); n.gain = new FakeParam(0); n.type = 'lowpass'; return n; }
   createOscillator() {
     const n = new FakeNode(this, 'osc');
     Object.assign(n, { type: 'sine', frequency: new FakeParam(440), detune: new FakeParam(0), onended: null });
@@ -651,7 +676,10 @@ class FakeAudioContext {
   createAnalyser() { const n = new FakeNode(this, 'analyser'); n.fftSize = 2048; n.getFloatTimeDomainData = (a) => a.fill(0.1); return n; }
   createBuffer(ch, len, sr) { return new FakeBuffer(ch, len, sr); }
   createMediaElementSource(el) { const n = new FakeNode(this, 'media'); n.el = el; return n; }
-  decodeAudioData() { this.decoded++; return Promise.resolve(new FakeBuffer(1, 24000, this.sampleRate)); }
+  decodeAudioData() {
+    this.decoded++; this.decoding = (this.decoding ?? 0) + 1; this.maxDecoding = Math.max(this.maxDecoding ?? 0, this.decoding);
+    return new Promise((r) => setImmediate(() => { this.decoding--; r(new FakeBuffer(1, 24000, this.sampleRate)); }));
+  }
   count(kind) { return this.nodes.filter((n) => n.kind === kind).length; }
 }
 class FakeAudioEl {
@@ -691,7 +719,13 @@ test('fake WebAudio: unlock builds master/music/sfx buses on ONE listener under 
     am.music('village_bards_tale');                     // CS-00 asks before the unlock
     assert.equal(await am.unlock(), true);
     assert.ok(am.ready && am.unlocked && ac.state === 'running');
-    assert.equal(ctx.camera.children.filter((c) => c.type === 'AudioListener').length, 1);
+    assert.equal(ctx.camera.children.filter((c) => c.type === 'AudioListener').length, 0, 'PERF §10.5: the listener is not in the scene graph');
+    assert.ok(am.listener && am.listener.matrixWorldAutoUpdate === false);
+    // ART §9.3 mix: master → low shelf −2 dB @ 120 Hz → high shelf +1.5 dB @ 6 kHz → limiter → out
+    const [lo, hi] = am._shelves;
+    assert.ok(lo.type === 'lowshelf' && lo.frequency.value === 120 && lo.gain.value === -2);
+    assert.ok(hi.type === 'highshelf' && hi.frequency.value === 6000 && hi.gain.value === 1.5);
+    assert.ok(am.bus.master.outs.has(lo) && lo.outs.has(hi) && ac.count('compressor') === 1);
     for (const k of ['master', 'music', 'sfx', 'world', 'player', 'ui', 'musicDuck', 'hitDuck']) assert.ok(am.bus[k], k);
     assert.ok(am.bus.music.outs.has(am.bus.master) && am.bus.sfx.outs.has(am.bus.master));
     assert.equal(am.voices2D.length, MIX.voices2D);
@@ -699,7 +733,10 @@ test('fake WebAudio: unlock builds master/music/sfx buses on ONE listener under 
     for (const v of am.voices3D) assert.ok(v.panner.refDistance === 3 && v.panner.rolloffFactor === 1.4 && v.panner.maxDistance === 45);
     assert.ok(am.wind.started);
     assert.ok(close(am.wind.filter.frequency.value, 700), 'wind 1 → 700 Hz');
-    for (const k of ['heartThump', 'crowCaw', 'hyenaLaugh', 'blip']) assert.ok(am.zz.get(k)?.length > 100, `zzfx ${k}`);
+    // PERF §3.1: the unlock wraps only what the idle slices finished; the rest is wrapped once the bake completes
+    am.baker.finish(); am.update(0.016);
+    for (const k of Object.keys(ZZFX_DEFS)) assert.ok(am.zz.get(k)?.length > 100, `zzfx ${k}`);
+    assert.ok(am.zz.get('blip').sampleRate === PCM_RATE && am.glockBuf?.length > 1000, 'PCM baked at 44.1 kHz; the glock note');
     // the title track fades in over 2 s once unlocked
     const deck = am.musicPlayer.decks[am.musicPlayer.active];
     assert.equal(deck.track, 'village_bards_tale');
@@ -715,7 +752,7 @@ test('fake WebAudio: unlock builds master/music/sfx buses on ONE listener under 
   } finally { restore(); }
 });
 
-test('fake WebAudio: 2D/3D voices, at most 8 + 12, oldest stolen; 3D follows positions; far sounds are skipped', async () => {
+test('fake WebAudio: 2D/3D voices, at most 8 + 8, oldest stolen; 3D follows positions; far sounds are skipped', async () => {
   const { ctx, am, ac, restore } = await withFakeAudio();
   try {
     await am.unlock();
@@ -735,7 +772,7 @@ test('fake WebAudio: 2D/3D voices, at most 8 + 12, oldest stolen; 3D follows pos
     ac.currentTime += 0.001;
     const h = am.play3D('cat/kitten_mew_01', actor);
     actor.pos.set(8, 0, 0);
-    am.render(0, 1 / 60);
+    for (let i = 0; i < 4; i++) am.render(0, 1 / 60);           // PERF §10.5: followers update at 20 Hz
     assert.equal(h.voice.panner.positionX.goal, 8);
     // 2D voices ride the player bus, ui sounds the ui bus
     const before = am.started['cat/kitten_mew_01'];
@@ -774,7 +811,7 @@ test('fake WebAudio: laugh build on one 3D voice, Sunbell partials, damped clunk
     assert.equal(am.bells.size, 2);
     ac.currentTime += 40; am.render(0, 1 / 60);
     assert.equal(am.bells.size, 0, 'rung-out bells are pruned');
-    // heartbeat: lub-dub = 2 one-shots per beat
+    // heartbeat (low HP): lub-dub = 2 one-shots per beat
     const s0 = ac.count('source');
     assert.equal(am.heartbeat({ beats: 2 }), 2);
     assert.equal(ac.count('source') - s0, 4);
@@ -852,11 +889,12 @@ test('fake WebAudio: level change cleans up voices / loops and evicts buffers ou
   const { ctx, am, ac, restore } = await withFakeAudio();
   try {
     await am.unlock();
-    const meadowOnly = manifestLevels.meadow.find((p) => !manifestLevels.bog.includes(p));
-    const star = manifestLevels['*'].find((p) => /sfx/.test(p));
+    const meadowOnly = lvl('meadow').find((p) => !lvl('bog').includes(p) && !lvl('*').includes(p));
+    const star = lvl('*').find((p) => /sfx/.test(p));
     await am.decode(meadowOnly); await am.decode(star);
     assert.ok(am.buffers.has(meadowOnly) && am.buffers.has(star));
     ctx.bus.emit(E.LEVEL_LOADED, { id: 'bog', level: { music: { explore: 'cave_theme' } } });
+    assert.equal(am.director.level.explore, 'bog_dreams', 'the retired cave_theme reads as bog_dreams');
     assert.equal(am.loops.size, 1, 'bog water ambience loop');
     ctx.bus.emit(E.LEVEL_LOADING, { id: 'meadow', spawnId: 'start' });
     assert.ok(am.buffers.has(meadowOnly) && am.buffers.has(star), 'meadow keeps its set');
@@ -935,7 +973,7 @@ test('fake WebAudio: cutscene loops run outside the voice pools and follow; proc
     assert.ok(am.voices3D.every((v) => v.endAt <= ac.currentTime), 'no pooled voice taken');
     for (let i = 0; i < 40; i++) { ac.currentTime += 0.001; am._gates.clear(); am.play3D('cat/cat_purrsleepy_loop', new THREE.Vector3(i % 4, 0, 1)); }
     assert.ok(am.loops.has(h), 'a burst of one-shots never steals the loop');
-    actor.pos.set(6, 0, 0); am.render(0, 1 / 60);
+    actor.pos.set(6, 0, 0); for (let i = 0; i < 4; i++) am.render(0, 1 / 60);
     assert.equal(h.panner.positionX.goal, 6, 'the loop follows its actor');
     h.stop(0.2);
     assert.ok(!am.loops.has(h) && h.src.stopped > 0);
@@ -961,17 +999,17 @@ const SPEC_M2 = [
   // §12.6 / §5.4 audio named for the gate, CS-05, CS-08 … CS-10
   'creature/c80_howl', 'world/metal_open_01', 'world/metal_close_01', 'pickup/powerup_rise05', 'magic/magic1', 'pickup/powerup_rise07',
   'jingles/jingles_STEEL03', 'creature/creature_roar_03', 'creature/c80_roar_02', 'cat/cat_purrsleepy_loop', 'world/wood_hit_01',
-  'music/battle_theme_a', 'music/dark_forest_creepy', 'music/story_lament_warriors_soul', 'music/tavern_old_tower_inn',
+  'music/battle_theme_a', 'music/field_of_dreams', 'music/story_lament_warriors_soul', 'music/tavern_old_tower_inn',
 ];
 
 test('M2 manifest: spec files resolve; forest / town / gate subsets preload their new sounds', () => {
   assert.deepEqual(SPEC_M2.filter((id) => expandId(id, INDEX).length === 0), []);
-  const pre = (lvl) => new Set([...manifestLevels['*'], ...manifestLevels[lvl]]);
-  const has = (lvl, ...ids) => { for (const id of ids) assert.ok(expandId(id, INDEX).every((p) => pre(lvl).has(p)), `${id} preloads for ${lvl}`); };
+  const pre = (l) => new Set([...lvl('*'), ...lvl(l)]);
+  const has = (l, ...ids) => { for (const id of ids) assert.ok(expandId(id, INDEX).every((p) => pre(l).has(p)), `${id} preloads for ${l}`); };
   has('forest', 'world/loop_water_01', 'creature/c80_bug_01', 'ui/pluck_002', 'impact/cloth');
   has('town', 'pickup/handleCoins', 'impact/metal_hit_01', 'magic/spell_fire_01', 'ui/error_003', 'world/doorOpen_1');
-  has('gate', 'creature/c80_howl', 'world/metal_open_01', 'world/metalLatch', 'creature/c80_monster_01', 'impact/metal_small2');
-  has('meadow', 'jingles/jingles_NES07');                    // objective jingle is global
+  has('gate', 'jingles/jingles_SAX02', 'world/metal_open_01', 'world/metalLatch', 'impact/impactWood_light_00x', 'impact/metal_small2');
+  has('meadow', 'jingles/jingles_PIZZI07', 'cat/cat_mewpurr', 'jingles/jingles_PIZZI08');   // objective jingle, boing, room read: global
 });
 
 test('M2 sfx: shop, objective, burst and cue tables only name defined sounds', () => {
@@ -990,21 +1028,36 @@ test('M2 sfx: shop, objective, burst and cue tables only name defined sounds', (
   const proc = new Set(['laugh', 'laughChorus', 'bell', 'bellClunk', 'heartbeat', 'march', 'shimmer', 'campfire', 'crackle', 'crickets', 'birds',
     'owl', 'rumble', 'handbell', 'shopBell', 'toll', 'kittenCheer']);
   for (const [name, parts] of Object.entries(CUES)) {
-    assert.match(name, /^(cs0[4-9]|cs10|d0[2-6]|g02|line)\./, name);
+    assert.match(name, /^(cs0[2-9]|cs10|d0[2-6]|g02|line)\./, name);
     for (const p of parts) assert.ok(SFX[p.id] || CUES[p.id] || proc.has(p.id) || expandId(p.id, INDEX).length, `${name}: ${p.id}`);
   }
   assert.deepEqual(partOpts({ id: 'x', delay: 1, at: 'y', vol: 0.5, rate: 2 }), { vol: 0.5, rate: 2 });
-  for (const cs of ['cs04', 'cs05', 'cs06', 'cs07', 'cs08', 'cs09', 'cs10']) assert.ok(Object.keys(CUES).some((k) => k.startsWith(cs + '.')), `${cs} has cues`);
+  for (const cs of ['cs02', 'cs04', 'cs05', 'cs06', 'cs07', 'cs08', 'cs09', 'cs10']) assert.ok(Object.keys(CUES).some((k) => k.startsWith(cs + '.')), `${cs} has cues`);
+  for (const [name, parts] of Object.entries(BEAT_CUES)) {
+    assert.ok(!CUES[name] && !SFX[name], `${name}: beat cue names are unique`);
+    for (const p of parts) assert.ok(SFX[p.id] || proc.has(p.id) || p.id === 'glock', `${name}: ${p.id}`);
+  }
 });
 
 test('M2 music: level defaults — forest night, town hub states + bakery zone, gate low approach and The Line hold', () => {
   const cond = (flags) => (c) => new Set(flags).has(String(c).replace(/^!/, '')) !== String(c).startsWith('!');
   assert.equal(levelMusic('forest', null, { cond: cond([]) }).explore, 'field_of_dreams');
-  assert.equal(levelMusic('forest', null, { cond: cond(['forest.camp']) }).explore, 'dark_forest_creepy');
+  assert.equal(levelMusic('forest', null, { cond: cond(['forest.camp']) }).explore, 'lantern_night', 'ART §9.3 Lantern Night');
   assert.equal(levelMusic('forest', null, { cond: cond(['forest.camp']) }).alias, 'field_of_dreams', 'LevelManager day request maps to night');
   assert.equal(levelMusic('town', null, { cond: cond([]) }).explore, 'village_town_theme');
   assert.equal(levelMusic('town', null, { cond: cond(['town.free']) }).explore, 'village_bards_tale');
-  assert.equal(levelMusic('town', null, { cond: cond(['town.free', 'gate.done']) }).explore, 'story_lament_warriors_soul');
+  assert.equal(levelMusic('town', null, { cond: cond(['town.free', 'gate.done']) }).explore, 'hub_hush', 'WA §9: the hub never loops the lament');
+  // world's own rows: a lament row swaps to hub_hush; a forest.camp row naming the day track falls through to lantern_night
+  const worldTown = { explore: 'village_town_theme', byFlag: [['gate.done', 'story_lament_warriors_soul'], ['town.free', 'village_bards_tale']] };
+  assert.equal(levelMusic('town', worldTown, { cond: cond(['town.free', 'gate.done']) }).explore, 'hub_hush');
+  const worldForest = { explore: 'field_of_dreams', byFlag: [['forest.camp', 'field_of_dreams']] };
+  assert.equal(levelMusic('forest', worldForest, { cond: cond(['forest.camp']) }).explore, 'lantern_night');
+  assert.equal(levelMusic('forest', worldForest, { cond: cond([]) }).explore, 'field_of_dreams');
+  assert.equal(levelMusic('bog', { explore: 'cave_theme' }).explore, 'bog_dreams');
+  const keep = levelMusic('keep', null);
+  assert.ok(keep.explore === 'castle_kings_feast' && keep.gains.castle_kings_feast === 0.7, 'ART §9.3 keep');
+  const camp = levelMusic('forest', null).zones.find((z) => z.id === 'camp');
+  assert.ok(camp && camp.r === 8 && camp.track === 'tavern_old_tower_inn' && camp.when === 'forest.camp', 'tavern within 8 m of the camp');
   assert.equal(levelMusic('town', null, { cond: cond(['town.free', 'gate.done', 'ending.seen']) }).explore, 'village_bards_tale');
   // the world's town def (no byFlag) still gets the audio defaults; its own byFlag would win
   assert.equal(levelMusic('town', { explore: 'village_town_theme' }, { cond: cond(['town.free']) }).explore, 'village_bards_tale');
@@ -1082,6 +1135,7 @@ test('M2 ambience: layer conditions, positions and the forest / town / gate tabl
   flags.add('gate.done');
   assert.ok(!ids('town').includes('birds'), 'the grey hub has no birdsong');
   assert.ok(!ids('gate').includes('winch'));
+  assert.ok(!ids('gate').includes('drums'), 'WA §9: the gate drums are gone (the giggles carry the threat)');
   objs.add('line');
   assert.ok(ids('gate').includes('winch') && ids('gate').includes('pin'), 'The Line runs the winch');
   flags.add('gate.boss');
@@ -1115,6 +1169,9 @@ test('M2 nature + bells: bird / owl plans, cricket / crackle / rumble buffers, h
   assert.ok(peak(fire) <= 0.81 && peak(fire) > 0.5);
   const rum = rumbleData(8000, rand, 2, 0.5);
   assert.ok(Math.abs(rum[0]) < 1e-3 && Math.abs(rum[rum.length - 1]) < 0.01, 'the swell starts and ends silent');
+  const breeze = breezeData(8000, rand, 2);
+  assert.ok(Math.abs(breeze[0]) < 1e-3 && Math.abs(breeze[breeze.length - 1]) < 0.02, 'ART §9.3 breeze swell');
+  assert.ok(BREEZE.freq >= 400, 'band-passed well above 80 Hz');
   assert.equal(bellPartials({ profile: 'handbell' }).length, BELL_PROFILES.handbell.ratios.length);
   assert.ok(bellDuration({ profile: 'handbell' }) < 8 && bellDuration({ profile: 'handbell' }) > 1);
   assert.equal(bellPartials()[1].freq, 196, 'the Sunbell keeps §16.3');
@@ -1147,9 +1204,11 @@ test('M2 fake WebAudio: town flags crossfade the hub music, the bakery zone, hub
     assert.equal(am.musicPlayer.current, 'tavern_old_tower_inn');
     ctx.player.pos.set(0, 0, -46); step(0.6);
     assert.equal(am.musicPlayer.current, 'village_bards_tale');
-    // hub grey (after CS-10)
+    // hub hush (after CS-10): bards' tale at 0.92, low-passed (WA §9: no lament loop)
     ctx.state.setFlag('gate.done', true); step(1);
-    assert.equal(am.musicPlayer.current, 'story_lament_warriors_soul');
+    assert.equal(am.musicPlayer.current, 'hub_hush');
+    const hush = am.musicPlayer.decks[am.musicPlayer.active];
+    assert.ok(hush.el.playbackRate === 0.92 && hush.el.preservesPitch === false && hush.filter.frequency.value === 2200);
     assert.ok(!am.amb.has('birds'));
     // shops
     const osc0 = ac.count('osc');
@@ -1170,8 +1229,9 @@ test('M2 fake WebAudio: town flags crossfade the hub music, the bakery zone, hub
     assert.ok(![...am.loops].some((x) => x.name === 'crickets'), 'the cue handle stops its beds');
     const toll = am.play3D('toll', [0, 14, 50], { strikes: 3 });
     assert.equal(toll.strikes, 3);
+    const g0 = am.started.glock ?? 0;
     const rum = am.play2D('rumble', { dur: 2 });
-    assert.ok(rum?.name === 'rumble');
+    assert.ok(rum?.name === 'rumble' && (am.started.glock ?? 0) - g0 === 2, 'breeze + chime tail');
     const cheer = am.play3D('kittenCheer', [0, 0, 8]);
     assert.ok(cheer.count >= 5);
     ctx.bus.emit(E.LEVEL_LOADING, { id: 'gate' });
@@ -1198,7 +1258,7 @@ test('M2 fake WebAudio: The Line — hold music, winch ambience, freeze / resume
     assert.ok(am.amb.has('winch'));
     step(8);
     assert.equal(am.musicPlayer.current, 'battle_theme_a', 'held with no enemy around');
-    assert.ok(am.log.some((l) => /chain_0/.test(l)), 'winch chains');
+    assert.ok(am.log.some((l) => /impactWood_light/.test(l)) && !am.log.some((l) => /chain_/.test(l)), 'a rope winch, no chains');
     obj(10, { frozen: true, paused: true });                // an enemy at the winch pauses the repair: no freeze clunk
     assert.equal(am.counts.repairFreeze, undefined);
     obj(10);
@@ -1234,11 +1294,330 @@ test('M2 fake WebAudio: The Line — hold music, winch ambience, freeze / resume
     am.music('field_of_dreams'); step(0.2);
     assert.ok(am.amb.has('birds') && am.amb.has('stream'));
     ctx.state.setFlag('forest.camp', true); step(1);
-    assert.equal(am.musicPlayer.current, 'dark_forest_creepy');
+    assert.equal(am.musicPlayer.current, 'lantern_night');
+    assert.equal(am.musicPlayer.decks[am.musicPlayer.active].el.playbackRate, 0.94);
     assert.ok(am.amb.has('crickets') && am.amb.has('campfire') && !am.amb.has('birds'));
     ctx.bus.emit(E.BOSS_START, { boss: { def: { id: 'boss_grizzlechop' } }, id: 'boss_grizzlechop' });
     am.render(0, 1 / 60);
     assert.equal(am.counts.bossIntroB1, 1);
     assert.equal(am.musicPlayer.current, 'boss_epic_battle_loop');
+  } finally { restore(); }
+});
+
+// ================================================================================================ Phase W (WA §5, §9; ART §9.3; AUTOCAM X24; PERF U1–U3)
+const BANNED_AUDIO = /dark_forest_creepy|victory_8bit_loop|creature\/c80_monster_|creature\/rpg_mnstr|creature\/c80_scream_|impact\/chain_|pickup\/powerup_downer/;
+
+test('audio.W2: the WA §9 banned ids appear nowhere in src/audio/** or src/world/levels/**', () => {
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+  const files = [...walk(path.join(ROOT, 'src/audio')), ...walk(path.join(ROOT, 'src/world/levels'))].filter((f) => /\.(js|mjs|json)$/.test(f));
+  const hits = files.filter((f) => BANNED_AUDIO.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(ROOT, f));
+  assert.deepEqual(hits, []);
+  assert.ok(!SFX.ghostLife && !SFX.farDrums, 'ghostLife → respawnBoing, farDrums deleted');
+  for (const d of Object.values(SFX)) for (const f of d.files) assert.doesNotMatch(f, /jingles_NES|glitch_/, 'ART §9.3: no NES jingles, no glitch');
+  for (const id of ['victory_8bit_loop', 'dark_forest_creepy', 'cave_theme']) assert.ok(!TRACKS[id], id);
+  for (const [k, v] of Object.entries(CONTEXT_MUSIC)) assert.ok(TRACKS[v], `context ${k}`);
+  assert.equal(SFX.farHorn.files.some((f) => /howl/.test(f)), false, 'ART §9.3: the howl is Barkus only');
+  assert.ok(SFX.barkusHowl.dur === 0.8 && SFX.barkusHowl.rate >= 1 && SFX.barkusHowl.rate <= 1.1);
+});
+
+test('audio.W1: pickup pitch ladder — 10 fish climb 6 % a step, clamp at 8 steps, reset after 1.5 s', async () => {
+  const L = new PitchLadder();
+  const rates = Array.from({ length: 10 }, (_, i) => L.next(i * 0.2));
+  for (let i = 1; i < rates.length; i++) assert.ok(rates[i] >= rates[i - 1], 'ascending');
+  assert.ok(close(rates[0], 1) && close(rates[1], 1.06) && close(rates[8], 1 + 0.06 * 8) && close(rates[9], rates[8]), rates.join());
+  assert.ok(close(L.next(1.8 + 1.49), 1.48), 'still in the run 1.49 s later');
+  assert.ok(close(L.next(3.29 + 1.51), 1), 'reset after 1.5 s');
+  assert.deepEqual(LADDER, { step: 0.06, max: 8, reset: 1.5 });
+  // through the bus: fish / small hearts carry the ladder rate (no random variation), letters do not
+  const ctx = fakeCtx();
+  const am = ctx.audio;
+  await am.init();
+  const seen = [];
+  const orig = am.play2D.bind(am);
+  am.play2D = (id, o) => { seen.push([id, o?.rate, o?.rateVar]); return orig(id, o); };
+  for (let i = 0; i < 10; i++) { am.time += 0.1; ctx.bus.emit(E.ITEM_PICKUP, { item: 'fish', amount: 1 }); }
+  ctx.bus.emit(E.ITEM_PICKUP, { item: 'letter', id: 'l', amount: 1 });
+  const fish = seen.filter(([id]) => id === 'fish');
+  assert.equal(fish.length, 10);
+  assert.ok(fish.every(([, , rv]) => rv === 0));
+  assert.ok(close(fish[9][1], 1.48) && close(fish[3][1], 1.18));
+  assert.equal(seen.find(([id]) => id === 'letter')[1], undefined);
+  am.dispose();
+});
+
+test('audio.W3 + ART §9.3: life lost → respawnBoing (purr at the wipe 1.2 s, boing 1.55 s); Still Standing purr + glock third', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    ctx.bus.emit(E.PLAYER_LIFE_LOST, { lives: 7 });
+    assert.equal(am.counts.respawnBoing, 1, 'respawnBoing queued');
+    assert.deepEqual(am._pending.map((p) => +(p.at - am.time).toFixed(2)).sort(), [1.2, 1.55]);
+    const step = (sec) => { for (let t = 0; t < sec; t += 1 / 60) { ac.currentTime += 1 / 60; am.render(0, 1 / 60); } };
+    step(1.25);
+    assert.ok(am.counts.respawnPurr === 1 && !am.counts.respawnPop);
+    step(0.4);
+    assert.equal(am.counts.respawnPop, 1);
+    assert.deepEqual(BEAT_CUES.respawnBoing.map((p) => p.delay), [1.2, 1.55]);
+    assert.ok(SFX.respawnPurr.files[0] === 'cat/cat_mewpurr' && SFX.respawnPurr.vol === 0.7);
+    assert.ok(SFX.respawnPop.files[0] === 'pickup/bubble' && SFX.respawnPop.rate === 0.8);
+    const g0 = am.started.glock ?? 0;
+    ctx.bus.emit(E.PLAYER_STILL_STANDING, {});
+    step(0.3);
+    assert.equal((am.started.glock ?? 0) - g0, 2, 'G5 → B5');
+    assert.equal(am.counts.stillStandingPurr, 1);
+    assert.equal(am.counts.heartbeat, undefined);
+    assert.equal(SFX.stillStandingPurr.dur, 1.2);
+  } finally { restore(); }
+});
+
+test('glock: note rates, phrases, the baked bar note; reward sizes and sticker thirds C5 → E5 → G5', async () => {
+  assert.equal(noteSemis('C5'), 0); assert.equal(noteSemis('E5'), 4); assert.equal(noteSemis('G5'), 7); assert.equal(noteSemis('B5'), 11);
+  assert.equal(noteSemis('C6'), 12); assert.equal(noteSemis('G#5'), 8); assert.equal(noteSemis('Bb4'), -2);
+  assert.ok(close(noteRate('E5'), 2 ** (4 / 12)) && close(noteRate('C6'), 2) && close(noteRate(7), 2 ** (7 / 12)));
+  assert.deepEqual(GLOCK_PHRASES.sticker, ['C5', 'E5', 'G5']);
+  assert.deepEqual(GLOCK_PHRASES.stillStanding, ['G5', 'B5']);
+  assert.deepEqual([0, 1, 2, 3, 9].map(stickerNote), ['C5', 'E5', 'G5', 'G5', 'G5']);
+  const plan = glockPlan('rescue');
+  assert.equal(plan.length, 4);
+  assert.ok(plan.every((n, i) => close(n.t, i * GLOCK.gap)) && plan[3].rate > plan[0].rate);
+  const data = glockData(16000, createRng(2).fork('g'));
+  const peak = data.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  assert.ok(close(peak, GLOCK.peak, 1e-3) && Math.abs(data[data.length - 1]) < 1e-3, 'normalised, no click at the tail');
+  const { am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    const rates = () => ac.nodes.filter((n) => n.kind === 'source' && n.buffer === am.glockBuf).map((n) => +n.playbackRate.value.toFixed(4));
+    am.reward('sticker', { row: 0 }); am.reward('sticker', { row: 1 }); am.reward('sticker', { row: 2 });
+    assert.deepEqual(rates(), [1, 2 ** (4 / 12), 2 ** (7 / 12)].map((r) => +r.toFixed(4)));
+    const n0 = rates().length;
+    am.reward('card');
+    assert.equal(rates().length - n0, GLOCK_PHRASES.card.length);
+    am.reward('friend');
+    assert.equal(am.counts['jingles/jingles_PIZZI06'], 1);
+    assert.ok(am.voices2D.every((v) => v.endAt <= ac.currentTime || v.name !== 'glock'), 'the glock never takes a pooled voice');
+    const h = am.play2D('glock', { notes: ['C5', 'G5'] });
+    assert.equal(h.notes, 2);
+  } finally { restore(); }
+});
+
+test('AUTOCAM X24 beat twins: rescue = glock arpeggio over a purr; room read once per arena, never right after a cutscene', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    ctx.bus.emit(E.LEVEL_LOADED, { id: 'meadow', level: { music: { explore: 'field_of_dreams' } } });
+    const step = (sec) => { for (let t = 0; t < sec; t += 1 / 60) { ac.currentTime += 1 / 60; am.update(1 / 60); am.render(0, 1 / 60); } };
+    const g0 = am.started.glock ?? 0;
+    ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: 'k1', position: new THREE.Vector3(2, 0, 2) });
+    step(0.7);
+    assert.ok(am.counts.rescueBeat === 1 && am.counts.rescuePurr === 1 && am.counts.kittenMew >= 1);
+    assert.equal((am.started.glock ?? 0) - g0, GLOCK_PHRASES.rescue.length);
+    assert.equal(SFX.rescuePurr.dur, 1.6);
+    step(ROOM_READ.afterCutscene + 0.1);
+    ctx.bus.emit(E.ARENA_LOCK, { id: 'a1', center: new THREE.Vector3(), r: 9 });
+    assert.equal(am.counts.roomReadSting, 1);
+    ctx.bus.emit(E.ARENA_LOCK, { id: 'a1', center: new THREE.Vector3(), r: 9 });
+    assert.equal(am.counts.roomReadSting, 1, 'once per arena');
+    // a boss intro cutscene just ended: the arena lock stays quiet
+    ctx.bus.emit(E.CUTSCENE_END, { id: 'cs03' });
+    ctx.bus.emit(E.ARENA_LOCK, { id: 'a2' });
+    assert.equal(am.counts.roomReadSting, 1);
+    // the next visit reads the room again
+    ctx.bus.emit(E.LEVEL_LOADING, { id: 'meadow' });
+    step(ROOM_READ.afterCutscene + 0.1);
+    ctx.bus.emit(E.ARENA_LOCK, { id: 'a1' });
+    assert.equal(am.counts.roomReadSting, 2);
+  } finally { restore(); }
+});
+
+test('WA §9 squeaks + ART §9.3 softened sounds: Barkus weapon squeak, Squeakybone revive, crow low-pass, pfft fizzle', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    assert.ok(enemyVoiceFor('bonehead:warrior').revive === 'boneSqueak' && enemyVoiceFor('boss_barkus').weaponHit === 'squeakyBone');
+    const barkus = { id: 50, def: { id: 'boss_barkus' }, pos: new THREE.Vector3(1, 0, 1) };
+    ctx.bus.emit(E.HIT, { attacker: barkus, target: ctx.player, attackId: 'bonk', position: new THREE.Vector3(1, 1, 1) });
+    assert.equal(am.counts.squeakyBone, 1);
+    // zzfx-only defs play from the baked PCM at once (no file)
+    const s0 = am.started.squeakyBone ?? 0;
+    ac.currentTime += 0.5;
+    am.play3D('squeakyBone', new THREE.Vector3(1, 0, 1));
+    assert.equal((am.started.squeakyBone ?? 0) - s0, 1);
+    await am.decode('creature/crow_caw_01'); await am.decode('creature/crow_caw_02');
+    const b0 = ac.count('biquad');
+    ac.currentTime += 1;
+    am.play3D('crowCaw', new THREE.Vector3(2, 0, 2));
+    assert.equal(ac.count('biquad') - b0, 1, 'the crow runs through a 3 kHz low-pass');
+    assert.equal(ac.nodes.filter((n) => n.kind === 'biquad').at(-1).frequency.value, 3000);
+    const p0 = am.started.chargePfft ?? 0;
+    ctx.bus.emit(E.PLAYER_CHARGE, { level: 0.5, fizzle: true });
+    assert.equal((am.started.chargePfft ?? 0) - p0, 1, 'the pfft plays from the bake even before the bubble decodes');
+  } finally { restore(); }
+});
+
+test('PERF U1: synth PCM bakes in budgeted slices before the unlock; the unlock only copies it', async () => {
+  let clock = 0;
+  const pb = new Prebaker(createRng(4).fork('b'), () => clock);
+  assert.equal(pb.tasks.length, bakeTasks(Math.random).length);
+  assert.deepEqual(pb.tasks.slice(0, 2).map((t) => t.key), ['gen:wind', 'gen:glock'], 'the wind first');
+  // every check costs 0.6 "ms": a 2 ms slice runs a few chunks, and a long bed spans several slices
+  let steps = 0;
+  pb.now = () => (clock += 0.6);
+  while (!pb.done && steps < 10000) { pb.step(BAKE.sliceMs); steps++; }
+  assert.ok(pb.done && steps > pb.tasks.length, `generator tasks resume across slices (${steps} slices)`);
+  for (const t of pb.tasks) assert.ok(pb.pcm.get(t.key)?.length > 100, t.key);
+  assert.equal(pb.pcm.get('gen:wind').length, Math.round(PCM_RATE * 2), 'the 2 s wind loop (seam folded in)');
+  // the same seed bakes the same samples whether sliced or not
+  const a = new Prebaker(createRng(4).fork('b')); a.finish();
+  const wind = a.pcm.get('gen:wind');
+  assert.ok(wind.every((v, i) => v === pb.pcm.get('gen:wind')[i]));
+  // get() bakes a task the slices have not reached yet
+  const c = new Prebaker(createRng(5).fork('b'));
+  assert.ok(c.get('zz:blip')?.length > 100 && !c.done);
+  // the manager: the unlock builds buffers from the baker's PCM (no synthesis at the gesture)
+  const { am, restore } = await withFakeAudio();
+  try {
+    am.baker.cancel();
+    am.baker.finish();
+    const make = am.baker.tasks.map((t) => t.make);
+    for (const t of am.baker.tasks) t.make = () => { throw new Error('baked at the unlock'); };
+    await am.unlock();
+    assert.ok(am.zz.get('blip').getChannelData(0).every((v, i) => v === am.baker.pcm.get('zz:blip')[i]));
+    assert.equal(am.wind.buffer.length, am.baker.pcm.get('gen:wind').length);
+    am.baker.tasks.forEach((t, i) => { t.make = make[i]; });
+  } finally { restore(); }
+});
+
+test('PERF U1: a tap before the idle bake finishes wraps only the baked PCM; the rest lands lazily / when the bake ends', async () => {
+  const { am, restore } = await withFakeAudio();
+  try {
+    am.baker.cancel();
+    am.baker.step(0);                                          // the slices only reached the first task (the wind)
+    const made = [];
+    const make = am.baker.tasks.map((t) => t.make);
+    am.baker.tasks.forEach((t, i) => { if (t.key !== 'gen:wind') t.make = () => { made.push(t.key); return make[i](); }; });
+    await am.unlock();
+    assert.deepEqual(made, [], 'nothing is synthesized in the gesture handler');
+    assert.ok(am._pcmPending && am.zz.size === 0 && !am.glockBuf);
+    // first use bakes + wraps just that def
+    assert.ok(am._zzBuf('blip')?.length > 100);
+    assert.deepEqual(made, ['zz:blip']);
+    am.update(0.016);
+    assert.equal(am.zz.size, 1, 'nothing more while the bake still runs');
+    // the idle bake completes → the next update wraps the rest
+    am.baker.finish(); am.update(0.016);
+    assert.ok(!am._pcmPending && am.glockBuf);
+    for (const k of Object.keys(ZZFX_DEFS)) assert.ok(am.zz.get(k)?.length > 100, `zzfx ${k}`);
+    am.baker.tasks.forEach((t, i) => { t.make = make[i]; });
+  } finally { restore(); }
+});
+
+test('march: footsteps reuse a ring of positions (no per-step Vector3), still jittered around the centre', async () => {
+  const { am, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    const seen = [];
+    const play = am.play3D;
+    am.play3D = (id, pos, o) => { seen.push([pos, pos.x, pos.z]); return null; };
+    am.march(true, { center: [10, 0, 20] });
+    for (let i = 0; i < 200; i++) am._marchTick(0.05);
+    am.play3D = play; am.march(false);
+    assert.ok(seen.length > 20);
+    assert.ok(new Set(seen.map((s) => s[0])).size <= 8, 'pooled vectors');
+    for (const [, x, z] of seen) assert.ok(Math.abs(x - 10) <= MARCH.spread && Math.abs(z - 20) <= MARCH.spread);
+  } finally { restore(); }
+});
+
+test('PERF U2: the listener is written at 20 Hz, only when the ears moved > 5 cm; panners use setValueAtTime only', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    ctx.cam = { isIso: true, modeName: 'follow', yaw: Math.PI, focus: new THREE.Vector3(0, 0, 0) };
+    const L = ac.listener, writes = () => L.positionX.events.length;
+    const w0 = writes();
+    am.render(0, 1 / 60);
+    assert.equal(writes() - w0, 1, 'snap on the first iso frame');
+    assert.ok(close(L.positionY.value, 1.2), 'focus + 1.2 m');
+    assert.ok(close(L.forwardZ.value, 1, 1e-9), 'yaw π faces +z');
+    for (let i = 0; i < 60; i++) am.render(0, 1 / 60);
+    assert.equal(writes() - w0, 1, 'standing still: no writes');
+    for (let i = 0; i < 60; i++) { ctx.cam.focus.x += 0.05; am.render(0, 1 / 60); }       // 3 m/s for 1 s
+    const w = writes() - w0 - 1;
+    assert.ok(w >= 15 && w <= RUNTIME.listenerHz + 1, `${w} writes in 1 s`);
+    assert.ok(L.positionX.events.every((e) => e[0] === 'set'), 'setValueAtTime only, never cancel / ramps');
+    for (let i = 0; i < 60; i++) { ctx.cam.focus.x += 0.0005; am.render(0, 1 / 60); }     // 3 cm/s
+    assert.ok(writes() - w0 - 1 - w <= 1, 'tiny drift is not written every tick');
+    // cutscene: the ears ride the lens at once
+    ctx.cam.modeName = 'cutscene';
+    ctx.camera.position.set(5, 6, 7); ctx.camera.updateMatrixWorld();
+    am.render(0, 1 / 60);
+    assert.ok(close(L.positionX.value, 5) && close(L.positionZ.value, 7));
+    assert.equal(MIX.voices3D, 8, 'PERF §10.5: 8 pooled 3D voices');
+    am.play3D('cat/kitten_mew_01', new THREE.Vector3(1, 0, 1));
+    for (const v of am.voices3D) assert.ok(v.panner.positionX.events.every((e) => e[0] === 'set'));
+  } finally { restore(); }
+});
+
+test('PERF U3: decodes are lazy and queued (≤ 4 at once); level warm-up runs one at a time and waits out a fight', async () => {
+  const { am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    for (let i = 0; i < 20 && (am._dq.length || am._inflight); i++) await flush();
+    ac.maxDecoding = 0;
+    const paths = lvl('town').filter((p) => !am.buffers.has(p)).slice(0, 12);
+    await Promise.all(paths.map((p) => am.decode(p)));
+    assert.ok(ac.maxDecoding <= RUNTIME.maxDecodes && ac.maxDecoding >= 2, `max ${ac.maxDecoding} concurrent`);
+    ac.maxDecoding = 0;
+    const warm = lvl('forest').filter((p) => !am.buffers.has(p)).slice(0, 6);
+    await Promise.all(warm.map((p) => am.load(p)));
+    for (let i = 0; i < 40 && (am._dq.length || am._inflight); i++) { am.render(0, 1 / 60); await flush(); }
+    assert.ok(warm.every((p) => am.buffers.has(p)), 'warm-up finished');
+    assert.equal(ac.maxDecoding, 1, 'preloads decode one at a time');
+    // during a fight the warm-up waits; an urgent request still decodes
+    const more = lvl('gate').filter((p) => !am.buffers.has(p)).slice(0, 3);
+    am._threat = true;
+    for (const p of more.slice(0, 2)) am._decode(p, false);
+    await flush(); await flush();
+    assert.ok(!am.buffers.has(more[0]) && am._dq.length === 2, 'paused while threatened');
+    await am.decode(more[2]);
+    assert.ok(am.buffers.has(more[2]));
+    am._threat = false; am.render(0, 1 / 60);
+    for (let i = 0; i < 20 && am._dq.length + am._inflight; i++) { await flush(); am.render(0, 1 / 60); }
+    assert.ok(more.every((p) => am.buffers.has(p)));
+    // a level change drops queued warm-ups
+    am._threat = true;
+    const rest = lvl('keep').filter((p) => !am.buffers.has(p)).slice(0, 2);
+    for (const p of rest) am._decode(p, false);
+    am._levelCleanup('meadow');
+    assert.equal(am._dq.length, 0);
+    am._threat = false;
+  } finally { restore(); }
+});
+
+test('WA §9 music variants: rate + low-pass per deck, the results loop wraps at 20 s, the camp zone plays the tavern', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    await am.unlock();
+    ctx.bus.emit(E.LEVEL_RESULTS, { levelId: 'meadow' });
+    am.render(0, 1 / 60);
+    const mp = am.musicPlayer, d = mp.decks[mp.active];
+    assert.equal(d.track, 'results_dance');
+    assert.ok(d.el.playbackRate === 1 && d.loopEnd === 20 && d.filter.frequency.value >= 19000);
+    d.el.currentTime = 20.3; mp.update();
+    assert.equal(d.el.currentTime, 0, 'the first 20 s loop');
+    am.music('field_of_dreams', 0); am.render(0, 1 / 60);
+    am.music('hub_hush', 0); am.render(0, 1 / 60);
+    const h = mp.decks[mp.active];
+    assert.ok(h.track === 'hub_hush' && h.el.playbackRate === 0.92 && h.filter.frequency.value === 2200);
+    assert.equal(mp.state().decks[mp.active].lowpass, 2200);
+    // Lantern Night: within 8 m of the camp the tavern tune plays
+    ctx.player = { pos: new THREE.Vector3(0, 0, 0), alive: true, hp: 6, vel: new THREE.Vector3() };
+    ctx.bus.emit(E.LEVEL_LOADED, { id: 'forest', level: { music: { explore: 'field_of_dreams', byFlag: [['forest.camp', 'field_of_dreams']] } } });
+    ctx.state.setFlag('forest.camp', true);
+    am.music('field_of_dreams');
+    const step = (sec) => { for (let t = 0; t < sec; t += 1 / 30) { ac.currentTime += 1 / 30; am.update(1 / 30); am.render(0, 1 / 30); } };
+    step(1);
+    assert.equal(mp.current, 'lantern_night');
+    ctx.player.pos.set(6, 0, 36); step(0.6);
+    assert.equal(mp.current, 'tavern_old_tower_inn');
   } finally { restore(); }
 });

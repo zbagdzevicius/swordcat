@@ -49,8 +49,14 @@ export const KINDS = Object.freeze(['cutscene', 'dialog', 'ambient']);
 export const CHARS_PER_SEC = 30;
 /** Minimum time on a line before input may complete / advance it (no accidental double skips). */
 export const LINE_MIN = 0.15;
-/** Extra hold after an auto line is fully revealed. */
+/** Extra hold after an auto line is fully revealed (legacy floor; see readHold for the reading floor). */
 export const AUTO_TAIL = 0.35;
+/**
+ * Reading floor for auto-advancing lines (WA clarity: a new / young player must be able to read every line): once fully
+ * revealed, an auto line stays on screen at least max(READ.min, READ.base + words × READ.perWord) seconds ÷ dialogSpeed
+ * (≈ 180 wpm). Authored `auto` values are a lower bound on the total, never a cap.
+ */
+export const READ = Object.freeze({ min: 1.2, base: 0.8, perWord: 1 / 3 });
 /** Safety timeouts (sim seconds). */
 export const TIMEOUT = Object.freeze({ default: 30, cam: 3, load: 90, asset: 8, prop: 5 });
 /** Actions that advance dialogue / `wait: 'input'`. */
@@ -62,6 +68,30 @@ const _v = new THREE.Vector3();
 
 /** Seconds a line of `n` characters takes to reveal at `speed` (settings.dialogSpeed). Pure. */
 export function revealTime(n, speed = 1) { return Math.max(0, n) / (CHARS_PER_SEC * Math.max(0.1, speed || 1)); }
+
+/** Words in a line (markup `*` stripped; glyph tokens `[x]` count as one). Pure. */
+export function wordCount(text) {
+  let n = 0, inWord = false;
+  const str = String(text ?? '');
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    const space = c === 32 || c === 9 || c === 10 || c === 13;
+    if (space) inWord = false;
+    else if (!inWord && c !== 42) { inWord = true; n++; }
+  }
+  return n;
+}
+
+/** Seconds an auto line stays fully visible after its reveal: the reading floor (READ ÷ dialogSpeed). Pure. */
+export function readHold(text, speed = 1) {
+  return Math.max(READ.min, READ.base + wordCount(text) * READ.perWord) / Math.max(0.1, speed || 1);
+}
+
+/** Total seconds an auto line with authored `auto` holds before advancing: max(auto, reveal + readHold). Pure. */
+export function autoHold(text, auto, speed = 1) {
+  const n = String(text ?? '').replace(/\*/g, '').length;
+  return Math.max(Math.max(0, +auto || 0), revealTime(n, speed) + readHold(text, speed));
+}
 
 /** Is this step instant (no waiting, no duration)? Used for dialogue look-ahead. Pure. */
 export function isInstant(step) {
@@ -80,7 +110,7 @@ export const MOVE_GUESS = 1.5;
 
 /**
  * Rough length of a step list in sim seconds, for authoring checks (WA27: CS-02 ≤ 55 s with the cut; no prologue scene
- * > 25 s before practice is done). Waits, auto lines (max(auto, reveal + tail)), timed cams / faces / once clips, moves
+ * > 25 s before practice is done). Waits, auto lines (autoHold: max(auto, reveal + reading floor)), input lines (reveal + tail), timed cams / faces / once clips, moves
  * (MOVE_GUESS); `par` = its longest member, `if` = its longer branch; `nowait` steps add nothing. Pure.
  */
 export function sceneLength(steps) {
@@ -98,8 +128,8 @@ export function stepLength(s) {
     case 'if': return Math.max(sceneLength(s.then), sceneLength(s.else));
     case 'wait': return typeof s.dur === 'number' && Number.isFinite(s.dur) ? s.dur : 0;
     case 'say': {
-      const n = s.key ? String(stext(s.key)).replace(/\*/g, '').length : 0;
-      return Math.max(s.auto || 0, revealTime(n) + AUTO_TAIL);
+      if (!s.auto) return revealTime(s.key ? String(stext(s.key)).replace(/\*/g, '').length : 0) + AUTO_TAIL;
+      return autoHold(s.key ? stext(s.key) : '', s.auto);
     }
     case 'cam': return typeof s.dur === 'number' ? s.dur : 0;
     case 'actor': return s.moveTo != null ? MOVE_GUESS : s.clip && s.once ? 0.6 : (s.faceDur ?? 0);
@@ -557,8 +587,10 @@ export class Cutscene {
       name: nameKey ? stext(nameKey) : speakerName(who),
       portrait: dyn(step.portrait) ?? who,
       auto: Math.max(0, +step.auto || 0),
-      t: 0, revealDur: revealTime(textStr.length, speed), revealed: 0, complete: false,
+      t: 0, revealDur: revealTime(textStr.length, speed), revealed: 0, complete: false, hold: 0,
     };
+    // auto lines: never advance before the reading floor (the authored `auto` is a minimum, not a cap)
+    if (line.auto > 0) line.hold = Math.max(line.auto, line.revealDur + readHold(textStr, speed));
     this.line = line;
     if (!this.dialogOpen) { this.dialogOpen = true; ctx.bus.emit(E.DIALOG_START, { id: this.id }); }
     ctx.bus.emit(E.DIALOG_LINE, { speaker: who, name: line.name, text: line.text, portrait: line.portrait, key: line.key, auto: line.auto, id: this.id });
@@ -580,7 +612,7 @@ export class Cutscene {
         else { task.hold = false; return; }
       }
       if (host?.fastDialog) { task.hold = false; return; }
-      if (line.auto > 0 && line.t >= Math.max(line.auto, line.revealDur + AUTO_TAIL)) task.hold = false;
+      if (line.auto > 0 && line.t >= line.hold) task.hold = false;
     };
     const close = () => {
       if (this.line === line) this.line = null;

@@ -8,7 +8,7 @@
 // `activeAt − windup` until `combat:telegraphEnd` + 0.3 s, plus the lane end point of boss lane / line telegraphs.
 import { E } from '../../core/events.js';
 import { CAMERA } from '../../core/config.js';
-import { STRIDE, SX, SY, SZ, SR, SW, SF, SC, ST, F_HARD, F_SOFT, F_TOKEN, CLS } from './FramingSolver.js';
+import { STRIDE, SX, SY, SZ, SR, SW, SF, SC, ST, F_HARD, F_SOFT, F_TOKEN, F_FADE, CLS } from './FramingSolver.js';
 
 const FR = CAMERA.iso.framing;
 
@@ -53,6 +53,8 @@ export class Subjects {
    */
   want(key, cls, x, y, z, rho, w, hard, token = false) {
     if (!key) return -1;
+    // D8 counts every engaged foe, including one already wanted this gather as a THREAT (its wind-up on her)
+    if (cls === CLS.ENGAGED) this.nEngaged++;
     let i = this.indexOf(key);
     const d = this.data;
     if (i < 0) {
@@ -68,7 +70,6 @@ export class Subjects {
     d[o + SX] = x; d[o + SY] = y; d[o + SZ] = z; d[o + SR] = rho; d[o + SC] = cls;
     this.wt[i] = w; this.hardWant[i] = hard ? 1 : 0; this.seen[i] = 1;
     d[o + SF] = (d[o + SF] & ~(F_TOKEN | F_SOFT)) | (token ? F_TOKEN : 0) | (hard ? 0 : F_SOFT);
-    if (cls === CLS.ENGAGED) this.nEngaged++;
     return i;
   }
 
@@ -94,7 +95,7 @@ export class Subjects {
       else if (w > tgt) w = Math.max(tgt, w - (dt / Math.max(1e-3, cfg.weightOut)) * Math.max(1, this.wt[i]));
       d[o + SW] = w;
       const hard = this.seen[i] && this.hardWant[i] && w >= cfg.hardMinW;
-      d[o + SF] = hard ? d[o + SF] | F_HARD : d[o + SF] & ~F_HARD;
+      d[o + SF] = (hard ? d[o + SF] | F_HARD : d[o + SF] & ~F_HARD) & ~F_FADE | (this.seen[i] ? 0 : F_FADE);
       if (w <= 0 && !this.seen[i]) { this.keys[i] = null; continue; }
       if (j !== i) {
         for (let k = 0; k < STRIDE; k++) d[j * STRIDE + k] = d[o + k];

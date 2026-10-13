@@ -17,6 +17,17 @@
 import { E } from '../core/events.js';
 import { PLAYER, STORY, FADE_COLOR } from '../core/config.js';
 import { reward } from './rewards.js';
+import { buildSunRing } from './cutscenes/rig.js';
+
+/**
+ * Device-aware strings lookup (CONTROLS_SPEC §12): `key.touch` / `key.pad` for those devices when present, else `key`.
+ * @param {object} ctx @param {string} key @returns {string}
+ */
+export function devText(ctx, key) {
+  const s = ctx?.strings, dev = ctx?.input?.device;
+  if ((dev === 'touch' || dev === 'pad') && s?.has?.(`${key}.${dev}`)) return s.t(`${key}.${dev}`);
+  return s?.t?.(key) ?? key;
+}
 
 /** WA §7.1 lessons, in order. `guide` speaks `intro` when the lesson starts and `praise` when it is done. */
 export const TUTORIAL_STEPS = Object.freeze([
@@ -25,7 +36,7 @@ export const TUTORIAL_STEPS = Object.freeze([
   { id: 'jump', textKey: 'tut.jump', guide: 'pearl', intro: 'pearl.fence', demo: 'tap', reward: 'hop' },
   { id: 'roll', textKey: 'tut.roll', guide: 'pearl', intro: 'pearl.sack', demo: 'swipe', reward: 'roll', praise: 'pearl.roll.ok' },
   { id: 'stand', textKey: 'tut.stand', guide: 'pearl', intro: 'pearl.wobble', demo: 'hold', need: 1, reward: 'stand' },
-  { id: 'parry', textKey: 'tut.parry', guide: 'pearl', demo: 'tap', reward: 'parry', praise: 'pearl.parry.ok' },
+  { id: 'parry', textKey: 'tut.parry', guide: 'pearl', intro: 'pearl.parry', demo: 'tap', reward: 'parry', praise: 'pearl.parry.ok' },
   { id: 'meow', textKey: 'tut.meow', guide: 'pearl', intro: 'pearl.hide', demo: 'tap', reward: 'found' },
 ]);
 
@@ -43,9 +54,15 @@ export const PRACTICE = Object.freeze({
   pearl: Object.freeze({ speed: 3.0, behind: 1.8, side: 1.4 }),
   spots: Object.freeze({ move: [1.7, -74.9], bonk: [2.4, -74.4], jump: [-6, -88.6], roll: [5.2, -81.8], stand: [-2.8, -82.8], parry: [-2.8, -82.8] }),
   hop: Object.freeze([[-6, -85.9], [-6, -88.3]]),
-  sparkleLine: Object.freeze([[0.6, -67], [0.3, -72.5]]), sparkles: 3,
+  // a side flip only counts as a hop if she was airborne (or pressed Jump) within this many seconds of it
+  hopWindow: 0.6,
+  // the 3 sun sparkles run from the title spot to the dummy's sun ring (the look shot frames both ends)
+  sparkleLine: Object.freeze([[0.4, -67.4], [0.1, -73.4]]), sparkles: 3,
+  lookScene: 'tutlook', lookFrom: 7, sunRing: Object.freeze({ r: 0.95, color: '#FFD57A', pulse: 1.4 }),
   chart: Object.freeze([-6, -67.3]), chartR: 2.5, chartPath: Object.freeze([[9, -72], [4, -70], [-1, -68.5], [-4.6, -67.6]]),
   wipe: 1.2,
+  // where Pearl pops out when hide-and-seek ends unfound (skip): the cow's lee, tutpearl's HIDE spot
+  found: Object.freeze([12.3, -73.9]),
 });
 
 /** Telegraph kind → its WA §7.3 one-shot hint key (story listens for `telegraph:first`). */
@@ -56,6 +73,7 @@ export const MOCHI_LINES = Object.freeze({
   'tut.pounce': 'mochi.hint.pounce', 'tut.reflect': 'mochi.hint.reflect', 'tut.milk': 'mochi.hint.milk',
   'tut.valor': 'mochi.hint.valor', 'tut.companion': 'mochi.hint.companion', 'tut.vigil': 'mochi.hint.vigil',
   'tut.click': 'mochi.hint.click', 'tut.jeer': 'mochi.hint.jeer', 'tut.bright': 'mochi.hint.bright',
+  'tut.fizzle': 'mochi.hint.fizzle',
 });
 
 /** Seconds a post-prologue hint bubble stays up. */
@@ -65,7 +83,9 @@ export const HINT_SHOW = 6;
  * Pure step state. Feed it facts; it says when the current step is complete.
  * Facts: { type: 'moved', d } · { type: 'near', d } (distance to the nearest dummy) · { type: 'hit', attackId, dummy }
  *        · { type: 'crossed' } (over the inner fence) · { type: 'north' } (old alias of crossed) · { type: 'dodge', nearSack }
- *        · { type: 'block' } · { type: 'parry' } · { type: 'cow' } · { type: 'parryFail' }
+ *        · { type: 'block', held? } · { type: 'parry' } · { type: 'cow' } · { type: 'parryFail' }
+ *   In the parry lesson a `block` is a miss (the guard went up outside the window) unless `held` says the guard has
+ *   been held since the lesson began (the carry-over from the Stand lesson): that one is not the player's mistake.
  */
 export class PracticeLog {
   constructor(steps = TUTORIAL_STEPS, cfg = PRACTICE) {
@@ -90,7 +110,7 @@ export class PracticeLog {
       case 'cow': this.latched.add('cow'); break;
       case 'hit': if (id === 'bonk' && f.dummy) { this.dummyHits++; if (f.attackId === 'slash3') this.latched.add('bonk'); } break;
       case 'dodge': if (id === 'roll' && f.nearSack) this.latched.add('roll'); break;
-      case 'block': if (id === 'stand') this.blocks++; else if (id === 'parry') this.parryFails++; break;
+      case 'block': if (id === 'stand') this.blocks++; else if (id === 'parry' && !f.held) this.parryFails++; break;
       case 'parry': if (id === 'stand') this.blocks++; if (id === 'parry') this.parries++; break;
       case 'parryFail': if (id === 'parry') this.parryFails++; break;
       default: break;
@@ -174,12 +194,14 @@ export class GuideClock {
  */
 export class ParryFails {
   constructor(cfg = STORY.kittenOffer) { this.cfg = cfg; this.failed = 0; this.asked = false; }
-  /** One failed parry (hit or merely blocked during the parry lesson). Returns true the moment the offer is due. */
+  /** One real miss in the parry lesson (hit unguarded, or a guard raised outside the window). Returns true the moment the offer is due. */
   fail() { this.failed++; if (!this.asked && this.failed >= this.cfg.failedParries) { this.asked = true; return true; } return false; }
 }
 
 /** Touch button / input action each lesson demonstrates (ui's ghost paw sits on that button; null = a world target). */
-export const DEMO_ACTION = Object.freeze({ move: null, bonk: null, jump: 'jump', roll: null, stand: 'guard', parry: 'guard', meow: 'meow' });
+// WA §7.5: a lesson's action also reveals its touch button (ui `_lesson`): bonk → ⚔, roll → Tumble (both were null, so
+// on phones the Bonk and Roll lessons sat behind veiled buttons and taps fell through to the ground)
+export const DEMO_ACTION = Object.freeze({ move: null, bonk: 'attack', jump: 'jump', roll: 'dodge', stand: 'guard', parry: 'guard', meow: 'meow' });
 
 /** Is (x, z) inside the practice field (with a little margin)? Pure. */
 export function inPractice(x, z, cfg = PRACTICE) {
@@ -190,6 +212,17 @@ export function inPractice(x, z, cfg = PRACTICE) {
 export function fenceSide(x, z, cfg = PRACTICE) {
   if (x < cfg.fenceX[0] - 0.3 || x > cfg.fenceX[1] + 0.3) return 0;
   return z >= cfg.fenceZ ? 1 : -1;
+}
+
+/**
+ * Does a fence-side sample count as a hop over the fence? Only a flip between two non-zero sides, with her airborne
+ * (or a Jump press) within `cfg.hopWindow` s — walking round the fence end resets the side to 0 (fenceSide leaves the
+ * span), and a flip with no recent air time never counts. Pure.
+ * @param {number} prev last side (0 = unknown / she left the span) @param {number} side this sample's fenceSide
+ * @param {number} airAge seconds since she was last airborne / pressed Jump (Infinity = never)
+ */
+export function fenceHopped(prev, side, airAge, cfg = PRACTICE) {
+  return !!prev && !!side && side !== prev && airAge <= cfg.hopWindow;
 }
 
 /** Distance from (x, z) to the nearest practice dummy. Pure. */
@@ -207,14 +240,20 @@ export const HINTS = Object.freeze([
   { key: 'tut.riposte', on: E.PLAYER_PARRY, when: (ctx, p) => ctx.state?.getFlag?.('prologue.done') && !p?.projectile,
     text: (ctx) => (ctx.player?.autoRiposteOn?.() ? 'tut.riposte.auto' : null) },   // Auto-Riposte (touch): no tap asked
   { key: 'tut.milk', on: E.PLAYER_DAMAGED, when: (ctx, p) => ctx.state?.getFlag?.('prologue.done') && (p?.hp ?? 99) <= 4 && (ctx.player?.milk ?? 0) > 0 },
-  { key: 'tut.valor', on: E.ENEMY_ALERTED, when: (ctx) => ctx.state?.getFlag?.('prologue.done') && ctx.levels?.current?.id === 'meadow' },
+  // The first fight (Mochi's cart) asks for Bright Slash, so it teaches only targeting (`tut.target`); the Valor tip waits
+  // for the first foe after Mochi joins, so he says it from his bubble instead of a toast stacked on the cart fight.
+  { key: 'tut.target', on: E.ENEMY_ALERTED, when: (ctx) => !!ctx.state?.getFlag?.('prologue.done') && canTarget(ctx) },
+  { key: 'tut.valor', on: E.ENEMY_ALERTED, when: (ctx) => !!ctx.state?.getFlag?.('prologue.done') && mochiJoined(ctx) },
   { key: 'tut.companion', on: E.COMPANION_CHANGED, when: (ctx, p) => (p?.active?.length ?? 0) > 0 },
   { key: 'tut.holy', on: E.SHARD, when: (ctx, p) => (p?.n ?? 0) >= 1 },
+  // first Holy Slash fizzle with a Shard in hand: it was Valor, not a bug (the charge itself only says 'pfft')
+  { key: 'tut.fizzle', on: E.PLAYER_CHARGE, when: (ctx, p) => !!p?.fizzle && (ctx.state?.shards ?? 0) >= 1 },
   { key: 'tut.line', on: E.OBJECTIVE, when: (ctx, p) => p?.id === 'line' },
   { key: 'tut.jeer', on: E.ENEMY_JEER, when: (ctx, p) => !!p?.on },
   // CONTROLS_SPEC §14 (new): the first arena teaches zoom; the first talkable NPC in reach teaches click / tap to talk
   // (the proximity scan in Tutorial._talkTip usually fires it first, from further away)
-  { key: 'tut.zoom', on: E.ARENA_LOCK, when: (ctx) => !!ctx.state?.getFlag?.('prologue.done') && ctx.cam?.isIso !== false },
+  // (never a soft arena: Mochi's cart already carries tut.target + tut.bright, so zoom waits for the first hard lock)
+  { key: 'tut.zoom', on: E.ARENA_LOCK, when: (ctx, p) => !!ctx.state?.getFlag?.('prologue.done') && ctx.cam?.isIso !== false && !p?.soft },
   { key: 'tut.talk', on: E.INTERACT_AVAILABLE, when: (ctx, p) => p?.prompt === 'prompt.talk' || p?.target?.kind === 'npc' },
   { key: 'tut.bones', on: E.ENEMY_SPAWNED, when: (ctx, p) => String(p?.enemy?.def?.id ?? '').startsWith('bonehead') },
 ]);
@@ -238,10 +277,16 @@ export class Tutorial {
     this._talkScan = 0;          // tut.talk proximity scan timer
     this._shown = null;          // index of the lesson whose prompt is up
     this._intro = false;         // P0 "Knighting Day is TOMORROW!" shown
-    this._side = 0;              // last fence side (jump lesson)
+    this._side = 0;              // last fence side (jump lesson; 0 once she leaves the span)
+    this._airT = -Infinity;      // game time she was last airborne / pressed Jump (jump lesson)
     this._prog = 0;              // last progress sent (wiggle on change)
     this._slowDone = false;      // the first-swing parry slow motion ran
+    this._carryStep = -1;        // lesson index the guard carry-over was sampled for
+    this._carry = false;         // parry lesson: the guard has been held without a break since the lesson began
+    this._letGoSaid = false;     // Pearl's one-time "let go, then tap" nudge
     this._cow = { farT: 0, said: new Set() };
+    this._wipeT = null;          // cancels the pending hide-and-seek wipe (meow lesson)
+    this._hidden = false;        // Pearl is hiding (despawned, the cow wears her tail) until found / practice ends
     this._hintT = 0;             // seconds left on a post-prologue hint bubble
     this._gameT = 0;
     this._offs = [];
@@ -268,6 +313,7 @@ export class Tutorial {
       else if (h.attacker === p && isMochiLock(h.target) && !this.ctx.state?.getFlag?.('meadow.mochi')) this.hint('tut.bright', { force: true });
     });
     on(E.PLAYER_PARRY, (p) => { if (p?.attacker?.kind === 'wobble_knight') this._fact({ type: 'parry' }); });
+    on(E.PLAYER_JUMP, () => { this._airT = this._gameT; });
     on(E.PLAYER_DODGE, () => {
       const p = this.ctx.player, [sx, sz] = PRACTICE.sack;
       this._fact({ type: 'dodge', nearSack: !!p && Math.hypot(p.pos.x - sx, p.pos.z - sz) <= PRACTICE.rollR });
@@ -277,7 +323,7 @@ export class Tutorial {
     on(E.TELEGRAPH_FIRST, (t) => { const k = GLYPH_HINTS[t?.kind]; if (k) this.hint(k); });
     on(E.LEVEL_LOADED, () => { this.reset(); this._clickT = 0; });
     on(E.PLAYER_ORDER, (o) => { if (o?.valid !== false) this._ordered = true; });
-    on(E.LEVEL_UNLOAD, () => this._hide(true));
+    on(E.LEVEL_UNLOAD, () => { this._hide(true); this._sunRing(false); });
     on(E.FLAG_SET, (f) => { if (f?.key === 'prologue.practice' && f.value && this.active) this._end(false, { quiet: true }); });
     for (const h of HINTS) on(h.on, (p) => this._hint(h, p));
   }
@@ -286,8 +332,13 @@ export class Tutorial {
     this.log = new PracticeLog();
     this.clock.reset();
     this.active = false; this.waitT = 0; this.pending = false; this.skipHeld = 0;
-    this._last = null; this._shown = null; this._intro = false; this._side = 0; this._prog = 0;
+    this._last = null; this._shown = null; this._intro = false; this._side = 0; this._airT = -Infinity; this._prog = 0;
+    this._carryStep = -1; this._carry = false; this._letGoSaid = false;
     this._cow = { farT: 0, said: new Set() };
+    if (this._wipeT) { try { this._wipeT(); } catch { /* gone */ } }
+    this._wipeT = null; this._hidden = false;
+    this._looked = false;
+    this._sunRing(false);
   }
 
   // ------------------------------------------------------------------ loop (play mode, StoryManager.update)
@@ -316,8 +367,9 @@ export class Tutorial {
     // hold Pause 1 s → skip practice (the hint shows only after 20 s on one lesson, WA §7.2)
     const input = ctx.input;
     if (input?.down?.('pause')) {
+      if (this.skipHeld === 0) this._skipLabel = devText(ctx, 'tut.skip');   // resolved once per hold (device-aware)
       this.skipHeld += dt;
-      this.story?.cinema?.skip(Math.min(1, this.skipHeld / PRACTICE.skipHold), ctx.strings?.t?.('tut.skip'));
+      this.story?.cinema?.skip(Math.min(1, this.skipHeld / PRACTICE.skipHold), this._skipLabel);
       if (this.skipHeld >= PRACTICE.skipHold) { this.skip(); return; }
     } else if (this.skipHeld > 0) { this.skipHeld = 0; this.story?.cinema?.skip(0); }
 
@@ -336,11 +388,18 @@ export class Tutorial {
       this.log.note({ type: 'near', d: nearestDummy(p.pos.x, p.pos.z) });
     } else if (this._last) this._last.copy(p.pos);
     if (id === 'jump') {
+      // only a real hop counts: walking round the fence end leaves the span (side → 0), and a flip needs air time
+      if (p.onGround === false) this._airT = this._gameT;
       const s = fenceSide(p.pos.x, p.pos.z);
-      if (s && this._side && s !== this._side) this.log.note({ type: 'crossed' });
-      if (s) this._side = s;
+      if (fenceHopped(this._side, s, this._gameT - this._airT)) this.log.note({ type: 'crossed' });
+      this._side = s;
     }
     if (id === 'meow') this._cowClues(dt, p);
+    if (id === 'parry') {
+      // a guard still up from the Stand lesson is a carry-over, not a timing miss; it ends the first frame it drops
+      if (this._carryStep !== this.log.i) { this._carryStep = this.log.i; this._carry = !!p.guarding; }
+      else if (!p.guarding) this._carry = false;
+    }
     const L = this.ctx.levels?.current;
     if (L?.critter?.(PRACTICE.cowId)?.woke) this.log.note({ type: 'cow' });
   }
@@ -348,7 +407,13 @@ export class Tutorial {
   _fact(f) {
     // facts count during the short pause between prompts too (a roll right after the bonk still lands); the step
     // only completes once its prompt is up (update()).
-    if ((f.type === 'parryFail' || f.type === 'block') && this.active && this.log.step?.id === 'parry' && this.parryFails.fail()) this._offerKitten();
+    if ((f.type === 'parryFail' || f.type === 'block') && this.active && this.log.step?.id === 'parry') {
+      // a hit blocked by a guard held since the lesson began is the Stand lesson's carry-over, not a missed parry:
+      // no Kitten-mode count, and Pearl says once how to do it instead
+      const held = f.type === 'block' && this._heldCarry();
+      if (held) { f = { type: 'block', held: true }; this._letGo(); }
+      else if (this.parryFails.fail()) this._offerKitten();
+    }
     if (!this.active || this.pending) return;
     this.log.note(f);
   }
@@ -388,6 +453,13 @@ export class Tutorial {
       // 3 sun sparkles on the way (+1 fish each; the pickup pitch ladder plays them up) and the sun ring at the dummy
       try { ctx.levels?.current?.pickups?.fishLine?.(PRACTICE.sparkleLine[0], PRACTICE.sparkleLine[1], PRACTICE.sparkles, 'practice'); } catch (e) { console.warn(e); }
       this._sunRing(true);
+      // the dummy is off-screen from the title spot (iso yaw π, 12 m south): a short look shot frames her, Pearl running
+      // ahead and the sun ring together, then follow again (once per practice; no look when she starts near it)
+      if (p && !this._looked && nearestDummy(p.pos.x, p.pos.z) > PRACTICE.lookFrom && typeof this.story?.play === 'function') {
+        this._looked = true;
+        this.pending = true;
+        Promise.resolve(this.story.play(PRACTICE.lookScene)).catch(() => {}).finally(() => { this.pending = false; this.clock.reset(); });
+      }
     } else if (s.id === 'jump') this._pearlHop();
     else if (s.id === 'meow') this._hideAndSeek();
     else if (PRACTICE.spots[s.id]) this._pearlTo(PRACTICE.spots[s.id]);
@@ -402,7 +474,8 @@ export class Tutorial {
       // ui's bubble plays the paw itself on the same clock; fx marks the world spot it taps (fx.W5, optional)
       try { this.ctx.fx?.ghostSpot?.(this._demoTarget(this.log.step)); } catch { /* fx optional */ }
     }
-    if (ev.skipHint) this.ctx.bus.emit(E.TOAST, { text: this.ctx.strings?.t?.('tut.skip') ?? 'tut.skip', key: 'tut.skip', icon: 'hint' });
+    // key only: ui resolves it device-aware (tut.skip.touch on a phone)
+    if (ev.skipHint) this.ctx.bus.emit(E.TOAST, { key: 'tut.skip', icon: 'hint' });
   }
 
   /** World point the ghost paw demonstrates on for a lesson ([x, y, z]; y from the ground). */
@@ -476,14 +549,38 @@ export class Tutorial {
     try { ctx.fx?.damageNumber?.(at, word, 'pop'); } catch { /* fx optional */ }
   }
 
-  /** The pulsing gold sun ring at the dummy (fx `marker` when it exists; a sparkle pulse otherwise). */
+  /**
+   * The pulsing gold sun ring at the middle dummy (WA §7.2): fx `marker` when fx has one, else the story's own ring
+   * (one additive ring mesh, scaled by a frame hook; built once per lesson, disposed on `_sunRing(false)`).
+   */
   _sunRing(on) {
-    const ctx = this.ctx, [x, z] = PRACTICE.dummies[1];
-    const pos = { x, y: ctx.physics?.heightAt?.(x, z) ?? 0, z };
+    const ctx = this.ctx, [x, z] = PRACTICE.dummies[1], R = PRACTICE.sunRing;
+    if (typeof ctx.fx?.marker === 'function') {
+      try { ctx.fx.marker('practiceSunRing', on ? { x, y: ctx.physics?.heightAt?.(x, z) ?? 0, z } : null, { color: R.color, r: R.r, pulse: true }); } catch { /* fx optional */ }
+      return;
+    }
+    if (!on) {
+      const ring = this._ring;
+      if (!ring) return;
+      this._ring = null;
+      try { ring.off?.(); ring.obj.removeFromParent(); ring.obj.userData.dispose?.(); } catch (e) { console.warn(e); }
+      return;
+    }
+    if (this._ring || !ctx.scene) return;
     try {
-      if (typeof ctx.fx?.marker === 'function') { ctx.fx.marker('practiceSunRing', on ? pos : null, { color: '#FFD57A', r: 0.9, pulse: true }); return; }
-      if (on) ctx.fx?.burst?.('sparkle', pos, { count: 12, color: '#FFD57A' });
-    } catch { /* fx optional */ }
+      const obj = buildSunRing(R.r, R.color);
+      obj.position.set(x, (ctx.physics?.heightAt?.(x, z) ?? 0) + 0.05, z);
+      ctx.scene.add(obj);
+      let t = 0;
+      const off = ctx.game?.addFrameHook?.((dt) => {
+        t += dt;
+        const k = 0.5 + 0.5 * Math.sin((t / R.pulse) * Math.PI * 2);
+        obj.scale.setScalar(1 + 0.12 * k);
+        obj.material.opacity = 0.55 + 0.35 * k;
+      }) ?? null;
+      this._ring = { obj, off };
+      ctx.fx?.burst?.('sparkle', { x, y: obj.position.y + 0.3, z }, { count: 12, color: R.color });
+    } catch (e) { console.warn('[story] sun ring failed', e); }
   }
 
   // ------------------------------------------------------------------ Pearl, the guide
@@ -537,10 +634,36 @@ export class Tutorial {
     this._wipeT = setTimeoutish(ctx, w * 0.45, () => {
       const a = this._pearl(false);
       if (a) { try { ctx.companions?.despawn?.(a); } catch { /* gone */ } }
+      this._wipeT = null;
+      this._hidden = true;
       try { ctx.levels?.current?.critter?.(PRACTICE.cowId)?.setTail?.('pearl'); } catch { /* world optional */ }
       this.story?.cinema?.apply?.({ fade: { alpha: 0, dur: w * 0.55 } });
     });
     this._cow = { farT: 0, said: new Set() };
+  }
+
+  /**
+   * Hide-and-seek is over (practice ended or skipped): the cow loses Pearl's pink tail and, when nobody found her
+   * (`tutpearl` did not play), Pearl pops out of the cow's lee with "Found me anyway!" so toChart has a guide to run
+   * ahead. Idempotent; a no-op outside the meow lesson.
+   */
+  _unhide() {
+    const ctx = this.ctx, wiping = !!this._wipeT;
+    if (wiping) { try { this._wipeT(); } catch { /* gone */ } this._wipeT = null; this.story?.cinema?.apply?.({ fade: { alpha: 0, dur: 0.3 } }); }
+    if (!this._hidden && !wiping) return;
+    this._hidden = false;
+    try { ctx.levels?.current?.critter?.(PRACTICE.cowId)?.setTail?.(null); } catch { /* world optional */ }
+    if (this._pearl(false) || typeof ctx.companions?.spawnNpc !== 'function') return;
+    const [x, z] = PRACTICE.found, p = ctx.player;
+    try {
+      const f = p ? Math.atan2(p.pos.x - x, p.pos.z - z) : 0;
+      const a = ctx.companions.spawnNpc('pearl', [x, 0, z], f);
+      if (!a) return;
+      a.setScripted?.(true);
+      try { a.play?.('jump', { once: true }); } catch { /* optional */ }
+      ctx.fx?.burst?.('sparkle', a, { count: 8, color: '#FFD2DE' });
+      this.story?.barks?.say?.(a, 'tut.pearl.anyway', 'pearl', 2.2);
+    } catch (e) { console.warn('[story] pearl respawn failed', e); }
   }
 
   /** Warmer / colder: the cow's clue bubbles (WA §7.4), each once. */
@@ -584,6 +707,22 @@ export class Tutorial {
   }
 
   /** The 3rd failed parry in practice: ui offers Kitten mode from Pearl's bubble (ui keeps the once-per-save flag). */
+  /** Parry lesson: is the guard still the unbroken one from before the lesson? (sampled now if _sample has not run yet) */
+  _heldCarry() {
+    const p = this.ctx.player;
+    if (this._carryStep !== this.log.i) { this._carryStep = this.log.i; this._carry = !!p?.guarding; }
+    return this._carry && !!p?.guarding;
+  }
+
+  /** Pearl's one-time nudge after the first held block in the parry lesson (keeps the lesson chip, swaps her line). */
+  _letGo() {
+    // before the lesson prompt is up its intro would replace the line at once: wait for the next held block
+    if (this._letGoSaid || this._shown !== this.log.i || this.pending) return;
+    this._letGoSaid = true;
+    this.clock.poke();
+    this._emit({ say: 'pearl.parry.letgo' });
+  }
+
   _offerKitten() {
     const ctx = this.ctx, st = ctx.state;
     if (st?.getFlag?.('seen.offer.kitten') || (st?.difficulty ?? 'knight') !== 'knight' || ctx.params?.test) return;
@@ -625,11 +764,13 @@ export class Tutorial {
     this._hide(true);
     if (!ctx.state?.getFlag?.('prologue.practice')) this.story?.flag?.('prologue.practice', true);
     this._jumpDone();                                                // practice over: the fence link opens too
+    const dots = skipped ? { n: this.log.dots().n, of: this.log.total, half: false } : { n: this.log.total, of: this.log.total, half: false };
+    this._unhide();                                                  // meow lesson cut short: Pearl back, the cow's tail off
     if (was && !quiet) {
-      ctx.bus.emit(E.TOAST, { text: ctx.strings?.t?.(skipped ? 'tut.skipped' : 'tut.done'), key: skipped ? 'tut.skipped' : 'tut.done', icon: 'hint' });
+      ctx.bus.emit(E.TOAST, { key: skipped ? 'tut.skipped' : 'tut.done', icon: 'hint' });
       ctx.bus.emit(E.SAVE_REQUEST, {});
     }
-    if (was) this.story?.toChart?.();                                // P8: the bell rings, Pearl runs to the chart
+    if (was) this.story?.toChart?.({ dots });                        // P8: the bell rings, Pearl runs to the chart
   }
 
   _hide(clear) {
@@ -696,7 +837,7 @@ export class Tutorial {
       ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'hint', action: null, hold: 0, textKey, step: 0, total: 0, progress: 0, done: false,
         speaker: 'mochi', say: MOCHI_LINES[key], stepDots: null, hintKey: key });
       this._hintT = HINT_SHOW;
-    } else ctx.bus.emit(E.TOAST, { text: ctx.strings?.t?.(textKey) ?? textKey, key, icon: 'hint' });
+    } else ctx.bus.emit(E.TOAST, { key, textKey, icon: 'hint' });     // ui resolves textKey device-aware (.touch / .pad)
     return true;
   }
 
@@ -709,6 +850,23 @@ export class Tutorial {
     for (const off of this._offs) off();
     this._offs.length = 0;
   }
+}
+
+/** Has Mochi joined (rescued this save, or in the active party)? Gates hints that wait for him to say them. */
+export function mochiJoined(ctx) {
+  if (ctx?.state?.getFlag?.('meadow.mochi')) return true;
+  const a = ctx?.companions?.active;
+  return Array.isArray(a) && a.some((c) => c?.kittenId === 'mochi');
+}
+
+/**
+ * Can she pick a foe with the current scheme (CONTROLS_SPEC §14 `tut.target`)? Iso only; mouse, touch or pad
+ * (pad copy: [RB] picks the nearest foe); not the keyboard-only preset, whose base copy would say "right-click".
+ */
+export function canTarget(ctx) {
+  const inp = ctx?.input;
+  if (ctx?.cam?.isIso === false) return false;
+  return inp?.device === 'touch' || inp?.device === 'pad' || inp?.preset !== 'keyboardOnly';
 }
 
 /** Is `t` Mochi's cart lock / carrier (companions' rescue target; any of the names it may carry)? */

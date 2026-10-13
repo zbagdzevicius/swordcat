@@ -14,6 +14,7 @@ import { disposeInstance } from '../core/Assets.js';
 import { E } from '../core/events.js';
 import { ATTACKS, PLAYER, TELEGRAPH } from '../core/config.js';
 import { dampAngle, wrapAngle } from '../core/math.js';
+import { makeToonMaterial } from '../characters/materials.js';
 
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3();
 const _ax = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
@@ -320,7 +321,12 @@ export function mergeSkinnedMeshes(root) {
   const merged = mergeGeometries(geos, false);
   for (const g of geos) g.dispose();
   if (!merged) return null;
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true }); mat.dithering = true;   // ART §4.2: no Standard in play
+  // ART §5.1 actors are WarmToon (no Standard in play). PERF §1.2: the shared skinned kit program (the same one every
+  // kitten body uses) with a constant matte rmse, not a skinned Lambert program of its own
+  const rm = new Float32Array(merged.attributes.position.count * 4);
+  for (let i = 0; i < rm.length; i += 4) { rm[i] = 0.9; rm[i + 2] = 0.3; }
+  merged.setAttribute('rmse', new THREE.BufferAttribute(rm, 4));
+  const mat = critterMaterial();
   const first = list[0];
   const mesh = new THREE.SkinnedMesh(merged, mat);
   mesh.name = first.name + ':merged';
@@ -329,8 +335,15 @@ export function mergeSkinnedMeshes(root) {
   mesh.position.copy(first.position); mesh.quaternion.copy(first.quaternion); mesh.scale.copy(first.scale);
   mesh.bind(first.skeleton, first.bindMatrix);
   for (const m of list) m.removeFromParent();
-  mesh.userData.owned = true; mat.userData.owned = true; merged.userData = { owned: true };
+  mesh.userData.owned = true; merged.userData = { owned: true };
   return mesh;
+}
+
+let _critterMat = null;
+/** The one shared critter material (skinned WarmToon, vertex colours; never disposed with a level). */
+function critterMaterial() {
+  if (!_critterMat) { _critterMat = makeToonMaterial({ kind: 'skinned' }); _critterMat.userData.sharedCritter = true; _critterMat.userData.noDispose = true; }
+  return _critterMat;
 }
 
 /**
@@ -415,7 +428,7 @@ export class Critter extends ScriptedActorMixin(Actor) {
     this.anim?.dispose();
     // the merged SkinnedMesh is ours (not template geometry); Actor.dispose detaches object3d before the level's
     // disposeOwned(root) walk, so free it here
-    if (this.merged) { this.merged.geometry?.dispose(); this.merged.material?.dispose(); this.merged = null; }
+    if (this.merged) { this.merged.geometry?.dispose(); if (!this.merged.material?.userData?.sharedCritter) this.merged.material?.dispose(); this.merged = null; }
     // cloned skeletons' bone textures + tinted material clones (leaked +2 textures per meadow reload, requests/enemies.md)
     if (this.object3d) disposeInstance(this.object3d, { detach: false });
     this.ctx.actors?.unregister(this);

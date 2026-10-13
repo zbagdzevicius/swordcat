@@ -19,6 +19,29 @@ async function shot(t, name) {
   return t.shot(`ui/${name}`);
 }
 
+/**
+ * Phase W review: the guide bubble, its chip and all 7 paw dots lie inside the viewport (16 px SafeFrame gutters) with
+ * a long line, and a dialogue scene hides the hint layers. `G` evaluates in the page, `wait(ms)` sleeps.
+ */
+async function guideInView(t, G, wait, tag) {
+  await G(() => { const g = window.__GAME__; g.setMode('play'); g.ctx.bus.emit(g.E.PROMPT, { kind: 'tutorial', id: 'smoke', speaker: 'pearl', say: 'Race you to the sun-ring! Last one there is a soggy biscuit!', textKey: 'tut.parry', step: 6, stepDots: { n: 5, of: 7, half: true }, action: 'guard' }); });
+  await wait(600);
+  const r = await G(() => {
+    const out = {};
+    for (const s of ['.ui-guide', '.gd-bubble', '.gd-chip', '.gd-dots']) { const b = document.querySelector(s)?.getBoundingClientRect(); out[s] = b && b.width > 0 ? [Math.round(b.left), Math.round(b.right), Math.round(b.top), Math.round(b.bottom)] : null; }
+    return { out, w: innerWidth, h: innerHeight, dots: document.querySelectorAll('.gd-dot:not(.is-hidden)').length, op: +getComputedStyle(document.querySelector('.ui-guide')).opacity };
+  });
+  const bad = Object.entries(r.out).filter(([, b]) => !b || b[0] < 15 || b[1] > r.w - 15 || b[2] < 0 || b[3] > r.h);
+  t.log(`${tag}: guide rects ${JSON.stringify(r.out)} in ${r.w}x${r.h}`);
+  t.assert(!bad.length && r.dots === 7 && r.op > 0.5, `${tag}: guide bubble / chip / 7 dots inside the viewport (${JSON.stringify(bad)}, dots ${r.dots}, opacity ${r.op})`);
+  await G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.CUTSCENE_START, { id: 'smoke_dialog', kind: 'dialog' }); });
+  await wait(500);
+  const op = await G(() => +getComputedStyle(document.querySelector('.ui-guide')).opacity);
+  await G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.CUTSCENE_END, { id: 'smoke_dialog' }); g.ctx.bus.emit(g.E.PROMPT, { kind: 'tutorial', id: 'smoke', speaker: 'pearl', textKey: 'tut.parry', step: 6, done: true }); g.setMode('play'); });
+  t.assert(op < 0.05, `${tag}: hint layers hide in a dialogue scene (guide opacity ${op})`);
+  await wait(700);
+}
+
 /** §14.1: no visible ui / touch text under 16 px (SVG illustration text excluded). */
 async function fontAudit(t, label) {
   const bad = await inPage(t, () => {
@@ -164,14 +187,15 @@ export default [
         ctx.bus.emit(E.BOSS_DIZZY, { boss, value: 55, max: 100, dizzy: false });
         ctx.bus.emit(E.TOAST, { text: ctx.strings.t('toast.kitten', { n: 1, max: 3 }), key: 'toast.kitten' });
         ctx.bus.emit(E.ITEM_PICKUP, { item: 'letter', id: 'l1', amount: 1, position: ctx.player.pos.clone() });
-        ctx.ui.hint('tut.combo', { step: 3, total: 8 });
-        ctx.state.companions.unlocked = ['mochi'];
+        ctx.ui.hint('tut.bright', { step: 3, total: 8 });          // tut.combo retired with the Morning Practice (story.W1)
+        ctx.state.companions.unlocked = ['mochi']; ctx.state.setFlag('meadow.mochi', true);    // joined (D-01): the slot shows him
         try { ctx.companions.setActive(['mochi']); } catch (err) { console.warn('[ui smoke] setActive', err?.message); }
         ctx.ui.hud.showSaved();
       });
       await t.wait(500);
       await inPage(t, () => { window.__uiBoss.hp = 420; });
       await t.wait(350);
+      await inPage(t, () => window.__GAME__.ctx.ui.hint('tut.bright', { step: 3, total: 8 }));   // a story quest:update may have replaced it
       const s1 = await inPage(t, () => ({
         low: !!document.querySelector('.hud-hearts.is-low'), full: !!document.querySelector('.hud-valor.is-full'),
         boss: !!document.querySelector('.hud-boss.is-on'), bossName: document.querySelector('.boss-name span')?.textContent,
@@ -186,20 +210,39 @@ export default [
       t.assert(/1\/3/.test(s1.obj), `objective line "${s1.obj}"`);
       t.assert(s1.toasts >= 2, `toasts shown: ${s1.toasts}`);
       t.assert(/ui-key/.test(s1.hint), 'tutorial hint renders keycaps');
-      t.assert(s1.fish === '42', `fish counter ${s1.fish}`);
+      // the counter shows state.fish: the start spawn sits on a placed fish line, so a magnet fish may land meanwhile
+      t.assert(s1.fish === String(await inPage(t, () => window.__GAME__.ctx.state.fish)) && +s1.fish >= 42, `fish counter ${s1.fish}`);
       t.assert(s1.comp || s1.compN === 0, `companion portrait shown for the active companion (${s1.compN})`);
       if (!s1.compN) t.warn('companions.setActive(["mochi"]) gave no active companion; portrait not checked');
       t.assert(/saved/i.test(s1.saved), `"Saved" wax seal ("${s1.saved}")`);
+      // WA §4.2: a defeat signal while the boss still has HP never stamps "BONKED!" over the boss name
+      const bk = await inPage(t, () => {
+        const g = window.__GAME__;
+        g.ctx.bus.emit(g.E.BOSS_DEFEATED, { boss: window.__uiBoss, id: 'smoke_none' });
+        return { on: g.ctx.ui.hud.bonked, cls: document.querySelector('.hud-boss').classList.contains('is-bonked'), txt: document.querySelector('.boss-bonked').textContent };
+      });
+      t.assert(!bk.on && !bk.cls && !bk.txt, `no BONKED! stamp while the boss has HP (${JSON.stringify(bk)})`);
       await fontAudit(t, 'HUD');
       await shot(t, '01-hud');
       // threat arrow: a red telegraph from an enemy behind her; interaction tag; story prompt with a filling ring
       const arrow = await inPage(t, () => {
         const g = window.__GAME__, ctx = g.ctx, E = g.E, p = ctx.player, cam = ctx.camera;
-        const back = cam.getWorldDirection(new g.THREE.Vector3()).setY(0).normalize().multiplyScalar(-6);
-        const e = ctx.enemies.spawn('rat_pike', p.pos.clone().add(back));
+        // off screen but inside TELEGRAPH.arrowRadius: beside her (the iso lens sees ~±7 m across at this distance)
+        const fwd = cam.getWorldDirection(new g.THREE.Vector3()).setY(0).normalize();
+        const side = new g.THREE.Vector3(-fwd.z, 0, fwd.x).multiplyScalar(13);
+        const e = ctx.enemies.spawn('rat_pike', p.pos.clone().add(side));
         window.__uiRat = e;
         ctx.bus.emit(E.TELEGRAPH, { id: 'ui-smoke-tell', actor: e, kind: 'red', shape: 'glint', pos: e.pos, dir: null, size: 1, duration: 3 });
+        // review: a Rest stop waits while a boss fight is on (its tag sat on the boss bar); other tags stay out of the top band
         ctx.bus.emit(E.INTERACT_AVAILABLE, { target: { id: 'vigil_1', kind: 'vigil', position: p.pos.clone().add(cam.getWorldDirection(new g.THREE.Vector3()).setY(0).normalize().multiplyScalar(2.5)) }, prompt: 'tut.vigil' });
+        return true;
+      });
+      await t.wait(300);
+      const restTag = await inPage(t, () => !!document.querySelector('.ui-tag.is-on'));
+      t.assert(!restTag, 'no "Rest" tag while the boss fight is on');
+      await inPage(t, () => {
+        const g = window.__GAME__, ctx = g.ctx, E = g.E, p = ctx.player, cam = ctx.camera;
+        ctx.bus.emit(E.INTERACT_AVAILABLE, { target: { id: 'smoke_chest', kind: 'chest', position: p.pos.clone().add(cam.getWorldDirection(new g.THREE.Vector3()).setY(0).normalize().multiplyScalar(2.5)) }, prompt: 'prompt.open' });
         ctx.bus.emit(E.PROMPT, { action: 'guard', hold: 1, textKey: 'prompt.holdStand', progress: 0.6, done: false });
         return true;
       });
@@ -210,6 +253,8 @@ export default [
       t.assert(s2.arrows >= 1, `off-screen threat arrow shown (${s2.arrows})`);
       t.assert(s2.tag, `interaction tag shown ("${s2.tagTxt}")`);
       t.assert(s2.prompt, 'story prompt overlay shown');
+      const band = await inPage(t, () => { const b = document.querySelector('.hud-boss.is-on')?.getBoundingClientRect(), tg = document.querySelector('.ui-tag.is-on .tag-in')?.getBoundingClientRect(); return b && tg ? { bb: Math.round(b.bottom), tt: Math.round(tg.top), ov: tg.top < b.bottom && tg.bottom > b.top && tg.right > b.left && tg.left < b.right } : null; });
+      t.assert(!band?.ov, `the interaction tag stays off the boss bar (${JSON.stringify(band)})`);
       await shot(t, '02-hud-arrows-tag-prompt');
       // reduce HP to 2 → pulse; cleanup
       await inPage(t, () => {
@@ -218,7 +263,7 @@ export default [
         ctx.bus.emit(E.TELEGRAPH_END, { id: 'ui-smoke-tell' });
         ctx.bus.emit(E.INTERACT_CLEAR, {});
         ctx.bus.emit(E.PROMPT, { action: 'guard', hold: 1, textKey: 'prompt.holdStand', progress: 1, done: true });
-        ctx.bus.emit(E.BOSS_DEFEATED, { boss: window.__uiBoss, id: 'grizzlechop' });
+        ctx.ui.hud._bossHide();      // clear the bar without a real defeat (boss:defeated grizzlechop would start CS-05)
         ctx.bus.emit(E.OBJECTIVE, { id: 'net_ropes', value: 3, max: 3, textKey: 'obj.ropes', frozen: false, done: true });
         ctx.ui.hint(null);
         if (window.__uiRat) ctx.enemies.despawn(window.__uiRat);
@@ -228,6 +273,17 @@ export default [
       await t.wait(200);
       const low = await inPage(t, () => !!document.querySelector('.hud-hearts.is-low'));
       t.assert(low, 'hearts pulse at HP ≤ 2');
+      // review: the "where next" beacon: a quest step with a target shows the gold paw (over it, or on the edge)
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.QUEST_UPDATE, { questId: 'meadow.mochi', state: 'active', text: 'Help Mochi out of the tipped cart' }); });
+      await t.wait(600);
+      const bc = await inPage(t, () => { const b = window.__GAME__.ctx.ui.beacon; return { on: !!document.querySelector('.ui-beacon.is-on'), marker: !!document.querySelector('.bc-marker.is-on'), edge: !!document.querySelector('.bc-edge.is-on'), has: b?.has, st: b?.state, prints: document.querySelectorAll('.bc-print.is-on').length, t: b?.target, boss: !!window.__GAME__.ctx.ui.hud.boss, tut: !!window.__GAME__.ctx.story?.tutorial?.active, sp: window.__GAME__.ctx.levels.current?.spawnId, mode: window.__GAME__.ctx.game.mode, hud: !!document.querySelector('.hud:not(.is-hidden)') }; });
+      t.assert(bc.on && (bc.marker || bc.edge), `objective beacon shows the way (${JSON.stringify(bc)})`);
+      await shot(t, '03-beacon');
+      await inPage(t, () => { const g = window.__GAME__, p = g.ctx.player.pos, b = g.ctx.ui.beacon.target; const f = g.ctx.camera.getWorldDirection(new g.THREE.Vector3()).setY(0).normalize(), x = b.x - f.x * 6, z = b.z - f.z * 6; g.teleport(x, g.ctx.physics.heightAt(x, z), z); });   // 6 m short of it, the cart up-screen
+      await t.wait(1500);
+      const bc2 = await inPage(t, () => { const g = window.__GAME__, b = g.ctx.ui.beacon.target, v = new g.THREE.Vector3(b.x, b.y + 2.6, b.z).project(g.ctx.camera); return { marker: !!document.querySelector('.bc-marker.is-on'), on: !!document.querySelector('.ui-beacon.is-on'), ndc: [+v.x.toFixed(2), +v.y.toFixed(2)], p: g.ctx.player.pos.toArray().map((n) => +n.toFixed(1)), mode: g.ctx.game.mode }; });
+      t.assert(bc2.on && bc2.marker, `the beacon floats over the cart when it is on screen (${JSON.stringify(bc2)})`);
+      await shot(t, '04-beacon-near');
       await inPage(t, () => { const g = window.__GAME__; g.player.setHp(g.ctx.player.maxHp); g.god(false); });
     },
   },
@@ -276,11 +332,13 @@ export default [
       await shot(t, '05-chapter-letterbox');
       await inPage(t, () => { const ui = window.__GAME__.ctx.ui; ui.cinema.apply({ letterbox: false, hud: true, caption: null }, null, true); ui.cinema.clear(); });
       // WA §5.7 knock-out: no card, no ghost; a cream wipe at KO.sitT, then the life toast and the lives-badge pop
-      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_LIFE_LOST, { lives: 8, gameOver: false }); });
+      // the player owns the wipe (ui.fade at KO.sitT, cleared on the respawn); the harness plays the player's part
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PLAYER_LIFE_LOST, { lives: 8, gameOver: false }); setTimeout(() => g.ctx.ui.fade({ to: '#FFF1DE', alpha: 1, dur: 0.35 }), 1200); });
       await t.wait(1350);
       const wipe = await inPage(t, () => { const f = document.querySelector('.cin-fade'); const cs = getComputedStyle(f); return { o: +cs.opacity, bg: cs.backgroundColor, card: !!document.querySelector('.cin-life.is-on') }; });
       t.assert(wipe.o > 0.05 && /255, 241, 222/.test(wipe.bg), `cream wipe (${wipe.o.toFixed(2)} ${wipe.bg})`);
       t.assert(!wipe.card, 'no life-lost card');
+      await inPage(t, () => window.__GAME__.ctx.ui.fade({ to: null, dur: 0.35 }));
       await t.wait(700);
       const life = await inPage(t, () => [...document.querySelectorAll('.ui-toast')].map((e) => e.textContent).join(' | '));
       t.assert(/8/.test(life), `life toast "${life}"`);
@@ -322,7 +380,8 @@ export default [
       await fontAudit(t, 'letters');
       await shot(t, '09-letters');
       await t.page.keyboard.press('Escape'); await t.wait(300);
-      // Settings: change master volume with ArrowRight, toggle reduce flashes
+      // Settings (after the WA §5.4 Stickers row): change master volume with ArrowRight, toggle reduce flashes
+      await t.page.keyboard.press('ArrowDown'); await t.wait(120);
       await t.page.keyboard.press('ArrowDown'); await t.wait(120);
       await t.page.keyboard.press('Enter'); await t.wait(500);
       const before = await inPage(t, () => window.__GAME__.ctx.state.settings.master);
@@ -492,14 +551,17 @@ export default [
       });
       t.assert(lay.v && lay.f, '#ui-vignette and #ui-flash exist, pointer-events none');
       t.assert(lay.spec?.color === '#FF8FB1', `hurt flash ${JSON.stringify(lay.spec)}`);
-      await t.wait(500);
+      // a steady layout: the full HUD (the calm HUD's tuck legitimately moves rects) after its 0.3 s fades
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.state.settings.hudMode = 'full'; g.ctx.bus.emit(g.E.SETTINGS_CHANGED, { key: 'hudMode', value: 'full' }); });
+      await t.wait(1200);
       const occ = await inPage(t, () => { const o = window.__GAME__.ctx.ui.screenOccluders(); return { v: o.version, kinds: o.rects.map((r) => r.kind), n: o.rects.length }; });
       t.assert(occ.v > 0 && occ.n >= 2 && occ.kinds.every((k) => ['hud', 'cluster', 'stick', 'bar', 'dialog', 'chip'].includes(k)), `occluders v${occ.v}: ${occ.kinds.join(',')}`);
       const v0 = occ.v;
       await t.wait(600);
-      t.assert((await inPage(t, () => window.__GAME__.ctx.ui.screenOccluders().version)) === v0, 'a steady layout keeps its version');
+      const v1 = await inPage(t, () => window.__GAME__.ctx.ui.screenOccluders().version);
+      t.assert(v1 === v0, `a steady layout keeps its version (${v0} → ${v1})`);
       // calm HUD: out of combat for 4 s → Grit / Valor / counters tucked; 'full' shows them
-      await inPage(t, () => { const g = window.__GAME__; g.ctx.state.settings.hudMode = 'calm'; });
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.state.settings.hudMode = 'calm'; g.ctx.bus.emit(g.E.SETTINGS_CHANGED, { key: 'hudMode', value: 'calm' }); });
       await t.wait(4600);
       const tuck = await inPage(t, () => { const h = document.querySelector('.hud'); return { grit: h.classList.contains('tuck-grit'), counts: h.classList.contains('tuck-counts') }; });
       t.assert(tuck.grit && tuck.counts, `calm HUD tucked (${JSON.stringify(tuck)})`);
@@ -508,12 +570,15 @@ export default [
       await inPage(t, () => { const g = window.__GAME__, p = g.ctx.player.pos; g.ctx.bus.emit(g.E.ITEM_PICKUP, { item: 'fish', amount: 1, position: { x: p.x + 1, y: p.y, z: p.z + 1 } }); });
       await t.wait(120);
       t.assert(await inPage(t, () => !!document.querySelector('.fly-ico.is-on')), 'a fish flies to its counter');
+      await t.wait(700);
+      t.assert(await inPage(t, () => !document.querySelector('.fly-ico.is-on')), 'the fish lands and its icon goes (no stray fish by the counter)');
+      await guideInView(t, (fn, arg) => inPage(t, fn, arg), (ms) => t.wait(ms), 'desktop');
       // a celebration card (docks in combat; here it pops big)
       await inPage(t, () => window.__GAME__.ctx.ui.celebrate('card', 'holy'));
       await t.wait(450);
-      const card = await inPage(t, () => ({ on: !!document.querySelector('.cel-card.is-on.is-card'), title: document.querySelector('.cel-title')?.textContent, ts: window.__GAME__.ctx.game.timeScale, mode: window.__GAME__.mode }));
+      const card = await inPage(t, () => ({ on: !!document.querySelector('.cel-card.is-on.is-card'), title: document.querySelector('.cel-title')?.textContent, ts: window.__GAME__.ctx.game.loop?.timeScale, mode: window.__GAME__.mode }));
       t.assert(card.on && /holy/i.test(card.title ?? ''), `card "${card.title}"`);
-      t.assert(card.ts === 1 && card.mode === 'play', 'a celebration never pauses the game');
+      t.assert(card.ts === 1 && card.mode === 'play', `a celebration never pauses the game (ts ${card.ts}, mode ${card.mode})`);
       await shot(t, '31-card');
       await t.wait(2200);
       await inPage(t, () => window.__GAME__.ctx.ui.celebrate('sticker', 'bonk'));
@@ -545,13 +610,13 @@ export default [
       t.assert(await inPage(t, () => window.__GAME__.ctx.state.difficulty !== 'kitten'), '"I got this" keeps the difficulty');
       t.assert((await inPage(t, () => window.__GAME__.ctx.ui.offerKitten().then((v) => v))) === null, 'not offered twice');
       // results: warm scrim, count-up, the rank stamp
-      const resP = inPage(t, () => { window.__GAME__.ctx.ui.showResults({ levelId: 'meadow', time: 512, kittens: 2, kittensTotal: 3, letter: true, fish: 64, lives: 7, livesLost: 2 }); return true; });
+      const resP = inPage(t, () => { window.__GAME__.ctx.ui.results.autoContinue = false; window.__GAME__.ctx.ui.showResults({ levelId: 'meadow', time: 512, kittens: 2, kittensTotal: 3, letter: true, fish: 64, lives: 7, livesLost: 2 }); return true; });
       await resP; await t.wait(1600);
-      const res = await inPage(t, () => ({ title: document.querySelector('.res-title')?.textContent, word: document.querySelector('.res-word')?.textContent, bf: getComputedStyle(document.querySelector('.ui-results')).backdropFilter }));
-      t.assert(/clear/i.test(res.title ?? '') && /PURR/i.test(res.word ?? ''), `results "${res.title}" ${res.word}`);
+      const res = await inPage(t, () => ({ on: !!document.querySelector('.ui-results.is-on'), title: document.querySelector('.res-title')?.textContent, word: document.querySelector('.res-word')?.textContent, bf: getComputedStyle(document.querySelector('.ui-results')).backdropFilter }));
+      t.assert(res.on && /clear/i.test(res.title ?? '') && /PURR/i.test(res.word ?? ''), `results "${res.title}" ${res.word} (on ${res.on})`);
       t.assert(!res.bf || res.bf === 'none', 'no backdrop blur');
       await shot(t, '35-results');
-      await inPage(t, () => window.__GAME__.ctx.ui.results.close());
+      await inPage(t, () => window.__GAME__.ctx.ui.results.close()); await inPage(t, () => { window.__GAME__.ctx.ui.results.autoContinue = true; });
       await inPage(t, () => { const g = window.__GAME__; g.setMode('play'); g.ctx.state.settings.hudMode = 'calm'; });
     },
   },
@@ -789,7 +854,7 @@ export default [
       t.assert(dcd.cd, `Tumble starts the dodge slot cooldown (${JSON.stringify(dcd)})`);
       await t.wait(700);
       // ---- kitten ability: Q casts, the Q slot shows the conic sweep + whole seconds
-      await inPage(t, () => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi']; c.companions.setActive(['mochi']); });
+      await inPage(t, () => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi']; c.state.setFlag('meadow.mochi', true); c.companions.setActive(['mochi']); });
       await t.frames(30);
       await t.clearEvents();
       await t.tap('KeyQ');
@@ -859,7 +924,7 @@ export default [
       await inPage(t, () => { const g = window.__GAME__, c = g.ctx; c.state.settings.cursorSize = 2; c.state.settings.cursorContrast = true; });
       await t.frames(4);
       const c2 = await inPage(t, () => decodeURIComponent(window.__GAME__.ctx.renderer.domElement.style.cursor));
-      t.assert(/width="64"/.test(c2) && /#000000/.test(c2), 'cursor ×2 + high contrast');
+      t.assert(/width="64"/.test(c2) && /#2A1E18/i.test(c2), 'cursor ×2 + high contrast (WA: dark-cocoa ink, never black)');
       await inPage(t, () => { const c = window.__GAME__.ctx; c.state.settings.cursorSize = 1; c.state.settings.cursorContrast = false; });
       // ---- §10.4 HP pills: hit two foes, select one; pills show, the selection is outlined, no centre reticle
       await page.mouse.move(40, 40);
@@ -896,7 +961,7 @@ export default [
       await inPage(t, () => { const m = window.__GAME__.ctx.ui.menus; m.pop(); m.openSettings(); });
       await t.wait(400);
       const rows = await inPage(t, () => [...document.querySelectorAll('.srow .srow-lbl')].map((e) => e.textContent));
-      t.assert(rows.some((r) => /Cursor size/.test(r)) && rows.some((r) => /High-contrast/.test(r)) && rows.some((r) => /Auto-Riposte/.test(r)) && rows.some((r) => /Camera follows/.test(r)), `new settings rows (${rows.length})`);
+      t.assert(rows.some((r) => /Cursor size/.test(r)) && rows.some((r) => /High-contrast/.test(r)) && rows.some((r) => /Auto-Riposte/.test(r)) && rows.some((r) => /Camera (follows|lock)/.test(r)), `new settings rows (${rows.length}: K7 camLockMode row)`);
       t.assert(!rows.some((r) => /invert/i.test(r)), 'invertY hidden in iso');
       await inPage(t, () => window.__GAME__.ctx.ui.resume());
       await t.wait(300);
@@ -916,6 +981,7 @@ export default [
         t.assert(Math.abs(dom.guard[2] - 76) < 1 && dom.guard[0] < dom.attack[0] - 100, '🛡 76 px left of ⚔');
         t.assert(Object.values(dom).filter((d) => !d[3]).every((d) => d[2] >= 55.5), 'every visible button ≥ 56 px');
         t.assert(L.attack && L.meow, 'layout from touchLayout.js');
+        await guideInView(t, G, (ms) => pg.waitForTimeout(ms), 'landscape 844x390');
         // ---- hero clearance: no visible button + its 40 px dead ring reaches the disc around her on screen (layout.clearR:
         // 120 px from a 430 px short side, scaled below it)
         await pg.waitForTimeout(1200);
@@ -953,7 +1019,7 @@ export default [
         t.assert(!!(await untilM(() => window.__GAME__.events.includes('player:dodge'), null, 2000)), 'a swipe tumbles');
         await pg.waitForTimeout(700);
         // ---- the kitten portrait: drag aims (pad + ✕ chip + the fx indicator), release over ✕ cancels
-        await G(() => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi']; c.companions.setActive(['mochi']); });
+        await G(() => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi']; c.state.setFlag('meadow.mochi', true); c.companions.setActive(['mochi']); });
         await untilM(() => !document.querySelector('.tb-ability').classList.contains('is-hidden'), null, 6000);
         await pg.waitForTimeout(400);
         const ab = await G(() => { const r = document.querySelector('.tb-ability').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2, document.querySelector('.tb-ability').classList.contains('is-hidden')]; });
@@ -1112,6 +1178,7 @@ export default [
         t.assert(s.iso.catPx >= 27.5, `cat ≥ 28 px (${s.iso.catPx.toFixed(1)})`);
         await mshot('55-portrait');
         await m.fontAudit('portrait');
+        await guideInView(t, G, (ms) => pg.waitForTimeout(ms), 'portrait 390x844');
         // a long toast wraps inside the screen, and the lesson card under the strip steps aside while it is up
         await G(() => document.querySelector('.ui-hint')?.classList.add('is-on')); // a lesson card up, as in the tutorial
         await G(() => window.__GAME__.ctx.bus.emit('ui:toast', { text: 'Standing your ground fills Valor. Hold the Stand near enemies to block and counter their swings.', icon: 'valor' }));

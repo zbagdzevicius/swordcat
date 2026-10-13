@@ -19,18 +19,21 @@ export { addPlateArmour, addGauntlet } from './Armour.js';
 export { ACCESSORIES } from './Accessories.js';
 export { buildProp, buildCage, PROP_NAMES, PROP_MOUNTS } from './Props/ProcProps.js';
 export { CHEESE, M2_BUILDERS, M2_MOUNTS } from './Props/M2Props.js';
+export { WARM_BUILDERS, WARM_PROP_NAMES, squeakyBone, bigSqueakyBone, sackyFace, wobbleSmile } from './Props/WarmProps.js';
 export { registerMaterialPatcher, makeKitMaterial, kitMaterial, RM, HOLY_COLOR, setCharacterEnvMap, getCharacterEnvMap } from './materials.js';
 // ---- WarmToon (ART_WARM_SPEC §5, PERF H5; IMPLEMENTATION_PLAN §7.2 characters surface)
 export {
   makeToonMaterial, getToonMaterial, releaseToonMaterial, toonPoolStats, makeMetalMaterial, makeSteelMatcap, steelMatcap, softRamp,
   toonLib, toonUniforms, setToonRim, TOON, TOON_ENV, TOON_KEY, METAL_KEY, MESH_KINDS, meshKind, isSharedKit, envMapUsers, BLOB, TUFT,
 } from './materials.js';
+// ---- PERF H7 bake (enemies first, E7)
+export { bakeSkinned, bakeInPlace, sameInverses, BAKE } from './merge.js';
 export { buildOutline, outlineMaterial, outlineAllowed, inkFor, setOutlineAlpha, OUTLINE, OUTLINE_U } from './Outline.js';
 export { assetUrl, setAssetResolver, mulberry32, hashString, setCharDetail, charDetail, CHAR_Q, setCharQuality } from './util.js';
 // ---- in-game glue (M1)
 export { KittenView, MEME_CAPE, POSE_BLEND, GLANCE } from './KittenView.js';
 export { initCharacters, disposeCharacters, characterFrame, visualDt, furShellsForPreset, furIsoForPreset, KITTEN_CLOSE_SHARE, WIND } from './runtime.js';
-export { dressBeast, BEAST_LOOKS, holdOnBone, silhouette } from './BeastDress.js';
+export { dressBeast, BEAST_LOOKS, holdOnBone, silhouette, squeakyLook } from './BeastDress.js';
 export { cagedKitten } from './Cages.js';
 export { noteRender, envTick, envColorsFromLights, characterEnvColors, resetCharacterEnv, CHAR_ENV } from './runtime.js';
 export { STRANDS, FUR_RENDER_ORDER } from './Fur.js';
@@ -42,7 +45,7 @@ export {
   silhouetteParts, xrayMaterial, setProxyXray, updateReadability, topViewFactor, resolveTarget, XRAY, HIGHLIGHT, TOP_TINT, CLOSE,
 } from './Readability.js';
 export { READABILITY, TOP_VIEW } from './materials.js';
-export { FUR_LOD_ISO, FUR_VIEW, furLodShells } from './Fur.js';
+export { FUR_LOD_ISO, FUR_VIEW, FUR_CLOSE, furLodShells } from './Fur.js';
 
 // ---- §7.2 conveniences on any target (actor, KittenView, Kitten, dressed beast)
 import { resolveTarget as _rt } from './Readability.js';

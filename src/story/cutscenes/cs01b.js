@@ -10,10 +10,14 @@
 // level cannot switch its Chapter 1 zones on live (`level.refresh`), the wipe covers a quick reload at the barn door.
 import { FADE_COLOR } from '../../core/config.js';
 import { reward } from '../rewards.js';
+import { setTimeoutish } from '../tutorial.js';
 import { say, cam, wait, sfx } from './lib.js';
 import { outfit, buildMirror, buildSunPatch } from './rig.js';
 
 /** The barn set (in front of Marmalade's armoury barn door, `barn_door` (−14, −88.6)). */
+/** Seconds after the hand-off before the "Knight-ish!" friend card: the chapter card (3 s) + a breath. */
+export const FRIEND_AFTER_CARD = 3.4;
+
 export const BARN = Object.freeze({ clem: [-13.3, -87.4], chest: [-12.85, -88.75], helm: [-13.85, -87.0], mirror: [-13.1, -85.05], enter: [-11.7, -85.0] });
 /** Seconds of the closing cream wipe (ON §5.4). */
 export const SUIT_WIPE = 0.4;
@@ -109,7 +113,8 @@ export default {
     player: { spawn: 'barn_door', outfit: 'armour' },
     call: (ctx, cs, skipped, phase) => {
       if (phase === 'before') { cs.host?.barnSet?.(false); return; }
-      reward(ctx, 'friend', 'knight');
+      // the friend card waits for the Chapter 1 card (StoryManager CARD.dur 3 s) so the two never stack (WA §8.4 order)
+      setTimeoutish(ctx, FRIEND_AFTER_CARD, () => reward(ctx, 'friend', 'knight'));
     },
     ui: { letterbox: false, hud: true, fade: { alpha: 0, dur: SUIT_WIPE } },
     chapter: 1,

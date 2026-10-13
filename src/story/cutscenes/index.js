@@ -11,6 +11,7 @@ import cs03b from './cs03b.js';
 import d01 from './d01.js';
 import tutpearl from './tutpearl.js';
 import tutbow from './tutbow.js';
+import tutlook from './tutlook.js';
 import d02 from './d02.js';
 import cs04 from './cs04.js';
 import cs05 from './cs05.js';
@@ -27,7 +28,7 @@ import { gate_yard, gate_back, gate_pin, gate_open } from './gate.js';
 
 export { ALIASES, PLACEHOLDER_ENDS, PLACEHOLDER_DUR, placeholderScene, nextD04 } from './registry.js';
 
-/** Authored scenes (M1: the prologue and Chapter 1; M2: Acts I–II, forest → town → gate; Phase W: cs01b, tutbow). */
-export const CUTSCENES = Object.freeze({ cs00, cs01, cs01b, g01, cs02, cs03, cs03b, d01, tutpearl, tutbow,
+/** Authored scenes (M1: the prologue and Chapter 1; M2: Acts I–II, forest → town → gate; Phase W: cs01b, tutbow, tutlook). */
+export const CUTSCENES = Object.freeze({ cs00, cs01, cs01b, g01, cs02, cs03, cs03b, d01, tutpearl, tutbow, tutlook,
   d02, cs04, cs05, d03, cs06, d04tofu, d04earlgrey, d04clover, cs07, d06, cs08, g02, cs09, cs10,
   gate_yard, gate_back, gate_pin, gate_open });

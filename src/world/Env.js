@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { clamp, damp } from '../core/math.js';
+import { SHADOW_ONLY_LAYER } from '../core/depth.js';
 import { SkyDome } from './Sky.js';
 import { HFOG, withHeightFog, fogFactor } from './HeightFog.js';
 import { CAMERA, qualityShadowsOn } from '../core/config.js';
@@ -44,25 +45,30 @@ export const EXPOSURE = Object.freeze({ golden: 0.06, ease: 0.25, min: 0.8, max:
  * toneMappingExposure, `rim` ('day' | 'night' | 'hush' | hex) → ENV_U.uRim, `hero` → her glow strength, `lamps` →
  * ENV_U.uLampStr (WA §2.3a: 1 for twilight / night / keep, 0.35 gate dusk, 0 elsewhere).
  * Fog densities are the gameplay values (CONTROLS / ART D13); cutscene-only presets set their own.
+ * `forest_day` and `gate_dusk` were lifted after the `world:art` frame audit (iso luma 0.36 / 0.31 → ≥ 0.50; WA §2.3a):
+ * more hemisphere and exposure, a paler sun, bluer sky fill, a higher gate sun (shorter, lighter shadows), a pink haze.
+ * Integrator pass (core art:warm, 2026-10-12): town_occupied / hub_gold / hub_hush, forest_twilight, bog_dusk and keep_*
+ * lifted the same way (hemi, lighter hemiGround, exposure, softer shadowI; bog: a higher sun + a sage haze so its long
+ * tree shadows stop pooling teal); meadow_day exposure −0.03 (luma sat on the 0.60 band top).
  */
 export const ENV_PRESETS = {
-  meadow_day:      { fogColor: '#F6E4C0', fogDensity: 0.045, fogLow: '#EED6A6', skyTop: '#8FCBF2', hemiSky: '#C4D9FF', hemiGround: '#C9A46A', hemi: 1.30, sunColor: '#FFE7C2', sun: 2.4, sunElev: 0.85, sunAz: -0.7, grade: 'none', wind: 0.6, env: 0.25, shadowI: 0.60, exposure: 1.00, rim: 'day', hero: 0.40, lamps: 0 },
+  meadow_day:      { fogColor: '#F6E4C0', fogDensity: 0.045, fogLow: '#EED6A6', skyTop: '#8FCBF2', hemiSky: '#C4D9FF', hemiGround: '#C9A46A', hemi: 1.30, sunColor: '#FFE7C2', sun: 2.4, sunElev: 0.85, sunAz: -0.7, grade: 'none', wind: 0.6, env: 0.25, shadowI: 0.60, exposure: 0.95, rim: 'day', hero: 0.40, lamps: 0 },
   meadow_morning:  { fogColor: '#FFE6CC', fogDensity: 0.040, fogLow: '#F2D3A8', skyTop: '#9FD0F5', hemiSky: '#CBD8FF', hemiGround: '#D4A874', hemi: 1.25, sunColor: '#FFE0B0', sun: 2.3, sunElev: 0.40, sunAz: -1.9, grade: 'none', wind: 0.5, env: 0.25, shadowI: 0.55, exposure: 1.02, rim: 'day', hero: 0.40, lamps: 0 },
-  meadow_evening:  { fogColor: '#FFD4AA', fogDensity: 0.020, fogLow: '#F4BE92', skyTop: '#A9A8E6', hemiSky: '#B9B8F0', hemiGround: '#D89A6A', hemi: 1.20, sunColor: '#FFB878', sun: 2.5, sunElev: 0.25, sunAz: -1.9, grade: 'none', wind: 0.5, env: 0.25, shadowI: 0.55, exposure: 1.00, rim: '#FFD8A0', hero: 0.35, lamps: 0 },
+  meadow_evening:  { fogColor: '#FFD4AA', fogDensity: 0.020, fogLow: '#F4BE92', skyTop: '#A9A8E6', hemiSky: '#B9B8F0', hemiGround: '#D89A6A', hemi: 1.40, sunColor: '#FFB878', sun: 2.5, sunElev: 0.25, sunAz: -1.9, grade: 'none', wind: 0.5, env: 0.25, shadowI: 0.55, exposure: 1.04, rim: '#FFD8A0', hero: 0.35, lamps: 0 },
   meadow_giggle:   { fogColor: '#CDBDF2', fogDensity: 0.062, fogLow: '#BFAFEA', skyTop: '#B9A9E8', hemiSky: '#D9CCFF', hemiGround: '#C9A0B0', hemi: 1.20, sunColor: '#FFD8E8', sun: 1.6, sunElev: 0.22, sunAz: -1.9, grade: 'none', wind: 0.9, env: 0.25, shadowI: 0.50, exposure: 1.02, rim: '#FFD8A0', hero: 0.6, lamps: 0 },   // CS-02 only
   meadow_night:    { fogColor: '#5A64A8', fogDensity: 0.050, fogLow: '#525C9E', skyTop: '#2E3A7E', hemiSky: '#9CB0F4', hemiGround: '#4A4478', hemi: 1.15, sunColor: '#C6D6FF', sun: 0.9, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.4, env: 0.25, shadowI: 0.50, exposure: 1.08, rim: 'night', hero: 1, lamps: 1 },   // callbacks only
-  forest_day:      { fogColor: '#DCE8BE', fogDensity: 0.060, fogLow: '#C6DA98', skyTop: '#9AD4E8', hemiSky: '#B9D8F5', hemiGround: '#A08A52', hemi: 1.30, sunColor: '#FFE2A8', sun: 2.3, sunElev: 0.90, sunAz: -0.5, grade: 'none', wind: 0.4, env: 0.25, shadowI: 0.60, exposure: 1.00, rim: 'day', hero: 0.40, lamps: 0 },
-  forest_twilight: { fogColor: '#6A66B4', fogDensity: 0.055, fogLow: '#5A6E96', skyTop: '#3A3E96', hemiSky: '#B0B6F4', hemiGround: '#3E6A58', hemi: 1.25, sunColor: '#D6E6FF', sun: 0.9, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.3, env: 0.25, shadowI: 0.50, exposure: 1.10, rim: 'night', hero: 1, lamps: 1 },
-  town_occupied:   { fogColor: '#F0DEC0', fogDensity: 0.040, fogLow: '#E4CCA6', skyTop: '#86C6EE', hemiSky: '#C8C8F0', hemiGround: '#B08A62', hemi: 1.20, sunColor: '#FFE0B4', sun: 2.3, sunElev: 0.75, sunAz: -0.9, grade: 'none', wind: 0.4, env: 0.25, shadowI: 0.60, exposure: 1.00, rim: 'day', hero: 0.40, lamps: 0 },
-  hub_gold:        { fogColor: '#FFE0B4', fogDensity: 0.025, fogLow: '#F6CF9C', skyTop: '#9CC8F0', hemiSky: '#CBD3FF', hemiGround: '#D2A070', hemi: 1.25, sunColor: '#FFD9A6', sun: 2.6, sunElev: 0.45, sunAz: -1.6, grade: 'none', wind: 0.4, env: 0.25, shadowI: 0.60, exposure: 1.00, rim: 'day', hero: 0.35, lamps: 0 },
-  hub_hush:        { fogColor: '#C6C0E4', fogDensity: 0.050, fogLow: '#B4ACD8', skyTop: '#8C96D6', hemiSky: '#D0D4EE', hemiGround: '#8E8A9A', hemi: 1.30, sunColor: '#F2E2F0', sun: 1.3, sunElev: 0.70, sunAz: -0.7, grade: 'grey', wind: 0.5, env: 0.25, shadowI: 0.45, exposure: 1.02, rim: 'hush', hero: 0.60, lamps: 0 },
+  forest_day:      { fogColor: '#DCE8BE', fogDensity: 0.060, fogLow: '#C6DA98', skyTop: '#9AD4E8', hemiSky: '#C0DCFF', hemiGround: '#B0A47C', hemi: 1.82, sunColor: '#FFF0D0', sun: 2.4, sunElev: 0.90, sunAz: -0.5, grade: 'none', wind: 0.4, env: 0.25, shadowI: 0.45, exposure: 1.15, rim: 'day', hero: 0.40, lamps: 0 },
+  forest_twilight: { fogColor: '#6A66B4', fogDensity: 0.055, fogLow: '#5A6E96', skyTop: '#3A3E96', hemiSky: '#B0B6F4', hemiGround: '#6A9484', hemi: 2.25, sunColor: '#D6E6FF', sun: 1.2, sunElev: 0.9, sunAz: 0.6, grade: 'night', wind: 0.3, env: 0.25, shadowI: 0.50, exposure: 1.15, rim: 'night', hero: 1, lamps: 1 },
+  town_occupied:   { fogColor: '#F0DEC0', fogDensity: 0.040, fogLow: '#E4CCA6', skyTop: '#86C6EE', hemiSky: '#C8C8F0', hemiGround: '#D8BC94', hemi: 1.95, sunColor: '#FFE0B4', sun: 2.3, sunElev: 0.75, sunAz: -0.9, grade: 'none', wind: 0.4, env: 0.25, shadowI: 0.40, exposure: 1.12, rim: 'day', hero: 0.40, lamps: 0 },
+  hub_gold:        { fogColor: '#FFE0B4', fogDensity: 0.025, fogLow: '#F6CF9C', skyTop: '#9CC8F0', hemiSky: '#CBD3FF', hemiGround: '#E4BE90', hemi: 1.90, sunColor: '#FFD9A6', sun: 2.6, sunElev: 0.45, sunAz: -1.6, grade: 'none', wind: 0.4, env: 0.25, shadowI: 0.42, exposure: 1.12, rim: 'day', hero: 0.35, lamps: 0 },
+  hub_hush:        { fogColor: '#C6C0E4', fogDensity: 0.030, fogLow: '#B4ACD8', skyTop: '#8C96D6', hemiSky: '#D0D4EE', hemiGround: '#B8B0C6', hemi: 1.75, sunColor: '#F2E2F0', sun: 1.3, sunElev: 0.70, sunAz: -0.7, grade: 'grey', wind: 0.5, env: 0.25, shadowI: 0.40, exposure: 1.08, rim: 'hush', hero: 0.60, lamps: 0 },
   ending_gold:     { fogColor: '#FFE8C8', fogDensity: 0.010, fogLow: '#FFD8A8', skyTop: '#9CC8F0', hemiSky: '#D0DCFF', hemiGround: '#E0B080', hemi: 1.30, sunColor: '#FFD9A6', sun: 2.8, sunElev: 0.35, sunAz: -1.6, grade: 'gold', wind: 0.4, env: 0.25, shadowI: 0.60, exposure: 1.00, rim: 'day', hero: 0.35, lamps: 0 },
-  gate_dusk:       { fogColor: '#FFC09A', fogDensity: 0.050, fogLow: '#F2A88A', skyTop: '#8C7ACB', hemiSky: '#9C9AE0', hemiGround: '#C07A5A', hemi: 1.15, sunColor: '#FF9E5E', sun: 2.4, sunElev: 0.25, sunAz: -2.2, grade: 'none', wind: 0.8, env: 0.25, shadowI: 0.55, exposure: 1.00, rim: '#FFD8A0', hero: 0.40, lamps: 0.35 },
+  gate_dusk:       { fogColor: '#F6CCB8', fogDensity: 0.050, fogLow: '#EEBCA8', skyTop: '#8C7ACB', hemiSky: '#C8D4FF', hemiGround: '#D0B0A0', hemi: 1.60, sunColor: '#FFD8B8', sun: 2.4, sunElev: 0.50, sunAz: -2.2, grade: 'none', wind: 0.8, env: 0.25, shadowI: 0.45, exposure: 1.10, rim: '#FFD8A0', hero: 0.40, lamps: 0.35 },
   bog:             { fogColor: '#A8E0D0', fogDensity: 0.058, fogLow: '#86CDBB', skyTop: '#86CCE6', hemiSky: '#A8E0E0', hemiGround: '#6E7A4A', hemi: 1.30, sunColor: '#F4F0C0', sun: 1.9, sunElev: 0.75, sunAz: -0.6, grade: 'none', wind: 0.3, env: 0.25, fogFalloff: 1.2, shadowI: 0.55, exposure: 1.00, rim: '#FFF0C6', hero: 0.35, lamps: 0 },   // day variant (Wardrobe / debug)
-  bog_dusk:        { fogColor: '#86C2C8', fogDensity: 0.058, fogLow: '#6AAFA8', skyTop: '#7A68C8', hemiSky: '#B8A8F0', hemiGround: '#3E7A66', hemi: 1.35, sunColor: '#FFCF98', sun: 1.6, sunElev: 0.28, sunAz: -0.6, grade: 'none', wind: 0.3, env: 0.25, fogFalloff: 1.2, shadowI: 0.50, exposure: 1.05, rim: '#FFF0C6', hero: 1, lamps: 1 },
-  keep_twilight:   { fogColor: '#8A74B0', fogDensity: 0.042, fogLow: '#8E6A8A', skyTop: '#3E3A8E', hemiSky: '#CDB8F4', hemiGround: '#6A4E5E', hemi: 1.45, sunColor: '#BFEDE6', sun: 1.0, sunElev: 0.55, sunAz: 0.4, grade: 'night', wind: 0.5, env: 0.25, shadowI: 0.45, exposure: 1.08, rim: 'night', hero: 1, lamps: 1 },
-  keep_storm:      { fogColor: '#6E5480', fogDensity: 0.042, fogLow: '#7A5A6A', skyTop: '#3E3270', hemiSky: '#C2AEE2', hemiGround: '#5A4048', hemi: 1.45, sunColor: '#FFC488', sun: 0.9, sunElev: 0.35, sunAz: 0.4, grade: 'none', wind: 1.0, env: 0.25, shadowI: 0.45, exposure: 1.05, rim: 'night', hero: 1, lamps: 1 },   // Barkus P3 only
-  keep_cellar:     { fogColor: '#A88AB0', fogDensity: 0.028, fogLow: '#9A7A96', skyTop: '#5A4E9A', hemiSky: '#F2D2B4', hemiGround: '#7A5A6A', hemi: 1.55, sunColor: '#FFD6A0', sun: 0.8, sunElev: 0.9, sunAz: 0.4, grade: 'night', wind: 0, env: 0.25, shadowI: 0.40, exposure: 1.10, rim: '#FFC46B', hero: 1, lamps: 1 },   // WA29 toy cellar
+  bog_dusk:        { fogColor: '#A6CCB0', fogDensity: 0.058, fogLow: '#9EC4A0', skyTop: '#7A68C8', hemiSky: '#E0C4E0', hemiGround: '#B0B48A', hemi: 2.30, sunColor: '#FFBE7A', sun: 2.0, sunElev: 0.95, sunAz: -0.6, grade: 'none', wind: 0.3, env: 0.25, fogFalloff: 1.2, shadowI: 0.18, exposure: 1.15, rim: '#FFF0C6', hero: 1, lamps: 1 },
+  keep_twilight:   { fogColor: '#8A74B0', fogDensity: 0.042, fogLow: '#8E6A8A', skyTop: '#3E3A8E', hemiSky: '#CDB8F4', hemiGround: '#9A7E8E', hemi: 1.95, sunColor: '#BFEDE6', sun: 1.0, sunElev: 0.55, sunAz: 0.4, grade: 'night', wind: 0.5, env: 0.25, shadowI: 0.45, exposure: 1.15, rim: 'night', hero: 1, lamps: 1 },
+  keep_storm:      { fogColor: '#6E5480', fogDensity: 0.042, fogLow: '#7A5A6A', skyTop: '#3E3270', hemiSky: '#C2AEE2', hemiGround: '#8A6E78', hemi: 2.30, sunColor: '#FFC488', sun: 1.3, sunElev: 0.35, sunAz: 0.4, grade: 'none', wind: 1.0, env: 0.25, shadowI: 0.45, exposure: 1.15, rim: 'night', hero: 1, lamps: 1 },   // Barkus P3 only
+  keep_cellar:     { fogColor: '#A88AB0', fogDensity: 0.028, fogLow: '#9A7A96', skyTop: '#5A4E9A', hemiSky: '#F2D2B4', hemiGround: '#7A5A6A', hemi: 1.85, sunColor: '#FFD6A0', sun: 0.8, sunElev: 0.9, sunAz: 0.4, grade: 'night', wind: 0, env: 0.25, shadowI: 0.40, exposure: 1.15, rim: '#FFC46B', hero: 1, lamps: 1 },   // WA29 toy cellar
   sky_night:       { fogColor: '#4A5498', fogDensity: 0.020, fogLow: '#4A5498', skyTop: '#24306E', hemiSky: '#A8B4F0', hemiGround: '#2A2E52', hemi: 1.05, sunColor: '#D6E2FF', sun: 0.9, sunElev: 0.80, sunAz: 0.5, grade: 'night', wind: 1.2, env: 0.25, shadowI: 0.50, exposure: 1.05, rim: 'night', hero: 1, lamps: 0 },
   sky_sunrise:     { fogColor: '#FFE2C0', fogDensity: 0.006, fogLow: '#FFE2C0', skyTop: '#9CCBF0', hemiSky: '#D0DCFF', hemiGround: '#E0B080', hemi: 1.25, sunColor: '#FFD49A', sun: 2.5, sunElev: 0.25, sunAz: -1.6, grade: 'gold', wind: 1.0, env: 0.25, shadowI: 0.60, exposure: 1.00, rim: 'day', hero: 0.20, lamps: 0 },
 };
@@ -223,7 +229,7 @@ export class Env {
     /** stage 1 shadow fit state + the stage 2 cache (StaticShadow) */
     this._fit = { halfX: SHADOW_HALF, halfY: SHADOW_HALF, cx: 0, cy: 0, shrinkT: 0, ok: false };
     this.staticShadow = null;
-    /** 1 = dynamic footprint fit (S3), 2 = cached statics-only map (S5; needs actor blobs + castShadow=false) */
+    /** 1 = dynamic footprint fit (S3), 2 = cached statics-only map (S5; static-caster layer only, actors ride fx blobs) */
     this.shadowStage = SHADOW_STAGE;
   }
 
@@ -293,6 +299,7 @@ export class Env {
     sh.bias = -0.0005; sh.normalBias = 0.03; sh.radius = 1;
     Object.assign(sh.camera, { left: -SHADOW_HALF, right: SHADOW_HALF, top: SHADOW_HALF, bottom: -SHADOW_HALF, near: 1, far: 90 });
     sh.camera.updateProjectionMatrix();
+    sh.camera.layers.enable(SHADOW_ONLY_LAYER);   // the kittens' shadow-only proxies (core/depth.js, PERF §1.2)
     // K3: 'none' | 'sun' (the retired boolean still reads right); Low has no map at all (blobs + vertex AO)
     this.sunLight.castShadow = q == null ? true : qualityShadowsOn(q) && size > 0;
     scene.add(this.hemiLight, this.sunLight, this.sunLight.target);
@@ -393,7 +400,7 @@ export class Env {
     // ART §2.5: the clear colour is the fog colour (never the old grey)
     const bg = this.ctx.scene.background;
     if (bg?.isColor) bg.copy(c.fogColor); else this.ctx.scene.background = c.fogColor.clone();
-    // per-level lighting from above (`level.cam.light`: { hemiMul, sunMul, sunAz, hemiSky, hemiGround } per preset, or
+    // per-level lighting from above (`level.cam.light`: { hemiMul, sunMul, sunAz, sunElev, shadowI, hemiSky, hemiGround } per preset, or
     // for every preset), mixed in with the focus-fog mode so cutscenes and Meme Cam keep the authored eye-level look
     const iso = this._isoLight(), mix = this._focusMode ?? 0;
     const isoMul = (k) => 1 + ((iso?.[k] ?? 1) - 1) * mix;
@@ -407,7 +414,9 @@ export class Env {
       const sun = c.sun * isoMul('sunMul');
       this.sunLight.color.copy(c.sunColor); this.sunLight.intensity = sun;
       // stays visible at 0: hiding the light would change the light count and recompile every lit program
-      this.sunLight.shadow.intensity = clamp(c.shadowI, 0, 1);
+      // a row's `shadowI` softens the cast shadows from above (the low-sun prologue field read overcast from the lens)
+      const sI = Number.isFinite(iso?.shadowI) ? c.shadowI + (iso.shadowI - c.shadowI) * mix : c.shadowI;
+      this.sunLight.shadow.intensity = clamp(sI, 0, 1);
     }
     const r = this.ctx.renderer;
     if (r && 'toneMappingExposure' in r) r.toneMappingExposure = clamp(this._exposure ?? c.exposure, EXPOSURE.min, EXPOSURE.max);
@@ -435,7 +444,7 @@ export class Env {
   _isoLight() {
     const L = this.ctx.levels?.current?.cam?.light;
     if (!L) return null;
-    return this._presetRow(L) ?? (L.hemiMul != null || L.sunAz != null || L.sunMul != null || L.envMul != null ? L : null);
+    return this._presetRow(L) ?? (L.hemiMul != null || L.sunAz != null || L.sunMul != null || L.envMul != null || L.sunElev != null || L.shadowI != null ? L : null);
   }
 
   /** The level's default iso yaw (never a zone hint: X7). */
@@ -447,12 +456,14 @@ export class Env {
 
   /**
    * Unit vector toward the sun. Cutscenes / classic use the preset azimuth; the iso view (focus mode) uses the level
-   * row's `sunAz` if authored, else `level yaw + 1.75` (night + 1.20), so shadows fall down-right across the screen.
+   * row's `sunAz` if authored, else `level yaw + 1.75` (night + 1.20), so shadows fall down-right across the screen;
+   * a row's `sunElev` raises (never lowers) the sun from above so a low morning sun's long off-screen shadows stay short.
    */
   sunDir(out = new THREE.Vector3()) {
-    const el = this.cur.sunElev, iso = this._isoLight(), m = this.ctx.params?.cam === 'classic' ? 0 : (this._focusMode ?? 0);
-    let az = this.cur.sunAz;
+    const iso = this._isoLight(), m = this.ctx.params?.cam === 'classic' ? 0 : (this._focusMode ?? 0);
+    let el = this.cur.sunElev, az = this.cur.sunAz;
     if (m > 0) {
+      if (Number.isFinite(iso?.sunElev) && iso.sunElev > el) el += (iso.sunElev - el) * m;
       const isoAz = iso && Number.isFinite(iso.sunAz) ? iso.sunAz : isoSunAz(this._levelYaw(), this.cur.hero >= 0.99);
       az = this.cur.sunAz + angDiff(isoAz, this.cur.sunAz) * m;
     }
@@ -531,6 +542,33 @@ export class Env {
 
   /** Patch now (LevelManager calls this before pre-compiling a new level). */
   patchScene() { this._patchScene(); }
+
+  /**
+   * PERF §3.3 warm set "every shadow-depth variant": one shadow render (under the load veil) with the sun's box
+   * widened to the whole level (`half` m around `center`), so every caster's depth program is built now instead of on
+   * the frame it first enters the footprint box. Restores the box; the next frame re-renders the real map.
+   * @param {THREE.WebGLRenderer} renderer @param {THREE.Camera} camera @param {number} half @param {THREE.Vector3} [center]
+   */
+  prewarmShadows(renderer, camera, half, center = _w.set(0, 0, 0)) {
+    const L = this.sunLight;
+    if (!L?.castShadow || typeof renderer?.render !== 'function' || !camera || !(half > 0)) return false;
+    const sc = L.shadow.camera, keep = [sc.left, sc.right, sc.top, sc.bottom, sc.far], pos = L.position.clone(), tgt = L.target.position.clone();
+    try {
+      const dir = this.sunDir(_v), h = half * 1.5;
+      sc.left = -h; sc.right = h; sc.top = h; sc.bottom = -h; sc.far = Math.max(sc.far, h * 3); sc.updateProjectionMatrix();
+      L.target.position.copy(center); L.target.updateMatrixWorld();
+      L.position.copy(center).addScaledVector(dir, h * 1.5);
+      L.updateMatrixWorld();
+      renderer.shadowMap.needsUpdate = true;
+      renderer.render(this.ctx.scene, camera);
+    } finally {
+      [sc.left, sc.right, sc.top, sc.bottom, sc.far] = keep; sc.updateProjectionMatrix();
+      L.position.copy(pos); L.target.position.copy(tgt); L.target.updateMatrixWorld(); L.updateMatrixWorld();
+      renderer.shadowMap.needsUpdate = true;
+      this.staticShadow?.invalidate?.();
+    }
+    return true;
+  }
 
   dispose() {
     for (const off of this._offs) off();

@@ -249,7 +249,7 @@ export function headFurMask(p, region, eyeScale = 1) {
   m *= smoothstep(0.018, 0.034, _d3(p, FACE.nose));
   m *= smoothstep(0.012, 0.03, _d3(p, FACE.mouth));
   let len = 1;
-  if (region === 'cheek') len = 1.38;
+  if (region === 'cheek') len = 1.2;   // 1.38 stacked visible shell rings over the face in close-ups (story 10c)
   else if (region === 'muzzle') len = 0.32;
   else {
     len = lerp(0.35, 1.0, smoothstep(0.03, 0.075, _d3(p, FACE.muzzle)));
@@ -302,8 +302,10 @@ void main() {
 const FUR_FRAG = /* glsl */`
 uniform sampler2D uStrands;
 uniform float uSheen;
-uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade, uEdgeStart, uFringe;
-uniform vec3 uTipTint, uRimColor, uHolyColor, uHighlight;
+uniform float uTiling, uRimStrength, uHoly, uAmbMul, uSunMul, uRootDark, uFlash, uDensityBoost, uStretch, uCells, uStreak, uEdgeFade, uEdgeStart, uFringe, uCloseEdge, uCloseThin;
+uniform vec2 uCloseRange;
+uniform vec3 uTipTint, uRimColor, uHolyColor, uHighlight, uWarmFill;
+uniform float uWarmFillK;
 varying vec3 vObjPos, vObjN, vWN, vWPos, vCoat;
 varying float vH, vMask;
 #include <common>
@@ -335,7 +337,14 @@ void main() {
     // edge-on, each outer shell's silhouette shows as a ring ("onion layers"): fade the outer shells there so the
     // silhouette turns into a soft fringe instead
     float ndv = abs(dot(normalize(vWN), normalize(cameraPosition - vWPos)));
-    alpha *= mix(1.0, smoothstep(0.02, uEdgeFade, ndv), smoothstep(uEdgeStart, uEdgeStart + 0.5, vH));
+    // close-ups (dialogue cameras ~1-2.5 m): the shells' screen spacing grows and the combed outer shells of the
+    // cheek ruff / muzzle stack into rings, a blurry halo smudge over the face (story 10c / 11c). Near the lens the
+    // edge fade reaches further in and starts lower, so the face keeps a crisp silhouette with a soft fringe
+    float nearK = 1.0 - smoothstep(uCloseRange.x, uCloseRange.y, length(cameraPosition - vWPos));
+    float eFade = mix(uEdgeFade, max(uEdgeFade, uCloseEdge), nearK), eStart = mix(uEdgeStart, min(uEdgeStart, 0.1), nearK);
+    alpha *= mix(1.0, smoothstep(0.02, eFade, ndv), smoothstep(eStart, eStart + 0.5, vH));
+    // ...and the outer shells thin out: their intersections with the skull / cheek shells are the concentric rings
+    alpha *= 1.0 - nearK * uCloseThin * smoothstep(0.4, 1.0, vH);
     if (alpha < 0.06) discard;   // nearly invisible tips must not write depth over what is behind them
   }
   vec3 N = normalize(vWN);
@@ -346,6 +355,9 @@ void main() {
   #if NUM_HEMI_LIGHTS > 0
   for (int i = 0; i < NUM_HEMI_LIGHTS; i++) irr += getHemisphereLightIrradiance(hemisphereLights[i], nView);
   #endif
+  // warm fill (WARM_ADVENTURE WA4): the fur's strong ambient term took the blue / plum sky colour of twilight presets,
+  // a blue-grey haze over cream muzzles and grey coats in close-ups; keep its brightness, pull its hue to warm cream
+  irr = mix(irr, uWarmFill * dot(irr, vec3(0.2126, 0.7152, 0.0722)), uWarmFillK);
   vec3 direct = vec3(0.0);
   #if NUM_DIR_LIGHTS > 0
   for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
@@ -377,6 +389,23 @@ void main() {
 }`;
 
 /**
+ * Close-up fringe (story close-ups): within `near` m of the lens the edge-on fade reaches `edgeFade` (n·v) and starts
+ * at shell 0.1, and the outer shells thin out by `thin`; it blends back to the material's own edge fade by `far` m (gameplay / Meme Cam distances unchanged).
+ */
+export const FUR_CLOSE = Object.freeze({ near: 2.0, far: 4.0, edgeFade: 0.7, thin: 0.85 });
+
+/**
+ * Warm fill (WARM_ADVENTURE WA4): the fur's ambient / hemisphere irradiance keeps its luminance but takes this warm
+ * cream hue by `k` (0 = the raw sky colour). The rim is the same warm cream (#FFE9D2).
+ */
+export const FUR_WARM_FILL = Object.freeze({ color: '#FFE9D2', k: 0.6 });
+/** Linear colour of `hex` scaled to luminance 1 (the fill multiplies it by the irradiance luminance). */
+function warmFillColor(hex) {
+  const c = new THREE.Color(hex), l = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  return c.multiplyScalar(1 / Math.max(l, 1e-3));
+}
+
+/**
  * Shell fur material. One per kitten (uniforms: shells, holy, drag). Programs are shared.
  * @param {{ baked?: boolean, len?: number, tiling?: number, shells?: number, rim?: number }} o
  */
@@ -393,6 +422,8 @@ export function makeFurMaterial(o = {}) {
       uComb: { value: o.comb ?? 1.6 }, uStretch: { value: o.stretch ?? 0.65 },
       uCells: { value: STRANDS.cells }, uStreak: { value: o.streak ?? 0.09 }, uEdgeFade: { value: o.edgeFade ?? 0.35 },
       uEdgeStart: { value: o.edgeStart ?? 0.35 }, uFringe: { value: o.fringe ?? 1 },
+      uCloseEdge: { value: o.closeEdge ?? FUR_CLOSE.edgeFade }, uCloseThin: { value: o.closeThin ?? FUR_CLOSE.thin },
+      uWarmFill: { value: warmFillColor(FUR_WARM_FILL.color) }, uWarmFillK: { value: o.warmFill ?? FUR_WARM_FILL.k }, uCloseRange: { value: new THREE.Vector2(FUR_CLOSE.near, FUR_CLOSE.far) },
     }]),
     vertexShader: FUR_VERT, fragmentShader: FUR_FRAG,
   });
@@ -418,12 +449,14 @@ export const FUR_RENDER_ORDER = 1;
 /**
  * A fur surface: base skin layer + N shells.
  * Rigid parts use an InstancedMesh (instance i = shell i; instance 0 = skin).
- * Skinned parts (tail) bake MAX shells into the geometry with an `aShell` attribute and use drawRange.
+ * Skinned parts (tail) bake their shell copies into the geometry with an `aShell` attribute and use drawRange.
  */
 export class FurPart {
   /**
    * @param {THREE.BufferGeometry} geo  must carry position, normal, color, fur, rmse (+ skinIndex/skinWeight if skinned)
-   * @param {object} o { furMat, bakedMat, sheenMat, tier, skeleton?, maxShells? }
+   * @param {object} o { furMat, bakedMat, sheenMat, tier, skeleton?, maxShells?, shells?, bake? }: `bake` (skinned
+   *   parts) = shell copies baked at build (default: the shell count). A play-LOD kitten bakes its iso count (0) and
+   *   reserve()s the close-up copies in idle time (PERF H4: no hidden shell geometry built at spawn).
    */
   constructor(geo, o) {
     this.tier = o.tier || 'kitten';
@@ -435,10 +468,10 @@ export class FurPart {
       this.furMat = o.bakedMat;
       this.idxPerShell = geo.index.count;
       // bake only the shells the current quality draws (Low: the base layer alone, not 25 copies on the GPU);
-      // setShells() re-bakes up to maxShells the first time more are asked for (quality raised, Meme Cam)
+      // setShells() re-bakes (to the current close-up count, or more) the first time more are asked for
       this._src = geo;
       this.baked = true;
-      this.bakedShells = clamp(Math.round(o.shells ?? shellsFor(this.tier)), 0, this.maxShells);
+      this.bakedShells = clamp(Math.round(o.bake ?? o.shells ?? shellsFor(this.tier)), 0, this.maxShells);
       const g = bakeShells(geo, this.bakedShells);
       this.mesh = new THREE.SkinnedMesh(g, this.furMat);
       this.mesh.bind(o.skeleton, o.bindMatrix || new THREE.Matrix4());
@@ -475,12 +508,26 @@ export class FurPart {
     n = clamp(Math.round(n), 0, this.maxShells);
     if (n === this.shells) return;
     this.shells = n; this._lodN = -1;
-    if (this.baked && n > this.bakedShells) this._rebake(this.maxShells);
+    if (this.baked && n > this.bakedShells) this._rebake(Math.min(this.maxShells, Math.max(n, shellsFor(this.tier))));
     const mat = n > 0 ? this.furMat : this.sheenMat;
     this.mesh.material = mat;
     if (n > 0) mat.uniforms.uShells.value = n;
     if (this.baked) this.mesh.geometry.setDrawRange(0, this.idxPerShell * (n + 1));
     else this.mesh.count = n + 1;
+  }
+  /**
+   * Make sure a baked part holds at least `n` shell copies (idle-time pre-bake, so the close-up frame never re-bakes).
+   * No-op for instanced parts or when enough copies are baked already.
+   * @param {number} n
+   * @returns {boolean} true when it re-baked
+   */
+  reserve(n) {
+    n = clamp(Math.round(n), 0, this.maxShells);
+    if (!this.baked || n <= this.bakedShells) return false;
+    this._rebake(n);
+    this._lodN = -1;
+    if (this.shells >= 0) this.mesh.geometry.setDrawRange(0, this.idxPerShell * (this.shells + 1));
+    return true;
   }
   /** Re-bake the skinned shell copies for up to `n` shells (the old GPU buffers are released). */
   _rebake(n) {
@@ -493,11 +540,12 @@ export class FurPart {
    * Swap the surface geometry (the close-up set replaces the play-detail one, ART §6.4). Baked parts re-bake the copies
    * they hold; instanced parts just point at the new base geometry. The old geometry is disposed.
    * @param {THREE.BufferGeometry} geo
+   * @param {number} [bake] baked parts: shell copies to bake from the new source (never fewer than held now)
    */
-  setSource(geo) {
+  setSource(geo, bake = 0) {
     if (this.baked) {
       const oldSrc = this._src; this._src = geo; this.idxPerShell = geo.index.count;
-      this._rebake(this.bakedShells);
+      this._rebake(clamp(Math.round(Math.max(bake, this.bakedShells)), 0, this.maxShells));
       if (oldSrc && oldSrc !== geo) oldSrc.dispose();
     } else {
       const old = this.mesh.geometry; this.mesh.geometry = geo;

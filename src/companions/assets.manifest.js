@@ -1,6 +1,6 @@
 // src/companions/assets.manifest.js  (owner: companions) — every file this area loads, relative to public/assets/.
 // Kittens, cages, nets, bubbles and the Shield Wall are procedural (characters' buildKitten / buildCage + ours); so are
-// the M2 stocks, rope posts, fishing sticks, cups, tables, butterflies (dressing.js) and the thrown spoons.
+// the M2 kitten carriers, rope posts, fishing sticks, cups, tables, butterflies (dressing.js) and the thrown spoons.
 export default [
   'models/creatures/monsters-flying/Dragon_Evolved.glb',     // Pudding (Pudding.js)
   'models/creatures/monsters-blob/Pigeon.glb',               // Coo the courier pigeon (NpcActor.js)

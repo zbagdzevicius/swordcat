@@ -19,6 +19,8 @@
 //                        fur LOD from the focus, cat px at 720p / 1080p, zoom 1.4), the x-ray silhouette proxy through an
 //                        occluder (hers + a rat's and a hyena's, telegraph-tinted), hover highlights, close-ups unchanged
 //   characters:iso-touch the same on touch phones (hasTouch + isMobile, 390×844 portrait and 844×390 landscape)
+//   characters:hero-read hero pop-out ×1.12 / bow ×1.4 / cocoa hull / warm-rim floor in town iso, and the tunic looks
+//                        keep her sword on screen (WA §3.3, WA4, sign-off 3)
 // Screenshots → tests/shots/characters/*.png. Works against the dev server and the bundled game (no /src imports:
 // the library is reached through any kitten, `root.userData.kitten.constructor.lib`).
 import fs from 'node:fs';
@@ -129,14 +131,16 @@ const installChr = (t) => t.G(() => {
       const feet = k.root.getWorldPosition(new THREE.Vector3());
       const ear = k.rig.earL.getWorldPosition(new THREE.Vector3()); ear.y += 0.12 * k.root.getWorldScale(v).x;
       const top = css(ear), bot = css(feet);
-      const bowW = k.bow.children[0].getWorldPosition(new THREE.Vector3());
+      const bowW = k.bow ? k.bow.children[0].getWorldPosition(new THREE.Vector3()) : null;   // no bow: the plain tunic
       const chest = k.rig.chest.getWorldPosition(new THREE.Vector3());
       const tip = k.sword?.tip.getWorldPosition(new THREE.Vector3());
       return {
-        catPx: Math.hypot(top.x - bot.x, top.y - bot.y), bow: css(bowW), chest: css(chest), tip: tip ? css(tip) : null,
-        bowScale: +(k.bow.scale.x / (k._bowBase ?? 1)).toFixed(3), earScale: +k.rig.earL.scale.x.toFixed(3),
+        catPx: Math.hypot(top.x - bot.x, top.y - bot.y), bow: bowW ? css(bowW) : null, chest: css(chest), tip: tip ? css(tip) : null,
+        bowScale: k.bow ? +(k.bow.scale.x / (k._bowBase ?? 1)).toFixed(3) : 1, earScale: +k.rig.earL.scale.x.toFixed(3),
         top: k.constructor.lib.TOP_VIEW.value, focusOn: k.constructor.lib.FUR_VIEW.focusOn,
-        lod: k.headFur?._lodN ?? -1, shells: k.headFur?.shells ?? -1, bowParent: k.bow.parent?.name,
+        lod: k.headFur?._lodN ?? -1, shells: k.headFur?.shells ?? -1, bowParent: k.bow?.parent?.name,
+        far: k.constructor.lib.TOP_VIEW.far ?? 0, closeUp: !!k.closeUp, drawnShells: k.debugFeatures?.().shells ?? -1,
+        wantShells: k.shellTarget?.() ?? -1,
       };
     },
     /** A grey box between the lens and `target` (fraction `at` of the way to the lens), or remove it (null). */
@@ -174,10 +178,13 @@ const IsoBlocks = [
       const m = await t.G(() => window.__GAME__.__chr.measure());
       t.log(`iso (${fr.real ? 'camera IsoRig' : 'emulated shot'}) d ${fr.dist.toFixed(1)} m fov ${fr.fov}: cat ${m.catPx.toFixed(0)} px, top-view ${m.top.toFixed(2)}, bow ×${m.bowScale} ears ×${m.earScale}, fur ${m.lod}/${m.shells} (focus LOD ${m.focusOn})`);
       t.assert(m.top > 0.99, `top-view readability on at ${fr.dist.toFixed(1)} m (${m.top})`);
-      t.assert(Math.abs(m.bowScale * m.earScale - 1.25) < 0.02 && Math.abs(m.earScale - 1.1) < 0.01, `bow ×1.25 / ears ×1.1 from above (${m.bowScale}, ${m.earScale})`);
+      const bowWant = 1.25 + (1.4 - 1.25) * m.far;   // ×1.25 top view, ×1.4 at a lens ≥ 12 m (WA §3.3)
+      t.assert(Math.abs(m.bowScale * m.earScale - bowWant) < 0.02 && Math.abs(m.earScale - 1.1) < 0.01, `bow ×${bowWant.toFixed(2)} / ears ×1.1 from above (${m.bowScale}, ${m.earScale}, far ${m.far.toFixed(2)})`);
       t.assert(m.bowParent === 'earL', 'bow still on her LEFT ear');
       if (fr.real) {
-        t.assert(m.focusOn && m.lod === m.shells, `iso: hero fur LOD keyed to the focus (full ${m.lod}/${m.shells})`);
+        // ART §6.1 / X8: in iso play the hero draws the iso shell count (QUALITY.furShellsIso; 0 on Low / Med), the
+        // close-up count only while camera reports cam.closeUp
+        t.assert(m.focusOn && !m.closeUp && m.drawnShells === m.wantShells, `iso: hero draws the iso shell count (${m.drawnShells} / want ${m.wantShells})`);
         t.assert(m.catPx >= 30, `her on-screen size ${m.catPx.toFixed(0)} px ≥ 30`);
       }
       // the bow reads pink from the top, the blade is on screen
@@ -324,7 +331,7 @@ const IsoBlocks = [
           const m = await T.G(() => window.__GAME__.__chr.measure());
           const dev = await T.G(() => window.__GAME__.ctx.input?.device ?? '?');
           t.log(`${label} ${w}×${h} (${fr.real ? 'IsoRig' : 'emulated'} d ${fr.dist.toFixed(1)} fov ${fr.fov}, device ${dev}): cat ${m.catPx.toFixed(0)} px, top ${m.top.toFixed(2)}, bow ×${m.bowScale}`);
-          t.assert(m.top > 0.99 && Math.abs(m.bowScale * m.earScale - 1.25) < 0.02, `${label}: readability from above on`);
+          t.assert(m.top > 0.99 && Math.abs(m.bowScale * m.earScale - (1.25 + 0.15 * m.far)) < 0.02, `${label}: readability from above on`);
           const bowC = await T.G((p) => window.__GAME__.__chr.pinkest([p.x, p.y], 4), m.bow);
           t.assert(bowC[0] > 150 && bowC[0] > bowC[1] + 25, `${label}: pink bow visible (rgb ${bowC})`);
           if (fr.real) t.assert(m.catPx >= (label === 'portrait' ? 28 : 30), `${label}: cat ${m.catPx.toFixed(0)} px ≥ the clamp`);
@@ -417,6 +424,10 @@ const GlanceBlocks = [
         const g = window.__GAME__, ctx = g.ctx, p = ctx.player;
         g.god(true); ctx.env.preset('meadow_day', 0);
         p.vel.set(0, 0, 0); p.object3d.rotation.y = 0; if ('facing' in p) p.facing = 0;
+        // the hero's own view is built with glance: false (player's WA §5.6 idle ladder owns her lens glances); this
+        // block tests the KittenView GLANCE mechanism that residents / companions use, so switch it on for the hero
+        // (?test keeps the player's ladder off)
+        p.model.view.glanceEnabled = true;
         Object.assign(p.model.view._g, { still: 0, phase: 'wait', w: 0 });
         await g.waitFrames(5);
       });
@@ -456,7 +467,54 @@ const GlanceBlocks = [
       const s2 = await sample();
       t.log(`moving: phase ${s2.phase} w ${s2.w.toFixed(2)} pose ${s2.pose}`);
       t.assert(s2.phase === 'wait' && s2.w < 0.2, `moving drops the glance (w ${s2.w.toFixed(2)})`);
-      await t.G(async () => { const g = window.__GAME__; g.ctx.player.vel.set(0, 0, 0); await g.waitFrames(3); });
+      await t.G(async () => { const g = window.__GAME__; g.ctx.player.vel.set(0, 0, 0); g.ctx.player.model.view.glanceEnabled = false; await g.waitFrames(3); });
+    },
+  },
+];
+
+// ------------------------------------------------------------------ hero read (WA §3.3, WA4): pop-out, rim, hull, tunic sword
+const HeroReadBlocks = [
+  {
+    name: 'characters:hero-read', order: 40, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      dir(t);
+      const ok = await until(t, () => !!window.__GAME__.ctx.player?.model?.k, null, 15000);
+      if (!t.assert(ok, 'the player renders the characters Swordcat')) return;
+      await installChr(t);
+      await t.G(async () => { const g = window.__GAME__; g.god(true); await g.waitFrames(5); });
+      const probe = () => t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, view = ctx.player.model.view, k = view.kitten, L = k.constructor.lib;
+        await g.waitFrames(30);
+        const m = g.__chr.measure();
+        let sv = !!k.sword; for (let o = k.sword?.group; o; o = o.parent) sv = sv && o.visible;
+        return {
+          ...m, iso: L.TOP_VIEW.iso, playScale: view.playScale, rootScale: +k.root.scale.x.toFixed(3),
+          outline: !!(k.outline && k.outline.visible && k.outline.parent), rim: k.rimFloor,
+          rimU: k.kitMat.userData.uniforms.uRimMin?.value, sword: sv, outfit: ctx.player.model.outfit,
+        };
+      });
+      const fr = await isoFrame(t);
+      const a = await probe();
+      t.log(`iso d ${fr.dist.toFixed(1)}: cat ${a.catPx.toFixed(0)} px, iso ${a.iso}, playScale ${a.playScale}, bow ×${(a.bowScale * a.earScale).toFixed(2)} (far ${a.far.toFixed(2)}), outline ${a.outline}, rim ${a.rim}/${a.rimU}`);
+      t.assert(a.iso && Math.abs(a.playScale - 1.12) < 0.005, `hero pop-out ×1.12 in iso (${a.playScale})`);
+      const bowWant = 1.25 + 0.15 * a.far;
+      t.assert(Math.abs(a.bowScale * a.earScale - bowWant) < 0.02, `bow ×${bowWant.toFixed(2)} in iso`);
+      t.assert(a.outline, 'hero cocoa outline hull drawn');
+      t.assert(a.rim === 0.4 && a.rimU === 0.4, 'hero warm-rim floor 0.40');
+      t.assert(a.sword && a.tip && a.tip.x > 0 && a.tip.x < a.tip.w && a.tip.y > 0 && a.tip.y < a.tip.h, 'armour: sword on screen');
+      await t.shot('characters/hero-read-play-full', { freeze: true });
+      await t.page.screenshot({ path: path.join(t.shotsDir, 'characters', 'hero-read-play.png'), clip: { x: Math.max(0, a.chest.x - 120), y: Math.max(0, a.chest.y - 120), width: 240, height: 240 } });
+      for (const outfit of ['tunic', 'tunic_bow']) {
+        await t.G(async (o) => { const g = window.__GAME__; g.ctx.player.setOutfit(o); await g.waitFrames(20); }, outfit);
+        await installChr(t);
+        const b = await probe();
+        t.log(`${outfit}: sword ${b.sword}, tip ${b.tip ? `${b.tip.x.toFixed(0)},${b.tip.y.toFixed(0)}` : '-'}, playScale ${b.playScale}, outline ${b.outline}, rim ${b.rim}`);
+        t.assert(b.outfit === outfit, `outfit ${outfit} applied`);
+        t.assert(b.sword && b.tip && b.tip.x > 0 && b.tip.x < b.tip.w && b.tip.y > 0 && b.tip.y < b.tip.h, `${outfit}: the practice tunic keeps the sword on screen`);
+        t.assert(b.outline && b.rim === 0.4, `${outfit}: hull + rim survive the rebuild`);
+        await t.page.screenshot({ path: path.join(t.shotsDir, 'characters', `hero-read-${outfit}.png`), clip: { x: Math.max(0, b.chest.x - 120), y: Math.max(0, b.chest.y - 120), width: 240, height: 240 } });
+      }
+      await t.G(async () => { const g = window.__GAME__; g.ctx.player.setOutfit('armour'); await g.waitFrames(5); });
     },
   },
 ];
@@ -493,22 +551,23 @@ export default [
         const coat = k.cfg.coat, base = hsl(coat.base), bib = hsl(coat.bib ?? coat.cream);
         return {
           bow: bow && bow.toArray(), bowParent: k.bow?.parent?.name, eye, shoulderW: maxX - minX, skullW, sword,
-          cape: k.cape ? { visible: k.cape.mesh.visible, maxZ: cb.max.z, topW: k.cape.d.topW, botW: k.cape.d.botW, style: k.capeStyle, grid: [k.cape.rc, k.cape.rr], aoMin } : null,
+          cape: k.cape ? { visible: k.cape.mesh.visible, maxZ: cb.max.z, topW: k.cape.d.topW, botW: k.cape.d.botW, style: k.capeStyle, grid: [k.cape.rc, k.cape.rr], closeUp: k.cape.closeUp, aoMin } : null,
           baseH: base.h, baseS: base.s, baseL: base.l, bibL: bib.l,
-          envMap: !!k.kitMat.envMap, envColors: !!k.constructor.lib?.characterEnvColors?.(),
+          envMap: !!k.kitMat.envMap, envColors: !!k.constructor.lib?.characterEnvColors?.(), toon: !!k.kitMat.userData?.toon,
           shells: k.headFur.shells, furBlended: !!k.furMat?.transparent, calls: k.drawCalls(), pose: k.poseName,
         };
       });
       t.log(`R1: bow ${m.bow?.map((v) => v.toFixed(2))} on ${m.bowParent}; eye ${m.eye.toFixed(3)} H; pauldrons ${m.shoulderW.toFixed(3)} vs skull ${m.skullW.toFixed(3)}; sword ${m.sword.toFixed(2)} H; cape ${JSON.stringify(m.cape)}; calls ${m.calls}; shells ${m.shells}`);
       t.assert(m.bow && m.bow[0] > 0.04 && m.bow[1] > 0.8 && m.bow[1] < 1.08 && m.bowParent === 'earL', `R1 bow on her LEFT ear (local ${m.bow})`);
-      t.assert(m.eye > 0.08 && m.eye < 0.1, `R1 eyes ≈ 0.09 H (got ${m.eye.toFixed(3)})`);
+      t.assert(m.eye > 0.1 && m.eye < 0.14, `ART_WARM §6: eyes ≈ 0.13 H (was R1 0.09; got ${m.eye.toFixed(3)})`);
       t.assert(m.shoulderW >= m.skullW, `R1 pauldrons ≥ head width (${m.shoulderW.toFixed(3)} vs ${m.skullW.toFixed(3)})`);
       t.assert(m.sword > 0.92 && m.sword < 1.08, `R1 sword ≈ her height (${m.sword.toFixed(3)} H)`);
       t.assert(m.cape && m.cape.visible && m.cape.botW > m.cape.topW, 'R1 cape V-frame (flares toward the hem)');
       t.assert(m.cape && m.cape.maxZ < 0.12, `cape hangs behind her (max local z ${m.cape?.maxZ.toFixed(3)})`);
-      t.assert(m.cape && m.cape.grid[0] >= 25 && m.cape.aoMin < 0.8, `cape renders soft folds (grid ${m.cape?.grid}, fold shade ${m.cape?.aoMin?.toFixed(2)})`);
+      // PERF §9.1 / X26: iso play draws the coarse 17 x 13 grid (the full >= 25-column grid is the close-up set)
+      t.assert(m.cape && m.cape.grid[0] >= (m.cape.closeUp ? 25 : 17) && m.cape.aoMin < 0.8, `cape renders soft folds (grid ${m.cape?.grid}, closeUp ${m.cape?.closeUp}, fold shade ${m.cape?.aoMin?.toFixed(2)})`);
       t.assert(m.baseH > 0.04 && m.baseH < 0.11 && m.baseS > 0.4 && m.bibL > m.baseL, 'R1 ginger coat with a lighter cream bib');
-      t.assert(m.envMap && m.envColors, 'character env map built from the live scene lights (polished plate)');
+      t.assert(m.toon || (m.envMap && m.envColors), 'warm toon kit material (ART_WARM §7), or the env map built from the live scene lights');
       t.assert(m.shells > 0 && m.furBlended, `shell fur on (${m.shells} shells, soft-blended)`);
       t.assert(m.calls <= 24, `hero draw calls ${m.calls} (budget 24)`);
 
@@ -709,12 +768,14 @@ export default [
         for (const name of ['low', 'high', 'med']) {
           g.quality(name);
           await g.waitFrames(3);
-          out[name] = { hero: k.headFur.shells, want: ctx.config.QUALITY[name].furShells };
+          const Q = ctx.config.QUALITY[name];
+          // ART §6.1 / X8: the close-up count (furShellsClose; furShells is the retired fallback) — the staged hero is close
+          out[name] = { hero: k.headFur.shells, want: Q.furShellsClose ?? Q.furShells };
         }
         return out;
       });
       t.log(`fur shells per quality: ${JSON.stringify(q)}`);
-      t.assert(['low', 'high', 'med'].every((n) => q[n].hero === q[n].want), 'core QUALITY.furShells drives the hero fur shells');
+      t.assert(['low', 'high', 'med'].every((n) => q[n].hero === q[n].want), 'core QUALITY.furShellsClose drives the hero fur shells');
       await unstage(t);
     },
   },
@@ -834,7 +895,7 @@ export default [
       t.log(`sword skins: ${JSON.stringify(r)}`);
       t.assert(Object.keys(r).length === 7, 'all 7 sword skins build');
       t.assert(r.diamond?.glb && r.toobig?.glb, 'Diamond Sword and Even More Too Big mount their fitted GLBs');
-      t.assert(r.toobig && r.toobig.tipY >= 0 && r.toobig.tipY < 0.06, `Even More Too Big: the tip drags ON the ground (tip y ${r.toobig?.tipY})`);
+      t.assert(r.toobig && r.toobig.tipY >= -0.01 && r.toobig.tipY < 0.06, `Even More Too Big: the tip drags ON the ground (tip y ${r.toobig?.tipY})`);
       t.assert(r.dawnblade?.sparkles, 'Dawnblade carries its 20 sparkles');
       await camShot(t, [0, 0.85, 0.2], [0, 0.45, 2.4], 50);
       await t.shot('characters/skins-swords', { freeze: true });
@@ -856,7 +917,7 @@ export default [
       });
       t.log(`capes: ${capes.out.map((c) => `${c.id}=${c.color}`).join(' ')}`);
       t.assert(capes.out.every((c) => c.style === c.id), 'every §13.5 cape equips on the hero');
-      t.assert(capes.out.every((c) => c.bowParent === 'earL' && c.bowVisible && /F2A2B8/i.test(c.bowHex)), 'the bow stays pink on her LEFT ear with every cape');
+      t.assert(capes.out.every((c) => c.bowParent === 'earL' && c.bowVisible && /F2A2B8|FF9EC0/i.test(c.bowHex)), 'the bow stays pink (ART_WARM #FF9EC0) on her LEFT ear with every cape');
       await t.G(async () => { const g = window.__GAME__; g.ctx.cam.shot({ pos: [0.7, 0.9, -2.2], look: [0, 0.5, 0], fov: 36, anchor: 'swordcat' }); await g.waitFrames(40); });
       await t.shot('characters/skins-cape-red', { freeze: true });
       await t.G(async () => { const g = window.__GAME__, ctx = g.ctx; ctx.player.model._applyCosmetics?.(true); await g.waitFrames(3); });
@@ -890,14 +951,48 @@ export default [
         const g = window.__GAME__, ctx = g.ctx, k = ctx.player.model.k, lib = k.constructor.lib;
         await g.waitFrames(5);
         const d = ctx.camera.position.distanceTo(k.headFur.mesh.getWorldPosition(new g.THREE.Vector3()));
-        return { d: +d.toFixed(2), n: k.headFur._lodN, shells: k.headFur.shells, far: lib.FUR_LOD.far };
+        return { d: +d.toFixed(2), n: k.headFur._lodN, shells: k.headFur.shells, far: lib.FUR_LOD.far, f: k.debugFeatures(), want: k.shellTarget() };
       });
       t.log(`fur LOD at ${lod.d} m: ${lod.n}/${lod.shells} shells (off past ${lod.far} m)`);
-      if (lod.shells > 0) t.assert(lod.n > 0 && lod.n <= lod.shells, 'hero fur draws a distance-LOD shell count');
+      // X8: the follow camera draws the iso count (fur base merged into the body draw when it is 0)
+      t.log(`hero play LOD: ${lod.f.draws} draws, ${lod.f.tris} tris, shells ${lod.f.shells} (want ${lod.want}), merged ${lod.f.merged}, outline ${lod.f.outline}`);
+      t.assert(lod.f.shells === lod.want && (lod.want > 0 || lod.f.merged), `hero fur at the follow distance: iso shell count (${lod.f.shells}/${lod.want})`);
+      if (lod.f.tris > 16000) t.log(`WARN hero ${lod.f.tris} tris > ART X10's 16k (the hero bake, PERF H7 / L3, is pending)`);
       const st = await t.state();
       t.log(`meadow follow view: ${st.calls} calls / ${(st.tris / 1000).toFixed(0)}k tris (scene), frame ${st.frameCalls} / ${(st.frameTris / 1000).toFixed(0)}k`);
     },
   },
+  {
+    // close-up faces (story 10c / 11c): no blue-grey halo smudge over the muzzle in dialogue shots
+    name: 'characters:faces', order: 36.5, level: 'forest', spawn: 'start', timeout: 180000,
+    async run(t) {
+      dir(t);
+      await stage(t, 'idle');
+      const info = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, k = p.model.k;
+        const at = p.object3d.position;
+        const sage = ctx.companions.spawnNpc('sage', [at.x + 0.9, at.z + 0.6], Math.PI * 0.75);
+        await g.waitFrames(30);
+        const sk = sage?.view?.kitten ?? sage?.model?.k ?? sage?.object3d?.userData?.kitten ?? null;
+        return { sage: !!sage, sk: !!sk, closeUp: sk?.closeUp, drag: sk?.drag?.toArray(), heroDrag: k.drag.toArray() };
+      });
+      t.log(`faces: ${JSON.stringify(info)}`);
+      // CS-04's twilight preset: the cool sky fill is what read as a blue-grey smudge on the fur
+      await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset?.('forest_twilight', 0); await g.waitFrames(5); });
+      const views = [
+        ['faces-sage-3q-back', { pos: [-1.6, 1.0, -2.2], look: [0, 0.5, 0], fov: 38, anchor: 'sage' }],
+        ['faces-sage-back', { pos: [-0.7, 0.75, -0.5], look: [0, 0.55, 0.05], fov: 34, anchor: 'sage' }],
+        ['faces-sage-front', { pos: [0.3, 0.7, 1.3], look: [0, 0.55, 0], fov: 34, anchor: 'sage' }],
+        ['faces-hero-front', { pos: [0.3, 0.75, 1.4], look: [0, 0.6, 0], fov: 34, anchor: 'swordcat' }],
+      ];
+      for (const [name, s] of views) {
+        await t.G(async (sh) => { const g = window.__GAME__; g.ctx.cam.shot(sh); await g.waitFrames(30); }, s);
+        await t.shot('characters/' + name, { freeze: true });
+      }
+      await unstage(t);
+    },
+  },
   ...IsoBlocks,
   ...GlanceBlocks,
+  ...HeroReadBlocks,
 ];

@@ -169,9 +169,10 @@ export function buildBeastHead(preset = 'hyena', opts = {}) {
     e.position.set(s * eyeX, eyeY, eyeZ); e.rotation.set(0, s * 0.35, 0);
     e.name = 'beastEye'; inner.add(e); eyes.push(e);
   }
-  const browMat = browMaterial(preset === 'hyena' ? '#5D4A6E' : preset === 'pug' ? '#4A3A5E' : '#5A4050');
+  const browGeo = browGeometry(preset === 'hyena' ? '#5D4A6E' : preset === 'pug' ? '#4A3A5E' : '#5A4050');
   for (const [s, g] of [[1, browL], [-1, browR]]) {
-    const b = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.085, 4, 8).rotateZ(Math.PI / 2), browMat);
+    // PERF §1.2: vertex-coloured on the shared kit material (was a colour-only toon program of its own)
+    const b = new THREE.Mesh(browGeo, kitMaterial('plain'));
     b.castShadow = false; g.add(b);
     g.position.set(s * eyeX, eyeY + eyeR * 1.35, eyeZ + 0.015); g.rotation.y = s * 0.3;
     inner.add(g);
@@ -203,7 +204,7 @@ export function buildBeastHead(preset = 'hyena', opts = {}) {
     },
     /** Barkus phase 2: the helm shatters (enemies spawn the debris fx). */
     setHelm(on) { if (helm) helm.visible = on; },
-    dispose() { root.traverse((o) => { if (o.isMesh) o.geometry.dispose(); }); },
+    dispose() { root.traverse((o) => { if (o.isMesh && !o.geometry.userData.sharedBrow) o.geometry.dispose(); }); },
     size,
   };
   head.setExpression(preset === 'hyena' ? 'sneer' : 'angry');
@@ -220,10 +221,16 @@ function card(gb, at, dir, len, wid, c0, c1, rnd) {
   gb.add(g, { matrix: m, color: (v, n, lp) => mixRgb(c0, c1, smoothstep(0, len, lp.y)), rmse: RM.fur });
 }
 
-const _browMats = new Map();
-function browMaterial(c) {
-  if (!_browMats.has(c)) _browMats.set(c, makeToonMaterial({ color: c, kind: 'plain' }));
-  return _browMats.get(c);
+const _browGeos = new Map();
+/** A brow capsule coloured `c` (vertex colour + fur rmse; shared per colour, never disposed per head). */
+function browGeometry(c) {
+  if (!_browGeos.has(c)) {
+    const gb = new GeoBuilder();
+    gb.add(new THREE.CapsuleGeometry(0.016, 0.085, 4, 8).rotateZ(Math.PI / 2), { color: rgb(c), rmse: RM.fur });
+    const g = gb.build(); g.userData.sharedBrow = true;
+    _browGeos.set(c, g);
+  }
+  return _browGeos.get(c);
 }
 
 /** Known KayKit head nodes and the hat / hood nodes that hide the seam. */

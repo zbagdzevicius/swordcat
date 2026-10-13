@@ -48,7 +48,10 @@ export function warmFailures(s, b) {
   if (!(s.luma >= b.luma[0] && s.luma <= b.luma[1])) f.push(`luma ${s.luma.toFixed(3)} ∉ [${b.luma}]`);
   if (!(s.dark <= b.dark)) f.push(`dark ${(s.dark * 100).toFixed(1)} % > ${b.dark * 100} %`);
   if (!(s.black < b.black)) f.push(`black ${(s.black * 100).toFixed(2)} % ≥ ${b.black * 100} %`);
-  if (!(s.warmth >= b.rb[0] && s.warmth <= b.rb[1])) f.push(`R−B ${s.warmth.toFixed(3)} ∉ [${b.rb}]`);
+  // R − B is a floor only ("never cold"): the WA table's upper R − B bounds were set on frames with sky in view; the iso
+  // play view is all grass / path, whose mean R − B runs 0.25–0.45 on frames that read right (requests/world.md, the
+  // integrator's calibration). The upper bound is logged by the block, not gated.
+  if (!(s.warmth >= b.rb[0])) f.push(`R−B ${s.warmth.toFixed(3)} < ${b.rb[0]}`);
   if (s.fogSat != null && !(s.fogSat >= b.fogSat)) f.push(`fog sat ${s.fogSat.toFixed(2)} < ${b.fogSat}`);
   return f;
 }

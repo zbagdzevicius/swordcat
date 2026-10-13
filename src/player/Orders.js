@@ -26,6 +26,8 @@ const _hostile = hostileTo('player');
 const SWING = ATTACKS.slash1;
 const ORDER_KINDS = new Set(['move', 'follow', 'attack', 'attackMove', 'use', 'stop']);
 const _sp = new THREE.Vector3();
+/** A* expansion budget for hold-to-follow and stuck re-plans (a fresh click keeps NAV.maxExpand; requests/physics.md). */
+const REPLAN_EXPAND = 2000;
 
 export class Orders {
   /** @param {import('./Player.js').Player} p */
@@ -173,7 +175,7 @@ export class Orders {
    * Path to `goal` (a nav path, else a straight line). Returns false when nothing at all is reachable. `toward` ({x, z},
    * optional): the camera side of the pick ray, physics' snap hint for clicks on the far face of a wall.
    */
-  _plan(goal, toward = null) {
+  _plan(goal, toward = null, maxExpand = 0) {
     const p = this.p, ph = this.ctx.physics;
     this._goal.copy(goal);
     this.wp = 0;
@@ -183,7 +185,8 @@ export class Orders {
       this.path.push({ x: goal.x, y: goal.y, z: goal.z });
       return true;
     }
-    const r = toward ? ph.findPath(p.pos, goal, { toward }) : ph.findPath(p.pos, goal);
+    // a fresh click keeps physics' default budget; hold-to-follow and stuck re-plans use REPLAN_EXPAND (requests/physics.md)
+    const r = toward || maxExpand ? ph.findPath(p.pos, goal, maxExpand ? (toward ? { toward, maxExpand } : { maxExpand }) : { toward }) : ph.findPath(p.pos, goal);
     this._pathsThisSec++;
     if (!r?.points?.length) {
       // she stands on the goal cell already, or nothing is reachable
@@ -242,7 +245,7 @@ export class Orders {
         if (pt && this.kind === 'move' && Math.hypot(pt.x - this._goal.x, pt.z - this._goal.z) > 0.3) {
           this.point.set(pt.x, pt.y, pt.z);
           if (ctx.physics?.losWalkable?.(p.pos, pt)) { this._goal.copy(pt); this.path.length = 0; this.path.push({ x: pt.x, y: pt.y, z: pt.z }); this.wp = 0; this.partial = false; }
-          else if (this._pathsThisSec < NAV.pathsPerSec) this._plan(this.point);
+          else if (this._pathsThisSec < NAV.pathsPerSec) this._plan(this.point, null, REPLAN_EXPAND);
         }
       }
     }
@@ -393,7 +396,7 @@ export class Orders {
     if (this.wp >= this.path.length) {
       if (this.kind === 'move') {
         if (this.queue.length) { const q = this.queue.shift(); this.point.copy(q); if (!this._plan(q)) this._fail('unreachable'); }
-        else if (!this.follow) this.clear('arrived');
+        else if (!this.follow) { this.clear('arrived'); p.onArrive?.(); }   // a plain move: a little turn to the lens
       } else if ((this.kind === 'use' || this.kind === 'attack') && p.onGround && p.state === 'move') this._pathSpent();
       return;
     }
@@ -452,7 +455,7 @@ export class Orders {
         if (moved < NAV.stuck.dist) {
           if (++S.fails > NAV.stuck.retries) { this.partial = true; this._emit(this.kind, this.point, this.target, false, false); this.clear('stuck'); this._rejectFx(false); return; }
           // a dynamic collider (cart, gate) may have closed the route: no path is a rejection, not a silent "arrived"
-          if (!this._plan(this.kind === 'attack' && this.target?.pos ? this.target.pos : this._goal)) { this._fail('unreachable'); return; }
+          if (!this._plan(this.kind === 'attack' && this.target?.pos ? this.target.pos : this._goal, null, REPLAN_EXPAND)) { this._fail('unreachable'); return; }
         } else S.fails = Math.max(0, S.fails - 1);
       }
     } else { S.t = 0; S.x = p.pos.x; S.z = p.pos.z; }

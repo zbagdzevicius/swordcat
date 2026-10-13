@@ -13,6 +13,7 @@ import { attachPlate, pickPlateWord, friendWordFor } from './Plate.js';
 import { buildOutline, setOutlineAlpha, OUTLINE, inkFor } from './Outline.js';
 import { buildProp, buildCage } from './Props/ProcProps.js';
 import { own } from './materials.js';
+import { WARM_LOOKS } from './palette.js';
 import { buildSilhouetteProxy, highlightObject, XRAY } from './Readability.js';
 
 /** Per-look head preset + options and plate word source (§3.7 villains, §11 boss builds). */
@@ -23,7 +24,8 @@ export const BEAST_LOOKS = Object.freeze({
   cacklejaw: { head: 'hyena', opts: { mane: true, chippedEar: 'left', lift: 0.15 }, words: ['HATER-IN-CHIEF'], style: 'rusty' },
   pug: { head: 'pug', opts: {}, words: null },
   brutus: { head: 'pug', opts: { scar: true }, words: null },
-  barkus: { head: 'bulldog', opts: { jowls: true, underbite: true, eyepatch: true, hornedHelm: true }, words: null },
+  // weapon: the hand prop that replaces the GLB weapon (WA §2.5: "Big Squeaky Bone" mallet, same hitbox / timings)
+  barkus: { head: 'bulldog', opts: { jowls: true, underbite: true, eyepatch: true, hornedHelm: true }, words: null, weapon: 'big_squeaky_bone' },
 });
 
 /** KayKit hand bones (three sanitises `handslot.r` → `handslotr`). */
@@ -158,7 +160,36 @@ const CARRY = {
   signpost: { p: [0, -0.35, 0], r: [0.25, 0, -0.35] },
   post_bag: { p: [0, -0.28, 0.02], r: [0, 0, 0] },
   lantern: { p: [0, -0.1, 0.02], r: [0, 0, 0] },
+  // WA §2.5 / WA26: Barkus's mallet (grip in the fist, bone head up) and a Squeakybone's toy bone club
+  big_squeaky_bone: { p: [0, -0.12, 0.02], r: [Math.PI / 2, 0, 0], s: 1.25 },
+  squeaky_bone: { p: [0, -0.1, 0.02], r: [Math.PI / 2, 0, 0], s: 1.0 },
 };
+
+const _squeakyMats = new Map();
+/**
+ * Squeakybone look (WA26: bone tint `#F3E6C8`): every material under `model` becomes a shared tinted twin (one clone per
+ * source material for the whole process, same program, so 0 extra draws / compiles per spawn). The toy knob comes from
+ * the held `squeaky_bone` (red rubber caps). Returns a restore function.
+ * @param {THREE.Object3D} model @param {{ tint?: THREE.ColorRepresentation }} [o]
+ */
+export function squeakyLook(model, o = {}) {
+  const tint = new THREE.Color(o.tint ?? WARM_LOOKS.squeakyBone);
+  const key = tint.getHexString();
+  const twin = (m) => {
+    if (!m || !m.color) return m;
+    const id = m.uuid + ':' + key;
+    let t = _squeakyMats.get(id);
+    if (!t) { t = own(m.clone()); t.color.copy(m.color).multiply(tint); t.name = (m.name || 'mat') + ':squeaky'; _squeakyMats.set(id, t); }
+    return t;
+  };
+  const saved = [];
+  model.traverse((c) => {
+    if (!c.isMesh || c.userData.noSqueaky) return;
+    saved.push([c, c.material]);
+    c.material = Array.isArray(c.material) ? c.material.map(twin) : twin(c.material);
+  });
+  return () => { for (const [c, m] of saved) c.material = m; };
+}
 
 const _silMats = new Map();
 /**

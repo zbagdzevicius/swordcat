@@ -77,13 +77,15 @@ export default [
         await t.G(() => window.__GAME__.ctx.state.setFlag('prologue.done', false));
       }
       t.assert(s.wind && s.wind.gainNow > 0.03, `procedural wind running (gain ${s.wind?.gainNow})`);
-      t.assert(['heartThump', 'crowCaw', 'hyenaLaugh', 'blip'].every((k) => s.zzfx.includes(k)), `zzfx baked: ${s.zzfx}`);
+      t.assert(['heartThump', 'crowCaw', 'hyenaLaugh', 'blip', 'pfft', 'squeak'].every((k) => s.zzfx.includes(k)) && s.glock, `zzfx baked: ${s.zzfx}, glock ${s.glock}`);
+      t.assert(s.bake?.done, `PERF §3.1: the title bake finished before play (${JSON.stringify(s.bake)})`);
       t.assert(s.gains.master > 0.5 && s.gains.music > 0.2 && s.gains.sfx > 0.5, `bus gains ${JSON.stringify(s.gains)}`);
-      // CONTROLS_SPEC §2.8: in the iso play camera the ears ride the focus (in the scene), on the lens otherwise
+      // CONTROLS_SPEC §2.8 / PERF §10.5: the ears ride the iso focus, written at 20 Hz (the listener is not in the scene graph)
       const listeners = await t.G(() => { const c = window.__GAME__.ctx; let n = 0; c.scene.traverse((o) => { if (o.type === 'AudioListener') n++; }); return n; });
-      t.assert(listeners === 1, `exactly one AudioListener (${listeners})`);
-      const ears = await t.G(() => { const c = window.__GAME__.ctx, L = c.audio.listener, f = c.cam.focus; return c.cam.isIso && L.parent === c.scene ? Math.hypot(L.position.x - f.x, L.position.z - f.z) : 0; });
-      t.assert(ears < 0.01, `the listener sits at the iso focus (${ears})`);
+      t.assert(listeners === 0, `no AudioListener in the scene graph (${listeners})`);
+      await t.wait(150);
+      const ears = await t.G(() => { const c = window.__GAME__.ctx, f = c.cam.focus, l = c.audio.debugState().listener; return c.cam.isIso && l ? Math.hypot(l[0] - f.x, l[2] - f.z) : 0; });
+      t.assert(ears < 0.3, `the listener sits at the iso focus (${ears})`);
       const m = await peak(t, 'master', 600);
       t.log(`unlocked: sr=${s.sampleRate} music ${db(s.levels.music)} dB, master peak ${db(m)} dB, wind ${s.wind.wind} → ${s.wind.freqNow} Hz`);
       await shot(t, '01-unlock-meadow');
@@ -329,7 +331,7 @@ export default [
       const s5 = await st(t);
       t.assert(s5.duck === 0.5, `menu duck ${s5.duck}`);
       await t.setMode('play');
-      // voice limits (§16.5): 8 × 2D, 12 × 3D, the oldest stolen
+      // voice limits (§16.5 / PERF §10.5): 8 × 2D, 8 pooled 3D, the oldest stolen
       const v = await t.page.evaluate(async () => {
         const g = window.__GAME__, a = g.ctx.audio, p = g.ctx.player.pos;
         await a.decode('creature/rat_squeak_attack');
@@ -339,7 +341,7 @@ export default [
         a.stopAll(0.05);
         return { v2: s.voices2D, v3: s.voices3D };
       });
-      t.assert(v.v2 <= 8 && v.v3 <= 12 && v.v3 >= 10, `voice pools ${v.v2}/8 2D, ${v.v3}/12 3D`);
+      t.assert(v.v2 <= 8 && v.v3 <= 8 && v.v3 >= 6, `voice pools ${v.v2}/8 2D, ${v.v3}/8 3D`);
     },
   },
   {
@@ -355,7 +357,7 @@ export default [
         const step = (kind, ...args) => { a._gates.clear(); const h = kind === 'music' ? a.music(...args) : kind === '3d' ? a.play3D(...args) : a.play2D(...args); log.push(`${kind}:${args[0]}`); return h; };
         const preload = ['ui/drop_001', 'ui/drop_002', 'world/creak1', 'sword/sword_unsheathe', 'sword/sword_unsheathe2', 'impact/armor_light',
           'impact/cloth', 'impact/cloth_heavy', 'cat/cat_purrsleepy_loop', 'pickup/bubble2', 'creature/creature_roar_02', 'creature/c80_roar_01',
-          'creature/creature_roar_01', 'creature/c80_monster_01', 'impact/impactSoft_heavy_002', 'creature/animal_moo'];
+          'creature/creature_roar_01', 'impact/impactWood_heavy_001', 'impact/impactSoft_heavy_002', 'creature/animal_moo'];
         await Promise.all(preload.map((p) => a.decode(p)));
         // CS-00: the title track (fades in over 2 s after the unlock)
         step('music', 'title', 2);
@@ -371,9 +373,10 @@ export default [
         bus.emit(E.CUTSCENE_END, { id: 'cs01', skipped: false }); g.game.setMode('play');
         // tutorial: the sleeping cow moos
         step('3d', 'creature/animal_moo', g.ctx.player.pos.clone().add(new g.THREE.Vector3(6, 0, 0)), { vol: 0.9 });
-        // CS-02: far drums at rate 0.6, the damped Sunbell clunk, the laugh chorus, the march, cloth / unsheathe, the battle sting
+        // CS-02 (WA15): the title-card wood hit (no monster drums), the damped Sunbell clunk, the laugh chorus, the march,
+        // cloth / unsheathe, the battle sting
         g.game.setMode('cutscene'); bus.emit(E.CUTSCENE_START, { id: 'cs02' });
-        step('2d', 'creature/c80_monster_0x', { rate: 0.6 });
+        step('2d', 'cs02.titleHit');
         step('2d', 'bellClunk');
         step('3d', 'laughChorus', 'swordcat', { count: 6, r: 18, dur: 2 });
         step('3d', 'march', 'swordcat', { on: true });
@@ -404,9 +407,9 @@ export default [
       });
       const s = r.end.started;
       const need = ['ui/drop_001', 'ui/drop_002', 'world/creak1', 'sword/sword_unsheathe', 'impact/armor_light', 'impact/cloth', 'cat/cat_purrsleepy_loop',
-        'creature/animal_moo', 'creature/c80_monster_0x', 'impact/cloth_heavy', 'sword/sword_unsheathe2', 'pickup/bubble2', 'impact/impactSoft_heavy_00x',
+        'creature/animal_moo', 'cs02.titleHit', 'impact/cloth_heavy', 'sword/sword_unsheathe2', 'pickup/bubble2', 'impact/impactSoft_heavy_00x',
         'creature/creature_roar_02', 'creature/c80_roar_01'];
-      const silent = need.filter((k) => !(s[k] > 0));
+      const silent = need.filter((k) => !(s[k] > 0) && !(k === 'cs02.titleHit' && s['impact/impactWood_heavy_001'] > 0));
       t.assert(silent.length === 0, `cue sheet sounds that did not start: ${silent.join(', ')}`);
       t.assert(r.purrLooping && r.purrGone, `CS-01 purr loop: looping ${r.purrLooping}, stopped ${r.purrGone}`);
       t.assert(r.mid.chorus === 6 && r.mid.marching && r.mid.bells >= 1, `CS-02 layers: chorus ${r.mid.chorus}, march ${r.mid.marching}, bells ${r.mid.bells}`);
@@ -437,11 +440,11 @@ export default [
       const sfxDay = await peak(t, 'sfx', 1500);
       t.log(`forest day: ambience ${s.ambience.join(',')}; sfx peak ${db(sfxDay)} dBFS`);
       await shot(t, '09-forest-day-stream');
-      // CS-04 Lantern Night: forest.camp → dark_forest_creepy (track volume 0.6), crickets, the campfire, the owl
+      // CS-04 Lantern Night (ART §9.3): forest.camp → lantern_night (field_of_dreams at 0.94), crickets, the campfire, the owl
       await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('forest.camp', true); else c.state.setFlag('forest.camp', true); });
       // no fight at the camp (a slow machine lets the camp rats alert first: the combat track then wins, rightly)
       await t.G(() => { const c = window.__GAME__.ctx; for (const e of [...(c.enemies?.list ?? [])]) c.enemies.despawn?.(e); window.__GAME__.teleport(4, 1, 34); });
-      const night = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'dark_forest_creepy' && d.playing && !d.fading), 12000);
+      const night = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => (d.track === 'lantern_night' || d.track === 'tavern_old_tower_inn') && d.playing && !d.fading), 12000);
       s = await st(t);
       t.assert(night, `night track after forest.camp (${JSON.stringify(s.music.decks)})`);
       t.assert(['crickets', 'campfire', 'owl'].every((k) => s.ambience.includes(k)) && !s.ambience.includes('birds'), `night ambience ${s.ambience}`);
@@ -539,9 +542,9 @@ export default [
       });
       t.assert(['letterFan', 'coo', 'wings', 'doorOpen', 'kittenCheer', 'rumble'].every((k) => (cues.started[k] ?? cues.counts[k] ?? 0) >= 1), `town cue parts: ${JSON.stringify(Object.fromEntries(['letterFan', 'coo', 'wings', 'doorOpen', 'kittenCheer', 'rumble'].map((k) => [k, cues.started[k] ?? 0])))}`);
       await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('gate.done', true); else c.state.setFlag('gate.done', true); window.__GAME__.teleport(0, 1, -46); });
-      const grey = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'story_lament_warriors_soul' && d.playing && !d.fading), 12000);
+      const grey = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'hub_hush' && d.playing && !d.fading && d.lowpass === 2200), 12000);
       s = await st(t);
-      t.assert(grey && !s.ambience.includes('birds'), `hub grey: lament ${grey}, ambience ${s.ambience}`);
+      t.assert(grey && !s.ambience.includes('birds'), `hub hush (WA §9, no lament loop): ${grey}, ambience ${s.ambience}`);
       await shot(t, '15-town-hub-grey');
       await t.G(() => window.__GAME__.ctx.audio.stopAll(0.1));
     },
@@ -567,7 +570,7 @@ export default [
       const held = await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().decks.some((d) => d.track === 'battle_theme_a' && d.playing && !d.fading), 8000);
       t.assert(held, 'battle_theme_a for The Line');
       await t.G(() => window.__GAME__.teleport(2, 1, 38));
-      t.assert(await until(t, () => window.__GAME__.ctx.audio.log.some((l) => /chain_0/.test(l)), 8000), 'the winch chains clank');
+      t.assert(await until(t, () => window.__GAME__.ctx.audio.log.some((l) => /winch|impactWood_light/.test(l)), 8000), 'the rope winch creaks (WA §9: no chains)');
       await t.wait(5000);
       s = await st(t);
       t.assert(s.director.target === 'battle_theme_a' && s.holds.includes('line'), `still held with no enemy near (${JSON.stringify(s.director)})`);

@@ -291,11 +291,15 @@ function hyenaFace(o, rogue) {
     + `<path d="M28 38 42 41M72 38 58 41" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>`;
 }
 
+/** The rats' colours, matching enemies/props.js `P` (ratFur plum, ratBelly lilac, peach ears): portrait = model. */
+const RAT = Object.freeze({ fur: '#6E5A86', face: '#7C6894', belly: '#9C88B4', ear: '#D9A494', nose: '#E58A9A', disc: '#FFE6BC' });
+
 function ratFace(o, captain) {
-  return '<circle cx="50" cy="50" r="50" fill="#D9D2C2"/>'
-    + `<circle cx="22" cy="30" r="15" fill="#9A9AA0" stroke="${INK}" stroke-width="2"/><circle cx="78" cy="30" r="15" fill="#9A9AA0" stroke="${INK}" stroke-width="2"/><circle cx="22" cy="30" r="9" fill="#E8A9B0"/><circle cx="78" cy="30" r="9" fill="#E8A9B0"/>`
-    + `<path d="M50 24c18 0 30 12 30 28 0 10-8 18-18 26l-12 12-12-12c-10-8-18-16-18-26 0-16 12-28 30-28Z" fill="#A6A6AC" stroke="${INK}" stroke-width="2.2"/>`
-    + `<ellipse cx="50" cy="88" rx="5" ry="4" fill="#E58A9A" stroke="${INK}" stroke-width="1.4"/>`
+  return `<circle cx="50" cy="50" r="50" fill="${RAT.disc}"/>`
+    + `<circle cx="22" cy="30" r="15" fill="${RAT.fur}" stroke="${INK}" stroke-width="2"/><circle cx="78" cy="30" r="15" fill="${RAT.fur}" stroke="${INK}" stroke-width="2"/><circle cx="22" cy="30" r="9" fill="${RAT.ear}"/><circle cx="78" cy="30" r="9" fill="${RAT.ear}"/>`
+    + `<path d="M50 24c18 0 30 12 30 28 0 10-8 18-18 26l-12 12-12-12c-10-8-18-16-18-26 0-16 12-28 30-28Z" fill="${RAT.face}" stroke="${INK}" stroke-width="2.2"/>`
+    + `<path d="M40 70q10-8 20 0l-10 14Z" fill="${RAT.belly}"/>`
+    + `<ellipse cx="50" cy="88" rx="5" ry="4" fill="${RAT.nose}" stroke="${INK}" stroke-width="1.4"/>`
     + `<circle cx="38" cy="54" r="5" fill="#2A1E18"/><circle cx="62" cy="54" r="5" fill="#2A1E18"/><circle cx="36.5" cy="52.5" r="1.6" fill="#fff"/><circle cx="60.5" cy="52.5" r="1.6" fill="#fff"/>`
     + '<g stroke="#F5EEE6" stroke-width="1.1" stroke-linecap="round"><path d="M44 82 20 76M44 85 22 88M56 82 80 76M56 85 78 88"/></g>'
     + (captain ? `<path d="M26 30c4-14 14-20 24-20s20 6 24 20Z" fill="#3E2C1E" stroke="${INK}" stroke-width="2"/><path d="M60 14c8-10 22-10 26 0-8-2-16 0-22 6Z" fill="#E8C66A" stroke="${INK}" stroke-width="1.4"/>` : '');

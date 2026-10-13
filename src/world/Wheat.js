@@ -22,8 +22,14 @@ export function trampleAt(d, T = TRAMPLE) {
 }
 function smooth01(a, b, x) { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
 
-/** Wheat look + build knobs. */
+/**
+ * Wheat look + build knobs. `tiers`: per-preset clump detail (PERF §1.2 triangle budget): stalks per clump, stalk rows
+ * (3 = a curved 2-quad stalk, 2 = one straight quad) and a width boost so a sparser clump keeps its body. High keeps the
+ * full 10-stalk clump (90 tris); Med 7 × 7 = 49, Low 6 × 7 = 42 (and Low plants every other clump).
+ */
 export const WHEAT = Object.freeze({
+  tiers: Object.freeze({ low: Object.freeze({ stalks: 6, rows: 2, widen: 1.3 }), med: Object.freeze({ stalks: 7, rows: 2, widen: 1.2 }),
+    high: Object.freeze({ stalks: 10, rows: 3, widen: 1 }) }),
   stalks: 10, spread: 0.3, height: [0.82, 1.06], head: 0.2, headW: 0.03, stalkW: [0.018, 0.008], awn: 0.11,
   colors: { base: '#8CA848', stalk: '#E8CC78', head: '#F6DA88', headDark: '#D8B060', awn: '#FFE8A8' },
 });
@@ -31,9 +37,11 @@ export const WHEAT = Object.freeze({
 /**
  * One clump (unit scale, base at y 0, height ≈ 1): `stalks` tapered stalks with seed heads + awns. Pure (three only).
  * Attributes: position, normal, color, aH (0 at the root → 1 at the tip, drives the sway).
- * @param {number} [seed]
+ * @param {number} [seed] @param {typeof WHEAT} [o] @param {{stalks: number, rows: number, widen: number}} [tier]
+ *   a `WHEAT.tiers` entry (default: the full High clump)
  */
-export function makeWheatClumpGeometry(seed = 1, o = WHEAT) {
+export function makeWheatClumpGeometry(seed = 1, o = WHEAT, tier = WHEAT.tiers.high) {
+  const nStalks = Math.max(1, tier?.stalks ?? o.stalks), rows = Math.max(2, Math.min(3, tier?.rows ?? 3)), widen = tier?.widen ?? 1;
   const rnd = mulberry32(seed >>> 0);
   const P = [], N = [], C = [], H = [], I = [];
   const col = (hex) => new THREE.Color(hex);
@@ -43,7 +51,7 @@ export function makeWheatClumpGeometry(seed = 1, o = WHEAT) {
     P.push(x, y, z); const l = Math.hypot(nx, 1, nz); N.push(nx / l, 1 / l, nz / l); C.push(c.r, c.g, c.b); H.push(y);
     return P.length / 3 - 1;
   };
-  for (let s = 0; s < o.stalks; s++) {
+  for (let s = 0; s < nStalks; s++) {
     const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * o.spread;
     const bx = Math.sin(a) * r, bz = Math.cos(a) * r;
     const h = 0.82 + rnd() * 0.18;                         // per-stalk height (the instance scales the clump)
@@ -51,11 +59,11 @@ export function makeWheatClumpGeometry(seed = 1, o = WHEAT) {
     const lx = Math.sin(la) * lean, lz = Math.cos(la) * lean;
     const fy = rnd() * Math.PI;                             // stalk card facing
     const fx = Math.cos(fy), fz = -Math.sin(fy);
-    // stalk: 3 rows (base, mid, top), curving with the lean (t²)
-    const rows = 3, ids = [];
+    // stalk: `rows` rows (base, [mid,] top), curving with the lean (t²)
+    const ids = [];
     for (let k = 0; k < rows; k++) {
       const t = k / (rows - 1), y = t * (h - o.head * 0.6);
-      const w = o.stalkW[0] + (o.stalkW[1] - o.stalkW[0]) * t;
+      const w = (o.stalkW[0] + (o.stalkW[1] - o.stalkW[0]) * t) * widen;
       const cx = bx + lx * t * t, cz = bz + lz * t * t;
       tmp.copy(cBase).lerp(cStalk, Math.min(1, t * 1.3));
       ids.push(vert(cx - fx * w, y, cz - fz * w, tmp, lx * 0.5, lz * 0.5), vert(cx + fx * w, y, cz + fz * w, tmp, lx * 0.5, lz * 0.5));
@@ -65,7 +73,7 @@ export function makeWheatClumpGeometry(seed = 1, o = WHEAT) {
     const hx = bx + lx, hz = bz + lz, y0 = h - o.head * 0.75, y1 = h + o.head * 0.25, ym = y0 + (y1 - y0) * 0.45;
     const tip = [hx + lx * 0.5, y1, hz + lz * 0.5];
     for (const ang of [fy, fy + Math.PI / 2]) {
-      const dx = Math.cos(ang) * o.headW, dz = -Math.sin(ang) * o.headW;
+      const dx = Math.cos(ang) * o.headW * widen, dz = -Math.sin(ang) * o.headW * widen;
       const b = vert(hx, y0, hz, cDark, lx, lz);
       const l = vert(hx - dx + lx * 0.2, ym, hz - dz + lz * 0.2, cHead, lx, lz);
       const rr = vert(hx + dx + lx * 0.2, ym, hz + dz + lz * 0.2, cHead, lx, lz);
@@ -152,8 +160,10 @@ float wh21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32)
  * per frame. The mesh is level-owned (userData.owned).
  */
 export class WheatField {
-  constructor({ seed = 5, name = 'wheat' } = {}) {
+  /** @param {{seed?: number, name?: string, quality?: string}} [o] `quality`: a preset id picking WHEAT.tiers (default high) */
+  constructor({ seed = 5, name = 'wheat', quality = 'high' } = {}) {
     this.seed = seed; this.name = name;
+    this.tier = WHEAT.tiers[quality] ?? WHEAT.tiers.high;
     this.items = [];
     this.uniforms = { uTime: { value: 0 }, uWind: { value: 0.6 }, uGust: { value: 0.5 },
       uWindDir: { value: new THREE.Vector2(0.8, 0.6).normalize() },
@@ -168,7 +178,7 @@ export class WheatField {
   /** Build the InstancedMesh (null when empty). */
   build() {
     if (!this.items.length) return null;
-    const geo = makeWheatClumpGeometry(this.seed);
+    const geo = makeWheatClumpGeometry(this.seed, WHEAT, this.tier);
     geo.userData.owned = true;
     const mat = makeWheatMaterial(this.uniforms);
     const mesh = new THREE.InstancedMesh(geo, mat, this.items.length);

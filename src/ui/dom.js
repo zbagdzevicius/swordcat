@@ -30,10 +30,11 @@ export function setHtml(e, s) {
   if (e._h !== v) { e._h = v; e.innerHTML = v; }
 }
 
-/** Toggle a class only when it changed. */
+/** Toggle a class only when it changed. Shares its cache with `pulse`, so a pulsed class can be flagged off again. */
 export function flag(e, cls, on) {
   if (!e) return;
   const k = '_c_' + cls;
+  if (!on) _pulseQ?.get(e)?.delete(cls);         // a pending pulse restart must not re-add a class flagged off
   if (e[k] === !!on) return;
   e[k] = !!on;
   e.classList.toggle(cls, !!on);
@@ -60,6 +61,7 @@ const _nextFrame = (fn) => (typeof requestAnimationFrame === 'function' ? reques
  */
 export function pulse(e, cls) {
   if (!e) return;
+  e['_c_' + cls] = true;                         // keep flag()'s cache honest: flag(e, cls, false) must remove it later
   if (!e.classList.contains(cls)) {
     if (_pulseQ?.get(e)?.has(cls)) return;      // already queued to restart
     e.classList.add(cls);

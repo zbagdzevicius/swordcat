@@ -17,7 +17,7 @@ import { E } from '../../core/events.js';
 const K = (n) => `models/env/castle/${n}.glb`;
 const G = (n) => `models/env/graveyard/${n}.glb`;
 const M = {
-  tower: K('tower-square'), wall: K('wall'), portcullis: K('metal-gate'), banner: K('flag-banner-long'), flag: K('flag'),
+  tower: K('tower-square'), wall: K('wall'), banner: K('flag-banner-long'), flag: K('flag'),
   // LI W15 "Hyena Toy Fort": intact, cork-and-coral siege toys with pennants (no wrecks, no debris, no craters)
   siegeTower: K('siege-tower'), catapult: K('siege-catapult'), ram: K('siege-ram'), ballista: K('siege-ballista'), pennant: K('flag-pennant'),
   rocksL: K('rocks-large'), rocksS: K('rocks-small'), hay: G('hay-bale'),
@@ -25,12 +25,18 @@ const M = {
   stoneL: 'models/env/nature/stone_largeA.glb', stoneL2: 'models/env/nature/stone_largeB.glb', reeds: 'models/env/nature/grass_large.glb',
 };
 const BRICKS = 'textures/bricks076c/color.jpg';
-/** LI W4 / W15 looks: coral sandstone, cork toys, foam lances, painted shields, sunset lamps, the steel-blue portcullis. */
+/** LI W4 / W15 looks: coral sandstone, cork toys, foam lances, painted shields, sunset lamps, the honey / teal toy gate. */
 const LOOK = Object.freeze({
   stone: { tint: '#E8B898', sat: 0.9, mul: 1.0 }, tower: { tint: '#E8B898', sat: 0.9 }, toy: { tint: '#F2C8A0', sat: 1.0 }, toyCork: { tint: '#E0B888', sat: 1.0 },
-  hay: { sat: 0.6, tint: '#F2D27A' }, portcullis: { tint: '#8E96A2' }, banner: { tint: '#FF9E7A' },
+  hay: { sat: 0.6, tint: '#F2D27A' }, banner: { tint: '#FF9E7A' },
+  honey: '#E8A85A', honeyDark: '#C98A4A', coral: '#FF9E7A', seaTeal: '#3FC1C9',
   lamp: '#FFB070', lampGlass: '#FFD9A0', shaft: '#C99A6A', foam: '#FFF6E8', teal: '#3FA59A', mustard: '#E0B043',
 });
+/** The combat deck paint: the sand band (width, colour) and its lane dash colours; the stretch it covers (z). */
+export const DECK_PAINT = Object.freeze({ w: 4.4, sand: '#FBE6BC', coral: '#FF9E7A', z0: -14, z1: 47 });
+/** The Line / B2 parapet bunting: strings along both parapets (x ±5.8) between bunting poles, shields every 6 m. */
+export const DECK_DRESS = Object.freeze({ x: 5.8, poleH: 3.4, runs: [[-9, 3], [12.5, 27], [28, 37.5]], shieldStep: 6 });
+
 /** The causeway's pale kerb / ledge rim colour (vertex colour × the brick map). */
 const LIP = '#FFFDF6';
 
@@ -47,6 +53,9 @@ export const GATE = Object.freeze({
 });
 /** Parapet runs (0.6 m high, 0.4 m thick) along both edges: 18 m with 2 m gaps, none where the towers stand. */
 export const PARAPETS = Object.freeze([[-60, -42], [-40, -22], [-20, -2], [0, 4.4], [11.6, 18], [20, 38], [40, 44.2]]);
+
+/** Is deck z on a parapet run (with `pad` m to spare at both ends)? */
+export const onParapet = (z, pad = 0) => PARAPETS.some(([a, b]) => z >= a + pad && z <= b - pad);
 
 /** The Line's disc arms once S1 and S2 are beaten (world's zone flags, or story's `gate.back`). */
 export const LINE_WHEN = 'gate.back && !gate.line || gate.cleared.s1 && gate.cleared.s2 && !gate.line';
@@ -80,9 +89,24 @@ function winchParts() {
     for (const dz of [-0.4, 0.4]) { const g = new THREE.BoxGeometry(0.14, 1.35, 0.14); g.rotateX(dz > 0 ? -0.28 : 0.28); p.push([g.translate(sx, 0.75, dz * 0.6), C.wood]); }
   }
   const drum = new THREE.CylinderGeometry(0.42, 0.42, 2.0, 16); drum.rotateZ(Math.PI / 2); p.push([drum.translate(0, 1.0, 0), '#B7773F']);
-  for (const x of [-0.6, 0, 0.6]) { const r = new THREE.TorusGeometry(0.43, 0.04, 5, 16); r.rotateY(Math.PI / 2); p.push([r.translate(x, 1.0, 0), C.iron]); }
-  const wheel = new THREE.TorusGeometry(0.55, 0.05, 6, 18); wheel.rotateY(Math.PI / 2); p.push([wheel.translate(1.35, 1.0, 0), C.iron]);
-  for (let i = 0; i < 4; i++) { const s = new THREE.BoxGeometry(0.04, 1.1, 0.06); s.rotateX((i / 4) * Math.PI); p.push([s.translate(1.35, 1.0, 0), C.iron]); }
+  for (const x of [-0.6, 0, 0.6]) { const r = new THREE.TorusGeometry(0.43, 0.04, 5, 16); r.rotateY(Math.PI / 2); p.push([r.translate(x, 1.0, 0), LOOK.teal]); }
+  const wheel = new THREE.TorusGeometry(0.55, 0.05, 6, 18); wheel.rotateY(Math.PI / 2); p.push([wheel.translate(1.35, 1.0, 0), LOOK.teal]);
+  for (let i = 0; i < 4; i++) { const s = new THREE.BoxGeometry(0.04, 1.1, 0.06); s.rotateX((i / 4) * Math.PI); p.push([s.translate(1.35, 1.0, 0), LOOK.teal]); }
+  return p;
+}
+
+/** The winch rope (LI W15: rope, not iron chain): a sagging run of thick rope segments from the drum (y 1) up to the
+ *  gate beam at (0, by, bz) in the winch's frame. */
+export function winchRopeParts(by, bz, n = 12) {
+  const a = new THREE.Vector3(0, 1.0, 0), b = new THREE.Vector3(0, by, bz), p = [], q0 = new THREE.Vector3(), q1 = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  const at = (t, q) => { q.copy(a).lerp(b, t); q.y -= Math.sin(t * Math.PI) * 0.4; return q; };
+  for (let i = 0; i < n; i++) {
+    at(i / n, q0); at((i + 1) / n, q1);
+    const d = q1.clone().sub(q0), len = d.length();
+    const g = new THREE.CylinderGeometry(0.06, 0.06, len + 0.04, 6);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, d.normalize()));
+    p.push([g.translate((q0.x + q1.x) / 2, (q0.y + q1.y) / 2, (q0.z + q1.z) / 2), i % 2 ? C.rope : '#D8B27A']);
+  }
   return p;
 }
 
@@ -121,6 +145,49 @@ function hyenaBannerParts() {
     [box(0.42, 0.08, 0.035, 0, 2.35, 0.02), LOOK.mustard], [box(0.08, 0.32, 0.035, -0.13, 2.15, 0.02), LOOK.mustard], [box(0.08, 0.32, 0.035, 0.13, 2.15, 0.02), LOOK.mustard],
     [new THREE.ConeGeometry(0.1, 0.4, 4).translate(0, 3.35, 0), C.iron]];
 }
+/**
+ * The toy-fort gate (LI W15, replaces the Kenney iron portcullis): painted honey / teal slats with rounded cream
+ * teeth, two cross rails, a beam, and a row of coral / sea-teal / cream pennants under the beam (both faces).
+ * Built in place: x across the passage (w), y up from the teeth (0 … h), z through the gate (centred).
+ */
+export function toyGateParts(w, h) {
+  const p = [], n = 7, sw = (w - 0.2) / n, slat = sw * 0.78, r = slat / 2;
+  for (let i = 0; i < n; i++) {
+    const x = -w / 2 + 0.1 + sw * (i + 0.5);
+    p.push([box(slat, h - r - 0.3, 0.16, x, r + (h - r - 0.3) / 2, 0), i % 2 ? LOOK.teal : LOOK.honey]);
+    p.push([new THREE.SphereGeometry(r, 10, 6).scale(1, 1, 0.42).translate(x, r, 0), LOOK.foam]);   // rounded tooth
+  }
+  for (const y of [h * 0.3, h * 0.66]) p.push([box(w, 0.26, 0.24, 0, y, 0), LOOK.honeyDark]);
+  p.push([box(w + 0.2, 0.36, 0.32, 0, h - 0.18, 0), LOOK.honeyDark]);
+  const pc = [LOOK.coral, LOOK.seaTeal, LOOK.foam], np = 9;
+  for (const side of [-1, 1]) for (let i = 0; i < np; i++) {
+    const tri = new THREE.ConeGeometry(0.2, 0.42, 3).rotateZ(Math.PI).scale(1, 1, 0.15);
+    p.push([tri.translate(-w / 2 + 0.35 + i * (w - 0.7) / (np - 1), h - 0.57, side * 0.19), pc[i % 3]]);
+  }
+  return p;
+}
+
+/** A painted toy shield hung flat on a parapet's inner face (disc axis along x, two painted halves, a foam boss). */
+function wallShieldParts() {
+  const half = (t0, c) => [new THREE.CylinderGeometry(0.36, 0.36, 0.05, 14, 1, false, t0, Math.PI).rotateZ(Math.PI / 2), c];
+  return [half(0, LOOK.teal), half(Math.PI, LOOK.mustard), [new THREE.SphereGeometry(0.09, 8, 6).scale(0.5, 1, 1).translate(0.04, 0, 0), LOOK.foam]];
+}
+/** A honey bunting pole with a cream ball cap (the strings' visible anchors). */
+function buntingPoleParts(h) {
+  return [[cyl(0.06, 0.07, h), LOOK.honeyDark], [new THREE.SphereGeometry(0.13, 10, 8).translate(0, h + 0.08, 0), LOOK.foam]];
+}
+/**
+ * The combat deck's paint (finding: the Line / B2 floor was a monotone brick field): a lighter sand path band down the
+ * middle of the causeway with coral / teal painted lane dashes on both edges (visual only, 1 cm, under the chalk).
+ */
+export function deckPaintParts(z0, z1, w = DECK_PAINT.w) {
+  const p = [[box(w, 0.006, z1 - z0, 0, 0.003, (z0 + z1) / 2), DECK_PAINT.sand]];
+  for (const sx of [-1, 1]) for (let z = z0 + 0.6, i = 0; z + 1.4 < z1; z += 2.4, i++) {
+    p.push([box(0.16, 0.009, 1.4, sx * (w / 2 + 0.25), 0.0045, z + 0.7), i % 2 ? LOOK.teal : DECK_PAINT.coral]);
+  }
+  return p;
+}
+
 /** A warm sunset lamp post (honey wood, glass lantern) by the gatehouse (LI W15: lamps, not fire baskets). */
 function lampPostParts() {
   return [[cyl(0.07, 0.09, 1.9), C.wood], [box(0.34, 0.06, 0.34, 0, 1.92, 0), C.woodDark], [box(0.26, 0.32, 0.26, 0, 2.11, 0), LOOK.lampGlass],
@@ -193,6 +260,13 @@ const SETPIECES = {
     // the chalk Line at z +10 and the winch zone ring
     kit.place(kit.proc('chalk_line', () => lineParts(11.4)), 0, GATE.line, { y: top, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
     kit.anchor('line_mark', 0, GATE.line, 0, Math.PI);
+    // the combat deck's sand band + lane dashes (the Line and Cacklejaw's arena), poles for the parapet bunting, shields
+    kit.place(kit.proc('deck_paint', () => deckPaintParts(DECK_PAINT.z0, DECK_PAINT.z1)), 0, 0, { y: top, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
+    const pole = kit.proc('bunting_pole', () => buntingPoleParts(DECK_DRESS.poleH)), shield = kit.proc('wall_shield', wallShieldParts);
+    for (const sx of [-1, 1]) for (const [z0, z1] of DECK_DRESS.runs) {
+      for (const z of [z0, z1]) kit.place(pole, sx * DECK_DRESS.x, z, { y: 0.6, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
+      for (let z = z0 + 2.5; z < z1 - 1; z += DECK_DRESS.shieldStep) if (onParapet(z, 0.4)) kit.place(shield, sx * (d.x - 0.43), z, { y: 0.42, yaw: sx > 0 ? Math.PI : 0, collider: false, clear: false, occupy: false, jitter: 0.04, ground: false });
+    }
     kit.place(kit.proc('winch_ring', () => ringParts(GATE.winchR)), GATE.winch[0], GATE.winch[1], { y: top, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
     // lanes and spoon rows (story, enemies)
     LINE.lanes.forEach(([x, z], i) => kit.anchor('lane_' + i, x, z, 0, 0));
@@ -219,8 +293,7 @@ const SETPIECES = {
   /** The gatehouse: two towers, the arch over the 6.4 m passage, the portcullis (animated), walls along the shore, torches. */
   async gatehouse(kit) {
     const ctx = kit.ctx, level = kit.level, gh = GATE.gatehouse;
-    const [tower, wall, port, banner] = await Promise.all([kit.tpl(M.tower, LOOK.tower), kit.tpl(M.wall, LOOK.tower), kit.tpl(M.portcullis, LOOK.portcullis),
-      kit.tpl(M.banner, LOOK.banner)]);
+    const [tower, wall, banner] = await Promise.all([kit.tpl(M.tower, LOOK.tower), kit.tpl(M.wall, LOOK.tower), kit.tpl(M.banner, LOOK.banner)]);
     for (const sx of [-1, 1]) if (tower) kit.place(tower, sx * gh.towerX, gh.z, { fit: { h: gh.towerH }, yaw: 0, collider: 'box', shrink: 0.98, jitter: 0.03, clear: 3, into: kit.gatehouseTowers ?? kit.castle });
     // the arch: a stone lintel block over the passage, with crenellations (one mesh: they fade together)
     const [a0, a1] = gh.arch, [y0, y1] = gh.archY;
@@ -231,12 +304,11 @@ const SETPIECES = {
     if (!lmat.map) lmat.color.set('#E2C8AC');
     const lmesh = new THREE.Mesh(lintel, lmat); lmesh.name = 'gatehouseArch'; lmesh.castShadow = true; lmesh.receiveShadow = true; lmesh.userData.camFade = 'roof'; lmesh.userData.roofPad = ARCH_ROOF_PAD;
     kit.object(lmesh);
-    // the portcullis (Kenney metal gate stretched over the passage): raised; the 100 % test drops and lifts it
-    if (port) {
-      const b = port.box, mesh = kit.mesh(port, { name: 'portcullis' });
-      const sw = (a1 - a0) / (b.max.z - b.min.z), sh = (y0 - 0.1) / (b.max.y - b.min.y);
-      mesh.scale.set(1.6, sh, sw);
-      mesh.rotation.y = Math.PI / 2;
+    // the portcullis (LI W15: a painted wooden toy gate with rounded teeth and pennants, built to the passage): raised;
+    // the 100 % test drops and lifts it
+    const port = kit.proc('toy_gate', () => toyGateParts(a1 - a0, y0 - 0.1));
+    {
+      const mesh = kit.mesh(port, { name: 'portcullis' });
       // CONTROLS_SPEC §3: raised, the bars hang across the passage at lens height when she walks under the arch (yaw 0:
       // the lens sits north of the gatehouse), so they fade by the roof rule like the lintel; dropped, they are a wall
       // (solid: fade only when they hide her). The camera's occluder boxes are static, so the pivot is re-registered
@@ -244,7 +316,6 @@ const SETPIECES = {
       const pg = new THREE.Group(); pg.name = 'portcullisPivot'; pg.add(mesh);
       const tagPort = (down) => { pg.userData.camFade = down ? 'solid' : 'roof'; pg.userData.roofPad = down ? undefined : ARCH_ROOF_PAD + 1.2; };
       tagPort(false);
-      mesh.position.set(-(b.min.z + b.max.z) / 2 * sw, -b.min.y * sh, 0);
       pg.position.set(0, 0, gh.z - 1.2);
       kit.object(pg);
       const up = y0 - 0.6;
@@ -286,17 +357,12 @@ const SETPIECES = {
     }
   },
 
-  /** The winch (0, +41): the drum and crank, the chain to the gatehouse; Earl Grey and Pip work it (anchors). */
+  /** The winch (0, +41): the drum and crank, the rope to the gatehouse; Earl Grey and Pip work it (anchors). */
   async winch(kit) {
     const [wx, wz] = GATE.winch;
     kit.place(kit.proc('winch', winchParts), wx, wz, { yaw: 0, collider: 'box', shrink: 0.9, jitter: 0, clear: false, occupy: 1.5, height: 1.4 });
-    const chain = kit.proc('winch_chain', () => {
-      const a = new THREE.Vector3(0, 1.0, 0), b = new THREE.Vector3(0, GATE.gatehouse.archY[0] - 0.2, GATE.gatehouse.z - 1.4 - wz);
-      const p = [];
-      for (let i = 0; i < 18; i++) { const t = (i + 0.5) / 18, q = a.clone().lerp(b, t); q.y -= Math.sin(t * Math.PI) * 0.4; const l = new THREE.TorusGeometry(0.08, 0.025, 4, 8); if (i % 2) l.rotateY(Math.PI / 2); p.push([l.translate(q.x, q.y, q.z), C.iron]); }
-      return p;
-    });
-    kit.place(chain, wx, wz, { y: 0, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
+    const rope = kit.proc('winch_rope', () => winchRopeParts(GATE.gatehouse.archY[0] - 0.2, GATE.gatehouse.z - 1.4 - wz));
+    kit.place(rope, wx, wz, { y: 0, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
     kit.anchor('winch', wx, wz, 0, Math.PI);
     kit.anchor('winch_a', wx - 1.7, wz + 0.8, 0, Math.PI);
     kit.anchor('winch_b', wx + 1.9, wz + 0.4, 0, -Math.PI / 2);
@@ -406,7 +472,9 @@ export default defineLevel({
   env: { default: 'gate_dusk' },
   // WA §2.6: the toy fort's pennant strings (coral / sea-teal / cream) between the siege toys
   accent: 'gate',
+  // the Line / B2 deck: pennant strings on poles along both parapets (first, so Low keeps them), then the toy fort
   bunting: [
+    ...[-1, 1].flatMap((sx) => DECK_DRESS.runs.map(([z0, z1]) => ({ a: [sx * DECK_DRESS.x, DECK_DRESS.poleH + 0.5, z0], b: [sx * DECK_DRESS.x, DECK_DRESS.poleH + 0.5, z1] }))),
     { a: [-17, 6.5, -72], b: [-6, 4.4, -84] },
     { a: [15, 4.8, -66], b: [18, 4.0, -84] },
     { a: [-6, 4.4, -84], b: [-24, 4.6, -84] },
@@ -420,6 +488,8 @@ export default defineLevel({
   music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },   // audio holds battle_theme_a through the Line
   spine: [[0, 66], [0, 52], [0, 41], [0, 10], [0, -30], [0, -60], [0, -72], [4, -80]],
   paths: [{ pts: [[0, -66], [-8, -66]], width: 3 }, { pts: [[0, -70], [10, -78]], width: 3 }],
+  // AUTOCAM §9.3 skyline audit: the gatehouse and the causeway towers stay drawn at the boss zoom
+  farKeep: [...[-1, 1].map((s) => [s * GATE.gatehouse.towerX, GATE.gatehouse.z, GATE.gatehouse.towerH]), ...GATE.towers.map(([x, z]) => [x, z, GATE.towerH])],
   spawns: { start: [0, 58, Math.PI], boss: [2.5, 20, Math.PI], line: [0, 12, Math.PI] },
   anchors: { horde_line: [0, -66], crane_gate: [0, 30, 9], causeway_mid: [0, 10] },
   zones: [
@@ -460,6 +530,6 @@ export default defineLevel({
   horizon: false,
   lights: 2,
   grass: { height: 0.24, near: 0.7 },
-  models: [M.tower, M.wall, M.portcullis, M.banner, M.crate, M.crateS, M.barrel, M.cart, M.hay, M.siegeTower, M.catapult, M.ram, M.pennant,
+  models: [M.tower, M.wall, M.banner, M.crate, M.crateS, M.barrel, M.cart, M.hay, M.siegeTower, M.catapult, M.ram, M.pennant,
     M.rocksL, M.ballista, K('bridge-straight-pillar')],
 });

@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { canvas2d, Spring, damp, mulberry32, hashString, charDetail, segScale, GeoBuilder, rgb } from './util.js';
 import { own } from './materials.js';
+import { fxBasicMaterial } from '../fx/shaders.js';
 
 /**
  * Eye look (ART §5.3): pupil radius (of 256) per kind, catchlights (upper-left ellipse, lower-right dot, top sparkle),
@@ -77,7 +78,7 @@ export function eyeGeometry(r = 0.045, flat = 0.55, detail = 1) {
 
 const _matCache = new Map();
 /**
- * Unlit eye material (ART §5.3: MeshBasicMaterial, the iris texture carries all the shading), cached per texture and
+ * Unlit eye material (ART §5.3: unlit, the iris texture carries all the shading; the fx basic module), cached per texture and
  * mesh kind (a material is never shared between plain and instanced meshes: PERF H3).
  * @param {object} [o] makeEyeTexture options @param {'plain'|'instanced'} [kind]
  */
@@ -85,7 +86,8 @@ export function eyeMaterial(o = {}, kind = 'plain') {
   const tex = makeEyeTexture(o);
   const key = (tex ? tex.uuid : 'none:' + (o.outer ?? '')) + ':' + kind;
   if (_matCache.has(key)) return _matCache.get(key);
-  const m = own(new THREE.MeshBasicMaterial({ map: tex, color: tex ? '#ffffff' : (o.outer ?? PAL.irisOuter) }));
+  // PERF §1.2: the unlit fx basic module (one program for every unlit card / eye / blob), not a Basic program
+  const m = own(fxBasicMaterial({ map: tex, color: tex ? '#ffffff' : (o.outer ?? PAL.irisOuter) }));
   m.userData.kind = kind;
   _matCache.set(key, m);
   return m;
@@ -109,7 +111,7 @@ export function ringGeometry(r, detail = 1) {
 
 let _glintMat = null;
 function glintMaterial() {
-  return _glintMat || (_glintMat = own(new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, fog: false })));
+  return _glintMat || (_glintMat = own(fxBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, fog: false })));
 }
 
 /**

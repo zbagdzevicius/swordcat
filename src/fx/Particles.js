@@ -7,7 +7,7 @@ import { FOG_FACTOR, SHAPES, OUTPUT, fogUniforms, fxShaderMaterial } from './sha
 import { setColor } from './util.js';
 
 /** Sprite shapes (fxShape in shaders.js). */
-export const SHAPE = Object.freeze({ SOFT: 0, PUFF: 1, STAR4: 2, STAR5: 3, RING: 4, SPARK: 5, HEART: 6, FEATHER: 7, DROPLET: 8, SHARD: 9, STAR8: 10, FISH: 11, CONFETTI: 12 });
+export const SHAPE = Object.freeze({ SOFT: 0, PUFF: 1, STAR4: 2, STAR5: 3, RING: 4, SPARK: 5, HEART: 6, FEATHER: 7, DROPLET: 8, SHARD: 9, STAR8: 10, FISH: 11, CONFETTI: 12, PLUS: 13 });
 /** Alpha-over-life curves. */
 export const FADE = Object.freeze({ LINEAR: 0, POP: 1, HOLD: 2, TWINKLE: 3, IN_OUT: 4 });
 /** Size-over-life curves (size0 → size1). */

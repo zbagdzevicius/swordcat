@@ -11,6 +11,7 @@
 // pre-tagged as their own highlight clones so it never clones them, and the hover rim is composed here with the rest.
 import * as THREE from 'three';
 import { WARM } from './tuning.js';
+import { simplifyGeometry } from './lod.js';
 
 const WHITE = new THREE.Color(1, 1, 1);
 const _col = new THREE.Color();
@@ -203,4 +204,111 @@ export function outlineTargets(mode, enemies, focus, engaged, maxEngaged, out = 
     scratch.length = 0;
   }
   return out;
+}
+
+// ------------------------------------------------------------------ outline hull (ART §5.4, X9)
+
+const _mA = new THREE.Matrix4(), _mB = new THREE.Matrix4(), _n3 = new THREE.Matrix3(), _hv = new THREE.Vector3();
+/** Meshes that never join a hull: fur shells / tufts / cards, plates, bubbles, the alert sprite, hulls and proxies. */
+const NO_HULL = /shell|tuft|fur|card|plate|bubble|alert|outline|silhouette|shadow|blob|glint|tell|ring/i;
+
+/** Does `o` belong in the hull (a visible, opaque, solid mesh)? */
+function hullable(o, root) {
+  if (!o.isMesh || o.isInstancedMesh || o.userData.noSilhouette || o.userData.noOutline || o.userData.outline) return false;
+  if (NO_HULL.test(o.name ?? '')) return false;
+  const m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!m || m.transparent || m.alphaTest > 0 || m.userData?.outline) return false;
+  const g = o.geometry;
+  if (!g?.attributes?.position || !g.attributes.normal) return false;
+  for (let p = o; p && p !== root.parent; p = p.parent) if (!p.visible) return false;
+  return true;
+}
+
+/**
+ * ART §5.4 / X9 enemy outline hull: ONE back-faced skinned mesh that shares the enemy's own skeleton — its skinned body
+ * parts (pre-multiplied by their bind matrices) and the rigid gear riding its bones (helms, beast heads, weapons; baked
+ * into their bone's bind space with weight 1) merged into one geometry — drawn with characters' constant-pixel ink
+ * material (`outlineMaterial(color, px)`). Unlike a box / ellipsoid proxy it hugs the real silhouette exactly.
+ * Returns null when the visual has no skeleton (procedural foes) or nothing to outline. `userData.dispose()` frees it.
+ * @param {THREE.Object3D} root the enemy visual @param {{px?: number, color?: THREE.ColorRepresentation,
+ *   material?: (color: any, px: number) => THREE.Material, simplify?: boolean}} [o] `material`: characters'
+ *   outlineMaterial; `simplify` false keeps the full-detail hull (tests)
+ * @returns {THREE.SkinnedMesh|null}
+ */
+export function buildEnemyHull(root, o = {}) {
+  if (!root) return null;
+  root.updateMatrixWorld(true);
+  // the main skeleton: the one with the most skinned vertices
+  let skel = null, best = -1;
+  root.traverse((c) => {
+    if (c.isSkinnedMesh && c.skeleton && hullable(c, root)) {
+      const n = c.geometry.attributes.position.count;
+      if (n > best) { best = n; skel = c.skeleton; }
+    }
+  });
+  if (!skel) return null;
+  const boneIdx = new Map(skel.bones.map((b, i) => [b, i]));
+  const pos = [], nrm = [], si = [], sw = [], idx = [];
+  /** Append `g` transformed by `mat`; skinned parts remap their bones (`bones`), rigid ones bind to bone `rigid`. */
+  const push = (g, mat, bones, rigid = 0) => {
+    const P = g.attributes.position, N = g.attributes.normal, base = pos.length / 3;
+    _n3.getNormalMatrix(mat);
+    const SI = bones ? g.attributes.skinIndex : null, SW = bones ? g.attributes.skinWeight : null;
+    for (let i = 0; i < P.count; i++) {
+      _hv.fromBufferAttribute(P, i).applyMatrix4(mat); pos.push(_hv.x, _hv.y, _hv.z);
+      _hv.fromBufferAttribute(N, i).applyMatrix3(_n3).normalize(); nrm.push(_hv.x, _hv.y, _hv.z);
+      if (SI) {
+        for (let k = 0; k < 4; k++) {
+          const b = bones[SI.getComponent(i, k)], j = b !== undefined ? boneIdx.get(b) : undefined;
+          si.push(j ?? 0); sw.push(j === undefined ? 0 : SW.getComponent(i, k));
+        }
+      } else { si.push(rigid, 0, 0, 0); sw.push(1, 0, 0, 0); }
+    }
+    if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i));
+    else for (let i = 0; i < P.count; i++) idx.push(base + i);
+  };
+  root.traverse((c) => {
+    if (!hullable(c, root)) return;
+    if (c.isSkinnedMesh) {
+      if (!c.skeleton || !c.geometry.attributes.skinIndex) return;
+      // skinned vertex (attached mode): world = Σ w · bone.matrixWorld · boneInverse · bindMatrix · p → pre-apply bindMatrix
+      push(c.geometry, c.bindMatrix, c.skeleton.bones);
+      return;
+    }
+    // rigid gear: its nearest ancestor bone of the main skeleton; local = inverse(bone.matrixWorld) · mesh.matrixWorld,
+    // bind-space = inverse(boneInverse) · local, weight 1 to that bone
+    let b = c.parent;
+    while (b && b !== root.parent && !boneIdx.has(b)) b = b.parent;
+    const j = b ? boneIdx.get(b) : undefined;
+    if (j === undefined) return;
+    _mA.copy(b.matrixWorld).invert().multiply(c.matrixWorld);
+    _mB.copy(skel.boneInverses[j]).invert().multiply(_mA);
+    push(c.geometry, _mB, null, j);
+  });
+  if (!pos.length) return null;
+  let g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+  g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
+  // PERF §1.2: a 1.6 px ink rim needs no full-detail silhouette: the hull draws a simplified, welded copy with smooth
+  // normals (lod.js; the ink pushes along them, so the welded rim also has no cracks at flat-shaded edges). Full
+  // detail until the simplifier has loaded.
+  const lg = o.simplify === false ? null : simplifyGeometry(g, WARM.lod.hullRatio, WARM.lod.error, { smooth: true });
+  if (lg) { g.dispose(); g = lg; }
+  const px = o.px ?? WARM.outline.px, color = o.color ?? '#4A2A1E';
+  const mat = typeof o.material === 'function' ? o.material(color, px)
+    : new THREE.MeshBasicMaterial({ color, side: THREE.BackSide, fog: true });
+  const mesh = new THREE.SkinnedMesh(g, mat);
+  mesh.name = 'outline';
+  mesh.userData.outline = true;
+  mesh.userData.noSilhouette = true;
+  mesh.frustumCulled = false;          // bones move it: the enemy's own culling decides (it hides with its visual)
+  mesh.castShadow = false; mesh.receiveShadow = false;
+  mesh.raycast = () => {};
+  root.add(mesh);
+  mesh.bind(skel, new THREE.Matrix4());
+  mesh.userData.dispose = () => { mesh.removeFromParent(); g.dispose(); mat.dispose(); };
+  return mesh;
 }

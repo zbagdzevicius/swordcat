@@ -1,11 +1,7 @@
 // src/story/assets.manifest.js  (owner: story) — every file this area loads, relative to public/assets/ (GAME_DESIGN §18.4,
-// §19.6). The fonts are the story overlay's (Overlay.js: logo, chapter cards, captions, dialogue fallback); the chest
-// is CS-01's "M. — my first" (Kenney Mini Dungeon; its sibling Textures/colormap.png ships with it).
+// §19.6). No fonts (ART §9.2: the overlay uses ui's one Fredoka woff2 through the --f-* variables). The chest
+// is CS-01b's "M. — my first" (Kenney Mini Dungeon; its sibling Textures/colormap.png ships with it).
 export default [
-  'fonts/CinzelDecorative-Bold.ttf',
-  'fonts/Cinzel-Variable.ttf',
-  'fonts/UncialAntiqua-Regular.ttf',
-  'fonts/Fredoka-Variable.ttf',
   'models/env/dungeon-mini/chest.glb',
 ];
 

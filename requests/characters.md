@@ -44,3 +44,39 @@ The API notes of this area are archived in `docs/api/characters.md`; what core a
   `Squash` in KittenBuilder, tell us and the model re-imports it.
 - PERF L3: after a cape / sword change the model calls `view.rebake()` when it exists (never in combat; deferred).
 - `player.debugFeatures()` passes through to `model.view.debugFeatures()` (ART G14); `player.object3d.userData.perfCat = 'hero'`.
+
+## Phase W pass (characters, 2026-10-12): what landed and what other areas can now call
+- **To enemies — requested (WA §2.5 / WA26, characters.W5):** Barkus's weapon: `BEAST_LOOKS.barkus.weapon` is
+  `'big_squeaky_bone'`; replace the Claymore GLB with `dress.hold('big_squeaky_bone', 'r')` (1 draw for 1, same hitbox
+  and timings; default fist offset in `CARRY`). Squeakybone (`bonehead`): `squeakyLook(model)` tints every material to
+  `#F3E6C8` through shared per-material twins (0 new draws / programs per spawn; returns a restore fn); the red rubber
+  knob comes from holding `'squeaky_bone'` in place of its current club. Both exported from `src/characters/index.js`.
+- **To enemies — available (PERF §9.4 / H7 → E7):** `bakeSkinned(root, skeleton, material, { filter, name })` in
+  `characters/merge.js` (unit-tested: baked vertices match the unbaked skinned + rigid parts within 1e-4 m at any pose
+  under a MODEL_FIT scale; parts with different boneInverses come back in `separate`). Material contract: vertex
+  colour × `aTexMix` (1 = textured part, colour white; 0 = vertex/material colour). `bakeInPlace(root, material)` hides
+  the merged parts. Bake once per template, clone per spawn.
+- **To companions — FYI:** `cheer`, `groom`, `twirl`, `boop`, `pawBump` are real poses now (`POSES`, `WARM_POSE_NAMES`)
+  with same-named procedural emotes (`kitten.emote(name)`; lengths in `EMOTE_DUR`). `KittenView.setOutline(on)`,
+  `setActivity(tier)`, `setCloseUp(on)` exist. KittenView tags `root.userData.perfCat` ('hero' / 'companions') unless
+  the owner already did.
+- **To world / ui (practice props, ON §4.2):** `buildProp('sacky_face')` (Sir Sacky `#E8A46B` sack's stitched face) and
+  `buildProp('wobble_smile')` (Sir Wobble's painted smile), one draw each, flat on +Z. `CATS.swordcat_tunic_sword` is the
+  Morning Practice outfit (sword visible). Pearl's portrait needs no ui change: `portraitSVG('pearl')` reads `CATS.pearl`.
+- **To player — FYI:** no `view.rebake()` yet: the hero bake (H7 hero / L3) is not done; her play draw list is 11 on
+  Med with shadows + hull (body, bow, eyes / lids / brows 3, blade + hilt 2, cape, tufts, shadow proxy, hull) against
+  ART X10's interim 9.
+- **From enemies (WA §3.1 foe hues, Phase W review) — open:** (1) `BEAST_PRESETS.hyena` is still tawny `#C99A5E`;
+  enemies now repaint the head's vertex colours at dress time (`kaykitGear.recolorBeastHead`, `palette.HEAD_REMAPS`:
+  fur → `#8E78AE` lilac-plum, spots → mustard). Please either adopt those values in the preset (the remap then becomes
+  a no-op) or accept an `opts.palette` override in `buildBeastHead`. CS-02 / cutscene hyenas built outside enemies'
+  `dressKayKit` still show tawny. (2) The wind-up `uHighlight` adds `TOON.highlightBase` over the whole surface: coral
+  `#FF8A3D` × 0.8 on a slate-violet crow reads pink-mauve (her hue). Ask: make the foe wind-up term rim-only (fresnel)
+  or expose a per-material base factor so enemies can set it to ~0.1.
+- (world, 2026-10-13) Shadow stage 2 is live: actors never reach the cached sun map (only static level casters on
+  STATIC_CASTER_LAYER do). `castShadow = true` on kitten bodies / shadowProxy / cape / bow / props (KittenBuilder,
+  Cape, Bow, Accessories, ProcProps) is now dead weight: set it false (K5, PERF §7.2); grounding comes from fx blobs.
+- (core, 2026-10-13, PERF §5 heap) Heap snapshot after town: `FurPart.mesh` (4.4 MB), `Kitten._kitGeo` (4.1 MB),
+  `Kitten._playGeo` (3.1 MB) keep CPU copies of static, non-skinned geometry. Where a geometry is never re-read on
+  the CPU and never redrawn after `dispose()`, call `releaseCpuOnUpload(root)` (`core/Assets.js`; keeps positions
+  and the index) — shared cached geometries that survive a level unload must not use it.

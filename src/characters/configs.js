@@ -25,11 +25,12 @@ const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade:
 export const SWORDCAT_CAPE = Object.freeze({ topW: 0.18, botW: 0.4, len: 0.4 });
 
 /**
- * Swordcat's config. `tunicSword`: the Morning Practice outfit (WARM_ADVENTURE_SPEC §13 sign-off 3, characters.W3): the
- * practice tunic with her sword in paw (the plain tunic carries none), so the practice swings show a blade.
+ * Swordcat's config. `tunicSword` (default true): the practice tunic keeps her sword in paw (WARM_ADVENTURE_SPEC §13
+ * sign-off 3, characters.W3), so every gameplay tunic look (the player's 'tunic' / 'tunic_bow' outfits included) shows a
+ * blade; pass `tunicSword: false` only for a shot that must show her empty-pawed.
  * @param {{ cape?: string|null, armour?: boolean, bow?: boolean, sword?: string, tier?: string, tunicSword?: boolean }} [o]
  */
-export function swordcatConfig({ cape = 'cream', armour = true, bow = true, sword = 'borrowed', tier = 'hero', tunicSword = false } = {}) {
+export function swordcatConfig({ cape = 'cream', armour = true, bow = true, sword = 'borrowed', tier = 'hero', tunicSword = true } = {}) {
   return {
     id: 'swordcat', name: 'Clementine', tier, scale: 1, width: 1, headScale: 1.0,
     coat: SWORDCAT_COAT,
@@ -43,6 +44,8 @@ export function swordcatConfig({ cape = 'cream', armour = true, bow = true, swor
     // back plate / belt show at its sides (art.md §1 silhouette: wide steel shoulder line, cape as a V frame)
     capeDims: SWORDCAT_CAPE,
     sword: armour || tunicSword ? sword : null,
+    // gameplay rest stand: the blade upright at her right side (reads from the iso lens; Poses.restUp)
+    idlePose: 'restUp',
     expression: 'worried',
     holy: true,
   };
@@ -54,7 +57,8 @@ export const SWORDCAT = swordcatConfig();
 export const CATS = {
   swordcat: SWORDCAT,
   swordcat_red: swordcatConfig({ cape: 'red' }),
-  swordcat_tunic: swordcatConfig({ armour: false, bow: false }),
+  // empty-pawed tunic (no sword): only for a shot that must show her without it
+  swordcat_tunic: swordcatConfig({ armour: false, bow: false, tunicSword: false }),
   swordcat_tunic_bow: swordcatConfig({ armour: false, bow: true }),
   // Morning Practice (WA §6 / ON §4): the practice tunic WITH the sword (sign-off 3 default: the tunic hid it)
   swordcat_tunic_sword: swordcatConfig({ armour: false, bow: true, tunicSword: true }),

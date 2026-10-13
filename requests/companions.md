@@ -55,3 +55,24 @@ Applied here (no action needed):
 - **To camera:** we read `cam.activityOf(actor)` when it exists, else our own frustum per frame (PERF §4.3 rule). We also
   read `cam.closeUp` and `cam.onScreen` (Volley).
 - **To save:** none.
+
+## from ui (Phase W review: barks)
+- **Bark bubbles (`src/companions/Bubble.js`, shared by companion, NPC, story and boss barks):** apply the WA §4.2
+  speech-bubble spec: Fredoka 500 at >= 16 CSS px on screen (Cacklejaw's barks render at ~12 px today), an 18 px corner
+  radius, a 2.5 px cocoa border (`#5A3B2E`) on cream (`#FFF8EE`), a 12 px tail, and at most 2 lines (`wrapText(text,
+  maxChars, 2)`). The parchment `PAPER` / `PAPER_EDGE` / `INK` values in the file header are the old M1 look.
+- **Never over a fight:** a bark's bubble must not anchor over an actor with an active aggro ring. When the speaker
+  (or the bubble rect) is within ~60 px of an alerted enemy's screen point, offset it toward the nearer screen edge,
+  away from the hero-to-foe line (ui does the same for its hint card and guide bubble: they fade back over alerted
+  foes, `prompts.js hintCovers`). Evidence: ui/43-hp-pills.png, Mochi's "My turn! Press it!" sits on a rat.
+- (world, 2026-10-13) Shadow stage 2 is live: NPC / villager / hub-kitten / LostKitten actors no longer get sun
+  shadows. Any actor without an `fx.blobs.add` registration now floats: please register blobs for those that lack one
+  (HubKittens, LostKitten cages, NpcActor if not via KittenVisual) and drop their `castShadow = true` (K5).
+
+## to companions, from core / fx / world (PERF §1.2 programs per level, the `perf:programs` hard gate)
+- `Bubble.js` speech-bubble `SpriteMaterial`: add `fog: false` (every other sprite in play is unfogged now: one sprite
+  program instead of two).
+- The cage cart (`models/env/town/cart.glb`, `LostKitten.js` CAGE_CART) and Tofu's barrels keep the GLB's
+  `MeshStandardMaterial` (a Physical program of its own per texture: `colormap`, `hexagons_medieval`). Convert them on
+  load like enemies do (`src/enemies/rig.js` `sharedToon(src, kind)` / characters `makeToonMaterial({ map, side })`, cached
+  per source material), or vertex-colour them into world's `worldMaterial()`: 1–2 programs → 0 on gate / forest / town.

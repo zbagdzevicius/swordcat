@@ -9,6 +9,8 @@
 //   lungeSpeed(def, dist, range)   the same in the units swings use: `def.lunge` is a speed (m/s) held over the lunge
 //                                  window, so the clamp runs on the distance it covers and returns the speed
 //   isParryKind / isWindupKind     telegraph kinds the parry ring / the windup bonus care about
+//   normalizeTelegraph(p, now)     the guaranteed `combat:telegraph` fields (windup, activeAt, targetsPlayer, glyph,
+//                                  lane `end`) filled when an emitter left them out (IMPLEMENTATION_PLAN §7.1, WA §3.4)
 //   ThreatBook                     live melee wind-ups (from combat:telegraph) → nextParryable (§8.2 parry ring,
 //                                  §8.1 threat snap), with activeAt / windup filled when enemies don't send them
 //
@@ -144,7 +146,9 @@ export function scoreCandidate(from, t, aimYaw, f, terms) {
  * Hostility / faction filtering is the caller's job (`cands` are already the actor's targets).
  *
  * `out` (optional) receives the breakdown: `{ target, score, terms, kept, prevScore, list: [{actor, score, terms}] }`
- * (`list` holds every candidate that passed the filter; `kept` = the sticky rule kept `prev`).
+ * (`list` holds every candidate that passed the filter; `kept` = the sticky rule kept `prev`). PERF B1: allocation
+ * free with an array `cands` — the `list` rows and their `terms` are pooled on `out._pool` and REUSED by the next
+ * call on the same `out` (copy what you keep).
  * @param {{pos:{x:number,y?:number,z:number}}} from
  * @param {Iterable<any>} cands
  * @param {{ range: number, angle?: number, refYaw: number, selected?: any, prev?: any, sticky?: boolean,
@@ -155,29 +159,43 @@ export function scoreCandidate(from, t, aimYaw, f, terms) {
 export function pickAssist(from, cands, o, out) {
   const A = aimCfg(), here = from.pos, range = o.range, half = o.angle ?? Math.PI;
   const groundY = o.groundY ?? here.y ?? 0, allowBrk = o.breakables !== false;
-  const ok = (a) => a && a !== from && a.pos && a.alive !== false && a.hurtable !== false && !a.hidden && !a.dormant;
+  const arr = Array.isArray(cands) ? cands : null;
+  const src = arr ?? Array.from(cands);                        // non-array iterables (tests) copy once; arrays never
+  const n = src.length;
   let hostileNear = false;
   if (allowBrk) {
-    for (const a of cands) {
-      if (!ok(a) || a.breakable) continue;
+    for (let i = 0; i < n; i++) {
+      const a = src[i];
+      if (!assistable(a, from) || a.breakable) continue;
       if (Math.hypot(a.pos.x - here.x, a.pos.z - here.z) - (a.radius ?? 0) <= A.breakableClear) { hostileNear = true; break; }
     }
   }
-  if (out) { out.target = null; out.score = Infinity; out.terms = null; out.kept = false; out.prevScore = Infinity; (out.list ??= []).length = 0; }
-  const terms = out ? {} : null;
+  let used = 0;
+  if (out) {
+    out.target = null; out.score = Infinity; out.terms = null; out.kept = false; out.prevScore = Infinity;
+    (out.list ??= []).length = 0;
+    out._pool ??= [];
+  }
+  const f = _flags;
   let best = null, bs = Infinity, bestTerms = null, prevScore = Infinity, prevTerms = null;
-  for (const a of cands) {
-    if (!ok(a)) continue;
+  for (let i = 0; i < n; i++) {
+    const a = src[i];
+    if (!assistable(a, from)) continue;
     if (a.breakable && (!allowBrk || hostileNear)) continue;
     if (!lowEnough(a, groundY)) continue;
     const dx = a.pos.x - here.x, dz = a.pos.z - here.z, d = Math.hypot(dx, dz) - (a.radius ?? 0);
     if (d > range) continue;
     if (half < Math.PI - 1e-6 && d > 1e-3 && Math.abs(wrapAngle(Math.atan2(dx, dz) - o.refYaw)) > half) continue;
-    const t = terms ? {} : null;
-    const sc = scoreCandidate(from, a, o.refYaw, {
-      windup: !!o.windup?.(a), selected: o.selected != null && a === o.selected, recentHit: !!o.recentHit?.(a), breakable: !!a.breakable,
-    }, t);
-    if (out) out.list.push({ actor: a, score: sc, terms: t });
+    f.windup = !!o.windup?.(a); f.selected = o.selected != null && a === o.selected;
+    f.recentHit = !!o.recentHit?.(a); f.breakable = !!a.breakable;
+    let entry = null, t = null;
+    if (out) {                                                   // pooled breakdown rows: reused across calls
+      entry = out._pool[used] ?? (out._pool[used] = { actor: null, score: 0, terms: {} });
+      used++;
+      t = entry.terms;
+    }
+    const sc = scoreCandidate(from, a, o.refYaw, f, t);
+    if (entry) { entry.actor = a; entry.score = sc; out.list.push(entry); }
     if (a === o.prev) { prevScore = sc; prevTerms = t; }
     if (sc < bs) { bs = sc; best = a; bestTerms = t; }
   }
@@ -185,8 +203,20 @@ export function pickAssist(from, cands, o, out) {
   if ((o.sticky ?? o.prev != null) && o.prev && prevScore < Infinity && best !== o.prev && bs > prevScore - A.sticky) {
     best = o.prev; bs = prevScore; bestTerms = prevTerms; kept = true;
   }
-  if (out) { out.target = best; out.score = bs; out.terms = bestTerms; out.kept = kept; out.prevScore = prevScore; }
+  if (out) {
+    out.target = best; out.score = bs; out.terms = bestTerms; out.kept = kept; out.prevScore = prevScore;
+    const pool = out._pool;                                       // drop stale actor refs held by unused rows
+    for (let i = used; i < pool.length; i++) pool[i].actor = null;
+  }
   return best;
+}
+
+/** Scratch flags for scoreCandidate (pickAssist is not re-entrant: its hooks never call back into it). */
+const _flags = { windup: false, selected: false, recentHit: false, breakable: false };
+
+/** Candidate filter of pickAssist: alive, hurtable, visible, awake, not the picker itself. */
+function assistable(a, from) {
+  return !!a && a !== from && !!a.pos && a.alive !== false && a.hurtable !== false && !a.hidden && !a.dormant;
 }
 
 /** Is a flyer (crow) low enough to be hit (§7.2: crows only below `hittableBelow` 2.2 m)? */
@@ -195,6 +225,58 @@ export function lowEnough(t, groundY) {
   if (below == null) return true;
   if (t.grounded) return true;
   return (t.pos.y - (groundY ?? 0)) <= below;
+}
+
+/** Telegraph shapes whose payload carries the lane end point `end` (AUTOCAM §6.2 THREAT / BOSS_LANE subjects). */
+export const LANE_SHAPES = Object.freeze(new Set(['lane', 'line']));
+
+/** The WA §3.4 glyph of a telegraph kind (`config.TELEGRAPH.glyph`), or null for kinds without one (jeer). */
+export function glyphFor(kind) {
+  return CFG.TELEGRAPH?.glyph?.[kind] ?? null;
+}
+
+/**
+ * Lane end point (pos + unit dir × length, XZ; y = pos.y) of a `lane` / `line` telegraph, or null. Length:
+ * `lane.l`, `l`, `range`, then `size` (a number, or `[w, l]`). Mirrors enemies' `laneEnd`; returns a new `{x, y, z}`.
+ * @param {any} p telegraph payload
+ */
+export function telegraphLaneEnd(p) {
+  const lane = p?.lane ?? null;
+  if (!p || (!lane && !LANE_SHAPES.has(p.shape))) return null;
+  const pos = p.pos, d = lane?.dir ?? p.dir;
+  if (!pos || !d) return null;
+  const sz = Array.isArray(p.size) ? p.size[1] : p.size;
+  const l = lane?.l ?? p.l ?? p.range ?? sz ?? null;
+  const n = Math.hypot(d.x ?? 0, d.z ?? 0);
+  if (!(n > 1e-6) || !(l > 0)) return null;
+  return { x: pos.x + (d.x / n) * l, y: pos.y ?? 0, z: pos.z + (d.z / n) * l };
+}
+
+/**
+ * IMPLEMENTATION_PLAN §7.1 / AUTOCAM §15 combat 2 / WA §3.4 (combat.W1): make a `combat:telegraph` payload carry the
+ * guaranteed fields, filling (mutating) ONLY the keys the emitter left out:
+ *   windup (s; default `duration`), activeAt (absolute game.time; default now + windup + the def's `active[0]` for
+ *   melee kinds), targetsPlayer (bool; `hooks.targets`, default true when there is no actor), glyph
+ *   (`TELEGRAPH.glyph[kind]` or null) and `end` for `lane` / `line` shapes (or any payload with a `lane`).
+ * Idempotent and allocation-free except the one `end` object it may create. Returns `p`.
+ * @param {any} p @param {number} now game.time
+ * @param {{ defOf?: (actor:any, p:any) => any, targets?: (actor:any, p:any) => boolean }} [hooks]
+ */
+export function normalizeTelegraph(p, now, hooks) {
+  if (!p || typeof p !== 'object') return p;
+  if (typeof p.windup !== 'number') p.windup = typeof p.duration === 'number' ? p.duration : 0;
+  if (typeof p.activeAt !== 'number') {
+    const def = MELEE_KINDS.has(p.kind) && p.actor ? hooks?.defOf?.(p.actor, p) ?? null : null;
+    p.activeAt = now + p.windup + (def?.active?.[0] ?? 0);
+  }
+  if (typeof p.targetsPlayer !== 'boolean') {
+    let t = true;
+    if (p.actor && hooks?.targets) { try { t = !!hooks.targets(p.actor, p); } catch { t = true; } }
+    p.targetsPlayer = t;
+  }
+  if (p.glyph == null) p.glyph = glyphFor(p.kind);
+  if (p.end == null && (p.lane || LANE_SHAPES.has(p.shape))) p.end = telegraphLaneEnd(p);
+  return p;
 }
 
 /**
@@ -208,6 +290,8 @@ export class ThreatBook {
     this.now = now;
     /** @type {Map<number, any>} telegraph id → entry */
     this.live = new Map();
+    /** the same entries as a dense array: every query walks it by index (Map iterators allocate; PERF B1) */
+    this.entries = [];
     this._pool = [];
   }
 
@@ -230,7 +314,8 @@ export class ThreatBook {
     if (p.activeAt === undefined) p.activeAt = activeAt;
     const targets = typeof p.targetsPlayer === 'boolean' ? p.targetsPlayer : (hooks.targets?.(p.actor, p) ?? true);
     if (p.targetsPlayer === undefined) p.targetsPlayer = targets;
-    const e = this.live.get(p.id) ?? this._pool.pop() ?? {};
+    let e = this.live.get(p.id);
+    if (!e) { e = this._pool.pop() ?? {}; this.entries.push(e); }
     e.id = p.id; e.actor = p.actor; e.kind = p.kind; e.start = now; e.windup = windup; e.activeAt = activeAt;
     e.attackId = p.attackId ?? null; e.targetsPlayer = targets; e.ended = false; e.payload = p;
     this.live.set(p.id, e);
@@ -251,20 +336,29 @@ export class ThreatBook {
 
   /** Drop entries past their strike (+keep), dead attackers and ended wind-ups of staggered attackers. */
   prune(keep = aimCfg().threatKeep) {
-    const now = this.now();
-    for (const [id, e] of this.live) {
-      const a = e.actor;
-      if (!a || a.alive === false || now > e.activeAt + keep || (e.ended && (a.staggerT ?? 0) > 0)) this._drop(id, e);
+    const now = this.now(), list = this.entries;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i], a = e.actor;
+      if (!a || a.alive === false || now > e.activeAt + keep || (e.ended && (a.staggerT ?? 0) > 0)) this._drop(e.id, e);
     }
   }
 
-  clear() { for (const [id, e] of this.live) this._drop(id, e); }
+  clear() { const list = this.entries; for (let i = list.length - 1; i >= 0; i--) this._drop(list[i].id, list[i]); }
 
-  _drop(id, e) { this.live.delete(id); e.actor = null; e.payload = null; this._pool.push(e); }
+  _drop(id, e) {
+    if (this.live.get(id) === e) this.live.delete(id);
+    const list = this.entries, i = list.indexOf(e);
+    if (i >= 0) { list[i] = list[list.length - 1]; list.length--; }
+    e.actor = null; e.payload = null; this._pool.push(e);
+  }
 
   /** Does `actor` have a live wind-up of one of `kinds` aimed at the player (§7.2 "winding up on her")? */
   windingUp(actor, kinds = WINDUP_KINDS) {
-    for (const e of this.live.values()) if (e.actor === actor && kinds.has(e.kind) && e.targetsPlayer && !e.ended) return true;
+    const list = this.entries;
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (e.actor === actor && kinds.has(e.kind) && e.targetsPlayer && !e.ended) return true;
+    }
     return false;
   }
 
@@ -276,7 +370,9 @@ export class ThreatBook {
   soonest(victim, maxDist, aimedAt) {
     const now = this.now();
     let best = null, bt = Infinity, bd = Infinity;
-    for (const e of this.live.values()) {
+    const list = this.entries;
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
       if (!PARRY_KINDS.has(e.kind) || e.activeAt < now - 1e-6) continue;
       const a = e.actor;
       if (!a?.pos || a.alive === false || (a.staggerT ?? 0) > 0) continue;

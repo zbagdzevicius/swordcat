@@ -8,7 +8,7 @@ import { addFlame } from '../Dressing.js';
 const G = (n) => `models/env/graveyard/${n}.glb`;
 /** LI §4.6 looks: honey rock, carved pumpkins (orange, a warm light inside), their spots beside the spine. */
 const LOOK = Object.freeze({ rock: '#C8A486', pumpkin: '#FF9A3C', glow: '#FFC46B' });
-const JACKS = [[-4, -50, 'pumpkin-carved'], [4, -44, 'pumpkin-tall-carved'], [-4.5, -30, 'pumpkin-carved'], [4.5, -24, 'pumpkin-carved'], [-4, -4, 'pumpkin-tall-carved'],
+const JACKS = [[4.2, -62, 'pumpkin-carved'], [-4.2, -56, 'pumpkin-tall-carved'], [-4, -50, 'pumpkin-carved'], [4, -44, 'pumpkin-tall-carved'], [-4.5, -30, 'pumpkin-carved'], [4.5, -24, 'pumpkin-carved'], [-4, -4, 'pumpkin-tall-carved'],
   [4.2, 4, 'pumpkin-carved'], [-4.4, 18, 'pumpkin-tall-carved'], [4.4, 22, 'pumpkin-carved'], [-3.6, 38, 'pumpkin-tall-carved'], [3.6, 40, 'pumpkin-carved']];
 
 /** The jack-o-lanterns (WA19): carved pumpkins beside the path facing it, a small warm flame inside each (a lamp pool). */
@@ -27,7 +27,7 @@ export default defineLevel({
   env: { default: 'keep_twilight' },
   // CONTROLS_SPEC §4.2 / §11 (M3 authors the rampart climb hint + links): clear 5 / 7, topMul 1.4
   cam: { yaw: Math.PI, fog: { clear: 5, clearCombat: 7, topMul: 1.4, keep_cellar: { clear: 5, clearCombat: 7, topMul: 1.4 } } },
-  music: { explore: 'battle_theme_a', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },
+  music: { explore: 'castle_kings_feast', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },
   spine: [[0, -66], [0, -58], [0, -20], [0, 10], [0, 36], [0, 46]],
   spawns: { start: [0, -66, 0], gate: [0, -66, 0], boss: [-3, 32, 0] },
   anchors: {},

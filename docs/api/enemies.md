@@ -209,3 +209,10 @@ P3 positional laughter; `play3D('stealerSnatch' | 'pugSnort' | 'grizzleRoar' | '
 ### Helpers
 `ctx.enemies.webs`, `pilferChase(opts)`, `joinArena(e, id)`, `claimBehind/releaseBehind`, `pinThief`, `prewarm`,
 `wakeUp(e)`; Enemy `telegraphExtra(kind, desc)`, `endTelegraphId(id)`, `choke()`, `runnerGoal()`, `gait()`.
+
+## PERF §1.2: enemy program consolidation
+- Prop materials (`props.js`) are WarmToon (`sc-toon-v2`) named `enemy-<kind>`; the kind's look is a per-vertex `rmse`
+  attribute (`PROP_RMSE`, `propGeometry(g, kind)`), double-sided kinds carry mirrored back faces (all FrontSide).
+- `toonify` makes every converted material DoubleSide (single pass) and converts shared lit GLB gear (weapons) to a
+  cached `sharedToon(src, kind)`; it runs before the helmet-top tint (a toon uniform now). Web patches and Cacklejaw's
+  blob are `fxBasicMaterial`s.

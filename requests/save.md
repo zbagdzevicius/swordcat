@@ -2,4 +2,7 @@
 
 No open requests. The M1 API notes of this area are archived in `docs/api/save.md`; what core applied is in `requests/RESOLVED.md`.
 
-- (core, §7.4 + W1) save.migrate drops non-boolean string settings back to defaults: add `config.SETTING_VALUES` enums/ranges (camLockMode, fpsCap, hudMode, pathPreview, camCursorLead, camZoomPortrait) to SETTING_ENUMS / SETTING_RANGES so hudMode 'full' etc. survive a reload. GameState.migrateSettings (core) already maps camLock false → camLockMode 'free' on every reset.
+Resolved this phase (save.1 / save.W1 / PERF V1 / ART A3): `migrate` reads `config.SETTING_VALUES` (ranges
+camCursorLead 0–0.15, camZoomPortrait 0.7–1.4; enums camLockMode, fpsCap, hudMode, pathPreview, quality), maps a legacy
+boolean `pathPreview` to 'on' / 'off', keeps the new booleans (biggerHero, batterySaver, hitWords, tutorialHints,
+`*Auto`), runs core's `migrateSettings` (camLock false → camLockMode 'free'). Notes in `docs/api/save.md` (Phase W).

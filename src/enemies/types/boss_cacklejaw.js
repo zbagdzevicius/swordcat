@@ -1,6 +1,7 @@
 // src/enemies/types/boss_cacklejaw.js  (owner: enemies) — B2 Warchief Cacklejaw (GAME_DESIGN §11.3), the Low Gate causeway.
-// Barbarian.glb fitted to 2.2 m, characters' hyena head (mane, chipped left ear) under the Barbarian_Hat (it hides
-// the ear until phase 3), the "HATER-IN-CHIEF" plate, Skeleton_Blade ×1.6. HP 700, poise 15, Dizzy max 120.
+// Barbarian.glb fitted to 2.2 m, characters' hyena head (mane, chipped left ear) under a crown-gold feather crown (WA
+// §3.1: warm from the iso camera; it flies off in phase 3), the "HATER-IN-CHIEF" plate, a big squeaky bone (WA §8.2).
+// HP 700, poise 15, Dizzy max 120.
 //   Gloat (all phases)            after any hit on her he laughs 1.5 s; a hit chokes him ("hrk— that's rude!",
 //                                 enemy:choke → +10 Valor) and fills Dizzy (a §11.1 lesson event).
 //   P1 "The Roast" (100–60%)      Cackle Combo: 2 hits, windups 0.6 / 0.35 (white), 2 / 2 damage, range 2.4, arc ±1.2.
@@ -16,6 +17,7 @@
 //                                 real one answers "WHAT?" and stops laughing for 2.0 s. Real-one windups ×0.85.
 //   Defeat → boss:defeated (story plays CS-09); +120 fish.
 import * as THREE from 'three';
+import { fxBasicMaterial } from '../../fx/shaders.js';
 import { BOSSES, ENEMIES } from '../../core/config.js';
 import { E } from '../../core/events.js';
 import { dampAngle } from '../../core/math.js';
@@ -24,8 +26,8 @@ import { TUNING, M2, WARM, rangeOf } from '../tuning.js';
 import { windupFor } from '../Enemy.js';
 import { bossDef } from '../bossBase.js';
 import { CHAIN_STATE, laneTo, minLead, ringAt } from '../moves.js';
-import { dressKayKit, characters, seatHat } from './kaykitGear.js';
-import { CACKLEJAW_HIDE, CACKLEJAW_LOOK } from '../scripted/Cacklejaw.js';
+import { dressKayKit, characters } from './kaykitGear.js';
+import { CACKLEJAW_HIDE, CACKLEJAW_LOOK, dressCacklejaw } from '../scripted/Cacklejaw.js';
 import { GLOAT } from './hyenaStates.js';
 
 const B = BOSSES.cacklejaw;
@@ -77,7 +79,8 @@ function blobMesh(r) {
     _blobTex = new THREE.CanvasTexture(c);
     _blobGeo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
   }
-  const m = new THREE.Mesh(_blobGeo, new THREE.MeshBasicMaterial({ map: _blobTex, transparent: true, depthWrite: false, color: '#000000', fog: true }));
+  // PERF §1.2: the unlit fx basic module (shared program), not a Basic program of its own
+  const m = new THREE.Mesh(_blobGeo, fxBasicMaterial({ map: _blobTex, transparent: true, depthWrite: false, color: '#000000', fog: true }));
   m.material.userData.enemyOwned = true;
   m.userData.sharedProp = true;                                   // no hit flash
   m.name = 'blob-shadow';
@@ -190,14 +193,21 @@ function spawnClone(e, i) {
   return c;
 }
 
-function liveClones(e) { return e.adds.filter((a) => a.alive && a.type === 'cacklejaw_clone').length; }
+function liveClones(e) {
+  let n = 0;
+  for (let i = 0; i < e.adds.length; i++) { const a = e.adds[i]; if (a.alive && a.type === 'cacklejaw_clone') n++; }
+  return n;
+}
 
+const _crownDir = new THREE.Vector3();
 function enterP3(e) {
   e.p3 = true; e.p3T = 0;
   e.fogFrom = e.ctx.env?.fogDensity ?? 0.05;
-  // the hat flies off: the chipped ear shows
-  const hat = e.model?.scene?.getObjectByName('Barbarian_Hat');
-  if (hat?.visible) { hat.visible = false; e.ctx.bus.emit(E.BURST, { kind: 'fur', position: e.pos.clone().setY(e.pos.y + e.height), count: 8 }); }
+  // the feather crown flies off (debris, away from her): the chipped ear shows
+  if (e.helmet?.visible) {
+    e.dropHelmet(_crownDir.set(-Math.sin(e.facing), 0.6, -Math.cos(e.facing)));
+    e.ctx.bus.emit(E.BURST, { kind: 'confetti', position: e.pos.clone().setY(e.pos.y + e.height), count: 10 });
+  }
   for (let i = 0; i < CLONES.n; i++) spawnClone(e, i);
   e.cloneT = CLONES.respawnEvery;
   e.laughT = rangeOf(e.ctx.rng, BM.laughEvery);
@@ -301,9 +311,8 @@ export default {
   onDefeat(e) { exitP3(e); },
   onBossDispose(e) { exitP3(e); },
   async build(e, m) {
-    await dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' });
+    await dressCacklejaw(e, m, { expression: 'sneer' });
     if (e.disposed) return;
-    seatHat(e, m);
     const blob = blobMesh(e.radius * 1.7);
     if (blob) { e.object3d.add(blob); e.blob = blob; }
   },
@@ -312,7 +321,7 @@ export default {
 // ------------------------------------------------------------------ the shadow clone (an Enemy, not a Boss)
 export const CACKLEJAW_CLONE = {
   id: 'cacklejaw_clone',
-  model: ENEMIES.hyena.model, fit: 'cacklejaw', hide: [...CACKLEJAW_HIDE, 'Barbarian_Hat'],
+  model: ENEMIES.hyena.model, fit: 'cacklejaw', hide: CACKLEJAW_HIDE,
   faction: 'enemy', radius: 0.6, height: 2.2, mass: 3, hp: 1, poise: 0, walk: 2.0, run: 4.5, sight: 30, fov: 6.28, leash: 60,
   smallHeart: false, fish: null, tags: ['clone'], expression: 'sneer', token: 'melee', noFlash: true,
   attacks: [{ id: 'cackleCombo', weight: 1, range: CACKLE_COMBO.range }],
@@ -324,12 +333,99 @@ export const CACKLEJAW_CLONE = {
   },
   states: { chain: CHAIN_STATE },
   init(e) { e.phaseWindupMul = CLONES.windupMul; },
-  onDeath(e) { if (e.visual) e.visual.visible = false; },       // one hit: it poofs
+  /** One hit: it pops in confetti (WA §3.1, playful not grim) and the body vanishes. */
+  onDeath(e) {
+    if (e.visual) e.visual.visible = false;
+    e.ctx.bus.emit(E.BURST, { kind: 'confetti', position: e.pos.clone().setY(e.pos.y + e.height * 0.5), count: 24 });
+  },
   dieDur() { return 0.3; },
+  /** The jelly-like wobble (volume-preserving squash), phase-shifted per clone. */
+  pulse(e) {
+    const t = CLONE_TIME.value * WARM.boss.cloneWobbleHz * Math.PI * 2 + (e.seed ?? 0);
+    const sy = 1 + Math.sin(t) * WARM.boss.cloneWobble, sx = 1 / Math.sqrt(sy);
+    _pulse[0] = sx; _pulse[1] = sy; _pulse[2] = sx;
+    return _pulse;
+  },
+  render(e, dt) {
+    const f = e.ctx.game?.frameCount ?? 0;                              // one shared clock, ticked once per frame
+    if (f !== CLONE_TIME.frame) { CLONE_TIME.frame = f; CLONE_TIME.value += dt; }
+  },
   async build(e, m) {
     await dressKayKit(e, m, { ...CACKLEJAW_LOOK, expression: 'sneer' });
     if (e.disposed) return;
-    (await characters()).silhouette(m.root, WARM.boss.cloneTint, { fog: true, castShadow: false });   // ART §7.1: plum, never black
+    // WA §3.1: light lilac body with a marching sparkle rim; the beast head keeps its own colours so his face reads
+    cloneLook(m.root, e.dress?.head?.root ?? null);
     m.root.traverse((o) => { if (o.isMesh) o.castShadow = false; });
   },
 };
+
+// ------------------------------------------------------------------ clone look (WA §3.1)
+const CLONE_TIME = { value: 0, frame: -1 };
+const _pulse = [1, 1, 1];
+const _cloneMats = new Map();
+const CLONE_DECL = `uniform float uCloneT;
+varying vec3 vCloneN;
+varying vec3 vCloneV;
+`;
+
+/**
+ * The clone body material: unlit light lilac with a soft top-light, a screen-space dashed sparkle rim that marches
+ * (shared clock), and fog. One program; one material per alpha-cut map (tuft cards keep their cut-outs).
+ * @param {THREE.Texture|null} cut
+ */
+export function cloneMaterial(cut = null) {
+  const key = cut ? cut.uuid : '-';
+  let m = _cloneMats.get(key);
+  if (m) return m;
+  m = new THREE.MeshBasicMaterial({ name: 'cacklejaw-clone', color: WARM.boss.cloneTint, fog: true,
+    ...(cut ? { map: cut, alphaTest: 0.5, side: THREE.DoubleSide } : {}) });
+  const sp = new THREE.Color(WARM.boss.cloneSparkle);
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uCloneT = CLONE_TIME;
+    sh.vertexShader = CLONE_DECL + sh.vertexShader.replace('#include <project_vertex>',
+      `#include <project_vertex>
+#if defined( USE_ENVMAP ) || defined( USE_SKINNING )
+  vCloneN = normalize(transformedNormal);
+#else
+  vCloneN = normalize(normalMatrix * normal);
+#endif
+  vCloneV = -mvPosition.xyz;`);
+    sh.fragmentShader = CLONE_DECL + sh.fragmentShader.replace('#include <color_fragment>',
+      `#include <color_fragment>
+  vec3 cN = normalize(vCloneN);
+  diffuseColor.rgb *= 0.82 + 0.18 * clamp(cN.y * 0.5 + 0.5, 0.0, 1.0);
+  float cF = pow(1.0 - clamp(abs(dot(normalize(vCloneV), cN)), 0.0, 1.0), 1.6);
+  float cDash = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) * 0.035 - uCloneT * 1.5));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(${sp.r.toFixed(3)}, ${sp.g.toFixed(3)}, ${sp.b.toFixed(3)}), smoothstep(0.6, 0.8, cF) * cDash);`);
+  };
+  m.customProgramCacheKey = () => 'cacklejaw-clone-v2';
+  m.userData.shared = true;                                       // never enemyOwned: dispose() must skip it
+  _cloneMats.set(key, m);
+  return m;
+}
+
+/**
+ * Dress a clone's meshes in the shared clone material, skipping `keep` (the beast head: his face stays visible). The
+ * per-instance GLB materials it replaces (`enemyOwned`, before toonify) are disposed here, since dispose() will no
+ * longer find them; shared props and characters' materials are left alone.
+ * @param {THREE.Object3D} root @param {THREE.Object3D|null} keep
+ * @returns {number} meshes recoloured
+ */
+export function cloneLook(root, keep = null) {
+  let n = 0;
+  const freed = new Set();
+  const walk = (o) => {
+    if (o === keep) return;
+    if ((o.isMesh || o.isSkinnedMesh) && o.material && !o.userData.sharedProp) {
+      const src = Array.isArray(o.material) ? null : o.material;
+      const cut = src && src.alphaTest > 0 && src.map ? src.map : null;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m?.userData?.enemyOwned && !m.userData.enemyToon) freed.add(m);
+      o.material = cloneMaterial(cut);
+      n++;
+    }
+    for (const c of o.children) walk(c);
+  };
+  walk(root);
+  for (const m of freed) m.dispose();
+  return n;
+}

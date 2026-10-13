@@ -25,6 +25,7 @@ import { el, flag, setVar, place, pulse } from './dom.js';
 import { applySetting } from './settings.js';
 import { tx } from './text.js';
 import { portraitSVG } from './portraits.js';
+import { companionJoined } from './reveal.js';
 import { computeLayout, buttonAt, inDeadRing, inStickZone, classifyGesture, stickVector as stickVec, clampTs, clampStickBase } from './touchLayout.js';
 import * as I from './icons.js';
 
@@ -189,7 +190,8 @@ export class TouchControls {
 
   _visible(name) {
     const e = this.btns.get(name);
-    return !!e && !e.classList.contains('is-hidden') && !e.classList.contains('is-dropped');
+    // a veiled (not yet taught) button takes no taps: the tap goes to the world under it, like a hidden one
+    return !!e && !e.classList.contains('is-hidden') && !e.classList.contains('is-dropped') && !e.classList.contains('is-veiled');
   }
 
   /** Undo _fitHud's inline caps (touch controls off: the desktop HUD lays itself out). */
@@ -622,7 +624,9 @@ export class TouchControls {
     flag(this.btns.get('attack'), 'is-charge', ch > 0.02);
     flag(this.btns.get('attack'), 'is-gold', (p?.chargeTier ?? 0) >= 2);
     // ability portrait + ring + seconds
-    const comp = ctx.companions, c = comp?.active?.[0];
+    const comp = ctx.companions, c0 = comp?.active?.[0];
+    // WA §7.5: the kitten button waits for the kitten to join (no Mochi portrait before D-01 sets meadow.mochi)
+    const c = c0 && companionJoined(ctx, c0.kittenId ?? c0.id) ? c0 : null;
     const ab = this.btns.get('ability');
     flag(ab, 'is-hidden', !c);
     if (c) {
@@ -642,6 +646,7 @@ export class TouchControls {
     const goldReady = !!p && (p.valor ?? 0) >= PLAYER.valor.max && (ctx.state?.shards ?? 0) >= 2 && !p.golden;
     flag(this.btns.get('golden'), 'is-hidden', !goldReady);
     flag(this.btns.get('milk'), 'is-empty', (p?.milk ?? 0) <= 0);
+    flag(this.btns.get('milk'), 'is-veiled', ctx.ui?.reveal?.milk === false);       // WA §7.5: not taught in practice
     const mt = `×${p?.milk ?? 0}`;
     if (this.milkN.textContent !== mt) this.milkN.textContent = mt;
     // portrait: a one-time "plays best sideways" toast (C8: no blocking card)

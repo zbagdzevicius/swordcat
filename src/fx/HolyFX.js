@@ -6,7 +6,7 @@
 //     the aura hull (α 0.35, fresnel edge) is the characters rig's own `setHoly`.
 //   - PERF F6 / ART X6: no PointLight once world's `ENV_U` exists: the holy ladder widens (+radius) and gilds the
 //     shared `ENV_U.uGlow` pool that already follows her (world writes the base every step; fx adds its share on
-//     top and takes it back when the level drops). Without ENV_U the old pooled PointLight is kept (legacy fallback).
+//     top and takes it back when the level drops). K2: fx never adds a PointLight (no ENV_U → no glow share).
 //   - Actors that render their own aura hull + blade streak (they expose `setHoly(v)`, e.g. a characters buildKitten
 //     rig) get explicit levels forwarded; fx then only adds sparkles, light and bloom.
 //   - Actors without `setHoly` (the M0 placeholder, NPC stand-ins) get fx's fallback: a silhouette halo (a soft gold
@@ -22,12 +22,11 @@ import { SHAPE, FADE, GROW } from './Particles.js';
 import { actorWorldPos, resolveBlade, isActor, auraOwner } from './util.js';
 import * as TONE_MOD from '../world/tone.js';
 
-/** World's shared ENV_U uniforms (null until world provides them: then fx falls back to its PointLight). */
+/** World's shared ENV_U uniforms (always exported by world/tone.js; null only in stripped test builds: no glow share). */
 const ENV_U = TONE_MOD.ENV_U ?? null;
 
 const GOLD = new THREE.Color('#FFD57A'), GOLD_CORE = new THREE.Color('#FFF1C4'), SILVER = new THREE.Color('#E4EAF6');
 const HALO_GOLD = new THREE.Color('#FFD98A');
-export const HOLY_LIGHT = { color: '#FFD38A', intensity: 0.6, distance: 3, decay: 2, ahead: 0.5 };
 /**
  * ART §8.5 glow cards + the ENV_U glow share (fx-owned numbers): core sprite colour / intensity / size (× her height),
  * sparkles 6..12 orbiting at `orbit` × height, and the uGlow boost at full holy (radius m, colour).
@@ -199,7 +198,6 @@ export class HolyFX {
     /** @type {Map<any, HolyState>} */
     this.states = new Map();
     this.fields = []; this.arcs = [];
-    this.light = null;
     this.bloomLevel = 0;
     /** what fx last added to ENV_U.uGlow (radius m, colour mix) and the values it wrote, to take its share back */
     this.glow = { add: 0, mix: 0, wroteW: NaN, base: new THREE.Color(), wrote: new THREE.Color(), on: false };
@@ -212,14 +210,6 @@ export class HolyFX {
     const count = (q.particles ?? 2000) < 1000 ? 80 : 160;
     for (let i = 0; i < 3; i++) { const f = new SparkleField(count, this.rng); this.fields.push(f); scene.add(f.points); }
     for (let i = 0; i < 12; i++) { const a = new GoldArc(); this.arcs.push(a); scene.add(a.mesh); }
-    // legacy only (no ENV_U yet): one persistent point light, intensity 0 when idle (adding / removing lights at
-    // runtime recompiles every material)
-    if (!ENV_U) {
-      this.light = new THREE.PointLight(HOLY_LIGHT.color, 0, HOLY_LIGHT.distance, HOLY_LIGHT.decay);
-      this.light.name = 'fx.holy.light';
-      this.light.castShadow = false;
-      scene.add(this.light);
-    }
   }
 
   /** Explicit level for an actor (0 removes it). Forwards to `actor.setHoly(v)` when the actor renders its own aura. */
@@ -288,7 +278,6 @@ export class HolyFX {
     for (const [actor, s] of this.states) { if (s.field) { s.field.actor = null; s.field.points.visible = false; } if (s.forwarded > 0) auraOwner(actor)?.setHoly(0); }
     this.states.clear();
     for (const a of this.arcs) a.mesh.visible = false;
-    if (this.light) this.light.intensity = 0;
     this._glowShare(null, 0, 0);
     this.bloomLevel = 0;
   }
@@ -304,6 +293,7 @@ export class HolyFX {
       if (autoLevel > 0 && !this.states.has(player)) this.states.set(player, new HolyState());
     }
     let best = null, bestL = 0, bloom = 0;
+    this.cards = 0;            // _cards() sets it again while her level is up
     for (const actor of this.states.keys()) {
       const s = this.states.get(actor);
       const isP = actor === player;
@@ -390,23 +380,11 @@ export class HolyFX {
   /**
    * The warm pool on the ground and the bodies around the strongest holy / Golden actor. With world's ENV_U: widen
    * `uGlow.w` by up to HOLY_GLOW.glowR and gild `uGlowCol`; world rewrites the base every fixed step, so fx detects
-   * whether its last write is still there before taking its share back. Legacy: the pooled PointLight.
+   * whether its last write is still there before taking its share back.
    */
   _glowShare(best, L, time) {
     const ctx = this.ctx, G = this.glow;
-    if (!ENV_U) {
-      if (!this.light) return;
-      if (best) {
-        actorWorldPos(best, _p);
-        const h = (best.height ?? 1) * (best.object3d?.scale?.y ?? 1);
-        _d.subVectors(ctx.camera.position, _p); _d.y = 0;
-        const l = _d.length();
-        if (l > 1e-3) _d.multiplyScalar(1 / l); else _d.set(Math.sin(best.facing ?? 0), 0, Math.cos(best.facing ?? 0));
-        this.light.position.set(_p.x + _d.x * HOLY_LIGHT.ahead, _p.y + h * 0.78, _p.z + _d.z * HOLY_LIGHT.ahead);
-        this.light.intensity = HOLY_LIGHT.intensity * L * (0.92 + 0.08 * Math.sin(time * 9));
-      } else this.light.intensity = 0;
-      return;
-    }
+    if (!ENV_U) return;
     const gw = ENV_U.uGlow.value, gc = ENV_U.uGlowCol.value;
     // take back last frame's share if world has not rewritten the base since
     const baseW = gw.w === G.wroteW ? gw.w - G.add : gw.w;
@@ -493,7 +471,7 @@ export class HolyFX {
     this.clear();
     for (const f of this.fields) f.dispose();
     for (const a of this.arcs) { a.mesh.removeFromParent(); a.material.dispose(); }
-    this.light?.removeFromParent(); this.light?.dispose?.();
+
     this.fields.length = 0; this.arcs.length = 0;
   }
 }

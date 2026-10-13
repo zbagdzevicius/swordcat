@@ -1,6 +1,8 @@
 // src/enemies/types/pug.js  (owner: enemies) — Pug Shieldbearer (GAME_DESIGN §10.2–§10.3).
-// Knight.glb at 1.25 m with characters' pug head under the Knight helmet, Rectangle_Shield + 1H_Sword. Turns at only
-// 120°/s (def.turnRate), so flanking works.
+// Knight.glb at 1.25 m with characters' pug head. WA §3.1 toy soldier, never the hero's silver read: the Knight atlas is
+// repainted plum / mustard tin (palette.js), the steel visor helm and 1H_Sword are hidden for a mustard saucepan helm
+// (props.js potHelm; the face stays clear) and a wooden practice sword (props.js practiceSword); the Rectangle_Shield
+// stays (painted, it is the shield-down tell). Turns at only 120°/s (def.turnRate), so flanking works.
 //   Shield    frontal ±70° hits spark for 0 damage (`resolveIncoming` → 'block'). Broken by `bright`, `holy`, a
 //             `pounce` from above, or parrying `pug_bash` → the shield drops for 4.0 s and it staggers 1.5 s (2.0 s
 //             after the parry).
@@ -14,11 +16,25 @@ import { E } from '../../core/events.js';
 import { CLIP_MAPS } from '../clipMaps.js';
 import { TUNING, M2 } from '../tuning.js';
 import { BASE_STATES } from '../Enemy.js';
-import { dressKayKit } from './kaykitGear.js';
+import { dressKayKit, seatOnHead } from './kaykitGear.js';
 import { ringAt } from '../moves.js';
 
 const def = ENEMIES.pug;
 const SH = def.shield;
+
+/** Knight.glb props: only the (repainted) shield shows; the visor helm and the steel sword never do (WA §3.1). */
+export const PUG_SHOW = Object.freeze(['Rectangle_Shield']);
+export const PUG_HIDE = Object.freeze([...new Set([...(def.hide ?? []), 'Knight_Helmet', '1H_Sword', 'Knight_Cape'])]);
+/** WA §3.1 toy gear: the practice sword in the right fist (built along the hand slot's +Y, like KayKit blades). */
+export const PUG_SWORD = Object.freeze({ prop: 'practiceSword', own: true, hand: 'r', opts: Object.freeze({ p: [0, 0, 0], r: [0, 0, 0], s: 1.1 }) });
+
+/** Dress a pug: beast head, the practice sword, the saucepan helm (spins off on defeat, §10.1). */
+export async function dressPug(e, m) {
+  await dressKayKit(e, m, { look: 'pug', headNode: 'Knight_Head', head: { scale: (def.helmetScale ?? 1) * 1.15 }, plate: false, expression: 'angry', hold: PUG_SWORD });
+  if (e.disposed) return;
+  const pot = seatOnHead(e, m, 'potHelm', { brim: 0.7, width: 0.78, tilt: -0.12 });
+  if (pot) e.helmet = pot;
+}
 
 /**
  * Does `atk` (attack def, attacker) break the pug's shield? `bright` / `holy` (and any guardBreak attack), a pounce
@@ -69,7 +85,8 @@ export default {
     pug_slam: { windup: { clip: '2H_Melee_Attack_Chop', from: 0, to: 0.4, speed: 'fit' }, strike: { clip: '2H_Melee_Attack_Chop', from: 0.4, to: 1, speed: 1.2 } },
     pug_chop: { windup: { clip: '1H_Melee_Attack_Chop', from: 0, to: 0.35, speed: 'fit' }, strike: { clip: '1H_Melee_Attack_Chop', from: 0.35, to: 1, speed: 1.3 } },
   },
-  build: (e, m) => dressKayKit(e, m, { look: 'pug', headNode: 'Knight_Head', head: { scale: (def.helmetScale ?? 1) * 1.15 }, plate: false, expression: 'angry' }),
+  show: PUG_SHOW, hide: PUG_HIDE,
+  build: dressPug,
   init(e) { e.shieldDownT = 0; },
   tick(e, dt) { if (e.shieldDownT > 0) e.shieldDownT = Math.max(0, e.shieldDownT - dt); },
 

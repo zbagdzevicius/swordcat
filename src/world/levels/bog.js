@@ -33,7 +33,7 @@ export default defineLevel({
   // CONTROLS_SPEC §4.2 / §11: the densest fog (the stage is small by design); a memeSpot at the Sovereign Pool
   cam: { yaw: Math.PI, fog: { clear: 4.5, clearCombat: 6, topMul: 1.2 } },
   memeSpot: { at: [-6, 70], yaw: Math.PI, r: 4 },
-  music: { explore: 'cave_theme', combat: 'battle_fast_fight_loop' },
+  music: { explore: 'bog_dreams', combat: 'battle_fast_fight_loop' },
   spine: SPINE,
   spawns: { start: [0, -86, 0], boss: [-6, 64, 0] },
   anchors: {},

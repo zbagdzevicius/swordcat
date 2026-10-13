@@ -9,7 +9,7 @@
 //   4 from the window toward the north: Barkus pulls the curtains, the Big Yawn rolls in (`hub_hush` lavender, fog
 //     0.025 → 0.05 over 4 s); the lament only for this 4 s window shot (WA §8.6a).
 //   5 medium (Earl Grey, Pip): "That's Barkus, pulling the curtains…" "And the ferry dock is where they send the
-//     kittens…"  Clem: "Pearl."  Then home's tune, sleepy (village_bards_tale).
+//     kittens…"  Clem: "Pearl."  Then home's tune, sleepy (hub_hush).
 // end: flag gate.done; env hub_hush (until ending.seen); the Lookout (Pip) opens on gate.done; she stands at `town`
 // spawn `hub`; save.
 import { FADE_COLOR } from '../../core/config.js';
@@ -114,12 +114,13 @@ export default {
     wait(4.2),
 
     // ---- 5 · Earl Grey and Pip (home's tune again, sleepy)
-    { t: 'music', track: 'village_bards_tale', fade: 2.0 },
+    { t: 'music', track: 'hub_hush', fade: 2.0 },   // audio: village_bards_tale 0.92, low-passed (WA §9 Big Yawn hub)
     { t: 'actor', id: 'earlgrey', visible: true },
     { t: 'actor', id: 'pip', visible: true },
     cam(null, 'swordcat', { pos: [-1.6, 1.0, 2.4], look: [0.6, 0.6, 0.2], fov: 44 }),
     { t: 'actor', id: 'swordcat', face: 'earlgrey', faceDur: 0.4, expression: 'earnest' },
-    say('earlgrey', 'cs10.7', 5.0),
+    say('earlgrey', 'cs10.7', 2.8),
+    say('earlgrey', 'cs10.7b', 3.2),
     { t: 'actor', id: 'swordcat', face: 'pip', faceDur: 0.4 },
     say('pip', 'cs10.8', 3.8),
     { t: 'actor', id: 'swordcat', expression: 'determined', pose: 'vigil' },
@@ -140,7 +141,7 @@ export default {
     player: { spawn: 'hub' },
     actors: { swordcat: { prop: { 'letter@belt': false, letter: false } } },
     env: 'hub_hush',
-    music: { track: 'village_bards_tale', fade: 2 },
+    music: { track: 'hub_hush', fade: 2 },
     ui: { letterbox: false, hud: true, fade: { alpha: 0, dur: 1.2 } },
     cam: 'follow',
     save: true,

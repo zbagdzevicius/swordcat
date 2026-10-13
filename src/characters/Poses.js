@@ -18,7 +18,7 @@ export const POSE_NAMES = Object.freeze(['vigil', 'oath', 'sip', 'selfie', 'fain
 /** Phase W poses (a subset of POSE_NAMES): hold the pose, play `kitten.emote(name)` for the motion. */
 export const WARM_POSE_NAMES = Object.freeze(['cheer', 'groom', 'twirl', 'boop', 'pawBump']);
 /** Extra poses beyond the contract nine (M1 extras + M2 activity poses). */
-export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
+export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'restUp', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
 
 export const POSES = {
   // ref2: sword planted point-down, both gauntlets stacked on the pommel, head straight, eyes on the camera.
@@ -112,6 +112,18 @@ export const POSES = {
     sword: { mode: 'hand', guard: [-0.19, 0.31, 0.13], dir: [-0.06, -1, 0.42], face: [0.45, 0, 1] },
     arms: {
       R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.2, -0.6], twist: [0, 0, 0] },
+      L: { fk: { shoulder: [0.05, 0, 0.12], elbow: [-0.25, 0, 0], paw: [0, 0, 0] } },
+    },
+    expr: 'neutral',
+  },
+  // Hero rest stand (WARM_ADVENTURE_SPEC §3.3 readability): the blade held upright at her right side, flat to the front,
+  // tip above her ear line, so from the 50° iso lens the bright blade always reads beside her silhouette (the cane
+  // idle hid it behind her body). Swordcat's `idlePose`; long skins (claymore, toobig) keep the cane idle (tip drag).
+  restUp: {
+    joints: { chest: [0.0, 0.04, 0], head: [0.0, 0.06, 0.03], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
+    sword: { mode: 'hand', guard: [-0.23, 0.37, 0.1], dir: [-0.22, 1, 0.12], face: [0.3, 0, 1] },
+    arms: {
+      R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.4, -0.6], twist: [0, 0, 0] },
       L: { fk: { shoulder: [0.05, 0, 0.12], elbow: [-0.25, 0, 0], paw: [0, 0, 0] } },
     },
     expr: 'neutral',

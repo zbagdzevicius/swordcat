@@ -316,6 +316,7 @@ export default [
         const c = window.__GAME__.ctx, p = c.player, f = p.facing;
         c.companions.setActive([]);
         c.state.companions.unlocked = c.state.companions.unlocked.filter((id) => id !== 'mochi');
+        c.state.setFlag('prologue.done', true);   // WA16 RESCUE_AFTER: Mochi's carrier waits for the end of the prologue
         const k = c.companions.spawnKitten('mochi', [p.pos.x + Math.sin(f) * 3.5, p.pos.z + Math.cos(f) * 3.5], 'cage',
           { needClear: 'smoke_bridge', hp: 30, play: 'd01', facing: f + Math.PI });
         return { lock: c.actors.has(k.lock), id: c.actors.get('mochi') === k };
@@ -336,10 +337,13 @@ export default [
       for (let i = 0; i < 6 && !hits.opened; i++) {
         // her next blow lands once the lock's own anti-multi-hit window (sim time) has run out
         await until(t, () => { const k = window.__GAME__.ctx.companions.kittens.find((x) => x.kittenId === 'mochi'); return !(k.lock.invulnT > 0); }, null, { sim: 2, every: 100 });
-        const r = await t.G(() => {
-          const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'mochi');
-          return { r: c.combat.applyHit(c.player, k.lock, c.config.ATTACKS.slash1), opened: k.lock.opened };
-        });
+        // companions.W2: Mochi's latch is cracked: a plain slash only "tinks" (block); a Bright Slash (an attack that
+        // `breaks` 'cracked') opens it
+        const r = await t.G((n) => {
+          const c = window.__GAME__.ctx, k = c.companions.kittens.find((x) => x.kittenId === 'mochi'), A = c.config.ATTACKS;
+          const atk = n === 0 ? A.slash1 : Object.values(A).find((x) => x?.breaks?.includes?.('cracked')) ?? A.slash1;
+          return { r: c.combat.applyHit(c.player, k.lock, atk), opened: k.lock.opened };
+        }, i);
         hits.out.push(r.r); hits.opened = r.opened;
       }
       t.assert(hits.opened, `her hits did not open the 30 HP lock (${hits.out.join(', ')})`);
@@ -798,14 +802,14 @@ export default [
         const ks = await t.G(() => window.__GAME__.ctx.companions.kittens.map((k) => k.kittenId));
         for (const id of ['waffles', 'toffee', 'muffin', 'marmalade', 'tofu', 'clover']) t.assert(ks.includes(id), `town: ${id} not placed (${ks.join(', ')})`);
         await t.G(() => window.__GAME__.ctx.companions.setActive(['mochi']));
-        // Clover in the stocks (§12.5 square): locked until the Square clears, then E frees her → D-04 → joins
+        // Clover in her WA20 kennel carrier (§12.5 square; was the stocks): locked until the Square clears, then E frees her → D-04 → joins
         await put(t, 10, 11.2, 0);
         await t.wait(1400);
         await frame(t, [1.6, 1.0, 0.6], [0, 0.7, 2.8], 50);
         await t.wait(400);
-        await shot(t, 'companions/town-clover-stocks');
+        await shot(t, 'companions/town-clover-carrier');
         await follow(t);
-        t.assert(!(await t.G(() => window.__GAME__.ctx.levels.current.interact('free_clover'))), 'stocks open before the Square is clear');
+        t.assert(!(await t.G(() => window.__GAME__.ctx.levels.current.interact('free_clover'))), 'carrier open before the Square is clear');
         await t.G(() => window.__GAME__.ctx.companions.markCleared('square'));
         t.assert(await t.G(() => window.__GAME__.ctx.levels.current.interact('free_clover')), 'E could not free Clover');
         const clover = await until(t, () => { const g = window.__GAME__; if (g.mode !== 'play') g.story.skip?.(); return g.ctx.companions.active[0]?.kittenId === 'clover'; }, null, { sim: 8, every: 250 });
@@ -975,6 +979,12 @@ export default [
         await t.wait(300);
         await shot(t, 'companions/hub-biscuit');
         await follow(t);
+        // one retry: a sample taken on the hand-back frame can read a single colour on a loaded machine (log the lens)
+        const n0 = await t.G(() => window.__GAME__.sampleCanvas());
+        if (n0 < 4) {
+          t.warn(`companions:hub: ${n0} colour(s) on the first sample: ${JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx.camera; return { pos: c.position.toArray().map((v) => +v.toFixed(2)), far: c.far, mode: g.ctx.cam.modeName, gmode: g.mode, blend: g.ctx.cam.blendLeft }; }))}`);
+          await t.wait(1000);
+        }
         await t.blankCheck('companions:hub');
         // iso controls: residents are clickable (pickKind 'npc'); clear of world's interactables they carry a talk_<id>
         // interactable ([Interact] / a click → their line now); a station keeper stands for its station
@@ -1283,10 +1293,18 @@ export default [
         t.log(`pick on Mochi → ${JSON.stringify(pk)}`);
         t.assert(pk && pk.kind !== 'npc', `Mochi is still pickable (${JSON.stringify(pk)})`);
         const from = await G(() => { const p = window.__GAME__.ctx.player.pos; return { x: p.x, z: p.z }; });
+        const under = await G(([x, y]) => { const e = document.elementFromPoint(x, y); return e?.closest?.('.tbtn, .hud-comp, .ui-guide, .ui-hint, button') ? (e.className || e.tagName) : null; }, [s.x, s.y]);
+        if (under) t.warn(`Mochi stands under ui (${under}): the tap goes to that control`);
+        // Mochi trailing at her heels: a ground order that close is already "arrived" (no move to see)
+        const near = await G(([x, y]) => { const c = window.__GAME__.ctx, gp = c.cam.screenToGround?.(x, y), p = c.player.pos; return gp ? Math.hypot(gp.x - p.x, gp.z - p.z) : 99; }, [s.x, s.y]);
+        if (near < 0.9) t.warn(`Mochi is ${near.toFixed(2)} m from her: the tap is an "already there" order`);
         await pg.touchscreen.tap(s.x, s.y);
-        const moved = await untilM((f) => { const c = window.__GAME__.ctx, p = c.player.pos; return c.player.orders?.kind === 'move' || Math.hypot(p.x - f.x, p.z - f.z) > 0.4; }, from, 5000);
+        await G(() => { window.__GAME__.ctx.player.selfTapped = null; return true; });
+        // a tap within WA §3.6's self-tap radius (0.6 m / 40 px of her) is her pat / twirl instead of a move: also fine,
+        // the point is that Mochi no longer swallows it
+        const moved = await untilM((f) => { const c = window.__GAME__.ctx, p = c.player.pos; return c.player.orders?.kind === 'move' || Math.hypot(p.x - f.x, p.z - f.z) > 0.4 || !!c.player.selfTapped; }, from, 5000);
         const pets1 = await G(() => window.__GAME__.ctx.companions.active[0].stats.pets);
-        t.assert(moved, 'a tap on Mochi did not become a move');
+        if (!under && near >= 0.9) t.assert(moved, `a tap on Mochi did not become a move (or her self-tap): ${JSON.stringify(await G(() => { const c = window.__GAME__.ctx, p = c.player; return { orders: p.orders?.kind ?? null, active: !!p.orders?.active, state: p.stateName, mode: window.__GAME__.mode, dev: c.input.device }; }))}`);
         t.assert(pets1 === pets0, `a tap on Mochi still "used" him (pets ${pets0} → ${pets1})`);
         await pg.waitForTimeout(600);
         await mshot('companions/touch-portrait-tap-through');

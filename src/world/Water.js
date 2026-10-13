@@ -9,7 +9,10 @@
 import * as THREE from 'three';
 
 /** ART §2.6 water colours (bog lagoon `#2FAE9E` through `def.waterColor`) and the glint strength. */
-export const WATER = Object.freeze({ deep: '#3FA8C8', shallow: '#8FE0E0', foam: '#FFFFFF', bog: '#2FAE9E', sparkle: 0.55 });
+export const WATER = Object.freeze({ deep: '#3FA8C8', shallow: '#8FE0E0', foam: '#FFFFFF', bog: '#2FAE9E', sparkle: 0.55,
+  // WA §3 clarity: water must read as water at a glance (never a dark blob): a mint shallows band and a bright foam
+  // rim where the ground rises to the surface (depth from the terrain's ground-data height, metres)
+  mint: '#9BEFD8', shallowD: 0.7, foamD: 0.16, foamStr: 0.85 });
 
 const WATER_VERT_PARS = /* glsl */`
 varying vec3 vWWorld;
@@ -18,6 +21,10 @@ const WATER_FRAG_PARS = /* glsl */`
 uniform float uWTime, uWWind;
 uniform vec3 uWDeep, uWShallow;
 uniform vec2 uWFlow;
+uniform sampler2D uWGround;
+uniform vec3 uWGroundUV;  // uv = xz * x + y; z = 1 when a ground texture is bound
+uniform vec3 uWMint, uWFoam;
+uniform float uWShallowD, uWFoamD, uWFoamStr;
 varying vec3 vWWorld;
 float wH(vec2 p) { p = fract(p * vec2(234.34, 435.345)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
 float wN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -46,6 +53,13 @@ const WATER_FRAG_COLOR = /* glsl */`
   vec2 wp = vWWorld.xz;
   float m = wF(wp * 0.12 + uWFlow * uWTime * 0.02);
   diffuseColor.rgb = mix(uWDeep, uWShallow, smoothstep(0.35, 0.75, m));
+  if (uWGroundUV.z > 0.5) {
+    // shoreline: depth above the ground → a mint shallows band, then a wobbling bright foam rim at the edge
+    float d = vWWorld.y - texture2D(uWGround, wp * uWGroundUV.x + uWGroundUV.y).r;
+    float wob = (wN(wp * 1.3 + uWFlow * uWTime * 0.4) - 0.5) * 0.08 + sin(uWTime * 1.6 + wp.x * 0.7 + wp.y * 0.5) * 0.025;
+    diffuseColor.rgb = mix(diffuseColor.rgb, uWMint, 1.0 - smoothstep(uWFoamD, uWShallowD, d));
+    diffuseColor.rgb = mix(diffuseColor.rgb, uWFoam, uWFoamStr * (1.0 - smoothstep(uWFoamD * 0.55, uWFoamD, d + wob)));
+  }
 }
 `;
 const WATER_FRAG_SPARKLE = /* glsl */`
@@ -73,7 +87,7 @@ export function makeWaterMaterial(uniforms) {
       .replace('#include <color_fragment>', WATER_FRAG_COLOR)
       .replace('#include <emissivemap_fragment>', WATER_FRAG_SPARKLE);
   };
-  m.customProgramCacheKey = () => 'world-water-v2';
+  m.customProgramCacheKey = () => 'world-water-v3';
   m.userData.owned = true;
   return m;
 }
@@ -99,11 +113,19 @@ export function stripGeometry(pts, w) {
 }
 
 export class WaterSet {
-  /** @param {any[]} entries level water entries @param {number} levelSize */
-  constructor(entries, levelSize = 200, { deep = WATER.deep, shallow = WATER.shallow } = {}) {
+  /**
+   * @param {any[]} entries level water entries @param {number} levelSize
+   * @param {{deep?:string, shallow?:string, ground?:THREE.Texture|null, res?:number}} [o] `ground` = the terrain's
+   *   ground-data texture (R = height) and `res` its grid resolution: they drive the shallows band and the foam rim
+   */
+  constructor(entries, levelSize = 200, { deep = WATER.deep, shallow = WATER.shallow, ground = null, res = 0 } = {}) {
     this.group = new THREE.Group(); this.group.name = 'water';
+    const W = res + 1, scale = res > 0 ? (W - 1) / (W * levelSize) : 0;
     this.uniforms = { uWTime: { value: 0 }, uWWind: { value: 0.6 }, uWFlow: { value: new THREE.Vector2(1, 0) },
-      uWDeep: { value: new THREE.Color(deep) }, uWShallow: { value: new THREE.Color(shallow) } };
+      uWDeep: { value: new THREE.Color(deep) }, uWShallow: { value: new THREE.Color(shallow) },
+      uWGround: { value: ground }, uWGroundUV: { value: new THREE.Vector3(scale, (levelSize / 2) * scale + (res > 0 ? 0.5 / W : 0), ground && res > 0 ? 1 : 0) },
+      uWMint: { value: new THREE.Color(WATER.mint) }, uWFoam: { value: new THREE.Color(WATER.foam) },
+      uWShallowD: { value: WATER.shallowD }, uWFoamD: { value: WATER.foamD }, uWFoamStr: { value: WATER.foamStr } };
     this.material = makeWaterMaterial(this.uniforms);
     this.meshes = [];
     for (const w of entries ?? []) {

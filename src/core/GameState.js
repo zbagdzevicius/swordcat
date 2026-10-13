@@ -27,9 +27,8 @@ export const defaultState = () => ({
               camLockMode: 'locked', camCursorLead: 0, camZoomPortrait: 1, biggerHero: false,
               reduceCameraMotionAuto: true, reduceFlashesAuto: true, fpsCap: 'auto', batterySaver: false,
               hudMode: 'calm', hitWords: true, tutorialHints: true,
-              // pathPreview: WA §3.6 default 'auto' ('auto' | 'on' | 'off'). It stays false (boolean) until fx GroundDecals and ui
-              // settings read the enum (requests/fx.md, ui.md); fx tests `!!pathPreview` today, so 'auto' would show it everywhere
-              pathPreview: false },
+              // pathPreview: WA §3.6 'auto' | 'on' | 'off' ('auto' = touch during the prologue + Chapter 1; fx pathPreviewOn)
+              pathPreview: 'auto' },
 });
 
 /** Settings that default from the OS (`prefers-reduced-motion: reduce`) until the player edits them (WCAG 2.3.3). */
@@ -39,7 +38,8 @@ export const OS_SETTINGS = Object.freeze(['reduceCameraMotion', 'reduceFlashes']
  * Save-migration hook for the settings (schema stays v1; IMPLEMENTATION_PLAN §7.4). Pure, idempotent, in place:
  * - K7 `camLock` (bool) ↔ `camLockMode`: a stored `camLock: false` with the default mode → `'free'`; an unlocked mode
  *   keeps `camLock` false (the retired key stays in sync until camera / ui read `camLockMode`).
- * - `pathPreview`: booleans are kept (the current default); enum strings ('auto' | 'on' | 'off') are validated.
+ * - `pathPreview`: a legacy boolean (the pre-W1 toggle) becomes 'on' / 'off' (keeps what the player saw); enum strings
+ *   ('auto' | 'on' | 'off') are validated.
  * - out-of-range enum values fall back to the defaults (config SETTING_VALUES).
  * @param {Record<string, any>} st  a settings object already merged onto the defaults
  * @returns {Record<string, any>} st
@@ -49,7 +49,7 @@ export function migrateSettings(st) {
   const def = defaultState().settings;
   for (const [k, allowed] of Object.entries(SETTING_VALUES)) {
     if (!(k in def) || typeof allowed[0] !== 'string') continue;   // enums only (numeric ranges are [min, max])
-    if (typeof st[k] === 'boolean' && typeof def[k] === 'boolean') continue;
+    if (k === 'pathPreview' && typeof st[k] === 'boolean') { st[k] = st[k] ? 'on' : 'off'; continue; }
     if (!allowed.includes(st[k])) st[k] = def[k];
   }
   if (st.camLock === false && st.camLockMode === 'locked') st.camLockMode = 'free';

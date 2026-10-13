@@ -72,15 +72,23 @@ export class FlyIcons {
     return true;
   }
 
-  /** @param {number} dt real seconds */
-  render(dt) {
+  /**
+   * @param {number} dt real seconds
+   * @param {boolean} [vis] the HUD is up: while it is hidden (cutscene, dialogue, letterbox) the layer is hidden and any
+   *   flight in the air lands at once, so no icon is left over the letterbox (the fish has nowhere visible to go).
+   */
+  render(dt, vis = true) {
+    flag(this.root, 'is-dim', !vis);
     const dur = P.flyMs / 1000;
     for (const s of this.pool) {
       if (s.t < 0) continue;
       s.t += dt;
-      if (s.t >= dur) { s.t = -1; flag(s.el, 'is-on', false); this.onArrive?.(s.home); }
+      if (s.t >= dur || !vis) { s.t = -1; flag(s.el, 'is-on', false); this.onArrive?.(s.home); }
     }
   }
+
+  /** Flights in the air (tests / smoke). */
+  get busy() { let n = 0; for (const s of this.pool) if (s.t >= 0) n++; return n; }
 
   dispose() { this.root.remove(); }
 }

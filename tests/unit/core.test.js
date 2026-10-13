@@ -599,8 +599,8 @@ test('PERF §11 A5 Input: pads are read every frame only while one is live; a pr
 test('PERF §12 perf.js: rings, percentiles, budget column, report shape; pool misses count', async () => {
   const { PerfMonitor, percentile, budgetFor, countPoolMiss, counters, PERF_CATS } = await import('../../src/core/perf.js');
   assert.equal(percentile(new Float32Array([5, 1, 3, 2, 4]), 5, 0.5), 3);
-  assert.deepEqual(budgetFor('low', 'I1'), { stage: 'I1', frameCalls: 70 });
-  assert.deepEqual(budgetFor('high', 'End'), { stage: 'End', sceneCalls: 90, tris: 260000 });
+  assert.deepEqual(budgetFor('low', 'I1'), { stage: 'I1', frameCalls: 70, heapMB: 90, titleHeapMB: 60 });
+  assert.deepEqual(budgetFor('high', 'End'), { stage: 'End', sceneCalls: 90, tris: 260000, heapMB: 120, titleHeapMB: 60 });
   assert.deepEqual(PERF_CATS, ['hero', 'enemies', 'companions', 'grass', 'props', 'fx', 'ui3d']);
   const r = stubRenderer(); r.info.programs = [1, 2]; r.info.memory = { geometries: 3, textures: 4 };
   const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
@@ -677,4 +677,151 @@ test('X2 PostChain: High cinematic = scene + prefilter + 2 down + 2 up + uber (7
   assert.equal(pf.composerActive, false); assert.equal(pf.path, 'canvas');
   assert.equal(pf.warmTargets().length, 2, 'High warms the canvas and the cinematic RT variants');
   pf.setQuality('med'); assert.equal(pf.chain, null, 'leaving High frees the chain');
+});
+
+test('perf GpuTimer: results 3 frames late keep updating (no deadlock at the pending cap); disjoint / stale -> null', async () => {
+  const { GpuTimer } = await import('../../src/core/perf.js');
+  let frame = 0, disjoint = false, lagFrames = 3, nextId = 0;
+  const ext = { TIME_ELAPSED_EXT: 1, GPU_DISJOINT_EXT: 2 };
+  const gl = {
+    QUERY_RESULT_AVAILABLE: 10, QUERY_RESULT: 11,
+    getExtension: () => ext,
+    createQuery: () => ({ id: nextId++, ended: -1, ns: 0 }),
+    deleteQuery() {},
+    beginQuery(_t, q) { this._q = q; },
+    endQuery() { this._q.ended = frame; this._q.ns = (5 + frame) * 1e6; },
+    getParameter: (p) => (p === ext.GPU_DISJOINT_EXT ? disjoint : null),
+    getQueryParameter: (q, p) => (p === 10 ? frame - q.ended >= lagFrames : q.ns),
+  };
+  const t = new GpuTimer(gl);
+  assert.equal(t.available, true);
+  const step = () => { t.begin(); t.end(); frame++; };
+  const seen = new Set();
+  for (let i = 0; i < 40; i++) { step(); if (t.lastMs != null) seen.add(t.lastMs); }
+  assert.ok(seen.size > 30, `lastMs must keep changing, saw ${seen.size} values`);
+  assert.ok(t.lastMs >= 5 + 40 - 1 - lagFrames - 1, `fresh result, got ${t.lastMs}`);
+  assert.ok(t._pending.length <= GpuTimer.MAX_PENDING);
+  // Results slower than the in-flight cap (cap hit every frame) must still drain once they land.
+  lagFrames = 8; for (let i = 0; i < 30; i++) step();
+  const v = t.lastMs; assert.ok(v != null);
+  lagFrames = 3; for (let i = 0; i < 10; i++) step();
+  assert.notEqual(t.lastMs, v);
+  // Disjoint invalidates.
+  disjoint = true; step(); step(); assert.equal(t.lastMs, null);
+  disjoint = false; for (let i = 0; i < 6; i++) step(); assert.ok(t.lastMs != null);
+  // Stale: results never become available -> null after STALE_FRAMES.
+  lagFrames = 1e9; for (let i = 0; i < GpuTimer.STALE_FRAMES + 2; i++) step();
+  assert.equal(t.lastMs, null);
+  // No extension: inert.
+  const none = new GpuTimer({ getExtension: () => null }); none.begin(); none.end(); assert.equal(none.lastMs, null);
+});
+
+// ------------------------------------------------------------------ PERF §1.2: the uber-program linker (core/uber.js)
+import { UberGroup, topLevel, parseDecl, stripComments, uberPrepare } from '../../src/core/uber.js';
+import { SHADOW_ONLY_LAYER, shadowOnly, depthFor } from '../../src/core/depth.js';
+
+const U_LIB = 'float uberLib( float x ) { return x * 2.0; }';
+const modA = {
+  name: 'a', side: THREE.FrontSide,
+  vertexShader: 'attribute vec4 iCol;\nvarying vec4 vCol;\nvarying vec2 vUv;\nuniform float uSize;\nvoid main() { vCol = iCol; vUv = uv; gl_Position = vec4( position * uSize, 1.0 ); }',
+  fragmentShader: `varying vec4 vCol;\nvarying vec2 vUv;\nuniform vec3 uColor;\n${U_LIB}\nconst float K = 0.5;\nfloat shade( float v ) { return v * K; }\nvoid main() { gl_FragColor = vec4( uColor * shade( uberLib( vUv.x ) ), vCol.a ); }`,
+};
+const modB = {
+  name: 'b', side: THREE.BackSide, fog: false,
+  vertexShader: 'attribute vec4 aOther;\nattribute vec2 aSeed;\nvarying vec4 vX;\nvoid main() { vX = aOther + vec4( aSeed, 0.0, 0.0 ); gl_Position = vec4( position, 1.0 ); }',
+  fragmentShader: `varying vec4 vX;\nuniform vec3 uColor;\nuniform sampler2D uTex;\n${U_LIB}\nfloat shade( float v ) { return v; }\nvoid main() { gl_FragColor = vec4( uColor, uberLib( vX.x ) ) * texture2D( uTex, vX.xy ); }`,
+};
+const modI = {
+  name: 'inst',
+  vertexShader: 'attribute float aAlpha;\nvarying float vA;\nvoid main() { vA = aAlpha; gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4( position, 1.0 ); }',
+  fragmentShader: 'varying float vA;\nvoid main() { gl_FragColor = vec4( 1.0, 1.0, 1.0, vA ); }',
+};
+
+test('uber linker: top-level GLSL split + declarations', () => {
+  const items = topLevel(stripComments('#include <common>\n// c\nuniform vec3 a, b[2];\nstruct S { float x; };\nfloat f( vec2 p ) { return p.x; }\nvoid main() { }'));
+  assert.deepEqual(items.map((i) => i.kind), ['pp', 'decl', 'struct', 'func', 'func']);
+  const d = parseDecl('uniform highp vec3 uA, uB[4];');
+  assert.equal(d.storage, 'uniform'); assert.equal(d.type, 'vec3'); assert.deepEqual(d.names.map((n) => n.name + n.arr), ['uA', 'uB[4]']);
+});
+
+test('uber linker: ONE source for every module; names namespaced, varyings / attributes on shared slots, libs once', () => {
+  const g = new UberGroup('t1', { libs: [U_LIB] });
+  const a = g.module(modA), b = g.module(modB);
+  assert.equal(g.module(modA), a, 'same source → same module');
+  const ma = g.material(a, { uniforms: { uColor: { value: new THREE.Color(1, 0, 0) }, uSize: { value: 2 } }, transparent: true });
+  const mb = g.material(b, { uniforms: { uColor: { value: new THREE.Color(0, 1, 0) }, uTex: { value: null } } });
+  assert.equal(ma.vertexShader, mb.vertexShader); assert.equal(ma.fragmentShader, mb.fragmentShader);
+  const fs = ma.fragmentShader, vs = ma.vertexShader;
+  assert.equal(fs.split('float uberLib(').length - 1, 1, 'shared lib hoisted once');
+  assert.ok(fs.includes(`#define uColor ${a.prefix}uColor`) && fs.includes(`#define uColor ${b.prefix}uColor`), 'per-module uniform names');
+  assert.ok(fs.includes(`#define shade ${a.prefix}shade`) && fs.includes(`#define shade ${b.prefix}shade`), 'per-module functions');
+  assert.ok(/#undef uColor/.test(fs), 'macros undone after each block');
+  // module A: 2 varyings (vec4, vec2), B: 1 vec4 → slots: vec4 ×1, vec2 ×1 (B reuses A's vec4 register)
+  assert.equal((vs.match(/varying vec4 fxv_vec4_\d+;/g) ?? []).length, 1);
+  assert.equal((vs.match(/varying vec2 fxv_vec2_\d+;/g) ?? []).length, 1);
+  assert.equal((vs.match(/attribute vec4 fxa_vec4_\d+;/g) ?? []).length, 1, 'iCol and aOther share one vec4 attribute slot');
+  // uniforms: the module's own object, the linked name a live getter onto it
+  assert.equal(ma.uniforms.fxMode.value, a.index); assert.equal(mb.uniforms.fxMode.value, b.index);
+  assert.equal(ma.uniforms[a.prefix + 'uColor'], ma.uniforms.uColor);
+  ma.uniforms.uColor = { value: new THREE.Color(0, 0, 1) };
+  assert.equal(ma.uniforms[a.prefix + 'uColor'], ma.uniforms.uColor, 'a replaced entry stays linked');
+  // per-module flags that would otherwise split programs
+  assert.ok(ma.side === THREE.DoubleSide && mb.side === THREE.DoubleSide && ma.forceSinglePass && ma.fog && mb.fog);
+  assert.ok(fs.includes(`if ( fxMode == ${a.index} ) { if ( ! gl_FrontFacing ) discard;`), 'FrontSide module discards back faces');
+  assert.ok(fs.includes(`if ( fxMode == ${b.index} ) { if ( gl_FrontFacing ) discard;`), 'BackSide module discards front faces');
+  assert.ok(fs.includes(`#define FXU_FOG_${b.index}`), 'fog:false module runs with USE_FOG undefined');
+  assert.equal(mb.blending, THREE.NoBlending, 'an opaque module draws unblended (three keys `opaque` otherwise)');
+  // samplers of the other modules get a value at compile (no stale unit 0 → no INVALID_OPERATION draws)
+  const sh = { uniforms: ma.uniforms, vertexShader: vs, fragmentShader: fs };
+  ma.onBeforeCompile(sh, null);
+  assert.ok(sh.uniforms[b.prefix + 'uTex']?.value?.isTexture, 'blank texture for module B\'s sampler on A');
+  assert.equal(g.sealed, g.version, 'the first compile seals the group');
+});
+
+test('uber linker: clone keeps the links; instanced modules live in the vertex USE_INSTANCING variant only', () => {
+  const g = new UberGroup('t2');
+  const a = g.module(modA), i = g.module(modI);
+  assert.equal(i.instanced, true, 'reads instanceMatrix → instanced');
+  const m = g.material(a, { uniforms: { uColor: { value: new THREE.Color() }, uSize: { value: 1 } } });
+  const c = m.clone();
+  assert.ok(c.isUberMaterial && c.userData.uber.mod === a);
+  assert.notEqual(c.uniforms.uColor, m.uniforms.uColor, 'own uniforms');
+  assert.equal(c.uniforms[a.prefix + 'uColor'], c.uniforms.uColor, 'linked names rebuilt on the clone');
+  assert.ok(!Object.keys(JSON.parse(JSON.stringify(c.userData))).includes('uber'), 'the group record is never serialised');
+  const { vertexShader: vs, fragmentShader: fs } = g.source();
+  assert.ok(vs.includes(`#ifdef USE_INSTANCING\n// ---- module ${i.index}`), 'instanced vertex block guarded');
+  assert.ok(vs.includes(`#ifndef USE_INSTANCING\n// ---- module ${a.index}`), 'plain vertex block guarded');
+  assert.ok(!fs.includes('#ifdef USE_INSTANCING\n// ---- module'), 'fragment stage unguarded (USE_INSTANCING is a vertex-prefix define)');
+  // late module → new version, a warning, the old materials untouched
+  const before = m.vertexShader;
+  const warn = console.warn; let warned = 0; console.warn = () => { warned++; };
+  m.onBeforeCompile({ uniforms: m.uniforms }, null);
+  g.module({ name: 'late', vertexShader: 'void main() { gl_Position = vec4( 0.0 ); }', fragmentShader: 'void main() { gl_FragColor = vec4( 1.0 ); }' });
+  console.warn = warn;
+  assert.equal(warned, 1); assert.equal(m.vertexShader, before);
+});
+
+test('uber linker: geometry normalised before compile (vertexNormals keys the program), attributes aliased per draw', () => {
+  const g = new UberGroup('t3');
+  const b = g.module(modB);
+  const m = g.material(b, { uniforms: { uColor: { value: new THREE.Color() }, uTex: { value: null } } });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+  geo.setAttribute('aOther', new THREE.Float32BufferAttribute(new Float32Array(12), 4));
+  const mesh = new THREE.Mesh(geo, m), root = new THREE.Group(); root.add(mesh);
+  uberPrepare(root);
+  assert.equal(geo.attributes.normal, geo.attributes.position, 'normal alias (no copy)');
+  m.onBeforeRender(null, null, null, geo, mesh);
+  const slot = b.aMacro.find(([n]) => n === 'aOther');
+  assert.ok(slot);
+  assert.equal(geo.attributes[slot[1]], geo.attributes.aOther, 'aliased onto its slot');
+});
+
+test('PERF §1.2 / §7: shadow-only layer + one depth material per kind with three\'s own packing', () => {
+  const o = shadowOnly(new THREE.Mesh());
+  assert.ok(o.layers.isEnabled(SHADOW_ONLY_LAYER) && !o.layers.isEnabled(0), 'never in a view camera\'s colour pass');
+  const d = depthFor(new THREE.Mesh());
+  assert.equal(d.depthPacking, THREE.BasicDepthPacking, 'same program family as three\'s default shadow depth material');
+  assert.equal(depthFor(new THREE.Mesh()), d);
+  assert.notEqual(depthFor(new THREE.InstancedMesh(new THREE.BufferGeometry(), null, 1)), d, 'per kind');
 });

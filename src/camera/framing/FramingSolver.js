@@ -17,6 +17,8 @@ export const STRIDE = 8;
 export const SX = 0, SY = 1, SZ = 2, SR = 3, SW = 4, SF = 5, SC = 6, ST = 7;
 /** flags */
 export const F_HARD = 1, F_DROP = 2, F_TOKEN = 4, F_SOFT = 8;
+/** F_FADE: not wanted this gather (fading out) — the drop ladder may drop it whatever its class */
+export const F_FADE = 16;
 /** subject classes (AUTOCAM D17; priority order) */
 export const CLS = Object.freeze({ HER: 0, THREAT: 1, BOSS: 2, LANE: 3, SELECTED: 4, ENGAGED: 5, PRE: 6, BEAT: 7 });
 export const CLS_NAMES = Object.freeze(['her', 'threat', 'boss', 'lane', 'selected', 'engaged', 'preAttend', 'beat']);
@@ -119,13 +121,17 @@ const _pp = { x: 0, y: 0, z: 0 };
  * @param {{x:number,y:number,z:number}} F her focus (feet + focusY)
  * @param {object} v view (makeView)
  * @param {{ dBase:number, cap:number, dMin?:number, capUp:number, capDown:number, limR:number, limL:number,
- *   limUp:number, limDown:number, nEngaged:number, crowd?:boolean, visible?:(sx:number, sy:number)=>boolean,
- *   holeRepair?:boolean }} o
+ *   limUp:number, limDown:number, nEngaged:number, crowd?:boolean, capMax?:number,
+ *   visible?:(sx:number, sy:number)=>boolean, holeRepair?:boolean }} o
  *   limR / limL / limUp / limDown: the herFrame offset limits (m, ≥ 0) the lean may never pass
- * @param {{ d:number, need:number, leanR:number, leanU:number, dropped:number, holes:number, capped:boolean }} out
+ *   capMax: the hard ceiling (cat clamp / range) — when given, the crowd term (D8) extends `cap` up to it (cap + ≤ 1.5 m)
+ * @param {{ d:number, need:number, leanR:number, leanU:number, dropped:number, holes:number, capped:boolean, cap?:number }} out
  */
 export function solveFrame(pool, n, F, v, o, out, cfg = FR) {
   const L = cfg.lean;
+  // crowd term (D8) on top of the +3 m combat budget: the cap grows by it, up to the hard ceiling `capMax`
+  const crowd = o.crowd !== false ? Math.min(cfg.crowd.max, cfg.crowd.per * Math.max(0, o.nEngaged - cfg.crowd.after)) : 0;
+  const cap = o.capMax != null ? Math.max(o.cap, Math.min(o.capMax, o.cap + crowd)) : o.cap;
   let dropped = 0;
   for (let i = 0; i < n; i++) pool[i * STRIDE + SF] &= ~F_DROP;
   let leanR = 0, leanU = 0, need = o.dBase;
@@ -134,13 +140,13 @@ export function solveFrame(pool, n, F, v, o, out, cfg = FR) {
     leanU = 0;
     if (!verticalFits(pool, n, F.x, F.y, F.z, leanR, v, o.dBase)) leanU = verticalLean(pool, n, F, v, leanR, o, L.kappa, cfg.ternarySteps);
     need = needD(pool, n, F.x, F.y, F.z, leanR, leanU, v, o.dBase, cfg.pitchPasses);
-    if (need <= o.cap + 1e-6 || attempt === 3) break;
+    if (need <= cap + 1e-6 || attempt === 3) break;
     if (!dropOne(pool, n, F)) break;
     dropped++;
   }
   let d = need;
-  if (o.crowd !== false) d = Math.max(d, o.dBase + Math.min(cfg.crowd.max, cfg.crowd.per * Math.max(0, o.nEngaged - cfg.crowd.after)));
-  d = Math.max(o.dMin ?? o.dBase, Math.min(o.cap, d));
+  if (crowd > 0) d = Math.max(d, o.dBase + crowd);
+  d = Math.max(o.dMin ?? o.dBase, Math.min(cap, d));
   // hole repair: a hard subject drawn under a HUD / thumb hole → +0.5 m (≤ 4 times, within the cap)
   let holes = 0;
   if (o.visible && o.holeRepair !== false) {
@@ -153,12 +159,12 @@ export function solveFrame(pool, n, F, v, o, out, cfg = FR) {
         projectAt(pool[q + SX], pool[q + SY], pool[q + SZ], F.x, F.y, F.z, leanR, leanU, v, d, _pp);
         if (!o.visible(_pp.x, _pp.y)) hidden = true;
       }
-      if (!hidden || d >= o.cap - 1e-6) break;
-      d = Math.min(o.cap, d + step); holes++;
+      if (!hidden || d >= cap - 1e-6) break;
+      d = Math.min(cap, d + step); holes++;
     }
   }
   out.d = d; out.need = need; out.leanR = leanR; out.leanU = leanU; out.dropped = dropped; out.holes = holes;
-  out.capped = need > o.cap + 1e-6;
+  out.capped = need > cap + 1e-6; out.cap = cap;
   return out;
 }
 
@@ -178,9 +184,14 @@ export function horizontalLean(pool, n, F, v, bias, limR, limL) {
   return Math.max(-limL, Math.min(limR, c));
 }
 
-/** Ternary search over leanU ∈ [−capDown, capUp] ∩ the herFrame limits, minimising needD + κ·|leanU|. */
+/**
+ * Ternary search over leanU ∈ [−capDown, capUp] ∩ the herFrame limits, minimising needD + κ·|leanU|. The bounds keep
+ * the COMBINED lean |(leanR, leanU)| inside the D7 cap (capDown down-screen, max(capUp, capDown) up-screen).
+ */
 export function verticalLean(pool, n, F, v, leanR, o, kappa, steps) {
-  let a = -Math.min(o.capDown, o.limDown), b = Math.min(o.capUp, o.limUp);
+  const r2 = leanR * leanR, up = Math.max(o.capUp, o.capDown);
+  let a = -Math.min(o.capDown, o.limDown, Math.sqrt(Math.max(0, o.capDown * o.capDown - r2)));
+  let b = Math.min(o.capUp, o.limUp, Math.sqrt(Math.max(0, up * up - r2)));
   if (!(b > a)) return 0;
   for (let k = 0; k < steps; k++) {
     const m1 = a + (b - a) / 3, m2 = b - (b - a) / 3;
@@ -195,13 +206,33 @@ function vCost(pool, n, F, v, leanR, u, dBase, kappa) {
   return needD(pool, n, F.x, F.y, F.z, leanR, u, v, dBase, 2) + kappa * Math.abs(u);
 }
 
-/** Drop ladder step: the first soft subject, else the ENGAGED subject farthest from her without a token. */
+/**
+ * Classes the ladder never drops once hard (AUTOCAM §6.3): HER, THREAT (a live wind-up on her), BOSS, BOSS_LANE and
+ * SELECTED.
+ * @param {number} c CLS.*
+ */
+export function undroppable(c) { return c <= CLS.SELECTED; }
+
+/**
+ * Drop ladder step (AUTOCAM §6.3), lowest priority first:
+ *  1. a soft subject of a low class (fading-out subjects of any class first, then BEAT, pre-attend, soft ENGAGED);
+ *  2. the ENGAGED subject farthest from her without a token;
+ *  3. only then a THREAT / LANE / BOSS / SELECTED subject still easing in (not hard yet, ≤ ~0.2 s) — so a wind-up on her
+ *     always outranks every ENGAGED foe, and a subject that is not hard yet (the lean ignores it) cannot force a
+ *     distance-only zoom-out that the lean then takes back.
+ * A hard THREAT / BOSS / LANE / SELECTED subject is never dropped; d clamps at the cap and ui arrows cover the rest.
+ * @returns {boolean} whether a subject was dropped
+ */
 export function dropOne(pool, n, F) {
+  let soft = -1, sk = -1, late = -1, lk = -1;
   for (let i = 1; i < n; i++) {
-    const o = i * STRIDE, fl = pool[o + SF];
-    if (fl & F_DROP || !(pool[o + SW] > 0)) continue;
-    if (!(fl & F_HARD)) { pool[o + SF] = fl | F_DROP; return true; }
+    const o = i * STRIDE, fl = pool[o + SF], c = pool[o + SC];
+    if (fl & F_DROP || !(pool[o + SW] > 0) || fl & F_HARD) continue;
+    if (undroppable(c) && !(fl & F_FADE)) { if (c > lk) { lk = c; late = i; } continue; }
+    const k = fl & F_FADE ? 100 : c;                          // fading first, then the lowest priority class
+    if (k > sk) { sk = k; soft = i; }
   }
+  if (soft >= 0) { pool[soft * STRIDE + SF] |= F_DROP; return true; }
   let best = -1, bd = -1;
   for (let i = 1; i < n; i++) {
     const o = i * STRIDE, fl = pool[o + SF];
@@ -209,6 +240,7 @@ export function dropOne(pool, n, F) {
     const dx = pool[o + SX] - F.x, dz = pool[o + SZ] - F.z, d = dx * dx + dz * dz;
     if (d > bd) { bd = d; best = i; }
   }
+  if (best < 0) best = late;
   if (best < 0) return false;
   pool[best * STRIDE + SF] |= F_DROP;
   return true;

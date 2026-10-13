@@ -17,8 +17,10 @@
 // Options on any shot: `scale: 'height'` (or a number) scales the anchor-local placements by the anchor's height (a
 // boss reveal frames a 1.6 m rat and a 2.2 m hyena alike); `collide: true` keeps the lens on her side of solid
 // architecture (a sphere cast from the subject's chest, like the spring arm; needs `castFn`, which FollowCamera sets).
+// Every framing (not whip / fall) keeps the lens out of the framed actors' heads: at least HEAD_CLEAR × the head
+// radius (and the near plane + a margin past the fur) from the head centre of the anchor and of the `target`.
 import * as THREE from 'three';
-import { CAMERA } from '../core/config.js';
+import { CAMERA, RENDER } from '../core/config.js';
 import { clamp01, lerp, EASES } from '../core/math.js';
 import { CamPose, resolveEase } from './pose.js';
 import { PRESETS, DEG, MEME_PERIOD, localToWorld, memeSway, handheld } from './presets.js';
@@ -37,6 +39,60 @@ const _c = new THREE.Vector3(), _o = new THREE.Vector3();
 /** lens sphere radius of the `collide` cast (m) */
 const COLLIDE_R = 0.2;
 const _n = { x: 0, y: 0, z: 0 }, _s = { x: 0, y: 0, z: 0 }, _arr = [0, 0, 0];
+const _hc = new THREE.Vector3();
+/** minimum lens distance from a framed actor's head centre, in head radii (camera collision against actor bounds) */
+export const HEAD_CLEAR = 1.2;
+/** extra clearance past the head radius on top of the near plane (m): the fur tips never touch the near plane */
+export const HEAD_NEAR_MARGIN = 0.05;
+/** head sphere of a kitten rig in head-joint local units (centre above the neck pivot, radius incl. the fur shell) */
+export const HEAD_LOCAL = Object.freeze({ y: 0.15, z: 0.02, r: 0.26 });
+/** fallback head sphere for an actor without a kitten rig, as fractions of its height */
+export const HEAD_FALLBACK = Object.freeze({ y: 0.74, r: 0.28 });
+
+/**
+ * The head joint of an actor's kitten rig (player model, companion / NPC visual, cage view), or null.
+ * @param {any} actor @returns {THREE.Object3D|null}
+ */
+export function headJointOf(actor) {
+  if (!actor) return null;
+  if (actor.headJoint?.isObject3D) return actor.headJoint;
+  const k = actor.model?.k ?? actor.model?.view?.kitten ?? actor.view?.kitten ?? actor.visual?.view?.kitten ?? actor.visual?.kitten ?? actor.kitten ?? null;
+  const h = k?.rig?.joints?.head ?? k?.rig?.head ?? null;
+  return h?.isObject3D ? h : null;
+}
+
+/**
+ * World head sphere of a framed actor into `out` (centre); returns the radius (0 = no actor). Uses the live head joint
+ * when the actor has a kitten rig (poses that lean / bow the head are followed), else a height-based estimate.
+ * @param {any} actor @param {THREE.Vector3} feet the actor's feet position @param {number} height @param {THREE.Vector3} out
+ */
+export function headSphere(actor, feet, height, out) {
+  if (!actor) return 0;
+  const j = headJointOf(actor);
+  if (j && j.matrixWorld) {
+    out.set(0, HEAD_LOCAL.y, HEAD_LOCAL.z).applyMatrix4(j.matrixWorld);
+    const sc = j.matrixWorld.getMaxScaleOnAxis();
+    if (Number.isFinite(out.x) && sc > 1e-4) return HEAD_LOCAL.r * sc;
+  }
+  const h = Math.max(0.3, height ?? 1);
+  out.set(feet.x, feet.y + h * HEAD_FALLBACK.y, feet.z);
+  return h * HEAD_FALLBACK.r;
+}
+
+/**
+ * Push `pos` out of the sphere (c, minDist) along c → pos (or back along the view when pos sits on the centre).
+ * The look point is untouched (the subject keeps its place in the frame). Returns true when it moved.
+ * @param {THREE.Vector3} pos @param {THREE.Vector3} look @param {THREE.Vector3} c @param {number} minDist
+ */
+export function clearSphere(pos, look, c, minDist) {
+  _d.subVectors(pos, c);
+  const d2 = _d.lengthSq();
+  if (d2 >= minDist * minDist) return false;
+  if (d2 < 1e-10) { _d.subVectors(pos, look); if (_d.lengthSq() < 1e-10) _d.set(0, 0, 1); }
+  _d.normalize();
+  pos.copy(c).addScaledVector(_d, minDist);
+  return true;
+}
 
 /**
  * Merge a `cam` step with its preset and fill the defaults. Pure (no ctx).
@@ -249,6 +305,7 @@ export class CutsceneCamera {
     out.fov = this._fov(k);
     if (s.collide) this._collide(out);
     this._addMotion(out);
+    this._clearHeads(out);
     // safety net: an anchor-relative low shot on a slope (HERO_LOW at 0.35 m) or a rail over a hill never dips
     // into the terrain (the look point stays: the subject keeps its place in the frame)
     const g = this.ctx.physics?.heightAt?.(out.pos.x, out.pos.z);
@@ -335,6 +392,25 @@ export class CutsceneCamera {
     this._point(s.look, _v, this.from.look);
     this._point(s.lookTo ?? s.look, _w, _v);
     out.look.lerpVectors(_v, _w, k);
+  }
+
+  /** Keep the lens out of the anchor's and the target's heads (≥ HEAD_CLEAR radii, ≥ near plane + margin past the fur). */
+  _clearHeads(out) {
+    const near = RENDER.near ?? 0.1;
+    const f = this.frame;
+    if (f.actor) this._clearHead(out, f.actor, f.pos, f.height, near);
+    const t = this.shot.target;
+    if (t != null) {
+      resolveFrame(this.ctx, t, this.targetFrame, false);
+      const a = this.targetFrame.actor;
+      if (a && a !== f.actor) this._clearHead(out, a, this.targetFrame.pos, this.targetFrame.height, near);
+    }
+  }
+
+  _clearHead(out, actor, feet, height, near) {
+    const r = headSphere(actor, feet, height, _hc);
+    if (r <= 0) return;
+    clearSphere(out.pos, out.look, _hc, Math.max(HEAD_CLEAR * r, r + near + HEAD_NEAR_MARGIN));
   }
 
   /** `collide` shots: pull the lens in front of solid architecture between the subject's chest and the lens. */

@@ -24,7 +24,7 @@ the reach the player sees is the reach that fires.
 Holding Q (Volley indicator up) and pressing Esc opens the pause menu as well as cancelling the aim. Esc should only
 cancel the aim (CONTROLS_SPEC §7.5) when `ctx.companions.aim.active`.
 
-- (core, W1) `settings.pathPreview` will become 'auto' | 'on' | 'off' (WA §3.6; allowed values in `config.SETTING_VALUES.pathPreview`). It stays boolean false until GroundDecals reads the enum ('auto' = touch during the prologue + Chapter 1); tell core when it does and core flips the default. New tables to read: `TELEGRAPH.glyph / ink / glyphSize*`, `CLASS_MARKS`, `FX.comicPops`, `PICKUP_FX`, `KO`. Core updated the two literal colour asserts in fx.test.js (red #FF5A4E, aoe #FF9A3D; crow shadow #3A2346).
+- (core, W1) `settings.pathPreview` will become 'auto' | 'on' | 'off' (WA §3.6; allowed values in `config.SETTING_VALUES.pathPreview`). DONE: GroundDecals reads the enum, so core flipped the default to 'auto'. New tables to read: `TELEGRAPH.glyph / ink / glyphSize*`, `CLASS_MARKS`, `FX.comicPops`, `PICKUP_FX`, `KO`. Core updated the two literal colour asserts in fx.test.js (red #FF5A4E, aoe #FF9A3D; crow shadow #3A2346).
 
 - (core, S1 K1) No bloom in play on any tier: `postfx.setBloom/resetBloom` only record the request (`postfx.bloom` returns it, capped 0.8 by reduceFlashes; `postfx.bloomRendered` is what renders: 0 in play). Holy / Golden Hour glow must come from the additive glow cards (F5 / ART §8.5). The `fx:holy` smoke's `bloom > base` assertions still pass on the recorded value but no longer prove a visual: switch them to the glow-card stats. Particle pools: multiply caps by `ctx.postfx.particleScale` (thermal rung 2 = ×0.5; `E.PERF_THERMAL {particleScale}`). Tag fx roots `userData.perfCat = 'fx'`.
 
@@ -43,3 +43,9 @@ cancel the aim (CONTROLS_SPEC §7.5) when `ctx.companions.aim.active`.
   0.35 s: please draw the double paw there. The head snap / bow bounce / hop are the player's.
 - **Glow:** the model writes her position into `ENV_U.uGlow.value.xyz` (world `Env.js` export, read through a namespace
   import) every frame once world ships `ENV_U`; radius / colour stay HolyFX's (X6). `ctx.fx.holy(player, h)` is still called.
+
+- (camera, Phase W) `ctx.cam.blendLeft` is live: seconds left of the running pose blend (hand-back, `blendTo`, shot blends), 0 when none (unit-tested).
+
+## from audio (Phase W: WA §5.3 comic pops)
+- When a `pop` style word shows ("BONK!", "PARRY!", "CLANK!", "BOING!"), please play `ctx.audio.play2D('comicPop')`
+  (pickup/bubble at 1.15, ui bus, min gap 0.08 s). fx owns the rate limit (`FX.comicPops`), audio adds none.

@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { ECONOMY, PLAYER, CLASS_MARKS, PICKUP_FX } from '../core/config.js';
 import { mulberry32, hashSeed } from '../core/rng.js';
-import { procTemplate } from './Props.js';
+import { procTemplate, worldMaterial } from './Props.js';
 
 const MAX_FISH = 240;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _v = new THREE.Vector3();
@@ -44,7 +44,8 @@ export const placedFishFlag = (levelId, key) => `${levelId}.fish.${key}`;
 
 /** Fish mesh (body + tail), ~0.32 m long, facing +Z, centred. */
 export function makeFishGeometry() {
-  const body = new THREE.SphereGeometry(0.1, 8, 6); body.scale(0.55, 0.85, 1.35);
+  // PERF §1.2: 6 × 5 segments (56 tris with the tail, was 88): every live fish of the level draws, on screen or not
+  const body = new THREE.SphereGeometry(0.1, 6, 5); body.scale(0.55, 0.85, 1.35);
   const tail = new THREE.ConeGeometry(0.09, 0.14, 4); tail.rotateX(-Math.PI / 2); tail.scale(0.35, 1.2, 1); tail.translate(0, 0, -0.17);
   const g = mergeSimple([body, tail]);
   body.dispose(); tail.dispose();
@@ -84,24 +85,35 @@ export function makeLetterMesh() {
   flap.rotateX(Math.PI / 2); flap.rotateZ(Math.PI / 4); flap.scale(1.4, 1, 0.12); flap.translate(0, 0.012, 0.04);
   const seal = new THREE.CylinderGeometry(0.035, 0.035, 0.016, 14); seal.translate(0, 0.02, 0);
   const t = procTemplate('letter', [[new THREE.BoxGeometry(0.34, 0.012, 0.24), '#FFF6E0'], [flap, '#F2DFB4'], [seal, '#FF6F9C']]);
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, emissive: '#FFE6C8', emissiveIntensity: 0.18 });
-  mat.dithering = true;
+  // PERF §1.2: a world material (the world-static program every plain vertex-coloured world mesh uses)
+  const mat = worldMaterial({ emissive: '#FFE6C8', emissiveIntensity: 0.18 });
   const m = new THREE.Mesh(t.geometry, mat);
   m.name = 'pickup:letter'; m.castShadow = false;
   m.userData.owned = true; mat.userData.owned = true;
   return m;
 }
 
+/**
+ * A plain pickup mesh: `geometry` coloured per vertex with `color`, drawn with a world material (PERF §1.2: the
+ * world-static program every vertex-coloured plain world mesh uses, instead of a colour-only Lambert program).
+ * @param {THREE.BufferGeometry} geometry @param {string} color @param {string} [emissive] @param {number} [ei]
+ */
+function pickupMesh(geometry, color, emissive = '#000000', ei = 0) {
+  const c = new THREE.Color(color), n = geometry.attributes.position.count, col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+  geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return new THREE.Mesh(geometry, worldMaterial({ emissive, emissiveIntensity: ei }));
+}
+
 /** Heart Bell: a small gold bell with a pink ribbon on a stone pedestal (≈1.0 m). */
 export function makeHeartBellMesh() {
   const g = new THREE.Group(); g.name = 'pickup:heartbell';
-  const stone = pickupMat('#E6DAC4');
-  const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.7, 8), stone); ped.position.y = 0.35;
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 8), stone); cap.position.y = 0.74;
+  const ped = pickupMesh(new THREE.CylinderGeometry(0.22, 0.28, 0.7, 8), '#E6DAC4'); ped.position.y = 0.35;
+  const cap = pickupMesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 8), '#E6DAC4'); cap.position.y = 0.74;
   const bellG = new THREE.LatheGeometry([[0.0, 0.0], [0.14, 0.0], [0.13, 0.04], [0.1, 0.14], [0.08, 0.22], [0.04, 0.26], [0, 0.27]].map(([x, y]) => new THREE.Vector2(x, y)), 16);
-  const bell = new THREE.Mesh(bellG, pickupMat('#E8C27A', '#FFD57A', 0.3));
+  const bell = pickupMesh(bellG, '#E8C27A', '#FFD57A', 0.3);
   bell.position.y = 0.95; bell.name = 'bell';
-  const ribbon = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.022, 6, 12), pickupMat('#FF9EC0'));
+  const ribbon = pickupMesh(new THREE.TorusGeometry(0.05, 0.022, 6, 12), '#FF9EC0');
   ribbon.position.y = 1.23; ribbon.scale.set(1.6, 1, 0.6);
   for (const m of [ped, cap, bell, ribbon]) { m.castShadow = m === ped; g.add(m); }
   g.traverse((o) => { o.userData.owned = true; });
@@ -111,9 +123,9 @@ export function makeHeartBellMesh() {
 /** Milk bottle (cream glass + red cap), ~0.3 m. */
 export function makeMilkMesh() {
   const g = new THREE.Group(); g.name = 'pickup:milk';
-  const glass = new THREE.Mesh(new THREE.LatheGeometry([[0, 0], [0.07, 0], [0.075, 0.14], [0.04, 0.2], [0.035, 0.26], [0, 0.26]].map(([x, y]) => new THREE.Vector2(x, y)), 14),
-    pickupMat('#FFFBF2', '#FFF6E8', 0.15));
-  const capM = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 12), pickupMat('#E0605A'));
+  const glass = pickupMesh(new THREE.LatheGeometry([[0, 0], [0.07, 0], [0.075, 0.14], [0.04, 0.2], [0.035, 0.26], [0, 0.26]].map(([x, y]) => new THREE.Vector2(x, y)), 14),
+    '#FFFBF2', '#FFF6E8', 0.15);
+  const capM = pickupMesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 12), '#E0605A');
   capM.position.y = 0.27;
   for (const m of [glass, capM]) { m.castShadow = false; g.add(m); }
   g.traverse((o) => { o.userData.owned = true; });
@@ -150,6 +162,8 @@ export class Pickups {
     this.heartMat = pickupMat('#FF6F9C', '#FF8FB1', 0.35);
     this.heartMesh = new THREE.InstancedMesh(makeHeartGeometry(), this.heartMat, 24);
     this.heartMesh.name = 'pickups:hearts'; this.heartMesh.count = 0; this.heartMesh.frustumCulled = false;
+    // PERF §1.2: a (white) instance colour like the fish, so hearts and fish share one program
+    this.heartMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(24 * 3).fill(1), 3);
     root.add(this.fishMesh, this.heartMesh);
     for (const o of [this.fishMesh, this.heartMesh, this.fishMat, this.heartMat]) o.userData.owned = true;
     this._t = 0;
@@ -346,10 +360,14 @@ export class Pickups {
         this.heartMesh.setMatrixAt(nh++, _m.compose(_v.copy(it.pos), _q, _s));
       }
     }
+    // PERF §1.2: the fish draw is one InstancedMesh (never frustum-culled as a whole), so resting fish outside the
+    // camera frustum are simply not written this frame (flying / magnetised ones always are)
+    const cam = this.ctx.cam, cull = typeof cam?.inView === 'function';
     for (const it of this.items) {
       if (!it.alive) continue;
       const bob = it.air || it.mag ? 0 : Math.sin(t * 2.2 + it.t * 0.3) * PM.bob;
       if (!it.air && !it.mag && it.delay <= 0) tw.push(it);
+      if (it.kind === 'fish' && cull && !it.air && !it.mag && !cam.inView(it.pos, 0.4)) continue;
       if (it.kind === 'fish' && nf < MAX_FISH) {
         _e.set(0.25, t * spin + it.t, Math.sin(t * 3 + it.t) * 0.2); _q.setFromEuler(_e);
         _s.setScalar(it.gold ? 1.35 : 1);

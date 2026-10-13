@@ -9,7 +9,7 @@
 //   4 wide: Mochi, half asleep, rolls over: "That's what brave is, I think. Being scared and being here."
 //     Sage: "...Don't tell anyone I cried."
 //   5 slow push-out (the tail curl is [unverified] on Dragon_Evolved's Body bones: skipped, push-out only); fade out.
-// end: flag forest.camp; Vigil Stone `vigil_3` lit; env forest_twilight; music field_of_dreams + crickets (WA §9).
+// end: flag forest.camp; Vigil Stone `vigil_3` lit; env forest_twilight; music lantern_night (musicMap forest.camp) + crickets (WA §9).
 import * as THREE from 'three';
 import { FADE_COLOR } from '../../core/config.js';
 import { say, cam, wait, sfx, yawOf } from './lib.js';
@@ -132,7 +132,7 @@ export default {
     // hand-back south of the fire facing on up the path (+Z): the follow camera behind her must not sit inside the sleeping Pudding
     actors: { swordcat: { prop: { lantern: false }, pos: END_AT, facing: yawOf([PUD[0] - END_AT[0], PUD[1] - END_AT[1]]) }, pudding: { pose: 'sleep' } },
     env: 'forest_twilight',
-    music: { track: 'field_of_dreams', fade: 2 },
+    music: { track: 'lantern_night', fade: 2 },          // = musicMap's forest.camp track (no second crossfade after the scene)
     ui: { letterbox: false, hud: true, fade: { alpha: 0, dur: 1.2 } },
     cam: 'follow',
     save: true,

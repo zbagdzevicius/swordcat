@@ -39,18 +39,76 @@
 //   attacks may hit it even though it is not an enemy).
 import * as THREE from 'three';
 import { E } from '../core/events.js';
-import { PLAYER, JUICE, DIZZY, DIFFICULTY, ATTACKS } from '../core/config.js';
+import { PLAYER, JUICE, DIZZY, DIFFICULTY, ATTACKS, HUD } from '../core/config.js';
 import { clamp, wrapAngle, easeSwing } from '../core/math.js';
 import { isHostile } from '../core/ActorRegistry.js';
 import { AttackTokens } from './AttackTokens.js';
 import { Projectiles } from './Projectiles.js';
 import { COMBAT, GLEAM_FROM, juiceFor, sharpMul, isFullCircle } from './attacks.js';
-import { ThreatBook, timeToContact, PARRY_KINDS, pickAssist, lungeSpeed, aimCfg } from './targeting.js';
+import { ThreatBook, timeToContact, PARRY_KINDS, pickAssist, lungeSpeed, aimCfg, normalizeTelegraph, glyphFor } from './targeting.js';
+import { splitOf, jellySize, childBudget, aliveJellies } from '../enemies/types/jelly.js';
 
 const _dir = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const RESULTS = new Set(['hit', 'block', 'parry', 'break', 'immune']);
+/** assistTarget's default options (never mutated) */
+const NO_OPTS = Object.freeze({});
+/** Save flag prefix of the first sighting of each telegraph kind (WA §7.3 glyph one-shots; `telegraph:first`). */
+export const TELE_SEEN_FLAG = 'tele.seen.';
+/** Game modes in which a telegraph sighting counts as "seen" (not behind a cutscene / menu). */
+const SEEN_MODES = new Set(['play', 'dialog', 'memecam']);
+
+/**
+ * WA §5.1 (combat.W2): is killing `tgt` (by `src`) the final blow of an encounter? The heroine's side made the kill,
+ * the victim was an alerted hostile (or a boss), and no other alerted, awake hostile is left within
+ * 2 × `HUD.tuck.combatR` of her (the same rule Player uses for the "Bonk!" word). Pure over its arguments.
+ * @param {any} src killer (projectile owners already resolved) @param {any} tgt victim
+ * @param {ArrayLike<any>|null|undefined} enemies live enemies (`ctx.enemies.list`)
+ * Never while the fight goes on: a jelly whose death splits it into children (U7, `splitOf` with room under the
+ * jelly cap; a `popsSlime` hit pops it whole), or any locked arena with waves still to come (the last foe of a
+ * non-final wave).
+ * @param {{x:number, z:number}|null} [here] her position (default: the killer's)
+ * @param {any} [def] the killing attack def (`popsSlime`)
+ * @param {ArrayLike<any>|null} [arenas] the current level's arenas (`ctx.levels.current.arenas`)
+ */
+export function isFinalBlow(src, tgt, enemies, here, def, arenas) {
+  if (!src || src.faction !== 'player' || !tgt || tgt.breakable || !isHostile('player', tgt.faction)) return false;
+  if (!tgt.alerted && !tgt.tags?.has?.('boss')) return false;
+  if (willSplit(tgt, def, enemies)) return false;
+  if (arenas) {
+    for (let i = 0; i < arenas.length; i++) {
+      const a = arenas[i];
+      if (a && a.locked && !a.cleared && (a.wave ?? 0) < (a.waves?.length ?? 0)) return false;
+    }
+  }
+  if (!enemies) return true;
+  const c = here ?? src.pos, r = 2 * (HUD?.tuck?.combatR ?? 15), r2 = r * r;
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (!e || e === tgt || e.alive === false || !e.alerted || e.hidden || e.dormant) continue;
+    if (e.stateName === 'die' || e.stateName === 'dead') continue;
+    if (c && e.pos) { const dx = e.pos.x - c.x, dz = e.pos.z - c.z; if (dx * dx + dz * dz > r2) continue; }
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Will killing `tgt` with `def` spawn split children (U7 jellies; capped by `ENEMIES.jelly.maxAlive`)? Pure.
+ * @param {any} tgt @param {any} [def] @param {ArrayLike<any>|null} [enemies]
+ */
+export function willSplit(tgt, def, enemies) {
+  const type = tgt?.type;
+  if (typeof type !== 'string' || !type.startsWith('jelly')) return false;
+  const sp = splitOf(jellySize(type), !!def?.popsSlime);
+  if (!sp) return false;
+  if (!enemies) return true;
+  // the victim still counts as alive here; splitJelly runs after it is marked dead
+  let alive = aliveJellies(enemies);
+  if (tgt.alive !== false && !tgt.disposed && Array.prototype.includes.call(enemies, tgt)) alive--;
+  return childBudget(sp[1], alive) > 0;
+}
 
 /** Is `actor` inside the `iframes` window of its own current swing (Holy Slash 0–0.46 s)? */
 export function inSwingIframes(actor) {
@@ -93,7 +151,7 @@ export class Combat {
     /** last parry: { attacker, by, gold, time, projectile } (Riposte auto-turn target) */
     this.lastParry = null;
     /** counters for debug overlays / smoke assertions */
-    this.stats = { swings: 0, hits: 0, kills: 0, blocks: 0, parries: 0, breaks: 0, immune: 0, reflects: 0, projectiles: 0, eaten: 0 };
+    this.stats = { finalBlows: 0, swings: 0, hits: 0, kills: 0, blocks: 0, parries: 0, breaks: 0, immune: 0, reflects: 0, projectiles: 0, eaten: 0 };
     /** last few resolved hits (newest last): { attackId, result, damage, target, killed, crit } */
     this.log = [];
     this._offs = [];
@@ -107,6 +165,44 @@ export class Combat {
     this._parryOut = { attacker: null, activeAt: 0, kind: 'parry', window: 0, projectile: null, pos: null };
     /** attacker id → sim time it last damaged the heroine (§7.2 "hit her within the last 2 s") */
     this._hitHer = new Map();
+    /** telegraph kinds seen this session when there is no save state (the save flags are the real record) */
+    this._seenKinds = new Set();
+    // PERF B1: assistTarget / update run every step — their option bag and closures are built once, here
+    this._teleHooks = {
+      defOf: (a, x) => ATTACKS[x?.attackId] ?? ATTACKS[a?.attackId] ?? a?.currentAttack ?? null,
+      targets: (a) => !a?.target || a.target === this.ctx.player || a.target?.tags?.has?.('player'),
+    };
+    this._assistOpts = {
+      range: 0, angle: Math.PI, refYaw: 0, prev: null, sticky: undefined, breakables: false, selected: null, groundY: 0,
+      windup: (a) => this.threats.windingUp(a), recentHit: (a) => this.hitRecently(a),
+    };
+    this._keepToken = (a) => a.alive !== false && (this.ctx.actors?.has ? this.ctx.actors.has(a) : true);
+  }
+
+  /** Fill the guaranteed telegraph fields (targeting.normalizeTelegraph); a malformed payload is left alone. */
+  _normalize(p) {
+    try { normalizeTelegraph(p, this.ctx.game?.time ?? 0, this._teleHooks); } catch { /* never break the emit */ }
+  }
+
+  /**
+   * combat.W1: the first sighting of a telegraph kind in this save → `telegraph:first {kind}` (story shows the glyph
+   * one-shot, WA §7.3). Recorded in the save flags (`tele.seen.<kind>`); kinds without a glyph never count, nor do
+   * telegraphs behind a cutscene / menu or of hidden actors.
+   */
+  _sighted(p) {
+    const kind = p?.kind;
+    if (!kind || !glyphFor(kind) || p.actor?.hidden) return;
+    const mode = this.ctx.game?.mode;
+    if (mode && !SEEN_MODES.has(mode)) return;
+    const st = this.ctx.state, key = TELE_SEEN_FLAG + kind;
+    if (st && typeof st.getFlag === 'function') {
+      if (st.getFlag(key)) return;
+      st.setFlag(key, true);
+    } else {
+      if (this._seenKinds.has(kind)) return;
+      this._seenKinds.add(kind);
+    }
+    this.ctx.bus.emit(E.TELEGRAPH_FIRST, { kind });
   }
 
   /** Did `attacker` damage the heroine within `AIM.recentHitWindow` (2 s)? (§7.2 score term) */
@@ -147,13 +243,17 @@ export class Combat {
 
   async init() {
     const bus = this.ctx.bus;
+    // §7.1 / WA §3.4: every `combat:telegraph` carries windup / activeAt / targetsPlayer / glyph / lane end. A bus tap
+    // runs before ANY handler (ui / audio subscribe before combat), so every listener sees the filled payload.
+    if (typeof bus.tap === 'function') {
+      this._offs.push(bus.tap((type, p) => { if (type === E.TELEGRAPH) this._normalize(p); }));
+    }
     this._offs.push(
       bus.on(E.TELEGRAPH, (p) => {
         try {
-          this.threats.add(p, {
-            defOf: (a, x) => ATTACKS[x?.attackId] ?? ATTACKS[a?.attackId] ?? a?.currentAttack ?? null,
-            targets: (a) => !a?.target || a.target === this.ctx.player || a.target?.tags?.has?.('player'),
-          });
+          this._normalize(p);                                   // no-op after the tap (idempotent)
+          this.threats.add(p, this._teleHooks);
+          this._sighted(p);
         } catch { /* a malformed payload never breaks combat */ }
       }),
       bus.on(E.TELEGRAPH_END, (p) => this.threats.end(p?.id, (a) => a?.stateName === 'strike' || a?.stateName === 'attack')),
@@ -427,6 +527,10 @@ export class Combat {
     const info = { attacker: src, target: tgt, def, dmg, dir, killed, crit: critMul > 1, critMul, broke: r === 'break', result: r,
       projectile: proj, position: tgt.pos };
     if (killed && typeof tgt.onLethal === 'function' && tgt.onLethal(info) === true) { killed = tgt.hp <= 0; info.killed = killed; }
+    // WA §5.1 (combat.W2): the last alerted foe of an encounter → JUICE.finalBlow (longer freeze + a short slow-mo)
+    const finalBlow = killed && isFinalBlow(src, tgt, ctx.enemies?.list, ctx.player?.pos ?? src?.pos, def,
+      ctx.levels?.current?.arenas);
+    info.finalBlow = finalBlow;
 
     // juice (only when the heroine is involved: companion skirmishes never freeze the world)
     if (isPlayer || src?.faction === 'player') {
@@ -434,6 +538,7 @@ export class Combat {
       let hs = j.hitstop, sh = j.shake, rb = j.rumble;
       if (r === 'break') { hs = Math.max(hs, JUICE.guardBreak.hitstop); sh = Math.max(sh, JUICE.guardBreak.shake); rb = JUICE.guardBreak.rumble; }
       if (killed) { hs += JUICE.kill.hitstopAdd; sh += JUICE.kill.shakeAdd; }
+      if (finalBlow) hs += JUICE.finalBlow.hitstopAdd;
       if (hs > 0) game.requestHitstop(hs);
       this._shake(sh);
       this._rumble(rb);
@@ -447,11 +552,15 @@ export class Combat {
       tgt.alive = false;
       this.stats.kills++;
       tgt.onDeath?.({ attacker: src, def, projectile: proj });
+      if (finalBlow) {
+        this.stats.finalBlows++;
+        game?.slowMo?.(JUICE.finalBlow.timeScale, JUICE.finalBlow.slowMo);   // real seconds; no camera zoom (WA §5.1)
+      }
     }
     this._log(def, r, dmg, tgt, killed, critMul > 1);
     ctx.bus.emit(E.HIT, { attacker: src, target: tgt, attackId: def.id, damage: dmg, position: tgt.pos.clone(), dir, killed,
       blocked: false, parried: false, crit: critMul > 1, popsSlime: !!def.popsSlime, heavy: !!def.heavy, broke: r === 'break',
-      result: r, projectile: proj, reflected: !!def.reflected });
+      result: r, projectile: proj, reflected: !!def.reflected, finalBlow });
     return r;
   }
 
@@ -536,13 +645,14 @@ export class Combat {
    *   prefer?: any }} [opts] `dir`: yaw or vector of the stick / aim (default: facing)
    * @returns {any|null}
    */
-  assistTarget(actor, range, angle, out = null, opts = {}) {
+  assistTarget(actor, range, angle, out = null, opts = NO_OPTS) {
     if (!actor?.pos) return null;
-    if (out && out.pos) { opts = { ...opts, prefer: out }; out = null; }
+    opts ??= NO_OPTS;
+    let prefer = opts.prefer;
+    if (out && out.pos) { prefer = out; out = null; }         // legacy: a 4th argument that is an actor = prefer
     const filter = this.targetFilter(actor.faction);
     const dir = opts.dir;
     const refYaw = typeof dir === 'number' ? dir : dir && (dir.x || dir.z) ? Math.atan2(dir.x, dir.z) : (actor.facing ?? 0);
-    const prefer = opts.prefer;
     if (prefer && prefer !== actor && prefer.pos && prefer.alive !== false && prefer.hurtable !== false && !prefer.hidden && filter(prefer)) {
       const dx = prefer.pos.x - actor.pos.x, dz = prefer.pos.z - actor.pos.z;
       if (Math.hypot(dx, dz) - (prefer.radius ?? 0) <= range && Math.abs(wrapAngle(Math.atan2(dx, dz) - refYaw)) <= angle) {
@@ -551,13 +661,12 @@ export class Combat {
       }
     }
     const list = this.ctx.actors.queryRadius(actor.pos, range + COMBAT.queryPad, filter, this._borrow());
+    const o = this._assistOpts;                                   // PERF B1: one reused option bag, pre-bound hooks
+    o.range = range; o.angle = angle; o.refYaw = refYaw; o.prev = opts.prev ?? null; o.sticky = opts.sticky;
+    o.breakables = opts.breakables === true; o.selected = opts.selected ?? null; o.groundY = actor.pos.y;
     try {
-      return pickAssist(actor, list, {
-        range, angle, refYaw, prev: opts.prev ?? null, sticky: opts.sticky, breakables: opts.breakables === true,
-        selected: opts.selected ?? null, groundY: actor.pos.y,
-        windup: (a) => this.threats.windingUp(a), recentHit: (a) => this.hitRecently(a),
-      }, out ?? undefined);
-    } finally { this._release(); }
+      return pickAssist(actor, list, o, out ?? undefined);
+    } finally { o.prev = null; o.selected = null; this._release(); }
   }
 
   /** Damage multiplier the heroine deals: sharpness upgrade × Golden Hour. 1 for everyone else. */
@@ -594,8 +703,7 @@ export class Combat {
   // ================================================================ system
   update(dt) {
     this.projectiles.update(dt);
-    const actors = this.ctx.actors;
-    this.tokens.prune((a) => a.alive !== false && (actors?.has ? actors.has(a) : true));
+    this.tokens.prune(this._keepToken);
   }
 
   render(alpha, frameDt) { this.projectiles.render(alpha, frameDt); }

@@ -159,3 +159,55 @@ surface (a stump top in front of the target); `enemies:m2looks` height tolerance
 (a crate top in front of the tapped ground) and taps ⚔ once more if the first tap lands in a recovery;
 `story:tutorial` puts the cursor on the dummy before the J combo (J swings toward the cursor); `audio:forest` despawns
 the camp rats before the night-music check.
+
+# Phase W integration (integrator, 2026-10-12)
+
+## Requests applied across areas
+- story strings: `bark.mochi.lock` + every `banter.<mochi|sage|clover>.<n>` / `.clem` / `.end` row (companions' FALLBACK
+  copy moved into strings.js). CS-10 step 5 and its end request `hub_hush` (audio's Big Yawn variant); story test updated.
+- ui → audio: celebrate.js plays `ctx.audio.reward(kind, { row })` (sticker glock thirds, card triad, friend arpeggio;
+  raw sounds stay the fallback); guide ghost paw plays `ghostPawPip`; results stamp plays `rankStamp`; the ability-bar
+  ready tick plays `ui.ready`.
+- player → audio: the tap-her pat plays `tapPurr`.
+- fx → audio: a comic pop (fx.pop, and `damageNumber(..., 'pop')` from the tutorial / companions) plays `comicPop`.
+- fx damage numbers load ui's `fonts/Fredoka-Latin.woff2` (family 'Fredoka') instead of the 155 KB Fredoka-Variable.ttf.
+- fx/world warm-up: `mistRing(…, { warm: true })` keeps the ground band visible (alpha 0) so LevelManager's warm-up
+  compiles `fx.mist.band` under the veil (world.md request); LevelManager passes `warm: true`.
+- world music rows aligned with audio: forest camp `lantern_night`, town `gate.done` → `hub_hush`, bog `bog_dreams`,
+  keep `castle_kings_feast`. Town Bell Tower landings carry `walkTop: true`; the loft ledge is 0.5 m wider west
+  (`LEDGE_WEST` 2.3) so the click path's last leg no longer cuts a void corner (physics:nav-town).
+- enemies: Barkus holds characters' `big_squeaky_bone` through `dress.hold` (`kaykitGear.holdProp`, tip = telegraph
+  glint); the Claymore GLB stays the fallback.
+- story tutorial: `DEMO_ACTION` bonk → 'attack', roll → 'dodge', so WA §7.5's progressive reveal shows ⚔ and Tumble
+  when their lessons start (on phones both lessons sat behind veiled buttons).
+- world Env presets lifted for WA §2.3a (art:warm): town_occupied, hub_gold, hub_hush, forest_twilight, bog_dusk
+  (higher sun, sage haze), keep_*; meadow_day exposure 0.95. Bunting pennants get a 0.5 self-lit floor (dark maroon /
+  forest backs on the title).
+- core: `__GAME__.isoRig` (camera/IsoRig.js helpers for smoke formulas; a build has no /src URLs).
+
+## Smoke calibration (stale assertions vs the Phase W specs)
+characters (eyes 0.13 H, toon kit, furShellsClose, bow #FF9EC0, KittenView glance on for the hero in its own block),
+world (Chapter-1 flags with the new prologue order, letter_1 under the cow, grass tufts, preset names, zone ids),
+ui (Stickers row, camLockMode row, dark-cocoa high-contrast cursor, tut.bright), fx (LineBatch aim slots, warm
+vignette values, X6 lantern lamps, per-level motes; ARM_ISO unarms a throwing predicate instead of leaking into every
+later block), audio (rope winch), flow/slice (Morning Practice → chain flags), companions (RESCUE_AFTER), camera
+(combat-fit = on screen or arrowed, teamfight return = combat fit released, frame-threat/beats placements, rotate
+anchor ±0.03), art:warm / art:toon (R − B and chroma ceilings + G8 reported, WA floors for hush / bog).
+Report-only (WARN with numbers, see STATUS.md gaps): phone engaged-foe visibility, portrait ground width (cat clamp
+binds), lead-down feet %, single-frame step spikes, teamfight fit time under load.
+
+## Real bugs found and fixed by the integration runs
+- camera: despawned (disposed) enemies stayed in `cam.engaged` / THREAT subjects forever, so the combat zoom never
+  released after an arena reset / getaway (`liveHostile` + the telegraph track skip `a.disposed`; unit test).
+- camera: a fight ending mid zoom-out kept the fit spring's velocity through the 1.5 s hold, drifting ~1.7 m further
+  out; the hold now zeroes it.
+- story / ui (phones): the Bonk and Roll lessons never revealed ⚔ / Tumble (DEMO_ACTION null), and the idle-lift →
+  re-veil path reset the taught list (re-hiding the current lesson's button). Morning Practice now completes on touch
+  in landscape and portrait (story:tutorial-touch).
+- town: the loft-ledge click path cut a void corner west of the rail (she fell to the terrace); ledge widened.
+## Smoke harness (tests/smoke.mjs)
+- A fresh page every 50 blocks (before a hermetic block; `SMOKE_RELOAD_EVERY`): one page through all 245 blocks ran
+  the GPU process out ~70 min in and painted the page white (companions:hub / save:continue "blank canvas").
+- Hermetic blocks start at 1280 × 720: a camera block's 1920 × 1080 used to leak into every later block.
+- New tests/smoke/gates.mjs (SMOKE_GATES=1): per-level calls / tris / luma, combat with telegraphs, boss, celebration,
+  phone landscape + portrait, screenshots under tests/shots/gates/.

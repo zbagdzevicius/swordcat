@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { makeGlowSprite } from './Sky.js';
+import { fxBasicMaterial } from '../fx/shaders.js';
 
 /**
  * Vigil look: the paper lantern hangs `paperOff` m out on the crook arm at `lanternH` m; unlit it is plain paper, lit
@@ -32,7 +33,7 @@ export class VigilStone {
     // lantern flame + glow (the stone and the lantern body are batched props placed by LevelKit)
     this.group = new THREE.Group(); this.group.name = 'vigil:' + this.id;
     const side = this._lanternOffset();
-    this.flameMat = new THREE.MeshBasicMaterial({ color: VIGIL.unlit, fog: true });
+    this.flameMat = fxBasicMaterial({ color: VIGIL.unlit, fog: true });   // PERF §1.2: the fx basic module (shared program)
     this.flameMat.userData.owned = true;
     this.flame = new THREE.Mesh(new THREE.SphereGeometry(0.118, 12, 8), this.flameMat);
     this.flame.scale.set(1, 1.35, 1);          // the paper shade itself: plain paper unlit, glowing gold when lit
@@ -43,7 +44,8 @@ export class VigilStone {
     this.lamp = { pos: this.flame.position.clone(), on: false, intensity: VIGIL.lampI, distance: VIGIL.lampDist, flicker: 0.15 };
     ctx.env?.lamps?.add?.(this.lamp);
     this.flame.userData.owned = true;
-    this.glow = makeGlowSprite({ color: VIGIL.glow, size: 0.9, intensity: 1.6, fog: true });
+    // fog: false like every glow sprite (PERF §1.2: one sprite program; a glow is light, it reads through fog)
+    this.glow = makeGlowSprite({ color: VIGIL.glow, size: 0.9, intensity: 1.6, fog: false });
     this.glow.position.copy(this.flame.position).setY(this.flame.position.y + 0.3);
     this.glow.visible = false;
     this.group.add(this.flame, this.glow);

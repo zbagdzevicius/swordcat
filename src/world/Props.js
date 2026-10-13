@@ -42,23 +42,33 @@ export const STONE_TINT = Object.freeze({ meadow: '#E3CFAE', town: '#E3CFAE', fo
 
 /**
  * ART §4.2: world materials are Lambert + the global toon patch (core `installToon`) + height fog (`withHeightFog`),
- * vertex coloured, dithered on every tier (X3). No Standard / Physical in play.
+ * vertex coloured, dithered on every tier (X3). No Standard / Physical in play. PERF §1.2: every one carries the
+ * world-static patch (`worldStatic`, all features off until set), so plain, inked, detailed, stone and ground
+ * materials of one mesh kind share ONE program.
  * @param {THREE.MeshLambertMaterialParameters} [o]
  */
 export function worldMaterial(o = {}) {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true, ...o });
   m.dithering = true;
   m.userData.owned = true;
+  worldStatic(m);
   return m;
 }
 
 /**
  * ART §4.3 ink rim (0 draws): darkens bevelled silhouette edges seen at a grazing angle; flat faces unaffected.
- * Appends to the material's existing onBeforeCompile and cache key. `k` = edge multiplier (spec 0.68).
+ * `k` = edge multiplier (spec 0.68). On a world-static material (or a plain one, which becomes world-static) it is a
+ * uniform of the shared patch; on a material with another hook (foliage sway...) it composes that hook and key.
  * @template {THREE.Material} M @param {M} m @param {number} [k] @returns {M}
  */
 export function applyInkRim(m, k = 0.68) {
   if (!m || m.userData.inkRim) return m;
+  const custom = Object.prototype.hasOwnProperty.call(m, 'onBeforeCompile') && !m.userData.wsU;
+  if (!custom && m.isMeshLambertMaterial) {
+    worldStatic(m).uWInk.value = k;
+    m.userData.inkRim = true;
+    return m;
+  }
   const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey !== THREE.Material.prototype.customProgramCacheKey ? m.customProgramCacheKey() : '';
   m.onBeforeCompile = function (sh, r) {
     if (prev && prev !== THREE.Material.prototype.onBeforeCompile) prev.call(this, sh, r);
@@ -144,6 +154,24 @@ function gradeColor(c, sat = 1, mul = 1) {
   return c;
 }
 
+const _hsl = { h: 0, s: 0, l: 0 }, _redHsl = { h: 0, s: 0, l: 0 };
+/** The red band `remapReds` touches: HSL hue within ±REDS.hue of 0 (or 1), saturation ≥ REDS.sat. */
+export const REDS = Object.freeze({ hue: 0.045, sat: 0.3, lMin: 0.5 });
+
+/**
+ * WA §2.5 / LI W11 candy-row tints: move a baked colour in the red band (KayKit maroon walls, crimson roofs and
+ * awnings) onto the target's hue and saturation, lifting its lightness to at least `REDS.lMin` × the target's while
+ * keeping the atlas's light / dark shading order. Other colours pass through unchanged. Mutates and returns `c`.
+ * @param {THREE.Color} c linear colour @param {THREE.Color} target linear colour
+ */
+export function remapReds(c, target) {
+  c.getHSL(_hsl, THREE.SRGBColorSpace);
+  if (_hsl.s < REDS.sat || (_hsl.h > REDS.hue && _hsl.h < 1 - REDS.hue)) return c;
+  target.getHSL(_redHsl, THREE.SRGBColorSpace);
+  const l = _redHsl.l * (REDS.lMin + (1 - REDS.lMin) * Math.min(1, _hsl.l / Math.max(0.05, _redHsl.l)));
+  return c.setHSL(_redHsl.h, _redHsl.s, Math.max(_hsl.l, l), THREE.SRGBColorSpace);
+}
+
 /**
  * Bake one mesh (posed / skinned allowed) into a plain geometry in `root` space with a colour attribute.
  * @returns {THREE.BufferGeometry|null}
@@ -165,6 +193,7 @@ function bakeMesh(mesh, rootInv, o) {
   }
   const flat = o.flatColor ? new THREE.Color(o.flatColor) : null;
   const tint = o.tint ? new THREE.Color(o.tint) : null;
+  const reds = o.reds ? new THREE.Color(o.reds) : null;
   for (let i = 0; i < n; i++) {
     if (mesh.isSkinnedMesh) mesh.getVertexPosition(i, _v); else _v.fromBufferAttribute(src.attributes.position, i);
     _v.applyMatrix4(_m);
@@ -179,6 +208,7 @@ function bakeMesh(mesh, rootInv, o) {
       if (mat?.map && uvAttr) { const px = pixelsOf(mat.map); if (px) _col.multiply(sampleTexture(px, mat.map, uvAttr.getX(i), uvAttr.getY(i), _c2)); }
       if (cAttr) _col.multiply(_c2.fromBufferAttribute(cAttr, i));
       gradeColor(_col, o.sat ?? (mat?.map ? 0.78 : 1), o.mul ?? 1);
+      if (reds) remapReds(_col, reds);
       if (tint) _col.multiply(tint);
     }
     col[i * 3] = _col.r; col[i * 3 + 1] = _col.g; col[i * 3 + 2] = _col.b;
@@ -209,7 +239,8 @@ function bakeMesh(mesh, rootInv, o) {
 /**
  * Bake an Object3D (a cached glTF scene or a posed clone) into a PropTemplate.
  * @param {THREE.Object3D} root
- * @param {{key?:string, hide?:string[], dynamic?:string[], recolor?:boolean, recolorMap?:object, sat?:number, mul?:number, tint?:string, flatColor?:string, flatNormals?:boolean}} [o]
+ * @param {{key?:string, hide?:string[], dynamic?:string[], recolor?:boolean, recolorMap?:object, sat?:number, mul?:number, tint?:string, reds?:string, flatColor?:string, flatNormals?:boolean}} [o]
+ *   `reds`: a candy target the red band is remapped onto (`remapReds`)
  * @returns {PropTemplate}
  */
 export function templateFromObject(root, o = {}) {
@@ -291,17 +322,40 @@ export function templateFromGeometry(key, geometry, color) {
 }
 
 // ------------------------------------------------------------------ materials
-const NOISE_GLSL = /* glsl */`
-float wdH(vec2 p) { p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
-float wdN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(wdH(i), wdH(i + vec2(1.0, 0.0)), f.x), mix(wdH(i + vec2(0.0, 1.0)), wdH(i + vec2(1.0, 1.0)), f.x), f.y); }
-`;
+//
+// PERF §1.2 / §8.1: every static world Lambert (batched props, standalone / instanced chunky props, the ground, dressed
+// stone, pickups' letter) carries the SAME patch with the same program key, `world-static-v1`: the looks are uniform
+// features of that one patch, not program variants. Per material:
+//   uWDetail  world-space value noise ± amount on the vertex colours (art.md §9.4; 0 = off)
+//   uWStone   (on, block x, block z, course): dressed flagstones / coursed blocks (the Old Bridge, arches)
+//   uWGround  (on, noise, speck): the ground's calm 3-octave noise + warm specks (ART §2.2)
+//   uWInk     ART §4.3 ink rim multiplier on grazing silhouette edges (1 = off; spec 0.68)
+//   uTreeH    tree canopies (> 0 = on): dark-inside / light-top shading + gentle world-space sway (uTime, uWind)
+// Program variants then come only from what three itself keys (instancing, batching, colours, skinning, side).
+export const WORLD_STATIC_KEY = 'world-static-v1';
 
-/** Shared world-position varyings for the patches below (instancing / batching aware via worldpos_vertex). */
-function patchWorldPos(sh) {
-  sh.vertexShader = sh.vertexShader
-    .replace('#include <common>', '#include <common>\nvarying vec3 vWdPos;\nvarying vec3 vWdNrm;')
-    .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+const STATIC_PARS_V = /* glsl */`#include <common>
+varying vec3 vWdPos;
+varying vec3 vWdNrm;
+varying float vUpK;
+uniform float uTime, uWind, uTreeH;`;
+const STATIC_NORMAL = /* glsl */`#include <beginnormal_vertex>
+vUpK = clamp(objectNormal.y * 0.5 + 0.5, 0.0, 1.0);`;
+const STATIC_BEGIN = /* glsl */`#include <begin_vertex>
+if ( uTreeH > 0.0 ) {
+  #ifdef USE_INSTANCING
+    vec3 tOrg = instanceMatrix[3].xyz;
+  #else
+    vec3 tOrg = vec3(0.0);
+  #endif
+  float th = clamp(transformed.y / max(uTreeH, 0.001), 0.0, 1.0);
+  float sw = smoothstep(0.35, 1.0, th);
+  float ph = tOrg.x * 0.37 + tOrg.z * 0.23;
+  float k = sw * (0.012 + 0.018 * uWind) * uTreeH;
+  transformed.x += (sin(uTime * 0.9 + ph) + 0.4 * sin(uTime * 2.3 + ph * 1.7)) * k;
+  transformed.z += (cos(uTime * 0.7 + ph * 1.3) * 0.6) * k;
+}`;
+const STATIC_WORLDPOS = /* glsl */`#include <worldpos_vertex>
 {
   vec4 wdp = vec4(transformed, 1.0);
   vec3 wdn = objectNormal;
@@ -313,46 +367,34 @@ function patchWorldPos(sh) {
   #endif
   vWdPos = (modelMatrix * wdp).xyz;
   vWdNrm = mat3(modelMatrix) * wdn;
-}`);
-  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWdPos;\nvarying vec3 vWdNrm;\n' + NOISE_GLSL);
+}`;
+const STATIC_PARS_F = /* glsl */`#include <common>
+varying vec3 vWdPos;
+varying vec3 vWdNrm;
+varying float vUpK;
+uniform float uWDetail, uWInk, uTreeH;
+uniform vec4 uWStone;
+uniform vec3 uWGround;
+float wdH(vec2 p) { p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
+float wdN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(wdH(i), wdH(i + vec2(1.0, 0.0)), f.x), mix(wdH(i + vec2(0.0, 1.0)), wdH(i + vec2(1.0, 1.0)), f.x), f.y); }`;
+const STATIC_COLOR = /* glsl */`#include <color_fragment>
+if ( uTreeH > 0.0 ) diffuseColor.rgb *= mix(0.86, 1.12, vUpK);
+if ( uWGround.x > 0.5 ) {
+  vec2 wp = vWdPos.xz;
+  float n = wdN(wp * 0.35) * 0.5 + wdN(wp * 1.3) * 0.3 + wdN(wp * 5.1) * 0.2;
+  float speck = smoothstep(0.78, 0.95, wdN(wp * 9.0));
+  diffuseColor.rgb *= (1.0 - uWGround.y) + uWGround.y * 2.0 * n;
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.06, 0.94), speck * uWGround.z);
 }
-
-/**
- * Subtle world-space value noise on a vertex-coloured material (art.md §9.4: no flat-looking surfaces): breaks up the
- * flat Kenney / procedural colours of batched props without textures. `amount` = ± brightness.
- */
-export function withDetailNoise(m, amount = 0.15) {
-  m.onBeforeCompile = (sh) => {
-    patchWorldPos(sh);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-{
-  vec3 q = vWdPos * 1.7 + vWdNrm * 0.37;
-  float n = wdN(q.xz + q.y * 0.71) * 0.6 + wdN(q.zy * 2.3 + q.x * 0.3) * 0.4;
-  diffuseColor.rgb *= 1.0 + ${amount.toFixed(3)} * (n * 2.0 - 1.0);
-}`);
-  };
-  m.customProgramCacheKey = () => 'world-detail-' + amount.toFixed(3);
-  return m;
-}
-
-/**
- * Dressed-stone material for architecture meshes (the Old Bridge): vertex colours × staggered flagstone blocks
- * (grooves + per-block tint) on top faces and coursed blocks on the sides, plus weathering noise. World-space, so
- * any scale reads right.
- */
-export function makeStoneMaterial({ block = [0.62, 0.45], course = 0.3 } = {}) {
-  const m = worldMaterial();
-  m.onBeforeCompile = (sh) => {
-    patchWorldPos(sh);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-{
+if ( uWStone.x > 0.5 ) {
   vec3 wp = vWdPos, wn = vWdNrm / max(length(vWdNrm), 1e-4);
   float top = smoothstep(0.55, 0.85, abs(wn.y));
   // top faces: flagstones (staggered rows across X); sides: coursed blocks along the face
-  vec2 bt = vec2(wp.x / ${block[0].toFixed(3)}, wp.z / ${block[1].toFixed(3)});
+  vec2 bt = vec2(wp.x / uWStone.y, wp.z / uWStone.z);
   bt.x += step(1.0, mod(floor(bt.y), 2.0)) * 0.5;
   float along = abs(wn.x) > abs(wn.z) ? wp.z : wp.x;
-  vec2 bs = vec2(along / ${(block[0] * 1.2).toFixed(3)}, wp.y / ${course.toFixed(3)});
+  vec2 bs = vec2(along / (uWStone.y * 1.2), wp.y / uWStone.w);
   bs.x += step(1.0, mod(floor(bs.y), 2.0)) * 0.5;
   vec2 b = mix(bs, bt, top);
   vec2 f = fract(b), id = floor(b);
@@ -364,10 +406,60 @@ export function makeStoneMaterial({ block = [0.62, 0.45], course = 0.3 } = {}) {
   vec3 c = diffuseColor.rgb * tint * (0.9 + 0.2 * n) * (1.0 - groove * 0.28);
   c = mix(c, c * vec3(0.86, 1.0, 0.72), moss * 0.45);
   diffuseColor.rgb = c;
-}`);
+}
+if ( uWDetail > 0.0 ) {
+  vec3 q = vWdPos * 1.7 + vWdNrm * 0.37;
+  float n = wdN(q.xz + q.y * 0.71) * 0.6 + wdN(q.zy * 2.3 + q.x * 0.3) * 0.4;
+  diffuseColor.rgb *= 1.0 + uWDetail * (n * 2.0 - 1.0);
+}`;
+const STATIC_INK = /* glsl */`if ( uWInk < 0.999 ) {
+  float inkE = smoothstep(0.62, 0.92, 1.0 - saturate(dot(normalize(vNormal), normalize(vViewPosition))));
+  outgoingLight *= mix(1.0, uWInk, inkE);
+}
+#include <opaque_fragment>`;
+
+/**
+ * Install the one world-static patch on a Lambert material (idempotent) and return its feature uniforms.
+ * Replaces any other hook on `m` (world materials get their look from these features only).
+ * @param {THREE.MeshLambertMaterial} m
+ * @returns {{ uWDetail: {value: number}, uWInk: {value: number}, uWStone: {value: THREE.Vector4}, uWGround: {value: THREE.Vector3},
+ *            uTreeH: {value: number}, uTime: {value: number}, uWind: {value: number} }} (replace an entry to share it)
+ */
+export function worldStatic(m) {
+  if (m.userData.wsU) return m.userData.wsU;
+  const u = { uWDetail: { value: 0 }, uWInk: { value: 1 }, uWStone: { value: new THREE.Vector4(0, 1, 1, 1) }, uWGround: { value: new THREE.Vector3(0, 0, 0) },
+    uTreeH: { value: 0 }, uTime: { value: 0 }, uWind: { value: 0 } };
+  m.userData.wsU = u;
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, m.userData.wsU ?? u);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', STATIC_PARS_V).replace('#include <worldpos_vertex>', STATIC_WORLDPOS)
+      .replace('#include <beginnormal_vertex>', STATIC_NORMAL).replace('#include <begin_vertex>', STATIC_BEGIN);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', STATIC_PARS_F)
+      .replace('#include <color_fragment>', STATIC_COLOR).replace('#include <opaque_fragment>', STATIC_INK);
   };
-  m.customProgramCacheKey = () => 'world-stone-v1';
-  m.userData.owned = true;
+  m.customProgramCacheKey = () => WORLD_STATIC_KEY;
+  m.needsUpdate = true;
+  return u;
+}
+
+/**
+ * Subtle world-space value noise on a vertex-coloured material (art.md §9.4: no flat-looking surfaces): breaks up the
+ * flat Kenney / procedural colours of batched props without textures. `amount` = ± brightness. (A world-static
+ * feature: no program of its own.)
+ */
+export function withDetailNoise(m, amount = 0.15) {
+  worldStatic(m).uWDetail.value = amount;
+  return m;
+}
+
+/**
+ * Dressed-stone material for architecture meshes (the Old Bridge): vertex colours × staggered flagstone blocks
+ * (grooves + per-block tint) on top faces and coursed blocks on the sides, plus weathering noise. World-space, so
+ * any scale reads right. (A world-static feature: no program of its own.)
+ */
+export function makeStoneMaterial({ block = [0.62, 0.45], course = 0.3 } = {}) {
+  const m = worldMaterial();
+  worldStatic(m).uWStone.value.set(1, block[0], block[1], course);
   return m;
 }
 

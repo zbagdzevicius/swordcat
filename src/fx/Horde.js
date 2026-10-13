@@ -1,6 +1,7 @@
-// src/fx/Horde.js  (owner: fx) — GAME_DESIGN §18.3 "Horde silhouettes": a low-poly bipedal hyena silhouette (the
-// beast-head Barbarian read: hunched torso, snout, round ears, mane, tail; some carry spears or a cage on a shoulder
-// pole) drawn as ONE instanced draw call (40 on Med/High, 24 on Low) with a vertex-shader walk cycle, unlit plum
+// src/fx/Horde.js  (owner: fx) — GAME_DESIGN §18.3 "Horde silhouettes": a low-poly bipedal hyena silhouette (hunched
+// torso, snout, round ears, mane, tail) — the "Woof Brigade" toy-fort parade (WA tone: a rowdy crowd, never a war
+// army): some wave toy props (a pennant pole with a round foam tip, or a balloon on a string), some carry a cage on a
+// shoulder pole. Drawn as ONE instanced draw call (40 on Med/High, 24 on Low) with a vertex-shader walk cycle, unlit plum
 // #5A3E6A (WA §2.7: a cartoon "dust-cloud army", never black) with a cream dust band kicked up at their feet (same
 // draw), living inside the fog beyond 18 m (instances closer to the camera fade out with real alpha, sinking into the fog colour).
 //
@@ -12,8 +13,8 @@
 //             'flee' (everyone turns away from opts.from / the anchor and runs off, fading) | false (fade out, then off)
 //     anchor  level anchor name ('horde_a' pairs with 'horde_b' automatically), actor id, actor, Vector3, [x, z],
 //             [x, y, z], {pos, facing}
-//     opts    { to, dir, length, width, count, speed, laugh, cages, spears, avoid (actor | pos), avoidR, from,
-//               near, face, fogMul, fade }
+//     opts    { to, dir, length, width, count, speed, laugh, cages, props (legacy alias: spears), avoid (actor | pos),
+//               avoidR, from, near, face, fogMul, fade }
 // Visual only: no colliders, no AI, never touches gameplay state.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -22,11 +23,13 @@ import { resolveAnchor, resolveActor, toVec3, groundY, hash01, isActor } from '.
 
 export const HORDE = Object.freeze({
   count: 40, countLow: 24, color: '#5A3E6A', dust: '#F2DDBB', dustH: 0.32, near: 18, speed: 1.6, width: 7, length: 64, laugh: 0.35,
-  cageEvery: 5, spearEvery: 3, avoidR: 3.2, fadeIn: 1.2, fadeOut: 1.4, fleeSpeed: 4.2, fleeFade: 2.6, fogMul: 0.55,
+  cageEvery: 5, propEvery: 3, avoidR: 3.2, fadeIn: 1.2, fadeOut: 1.4, fleeSpeed: 4.2, fleeFade: 2.6, fogMul: 0.55,
 });
 
-/** Body-part ids (aPart). */
-const PART = Object.freeze({ BODY: 0, LEG_L: 1, LEG_R: 2, ARM_L: 3, ARM_R: 4, HEAD: 5, CAGE: 6, SPEAR: 7, TAIL: 8 });
+/** Body-part ids (aPart). POLE = the cage carrier's shoulder pole; PENNANT / BALLOON = the toy props. */
+const PART = Object.freeze({ BODY: 0, LEG_L: 1, LEG_R: 2, ARM_L: 3, ARM_R: 4, HEAD: 5, CAGE: 6, POLE: 7, TAIL: 8, PENNANT: 9, BALLOON: 10 });
+/** Member variants (iB.w): 0 plain, 1 pennant, 2 cage, 3 balloon. No weapons anywhere (WA tone). */
+export const HORDE_VARIANT = Object.freeze({ PLAIN: 0, PENNANT: 1, CAGE: 2, BALLOON: 3 });
 
 /** Normalise the `on` argument to a mode (pure; unit-tested). */
 export function hordeMode(on) {
@@ -40,9 +43,10 @@ export function hordeMode(on) {
 /**
  * Deterministic layout of `n` horde members (pure; unit-tested): `u` metres along the path (0..length), `lat` lateral
  * offset (±width/2, in loose files), plus per-member variety. Members are spread evenly along the path with jitter so
- * the stream never bunches; cages every `cageEvery`, spears every `spearEvery` (not both).
+ * the stream never bunches; cages every `cageEvery`, toy props every `propEvery` (not both; pennant or balloon by hash).
+ * `spearEvery` is a legacy alias of `propEvery`.
  */
-export function hordeLayout(n, { length = HORDE.length, width = HORDE.width, cageEvery = HORDE.cageEvery, spearEvery = HORDE.spearEvery } = {}) {
+export function hordeLayout(n, { length = HORDE.length, width = HORDE.width, cageEvery = HORDE.cageEvery, spearEvery, propEvery = spearEvery ?? HORDE.propEvery } = {}) {
   const out = [];
   const files = Math.max(2, Math.round(width / 1.6));
   for (let i = 0; i < n; i++) {
@@ -51,8 +55,10 @@ export function hordeLayout(n, { length = HORDE.length, width = HORDE.width, cag
     const lat = (files > 1 ? (file / (files - 1) - 0.5) * width : 0) + (h0 - 0.5) * 0.9;
     const u = ((i + 0.5) / n) * length + (h1 - 0.5) * (length / n) * 0.8;
     const cage = cageEvery > 0 && i % cageEvery === 2;
-    const spear = !cage && spearEvery > 0 && i % spearEvery === 0;
-    out.push({ u, lat, scale: 1.25 + h2 * 0.3, speedMul: 0.9 + h3 * 0.2, phase: h1 * Math.PI * 2, variant: cage ? 2 : spear ? 1 : 0 });
+    const prop = !cage && propEvery > 0 && i % propEvery === 0;
+    const V = HORDE_VARIANT;
+    const variant = cage ? V.CAGE : prop ? (hash01(i * 7 + 5) < 0.55 ? V.PENNANT : V.BALLOON) : V.PLAIN;
+    out.push({ u, lat, scale: 1.25 + h2 * 0.3, speedMul: 0.9 + h3 * 0.2, phase: h1 * Math.PI * 2, variant });
   }
   return out;
 }
@@ -117,11 +123,17 @@ export function buildHordeGeometry() {
   }
   // tail
   parts.push(part(new THREE.ConeGeometry(0.06, 0.34, 5), P.TAIL, [0, 0.78, -0.16], M(0, 0.72, -0.3, -2.0)));
-  // spear (right hand, upright, leaning forward)
-  parts.push(part(new THREE.CylinderGeometry(0.018, 0.018, 1.9, 4), P.SPEAR, [-0.29, 1.24, 0.08], M(-0.33, 1.25, 0.24, 0.12)));
-  parts.push(part(new THREE.ConeGeometry(0.045, 0.2, 4), P.SPEAR, [-0.29, 1.24, 0.08], M(-0.33, 2.27, 0.37, 0.12)));
+  // toy pennant (right hand): a short pole with a round foam tip and a triangular flag (pivot = the hand, it sways)
+  const hand = [-0.33, 0.7, 0.2];
+  parts.push(part(new THREE.CylinderGeometry(0.02, 0.02, 1.15, 4), P.PENNANT, hand, M(-0.33, 1.2, 0.26, 0.08)));
+  parts.push(part(new THREE.SphereGeometry(0.075, 6, 4), P.PENNANT, hand, M(-0.33, 1.8, 0.31)));
+  parts.push(part(new THREE.CylinderGeometry(0.2, 0.0, 0.42, 3, 1), P.PENNANT, hand, M(-0.54, 1.55, 0.29, 0, 0, -Math.PI / 2, 1, 1, 0.12)));
+  // balloon on a string (right hand): a round balloon well above the head, with a tiny knot
+  parts.push(part(new THREE.CylinderGeometry(0.008, 0.008, 1.0, 3), P.BALLOON, hand, M(-0.36, 1.2, 0.24, 0.05)));
+  parts.push(part(new THREE.SphereGeometry(0.22, 8, 6), P.BALLOON, hand, M(-0.38, 1.92, 0.27, 0, 0, 0, 1, 1.15, 1)));
+  parts.push(part(new THREE.ConeGeometry(0.04, 0.07, 4), P.BALLOON, hand, M(-0.38, 1.68, 0.27)));
   // cage on a shoulder pole: pole forward-back over the right shoulder, the cage hanging behind (pivot = pole end)
-  parts.push(part(new THREE.CylinderGeometry(0.02, 0.02, 1.3, 4), P.SPEAR, [-0.2, 1.38, 0], M(-0.2, 1.42, -0.15, Math.PI / 2 - 0.12)));
+  parts.push(part(new THREE.CylinderGeometry(0.02, 0.02, 1.3, 4), P.POLE, [-0.2, 1.38, 0], M(-0.2, 1.42, -0.15, Math.PI / 2 - 0.12)));
   const cx = -0.2, cy = 0.92, cz = -0.75, s = 0.26;
   for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) parts.push(part(new THREE.BoxGeometry(0.03, s * 2, 0.03), P.CAGE, [cx, 1.48, cz], M(cx + x * s, cy, cz + z * s)));
   for (const y of [-1, 1]) {
@@ -143,7 +155,7 @@ const VERT = /* glsl */`
 attribute float aPart;
 attribute vec3 aPivot;
 attribute vec4 iA;      // feet x, y, z, yaw
-attribute vec4 iB;      // cycle phase (rad), scale, alpha, variant (0 plain, 1 spear, 2 cage)
+attribute vec4 iB;      // cycle phase (rad), scale, alpha, variant (0 plain, 1 pennant, 2 cage, 3 balloon)
 attribute vec4 iC;      // gait (0 shuffle … 1 march, >1 run), laugh, sway seed, 0
 uniform float uTime;
 varying float vAlpha;
@@ -157,9 +169,9 @@ void main() {
   int part = int( aPart + 0.5 );
   float vr = iB.w;
   // hide props this member does not carry
-  if ( part == 7 && vr < 0.5 ) p = aPivot;
-  if ( part == 6 && vr < 1.5 ) p = aPivot;
-  if ( part == 7 && vr > 1.5 && p.y > 1.6 ) p = aPivot;      // cage carriers keep only the pole, not the spear head
+  if ( ( part == 6 || part == 7 ) && abs( vr - 2.0 ) > 0.5 ) p = aPivot;
+  if ( part == 9 && abs( vr - 1.0 ) > 0.5 ) p = aPivot;
+  if ( part == 10 && abs( vr - 3.0 ) > 0.5 ) p = aPivot;
   float sw = sin( ph );
   float stride = clamp( gait, 0.0, 1.6 );
   if ( part == 1 || part == 2 ) {
@@ -178,6 +190,9 @@ void main() {
     p = rotX( a ) * ( p - aPivot ) + aPivot;
   } else if ( part == 8 ) {
     p = rotZ( sin( uTime * 6.0 + seed * 3.0 ) * 0.4 ) * ( p - aPivot ) + aPivot;
+  } else if ( part == 9 || part == 10 ) {           // toy props wave / bob from the hand
+    float k = part == 9 ? 0.16 : 0.1;
+    p = rotZ( sin( uTime * ( part == 9 ? 4.0 : 1.7 ) + seed * 4.0 ) * k ) * rotX( sin( ph ) * 0.08 * stride ) * ( p - aPivot ) + aPivot;
   }
   // whole-body bob, lean and laugh shake
   float bob = abs( sin( ph ) ) * 0.06 * min( stride, 1.0 ) + laugh * 0.025 * sin( uTime * 26.0 + seed * 11.0 );
@@ -320,7 +335,7 @@ export class Horde {
     // re-layout for this path (counts and props)
     const n = Math.max(1, Math.min(this.capacity, o.count ?? this.capacity));
     const lay = hordeLayout(n, { length: this.length, width: this.width, cageEvery: o.cages === false ? 0 : (o.cageEvery ?? HORDE.cageEvery),
-      spearEvery: o.spears === false ? 0 : HORDE.spearEvery });
+      propEvery: (o.props ?? o.spears) === false ? 0 : HORDE.propEvery });
     this.members.length = 0;
     for (const l of lay) this.members.push(new Member(l));
     this.count = n;

@@ -8,6 +8,7 @@
 // `poolMisses === 0` after the prefill).
 import { WARM } from './tuning.js';
 import { disposeInstanceMaterials } from './rig.js';
+import { countPoolMiss } from '../core/perf.js';
 
 /** Types whose dressing is fully described by `type + dressingKey` (their builds wire only VISUAL_FIELDS). */
 export const POOLED_TYPES = Object.freeze(new Set(['rat_pike', 'rat_xbow', 'crow', 'hyena', 'stealer', 'spider', 'pug']));
@@ -50,7 +51,7 @@ export class VisualPool {
     if (!key) return null;
     const l = this.free.get(key);
     const rec = l?.pop() ?? null;
-    if (rec) this.hits++; else this.misses++;
+    if (rec) this.hits++; else { this.misses++; countPoolMiss(); }   // `__GAME__.perf().poolMisses` (gate `perf:spawn`)
     return rec;
   }
 

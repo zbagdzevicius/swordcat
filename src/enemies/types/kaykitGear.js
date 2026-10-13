@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { attachAligned, bone, keepUpright, mountNative, posIn, tintAll } from '../rig.js';
 import { friendWordFor } from '../names.js';
+import { HEAD_REMAPS, remapVertexColors } from '../palette.js';
+import { makeProp } from '../props.js';
 
 import * as CHARS from '../../characters/index.js';
 
@@ -26,7 +28,7 @@ const CAGE_BASE_H = 1.35;
 /**
  * @param {import('../Enemy.js').Enemy} e @param {any} m ModelInstance
  * @param {{look?: string, head?: object, headNode?: string, expression?: string, word?: string|null, plate?: boolean,
- *          plateOpts?: object, weapon?: {model: string, bone?: string, fit?: any}, cage?: boolean|string, bag?: boolean,
+ *          plateOpts?: object, weapon?: {model: string, bone?: string, fit?: any}, hold?: {prop: string, hand?: 'l'|'r'}, cage?: boolean|string, bag?: boolean,
  *          tint?: string|number}} o
  */
 export async function dressKayKit(e, m, o = {}) {
@@ -46,6 +48,7 @@ export async function dressKayKit(e, m, o = {}) {
       }
       e.dress = dressBeast(space, look, { seed, word, plate: o.plate, plateOpts: o.plateOpts, head: { headNode: o.headNode, ...(o.head ?? {}) } });
       e.head = e.dress;
+      recolorBeastHead(e.dress.head, BEAST_LOOKS[look]?.head, C.BEAST_PRESETS);
       e.plate = e.dress.plate; e.plateWord = e.dress.word;
       e.plateFriendWord = e.friendly ? null : friendWordFor(e.def.id, e.plateWord);
       if (e.plate && e.plateFriendWord) bakeFriendPlate(e, C, look, seed);
@@ -55,7 +58,116 @@ export async function dressKayKit(e, m, o = {}) {
   const cage = e.spawnOpts?.cage ?? o.cage;
   if (cage) addCage(e, m, cage, C);
   if (o.bag) addHeldProp(e, m, 'post_bag', 'handslot.r', { down: 0.28, scale: 1.1 }, C);
+  // WA §2.5 / characters.W5: a procedural held weapon (Barkus's Big Squeaky Bone) through the dress; the GLB `weapon`
+  // stays the fallback when the dress or the prop is missing
+  if (o.hold && e.dress?.hold && holdProp(e, o.hold)) return;
   if (o.weapon) await addWeapon(e, m, o.weapon);
+}
+
+/** Linear-rgb swatch lists per head preset, built once (the presets are frozen). */
+const _remapCache = new Map();
+
+/**
+ * WA §3.1: repaint a beast head's vertex colours with the enemies' foe hues (HEAD_REMAPS: the tawny hyena → lilac-plum
+ * with mustard spots). Once per dressed head at build time; pooled visuals keep theirs. No-op for presets without a remap.
+ * @param {{root?: THREE.Object3D}|null|undefined} head the characters head handle @param {string|undefined} preset
+ * @param {Record<string, Record<string, any>>|undefined} presets characters' BEAST_PRESETS
+ * @returns {number} vertices changed
+ */
+export function recolorBeastHead(head, preset, presets) {
+  const map = preset ? HEAD_REMAPS[preset] : null, P = presets?.[preset];
+  if (!head?.root || !map || !P) return 0;
+  let lists = _remapCache.get(preset);
+  if (!lists) {
+    const src = [], dst = [], c = new THREE.Color();
+    for (const [k, v] of Object.entries(P)) {
+      if (typeof v !== 'string' || v[0] !== '#') continue;
+      c.set(v); const s = [c.r, c.g, c.b];
+      src.push(s);
+      if (map[k]) { c.set(map[k]); dst.push([c.r, c.g, c.b]); } else dst.push(s);
+    }
+    lists = { src, dst };
+    _remapCache.set(preset, lists);
+  }
+  let n = 0;
+  head.root.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.color) n += remapVertexColors(o.geometry, lists.src, lists.dst); });
+  return n;
+}
+
+/**
+ * Put a held prop in the dress's hand: a characters prop by name ('big_squeaky_bone', 'squeaky_bone') or one of the
+ * enemies' own procedural props (`own: true`: props.js `makeProp`, e.g. the pug's 'practiceSword'). `opts` = the
+ * characters hand offset { p, r, s } (metres / radians / scale; s on top of the prop's own size). Its top becomes the
+ * telegraph glint point (`e.tipNode`). → the held Object3D, or null.
+ * @param {any} e @param {{prop: string, own?: boolean, hand?: 'l'|'r', opts?: {p?: number[], r?: number[], s?: number}}} h
+ */
+export function holdProp(e, h) {
+  let obj = null;
+  try {
+    // built here (not by name) when an offset is given: characters' hold() also hands `opts` to the prop builder,
+    // where `r` means a radius (squeakyBone), not the hand rotation
+    const what = h.own ? makeProp(h.prop) : h.opts ? CHARS.buildProp(h.prop) : h.prop;
+    obj = e.dress.hold(what, h.hand ?? 'r', h.opts ?? {});
+  } catch (err) { console.warn(`[enemies] hold ${h.prop} failed`, err); }
+  if (!obj) return null;
+  const box = new THREE.Box3().setFromObject(obj, true);
+  const tip = new THREE.Object3D(); tip.name = 'tell';
+  // the prop's local top (props are built along +Y); world box → local height through the prop's scale
+  const sy = obj.getWorldScale(new THREE.Vector3()).y || 1;
+  tip.position.set(0, Number.isFinite(box.max.y) ? (box.max.y - box.min.y) / sy * 0.9 : 0.8, 0);
+  obj.add(tip);
+  e.tipNode = tip; e.weaponRoot = obj;
+  return obj;
+}
+
+const _hm = new THREE.Matrix4(), _gb = new THREE.Box3();
+/**
+ * Bounding box of every mesh under `obj`, in `space` coordinates (bind pose; from the geometries' own boxes, so the
+ * actor's yaw never inflates it). Visual setup only (dress time). → `out` (empty when there are no meshes).
+ * @param {THREE.Object3D} space @param {THREE.Object3D} obj @param {THREE.Box3} out
+ */
+export function boxIn(space, obj, out) {
+  out.makeEmpty();
+  space.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(space.matrixWorld).invert();
+  obj.traverse((o) => {
+    if (!o.isMesh || !o.visible || !o.geometry?.attributes?.position) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    _gb.copy(o.geometry.boundingBox).applyMatrix4(_hm.multiplyMatrices(inv, o.matrixWorld));
+    out.union(_gb);
+  });
+  return out;
+}
+
+const _sb = new THREE.Box3(), _eb = new THREE.Box3(), _ob = new THREE.Box3(), _sc = new THREE.Vector3(), _ss = new THREE.Vector3();
+/**
+ * WA §3.1 toy headgear: seat one of the enemies' procedural hats (props.js: 'potHelm', 'chiefCrown') on the beast head,
+ * riding the KayKit `head` bone. The hat's rim (its origin, radius `rimR` m) is sized to `width` × the head's width
+ * and set at `brim` (0 = head bottom … 1 = head top) of the head's height, `fwd` × the head depth toward +Z.
+ * `eyes` sizes and seats it from the beast eyes instead (heads with tall ears / a mane, whose box overstates the
+ * crown): rim diameter = `eyes.width` × the eye pair's span, rim height = the eyes' top + `eyes.above` × that span.
+ * → the hat mesh (shared geometry and material), or null when there is no beast head / head bone.
+ * @param {any} e @param {any} m ModelInstance @param {string} name props.js prop
+ * @param {{brim?: number, width?: number, rimR?: number, fwd?: number, tilt?: number, eyes?: {width: number, above: number}}} [o]
+ */
+export function seatOnHead(e, m, name, { brim = 0.66, width = 0.8, rimR = 0.17, fwd = 0, tilt = -0.1, eyes = null } = {}) {
+  const head = e?.dress?.head?.root, node = bone(m?.scene, 'head') ?? bone(m?.scene, 'Head');
+  if (!head || !node) return null;
+  boxIn(m.root, head, _sb);
+  if (_sb.isEmpty()) return null;
+  _sb.getCenter(_sc); _sb.getSize(_ss);
+  let diam = _ss.x * width, y = _sb.min.y + _ss.y * brim;
+  if (eyes) {
+    _eb.makeEmpty();
+    head.traverse((o) => { if (o.isMesh && o.name === 'beastEye') _eb.union(boxIn(m.root, o, _ob)); });
+    if (!_eb.isEmpty()) {
+      const span = _eb.max.x - _eb.min.x;
+      diam = span * eyes.width; y = _eb.max.y + span * eyes.above;
+    }
+  }
+  const hat = makeProp(name);
+  attachAligned(m.root, node, hat, { pos: [_sc.x, y, _sc.z + _ss.z * fwd], rot: [tilt, 0, 0], scale: diam / (2 * rimR) });
+  return hat;
 }
 
 /**

@@ -19,7 +19,7 @@ import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
 import { damp, clamp, lerp, easeSwing, easeOutCubic, easeInOutSine, wrapAngle, dampAngle, Spring } from '../core/math.js';
 import { KittenView, MEME_CAPE, visualDt, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, POSES, mulberry32, SWORD_SKINS, CAPES } from '../characters/index.js';
-import * as WorldEnv from '../world/Env.js';
+import { ENV_U } from '../world/tone.js';
 import { TUNING } from './tuning.js';
 import { Squash, SQUASH, FEEL, ORDER_FX } from './juice.js';
 
@@ -95,6 +95,9 @@ function rot(j, x, y, z) {
   if (!x && !y && !z) return;
   j.quaternion.multiply(_q.setFromEuler(_e.set(x, y, z)));
 }
+
+/** Outfits the hero model can wear: plate, the swordless cutscene tunic, and the two practice tunics (sword visible). */
+export const OUTFITS = Object.freeze(['armour', 'tunic', 'tunic_sword', 'tunic_bow']);
 
 export class SwordcatModel {
   /** @param {import('./Player.js').Player} player */
@@ -237,7 +240,12 @@ export class SwordcatModel {
     const want = equippedSword(cos);
     const sword = SWORD_GLB[want] ? 'borrowed' : want;              // GLB skins are swapped in once loaded
     const o = this.outfit;
-    return swordcatConfig({ cape: equippedCape(cos, this.capeOverride), sword, armour: o === 'armour', bow: o !== 'tunic' });
+    // practice outfits (tunic_sword before the bow sticker, tunic_bow after) keep her sword visible (sign-off 3);
+    // the plain 'tunic' is the swordless cutscene look
+    return swordcatConfig({
+      cape: equippedCape(cos, this.capeOverride), sword, armour: o === 'armour',
+      bow: o === 'armour' || o === 'tunic_bow', tunicSword: o === 'tunic_sword' || o === 'tunic_bow',
+    });
   }
 
   _build() {
@@ -337,8 +345,12 @@ export class SwordcatModel {
     this.k?.setProp(name, on);
   }
 
+  /** Outfit names setOutfit accepts (story probes this for 'tunic_sword'). */
+  get outfits() { return OUTFITS; }
+
+  /** @param {string} name one of OUTFITS ('armour' | 'tunic' | 'tunic_sword' | 'tunic_bow'); anything else is 'armour' */
   setOutfit(name) {
-    const o = name === 'tunic' || name === 'tunic_bow' ? name : 'armour';
+    const o = OUTFITS.includes(name) ? name : 'armour';
     if (o === this.outfit && this.k) return;
     this.outfit = o;
     if (this.ready) this._build();
@@ -751,7 +763,7 @@ export class SwordcatModel {
 
   /** PERF L2 / ART §2.5 [X6]: her glow position into ENV_U.uGlow (no PointLight); radius / colour belong to HolyFX. */
   _glowPos() {
-    const u = WorldEnv.ENV_U?.uGlow?.value;
+    const u = ENV_U?.uGlow?.value;
     if (!u) return;
     const o = this.player.object3d.position;
     u.x = o.x; u.y = o.y + this.player.height * FEEL.glowUp; u.z = o.z;

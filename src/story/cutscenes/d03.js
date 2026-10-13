@@ -3,8 +3,8 @@
 // zone `play: 'd03'`). Marmalade pokes his head out of the bakery door, flour on his nose.
 //   Marmalade: "Clem? Is that... my armour?"   Clem: "...It's borrowed."
 //   (long pause; he looks her up and down) "Is it now."   "That armour's on loan, then. Bring it back with a story in it."
-//   "That hooded thief took the Royal Post. Get it back, would you? My knees don't run anymore."
-// end: flag town.marmalade; objective "Catch the Post Stealer" (`chase`) — the Pilfer chase is world / enemies'.
+//   "Pilfer, the Post Stealer, nabbed the Royal Post! Get it back, would you? My knees don't run anymore."
+// end: flag town.marmalade; objective "Catch Pilfer!" (`chase`) — the Pilfer chase is world / enemies'.
 import { say, cam, wait, sfx } from './lib.js';
 
 /** §12.5: Marmalade's bakery at (−26,−20); its door faces the street (east). */

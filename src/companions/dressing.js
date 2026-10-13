@@ -1,21 +1,48 @@
 // src/companions/dressing.js  (owner: companions) — small procedural set dressing this area builds around its actors
-// (GAME_DESIGN §12.4–§12.6, §12.5 hub activity spots): the town stocks that hold Clover (D-04), the treetop rope
-// posts and rope of Sage's hanging cage (D-02), the hub kittens' fishing sticks, tavern cups and butterfly.
+// (GAME_DESIGN §12.4–§12.6, §12.5 hub activity spots): the treetop rope posts and rope of Sage's hanging carrier
+// (D-02), the hub kittens' fishing sticks, tavern cups and table, the butterfly, and the WA20 kitten carriers (every
+// rescue, Clover's included: no stocks, no metal).
+// K6 (IMPLEMENTATION_PLAN §7.3): every lit mesh here is drawn with the ONE shared toon program (`kitMaterial()`,
+// sc-toon): colour and rmse are baked into the (cached) geometry as vertex attributes, never a MeshStandardMaterial.
 // Every builder returns a THREE.Group whose meshes share module-level geometries / materials (no per-call shader
 // compile); `disposeDressing(root)` frees only what a builder created per call (`userData.owned`).
 import * as THREE from 'three';
 import { kitMaterial, RM } from '../characters/index.js';
 import { GeoBuilder, rgb } from '../characters/util.js';
 
+/**
+ * Dressing palette: colour + rmse preset per part (WA20: warm woods, no iron). Baked into geometry by `paint`.
+ */
+export const DRESS = Object.freeze({
+  wood: ['#7A5A3E', RM.wood], woodDark: ['#5A3E2B', RM.wood], woodPale: ['#9C7B57', RM.wood], rope: ['#B89A6A', RM.cloth],
+  latch: ['#8E5A2E', RM.wood], bow: ['#C9A8FF', RM.satin], cup: ['#D9D2C2', RM.ceramic], milk: ['#FFFDF6', RM.milk], cloth: ['#B0503C', RM.cloth],
+});
+
+/**
+ * Bake a flat colour + rmse into `g` (in place) so it draws with the shared toon kit material (one program).
+ * @param {THREE.BufferGeometry} g @param {THREE.ColorRepresentation|number[]} color @param {number[]} [rmse]
+ * @returns {THREE.BufferGeometry}
+ */
+export function paint(g, color, rmse = RM.wood) {
+  const n = g.attributes.position.count, c = rgb(color);
+  const col = new Float32Array(n * 3), rm = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2];
+    rm[i * 4] = rmse[0]; rm[i * 4 + 1] = rmse[1]; rm[i * 4 + 2] = rmse[2]; rm[i * 4 + 3] = rmse[3];
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('rmse', new THREE.BufferAttribute(rm, 4));
+  return g;
+}
+
 let _mats = null;
-/** Shared materials (lazy: no WebGL / allocation at import). */
+/** Shared materials (lazy: no WebGL / allocation at import). `kit`: the shared toon kit (sc-toon); the fishing line
+ * and the butterfly wings are unlit (basic programs the FX already use). */
 export function dressingMats() {
   if (_mats) return _mats;
-  const m = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: o.r ?? 0.85, metalness: o.m ?? 0, ...(o.extra ?? {}) });
   _mats = {
-    wood: m('#7A5A3E'), woodDark: m('#5A3E2B'), woodPale: m('#9C7B57'), iron: m('#4A4C52', { r: 0.45, m: 0.7 }),
-    rope: m('#B89A6A', { r: 0.95 }), line: new THREE.LineBasicMaterial({ color: '#EDE6D6', transparent: true, opacity: 0.7 }),
-    latch: m('#8E5A2E'), bow: m('#C9A8FF', { r: 0.5 }), cup: m('#D9D2C2', { r: 0.4 }), milk: m('#FFFDF6', { r: 0.3 }), cloth: m('#B0503C'),
+    kit: kitMaterial(),
+    line: new THREE.LineBasicMaterial({ color: '#EDE6D6', transparent: true, opacity: 0.7 }),
     wing: new THREE.MeshBasicMaterial({ color: '#FFD34D', side: THREE.DoubleSide, transparent: true, opacity: 0.95, fog: true }),
   };
   for (const k in _mats) _mats[k].userData.shared = true;
@@ -25,56 +52,15 @@ export function dressingMats() {
 const _geo = new Map();
 /** Cached geometry by key (shared by every dressing instance). */
 function geo(key, make) { let g = _geo.get(key); if (!g) { g = make(); _geo.set(key, g); } return g; }
-const box = (w, h, d) => geo(`box:${w}:${h}:${d}`, () => new THREE.BoxGeometry(w, h, d));
-const cyl = (r0, r1, h, n = 8) => geo(`cyl:${r0}:${r1}:${h}:${n}`, () => new THREE.CylinderGeometry(r0, r1, h, n));
+/** Cached geometry painted with a DRESS part (key + part: one buffer per shape and colour). */
+const painted = (key, make, part) => geo(key + '@' + part, () => paint(make(), DRESS[part][0], DRESS[part][1]));
+const cyl = (r0, r1, h, n, part) => painted(`cyl:${r0}:${r1}:${h}:${n}`, () => new THREE.CylinderGeometry(r0, r1, h, n), part);
 
-function mesh(g, mat, x = 0, y = 0, z = 0, shadow = true) {
-  const o = new THREE.Mesh(g, mat);
+function mesh(g, x = 0, y = 0, z = 0, shadow = true) {
+  const o = new THREE.Mesh(g, dressingMats().kit);
   o.position.set(x, y, z);
   o.castShadow = shadow; o.receiveShadow = true;
   return o;
-}
-
-/**
- * The town stocks (§12.5 `square`, Clover D-04): two posts, a split board with a head hole and two paw holes at the
- * held kitten's neck height. userData: { size: [w, h, d], setOpen(t) (the top board swings up), neckY }.
- * @param {{ neckY?: number, width?: number }} [o]
- */
-export function buildStocks({ neckY = 0.55, width = 1.3 } = {}) {
-  const M = dressingMats();
-  const g = new THREE.Group(); g.name = 'stocks';
-  const postH = neckY + 0.45, hw = width / 2;
-  for (const x of [-hw, hw]) g.add(mesh(cyl(0.05, 0.06, postH, 8), M.woodDark, x, postH / 2, 0));
-  g.add(mesh(box(width + 0.12, 0.06, 0.12), M.woodDark, 0, postH + 0.03, 0));            // cap beam
-  g.add(mesh(box(0.5, 0.04, 0.5), M.woodDark, 0, 0.02, 0.05, false));                   // a little plank floor
-  // lower board (fixed) with half-holes: three short pieces leave gaps for the neck and the paws
-  const by = neckY - 0.06;
-  const seg = (x0, x1, y, top) => {
-    const w = Math.max(0.02, x1 - x0);
-    const b = mesh(box(w, 0.12, 0.07), top ? M.woodPale : M.wood, (x0 + x1) / 2, y, 0);
-    return b;
-  };
-  const holes = [[-0.32, 0.05], [0, 0.07], [0.32, 0.05]];               // paw, neck, paw (x, half-width)
-  const cutRow = (y, top, parent) => {
-    let x0 = -hw;
-    for (const [hx, r] of holes) { parent.add(seg(x0, hx - r, y, top)); x0 = hx + r; }
-    parent.add(seg(x0, hw, y, top));
-  };
-  cutRow(by, false, g);
-  // upper board on a hinge at the left post: swings up when she frees the prisoner
-  const hinge = new THREE.Group(); hinge.name = 'stocksBoard';
-  hinge.position.set(-hw, by + 0.12, 0);
-  const upper = new THREE.Group(); upper.position.set(hw, 0, 0);
-  cutRow(0, true, upper);
-  upper.add(mesh(box(0.08, 0.09, 0.06), M.latch, hw - 0.09, 0, 0.05));                   // the wooden latch (WA20: no metal)
-  upper.add(mesh(box(0.14, 0.07, 0.03), M.bow, hw - 0.09, 0.075, 0.07, false));            // + its lilac bow
-  hinge.add(upper);
-  g.add(hinge);
-  g.userData.size = [width + 0.12, postH + 0.06, 0.5];
-  g.userData.neckY = neckY;
-  g.userData.setOpen = (t) => { hinge.rotation.z = Math.max(0, Math.min(1, t)) * 1.35; };
-  g.userData.kind = 'stocks';
-  return g;
 }
 
 /**
@@ -82,11 +68,10 @@ export function buildStocks({ neckY = 0.55, width = 1.3 } = {}) {
  * the frayed end over. Height ~1.1 m.
  */
 export function buildRopePost() {
-  const M = dressingMats();
   const g = new THREE.Group(); g.name = 'ropePost';
-  g.add(mesh(cyl(0.09, 0.11, 1.1, 8), M.woodDark, 0, 0.55, 0));
-  g.add(mesh(geo('ropeCoil', () => new THREE.TorusGeometry(0.12, 0.035, 6, 14)), M.rope, 0, 0.85, 0));
-  const frayed = mesh(cyl(0.025, 0.025, 0.35, 5), M.rope, 0.08, 0.95, 0);
+  g.add(mesh(cyl(0.09, 0.11, 1.1, 8, 'woodDark'), 0, 0.55, 0));
+  g.add(mesh(painted('ropeCoil', () => new THREE.TorusGeometry(0.12, 0.035, 6, 14), 'rope'), 0, 0.85, 0));
+  const frayed = mesh(cyl(0.025, 0.025, 0.35, 5, 'rope'), 0.08, 0.95, 0);
   frayed.rotation.z = -0.4;
   g.add(frayed);
   g.userData.setCut = (on) => { frayed.rotation.z = on ? -1.9 : -0.4; frayed.position.y = on ? 0.7 : 0.95; g.rotation.z = on ? 0.08 : 0; };
@@ -98,8 +83,7 @@ export function buildRopePost() {
  * userData.set(a, b). Owned geometry: unit-height cylinder scaled along Y (shared).
  */
 export function buildRope(a, b, r = 0.025) {
-  const M = dressingMats();
-  const m = mesh(cyl(r, r, 1, 5), M.rope, 0, 0, 0, false);
+  const m = mesh(cyl(r, r, 1, 5, 'rope'), 0, 0, 0, false);
   m.name = 'rope';
   const _d = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
   m.userData.set = (p, q) => {
@@ -117,13 +101,13 @@ export function buildRope(a, b, r = 0.025) {
 export function buildFishingStick() {
   const M = dressingMats();
   const g = new THREE.Group(); g.name = 'fishingStick';
-  const pole = mesh(cyl(0.008, 0.014, 0.9, 5), M.woodPale, 0, 0.45, 0);
+  const pole = mesh(cyl(0.008, 0.014, 0.9, 5, 'woodPale'), 0, 0.45, 0);
   const tip = new THREE.Group(); tip.position.set(0, 0.9, 0);
   g.add(pole);
   pole.add(tip); tip.position.set(0, 0.45, 0);
   const line = new THREE.Line(geo('fishLine', () => new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -0.55, 0)])), M.line);
   tip.add(line);
-  const cork = mesh(geo('cork', () => new THREE.SphereGeometry(0.025, 8, 6)), M.cloth, 0, -0.55, 0, false);
+  const cork = mesh(painted('cork', () => new THREE.SphereGeometry(0.025, 8, 6), 'cloth'), 0, -0.55, 0, false);
   tip.add(cork);
   g.userData.pole = pole; g.userData.tip = tip; g.userData.cork = cork;
   return g;
@@ -131,19 +115,17 @@ export function buildFishingStick() {
 
 /** A small cup (Sprout's tavern table gag). */
 export function buildCup() {
-  const M = dressingMats();
   const g = new THREE.Group(); g.name = 'cup';
-  g.add(mesh(cyl(0.045, 0.035, 0.09, 10), M.cup, 0, 0.045, 0));
-  g.add(mesh(cyl(0.04, 0.04, 0.005, 10), M.milk, 0, 0.085, 0, false));
+  g.add(mesh(cyl(0.045, 0.035, 0.09, 10, 'cup'), 0, 0.045, 0));
+  g.add(mesh(cyl(0.04, 0.04, 0.005, 10, 'milk'), 0, 0.085, 0, false));
   return g;
 }
 
 /** A little round tavern table (0.62 m) for the cup. */
 export function buildTable() {
-  const M = dressingMats();
   const g = new THREE.Group(); g.name = 'tavernTable';
-  g.add(mesh(cyl(0.38, 0.38, 0.05, 14), M.woodPale, 0, 0.6, 0));
-  g.add(mesh(cyl(0.05, 0.07, 0.6, 8), M.woodDark, 0, 0.3, 0));
+  g.add(mesh(cyl(0.38, 0.38, 0.05, 14, 'woodPale'), 0, 0.6, 0));
+  g.add(mesh(cyl(0.05, 0.07, 0.6, 8, 'woodDark'), 0, 0.3, 0));
   return g;
 }
 

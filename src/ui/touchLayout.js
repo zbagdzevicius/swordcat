@@ -2,7 +2,6 @@
 // unit-tested: the Wild Rift cluster (button centres / sizes for a viewport, touch size, orientation, mirror), the
 // joystick zone, dead rings, and the free-area gesture classifier.
 import { TOUCH, CAMERA } from '../core/config.js';
-import { isoFrameOffset } from '../camera/IsoRig.js';
 
 /** Clamp the touch-size setting to the spec range (0.8–1.4). */
 export const clampTs = (ts) => Math.max(0.8, Math.min(1.4, Number.isFinite(ts) ? ts : 1));
@@ -117,6 +116,13 @@ export function computeLayout(w, h, o = {}) {
   return { buttons, dropped, anchor: { x: ax, y: ay }, portrait, scale: k, stickZone, hudBottom, hero, clearR, cancel };
 }
 
+/**
+ * camera/IsoRig FRAME.herY: her focus height in a landscape view with no bottom inset (a touch view has none), so
+ * IsoRig.isoFrameOffset(h, 0, false) = HER_Y − 0.5. Mirrored here (a unit test pins it to IsoRig) so the boot shell does
+ * not import the camera rig (PERF §10.2).
+ */
+export const HER_Y = 0.48;
+
 /** Hero clearance radius (CSS px) around her screen point that no button + dead ring may reach (TOUCH.heroClear). */
 export const HERO_CLEAR = 120;
 
@@ -131,7 +137,7 @@ export function heroClearR(w, h) { return (TOUCH.heroClear ?? HERO_CLEAR) * Math
  * portrait centred, frameOffsetPortrait above the middle (≈ 0.40 H). Pure.
  */
 export function heroPoint(w, h, portrait = h > w * 1.05) {
-  const offY = isoFrameOffset(h, 0, portrait);
+  const offY = portrait ? (CAMERA.iso?.frameOffsetPortrait ?? 0) : HER_Y - 0.5;
   const offX = portrait ? 0 : (CAMERA.iso?.frameOffsetTouchX ?? 0);
   return { x: w * (0.5 - offX), y: h * (0.5 + offY) };
 }

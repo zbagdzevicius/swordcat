@@ -17,11 +17,14 @@ import { tx, esc, rich, levelKittens } from './text.js';
 import { portraitSVG } from './portraits.js';
 import { swordArt, capeMannequin, itemIcon } from './shopArt.js';
 import * as I from './icons.js';
+import { CAPES } from '../characters/palette.js';
 
 /** Sword skins in display order (§13.4) and capes (§13.5). */
 export const SKINS = Object.freeze(['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
 export const CAPE_IDS = Object.freeze(['cream', 'red', 'memeWhite', 'blue', 'green', 'midnight', 'gold']);
-export const CAPE_COLORS = Object.freeze({ cream: '#E2D6C0', red: '#A3202C', memeWhite: '#F2EFE8', blue: '#3F6FB5', green: '#5E7F3E', midnight: '#3E3F66', gold: '#D9B26A' });
+/** Wardrobe swatches: derived from characters' CAPES (the cloth the 3D cape wears), never a hand-kept copy. */
+export const CAPE_COLORS = Object.freeze(Object.fromEntries(CAPE_IDS.map((id) => [id, (CAPES[id] ?? CAPES.cream).color])));
+export const CAPE_HEMS = Object.freeze(Object.fromEntries(CAPE_IDS.map((id) => [id, (CAPES[id] ?? CAPES.cream).hem])));
 
 /** Station id → keeper, sign key, item ids, preview kind. */
 export const STATIONS = Object.freeze({
@@ -207,7 +210,7 @@ export function openShop(menus, station) {
   return new Promise((resolve) => {
     const e = el('div', `ui-screen menu-screen menu--shop shop--${station}`);
     const p = el('div', 'panel menu-panel shop-panel', { parent: e });
-    // hanging wooden sign (MedievalSharp, §14.1 "shop signs")
+    // the hanging shop sign (candy skin: a Fredoka pill on a rope, ART §9.1)
     el('div', 'shop-sign', { parent: p, html: `<i class="sg-rope"></i><span>${esc(tx(ctx, def.sign))}</span>` });
     const head = el('div', 'shop-head', { parent: p });
     if (def.keeper) {
@@ -272,7 +275,7 @@ export function openShop(menus, station) {
         it.refresh = () => {
           const st = it.state();
           const icoKey = st.kind === 'cape' ? `cape:${st.value}` : st.kind === 'skin' ? `skin:${st.value}` : `${st.icon}:${st.tier}`;
-          if (ico._k !== icoKey) { ico._k = icoKey; ico.innerHTML = st.kind === 'cape' ? I.cape(CAPE_COLORS[st.value]) : st.kind === 'skin' ? `<span class="sr-sword">${swordArt(st.value)}</span>` : itemIcon(st.icon, { tier: Math.min(st.tier + 1, st.maxTier) }); }
+          if (ico._k !== icoKey) { ico._k = icoKey; ico.innerHTML = st.kind === 'cape' ? I.cape(CAPE_COLORS[st.value], CAPE_HEMS[st.value]) : st.kind === 'skin' ? `<span class="sr-sword">${swordArt(st.value)}</span>` : itemIcon(st.icon, { tier: Math.min(st.tier + 1, st.maxTier) }); }
           setText(nm, tx(ctx, st.nameKey, st.nameVars));
           setText(sub, st.status === 'locked' ? tx(ctx, st.lockKey ?? 'ui.shop.locked', st.lockVars) : tx(ctx, st.descKey, st.descVars));
           let tiers = '';

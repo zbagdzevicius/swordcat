@@ -1,5 +1,8 @@
 // src/audio/musicMap.js  (owner: audio) — GAME_DESIGN §16.1 music table + rules, and the MusicDirector (pure state
 // machine: explore ↔ combat ↔ boss, cutscene requests, stings). Node-safe; AudioManager drives the playback.
+// Phase W (WA §9, ART §9.3): no creepy or chiptune tracks. Warm variants of the same files carry the moods instead:
+// `lantern_night` (field_of_dreams at rate 0.94), `hub_hush` (village_bards_tale at 0.92, low-passed at 2.2 kHz),
+// `bog_dreams` (field_of_dreams at 0.96) and `results_dance` (festival_minstrel_dance, its first 20 s looped).
 
 /**
  * @typedef {object} TrackDef
@@ -12,28 +15,45 @@
  * @property {boolean} [loop] default true (stings: false)
  * @property {number} [offset] start offset in seconds
  * @property {boolean} [buffer] decode to an AudioBuffer (short seamless loops / stings); else streamed
+ * @property {number} [rate]  playback rate (pitch drops with it: warm, slower variants of a file)
+ * @property {number} [lowpass] deck low-pass cutoff (Hz) while this track plays
+ * @property {number} [loopEnd] loop only the first `loopEnd` seconds (results: the first 20 s)
  */
 
 /** Target mean loudness every track is normalised to (dBFS, before the music bus). */
 export const MUSIC_TARGET_DB = -18;
 
-/** @type {Record<string, TrackDef>} — all 14 tracks are used (§16.1). */
+/** @type {Record<string, TrackDef>} — every track is used (§16.1, WA §9). */
 export const TRACKS = {
   village_bards_tale:         { file: 'audio/music/village_bards_tale.mp3', kind: 'explore', meanDb: -21.0 }, // title, menu, CS-01, hub gold, credits tail
   field_of_dreams:            { file: 'audio/music/field_of_dreams.mp3', kind: 'explore', meanDb: -26.3 }, // meadow + forest day, ending flight
   battle_fast_fight_loop:     { file: 'audio/music/battle_fast_fight_loop.ogg', kind: 'combat', buffer: true, meanDb: -9.1 }, // 24 s seamless loop
   battle_theme_a:             { file: 'audio/music/battle_theme_a.mp3', kind: 'combat', meanDb: -13.1 }, // The Line waves, CS-02 sting, keep courtyard
   boss_epic_battle_loop:      { file: 'audio/music/boss_epic_battle_loop.ogg', kind: 'boss', meanDb: -8.6 },
-  dark_forest_creepy:         { file: 'audio/music/dark_forest_creepy.ogg', kind: 'explore', vol: 0.6, meanDb: -26.0 }, // "at volume 0.6"
-  cave_theme:                 { file: 'audio/music/cave_theme.ogg', kind: 'explore', meanDb: -14.1 },
   village_town_theme:         { file: 'audio/music/village_town_theme.mp3', kind: 'explore', meanDb: -15.6 },
   tavern_old_tower_inn:       { file: 'audio/music/tavern_old_tower_inn.mp3', kind: 'explore', meanDb: -20.3 },
   story_lament_warriors_soul: { file: 'audio/music/story_lament_warriors_soul.mp3', kind: 'story', meanDb: -19.5 },
   castle_kings_feast:         { file: 'audio/music/castle_kings_feast.mp3', kind: 'story', meanDb: -16.2 },
   festival_minstrel_dance:    { file: 'audio/music/festival_minstrel_dance.mp3', kind: 'story', meanDb: -15.2 },
   victory_fanfare:            { file: 'audio/music/victory_fanfare.mp3', kind: 'sting', loop: false, buffer: true, meanDb: -21.0 },
-  victory_8bit_loop:          { file: 'audio/music/victory_8bit_loop.ogg', kind: 'results', meanDb: -18.2 },
+  // ---- WA §9 / ART §9.3 warm variants (same files, no extra download)
+  lantern_night:              { file: 'audio/music/field_of_dreams.mp3', kind: 'explore', rate: 0.94, meanDb: -26.3 },  // CS-04 Lantern Night + crickets
+  hub_hush:                   { file: 'audio/music/village_bards_tale.mp3', kind: 'explore', rate: 0.92, lowpass: 2200, meanDb: -21.0 }, // Big Yawn hub, CS-10
+  bog_dreams:                 { file: 'audio/music/field_of_dreams.mp3', kind: 'explore', rate: 0.96, meanDb: -26.3 },  // the bog (+ water)
+  results_dance:              { file: 'audio/music/festival_minstrel_dance.mp3', kind: 'results', loopEnd: 20, meanDb: -15.2 }, // WA21
 };
+
+/**
+ * Retired ids other areas' data may still name → their warm replacement (trackId reads them as these). The WA §9
+ * banned ids are not listed: nothing may name them.
+ */
+export const TRACK_ALIASES = { cave_theme: 'bog_dreams', hubGrey: 'hub_hush' };
+
+/**
+ * WA §9 "lament only for its scenes" (CS-10 window shot, CS-11, CS-15): a level that resolves an explore loop to one of
+ * these plays the warm swap instead (the town's old gate.done row → hub_hush).
+ */
+export const EXPLORE_SWAPS = { story_lament_warriors_soul: 'hub_hush' };
 
 /** Most a quiet track is boosted (+10 dB) by the normalisation. */
 export const MUSIC_MAX_BOOST = 3.16;
@@ -53,16 +73,19 @@ export const trackGain = (def) => (def?.vol ?? 1) *
  */
 export const LEVEL_MUSIC = {
   meadow: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop' },
+  // CS-04 Lantern Night onwards (§12.4): warm, slower field_of_dreams + crickets; the tavern tune within 8 m of the camp
   forest: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
-    byFlag: [['forest.camp', 'dark_forest_creepy']] },                     // CS-04 Lantern Night onwards (§12.4)
+    byFlag: [['forest.camp', 'lantern_night']],
+    zones: [{ id: 'camp', at: [6, 40], r: 8, track: 'tavern_old_tower_inn', when: 'forest.camp' }] },
   town: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
-    // §12.5: occupied → hub gold (town.free) → hub grey (gate.done) → ending gold (ending.seen)
-    byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'story_lament_warriors_soul'], ['town.free', 'village_bards_tale']],
+    // §12.5: occupied → hub gold (town.free) → hub hush (gate.done; WA §9: never the lament as a loop) → ending gold
+    byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'hub_hush'], ['town.free', 'village_bards_tale']],
     zones: [{ id: 'bakery', at: [-26, -20], r: 8, track: 'tavern_old_tower_inn' }] },
   gate: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
     gains: { village_town_theme: 0.6 }, holds: { line: 'battle_theme_a', 'obj.line': 'battle_theme_a' } },
-  bog: { explore: 'cave_theme', combat: 'battle_fast_fight_loop' },
-  keep: { explore: 'cave_theme', combat: 'battle_theme_a', boss: 'boss_epic_battle_loop' },
+  // ART §9.3: bog field_of_dreams 0.96 + water; keep castle_kings_feast at 0.7
+  bog: { explore: 'bog_dreams', combat: 'battle_fast_fight_loop' },
+  keep: { explore: 'castle_kings_feast', combat: 'battle_theme_a', boss: 'boss_epic_battle_loop', gains: { castle_kings_feast: 0.7 } },
 };
 
 /**
@@ -87,9 +110,10 @@ export function bossMusicFor(id) {
 /** Named contexts other areas may ask for (`ctx.audio.music(CONTEXT_MUSIC.title)`). */
 export const CONTEXT_MUSIC = {
   title: 'village_bards_tale', menu: 'village_bards_tale', knightingEve: 'village_bards_tale', hubGold: 'village_bards_tale',
-  hubGrey: 'story_lament_warriors_soul', emotional: 'story_lament_warriors_soul', knighting: 'castle_kings_feast',
-  credits: 'festival_minstrel_dance', festival: 'festival_minstrel_dance', victory: 'victory_fanfare', results: 'victory_8bit_loop',
-  bakery: 'tavern_old_tower_inn', ending: 'field_of_dreams',
+  hubGrey: 'hub_hush', hubHush: 'hub_hush', emotional: 'story_lament_warriors_soul', lament: 'story_lament_warriors_soul',
+  knighting: 'castle_kings_feast', credits: 'festival_minstrel_dance', festival: 'festival_minstrel_dance',
+  victory: 'victory_fanfare', results: 'results_dance', bakery: 'tavern_old_tower_inn', ending: 'field_of_dreams',
+  lanternNight: 'lantern_night', homesick: 'tavern_old_tower_inn',
 };
 
 /** Ambience loops per level (wind is procedural everywhere). Ids are sfx file ids. */
@@ -120,12 +144,15 @@ export function trackId(track) {
   const base = s.split('/').pop().replace(/\.(mp3|ogg|wav)$/i, '');
   if (TRACKS[base]) return base;
   if (CONTEXT_MUSIC[base]) return CONTEXT_MUSIC[base];
+  if (TRACK_ALIASES[base]) return TRACK_ALIASES[base];
   return null;
 }
 
 /**
  * Track ids that the director can choose for a level. The explore track is the first `byFlag` row whose condition
- * holds (`opts.cond(expr)`, GameState.cond), else `explore`. A level's legacy `music.prologue` track (meadow: the
+ * holds (`opts.cond(expr)`, GameState.cond), else `explore`. The level def's rows come first; a holding def row that
+ * only names the day track again (a no-op) falls through to the audio defaults (LEVEL_MUSIC), so a mood the def
+ * leaves at "day" still gets its warm variant. Lament loops swap to EXPLORE_SWAPS. A level's legacy `music.prologue` track (meadow: the
  * bards' tale CS-01 fades in) replaces it while `opts.prologue` is true. When the resolved track differs from the
  * plain `explore` (the "day" track LevelManager announces on load), requests for the day track are read as the
  * resolved one (`alias`).
@@ -135,15 +162,24 @@ export function trackId(track) {
 export function levelMusic(levelId, def, { prologue = false, cond = null } = {}) {
   const fb = LEVEL_MUSIC[levelId] ?? {};
   const m = def && typeof def === 'object' ? def : {};
-  const day = trackId(m.explore) ?? trackId(fb.explore);
-  const byFlag = Array.isArray(m.byFlag) ? m.byFlag : (fb.byFlag ?? []);
+  const swap = (id) => (id && EXPLORE_SWAPS[id]) || id;
+  const day = swap(trackId(m.explore) ?? trackId(fb.explore));
+  const own = Array.isArray(m.byFlag) ? m.byFlag : null;
+  const byFlag = own ?? (fb.byFlag ?? []);
   let flagged = null;
   if (typeof cond === 'function') {
-    for (const row of byFlag) {
-      const [c, t] = Array.isArray(row) ? row : [row?.when, row?.track];
-      let ok = false; try { ok = !!cond(c); } catch { ok = false; }
-      if (ok && trackId(t)) { flagged = trackId(t); break; }
-    }
+    const pick = (rows) => {
+      for (const row of rows) {
+        const [c, t] = Array.isArray(row) ? row : [row?.when, row?.track];
+        let ok = false; try { ok = !!cond(c); } catch { ok = false; }
+        const id = ok ? swap(trackId(t)) : null;
+        if (id && !(own && rows === own && id === day)) return id;
+        if (id) return undefined;                         // a def row naming the day track: try the audio defaults
+      }
+      return null;
+    };
+    flagged = pick(byFlag);
+    if (flagged === undefined) flagged = own && fb.byFlag ? (pick(fb.byFlag) || null) : null;
   }
   const pro = prologue ? trackId(m.prologue) : null;
   const explore = pro ?? flagged ?? day;
@@ -154,7 +190,7 @@ export function levelMusic(levelId, def, { prologue = false, cond = null } = {})
     combat: trackId(m.combat) ?? trackId(fb.combat) ?? 'battle_fast_fight_loop',
     boss: trackId(m.boss) ?? trackId(fb.boss) ?? 'boss_epic_battle_loop',
     zones: Array.isArray(m.zones) ? m.zones : (fb.zones ?? []),
-    byFlag,
+    byFlag: own && fb.byFlag ? [...own, ...fb.byFlag] : byFlag,
     gains: { ...(fb.gains ?? {}), ...(m.gains ?? {}) },
     holds: { ...(fb.holds ?? {}), ...(m.holds ?? {}) },
   };
@@ -350,5 +386,5 @@ export class MusicDirector {
   }
 }
 
-/** Every music file (manifest generation + U15 checks). */
-export function musicFiles() { return Object.values(TRACKS).map((t) => t.file); }
+/** Every music file (manifest generation + U15 checks; variants share their file). */
+export function musicFiles() { return [...new Set(Object.values(TRACKS).map((t) => t.file))]; }

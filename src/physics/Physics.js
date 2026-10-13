@@ -21,7 +21,8 @@
 // moveActor(actor, dt) — duck-typed actor fields:
 //   in:  pos (feet), vel, radius, height, onGround, mass, id
 //        flying (no gravity, never below ground), gravityMul, terminalFall, stepUp, noClip (integrate only)
-//   out: onGround, landImpact (m/s on the landing step, else 0), groundNormal (Vector3), groundY, groundKind
+//   out: onGround, landImpact (m/s on the landing step, else 0), groundNormal (Vector3), groundY (last contact, kept
+//        while airborne), groundKind (null while airborne)
 //        ('terrain' | 'static' | 'mesh' | null), groundObject, sliding (on a too-steep slope), wallHit, ceilingHit,
 //        stepY (height gained / lost stepping onto or off a prop or stair this step; ease visuals with it),
 //        bounced (vy given by a bounce surface on the landing step; onGround stays false),
@@ -39,7 +40,7 @@ import { PHYSICS, NAV } from '../core/config.js';
 import { E } from '../core/events.js';
 import { StaticColliders, toRecord } from './StaticColliders.js';
 import { NavGrid, WALK } from './NavGrid.js';
-import { findPath, markTraps, buildIslands } from './Pathfind.js';
+import { findPath, markTraps, buildIslands, reachableIslands } from './Pathfind.js';
 import { MeshCollider } from './MeshCollider.js';
 import { PhysicsDebug } from './PhysicsDebug.js';
 
@@ -57,6 +58,13 @@ const _dir = new THREE.Vector3();
 const RAY_DEFAULTS = Object.freeze({ terrain: true, mesh: true, statics: false });
 const LOS_DEFAULTS = Object.freeze({ terrain: true, mesh: true, statics: true });
 const KIND_NAMES = ['terrain', 'static', 'mesh'];
+/** PERF P1: above this many solid actors separateActors uses a uniform hash instead of the all-pairs loop */
+export const SEP_HASH_MIN = 24;
+/** ... with cells this big (m; grown to 2 × the largest radius so the 3 × 3 neighbourhood finds every overlap) */
+export const SEP_CELL = 2;
+/** hash buckets (power of two; a collision only adds candidates, every pair is distance-tested) */
+const SEP_BUCKETS = 1024;
+const sepBucket = (ix, iz, mask) => (Math.imul(ix, 73856093) ^ Math.imul(iz, 19349663)) & mask;
 const TERRAIN = 0, STATIC = 1, MESH = 2;
 const SNAP_NONE = 0, SNAP_FLOOR = 1, SNAP_EDGE = 2;
 const RIM_RISE = 0.05;           // terrain this far above the feet at the capsule's leading rim counts as "in the way"
@@ -96,6 +104,13 @@ export class Physics {
     this._debug = null;
     this._sepStamp = 0;
     this._moved = [];
+    /** separateActors scratch (PERF P1): the solid actors this step, and the typed-array hash used above SEP_HASH_MIN */
+    this._sol = [];
+    /** reachableFrom scratch: the island mask of the current query and its (allocated once) cell predicate */
+    this._rq = { reach: null, comp: null, trap: null, sc: -1 };
+    this._rqOk = (k) => { const q = this._rq; return q.reach[q.comp[k]] === 1 && (!q.trap || q.trap[k] === 0 || q.comp[k] === q.sc); };
+    this._sepHead = new Int32Array(SEP_BUCKETS);
+    this._sepNext = new Int32Array(64);
     this._warnedNaN = false;
     this._waterDeep = undefined;
     /** @type {Map<object, 'ring'|null>} colliders added with addCollider (kept across refreshColliders; dropped by setLevel) */
@@ -261,6 +276,26 @@ export class Physics {
     const k = this.nav?.nearestWalkable(x, z, maxR) ?? -1;
     return k < 0 ? null : { x: this.nav.cx(k), y: this.nav.h[k], z: this.nav.cz(k) };
   }
+  /**
+   * Can she get near (x, z) from `from` (ui's grey "unreachable" paw, CONTROLS §10.2)? true when a walkable cell within
+   * `maxGap` m of (x, z) lies on an island reachable from the island under `from` (walking + automatic jumps + open
+   * authored links, exactly as findPath sees it, trap pockets excluded); false when none is (roofs, walled yards, the
+   * far bank of a lake, or no walkable cell there at all); null while the island audit is missing / stale or `from` is
+   * off the nav. Cached per start island (Pathfind.reachableIslands); allocation-free, cheap at ui's ~8 Hz.
+   * @param {{x:number, z:number}} from @param {number} x @param {number} z @param {number} [maxGap] m
+   * @returns {boolean|null}
+   */
+  reachableFrom(from, x, z, maxGap = 2) {
+    const nav = this.nav;
+    if (!nav || !from || !Number.isFinite(from.x) || !Number.isFinite(from.z) || !Number.isFinite(x) || !Number.isFinite(z)) return null;
+    const s = nav.nearestWalkable(from.x, from.z, 1.5);
+    if (s < 0) return null;
+    const reach = reachableIslands(nav, s);
+    if (!reach) return null;
+    this._rq.reach = reach; this._rq.comp = nav.comp; this._rq.trap = nav.trap; this._rq.sc = nav.comp[s];
+    return nav.nearestWalkable(x, z, maxGap, this._rqOk) >= 0;
+  }
+
   navWalkable(x, z) { return this.nav ? this.nav.walkableAt(x, z) : true; }
   losWalkable(a, b) { return this.nav ? this.nav.losWalkable(a.x, a.z, b.x, b.z) : true; }
   /** The nav island audit (Pathfind.markTraps): small walled-in pockets that no link leads out of. */
@@ -636,7 +671,11 @@ export class Physics {
       a.groundY = p.y; a.groundKind = KIND_NAMES[g.kind] ?? null; a.groundObject = g.obj;
     } else {
       if (!a.sliding) a.groundNormal.set(0, 1, 0);
-      a.groundY = NaN; a.groundKind = null; a.groundObject = null;
+      // AUTOCAM §4 (physics review): groundY stays the Y of the LAST ground contact while airborne (the camera's
+      // jump-rise reference: the same terrain / prop top / deck contact collision used); NaN only before any contact.
+      // `groundKind === null` is the airborne signal.
+      if (typeof a.groundY !== 'number') a.groundY = NaN;
+      a.groundKind = null; a.groundObject = null;
     }
     if (!wasGround && grounded) a.landImpact = impact;
     if (!a.sliding) a.slideSpeed = 0;
@@ -911,49 +950,87 @@ export class Physics {
   }
 
   /**
-   * Mass-weighted XZ circle separation between live, solid actors (O(n²), n < 40; tech.md §5 item 4). `fixed` actors
-   * (Pudding, shield posts, props) never move and push others fully; actors whose height ranges don't overlap (a crow
-   * overhead, a kitten on a balcony) are ignored. Every pushed actor is then swept from where it stood through props,
-   * architecture and bounds, so a shove never tunnels through a thin wall, and is lifted onto the ground it lands on.
+   * Mass-weighted XZ circle separation between live, solid actors (tech.md §5 item 4). `fixed` actors (Pudding, shield
+   * posts, props) never move and push others fully; actors whose height ranges don't overlap (a crow overhead, a kitten
+   * on a balcony) are ignored. Every pushed actor is then swept from where it stood through props, architecture and
+   * bounds, so a shove never tunnels through a thin wall, and is lifted onto the ground it lands on.
+   * Up to SEP_HASH_MIN solid actors: all pairs (n ≤ 24 → ≤ 276 tests). Above it (PERF P1, hordes): a uniform
+   * SEP_CELL m hash over typed arrays, 3 × 3 neighbour cells per actor. Allocation-free either way (Actor predeclares
+   * `_physSep / _sepX / _sepZ`, C13).
    */
   separateActors() {
     const list = this.ctx?.actors?.list;
     if (!list || list.length < 2) return;
-    const stamp = ++this._sepStamp, moved = this._moved;
-    moved.length = 0;
+    const stamp = ++this._sepStamp, moved = this._moved, sol = this._sol;
+    moved.length = 0; sol.length = 0;
+    let maxR = 0;
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
       if (!this._solid(a)) continue;
-      for (let j = i + 1; j < list.length; j++) {
-        const b = list[j];
-        if (!this._solid(b)) continue;
-        if (a.fixed && b.fixed) continue;
-        if (a.pos.y >= b.pos.y + (b.height ?? 1) || b.pos.y >= a.pos.y + (a.height ?? 1)) continue;   // no vertical overlap
-        let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
-        const min = a.radius + b.radius;
-        let d2 = dx * dx + dz * dz;
-        if (d2 >= min * min) continue;
-        if (d2 < 1e-10) {                                                // stacked: split along a deterministic direction
-          const an = (((a.id ?? i) * 7919 + (b.id ?? j) * 104729) % 360) * (Math.PI / 180);
-          dx = Math.sin(an) * 1e-3; dz = Math.cos(an) * 1e-3; d2 = 1e-6;
-        }
-        const d = Math.sqrt(d2), push = min - d, nx = dx / d, nz = dz / d;
-        let wa, wb;
-        if (a.fixed) { wa = 0; wb = 1; }
-        else if (b.fixed) { wa = 1; wb = 0; }
-        else { const ma = Math.max(1e-3, a.mass ?? 1), mb = Math.max(1e-3, b.mass ?? 1); wa = mb / (ma + mb); wb = ma / (ma + mb); }
-        if (wa > 0) {
-          if (a._physSep !== stamp) { a._physSep = stamp; a._sepX = a.pos.x; a._sepZ = a.pos.z; moved.push(a); }
-          a.pos.x -= nx * push * wa; a.pos.z -= nz * push * wa;
-        }
-        if (wb > 0) {
-          if (b._physSep !== stamp) { b._physSep = stamp; b._sepX = b.pos.x; b._sepZ = b.pos.z; moved.push(b); }
-          b.pos.x += nx * push * wb; b.pos.z += nz * push * wb;
-        }
-      }
+      sol.push(a);
+      if (a.radius > maxR) maxR = a.radius;
+    }
+    const n = sol.length;
+    if (n >= 2) {
+      if (n <= SEP_HASH_MIN) {
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) this._sepPair(sol[i], sol[j], i, j, stamp);
+      } else this._sepHashed(n, Math.max(SEP_CELL, 2 * maxR), stamp);
     }
     for (let i = 0; i < moved.length; i++) this._settle(moved[i]);
-    moved.length = 0;
+    moved.length = 0; sol.length = 0;
+  }
+
+  /** The hashed broad phase of separateActors over `this._sol[0..n)` (cells of `cell` m; no allocation once warm). */
+  _sepHashed(n, cell, stamp) {
+    const sol = this._sol, head = this._sepHead, mask = SEP_BUCKETS - 1, inv = 1 / cell;
+    if (this._sepNext.length < n) this._sepNext = new Int32Array(Math.max(n, this._sepNext.length * 2));
+    const next = this._sepNext;
+    head.fill(-1);
+    // insert in reverse so each bucket chain runs in ascending index order (deterministic, like the all-pairs loop)
+    for (let i = n - 1; i >= 0; i--) {
+      const p = sol[i].pos, b = sepBucket(Math.floor(p.x * inv), Math.floor(p.z * inv), mask);
+      next[i] = head[b]; head[b] = i;
+    }
+    const seen = this._sepSeen ??= new Int32Array(9);
+    for (let i = 0; i < n; i++) {
+      const a = sol[i], ix = Math.floor(a.pos.x * inv), iz = Math.floor(a.pos.z * inv);
+      let ns = 0;
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        const b = sepBucket(ix + dx, iz + dz, mask);
+        let dup = false;
+        for (let q = 0; q < ns; q++) if (seen[q] === b) { dup = true; break; }
+        if (dup) continue;
+        seen[ns++] = b;
+        for (let j = head[b]; j >= 0; j = next[j]) if (j > i) this._sepPair(a, sol[j], i, j, stamp);
+      }
+    }
+  }
+
+  /** Push one pair of solid actors apart (mass-weighted; `fixed` never moves). Records the first push per step. */
+  _sepPair(a, b, i, j, stamp) {
+    if (a.fixed && b.fixed) return;
+    if (a.pos.y >= b.pos.y + (b.height ?? 1) || b.pos.y >= a.pos.y + (a.height ?? 1)) return;   // no vertical overlap
+    let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
+    const min = a.radius + b.radius;
+    let d2 = dx * dx + dz * dz;
+    if (d2 >= min * min) return;
+    if (d2 < 1e-10) {                                                  // stacked: split along a deterministic direction
+      const an = (((a.id ?? i) * 7919 + (b.id ?? j) * 104729) % 360) * (Math.PI / 180);
+      dx = Math.sin(an) * 1e-3; dz = Math.cos(an) * 1e-3; d2 = 1e-6;
+    }
+    const d = Math.sqrt(d2), push = min - d, nx = dx / d, nz = dz / d, moved = this._moved;
+    let wa, wb;
+    if (a.fixed) { wa = 0; wb = 1; }
+    else if (b.fixed) { wa = 1; wb = 0; }
+    else { const ma = Math.max(1e-3, a.mass ?? 1), mb = Math.max(1e-3, b.mass ?? 1); wa = mb / (ma + mb); wb = ma / (ma + mb); }
+    if (wa > 0) {
+      if (a._physSep !== stamp) { a._physSep = stamp; a._sepX = a.pos.x; a._sepZ = a.pos.z; moved.push(a); }
+      a.pos.x -= nx * push * wa; a.pos.z -= nz * push * wa;
+    }
+    if (wb > 0) {
+      if (b._physSep !== stamp) { b._physSep = stamp; b._sepX = b.pos.x; b._sepZ = b.pos.z; moved.push(b); }
+      b.pos.x += nx * push * wb; b.pos.z += nz * push * wb;
+    }
   }
 
   /**

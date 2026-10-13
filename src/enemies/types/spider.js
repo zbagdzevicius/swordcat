@@ -16,6 +16,11 @@ import { applySlow } from '../status.js';
 import { makeProp } from '../props.js';
 import { attachAligned, bone, posIn, recolor } from '../rig.js';
 import { MATERIAL_COLORS } from '../palette.js';
+import * as THREE from 'three';
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
+/** Fuzz coat fit on the abdomen bone: ball radius = bone length × r, centred at `at` along the bone (ART §7.2). */
+const FUZZ = Object.freeze({ r: 0.62, at: 0.5 });
 
 const def = ENEMIES.spider;
 const WEB = ATTACKS.spider_web;
@@ -34,6 +39,7 @@ export default {
   id: 'spider',
   tint: undefined,                                         // coloured in build (a multiply over the black atlas reads black)
   scamper: true,
+  bake: true,                                              // PERF §9.4: body + eyes + fuzz coat = 1 draw
   anims: { ...CLIP_MAPS.spider.roles, spider_web: { windup: { clip: 'Spider_Idle', speed: 2.2 }, strike: { clip: 'Spider_Attack', from: 0.4, to: 1, speed: 1.6 } } },
   init(e) { e.burstT = (e.id * 0.37) % ((def.burst?.move ?? 1.2) + (def.burst?.pause ?? 1.0)); },
 
@@ -55,15 +61,21 @@ export default {
         mat.roughness = 0.9; mat.metalness = 0;
       }
     });
-    // 2 big friendly eyes and the leaf hat (top colour) ride the head bone (×1.4 after dressing)
+    // 2 big friendly eyes ride the head bone (×1.4 after dressing); the fuzz coat (12-card fringe + the leaf hat on
+    // top, ONE draw) rides the abdomen (×1.5) — ART §7.4: body 1 + eyes 1 + coat 1 (+ hull) per Fuzzball
     const head = bone(m.scene, 'Head') ?? bone(m.scene, 'Spider_Head') ?? bone(m.scene, 'Body');
     if (!head) return;
     const hp = posIn(m.root, head), k = (m.size?.y ?? 0.5) / 0.5;
     const eyes = makeProp('eyes');
     attachAligned(m.root, head, eyes, { pos: [hp.x, hp.y + 0.06 * k, hp.z + 0.15 * k], scale: k * 1.05 });
-    const hat = makeProp('leafHat');
-    attachAligned(m.root, head, hat, { pos: [hp.x, hp.y + 0.13 * k, hp.z + 0.02 * k], rot: [-0.15, 0.3, 0], scale: k * 0.9 });
-    e.helmet = hat;                                           // pops off on the bonk like the rats' helms
+    const abd = bone(m.scene, 'Abdomen'), abdEnd = bone(m.scene, 'Abdomen_end');
+    if (abd && abdEnd) {
+      const a = posIn(m.root, abd, _a), b = posIn(m.root, abdEnd, _b);
+      const r = a.distanceTo(b) * FUZZ.r;
+      _c.copy(a).lerp(b, FUZZ.at);
+      attachAligned(m.root, abd, makeProp('fuzzCoat'), { pos: [_c.x, _c.y, _c.z], scale: r });
+    }
+    e.helmet = null;                                          // the coat stays on: faint-and-poof is the defeat
   },
 
   /** The web glob: slow on a hit, a patch where it ends (not when reflected). */

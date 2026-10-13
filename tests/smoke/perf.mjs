@@ -3,7 +3,8 @@
 // Count gates (programs, compiles, re-resolves, draws, steps, pool misses, composer, dyn-res viewport) FAIL now on any
 // machine. Timing gates print REPORT until PERF §14.4's idle-machine baseline sets thresholds; a failed calibration
 // (§14.1: 2000 Math.sqrt ≤ 10 µs, median of 50) prints INVALID for them (never pass, never fail).
-// Without SMOKE_PERF=1 every block logs "skipped" and costs nothing (level: null).
+// Without SMOKE_PERF=1 every block logs "skipped" and costs nothing (level: null), except `perf:programs`: the
+// programs-per-level budget is a hard gate for every preset on every run (low / med / high × meadow + gate).
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -44,6 +45,21 @@ async function settle(t, level, spawn = 'start', frames = 60) {
 
 const perf = (t) => t.G(() => window.__GAME__.perf());
 
+/**
+ * PERF §5 memory gate: JS heap in play (performance.memory.usedJSHeapSize, which counts ArrayBuffer backing stores)
+ * after a forced GC ≤ budget.heapMB of the active tier. Machine-independent, so it FAILs now (not REPORT). The dev
+ * server adds a few MB of module records; the gate applies to it unchanged.
+ */
+async function heapGate(t, label) {
+  let cdp = null;
+  try { cdp = await t.page.context().newCDPSession(t.page); await cdp.send('HeapProfiler.collectGarbage'); }
+  catch { /* non-Chromium: measure without a GC */ } finally { await cdp?.detach().catch(() => {}); }
+  const r = await t.G(() => { const p = window.__GAME__.perf(); return { heapMB: p.heapMB, budget: p.budget.heapMB, q: p.quality }; });
+  if (r.heapMB == null) { t.log(`perf:heap ${label}: performance.memory unavailable`); return; }
+  t.log(`perf:heap ${label} (${r.q}): ${r.heapMB.toFixed(0)} MB (budget ${r.budget} MB)`);
+  t.assert(r.heapMB <= r.budget, `perf:heap ${label} (${r.q}): JS heap ${r.heapMB.toFixed(0)} MB > ${r.budget} MB (PERF §5)`);
+}
+
 /** Frame intervals (ms) of the next n rendered frames, measured in the page. */
 const frameTimes = (t, n) => t.page.evaluate((k) => new Promise((res) => {
   const g = window.__GAME__.game, out = []; let last = performance.now();
@@ -53,16 +69,37 @@ const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.lengt
 
 export default [
   {
-    name: 'perf:programs', order: 80, level: null, timeout: 600000,
+    // PERF §1.2 "programs per level (fresh page)" as a HARD gate for EVERY preset (not just the page's own): each
+    // (preset, level) boots a fresh page at `?quality=<preset>&level=<level>`, settles 90 frames in play and asserts
+    // renderer.info.programs ≤ QUALITY[preset].programs (+ programsCinematic on High). Always on (no SMOKE_PERF):
+    // low / med / high × meadow and gate by default; SMOKE_PERF=1 checks all four M2 levels.
+    name: 'perf:programs', order: 80, level: null, timeout: 1200000,
     async run(t) {
-      if (skip(t)) return;
-      for (const s of SCENES) {
-        await settle(t, s.level, s.spawn);
-        const p = await perf(t);
-        const q = await t.G(() => window.__GAME__.ctx.quality);
-        const cap = (q.programs ?? 40) + (q.cinematic ? (q.programsCinematic ?? 0) : 0);
-        t.log(`${s.id}: programs ${p.programs} / ${cap} (${p.quality})`);
-        t.assert(p.programs <= cap, `perf:programs ${s.id}: ${p.programs} > ${cap}`);
+      const url = new URL(t.page.url()), base = url.origin + url.pathname;
+      const scenes = ON ? SCENES : SCENES.filter((s) => s.level === 'meadow' || s.level === 'gate');
+      for (const preset of ['low', 'med', 'high']) {
+        for (const s of scenes) {
+          const pg = await t.page.context().browser().newPage({ viewport: { width: 1280, height: 720 } });
+          const errs = [];
+          pg.on('pageerror', (e) => errs.push(e.message));
+          try {
+            await pg.goto(`${base}?test=1&seed=1&quality=${preset}&level=${s.level}`, { timeout: 180000 });
+            await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 180000 });
+            const r = await pg.evaluate(async () => {
+              const g = window.__GAME__;
+              g.story?.skip?.(); g.skipDialog?.(); g.setMode('play'); g.god(true);
+              await g.waitFrames(90);
+              const q = g.ctx.quality;
+              return { programs: g.ctx.renderer.info.programs.length, cap: (q.programs ?? 40) + (q.cinematic ? (q.programsCinematic ?? 0) : 0), id: q.id };
+            });
+            t.log(`${preset} ${s.id}: programs ${r.programs} / ${r.cap} (${r.id})`);
+            t.assert(r.id === preset, `perf:programs: asked for ${preset}, the page runs ${r.id}`);
+            t.assert(r.programs <= r.cap, `perf:programs ${preset} ${s.id}: ${r.programs} > ${r.cap}`);
+            for (const e of errs) t.fail(`perf:programs ${preset} ${s.id}: pageerror ${e}`);
+          } finally {
+            await pg.close().catch(() => {});
+          }
+        }
       }
     },
   },
@@ -304,6 +341,7 @@ export default [
       await t.G(() => window.__GAME__.perf.reset());
       await t.frames(600);
       const idle = await perf(t);
+      await heapGate(t, 'meadow idle');
       await t.G(() => { const g = window.__GAME__, p = g.ctx.player.pos; for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; g.spawn('rat_pike', p.x + Math.cos(a) * 7, p.z + Math.sin(a) * 7); } });
       await t.frames(120);
       await t.G(() => window.__GAME__.perf.reset());

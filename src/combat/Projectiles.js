@@ -32,12 +32,15 @@ const PAL = {
 };
 
 /**
- * HDR intensities (additive, untonemapped; bloom threshold is 0.85, so only the hot cores bloom and a wave stays a
- * readable crescent instead of a white blob — Holy raises bloom to 1.2 while it plays).
+ * Glow intensities (additive, untonemapped). PERF K1: gameplay renders straight to the canvas with no bloom, so the
+ * glow is in the shapes themselves (soft halo falloff, bright cores) and reads without a bloom pass (ART S6).
+ * `blobMinR` / `blobMul`: PERF B2 — projectiles never cast sun shadows; only the large ones (round r ≥ 0.2 m: bone
+ * orbs, web globs) get a contact blob from `fx.blobs` (radius r × blobMul), the thin bolts and the flat waves none.
  */
 const VIS = Object.freeze({
   wave: 1.15, gleam: 1.2, trail: 0.85, trailGold: 1.7, trailGlob: 0.45, boltGold: 1.2,
   orbCore: 1.1, halo: 1.15, haloGold: 1.4, haloSize: 3.2,
+  blobMinR: 0.2, blobMul: 1.4,
 });
 
 const _v = new THREE.Vector3();
@@ -161,6 +164,11 @@ function crescentGeometry(seg = 32, span = 2.2) {
   g.setIndex(idx);
   g.computeBoundingSphere();
   return g;
+}
+
+/** PERF B2: does this projectile get a contact blob (large and round; never waves / thin bolts)? */
+export function wantsBlob(p) {
+  return !!p && !p.wave && p.kind !== 'bolt' && (p.r ?? 0) >= VIS.blobMinR;
 }
 
 /** Projectile look for a def (PROJECTILE_KIND, else wave if it has a width, else orb). */
@@ -451,7 +459,9 @@ export class Projectiles {
   /** holyWave (`eatsProjectiles`): destroy hostile projectiles inside the crescent (swept over this step). */
   _eat(p, dt) {
     const len = Math.hypot(p.vel.x, p.vel.z) || 1, fx = p.vel.x / len, fz = p.vel.z / len, step = len * dt;
-    for (const q of this.list) {
+    const list = this.list;
+    for (let i = 0; i < list.length; i++) {
+      const q = list[i];
       if (q === p || !q.alive || q.eats || !isHostile(p.faction, q.faction)) continue;
       const dx = q.pos.x - p.pos.x, dz = q.pos.z - p.pos.z, f = dx * fx + dz * fz, l = -dx * fz + dz * fx;
       if (Math.abs(l) > p.halfW + q.r || f > p.r + q.r || f < -(p.r + q.r + step + q.speed * dt)) continue;
@@ -529,6 +539,7 @@ export class Projectiles {
   _recycle(p) {
     if (p.visual) {
       p.visual.group.visible = false;
+      if (p.visual.blob) { this.ctx.fx?.blobs?.remove?.(p.visual.group); p.visual.blob = false; }
       let pool = this._visualPool.get(p.visual.kind);
       if (!pool) this._visualPool.set(p.visual.kind, (pool = []));
       pool.push(p.visual);
@@ -546,10 +557,11 @@ export class Projectiles {
     const plane = new THREE.PlaneGeometry(1, 1, 1, 6).translate(0, 0.5, 0);
     this._res = {
       boltGeo: boltGeometry(),
-      boltMat: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.15, emissive: new THREE.Color(0x000000) }),
+      // PERF / ART K6: Lambert (the world's lit program family; no Standard / Physical program for two tiny meshes)
+      boltMat: new THREE.MeshLambertMaterial({ vertexColors: true, emissive: new THREE.Color(0x000000) }),
       sphereGeo: new THREE.SphereGeometry(1, 14, 10),
       globGeo: new THREE.IcosahedronGeometry(1, 1),
-      globMat: new THREE.MeshStandardMaterial({ color: PAL.web, roughness: 0.9, metalness: 0, flatShading: true, emissive: new THREE.Color(PAL.webShade), emissiveIntensity: 0.25 }),
+      globMat: new THREE.MeshLambertMaterial({ color: PAL.web, flatShading: true, emissive: new THREE.Color(PAL.webShade), emissiveIntensity: 0.25 }),
       trailGeo: plane,
       haloGeo: new THREE.PlaneGeometry(1, 1),
       crescentGeo: crescentGeometry(),
@@ -571,13 +583,14 @@ export class Projectiles {
     v.group.visible = true;
     this._styleVisual(p);
     this._place(p, 1, 0);
+    if (wantsBlob(p)) { this.ctx.fx?.blobs?.add?.(v.group, p.r * VIS.blobMul); v.blob = true; }
   }
 
   _makeVisual(kind) {
     const R = this._resources();
     const group = new THREE.Group();
     group.name = `projectile:${kind}`;
-    const v = { kind, group, body: null, trail: null, halo: null, crescent: null };
+    const v = { kind, group, body: null, trail: null, halo: null, crescent: null, blob: false };
     const trail = (width) => {
       const m = new THREE.Mesh(R.trailGeo, R.trailMat.clone());
       m.material.uniforms.uWidth.value = width;
@@ -678,7 +691,8 @@ export class Projectiles {
     if (!this.list.length) return;
     const a = (this.ctx.game?.hitstopT ?? 0) > 0 ? 1 : alpha;
     const time = this.ctx.game?.realTime ?? 0;
-    for (const p of this.list) if (p.alive) this._place(p, a, time);
+    const list = this.list;
+    for (let i = 0; i < list.length; i++) if (list[i].alive) this._place(list[i], a, time);
   }
 
   /** Remove every projectile (level unload, cutscene start). No onEnd callbacks. */

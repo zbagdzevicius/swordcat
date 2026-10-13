@@ -71,13 +71,18 @@ const WARM_DEFAULTS = {
   // ART §5.4 hulls per QUALITY.outline: enemies 1.6 px, bosses 2.4 px; ≤ `maxEngaged` engaged enemies nearest-first on
   // Med; the hull fades in over `fadeIn` s; checked at `hz`
   outline: { px: 1.6, bossPx: 2.4, maxEngaged: 4, fadeIn: 0.2, hz: 4, engagedR: 14 },
+  // PERF §1.2 triangle budget (lod.js): skinned bodies draw an index-simplified LOD (~`ratio` of the triangles within
+  // `error` of the extent) on Low, and on Med / High beyond `far` m from the iso focus (± `hyst`) or in activity
+  // tier ≥ 1; re-picked at `hz`. Outline hulls are simplified to `hullRatio`.
+  lod: { far: 10, hyst: 0.75, ratio: 0.38, error: 0.025, hz: 4, hullRatio: 0.4 },
   // PERF §3.4 visual pool: prefill max(waveSize) per type under the veil (capped), pool sizes per type
   pool: { maxPerType: 8, prefillCap: 6 },
   // AUTOCAM §6.6 orbit penalty fallbacks (CAMERA.iso.framing.orbitPenalty wins): tokenless orbit slots scored by how
   // far down-screen past `free` m they sit, `k` per metre; `probe` candidate slots each side
   orbit: { k: 1.5, free: 3.0, probe: 2 },
-  // ART §2.6 / §7.1: no near-black silhouettes — Cacklejaw's shadow clones and Barkus's cape are plum ink
-  boss: { cloneTint: '#4A3A5E', barkusCape: '#4A3A5E' },
+  // ART §2.6 / §7.1: no near-black silhouettes. WA §3.1: Cacklejaw's P3 clones are playful light-lilac copies (marching
+  // sparkle rim + wobble, his face kept, confetti pop); Barkus's cape stays plum ink
+  boss: { cloneTint: '#B7A2E0', cloneSparkle: '#FFF1C4', cloneWobble: 0.06, cloneWobbleHz: 2.2, barkusCape: '#4A3A5E' },
 };
 const WOVR = ENEMY_TUNING.warm ?? {};
 /** Warm-adventure / perf / auto-camera tuning (see WARM_DEFAULTS). */

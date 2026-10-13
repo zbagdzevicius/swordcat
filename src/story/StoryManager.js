@@ -26,14 +26,14 @@ import { E } from '../core/events.js';
 import { LEVEL_IDS, FADE_COLOR } from '../core/config.js';
 import { Cutscene } from './Cutscene.js';
 import { Overlay } from './Overlay.js';
-import { Tutorial, PRACTICE, setTimeoutish } from './tutorial.js';
+import { Tutorial, PRACTICE, TUTORIAL_STEPS, setTimeoutish } from './tutorial.js';
 import { BarkDirector } from './dialogue/barks.js';
 import { EAGER, LAZY, SCENE_LEVEL, ALIASES, placeholderScene, loadScene } from './cutscenes/registry.js';
 import { BARN, levelChest } from './cutscenes/cs01b.js';
 import { buildSunPatch } from './cutscenes/rig.js';
 import { G01_STATUE } from './cutscenes/g01.js';
 import { t as tr, text as textOf } from './strings.js';
-import { currentQuest, nextLevel, levelCards, entrySpawn } from './quests.js';
+import { currentQuest, bossQuest, nextLevel, levelCards, entrySpawn } from './quests.js';
 import { hubLine } from './dialogue/hub.js';
 import { aliveEnemies, levelResults } from './cutscenes/cast.js';
 
@@ -60,6 +60,15 @@ export const PREROLL = Object.freeze({ maxAlive: 2, maxWait: 10 });
 export const PROLOGUE = Object.freeze({ chartR: PRACTICE.chartR, chestR: 2.2, g01: Object.freeze([0, -61]), g01R: 2.5, sparkleEvery: 1.6, bellSay: 3.0, pathStep: 0.3 });
 /** Mochi cheers from his carrier when a foe within this many metres of it is bonked (WA §8.4), at most every `gap` s. */
 export const MOCHI_CHEER = Object.freeze({ r: 16, gap: 2.0, n: 3 });
+/** The prologue director runs every this many seconds of play. */
+export const PROLOGUE_TICK = 0.1;
+/**
+ * The Suit Up guide (after CS-02 nothing else names the barn): `delay` s into the suit stage (after the cream fade)
+ * Clem's own bubble says "First... armour." with the quest line and the ghost paw on the barn chest, and a trail of
+ * `trail` gold sparkles runs from her to the chest, `trailStep` s apart; the trail repeats every `every` s while she is
+ * still `farR` m or more from the chest.
+ */
+export const BARN_GUIDE = Object.freeze({ delay: 0.6, trail: 6, trailStep: 0.18, every: 7, farR: 5, idleDemo: 4 });
 
 /**
  * Map pre-Phase-W prologue flags onto the new order (play first; WA §6.2). Old: CS-01 (night barn) set
@@ -273,6 +282,13 @@ export class StoryManager {
     this._raidAsked = false;
     this._cheer = { t: 0, n: 0 };
     this._directorT = 0;
+    /** the boss whose fight is on (`boss:start` id): the objective pill names it until it is beaten / gone */
+    this.bossId = null;
+    /** the story step under a boss row (quest:update `done` follows the steps, not the boss row) */
+    this._step = null;
+    /** Suit Up guide state: seconds in the suit stage, shown, seconds to the next sparkle trail */
+    this._barnGuide = { t: 0, on: false, trailT: 0 };
+    this._chartTrailT = 0;          // s to the next height-chart sparkle trail (stage 'chart')
   }
 
   // ------------------------------------------------------------------ contract
@@ -289,7 +305,9 @@ export class StoryManager {
     this.cinema.init();
     this.tutorial.init();
     this.barks.init();
-    on(E.BOSS_DEFEATED, (p) => { const id = BOSS_SCENES[String(p?.id ?? '').replace(/^boss_/, '')]; if (id) this.play(id); });
+    on(E.BOSS_DEFEATED, (p) => { this._bossQuest(null); const id = BOSS_SCENES[String(p?.id ?? '').replace(/^boss_/, '')]; if (id) this.play(id); });
+    on(E.BOSS_START, (p) => this._bossQuest(p?.id ?? p?.boss?.def?.id ?? 'boss'));
+    on(E.CUTSCENE_START, (p) => { if (p?.id === 'cs01b') this._barnGuideOff(); });
     on(E.OBJECTIVE, (p) => this._onObjective(p));
     on(E.ARENA_CLEAR, (p) => { if (p?.id === 'bakery') this._beat('d03', 'town.marmalade', 'town'); });
     on(E.ITEM_RETURNED, (p) => this._onReturned(p));
@@ -302,7 +320,11 @@ export class StoryManager {
     on(E.PLAYER_SPAWNED, () => this._beltLetter());
     on(E.PROMPT, (p) => this.cinema.prompt(p));
     on(E.LEVEL_LOADED, (p) => this._onLevelLoaded(p));
-    on(E.LEVEL_LOADING, (p) => { this.barks.clear(); this.barnSet(false); this._prefetch(p?.id); });
+    on(E.LEVEL_LOADING, (p) => {
+      this.barks.clear(); this.barnSet(false); this._barnGuideOff();
+      this.bossId = null; if (this.quest?.boss) this.quest = null;
+      this._prefetch(p?.id);
+    });
     on(E.ENEMY_DIED, (p) => this._mochiCheer(p));
     // ?test: smoke blocks start any scene at any time, so every lazy scene is loaded up front there
     if (ctx.params?.test) for (const id of Object.keys(LAZY)) this._prefetchOne(id);
@@ -628,11 +650,16 @@ export class StoryManager {
 
   /**
    * P8 (ON §4.2): practice is over. The Sunbell rings far away, Pearl says "The bell! It's measuring time! Come ON!"
-   * and runs ahead to the height chart along a little trail of sparkles; CS-01 plays when Clem reaches it.
+   * and runs ahead to the height chart along a little trail of sparkles; CS-01 plays when Clem reaches it. Until then
+   * the director repeats a sparkle trail from Clem to the chart every BARN_GUIDE.every s while she is far from it.
+   * @param {{ dots?: { n: number, of: number, half?: boolean } }} [o] `dots`: the paw dots to show (the lessons really
+   *   done when practice was skipped; all of them by default)
    */
-  toChart() {
+  toChart({ dots = null } = {}) {
     const ctx = this.ctx;
-    ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: PRACTICE.chartPath.length, progress: 1, done: false, speaker: 'pearl', say: 'pearl.bell', stepDots: { n: 7, of: 7, half: false } });
+    const stepDots = dots ? { n: dots.n, of: dots.of, half: false } : { n: TUTORIAL_STEPS.length, of: TUTORIAL_STEPS.length, half: false };
+    ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: PRACTICE.chartPath.length, progress: 1, done: false, speaker: 'pearl', say: 'pearl.bell', stepDots });
+    this._chartTrailT = BARN_GUIDE.every;                            // the one-shot path trail below covers the first beat
     setTimeoutish(ctx, PROLOGUE.bellSay, () => ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: 0, progress: 1, done: true, speaker: 'pearl' }));
     try { ctx.audio?.bell?.({ strikes: 1, volume: 0.55 }); } catch { /* audio optional */ }
     const pearl = (ctx.companions?.actors ?? []).find?.((a) => a?.npcId === 'pearl') ?? null;
@@ -680,16 +707,76 @@ export class StoryManager {
     const ctx = this.ctx, p = ctx.player, st = ctx.state;
     if (!p || this.levelId !== 'meadow' || this.current || this._loading.size || this.queue.length) return;
     if ((this._directorT -= dt) > 0) return;
-    this._directorT = 0.1;
+    this._directorT = PROLOGUE_TICK;
     const stage = prologueStage(st), near = (xz, r) => Math.hypot(p.pos.x - xz[0], p.pos.z - xz[1]) <= r;
-    if (stage === 'chart') { if (near(PRACTICE.chart, PROLOGUE.chartR) || near([PRACTICE.chart[0], PRACTICE.chart[1] + 1.3], PROLOGUE.chartR)) this.play('cs01'); }
+    if (stage === 'chart') {
+      if (near(PRACTICE.chart, PROLOGUE.chartR) || near([PRACTICE.chart[0], PRACTICE.chart[1] + 1.3], PROLOGUE.chartR)) this.play('cs01');
+      else this._chartGuideTick(PROLOGUE_TICK);
+    }
     else if (stage === 'raid') { if (!this._raidAsked) { this._raidAsked = true; this.play('cs02'); } }
     else if (stage === 'suit') {
       this.barnSet(true);
+      this._barnGuideTick(PROLOGUE_TICK);
       if (!levelChest(ctx) && near(BARN.chest, PROLOGUE.chestR)) this.play('cs01b');
     } else if (stage === 'done') {
       if (!this.seen('g01') && near(PROLOGUE.g01, PROLOGUE.g01R) && p.pos.z < G01_STATUE[1]) this.play('g01');
     }
+  }
+
+  /**
+   * The Suit Up guide (the director calls it every PROLOGUE_TICK s in the suit stage): after BARN_GUIDE.delay, Clem's
+   * bubble ("First... armour." + "Borrow armour from the barn!", the ghost paw on the chest), then a gold sparkle trail
+   * from her to the chest every BARN_GUIDE.every s while she is still far from it.
+   */
+  _barnGuideTick(dt) {
+    const ctx = this.ctx, G = this._barnGuide, p = ctx.player;
+    G.t += dt;
+    if (G.t < BARN_GUIDE.delay || !p) return;
+    const [x, z] = BARN.chest;
+    if (!G.on) {
+      G.on = true; G.trailT = 0;
+      const y = ctx.physics?.heightAt?.(x, z) ?? p.pos.y;
+      ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'barn', action: null, hold: 0, textKey: 'quest.prologue.suit', step: 'barn', total: 0, progress: 0, done: false,
+        speaker: 'swordcat', say: 'cs02.7', demo: 'tap', target: [x, y + 0.4, z], idleDemo: BARN_GUIDE.idleDemo });
+    }
+    if ((G.trailT -= dt) > 0) return;
+    G.trailT = BARN_GUIDE.every;
+    if (Math.hypot(p.pos.x - x, p.pos.z - z) < BARN_GUIDE.farR) return;
+    this._sparkleTrail(p.pos.x, p.pos.z, x, z, BARN_GUIDE.trail, BARN_GUIDE.trailStep);
+  }
+
+  /**
+   * The height-chart guide (stage 'chart', until CS-01 starts): every BARN_GUIDE.every s a gold sparkle trail runs
+   * from Clem to the chart while she is farther than BARN_GUIDE.farR from it (the barn guide's trail, same cadence).
+   */
+  _chartGuideTick(dt) {
+    const p = this.ctx.player;
+    if (!p || (this._chartTrailT -= dt) > 0) return;
+    this._chartTrailT = BARN_GUIDE.every;
+    const [x, z] = PRACTICE.chart;
+    if (Math.hypot(p.pos.x - x, p.pos.z - z) < BARN_GUIDE.farR) return;
+    this._sparkleTrail(p.pos.x, p.pos.z, x, z, BARN_GUIDE.trail, BARN_GUIDE.trailStep);
+  }
+
+  /** Hide the Suit Up guide bubble (CS-01b starts, a level load). Idempotent. */
+  _barnGuideOff() {
+    const G = this._barnGuide;
+    if (G.on) this.ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'barn', action: null, hold: 0, textKey: null, step: 'barn', total: 0, progress: 1, done: true, speaker: 'swordcat' });
+    G.on = false; G.t = 0; G.trailT = 0;
+  }
+
+  /** `n` gold sparkles from (x0, z0) to (x1, z1), one every `step` s (the "this way" trail; fx bursts only). */
+  _sparkleTrail(x0, z0, x1, z1, n, step) {
+    const ctx = this.ctx;
+    for (let i = 1; i <= n; i++) {
+      const f = i / n, x = x0 + (x1 - x0) * f, z = z0 + (z1 - z0) * f;
+      setTimeoutish(ctx, i * step, () => {
+        const y = ctx.physics?.heightAt?.(x, z) ?? ctx.player?.pos?.y ?? 0;
+        try { ctx.fx?.burst?.('sparkle', { x, y: y + 0.25, z }, { count: 5, color: '#FFD57A' }); } catch { /* fx optional */ }
+      });
+    }
+    // requests/fx.md: a soft ground arrow toward the goal, once fx has one
+    try { ctx.fx?.guideArrow?.({ x: x0, z: z0 }, { x: x1, z: z1 }, { dur: n * step + 1.5 }); } catch { /* fx optional */ }
   }
 
   /** Mochi cheers each bonk at his cart from inside the carrier (WA §8.4 `bark.mochi.cheer.*`). */
@@ -793,14 +880,27 @@ export class StoryManager {
     try { p.prop('letter@belt', on); } catch (e) { console.warn('[story] belt letter failed', e); }
   }
 
-  /** quest:update when the current quest step changes (`force`: re-announce, e.g. after a load). */
+  /**
+   * quest:update when the row on screen changes (`force`: re-announce, e.g. after a load). While a boss is up the row
+   * is the boss goal (bossQuest); `done` is still sent for every story step that finishes, boss or not.
+   */
   _questTick(force = false) {
-    const q = currentQuest(this.ctx.state, this.levelId);
+    const step = currentQuest(this.ctx.state, this.levelId);
+    const prevStep = this._step;
+    this._step = step;
+    if (prevStep && prevStep.id !== step.id) this.ctx.bus.emit(E.QUEST_UPDATE, { questId: prevStep.id, state: 'done', text: prevStep.text });
+    const q = this.bossId ? bossQuest(this.bossId) : step;
     if (!force && this.quest?.id === q.id) return;
-    const prev = this.quest;
     this.quest = q;
-    if (prev && prev.id !== q.id) this.ctx.bus.emit(E.QUEST_UPDATE, { questId: prev.id, state: 'done', text: prev.text });
     this.ctx.bus.emit(E.QUEST_UPDATE, { questId: q.id, state: q.id === 'done' ? 'done' : 'active', text: q.text, textKey: q.textKey });
+  }
+
+  /** A boss fight starts (`id`) or ends (null): the objective pill shows the boss goal meanwhile. */
+  _bossQuest(id) {
+    const next = id ? String(id).replace(/^boss_/, '') : null;
+    if (next === this.bossId) return;
+    this.bossId = next;
+    this._questTick(true);
   }
 
   /** Quest Board data (§14.3) for ui / world: level cards, the next level and its entry spawn. */
@@ -838,6 +938,8 @@ export class StoryManager {
   update(dt) {
     const ctx = this.ctx, mode = ctx.game?.mode;
     const cs = this.current;
+    // a boss that left without boss:defeated (an arena reset after a lost life, a despawn): back to the story step
+    if (this.bossId && !cs) { const b = ctx.enemies?.boss; if (!b || b.alive === false) this._bossQuest(null); }
     if (cs) {
       this._skipHold(dt, cs);
       if (this.current === cs) cs.update(dt);

@@ -148,9 +148,9 @@ export class DamageNumbers {
     try {
       if (typeof FontFace === 'undefined' || !document.fonts) return;
       for (const f of document.fonts) if (/fredoka/i.test(f.family)) return;
-      const url = this.ctx.assets?.url?.('fonts/Fredoka-Variable.ttf');
+      const url = this.ctx.assets?.url?.('fonts/Fredoka-Latin.woff2');            // ui's PERF I2 subset (same file, cached)
       if (!url) return;
-      const face = new FontFace('SwordcatFredoka', `url(${url})`, { weight: '300 700' });
+      const face = new FontFace('Fredoka', `url("${url}") format("woff2")`, { weight: '300 700', display: 'swap' });
       face.load().then((f) => document.fonts.add(f)).catch((e) => console.warn('[fx] damage-number font', e?.message ?? e));
     } catch (e) { console.warn('[fx] damage-number font', e?.message ?? e); }
   }
@@ -214,16 +214,16 @@ export class DamageNumbers {
    * WA §5.3 a word over her head (`id` a WORDS key or literal text): at most one per 0.25 s; nothing when
    * settings.hitWords is false. Returns true when shown.
    */
-  word(id, pos) {
+  word(id, pos, opts = null) {
     if (this.ctx.state?.settings?.hitWords === false) return false;
     const now = this._now();
-    if (now - this._wordAt < DAMAGE_STYLE.word.every) return false;
-    const text = this._str(`word.${id}`) ?? WORDS[id] ?? String(id);
+    if (!opts?.force && now - this._wordAt < DAMAGE_STYLE.word.every) return false;
+    const text = opts?.text ?? this._str(`word.${id}`) ?? WORDS[id] ?? String(id);
     if (!text) return false;
     this._wordAt = now;
     this.shown++; this.words++;
     const n = this._take();
-    n.pos.copy(pos); n.pos.y += DAMAGE_FX.wordLift;
+    n.pos.copy(pos); if (!opts?.lifted) n.pos.y += DAMAGE_FX.wordLift;
     n.t = 0; n.kind = 'word'; n.active = true; n.key = null; n.style = 'word'; n.life = DAMAGE_FX.wordLife; n.dx = 0; n.rise = 0.35;
     n.size = DAMAGE_STYLE.word.size; n.value = NaN; n.bump = 0;
     this._paint(n, text, 'word');

@@ -202,7 +202,7 @@ export default [
           found: !!(cj && pf && h1 && h2), scripted: [cj, pf, h1, h2].every((e) => e.scripted && !e.hurtable),
           plates: [cj.plateWord, pf.plateWord, h1.plateWord, h2.plateWord], heads: [cj, pf, h1, h2].every((e) => !!e.head),
           cage: [!!h1.extraProps.cage, h1.cageWho, !!h2.extraProps.cage, h2.cageWho], props: [!!pf.extraProps.signpost, !!pf.extraProps.post_bag],
-          hat: !!cj.model?.scene.getObjectByName('Barbarian_Hat')?.visible,
+          hat: !cj.model?.scene.getObjectByName('Barbarian_Hat')?.visible && cj.helmet?.name === 'chief_crown' && !!cj.helmet.parent,
         };
       });
       t.log(`cast: plates ${info.plates.join(' / ')}, cages ${info.cage.join(' ')}, pilfer props ${info.props}, cacklejaw hat ${info.hat}`);
@@ -212,7 +212,7 @@ export default [
       t.assert(info.plates[0] === 'HATER-IN-CHIEF' && info.plates[1] === 'POST STEALER' && info.plates[3] === 'GRUMBLER', `plates ${info.plates}`);
       t.assert(info.cage[0] && info.cage[1] === 'pearl' && info.cage[2], 'caged hyenas (Pearl + a squire)');
       t.assert(info.props[0] && info.props[1], 'Pilfer holds the signpost and the post bag');
-      t.assert(info.hat, 'Cacklejaw keeps Barbarian_Hat (hides the chipped ear, §11.3)');
+      t.assert(info.hat, 'Cacklejaw wears the feather crown, not Barbarian_Hat (WA §3.1)');
       // the two files walk the lane at 1.6 m/s (scripted moveTo) while Cacklejaw laughs
       const w0 = await t.G(() => {
         const ctx = window.__GAME__.ctx, e = ctx.actors.get('hyena_2'), p = ctx.player.pos;
@@ -649,7 +649,7 @@ export default [
       t.assert(stolen, 'it steals (item:stolen)');
       const s1 = await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); return { fish: g.ctx.state.fish, loot: e?.loot, state: e?.stateName }; }, id);
       t.log(`after the snatch: fish ${s1.fish}, loot ${JSON.stringify(s1.loot)}, state ${s1.state}`);
-      t.assert(s1.fish === 90 && s1.loot?.amount === 10 && s1.state === 'getaway', '10% of 100 fish, then the getaway');
+      t.assert(s1.fish >= 90 && s1.fish <= 91 && s1.loot?.amount === 10 && s1.state === 'getaway', `10% of 100 fish, then the getaway (fish ${s1.fish}: a magnet fish may land meanwhile)`);
       await t.G((rid) => { const g = window.__GAME__, ctx = g.ctx, e = ctx.enemies.list.find((x) => x.id === rid); e.invulnT = 0; ctx.combat.applyHit(ctx.player, e, { ...ctx.config.ATTACKS.slash1, dmg: 1 }); }, id);
       t.assert((await t.events()).includes('item:returned'), 'a hit returns the post (item:returned)');
       await t.G((rid) => { const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid); g.ctx.game.setTimeScale(0); return g.__en.frame(e, [1.6, 1.6, 2.6], [0, 0.3, 0.6], 50); }, id);
@@ -900,6 +900,13 @@ export default [
     name: 'enemies:onscreen-rule', order: 57, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
       await prepare(t);
+      // Chapter 1 state, loaded by the block itself: with the boot (prologue) flags the Phase W prologue director may
+      // send her to the practice field, a level load that landed mid-test and replaced our crossbowman
+      await t.G(() => { const s = window.__GAME__.ctx.state; for (const k of ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid', 'prologue.armour', 'prologue.tutorial', 'prologue.done', 'tut.done']) s.setFlag(k, true); });
+      await t.loadLevel('meadow', 'start');
+      await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+      await t.page.waitForFunction(() => !window.__GAME__.ctx.levels.loading, null, { timeout: 60000, polling: 100 }).catch(() => {});
+      await t.frames(30);
       await t.G(() => window.__GAME__.ctx.cam.mode('follow', { blend: 0 }));
       await t.frames(6);
       const ax = await t.G(SCREEN_AXES);
@@ -920,6 +927,8 @@ export default [
       }, id);
       t.assert(off.on === false && off.d > 9, `the crossbowman is off screen and > 9 m (on ${off.on}, ${off.d.toFixed(1)} m)`);
       await t.wait(3500);
+      const gone = await t.G((rid) => { const g = window.__GAME__; return g.ctx.enemies.list.some((x) => x.id === rid) ? null : { ev: [...g.events].filter((x) => /enemy|despawn|died|level/.test(x)).slice(-10), n: g.ctx.enemies.list.length, mode: g.mode }; }, id);
+      if (gone) { t.fail(`the crossbowman vanished: ${JSON.stringify(gone)}`); return; }
       const held = await t.G((rid) => {
         const g = window.__GAME__, e = g.ctx.enemies.list.find((x) => x.id === rid);
         return { state: e.stateName, hold: !!e.holdFire, aims: g.__en.tele.filter((x) => x.actor === e && x.kind === 'aim').length,
@@ -938,7 +947,7 @@ export default [
         for (let k = 0; k <= 30; k++) {
           const a = (k / 30) * 1.4, ux = -d[0] * Math.cos(a) + r[0] * Math.sin(a), uz = -d[1] * Math.cos(a) + r[1] * Math.sin(a);
           const x = p[0] + ux * 9.6, z = p[1] + uz * 9.6, y = ctx.physics.heightAt(x, z);
-          if (ctx.cam.onScreen({ x, y: y + e.height * 0.5, z }, 1.0)) {
+          if (ctx.cam.onScreen({ x, y: y + e.height * 0.5, z }, 0.5)) {   // margin 0.5 m (Chapter 1's lane framing sits a little tighter)
             e.pos.set(x, y, z); e.facing = Math.atan2(-ux, -uz); e.snap?.();
             return { x, z, a };
           }
@@ -1171,6 +1180,33 @@ export default [
           await ctxM.close().catch(() => {});
         }
       }
+    },
+  },
+  {
+    // PERF §1.2 triangle budget: skinned bodies draw their simplified LOD on Low and beyond WARM.lod.far on Med; the
+    // finding's case (6 spawned rats in the meadow, one of them far) fits the scene triangle budget; the LOD shot is checked by eye (tests/shots/enemies/lod-*.png)
+    name: 'enemies:lod', order: 59, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      await prepare(t);
+      const q0 = await t.G(() => window.__GAME__.ctx.postfx?.qualityName ?? 'auto');
+      for (const [q, budget] of [['low', 80000], ['med', 150000]]) {
+        await t.G((n) => window.__GAME__.quality(n), q);
+        await t.loadLevel('meadow', 'start');
+        await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.skipDialog?.(); g.setMode('play'); g.god(true); });
+        await t.G(() => { const g = window.__GAME__, p = g.ctx.player.pos;
+          for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; g.spawn(i % 3 ? 'rat_pike' : 'rat_xbow', p.x + Math.cos(a) * 6, p.z + Math.sin(a) * 6); }
+          g.spawn('rat_pike', p.x + 3, p.z + 14); });
+        await waitLoaded(t);
+        await t.frames(90);
+        const r = await t.G(() => { const g = window.__GAME__, f = g.ctx.cam?.focus ?? g.ctx.player.pos;
+          return { tris: g.perf().sceneTris, rats: g.ctx.enemies.list.filter((e) => e.type.startsWith('rat_')).map((e) => ({ d: Math.hypot(e.pos.x - f.x, e.pos.z - f.z), lod: e.visual?.userData.lodOn === true })) }; });
+        t.log(`${q}: ${r.rats.length} rats, scene ${r.tris} tris (≤ ${budget}); LOD ${r.rats.map((x) => `${x.d.toFixed(1)}m:${x.lod ? 1 : 0}`).join(' ')}`);
+        if (q === 'low') t.assert(r.rats.every((x) => x.lod), 'Low: every rat draws its LOD');
+        else t.assert(r.rats.every((x) => (x.d <= 9.25 ? !x.lod : x.d >= 10.75 ? x.lod : true)), 'Med: full detail within WARM.lod.far (10 m ± 0.75), LOD beyond');
+        t.assert(r.tris <= budget, `${q}: 6 rats + meadow ${r.tris} tris ≤ ${budget}`);
+        await t.shot(`enemies/lod-${q}`);
+      }
+      await t.G((n) => window.__GAME__.quality(n), q0);
     },
   },
 ];

@@ -32,7 +32,7 @@ mobile cluster) is integrated. `npm run check` = build, then the unit tests, the
 npm install
 npm run dev            # http://localhost:5173/  (add ?debug for lil-gui + stats, ?test for hooks)
 npm run build          # dist/ (pruned assets)
-npm run test:unit      # node --test, ~700 tests
+npm run test:unit      # node --test, ~1030 tests
 npm run smoke          # Playwright smoke against vite preview :4173 (needs a build); screenshots → tests/shots/
 npm run check          # all three
 ```
@@ -66,7 +66,8 @@ rings, order markers and path dots. The desktop / pad ability bar sits at the bo
 
 ## Known issues
 - **Smoke run time:** the full smoke takes 45–50 minutes on Iris Xe; a few blocks are timing-sensitive under load (enemies:hyena waits up to 45 s for a gloat).
-- **Draw calls (§18, Med):** forest start 129, town 110, gate 92 scene calls; boss fights and the hub with all residents reach ~145–160 frame calls. Hero fur and actors are the bulk (characters' fur LOD helps; `QUALITY.med.furShells` is the remaining lever).
+- **Draw calls (PERF §5, Med):** start spawns draw 33–41 frame calls (meadow 41, forest 34, town 33, gate 36); fights, bosses
+  and the hub with every resident still reach ~100–110. The End column (≤ 35–75) needs the hero bake (H7) and resident LOD.
 - **Old Bridge clipping:** the bridge deck is only ~0.3 m above the meadow and the stream bed is −1.5 m. Teleport hooks have to use `physics.topAt` over deep water.
 - **Bundle:** `index` (game code) is ~1.5 MB minified and `three` ~0.82 MB (its own chunk); levels, lil-gui, stats and zzfx load lazily.
 - **Looks:** the gate deck bricks read a little dark in `gate_dusk` fog; CS-05's shard moment is still very bright (ref1 glow); the war-wagon kittens hop over the bars of the cart cage when it opens; Grizzlechop's Wheel Ride charge stops on her collider instead of passing through.
@@ -105,6 +106,54 @@ level triggers that dropped their scene while another one played, the CS-04 hand
 hat over his eyes, far lost kittens drawn through the fog (−40 draw calls in the forest), the web slow, the jeer duet
 radius, shop sounds / sparkle, double toasts. New `tests/smoke/flow.mjs` plays the whole M2 path through its real
 triggers: meadow exit → forest → town → hub shop + Quest Board → gate → The Line → B2 → CS-10 → the grey hub.
+
+## Phase W: warm adventure, performance, auto-camera (integrated 2026-10-12)
+Specs: research/next/WARM_ADVENTURE_SPEC.md, ART_WARM_SPEC.md, PERF_SPEC.md, AUTOCAM_SPEC.md, IMPLEMENTATION_PLAN.md
+(Phase W). Every area landed its tasks (see requests/RESOLVED.md, "Phase W integration"). Highlights: warm toon
+materials and cream/candy UI (Fredoka only), the lifted WA §2.3 presets, Morning Practice with Pearl → chart → CS-02
+(≤ 55 s) → barn → Chapter 1, Mochi's cart rescue (Bright Slash), bonk-to-befriend plates, celebrations / sticker book,
+comic words, glock reward sounds, lazy systems (title-first boot), batched decals / flames / grass, the AUTOCAM solver
+(SafeFrame, subjects, beats, rate caps, threat arrows).
+
+### Gate results (integrator run 2026-10-13, Med, 1280 × 720 unless noted)
+- `npm run test:unit`: **1033 / 1033**. `npm run build`: gated bundles within budget (three 181 KB gz / 215,
+  three-addons ≤ 30 after `meshopt_simplifier` moved back to its own lazy chunk, LevelKit ≤ 40, story ≤ 60, every
+  level ≤ 15, cutscenes ≤ 8); boot 215 KB gz / 140, play 450 / 300 and the jelly type 35 / 6 stay report-only.
+- Flow smoke (`flow:first-minute`, `flow:forest`, `flow:town`, `flow:gate`): green. Title tap → first move accepted
+  71–187 ms, control 15–53 ms; D-01 (Mochi's cart, WA16) at 78–95 s scripted game time (gate ≤ 450 s).
+- WA §2.3a `art:warm`: all 17 preset rows inside the luma / dark / black / fog-sat bands (meadow_day 0.59,
+  meadow_morning 0.58, forest_day 0.51, town_occupied 0.56, hub_gold 0.54, gate_dusk 0.53, bog_dusk 0.46,
+  keep_twilight 0.39, forest_twilight 0.37); no black pixels in any preset, dark ≤ 1.6 %.
+- PERF `perf:draws` (frame calls, Med, iso, start spawns; I1 ≤ 120, End ≈ 35–75): meadow 41 / 96k tris, forest 34 /
+  78k, town 33 / 91k, gate 36 / 56k (hero 11 calls each). `perf:programs`: Low 28–29 / 30, Med 32–33 / 40,
+  High 58–61 / 72.
+- `perf:frame` (built preview, ANGLE-GL, 60 Hz vsync): idle p50 16.7 / p99 18.5 ms, CPU 6.7 ms (sim 0.65, render
+  3.4, submit 2.6), GPU 8.1 ms; 8-rat fight p50 16.7 / p99 18.0 ms, CPU 7.3 ms, GPU 8.1 ms. `perf:boot` (preview):
+  first paint 1.2 s, title 3.1 s.
+- Onboarding: Morning Practice → chart → CS-02 (`STORY.cs02Cut`) → barn suit-up → Chapter 1 → Mochi, all through real
+  triggers on desktop; touch landscape + portrait covered by the controls blocks.
+- Screenshots: docs/screens/20–25 (practice field, auto-camera teamfight, Lantern Camp at night, hub gold, B2, phone
+  portrait fight); tests/shots/art/ (every preset), tests/shots/flow/ (whole M2 path).
+
+### Gaps (honest list)
+- **JS heap (PERF §5) FAILs:** meadow idle on Med holds 202 MB (built) / 257 MB (dev) vs the 120 MB budget
+  (`perf:frame` heap gate). Likely retained GLB / audio ArrayBuffers after upload; needs a heap profile (core / assets).
+- AUTOCAM quantitative targets reported, not gated: phone engaged-foe visibility (landscape ≈ 93–96 % vs 98 %; portrait
+  ≈ 67 % vs 92 %), portrait ground width 7.5 m vs 9 m (`minCatPxPortrait` 28 caps it: the spec's two numbers conflict),
+  lead-down feet 45 % vs 30–36 % (ground below her 5.2 m vs 5.5 m), teamfight fit 0.8–0.9 s wall clock vs 0.6 s,
+  rotate re-fit 0.8 s vs 0.45 s, single-frame step spikes on the phone page. Hidden telegraphs are always arrowed.
+- ART §11.1 G2 / G3 ceilings and G8 hero pop are WARN: the binding §2.6 grass / ground palettes put day frames at chroma
+  0.41–0.45 (band 0.16–0.26) and R − B 0.26–0.44 (band ≤ 0.16); hero chroma ≈ 0.95 × ground (target 1.3×). Needs an art
+  decision (soften ground saturation vs re-band).
+- Meadow day frame 185k triangles on Med (PERF End 150k); hero 11 draws / 18.6k tris (X10 9 / 16k) until the H7 bake.
+- Boot / play bundle gates report-only; E5 lazy enemy types, W12 p1/p2 tiers, P3 nav worker, hub cameos not built.
+- Squeakybone reassembly (`boneSqueak`) and squeakyLook wait for M3 content; world night body lift for enemies open.
+- The town hub with residents draws 111 frame calls / 504k tris on Med (companions:hub): inside I1 (120) but far over the
+  End column; resident LOD / bake needed before the End stage.
+- companions:bubble-edge failed once at a leaked 1920 × 1080 viewport (bubble bottom 1022 px under the bar top 981 px);
+  not reproduced at 1280 × 720 — worth a 1080p check by companions / ui.
+- Several AUTOCAM smoke numbers vary run to run on this loaded machine (teamfight reversals 2–4, boss two-shot
+  87–95 %, portrait herFrame 0–17 % frames out); they are gated loosely / reported until the PERF §14.4 idle baseline.
 
 ## Next: M3 (Acts III–IV, GAME_DESIGN §19.10)
 1. Build out `bog` and `keep` (and the CloudSea / finale pieces): objectives, rescues, letters, Heart Bells.

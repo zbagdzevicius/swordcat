@@ -45,8 +45,8 @@ export const RESCUES = Object.freeze({
     ['marmalade', [-23.2, -19.2], null, { appearOn: 'bakery', stay: true, talkR: 3.6, facing: Math.PI / 2, expression: 'surprised' }],
     // D-04 Tofu: the 3rd barrel of the 6-barrel stack in the Forge Yard (18,−14); Meow or a knock reveals him
     ['tofu', [18, -14], 'meow', { prop: 'barrel', stack: 6, leaveTo: [30, -10], facing: 0 }],
-    // D-04 Clover: the stocks at (10,14), free once the Square is clear (3 blows or E) → join
-    ['clover', [10, 14], 'cage', { cage: 'stocks', needClear: 'square', interact: true, hits: 3, play: 'd04clover', facing: Math.PI }],
+    // D-04 Clover: a WA20 kennel carrier at (10,14) (was the stocks: no pillory, no iron), free once the Square is clear (3 blows or E) → join
+    ['clover', [10, 14], 'cage', { cage: 'kennel', needClear: 'square', interact: true, hits: 3, play: 'd04clover', facing: Math.PI }],
   ],
   gate: [
     // D-06: the hyena war-wagon cage at (6,−80): Tater (host), Mittens and Pip inside; 3 blows open it

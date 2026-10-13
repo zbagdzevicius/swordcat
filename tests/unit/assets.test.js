@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as THREE from 'three';
 import { MODEL_FIT, LEVEL_IDS } from '../../src/core/config.js';
-import { fitToHeight, measure, resolveFit, extentOf, findNode } from '../../src/core/Assets.js';
+import { fitToHeight, measure, resolveFit, extentOf, findNode, Assets, usedResources, disposeGltf, releaseCpuOnUpload } from '../../src/core/Assets.js';
 import { normalizeAssetPath, normalizeManifest, levelAssets, TIERS } from '../../src/core/manifests.js';
 import { collectManifests, computeKeep, norm } from '../../scripts/prune-assets.mjs';
 
@@ -162,18 +162,110 @@ test('PERF §10.3 tier budgets: title <= 1.2 MB, p0 <= 4 MB per level, "*" p0 <=
 
 test('PERF §10.2 bundle guard: chunk groups summed and gated against their gzip budgets', async () => {
   const os = await import('node:os');
-  const { checkBundle, BUDGETS } = await import('../../scripts/bundle-budget.mjs');
+  const { checkBundle, graphGroups, BUDGETS } = await import('../../scripts/bundle-budget.mjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-bundle-'));
   fs.mkdirSync(path.join(dir, 'bundle'));
   const rnd = (n) => { let s = ''; let x = 1; for (let i = 0; i < n; i++) { x = (x * 48271) % 2147483647; s += String.fromCharCode(33 + (x % 90)); } return s; };
   fs.writeFileSync(path.join(dir, 'bundle', 'boot-abc.js'), rnd(1000));
   fs.writeFileSync(path.join(dir, 'bundle', 'meadow-abc.js'), rnd(40000));
-  fs.writeFileSync(path.join(dir, 'bundle', 'index-abc.js'), 'x');
-  const r = checkBundle(dir);
+  fs.writeFileSync(path.join(dir, 'bundle', 'debug-abc.js'), 'x');
+  let r = checkBundle(dir);   // no manifest: chunk names decide
   assert.ok(r.rows.find((x) => x.group === 'boot').ok);
   const lvl = r.rows.find((x) => x.group === 'level');
   assert.ok(lvl && !lvl.ok && lvl.gate, 'a 40 KB-random level chunk is over its 15 KB gz budget');
-  assert.equal(r.fail, true); assert.equal(r.unmatched.length, 1);
+  assert.equal(r.fail, true); assert.equal(r.unmatched.length, 1, 'lazy debug chunk is in no group');
   assert.ok(BUDGETS.find((b) => b.name === 'three').kb === 215);
+  // C16 chunk graph: boot = entry closure + boot systems; play = play systems minus boot; story = the rest of story
+  const systems = [{ key: 'ui', file: 'ui/UI.js', boot: true }, { key: 'player', file: 'player/Player.js', boot: false },
+    { key: 'story', file: 'story/StoryManager.js', boot: false }];
+  const manifest = {
+    'index.html': { file: 'bundle/index-1.js', isEntry: true, imports: ['_config.js'] },
+    '_config.js': { file: 'bundle/config-1.js' },
+    'src/ui/UI.js': { file: 'bundle/UI-1.js', imports: ['_config.js'] },
+    'src/player/Player.js': { file: 'bundle/Player-1.js', imports: ['_config.js', '_chars.js'] },
+    '_chars.js': { file: 'bundle/characters-1.js' },
+    'src/story/StoryManager.js': { file: 'bundle/StoryManager-1.js', imports: ['_chars.js', '_rig.js'] },
+    '_rig.js': { file: 'bundle/rig-1.js' },
+  };
+  const g = graphGroups(manifest, systems);
+  assert.deepEqual([...g.boot].sort(), ['UI-1.js', 'config-1.js', 'index-1.js']);
+  assert.deepEqual([...g.play].sort(), ['Player-1.js', 'characters-1.js']);
+  assert.deepEqual([...g.story].sort(), ['StoryManager-1.js', 'rig-1.js']);
+  fs.mkdirSync(path.join(dir, '.vite'));
+  fs.writeFileSync(path.join(dir, '.vite', 'manifest.json'), JSON.stringify({ 'index.html': { file: 'bundle/debug-abc.js', isEntry: true } }));
+  r = checkBundle(dir);       // with a manifest the graph decides: the entry is boot whatever its name
+  assert.ok(r.rows.find((x) => x.group === 'boot' && x.file === 'debug-abc.js'));
+  assert.ok(r.unmatched.some((u) => u.file === 'boot-abc.js'), 'a name alone no longer makes a chunk boot');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ------------------------------------------------------------------ PERF §5 heap: level-change cache release
+function fakeGltf(tag) {
+  const tex = new THREE.Texture(); tex.name = tag;
+  const mat = new THREE.MeshStandardMaterial({ map: tex });
+  const geo = new THREE.BoxGeometry();
+  const scene = new THREE.Group(); scene.add(new THREE.Mesh(geo, mat));
+  const n = { geo: 0, mat: 0, tex: 0 };
+  geo.addEventListener('dispose', () => n.geo++); mat.addEventListener('dispose', () => n.mat++); tex.addEventListener('dispose', () => n.tex++);
+  return { gltf: { scene, scenes: [scene], animations: [], parser: {} }, geo, mat, tex, n };
+}
+
+test('PERF §5 heap: usedResources collects geometry, materials and slot / uniform textures of a scene', () => {
+  const a = fakeGltf('a'), u = new THREE.Texture();
+  const sm = new THREE.ShaderMaterial({ uniforms: { uTex: { value: u } } });
+  const root = new THREE.Scene(); root.add(a.gltf.scene.clone(), new THREE.Mesh(new THREE.PlaneGeometry(), sm));
+  const used = usedResources(root);
+  assert.ok(used.geometries.has(a.geo) && used.materials.has(a.mat) && used.textures.has(a.tex) && used.textures.has(u));
+});
+
+test('PERF §5 heap: disposeGltf frees an unused glTF (GPU + parser) and keeps one the scene still draws', () => {
+  const a = fakeGltf('a');
+  assert.equal(disposeGltf(a.gltf, usedResources(new THREE.Scene())), true);
+  assert.deepEqual(a.n, { geo: 1, mat: 1, tex: 1 }); assert.equal(a.gltf.parser, null);
+  const b = fakeGltf('b'), root = new THREE.Scene(); root.add(b.gltf.scene.clone());   // clone shares geometry
+  assert.equal(disposeGltf(b.gltf, usedResources(root)), false, 'in use: stays cached');
+  assert.deepEqual(b.n, { geo: 0, mat: 0, tex: 0 });
+  // a shared texture survives when a live material still samples it
+  const c = fakeGltf('c'); const live = new THREE.Scene(); live.add(new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({ map: c.tex })));
+  assert.equal(disposeGltf(c.gltf, usedResources(live)), true);
+  assert.deepEqual(c.n, { geo: 1, mat: 1, tex: 0 });
+});
+
+test('PERF §5 heap: Assets.release drops settled, unlisted, unused gltf / tex entries; keeps pending and in-use ones', async () => {
+  const assets = new Assets({});
+  const a = fakeGltf('a'), b = fakeGltf('b');
+  const put = (key, v) => { assets.cache.set(key, Promise.resolve(v)); assets._values.set(key, v); };
+  put('gltf:models/a.glb', a.gltf); put('gltf:models/b.glb', b.gltf);
+  const t1 = new THREE.Texture(); let t1d = 0; t1.addEventListener('dispose', () => t1d++);
+  put('tex:textures/t1.png:true:false:true', t1);
+  put('bin:audio/x.ogg', new ArrayBuffer(8));
+  assets.cache.set('gltf:models/pending.glb', new Promise(() => {}));                  // still loading: untouched
+  const root = new THREE.Scene(); root.add(b.gltf.scene.clone());
+  const out = assets.release('meadow', root).sort();
+  assert.deepEqual(out, ['gltf:models/a.glb', 'tex:textures/t1.png:true:false:true']);
+  assert.ok(!assets.cache.has('gltf:models/a.glb') && assets.cache.has('gltf:models/b.glb'));
+  assert.ok(assets.cache.has('gltf:models/pending.glb') && assets.cache.has('bin:audio/x.ogg'));
+  assert.equal(a.n.geo, 1); assert.equal(t1d, 1); assert.equal(assets.stats.released, 2);
+});
+
+test('PERF §5 heap: the settled-value map follows _cached (loads record, failures do not)', async () => {
+  const assets = new Assets({});
+  const v = { scene: new THREE.Group() };
+  await assets._cached('gltf:ok.glb', async () => v);
+  await assets._cached('gltf:bad.glb', async () => { throw new Error('x'); }).catch(() => {});
+  assert.equal(assets._values.get('gltf:ok.glb'), v);
+  assert.ok(!assets._values.has('gltf:bad.glb') && !assets.cache.has('gltf:bad.glb'));
+});
+
+test('PERF §5 heap: releaseCpuOnUpload drops static non-position arrays after upload; skips skinned / keepCpu / dynamic', () => {
+  const g = new THREE.BoxGeometry(), m = new THREE.Mesh(g);
+  const dyn = new THREE.BoxGeometry(); dyn.attributes.normal.setUsage(THREE.DynamicDrawUsage);
+  const keep = new THREE.Mesh(new THREE.BoxGeometry()); keep.userData.keepCpu = true;
+  const root = new THREE.Group(); root.add(m, new THREE.Mesh(dyn), keep);
+  assert.equal(releaseCpuOnUpload(root), 2 + 1, 'box: normal + uv; dyn box: uv only');
+  assert.ok(g.boundingSphere && g.boundingBox, 'bounds computed before the arrays go');
+  g.attributes.normal.onUploadCallback(); g.attributes.position.onUploadCallback();
+  assert.equal(g.attributes.normal.array, null); assert.ok(g.attributes.position.array, 'positions kept for raycasts');
+  assert.ok(keep.geometry.attributes.normal.array);
+  assert.equal(releaseCpuOnUpload(root), 0, 'idempotent');
 });

@@ -8,8 +8,9 @@
 //   break  behind a cracked boulder: a Bright / Holy slash (ATTACKS[*].breaks 'cracked') nearby, or reveal()
 //   climb  in plain view, hard to reach (`y` = perch height above the ground)
 // Cage variants (M2): `hang` (Sage's treetop cage hangs on a rope at that height and is lowered by `lower()` when the
-// rope posts are cut: its `lowerOn` objective / flag, or our own `ropes` posts), `cage: 'stocks'` (Clover: freed by
-// 3 blows or E), `cageWith: <hostId>` (a guest sharing the host's cage: Tater / Mittens / Pip in the war-wagon).
+// rope posts are cut: its `lowerOn` objective / flag, or our own `ropes` posts), `cage: 'kennel'` (Clover: a WA20 kennel
+// carrier, freed by 3 blows or E; the legacy `'stocks'` maps to it: no pillory),
+// `cageWith: <hostId>` (a guest sharing the host's cage: Tater / Mittens / Pip in the war-wagon).
 // `appearOn: <arenaId>` keeps the kitten out of sight until that arena clears (Marmalade peeking out of the bakery).
 // Once visible a kitten waves and is rescued when she comes within 1.3 m: state.addKitten, kitten:rescued, its line
 // in a bubble, then it trots off home and poofs. Contract (§19.4): kittenId, hidden, reveal(), rescue().
@@ -29,7 +30,7 @@ import { KittenVisual } from './KittenVisual.js';
 import { TextSprite } from './Bubble.js';
 import { lineText } from './lines.js';
 import { COMPANION_IDS, SERVICE_IDS, SERVICE_FLAGS, SERVICE_SCENES, groundY, lodOrigin } from './steering.js';
-import { buildStocks, buildRopePost, buildRope, disposeDressing, buildCarrier } from './dressing.js';
+import { buildRopePost, buildRope, buildCarrier } from './dressing.js';
 import { CRACKED_LOCKS, TIPPED_CARTS } from './rescues.js';
 
 export const HIDES = Object.freeze(['meow', 'cage', 'stand', 'break', 'climb']);
@@ -216,7 +217,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     if (this.hide === 'meow' && HIDE_PROPS[o.prop]) this._loadProp(o.prop);
     if (this.hide === 'meow' && o.prop === 'barrel' && o.stack > 1) this._loadStack(Math.min(o.stack - 1, BARREL_STACK.length));
     if (this.visual) {
-      this.visual.setPose(this.hide === 'cage' && o.cage !== 'stocks' ? 'sit' : 'idle', 0);
+      this.visual.setPose(this.hide === 'cage' ? 'sit' : 'idle', 0);
       this.visual.setExpression(this.hide === 'cage' ? 'worried' : 'happy');
       if (this.hidden) this.visual.snapFade(0);
     }
@@ -326,7 +327,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     return true;
   }
 
-  /** E next to the stocks / cage frees the prisoner (when the lock is in play). Lives in the level's interactables. */
+  /** E next to the carrier frees the prisoner (when the lock is in play). Lives in the level's interactables. */
   _addInteract() {
     const list = this.ctx.levels?.current?.interactables;
     if (!Array.isArray(list)) return;
@@ -386,8 +387,8 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
   }
 
   _buildCage() {
-    const o = this.opts, style = this.hanging ? 'hanging' : o.cage ?? (this.companion ? 'cart' : 'carry');
-    if (style === 'stocks') return this._buildStocks();
+    const o = this.opts, asked = o.cage === 'stocks' ? 'kennel' : o.cage;           // WA20: the old town stocks are a kennel carrier
+    const style = this.hanging ? 'hanging' : asked ?? (this.companion ? 'cart' : 'carry');
     if (this.hanging) { this.perchY = o.hang; this.flying = true; }
     // A given perch height `y` means the level already built the surface the cage stands on (world's meadow places
     // `cart-high` at the Old Bridge and passes its bed height): then we add only the bars, not a second cart.
@@ -450,18 +451,6 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
 
   /** A KO in the cart fight: Mochi cheers in his carrier (party.js; ON §6.1). */
   cheer() { this.visual?.hop(0.18, 0.35); this.visual?.setExpression('happy'); this.visual?.emote('meow'); this.rattleT = 0.2; }
-
-  /** Clover's town stocks (§12.5): she stands behind the board; 3 blows or E lift it. */
-  _buildStocks() {
-    const o = this.opts, root = this._propRoot();
-    const neckY = Math.max(0.4, this.height * 0.68);
-    this.cage = buildStocks({ neckY });
-    this.cage.position.z = 0.16;                                 // the board in front of her chest
-    root.add(this.cage);
-    const sz = this.cage.userData.size;
-    this.cageSize = sz;
-    this.lock = new CageLock(this.ctx, this, { pos: this.home.clone(), facing: this.facing, radius: 0.55, height: sz[1], hits: o.hits ?? 3, hp: o.hp ?? null });
-  }
 
   /** The rat cage cart under a squire's cage (§12.3 Old Bridge): fitted GLB + a box collider for everyone but us. */
   async _loadCart() {
@@ -1011,8 +1000,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     }
     for (const c of this.stackColliders ?? []) { try { this.ctx.physics?.removeCollider?.(c); } catch { /* level gone */ } }
     this.stackColliders = null;
-    if (this.cage?.userData?.kind === 'stocks') disposeDressing(this.cage);
-    else if (this.cage) this.cage.traverse((c) => { if (c.isMesh) c.geometry?.dispose(); });
+    if (this.cage) this.cage.traverse((c) => { if (c.isMesh) c.geometry?.dispose(); });
     if (this.cartCollider) { try { this.ctx.physics?.removeCollider?.(this.cartCollider); } catch { /* level gone */ } this.cartCollider = null; }
     this.propRoot?.removeFromParent();
     this.visual?.dispose();

@@ -21,19 +21,20 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { E } from '../core/events.js';
 import { createRng } from '../core/rng.js';
 import { resolveFit } from '../core/Assets.js';
-import { ECONOMY } from '../core/config.js';
+import { ECONOMY, CAMERA } from '../core/config.js';
+import { ENV_PRESETS, resolvePreset, isoSunAz } from './Env.js';
 import { Level, condOk } from './Level.js';
-import { Terrain } from './Terrain.js';
-import { Grass, GRASS_COLORS } from './Grass.js';
-import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial, crownFraction, splitRoofTemplate, worldMaterial, matFor, applyInkRim, PROP_PAL, STONE_TINT } from './Props.js';
+import { Terrain, groundChunks } from './Terrain.js';
+import { Grass, GRASS_COLORS, mutedFlowers } from './Grass.js';
+import { PropBatch, templateFromObject, fitScale, trs, procTemplate, makeStoneMaterial, crownFraction, splitRoofTemplate, worldMaterial, worldStatic, matFor, applyInkRim, PROP_PAL } from './Props.js';
 import { depthFor } from '../core/depth.js';
-import { Bunting } from './Bunting.js';
+import { Bunting, BUNTING_ACCENT } from './Bunting.js';
 import { clutterAnchors, isClutter } from './isoView.js';
 export { procTemplate };
 import { PropActor, Critter } from './PropActor.js';
 import { Pickups } from './Pickups.js';
 import { Arena } from './Arena.js';
-import { VigilStone, VIGIL } from './VigilStone.js';
+import { VigilStone } from './VigilStone.js';
 import { WaterSet } from './Water.js';
 import { Silhouettes, makeGlowSprite, SILHOUETTE } from './Sky.js';
 import { distToPolyline, inBox, pointAlong, polylineLength } from './noise.js';
@@ -47,6 +48,53 @@ import { LightPool, Fireflies, paveRibbons } from './Dressing.js';
 export const OPEN_ZONE = Object.freeze({ safeLoadR: 17 });
 /** The flag that marks an open-fight zone cleared (pure). */
 export const openZoneFlag = (levelId, zoneId) => `${levelId}.cleared.${zoneId}`;
+
+/**
+ * ART G6 shadow probe derivation: a solid of at least `minH` m (collider span) within `near` m of the start spawn;
+ * the shade point sits in the middle of its cast shadow (`mid` × shadow length h / tan(elev), at least `gap` m beyond
+ * its down-sun edge; `sink` = the collider's below-ground part), the lit point beside it, `ext + litOff` m sideways.
+ */
+export const SHADOW_PROBE = Object.freeze({ near: 16, minH: 2.4, gap: 0.8, litOff: 3.5, mid: 0.45, sink: 0.6 });
+
+/** The sun elevation (rad) of a level def's default preset (pure). */
+export function levelSunElev(def) {
+  const env = def?.env;
+  return ENV_PRESETS[resolvePreset(typeof env === 'string' ? env : env?.default ?? 'meadow_day')]?.sunElev ?? Math.PI / 4;
+}
+
+/** The iso sun azimuth of a level def's default preset (level yaw + ISO_SUN day / night; pure). */
+export function levelSunAz(def) {
+  const env = def?.env, name = resolvePreset(typeof env === 'string' ? env : env?.default ?? 'meadow_day');
+  const yaw = Number.isFinite(def?.cam?.yaw) ? def.cam.yaw : (CAMERA.iso?.yaw ?? Math.PI);
+  return isoSunAz(yaw, (ENV_PRESETS[name]?.hero ?? 0) >= 0.99);
+}
+
+/**
+ * Derive `{ lit: [x, z], shade: [x, z] }` from the level's colliders (pure): the nearest tall solid (trees' thin
+ * trunk colliders are skipped: their crown shadow is offset) to `start`; null when none is near.
+ * @param {{circles: any[], boxes: any[]}} colliders @param {{x:number, z:number}|undefined} start @param {number} sunAz
+ */
+export function autoShadowProbe(colliders, start, sunAz, sunElev = Math.PI / 4) {
+  if (!start || !colliders) return null;
+  const P = SHADOW_PROBE, sx = Math.sin(sunAz), sz = Math.cos(sunAz);
+  let best = null, bd = Infinity;
+  for (const list of [colliders.circles ?? [], colliders.boxes ?? []]) {
+    for (const c of list) {
+      if (!Number.isFinite(c.x) || !Number.isFinite(c.z) || (c.camFade && c.r != null)) continue;
+      if ((c.y1 ?? 0) - (c.y0 ?? 0) < P.minH) continue;
+      const d = Math.hypot(c.x - start.x, c.z - start.z);
+      if (d <= P.near && d < bd) { bd = d; best = c; }
+    }
+  }
+  if (!best) return null;
+  const ext = best.r ?? Math.max(best.hx ?? 0, best.hz ?? 0);
+  const r2 = (v) => Math.round(v * 100) / 100;
+  // the lit point sits beside the shade point (same distance from the solid, so the same kind of ground), stepped
+  // sideways out of the shadow's width
+  const h = (best.y1 ?? 0) - (best.y0 ?? 0) - P.sink, off = Math.max(P.gap, P.mid * h / Math.tan(Math.max(0.1, sunElev)));
+  const hx = best.x - sx * (ext + off), hz = best.z - sz * (ext + off), side = ext + P.litOff;
+  return { lit: [r2(hx + sz * side), r2(hz - sx * side)], shade: [r2(hx), r2(hz)] };
+}
 
 export const KIT_MODELS = {
   // LI W10: every Vigil Stone is a waystone (a sandstone standing stone + a paper lantern on a crook + a pink ribbon),
@@ -76,6 +124,7 @@ const BIOME = {
 /** LI W10 waystone look (paper lantern on a crook, pink ribbon) and its trodden paint. */
 export const WAYSTONE = Object.freeze({ h: 1.3, tint: '#E3CFAE', paper: '#FFF0D6', cap: '#E0794F', ribbon: '#FF8FB1', crook: '#7E4E2A', paint: '#D8C49A' });
 /** WA §3.5 / LI W20 arena stage floor: path lifted +8 % L, weight 0.35, soft 3 m, out to r + pad, grass density × 0.4. */
+const _hsl = { h: 0, s: 0, l: 0 };
 export const STAGE = Object.freeze({ lift: 0.08, weight: 0.35, soft: 3, pad: 1, grass: 0.4 });
 /** WA §2.8 cutscene clouds (the 'far' group only; 0 iso draws): count, ring radius and height bands, size, fog lerp. */
 export const CLOUDS = Object.freeze({ n: 5, r: [120, 190], y: [38, 60], scale: [14, 24], toFog: 0.25 });
@@ -128,34 +177,17 @@ export function posedScene(gltf, clip, t = 0.5) {
   return scene;
 }
 
-/** Tree material: vertex colours + gentle canopy sway (world-space, per instance phase). */
+/**
+ * Tree material: vertex colours + gentle canopy sway (world-space, per instance phase) and dark-inside / light-top
+ * canopy shading. PERF §1.2: the world-static patch's tree feature (`uTreeH` > 0; `uTime` / `uWind` shared), so the
+ * trees share one program with the instanced chunky props.
+ * @param {{ uTime: {value: number}, uWind: {value: number}, uTreeH: {value: number} }} uniforms
+ */
 export function makeTreeMaterial(uniforms) {
   // ART §4.2 / §8.3: Lambert + the toon patch; canopies shade dark (bottom / inside) → light (top) by the normal
   const m = worldMaterial();
-  m.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, uniforms);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vUpK;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.86, 1.12, vUpK);');
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime, uWind, uTreeH;\nvarying float vUpK;')
-      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvUpK = clamp(objectNormal.y * 0.5 + 0.5, 0.0, 1.0);')
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-{
-  #ifdef USE_INSTANCING
-    vec3 tOrg = instanceMatrix[3].xyz;
-  #else
-    vec3 tOrg = vec3(0.0);
-  #endif
-  float th = clamp(transformed.y / max(uTreeH, 0.001), 0.0, 1.0);
-  float sw = smoothstep(0.35, 1.0, th);
-  float ph = tOrg.x * 0.37 + tOrg.z * 0.23;
-  float k = sw * (0.012 + 0.018 * uWind) * uTreeH;
-  transformed.x += (sin(uTime * 0.9 + ph) + 0.4 * sin(uTime * 2.3 + ph * 1.7)) * k;
-  transformed.z += (cos(uTime * 0.7 + ph * 1.3) * 0.6) * k;
-}`);
-  };
-  m.customProgramCacheKey = () => 'world-tree-v2';
+  const u = worldStatic(m);
+  u.uTime = uniforms.uTime; u.uWind = uniforms.uWind; u.uTreeH = uniforms.uTreeH;
   m.userData.owned = true;
   return m;
 }
@@ -205,6 +237,14 @@ export class Kit {
     return o;
   }
   actor(a, id) { return this.level.addActor(a, id); }
+  /**
+   * A landmark the iso far plane must keep (AUTOCAM D21): a sphere over (x, z) from the ground to `h` m, radius
+   * `r` (default h / 2 + 1). The camera raises `far` for it while it is inside the frustum side planes.
+   */
+  farKeep(x, z, h, r) {
+    const y = this.h(x, z);
+    this.level.farKeep.push({ position: new THREE.Vector3(x, y + h / 2, z), r: r ?? h / 2 + 1 });
+  }
   anchor(name, x, z, y, facing = 0) { this.level.anchors[name] = { pos: new THREE.Vector3(x, y ?? this.h(x, z), z), facing }; }
   /** A spawn point; `y` (absolute) for raised spawns (the town bell platform), else the ground. */
   spawn(name, x, z, facing = 0, y = null) { this.level.spawns[name] = { pos: new THREE.Vector3(x, Number.isFinite(y) ? y : this.h(x, z), z), facing }; }
@@ -245,7 +285,7 @@ export class Kit {
    * recolor, recolorMap, sat, mul, tint (multiplied after the grade), flatColor, flatNormals }.
    */
   tpl(path, o = {}) {
-    const key = o.key ?? [path, o.pose ?? '', (o.hide ?? []).join(','), (o.show ?? []).join(','), (o.dynamic ?? []).join(','), o.flatColor ?? '', o.mul ?? '', o.sat ?? '', o.tint ?? '', o.recolorMap ? JSON.stringify(o.recolorMap) : ''].join('|');
+    const key = o.key ?? [path, o.pose ?? '', (o.hide ?? []).join(','), (o.show ?? []).join(','), (o.dynamic ?? []).join(','), o.flatColor ?? '', o.mul ?? '', o.sat ?? '', o.tint ?? '', o.reds ?? '', o.recolorMap ? JSON.stringify(o.recolorMap) : ''].join('|');
     let p = this._tpls.get(key);
     if (!p) {
       p = this._makeTpl(path, key, o).then((t) => {
@@ -264,7 +304,7 @@ export class Kit {
     const root = o.pose ? posedScene(gltf, o.pose, o.poseT ?? 0.5) : gltf.scene;
     const show = new Set(o.show ?? []);
     const hide = [...(resolveFit(path).hide ?? []), ...(o.hide ?? [])].filter((n) => !show.has(n));
-    const t = templateFromObject(root, { key, hide, dynamic: o.dynamic, recolor: o.recolor, recolorMap: o.recolorMap, sat: o.sat, mul: o.mul, tint: o.tint,
+    const t = templateFromObject(root, { key, hide, dynamic: o.dynamic, recolor: o.recolor, recolorMap: o.recolorMap, sat: o.sat, mul: o.mul, tint: o.tint, reds: o.reds ?? this.def.reds,
       flatColor: o.flatColor, flatNormals: o.flatNormals });
     t.path = path;
     return t;
@@ -330,7 +370,7 @@ export class Kit {
     const jit = o.jitter ?? 0.06;
     const color = o.color != null ? new THREE.Color(o.color) : (jit > 0 ? new THREE.Color(1, 1, 1).multiplyScalar(1 - jit + this.rng() * jit * 2) : null);
     let handle = null, roofHandle = null;
-    if (o.tree || o.fade) this._addInst(tpl, m, color, !!o.tree);
+    if (o.tree || o.fade) this._addInst(tpl, m, color, !!o.tree, !!o.lattice);
     else if (o.into) o.into.items.push({ geo: tpl.geometry, m, color });     // a merged architecture mesh (kit.merged)
     else if (o.camFade === 'roof') {
       // §3 roofs: the roof faces become their own batch instance, tagged for the roof-only fade (walls stay)
@@ -426,10 +466,11 @@ export class Kit {
   }
 
   /** Instanced (camera-fadeable) props: trees (with wind sway) and `fade` props such as the practice-field fence. */
-  _addInst(tpl, m, color, sway) {
+  _addInst(tpl, m, color, sway, lattice = false) {
     const key = tpl.key + (sway ? '|sway' : '|fade');
     let set = this.treeSets.get(key);
-    if (!set) { set = { tpl, sway, items: [], name: (sway ? 'trees:' : 'fade:') + (tpl.path ?? tpl.key).split('/').pop().replace('.glb', '') }; this.treeSets.set(key, set); }
+    if (!set) { set = { tpl, sway, lattice: false, items: [], name: (sway ? 'trees:' : 'fade:') + (tpl.path ?? tpl.key).split('/').pop().replace('.glb', '') }; this.treeSets.set(key, set); }
+    if (lattice) set.lattice = true;       // fence runs: rails with gaps (the camera fades them on a box test)
     set.items.push({ m, c: color });
   }
 
@@ -457,7 +498,7 @@ export class Kit {
       if (inGap) { if (segStart !== null) { segs.push([segStart, (i) / n]); segStart = null; } continue; }
       if (segStart === null) segStart = i / n;
       const p = this.place(tpl, x, z, { scale: [sx, sc, sz], yaw, center: true, collider: false,
-        jitter: o.jitter ?? 0.05, clear: o.clear ?? 0.6, occupy: 0.4, tiltZ: (this.rng() - 0.5) * (o.wobble ?? 0.04), fade: o.fade, into: o.into });
+        jitter: o.jitter ?? 0.05, clear: o.clear ?? 0.6, occupy: 0.4, tiltZ: (this.rng() - 0.5) * (o.wobble ?? 0.04), fade: o.fade, lattice: true, into: o.into });
       if (p) pieces.push(p);
     }
     if (segStart !== null) segs.push([segStart, 1]);
@@ -555,11 +596,13 @@ export class Kit {
     }
 
     // 7. render outputs: ground, grass, water, props batch, trees
-    // §18 budget: Low draws the ground at half resolution in one call; Med / High in 2 × 2 frustum-culled tiles
+    // PERF §1.2 triangle budget: Low draws the ground at half resolution; every preset splits it into ~40 m
+    // frustum-culled tiles (GROUND_TILES), so the iso view draws 1-4 of them instead of half the level
     const lowQ = ctx.quality?.id === 'low';
     // PERF §7.3: Low has no shadow map; a height-term vertex AO (QUALITY.vertexAO 'height') grounds hollows instead
     const ao = ctx.quality?.vertexAO === 'height';
-    const out = this.terrain.finalize(lowQ ? { step: 2, chunks: 1, ao } : { step: 1, chunks: 2, lod: ctx.quality?.id !== 'high', ao });
+    const step = lowQ ? 2 : 1, chunks = groundChunks(Math.floor(this.terrain.res / step), this.terrain.cell * step);
+    const out = this.terrain.finalize({ step, chunks, lod: ctx.quality?.id !== 'high', ao });
     mark('ground');
     this.terrain.dataTexture = out.dataTexture;
     level.groups.terrain.add(out.mesh);
@@ -580,10 +623,12 @@ export class Kit {
       const g = def.grass ?? {};
       level.grass = new Grass({ ground: out.dataTexture, size: this.terrain.size, res: this.terrain.res, quality: ctx.quality,
         colors: g.colors ?? GRASS_COLORS[def.biome ?? def.id] ?? GRASS_COLORS.meadow, seed: (def.seed ?? 7) * 31 + 7,
-        height: g.height, near: g.near, flowers: g.flowers });
+        height: g.height, near: g.near, flowers: g.flowers,
+        // WA §3.2: flowers wear the level's accent set, muted (pickups own cream / gold)
+        flowerColors: g.flowerColors ?? mutedFlowers(Array.isArray(def.accent) ? def.accent : BUNTING_ACCENT[def.accent ?? def.biome ?? def.id] ?? BUNTING_ACCENT.meadow) });
       level.groups.grass.add(level.grass.group);
     }
-    if (def.water?.length) { level.waterMeshes = new WaterSet(def.water, def.size ?? 200, def.waterColor ? { deep: def.waterColor, shallow: def.waterShallow ?? def.waterColor } : {}); level.groups.water.add(level.waterMeshes.group); }
+    if (def.water?.length) { level.waterMeshes = new WaterSet(def.water, def.size ?? 200, { ...(def.waterColor ? { deep: def.waterColor, shallow: def.waterShallow ?? def.waterColor } : {}), ground: out.dataTexture, res: this.terrain.res }); level.groups.water.add(level.waterMeshes.group); }
     level.batch = this.batch;
     this.batch.build(level.groups.props, { spareInstances: 64, spareVertices: 6000 });
     // §3 occlusion tags on the batch (instance ids exist only after the build): roof faces, solid occluders
@@ -628,6 +673,12 @@ export class Kit {
     // PERF §8.5: never-moving render outputs stop recomputing their matrices every frame (terrain tiles, the props
     // batch, tree sets, merged architecture, far silhouettes); animated props keep auto-updating matrices
     freezeStatics(level);
+    // AUTOCAM §9.3 skyline audit: `farKeep: [[x, z, h, r?]]` landmarks (the centre at ground + h / 2) stay inside far
+    for (const [x, z, h, r] of def.farKeep ?? []) this.farKeep(x, z, h, r);
+    // ART G6 (`__GAME__.art.shadowRatio()`): an authored `art.shadowProbe`, else one derived from the tallest-nearest
+    // solid by the start spawn and the level's iso sun
+    const probe = def.art?.shadowProbe ?? autoShadowProbe(level.colliders, level.spawns.start?.pos, levelSunAz(def), levelSunElev(def));
+    level.art = { ...(def.art ?? {}), shadowProbe: probe };
     return level;
   }
 
@@ -711,7 +762,9 @@ export class Kit {
    */
   _stage(zn) {
     const t = this.terrain, P = t.palette, S = STAGE;
-    const col = '#' + _c.set(P.path).offsetHSL(0, 0, S.lift).getHexString();
+    // +8 % L in sRGB (what the eye and the hex palette see; a linear-space lift is lost to 8-bit rounding)
+    const hsl = _c.set(P.path).getHSL(_hsl, THREE.SRGBColorSpace);
+    const col = '#' + _c.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + S.lift), THREE.SRGBColorSpace).getHexString();
     const [x, z] = zn.at;
     if (zn.size) {
       const hw = zn.size[0] / 2 + S.pad, hd = zn.size[1] / 2 + S.pad;
@@ -1084,7 +1137,7 @@ export class Kit {
       mesh.receiveShadow = true;
       // §3: tree crowns fade from above, trunks never (`crownFrac` = where the leaves start, per template)
       if (set.sway) { mesh.userData.camFade = 'crown'; mesh.userData.crownFrac = crownFraction(tpl.geometry); }
-      else mesh.userData.camFade = true;
+      else { mesh.userData.camFade = true; if (set.lattice) mesh.userData.camFadeBox = true; }   // rails: box test (sight lines slip between them)
       mesh.userData.owned = true;
       level.groups.props.add(mesh);
       level.trees.push(mesh);

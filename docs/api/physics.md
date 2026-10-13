@@ -89,3 +89,29 @@ New calls, all additive:
 - `physics.raycast(ray, max, { terrain, mesh, tops: true })`: also hits WALKABLE PROP TOPS (ledges, crates, stumps,
   mushroom caps), never trunks or walls.
 - Bounce links are followed by player `Orders`: a hop that comes down on a bounce cap counts as landed, and the spring off the cap is steered onto the link's landing (`_bounceLink`).
+
+## Phase W / perf / auto-camera (IMPLEMENTATION_PLAN §6 physics, PERF P1–P4, AUTOCAM physics 1, physics.W1)
+- **Nav API: `physics.reachableFrom(from, x, z, maxGap = 2)` → `true | false | null`** (ui's grey "unreachable" paw).
+  true: a walkable cell within `maxGap` m of (x, z) lies on an island reachable from the island under `from` (walking,
+  automatic jumps, open authored links; trap pockets of other islands excluded, exactly as `findPath` sees it). false:
+  none is (roofs, walled yards, the far bank, or no walkable cell there). null: the island audit is missing / stale or
+  `from` is > 1.5 m off the nav. Cached per start island, allocation-free.
+- **P1 `separateActors`:** ≤ 24 solid actors (`SEP_HASH_MIN`) all pairs; above it a uniform hash (`SEP_CELL` 2 m,
+  grown to 2 × the largest radius) over typed arrays with 3 × 3 neighbour cells. No allocation once warm (Actor's
+  predeclared `_physSep / _sepX / _sepZ`, C13).
+- **P2 A*:** already stamped (no clears), typed binary heap, per-grid scratch; the walked-back node chain now reuses
+  an Int32Array too. Only the player issues path queries (clicks / holds / stuck re-plans), so no request queue or flow
+  field was added (enemies steer, they do not path); the throttling ideas for `Orders.js` are in `requests/player.md`.
+- **P3 nav build:** the grid fills time-sliced (`NAV.sliceMs` per frame, ×4 while loading) and paths work before it is
+  complete (lazy cell probes), so `setLevel` stays far under 100 ms on the main thread (meadow ≈ 90 ms headless incl.
+  the collider hash + octree, gate ≈ 2 ms). A worker build is not used: a nav sample reads the heightfield, the static
+  collider hash, the architecture octree and level callbacks (`isDeepWater`), which would all have to be copied over.
+- **P4 static queries:** `StaticColliders.query / resolve / supportAt / navTop / navCell` write into scratch arrays
+  (no per-call allocation); `heightAt` is the plain bilinear sample (blob shadows may call it per actor per frame).
+- **AUTOCAM §4 review:** `moveActor` sets `groundY` from the same contact collision resolved (terrain, prop top or
+  architecture deck) and now KEEPS it while airborne (`groundKind === null` is the airborne signal; NaN only before the
+  first contact). `player.groundY` therefore never flickers to NaN mid-jump.
+- **physics.W1 / A:physics.1:** `tests/unit/nav.test.js` builds meadow and gate headless (stub GLBs, as world's tests)
+  with the current Phase W level data (Mochi cart at `STORY.mochiCage`) and checks start → exit is one
+  non-partial walkable path with no corridor < `NAV.minCorridor` on it, plus the prologue routes (practice field → barn
+  chest, → north gate; start → Mochi's cart).

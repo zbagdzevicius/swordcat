@@ -6,13 +6,16 @@
 //   parry    white 4-point glint on the weapon + white "!" over the head          glint
 //   gold     gold #FFD34D slowly rotating 8-point star on the weapon              glint
 //   red      warm red #FF5A4E glow on the weapon and body + jagged "!!"           glint (or any decal shape, tinted red)
-//   aoe      ground decal filling from the centre outward, #FF9A3D @ 0.45, cream rim; full = it hits  circle | lane | cone | ring
+//   aoe      ground decal: saturated #FF9A3D rim (≥ 0.14 m, α 0.95) in a cream ink sandwich, a faint fill sweeping
+//            from the centre outward with a bright leading front; full = it hits                   circle | lane | cone | ring
 //   aim      dotted white line from the shooter; stops tracking 0.2 s before the shot               line
 //   grab     purple #9B5CFF swirl around the hands                                 swirl
 //   jeer     purple #B07CFF expanding sound-wave rings around the hyena            rings
 //   shadow   plum #3A2346 disc that shrinks 1.6 r → r; tracks the first 60%, then freezes   shadow
-// WA §3.4: every disc / lane / aim line also queues its kind's glyph (TELEGRAPH.glyph: 6-dot burst, crow foot,
-// arrowhead, ...) into GroundDecals, so the danger reads by SHAPE as well as by colour (colour-blind safe).
+// WA §3.4: every disc / lane / aim line also queues glyphs (TELEGRAPH.glyph: 6-dot burst, crow foot, arrowhead, ...)
+// into GroundDecals, so the danger reads by SHAPE as well as by colour (colour-blind safe). Glyphs sit on the RIM,
+// 3–4 around a disc / ring / cone arc and in rows along a lane's edges (`glyphSpots`), never only at the centre where
+// the hero or the attacker hides them; lanes always draw chevrons (`telegraphGlyph`). TELE_GLYPH: ≥ 0.7 m, ink α 0.85.
 // PERF §8.4 (F4): all decals are ONE batched draw (DecalBatch) and all aim lines another (LineBatch).
 //
 // Descriptor (combat:telegraph payload, §19.5): { id, actor, kind, shape, pos, dir, size, duration } plus optional
@@ -101,6 +104,85 @@ export function isTracking(shape, kind, t, duration) {
   return true;
 }
 
+/**
+ * The glyph a telegraph decal actually draws (pure; unit-tested; story keys its "Arrows? Roll away!" / "Dots? Step
+ * out!" hints on this): lanes always draw the double chevron, discs / rings / cones / shadows their kind's
+ * `TELEGRAPH.glyph`, the jeer's sound rings none (null).
+ * @param {string} kind @param {string} shape
+ */
+export function telegraphGlyph(kind, shape) {
+  if (kind === 'jeer' || shape === 'rings') return null;
+  if (shape === 'lane') return 'chevron2';
+  return TELEGRAPH.glyph?.[kind] ?? TELEGRAPH.glyph?.aoe ?? null;
+}
+
+/**
+ * Telegraph glyph sizing (metres): fx floors over `TELEGRAPH.glyphSize*` (0.45 / 0.55 read as specks at iso zoom) and
+ * the ink alpha (0.35 vanished on bright grass). `rim` = the decal's saturated rim band, so glyphs sit just inside it.
+ */
+export const TELE_GLYPH = Object.freeze({ size: Math.max(0.7, TELEGRAPH.glyphSize ?? 0), sizeTouch: Math.max(0.8, TELEGRAPH.glyphSizeTouch ?? 0),
+  inkA: Math.max(0.85, TELEGRAPH.ink?.alpha ?? 0), rim: 0.16, smallR: 1.4, laneStep: 2.2, laneRows: 4 });
+
+/**
+ * Where a telegraph decal draws its glyphs (pure; unit-tested): on the rim, never only at the centre. Writes
+ * `[lx, lz, ux, uz, size]` records into `out` (flat; local frame: +z = the telegraph dir, +x = its side vector;
+ * (ux, uz) = the glyph's forward, radial-outward on discs so the chevrons say "away", along the lane on lanes) and
+ * returns the count. `prog` = fill progress (the crow shadow shrinks 1.6 r → r).
+ * @param {ReturnType<typeof normalizeTelegraph>} n @param {number} size glyph diameter (m) @param {number[]} out
+ * @param {number} [prog]
+ */
+export function glyphSpots(n, size, out, prog = 0) {
+  const G = TELE_GLYPH;
+  let k = 0;
+  const put = (lx, lz, ux, uz, s) => { const o = k * 5; out[o] = lx; out[o + 1] = lz; out[o + 2] = ux; out[o + 3] = uz; out[o + 4] = s; k++; };
+  const ring = (rho, count, a0, span, s) => {        // `count` glyphs on radius rho; span = full angle (2π = closed)
+    for (let i = 0; i < count; i++) {
+      const a = span >= Math.PI * 2 - 1e-6 ? a0 + (i * Math.PI * 2) / count : count === 1 ? a0 : a0 - span / 2 + (span * i) / (count - 1);
+      const ux = Math.sin(a), uz = Math.cos(a);
+      put(ux * rho, uz * rho, ux, uz, s);
+    }
+  };
+  switch (n.shape) {
+    case 'lane': {
+      const s = Math.min(size, n.w * 0.8);
+      const two = n.w >= s * 1.4;                       // edge columns straddle the rim (they mark the edges)
+      const ex = two ? Math.max(s * 0.55, n.w / 2 - s * 0.3) : 0;
+      const rows = Math.max(2, Math.min(G.laneRows, Math.round(n.l / G.laneStep)));
+      for (let j = 0; j < rows; j++) {
+        const lz = (n.l * (j + 0.5)) / rows;
+        if (two) { put(-ex, lz, 0, 1, s); put(ex, lz, 0, 1, s); } else put(0, lz, 0, 1, s);
+      }
+      break;
+    }
+    case 'cone': {
+      const s = Math.min(size, n.r * 0.5);
+      const rho = Math.max(n.r * 0.45, n.r - G.rim - s * 0.45);
+      const span = Math.min(n.angle, Math.PI * 2) * 0.7;
+      const count = rho * span >= s * 2.4 ? 3 : rho * span >= s * 1.2 ? 2 : 1;
+      if (n.angle >= Math.PI * 2 - 1e-6) ring(rho, 4, Math.PI / 4, Math.PI * 2, s); else ring(rho, count, 0, count === 1 ? 0 : span, s);
+      break;
+    }
+    case 'shadow': {
+      const R = n.r * (1.6 - 0.6 * Math.min(1, Math.max(0, prog)));
+      const s = Math.min(size, R * 0.55);
+      ring(R * 0.62, 3, Math.PI / 3, Math.PI * 2, s);
+      break;
+    }
+    case 'ring': {
+      const s = Math.min(size, Math.max(0.35, (n.r - n.inner) * 1.1));
+      const rho = Math.max((n.inner + n.r) / 2, n.r - G.rim - s * 0.45);
+      ring(rho, 4, Math.PI / 4, Math.PI * 2, s);
+      break;
+    }
+    default: {                                          // circle
+      const s = Math.min(size, n.r * 0.7);
+      const rho = Math.max(n.r * 0.5, n.r - G.rim - s * 0.45);
+      ring(rho, n.r < G.smallR ? 3 : 4, n.r < G.smallR ? Math.PI / 3 : Math.PI / 4, Math.PI * 2, s);
+    }
+  }
+  return k;
+}
+
 /** Fill progress 0..1 (full = it hits). */
 export const fillProgress = (t, duration) => (duration > 0 ? Math.min(1, Math.max(0, t / duration)) : 1);
 
@@ -114,6 +196,12 @@ export function decalBounds(n) {
     default: return [-n.r - m, n.r + m, -n.r - m, n.r + m];
   }
 }
+
+/**
+ * The decal look (shader literals come from here; unit-tested for contrast): body α before the fill reaches, the fill
+ * α (lo at the start → hi when full), the sweeping front α, the saturated rim (width m, α) and its cream ink lines.
+ */
+export const TELE_LOOK = Object.freeze({ baseA: 0.06, fillLo: 0.16, fillHi: 0.28, frontA: 0.7, rimW: 0.14, rimA: 0.95, creamA: 0.85, fog: 0.25 });
 
 // ------------------------------------------------------------------ ground decals: ONE batched draw (PERF §8.4 F4)
 // Every telegraph decal is a GRID × GRID slot conformed to the terrain inside one shared BufferGeometry; its shape
@@ -138,6 +226,7 @@ void main() {
   #include <fog_vertex>
 }`;
 
+const LK = TELE_LOOK;
 const DECAL_FRAG = /* glsl */`
 uniform vec3 uRim;
 varying vec2 vLocal;
@@ -154,27 +243,33 @@ void main() {
   float aa = 0.035;
   float edge;              // signed distance to the shape edge, + inside (m)
   float fillM;             // 1 where the fill has reached
-  float baseA = 0.12, fillA = 0.45;
+  float frontD;            // distance (m) to the sweeping fill front
+  // WA §3.4 / LoL-grade read: a faint body, a low fill, a bright leading front, and a saturated rim that carries it
+  float baseA = ${LK.baseA.toFixed(3)}, fillA = ${LK.fillLo.toFixed(3)} + ${(LK.fillHi - LK.fillLo).toFixed(3)} * uFill;
   vec3 col = uColor;
-  float rimW = max( 0.12, 0.06 + 0.012 * uR );     // §8.2.5: rim ≥ 0.12 m
+  float rimW = max( ${LK.rimW.toFixed(3)}, 0.08 + 0.012 * uR );     // §8.2.5: rim ≥ 0.12 m (0.14 m: reads on bright grass)
   if ( shape == 0 ) {
     edge = uR - d;
     fillM = smoothstep( -aa, aa, uR * uFill - d );
-  } else if ( shape == 1 ) {                         // ring wave: annulus inner..r fills outward, a front sweeps 0 → r
+    frontD = abs( d - uR * uFill );
+  } else if ( shape == 1 ) {                         // ring wave: annulus inner..r fills outward, a front sweeps inner → r
     edge = uR - d;
     float band = smoothstep( -aa, aa, d - uInner );
-    fillM = band * smoothstep( -aa, aa, mix( uInner, uR, uFill ) - d );
-    fillM = max( fillM, 1.0 - smoothstep( 0.0, 0.08, abs( d - uR * uFill ) ) );
+    float fr = mix( uInner, uR, uFill );
+    fillM = band * smoothstep( -aa, aa, fr - d );
+    frontD = abs( d - fr ) + ( 1.0 - band ) * 9.0;
     fillM = max( fillM, ( 1.0 - smoothstep( 0.0, rimW * 0.7, abs( d - uInner ) ) ) * 0.8 );
-    baseA = 0.03 + 0.09 * band;
+    baseA = 0.02 + 0.05 * band;
   } else if ( shape == 2 ) {
     edge = min( uW * 0.5 - abs( p.x ), min( p.y, uL - p.y ) );
     fillM = smoothstep( -aa, aa, uL * uFill - p.y );
+    frontD = abs( p.y - uL * uFill );
   } else if ( shape == 3 ) {
     float ang = abs( atan( p.x, p.y ) );
     float ha = uAngle * 0.5;
     edge = min( uR - d, ( ha - ang ) * max( d, 0.25 ) );
     fillM = smoothstep( -aa, aa, uR * uFill - d );
+    frontD = abs( d - uR * uFill );
   } else if ( shape == 4 ) {                         // crow shadow (WA §3.4): plum, shrinks 1.6 r → r, darkens to α 0.55
     float R = uR * ( 1.6 - 0.6 * uFill );
     float a = ( 0.3 + 0.25 * uFill ) * ( 1.0 - smoothstep( R * 0.72, R, d ) ) * uAlpha;
@@ -200,15 +295,20 @@ void main() {
   float inside = smoothstep( -aa, aa, edge );
   if ( inside < 0.002 ) discard;
   float a = mix( baseA, fillA, fillM );
+  // the fill-progress sweep: a bright band riding the front (centre → rim), gone once it is full (= the hit)
+  float front = ( 1.0 - smoothstep( 0.03, 0.14, frontD ) ) * step( 0.02, uFill ) * ( 1.0 - step( 0.995, uFill ) );
+  a = max( a, front * ${LK.frontA.toFixed(3)} );
   if ( uPattern > 0.5 && uPattern < 1.5 ) a *= 0.6 + 0.4 * step( 0.5, fract( ( p.x + p.y ) * 1.6 ) );
   else if ( uPattern > 1.5 ) { vec2 g = fract( p * 2.2 ) - 0.5; a = max( a * 0.75, ( 1.0 - smoothstep( 0.14, 0.2, length( g ) ) ) * 0.6 ); }
-  // ART §8.4: a thin cream rim (uRim #FFF6E8) on the very edge, then the kind's own colour band inside it
-  float rim = 1.0 - smoothstep( rimW * 0.55, rimW, edge );
-  float cream = 1.0 - smoothstep( rimW * 0.12, rimW * 0.3, edge );
-  col = mix( mix( col, mix( col, vec3( 1.0 ), 0.25 ), rim ), uRim, cream );
-  a = max( a, rim * 0.95 );
+  // ART §8.4 cream ink sandwich: a cream line on the very edge, the kind's SATURATED band (never washed toward white:
+  // a pale band reads as peach / her pink), then a cream hairline on its inner side
+  float rim = 1.0 - smoothstep( rimW - aa, rimW, edge );
+  float creamO = 1.0 - smoothstep( 0.022, 0.022 + aa, edge );
+  float creamI = 1.0 - smoothstep( 0.008, 0.008 + aa, abs( edge - rimW - 0.012 ) );
+  col = mix( col, uRim, max( creamO, creamI ) );
+  a = max( a, max( rim * ${LK.rimA.toFixed(3)}, creamI * ${LK.creamA.toFixed(3)} ) );
   a *= inside * uAlpha;
-  col = mix( col, fxFogColor(), fxFog() * 0.5 );
+  col = mix( col, fxFogColor(), fxFog() * ${LK.fog.toFixed(3)} );
   gl_FragColor = vec4( col, a );
   ${OUTPUT}
 }`;
@@ -464,6 +564,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _p = new THREE.Vector3
 const _col = new THREE.Color(), _white = new THREE.Color('#FFFFFF');
 const _w0 = new THREE.Vector3(), _w1 = new THREE.Vector3();
 const RED_GLOW = new THREE.Color(TELEGRAPH.colors.red);
+const _spots = new Array(5 * 8).fill(0);          // glyphSpots scratch (≤ 8 glyphs per telegraph)
 
 /** One live telegraph. */
 class Live {
@@ -474,6 +575,8 @@ class Live {
     this.livePos = null; this.liveDir = null; this.trackTarget = false;
     this.follow = false; this.decal = null; this.line = null; this.actor = null; this.target = null; this.frozen = false;
     this.bounds = null;
+    /** the glyph this telegraph draws (`telegraphGlyph`), or null */
+    this.glyph = null;
   }
 }
 
@@ -509,6 +612,7 @@ export class Telegraphs {
     this.scene = null;
     this.started = 0;          // total telegraphs started (tests/smoke)
     this.byKind = Object.fromEntries(KINDS.map((k) => [k, 0]));
+    this.glyphsDrawn = 0;      // rim glyphs queued last frame (tests/smoke)
     this._ground = (x, z, fb) => groundY(ctx, x, z, fb);
   }
 
@@ -546,6 +650,7 @@ export class Telegraphs {
     L.trackTarget = n.shape === 'shadow' && desc.pos == null;
     L.decal = null; L.line = null;
     L.bounds = decalBounds(n);
+    L.glyph = telegraphGlyph(n.kind, n.shape);
     if (DECAL_SHAPE[n.shape] !== undefined) {
       const d = this.decals.find((x) => !x.busy);
       if (d) {
@@ -601,6 +706,7 @@ export class Telegraphs {
     const ctx = this.ctx, cam = ctx.camera;
     this._isoNow = this.iso;
     const patterns = !!ctx.state?.settings?.patterns;
+    this.glyphsDrawn = 0;
     for (const L of this.active.values()) {
       const n = L.n;
       L.real += dt;
@@ -632,22 +738,26 @@ export class Telegraphs {
     this.lineBatch?.commit();
   }
 
+  /** Glyph diameter (m) for the current input device (touch reads bigger). */
+  get glyphSize() { return this.ctx.input?.device === 'touch' ? TELE_GLYPH.sizeTouch : TELE_GLYPH.size; }
+
   /**
-   * WA §3.4: queue the telegraph's glyph into GroundDecals: at the centre of a disc / ring / shadow, at the far end of
-   * a lane or cone (the jeer's sound rings carry none). The shadow's crow foot shrinks with the disc.
+   * WA §3.4: queue the telegraph's glyphs into GroundDecals on the rim (`glyphSpots`: 3–4 around discs / rings /
+   * shadows, along a cone's arc, rows along a lane's edges), never only at the centre; the jeer's rings carry none.
+   * Allocation-free (the spot buffer is shared).
    */
   _glyph(L, alpha, prog) {
-    const dec = this.ctx.fx?.decals, n = L.n;
-    if (!dec?.glyph || n.kind === 'jeer' || n.shape === 'rings') return;
-    const g = TELEGRAPH.glyph?.[n.kind] ?? TELEGRAPH.glyph?.aoe;
-    if (!g) return;
-    const o = L.origin, yaw = Math.atan2(L.dir.x, L.dir.z);
-    let x = o.x, z = o.z, size = 0;
-    if (n.shape === 'lane' || n.shape === 'cone') {
-      const reach = (n.shape === 'lane' ? n.l : n.r) - 0.45;
-      x += L.dir.x * reach; z += L.dir.z * reach;
-    } else if (n.shape === 'shadow') size = Math.min(1.2, n.r * (1.6 - 0.6 * prog) * 0.9);
-    dec.glyph(g, x, this._ground(x, z, o.y) + LIFT, z, yaw, Math.min(1, alpha * 1.05), size);
+    const dec = this.ctx.fx?.decals, n = L.n, g = L.glyph;
+    if (!dec?.glyph || !g) return;
+    const k = glyphSpots(n, this.glyphSize, _spots, prog);
+    const o = L.origin, fx = L.dir.x, fz = L.dir.z, sx = fz, sz = -fx;      // side vector ⟂ dir (as DecalSlot.place)
+    const a = Math.min(1, alpha * 1.05), ink = TELE_GLYPH.inkA;
+    for (let i = 0; i < k; i++) {
+      const b = i * 5, lx = _spots[b], lz = _spots[b + 1], ux = _spots[b + 2], uz = _spots[b + 3];
+      const x = o.x + sx * lx + fx * lz, z = o.z + sz * lx + fz * lz;
+      dec.glyph(g, x, this._ground(x, z, o.y) + LIFT, z, Math.atan2(sx * ux + fx * uz, sz * ux + fz * uz), a, _spots[b + 4], undefined, ink);
+    }
+    this.glyphsDrawn += k;
   }
 
   _aim(L, cam, alpha, tracking) {
@@ -715,7 +825,8 @@ export class Telegraphs {
     if (iso && this.ctx.fx?.decals?.glyph) {
       _d.subVectors(_b, _a); _d.y = 0;
       const len = _d.length();
-      if (len > 0.5) this.ctx.fx.decals.glyph(TELEGRAPH.glyph?.aim ?? 'arrow', _b.x - _d.x / len * 0.3, _b.y, _b.z - _d.z / len * 0.3, Math.atan2(_d.x, _d.z), alpha);
+      const gs = this.glyphSize;
+      if (len > 0.5) this.ctx.fx.decals.glyph(TELEGRAPH.glyph?.aim ?? 'arrow', _b.x - _d.x / len * gs * 0.6, _b.y, _b.z - _d.z / len * gs * 0.6, Math.atan2(_d.x, _d.z), alpha, gs, undefined, TELE_GLYPH.inkA);
     }
   }
 

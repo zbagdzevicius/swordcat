@@ -261,3 +261,15 @@ so world's fog patcher (C4 focus fog) wraps them instead of being replaced.
 ### → core
 6. Optional: mirror `READABILITY`, `XRAY`, `FUR_LOD_ISO` into `config.CAMERA.iso` (§13 "no literals"); characters
    reads `config.CAMERA.iso.lodFromFocus === false` to disable the focus LOD today and will read the rest when it lands.
+
+## PERF §1.2: character program consolidation
+- `makeToonMaterial` uniforms (no key variants any more): `topGlow` → `userData.mc.uTopGlow`, new `selfLight` →
+  `uSelfLight`, Readability's helmet top tint → `uTopColor` / `uTopMix` in `userData.uniforms` (`topTintMaterial` on a
+  toon material only writes them; pooled materials reset them in `getToonMaterial`).
+- The blade is WarmToon for every skin (its geometry's `rmse.y = 1` shades steel with the matcap in-draw); the bow is the
+  shared toon program, FrontSide with mirrored back faces (`Bow.withBackFaces`). Cape sway is the `uCapeSway` uniform
+  (`sc-cape-v7`, one cape program).
+- `flatPatch.js`: outline hulls and x-ray proxies share ONE program (`sc-flat-v1`, `uFlatMode` 0 = outline, 1 = x-ray,
+  `uFogK`); `setOutlineAlpha` switches blending with transparency. Eyes, glints, contact blobs and whiskers are
+  `fxBasicMaterial`s; aura, holy streak and Dawnblade sparkles are fx modules. The shadow proxy lives on core's
+  `SHADOW_ONLY_LAYER` with the shared skinned kit material. Beast brows are vertex-coloured kit geometry.

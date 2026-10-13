@@ -206,7 +206,7 @@ export class Guide {
       setText(this.pawKey, kbm && p.action ? actionGlyph(p.action === 'chargeRelease' ? 'attack' : p.action, this.device, this.ctx.input) : '');
       flag(this.paw, 'is-on', true);
       pulse(this.paw, 'is-play');
-      try { this.ctx.audio?.play2D?.('ui/glass_001', { rate: 1.4, volume: 0.3 }); } catch { /* audio optional */ }
+      try { this.ctx.audio?.play2D?.('ghostPawPip'); } catch { /* audio optional */ }
     }
     if (c.demoT >= 0) {
       c.demoT += dt;

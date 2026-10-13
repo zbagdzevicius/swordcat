@@ -5,8 +5,8 @@
 //   forest  birdsong by day (procedural), the stream at the stumps, Lantern Night crickets + an owl + the campfire
 //   town    occupied: distant rat squeaks. Hub (town.free): the fountain, kittens chattering around the square, the
 //           forge's anvil, the bakery oven, birds while the hub is gold; Coo at the Post Office after the ending
-//   gate    the raft creaking, the horde's drums and laughs in the fog bank, and The Line's winch / pin hammering
-//           while the repair runs (objective-driven)
+//   gate    the raft creaking, the horde's giggles in the fog bank (WA §9: no drums; the giggles carry the threat),
+//           and The Line's rope winch / pin hammering while the repair runs (objective-driven)
 //
 // Layer kinds:
 //   loop     { sound, at?, vol, rate? }                      a looped file (positional with `at`)
@@ -41,9 +41,9 @@ export const AMBIENT_LAYERS = {
   ],
   gate: [
     { id: 'raft', kind: 'scatter', sounds: ['world/creak1', 'world/creak2', 'world/creak3'], every: [4, 9], vol: 0.5, rate: [0.6, 0.8], at: [-16, 0.5, -4] },
-    { id: 'drums', kind: 'scatter', when: '!gate.boss', sounds: ['creature/c80_monster_0x'], every: [5, 11], vol: 0.7, rate: [0.55, 0.65], area: { at: [0, -66], r: 8 } },
     { id: 'horde', kind: 'laughs', when: '!gate.boss', every: [3.5, 8], vol: 1.6, area: { at: [0, -64], r: 12 } },
-    { id: 'winch', kind: 'scatter', when: 'obj:line', sounds: ['impact/chain_0x'], every: [0.7, 1.3], vol: 0.55, rate: [0.9, 1.05], at: [0, 1, 41] },
+    // WA §9: a rope winch (wood creaks at rate ≈ 1.1), no chains
+    { id: 'winch', kind: 'scatter', when: 'obj:line', sounds: ['impact/impactWood_light_00x'], every: [0.7, 1.3], vol: 0.5, rate: [1.05, 1.15], at: [0, 1, 41] },
     { id: 'pin', kind: 'scatter', when: 'obj:line', sounds: ['impact/metal_small2', 'impact/metal_small3'], every: [1.6, 3.2], vol: 0.45, rate: [1.1, 1.3], at: [1, 1, 41.5], burst: [2, 0.3] },
   ],
 };

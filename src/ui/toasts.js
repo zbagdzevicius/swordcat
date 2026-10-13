@@ -1,16 +1,27 @@
 // src/ui/toasts.js  (owner: ui) — GAME_DESIGN §14.3 Toasts: "Kitten found, letter, Heart Bell, skin unlocked,
 // objective done. Queue of 3; 2.5 s each." `ToastQueue` is the pure timing model (node-tested); `Toasts` renders it as
-// parchment ribbons under the objective line (top-centre) with an icon per kind.
+// cream candy pills under the objective line (top-centre) with an icon per kind; gameplay tips go one at a time.
 import { el, flag } from './dom.js';
 import { glyphify } from './text.js';
 import * as I from './icons.js';
 
 export const TOAST = Object.freeze({ visible: 3, life: 2.5, fadeIn: 0.25, fadeOut: 0.35, dedupe: 0.6, maxQueue: 12 });
 
-/** Pure toast queue: at most `visible` on screen, each lives `life` s; extras wait their turn. */
+/**
+ * Is this toast a gameplay tip (a `tut.*` hint, icon 'hint')? Tips go one at a time (WA §6.1 rule 6: one instruction
+ * on screen), wait while the guide bubble talks, and never show in a scene. Pure.
+ */
+export function isTip(key, icon) { return icon === 'hint' || String(key ?? '').startsWith('tut.'); }
+
+/**
+ * Pure toast queue: at most `visible` on screen, each lives `life` s; extras wait their turn. Tips (`tip: true`): at
+ * most one shown at a time, and none promoted while `tipHold` is set (they keep their place in the queue).
+ */
 export class ToastQueue {
   constructor(o = {}) {
     this.cfg = { ...TOAST, ...o };
+    /** tips wait (the guide bubble is up, a scene is playing) */
+    this.tipHold = false;
     /** @type {{id:number, text:string, icon:string|null, t:number, life:number}[]} */
     this.shown = [];
     /** @type {{text:string, icon:string|null}[]} */
@@ -20,22 +31,26 @@ export class ToastQueue {
   }
 
   /** Queue a toast. Returns false when it was a duplicate of one shown in the last `dedupe` s. */
-  push(text, icon = null) {
+  push(text, icon = null, tip = false) {
     const s = String(text ?? '').trim();
     if (!s) return false;
     if (this._recent.has(s) && this._recent.get(s) < this.cfg.dedupe) return false;
     if (this.shown.some((t) => t.text === s && t.t < t.life - this.cfg.fadeOut) || this.waiting.some((t) => t.text === s)) return false;
     this._recent.set(s, 0);
-    this.waiting.push({ text: s, icon });
+    this.waiting.push({ text: s, icon, tip: !!tip });
     if (this.waiting.length > this.cfg.maxQueue) this.waiting.shift();
     this._promote();
     return true;
   }
 
   _promote() {
-    while (this.shown.length < this.cfg.visible && this.waiting.length) {
-      const w = this.waiting.shift();
-      this.shown.push({ id: ++this._id, text: w.text, icon: w.icon, t: 0, life: this.cfg.life });
+    let tipUp = this.tipHold || this.shown.some((t) => t.tip);
+    for (let i = 0; i < this.waiting.length && this.shown.length < this.cfg.visible;) {
+      const w = this.waiting[i];
+      if (w.tip && tipUp) { i++; continue; }          // one tip at a time: the next waits its turn
+      this.waiting.splice(i, 1);
+      if (w.tip) tipUp = true;
+      this.shown.push({ id: ++this._id, text: w.text, icon: w.icon, tip: !!w.tip, t: 0, life: this.cfg.life });
     }
   }
 
@@ -48,7 +63,7 @@ export class ToastQueue {
       t.t += dt;
       if (t.t >= t.life) { gone.push(t); this.shown.splice(i, 1); }
     }
-    if (gone.length) this._promote();
+    if (gone.length || this.waiting.length) this._promote();
     return gone;
   }
 
@@ -96,11 +111,18 @@ export class Toasts {
   }
 
   push(text, { icon = null, key = null } = {}) {
-    return this.q.push(text, iconFor(key, icon));
+    return this.q.push(text, iconFor(key, icon), isTip(key, icon));
   }
 
-  /** Real seconds (toasts keep their pace during hitstop / slow motion). */
-  render(dt) {
+  /**
+   * Real seconds (toasts keep their pace during hitstop / slow motion).
+   * @param {number} dt @param {{ tips?: boolean, tipHold?: boolean }} [o] `tips`: the hint layers may show (live play);
+   *   `tipHold`: the guide bubble is up. A shown tip hides (and its clock pauses) while `tips` is false.
+   */
+  render(dt, o = {}) {
+    const tips = o.tips !== false;
+    this.q.tipHold = !tips || !!o.tipHold;
+    for (const t of this.q.shown) if (t.tip && !tips) t.t = Math.max(0, t.t - dt);   // a tip's clock waits out a scene
     const gone = this.q.update(dt);
     for (const t of gone) { const e = this.els.get(t.id); e?.remove(); this.els.delete(t.id); }
     for (const t of this.q.shown) {
@@ -111,6 +133,7 @@ export class Toasts {
         this.els.set(t.id, e);
       }
       if (t.t > t.life - this.q.cfg.fadeOut) flag(e, 'is-out', true);
+      if (t.tip) flag(e, 'is-hid', !tips);
     }
   }
 

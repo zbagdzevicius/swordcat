@@ -8,12 +8,35 @@
 //                                               box = fit + 8 m margin snapped to 8 m; re-rendered only when the live
 //                                               fit leaves it, its size class changes, the sun tweens (every 4th
 //                                               frame) or `invalidate()` (caster visibility / quality / level change)
-// Stage 2 needs every actor to stop casting (blobs, K5); until that train lands `SHADOW_STAGE` stays 1.
+// Stage 2 renders STATIC casters only: the map pass sees just the meshes tagged on STATIC_CASTER_LAYER (the level's
+// casting meshes outside its actors group, re-tagged on every invalidate), whatever any actor's castShadow says, so a
+// moving actor can never leave a stale shadow in the cache. Actors are grounded by fx contact blobs (K5).
 import * as THREE from 'three';
 import { CAMERA } from '../core/config.js';
 
-/** 1 = dynamic footprint-fitted map (S3); 2 = cached statics-only map (S5, after fx blobs + actors castShadow=false). */
-export const SHADOW_STAGE = 1;
+/** 1 = dynamic footprint-fitted map (S3); 2 = cached statics-only map (S5: fx blobs + the static-caster layer). */
+export const SHADOW_STAGE = 2;
+
+/** Object layer the stage 2 map pass renders (main and raycast cameras never enable it: no effect elsewhere). */
+export const STATIC_CASTER_LAYER = 7;
+
+/**
+ * Tag every casting, non-skinned mesh under `root` (skipping the `skip` subtree, e.g. the level's actors group, and
+ * anything marked `userData.dynamicShadow`) with `layer`, so the stage 2 pass draws it. Idempotent; returns the count.
+ * @param {THREE.Object3D|null} root @param {THREE.Object3D|null} [skip] @param {number} [layer]
+ */
+export function tagStaticCasters(root, skip = null, layer = STATIC_CASTER_LAYER) {
+  if (!root) return 0;
+  let n = 0;
+  const stack = [root];
+  while (stack.length) {
+    const o = stack.pop();
+    if (o === skip || o.userData?.dynamicShadow) continue;
+    if (o.isMesh && o.castShadow && !o.isSkinnedMesh) { o.layers.enable(layer); n++; }
+    for (let i = 0; i < o.children.length; i++) stack.push(o.children[i]);
+  }
+  return n;
+}
 
 /** Farthest a top-of-screen ray may reach on the ground (m) when it grazes the horizon. */
 export const FOOT_MAX_REACH = 60;
@@ -118,10 +141,33 @@ export class StaticShadow {
     this.renders = 0;
     this._frame = 0;
     this._on = false;
+    /** re-tag the level's static casters before the next re-render (level load, caster set change) */
+    this._retag = true;
+    /** static casters tagged at the last re-tag (perf probes / tests) */
+    this.casters = 0;
+    this._sm = null; this._prev = null; this._hookFn = null;
   }
 
   /** Force a re-render next frame (caster visibility, quality, level or preset change). */
-  invalidate() { this.dirty = true; }
+  invalidate() { this.dirty = true; this._retag = true; }
+
+  /**
+   * Restrict the renderer's shadow pass to STATIC_CASTER_LAYER while stage 2 runs: three tests `object.layers` against
+   * the camera handed to `shadowMap.render` (render lists are already built by then, so the main pass is untouched).
+   * Wraps whatever `render` is installed (the perf probe's counter stays inside). Idempotent per renderer.
+   */
+  _hook(sm) {
+    if (this._sm === sm) return;
+    const prev = sm.render, self = this, mask = 1 << STATIC_CASTER_LAYER;
+    const fn = function (lights, scene, camera) {
+      if (!self._on || !camera?.layers) return prev.call(this, lights, scene, camera);
+      const keep = camera.layers.mask;
+      camera.layers.mask = mask;
+      try { return prev.call(this, lights, scene, camera); } finally { camera.layers.mask = keep; }
+    };
+    sm.render = fn;
+    this._sm = sm; this._prev = prev; this._hookFn = fn;
+  }
 
   /**
    * Place the light for the cached box; returns false when stage 2 cannot run (no renderer shadow map).
@@ -132,13 +178,18 @@ export class StaticShadow {
   place(fit, r, u, f, dir, p) {
     const env = this.env, rd = env.ctx.renderer, L = env.sunLight;
     if (!rd?.shadowMap || !L) return false;
-    if (!this._on) { rd.shadowMap.autoUpdate = false; this._on = true; this.dirty = true; }
+    if (!this._on) { rd.shadowMap.autoUpdate = false; this._on = true; this.dirty = true; this._hook(rd.shadowMap); }
     const F = CAMERA.iso?.foot ?? {};
     this._frame++;
     const tween = env.tweening && this._frame % 4 === 0;
     const moved = cacheBox(fit, this.box, F.shadowCacheMargin ?? 8, F.shadowCacheSnap ?? 8);
     if (!(moved || tween || this.dirty)) return true;
     this.dirty = false;
+    if (this._retag) {
+      const lv = env.ctx.levels?.current;
+      this.casters = tagStaticCasters(lv?.root ?? null, lv?.groups?.actors ?? null);
+      this._retag = false;
+    }
     const b = this.box, sc = L.shadow.camera;
     if (sc.right !== b.hx || sc.top !== b.hy) { sc.left = -b.hx; sc.right = b.hx; sc.top = b.hy; sc.bottom = -b.hy; sc.updateProjectionMatrix(); }
     const tgt = L.target.position, d = p.dot(f);
@@ -153,6 +204,8 @@ export class StaticShadow {
   dispose() {
     const rd = this.env?.ctx?.renderer;
     if (this._on && rd?.shadowMap) rd.shadowMap.autoUpdate = true;
+    if (this._sm && this._sm.render === this._hookFn) this._sm.render = this._prev;
+    this._sm = this._prev = this._hookFn = null;
     this._on = false;
   }
 }

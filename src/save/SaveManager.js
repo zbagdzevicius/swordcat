@@ -30,8 +30,8 @@
 // with meadow/title, so story's Continue (which reads ctx.state) resumes where the save says. Title-screen time is
 // kept out of `playtime`.
 import { E } from '../core/events.js';
-import { defaultState, SAVE_KEYS } from '../core/GameState.js';
-import { COMPANIONS, DIFFICULTY, ECONOMY, KITTEN_IDS, LEVEL_IDS, PLAYER } from '../core/config.js';
+import { defaultState, migrateSettings, OS_SETTINGS, SAVE_KEYS } from '../core/GameState.js';
+import { COMPANIONS, DIFFICULTY, ECONOMY, KITTEN_IDS, LEVEL_IDS, PLAYER, SETTING_VALUES } from '../core/config.js';
 
 export const KEY = 'swordcat.save.v1';
 export const BACKUP_KEY = KEY + '.bak';
@@ -42,7 +42,10 @@ export const SAVE_VERSION = 1;
 export const defaultSave = () => defaultState();
 
 // ------------------------------------------------------------------ constants
-const PROLOGUE_FLAGS = ['prologue.armour', 'prologue.tutorial', 'prologue.done'];
+/** Skip the prologue: every stage flag (WA §6.2 order + the CS-01b trio StoryManager.migrateFlags maps from). */
+const PROLOGUE_FLAGS = ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid', 'prologue.armour', 'prologue.tutorial', 'prologue.done'];
+/** Any prologue progress flag (old: armour / tutorial; WA §6.2: start / practice / chart / raid). */
+const PROLOGUE_RE = /^prologue\./;
 const RANKS = ['pawsome', 'purrfect', 'mewtiful'];
 const QUALITY_NAMES = ['auto', 'low', 'med', 'high'];
 /** numeric settings: [min, max] */
@@ -57,6 +60,20 @@ const SETTING_ENUMS = {
   controlPreset: ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly'], autoAttack: ['auto', 'chain', 'loop', 'off'],
   castMode: ['smart', 'indicator', 'dragOnly'], parryRing: ['auto', 'on', 'off'], autoRiposte: ['auto', 'on', 'off'], haptics: [0, 0.5, 1],
 };
+// IMPLEMENTATION_PLAN §7.4 + Phase W (save.1 / save.W1, PERF V1): config SETTING_VALUES is the one list of the new
+// settings' allowed values. A pair of numbers is a [min, max] range (camCursorLead 0–0.15, camZoomPortrait 0.7–1.4);
+// anything else is an enum (camLockMode, fpsCap 'auto' | 30 | 60 | 'off', quality, hudMode, pathPreview).
+for (const [k, allowed] of Object.entries(SETTING_VALUES)) {
+  if (k === 'quality') continue;                                           // QUALITY_NAMES below
+  if (allowed.length === 2 && allowed.every((v) => typeof v === 'number')) SETTING_RANGES[k] = [allowed[0], allowed[1]];
+  else SETTING_ENUMS[k] = allowed.slice();
+}
+/** Boolean settings added after the first v1 saves (WA §12 / AUTOCAM §12 / PERF §5.3): a missing key takes the default. */
+const BOOL_SETTINGS = ['biggerHero', 'batterySaver', 'hitWords', 'tutorialHints', 'reduceCameraMotionAuto', 'reduceFlashesAuto'];
+/** Flags that are UI memory, not game progress (WA §5 sticker / offer / first-sighting one-shots): never make a save "started". */
+const MEMO_FLAG_RE = /^(seen\.|telegraph\.seen\.)/;
+/** At most this many flags are kept from a stored record (far above the game's ~200; stops a runaway writer). */
+const MAX_FLAGS = 2048;
 const ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MAX_STR = 64;
 const MILK_CAP = PLAYER.milk.max + (COMPANIONS.mochi?.milkBonus ?? 1);   // satchel II + Mochi (§7.6)
@@ -150,11 +167,18 @@ function fromTechV1(d) {
   return out;
 }
 
-/** Where "Continue" resumes: the saved spawn, except the title backdrop (→ `practice` before the prologue ends, else `start`). */
+/**
+ * Where "Continue" resumes: the saved spawn, except the title backdrop (→ `practice` before the prologue ends, else
+ * `start`) and a mid-prologue meadow save (→ `practice`, the barn).
+ */
 export function resumeSpawn(levelId, spawnId, flags = {}) {
-  const s = id(spawnId);
+  const s = id(spawnId), meadow = (levelId ?? 'meadow') === 'meadow', done = !!flags?.['prologue.done'];
+  // mid-prologue (any `prologue.*` flag, e.g. an old `prologue.armour` without `prologue.done`): the meadow resumes at
+  // the barn (the practice field, WA §6.2), never north of the closed practice gate. Saves without any prologue flag
+  // (tech.md v1, dev fixtures) keep their spawn.
+  if (meadow && !done && s !== 'practice' && isObj(flags) && Object.keys(flags).some((k) => PROLOGUE_RE.test(k) && flags[k])) return 'practice';
   if (s && s !== 'title') return s;
-  if ((levelId ?? 'meadow') === 'meadow' && !flags?.['prologue.done']) return 'practice';
+  if (meadow && !done) return 'practice';
   return 'start';
 }
 
@@ -166,7 +190,13 @@ function sanitize(d) {
 
   // flags first: the resume spawn depends on them
   out.flags = {};
-  if (isObj(d.flags)) for (const [k, v] of Object.entries(d.flags)) { const p = prim(v); if (p.ok && k.length <= MAX_STR) out.flags[k] = p.v; }
+  if (isObj(d.flags)) {
+    let n = 0;
+    for (const [k, v] of Object.entries(d.flags)) {
+      const p = prim(v);
+      if (p.ok && k.length <= MAX_STR) { out.flags[k] = p.v; if (++n >= MAX_FLAGS) break; }
+    }
+  }
 
   const levelOk = typeof d.levelId === 'string' && LEVEL_IDS.includes(d.levelId);
   out.levelId = levelOk ? d.levelId : b.levelId;
@@ -226,7 +256,8 @@ function sanitize(d) {
   out.settings = { ...b.settings };
   if (isObj(d.settings)) {
     for (const [k, v] of Object.entries(d.settings)) {
-      if (k in SETTING_RANGES) out.settings[k] = num(v, b.settings[k], SETTING_RANGES[k][0], SETTING_RANGES[k][1]);
+      if (k === 'pathPreview') out.settings.pathPreview = typeof v === 'boolean' ? (v ? 'on' : 'off') : (SETTING_ENUMS.pathPreview.includes(v) ? v : b.settings.pathPreview);   // legacy toggle → 'on' / 'off'
+      else if (k in SETTING_RANGES) out.settings[k] = num(v, b.settings[k], SETTING_RANGES[k][0], SETTING_RANGES[k][1]);
       else if (k in SETTING_ENUMS) out.settings[k] = SETTING_ENUMS[k].includes(v) ? v : b.settings[k];
       else if (k === 'bindings') out.settings.bindings = cleanBindings(v);
       else if (k === 'touchLayout') out.settings.touchLayout = cleanLayout(v);
@@ -234,7 +265,15 @@ function sanitize(d) {
       else if (typeof b.settings[k] === 'boolean') out.settings[k] = bool(v, b.settings[k]);
       else if (!(k in b.settings) && k.length <= MAX_STR) { const p = prim(v); if (p.ok) out.settings[k] = p.v; }   // future ui keys
     }
+    // a pre-W save without `<key>Auto`: a stored `true` was the player's own choice (the old default was false), so it
+    // stops following the OS; a stored `false` keeps following it (X31, ART save A3)
+    for (const k of OS_SETTINGS) {
+      if (!(`${k}Auto` in d.settings) && d.settings[k] === true) out.settings[`${k}Auto`] = false;
+    }
   }
+  for (const k of BOOL_SETTINGS) if (typeof out.settings[k] !== 'boolean') out.settings[k] = b.settings[k];
+  // K7 / X19: `camLock: false` → camLockMode 'free'; the retired boolean stays in sync with the mode (core's hook)
+  migrateSettings(out.settings);
 
   // exactly the §19.7 keys, in schema order
   const ordered = {};
@@ -263,7 +302,7 @@ export function hasProgress(rec) {
   if (typeof rec.progress === 'boolean') return rec.progress;
   if (isLegacyV1(rec)) return true;
   const n = (a) => (Array.isArray(a) ? a.length : 0);
-  return (isObj(rec.flags) && Object.keys(rec.flags).length > 0) || n(rec.kittens) > 0 || n(rec.letters) > 0 ||
+  return (isObj(rec.flags) && Object.keys(rec.flags).some((k) => !MEMO_FLAG_RE.test(k))) || n(rec.kittens) > 0 || n(rec.letters) > 0 ||
     num(rec.shards, 0) > 0 || (typeof rec.levelId === 'string' && rec.levelId !== 'meadow');
 }
 

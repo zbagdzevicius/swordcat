@@ -73,6 +73,16 @@ import { Subjects, TelegraphTrack } from './framing/Subjects.js';
 import { makeView, setYaw, solveFrame, holdGoal, allHardInside, needD, CLS, CLS_NAMES, STRIDE, SX, SY, SZ, SR, SW, SF, SC, F_HARD, F_DROP } from './framing/FramingSolver.js';
 import { BeatRunner, BEATS } from './framing/beats.js';
 import { screenToGround, pickAt, worldToScreen as w2s, canvasRect } from './Picker.js';
+/** the per-frame hover pick's options (no literal per frame) */
+const HOVER_OPTS = Object.freeze({ ground: false });
+/** setProfiling(): fold the time since `t0` into the EMA `T[key]` (ms); returns now (the next lap's start) */
+function lap(T, key, t0) {
+  const now = performance.now(), ms = now - t0;
+  T[key] = T.n <= 1 ? ms : T[key] + (ms - T[key]) * 0.05;
+  return now;
+}
+/** rendered frames a cached cursor ground ray may serve at most (_cursorKeyFresh) */
+const CURSOR_TTL = 8;
 import { setXray } from '../characters/Readability.js';
 
 const LOCK = PLAYER.lockOn;
@@ -124,6 +134,10 @@ export const THIN_RADIUS = 0.6;
 /** segment colliders (fences, thin walls) up to this half-thickness are skipped too (m) */
 const THIN_SEGMENT = 0.2;
 const MAX_SKIPS = 6;
+/** x-ray: statics that never count as hiding her (arena mist walls, explicit `cam: false`) */
+function xrayIgnored(src) { return !!src && typeof src === 'object' && (!!src.arenaWall || src.cam === false); }
+/** x-ray line of sight: everything (thin props included) except xrayIgnored */
+const XRAY_OPTS = Object.freeze({ terrain: true, mesh: true, statics: true, ignore: xrayIgnored });
 // ==================== CLASSIC (remove after M3): ?cam=classic orbit only ====================
 /**
  * Boom avoidance (a low wall, a standing stone or a cart right behind her): when the arm would be cut shorter than
@@ -321,6 +335,7 @@ const _subjects = Array.from({ length: 7 }, () => new THREE.Vector3());
 const _radii = new Float32Array(7);
 const _feet = new THREE.Vector3();
 const _xrPt = new THREE.Vector3();
+const _hidP = new THREE.Vector3();
 const _ZV2 = Object.freeze({ x: 0, y: 0 });
 const _xrSet = new Set();
 const _projView = new THREE.Matrix4();
@@ -339,6 +354,24 @@ const OTHER_STATES = new Set(['dodge', 'pounce', 'attack', 'hurt', 'stagger', 'd
 /** smooth times (s) of the iso springs that AUTOCAM §12 leaves to the rig: zoom / elastic, pitch (≤ 20°/s cap on top),
  *  the beat lean (the beat envelope already eases), the charge push-in weight */
 const ZOOM_ST = 0.12, PITCH_ST = 0.15, BEAT_ST = 0.12, CHARGE_ST = 0.1;
+/** R10 base-FOV smoothing (s); the rate cap is framing.rate.fovDeg (12°/s) */
+const FOV_ST = 0.2;
+/** settings.camCursorLead upper bound (AUTOCAM §5.4; SETTINGS range [0, 0.15]) */
+const CURSOR_LEAD_MAX = 0.15;
+/** Purrfect Dodge punch in / out (s; ISO.perfectDodge.in / out when core adds them — requests/core.md) */
+const pdIn = (P) => P.in ?? 0.08, pdOut = (P) => P.out ?? 0.3;
+
+/**
+ * Trapezoid punch envelope: 0 → 1 linearly over `tin`, 1 for `hold`, 1 → 0 linearly over `tout` (0 outside).
+ * @param {number} t seconds since the trigger @param {number} tin @param {number} hold @param {number} tout
+ * @returns {number} weight in [0, 1]
+ */
+export function dodgeEnvelope(t, tin, hold, tout) {
+  if (!(t >= 0)) return 0;
+  if (t < tin) return t / tin;
+  if (t < tin + hold) return 1;
+  return Math.max(0, 1 - (t - tin - hold) / Math.max(1e-3, tout));
+}
 /** a beat trigger that cannot fire within this long (s) is dropped (never a late beat) */
 const BEAT_QUEUE_T = 1.0;
 /** PERF §4.3 activity tiers (until core adds CAMERA.iso.activity, requests/core.md): bounding sphere + margin in the
@@ -366,7 +399,8 @@ const CUT_RECENT = 1.5;
 
 /** A live hostile actor (not her, alive, not hidden). */
 function liveHostile(a, me) {
-  return !!a && a !== me && a.alive !== false && !a.dead && !a.hidden && !(a.hp !== undefined && a.hp <= 0) && !!(a.object3d?.position ?? a.pos);
+  // `disposed`: a despawned actor (arena reset, a getaway, level cleanup) never stays engaged / framed
+  return !!a && a !== me && !a.disposed && a.alive !== false && !a.dead && !a.hidden && !(a.hp !== undefined && a.hp <= 0) && !!(a.object3d?.position ?? a.pos);
 }
 /** Alerted / engaged (the AI's flag or an engaged state). */
 function isAlerted(a) { return !!(a.alerted || ENGAGED.has(a.stateName)); }
@@ -415,13 +449,23 @@ export class FollowCamera {
     this._fader = new OccluderFader({ minOpacity: CAMERA.treeFadeOpacity, fadeIn: ISO.occl.fadeIn, fadeOut: ISO.occl.fadeOut,
       crownR: ISO.occl.crownR, roofPad: ISO.occl.roofPad, dither: true, archOpacity: ISO.occl.archOpacity ?? ARCH_FADE_OPACITY });
     this._marker = new LockMarker();
+    // PERF (AUTOCAM §9.6 ≤ 0.08 ms): the viewport size read once per canvas-rect refresh (a clientWidth read after a
+    // DOM write forces a synchronous layout), the isoFrame base re-derived only when one of its inputs changes, the
+    // x-ray capsule test skipped while lens and her stand still, and option objects reused (no literal per frame)
+    this._vs = { w: 0, h: 0, rect: null, el: null };
+    this._fr0Key = new Float64Array(10); this._fr0Ok = false;
+    this._occOpts = { n: 0, radii: null, her: null };
+    this._fogArg = { focus: null, mode: 0, combat: false, boss: false };
+    this._xrq = { ok: false, age: 0, cx: 0, cy: 0, cz: 0, hx: 0, hy: 0, hz: 0, h: 0, yaw: 0, sc: -1, frac: 0 };
+    /** opt-in per-function render timings (setProfiling(true)): { name: EMA ms }, else null (no timer calls at all) */
+    this.timing = null;
     this._flick = new FlickDetector(LOCK.flickPx, LOCK.flickTime);
     this._stick = new StickFlick(0.7, 0.35);
     this._gamePose = new CamPose();
     this._outPose = new CamPose();
     this._holdPose = new CamPose();
     this._blendFrom = new CamPose();
-    this._blend = { active: false, t: 0, dur: 0, ease: easeInOutSine, pivot: null, sim: false };
+    this._blend = { active: false, t: 0, dur: 0, ease: easeInOutSine, pivot: null, sim: false, isoFrom: 1 };
     this._dist = { from: CAMERA.dist, to: CAMERA.dist, t: CAMERA.ease };
     this._snap = true;
     this._recenter = false;
@@ -496,8 +540,12 @@ export class FollowCamera {
     this._off = { x: 0, z: 0 };
     /** combat / boss fit above the rest distance (m): out fast, in slowly after holdIn (§6.5) */
     this._extra = 0; this._extraS = { v: 0 }; this._lastNeedOut = -1e9; this._calmFit = 0;
+    this._needHeld = false; this._wasCombat = false;
     this._snug = 0; this._snugS = { v: 0 }; this._snugArmed = true;
+    /** the rate-capped automatic distance above dBase (R3; see _isoGameplay) */
+    this._autoD = NaN;
     this._rubber = 0; this._rubberS = { v: 0 }; this._pinchInT = 0; this._fitToast = false;
+    this._fovB = NaN; this._fovS = { v: 0 }; this._fovPortrait = false;
     this._pitch = NaN; this._pitchS = { v: 0 }; this._chargeS = { v: 0 }; this._dCur = 0;
     this._gy = 0; this._gyS = { v: 0 };
     this._groundY = 0;
@@ -515,11 +563,13 @@ export class FollowCamera {
     this._tok = [];
     this._view = makeView();
     this._goal = { d: ISO.dist, need: ISO.dist, leanR: 0, leanU: 0, dropped: 0, holes: 0, capped: false };
-    this._goalNext = { d: ISO.dist, need: ISO.dist, leanR: 0, leanU: 0, dropped: 0, holes: 0, capped: false };
+    this._goalNext = { d: ISO.dist, need: ISO.dist, leanR: 0, leanU: 0, dropped: 0, holes: 0, capped: false, cap: ISO.dist };
     this._solveOpts = { dBase: 0, cap: 0, dMin: 0, capUp: 0, capDown: 0, limR: 0, limL: 0, limUp: 0, limDown: 0, nEngaged: 0, crowd: true, visible: null, holeRepair: true };
     this._visibleFn = (sx, sy) => this.safeFrame.visible(sx, sy);
     this._solveT = 0; this._forceSolve = true;
     this._lim = { up: 2, down: 4, left: 3, right: 3 };
+    /** herLimits at the dialogue-dollied distance (d × dialog.mul; R7 through the two-shot) */
+    this._limDlg = { up: 2, down: 4, left: 3, right: 3 };
     this._tmpPool = new Float32Array(2 * STRIDE);
     this.beat = new BeatRunner();
     this._beatQ = { id: null, x: 0, z: 0, r: 0, t: 0 };
@@ -533,7 +583,7 @@ export class FollowCamera {
     this.footprint = { q: new Float32Array(8), cx: 0, cz: 0, ahead: 0, behind: 0, halfW: 0, halfWTop: 0, slantMax: 0, d: 0, version: 0, valid: false };
     this._fpQ = new Float64Array(5);
     /** the merged iso far plane (X12) */
-    this.farPlane = ISO.far;
+    this.farPlane = ISO.foot.farFallback ?? ISO.far;
     /** increments once per rendered frame after `frustum` is rebuilt */
     this.frameId = 0;
     /** ART §6.1: the lens is within 6.0 m of the framed character (off above 6.3 m) */
@@ -541,6 +591,8 @@ export class FollowCamera {
     this._cinematic = false;
     /** the ground point under the mouse (cached once per rendered frame) */
     this.cursorGround = new THREE.Vector3(); this.cursorValid = false;
+    /** _isoCursor's ground-ray cache key (_cursorKeyFresh) */
+    this._ck = { ok: false, age: 0, x: 0, y: 0, rl: 0, rt: 0, rw: 0, rh: 0, p0: 0, p5: 0, p8: 0, p9: 0, hx: 0, hy: 0, hz: 0, level: null, nv: -1, nl: -1, sc: -1, m: new Float64Array(16) };
     /** the hover pick (§5.5: at most once per rendered frame) */
     this.hover = { kind: 'ground', actor: null, id: null, interact: null, point: new THREE.Vector3(), px: 0 };
     /** iso weight (1 = gameplay iso, 0 = preset / meme / cutscene): drives the focus-fog mode and the anchor */
@@ -548,7 +600,8 @@ export class FollowCamera {
     this._near = -1; this._far = -1;
     /** the engaged set (AUTOCAM D9 hysteresis) + the selection, of the last frame */
     this.engaged = [];
-    this._punchT = -1; this._holyT = -1; this._dodgeT = 0;
+    /** punch clocks (real s since the trigger; −1 = idle) */
+    this._punchT = -1; this._holyT = -1; this._dodgeT = -1;
     this._xrayT = 0; this._xrayOn = false; this._xrayCheckT = 0; this._xrayEnemies = new Set();
     /** last iso framing numbers (cam.iso()) */
     this.isoInfo = { yaw: ISO.yaw, pitch: 0.9, dist: ISO.dist, fov: ISO.fov, catPx: 0, portrait: false, phone: false, frameOffset: 0, profile: 'desktop' };
@@ -646,7 +699,7 @@ export class FollowCamera {
       bus.on(E.PLAYER_PARRY, () => { this._punchT = 0; }),
       bus.on(E.SETTINGS_CHANGED, (p) => this._onSetting(p)),
       bus.on(E.PLAYER_HOLY, () => { this._holyT = 0; }),
-      bus.on(E.PLAYER_PERFECT_DODGE, (p) => { if (!p?.graze) this._dodgeT = PLAYER.dodge.perfectDur; }),
+      bus.on(E.PLAYER_PERFECT_DODGE, (p) => { if (!p?.graze) this._dodgeT = 0; }),
       bus.on(E.ENEMY_ALERTED, (p) => { if (!this.camLocked && p?.enemy?.pos && this.ctx.player && p.enemy.pos.distanceTo(this.ctx.player.pos) < 8) this._recentrePan = true; }),
     );
     // AUTOCAM §6.2: live wind-ups aimed at her (THREAT) and boss lane ends (BOSS_LANE), with game-time windows
@@ -898,6 +951,11 @@ export class FollowCamera {
   get inShot() { return this.modeName === 'preset'; }
   /** the running shot's normalized step (read-only) or null */
   get currentShot() { return this._cut.shot; }
+  /**
+   * Seconds left of the running pose blend (hand-back, mode blend, shot blend), 0 when none (requests/fx.md: fx fades
+   * her decals back in over the last 0.3 s of the hand-back).
+   */
+  get blendLeft() { const b = this._blend; return b.active ? Math.max(0, b.dur - b.t) : 0; }
 
   /**
    * Rotation (rad) of the MEME_LOOP framing around `actor` that gives the lens a clear view of her face: the first
@@ -1100,6 +1158,24 @@ export class FollowCamera {
     };
   }
 
+  /**
+   * AUTOCAM §7.4 / gate camera:threat-visibility: every engaged foe the player cannot see this frame (dropped by the
+   * framing ladder, past the zoom cap, or under a HUD / thumb hole: `onScreen` false), whether or not it is winding up.
+   * ui threatArrows arrows each one. Zero allocation: fills and returns `out` (cleared first).
+   * @param {object[]} out @returns {object[]}
+   */
+  hiddenEngagedInto(out) {
+    out.length = 0;
+    const eng = this._engA;
+    for (let i = 0; i < eng.length; i++) {
+      const a = eng[i], q = a?.object3d?.position ?? a?.pos;
+      if (!q || a.alive === false || a.dead) continue;
+      _hidP.set(q.x, q.y + (a.height ?? 1) * 0.6, q.z);
+      if (!this.onScreen(_hidP, 0)) out.push(a);
+    }
+    return out;
+  }
+
   /** Debug / smoke: the framing solve { need, d, lean, subjects, dropped, beat } (AUTOCAM core.5). Allocates. */
   framing() {
     const S = this.subjects, g = this._goal, subs = [];
@@ -1107,7 +1183,7 @@ export class FollowCamera {
       const o = i * STRIDE, d = S.data;
       subs.push({ cls: CLS_NAMES[d[o + SC]] ?? d[o + SC], x: d[o + SX], y: d[o + SY], z: d[o + SZ], r: d[o + SR], w: d[o + SW], hard: !!(d[o + SF] & F_HARD), dropped: !!(d[o + SF] & F_DROP), id: S.keys[i]?.id ?? null });
     }
-    return { need: g.need, d: g.d, lean: [g.leanR, g.leanU], subjects: subs, dropped: g.dropped, holes: g.holes, capped: g.capped, beat: this.beat.id, limits: { ...this._lim } };
+    return { need: g.need, d: g.d, lean: [g.leanR, g.leanU], subjects: subs, dropped: g.dropped, holes: g.holes, capped: g.capped, cap: this._goalNext.cap ?? null, beat: this.beat.id, limits: { ...this._lim } };
   }
 
   /**
@@ -1367,7 +1443,7 @@ export class FollowCamera {
       if (!tel.live(i, now)) continue;
       const a = tel.actor[i];
       if (tel.lane[i]) S.want(this._laneKeys[i], CLS.LANE, tel.lx[i], tel.ly[i] + 0.5, tel.lz[i], P.lane, Wt.lane, true);
-      if (a && !tel.boss[i]) {
+      if (a && !a.disposed && !tel.boss[i]) {
         const ap = a.object3d?.position ?? a.pos;
         if (ap) S.want(a, CLS.THREAT, ap.x, ap.y + (a.height ?? 1) * 0.5, ap.z, (a.radius ?? 0.4) + P.threat, Wt.threat, true);
       }
@@ -1429,6 +1505,8 @@ export class FollowCamera {
     o.capDown = boss ? L.boss : (down ? L.capDown : L.capDownCalm)[prof] ?? 2;
     const noLean = calm;
     o.limR = noLean ? 0 : lim.right; o.limL = noLean ? 0 : lim.left; o.limUp = noLean ? 0 : lim.up; o.limDown = noLean ? 0 : lim.down;
+    // D8 crowd term rides on top of the +3 m budget, up to the cat clamp / range ceiling (never past it; boss: none)
+    o.capMax = boss ? cap : Math.max(cap, Math.min(base.dMax, rng[1]));
     o.nEngaged = S.nEngaged; o.crowd = !calm; o.visible = this._visibleFn; o.holeRepair = true;
     _F.set(feet.x, this._gy, feet.z);
     solveFrame(S.data, S.n, _F, v, o, nx);
@@ -1541,7 +1619,7 @@ export class FollowCamera {
     this._hintStep(this._hDist, dt, hv, 'dist', 'distW');
     this._hintStep(this._hPitch, dt, hv, 'pitch', 'pitchW');
     const boss = this.bossActive ? this._liveBoss() : null;
-    const base = isoFrame({ w: W, h: H, device: dev, zoom: this._zoomS, boss: !!boss, hintDist: hv.dist, hintDistW: hv.distW, hintPitch: hv.pitch, hintPitchW: hv.pitchW, bigger: !!st.biggerHero }, this._fr0);
+    const base = this._isoBase(W, H, dev, !!boss, hv, !!st.biggerHero);
     // the pitch the rig gives a distance (zone hint blend; portrait / boss fixed): the solver's and the springs' curve
     this._pitchFixed = portrait ? I.pitchPortrait : boss ? I.pitchBoss : NaN;
     this._pitchHintW = !portrait && !boss && Number.isFinite(hv.pitch) ? clamp(hv.pitchW ?? 1, 0, 1) : 0;
@@ -1582,6 +1660,15 @@ export class FollowCamera {
       if (leadOn) { this._intent(p, this._int); intentLead(this._int.x, this._int.z, this._int.kind, yaw, prof, this._leadT); }
       else { this._leadT.x = 0; this._leadT.z = 0; }
       this._leadGate.step(this._leadT, this._lead, dt);
+      // §5.4 / D6 KBM cursor look-ahead (settings.camCursorLead 0–0.15, default 0): gain × (cursor − her), ≤ cursorMax,
+      // after the intent debounce (a wandering cursor is not an intent); read per frame, so a SETTINGS_CHANGED applies
+      const cg = leadOn && dev === 'kbm' && !portrait && this.cursorValid ? clamp(+st.camCursorLead || 0, 0, CURSOR_LEAD_MAX) : 0;
+      if (cg > 0) {
+        _tmp.set((this.cursorGround.x - feet.x) * cg, 0, (this.cursorGround.z - feet.z) * cg);
+        capXZ(_tmp, L.cursorMax);
+        this._leadT.x += _tmp.x; this._leadT.z += _tmp.z;
+        capXZ(this._leadT, L.max);
+      }
       this._biasT = !calm && !portrait && !combat && !boss && !this._arena.locked ? (L.up ?? 0.8) : 0;
       const g = this._goal;
       this._leanT.x = g.leanR * v.Rx + g.leanU * v.Ux; this._leanT.z = g.leanR * v.Rz + g.leanU * v.Uz;
@@ -1613,27 +1700,37 @@ export class FollowCamera {
     const off = this._off;
     off.x = ux * this._bias + this._lead.x + this._lean.x + this._aim.x + this._beatOff.x + this._peek.x + this._semi.x;
     off.z = uz * this._bias + this._lead.z + this._lean.z + this._aim.z + this._beatOff.z + this._peek.z + this._semi.z;
-    clampToLimits(off, yaw, this._lim);
-    this.lead.x = this._lead.x; this.lead.z = this._lead.z;
-    _piv.set(feet.x + off.x + this._pan.x, this._gy, feet.z + off.z + this._pan.z);
-    // §2.4 dialogue: the focus eases to the speaker midpoint and d × 0.8 over 0.5 s (no cut)
+    // §2.4 dialogue: the focus eases to the speaker midpoint and d × 0.8 over 0.5 s (no cut). The midpoint is part of
+    // the offset, and the herFrame limits are re-derived at the dollied distance, so R7 holds through the two-shot
     const dlg = ctx.game?.mode === 'dialog';
     this._dlgW = snap ? (dlg ? 1 : 0) : clamp(this._dlgW + (dlg ? dt : -dt) / I.dialog.t, 0, 1);
     const dlgW = calm ? (dlg ? 1 : 0) : easeInOutSine(this._dlgW);
+    let lim = this._lim;
     if (dlgW > 0) {
       const sp = this._speaker(feet);
       if (sp) this._dlgMid.set((sp.x - feet.x) * 0.5, 0, (sp.z - feet.z) * 0.5);
-      _piv.x += this._dlgMid.x * dlgW; _piv.z += this._dlgMid.z * dlgW;
+      off.x += this._dlgMid.x * dlgW; off.z += this._dlgMid.z * dlgW;
+      const dl = Math.max(base.dist, this._dCur || base.dist) * (1 + (I.dialog.mul - 1) * dlgW);
+      lim = herLimits(this._pitch || base.pitch, dl, v.tanV, v.tanH, A.toX, A.toY, this.safeFrame.herFrame, this._limDlg);
     }
+    clampToLimits(off, yaw, lim);
+    this.lead.x = this._lead.x; this.lead.z = this._lead.z;
+    _piv.set(feet.x + off.x + this._pan.x, this._gy, feet.z + off.z + this._pan.z);
     this.focus.copy(_piv);
     // ---- distance: rest (zoom × base × hints) + the combat / boss fit (out fast, in slow after a 1.5 s hold, §6.5)
     const dBase = base.dist, g = this._goal, D = FR.dist;
     const extraGoal = combat ? Math.max(0, g.d - dBase) : 0;
     const outward = extraGoal > this._extra + 1e-3;
-    if (outward) this._lastNeedOut = this._realT;
+    // §6.5 / R4 'out fast, in slow': the 1.5 s hold counts from the moment the need DROPS below the fit, so stamp
+    // while it is still at / above it (zooming out or settled), and on the frame the fight ends with the need held
+    const needHeld = combat && extraGoal >= this._extra - 1e-3;
+    if (needHeld || (this._wasCombat && !combat && this._needHeld)) this._lastNeedOut = this._realT;
+    this._needHeld = needHeld; this._wasCombat = combat;
     let tgt = extraGoal;
-    if (!outward && this._realT - this._lastNeedOut < D.holdIn && combat) tgt = this._extra;
-    if (!combat && this._realT - this._lastNeedOut < D.holdIn) tgt = this._extra;      // after a fight: hold, then ease in
+    // a hold freezes the fit where it is: the spring's velocity goes too, or a fight that ends mid zoom-out kept
+    // drifting outward for ~1.5 m (integrator, camera:teamfight)
+    if (!outward && this._realT - this._lastNeedOut < D.holdIn && combat) { tgt = this._extra; this._extraS.v = 0; }
+    if (!combat && this._realT - this._lastNeedOut < D.holdIn) { tgt = this._extra; this._extraS.v = 0; }   // after a fight: hold, then ease in
     if (snap) { this._extra = extraGoal; this._extraS.v = 0; }
     else if (calm) this._extra = smoothDamp(this._extra, tgt, this._extraS, I.reduce.combatFitEase / 3, dt);
     else this._extra = smoothDamp(this._extra, tgt, this._extraS, outward ? D.outST : D.inST, dt, outward ? D.outVmax : D.inVmax);
@@ -1650,11 +1747,20 @@ export class FollowCamera {
       const dd = beat.dd * bw;
       d = dd < 0 ? Math.max(d + dd, Math.min(d, beat.id === 'cosy' ? BEATS.cosy.dMin : rng[0])) : d + dd;
     }
-    // boss: phase breath (+1.5 m for 1 s), Dizzy punch (−1.0 m)
-    d += this._bossEnvelopes(dt, calm);
+    // R3 rate caps on the automatic part of d (fit + snuggle + beats, everything above the player's own rest
+    // distance): out ≤ outVmax, in ≤ inVmax m/s. A clamp toward the goal, so it never overshoots; the zoom, hints and
+    // orientation (dBase), the boss envelopes and the punches below stay exempt.
+    const auto = d - dBase;
+    if (snap || !Number.isFinite(this._autoD)) this._autoD = auto;
+    else this._autoD = clamp(auto, this._autoD - D.inVmax * dt, this._autoD + D.outVmax * dt);
+    d = dBase + this._autoD;
     if (boss) d = clamp(d, I.boss.dist[0], I.boss.dist[1]);
     d = Math.min(d, Math.max(base.dMax, Math.min(dBase, base.dMax)));
     const dCurve = d;
+    // §8.2 / D11 boss punches (own envelopes, exempt from R3 and the boss floor): phase breath (+1.5 m for 1 s), Dizzy
+    // (−1.0 m; may dip below the 14 m floor to dist[0] + dizzy.dd, so the beat reads from the at-rest two-shot)
+    const bossDd = this._bossEnvelopes(dt, calm);
+    if (bossDd) d = boss ? clamp(d + bossDd, I.boss.dist[0] + I.boss.dizzy.dd, I.boss.dist[1] + I.boss.phaseBreath.dd) : d + bossDd;
     // ---- punches (exempt from the rate caps): charge push-in, parry, Holy, Purrfect Dodge; Golden Hour; dialogue
     const charging = p.stateName === 'charge' || (p.charge ?? 0) > 0;
     this._chargeW = snap ? (charging && !calm ? 1 : 0) : smoothDamp(this._chargeW, charging && !calm ? 1 : 0, this._chargeS, CHARGE_ST, dt);
@@ -1671,8 +1777,13 @@ export class FollowCamera {
         if (t < I.holy.ddT) dd += I.holy.dd * Math.sin(Math.PI * t / I.holy.ddT);
         else if (t > Math.max(I.holy.fovT, I.holy.ddT)) this._holyT = -1;
       }
-      if (this._dodgeT > 0) { this._dodgeT = Math.max(0, this._dodgeT - dt); dd += I.perfectDodge.dd; }
-    } else { this._punchT = -1; this._holyT = -1; this._dodgeT = 0; }
+      if (this._dodgeT >= 0) {
+        // Purrfect Dodge: in 0.08 s, held through the slow motion (perfectDur), out 0.3 s (R2: no step in / out)
+        const P = I.perfectDodge, t = (this._dodgeT += dt), hold = Math.max(0, PLAYER.dodge.perfectDur - pdIn(P));
+        dd += P.dd * dodgeEnvelope(t, pdIn(P), hold, pdOut(P));
+        if (t > pdIn(P) + hold + pdOut(P)) this._dodgeT = -1;
+      }
+    } else { this._punchT = -1; this._holyT = -1; this._dodgeT = -1; }
     if (bw > 0 && beat.dfov && !calm) dfov += beat.dfov * bw;
     d = Math.max(I.distMin * 0.7, d + dd);
     // pitch from the distance curve, rate-capped (R3 ≤ 20°/s); boss / portrait fixed
@@ -1687,7 +1798,15 @@ export class FollowCamera {
     isoPosition(this.focus, yaw, pitch, d, out.pos);
     out.look.copy(this.focus);
     out.roll = 0;
-    out.fov = base.fov + dfov;
+    // R10: the base FOV (isoFrame fov / fovPortrait, Bigger hero, device profile) changes at ≤ rate.fovDeg °/s; a snap or
+    // an orientation change (already under a veil) jumps; the punch / beat dfov above keeps its own envelopes
+    if (snap || portrait !== this._fovPortrait || !Number.isFinite(this._fovB)) { this._fovB = base.fov; this._fovS.v = 0; }
+    else {
+      const f0 = this._fovB, cap = FR.rate.fovDeg * dt;
+      this._fovB = clamp(smoothDamp(f0, base.fov, this._fovS, FOV_ST, dt, FR.rate.fovDeg), f0 - cap, f0 + cap);
+    }
+    this._fovPortrait = portrait;
+    out.fov = this._fovB + dfov;
     const info = this.isoInfo;
     info.yaw = yaw; info.pitch = pitch; info.dist = d; info.fov = out.fov; info.portrait = base.portrait; info.phone = base.phone;
     info.frameOffset = A.toY - 0.5; info.profile = prof;
@@ -1765,7 +1884,10 @@ export class FollowCamera {
   _snuggleStep(dt, p, combat, calm, gmPlay, snap) {
     const S = ISO.snuggle, idle = this.ctx.input?.idleTime ?? 0;
     if (idle < S.after) this._snugArmed = true;
-    const want = !calm && gmPlay && !combat && !p.orders?.active && !this.beat.active && this.modeName === 'follow'
+    // never inside the post-fight hold / fit release (§6.5: hold 1.5 s, then the fit eases in; an idle timer that ran
+    // through a stand-still fight must not dolly in over it)
+    const fitDone = this._extra < 0.05 && this._realT - this._lastNeedOut >= FR.dist.holdIn;
+    const want = !calm && gmPlay && !combat && fitDone && !p.orders?.active && !this.beat.active && this.modeName === 'follow'
       && idle >= S.after && this._snugArmed;
     const tgt = want ? S.dd : 0;
     if (snap) { this._snug = 0; this._snugS.v = 0; return; }
@@ -1853,7 +1975,7 @@ export class FollowCamera {
     const feet = this.ctx.player?.object3d?.position;
     if (!feet) return false;
     _F.set(feet.x, this._gy, feet.z);
-    return allHardInside(S.data, S.n, _F, v, Math.max(ISO.boss.dist[0], (this._dCur || g.d) + ISO.boss.dizzy.dd), g.leanR, g.leanU, 1);
+    return allHardInside(S.data, S.n, _F, v, Math.max(ISO.boss.dist[0] + ISO.boss.dizzy.dd, (this._dCur || g.d) + ISO.boss.dizzy.dd), g.leanR, g.leanU, 1);
   }
 
   /** Orientation change: the zoom value of that orientation (camZoom / camZoomPortrait, §10.3). */
@@ -1917,23 +2039,89 @@ export class FollowCamera {
     }
   }
 
-  _viewW() { const el = this.ctx.renderer?.domElement; return el?.clientWidth || (typeof innerWidth !== 'undefined' ? innerWidth : 1280); }
+  _viewW() { return this._viewSize().w; }
   /** Bottom safe inset (CSS px): the desktop / pad ability bar's reserved height (ui/abilityBar.js; 0 on touch). */
   _insetBottom() { const v = this.ctx.ui?.bar?.insetBottom; return Number.isFinite(v) ? v : 0; }
-  _viewH() { const el = this.ctx.renderer?.domElement; return el?.clientHeight || (typeof innerHeight !== 'undefined' ? innerHeight : 720); }
+  _viewH() { return this._viewSize().h; }
 
-  /** Per rendered frame: the cursor ground point and the hover pick (§5.5: once per frame). */
+  /**
+   * The canvas size (CSS px; clientWidth / clientHeight, window size without a canvas). PERF: re-read only when Picker's
+   * cached canvas rect was refreshed (resize / scroll / ResizeObserver / its TTL), so the read never forces a layout
+   * after the frame's DOM writes; a canvas without getBoundingClientRect (node tests) is read every call.
+   * @returns {{w:number, h:number}}
+   */
+  _viewSize() {
+    const vs = this._vs, el = this.ctx.renderer?.domElement;
+    const r = el?.getBoundingClientRect ? canvasRect(this.ctx) : null;
+    if (r === null || r !== vs.rect || el !== vs.el || !(vs.w > 0)) {
+      vs.rect = r; vs.el = el ?? null;
+      vs.w = el?.clientWidth || (typeof innerWidth !== 'undefined' ? innerWidth : 1280);
+      vs.h = el?.clientHeight || (typeof innerHeight !== 'undefined' ? innerHeight : 720);
+    }
+    return vs;
+  }
+
+  /**
+   * isoFrame for the current viewport / zoom / boss / hint / Bigger-hero inputs into this._fr0, re-derived only when one
+   * of them changed (PERF: most frames have a settled zoom and no hint blend).
+   */
+  _isoBase(W, H, dev, boss, hv, bigger) {
+    const k = this._fr0Key, devN = dev === 'touch' ? 1 : dev === 'pad' ? 2 : 0;
+    const flags = devN | (boss ? 4 : 0) | (bigger ? 8 : 0);
+    if (this._fr0Ok && k[0] === W && k[1] === H && k[2] === flags && k[3] === this._zoomS && Object.is(k[4], hv.dist) && k[5] === hv.distW
+      && Object.is(k[6], hv.pitch) && k[7] === hv.pitchW) return this._fr0;
+    k[0] = W; k[1] = H; k[2] = flags; k[3] = this._zoomS; k[4] = hv.dist; k[5] = hv.distW; k[6] = hv.pitch; k[7] = hv.pitchW;
+    this._fr0Ok = true;
+    const a = this._fr0Arg ?? (this._fr0Arg = {});
+    a.w = W; a.h = H; a.device = dev; a.zoom = this._zoomS; a.boss = boss; a.hintDist = hv.dist; a.hintDistW = hv.distW;
+    a.hintPitch = hv.pitch; a.hintPitchW = hv.pitchW; a.bigger = bigger;
+    return isoFrame(a, this._fr0);
+  }
+
+  /**
+   * Per rendered frame: the cursor ground point and the hover pick (§5.5: once per frame). PERF §4.5 (≤ 0.05 ms): the
+   * ground ray is skipped while the pointer px, the rendered camera pose, her feet and the nav / prop versions are all
+   * unchanged (_cursorKeyFresh); one cached canvas rect serves the ground ray and the actor pick.
+   */
   _isoCursor() {
     const input = this.ctx.input, P = input?.pointer;
-    this.cursorValid = false;
     // no live mouse cursor (touch / pad, or the pointer left the canvas): nothing is hovered — a stale pick would keep
     // pinning an enemy's HP bar (ui/hpBars) and winning interact priority (world/Level) with no cursor over it
-    if (!P || input.device !== 'kbm' || !P.inside) { this._clearHover(); return; }
-    const g = screenToGround(this.ctx, P.x, P.y, this.cursorGround);
-    this.cursorValid = !!g && Number.isFinite(g.x);
-    if (this.ctx.game?.mode === 'play') pickAt(this.ctx, P.x, P.y, { ground: false }, this.hover);
+    if (!P || input.device !== 'kbm' || !P.inside) { this.cursorValid = false; this._ck.ok = false; this._clearHover(); return; }
+    const rect = canvasRect(this.ctx);
+    if (!this._cursorKeyFresh(P.x, P.y, rect)) {
+      const g = screenToGround(this.ctx, P.x, P.y, this.cursorGround, rect);
+      this.cursorValid = !!g && Number.isFinite(g.x);
+    }
+    if (this.ctx.game?.mode === 'play') pickAt(this.ctx, P.x, P.y, HOVER_OPTS, this.hover, rect);
     else this._clearHover();
     this.hover.point.copy(this.cursorGround);
+  }
+
+  /**
+   * Is the last cursor ground ray still valid? Compares (and then stores) the pointer px, the canvas rect, the camera's
+   * world matrix + projection terms, her feet (the fallback plane / top tests use them), the level, the nav and link
+   * versions and the static collider count; re-cast anyway every CURSOR_TTL frames (a prop collider moved in place via
+   * StaticColliders.update bumps no version). No allocation: the key lives in `this._ck`.
+   */
+  _cursorKeyFresh(x, y, rect) {
+    const k = this._ck, cam = this.ctx.camera, ph = this.ctx.physics, her = this.ctx.player?.pos, nav = ph?.nav;
+    if (!cam) { k.ok = false; return false; }
+    cam.updateMatrixWorld();
+    const m = cam.matrixWorld.elements, pr = cam.projectionMatrix.elements, km = k.m;
+    let same = k.ok && ++k.age < CURSOR_TTL && k.x === x && k.y === y && k.rl === rect.left && k.rt === rect.top && k.rw === rect.width && k.rh === rect.height
+      && k.p0 === pr[0] && k.p5 === pr[5] && k.p8 === pr[8] && k.p9 === pr[9]
+      && k.hx === (her?.x ?? 0) && k.hy === (her?.y ?? 0) && k.hz === (her?.z ?? 0)
+      && k.level === (this.ctx.levels?.current ?? null) && k.nv === (nav?.version ?? -1) && k.nl === (nav?.linkVersion ?? -1)
+      && k.sc === (ph?.statics?.count ?? -1);
+    for (let i = 0; same && i < 16; i++) if (km[i] !== m[i]) same = false;
+    if (same) return true;
+    k.ok = true; k.age = 0; k.x = x; k.y = y; k.rl = rect.left; k.rt = rect.top; k.rw = rect.width; k.rh = rect.height;
+    k.p0 = pr[0]; k.p5 = pr[5]; k.p8 = pr[8]; k.p9 = pr[9];
+    k.hx = her?.x ?? 0; k.hy = her?.y ?? 0; k.hz = her?.z ?? 0;
+    k.level = this.ctx.levels?.current ?? null; k.nv = nav?.version ?? -1; k.nl = nav?.linkVersion ?? -1; k.sc = ph?.statics?.count ?? -1;
+    for (let i = 0; i < 16; i++) km[i] = m[i];
+    return false;
   }
 
   /** Reset the hover pick to bare ground (drops the actor / interactable references). */
@@ -1962,11 +2150,16 @@ export class FollowCamera {
     const ord = p.orders, wp = ord?.moving ? ord.path?.[ord.wp] : null;
     if (wp && Math.hypot(wp.x - pos.x, wp.z - pos.z) <= 3) { _radii[n] = O.pathR; _subjects[n++].set(wp.x, (wp.y ?? pos.y) + 0.3, wp.z); }
     _feet.set(pos.x, pos.y, pos.z);
-    this._fader.update(dt, cam.position, _subjects, { n, radii: _radii, her: _feet });
+    const oo = this._occOpts;
+    oo.n = n; oo.radii = _radii; oo.her = _feet;
+    const T = this.timing;
+    let t0 = T ? performance.now() : 0;
+    this._fader.update(dt, cam.position, _subjects, oo);
+    if (T) t0 = lap(T, 'fader', t0);
     // x-ray: a ray from the lens to her chest (props + architecture) at 20 Hz
     if ((this._xrayCheckT -= dt) <= 0) {
       this._xrayCheckT = 0.05;
-      const blocked = this._herOccludedFrac(cam.position, pos, h) > O.xrayFrac;   // > 30 % of her capsule
+      const blocked = this._herOccludedFracCached(cam.position, pos, h) > O.xrayFrac;   // > 30 % of her capsule
       this._xrayT = blocked ? this._xrayT + 0.05 : 0;
       const on = this._xrayT >= O.xrayDelay && GAMEPLAY.has(this.modeName);
       if (on !== this._xrayOn) { this._xrayOn = on; try { setXray(p, on); } catch { /* no proxy yet */ } }
@@ -1985,6 +2178,7 @@ export class FollowCamera {
         try { setXray(e, true, { color: TELEGRAPH.colors[kind] ?? '#FFFFFF' }); this._xrayEnemies.add(e); } catch { /* */ }
       }
     }
+    if (T) lap(T, 'xray', t0);
   }
 
   _clearXray() {
@@ -1995,9 +2189,23 @@ export class FollowCamera {
   }
 
   /**
-   * §3: the share of her capsule hidden from the lens by solid geometry: 6 sample points (feet, hips, chest, head and
+   * §3: the share of her capsule hidden from the lens (architecture and thin props, see _hides): 6 sample points (feet, hips, chest, head and
    * both flanks at chest height, screen-left / right) tested against the colliders.
    */
+  /**
+   * _herOccludedFrac, reused while the lens, her feet, her height and the yaw all moved < 1 cm / 0.001 rad and the
+   * static collider count is unchanged (PERF: 6 physics casts per 20 Hz tick otherwise); re-cast every 10 ticks anyway.
+   */
+  _herOccludedFracCached(camPos, pos, h) {
+    const q = this._xrq, sc = this.ctx.physics?.statics?.count ?? -1, E = 0.01;
+    if (q.ok && ++q.age < 10 && q.sc === sc && q.h === h && Math.abs(q.yaw - this.yaw) < 1e-3
+      && Math.abs(q.cx - camPos.x) < E && Math.abs(q.cy - camPos.y) < E && Math.abs(q.cz - camPos.z) < E
+      && Math.abs(q.hx - pos.x) < E && Math.abs(q.hy - pos.y) < E && Math.abs(q.hz - pos.z) < E) return q.frac;
+    q.ok = true; q.age = 0; q.sc = sc; q.h = h; q.yaw = this.yaw;
+    q.cx = camPos.x; q.cy = camPos.y; q.cz = camPos.z; q.hx = pos.x; q.hy = pos.y; q.hz = pos.z;
+    return (q.frac = this._herOccludedFrac(camPos, pos, h));
+  }
+
   _herOccludedFrac(camPos, pos, h) {
     const sx = Math.cos(this.yaw), sz = -Math.sin(this.yaw), w = 0.28;          // screen-right in XZ at this yaw
     let n = 0;
@@ -2005,9 +2213,29 @@ export class FollowCamera {
       const y = i === 0 ? 0.15 : i === 1 ? h * 0.35 : i === 2 || i > 3 ? h * 0.6 : h * 0.95;
       const o = i === 4 ? w : i === 5 ? -w : 0;
       _xrPt.set(pos.x + sx * o, pos.y + y, pos.z + sz * o);
-      if (this._blocked(camPos, _xrPt)) n++;
+      if (this._hides(camPos, _xrPt)) n++;
     }
     return n / 6;
+  }
+
+  /**
+   * x-ray line of sight: does anything that hides her cut the segment a → b? Architecture and solid statics
+   * (_blocked) and also the thin props the arm passes through (fence / gate rails, posts, trunks: a meadow gate
+   * crossing her body hides her just as well). Arena mist walls and `cam: false` colliders never hide her.
+   * One physics ray in the common case; falls back to _blocked when the first hit is one of the ignored ones.
+   */
+  _hides(a, b) {
+    const ph = this.ctx.physics;
+    if (!ph?.raycast) return this._blocked(a, b);
+    _losDir.subVectors(b, a);
+    const len = _losDir.length();
+    if (len < 0.5) return false;
+    _losDir.multiplyScalar(1 / len);
+    _ray.set(a, _losDir);
+    const hit = ph.castIgnore === true ? ph.raycast(_ray, len, XRAY_OPTS) : ph.raycast(_ray, len, ARM_OPTS);
+    if (!hit) return false;
+    if (hit.kind === 'static' && xrayIgnored(hit.object)) return ph.castIgnore === true ? false : this._blocked(a, b);
+    return hit.distance < len - 0.35;
   }
 
   /** Does solid geometry (architecture, solid statics; not camera-transparent ones) cut the segment a → b? */
@@ -2085,7 +2313,7 @@ export class FollowCamera {
     const b = this._blend;
     if (!(dur > 0)) { b.active = false; b.iso = false; return; }
     this._blendFrom.copy(this._outPose);
-    b.active = true; b.t = 0; b.dur = dur; b.ease = resolveEase(ease); b.sim = !!sim; b.iso = !!iso;
+    b.active = true; b.t = 0; b.dur = dur; b.ease = resolveEase(ease); b.sim = !!sim; b.iso = !!iso; b.isoFrom = this._isoW;
     b.pivot = pivot ? (b._pv ?? (b._pv = new THREE.Vector3())).copy(pivot) : null;
   }
 
@@ -2549,7 +2777,27 @@ export class FollowCamera {
 
   // ------------------------------------------------------------------ per frame
   render(alpha, frameDt) {
-    const ctx = this.ctx, cam = ctx.camera, game = ctx.game;
+    const T = this.timing;
+    if (T === null) { this._render(alpha, frameDt); return; }
+    const t0 = performance.now();
+    this._render(alpha, frameDt);
+    lap(T, 'render', t0);
+  }
+
+  /**
+   * Opt-in per-function camera timings (PERF report, perf:frame / camera:perf): `on` installs `this.timing` = { render,
+   * cursor, gameplay, occlusion, fader, xray, footprint, fog } as exponential moving averages (ms, α 0.05) and `n`
+   * (frames measured); off (the default) costs one null check per render.
+   * @param {boolean} [on] @returns {Record<string, number>|null}
+   */
+  setProfiling(on = true) {
+    this.timing = on ? { n: 0, render: 0, cursor: 0, gameplay: 0, occlusion: 0, fader: 0, xray: 0, footprint: 0, fog: 0 } : null;
+    return this.timing;
+  }
+
+  _render(alpha, frameDt) {
+    const ctx = this.ctx, cam = ctx.camera, game = ctx.game, T = this.timing;
+    let t0 = 0;
     const dt = Math.min(Math.max(frameDt || 0, 0), ISO.follow.dtMax ?? 0.1);    // D12: real time, clamped
     this._realT += dt;
     const paused = game?.mode === 'menu';
@@ -2560,6 +2808,7 @@ export class FollowCamera {
       this._handback = -1;
       if (this.modeName === 'preset' || this.modeName === 'cutscene') this.mode('follow', { blend: b > 0 ? b : false });
     }
+    if (T) { T.n++; t0 = performance.now(); }
     if (this.isIso) this._isoCursor();
     else if (this.hover.kind !== 'ground') this._clearHover();   // follow / cutscene: no hover pick runs
     let pose;
@@ -2568,13 +2817,18 @@ export class FollowCamera {
       case 'preset': pose = this._cut.update(sdt); if (this._cut.landed && !this._landShaken) { this._landShaken = true; this.shake(0.2); } break;
       case 'cutscene': pose = this._holdPose; break;
       default:
+        if (T) t0 = lap(T, 'cursor', t0);
         if (this.isIso) pose = this._isoGameplay(paused ? 0 : dt);
         else { pose = this._gameplay(dt, paused ? ZERO_LOOK : look); this._flicks(dt, look); }
+        if (T) lap(T, 'gameplay', t0);
     }
-    // iso weight: 1 in the gameplay rig, 0 in presets / cutscenes / Meme Cam (eased with the blends)
-    const isoGoal = this.isIso && GAMEPLAY.has(this.modeName) ? 1 : 0;
-    const bw = this._blend.active ? Math.max(0.3, this._blend.dur) : 0.25;
-    this._isoW = this._snapIso ? isoGoal : clamp(this._isoW + Math.sign(isoGoal - this._isoW) * dt / bw, 0, 1);
+    // iso weight: 1 in the gameplay rig, 0 in presets / cutscenes / Meme Cam. It moves the anchor (setViewOffset), so it
+    // only changes WITH the pose: a held cutscene pose keeps the anchor it was frozen with (no unauthored slide); a
+    // blend drives it with the blend's own eased k (her screen position stays put through a hand-back); a cut snaps
+    const isoGoal = this.isIso && GAMEPLAY.has(this.modeName) ? 1 : 0, bl = this._blend;
+    if (this._snapIso) this._isoW = isoGoal;
+    else if (bl.active) this._isoW = lerp(bl.isoFrom, isoGoal, bl.ease(clamp((bl.t + (bl.sim ? sdt : dt)) / bl.dur, 0, 1)));
+    else if (this.modeName !== 'cutscene') this._isoW = isoGoal;
     if (Math.abs(isoGoal - this._isoW) < 1e-3) this._isoW = isoGoal;
     if (this.modeName !== 'preset') this._landShaken = false;
     if (this._goldenT > 0) this._goldenT = Math.max(0, this._goldenT - dt);       // real time, in every mode
@@ -2634,16 +2888,24 @@ export class FollowCamera {
     this._frustumOk = true;
     this.frameId++;
     // §9.1 footprint + §9.3 far (applied next frame) from the gameplay pose
+    if (T) t0 = performance.now();
     if (this.isIso) this._publishFootprint(isoView, vw, vh, fx, fy);
+    if (T) t0 = lap(T, 'footprint', t0);
     this._closeUpStep(cam);
     // §4.1 focus fog: Env owns the uniforms; mode follows the iso weight, the clear radius widens in combat
     if (this.isIso) {
       const p = ctx.player;
       if (this._isoW <= 0 && p) this.focus.copy(p.object3d?.position ?? p.pos);
-      ctx.env?.setFocusFog?.({ focus: this.focus, mode: this._isoW, combat: this.engaged.length > 0 || this.bossActive, boss: this.bossActive });
+      const fa = this._fogArg;
+      fa.focus = this.focus; fa.mode = this._isoW; fa.combat = this.engaged.length > 0 || this.bossActive; fa.boss = this.bossActive;
+      if (T) t0 = performance.now();
+      ctx.env?.setFocusFog?.(fa);
+      if (T) lap(T, 'fog', t0);
     }
     if (this.isIso && GAMEPLAY.has(this.modeName)) {
+      if (T) t0 = performance.now();
       this._isoOcclusion(dt, cam);
+      if (T) lap(T, 'occlusion', t0);
       this._marker.update(null, cam, dt, false);
       return;
     }
@@ -2695,7 +2957,7 @@ export class FollowCamera {
     if (a !== Q[0] || b !== Q[1] || c !== Q[2] || d !== Q[3] || e !== Q[4]) { Q[0] = a; Q[1] = b; Q[2] = c; Q[3] = d; Q[4] = e; fp.version++; }
     // far: the footprint term and the fog radius (no fog model, e.g. a bare node ctx: the legacy far stays)
     const env = this.ctx.env, rho = env?.fogDensity;
-    if (!Number.isFinite(rho) || rho <= 0) { this.farPlane = I.far; return; }
+    if (!Number.isFinite(rho) || rho <= 0) { this.farPlane = I.foot.farFallback ?? I.far; return; }     // X12 fallback 60
     const F = I.fog, lf = this.ctx.levels?.current?.cam?.fog ?? EMPTY;
     const combat = this.engaged.length > 0 || this.bossActive;
     const clear = combat ? (lf.clearCombat ?? F.clearCombat) : (lf.clear ?? F.clear);

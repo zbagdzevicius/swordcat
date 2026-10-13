@@ -17,6 +17,7 @@ import { tx, heartStates, frac, objectiveText, levelKittens, levelLetterId, acti
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 import { alertedNear } from './celebrate.js';
+import { companionJoined } from './reveal.js';
 
 const PIP_LIFE = 3.0;          // §14.2: the pip bar fades 3 s after the last hit
 const CHIP_HOLD = 0.55, CHIP_RATE = 0.45;
@@ -61,6 +62,17 @@ export class HudTuck {
     o.counts = this.countsT > 0 || !!s.hub || !!s.peek || !!s.menu;
     return o;
   }
+}
+
+/**
+ * WA §4.2: may the boss bar wear the "BONKED!" stamp? Only after `boss:defeated` for a boss with no HP left (the final
+ * hit); a defeat signal while it still has HP (a scripted hand-off, a debug jump) never stamps it mid-fight. Pure.
+ * @param {{ hp?: number, alive?: boolean } | null} boss @param {boolean} defeated
+ */
+export function bonkedShown(boss, defeated) {
+  if (!defeated) return false;
+  if (!boss) return true;
+  return boss.alive === false || !((boss.hp ?? 0) > 0);
 }
 
 /** The sword-shaped Valor meter (viewBox 0 0 220 40). Blade 40 → 204 (tip 214). */
@@ -129,7 +141,7 @@ export class Hud {
     this.saveTxt = this.saveEl.querySelector('.save-txt');
     this.saveT = 0;
     // ---- top-centre: boss bar + objective line
-    const tc = el('div', 'hud-tc', { parent: root });
+    const tc = this.tcEl = el('div', 'hud-tc', { parent: root });
     this.bossEl = el('div', 'hud-boss', { parent: tc });
     this.bossEl.innerHTML = '<div class="boss-name"><span></span></div>'
       + '<div class="boss-row"><div class="boss-medal"><div class="boss-face"></div></div><div class="boss-bars">'
@@ -167,7 +179,7 @@ export class Hud {
     this.v = {};                 // last written values (DOM writes only on change)
     this.valorShown = 0;
     this.hits = new Map();       // enemy → seconds since the player's last hit
-    this.boss = null; this.bossMax = 1; this.bossChipV = 1; this.bossHold = 0; this.bossOut = 0;
+    this.boss = null; this.bossMax = 1; this.bossChipV = 1; this.bossHold = 0; this.bossOut = 0; this.bonked = false;
     this.objs = new Map(); this.objCur = null; this.objDoneT = 0;
     this.lastHit = 0;
     this.stillT = 0;
@@ -189,8 +201,14 @@ export class Hud {
     on(E.BOSS_START, (p) => this._bossStart(p));
     on(E.BOSS_PHASE, () => pulse(this.bossEl, 'is-phase'));
     on(E.BOSS_DIZZY, (p) => this._bossDizzy(p));
-    // WA §4.2: the final hit stamps "BONKED!" on the boss bar (hud.boss.bonked)
-    on(E.BOSS_DEFEATED, () => { this.bossOut = 1.6; setText(this.bonkedEl, tx(ctx, 'hud.boss.bonked')); pulse(this.bossEl, 'is-bonked'); });
+    on(E.BOSS_PHASE, () => this._bonk(false));
+    // WA §4.2: only the final hit stamps "BONKED!" on the boss bar (hud.boss.bonked): never while the bar's boss has HP
+    on(E.BOSS_DEFEATED, (p) => {
+      if (!this.boss || (p?.boss && p.boss !== this.boss)) return;
+      if (!bonkedShown(this.boss, true)) return;
+      this.bossOut = 1.6;
+      this._bonk(true);
+    });
     on(E.OBJECTIVE, (p) => this._objective(p));
     on(E.LEVEL_LOADING, () => { this._bossHide(); this.objs.clear(); this.objCur = null; flag(this.objEl, 'is-on', false); this.hits.clear(); });
     on(E.LEVEL_LOADED, () => this.poll(true));
@@ -235,8 +253,11 @@ export class Hud {
       hub: lvl === 'town' && !!st?.cond?.('town.free'),
       peek: ctx.input?.device === 'kbm' && !!ctx.input?.down?.('lockon'),
     });
-    flag(this.root, 'tuck-grit', !o.grit);
-    flag(this.root, 'tuck-valor', !o.valor);
+    // WA §7.5: Morning Practice reveals the armour shields with the Stand lesson; Valor and milk wait until after it
+    const rv = ctx.ui?.reveal;
+    flag(this.root, 'tuck-grit', !o.grit || rv?.grit === false);
+    flag(this.root, 'tuck-valor', !o.valor || rv?.valor === false);
+    flag(this.root, 'tuck-milk', rv?.milk === false);
     flag(this.root, 'tuck-lives', !o.lives);
     flag(this.root, 'tuck-counts', !o.counts);
   }
@@ -280,6 +301,7 @@ export class Hud {
     for (const at of p.phases ?? []) if (at > 0 && at < 1) pips += `<i style="left:${(at * 100).toFixed(1)}%"></i>`;
     setHtml(this.bossPips, pips);
     this._bossDizzy({ value: 0, max: p.dizzyMax ?? 100, dizzy: false });
+    this._bonk(false);
     flag(this.bossEl, 'is-on', true);
     pulse(this.bossEl, 'is-enter');
   }
@@ -292,7 +314,14 @@ export class Hud {
     setText(this.dizzyLbl, p.dizzy ? `${tx(this.ctx, 'hud.boss.dizzy')} ${tx(this.ctx, 'ui.boss.crit')}` : '');
   }
 
-  _bossHide() { this.boss = null; this.bossOut = 0; flag(this.bossEl, 'is-on', false); }
+  _bossHide() { this.boss = null; this.bossOut = 0; this._bonk(false); flag(this.bossEl, 'is-on', false); }
+
+  /** Show / clear the "BONKED!" stamp (WA §4.2). `bonked` is what tests and the smoke read. */
+  _bonk(on) {
+    this.bonked = !!on;
+    setText(this.bonkedEl, on ? tx(this.ctx, 'hud.boss.bonked') : '');
+    if (on) pulse(this.bossEl, 'is-bonked'); else flag(this.bossEl, 'is-bonked', false);
+  }
 
   _objective(p) {
     if (!p || !p.id) return;
@@ -396,7 +425,8 @@ export class Hud {
       v.saveN = ls.count;
     }
     // companion portrait + ring
-    const c = ctx.companions?.active?.[0] ?? null;
+    // the kitten portrait waits for the kitten to join (no Mochi before D-01 sets meadow.mochi)
+    const c0 = ctx.companions?.active?.[0] ?? null, c = c0 && companionJoined(ctx, c0.kittenId ?? c0.id) ? c0 : null;
     flag(this.compEl, 'is-on', !!c);
     if (c) {
       const id = c.kittenId ?? c.id;
@@ -437,7 +467,7 @@ export class Hud {
     flag(this.valorEl, 'can-golden', this.golden || (full && (ctx.state?.shards ?? 0) >= 2));
     // a shine sweeps the blade while full: a CSS animation on .is-full (PERF §10.5: no per-frame attribute writes)
     // companion ring
-    const c = ctx.companions?.active?.[0];
+    const c = this.v.comp != null && this.compEl.classList.contains('is-on') ? ctx.companions?.active?.[0] : null;
     if (c && this.compRing) {
       const r = Math.max(0, Math.min(1, c.readiness ?? (c.cooldown > 0 ? 0 : 1)));
       const off = (I.RING_LEN * (1 - r)).toFixed(1);
@@ -462,6 +492,7 @@ export class Hud {
     if (!b) return;
     if (this.bossOut > 0 && (this.bossOut -= dt) <= 0) { this._bossHide(); return; }
     if (b.alive === false && this.bossOut <= 0) this.bossOut = 1.6;
+    if (this.bonked && !bonkedShown(b, true)) this._bonk(false);      // back on its feet (a rally): no stamp over a live boss
     const f = frac(b.hp ?? 0, this.bossMax);
     if (f < this.bossChipV) {
       if (this._bossLast != null && f < this._bossLast - 1e-4) this.bossHold = CHIP_HOLD;

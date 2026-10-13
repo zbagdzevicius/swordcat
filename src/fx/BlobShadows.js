@@ -11,6 +11,7 @@
 // g, 0, 3), scale = r × 2 × (1 − h / 6), alpha = 1 − h / 4. No allocation per frame.
 import * as THREE from 'three';
 import { FX_COLORS } from './palette.js';
+import { fxShaderMaterial } from './shaders.js';
 
 export const BLOB = Object.freeze({ max: 64, alpha: 0.35, mul: 1.1, range: 20, autoMax: 16, heroLift: 0.4, lift: 0.02 });
 
@@ -59,7 +60,7 @@ export class BlobShadows {
     const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     this.alpha = new THREE.InstancedBufferAttribute(new Float32Array(BLOB.max), 1).setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('aAlpha', this.alpha);
-    const mat = new THREE.ShaderMaterial({
+    const mat = fxShaderMaterial({
       name: 'fx.blobs', vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, fog: false,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       uniforms: { uCol: { value: new THREE.Color(this.ctx.env?.TONE?.blob ?? FX_COLORS.blob) }, uA: { value: BLOB.alpha } },

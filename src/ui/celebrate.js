@@ -88,11 +88,11 @@ export class CelebrateQueue {
   constructor() { this.items = []; this.cur = null; }
 
   /** Queue a reward; duplicates of the item on screen or already waiting are dropped. Returns true when queued. */
-  push(kind, id, vars = null) {
+  push(kind, id, vars = null, src = 'reward') {
     if (!KINDS.includes(kind) || !id) return false;
     const same = (it) => it && it.kind === kind && it.id === id && JSON.stringify(it.vars ?? null) === JSON.stringify(vars ?? null);
     if (same(this.cur) || this.items.some(same)) return false;
-    this.items.push({ kind, id, vars, t: 0, dur: C[kind], fly: kind === 'sticker' ? CELEBRATE_TIMING.stickerFly : CELEBRATE_TIMING.cardFly, docked: false, flying: false, started: false });
+    this.items.push({ kind, id, vars, src, t: 0, dur: C[kind], fly: kind === 'sticker' ? CELEBRATE_TIMING.stickerFly : CELEBRATE_TIMING.cardFly, docked: false, flying: false, started: false });
     if (this.items.length > 12) this.items.shift();
     return true;
   }
@@ -132,6 +132,27 @@ export class CelebrateQueue {
   clear() { this.items.length = 0; this.cur = null; }
 }
 
+/**
+ * Did any input action press on this step (keyboard, pad, or touch buttons routed through the input layer)? Pointer
+ * presses are caught separately by the window listener. No allocation (walks the input's action map).
+ * @param {any} input ctx.input
+ */
+export function anyActionPressed(input) {
+  const acts = input?.actions;
+  if (!acts) return false;
+  for (const s of acts.values()) if (s.pressed) return true;
+  return false;
+}
+
+/**
+ * Skip the item on screen when any action pressed (keeps the queue's skipAfter / already-flying guards). Returns the
+ * item that was sent flying, or null.
+ * @param {CelebrateQueue} q @param {any} input
+ */
+export function pollSkip(q, input) {
+  return q.cur && anyActionPressed(input) && q.skip() ? q.cur : null;
+}
+
 export class Celebrate {
   /** @param {any} ctx @param {HTMLElement} parent @param {any} ui the UI facade (flash, home rects, sfx) */
   constructor(ctx, parent, ui) {
@@ -158,17 +179,17 @@ export class Celebrate {
     this.lastStarted = null;
     const bus = ctx.bus, on = (n, f) => this._offs.push(bus.on(n, f));
     this._offs = [];
-    on(E.REWARD, (p) => this.show(p?.kind, p?.id, p?.vars ?? null));
+    on(E.REWARD, (p) => this.show(p?.kind, p?.id, p?.vars ?? null, 'reward'));
     on(E.KITTEN_RESCUED, (p) => {
       const st = ctx.state, id = p?.kittenId ?? p?.id;
       const lvl = Object.keys(KITTENS_BY_LEVEL).find((l) => KITTENS_BY_LEVEL[l].includes(id)) ?? ctx.levels?.current?.id;
       const k = levelKittens(st, lvl);
       const vars = k.max ? { n: Math.max(1, k.n), max: k.max } : { n: st?.kittens?.length ?? 1, max: KITTEN_IDS.length };
-      this.show('card', 'kitten', vars);
+      this.show('card', 'kitten', vars, 'kitten');
     });
-    on(E.ITEM_PICKUP, (p) => { if (p?.item === 'heartBell') this.show('card', 'heartbell'); });
-    on(E.SHARD, (p) => this.show('card', 'shard', { n: p?.n ?? ctx.state?.shards ?? 1 }));
-    on(E.UNLOCK, (p) => { if (p?.kind === 'ability' && (p.id === 'holy' || p.id === 'golden')) this.show('card', p.id); });
+    on(E.ITEM_PICKUP, (p) => { if (p?.item === 'heartBell') this.show('card', 'heartbell', null, 'ui'); });
+    on(E.SHARD, (p) => this.show('card', 'shard', { n: p?.n ?? ctx.state?.shards ?? 1 }, 'ui'));
+    on(E.UNLOCK, (p) => { if (p?.kind === 'ability' && (p.id === 'holy' || p.id === 'golden')) this.show('card', p.id, null, 'ui'); });
     on(E.LEVEL_LOADING, () => { this.q.clear(); this._end(); });
     if (typeof window !== 'undefined') {
       this._skip = () => { if (this.q.cur && this.q.skip()) this._fly(this.q.cur); };
@@ -180,10 +201,10 @@ export class Celebrate {
   get busy() { return !!this.q.cur || this.q.items.length > 0; }
 
   /** Queue a reward. Returns true when queued. Stickers set the save flag `sticker.<id>` right away. */
-  show(kind, id, vars = null) {
+  show(kind, id, vars = null, src = 'api') {
     if (!kind || !id) return false;
     if (kind === 'sticker') { try { this.ctx.state?.setFlag?.(`sticker.${id}`, true); } catch { /* state optional */ } }
-    return this.q.push(kind, id, vars);
+    return this.q.push(kind, id, vars, src);
   }
 
   _start(c) {
@@ -208,23 +229,26 @@ export class Celebrate {
     flag(this.card, 'is-on', true);
     pulse(this.card, 'is-pop');
     // the moment: flash, pose, world burst (never when docked; stickers stay small)
+    // fx already bursts on `reward` (Beats.reward) and on `kitten:rescued` (Beats.rescue, with its own rescue flash),
+    // so the ui adds the world burst only for the cards it raises itself (shards, Heart Bells, ability unlocks)
     if (!c.docked && c.kind !== 'sticker') {
-      this.ui?.flash?.('card');
+      if (c.src !== 'kitten') this.ui?.flash?.('card');
       const p = ctx.player;
-      try { p?.emote?.('cheer'); } catch { /* pose optional (characters W2) */ }
-      try {
-        if (typeof ctx.fx?.celebrate === 'function') ctx.fx.celebrate(p, c.kind);
-        else if (p) { ctx.fx?.burst?.('confetti', p, { count: 40 }); ctx.fx?.burst?.('hearts', p, { count: 8 }); }
-      } catch { /* fx optional */ }
+      try { if (typeof p?.onEmote === 'function') p.onEmote('cheer'); else p?.emote?.('cheer'); } catch { /* pose optional (characters W2) */ }
+      if (c.src !== 'reward' && c.src !== 'kitten' && p) { try { ctx.fx?.burst?.('celebrate', p, { size: c.kind }); } catch { /* fx optional */ } }
     }
     if (c.kind === 'friend' && !c.docked) this._confettiStart();
-    // sound: glock thirds for stickers in a row (C5 → E5 → G5 …), a sting for friends
+    // sound (WA §5.4): audio's baked glock when it exists (stickers a third higher per sticker in a row, a triad for
+    // cards, the arpeggio + pizzicato for friends); the old raw ui sounds otherwise
     try {
       if (c.kind === 'sticker') {
         this._row = this._rowT > 0 ? this._row + 1 : 0;
         this._rowT = CELEBRATE_TIMING.glockReset;
-        ctx.audio?.play2D?.('ui.confirm', { rate: Math.pow(2, (STICKER_THIRDS[this._row % STICKER_THIRDS.length]) / 12) });
-      } else if (c.kind === 'friend') ctx.audio?.play2D?.('jingles/jingles_PIZZI06', { volume: 0.6 });
+      }
+      const kind = c.kind === 'sticker' || c.kind === 'friend' ? c.kind : 'card';
+      if (typeof ctx.audio?.reward === 'function') ctx.audio.reward(kind, { row: this._row });
+      else if (kind === 'sticker') ctx.audio?.play2D?.('ui.confirm', { rate: Math.pow(2, (STICKER_THIRDS[this._row % STICKER_THIRDS.length]) / 12) });
+      else if (kind === 'friend') ctx.audio?.play2D?.('jingles/jingles_PIZZI06', { volume: 0.6 });
       else ctx.audio?.play2D?.('ui.confirm');
     } catch { /* audio optional */ }
   }
@@ -266,6 +290,9 @@ export class Celebrate {
   render(dt) {
     if (this._rowT > 0) this._rowT -= dt;
     if (this._confT > 0 && (this._confT -= dt) <= 0) flag(this.confetti, 'is-on', false);
+    // skippable by any input (WA §5.4): keyboard / pad / touch-button edges here, pointer presses via the listener
+    // (the queue's update below sees the moved fly time and sends the card home this same frame)
+    pollSkip(this.q, this.ctx.input);
     const ev = this.q.update(dt, this.q.cur || !this.q.items.length ? false : alertedNear(this.ctx, C.safeR));
     if (ev.started) this._start(ev.started);
     if (ev.fly) this._fly(ev.fly);

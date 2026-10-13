@@ -11,7 +11,7 @@ made earlier are logged, music requested earlier starts (2 s fade) on the unlock
 ### Sound ids (play2D / play3D)
 - An SFX name from `src/audio/sfxMap.js` (`'parry'`, `'kittenFound'`, `'ui.click'` …), a file id under `audio/sfx/`
   (`'pickup/bubble2'`, `'creature/creature_roar_02'`), a GAME_DESIGN pattern (`'impact/chain_0x'`, `'sword/swish_01–13'`,
-  `'creature/c80_scream_01/02'`: a random existing variant), or a full path. Every file must be in `src/audio/assets.manifest.js`
+  `'creature/crow_caw_01/02'`: a random existing variant), or a full path. Every file must be in `src/audio/assets.manifest.js`
   (tell audio if you need one that isn't).
 - Procedural ids (for cutscene `sfx` steps): `'laugh'` (hyena laugh build; `{rate}` 0.85 Cacklejaw / 1.4 Pilfer),
   `'laughChorus'` (`{count: 6, r: 18, dur}` around `pos`; CS-02 shot 3), `'bell'` (the Sunbell), `'bellClunk'` (damped, CS-02
@@ -168,3 +168,21 @@ The API notes (M1 + M2) are in `docs/api/audio.md`. All requests below are optio
 ## To enemies (M2)
 - `boss:start` / `boss:defeated` for B1 / B2 with `id: 'boss_grizzlechop' | 'boss_cacklejaw'` (stingers are keyed by id).
   In this run the forest mill arena did not emit `boss:start` on `startBoss()`; the audio smoke emulates it until then.
+
+## Phase W (warm adventure + perf + auto-camera) — audio API additions
+
+- `ctx.audio.glock(notes, { volume, gap, delay, bus })`: the baked glockenspiel (one C5 bar note in PCM, played at note
+  rates; never takes a pooled voice). `notes`: a phrase (`sticker`, `rescue`, `stillStanding`, `card`, `friend`,
+  `chime`, `roomRead`), a note (`'E5'`) or a list. Also a procedural id: `play2D('glock', { notes })`.
+- `ctx.audio.reward(kind, { row })`: WA §5.4 reward sounds (`sticker` thirds C5 → E5 → G5 by `row`, `card`, `friend`).
+- `ctx.audio.roomRead({ id })`: AUTOCAM X24 room read (bound to `arena:lock`; once per arena per visit).
+- Beat cues (`cues.js` BEAT_CUES, played by name): `respawnBoing` (on `player:lifeLost`), `rescueBeat` (on
+  `kitten:rescued`), `roomRead`, `stillStandingBeat` (on `player:stillStanding`).
+- New SFX names: `tapPurr`, `comicPop`, `ghostPawPip`, `rankStamp`, `roomReadSting`, `ui.ready`, `squeak`, `boneSqueak`,
+  `squeakyBone`, `woodKnock`; `ghostLife` and `farDrums` are gone.
+- Music: `lantern_night`, `hub_hush`, `bog_dreams`, `results_dance` (warm variants with `rate` / `lowpass` / `loopEnd`);
+  `dark_forest_creepy`, `victory_8bit_loop` and `cave_theme` are retired (`cave_theme` aliases to `bog_dreams`). Context
+  names: `hubHush`, `lanternNight`, `homesick`, `lament`, `results`.
+- PERF: synth PCM bakes on the title (`bake.js`, ≤ 2 ms idle slices); decodes are queued (≤ 4, first use first, level
+  warm-up one at a time while calm); the listener and followed panners are written at 20 Hz when moved > 5 cm; 8 pooled
+  3D voices. `debugState()` adds `bake`, `decodes`, `listener`, `glock`.

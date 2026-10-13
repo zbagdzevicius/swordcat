@@ -1426,3 +1426,74 @@ test('ART §6.5 Squash: kicks stretch then settle, clamped to ±0.35, frozen at 
   assert.ok(s.x >= -SQUASH.limit - 1e-9, 'clamped');
   const before = s.x; s.update(0); assert.equal(s.x, before, 'frozen in hitstop (dt 0)');
 });
+
+test('Arrival turn (requests/characters.md): a plain move order ends ≤ 20° toward the lens over 0.25 s; WASD cancels it', async () => {
+  const r = await rig(), { p, ctx } = r;
+  ctx.camera.position.set(10, 10, 6);                                // the lens off to her right at the goal
+  assert.equal(p.order('move', new THREE.Vector3(0, 0, 6)), true);
+  r.seconds(2.5);
+  assert.equal(p.orders.lastClear, 'arrived');
+  assert.ok(Math.abs(p.facing - 0.35) < 0.02, `turned 0.35 rad toward the lens (${p.facing.toFixed(3)})`);
+  // an attack-move / in-combat arrival or a game camera behind her: no stray turn beyond the clamp
+  p.facing = 0; ctx.camera.position.set(0, 10, -20);
+  assert.equal(p.onArrive(), true);
+  r.seconds(0.4);
+  assert.ok(Math.abs(Math.abs(p.facing) - 0.35) < 0.02, `lens behind her: her turning side, clamped (${p.facing.toFixed(3)})`);
+  // direct input cancels the turn at once
+  p.facing = 0; ctx.camera.position.set(10, 10, 6);
+  p.onArrive();
+  ctx.input.move.x = 1; r.seconds(1 / 60); ctx.input.move.x = 0;
+  assert.equal(p._arriveT, 0);
+});
+
+// ================================================================== practice tunic keeps the sword (sign-off 3)
+import { buildKitten } from '../../src/characters/index.js';
+import { OUTFITS } from '../../src/player/SwordcatModel.js';
+import { isFinalBlow } from '../../src/combat/Combat.js';
+
+test('Player: setOutfit(tunic_sword / tunic_bow) keeps armour off and the sword mesh visible; story probe resolves', async () => {
+  const { p } = await rig();
+  const m = p.model;
+  assert.ok(p.hasOutfit('tunic_sword') && m.outfits.includes('tunic_sword'), 'story practiceOutfit() probe finds tunic_sword');
+  assert.ok(!p.hasOutfit('pyjamas'));
+  for (const name of ['tunic_sword', 'tunic_bow']) {
+    p.setOutfit(name);
+    assert.equal(m.outfit, name);
+    const cfg = m._config();
+    assert.equal(cfg.outfit.armour, null, `${name}: no plate`);
+    assert.ok(cfg.accessories.some((a) => a?.id === 'tunic'), `${name}: tunic`);
+    assert.ok(cfg.sword, `${name}: sword in the config`);
+    assert.equal(!!cfg.bow, name === 'tunic_bow', `${name}: bow only after the sticker`);
+    const k = buildKitten(cfg);
+    try {
+      assert.ok(k.sword?.group?.parent, `${name}: sword attached`);
+      let vis = true; for (let o = k.sword.group; o; o = o.parent) vis = vis && o.visible;
+      let blade = false; k.sword.group.traverseVisible((o) => { if (o.isMesh) blade = true; });
+      assert.ok(vis && blade, `${name}: sword mesh visible`);
+    } finally { k.dispose(); }
+  }
+  p.setOutfit('tunic');
+  assert.equal(m._config().sword, null, 'plain tunic (cutscenes) stays swordless');
+  p.setOutfit('nonsense');
+  assert.equal(m.outfit, 'armour');
+  assert.deepEqual([...OUTFITS], ['armour', 'tunic', 'tunic_sword', 'tunic_bow']);
+});
+
+test('Player: the "Bonk!" final-blow word uses Combat.isFinalBlow (one rule)', async () => {
+  const { p, ctx } = await rig().then((r) => ({ ...r, ctx: r.p.ctx }));
+  const mk = (x, o = {}) => ({ pos: new THREE.Vector3(x, 0, 0), faction: 'enemy', alerted: true, alive: true, ...o });
+  const tgt = mk(1), other = mk(5);
+  const cases = [
+    [[tgt, other]],
+    [[tgt, mk(5, { alive: undefined })]],                 // !e.alive vs alive === false used to disagree
+    [[tgt, mk(5, { breakable: true })]],
+    [[tgt, mk(500)]],
+    [[tgt]],
+  ];
+  for (const [list] of cases) {
+    ctx.enemies = { list };
+    assert.equal(p._finalBlow(tgt), isFinalBlow(p, tgt, list, p.pos));
+  }
+  ctx.enemies = { list: [tgt] };
+  assert.equal(p._finalBlow({ ...tgt, breakable: true }), false, 'breakables never Bonk');
+});

@@ -2,15 +2,16 @@
 //   LightPool        the level's lit sources (torches, the campfire, lit lanterns, gate lamps) registered as lamp
 //                    pools: Env writes the 4 nearest the iso focus into ENV_U.uLamps (K2 / PERF §8.2: no PointLights,
 //                    so lighting a lantern or the forest day → night switch only changes uniforms, never a program)
-//   addFlame         a flickering flame (emissive cone + additive glow sprites) registered as a light source
+//   FlameSet/addFlame every flame of a level in 2 instanced draws (additive cones + billboard halos, shader flicker),
+//                    each registered as a lamp source
 //   Fireflies        drifting additive points around the camera (forest `#E8FF9A`, brighter at night)
 //   paveRibbons      textured street / deck ribbons that follow the terrain (town cobbles `pavingstones070`)
 //   texturedMaterial a vertex-coloured Lambert (toon-patched) material with a world-UV colour map (awaited with a timeout)
 //   ropeLine         a sagging rope between two points (a thin tube)
 // Everything is `userData.owned` (LevelManager disposes it with the level); shared textures are never disposed.
 import * as THREE from 'three';
-import { makeGlowSprite } from './Sky.js';
 import { LampSet } from './Env.js';
+import { FOG_FACTOR, OUTPUT, fxModule, fxShaderMaterial } from '../fx/shaders.js';
 
 const _v = new THREE.Vector3(), _c = new THREE.Color();
 
@@ -34,21 +35,29 @@ export async function texturedMaterial(ctx, path, { tint = '#FFFFFF', mapMix = 0
   const tex = path && ctx?.assets?.texture ? await within(ctx.assets.texture(path, { srgb: true, repeat: true })) : null;
   if (tex) {
     m.map = tex;
-    const mix = mapMix.toFixed(3), jk = (joint > 0 ? `j${joint.toFixed(3)}_${jointLo.toFixed(3)}_${jointHi.toFixed(3)}` : '') + (contrast !== 1 ? 'c' + contrast.toFixed(3) : '');
-    // LI §4.3 / ART §8.3 rule 5: kept textures read as soft pattern, not noise (contrast squeezed around the mid-grey)
-    const squeeze = contrast !== 1 ? `
-  sampledDiffuseColor.rgb = mix(vec3(0.5), sampledDiffuseColor.rgb, ${contrast.toFixed(3)});` : '';
-    const lift = joint > 0 ? `\n  sampledDiffuseColor.rgb = mix(vec3(${joint.toFixed(3)}), sampledDiffuseColor.rgb, smoothstep(${jointLo.toFixed(3)}, ${jointHi.toFixed(3)}, lum));` : '';
+    // LI §4.3 / ART §8.3 rule 5: kept textures read as soft pattern, not noise (contrast squeezed around the mid-grey).
+    // PERF §1.2: mix / joint lift / contrast / gain are uniforms of ONE textured-world program (were key variants).
+    const u = {
+      uTexMix: { value: mapMix }, uTexGain: { value: gain }, uTexContrast: { value: contrast },
+      uTexJoint: { value: new THREE.Vector3(joint > 0 ? joint : -1, jointLo, jointHi) },
+    };
+    m.userData.texU = u;
     m.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
+      Object.assign(sh.uniforms, u);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uTexMix, uTexGain, uTexContrast;\nuniform vec3 uTexJoint;')
+        .replace('#include <map_fragment>', `#ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
   float lum = dot(sampledDiffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-  sampledDiffuseColor.rgb = mix(vec3(lum), sampledDiffuseColor.rgb, ${mix});${lift}${squeeze}
-  sampledDiffuseColor.rgb *= ${gain.toFixed(3)};
+  sampledDiffuseColor.rgb = mix(vec3(lum), sampledDiffuseColor.rgb, uTexMix);
+  if ( uTexJoint.x >= 0.0 ) sampledDiffuseColor.rgb = mix(vec3(uTexJoint.x), sampledDiffuseColor.rgb, smoothstep(uTexJoint.y, uTexJoint.z, lum));
+  sampledDiffuseColor.rgb = mix(vec3(0.5), sampledDiffuseColor.rgb, uTexContrast);
+  sampledDiffuseColor.rgb *= uTexGain;
   diffuseColor *= sampledDiffuseColor;
 #endif`);
     };
-    m.customProgramCacheKey = () => 'world-tex-' + key + mix + gain.toFixed(3) + jk;
+    m.customProgramCacheKey = () => 'world-tex-v2';
+    void key;
   }
   return m;
 }
@@ -168,59 +177,250 @@ export class LightPool {
   dispose() { for (const s of this.sources) this.lamps.remove(s); this.sources.length = 0; }
 }
 
-/** Flame cone geometry (one per level: LevelManager disposes everything under the level root). */
-function flameGeometry(level) {
-  if (level._flameGeo) return level._flameGeo;
+/**
+ * PERF §8.6 / W7 flames: every flame of a level lives in two InstancedMeshes (2 draws per level instead of 3 per
+ * flame): the additive cone and the camera-facing glow halos (2 per flame). Flicker runs in the vertex shaders
+ * from a per-instance phase (`uTime` is the only per-frame write); lighting / dousing writes one instance matrix.
+ * `cap` is the initial capacity (doubles at build time if a level needs more); `glowHi` is the inner halo colour.
+ */
+export const FLAME = Object.freeze({ cap: 32, glowHi: '#FFE2A8', outer: 1.4, inner: 0.55, outerY: 0.15, innerY: 0.12, innerMul: 1.2,
+  coneA: '#FF9A3D', coneB: '#FFEFB8', coneGain: 2.2, coneOpacity: 0.92 });
+
+/** Radial halo profile (the old glow texture's stops: 0 → 1, 0.18 → 0.75, 0.45 → 0.22, 1 → 0), in the shader. */
+const GLOW_VS = /* glsl */`
+attribute vec2 aFl;
+attribute vec3 aGlowCol;
+uniform float uTime;
+varying vec3 vCol;
+varying vec2 vUv;
+#include <fog_pars_vertex>
+void main() {
+  float sz = length(instanceMatrix[0].xyz);
+  vec4 mvPosition = modelViewMatrix * vec4(instanceMatrix[3].xyz, 1.0);
+  mvPosition.xy += position.xy * sz;
+  float f = 0.85 + 0.15 * sin(uTime * 17.0 + aFl.x) * sin(uTime * 9.1 + aFl.x * 1.7);
+  vCol = aGlowCol * mix(1.0, 0.8 + 0.2 * f, aFl.y);
+  vUv = uv;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}`;
+const GLOW_FS = /* glsl */`
+varying vec3 vCol;
+varying vec2 vUv;
+#include <fog_pars_fragment>
+void main() {
+  float r = length(vUv - 0.5) * 2.0;
+  float a = r < 0.18 ? mix(1.0, 0.75, r / 0.18) : r < 0.45 ? mix(0.75, 0.22, (r - 0.18) / 0.27) : mix(0.22, 0.0, clamp((r - 0.45) / 0.55, 0.0, 1.0));
+  vec3 col = vCol;
+  #ifdef USE_FOG
+    #ifdef FOG_EXP2
+      float ff = 1.0 - exp(- fogDensity * fogDensity * vFogDepth * vFogDepth);
+    #else
+      float ff = smoothstep(fogNear, fogFar, vFogDepth);
+    #endif
+    col *= 1.0 - ff;                       // additive: fog fades the halo out instead of tinting it
+  #endif
+  gl_FragColor = vec4(col, a);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`;
+
+/** Flame cones: vertex-coloured open cones with a per-flame flicker (`aPh`), additive, fogged. */
+const CONE_VS = /* glsl */`
+attribute vec3 color;
+attribute float aPh;
+uniform float uTime;
+varying vec3 vCol;
+#include <fog_pars_vertex>
+void main() {
+  vec3 transformed = position;
+  float flk = 0.85 + 0.15 * sin(uTime * 17.0 + aPh) * sin(uTime * 9.1 + aPh * 1.7);
+  transformed *= vec3(0.95 + 0.1 * sin(uTime * 11.0 + aPh), flk * 1.05, 0.95 + 0.1 * cos(uTime * 13.0 + aPh));
+  vCol = color;
+  vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(transformed, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}`;
+const CONE_FS = /* glsl */`
+uniform vec3 uColor;
+uniform float uOpacity;
+varying vec3 vCol;
+#include <fog_pars_fragment>
+${FOG_FACTOR}
+void main() {
+  gl_FragColor = vec4( mix( vCol * uColor, fxFogColor(), fxFog() ), uOpacity );
+  ${OUTPUT}
+}`;
+// PERF §1.2: linked into the one fx program at import (flames are built per level, after it compiled)
+fxModule({ name: 'flames', vertexShader: CONE_VS, fragmentShader: CONE_FS, side: THREE.DoubleSide, fog: true });
+fxModule({ name: 'flameGlow', vertexShader: GLOW_VS, fragmentShader: GLOW_FS, fog: true });
+
+/** Flame cone geometry: an outer orange and an inner cream open cone, vertex-coloured (one per FlameSet). */
+function flameGeometry() {
   const outer = new THREE.ConeGeometry(0.11, 0.34, 7, 1, true).translate(0, 0.17, 0);
   const inner = new THREE.ConeGeometry(0.06, 0.2, 6, 1, true).translate(0, 0.1, 0);
-  const pos = [], cols = [], a = new THREE.Color('#FF9A3D'), b = new THREE.Color('#FFEFB8');
+  const pos = [], cols = [], a = new THREE.Color(FLAME.coneA), b = new THREE.Color(FLAME.coneB);
   for (const [g, c] of [[outer, a], [inner, b]]) {
     const ng = g.toNonIndexed(), p = ng.attributes.position;
     for (let i = 0; i < p.count; i++) { pos.push(p.getX(i), p.getY(i), p.getZ(i)); cols.push(c.r, c.g, c.b); }
     g.dispose(); ng.dispose();
   }
-  const g = level._flameGeo = new THREE.BufferGeometry();
+  const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
   return g;
 }
 
-/** Unlit additive flame material (one per level). */
-function flameMaterial(level) {
-  if (level._flameMat) return level._flameMat;
-  const m = level._flameMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, fog: true });
-  m.color.setScalar(2.2);
-  return m;
+/**
+ * A level's flames (see FLAME). `add(x, y, z, o)` → instance index; `set(i, on)` lights / douses one; the level
+ * animator calls `update(t)`. Both meshes are fog-aware and cast / receive no shadow.
+ */
+export class FlameSet {
+  /** @param {THREE.Object3D} parent  the level's props group */
+  constructor(parent) {
+    this.parent = parent;
+    this.uniforms = { uTime: { value: 0 } };
+    /** @type {{x:number,y:number,z:number,size:number,halo:number,color:THREE.Color,glow:number,ph:number,on:boolean}[]} */
+    this.items = [];
+    const u = this.uniforms;
+    // PERF §1.2: cones and halos are modules of the linked fx program (were a patched Basic, drawn in two passes,
+    // plus a ShaderMaterial: three programs); the cones keep their flicker, vertex colours and fog
+    this.coneMat = fxShaderMaterial({
+      name: 'flames', vertexShader: CONE_VS, fragmentShader: CONE_FS, side: THREE.DoubleSide, fog: true,
+      uniforms: { uTime: u.uTime, uColor: { value: new THREE.Color().setScalar(FLAME.coneGain) }, uOpacity: { value: FLAME.coneOpacity } },
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    this.glowMat = fxShaderMaterial({
+      name: 'flameGlow', vertexShader: GLOW_VS, fragmentShader: GLOW_FS, fog: true,
+      uniforms: { uTime: u.uTime }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    this.coneMat.userData.noHeightFog = this.glowMat.userData.noHeightFog = true;   // fog lives in the modules
+    this.coneGeo = flameGeometry();
+    this.glowGeo = new THREE.PlaneGeometry(1, 1);
+    this.cones = null; this.glows = null;
+    this._alloc(FLAME.cap);
+  }
+
+  /** (Re)allocate both meshes with `cap` flames (copies the instances already added). */
+  _alloc(cap) {
+    const old = [this.cones, this.glows];
+    this.cap = cap;
+    const ph = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
+    const fl = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 2);
+    this.coneGeo.setAttribute('aPh', ph);
+    this.glowGeo.setAttribute('aFl', fl);
+    this.cones = new THREE.InstancedMesh(this.coneGeo, this.coneMat, cap);
+    this.glows = new THREE.InstancedMesh(this.glowGeo, this.glowMat, cap * 2);
+    // the halo colour is a plain instanced attribute, not `instanceColor` (that would key a second fx program)
+    this.glowCol = new THREE.InstancedBufferAttribute(new Float32Array(cap * 6), 3);
+    this.glowGeo.setAttribute('aGlowCol', this.glowCol);
+    for (const [m, name] of [[this.cones, 'flames'], [this.glows, 'flameGlow']]) {
+      m.name = name; m.count = 0; m.castShadow = false; m.receiveShadow = false; m.renderOrder = 5;
+      m.userData.owned = true; m.userData.camFade = false; m.userData.perfCat = 'props';
+      m.matrixAutoUpdate = false;
+    }
+    for (const m of old) if (m) { m.removeFromParent(); m.dispose?.(); }
+    this.items.forEach((_, i) => this._write(i));
+    this.parent.add(this.cones, this.glows);
+  }
+
+  /**
+   * Add a flame. @returns {number} its index
+   * @param {{size?:number, color?:string, glow?:number, halo?:number, on?:boolean}} [o]
+   */
+  add(x, y, z, { size = 1, color = '#FFB060', glow = 1.6, halo = 1, on = true } = {}) {
+    if (this.items.length >= this.cap) this._alloc(this.cap * 2);
+    const i = this.items.length;
+    this.items.push({ x, y, z, size, halo, color: new THREE.Color(color), glow, ph: x * 0.73 + z * 1.31, on: !!on });
+    this._write(i);
+    this.cones.count = this.items.length; this.glows.count = this.items.length * 2;
+    this.cones.computeBoundingSphere(); this.glows.computeBoundingSphere();
+    return i;
+  }
+
+  /** Light (true) or douse (false) flame `i`: one matrix write per mesh, no program change. */
+  set(i, on) {
+    const it = this.items[i];
+    if (!it || it.on === !!on) return;
+    it.on = !!on;
+    this._write(i);
+  }
+
+  /** Is flame `i` lit? */
+  isOn(i) { return !!this.items[i]?.on; }
+
+  _write(i) {
+    const it = this.items[i], s = it.on ? it.size : 0, M = _m4;
+    M.makeScale(s, s, s).setPosition(it.x, it.y, it.z);
+    this.cones.setMatrixAt(i, M);
+    const so = it.on ? FLAME.outer * it.size * it.halo : 0, si = it.on ? FLAME.inner * it.size : 0;
+    M.makeScale(so, so, so).setPosition(it.x, it.y + FLAME.outerY * it.size, it.z);
+    this.glows.setMatrixAt(i * 2, M);
+    M.makeScale(si, si, si).setPosition(it.x, it.y + FLAME.innerY * it.size, it.z);
+    this.glows.setMatrixAt(i * 2 + 1, M);
+    _c.copy(it.color).multiplyScalar(it.glow); this.glowCol.setXYZ(i * 2, _c.r, _c.g, _c.b);
+    _c.set(FLAME.glowHi).multiplyScalar(it.glow * FLAME.innerMul); this.glowCol.setXYZ(i * 2 + 1, _c.r, _c.g, _c.b);
+    this.coneGeo.attributes.aPh.setX(i, it.ph); this.coneGeo.attributes.aPh.needsUpdate = true;
+    const fl = this.glowGeo.attributes.aFl;
+    fl.setXY(i * 2, it.ph, 1); fl.setXY(i * 2 + 1, it.ph, 0); fl.needsUpdate = true;
+    this.cones.instanceMatrix.needsUpdate = true; this.glows.instanceMatrix.needsUpdate = true;
+    this.glowCol.needsUpdate = true;
+  }
+
+  /** Per rendered frame: the flicker clock (one uniform write). */
+  update(t) { this.uniforms.uTime.value = t; }
+
+  /** Draw calls this set costs (0 when empty). */
+  get draws() { return this.items.length ? 2 : 0; }
+
+  dispose() {
+    this.cones?.removeFromParent(); this.glows?.removeFromParent();
+    this.cones?.dispose?.(); this.glows?.dispose?.();
+    this.coneGeo.dispose(); this.glowGeo.dispose(); this.coneMat.dispose(); this.glowMat.dispose();
+    this.items.length = 0;
+  }
+}
+const _m4 = new THREE.Matrix4();
+
+/** The level's FlameSet (created on the first flame; its animator drives the flicker clock). */
+export function flameSet(level) {
+  if (level.flames) return level.flames;
+  const fs = level.flames = new FlameSet(level.groups.props);
+  level.animators.push({ render: (dt, t) => fs.update(t) });
+  return fs;
 }
 
 /**
- * A flickering flame at (x, y, z) (torch heads, the campfire, braziers, lit lanterns): additive cone + two glow
- * sprites, animated by the level; registered with `pool` as a light source (if given). Returns { group, source, set(on) }.
+ * A flickering flame at (x, y, z) (lantern heads, the campfire, lamp posts, jack-o'-lanterns): one instance of the
+ * level's FlameSet (0 extra draws), registered with `pool` as a lamp source (if given).
+ * Returns { index, source, set(on), on }.
  */
 export function addFlame(level, pool, x, y, z, { size = 1, color = '#FFB060', glow = 1.6, light = 1.6, distance = 8, on = true, flicker = 0.25, halo = 1 } = {}) {
-  const g = new THREE.Group(); g.name = 'flame';
-  g.position.set(x, y, z);
-  const cone = new THREE.Mesh(flameGeometry(level), flameMaterial(level));
-  cone.scale.setScalar(size); cone.castShadow = false; cone.receiveShadow = false; cone.userData.camFade = false;
-  const s1 = makeGlowSprite({ color, size: 1.4 * size * halo, intensity: glow, fog: true });
-  const s2 = makeGlowSprite({ color: '#FFE2A8', size: 0.55 * size, intensity: glow * 1.2, fog: true });
-  s1.position.y = 0.15 * size; s2.position.y = 0.12 * size;
-  g.add(cone, s1, s2);
-  g.traverse((o) => { o.userData.owned = true; });
-  level.groups.props.add(g);
+  const fs = flameSet(level);
+  const index = fs.add(x, y, z, { size, color, glow, halo, on });
   const src = pool ? pool.add({ pos: new THREE.Vector3(x, y + 0.25 * size, z), color, intensity: light, distance, on, flicker }) : null;
-  const ph = x * 0.73 + z * 1.31;
-  let lit = on;
-  const set = (v) => { lit = !!v; g.visible = lit; if (src) src.on = lit; };
-  set(on);
-  level.animators.push({ render: (dt, t) => {
-    if (!lit) return;
-    const f = 0.85 + 0.15 * Math.sin(t * 17 + ph) * Math.sin(t * 9.1 + ph * 1.7);
-    cone.scale.set(size * (0.95 + 0.1 * Math.sin(t * 11 + ph)), size * f * 1.05, size * (0.95 + 0.1 * Math.cos(t * 13 + ph)));
-    s1.material.opacity = 0.8 + 0.2 * f;
-  } });
-  return { group: g, source: src, set, get on() { return lit; } };
+  const set = (v) => { fs.set(index, v); if (src) src.on = !!v; };
+  return { index, source: src, set, get on() { return fs.isOn(index); } };
 }
+
+const FIREFLY_VS = /* glsl */`uniform float uTime, uBright, uGround; uniform vec3 uCenter, uBox; attribute float aPh; varying float vA;
+  void main() {
+    vec3 p = position;
+    p.x += sin(uTime * 0.31 + aPh) * 1.6 + sin(uTime * 0.87 + aPh * 2.0) * 0.4;
+    p.z += cos(uTime * 0.27 + aPh * 1.3) * 1.6;
+    p.y += sin(uTime * 0.6 + aPh * 0.7) * 0.5;
+    // wrap around the camera box so the swarm always surrounds her
+    vec3 w = mod(p - uCenter + uBox * 0.5, uBox) - uBox * 0.5 + uCenter;
+    w.y = uGround + p.y;
+    vec4 mv = modelViewMatrix * vec4(w, 1.0);
+    float blink = smoothstep(0.2, 1.0, sin(uTime * 1.7 + aPh * 3.1) * 0.5 + 0.5);
+    vA = blink * uBright * smoothstep(60.0, 8.0, -mv.z);
+    gl_PointSize = (2.0 + 3.0 * blink) * clamp(48.0 / max(1.0, -mv.z), 0.8, 5.0);
+    gl_Position = projectionMatrix * mv;
+  }`;
+const FIREFLY_FS = /* glsl */`uniform vec3 uColor; varying float vA;
+  void main() { vec2 d = gl_PointCoord - 0.5; float r = dot(d, d); if (r > 0.25) discard; gl_FragColor = vec4(uColor * (1.4 - r * 4.0), vA * (1.0 - r * 4.0)); }`;
+fxModule({ name: 'fireflies', fog: false, vertexShader: FIREFLY_VS, fragmentShader: FIREFLY_FS });   // linked at import (PERF §1.2)
 
 /**
  * Fireflies (art.md forest extra `#E8FF9A`): `n` additive points drifting in a box that follows the camera, brighter
@@ -239,25 +439,10 @@ export class Fireflies {
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
     this.uniforms = { uTime: { value: 0 }, uCenter: { value: new THREE.Vector3() }, uBox: { value: new THREE.Vector3(...box) }, uBright: { value: 0.5 },
       uColor: { value: new THREE.Color(color) }, uGround: { value: 0 } };
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.uniforms, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-      vertexShader: `uniform float uTime, uBright, uGround; uniform vec3 uCenter, uBox; attribute float aPh; varying float vA;
-        void main() {
-          vec3 p = position;
-          p.x += sin(uTime * 0.31 + aPh) * 1.6 + sin(uTime * 0.87 + aPh * 2.0) * 0.4;
-          p.z += cos(uTime * 0.27 + aPh * 1.3) * 1.6;
-          p.y += sin(uTime * 0.6 + aPh * 0.7) * 0.5;
-          // wrap around the camera box so the swarm always surrounds her
-          vec3 w = mod(p - uCenter + uBox * 0.5, uBox) - uBox * 0.5 + uCenter;
-          w.y = uGround + p.y;
-          vec4 mv = modelViewMatrix * vec4(w, 1.0);
-          float blink = smoothstep(0.2, 1.0, sin(uTime * 1.7 + aPh * 3.1) * 0.5 + 0.5);
-          vA = blink * uBright * smoothstep(60.0, 8.0, -mv.z);
-          gl_PointSize = (2.0 + 3.0 * blink) * clamp(48.0 / max(1.0, -mv.z), 0.8, 5.0);
-          gl_Position = projectionMatrix * mv;
-        }`,
-      fragmentShader: `uniform vec3 uColor; varying float vA;
-        void main() { vec2 d = gl_PointCoord - 0.5; float r = dot(d, d); if (r > 0.25) discard; gl_FragColor = vec4(uColor * (1.4 - r * 4.0), vA * (1.0 - r * 4.0)); }`,
+    // PERF §1.2: one module of the linked fx program (no program of its own)
+    const mat = fxShaderMaterial({
+      name: 'fireflies', uniforms: this.uniforms, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+      vertexShader: FIREFLY_VS, fragmentShader: FIREFLY_FS,
     });
     mat.userData.owned = true; mat.userData.noHeightFog = true;
     this.points = new THREE.Points(g, mat);

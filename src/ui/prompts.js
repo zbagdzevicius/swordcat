@@ -1,5 +1,5 @@
 // src/ui/prompts.js  (owner: ui) — on-screen instructions:
-//  • interaction tags (§14.2 world space: "parchment plus a wax-seal key glyph") from interact:available / clear;
+//  • interaction tags (§14.2 world space: a cream candy tag plus a wax-seal key glyph) from interact:available / clear;
 //  • story prompts (§14.3 "prompt overlays ('HOLD THE STAND' with a filling ring)") from story:prompt;
 //  • the tutorial hint card (§6.6 tut.* strings with keyboard / gamepad / touch glyphs swapped in), driven by
 //    `ui.hint(keyOrText, opts)` or quest:update { questId, state, text }.
@@ -14,16 +14,41 @@ const _v = new THREE.Vector3(), _f = new THREE.Vector3(), _d = new THREE.Vector3
 const HINT_CALM = 2;      // s clear before a faded hint card comes back
 const HINT_POLL = 0.1;    // s between occlusion checks
 const HINT_PAD = 24;      // px around the card that still counts as covering a foe
+const TAG_ABOVE = 1.25;   // m above the target where the interaction tag sits
+const TAG_BELOW = -0.15;  // m: the fallback anchor under the target when the top band is taken (the boss bar)
+const TAG_GAP = 10;       // px kept clear under the boss bar / objective line
+const TAG_SIDE = 70;      // px either side of that column that still counts (half a tag)
+const KEEP_POLL = 0.25;   // s between boss-bar rect reads
+
+/** Interaction kinds hidden while a boss fight is on (no "Rest" pill over the fight, review: tag over the boss bar). */
+export const BOSS_HIDDEN_TAGS = Object.freeze(['vigil', 'rest']);
 
 /**
- * Does the hint card (screen rect) sit over the live joystick or an alerted foe? Reads ctx.ui.touch (stick) and
- * ctx.enemies.list (alive / alerted / pos) defensively.
- * @param {{ left: number, top: number, right: number, bottom: number }} r @param {any} ctx
+ * Where the interaction tag goes (screen px). Above the object normally; when that point would sit inside the top
+ * keep-out band (the boss bar), the tag anchors under the object instead, and never higher than the band. Pure.
+ * @param {number} yAbove tag y when placed above the object @param {number} yBelow tag y under the object
+ * @param {number} keepTop px from the top that must stay clear (0 = none)
+ * @returns {number}
  */
-export function hintCovers(r, ctx) {
+export function tagY(yAbove, yBelow, keepTop) {
+  if (!(keepTop > 0) || yAbove >= keepTop) return yAbove;
+  return Math.max(yBelow, keepTop);
+}
+
+/** May the interaction tag for `kind` show? Rest stops wait while a boss encounter is active. Pure. */
+export function tagAllowed(kind, bossOn) {
+  return !(bossOn && BOSS_HIDDEN_TAGS.includes(kind));
+}
+
+/**
+ * Does a hint layer (screen rect) sit over an alerted foe, or (`stick`) the live joystick? Reads ctx.ui.touch (stick)
+ * and ctx.enemies.list (alive / alerted / pos) defensively.
+ * @param {{ left: number, top: number, right: number, bottom: number }} r @param {any} ctx @param {boolean} [stick]
+ */
+export function hintCovers(r, ctx, stick = true) {
   if (!r || r.right <= r.left) return false;
   const tc = ctx?.ui?.touch;
-  if (tc?.stick?.id != null && tc.base) {
+  if (stick && tc?.stick?.id != null && tc.base) {
     const b = tc.base.getBoundingClientRect();
     if (b.right > r.left && b.left < r.right && b.bottom > r.top && b.top < r.bottom) return true;
   }
@@ -40,6 +65,15 @@ export function hintCovers(r, ctx) {
     if (x > r.left - HINT_PAD && x < r.right + HINT_PAD && y > r.top - HINT_PAD && y < r.bottom + HINT_PAD) return true;
   }
   return false;
+}
+
+/**
+ * May the hint / prompt layers (lesson card, guide bubble, tips) show? Only in live play: never in a cutscene, a
+ * dialogue scene, under the letterbox, in a menu or the Meme Cam. Pure.
+ * @param {{ hud?: boolean, meme?: boolean, mode?: string, dialog?: boolean, letterbox?: boolean, menu?: boolean, cinema?: boolean }} s
+ */
+export function hintLayerOn(s) {
+  return !!s.hud && !s.meme && s.mode === 'play' && !s.dialog && !s.letterbox && !s.menu && !s.cinema;
 }
 
 /** Short label for an interaction tag: `prompt.<kind>` beats a long tutorial sentence. Pure. */
@@ -70,6 +104,9 @@ export class Prompts {
     this.hintData = null;         // { text, step, total, t, sec }
     /** WA §7.5 guide bubble (story:prompt payloads with a `speaker`) */
     this.guide = new Guide(ctx, parent);
+    this._hintB = { t: 0, poll: 0 }; this._guideB = { t: 0, poll: 0 }; this._promptB = { t: 0, poll: 0 };
+    this.bossOn = false;          // a boss encounter is running (boss:start … boss:defeated / level change)
+    this._keepTop = 0; this._keepL = 0; this._keepR = 0; this._keepPoll = 0;
     const bus = ctx.bus;
     this._offs = [
       bus.on(E.INTERACT_AVAILABLE, (p) => { this.target = p?.target ?? null; this.tagPrompt = p?.prompt ?? null; this._drawTag(); }),
@@ -80,7 +117,9 @@ export class Prompts {
       bus.on(E.INPUT_DEVICE, () => this._redraw()),
       bus.on(E.INPUT_SCHEME, () => this._redraw()),          // CONTROLS_SPEC §12 ui 3: glyphs follow the preset
       bus.on(E.SETTINGS_CHANGED, (p) => { if (p?.key === 'bindings' || p?.key === 'controlPreset') this._redraw(); }),
-      bus.on(E.LEVEL_LOADING, () => { this.target = null; this.hint(null); this.prState = null; flag(this.prompt, 'is-on', false); this.guide.hide(); }),
+      bus.on(E.BOSS_START, () => { this.bossOn = true; this._keepPoll = 0; }),
+      bus.on(E.BOSS_DEFEATED, () => { this.bossOn = false; this._keepTop = 0; }),
+      bus.on(E.LEVEL_LOADING, () => { this.bossOn = false; this._keepTop = 0; this.target = null; this.hint(null); this.prState = null; flag(this.prompt, 'is-on', false); this.guide.hide(); }),
     ];
   }
 
@@ -102,7 +141,7 @@ export class Prompts {
     // WA §7.5: a speaker turns the prompt into the guide bubble (one bubble; the old card steps aside)
     if (p.speaker) { if (this._tutKey) { this._tutKey = null; this.hint(null); } this.guide.onPrompt(p); return; }
     if (p.kind === 'tutorial' && this.guide.open && !p.done) this.guide.hide();
-    if (p.kind === 'tutorial') {                 // Midnight Practice: the parchment hint card (requests/story.md)
+    if (p.kind === 'tutorial') {                 // the lesson card for a prompt without a guide (requests/story.md)
       if (p.done || !p.textKey) { if (!this._tutKey || this._tutKey === p.textKey || p.done) { this._tutKey = null; this.hint(null); } return; }
       this._tutKey = p.textKey;
       this.hint(p.textKey, { step: p.step, total: p.total, vars: p.vars });
@@ -164,16 +203,25 @@ export class Prompts {
     const ctx = this.ctx, cam = ctx.camera;
     // interaction tag above the target
     let tagOn = false;
-    if (this.target && vis.world && cam) {
+    this._keepOut(dt);
+    const hud = ctx.ui?.hud, bossOn = hud ? !!hud.boss : this.bossOn;           // the hud's boss is the truth (a stray defeat signal never ends it)
+    if (this.target && vis.world && cam && tagAllowed(this.target.kind, bossOn)) {
       const pos = this.target.position;
       if (pos) {
-        _v.set(pos.x ?? pos[0] ?? 0, (pos.y ?? pos[1] ?? 0) + 1.25, pos.z ?? pos[2] ?? 0);
+        const px = pos.x ?? pos[0] ?? 0, py = pos.y ?? pos[1] ?? 0, pz = pos.z ?? pos[2] ?? 0;
+        _v.set(px, py + TAG_ABOVE, pz);
         cam.getWorldDirection(_f); _d.copy(_v).sub(cam.position);
         if (_d.dot(_f) > 0) {
           _v.project(cam);
           if (Math.abs(_v.x) < 1.05 && Math.abs(_v.y) < 1.05) {
             tagOn = true;
-            place(this.tag, (_v.x * 0.5 + 0.5) * window.innerWidth, (-_v.y * 0.5 + 0.5) * window.innerHeight);
+            const H = window.innerHeight, x = (_v.x * 0.5 + 0.5) * window.innerWidth, yA = (-_v.y * 0.5 + 0.5) * H;
+            let y = yA;
+            if (this._keepTop > 0 && yA < this._keepTop && x > this._keepL && x < this._keepR) {   // the top column owns that band: hang the tag below
+              _v.set(px, py + TAG_BELOW, pz).project(cam);
+              y = tagY(yA, (-_v.y * 0.5 + 0.5) * H, this._keepTop);
+            }
+            place(this.tag, x, y);
           }
         }
       }
@@ -187,23 +235,49 @@ export class Prompts {
     flag(this.hintEl, 'is-dim', !vis.hint);
     this.guide.render(dt, !!vis.hint);
     flag(this.hintEl, 'is-guided', this.guide.open);      // one bubble on screen (WA §6.1 rule 6)
-    this._busyHint(dt, !!h && vis.hint);
+    this._busy(this.hintEl, this._hintB, dt, !!h && vis.hint);
+    this._busy(this.prompt, this._promptB, dt, !!this.prState && vis.hint);   // 'HOLD THE STAND' never hides a foe
+    this._busy(this.guide.root, this._guideB, dt, this.guide.open && vis.hint);
     setVar(this.hintEl, '--sub', (ctx.state?.settings?.subtitleSize ?? 1).toFixed(2));
   }
 
   /**
-   * Touch: fade the hint card back while it covers the floating stick or an alerted foe, and restore it after
-   * HINT_CALM seconds clear. The card rect is re-read at most every HINT_POLL s (a layout read).
-   * @param {number} dt @param {boolean} on the card is up and visible
+   * The top keep-out band: the top-centre column (the boss bar while it is up, the objective line) as its bottom edge
+   * plus a gap (`_keepTop`, px; 0 = none) and its horizontal span (`_keepL` … `_keepR`). Rects are read at most every
+   * KEEP_POLL s.
+   * @param {number} dt
    */
-  _busyHint(dt, on) {
-    if (!on || this.device !== 'touch') { this._hintBusyT = 0; this._hintPoll = 0; flag(this.hintEl, 'is-busy', false); return; }
-    if ((this._hintPoll = (this._hintPoll ?? 0) - dt) <= 0) {
-      this._hintPoll = HINT_POLL;
-      if (hintCovers(this.hintEl.getBoundingClientRect(), this.ctx)) this._hintBusyT = HINT_CALM;
+  _keepOut(dt) {
+    if ((this._keepPoll -= dt) > 0) return;
+    this._keepPoll = KEEP_POLL;
+    const hud = this.ctx.ui?.hud;
+    this._keepTop = 0; this._keepL = Infinity; this._keepR = -Infinity;
+    this._keepAdd(hud?.bossEl); this._keepAdd(hud?.objEl);
+    this._keepL -= TAG_SIDE; this._keepR += TAG_SIDE;
+  }
+
+  /** Grow the keep-out band by element `b` when it is up. */
+  _keepAdd(b) {
+    if (!b?.classList?.contains('is-on')) return;
+    const q = b.getBoundingClientRect();
+    if (!(q.bottom > 0) || q.width <= 0) return;
+    this._keepTop = Math.max(this._keepTop, q.bottom + TAG_GAP); this._keepL = Math.min(this._keepL, q.left); this._keepR = Math.max(this._keepR, q.right);
+  }
+
+  /**
+   * Fade a hint layer (the lesson / objective card, the guide bubble) back while it covers an alerted foe (every
+   * device: a hint never sits on top of the fight) or, on touch, the floating stick; full again after HINT_CALM s
+   * clear. The rect is re-read at most every HINT_POLL s (one layout read).
+   * @param {HTMLElement} e @param {{ t: number, poll: number }} b its busy state @param {number} dt @param {boolean} on it is up and visible
+   */
+  _busy(e, b, dt, on) {
+    if (!on) { b.t = 0; b.poll = 0; flag(e, 'is-busy', false); return; }
+    if ((b.poll -= dt) <= 0) {
+      b.poll = HINT_POLL;
+      if (hintCovers(e.getBoundingClientRect(), this.ctx, this.device === 'touch')) b.t = HINT_CALM;
     }
-    this._hintBusyT = Math.max(0, (this._hintBusyT ?? 0) - dt);
-    flag(this.hintEl, 'is-busy', this._hintBusyT > 0);
+    b.t = Math.max(0, b.t - dt);
+    flag(e, 'is-busy', b.t > 0);
   }
 
   dispose() { for (const off of this._offs) off(); this.tag.remove(); this.prompt.remove(); this.hintEl.remove(); this.guide.dispose(); }

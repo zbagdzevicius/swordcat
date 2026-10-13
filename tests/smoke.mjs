@@ -234,6 +234,8 @@ const withTimeout = (p, ms) => {
 };
 
 const t0 = Date.now();
+const RELOAD_EVERY = +(process.env.SMOKE_RELOAD_EVERY ?? 50);
+let sinceReload = 0;
 try {
   console.log(`smoke → ${base}  gpu=${GPU}  (${selected.length}/${blocks.length} blocks${ONLY.length ? `, SMOKE_ONLY=${ONLY.join(',')}` : ''})`);
   await boot();
@@ -242,7 +244,14 @@ try {
     const bt = Date.now();
     console.log(`▶ ${b.name}`);
     try {
-      if (b.reload) { await page.reload({ timeout: BOOT_TIMEOUT }); await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: BOOT_TIMEOUT }); }
+      // a fresh page every RELOAD_EVERY blocks (only before a hermetic block, which reloads its level anyway): one page
+      // through ~240 blocks / 70+ min ran the GPU process out and painted the page white (integrator, Phase W)
+      const fresh = b.level && sinceReload >= RELOAD_EVERY;
+      if (b.reload || fresh) { await page.reload({ timeout: BOOT_TIMEOUT }); await page.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: BOOT_TIMEOUT }); sinceReload = 0; }
+      sinceReload++;
+      // hermetic blocks start at the harness viewport (a block that resized the page for its own shots no longer leaks
+      // its size into every later block: art:warm / bubble checks then measured 1920 × 1080 frames)
+      if (b.level) { const vp = page.viewportSize(); if (!vp || vp.width !== 1280 || vp.height !== 720) { await page.setViewportSize({ width: 1280, height: 720 }); await t.frames(10); } }
       if (b.level) {
         // hermetic blocks: every block with a `level` starts from boot-like progress (default §19.7 state, settings
         // kept, no party, no stray enemies, real-time sim, no held input), exactly as when it runs alone. Blocks

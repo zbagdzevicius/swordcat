@@ -78,6 +78,9 @@ export class KittenView {
     // hero pop-out (WARM_ADVENTURE_SPEC §3.3): the visual root grows in the iso gameplay modes (hitboxes unchanged)
     const tags = this.actor?.tags;
     this.role = o.role ?? (tags?.has?.('player') || kitten.tier === 'hero' ? 'hero' : tags?.has?.('companion') ? 'companion' : 'npc');
+    // perf().byCat bucket (PERF §4; core request): the owner may already have tagged its root
+    // (PERF_CATS: residents / kittens fall into their parent's bucket)
+    if (!kitten.root.userData.perfCat && this.role !== 'npc') kitten.root.userData.perfCat = this.role === 'hero' ? 'hero' : 'companions';
     this._baseScale = kitten.root.scale.x;
     this._playK = 1;
     this._actOverride = null;

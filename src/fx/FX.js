@@ -158,6 +158,7 @@ export class FX {
     const ctx = this.ctx, scene = ctx.scene, bus = ctx.bus;
     const rng = ctx.rng?.fork ? ctx.rng.fork('fx') : Math.random;
     this.rng = rng;
+    const firstChild = scene?.children?.length ?? 0;
     const ground = (x, z, fb) => groundY(ctx, x, z, fb);
     this.particles = new Particles({ rng, groundY: ground });
     this.particles.attach(scene);
@@ -213,6 +214,7 @@ export class FX {
     this.clouds = new CloudShadows(ctx);
     this.clouds.init(scene);
     if (ctx.params?.debug && !ctx.params?.test) { this.debugFrame = new DebugOverlay(ctx); this.debugFrame.init(scene); }
+    this._tagPerf(scene, firstChild);
     this._applyQuality(ctx.quality);
     this._offs.push(ctx.game?.addFrameHook?.(() => { this.screen.afterFrame(); this._warmEnd(); }) ?? (() => {}));
     this._warm = 1;
@@ -245,7 +247,7 @@ export class FX {
     on(E.PLAYER_HEALED, (p) => this._onHeal(p));
     on(E.PLAYER_DODGE, () => { const pl = ctx.player; if (pl) this.poofs.dust(actorWorldPos(pl, _p), 1, 6); });
     on(E.PLAYER_LAND, (p) => { const pl = ctx.player; if (pl && (p?.impact ?? 0) > PLAYER.hardLandSpeed * 0.75) this.poofs.dustRing(actorWorldPos(pl, _p), 0.8); });
-    on(E.PLAYER_PERFECT_DODGE, (p) => { this._onPerfectDodge(p); if (!p?.graze) this.word('perfectDodge'); });
+    on(E.PLAYER_PERFECT_DODGE, (p) => { this._onPerfectDodge(p); if (!p?.graze && typeof ctx.player?.sayWord !== 'function') this.word('perfectDodge'); });
     on(E.PLAYER_GRIT, (p) => { if (p?.broken && ctx.player) this._guardBreak(ctx.player); });
     on(E.PLAYER_STILL_STANDING, () => this._stillStanding());
     on(E.PLAYER_MEOW, (p) => this._meow(p));
@@ -258,6 +260,7 @@ export class FX {
     on(E.LEVEL_UNLOAD, () => this.clear());
     on(E.LEVEL_LOADED, (p) => { this._onLevel(p?.id); this._warm = 1; });
     on(E.ENV_CHANGED, (p) => { if (this.levelId) this._onLevel(this.levelId, p?.grade); });
+    on(E.PERF_THERMAL, (p) => { if (this.particles) this.particles.setTier({ countScale: (this._low() ? 0.5 : 1) * this._thermalScale(p?.particleScale), flat: this._low() }); });
     on(E.QUALITY, (p) => { this._applyQuality(p?.preset ?? ctx.quality); this._warm = 1; });
     on(E.MEME_CAM, (p) => { this._memeMist = !!p?.on; this.mist.speedMul = p?.on ? (PLAYER.memeCam.mist ?? 2) : 1; });
     if (ctx.levels?.current?.id) this._onLevel(ctx.levels.current.id);
@@ -304,10 +307,12 @@ export class FX {
         P.burst(actor ? _p.setY(_p.y + h * 1.1) : _p, { n: n(1), shape: SHAPE.HEART, color: opts.color ?? '#FF8FB1', size: [0.18 * S, 0.24 * S], sizeEnd: 1.25,
           grow: GROW.BACK, fade: FADE.HOLD, life: [0.9, 1.2], speed: [0.2, 0.5], up: 0.9, drag: 1.5, jitter: 0.12 });
         return;
-      case 'heal':
-        P.burst(mid(), { additive: true, n: n(10), shape: SHAPE.STAR4, color: opts.color ?? '#7FD38A', intensity: 1.8, size: [0.1, 0.18], sizeEnd: 0.3,
-          life: [0.6, 1.0], speed: [0.3, 0.8], up: 1.4, drag: 1.2, fade: FADE.TWINKLE, jitter: 0.35 });
-        P.burst(_p, { n: 2, shape: SHAPE.HEART, color: '#7FD38A', size: [0.14, 0.18], sizeEnd: 1.1, grow: GROW.BACK, fade: FADE.HOLD,
+      case 'heal':        // ART §8.6: 6 mint plus-signs rising (+ a small mint twinkle and 2 hearts)
+        P.burst(mid(), { n: n(6), shape: SHAPE.PLUS, color: opts.color ?? '#9BE3C4', size: [0.14 * S, 0.2 * S], sizeEnd: 0.6,
+          grow: GROW.BACK, life: [0.7, 1.0], speed: [0.3, 0.7], up: 1.4, drag: 1.2, fade: FADE.HOLD, jitter: 0.35 });
+        P.burst(_p, { additive: true, n: 4, shape: SHAPE.STAR4, color: '#DFFBEF', intensity: 1.6, size: [0.08, 0.14], sizeEnd: 0.3,
+          life: [0.5, 0.8], speed: [0.3, 0.7], up: 1.2, drag: 1.2, fade: FADE.TWINKLE, jitter: 0.3 });
+        P.burst(_p, { n: 2, shape: SHAPE.HEART, color: '#FF8FB1', size: [0.14, 0.18], sizeEnd: 1.1, grow: GROW.BACK, fade: FADE.HOLD,
           life: [0.8, 1.0], speed: [0.1, 0.3], up: 1.0, drag: 1.5, jitter: 0.2 });
         return;
       case 'spawn': this.poofs.spawn(_p, S); return;
@@ -470,16 +475,23 @@ export class FX {
     if (!this.numbers || !toVec3(pos, _v)) return;
     this.counts.numbers++;
     this.numbers.show(_v, String(text), style, key, value);
+    if (style === 'pop') { try { this.ctx.audio?.play2D?.('comicPop'); } catch { /* audio optional */ } }   // WA §5.3 (tutorial / companions pops)
   }
 
   /**
    * WA §5.3 a word over HER head: `id` a DamageNumbers WORDS key ('slash1', 'slash2', 'slash3', 'bright', 'holy',
    * 'parry', 'perfectDodge', 'riposte', 'finalBlow') or literal text. ≤ 1 per 0.25 s; off with settings.hitWords
-   * false. Player emits the combo / final-blow words; fx adds parry and perfect-dodge itself. → shown?
+   * false. Player emits the combo / final-blow words; fx adds perfect-dodge itself only for a player without
+   * `sayWord`. Also the player's form `word(pos, text, { kind, actor })` (pos already lifted; no fx rate limit). → shown?
    */
-  word(id, at = null) {
+  word(id, at = null, opts = null) {
     const pl = this.ctx.player;
     if (!this.numbers) return false;
+    // the player's form (requests/fx.md): word(pos, text, { kind, actor }); pos is already lifted above her head and
+    // the player applied `hitWords` and its own 0.25 s limit, so ours is skipped
+    if (typeof id !== 'string' && toVec3(id, _q)) {
+      return this.numbers.word(opts?.kind ?? at, _q, { text: typeof at === 'string' ? at : null, lifted: true, force: true });
+    }
     if (at && toVec3(at, _q)) return this.numbers.word(id, _q);
     if (!isActor(pl)) return false;
     return this.numbers.word(id, headPoint(pl, _q, 0));
@@ -495,7 +507,9 @@ export class FX {
     const a = resolveActor(this.ctx, target);
     if (a) headPoint(a, _q, 0.2); else if (!toVec3(target, _q)) return false;
     this._popsSeen.add(id);
-    return this.numbers.pop(id, _q);
+    const shown = this.numbers.pop(id, _q);
+    if (shown) { try { this.ctx.audio?.play2D?.('comicPop'); } catch { /* audio optional */ } }   // fx owns the pop rate limit
+    return shown;
   }
 
   /** ART §9.1 a full-screen flash: a ScreenFX FLASH kind ('hurt' | 'rescue' | 'card' | 'storm') or (colour, alpha, dur). */
@@ -513,6 +527,7 @@ export class FX {
    */
   dizzyFor(actor, sec, { gold = false, r = 0, rev = 0 } = {}) {
     if (!isActor(actor)) return;
+    if (actor === this.ctx.player) { r ||= KO.starR; rev ||= KO.starRev; }   // WA §5.7 her knock-out stars
     const d = this.dizzy.get(actor);
     if (d) { d.dur = Math.max(d.dur - d.t, sec); d.t = 0; d.gold ||= gold; if (r) d.r = r; if (rev) d.rev = rev; return; }
     this.dizzy.set(actor, { t: 0, dur: sec, gold, r, rev });
@@ -553,7 +568,7 @@ export class FX {
         shocks: this.shock?.active ?? 0, shocksStarted: this.shock?.started ?? 0, cracks: this.shock?.activeCracks ?? 0, cracksStarted: this.shock?.crackCount ?? 0,
         webs: this.webs?.count ?? 0, websMade: this.webs?.made ?? 0, webCuts: this.webs?.cuts ?? 0, sunRays: this.sunRays?.mode ?? null,
         sunOpened: this.sunRays?.opened ?? 0, sunBursts: this.sunRays?.bursts ?? 0,
-        lanterns: this.lanterns?.count ?? 0, lanternsLit: this.lanterns?.litCount ?? 0, lanternLights: this.lanterns?.pool.length ?? 0,
+        lanterns: this.lanterns?.count ?? 0, lanternsLit: this.lanterns?.litCount ?? 0, lanternLights: 0, lanternLamps: this.lanterns?.lampCount ?? 0, lanternPending: this.lanterns?.pending ?? 0,
         lanternLightsOn: this.lanterns?.lightsOn ?? 0, ignitions: this.lanterns?.ignitions ?? 0, jeers: this.encounters?.jeerCount ?? 0,
         thieves: this.encounters?.thieves.size ?? 0,
         line: this.encounters ? { active: this.encounters.line.active, pct: this.encounters.line.pct, frozen: this.encounters.line.frozen,
@@ -687,11 +702,23 @@ export class FX {
   /** Low tier (ART §8.6): counts ×0.5 and flat confetti everywhere. */
   _low(q = this.ctx.quality) { return q?.id === 'low' || (q?.particles ?? 2000) < 1000; }
 
+  /** PERF §5.4 thermal rung 2+: `postfx.particleScale` (0.5) multiplies every burst count; 1 without a PostFX. */
+  _thermalScale(p = this.ctx.postfx?.particleScale) { return Number.isFinite(p) && p > 0 ? Math.min(1, p) : 1; }
+
+  /** PERF §12: tag every fx root `userData.perfCat = 'fx'` so `perf().drawsByCat` counts them (init time only). */
+  _tagPerf(scene, before) {
+    const kids = scene?.children;
+    if (!kids) return 0;
+    let n = 0;
+    for (let i = before; i < kids.length; i++) { const o = kids[i]; if (o?.userData && o.userData.perfCat == null) { o.userData.perfCat = 'fx'; n++; } }
+    return n;
+  }
+
   _applyQuality(q) {
     if (!q || !this.particles) return;
     const low = this._low(q);
     this.particles.setBudget(q.particles ?? 2000);
-    this.particles.setTier({ countScale: low ? 0.5 : 1, flat: low });
+    this.particles.setTier({ countScale: (low ? 0.5 : 1) * this._thermalScale(), flat: low });
     this.mist.setCount(MIST_COUNT[q.id] ?? MIST_COUNT.med);
     this.groundMist?.setQuality(q);
     this.ambient.setBudget(low ? 0.5 : 1);
@@ -710,8 +737,6 @@ export class FX {
     this.butterflies?.setLevel(id, { hub, low, night });
     this.lightPools?.setLevel(id, low);
     this.clouds?.setLevel(id, low);
-    // a level without light-casting fx lanterns drops the pooled lantern lights (one less light in every program)
-    if (this.lanterns && !this.lanterns.castCount) this.lanterns.dropLights();
   }
 
   /** ART §8.6 kitten rescue burst at the carrier / kitten (payload `position`, else the kitten actor). */
@@ -865,7 +890,7 @@ export class FX {
   _onHeal(p) {
     const pl = this.ctx.player;
     if (!isActor(pl) || !(p?.amount > 0)) return;
-    this.burst('heal', pl, { count: 12 });
+    this.burst('heal', pl);
     const t = formatHeal(p.amount);
     if (t) this.damageNumber(headPoint(pl, _q, 0.15), t.text, t.style);
   }

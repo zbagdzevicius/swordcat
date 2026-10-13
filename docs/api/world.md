@@ -309,3 +309,17 @@ World's own fallback warm-up now skips `boss_*` types too (it spawned B1 at the 
 - **Look:** grass tiles and LOD follow `cam.focus` (near tile 36 m, blades ×1.25 wider), ground under grass −10 %;
   wheat trample field (`Wheat.TRAMPLE`: her + 4 enemies, bend within 1.4 m, flatten to 40 % within 0.9 m); shadow box
   16 m (boss 20 m) around the focus; the gate deck bricks ×1.1; bounce caps carry an up-arrow facing screen-up.
+
+## PERF §1.2: world program consolidation
+- `Props.js` `worldStatic(m)` → feature uniforms of ONE Lambert patch (`world-static-v1`): `uWDetail` (detail noise),
+  `uWInk` (ink rim, 1 = off), `uWStone` (dressed stone), `uWGround` (ground noise / specks), `uTreeH` + `uTime` /
+  `uWind` (tree canopy shading + sway). `worldMaterial()` installs it (all off); `withDetailNoise`, `applyInkRim`,
+  `makeStoneMaterial`, `makeGroundMaterial`, `makeTreeMaterial` only set uniforms (no key variants). A material with
+  another hook (bunting, wheat, grass, water) keeps its own key; `applyInkRim` composes there as before.
+- `Dressing.texturedMaterial`: mix / gain / joint lift / contrast are uniforms (`world-tex-v2`, `m.userData.texU`).
+  Flames, flame halos and fireflies are fx modules (`Dressing.js` is imported at boot by LevelManager so they link before
+  the first compile); the halo colour is the `aGlowCol` instanced attribute (not `instanceColor`).
+- Pickups: hearts carry a white `instanceColor` (they share the fish program); plain pickups (heart bell, milk, letter)
+  are vertex-coloured `worldMaterial`s. Critters (`PropActor` merged skinned) draw with one shared skinned WarmToon
+  (`userData.noDispose`; `disposeOwned` skips such materials). Vigil glow sprites and the town lantern glow are unfogged
+  (one sprite program); the vigil flame and the far silhouettes are `fxBasicMaterial`s; the sky is an fx module.

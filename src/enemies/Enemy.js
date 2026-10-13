@@ -23,15 +23,20 @@ import { E } from '../core/events.js';
 import { ATTACKS, PLAYER, TELEGRAPH, COMPANIONS, CAMERA, qualityShadowsOn } from '../core/config.js';
 import { damp, dampAngle, wrapAngle, clamp } from '../core/math.js';
 import { depthFor } from '../core/depth.js';
+import { KIND } from '../core/ActorRegistry.js';
 import { TUNING, M2, WARM, rangeOf } from './tuning.js';
 import { clipKey, clipsFor, isSpec, specDuration } from './clipMaps.js';
-import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright, applyPalette, stripConstantScaleTracks, scaleBones, setCasting } from './rig.js';
+import { flashMaterials, markOwned, disposeInstanceMaterials, applyUpright, applyPalette, stripConstantScaleTracks, scaleBones, setCasting, toonify } from './rig.js';
 import { paletteFor, boneScalesFor } from './palette.js';
 import { EnemyLook } from './look.js';
 import { friendWordFor, displayNameFor } from './names.js';
 import { rangedStartAllowed } from './onscreen.js';
 import { topTint } from '../characters/Readability.js';
 import { SHADOW_STAGE } from '../world/StaticShadow.js';
+import { bakeEnemyVisual } from './bake.js';
+
+/** `?bake=0`: keep enemy visuals unbaked (A/B of PERF §9.4; not a core URL switch, read here). */
+const NO_BAKE = typeof location !== 'undefined' && /[?&]bake=0(&|$)/.test(location.search ?? '');
 
 let teleId = 1;
 /** States an open-zone enemy leaves (→ return) when she is walled off inside a locked arena it isn't part of. */
@@ -182,6 +187,9 @@ export function segSegXZ(a0x, a0z, a1x, a1z, b0x, b0z, b1x, b1z, out) {
   return dx * dx + dz * dz;
 }
 const _seg = { ax: 0, az: 0, bx: 0, bz: 0 };
+/** resolveBody candidates: player + allies (KIND bits), written into a reused array */
+const BODY_MASK = KIND.player | KIND.ally;
+const _bodyCands = [];
 
 /**
  * ART §7.1 "faint and poof" timeline for a defeat, or null for the legacy path (bosses sit down for their befriend
@@ -425,6 +433,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.type = def.id;
     this.spawnOpts = spawn;
     this.tags.add('enemy');
+    this.object3d.userData.perfCat = 'enemies';           // core perf drawsByCat (PERF §12)
     for (const t of def.tags ?? []) this.tags.add(t);
     this.home = new THREE.Vector3().copy(spawn.pos ?? this.pos);
     this.pos.copy(this.home);
@@ -684,9 +693,12 @@ export class Enemy extends ScriptedActorMixin(Actor) {
   resolveBody() {
     const b = this.def.body;
     if (!b || !this.alive || this.dormant || this.flying || this.attachedTo) return;
-    const list = this.ctx.actors?.list;
-    if (!list) return;
+    const reg = this.ctx.actors;
+    if (!reg?.list) return;
     const s = this.spine(_spA);
+    // PERF §11 A15: typed query (her side only), no filter closure; radius covers the whole spine around `pos`
+    const list = typeof reg.queryRadiusTyped === 'function'
+      ? reg.queryRadiusTyped(this.pos, Math.max(b.front, b.back) + s.r, BODY_MASK, _bodyCands) : reg.list;
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
       if (!a || a === this || a.faction === 'enemy' || a.faction === 'neutral' || a.alive === false || !a.pos || !(a.radius > 0)) continue;
@@ -1391,8 +1403,18 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       // ART §7.2: big readable heads (static bone scales; the gear on a bone grows with it)
       const bs = def.boneScales ?? boneScalesFor(def.model);
       if (bs) scaleBones(m.scene, bs);
-      // CONTROLS_SPEC §12 characters 3: helmet tops read from above (owned materials are patched in place, per instance)
+      // ART §7.3 step 3 / X28: GLB standard materials → pooled per-actor toon materials (uFlash / uHighlight, no clones)
+      if (!def.noToon) { try { toonify(m.root, def.id); } catch (err) { console.warn(`[enemy] toon materials for ${def.id}`, err); } }
+      // CONTROLS_SPEC §12 characters 3: helmet tops read from above. After toonify: the tint is a uniform of the toon
+      // program (PERF §1.2: no extra program); owned non-toon materials are still patched in place, per instance
       if (this.ctx.cam?.isIso !== false && !def.noTopTint) { try { topTint(m.root); } catch { /* cosmetic only */ } }
+      // PERF §9.4 / §5: body + rigid gear → one skinned draw (the helmet, beast head, plate, toggled and upright props
+      // keep their own); `?bake=0` keeps the unbaked parts for A/B
+      if (def.bake && !NO_BAKE) {
+        try {
+          bakeEnemyVisual(m.root, def.id, { skip: [this.helmet, this.head?.root, this.plate?.mesh ?? this.plate, ...Object.values(this.extraProps ?? {}), ...(this.uprightProps ?? [])] });
+        } catch (err) { console.warn(`[enemy] bake failed for ${def.id}`, err); }
+      }
       this._flash = def.noFlash ? [] : flashMaterials(m.root);
       this.anim = new Animator(m.scene, clipsFor(def.anims, m.animations));
       this._animKey = '';

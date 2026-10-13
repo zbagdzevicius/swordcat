@@ -14,7 +14,7 @@ import * as config from '../../src/core/config.js';
 import { E } from '../../src/core/events.js';
 import { TELEGRAPH, PLAYER, JUICE, QUALITY } from '../../src/core/config.js';
 import { FX, hitJuice, BURST_KINDS, MIST_COUNT } from '../../src/fx/FX.js';
-import { normalizeTelegraph, isTracking, fillProgress, decalBounds, defaultShape, originMode, SHAPES, KINDS } from '../../src/fx/Telegraphs.js';
+import { normalizeTelegraph, isTracking, fillProgress, decalBounds, defaultShape, originMode, SHAPES, KINDS, telegraphGlyph, glyphSpots, TELE_GLYPH, TELE_LOOK } from '../../src/fx/Telegraphs.js';
 import { trailStyle, trailWindow, TRAIL_COLORS } from '../../src/fx/SwordTrail.js';
 import { formatDamage, formatHeal, DAMAGE_STYLE } from '../../src/fx/DamageNumbers.js';
 import { chargeState } from '../../src/fx/HolyFX.js';
@@ -226,14 +226,16 @@ test('mist walls: cards every ~1.5 m on rings and rectangles; ambient density pe
   assert.ok(MIST_COUNT.low < MIST_COUNT.med && MIST_COUNT.med <= 60 && MIST_COUNT.low >= 20);
 });
 
-test('horde: modes, deterministic layout with cages / spears, the stream parts around her', () => {
+test('horde: modes, deterministic layout with cages / toy props, the stream parts around her', () => {
   assert.equal(hordeMode(true), 'march'); assert.equal(hordeMode(false), 'off'); assert.equal(hordeMode('mill'), 'mill');
   assert.equal(hordeMode('flee'), 'flee'); assert.equal(hordeMode('idle'), 'mill'); assert.equal(hordeMode(null), 'off');
   const a = hordeLayout(40), b = hordeLayout(40);
   assert.deepEqual(a, b, 'deterministic');
   assert.equal(a.length, 40);
   assert.ok(a.filter((m) => m.variant === 2).length >= 6, 'several cage carriers');
-  assert.ok(a.some((m) => m.variant === 1), 'spears');
+  assert.ok(a.some((m) => m.variant === 1), 'pennants'); assert.ok(a.some((m) => m.variant === 3), 'balloons');
+  assert.equal(HORDE.spearEvery, undefined, 'WA tone: no spears (toy props only)');
+  assert.ok(hordeLayout(40, { propEvery: 0 }).every((m) => m.variant === 0 || m.variant === 2), 'props off');
   for (const m of a) { assert.ok(m.u >= -1 && m.u <= HORDE.length + 1); assert.ok(Math.abs(m.lat) <= HORDE.width / 2 + 0.5); }
   assert.equal(partOffset(10, 0.5, 3), 0, 'far along the path: no push');
   assert.ok(partOffset(0, 0.5, 3) > 2, 'right beside her: pushed out to the radius');
@@ -345,6 +347,14 @@ test('FX service: contract methods exist and init builds every pool without a DO
   ctx.scene.traverse((o) => { if (o.isPointLight) lights++; });
   assert.equal(lights, 0, 'no PointLights');
   assert.ok(!names.has('fx.debugFrame'), 'the framing overlay is ?debug only');
+  // PERF §12: every fx root is tagged for perf().drawsByCat
+  for (const o of ctx.scene.children) if (o.name?.startsWith('fx.')) assert.equal(o.userData.perfCat, 'fx', `${o.name} perfCat`);
+  // PERF §5.4 thermal rung 2: particle counts × postfx.particleScale
+  const full = ctx.fx.particles.countScale;
+  ctx.bus.emit(E.PERF_THERMAL, { rung: 2, particleScale: 0.5 });
+  assert.ok(Math.abs(ctx.fx.particles.countScale - full * 0.5) < 1e-9, 'thermal halves burst counts');
+  ctx.bus.emit(E.PERF_THERMAL, { rung: 0, particleScale: 1 });
+  assert.equal(ctx.fx.particles.countScale, full);
   ctx.fx.dispose();
   let left = 0;
   ctx.scene.traverse((o) => { if (o.name?.startsWith('fx.')) left++; });
@@ -623,7 +633,7 @@ test('mist walls: wider near-fade than the ambient field + player focus fade', (
 import { shockRadius, shockAlpha, normalizeShock, slamColor, SLAM_COLORS } from '../../src/fx/Shockwaves.js';
 import { webAlpha, WEB } from '../../src/fx/WebPatches.js';
 import { sunRayEnvelope } from '../../src/fx/SunRays.js';
-import { lanternFlicker, nearestLanterns, LANTERN } from '../../src/fx/Lanterns.js';
+import { lanternFlicker, LANTERN } from '../../src/fx/Lanterns.js';
 import { isLineObjective, repairPct, milestonesCrossed, lootCount, lobVelocity, JEER } from '../../src/fx/Encounters.js';
 import { sparkleLayout } from '../../src/fx/ShopSparkle.js';
 import { jellySize, popsSlime, JELLY_SCALE } from '../../src/fx/FX.js';
@@ -667,13 +677,9 @@ test('M2 Golden Hour rays: open blooms to 2.4 m, holds ~1.7 m, sunburst flares t
   assert.equal(sunRayEnvelope('nope', 0), null);
 });
 
-test('M2 lanterns: CS-04 light numbers, bounded flicker, nearest 2 lit lanterns get the real lights', () => {
-  assert.equal(LANTERN.color, '#FFC46B'); assert.equal(LANTERN.intensity, 1.5); assert.equal(LANTERN.distance, 6); assert.equal(LANTERN.lights, 2);
+test('M2 lanterns: CS-04 light numbers, bounded flicker', () => {
+  assert.equal(LANTERN.color, '#FFC46B'); assert.equal(LANTERN.intensity, 1.5); assert.equal(LANTERN.distance, 6);
   for (let t = 0; t < 20; t += 0.37) { const f = lanternFlicker(t, 3); assert.ok(f >= 0.82 && f <= 1.08); }
-  const list = [{ x: 0, z: 0, lit: true }, { x: 10, z: 0, lit: true }, { x: 1, z: 0, lit: false }, { x: 3, z: 0, lit: true }];
-  assert.deepEqual(nearestLanterns(list, 0.5, 0), [0, 3]);
-  assert.deepEqual(nearestLanterns(list, 9, 0, 1), [1]);
-  assert.deepEqual(nearestLanterns([], 0, 0), []);
 });
 
 test('M2 The Line / theft / jelly / shop helpers', () => {
@@ -760,19 +766,15 @@ test('M2 FX service: jeer fog, theft, jelly, slams, webs, lanterns, The Line and
   assert.equal(w.alive, false);
   await frames(ctx, 40);
   assert.equal(fx.stats().m2.webs, 0); assert.equal(w2.alive, false);
-  // lanterns: 3 lit, only 2 real lights, nearest first
+  // lanterns (K2): no lamp set yet → the lamp sources queue (glow only), never a PointLight
   const glowOnly = fx.lantern([2, 1.5, 2]);
-  assert.equal(fx.stats().m2.lanternLights, 0, 'glow-only lanterns add no lights');
+  assert.equal(fx.stats().m2.lanternPending, 0, 'glow-only lanterns feed no lamp');
   glowOnly.remove();
   const ls = [[0.5, 1.5, 0], [8, 1.5, 0], [30, 1.5, 0]].map((p) => fx.lantern(p, { light: true }));
-  await frames(ctx, 60);
+  await frames(ctx, 10);
   s = fx.stats();
-  assert.equal(s.m2.lanterns, 3); assert.equal(s.m2.lanternLights, 2); assert.equal(s.m2.lanternLightsOn, 2);
-  const lit = fx.lanterns.pool.map((p) => p.owner?.pos.x).sort((a, b) => a - b);
-  assert.deepEqual(lit, [0.5, 8]);
+  assert.equal(s.m2.lanterns, 3); assert.equal(s.m2.lanternLights, 0); assert.equal(s.m2.lanternPending, 3); assert.equal(s.m2.lanternLightsOn, 0);
   ls[0].out();
-  await frames(ctx, 90);
-  assert.deepEqual(fx.lanterns.pool.map((p) => p.owner?.pos.x).sort((a, b) => a - b), [8, 30], 'the light moves to the next lantern');
   const clem = actor(ctx, 'ally', 5, 5, { height: 0.6 });
   const ign0 = fx.stats().m2.ignitions;
   const lh = fx.lantern(clem, { lit: false });
@@ -805,13 +807,13 @@ test('M2 FX service: jeer fog, theft, jelly, slams, webs, lanterns, The Line and
   s = fx.stats();
   assert.equal(s.m2.lanterns, 0); assert.equal(s.m2.webs, 0); assert.equal(s.m2.jeers, 0); assert.equal(s.m2.line.active, false);
   ctx.bus.emit(E.LEVEL_LOADED, { id: 'meadow' });
-  assert.equal(fx.stats().m2.lanternLights, 0, 'pooled lantern lights dropped on a level without them');
+  assert.equal(fx.stats().m2.lanternPending, 0, 'queued lamp sources leave with the level');
   fx.dispose();
 });
 
 // ================================================================== CONTROLS_SPEC (iso controls): fx P3
 // fog (§4.1, C4), ground mist (§4.2), ground decals (§7.3, §8.2, §10.3), constant-size marks (§8.2.3), numbers (§10.4)
-const { withFxFog, fxShaderMaterial, FOG_FACTOR, fogUniforms: isoFogUniforms } = await import('../../src/fx/shaders.js');
+const { withFxFog, fxShaderMaterial, fxFogged, FOG_FACTOR, fogUniforms: isoFogUniforms } = await import('../../src/fx/shaders.js');
 const { HFOG } = await import('../../src/world/HeightFog.js');
 const GD = await import('../../src/fx/GroundDecals.js');
 const GM = await import('../../src/fx/GroundMist.js');
@@ -839,7 +841,9 @@ test('iso fog (C4): fx shader materials get vFogW + HFOG_GLSL and share the HFOG
   assert.equal(c.uniforms.uFogClear, HFOG.uFogClear, 'a clone is re-shared');
   assert.equal((c.fragmentShader.match(/varying vec3 vFogW/g) ?? []).length, 1);
   const noFog = fxShaderMaterial({ fog: false, vertexShader: 'void main(){}', fragmentShader: 'void main(){}' });
-  assert.ok(!noFog.userData.hfog, 'unfogged materials untouched');
+  // PERF §1.2: one linked program, so the material keeps fog on and the module drops it (USE_FOG undefined there)
+  assert.equal(fxFogged(noFog), false, 'unfogged module');
+  assert.ok(noFog.userData.hfog, 'Env never patches a linked material');
 });
 
 test('iso fog (C4): every fogged fx material in the scene measures fog like the level (no lens-only fog maths left)', async () => {
@@ -907,14 +911,14 @@ test('ground mist (§4.2): 8 sheets in the 4–16 m ring, 3.5 m clear disc, hole
   for (const s of L) {
     const d = Math.hypot(s.x - 5, s.z + 3);
     assert.ok(d > 4 && d < 16, `sheet at ${d.toFixed(1)} m`);
-    assert.ok(s.h >= 0.4 && s.h <= 1.3); assert.ok(s.a >= 0.1 && s.a <= 0.22);
+    assert.ok(s.h >= 0.4 && s.h <= 1.3); assert.ok(s.a >= 0.1 && s.a <= 0.14, 'ART §8.1 alpha cap 0.14');
   }
   assert.equal(GM.mistMask(0, 0, 0, 0), 0, 'clear on her');
   assert.equal(GM.mistMask(3.4, 0, 0, 0), 0, 'clear inside 3.5 m');
   assert.equal(GM.mistMask(9, 0, 0, 0), 1, 'full in the ring');
   assert.equal(GM.mistMask(16.5, 0, 0, 0), 0, 'none beyond 16 m');
   assert.equal(GM.mistMask(9, 0, 0, 0, [{ x: 9, z: 0, r: 2 }]), 0, 'a hole over a wind-up');
-  assert.equal(GM.mistFactor('bog'), 1.4); assert.equal(GM.mistFactor('nope'), GM.GROUND_MIST.def);
+  assert.equal(GM.mistFactor('bog'), 0.8, 'WA §2.1: bog 0.8'); assert.equal(GM.mistFactor('gate_dusk'), 0.6); assert.equal(GM.mistFactor('keep_storm'), 0.5); assert.equal(GM.mistFactor('nope'), GM.GROUND_MIST.def);
 });
 
 test('ground mist: one draw, iso play camera only, eases with the focus-fog mode, cuts wind-up holes', async () => {
@@ -1033,6 +1037,14 @@ test('ground decals: order markers (paw / ✕), queued waypoints, RMB dots, path
   assert.equal(d.counts.marker, 2);
   for (let i = 0; i < 50; i++) d.render(DT);
   assert.equal(d.markers.length, 0, 'markers expire');
+  // WA §3.6: a double tap draws two paws (one instance more than a single tap, same draw)
+  ctx.bus.emit(E.PLAYER_ORDER, { kind: 'move', point: new THREE.Vector3(3, 0, 4), valid: true });
+  d.render(DT); const single = d.n;
+  for (let i = 0; i < 50; i++) d.render(DT);
+  ctx.bus.emit(E.PLAYER_ORDER, { kind: 'move', point: new THREE.Vector3(3, 0, 4), valid: true, double: true });
+  d.render(DT);
+  assert.equal(d.n, single + 1, 'double paw');
+  for (let i = 0; i < 50; i++) d.render(DT);
   ctx.player.orders = { kind: 'move', path: [new THREE.Vector3(0, 0, 4), new THREE.Vector3(4, 0, 4)], wp: 0, engaged: false,
     queue: [new THREE.Vector3(4, 0, 9), new THREE.Vector3(0, 0, 9)] };
   d.render(DT);
@@ -1174,7 +1186,7 @@ test('fx.W1: WA §3.4 wedge timing (rim α 0.6 → window, glyph pop ×1.3 over 
   // the palette: hero pink, warm danger hues, plum blob, cream white, mint interactables, sky companions
   assert.equal(GD.DECAL_COLORS.hero, '#FF8FB1'); assert.equal(GD.DECAL_COLORS.red, '#FF9A3D'); assert.equal(GD.DECAL_COLORS.aggro, '#FF5A4E');
   assert.equal(GD.DECAL_COLORS.blob, '#5A4E7A'); assert.equal(GD.DECAL_COLORS.mint, '#9BE3C4'); assert.equal(GD.DECAL_COLORS.sky, '#8FD3FF');
-  assert.equal(GD.DECAL_CFG.heroAlpha, 0.55); assert.equal(GD.DECAL_CFG.heroW, 0.08);
+  assert.equal(GD.DECAL_CFG.heroAlpha, GD.HERO_RING_ALPHA); assert.ok(GD.HERO_RING_ALPHA >= 0.9, 'near-opaque: pink never blends to tan'); assert.equal(GD.DECAL_CFG.heroW, 0.08);
   // the strike flash draws after the strike, then the wedge is gone
   const { ctx, d, live } = isoDecals();
   const rat = { id: 1, pos: new THREE.Vector3(0, 0, 2), facing: Math.PI, alive: true, radius: 0.4 };
@@ -1239,6 +1251,12 @@ test('fx.W3: damage numbers v2: 3 hits in 0.3 s → one node, summed; overshoot 
   assert.equal(N.word('slash2', new THREE.Vector3()), true);
   ctx.state.settings.hitWords = false; ctx.game.realTime = 6;
   assert.equal(N.word('slash3', new THREE.Vector3()), false, 'hitWords off');
+  // the player's call (requests/fx.md): its own text and limit, position already lifted above her head
+  ctx.state.settings.hitWords = true; ctx.game.realTime = 6.05;
+  const at = new THREE.Vector3(1, 2, 3);
+  assert.equal(N.word('pounce', at, { text: 'Pounce!', lifted: true, force: true }), true, 'force skips the fx limit');
+  const last = N.pool.find((n) => n.active && n.kind === 'word' && Math.abs(n.pos.y - 2) < 1e-9);
+  assert.ok(last, 'a lifted word is drawn exactly at pos');
   assert.equal(WORDS.slash1, 'Snip!'); assert.equal(WORDS.finalBlow, 'Bonk!');
   assert.equal(N.pop('parry', new THREE.Vector3()), true);
   assert.ok(DAMAGE_FX.mergeWindow === 0.35 && DAMAGE_FX.bump === 1.15);
@@ -1254,6 +1272,7 @@ test('fx.W3: damage numbers v2: 3 hits in 0.3 s → one node, summed; overshoot 
 test('fx.W5 / ART §8.6: rescue / card bursts stay under the particle pool caps; Low halves them and flattens confetti', async () => {
   assert.ok(burstParticleCount(1) <= 800, 'alpha pool');
   assert.equal(SHAPE.CONFETTI, 12);
+  assert.equal(SHAPE.PLUS, 13, 'ART §8.6 heal plus-signs');
   const ctx = setupFx();
   await ctx.fx.init();
   const pl = actor(ctx, 'player', 0, 0); ctx.player = pl;
@@ -1349,21 +1368,34 @@ test('WA §3.6 path preview enum: on / off / auto (touch on the meadow)', () => 
   assert.ok(config.SETTING_VALUES.pathPreview.every((v) => typeof GD.pathPreviewOn(v, 'touch', 'meadow') === 'boolean'));
 });
 
-test('telegraph glyphs: discs queue their glyph at the centre, lanes at the far end; the crow shadow is plum', async () => {
+test('telegraph glyphs: on the rim (3–4 around discs, rows along lane edges), never only at the centre; the crow shadow is plum', async () => {
   const ctx = setupFx();
   await ctx.fx.init();
   ctx.cam = { isIso: true, modeName: 'follow', focus: new THREE.Vector3() };
   const calls = [];
   const orig = ctx.fx.decals.glyph.bind(ctx.fx.decals);
-  ctx.fx.decals.glyph = (g, x, y, z, ...r) => { calls.push({ g, x, z }); return orig(g, x, y, z, ...r); };
+  ctx.fx.decals.glyph = (g, x, y, z, yaw, a, size, col, ink) => { calls.push({ g, x, z, yaw, size, ink }); return orig(g, x, y, z, yaw, a, size, col, ink); };
   ctx.fx.telegraph({ kind: 'aoe', shape: 'circle', pos: [4, 0, 4], size: 2, duration: 1 });
-  ctx.fx.telegraph({ kind: 'red', shape: 'lane', pos: [0, 0, 0], dir: [0, 0, 1], size: [1.5, 6], duration: 1 });
+  ctx.fx.telegraph({ kind: 'aoe', shape: 'lane', pos: [0, 0, 0], dir: [0, 0, 1], size: [1.6, 6], duration: 1 });
   ctx.fx.telegraph({ kind: 'shadow', shape: 'shadow', pos: [-3, 0, 0], size: 0.9, duration: 1 });
-  await frames(ctx, 3);
+  await frames(ctx, 2);
+  calls.length = 0;
+  await frames(ctx, 1);
   const g = new Set(calls.map((c) => c.g));
   for (const k of ['dots6', 'chevron2', 'crowfoot']) assert.ok(g.has(k), k);
-  const lane = calls.find((c) => c.g === 'chevron2');
-  assert.ok(lane.z > 4, 'at the lane end');
+  const disc = calls.filter((c) => c.g === 'dots6');
+  assert.equal(disc.length, 4, 'four dot bursts around a 2 m disc');
+  for (const c of disc) {
+    const r = Math.hypot(c.x - 4, c.z - 4);
+    assert.ok(r > 1.2 && r < 2, `on the rim (r ${r.toFixed(2)})`);
+    assert.ok(c.size >= 0.7, 'glyph >= 0.7 m'); assert.ok(c.ink >= 0.8, 'ink alpha >= 0.8');
+  }
+  const lane = calls.filter((c) => c.g === 'chevron2');
+  assert.ok(lane.length >= 4, 'an aoe lane draws chevrons, not dots (two edge columns)');
+  assert.ok(lane.some((c) => c.x < -0.2) && lane.some((c) => c.x > 0.2), 'both lane edges');
+  assert.ok(lane.every((c) => c.z > 0 && c.z < 6 && Math.abs(c.yaw) < 1e-6), 'along the lane, pointing down it');
+  assert.ok(Math.max(...lane.map((c) => c.z)) - Math.min(...lane.map((c) => c.z)) > 2, 'spread along its length');
+  assert.ok(ctx.fx.telegraphs.glyphsDrawn >= 4 + 4 + 3);
   const shadowSlot = ctx.fx.telegraphs.decals.find((s) => s.d0.x === 4);
   const plum = new THREE.Color(TELEGRAPH.colors.shadow);
   assert.ok(Math.abs(shadowSlot.d2.x - plum.r) < 1e-6 && Math.abs(shadowSlot.d2.z - plum.b) < 1e-6, 'plum #3A2346, never black');
@@ -1397,6 +1429,90 @@ test('ART §8.5 glow cards (6–12 sparkles), ART §9.1 flashes through ui.flash
   fctx.fx.dispose();
 });
 
+test('telegraphGlyph / glyphSpots: lanes are chevrons, discs ring their rim with radial glyphs, jeers carry none', () => {
+  assert.equal(telegraphGlyph('aoe', 'lane'), 'chevron2'); assert.equal(telegraphGlyph('red', 'lane'), 'chevron2');
+  assert.equal(telegraphGlyph('aoe', 'circle'), 'dots6'); assert.equal(telegraphGlyph('red', 'circle'), 'chevron2');
+  assert.equal(telegraphGlyph('shadow', 'shadow'), 'crowfoot'); assert.equal(telegraphGlyph('jeer', 'rings'), null);
+  assert.ok(TELE_GLYPH.size >= 0.7 && TELE_GLYPH.sizeTouch >= TELE_GLYPH.size && TELE_GLYPH.inkA >= 0.8);
+  const out = [];
+  const spots = (d, s = 0.7, prog = 0) => { const n = normalizeTelegraph(d); const k = glyphSpots(n, s, out, prog); return { n, k, list: Array.from({ length: k }, (_, i) => out.slice(i * 5, i * 5 + 5)) }; };
+  for (const r of [0.8, 1.2, 2, 3.5, 6]) {
+    const { k, list } = spots({ kind: 'aoe', shape: 'circle', size: r });
+    assert.ok(k === 3 || k === 4, `r ${r}: ${k}`);
+    for (const [lx, lz, ux, uz, s] of list) {
+      const d = Math.hypot(lx, lz);
+      assert.ok(d >= r * 0.5 - 1e-6 && d + s / 2 <= r + 1e-6, `r ${r}: inside the disc, off the centre (d ${d.toFixed(2)})`);
+      assert.ok(Math.abs(ux * lz - uz * lx) < 1e-6 && ux * lx + uz * lz > 0, 'points radially outward');
+    }
+  }
+  const ring = spots({ kind: 'red', shape: 'ring', size: [2, 2.6] });
+  assert.equal(ring.k, 4);
+  for (const [lx, lz] of ring.list) { const d = Math.hypot(lx, lz); assert.ok(d >= 2 && d <= 2.6, 'inside the ring band'); }
+  const lane = spots({ kind: 'aoe', shape: 'lane', size: [2, 9] });
+  assert.ok(lane.k >= 6 && lane.k <= 8);
+  for (const [lx, lz, ux, uz] of lane.list) { assert.ok(Math.abs(lx) > 0.2 && Math.abs(lx) < 1 && lz > 0 && lz < 9); assert.equal(ux, 0); assert.equal(uz, 1); }
+  const thin = spots({ kind: 'aoe', shape: 'lane', size: [0.8, 4] });
+  assert.ok(thin.list.every(([lx]) => lx === 0) && thin.list.every((x) => x[4] <= 0.8 * 0.8 + 1e-9), 'a thin lane: one centred column, glyphs fit it');
+  const cone = spots({ kind: 'aoe', shape: 'cone', size: [4, Math.PI / 2] });
+  assert.equal(cone.k, 3);
+  for (const [lx, lz] of cone.list) assert.ok(Math.abs(Math.atan2(lx, lz)) <= Math.PI / 4 + 1e-6 && Math.hypot(lx, lz) > 2, 'along the cone arc');
+  const sh0 = spots({ kind: 'shadow', shape: 'shadow', size: 1 }, 0.7, 0), sh1 = spots({ kind: 'shadow', shape: 'shadow', size: 1 }, 0.7, 1);
+  assert.equal(sh0.k, 3);
+  assert.ok(Math.hypot(sh1.list[0][0], sh1.list[0][1]) < Math.hypot(sh0.list[0][0], sh0.list[0][1]), 'the crow feet shrink with the shadow');
+});
+
+/** sRGB hex -> [r, g, b] 0..1; composite `fg` at alpha over `bg`; HSL hue (deg) and saturation. */
+const hex3 = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+const over = (fg, a, bg) => fg.map((c, i) => c * a + bg[i] * (1 - a));
+const hs = ([r, g, b]) => {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, s];
+};
+
+test('telegraph look: saturated warm rim >= 0.14 m at alpha >= 0.9 reads danger on every ground; low fill; never her pink', () => {
+  const L = TELE_LOOK;
+  assert.ok(L.rimW >= 0.12 && L.rimA >= 0.9 && L.creamA >= 0.8);
+  assert.ok(L.fillHi <= 0.3 && L.baseA <= 0.08 && L.frontA >= 0.6, 'faint fill, bright sweep front');
+  const grounds = ['#9CC94F', '#B8D95A', '#7FB24A', '#D9B98A', '#C9A66B', '#6E8F4E', '#E8D6A8'];   // grass, path, bog, sand
+  const pink = hs(hex3('#FF8FB1'))[0];
+  for (const kind of ['aoe', 'red']) {
+    const c = hex3(TELEGRAPH.colors[kind]);
+    for (const gnd of grounds) {
+      const [h, s] = hs(over(c, L.rimA, hex3(gnd)));
+      assert.ok(h <= 40 && s >= 0.6, `${kind} rim over ${gnd}: hue ${h.toFixed(0)} sat ${s.toFixed(2)}`);
+      const [fh] = hs(over(c, L.fillHi, hex3(gnd)));
+      const dPink = Math.min(Math.abs(fh - pink), 360 - Math.abs(fh - pink));
+      assert.ok(dPink > 30, `${kind} fill never reads as her pink over ${gnd} (hue ${fh.toFixed(0)})`);
+    }
+  }
+});
+
+test('K2: no THREE.PointLight after FX init + light-casting lanterns added while env.lamps is null; they register once it appears', async () => {
+  const ctx = setupFx();
+  ctx.env = { lamps: null };
+  await ctx.fx.init();
+  const pl = actor(ctx, 'ally', 3, 3, { height: 0.6 });
+  const hs = [ctx.fx.lantern([1, 1.5, 0], { light: true }), ctx.fx.lantern([4, 1.5, 0], { light: true, lit: false }), ctx.fx.lantern(pl, { light: true })];
+  ctx.fx.holy(pl, 1);
+  await frames(ctx, 8);
+  const count = () => { let n = 0; ctx.scene.traverse((o) => { if (o.isPointLight || o.isLight && o.type === 'PointLight') n++; }); return n; };
+  assert.equal(count(), 0, 'no PointLight anywhere in the scene (K2)');
+  assert.equal(ctx.fx.lanterns.pending, 3);
+  // world's LampSet arrives: the queued sources register on the next render, with their lit state
+  const sources = [];
+  ctx.env.lamps = { add: (s) => { sources.push(s); return s; }, remove: (s) => { const i = sources.indexOf(s); if (i >= 0) sources.splice(i, 1); } };
+  await frames(ctx, 2);
+  assert.equal(sources.length, 3); assert.equal(ctx.fx.lanterns.pending, 0);
+  assert.deepEqual(sources.map((s) => s.on), [true, false, true]);
+  hs[1].light(); assert.equal(sources[1].on, true);
+  hs[0].remove(); assert.equal(sources.length, 2);
+  assert.equal(count(), 0);
+  ctx.fx.dispose();
+});
+
 test('ART §8.7 ambient life: butterfly / dragonfly / swallow sets, Low ×0.5, night off; light pools + cloud shadows rules', () => {
   assert.deepEqual(flyersFor('meadow'), { kind: 'butterfly', count: 18 });
   assert.deepEqual(flyersFor('town', { hub: true }), { kind: 'butterfly', count: 14 });
@@ -1423,4 +1539,67 @@ test('WA §3.2 twinkles: deterministic, one 0.35 s twinkle per period; pickups a
   assert.ok(on > 0 && on < 12 * 60 * 0.4, `twinkling ${on}`);
   assert.equal(twinkleAlpha(3.3, 1.2, 0.25), twinkleAlpha(3.3, 1.2, 0.25), 'deterministic');
   assert.ok(Object.keys(FACTION_CONFETTI).length >= 5);
+});
+
+// ================================================================== clarity pass: hero ring colour, light pools
+test('hero ring: CLASS_MARKS.hero colour, unfogged, and still pink over every Env preset ground', async () => {
+  const { ENV_PRESETS } = await import('../../src/world/Env.js');
+  const { hexRgb, rgbHsv } = await import('../../src/fx/palette.js');
+  const st = GD.heroRingStyle();
+  assert.equal(st.color, config.CLASS_MARKS.hero.color); assert.equal(st.fog, false);
+  const { ctx, d } = isoDecals();
+  assert.equal(fxFogged(d.mesh.material), false); assert.equal(d.mesh.material.userData.noHeightFog, true);
+  const want = new THREE.Color(config.CLASS_MARKS.hero.color), pink = hexRgb(config.CLASS_MARKS.hero.color), a = st.alpha;
+  // grass greens seen in the forest / bog / twilight gate shots, plus every preset's ground and fog-floor colours
+  const grounds = ['#46902A', '#3C7A2C', '#5E9E3A', '#7DB24A', '#2E6A3A'];
+  for (const [name, P] of Object.entries(ENV_PRESETS)) {
+    ctx.env = { preset: name, grade: P.grade, wind: P.wind };
+    d.render(DT);
+    assert.equal(d.counts.hero, 1, name);
+    const c = d.colors;
+    assert.ok(Math.abs(c.getX(0) - want.r) < 1e-6 && Math.abs(c.getY(0) - want.g) < 1e-6 && Math.abs(c.getZ(0) - want.b) < 1e-6, `${name}: ring colour is CLASS_MARKS.hero`);
+    assert.ok(c.getW(0) >= 0.9, `${name}: near-opaque`);
+    for (const g of [...grounds, P.hemiGround, P.fogLow]) {
+      const b = hexRgb(g), mix = [0, 1, 2].map((i) => pink[i] * a + b[i] * (1 - a)), hsv = rgbHsv(mix);
+      assert.ok((hsv.h >= 320 || hsv.h <= 10) && hsv.s >= 0.3, `${name} over ${g}: ring reads pink (h ${hsv.h.toFixed(0)}, s ${hsv.s.toFixed(2)})`);
+    }
+  }
+});
+
+test('light pools: hue-preserving capped lift, soft falloff, cream tint, cleared around arenas and alerted enemies', async () => {
+  const LP = await import('../../src/fx/LightPools.js');
+  const { hexHsv } = await import('../../src/fx/palette.js');
+  const tint = hexHsv(LP.POOLS.color);
+  assert.ok(tint.h >= 25 && tint.h <= 50 && tint.s <= 0.15 && tint.v >= 0.95, 'warm cream, not lime / yellow');
+  assert.ok(LP.POOLS.falloff[0] <= 0.2 && LP.POOLS.falloff[1] === 1, 'soft smoothstep 0.2 → 1');
+  for (const g of [[0.25, 0.55, 0.12], [0.6, 0.6, 0.5], [1, 1, 1]]) assert.ok(LP.poolLumaLift(g) <= 0.12 + 1e-9);
+  assert.ok(LP.poolLumaLift([0.45, 0.55, 0.4]) <= 0.06 + 1e-3, '≈ +0.06 luma on mid grass');
+  // suppression
+  const arena = { center: { x: 0, z: 0 }, r: 10 }, rect = { center: { x: 50, z: 0 }, size: [8, 4] };
+  assert.equal(LP.poolSuppressed(5, 5, [arena], null), true);
+  assert.equal(LP.poolSuppressed(10.5, 0, [arena], null), true, 'arena pad');
+  assert.equal(LP.poolSuppressed(13, 0, [arena], null), false);
+  assert.equal(LP.poolSuppressed(54.5, 2.5, [rect], null), true); assert.equal(LP.poolSuppressed(56, 0, [rect], null), false);
+  const foe = { pos: { x: 30, z: 30 }, alerted: true, alive: true };
+  assert.equal(LP.poolSuppressed(33, 30, null, [foe]), true);
+  assert.equal(LP.poolSuppressed(35, 30, null, [foe]), false);
+  assert.equal(LP.poolSuppressed(33, 30, null, [{ ...foe, alerted: false }]), false, 'calm enemies keep their pools');
+  assert.equal(LP.poolSuppressed(33, 30, null, [{ ...foe, alive: false }]), false);
+  // the live draw: multiplicative blend, per-pool fade under an alerted enemy
+  const ctx = setupFx();
+  ctx.cam = { isIso: true, focus: new THREE.Vector3(), footprint: { cx: 0, cz: 0 } };
+  ctx.env = { grade: 'none' }; ctx.game = { ...(ctx.game ?? {}), mode: 'play', realTime: 0 };
+  const lp = new LP.LightPools(ctx); lp.init(ctx.scene); lp.setLevel('meadow', false);
+  assert.equal(lp.material.blending, THREE.CustomBlending);
+  assert.equal(lp.material.blendSrc, THREE.DstColorFactor); assert.equal(lp.material.blendDst, THREE.OneFactor);
+  for (let i = 0; i < 30; i++) lp.render(0.1);
+  assert.equal(lp.mesh.visible, true);
+  assert.ok(lp.material.uniforms.uAlpha.value <= LP.POOLS.gain + 1e-9);
+  const P = lp.iPos.array, x0 = P[0], z0 = P[2];
+  ctx.enemies = { list: [{ pos: { x: x0, z: z0 }, alerted: true, alive: true }] };
+  for (let i = 0; i < 30; i++) lp.render(0.1);
+  assert.ok(lp.iSize.array[3] < 0.02, 'the pool under an alerted enemy fades out');
+  let lit = 0; for (let i = 0; i < lp.count; i++) if (lp.iSize.array[i * 4 + 3] > 0.5) lit++;
+  assert.ok(lit >= lp.count - 6, 'far pools stay');
+  lp.dispose();
 });

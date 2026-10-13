@@ -3,8 +3,9 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, segScale } from './util.js';
-import { own, TOP_VIEW, READABILITY, kitMaterial, RM, makeMetalMaterial, makeToonMaterial } from './materials.js';
+import { own, TOP_VIEW, READABILITY, kitMaterial, RM, makeToonMaterial } from './materials.js';
 import { FUR_TIME } from './Fur.js';
+import { fxModule, fxShaderMaterial } from '../fx/shaders.js';
 
 export const SWORD = Object.freeze({ blade: 0.85, gripLen: 0.11, guardW: 0.24, pommelY: -0.132, gripY: -0.055 });
 export const SWORD_SKINS = Object.freeze(['borrowed', 'twig', 'fishbone', 'baguette', 'diamond', 'toobig', 'dawnblade']);
@@ -25,22 +26,25 @@ function bladeShape(len = 0.85, w0 = BLADE.w0, w1 = BLADE.w1, point = BLADE.poin
 /** Holy streak look: a narrow white-gold core with a soft golden falloff (ref1), bloom does the rest. */
 export const STREAK = Object.freeze({ width: 0.16, gain: 1.05, color: '#FFD98A', bladeGlow: 1.9 });
 
-/** Holy streak: cylindrical billboard along the blade (art.md §4.3). */
-export function makeStreak(len = 1.0, width = STREAK.width) {
-  const m = own(new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-    uniforms: { uColor: { value: new THREE.Color(STREAK.color) }, uI: { value: 0 }, uWidth: { value: width }, uGain: { value: STREAK.gain } },
-    vertexShader: /* glsl */`uniform float uWidth; varying vec2 vUv;
+const STREAK_VERT = /* glsl */`uniform float uWidth; varying vec2 vUv;
       void main(){ vUv = uv;
         vec3 base = (modelMatrix * vec4(0.0, position.y, 0.0, 1.0)).xyz;
         vec3 axis = normalize(mat3(modelMatrix) * vec3(0.0, 1.0, 0.0));
         vec3 side = normalize(cross(axis, normalize(cameraPosition - base)));
         float sc = length(modelMatrix[0].xyz);
-        gl_Position = projectionMatrix * viewMatrix * vec4(base + side * position.x * uWidth * sc, 1.0); }`,
-    fragmentShader: /* glsl */`uniform vec3 uColor; uniform float uI, uGain; varying vec2 vUv;
+        gl_Position = projectionMatrix * viewMatrix * vec4(base + side * position.x * uWidth * sc, 1.0); }`;
+const STREAK_FRAG = /* glsl */`uniform vec3 uColor; uniform float uI, uGain; varying vec2 vUv;
       void main(){ float x = abs(vUv.x - 0.5) * 2.0;
         float a = (exp(-x * 9.0) * 0.75 + exp(-x * 3.0) * 0.25) * smoothstep(0.0, 0.1, vUv.y) * smoothstep(1.0, 0.75, vUv.y);
-        gl_FragColor = vec4(uColor * a * uI * uGain, 1.0); }`,
+        gl_FragColor = vec4(uColor * a * uI * uGain, 1.0); }`;
+fxModule({ name: 'holyStreak', fog: false, vertexShader: STREAK_VERT, fragmentShader: STREAK_FRAG });   // linked at import (PERF §1.2)
+/** Holy streak: cylindrical billboard along the blade (art.md §4.3). */
+export function makeStreak(len = 1.0, width = STREAK.width) {
+  // one module of the linked fx program (PERF §1.2): no program of its own
+  const m = own(fxShaderMaterial({
+    name: 'holyStreak', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    uniforms: { uColor: { value: new THREE.Color(STREAK.color) }, uI: { value: 0 }, uWidth: { value: width }, uGain: { value: STREAK.gain } },
+    vertexShader: STREAK_VERT, fragmentShader: STREAK_FRAG,
   }));
   const g = new THREE.PlaneGeometry(1, len, 1, 8).translate(0, len / 2, 0);
   const mesh = new THREE.Mesh(g, m);
@@ -50,13 +54,7 @@ export function makeStreak(len = 1.0, width = STREAK.width) {
 
 /** Dawnblade sparkles (GAME_DESIGN §13.4: 20 sparkles, ref1): additive twinkling points drifting up the blade. */
 export const DAWN_SPARKLES = Object.freeze({ count: 20, color: '#FFE7A6', size: 0.05 });
-let _sparkMat = null;
-function sparkleMaterial() {
-  if (_sparkMat) return _sparkMat;
-  _sparkMat = own(new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-    uniforms: { uTime: FUR_TIME, uColor: { value: new THREE.Color(DAWN_SPARKLES.color) }, uSize: { value: DAWN_SPARKLES.size }, uPR: { value: 1 } },
-    vertexShader: /* glsl */`uniform float uTime, uSize, uPR; attribute float aPhase; varying float vA;
+const SPARK_VERT = /* glsl */`uniform float uTime, uSize, uPR; attribute float aPhase; varying float vA;
       void main(){ vec3 p = position;
         float life = fract(uTime * 0.22 + aPhase);
         p.y += life * 0.12; p.x += sin(uTime * 1.3 + aPhase * 17.0) * 0.012; p.z += cos(uTime * 1.1 + aPhase * 11.0) * 0.012;
@@ -65,12 +63,20 @@ function sparkleMaterial() {
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         float sc = length(modelMatrix[0].xyz);
         gl_PointSize = clamp(uSize * sc * 900.0 / max(-mv.z, 0.05), 1.0, 48.0) * (0.6 + 0.4 * tw);
-        gl_Position = projectionMatrix * mv; }`,
-    fragmentShader: /* glsl */`uniform vec3 uColor; varying float vA;
+        gl_Position = projectionMatrix * mv; }`;
+const SPARK_FRAG = /* glsl */`uniform vec3 uColor; varying float vA;
       void main(){ vec2 c = gl_PointCoord - 0.5; float d = length(c);
         float core = pow(max(smoothstep(0.5, 0.0, d), 0.0), 3.0);
         float star = max(0.0, 1.0 - abs(c.x) * 14.0) * smoothstep(0.5, 0.0, abs(c.y)) + max(0.0, 1.0 - abs(c.y) * 14.0) * smoothstep(0.5, 0.0, abs(c.x));
-        gl_FragColor = vec4(uColor * (core + star * 0.6) * vA * 2.2, 1.0); }`,
+        gl_FragColor = vec4(uColor * (core + star * 0.6) * vA * 2.2, 1.0); }`;
+fxModule({ name: 'dawnSparkles', fog: false, vertexShader: SPARK_VERT, fragmentShader: SPARK_FRAG });   // linked at import (PERF §1.2)
+let _sparkMat = null;
+function sparkleMaterial() {
+  if (_sparkMat) return _sparkMat;
+  _sparkMat = own(fxShaderMaterial({
+    name: 'dawnSparkles', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    uniforms: { uTime: FUR_TIME, uColor: { value: new THREE.Color(DAWN_SPARKLES.color) }, uSize: { value: DAWN_SPARKLES.size }, uPR: { value: 1 } },
+    vertexShader: SPARK_VERT, fragmentShader: SPARK_FRAG,
   }));
   return _sparkMat;
 }
@@ -92,22 +98,15 @@ export function makeBladeSparkles(len = 0.85, count = DAWN_SPARKLES.count) {
 }
 
 /**
- * Blade material per sword instance (emissive tracks Valor and the holy charge). Steel blades: the warm steel matcap
- * (`sc-metal-v2`, ART §5.2, X27); wood / bone / bread: WarmToon. Both keep the old `emissive` / `emissiveIntensity`
- * surface (setCharge / setValorGlow write it) and get the silver top-view self-light (READABILITY.bladeGlow).
+ * Blade material per sword instance (emissive tracks Valor and the holy charge): WarmToon for every skin. Steel
+ * blades carry `rmse.y = 1` (RM.steel) in their geometry, so the toon program shades them with the warm steel matcap
+ * (ART §5.2) in the same draw; wood / bone / bread blades are plain toon. PERF §1.2: one program (`sc-toon-v2`) for
+ * blade, hilt and kit (no `sc-metal` program). `emissive` / `emissiveIntensity` are the material's own (setCharge /
+ * setValorGlow write them); the silver top-view self-light (READABILITY.bladeGlow) is the `uTopGlow` uniform.
+ * @param {string} kind 'metal' | 'wood' | ... (kept for callers; the geometry decides the look)
  */
 function bladeMaterial(kind) {
-  if (kind === 'metal') {
-    const m = makeMetalMaterial({ emissive: true, topGlow: READABILITY.bladeGlow });
-    const out = m.userData.uniforms.uEmissive.value, col = new THREE.Color(PAL.holy);
-    let k = 0;
-    // three's emissive API on a matcap material: the colour and intensity fold into the uEmissive uniform
-    Object.defineProperty(m, 'emissive', { get: () => col, configurable: true });
-    Object.defineProperty(m, 'emissiveIntensity', {
-      get: () => k, set: (v) => { k = v; out.copy(col).multiplyScalar(v); }, configurable: true,
-    });
-    return m;
-  }
+  void kind;
   const m = makeToonMaterial({ topGlow: READABILITY.bladeGlow });
   m.emissive.set(PAL.holy); m.emissiveIntensity = 0;
   return m;

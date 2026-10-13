@@ -14,7 +14,8 @@ import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
 import { E } from '../core/events.js';
 import { damp, dampAngle, clamp01, easeInOutSine, lerp } from '../core/math.js';
-import { visualDt } from '../characters/index.js';
+import { visualDt, kitMaterial, RM } from '../characters/index.js';
+import { paint } from './dressing.js';
 import { disposeInstance } from '../core/Assets.js';
 
 export const PUDDING_MODEL = 'models/creatures/monsters-flying/Dragon_Evolved.glb';
@@ -96,10 +97,13 @@ function recolourTexture(src) {
   } catch (e) { console.warn('[pudding] recolour failed', e); return null; }
 }
 
-/** Build the rope net: a dome of meridians + rings (tubes) plus tether ropes to the posts. */
+/**
+ * Build the rope net: a dome of meridians + rings (tubes) plus tether ropes to the posts. K6: the tubes carry baked
+ * colour + rmse and draw with the shared toon kit (sc-toon); `mat` is shared, never disposed.
+ */
 function buildNet(dome, tethers) {
   const g = new THREE.Group(); g.name = 'puddingNet';
-  const mat = new THREE.MeshStandardMaterial({ color: '#8C6A4A', roughness: 0.95 });
+  const mat = kitMaterial(), ROPE = '#B08A5E';
   const [rx, ry, rz] = dome;
   const tubes = [];
   const pt = (u, v) => new THREE.Vector3(Math.cos(u) * Math.sin(v) * rx, Math.cos(v) * ry, Math.sin(u) * Math.sin(v) * rz);
@@ -114,13 +118,13 @@ function buildNet(dome, tethers) {
     tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 56, 0.03, 4, true));
   }
   const domeMesh = new THREE.Group(); domeMesh.name = 'netDome';
-  for (const t of tubes) { const m = new THREE.Mesh(t, mat); m.castShadow = false; domeMesh.add(m); }
+  for (const t of tubes) { const m = new THREE.Mesh(paint(t, ROPE, RM.cloth), mat); m.castShadow = false; domeMesh.add(m); }
   g.add(domeMesh);
   const ropes = [];
   for (const [x, z] of tethers) {
     const a = new THREE.Vector3(x * 0.55, 0.5, z * 0.55), b = new THREE.Vector3(x, 0.9, z);
     const mid = a.clone().lerp(b, 0.5); mid.y -= 0.25;
-    const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(a, mid, b), 10, 0.04, 4, false), mat);
+    const m = new THREE.Mesh(paint(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(a, mid, b), 10, 0.04, 4, false), ROPE, RM.cloth), mat);
     m.castShadow = false; ropes.push(m); g.add(m);
   }
   return { group: g, dome: domeMesh, ropes, mat };
@@ -452,7 +456,6 @@ export class Pudding extends ScriptedActorMixin(Actor) {
     if (!this.net) return;
     this.net.group.removeFromParent();
     this.net.group.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
-    this.net.mat.dispose();
     this.net = null;
   }
 

@@ -25,6 +25,15 @@ export class AttackTokens {
     this.waiting = new Map();
     /** actor → time the token was granted */
     this._since = new Map();
+    // zero-alloc iteration (PERF B1 / AUTOCAM §15 combat 1): Set / Map `for…of` allocates an iterator per call, so
+    // the per-step paths walk with `forEach` and these pre-bound callbacks + scratch slots instead.
+    /** @type {any[]|null} */ this._into = null;
+    this._intoFn = (a) => { if (a.alive !== false) this._into.push(a); };
+    /** @type {((actor:any) => boolean)|null} */ this._keep = null;
+    /** @type {Set<any>|null} */ this._set = null;
+    this._now = 0;
+    this._pruneHolder = (a) => { if (!this._keep(a)) { this._set.delete(a); this._since.delete(a); } };
+    this._pruneWaiter = (w, a) => { if (!this._keep(a) || this._now - w.last > COMBAT.tokenStale * 4) this.waiting.delete(a); };
   }
 
   /** Current limit for `kind`. */
@@ -35,6 +44,19 @@ export class AttackTokens {
 
   /** Holders of `kind`. */
   holders(kind = 'melee') { return kind === 'ranged' ? this.ranged : this.melee; }
+
+  /**
+   * AUTOCAM §15 combat 1: fill `out` with the live holders of `kind` (zero-alloc; `holders()` returns the Set, whose
+   * iteration allocates). `out` is cleared first. Returns `out`.
+   * @template T @param {TokenKind} kind @param {T[]} out @returns {T[]}
+   */
+  holdersInto(kind, out) {
+    out.length = 0;
+    this._into = out;
+    this.holders(kind).forEach(this._intoFn);
+    this._into = null;
+    return out;
+  }
 
   /** Tokens of `kind` in use. */
   count(kind = 'melee') { return this.holders(kind).size; }
@@ -81,15 +103,12 @@ export class AttackTokens {
    * @param {(actor:any) => boolean} keep
    */
   prune(keep) {
-    this._pruneSet(this.melee, keep);
-    this._pruneSet(this.ranged, keep);
-    const now = this.clock();
-    for (const [a, w] of this.waiting) if (!keep(a) || now - w.last > COMBAT.tokenStale * 4) this.waiting.delete(a);
-  }
-
-  /** @param {Set<any>} set @param {(actor:any) => boolean} keep */
-  _pruneSet(set, keep) {
-    for (const a of set) if (!keep(a)) { set.delete(a); this._since.delete(a); }
+    this._keep = keep;
+    this._set = this.melee; if (this.melee.size) this.melee.forEach(this._pruneHolder);
+    this._set = this.ranged; if (this.ranged.size) this.ranged.forEach(this._pruneHolder);
+    this._now = this.clock();
+    if (this.waiting.size) this.waiting.forEach(this._pruneWaiter);
+    this._keep = null; this._set = null;
   }
 
   /**

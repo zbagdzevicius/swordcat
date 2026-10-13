@@ -399,11 +399,16 @@ export default [
           const btn = (a) => G((x) => { const r = document.querySelector(`.tbtn[data-action="${x}"]`).getBoundingClientRect(); return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]; }, a);
           await G(() => window.__GAME__.clearEvents());
           const [ax, ay] = await btn('attack');
+          // diagnostics for the first-tap check (review: a fresh ⚔ tap after an auto-attack kill was once dropped): the
+          // button's pointer events, the element under the button centre, and every sim step that saw a press or a buffer
+          await G(([x, y]) => { const g = window.__GAME__, p = g.ctx.player, inp = g.ctx.input; window.__atkTrace = []; window.__atkHit = document.elementFromPoint(x, y)?.className ?? null;
+            if (!p.__ri) { p.__ri = p._readInput; p._readInput = function (dt) { const pr = inp.pressed('attack'), sup = this.orders.suppressAttack; const r = p.__ri.call(this, dt); if (window.__atkTrace && window.__atkTrace.length < 200 && (pr || this.attackBuf > 0)) window.__atkTrace.push({ t: +g.ctx.game.time.toFixed(2), pr, sup, buf: +this.attackBuf.toFixed(2), st: this.state, sw: this.swing?.def?.id ?? null, o: this.orders.kind }); return r; }; }
+            const b = document.querySelector('.tbtn[data-action="attack"]'); window.__atkPtr = []; for (const k of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(k, (e) => window.__atkPtr.push(`${k}:${e.pointerId}`), { capture: true, once: true }); }, [ax, ay]);
           await pg.touchscreen.tap(ax, ay);
           let swung = await untilM(() => window.__GAME__.events.includes('player:swing'), null, 3000);
-          // the auto-attack loop on the rat that just fell can still be in its recovery: one more tap (still a tap)
-          if (!swung) { t.warn(`${tag}: first ⚔ tap gave no swing (${JSON.stringify(await G(() => ({ st: window.__GAME__.ctx.player.state, o: window.__GAME__.orders().kind, mode: window.__GAME__.ctx.game.mode })))}); tapping again`); await pg.touchscreen.tap(ax, ay); swung = await untilM(() => window.__GAME__.events.includes('player:swing'), null, 4000); }
-          t.assert(swung, `${tag}: ⚔ tap swings`);
+          if (!swung) t.log(`${tag}: first ⚔ tap gave no swing ${JSON.stringify(await G(() => ({ st: window.__GAME__.ctx.player.state, o: window.__GAME__.orders().kind, mode: window.__GAME__.ctx.game.mode, hit: window.__atkHit, ptr: window.__atkPtr, steps: window.__atkTrace })))}`);
+          await G(() => { const p = window.__GAME__.ctx.player; if (p.__ri) { p._readInput = p.__ri; delete p.__ri; } window.__atkTrace = null; });
+          t.assert(swung, `${tag}: the first ⚔ tap swings (no retry)`);
           const [gx, gy] = await btn('guard');
           await ptr('pointerdown', gx, gy, 21);
           const gd = await untilM(() => window.__GAME__.ctx.player.stateName === 'guard', null, 2000);

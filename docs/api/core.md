@@ -73,3 +73,16 @@
 - `input.pointerMark()` / `input.pointerSince(mark)`: straight-line CSS px the cursor is from a mark.
 - The canvas rect is cached (refreshed on resize / scroll / canvas ResizeObserver), not read per mousemove.
 - Removed `INPUT.pointer.cursorFresh` (unused); cursor freshness is `AIM.cursorIdle` with `input.pointerIdle()`.
+
+## PERF §1.2 programs per level (shader consolidation)
+- `core/uber.js` `UberGroup(name, { libs, shared, sharedVaryings })`: links GLSL *modules* (standalone ShaderMaterial
+  sources) into one program: per-module names via `#define` / `#undef`, varyings / custom attributes on shared typed
+  slots (`fxv_*`, `fxa_*`; geometry attributes aliased per draw, no copies), Front / Back side as a `gl_FrontFacing`
+  discard, `fog: false` per block, `instanced: true | 'both'` (vertex-stage USE_INSTANCING guard), every sampler bound
+  on every draw. `group.module(src)` → record; `group.material(mod, params)` → `UberMaterial`; `uberPrepare(root)`
+  (prewarm calls it) aliases `normal` so geometry never splits the program. `UBER_GROUPS` / `__GAME__.art.uber()`.
+- `core/depth.js`: `depthFor(o)` now uses three's own `BasicDepthPacking` (r186 shadow maps write a DepthTexture), so
+  custom and default casters share one depth program per kind; `SHADOW_ONLY_LAYER` (9) + `shadowOnly(o)`: casters drawn
+  into the sun's shadow map only (world Env enables the layer on the shadow camera).
+- `tests/smoke/perf.mjs` `perf:programs` is a hard gate on every run: fresh pages at low / med / high × meadow + gate
+  (all four M2 levels with `SMOKE_PERF=1`), `renderer.info.programs` ≤ `QUALITY[preset].programs` (+ `programsCinematic`).

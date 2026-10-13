@@ -304,7 +304,8 @@ test('resolveEnemyDef: every Appendix A row, Bonehead variants, jelly sizes, bos
     const d = resolveEnemyDef(id);
     assert.equal(d.aiLess, true, id); assert.equal(d.hurtable, false, id); assert.ok(d.tags.includes('cutscene'), id);
   }
-  assert.ok(resolveEnemyDef('cacklejaw').hide.every((n) => n !== 'Barbarian_Hat'), 'Cacklejaw keeps his hat (§11.3)');
+  // WA §3.1 / §8.2: the near-black bear-skull hat is gone (a feather crown replaces it) on every Cacklejaw def
+  for (const id of ['cacklejaw', 'boss_cacklejaw', 'cacklejaw_clone']) assert.ok(resolveEnemyDef(id).hide.includes('Barbarian_Hat'), `${id} hides Barbarian_Hat`);
   assert.equal(resolveEnemyDef('nope').unknown, true);
 });
 
@@ -1513,7 +1514,7 @@ import { EnemyLook, springStep, outlineTargets } from '../../src/enemies/look.js
 import { VisualPool, dressingKey, waveSizes, POOLED_TYPES } from '../../src/enemies/VisualPool.js';
 import { DISPLAY_NAMES, BANNED_NAME_WORDS, friendWordFor, displayNameFor } from '../../src/enemies/names.js';
 import { PALETTE_MAPS, BONE_SCALES, boneScalesFor, paletteFor } from '../../src/enemies/palette.js';
-import { ENEMY_PAL, makeProp, PROP_NAMES } from '../../src/enemies/props.js';
+import { ENEMY_PAL, makeProp, PROP_NAMES, propMaterial, PROP_RMSE } from '../../src/enemies/props.js';
 import { faintPlan, orbitPenalty, laneEnd, VISUAL_FIELDS } from '../../src/enemies/Enemy.js';
 import { hubFriendly } from '../../src/enemies/EnemyManager.js';
 
@@ -1593,6 +1594,16 @@ test('ART §2.6: the mischief palette — no enemy token darker than luma 0.12 e
   assert.notEqual(ENEMY_PAL.ratEye, '#FF4A3A', 'no red eye glints (ART §7.1)');
   for (const map of Object.values(PALETTE_MAPS)) for (const [, to] of map.pairs ?? []) assert.ok(L(to) >= 0.02);
   for (const name of PROP_NAMES) assert.ok(makeProp(name).isMesh, name);
+  // PERF §1.2: every prop kind is the shared WarmToon program, FrontSide (double kinds carry back faces), with its rmse
+  for (const name of PROP_NAMES) {
+    const p = makeProp(name);
+    assert.ok(p.material.isMeshToonMaterial && p.material.side === THREE.FrontSide, `${name}: front-side toon`);
+    assert.equal(p.material.customProgramCacheKey().split('|')[0], 'sc-toon-v2', `${name}: the shared sc-toon program`);
+    assert.ok(p.geometry.attributes.rmse?.count === p.geometry.attributes.position.count, `${name}: rmse per vertex`);
+  }
+  assert.equal(makeProp('eyes').geometry.attributes.rmse.getW(0), PROP_RMSE.eyes[3], 'eyes self-lit (ART §5.3 unlit look)');
+  const hood = makeProp('hood').geometry;
+  assert.equal(hood.index.count % 2, 0, 'cloth: front + mirrored back faces');
   assert.equal(makeProp('kettleHelm').castShadow, false, 'gear never casts (PERF E3: the body does)');
 });
 
@@ -1834,4 +1845,388 @@ test('ART §7.2 squash spring: kicks settle back to rest and stay clamped', () =
   l.poseTarget = WARM.pose.parry;
   for (let i = 0; i < 60; i++) l.update(1 / 60, 0);
   assert.ok(Math.abs(l.sq.s - WARM.pose.parry) < 0.01, 'the parry-window stretch target +0.12');
+});
+
+// ------------------------------------------------------------------ warm phase follow-ups (toon pools, Fuzzball coat,
+// Squeakybones, bark pools, perf hooks)
+import { toonify, toonable } from '../../src/enemies/rig.js';
+import { counters as perfCounters } from '../../src/core/perf.js';
+import { S as STR, t as tx } from '../../src/story/strings.js';
+import { toonPoolStats } from '../../src/characters/materials.js';
+
+test('ART §7.3 step 3 / X28: toonify swaps owned GLB materials for pooled toon ones; dispose returns them to the pool', () => {
+  const atlas = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  const a = new THREE.MeshStandardMaterial({ name: 'atlas', map: atlas });
+  const solid = new THREE.MeshStandardMaterial({ name: 'Grey', color: '#6E5A86' });
+  const glow = new THREE.MeshStandardMaterial({ name: 'Glow', emissive: '#ffffff' });
+  for (const m of [a, solid, glow]) m.userData.enemyOwned = true;
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(), a), arm = new THREE.Mesh(new THREE.BoxGeometry(), a);
+  const fur = new THREE.Mesh(new THREE.BoxGeometry(), solid), eyes = new THREE.Mesh(new THREE.BoxGeometry(), glow);
+  const prop = makeProp('eyes');
+  root.add(body, arm, fur, eyes, prop);
+  assert.equal(toonable(glow), false, 'glowing eyes keep their look');
+  assert.equal(toonify(root, 'test_rat'), 2);
+  assert.ok(body.material.isMeshToonMaterial && body.material === arm.material, 'meshes sharing a GLB material share one toon material');
+  assert.equal(body.material.map, atlas, 'the (remapped) atlas stays');
+  assert.ok(body.material.userData.uniforms.uFlash && body.material.userData.uniforms.uHighlight, 'uFlash / uHighlight');
+  assert.ok(fur.material.isMeshToonMaterial && fur.material.color.getHexString() === new THREE.Color('#6E5A86').getHexString(), 'solid colour kept');
+  assert.equal(eyes.material, glow);
+  assert.equal(prop.material, propMaterial('eyes'), 'shared props untouched (their shared toon material stays)');
+  const toon = body.material;
+  disposeInstanceMaterials(root);
+  const pooled = Object.entries(toonPoolStats()).filter(([k]) => k.startsWith('test_rat:')).reduce((n, [, v]) => n + v, 0);
+  assert.equal(pooled, 2, 'both toon materials back in their pools');
+  // the next actor of the type takes the same material (same program, no compile)
+  const b2 = new THREE.MeshStandardMaterial({ name: 'atlas', map: atlas }); b2.userData.enemyOwned = true;
+  const r2 = new THREE.Group(); const m2 = new THREE.Mesh(new THREE.BoxGeometry(), b2); r2.add(m2);
+  toonify(r2, 'test_rat');
+  assert.equal(m2.material, toon, 'reused from the pool');
+});
+
+test('ART §7.2 Fuzzball coat: 12 fringe cards + the leaf hat in ONE draw with the top colour on top', () => {
+  const coat = makeProp('fuzzCoat');
+  assert.ok(coat.isMesh && !Array.isArray(coat.material), 'one mesh, one material');
+  const g = coat.geometry, pos = g.attributes.position, col = g.attributes.color;
+  let topY = -Infinity, topI = 0;
+  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > topY) { topY = pos.getY(i); topI = i; }
+  const top = new THREE.Color(col.getX(topI), col.getY(topI), col.getZ(topI));
+  const olive = new THREE.Color(ENEMY_PAL.olive), oliveTop = new THREE.Color(ENEMY_PAL.oliveTop);
+  const near = (a, b) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b) < 1e-3;
+  assert.ok(near(top, olive) || near(top, oliveTop), 'leaf colours on top');
+  assert.ok(topY > 0.9 && topY < 1.6, `the hat sits on the unit ball (${topY.toFixed(2)})`);
+  assert.equal(coat.castShadow, false, 'gear never casts (PERF E3)');
+});
+
+test('ART §7.2 Squeakybones: every skeleton variant maps bone → biscuit, crimson → mustard, no near-black', () => {
+  for (const v of ['minion', 'warrior', 'rogue', 'mage']) {
+    const map = paletteFor(ENEMIES.bonehead.variants[v].model);
+    assert.ok(map && map.key === 'bonehead', v);
+    const tos = map.bands.map((b) => b.to);
+    assert.ok(tos.includes(ENEMY_PAL.biscuit) && tos.includes(ENEMY_PAL.mustard), v);
+  }
+  assert.equal(ENEMY_PAL.biscuit, '#F3E2C4');
+});
+
+test('WA §8 / enemies.W3: enemy bark pools are warm (no banned line, no grim words)', () => {
+  const keys = Object.keys(STR).filter((k) => /^bark\.(hyena|rat|crow|pug|stealer|spider|cacklejaw|grizzlechop|pilfer|brutus|barkus)\b/.test(k));
+  assert.ok(keys.length >= 8, 'enemy barks exist');
+  for (const k of keys) {
+    const line = String(tx(k)).toLowerCase();
+    assert.ok(!line.includes("nobody's coming for you"), `${k}: banned line`);
+    for (const w of ['kill', 'die', 'dead', 'slain', 'blood']) assert.ok(!new RegExp(`\b${w}\b`).test(line), `${k}: "${w}"`);
+  }
+  assert.ok(!/nobody/i.test(tx('bark.hyena.alert.3')), 'bark.hyena.alert.3 replaced');
+});
+
+test('PERF §12 hooks: a pool miss feeds perf().poolMisses; enemy roots are tagged perfCat enemies', () => {
+  const before = perfCounters.poolMisses;
+  const p = new VisualPool();
+  assert.equal(p.take('rat_pike'), null);
+  assert.equal(perfCounters.poolMisses, before + 1);
+  assert.equal(p.take(null), null);
+  assert.equal(perfCounters.poolMisses, before + 1, 'unpooled spawns are not misses');
+  const ctx = fakeCtx();
+  const e = new Enemy(ctx, resolveEnemyDef('rat_pike'), { pos: new THREE.Vector3() });
+  assert.equal(e.object3d.userData.perfCat, 'enemies');
+});
+
+test('ART §5.4 / X9: buildEnemyHull hugs the real silhouette (skinned body + rigid gear on a bone, one draw)', async () => {
+  const { buildEnemyHull } = await import('../../src/enemies/look.js');
+  const root = new THREE.Group(); root.scale.setScalar(0.5); root.position.set(3, 0, 1);
+  const b0 = new THREE.Bone(), b1 = new THREE.Bone(); b1.position.set(0, 1, 0); b0.add(b1);
+  const g = new THREE.BoxGeometry(0.4, 2, 0.4, 1, 4, 1); g.translate(0, 1, 0);
+  const n = g.attributes.position.count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) { const up = g.attributes.position.getY(i) > 1; si[i * 4] = up ? 1 : 0; sw[i * 4] = 1; }
+  g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  const body = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial());
+  const arm = new THREE.Group(); arm.add(b0); root.add(arm, body);
+  root.updateMatrixWorld(true);
+  body.bind(new THREE.Skeleton([b0, b1]));
+  const helm = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), new THREE.MeshStandardMaterial()); helm.position.set(0, 0.6, 0.1); b1.add(helm);
+  const card = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({ transparent: true })); b1.add(card);
+  b1.rotation.z = 0.7; root.updateMatrixWorld(true); body.skeleton.update();
+  const hull = buildEnemyHull(root, { px: 2, simplify: false });
+  assert.ok(hull?.isSkinnedMesh && hull.material.side === THREE.BackSide, 'one back-faced skinned mesh');
+  assert.equal(hull.geometry.attributes.position.count, n + helm.geometry.attributes.position.count, 'body + helm, no transparent card');
+  root.updateMatrixWorld(true); hull.skeleton.update();
+  const a = new THREE.Vector3(), b = new THREE.Vector3();
+  const h = helm.geometry.attributes.position.count;          // traversal order: the arm (bones, helm) before the body
+  for (const i of [0, 5, n - 1]) {
+    hull.getVertexPosition(h + i, a).applyMatrix4(hull.matrixWorld); body.getVertexPosition(i, b).applyMatrix4(body.matrixWorld);
+    assert.ok(a.distanceTo(b) < 1e-4, `skinned vertex ${i} matches (${a.distanceTo(b)})`);
+  }
+  hull.getVertexPosition(3, a).applyMatrix4(hull.matrixWorld);
+  b.fromBufferAttribute(helm.geometry.attributes.position, 3).applyMatrix4(helm.matrixWorld);
+  assert.ok(a.distanceTo(b) < 1e-4, 'rigid gear follows its bone');
+  hull.userData.dispose();
+  assert.equal(hull.parent, null);
+  assert.equal(buildEnemyHull(new THREE.Group()), null, 'no skeleton → no hull');
+});
+
+// ------------------------------------------------------------------ WA §3.1 foe hues (Phase W review fixes)
+import { HEAD_REMAPS, FOE_BODY_COLORS, isFoeBodyHue, hexHsv, remapVertexColors } from '../../src/enemies/palette.js';
+import { recolorBeastHead } from '../../src/enemies/types/kaykitGear.js';
+import { JELLY_COLORS } from '../../src/enemies/types/jelly.js';
+import { cloneLook, cloneMaterial } from '../../src/enemies/types/boss_cacklejaw.js';
+import { BEAST_PRESETS, buildBeastHead } from '../../src/characters/index.js';
+
+test('WA §3.1 lint: foe body colours sit at hue 200–290°, never her pink (335–350°) or ginger (15–40°)', () => {
+  assert.equal(isFoeBodyHue('#C9A46C'), false, 'the old tawny hyena fails');
+  assert.equal(isFoeBodyHue('#7FD38A'), false, 'the old grass-green jelly fails');
+  assert.equal(isFoeBodyHue('#FF8FB1'), false, 'hero pink fails');
+  const sL = (hex) => lum8(...rgb8(hex)) / 255;
+  const body = { ...FOE_BODY_COLORS, jellyBody: JELLY_COLORS.body, jellyDeep: JELLY_COLORS.deep, cloneTint: WARM.boss.cloneTint };
+  for (const [k, v] of Object.entries(body)) assert.ok(isFoeBodyHue(v), `${k} ${v} hue ${hexHsv(v).h.toFixed(0)}°`);
+  for (const k of ['hyenaFur', 'crowBody', 'crowWing', 'jellyBody']) {
+    const L = sL(FOE_BODY_COLORS[k]);
+    assert.ok(L >= 0.25 && L <= 0.55, `${k} body luma ${L.toFixed(2)} in 0.25–0.55`);
+  }
+  // the atlas remaps point foe bodies at those tokens
+  const crow = paletteFor('models/creatures/monsters-flying/Pigeon.glb');
+  assert.equal(crow.pairs[0][1], ENEMY_PAL.crowBody); assert.equal(crow.pairs[1][1], ENEMY_PAL.crowWing);
+  for (const p of ['models/characters/kaykit/Barbarian.glb', 'models/characters/kaykit/Rogue_Hooded.glb']) {
+    for (const b of paletteFor(p).bands) { const { h } = hexHsv(b.to); assert.ok(!(h >= 15 && h <= 40) || b.to === ENEMY_PAL.mustard, `${p} band → ${b.to} not ginger`); }
+  }
+  for (const [k, v] of Object.entries(HEAD_REMAPS.hyena)) if (k !== 'spots') assert.ok(isFoeBodyHue(v), `head ${k} ${v}`);
+  assert.equal(HEAD_REMAPS.hyena.spots, ENEMY_PAL.mustard, 'mustard spots: the small top-colour accent');
+});
+
+test('WA §3.1: remapVertexColors maps swatches and 2-way mixes, keeps unmapped swatches, runs once per geometry', () => {
+  const c = (h) => { const k = new THREE.Color(h); return [k.r, k.g, k.b]; };
+  const src = [c('#C99A5E'), c('#6E5A86'), c('#F6EFE4')], dst = [c(ENEMY_PAL.hyenaFur), c(ENEMY_PAL.mustard), src[2]];
+  const mid = src[0].map((v, i) => (v + src[1][i]) / 2);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('color', new THREE.Float32BufferAttribute([...src[0], ...src[1], ...src[2], ...mid], 3));
+  assert.equal(remapVertexColors(g, src, dst), 3, 'the tooth swatch stays');
+  const a = g.attributes.color.array, near = (x, y) => x.every((v, i) => Math.abs(v - y[i]) < 1e-5);
+  assert.ok(near([a[0], a[1], a[2]], dst[0]), 'fur → lilac');
+  assert.ok(near([a[3], a[4], a[5]], dst[1]), 'plum spot → mustard');
+  assert.ok(near([a[6], a[7], a[8]], src[2]), 'tooth unchanged');
+  assert.ok(near([a[9], a[10], a[11]], dst[0].map((v, i) => (v + dst[1][i]) / 2)), 'a 50/50 mix → the 50/50 target mix');
+  assert.equal(remapVertexColors(g, src, dst), 0, 'idempotent: marked done');
+});
+
+test('WA §3.1: a dressed hyena head has no ginger fur left (characters preset → enemies foe hues)', () => {
+  const head = buildBeastHead('hyena', { seed: 3 });
+  // share of vertices still near the preset's tawny fur / furDark / belly (linear rgb distance)
+  const tawny = ['fur', 'furDark', 'belly'].map((k) => { const c = new THREE.Color(BEAST_PRESETS.hyena[k]); return [c.r, c.g, c.b]; });
+  const hist = (root) => { let warm = 0, n = 0;
+    root.traverse((o) => { const col = o.isMesh && o.geometry.attributes.color; if (!col) return;
+      for (let i = 0; i < col.count; i++) { n++; const r = col.getX(i), g = col.getY(i), b = col.getZ(i);
+        if (tawny.some((t) => Math.hypot(r - t[0], g - t[1], b - t[2]) < 0.08)) warm++; } });
+    return warm / Math.max(1, n); };
+  const before = hist(head.root);
+  assert.ok(recolorBeastHead(head, 'hyena', BEAST_PRESETS) > 0);
+  const after = hist(head.root);
+  assert.ok(before > 0.15, `the preset is tawny (${before.toFixed(2)})`);
+  assert.ok(after < 0.02, `tawny fur share ${before.toFixed(2)} → ${after.toFixed(2)}`);
+  assert.equal(recolorBeastHead(head, 'pug', BEAST_PRESETS), 0, 'presets without a remap are untouched');
+  head.dispose();
+});
+
+test('WA §3.1: Cacklejaw clones are light lilac with a sparkle rim, keep his face, wobble and pop in confetti', () => {
+  const L = lum8(...rgb8(WARM.boss.cloneTint)) / 255;
+  assert.ok(L > 0.55, `clone tint is light (${L.toFixed(2)}), not a dark silhouette`);
+  const root = new THREE.Group(), head = new THREE.Group();
+  const own = new THREE.MeshStandardMaterial(); own.userData.enemyOwned = true;
+  let disposed = 0; own.addEventListener('dispose', () => disposed++);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(), own), face = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+  root.add(body, head); head.add(face);
+  assert.equal(cloneLook(root, head), 1);
+  assert.equal(body.material, cloneMaterial(), 'one shared clone material');
+  assert.notEqual(face.material, body.material, 'the beast head (face) keeps its own look');
+  assert.equal(disposed, 1, 'the replaced per-instance material is freed');
+  assert.ok(!body.material.userData.enemyOwned, 'the shared material is never disposed with an instance');
+  disposeInstanceMaterials(root);
+  const def = resolveEnemyDef('cacklejaw_clone');
+  const ctx = fakeCtx(); const bursts = []; ctx.bus.on(E.BURST, (b) => bursts.push(b.kind));
+  const e = { pos: new THREE.Vector3(), height: 2.2, visual: new THREE.Group(), seed: 1, ctx };
+  def.onDeath(e);
+  assert.ok(bursts.includes('confetti') && !e.visual.visible);
+  const sq = [];
+  for (let f = 0; f < 30; f++) { def.render({ ctx: { game: { frameCount: f } } }, 1 / 30); sq.push(def.pulse(e)[1]); }
+  assert.ok(Math.max(...sq) - Math.min(...sq) > 0.05, 'the body wobbles');
+});
+
+// ------------------------------------------------------------------ PERF §9.4 enemy bake (draw budget for the horde)
+import { bakeEnemyVisual, planBake, rmseKind, BAKE_RMSE, clearBakeCache, bakeCacheSize } from '../../src/enemies/bake.js';
+
+/** A 2-bone skinned "body" (2 primitives sharing one skeleton, like Rat.glb), a rigid prop on bone 1 and a helmet. */
+function bakeRig() {
+  const root = new THREE.Group(); root.name = 'visual'; root.scale.setScalar(0.8); root.position.set(3, 0, -2);
+  const b0 = new THREE.Bone(); b0.name = 'Body'; const b1 = new THREE.Bone(); b1.name = 'Head'; b1.position.set(0, 1, 0.5); b0.add(b1);
+  root.add(b0); root.updateMatrixWorld(true);
+  const skel = new THREE.Skeleton([b0, b1]);
+  const body = (color, y) => {
+    const g = new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, y, 0);
+    const n = g.attributes.position.count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) { si[i * 4] = g.attributes.position.getY(i) > 0.5 ? 1 : 0; sw[i * 4] = 1; }
+    g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+    const m = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial({ color })); m.name = 'Rat'; m.material.userData.enemyOwned = true;
+    root.add(m); m.bind(skel, m.matrixWorld.clone().invert().multiply(root.matrixWorld)); return m;
+  };
+  const grey = body('#6E5A86', 0), pink = body('#D9A494', 1);
+  const spear = makeProp('spear'); spear.position.set(0.2, 0, 0.3); spear.rotation.y = 0.4; b1.add(spear);
+  const eyes = makeProp('eyes'); eyes.position.set(0, 0.1, 0.2); b1.add(eyes);
+  const helm = makeProp('kettleHelm'); b1.add(helm);
+  root.updateMatrixWorld(true);
+  return { root, b0, b1, grey, pink, spear, eyes, helm, skel };
+}
+
+test('PERF §9.4 bake: body primitives + rigid gear → ONE skinned toon draw; the helmet keeps its own', () => {
+  clearBakeCache();
+  const r = bakeRig();
+  const res = bakeEnemyVisual(r.root, 'rat_test', { skip: [r.helm] });
+  assert.ok(res?.mesh?.isSkinnedMesh, 'one SkinnedMesh');
+  assert.equal(res.parts.length, 4, 'grey + pink + spear + eyes');
+  for (const o of [r.grey, r.pink, r.spear, r.eyes]) assert.equal(o.visible, false, `${o.name} hidden`);
+  assert.equal(r.helm.visible, true, 'the helmet spins off on defeat: never baked');
+  const draws = []; r.root.traverse((o) => { if (o.isMesh && o.visible) draws.push(o.name); });
+  assert.deepEqual(draws.sort(), ['enemy-baked', 'prop:kettleHelm'].sort(), '2 draws per rat (was 5)');
+  const m = res.mesh.material;
+  assert.ok(m.isMeshToonMaterial && m.vertexColors && m.userData.enemyOwned && m.userData.enemyToon && m.userData.uniforms.uFlash, 'pooled per-actor WarmToon (flash / highlight / pool release)');
+  const g = res.mesh.geometry;
+  for (const a of ['position', 'normal', 'color', 'rmse', 'skinIndex', 'skinWeight']) assert.ok(g.attributes[a], a);
+  // per-part vertex ranges (merge order = res.parts order)
+  const start = new Map(); let off = 0;
+  for (const p of res.parts) { start.set(p, off); off += p.geometry.attributes.position.count * (p.material.side === THREE.DoubleSide ? 2 : 1); }
+  const rm = g.attributes.rmse;
+  assert.ok(Math.abs(rm.getW(start.get(r.eyes)) - BAKE_RMSE.eyes[3]) < 1e-6, 'eyes self-lit (ART §5.3 unlit look in the toon draw)');
+  assert.equal(rm.getW(start.get(r.grey)), BAKE_RMSE.fur[3], 'fur is lit');
+  // colours: the body's material colour (linear) lands on its vertices
+  const c = new THREE.Color('#6E5A86'), i0 = start.get(r.grey);
+  assert.ok(Math.abs(g.attributes.color.getX(i0) - c.r) < 1e-5 && Math.abs(g.attributes.color.getZ(i0) - c.b) < 1e-5);
+});
+
+test('PERF §9.4 bake: baked vertices land exactly where the originals render, at any pose', () => {
+  clearBakeCache();
+  const r = bakeRig();
+  const res = bakeEnemyVisual(r.root, 'rat_pose', { skip: [r.helm] });
+  // pose the rig (the helm hides nothing here; a turn + scale on the head bone like ART §7.2's big heads)
+  r.b0.rotation.y = 0.7; r.b1.rotation.x = -0.5; r.b1.scale.setScalar(1.45); r.root.position.x += 2;
+  r.root.updateMatrixWorld(true); r.skel.update?.();
+  const world = (mesh, i, out) => {
+    if (mesh.isSkinnedMesh) { mesh.getVertexPosition(i, out); return out.applyMatrix4(mesh.matrixWorld); }
+    return out.fromBufferAttribute(mesh.geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
+  };
+  const a = new THREE.Vector3(), b = new THREE.Vector3();
+  let off = 0, worst = 0;
+  for (const part of res.parts) {
+    const n = part.geometry.attributes.position.count;
+    for (let i = 0; i < n; i += 7) { world(part, i, a); world(res.mesh, off + i, b); worst = Math.max(worst, a.distanceTo(b)); }
+    off += n * (part.material.side === THREE.DoubleSide ? 2 : 1);
+  }
+  assert.ok(worst < 1e-4, `max error ${worst}`);
+});
+
+test('PERF §9.4 bake: one shared geometry per type; skip / toggled / transparent parts stay separate', () => {
+  clearBakeCache();
+  const a = bakeRig(), b = bakeRig();
+  const ra = bakeEnemyVisual(a.root, 'rat_share', { skip: [a.helm] }), rb = bakeEnemyVisual(b.root, 'rat_share', { skip: [b.helm] });
+  assert.equal(ra.mesh.geometry, rb.mesh.geometry, 'every rat of a type shares the baked geometry');
+  assert.notEqual(ra.mesh.material, rb.mesh.material, 'but each has its own pooled toon material (per-actor flash)');
+  assert.equal(bakeCacheSize(), 1);
+  // pooled visual reuse: disposing returns the material to the pool and never frees the shared geometry
+  disposeInstanceMaterials(a.root);
+  assert.ok(rb.mesh.geometry.attributes.position.count > 0);
+  // a transparent part and a hidden part never join
+  const c = bakeRig();
+  c.eyes.material = c.eyes.material.clone(); c.eyes.material.transparent = true; c.spear.visible = false;
+  const plan = planBake(c.root, [c.helm]);
+  assert.deepEqual(plan.parts.map((p) => p.mesh.name), ['Rat', 'Rat']);
+  assert.equal(rmseKind(new THREE.MeshBasicMaterial()), 'eyes');
+  assert.equal(rmseKind(new THREE.MeshStandardMaterial({ name: 'enemy-metal' })), 'metal');
+  // nothing to merge → null (≥ 2 parts needed)
+  const lone = new THREE.Group(); assert.equal(bakeEnemyVisual(lone, 'none'), null);
+  for (const t of ['rat_pike', 'rat_xbow', 'spider']) assert.equal(TYPES[t]?.bake ?? TYPES[t]?.default?.bake, true, `${t} bakes`);
+});
+
+// ------------------------------------------------------------------ PERF §1.2 triangle budget: body LOD (lod.js)
+test('PERF §1.2 lod: welded flat-shaded LOD keeps the attribute set, swaps by preset / distance / tier, never on bosses', async () => {
+  const L = await import('../../src/enemies/lod.js');
+  assert.equal(await L.loadSimplifier(), true, 'meshopt simplifier loads');
+  // a skinned "body": a dense sphere with skin attributes
+  // flat-shaded like the low-poly GLBs (every face owns its corners): an index-only simplifier could not collapse it
+  const g = new THREE.SphereGeometry(0.5, 40, 30).toNonIndexed();
+  g.setIndex(Array.from({ length: g.attributes.position.count }, (_, i) => i));
+  const n = g.attributes.position.count;
+  g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(n * 4), 4));
+  g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Float32Array(n * 4).fill(0.25), 4));
+  const lod = L.lodGeometry(g);
+  assert.ok(lod, 'a LOD is built');
+  assert.equal(L.lodGeometry(g), lod, 'cached per source geometry');
+  assert.deepEqual(Object.keys(lod.attributes).sort(), Object.keys(g.attributes).sort(), 'same attribute set (same program)');
+  for (const k of Object.keys(g.attributes)) assert.equal(lod.attributes[k].itemSize, g.attributes[k].itemSize, k);
+  const full = g.index.count / 3, low = lod.index.count / 3;
+  assert.ok(low <= full * (WARM.lod.ratio + 0.1) && low > full * 0.15, `LOD ${low} of ${full} tris`);
+  assert.equal(L.lodGeometry(lod), null, 'a LOD never gets its own LOD');
+  // swap on a skinned mesh (same skeleton, attribute set unchanged → same program)
+  const bone = new THREE.Bone(), root = new THREE.Group();
+  const body = new THREE.SkinnedMesh(g, new THREE.MeshBasicMaterial()); root.add(bone, body); body.bind(new THREE.Skeleton([bone]));
+  assert.equal(L.setVisualLod(root, true), true); assert.equal(body.geometry, lod);
+  assert.equal(L.setVisualLod(root, false), false); assert.equal(body.geometry, g);
+  // policy
+  const e = { pos: { x: 0, z: 0 }, def: {}, _tier: 0 };
+  assert.equal(L.wantsLod(e, { x: 0, z: 0 }, 'low', false), true, 'Low: always');
+  assert.equal(L.wantsLod(e, { x: 5, z: 0 }, 'med', false), false, 'Med near: full');
+  assert.equal(L.wantsLod(e, { x: 12, z: 0 }, 'high', false), true, 'High far: LOD');
+  assert.equal(L.wantsLod(e, { x: WARM.lod.far, z: 0 }, 'med', true), true, 'hysteresis keeps the LOD at the edge');
+  assert.equal(L.wantsLod(e, { x: WARM.lod.far, z: 0 }, 'med', false), false, 'hysteresis keeps full at the edge');
+  assert.equal(L.wantsLod({ ...e, _tier: 1 }, { x: 0, z: 0 }, 'med', false), true, 'activity tier ≥ 1: LOD');
+  assert.equal(L.wantsLod({ ...e, def: { boss: true } }, { x: 50, z: 0 }, 'low', false), false, 'bosses: never');
+  assert.equal(L.wantsLod({ ...e, scripted: true }, { x: 50, z: 0 }, 'low', false), false, 'cutscene actors: never');
+  // a baked double-sided body (a mirrored back copy of every face): the LOD keeps both sides
+  const di = [...g.index.array]; for (let i = 0, f = di.length; i < f; i += 3) di.push(di[i], di[i + 2], di[i + 1]);
+  const dbl = g.clone(); dbl.setIndex(di);
+  const dl = L.simplifyGeometry(dbl);
+  assert.ok(dl && dl.index.count < di.length * 0.6 && (dl.index.count / 3) % 2 === 0, 'both sides, simplified');
+  // outline hulls: welded + smooth normals, indexed (shared corners)
+  const sm = L.simplifyGeometry(g, 0.5, 0.05, { smooth: true });
+  assert.ok(sm && sm.attributes.position.count < sm.index.count, 'welded corners');
+  // the source leaving the asset cache frees its LOD
+  g.dispose();
+  assert.notEqual(L.lodGeometry(new THREE.SphereGeometry(0.5, 40, 30)), lod);
+});
+
+test('PERF §1.2 enemy gear: eyes ≤ 600 tris and skip the outline hull; kettle helm ≤ 650 tris', async () => {
+  const { makeProp } = await import('../../src/enemies/props.js');
+  const tris = (m) => (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+  const eyes = makeProp('eyes');
+  assert.ok(tris(eyes) <= 600, `eyes ${tris(eyes)} tris`);
+  assert.equal(eyes.userData.noOutline, true);
+  assert.ok(tris(makeProp('kettleHelm')) <= 650, `helm ${tris(makeProp('kettleHelm'))} tris`);
+});
+
+test('WA §3.1 / §8.2: pug, hyena and Cacklejaw wear toy gear, never silver plate or grim blades', async () => {
+  const { PUG_SHOW, PUG_HIDE, PUG_SWORD } = await import('../../src/enemies/types/pug.js');
+  const { HYENA_BONE } = await import('../../src/enemies/types/hyena.js');
+  const { CACKLEJAW_LOOK, CACKLEJAW_HIDE } = await import('../../src/enemies/scripted/Cacklejaw.js');
+  const { makeProp: mk } = await import('../../src/enemies/props.js');
+  const { PALETTE_MAPS: PM, hexHsv } = await import('../../src/enemies/palette.js');
+  const pug = resolveEnemyDef('pug');
+  assert.deepEqual([...pug.show], ['Rectangle_Shield'], 'only the (painted) shield shows');
+  for (const n of ['Knight_Helmet', '1H_Sword', 'Knight_Head']) assert.ok(pug.hide.includes(n), `pug hides ${n}`);
+  assert.equal(PUG_SHOW, pug.show); assert.equal(PUG_HIDE, pug.hide);
+  assert.ok(PUG_SWORD.own && PUG_SWORD.prop === 'practiceSword');
+  assert.equal(HYENA_BONE.prop, 'squeaky_bone');
+  assert.equal(CACKLEJAW_LOOK.hold.prop, 'squeaky_bone');
+  assert.ok(CACKLEJAW_HIDE.includes('Barbarian_Hat'));
+  // the Knight atlas's steel greys go to a plum tin, never back to a cold grey / slate (her silver armour read)
+  const steel = PM['models/characters/kaykit/Knight.glb'].bands.find((b) => b.ref === '#7c868b');
+  const tin = hexHsv(steel.to);
+  assert.ok(tin.h >= 250 && tin.h <= 290 && tin.s >= 0.2, `Knight steel → plum tin (${steel.to})`);
+  // the new props: one mesh each, sized as documented, and no near-grey (silver) vertex above luma 0.6
+  const size = (name) => { const g = mk(name).geometry; g.computeBoundingBox(); return g.boundingBox.getSize(new THREE.Vector3()); };
+  const sw = size('practiceSword');
+  assert.ok(sw.y > 0.8 && sw.y < 0.95 && sw.x < 0.3, `practice sword ${sw.y.toFixed(2)} m along +Y`);
+  assert.ok(Math.abs(size('potHelm').x - 2 * 0.188) < 0.03, 'pot rim radius ≈ 0.17 (+ the rim torus)');
+  assert.ok(size('chiefCrown').y > 0.3, 'the crown feathers stand up (they read from above)');
+  for (const name of ['practiceSword', 'potHelm', 'chiefCrown']) {
+    const col = mk(name).geometry.attributes.color, c = new THREE.Color(), hsl = {};
+    for (let i = 0; i < col.count; i++) {
+      c.setRGB(col.getX(i), col.getY(i), col.getZ(i), THREE.LinearSRGBColorSpace).getHSL(hsl, THREE.SRGBColorSpace);
+      assert.ok(!(hsl.s < 0.12 && hsl.l > 0.45 && hsl.l < 0.9), `${name}: vertex ${i} is not silver-grey`);
+    }
+  }
 });

@@ -31,6 +31,60 @@ const PRECISE_MAX_VERTS = 60000;
 export const SKIN_CULL_PAD = 1.6;
 /** Prefetches in flight at once (PERF §10.3). */
 const PREFETCH_PARALLEL = 2;
+/** Cache release after `level:loaded` waits this long (ms) so late spawners (companions, waves) hit the cache first. */
+export const RELEASE_DELAY_MS = 4000;
+/** Material slots that hold textures (MeshStandard / Physical / Toon / Basic / Lambert / Phong). */
+const TEX_SLOTS = ['map', 'alphaMap', 'aoMap', 'bumpMap', 'normalMap', 'displacementMap', 'emissiveMap', 'lightMap',
+  'metalnessMap', 'roughnessMap', 'specularMap', 'gradientMap', 'envMap', 'matcap', 'clearcoatMap', 'clearcoatNormalMap',
+  'clearcoatRoughnessMap', 'sheenColorMap', 'sheenRoughnessMap', 'transmissionMap', 'thicknessMap', 'iridescenceMap',
+  'iridescenceThicknessMap', 'anisotropyMap', 'specularIntensityMap', 'specularColorMap'];
+
+/** Add every texture `m` references (slots + ShaderMaterial / onBeforeCompile uniforms) to `out`. */
+function texturesOf(m, out) {
+  if (!m) return out;
+  for (const k of TEX_SLOTS) { const t = m[k]; if (t?.isTexture) out.add(t); }
+  const u = m.uniforms ?? m.userData?.uniforms ?? m.userData?.shader?.uniforms;
+  if (u) for (const k in u) { const v = u[k]?.value; if (v?.isTexture) out.add(v); else if (Array.isArray(v)) for (const t of v) if (t?.isTexture) out.add(t); }
+  return out;
+}
+
+/**
+ * Geometries, materials and textures reachable from `root` (the live scene). Allocates; level-load time only.
+ * @param {THREE.Object3D|null|undefined} root
+ * @returns {{ geometries: Set<THREE.BufferGeometry>, materials: Set<THREE.Material>, textures: Set<THREE.Texture> }}
+ */
+export function usedResources(root) {
+  const geometries = new Set(), materials = new Set(), textures = new Set();
+  root?.traverse?.((o) => {
+    if (o.geometry) geometries.add(o.geometry);
+    const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : null;
+    if (ms) for (const m of ms) if (m && !materials.has(m)) { materials.add(m); texturesOf(m, textures); }
+  });
+  if (root?.background?.isTexture) textures.add(root.background);
+  if (root?.environment?.isTexture) textures.add(root.environment);
+  return { geometries, materials, textures };
+}
+
+/**
+ * Free a cached glTF's GPU resources (geometries, materials, textures) except those in `used`, and drop its CPU-side
+ * parser. A freed resource that is drawn again re-uploads from its CPU data (three handles it), so a wrong guess
+ * costs an upload, never a crash. Returns true when nothing of it is in `used` (the entry may leave the cache).
+ * @param {any} gltf @param {ReturnType<typeof usedResources>} used
+ */
+export function disposeGltf(gltf, used) {
+  if (!gltf?.scenes && !gltf?.scene) return true;
+  const geos = new Set(), mats = new Set(), texs = new Set();
+  for (const sc of gltf.scenes ?? [gltf.scene]) sc?.traverse?.((o) => {
+    if (o.geometry) geos.add(o.geometry);
+    if (o.material) for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) { mats.add(m); texturesOf(m, texs); }
+  });
+  for (const g of geos) if (used.geometries.has(g)) return false;
+  for (const g of geos) g.dispose();
+  for (const m of mats) if (!used.materials.has(m)) m.dispose();
+  for (const t of texs) if (!used.textures.has(t)) t.dispose();
+  gltf.parser = null;
+  return true;
+}
 
 /**
  * World-space AABB of the VISIBLE meshes under `object` (bone-deformed for skinned meshes), skipping any
@@ -136,6 +190,36 @@ export function disposeInstance(root, { detach = true, materials = true } = {}) 
   if (detach) root.removeFromParent();
 }
 
+/** onUpload callback: drop the CPU copy once three has it on the GPU (`this` is the attribute). */
+function _dropArray() { this.array = null; }
+
+/**
+ * PERF §5 heap: free the CPU-side typed arrays of static, non-skinned meshes under `root` once they are uploaded
+ * (`BufferAttribute.onUpload`). Bounds are computed first (culling keeps working). Opt-in per area, and ONLY for
+ * geometry that is (a) never edited, re-baked or read on the CPU again (no `fromBufferAttribute`, no bake, no BVH),
+ * and (b) never drawn again after `geometry.dispose()` (a dispose + redraw would re-upload from a null array).
+ * `keepPosition` (default) keeps positions, which raycasts (Picker, Occluders) and physics read; the index is always
+ * kept (raycasts walk it). Morph / instanced / interleaved attributes and `userData.keepCpu` meshes are skipped.
+ * Returns the number of attributes marked.
+ * @param {THREE.Object3D} root @param {{ keepPosition?: boolean }} [opts]
+ */
+export function releaseCpuOnUpload(root, { keepPosition = true } = {}) {
+  let n = 0;
+  root?.traverse?.((o) => {
+    const g = o.geometry;
+    if (!o.isMesh || o.isSkinnedMesh || o.isInstancedMesh || !g?.attributes || o.userData?.keepCpu || g.userData?.keepCpu) return;
+    if (g.morphAttributes && Object.keys(g.morphAttributes).length) return;
+    if (!g.boundingBox) g.computeBoundingBox();
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    for (const k in g.attributes) {
+      const a = g.attributes[k];
+      if ((keepPosition && k === 'position') || a.isInterleavedBufferAttribute || a.usage !== THREE.StaticDrawUsage) continue;
+      if (a.onUploadCallback !== _dropArray) { a.onUpload(_dropArray); n++; }
+    }
+  });
+  return n;
+}
+
 export class Assets {
   constructor(ctx) {
     this.ctx = ctx;
@@ -155,18 +239,61 @@ export class Assets {
     this._prefetched = new Set();
     /** measured raw boxes per template key */
     this._measured = new Map();
+    /** settled cache values by key (release() only touches settled entries) */
+    this._values = new Map();
+    /** pending release() timer (setTimeout id) */
+    this._releaseTimer = null;
     // meshopt only: no shipped GLB uses DRACO (checked 2026-10-07), and DRACOLoader would pull ~1.3 MB of
     // decoder files into the bundle. If one ever does: copy three/examples/jsm/libs/draco/gltf to public/draco/
     // and call this.gltfLoader.setDRACOLoader(new DRACOLoader(this.manager).setDecoderPath(baseUrl() + 'draco/')).
     this.gltfLoader = new GLTFLoader(this.manager).setMeshoptDecoder(MeshoptDecoder);
     this.texLoader = new THREE.TextureLoader(this.manager);
     this.hdrLoader = new HDRLoader(this.manager);
-    this.stats = { loaded: 0, failed: 0 };
+    this.stats = { loaded: 0, failed: 0, released: 0 };
   }
 
-  async init() {}
+  async init() {
+    const bus = this.ctx?.bus;
+    if (!bus) return;
+    bus.on(E.LEVEL_LOADING, () => this._cancelRelease());
+    bus.on(E.LEVEL_LOADED, (p) => {
+      this._cancelRelease();
+      if (typeof setTimeout !== 'function' || !p?.id) return;
+      this._releaseTimer = setTimeout(() => { this._releaseTimer = null; this.release(p.id); }, RELEASE_DELAY_MS);
+    });
+  }
   update() {}
-  dispose() { this.cache.clear(); this._measured.clear(); }
+  dispose() { this._cancelRelease(); this.cache.clear(); this._values.clear(); this._measured.clear(); }
+
+  _cancelRelease() { if (this._releaseTimer != null) { clearTimeout(this._releaseTimer); this._releaseTimer = null; } }
+
+  /**
+   * PERF §5 / §10.3 memory: drop settled glTF / texture cache entries the level `levelId` does not list (every tier,
+   * plus '*') and that nothing in the live scene draws, and free their GPU resources. Without this every visited
+   * level's GLBs (geometry, textures, decoded images and whatever other areas cached per image) stayed resident
+   * for the whole session. Called `RELEASE_DELAY_MS` after `level:loaded`; a released path loads again on demand.
+   * Allocates (one scene traversal); level-load time only. Returns the released cache keys.
+   * @param {string} levelId @param {THREE.Object3D} [root] defaults to ctx.scene
+   * @returns {string[]}
+   */
+  release(levelId, root = this.ctx?.scene) {
+    const keep = new Set(levelAssets(levelId, undefined, 'all'));
+    const used = usedResources(root);
+    const out = [];
+    for (const [key, v] of this._values) {
+      const i = key.indexOf(':'), kind = key.slice(0, i);
+      if (kind !== 'gltf' && kind !== 'tex') continue;
+      const path = kind === 'tex' ? key.slice(i + 1).split(':')[0] : key.slice(i + 1);
+      if (keep.has(path)) continue;
+      if (kind === 'gltf') { if (!disposeGltf(v, used)) continue; }
+      else if (used.textures.has(v)) continue;
+      else v?.dispose?.();
+      this.cache.delete(key); this._values.delete(key);
+      out.push(key);
+    }
+    this.stats.released += out.length;
+    return out;
+  }
 
   /** Public URL for a path relative to public/assets/. */
   url(path) { return assetUrl(path); }
@@ -174,7 +301,11 @@ export class Assets {
   _cached(key, make) {
     let p = this.cache.get(key);
     if (!p) {
-      p = make().then((v) => { this.stats.loaded++; return v; }, (e) => { this.stats.failed++; this.cache.delete(key); throw e; });
+      p = make().then((v) => {
+        this.stats.loaded++;
+        if (this.cache.get(key) === p) this._values.set(key, v);
+        return v;
+      }, (e) => { this.stats.failed++; this.cache.delete(key); throw e; });
       this.cache.set(key, p);
     }
     return p;
@@ -183,7 +314,9 @@ export class Assets {
   /** Cached glTF (shared; never mutate — use model() for an instance). */
   gltf(path) {
     const p = normalizeAssetPath(path);
-    return this._cached('gltf:' + p, () => this.gltfLoader.loadAsync(this.url(p)));
+    // PERF §5 memory: the parser keeps the GLB body, every decoded bufferView and image blob in its cache (≈ 13 MB
+    // over the levels); nothing reads gltf.parser after the parse, so drop it.
+    return this._cached('gltf:' + p, () => this.gltfLoader.loadAsync(this.url(p)).then((g) => { g.parser = null; return g; }));
   }
 
   /**

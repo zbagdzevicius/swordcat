@@ -1,18 +1,23 @@
 // Capes (research/art.md §5; GAME_DESIGN §7.8, §13.5, §17):
 // - Hero: CPU verlet cloth, 9 x 13 particles, pinned to 3 shoulder/neck anchors that follow the chest joint,
-//   structural + shear constraints, 4 iterations, damping 0.985, gravity -20, wind + inertia, sphere colliders.
+//   structural + shear constraints, 3 iterations (PERF §9.1), damping 0.985, gravity -20, wind + inertia, sphere
+//   colliders; at most 2 sub-steps per frame.
 // - Meme Cam: cross-fade (0.3 s) to a seamlessly looping sway (3.8 s period, gust peak at 1.2 s), back on exit.
 // - NPCs: static drape + vertex-shader sway (no CPU).
 // The 9 x 13 particles drive a finer RENDER grid (Catmull-Rom, CAPE_DEFAULTS.resX/resY): the soft vertical folds,
 // the gathered neckline and the wavy hem live on that grid, with a baked fold-shade (capeAO) so the cloth reads as
 // cloth under flat overcast light (a 9-column grid alone aliased the folds into a flat board).
+// Render LOD (PERF §9.1, X26): the full resX/resY grid only in close-ups (cam.closeUp); iso play uses the coarser
+// playResX/playResY grid (17 x 13 = 221 vertices). Normals come from central differences on the regular grid
+// (`gridNormals`, 0 allocations) instead of computeVertexNormals.
 import * as THREE from 'three';
 import { CAPES } from './palette.js';
 import { own, TOP_VIEW, READABILITY, softRamp } from './materials.js';
 import { clamp, smoothstep } from './util.js';
 
-export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.3, botW: 0.6, len: 0.47, iterations: 4, damping: 0.985, gravity: -20, anchorY: 0.61, anchorZ: -0.12,
-  folds: 3.5, foldAmp: 0.05, hemCurve: 0.035, hemWave: 0.014, gather: 0.008, neckArc: 0.014, ao: 0.5, resX: 4, resY: 2 });
+export const CAPE_DEFAULTS = Object.freeze({ cols: 9, rows: 13, topW: 0.3, botW: 0.6, len: 0.47, iterations: 3, damping: 0.985, gravity: -20, anchorY: 0.61, anchorZ: -0.12,
+  folds: 3.5, foldAmp: 0.05, hemCurve: 0.035, hemWave: 0.014, gather: 0.008, neckArc: 0.014, ao: 0.5, resX: 4, resY: 2,
+  playResX: 2, playResY: 1, maxSub: 2 });
 const TAU = Math.PI * 2;
 
 /** Shared sway clock for NPC capes. */
@@ -36,24 +41,22 @@ export function capeMaterial(style = 'red', o = {}) {
   m.dithering = true;
   const uniforms = {
     uLining: { value: new THREE.Color(spec.lining) }, uHem: { value: new THREE.Color(spec.hem) },
-    uTime: CAPE_TIME, uSpeed: { value: 0 }, uSwayAmp: { value: 1 }, uTopView: TOP_VIEW,
+    uTime: CAPE_TIME, uSpeed: { value: 0 }, uSwayAmp: { value: 1 }, uCapeSway: { value: o.sway ? 1 : 0 }, uTopView: TOP_VIEW,
     uTrimV: { value: READABILITY.trimM / CAPE_DEFAULTS.len },
   };
   m.userData.uniforms = uniforms;
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nattribute float capeAO;\nuniform float uTime, uSpeed, uSwayAmp;')
+      .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nattribute float capeAO;\nuniform float uTime, uSpeed, uSwayAmp, uCapeSway;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vCapeUv = uv; vCapeAO = capeAO;
-        #ifdef CAPE_SWAY
-        {
+        if ( uCapeSway > 0.5 ) {   // NPC sway variant: a uniform, not a define (PERF §1.2: one cape program)
           float k = pow(1.0 - uv.y, 2.0);
           transformed.z -= k * (0.06 + uSpeed * 0.18);
           transformed.x += k * sin(uTime * 2.0 + uv.y * 4.0) * 0.02 * uSwayAmp;
           transformed.z += k * sin(uTime * 2.6 + uv.x * 3.0) * 0.015 * uSwayAmp;
-        }
-        #endif`);
+        }`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vCapeUv;\nvarying float vCapeAO;\nuniform vec3 uLining, uHem;\nuniform float uTopView, uTrimV;')
       .replace('#include <color_fragment>', `#include <color_fragment>
@@ -72,8 +75,7 @@ export function capeMaterial(style = 'red', o = {}) {
       .replace('#include <opaque_fragment>', `outgoingLight *= vCapeAO;
         #include <opaque_fragment>`);
   };
-  if (o.sway) m.defines = { CAPE_SWAY: '' };
-  m.customProgramCacheKey = () => 'sc-cape-v6' + (o.sway ? '-sway' : '');
+  m.customProgramCacheKey = () => 'sc-cape-v7';
   _mats.set(key, own(m));
   return m;
 }
@@ -153,6 +155,27 @@ function crTaps(nCoarse, res) {
   return { n: nFine, ix, w };
 }
 
+/**
+ * Vertex normals of a regular row-major `rc x rr` grid by central differences (PERF §9.1), written in place into `n`.
+ * Matches the cape's flipped winding (right x down = the outside face). No allocations; ~6x cheaper than
+ * computeVertexNormals on the same grid.
+ * @param {Float32Array|number[]} p positions (xyz per vertex) @param {Float32Array|number[]} n normals out
+ * @param {number} rc columns @param {number} rr rows
+ */
+export function gridNormals(p, n, rc, rr) {
+  for (let r = 0; r < rr; r++) {
+    const ru = (r > 0 ? r - 1 : 0) * rc, rd = (r < rr - 1 ? r + 1 : r) * rc, ro = r * rc;
+    for (let c = 0; c < rc; c++) {
+      const l = (ro + (c > 0 ? c - 1 : 0)) * 3, rt = (ro + (c < rc - 1 ? c + 1 : c)) * 3, u = (ru + c) * 3, d = (rd + c) * 3;
+      const ax = p[rt] - p[l], ay = p[rt + 1] - p[l + 1], az = p[rt + 2] - p[l + 2];
+      const bx = p[d] - p[u], by = p[d + 1] - p[u + 1], bz = p[d + 2] - p[u + 2];
+      const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+      const k = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1), i = (ro + c) * 3;
+      n[i] = nx * k; n[i + 1] = ny * k; n[i + 2] = nz * k;
+    }
+  }
+}
+
 // ------------------------------------------------------------------ verlet sim (pure math; node-testable)
 
 /** Position-based verlet cloth. All positions in world space. */
@@ -185,6 +208,17 @@ export class ClothSim {
       if (r < R - 2) add(i, i + 2 * C, 0.25);
     }
     this.cons = new Float32Array(cons);
+    // solver layout (hot loop, PERF §9.1): integer offsets + per-end gains with the pin weights folded in (pins are
+    // fixed per sim), so the inner loop does no float→index conversion and no pin lookups. Pin-pin pairs drop out.
+    const nc = cons.length / 4, ca = [], cb = [], cr = [], cga = [], cgb = [];
+    for (let j = 0; j < nc; j++) {
+      const a = cons[j * 4], b = cons[j * 4 + 1], st = cons[j * 4 + 3], pa = this.pinned[a], pb = this.pinned[b];
+      if (pa && pb) continue;
+      ca.push(a * 3); cb.push(b * 3); cr.push(cons[j * 4 + 2]);
+      cga.push((pa ? 0 : pb ? 2 : 1) * 0.5 * st); cgb.push((pb ? 0 : pa ? 2 : 1) * 0.5 * st);
+    }
+    this._cA = new Int32Array(ca); this._cB = new Int32Array(cb); this._cR = new Float32Array(cr);
+    this._cGA = new Float32Array(cga); this._cGB = new Float32Array(cgb);
     // long-range tethers: each particle may not drift further from its column's pin than its rest distance
     this.tether = new Float32Array(N);
     for (let i = 0; i < N; i++) { const c = i % C; const dx = this.p[i * 3] - this.p[c * 3], dy = this.p[i * 3 + 1] - this.p[c * 3 + 1], dz = this.p[i * 3 + 2] - this.p[c * 3 + 2]; this.tether[i] = Math.hypot(dx, dy, dz) * 1.03; }
@@ -238,17 +272,15 @@ export class ClothSim {
       }
       p[k] += vx + ax; p[k + 1] += vy + ay; p[k + 2] += vz + az;
     }
-    const cons = this.cons, nc = cons.length;
+    const cA = this._cA, cB = this._cB, cR = this._cR, gA = this._cGA, gB = this._cGB, nc = cA.length;
     for (let it = 0; it < d.iterations; it++) {
-      for (let j = 0; j < nc; j += 4) {
-        const a = cons[j] * 3, b = cons[j + 1] * 3, rest = cons[j + 2], st = cons[j + 3];
+      for (let j = 0; j < nc; j++) {
+        const a = cA[j], b = cB[j];
         const dx = p[b] - p[a], dy = p[b + 1] - p[a + 1], dz = p[b + 2] - p[a + 2];
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
-        const diff = ((len - rest) / len) * 0.5 * st;
-        const pa = this.pinned[cons[j]], pb = this.pinned[cons[j + 1]];
-        const wa = pa ? 0 : pb ? 2 : 1, wb = pb ? 0 : pa ? 2 : 1;
-        p[a] += dx * diff * wa; p[a + 1] += dy * diff * wa; p[a + 2] += dz * diff * wa;
-        p[b] -= dx * diff * wb; p[b + 1] -= dy * diff * wb; p[b + 2] -= dz * diff * wb;
+        const diff = (len - cR[j]) / len, fa = diff * gA[j], fb = diff * gB[j];
+        p[a] += dx * fa; p[a + 1] += dy * fa; p[a + 2] += dz * fa;
+        p[b] -= dx * fb; p[b + 1] -= dy * fb; p[b + 2] -= dz * fb;
       }
       this.applyTethers();
       this.collide();
@@ -285,14 +317,15 @@ export class ClothSim {
     }
   }
   /**
-   * Advance with an accumulator at 60 Hz (max 4 sub-steps). `onSub(f)` runs before each sub-step with the fraction
+   * Advance with an accumulator at 60 Hz (at most `d.maxSub` sub-steps, PERF §9.1: 2; a longer frame drops the rest). `onSub(f)` runs before each sub-step with the fraction
    * f (0..1] of the frame it ends at, so callers can move pins / colliders smoothly through the frame: snapping the
    * pins a whole frame ahead in the first sub-step injects a burst of velocity at the neckline every frame, and at
    * 30-45 fps a running kitten's cape crumpled up against her back instead of trailing.
    */
   advance(dt, wind, onSub = null) {
-    this.acc = Math.min(this.acc + dt, 4 / 60);
-    const n = Math.min(4, Math.floor(this.acc * 60 + 1e-6));
+    const m = Math.max(1, this.d.maxSub | 0);
+    this.acc = Math.min(this.acc + dt, m / 60);
+    const n = Math.min(m, Math.floor(this.acc * 60 + 1e-6));
     for (let s = 0; s < n; s++) { if (onSub) onSub((s + 1) / n); this.step(1 / 60, wind); this.acc -= 1 / 60; }
     if (this.acc < 0) this.acc = 0;
     return n;
@@ -348,18 +381,16 @@ export class HeroCape {
     this.rig = o.rig; this.root = o.root;
     this.d = { ...CAPE_DEFAULTS, ...(o.dims || {}) };
     this.sim = new ClothSim(this.d);
-    // render grid (finer than the sim): Catmull-Rom taps per render column / row
-    this._tx = crTaps(this.d.cols, Math.max(1, this.d.resX | 0));
-    this._ty = crTaps(this.d.rows, Math.max(1, this.d.resY | 0));
-    /** render grid size (columns, rows) */
-    this.rc = this._tx.n; this.rr = this._ty.n;
-    this.geo = capeGeometry(this.rc, this.rr, this.d);
     this._loc = new Float32Array(this.sim.N * 3);   // sim particles in root-local space (per write)
-    this._fold = new Float32Array(this.rc * this.rr * 2);
-    for (let r = 0; r < this.rr; r++) for (let c = 0; c < this.rc; c++) {
-      const u = c / (this.rc - 1), v = r / (this.rr - 1), i = (r * this.rc + c) * 2;
-      this._fold[i] = capeFold(u, v, this.d); this._fold[i + 1] = capeHem(u, v, this.d);
-    }
+    // render grids (finer than the sim, Catmull-Rom): 'close' = resX/resY (close-ups, tools), 'play' = playResX/Y
+    // (iso play, PERF §9.1). The play set builds on first use; the mesh swaps geometry pointers only.
+    /** @type {{close?: object, play?: object}} */
+    this._sets = {};
+    /** Current render detail: true = close-up grid, false = iso play grid. */
+    this.closeUp = o.closeUp !== false;
+    this._useSet(this.closeUp ? 'close' : 'play');
+    /** Sim paused while fully swayed (activity tier >= 1, PERF §4.3): the cloth re-seeds on snap(). */
+    this.simPaused = false;
     this.mesh = new THREE.Mesh(this.geo, capeMaterial(o.style || 'red'));
     this.mesh.name = 'cape'; this.mesh.frustumCulled = false; this.mesh.castShadow = true; this.mesh.receiveShadow = true;
     this.style = o.style || 'red';
@@ -378,8 +409,41 @@ export class HeroCape {
     for (let c = 0; c < this.d.cols; c++) this.pinLocal.push(drapePoint(c / (this.d.cols - 1), 0, this.d, new THREE.Vector3()));
   }
   setStyle(style) { this.style = style; this.mesh.material = capeMaterial(style); }
-  /** Render-geometry vertex index of sim particle (column c, row r). */
-  vertexIndex(c, r) { return r * Math.max(1, this.d.resY | 0) * this.rc + c * Math.max(1, this.d.resX | 0); }
+  /** Build (once) and select a render set: taps, grid size, geometry, fold offsets. @param {'close'|'play'} key */
+  _useSet(key) {
+    let s = this._sets[key];
+    if (!s) {
+      const d = this.d, close = key === 'close';
+      const resX = Math.max(1, (close ? d.resX : d.playResX ?? d.resX) | 0), resY = Math.max(1, (close ? d.resY : d.playResY ?? d.resY) | 0);
+      const tx = crTaps(d.cols, resX), ty = crTaps(d.rows, resY), rc = tx.n, rr = ty.n;
+      const fold = new Float32Array(rc * rr * 2);
+      for (let r = 0; r < rr; r++) for (let c = 0; c < rc; c++) {
+        const u = c / (rc - 1), v = r / (rr - 1), i = (r * rc + c) * 2;
+        fold[i] = capeFold(u, v, d); fold[i + 1] = capeHem(u, v, d);
+      }
+      s = this._sets[key] = { key, resX, resY, tx, ty, rc, rr, fold, geo: capeGeometry(rc, rr, d) };
+    }
+    this._set = s;
+    this._tx = s.tx; this._ty = s.ty; this._fold = s.fold;
+    /** render grid size (columns, rows) */
+    this.rc = s.rc; this.rr = s.rr;
+    this.geo = s.geo;
+    if (this.mesh) this.mesh.geometry = s.geo;
+  }
+  /**
+   * Render detail (PERF §9.1): true = the full close-up grid (cam.closeUp, cutscenes, tools), false = the iso play
+   * grid. Pointer swap; the next update() writes the new grid.
+   * @param {boolean} closeUp
+   */
+  setDetail(closeUp) {
+    closeUp = !!closeUp;
+    if (closeUp === this.closeUp) return this;
+    this.closeUp = closeUp;
+    this._useSet(closeUp ? 'close' : 'play');
+    return this;
+  }
+  /** Render-geometry vertex index of sim particle (column c, row r) on the current grid. */
+  vertexIndex(c, r) { return r * this._set.resY * this.rc + c * this._set.resX; }
   /** 'verlet' | 'sway'. blend seconds (Meme Cam: 0.3 in, 0.6 out). */
   setMode(mode, { blend = 0.3, period, gustPeak, amp } = {}) {
     this.mode = mode; this.wTarget = mode === 'sway' ? 1 : 0; this.blendDur = Math.max(1e-3, blend);
@@ -389,6 +453,18 @@ export class HeroCape {
   setSwayTime(t) { this.sway.t = t; }
   /** Snap the cloth to the current pose (call after teleports / cutscene cuts). */
   snap() { this._initialised = false; }
+  /**
+   * Pause the cloth sim (activity tier >= 1, PERF §4.3/§9.1): while the cape is fully on the looping sway nothing
+   * reads the particles, so the steps are skipped. Unpausing re-seeds the cloth from the current pose.
+   * @param {boolean} on
+   */
+  pauseSim(on) {
+    on = !!on;
+    if (on === this.simPaused) return this;
+    this.simPaused = on;
+    if (!on) this.snap();
+    return this;
+  }
   _updatePins() {
     const C = this.d.cols;
     this.root.updateWorldMatrix(true, false);
@@ -465,6 +541,12 @@ export class HeroCape {
   update(dt, { wind = null, speed = 0 } = {}) {
     if (!this.rig.chestBind) return;
     this._updatePins();
+    // fully swayed and paused (off screen): the sim output is not used, skip the cloth entirely (PERF §9.1 item 4)
+    if (this.simPaused && this._initialised && this.w >= 1 && this.wTarget >= 1) {
+      this.sway.t += dt;
+      this._write(speed);
+      return;
+    }
     let resetPrev = false;
     if (!this._initialised) {
       this.sim.reset((v) => v.applyMatrix4(this._pinM));
@@ -549,9 +631,11 @@ export class HeroCape {
       }
     }
     pos.needsUpdate = true;
-    this.geo.computeVertexNormals();
+    const nrm = this.geo.attributes.normal;
+    gridNormals(arr, nrm.array, rc, this.rr);
+    nrm.needsUpdate = true;
   }
-  dispose() { this.geo.dispose(); }
+  dispose() { for (const k in this._sets) this._sets[k].geo.dispose(); }
 }
 
 /**

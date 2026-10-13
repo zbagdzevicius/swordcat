@@ -33,17 +33,52 @@ const PROP_PICK_R = 0.8, VIGIL_AXIS_H = 1.7;
 /** a Vigil Stone click beyond the base px must hit a collider within this (m, horizontal) of the stone */
 const VIGIL_HIT_R = 0.9;
 const PROP_RAY = Object.freeze({ terrain: true, mesh: true, statics: true });
+const NO_OPTS = Object.freeze({});
 const _list = [];
 
-/** The canvas rect (CSS px). A layout read (getBoundingClientRect): callers projecting many points read it once and
- *  pass it on (worldToScreen / toNdc / screenToGround take an optional `rect`). */
+/** The canvas rect cache (PERF §4.5: no layout read per pick). Re-read only after a ResizeObserver / window resize /
+ *  scroll / visualViewport event, or every RECT_TTL calls as a safety net (a layout shift no event reports). Without
+ *  ResizeObserver (node tests) every call reads the element. */
+const RECT_TTL = 120;
+const _rc = { el: null, rect: null, dirty: true, n: 0, ro: null };
+const _markDirty = () => { _rc.dirty = true; };
+function watchRect(el) {
+  if (_rc.ro) _rc.ro.disconnect();
+  _rc.ro = new ResizeObserver(_markDirty);
+  _rc.ro.observe(el);
+  if (_rc.el === null && typeof addEventListener === 'function') {          // once per page (the listeners are global)
+    addEventListener('resize', _markDirty, { passive: true });
+    addEventListener('scroll', _markDirty, { passive: true, capture: true });
+    addEventListener('orientationchange', _markDirty, { passive: true });
+    if (typeof visualViewport !== 'undefined' && visualViewport) visualViewport.addEventListener('resize', _markDirty, { passive: true });
+  }
+  _rc.el = el;
+}
+
+/** The canvas rect (CSS px), cached (see _rc): callers projecting many points read it once and pass it on
+ *  (worldToScreen / toNdc / screenToGround take an optional `rect`). Read-only: never mutate the result. */
 export function canvasRect(ctx) {
   const el = ctx.renderer?.domElement;
-  const r = el?.getBoundingClientRect?.();
-  if (r && r.width > 0) return r;
+  if (el?.getBoundingClientRect) {
+    if (typeof ResizeObserver === 'undefined') {
+      const r = el.getBoundingClientRect();
+      if (r && r.width > 0) return r;
+    } else {
+      if (el !== _rc.el) { watchRect(el); _rc.dirty = true; }
+      if (_rc.dirty || ++_rc.n >= RECT_TTL || !_rc.rect) {
+        const r = el.getBoundingClientRect();
+        _rc.n = 0;
+        if (r && r.width > 0) { _rc.rect = r; _rc.dirty = false; } else _rc.rect = null;
+      }
+      if (_rc.rect) return _rc.rect;
+    }
+  }
   const w = typeof innerWidth !== 'undefined' ? innerWidth : 1280, h = typeof innerHeight !== 'undefined' ? innerHeight : 720;
   return { left: 0, top: 0, width: w, height: h };
 }
+
+/** Invalidate the cached canvas rect (a caller that moved / resized the canvas itself). */
+export function invalidateCanvasRect() { _rc.dirty = true; }
 
 /** CSS px → NDC (writes `out` Vector2). */
 export function toNdc(ctx, x, y, out = _ndc, r = canvasRect(ctx)) {
@@ -66,9 +101,28 @@ export function worldToScreen(ctx, p, out = { x: 0, y: 0, z: 0, on: false }, r =
   return out;
 }
 
+/** Rays never reach past this (m) — the far plane caps it first in practice. */
+const RAY_MAX = 400;
+const _fwd = new THREE.Vector3();
+/**
+ * The longest useful pick ray (m) along `dir` from the camera: to the far plane (AUTOCAM §9.3 / PERF §4.5 — nothing
+ * beyond it is drawn, so nothing beyond it is a click target), never more than RAY_MAX. The iso far plane is ~55-60 m,
+ * so the heightfield DDA walks ≤ ~ far / cell cells and the mesh / prop-top queries stay inside that span.
+ */
+export function rayLimit(cam, dir) {
+  const far = cam?.far;
+  if (!(far > 0) || !Number.isFinite(far) || !cam.matrixWorld) return RAY_MAX;
+  const e = cam.matrixWorld.elements;
+  _fwd.set(-e[8], -e[9], -e[10]);
+  const c = _fwd.dot(dir) / (_fwd.length() || 1);
+  return c > 1e-3 ? Math.min(RAY_MAX, far / c) : RAY_MAX;
+}
+
 /**
  * The ground under CSS px (x, y): terrain + architecture (bridge decks, ledges, stairs, roofs) by raycast, else the
- * horizontal plane through her feet. Returns `out` (Vector3) or null when the ray never meets the ground.
+ * horizontal plane through her feet. Returns `out` (Vector3) or null when the ray never meets the ground. The ray is
+ * capped at the far plane (rayLimit); terrain is the heightfield's DDA, and the mesh / prop-top tests only search up to
+ * the terrain hit (Physics._ray narrows `best`).
  */
 export function screenToGround(ctx, x, y, out = new THREE.Vector3(), rect = canvasRect(ctx)) {
   const cam = ctx.camera;
@@ -77,13 +131,15 @@ export function screenToGround(ctx, x, y, out = new THREE.Vector3(), rect = canv
   _ray.setFromCamera(toNdc(ctx, x, y, _ndc, rect), cam);
   const ph = ctx.physics;
   const her = ctx.player?.pos ?? null, fy = her?.y ?? 0;
-  let hit = ph?.raycast?.(_ray.ray, 400, GROUND_OPTS);
+  const lim = rayLimit(cam, _ray.ray.direction);
+  let hit = ph?.raycast?.(_ray.ray, lim, GROUND_OPTS);
   // a too-tall top: continue the ray just past it (a reachable top — the next flight — may lie behind / under it)
   _ray2.copy(_ray.ray);
-  let left = 400;
+  let left = lim, done = 0;
   for (let n = 0; hit?.kind === 'static' && !topOk(ph, hit, fy, her); n++) {
-    left -= hit.distance + 0.02;
-    if (n >= MAX_SKIPS || left <= 0) { hit = ph.raycast(_ray.ray, 400, GROUND_NO_TOPS); break; }
+    done += hit.distance + 0.02;
+    left = lim - done;
+    if (n >= MAX_SKIPS || left <= 0) { hit = ph.raycast(_ray.ray, lim, GROUND_NO_TOPS); break; }
     _ray2.origin.copy(hit.point).addScaledVector(_ray2.direction, 0.02);
     hit = ph.raycast(_ray2, left, GROUND_OPTS);
   }
@@ -176,10 +232,30 @@ function propRay(ctx, x, y, rect) {
   const cam = ctx.camera, ph = ctx.physics;
   if (!cam || !ph?.raycast) return false;
   _ray.setFromCamera(toNdc(ctx, x, y, _ndc, rect), cam);
-  const h = ph.raycast(_ray.ray, 400, PROP_RAY);
+  const h = ph.raycast(_ray.ray, rayLimit(cam, _ray.ray.direction), PROP_RAY);
   if (!h) return false;
   _hp.copy(h.point);
   return true;
+}
+
+/** pickAt's view-projection (camera as rendered last frame), set once per pick: one 4×4 per projected point. */
+const _pv = new THREE.Matrix4();
+/** pickAt's pixels per metre at view depth 1 (perspective; 0 = no screen-space cull, e.g. an orthographic lens) */
+let _ppm1 = 0;
+function setPV(cam, r) {
+  _pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  _ppm1 = cam.isPerspectiveCamera ? Math.abs(cam.projectionMatrix.elements[5]) * r.height * 0.5 : 0;
+}
+/** worldToScreen with _pv (same result, one matrix product, no Vector3). */
+function proj(x, y, z, out, r) {
+  const e = _pv.elements;
+  const w = 1 / (e[3] * x + e[7] * y + e[11] * z + e[15]);
+  const nx = (e[0] * x + e[4] * y + e[8] * z + e[12]) * w, ny = (e[1] * x + e[5] * y + e[9] * z + e[13]) * w;
+  out.z = (e[2] * x + e[6] * y + e[10] * z + e[14]) * w;
+  out.x = r.left + (nx + 1) * 0.5 * r.width;
+  out.y = r.top + (1 - ny) * 0.5 * r.height;
+  out.on = out.z > -1 && out.z < 1 && Math.abs(nx) <= 1 && Math.abs(ny) <= 1;
+  return out;
 }
 
 /** Squared distance (px²) from (px, py) to the segment a–b (screen). */
@@ -202,23 +278,37 @@ function actorScreen(ctx, a, x, y, basePx, r) {
   const pos = a.object3d?.position ?? a.pos;
   if (!pos) return null;
   if (ctx.camera && pos.distanceToSquared?.(ctx.camera.position) > 60 * 60) return null;
-  const h = Math.max(0.3, a.height ?? 1);
+  const h = Math.max(0.3, a.height ?? 1), rad = a.radius ?? 0.4;
+  const flyer = a.tags?.has?.('flyer') || a.def?.tags?.includes?.('flyer');
+  // cheap reject (PERF §4.5): the capsule's mid point only. Everything the full test can hit lies within half its
+  // height + its radius (in px at that depth, ×1.25 for the perspective spread) + the tolerance of that mid point.
+  if (_ppm1 > 0 && !flyer) {
+    const e = _pv.elements, my = pos.y + h * 0.5;
+    const cw = e[3] * pos.x + e[7] * my + e[11] * pos.z + e[15];        // view depth (perspective w)
+    if (cw > 3 * (h + rad)) {                                           // far enough that the ×1.25 covers the depth spread
+      const iw = 1 / cw, ppm = _ppm1 * iw;
+      const sx = r.left + ((e[0] * pos.x + e[4] * my + e[8] * pos.z + e[12]) * iw + 1) * 0.5 * r.width;
+      const sy = r.top + (1 - (e[1] * pos.x + e[5] * my + e[9] * pos.z + e[13]) * iw) * 0.5 * r.height;
+      const reach = (h * 0.5 + rad) * ppm * 1.25 + Math.max(basePx, rad * ppm * 1.25 + AIM.pick.pad) + 2;
+      const dx = x - sx, dy = y - sy;
+      if (dx * dx + dy * dy > reach * reach) return null;
+    }
+  }
   _a.set(pos.x, pos.y + Math.min(0.15, h * 0.2), pos.z);
   _b.set(pos.x, pos.y + h, pos.z);
-  worldToScreen(ctx, _a, _sa, r); worldToScreen(ctx, _b, _sb, r);
+  proj(_a.x, _a.y, _a.z, _sa, r); proj(_b.x, _b.y, _b.z, _sb, r);
   // behind the lens or beyond the far plane: never pickable (a point behind the camera can project onto the screen)
   if (!(_sa.z > -1 && _sa.z < 1) || !(_sb.z > -1 && _sb.z < 1)) return null;
   // projected radius: a point `radius` m to the side of her chest
   const right = ctx.cam?.yaw != null ? ctx.cam.yaw : Math.PI;
-  _a.set(pos.x + Math.cos(right) * (a.radius ?? 0.4), pos.y + h * 0.5, pos.z - Math.sin(right) * (a.radius ?? 0.4));
-  worldToScreen(ctx, _a, _sr, r);
+  proj(pos.x + Math.cos(right) * rad, pos.y + h * 0.5, pos.z - Math.sin(right) * rad, _sr, r);
   const mx = (_sa.x + _sb.x) / 2, my = (_sa.y + _sb.y) / 2;
   const rpx = Math.hypot(_sr.x - mx, _sr.y - my);
   let d = Math.sqrt(segDist2(x, y, _sa.x, _sa.y, _sb.x, _sb.y));
   // crows: also at their ground shadow
-  if (a.tags?.has?.('flyer') || a.def?.tags?.includes?.('flyer')) {
+  if (flyer) {
     const gy = ctx.physics?.heightAt?.(pos.x, pos.z) ?? 0;
-    _a.set(pos.x, gy, pos.z); worldToScreen(ctx, _a, _sa, r);
+    proj(pos.x, gy, pos.z, _sa, r);
     d = Math.min(d, Math.hypot(x - _sa.x, y - _sa.y));
   }
   _as.d = d; _as.tol = Math.max(basePx, rpx + AIM.pick.pad); _as.sy = _sb.y;
@@ -248,13 +338,14 @@ function consider(kind, actor, id, interact, d, p) {
 /**
  * The pick under CSS px (x, y) (§7.6). `opts.touch` widens the tolerance; `opts.kinds` (a Set) limits the kinds;
  * `opts.ground` false skips the ground ray. Writes `out`. One layout read per call, and no allocation once `out.point`
- * exists (the hover pick runs every rendered frame).
+ * exists (the hover pick runs every rendered frame). `rect`: the canvas rect when the caller already has it.
  * @returns {{kind:string, actor:any, id:string|null, interact:any, point:THREE.Vector3|null, px:number}}
  */
-export function pickAt(ctx, x, y, opts = {}, out = { kind: 'ground', actor: null, id: null, interact: null, point: new THREE.Vector3(), px: 0 }) {
+export function pickAt(ctx, x, y, opts = NO_OPTS, out = { kind: 'ground', actor: null, id: null, interact: null, point: new THREE.Vector3(), px: 0 }, rect = canvasRect(ctx)) {
   const touch = !!opts.touch, ts = ctx.state?.settings?.touchSize ?? 1;
   const basePx = touch ? AIM.pick.touchPx * ts : AIM.pick.px;
-  const rect = canvasRect(ctx), her = ctx.player?.pos;
+  const her = ctx.player?.pos;
+  if (ctx.camera) setPV(ctx.camera, rect); else { _pv.identity(); _ppm1 = 0; }
   B.kind = null; B.actor = null; B.id = null; B.interact = null; B.rank = 99; B.d = Infinity; B.her = Infinity;
   B.kinds = opts.kinds ?? null; B.hasHer = !!her; B.hx = her?.x ?? 0; B.hz = her?.z ?? 0;
 
@@ -281,16 +372,15 @@ export function pickAt(ctx, x, y, opts = {}, out = { kind: 'ground', actor: null
   let vigilRay = 0;                                          // 0 not cast, 1 cast (hit point in _hp), -1 no hit
   for (const it of level?.interactables ?? []) {
     if (!it?.pos || (it.enabled && !it.enabled())) continue;
-    _a.set(it.pos.x, it.pos.y, it.pos.z); worldToScreen(ctx, _a, _sa, rect);
+    proj(it.pos.x, it.pos.y, it.pos.z, _sa, rect);
     if (!(_sa.z > -1 && _sa.z < 1)) continue;
     const vigil = it.kind === 'vigil', prop = vigil || it.kind === 'station';
     const R = prop ? PROP_PICK_R : Math.max(AIM.pick.interactR, Math.min(it.r ?? 1.2, 2.0) * 0.6);
-    _b.set(it.pos.x + cyaw * R, it.pos.y, it.pos.z - syaw * R);
-    worldToScreen(ctx, _b, _sb, rect);
+    proj(it.pos.x + cyaw * R, it.pos.y, it.pos.z - syaw * R, _sb, rect);
     const tol = Math.max(basePx, Math.hypot(_sb.x - _sa.x, _sb.y - _sa.y));
     let d;
     if (vigil) {
-      _b.set(it.pos.x, it.pos.y + VIGIL_AXIS_H, it.pos.z); worldToScreen(ctx, _b, _sb, rect);
+      proj(it.pos.x, it.pos.y + VIGIL_AXIS_H, it.pos.z, _sb, rect);
       d = Math.sqrt(segDist2(x, y, _sa.x, _sa.y, _sb.x, _sb.y));
     } else d = Math.hypot(x - _sa.x, y - _sa.y);
     // a stone: its foot within the base px, or the ray meeting the stone (its body / top) — never the grass behind it

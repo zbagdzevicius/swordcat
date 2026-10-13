@@ -1,126 +1,135 @@
 // src/story/Overlay.js  (owner: story) — the cutscene overlay story falls back on until the ui area draws it
 // (§14.2 "Cutscene letterbox bars", §14.3 Cutscene overlay / Dialogue box / Chapter card / Title). Each feature steps
 // aside as soon as `ctx.ui.handles[feature]` is truthy (requests/story.md); StoryManager's Cinema routes the calls.
-// Look (art.md §13): parchment panels, pink candy ribbon, pink wax seals, gold accents; Cinzel Decorative (logo,
-// chapter titles), Cinzel (labels), Uncial Antiqua (captions, regions), Fredoka (dialogue, prompts).
+// Look (ART_WARM §9.1–9.2, WA §2.7): candy notecards on cream, cocoa ink, pink ribbon, butter accents; **Fredoka
+// everywhere** through ui's font-role variables (`--f-logo`, `--f-head`, `--f-body`, `--f-lore`; ui/fonts.css registers
+// the one Fredoka woff2), so the overlay downloads no font of its own. No colour darker than the cocoa ink family
+// (`#2A1E18`–`#5A3B2E`, letterbox `#3A2630`); fades are cream `FADE_COLOR`, never black.
 // No DOM at import: everything is built in init() and the class is inert where `document` is missing (node tests).
 import { CHARS_PER_SEC } from './Cutscene.js';
 
 const HAS_DOM = () => typeof document !== 'undefined' && typeof document.createElement === 'function';
 
-/** Fonts (public/assets/fonts, OFL) under story-private family names so they never clash with ui / fx faces. */
+const ROUND = '"Fredoka","Nunito","Segoe UI Rounded",system-ui,sans-serif';
+/** Font stacks: ui's role variables first, then rounded fallbacks (ART §9.2). Story registers no font face of its own. */
 export const FONTS = Object.freeze({
-  deco: { family: 'StoryCinzelDeco', file: 'fonts/CinzelDecorative-Bold.ttf', weight: '700' },
-  cinzel: { family: 'StoryCinzel', file: 'fonts/Cinzel-Variable.ttf', weight: '400 900' },
-  uncial: { family: 'StoryUncial', file: 'fonts/UncialAntiqua-Regular.ttf', weight: '400' },
-  fredoka: { family: 'StoryFredoka', file: 'fonts/Fredoka-Variable.ttf', weight: '300 700' },
+  logo: `var(--f-logo,${ROUND})`,
+  head: `var(--f-head,${ROUND})`,
+  body: `var(--f-body,${ROUND})`,
+  lore: `var(--f-lore,${ROUND})`,
 });
 
-/** Portrait colours per speaker (art.md §7 coats); unknown speakers get parchment. */
+/** Overlay palette (ART §9.1 candy tokens; WA §2.7 cocoa ink allowlist). */
+export const OVERLAY_COLORS = Object.freeze({
+  cream: '#FFF8EE', fade: '#FFF1DE', ink: '#5A3B2E', inkDeep: '#3A2A1F', shadow: '#4A2A1F', bar: '#3A2630',
+  pink: '#FF8FB1', pinkDeep: '#E0638A', pinkEdge: '#C24E78', butter: '#FFD86B', gold: '#F2B33D', lilac: '#C9B6F2', mint: '#8FE3C0',
+});
+
+/** Portrait colours per speaker (art.md §7 coats, brightened for WA); unknown speakers get cream. */
 export const PORTRAIT = Object.freeze({
-  swordcat: ['#E8A25A', '#FFF1DC'], pearl: ['#D9D4CC', '#F6F1E8'], whiskerbottom: ['#8C8F93', '#E5E2DC'], marmalade: ['#D9822F', '#F3D7A8'],
-  snowpaw: ['#F4F2EE', '#C9B6E4'], mochi: ['#2E2B2C', '#F2EFEA'], sage: ['#A7AAAD', '#5E7F3E'], clover: ['#E9D3B5', '#C4652E'],
-  pudding: ['#E0503A', '#F6C27A'], cacklejaw: ['#B08A55', '#4A3626'], pilfer: ['#8C7458', '#3E3A36'], coo: ['#9AA0A8', '#E8E6E2'],
-  squire: ['#C9A87A', '#F1E4CC'], kitten: ['#E4C9A0', '#FFF4E2'],
+  swordcat: ['#F2A65A', '#FFF1DC'], pearl: ['#EDE8F2', '#FFF6FA'], whiskerbottom: ['#B9BCC4', '#F1EEF6'], marmalade: ['#F09A45', '#FFE3B8'],
+  snowpaw: ['#FFFFFF', '#D9CCF4'], mochi: ['#6A5A6E', '#F7F2EC'], sage: ['#C4C7CA', '#9CC77A'], clover: ['#F2DFC4', '#E88A52'],
+  pudding: ['#F2705A', '#FFD49A'], cacklejaw: ['#D9B07A', '#FFE6C2'], pilfer: ['#B89C7C', '#F2E2CC'], coo: ['#C4CAD4', '#F4F2EE'],
+  squire: ['#E3C49A', '#FFF1DC'], kitten: ['#F2D9B0', '#FFF8EC'],
 });
 
+const C = OVERLAY_COLORS;
+const SCALLOP = (edge) => `radial-gradient(10px 10px at 10px ${edge},#FFF0 98%,#FFF) 0 0/20px 100% repeat-x`;
 const CSS = `
-.st-root{position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;font-family:StoryFredoka,"Fredoka","Trebuchet MS",system-ui,sans-serif;color:#3B2A20}
+.st-root{position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;font-family:${FONTS.body};font-weight:500;color:${C.ink}}
 .st-root *{box-sizing:border-box}
-.st-bar{position:absolute;left:0;right:0;height:0;background:#0B0A09;transition:height .55s cubic-bezier(.3,.7,.3,1);z-index:2}
-.st-bar.top{top:0}.st-bar.bot{bottom:0}
+.st-bar{position:absolute;left:0;right:0;height:0;background:${C.bar};transition:height .55s cubic-bezier(.3,.7,.3,1);z-index:2}
+.st-bar.top{top:0;-webkit-mask:${SCALLOP('100%')};mask:${SCALLOP('100%')}}
+.st-bar.bot{bottom:0;-webkit-mask:${SCALLOP('0')};mask:${SCALLOP('0')}}
 .st-root.lb .st-bar{height:10%}
-.st-fade{position:absolute;inset:0;background:#000;opacity:0;z-index:9}
+.st-fade{position:absolute;inset:0;background:${C.fade};opacity:0;z-index:9}
 .st-caption{position:absolute;left:50%;bottom:16%;transform:translateX(-50%);width:min(90vw,980px);text-align:center;z-index:10;
-  font-family:StoryUncial,"Uncial Antiqua",Georgia,serif;font-size:clamp(20px,2.6vw,34px);color:#F4E7C9;letter-spacing:.04em;
-  text-shadow:0 2px 0 #0008,0 0 18px #000a;opacity:0;transition:opacity .9s ease}
+  font-family:${FONTS.lore};font-weight:600;font-size:clamp(20px,2.6vw,34px);color:${C.cream};letter-spacing:.02em;
+  text-shadow:0 2px 0 ${C.shadow},0 0 14px #4A2A1F99;opacity:0;transition:opacity .9s ease}
 .st-caption.on{opacity:1}
-.st-title{position:absolute;left:0;right:0;top:12%;text-align:center;z-index:8;opacity:0;transition:opacity 1.6s ease;transform:translateY(6px)}
-.st-title.on{opacity:1;transform:none;transition:opacity 1.6s ease,transform 2.2s ease}
-.st-logo{display:inline-block;position:relative;font-family:StoryCinzelDeco,"Cinzel Decorative",Georgia,serif;font-weight:700;
-  font-size:clamp(46px,8.2vw,112px);letter-spacing:.05em;line-height:1;
-  background:linear-gradient(180deg,#FFF3C4 0%,#F5D06B 38%,#C8902C 62%,#F0C460 82%,#8E5F1C 100%);-webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 3px 0 #5A3A12) drop-shadow(0 0 22px #FFE3A355)}
+.st-title{position:absolute;left:0;right:0;top:12%;text-align:center;z-index:8;opacity:0;transition:opacity 1.2s ease;transform:translateY(10px) scale(.92)}
+.st-title.on{opacity:1;transform:none;transition:opacity 1.2s ease,transform .7s cubic-bezier(.3,1.5,.5,1)}
+.st-logo{display:inline-block;position:relative;font-family:${FONTS.logo};font-weight:700;
+  font-size:clamp(46px,8.2vw,112px);letter-spacing:.03em;line-height:1;
+  background:linear-gradient(180deg,#FFF3B8 0%,${C.butter} 45%,${C.gold} 100%);-webkit-background-clip:text;background-clip:text;color:transparent;
+  -webkit-text-stroke:5px ${C.ink};paint-order:stroke fill}
 .st-o{position:relative;display:inline-block}
 .st-bow{position:absolute;left:50%;top:-.16em;width:.62em;height:.34em;transform:translateX(-50%) rotate(-8deg);pointer-events:none}
-.st-bow i{position:absolute;top:0;width:.3em;height:.3em;background:radial-gradient(circle at 35% 35%,#FFD2DE,#F2A2B8 55%,#C76E8A);border-radius:60% 40% 55% 45%;
-  box-shadow:inset 0 -.03em .05em #B0506F88}
+.st-bow i{position:absolute;top:0;width:.3em;height:.3em;background:radial-gradient(circle at 35% 35%,#FFD2DE,#FF9FBE 55%,${C.pinkDeep});border-radius:60% 40% 55% 45%}
 .st-bow i.l{left:0;transform:rotate(-24deg) scaleX(1.25)}.st-bow i.r{right:0;transform:rotate(24deg) scaleX(1.25)}
-.st-bow b{position:absolute;left:50%;top:.08em;width:.12em;height:.15em;transform:translateX(-50%);border-radius:40%;background:#E88AA6;box-shadow:0 0 0 .02em #C76E8A}
-.st-bow s{position:absolute;top:.2em;width:.07em;height:.22em;background:#E88AA6;border-radius:0 0 40% 40%}
+.st-bow b{position:absolute;left:50%;top:.08em;width:.12em;height:.15em;transform:translateX(-50%);border-radius:40%;background:${C.pink};box-shadow:0 0 0 .02em ${C.pinkDeep}}
+.st-bow s{position:absolute;top:.2em;width:.07em;height:.22em;background:${C.pink};border-radius:0 0 40% 40%}
 .st-bow s.l{left:38%;transform:rotate(18deg)}.st-bow s.r{right:38%;transform:rotate(-18deg)}
-.st-sub{margin-top:.5em;font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:600;font-size:clamp(16px,1.9vw,26px);letter-spacing:.32em;
-  color:#F6EBD2;text-shadow:0 2px 0 #3B2A2099,0 0 14px #0006;text-transform:uppercase}
-.st-press{position:absolute;left:0;right:0;bottom:12%;text-align:center;z-index:8;font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;
-  font-size:clamp(16px,1.6vw,22px);letter-spacing:.2em;color:#FFF6E2;text-shadow:0 2px 0 #3B2A20aa,0 0 12px #000a;opacity:0;transition:opacity .8s}
+.st-sub{margin-top:.5em;font-family:${FONTS.head};font-weight:700;font-size:clamp(16px,1.9vw,26px);letter-spacing:.12em;
+  color:${C.cream};text-shadow:0 2px 0 ${C.shadow}}
+.st-press{position:absolute;left:0;right:0;bottom:12%;text-align:center;z-index:8;font-family:${FONTS.head};font-weight:700;
+  font-size:clamp(16px,1.6vw,22px);letter-spacing:.06em;color:${C.cream};text-shadow:0 2px 0 ${C.shadow};opacity:0;transition:opacity .8s}
 .st-press.on{opacity:1;animation:st-pulse 2.2s ease-in-out infinite}
-@keyframes st-pulse{0%,100%{opacity:.55}50%{opacity:1}}
-.st-chapter{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%) scale(.96);z-index:11;opacity:0;transition:opacity .6s ease,transform .6s ease;
-  min-width:min(560px,86vw);padding:30px 56px 34px;text-align:center;border-radius:6px;
-  background:radial-gradient(ellipse at 50% 40%,#FBF3E1 0%,#F1E2C2 70%,#E3CC9F 100%);box-shadow:0 10px 30px #0007,inset 0 0 0 3px #E6D2A6,inset 0 0 0 5px #C9A86A55,inset 0 0 40px #C9A86A66}
+@keyframes st-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+.st-chapter{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%) scale(.9);z-index:11;opacity:0;transition:opacity .35s ease,transform .45s cubic-bezier(.3,1.6,.5,1);
+  min-width:min(560px,86vw);padding:30px 56px 34px;text-align:center;border-radius:24px;
+  background:${C.cream};box-shadow:0 6px 0 ${C.lilac},0 12px 26px #5A3B2E40,inset 0 0 0 3px #FFE3EC}
 .st-chapter.on{opacity:1;transform:translate(-50%,-50%) scale(1)}
-.st-chapter .lab{font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:clamp(14px,1.4vw,18px);letter-spacing:.34em;color:#8E5F1C;text-transform:uppercase}
-.st-chapter .ttl{margin:.25em 0 .2em;font-family:StoryCinzelDeco,"Cinzel Decorative",Georgia,serif;font-weight:700;font-size:clamp(26px,3.6vw,48px);color:#4A2E1A;line-height:1.1}
-.st-chapter .reg{font-family:StoryUncial,"Uncial Antiqua",Georgia,serif;font-size:clamp(16px,1.6vw,22px);color:#6B4A2B}
+.st-chapter .lab{font-family:${FONTS.head};font-weight:700;font-size:clamp(14px,1.4vw,18px);letter-spacing:.14em;color:${C.pinkDeep}}
+.st-chapter .ttl{margin:.25em 0 .2em;font-family:${FONTS.logo};font-weight:700;font-size:clamp(26px,3.6vw,48px);color:${C.ink};line-height:1.1}
+.st-chapter .reg{font-family:${FONTS.lore};font-weight:500;font-size:clamp(16px,1.6vw,22px);color:#8A6A55}
 .st-seal{position:absolute;right:-18px;bottom:-18px;width:64px;height:64px;border-radius:50%;transform:rotate(-12deg) scale(1.6);opacity:0;
-  background:radial-gradient(circle at 38% 32%,#F7A9BE,#E07895 55%,#B84E6E);box-shadow:0 3px 0 #8E3552,inset 0 0 0 4px #F7B6C766,0 6px 12px #0005;transition:transform .25s cubic-bezier(.3,1.6,.5,1),opacity .2s}
+  background:radial-gradient(circle at 38% 32%,#FFC2D4,${C.pink} 55%,${C.pinkDeep});box-shadow:0 3px 0 ${C.pinkEdge},inset 0 0 0 4px #FFD2DE88;transition:transform .25s cubic-bezier(.3,1.6,.5,1),opacity .2s}
 .st-chapter.stamp .st-seal{transform:rotate(-12deg) scale(1);opacity:1}
 .st-seal::after{content:"";position:absolute;inset:0;background:
-  radial-gradient(circle at 50% 62%,#8E3552 0 9px,transparent 10px),radial-gradient(circle at 30% 40%,#8E3552 0 4px,transparent 5px),
-  radial-gradient(circle at 43% 30%,#8E3552 0 4px,transparent 5px),radial-gradient(circle at 57% 30%,#8E3552 0 4px,transparent 5px),
-  radial-gradient(circle at 70% 40%,#8E3552 0 4px,transparent 5px)}
+  radial-gradient(circle at 50% 62%,${C.cream} 0 9px,transparent 10px),radial-gradient(circle at 30% 40%,${C.cream} 0 4px,transparent 5px),
+  radial-gradient(circle at 43% 30%,${C.cream} 0 4px,transparent 5px),radial-gradient(circle at 57% 30%,${C.cream} 0 4px,transparent 5px),
+  radial-gradient(circle at 70% 40%,${C.cream} 0 4px,transparent 5px)}
 .st-dlg{position:absolute;left:50%;bottom:calc(10% + 18px);transform:translateX(-50%) translateY(14px);width:min(860px,94vw);z-index:12;opacity:0;
-  transition:opacity .22s ease,transform .22s ease;pointer-events:none}
+  transition:opacity .22s ease,transform .28s cubic-bezier(.3,1.5,.5,1);pointer-events:none}
 .st-root.nolb .st-dlg{bottom:24px}
 .st-dlg.on{opacity:1;transform:translateX(-50%);pointer-events:auto;cursor:pointer}
-.st-scroll{position:relative;display:flex;gap:18px;align-items:center;padding:18px 30px 18px 22px;border-radius:14px;min-height:108px;
-  background:linear-gradient(180deg,#FBF4E3,#F2E3C3);box-shadow:0 8px 22px #0006,inset 0 0 0 3px #E8D5AE,inset 0 0 0 5px #C9A86A44}
-.st-scroll::before,.st-scroll::after{content:"";position:absolute;top:8px;bottom:8px;width:14px;border-radius:7px;background:linear-gradient(90deg,#D9BF8C,#F5E7C8,#C9A86A);box-shadow:0 2px 4px #0004}
-.st-scroll::before{left:-8px}.st-scroll::after{right:-8px}
-.st-port{flex:0 0 76px;height:76px;border-radius:50%;display:grid;place-items:center;font-family:StoryCinzelDeco,"Cinzel Decorative",Georgia,serif;font-weight:700;font-size:34px;
-  color:#3B2A20;box-shadow:0 0 0 4px #E9C46A,0 0 0 6px #8E5F1C,0 4px 8px #0005}
+.st-scroll{position:relative;display:flex;gap:18px;align-items:center;padding:18px 30px 18px 22px;border-radius:26px;min-height:108px;
+  background:${C.cream};box-shadow:0 5px 0 #F2D6C4,0 10px 22px #5A3B2E33,inset 0 0 0 3px #FFE3EC}
+.st-port{flex:0 0 76px;height:76px;border-radius:50%;display:grid;place-items:center;font-family:${FONTS.logo};font-weight:700;font-size:34px;
+  color:${C.ink};box-shadow:0 0 0 4px #FFFFFF,0 0 0 7px ${C.pink},0 4px 0 7px #C24E7855}
 .st-body{flex:1;min-width:0}
-.st-name{display:inline-block;margin:-34px 0 6px -6px;padding:3px 18px 4px;font-weight:700;font-size:17px;letter-spacing:.04em;color:#fff;
-  background:linear-gradient(180deg,#F7A9BE,#E07895);border-radius:999px;box-shadow:0 3px 0 #B0506F;text-shadow:0 1px 0 #B0506F}
+.st-name{display:inline-block;margin:-34px 0 6px -6px;padding:3px 18px 4px;font-weight:700;font-size:17px;letter-spacing:.02em;color:#fff;
+  background:linear-gradient(180deg,#FFB0C8,${C.pinkDeep});border-radius:999px;box-shadow:0 3px 0 ${C.pinkEdge};text-shadow:0 1px 0 ${C.pinkEdge}}
 .st-text{font-size:clamp(17px,1.65vw,22px);line-height:1.38;font-weight:500;min-height:2.6em;white-space:pre-wrap}
-.st-text em{font-style:italic;color:#7A4A2A}
+.st-text em{font-style:normal;font-weight:700;color:${C.pinkDeep}}
 .st-next{position:absolute;right:26px;bottom:10px;width:18px;height:18px;opacity:0;transition:opacity .2s;animation:st-bob .9s ease-in-out infinite;
-  background:radial-gradient(circle at 50% 66%,#C76E8A 0 5px,transparent 6px),radial-gradient(circle at 22% 34%,#C76E8A 0 2.5px,transparent 3.5px),
-  radial-gradient(circle at 42% 18%,#C76E8A 0 2.5px,transparent 3.5px),radial-gradient(circle at 62% 18%,#C76E8A 0 2.5px,transparent 3.5px),radial-gradient(circle at 80% 34%,#C76E8A 0 2.5px,transparent 3.5px)}
+  background:radial-gradient(circle at 50% 66%,${C.pinkDeep} 0 5px,transparent 6px),radial-gradient(circle at 22% 34%,${C.pinkDeep} 0 2.5px,transparent 3.5px),
+  radial-gradient(circle at 42% 18%,${C.pinkDeep} 0 2.5px,transparent 3.5px),radial-gradient(circle at 62% 18%,${C.pinkDeep} 0 2.5px,transparent 3.5px),radial-gradient(circle at 80% 34%,${C.pinkDeep} 0 2.5px,transparent 3.5px)}
 .st-dlg.done .st-next{opacity:1}
 @keyframes st-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 .st-prompt{position:absolute;left:50%;top:58%;transform:translate(-50%,-50%);z-index:13;text-align:center;opacity:0;transition:opacity .3s}
 .st-prompt.on{opacity:1}
-.st-prompt .txt{font-family:StoryCinzelDeco,"Cinzel Decorative",Georgia,serif;font-weight:700;font-size:clamp(26px,3.4vw,46px);letter-spacing:.06em;
-  color:#FFE9A8;text-shadow:0 3px 0 #5A3A12,0 0 24px #FFC86A88}
+.st-prompt .txt{font-family:${FONTS.logo};font-weight:700;font-size:clamp(26px,3.4vw,46px);letter-spacing:.02em;
+  color:${C.butter};-webkit-text-stroke:4px ${C.ink};paint-order:stroke fill}
 .st-ring{width:86px;height:86px;margin:10px auto 0;display:block}
 .st-ring circle{fill:none;stroke-width:8}
-.st-ring .bg{stroke:#00000055}.st-ring .fg{stroke:#FFD34D;stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%;filter:drop-shadow(0 0 6px #FFD34D)}
-.st-key{display:inline-block;min-width:1.6em;padding:0 .45em;margin:0 .15em;border-radius:7px;font-weight:700;font-size:.92em;line-height:1.45em;text-align:center;
-  color:#fff;background:linear-gradient(180deg,#E9849F,#C95E7E);box-shadow:0 2px 0 #8E3552;font-family:StoryFredoka,"Fredoka",system-ui,sans-serif;font-style:normal}
+.st-ring .bg{stroke:#FFF8EE88}.st-ring .fg{stroke:${C.butter};stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%}
+.st-key{display:inline-block;min-width:1.6em;padding:0 .45em;margin:0 .15em;border-radius:9px;font-weight:700;font-size:.92em;line-height:1.45em;text-align:center;
+  color:#fff;background:linear-gradient(180deg,#FFB0C8,${C.pinkDeep});box-shadow:0 2px 0 ${C.pinkEdge};font-family:${FONTS.body};font-style:normal}
 .st-tut{position:absolute;left:50%;top:84px;transform:translateX(-50%) translateY(-8px);z-index:12;opacity:0;transition:opacity .35s,transform .35s;
-  max-width:min(640px,90vw);padding:12px 22px 13px 58px;border-radius:10px;background:linear-gradient(180deg,#FBF4E3,#EFDDB7);
-  box-shadow:0 6px 16px #0005,inset 0 0 0 2px #E2CB9C;font-size:clamp(16px,1.45vw,19px);font-weight:600;line-height:1.35}
+  max-width:min(640px,90vw);padding:12px 22px 13px 58px;border-radius:20px;background:${C.cream};
+  box-shadow:0 4px 0 #F2D6C4,0 8px 16px #5A3B2E33;font-size:clamp(16px,1.45vw,19px);font-weight:600;line-height:1.35}
 .st-tut.on{opacity:1;transform:translateX(-50%)}
-.st-tut .hd{font-family:StoryCinzel,Cinzel,Georgia,serif;font-size:12px;font-weight:800;letter-spacing:.24em;color:#8E5F1C;text-transform:uppercase}
+.st-tut .hd{font-family:${FONTS.head};font-size:12px;font-weight:700;letter-spacing:.12em;color:${C.pinkDeep}}
 .st-tut .num{position:absolute;left:12px;top:50%;width:36px;height:36px;margin-top:-18px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;
-  background:radial-gradient(circle at 38% 32%,#F7A9BE,#E07895 55%,#B84E6E);box-shadow:0 2px 0 #8E3552}
-.st-tut.ok{box-shadow:0 6px 16px #0005,inset 0 0 0 2px #E9C46A,0 0 0 3px #F5D06B}
-.st-letter{position:absolute;inset:0;z-index:15;display:grid;place-items:center;opacity:0;transition:opacity 1.1s ease;background:radial-gradient(ellipse at 50% 50%,#0000 40%,#000a 100%)}
+  background:radial-gradient(circle at 38% 32%,#FFC2D4,${C.pink} 55%,${C.pinkDeep});box-shadow:0 2px 0 ${C.pinkEdge}}
+.st-tut.ok{box-shadow:0 4px 0 #BFEBD6,0 8px 16px #5A3B2E33,0 0 0 3px ${C.mint}}
+.st-letter{position:absolute;inset:0;z-index:15;display:grid;place-items:center;opacity:0;transition:opacity 1.1s ease;background:radial-gradient(ellipse at 50% 50%,#FFF1E200 40%,#5A3B2E80 100%)}
 .st-letter.on{opacity:1}
-.st-letter .pg{position:relative;width:min(640px,86vw);padding:44px 56px 50px;border-radius:4px;transform:rotate(-1.2deg);
-  background:radial-gradient(ellipse at 40% 35%,#F6E7C2 0%,#E9D3A0 60%,#D2B47A 100%);box-shadow:0 14px 40px #000a,inset 0 0 60px #A47C3E66,inset 0 0 0 2px #C9A86A55}
-.st-letter .lb{font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:13px;letter-spacing:.3em;text-transform:uppercase;color:#8E5F1C;margin-bottom:6px}
-.st-letter .tt{font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:clamp(18px,2vw,24px);color:#5A3A1A;margin-bottom:16px}
-.st-letter .tx{font-family:StoryUncial,"Uncial Antiqua",Georgia,serif;font-size:clamp(19px,2.2vw,28px);line-height:1.55;color:#3B2414;white-space:pre-wrap}
+.st-letter .pg{position:relative;width:min(640px,86vw);padding:44px 56px 50px;border-radius:18px;transform:rotate(-1.2deg);
+  background:${C.cream};box-shadow:0 6px 0 ${C.lilac},0 14px 32px #5A3B2E55,inset 0 0 0 3px #FFE3EC}
+.st-letter .lb{font-family:${FONTS.head};font-weight:700;font-size:13px;letter-spacing:.14em;color:${C.pinkDeep};margin-bottom:6px}
+.st-letter .tt{font-family:${FONTS.head};font-weight:700;font-size:clamp(18px,2vw,24px);color:${C.ink};margin-bottom:16px}
+.st-letter .tx{font-family:${FONTS.lore};font-weight:500;font-size:clamp(19px,2.2vw,28px);line-height:1.5;color:${C.inkDeep};white-space:pre-wrap;transform:skewX(-4deg)}
 .st-letter .st-seal{opacity:1;transform:rotate(-12deg) scale(.8);right:-14px;bottom:-14px}
 .st-skip{position:absolute;right:28px;bottom:calc(10% + 18px);z-index:14;display:flex;align-items:center;gap:8px;opacity:0;transition:opacity .2s;
-  font-family:StoryCinzel,Cinzel,Georgia,serif;font-weight:700;font-size:14px;letter-spacing:.12em;color:#F4E7C9;text-shadow:0 1px 0 #000a}
+  font-family:${FONTS.head};font-weight:700;font-size:14px;letter-spacing:.04em;color:${C.cream};text-shadow:0 1px 0 ${C.shadow}}
 .st-root.nolb .st-skip{bottom:28px}
 .st-skip.on{opacity:1}
 .st-skip svg{width:34px;height:34px}
 .st-skip circle{fill:none;stroke-width:5}
-.st-skip .bg{stroke:#FFFFFF33}.st-skip .fg{stroke:#F2A2B8;stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%}
+.st-skip .bg{stroke:#FFF8EE55}.st-skip .fg{stroke:${C.pink};stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%}
 `;
 
 const RING_C = 2 * Math.PI * 36;
@@ -167,9 +176,7 @@ export class Overlay {
     const doc = document;
     const style = doc.createElement('style');
     style.id = 'story-overlay-css';
-    const url = (p) => this.ctx.assets?.url?.(p) ?? `./assets/${p}`;
-    const faces = Object.values(FONTS).map((f) => `@font-face{font-family:${f.family};src:url("${url(f.file)}") format("truetype");font-weight:${f.weight};font-display:swap}`).join('');
-    style.textContent = faces + CSS;
+    style.textContent = CSS;
     doc.head.appendChild(style);
     this.style = style;
     const host = doc.getElementById('ui') ?? doc.body;
@@ -253,7 +260,7 @@ export class Overlay {
     this.chapterT = 0.35;
   }
 
-  /** `{ to: '#000', alpha = 1, dur = 0.6 }`, a number (alpha) or null (clear). */
+  /** `{ to: FADE_COLOR, alpha = 1, dur = 0.6 }`, a number (alpha) or null (clear). StoryManager's Cinema turns black into cream. */
   fadeTo(f) {
     const el = this.el.fade; if (!el) return;
     if (f == null || f === false) { this.fade.to = 0; this.fade.from = this.fade.a; this.fade.t = 0; this.fade.dur = 0.4; return; }
@@ -289,7 +296,7 @@ export class Overlay {
     if (this.line !== line) {
       this.line = line; this._shownChars = -1;
       this.el.name.textContent = line.name ?? '';
-      const [c0, c1] = PORTRAIT[line.portrait] ?? PORTRAIT[String(line.portrait ?? '').replace(/_\d+$/, '')] ?? ['#E9DCC2', '#FBF4E3'];
+      const [c0, c1] = PORTRAIT[line.portrait] ?? PORTRAIT[String(line.portrait ?? '').replace(/_\d+$/, '')] ?? ['#F2E4CC', '#FFF8EE'];
       this.el.port.style.background = `radial-gradient(circle at 50% 38%, ${c1} 0 30%, ${c0} 31% 100%)`;
       this.el.port.textContent = (line.name ?? '?').trim().charAt(0).toUpperCase();
       this.el.text.innerHTML = '';
@@ -317,7 +324,7 @@ export class Overlay {
     if (p.done) { el.classList.add('ok'); return; }
     el.classList.remove('ok');
     this.el.tutNum.textContent = String(p.step ?? '');
-    this.el.tutHd.textContent = `${this.ctx.strings?.t?.('tut.title') ?? 'Midnight Practice'} · ${p.step ?? ''}/${p.total ?? ''}`;
+    this.el.tutHd.textContent = `${this.ctx.strings?.t?.('tut.title') ?? 'Morning Practice'} · ${p.step ?? ''}/${p.total ?? ''}`;
     this.el.tutTx.innerHTML = glyphs(this.ctx.strings?.t?.(p.textKey) ?? p.textKey ?? '');
     el.classList.add('on');
   }

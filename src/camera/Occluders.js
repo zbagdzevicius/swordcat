@@ -9,6 +9,7 @@
 //   batched.userData.camFade = (id) => bool   BatchedMesh / InstancedMesh: per-instance predicate
 //   object.userData.camFade = false     never fade (overrides the name heuristic)
 //   ctx.cam.addFadeable(obj) / removeFadeable(obj) / refreshFadeable(obj)   for props added after the level load
+//   userData.camFadeBox = true                     a lattice (gate leaf, fence rails): fade on the box test, no triangle refinement
 // Fallback heuristic: Mesh / InstancedMesh / small groups named like trees or foliage (never a BatchedMesh: one
 // batch holds every prop of a level, so it must be tagged explicitly).
 //
@@ -76,6 +77,18 @@ export const CROWN_NAME = /(^|[^a-z])(leaves|leaf|foliage|canopy|crown|needles)(
 const TREE_NAME = /(^|[^a-z])(tree|trees|pine|oak|birch|willow|fir|spruce|leaves|leaf|foliage|canopy)([^a-z]|$)/i;
 /** auto solid occluders: largest prop footprint (m²) considered (terrain, water, grass are far bigger) */
 const SOLID_MAX_AREA = 1600;
+/** update(): a query whose points all moved less than this (m) since the last full check reuses its hit set */
+export const QUERY_EPS = 0.01;
+/** ...but a full check still runs at least every QUERY_TTL checks (0.5 s at 20 Hz) */
+const QUERY_TTL = 10;
+/** the query key's capacity (12 header slots + 4 per subject + 3 per lens point); a bigger query always re-checks */
+const QUERY_KEY_MAX = 160;
+const near = (a, b) => Math.abs(a - b) < QUERY_EPS;
+/** Grow box b [minX, minY, minZ, maxX, maxY, maxZ] by the point (x, y, z) ± g. */
+function grow(b, x, y, z, g) {
+  if (x - g < b[0]) b[0] = x - g; if (y - g < b[1]) b[1] = y - g; if (z - g < b[2]) b[2] = z - g;
+  if (x + g > b[3]) b[3] = x + g; if (y + g > b[4]) b[4] = y + g; if (z + g > b[5]) b[5] = z + g;
+}
 
 const _m = new THREE.Matrix4(), _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -232,6 +245,15 @@ export class OccluderFader {
     this.enabled = true;
     /** world AABBs of every registered part, built lazily by covers() (null = stale) @type {THREE.Box3[]|null} */
     this._aabbs = null;
+    /** registration version (bumped on add / remove / clear): part of the update() query key */
+    this._ver = 0;
+    /** the last full check's query (see _sameQuery) */
+    this._qk = new Float64Array(QUERY_KEY_MAX);
+    this._qOk = false;
+    this._qAge = 0;
+    this._qb = new Float64Array(6);
+    /** cull units whose bounding sphere misses the query box before the hit rules (off only for tests) */
+    this.broadPhase = true;
   }
 
   get count() { return this.units.length; }
@@ -272,7 +294,8 @@ export class OccluderFader {
     }
     this._crown = false; this._crownFracNow = null;
     const pad = Number.isFinite(ud.roofPad) ? Math.max(0, ud.roofPad) : null;
-    for (let i = before; i < this.units.length; i++) { const u = this.units[i]; if (solid) u.solid = true; if (roof) u.roof = true; if (pad != null) u.roofPad = pad; }
+    const lattice = ud.camFadeBox === true;                  // rails / lattices: the box test alone (gaps let sight lines through)
+    for (let i = before; i < this.units.length; i++) { const u = this.units[i]; if (solid) u.solid = true; if (roof) u.roof = true; if (pad != null) u.roofPad = pad; if (lattice) u.precise = false; }
     if (this.units.length > before) { this._roots.add(obj); this._aabbs = null; }
     return this.units.length - before;
   }
@@ -281,7 +304,7 @@ export class OccluderFader {
   remove(obj) {
     if (!this._roots.has(obj)) return;
     this._roots.delete(obj);
-    this._aabbs = null;
+    this._aabbs = null; this._ver++;
     for (let i = this.units.length - 1; i >= 0; i--) {
       const u = this.units[i];
       if (u.root !== obj) continue;
@@ -370,7 +393,7 @@ export class OccluderFader {
   /** Restore every faded prop and forget all registrations (level unload). */
   clear() {
     for (const u of this.units) this._restore(u);
-    this.units.length = 0; this.active.clear(); this._roots.clear(); this._aabbs = null;
+    this.units.length = 0; this.active.clear(); this._roots.clear(); this._aabbs = null; this._ver++; this._qOk = false;
     for (const p of this._proxies) this._releaseProxy(p);
     this._checkT = 0;
   }
@@ -425,6 +448,7 @@ export class OccluderFader {
     u.radius = r; u._spheres = null;
     u.precise = r > PRECISE_RADIUS && u.parts.every((p) => !!p.rayGeo);
     this.units.push(u);
+    this._ver++;
     return true;
   }
 
@@ -520,30 +544,103 @@ export class OccluderFader {
     }
     if (!this.units.length) return;
     this._checkT -= dt;
-    const check = this._checkT <= 0;
-    if (check) this._checkT = this.checkInterval;
+    const tick = this._checkT <= 0;
+    let check = tick;
+    if (tick) {
+      this._checkT = this.checkInterval;
+      // PERF (AUTOCAM §9.6): the lens, subjects, options and registrations all unchanged (< 1 cm) since the last
+      // full check → the hit set stands; a full pass still runs every QUERY_TTL checks (a prop re-shown / moved)
+      if (this._sameQuery(camPos, targets, nTargets, radii, her, lens, nLens, solidOnly, crowns)) check = false;
+      else {
+        // broad phase over the whole query: the box around the lens, every subject (+ its capsule radius, the crown
+        // reach) and lens point, her feet (+ the roof pad); a unit whose bounding sphere misses it cannot be hit
+        const qb = this._queryBox(camPos, targets, nTargets, radii, her, lens, nLens, crowns);
+        for (const u of this.units) {
+          // crowns: the rule measures from the crown's box centre (≤ R from u.center) → 2R; crowns and roofs hide her
+          // from above, so a unit above the box still counts (no max-y test)
+          const c = u.center, R = u.radius * (u.crown ? 2 : 1) + (u.roof && u.roofPad > this.roofPad ? u.roofPad - this.roofPad : 0);
+          if (this.broadPhase && (c.x + R < qb[0] || c.x - R > qb[3] || c.y + R < qb[1] || (!u.crown && !u.roof && c.y - R > qb[4]) || c.z + R < qb[2] || c.z - R > qb[5])) {
+            u.hit = false;
+            continue;
+          }
+          // the cheap analytic rules first: a crown / roof hit skips the capsule's triangle raycasts
+          u.hit = this.enabled && (!solidOnly || u.solid) && (
+            (u.roof && !!her && this._underRoof(u, her))
+            || (crowns && u.crown && this.crownR > 0 && this._nearCrown(u, camPos, targets, nTargets, radii))
+            || this._occludes(u, camPos, targets, nTargets, radii)
+            || this._nearLens(u, camPos, lens, nLens));
+          if (u.hit) this.active.add(u);                 // `active` = hit or still faded: the only units eased below
+        }
+      }
+    }
+    if (!this.active.size) return;
+    // opacity easing at render rate over the hot units only (the hit tests above run at checkHz)
     const linear = this.fadeIn > 0 && this.fadeOut > 0;
     const k = 1 - Math.exp(-this.speed * dt);
-    for (const u of this.units) {
-      if (check) {
-        u.hit = this.enabled && (!solidOnly || u.solid) && (
-          this._occludes(u, camPos, targets, nTargets, radii)
-          || (crowns && u.crown && this.crownR > 0 && this._nearCrown(u, camPos, targets, nTargets, radii))
-          || (u.roof && !!her && this._underRoof(u, her))
-          || this._nearLens(u, camPos, lens, nLens));
-      }
+    for (const u of this.active) {
       const hit = u.hit;
-      if (!hit && u.f <= 0) continue;
       if (linear) u.f = hit ? Math.min(1, u.f + dt / this.fadeIn) : Math.max(0, u.f - dt / this.fadeOut);
       else {
         u.f += ((hit ? 1 : 0) - u.f) * k;
         if (!hit && u.f < 0.02) u.f = 0;
         if (hit && u.f > 0.98) u.f = 1;
       }
-      if (u.f > 0) { this.active.add(u); this._applyFade(u); }
-      else { this._restore(u); this.active.delete(u); }
+      if (u.f > 0) this._applyFade(u, tick);
+      else if (!hit) { this._restore(u); this.active.delete(u); }
     }
   }
+
+  /**
+   * Is this occlusion query the same as the last full check's (every point within QUERY_EPS m, same options, same
+   * registrations / enabled flag)? Stores the query when it is not. No allocation (a fixed Float64Array key).
+   */
+  _sameQuery(camPos, targets, nTargets, radii, her, lens, nLens, solidOnly, crowns) {
+    const nT = Math.min(nTargets, targets.length), nL = lens ? Math.min(nLens, lens.length) : 0;
+    const need = 12 + nT * 4 + nL * 3;
+    if (need > QUERY_KEY_MAX) { this._qOk = false; return false; }
+    const q = this._qk, flags = (this.enabled ? 1 : 0) | (solidOnly ? 2 : 0) | (crowns ? 4 : 0) | (her ? 8 : 0);
+    let same = this._qOk && ++this._qAge < QUERY_TTL && q[0] === this._ver && q[1] === flags && q[2] === nT && q[3] === nL
+      && near(q[4], camPos.x) && near(q[5], camPos.y) && near(q[6], camPos.z)
+      && (!her || (near(q[7], her.x) && near(q[8], her.y) && near(q[9], her.z)));
+    let o = 12;
+    for (let i = 0; same && i < nT; i++, o += 4) {
+      const p = targets[i];
+      same = near(q[o], p.x) && near(q[o + 1], p.y) && near(q[o + 2], p.z) && q[o + 3] === (radii ? (radii[i] ?? 0) : 0);
+    }
+    for (let i = 0; same && i < nL; i++, o += 3) { const p = lens[i]; same = near(q[o], p.x) && near(q[o + 1], p.y) && near(q[o + 2], p.z); }
+    if (same) return true;
+    this._qOk = true; this._qAge = 0;
+    q[0] = this._ver; q[1] = flags; q[2] = nT; q[3] = nL; q[4] = camPos.x; q[5] = camPos.y; q[6] = camPos.z;
+    q[7] = her ? her.x : 0; q[8] = her ? her.y : 0; q[9] = her ? her.z : 0;
+    o = 12;
+    for (let i = 0; i < nT; i++, o += 4) { const p = targets[i]; q[o] = p.x; q[o + 1] = p.y; q[o + 2] = p.z; q[o + 3] = radii ? (radii[i] ?? 0) : 0; }
+    for (let i = 0; i < nL; i++, o += 3) { const p = lens[i]; q[o] = p.x; q[o + 1] = p.y; q[o + 2] = p.z; }
+    return false;
+  }
+
+  /**
+   * The update() broad-phase box [minX, minY, minZ, maxX, maxY, maxZ] (reused Float64Array): the lens, the subjects
+   * grown by their capsule radius and the crown reach, the lens points, her feet grown by the roof pad.
+   */
+  _queryBox(camPos, targets, nTargets, radii, her, lens, nLens, crowns) {
+    const b = this._qb;
+    b[0] = b[3] = camPos.x; b[1] = b[4] = camPos.y; b[2] = b[5] = camPos.z;
+    let rMax = 0;
+    for (let t = 0; t < nTargets; t++) {
+      const p = targets[t];
+      grow(b, p.x, p.y, p.z, 0);
+      if (radii && radii[t] > rMax) rMax = radii[t];
+    }
+    if (lens) for (let t = 0; t < nLens; t++) grow(b, lens[t].x, lens[t].y, lens[t].z, 0);
+    // the capsules (r around every segment), the crown reach (horizontal crownR + r / 2), the box margin
+    const g = rMax + (crowns && this.crownR > 0 ? this.crownR : 0) + this.margin;
+    b[0] -= g; b[1] -= g; b[2] -= g; b[3] += g; b[4] += g; b[5] += g;
+    if (her) grow(b, her.x, her.y, her.z, this.roofPad);
+    return b;
+  }
+
+  /** Force the next update() check to re-test every unit (a caller moved a registered prop in place). */
+  invalidate() { this._qOk = false; this._checkT = 0; }
 
   /**
    * Does the unit cut the capsule camera → any subject point (radius radii[t], default 0)? A capsule (r > 0) ends r m
@@ -754,8 +851,15 @@ export class OccluderFader {
     return hit;
   }
 
-  _applyFade(u) {
+  /**
+   * Apply a unit's fade. A settled unit (opacity unchanged since the last apply) is skipped between checks; on a
+   * check (`full`) its batch sources are re-hidden if world re-showed them (culling), without a per-frame
+   * setVisibleAt (that re-sorts the BatchedMesh draw list).
+   */
+  _applyFade(u, full = true) {
     const op = 1 - u.f * (1 - (u.roof || u.solid ? this.archOpacity : this.minOpacity));
+    if (op === u.op && !full) return;
+    u.op = op;
     for (const part of u.parts) {
       if (part.never) continue;                         // trunks never fade
       const mesh = part.mesh;
@@ -765,7 +869,7 @@ export class OccluderFader {
           part.proxy = this._takeProxy(part);
           if (!part.proxy) continue;                   // pool exhausted: leave it opaque
           this._hideSource(part);
-        } else if (part.kind === 'batch' && part.hidByUs) mesh.setVisibleAt(part.index, false);   // world may have re-shown it
+        } else if (part.kind === 'batch' && part.hidByUs && this._batchVisible(part)) mesh.setVisibleAt(part.index, false);   // world re-showed it
         setOpacity(part.proxy.mesh.material, (part.proxy.mesh.material.userData.baseOpacity ?? 1) * op);
         continue;
       }
@@ -823,7 +927,7 @@ export class OccluderFader {
       }
       part.faded = null; part.orig = null;
     }
-    u.f = 0;
+    u.f = 0; u.op = 1;
   }
 
   /**

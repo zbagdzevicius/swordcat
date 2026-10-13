@@ -3,6 +3,7 @@
 // silhouettes (§12.3 Pawsbury skyline: fog:false, a flat colour 70% of the way to the current fog colour) and
 // warm emissive glow sprites (the Dawnstone). Env owns the colours and drives `update()`. No DOM at import.
 import * as THREE from 'three';
+import { fxBasicMaterial, fxModule, fxShaderMaterial } from '../fx/shaders.js';
 
 const SKY_VERT = /* glsl */`
 varying vec3 vDir;
@@ -44,6 +45,9 @@ void main() {
   #include <colorspace_fragment>
 }`;
 
+// PERF §1.2: the sky is one module of the linked fx program (no program of its own); registered at import
+fxModule({ name: 'sky', side: THREE.BackSide, fog: false, vertexShader: SKY_VERT, fragmentShader: SKY_FRAG });
+
 /** The sky dome (BackSide sphere that follows the camera; rendered first; never fogged). */
 export class SkyDome {
   constructor(radius = 450) {
@@ -53,8 +57,8 @@ export class SkyDome {
       uSunColor: { value: new THREE.Color('#FFE7C2') }, uSunDir: { value: new THREE.Vector3(-0.5, 0.6, 0.6) },
       uSunGlow: { value: 1 }, uTime: { value: 0 }, uClouds: { value: 1 }, uExposure: { value: 1 },
     };
-    this.material = new THREE.ShaderMaterial({
-      uniforms: this.uniforms, vertexShader: SKY_VERT, fragmentShader: SKY_FRAG,
+    this.material = fxShaderMaterial({
+      name: 'sky', uniforms: this.uniforms, vertexShader: SKY_VERT, fragmentShader: SKY_FRAG,
       side: THREE.BackSide, depthWrite: false, depthTest: true, fog: false, toneMapped: true,
     });
     this.material.userData.noHeightFog = true;
@@ -89,7 +93,7 @@ export class Silhouettes {
   constructor({ base = SILHOUETTE.skyline, toFog = SILHOUETTE.skylineFog } = {}) {
     this.base = new THREE.Color(base);
     this.toFog = toFog;
-    this.material = new THREE.MeshBasicMaterial({ color: base, fog: false });
+    this.material = fxBasicMaterial({ color: base, fog: false });   // PERF §1.2: the fx basic module (shared program)
     this.material.userData.noHeightFog = true;
     this.group = new THREE.Group(); this.group.name = 'skyline';
   }

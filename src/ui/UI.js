@@ -19,7 +19,7 @@ import fontsCss from './fonts.css?inline';
 import { E } from '../core/events.js';
 import { PLAYER, KO } from '../core/config.js';
 import { el, flag, setVar, hasDom } from './dom.js';
-import { tx, UI_STRINGS } from './text.js';
+import { tx, UI_STRINGS, toastText } from './text.js';
 import { loadFonts } from './fonts.js';
 import { Hud } from './hud.js';
 import { Dialog } from './dialog.js';
@@ -27,16 +27,22 @@ import { Cinema } from './cinema.js';
 import { Menus } from './menus.js';
 import { Results } from './results.js';
 import { Toasts } from './toasts.js';
-import { Prompts } from './prompts.js';
+import { Prompts, hintLayerOn } from './prompts.js';
+import { inPractice, revealShow } from './reveal.js';
 import { ThreatArrows } from './threatArrows.js';
+import { Beacon } from './beacon.js';
 import { TouchControls, LESSON_BUTTONS } from './touch.js';
 import { AbilityBar } from './abilityBar.js';
 import { CursorController } from './cursor.js';
 import { HpBars } from './hpBars.js';
 import { applySetting } from './settings.js';
 import { TouchLayoutEditor } from './touchEditor.js';
-import { openShop as buildShop, stationId } from './shops.js';
-import { openQuestBoard as buildBoard, HUB_LEVEL } from './questBoard.js';
+// PERF §10.2 / C16 (requests/ui.md): the hub panels are their own chunk, loaded on first use (and prefetched when the
+// hub level loads), so the boot shell does not carry the shops, their art or the Quest Board.
+const HUB_LEVEL = 'town';
+let _hubMods = null;
+/** @returns {Promise<[typeof import('./shops.js'), typeof import('./questBoard.js')]>} */
+const loadHubPanels = () => (_hubMods ??= Promise.all([import('./shops.js'), import('./questBoard.js')]).catch((e) => { _hubMods = null; throw e; }));
 import { ScreenLayers } from './layers.js';
 import { Occluders } from './occluders.js';
 import { Celebrate } from './celebrate.js';
@@ -63,9 +69,11 @@ export class UI {
     /** @type {Toasts|null} */ this.toasts = null;
     /** @type {Prompts|null} */ this.prompts = null;
     /** @type {ThreatArrows|null} */ this.arrows = null;
+    /** @type {Beacon|null} the "where next" objective beacon (review: wayfinding) */ this.beacon = null;
     /** @type {TouchControls|null} */ this.touch = null;
     this.isLoading = false;
     this.csHidden = false;          // HUD hidden by a running cutscene (cutscene:start … end)
+    this.inScene = false;           // any non-ambient scene is running (dialogue scenes too): hints / tips stay hidden
     this.meme = false; this.memeT = 0; this.memeCapShown = false;
     this.pauseHeld = 0; this.skipped = false;
     this.bootSave = null;           // { levelId, spawnId } of the save found at boot (Continue)
@@ -80,9 +88,10 @@ export class UI {
     /** WA §5.4 */ this.celebrations = null;
     /** WA §6.3 */ this.offer = null;
     /** WA §5.5 fly-to-HUD */ this.fly = null;
+    /** WA §7.5 / §4.1 progressive reveal (reveal.js `revealShow`; 10 Hz): what the bar / HUD / cluster may show */ this.reveal = null;
     this._lastUnlocked = 'free';
     /** requests/story.md: the features the ui draws (story's own fallback Overlay steps aside for each). */
-    this.handles = Object.freeze({ dialog: true, cinema: true, prompt: true, skip: true, title: true, tutorial: true });
+    this.handles = Object.freeze({ dialog: true, cinema: true, prompt: true, skip: true, title: true, tutorial: true, reward: true });
     /**
      * story → ui cinema commands (requests/story.md): `ctx.ui.cinema({ letterbox, hud, caption, title, chapter, fade,
      * press, clear, skip, skipText })` with strings already resolved. The function also carries the step-level api
@@ -163,6 +172,7 @@ export class UI {
     }
     // layers, back to front (the vignette + flash first: the HUD paints over them)
     this.layers = new ScreenLayers(ctx, this.root);
+    this.beacon = new Beacon(ctx, this.root);         // under the threat arrows: a threat always paints over the way
     this.arrows = new ThreatArrows(ctx, this.root);
     this.hud = new Hud(ctx, this.root);
     /** CONTROLS_SPEC §10.4 / §10.5: enemy HP pills and the Grit arc (iso) */
@@ -208,7 +218,7 @@ export class UI {
     });
     { const m = ctx.state?.settings?.camLockMode; if (m && m !== 'locked') this._applyLockMode(m); else if (ctx.state?.settings?.camLock === false) ctx.cam?.setCamLock?.(false, false); }
     const T = (k, v) => tx(ctx, k, v);
-    on(E.TOAST, (p) => this.toast(p?.text ?? (p?.key ? T(p.key, p.vars) : ''), { icon: p?.icon, key: p?.key }));
+    on(E.TOAST, (p) => this.toast(toastText(ctx, p), { icon: p?.icon, key: p?.key }));
     // WA §5.4: kitten rescues, Heart Bells and shards are celebration cards now (celebrate.js); letters stay toasts.
     // WA §5.5: a fish (heart, milk) picked up in the world flies to its HUD counter.
     on(E.ITEM_PICKUP, (p) => {
@@ -242,11 +252,13 @@ export class UI {
     });
     on(E.MEME_CAM, (p) => { this.meme = !!p?.on; this.memeT = 0; this.memeCapShown = false; if (!this.meme) this.overlay.memeCaption(null); });
     on(E.CUTSCENE_START, (p) => {
+      // any scene but an ambient bark hides the hint / prompt layers (dialogue scenes keep the HUD, not the tips)
+      if (p?.kind !== 'ambient') this.inScene = true;
       if (p?.kind === 'dialog' || p?.kind === 'ambient') return;
       this.csHidden = true; this.skipped = false; this.pauseHeld = 0;
     });
     on(E.CUTSCENE_END, () => {
-      this.csHidden = false;
+      this.csHidden = false; this.inScene = false;
       this.overlay.skipProgress(0);
       // §5.1: every cutscene ends with the letterbox off and the HUD restored (also when story drew its own overlay)
       this._after(0.05, () => {
@@ -273,17 +285,17 @@ export class UI {
     // hub stations (§12.5): world's interactables of kind 'shop' / 'board' (or the station ids themselves) open the
     // panels. world may also call ui.openShop / openQuestBoard from its own use(); the second call is a no-op.
     on(E.INTERACT, (p) => this._onInteract(p?.target));
-    on(E.LEVEL_LOADED, (p) => { this._levelStart = { id: p?.id, rec: { ...(ctx.state?.levels?.[p?.id] ?? {}) } }; });
+    on(E.LEVEL_LOADED, (p) => {
+      this._levelStart = { id: p?.id, rec: { ...(ctx.state?.levels?.[p?.id] ?? {}) } };
+      if (p?.id === HUB_LEVEL) loadHubPanels().catch(() => { /* retried on first use */ });   // prefetch, no hitch on first open
+    });
   }
 
   _onInteract(t) {
     if (!t || this.busy) return;
     const kind = String(t.kind ?? '').toLowerCase();
     if (/^(board|questboard|quest_board|quest)$/.test(kind) || /quest.?board/i.test(String(t.id ?? ''))) { this.openQuestBoard(); return; }
-    if (/^(shop|station|stall|banner|barracks|lookout)$/.test(kind)) {
-      const st = stationId(t.station ?? t.id) ?? stationId(kind);
-      if (st) this.openShop(st);
-    }
+    if (/^(shop|station|stall|banner|barracks|lookout)$/.test(kind)) this.openShop(t.station ?? t.id, kind);
   }
 
   _device(d) {
@@ -298,11 +310,14 @@ export class UI {
   _knockOut(p) {
     const ctx = this.ctx;
     const text = this.overlay?.lifeLostText(p?.lives ?? ctx.player?.lives ?? 0, { infinite: !!p?.infinite }) ?? '';
+    // the player owns the wipe (it calls ui.fade at KO.sitT and clears it on the respawn, on game time); the ui only
+    // draws it itself when no player drives a knock-out (old builds, harness events)
+    const playerWipes = typeof ctx.player?.koTick === 'function';
     this._after(KO_T.sitT, () => {
       if (ctx.levels?.loading || ctx.story?.isPlaying) return;
-      this.overlay?.fade({ to: 'cream', alpha: 1, dur: KO_T.wipeT });
+      if (!playerWipes) this.overlay?.fade({ to: 'cream', alpha: 1, dur: KO_T.wipeT });
       this._after(KO_T.wipeT, () => {
-        if (!ctx.levels?.loading) this.overlay?.fade({ to: null, dur: 0.35 });
+        if (!playerWipes && !ctx.levels?.loading) this.overlay?.fade({ to: null, dur: 0.35 });
         if (text) this.toast(text, { key: 'life.lost', icon: 'heart' });
       });
     });
@@ -315,12 +330,30 @@ export class UI {
    */
   _lesson(p) {
     const tc = this.touch, st = this.ctx.state;
-    if (!p?.speaker || !tc) return;
-    if (st?.getFlag?.('prologue.tutorial') || st?.getFlag?.('prologue.done')) { if (tc.veiled) tc.veil(null); return; }
-    if (!tc.veiled) tc.veil(this._taught = []);
+    if (!p?.speaker) return;
+    if (st?.getFlag?.('prologue.tutorial') || st?.getFlag?.('prologue.done')) { if (tc?.veiled) tc.veil(null); return; }
+    // the taught list drives the desktop / pad bar and the HUD too (reveal.js), so it is kept without a touch cluster
+    this._taught ??= [];
+    // a re-veil (after the 3 s idle lift) keeps what was already taught: resetting it re-hid the current lesson's button
+    if (tc && !tc.veiled) tc.veil(this._taught);
     const a = p.action === 'chargeRelease' ? 'attack' : p.action;
-    if (a && LESSON_BUTTONS.includes(a) && !p.done) { if (!this._taught.includes(a)) this._taught.push(a); tc.reveal(a); }
+    if (a && LESSON_BUTTONS.includes(a) && !p.done) {
+      if (!this._taught.includes(a)) { this._taught.push(a); this.bar?.reveal?.(a); }
+      tc?.reveal(a);
+    }
     this._veilIdle = 0;
+  }
+
+  /**
+   * WA §7.5 / §4.1: refresh the progressive-reveal model (10 Hz) that the bar, the HUD and the touch cluster read as
+   * `ui.reveal`. In practice the touch veil holds (it is put back if anything lifted it); after it, it lifts.
+   */
+  _revealTick() {
+    const practice = inPractice(this.ctx);
+    this.reveal = revealShow({ practice, taught: this._taught }, this.reveal ?? {});
+    const tc = this.touch;
+    if (!tc) return;
+    if (practice && !tc.veiled) tc.veil(this._taught ?? []);
   }
 
   /** PERF §10.1: the warm splash (core's inline `#splash`) fades out once the title is interactive, then goes. */
@@ -495,14 +528,17 @@ export class UI {
    * Hub station panel (§13.3 / §14.3): 'bakery' | 'forge' | 'library' | 'wardrobe' | 'lookout' | 'barracks' (world ids such
    * as 'shop_forge' or the keeper's name also work). Freezes the world; resolves when the panel closes.
    */
-  openShop(id) {
-    const st = stationId(id);
-    if (!this.menus || !st) return Promise.resolve();
-    if (this.menus.has(`shop:${st}`)) return this._shopP ?? Promise.resolve();
+  openShop(id, fallback = null) {
+    if (!this.menus) return Promise.resolve();
+    if (this._shopP) return this._shopP;
     if (this.busy) return Promise.resolve();
-    this._freeze();
-    this._shopP = buildShop(this.menus, st).finally(() => { this._shopP = null; });
-    return this._shopP;
+    const p = this._shopP = loadHubPanels().then(([shops]) => {
+      const st = shops.stationId(id) ?? (fallback ? shops.stationId(fallback) : null);
+      if (!st || !this.menus || this.busy) return undefined;
+      this._freeze();
+      return shops.openShop(this.menus, st);
+    }).catch((e) => { console.warn('[ui] shop panel failed to load', e); }).finally(() => { if (this._shopP === p) this._shopP = null; });
+    return p;
   }
 
   /**
@@ -513,9 +549,13 @@ export class UI {
   openQuestBoard({ onPick = null } = {}) {
     if (!this.menus) return Promise.resolve(null);
     if (this.menus.has('board')) return this._boardP ?? Promise.resolve(null);
+    if (this._boardP) return this._boardP;
     if (this.busy) return Promise.resolve(null);
-    this._freeze();
-    this._boardP = buildBoard(this.menus).then(async (pick) => {
+    this._boardP = loadHubPanels().then(([, board]) => {
+      if (!this.menus || this.busy) return null;
+      this._freeze();
+      return board.openQuestBoard(this.menus);
+    }).catch((e) => { console.warn('[ui] quest board failed to load', e); return null; }).then(async (pick) => {
       this._boardP = null;
       if (pick) {
         this.ctx.bus.emit(E.SAVE_REQUEST, { reason: 'board' });
@@ -722,9 +762,11 @@ export class UI {
     this.hud.render(dt);
     this.dialog.render(dt);
     this.overlay.render(dt);
-    this.toasts.render(dt);
+    const hintOn = hintLayerOn({ hud: hudOn, meme: this.meme, mode, dialog: !!this.dialog.visible, letterbox: !!this.overlay.letterboxOn, menu: !!this.menus.active, cinema: this.inScene });
+    this.toasts.render(dt, { tips: hintOn, tipHold: !!this.prompts?.guide?.open });
     const world = hudOn && !this.meme && (mode === 'play' || mode === 'memecam') && !this.menus.active;
-    this.prompts.render(dt, { world, hint: hudOn && !this.meme });
+    this.prompts.render(dt, { world, hint: hintOn });
+    this.beacon?.render(dt, world);
     this.arrows.render(dt, world);
     this.hpBars?.render(dt, world);
     this.results.render(dt);
@@ -735,13 +777,14 @@ export class UI {
     this.layers?.render(world);
     this.celebrations?.render(dt);
     flag(this.celebrations?.root, 'is-dim', !hudOn);
-    this.fly?.render(dt);
+    this.fly?.render(dt, hudOn);
     this.offer?.render(dt, hudOn);
     this.occluders?.render(dt);
+    if ((this._revealT = (this._revealT ?? 0) - dt) <= 0) { this._revealT = 0.1; this._revealTick(); }
     if (this.touch?.veiled) {
-      const guided = this.prompts?.guide?.open || this.ctx.story?.tutorial?.active;
+      const guided = this.prompts?.guide?.open || this.ctx.story?.tutorial?.active || this.reveal?.practice;
       this._veilIdle = guided ? 0 : (this._veilIdle ?? 0) + dt;
-      if (this._veilIdle > 3) { this.touch.veil(null); this._taught = null; }
+      if (this._veilIdle > 3) this.touch.veil(null);          // taught lessons are kept until the next level load
     }
     this._measureSafe(dt);
     // §10.2 context cursor over the canvas (only written on change)
@@ -780,6 +823,11 @@ export class UI {
       if (b.height > 0) top = Math.max(0, b.bottom - r.top);
     }
     s.top = top;
+    // the guide bubble / offer sit under the top-centre column (boss bar, objective, toasts), never over its pills
+    const tc = this.hud?.tcEl;
+    let tcb = 0;
+    if (tc && this.hud.visible !== false) { const b = tc.getBoundingClientRect(); if (b.height > 0) tcb = Math.ceil(b.bottom); }
+    setVar(this.root, '--tc-b', `${tcb}px`);
   }
 
   _skipHold(dt, mode, input) {
@@ -807,13 +855,13 @@ export class UI {
     for (const off of this._offs) off();
     this._offs.length = 0;
     this._timers.length = 0;
-    for (const m of [this.hpBars, this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.hud, this.layers, this.celebrations, this.offer, this.fly, this.occluders]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
+    for (const m of [this.hpBars, this.bar, this.touch, this.menus, this.results, this.overlay, this.dialog, this.prompts, this.arrows, this.beacon, this.hud, this.layers, this.celebrations, this.offer, this.fly, this.occluders]) { try { m?.dispose(); } catch (e) { console.warn('[ui] dispose', e); } }
     if (this._onResize && typeof window !== 'undefined') window.removeEventListener('resize', this._onResize);
     this.toasts?.clear();
     if (this._noMenu) this.root?.removeEventListener('contextmenu', this._noMenu);
     this.style?.remove();
     if (this.root) for (const k of ['ui-root', 'is-meme', 'is-title', 'dev-kbm', 'dev-pad', 'dev-touch']) this.root.classList.remove(k);
-    this.hud = this.dialog = this.overlay = this.menus = this.results = this.toasts = this.prompts = this.arrows = this.touch = null;
+    this.hud = this.dialog = this.overlay = this.menus = this.results = this.toasts = this.prompts = this.arrows = this.beacon = this.touch = null;
     this.root = null;
   }
 }

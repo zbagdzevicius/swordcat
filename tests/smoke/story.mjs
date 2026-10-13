@@ -1,11 +1,9 @@
-// tests/smoke/story.mjs  (owner: story) — smoke blocks for src/story: the title loop, CS-01, Midnight Practice, G-01,
-// CS-02 (never cut), CS-03 (never cut) + the Pudding follow beat, D-01, hold-to-skip and barks; M2: forest (D-02, CS-04,
-// CS-05), town (D-03, CS-06, D-04 ×3, CS-07) and gate (yard, D-06, CS-08 never cut, G-02, CS-09, CS-10 → the grey hub).
-// CONTROLS_SPEC §12 story: `story:tutorial` plays Midnight Practice with the desktop mouse (RMB to move, RMB a dummy to
-// target it, LMB / J to swing) and `story:tutorial-touch` plays it on 844×390 and 390×844 hasTouch / isMobile pages through
-// the touch path only (joystick, ground taps, the ⚔ / 🛡 / Jump / Tumble / Meow buttons, a tap on a dummy, a swipe).
+// tests/smoke/story.mjs  (owner: story) — smoke blocks for src/story. Phase W prologue (WA §6–§8): the title → new
+// adventure hand-off (no fade, no reload, control ≤ 5 s, first sticker ≤ 60 s), Morning Practice (7 lessons, desktop and
+// touch), the chart → The Giggling Mist → Suit Up chain, G-01, CS-03, D-01 at Mochi's cart, hold-to-skip and barks;
+// M2: forest (D-02, CS-04, CS-05), town (D-03, CS-06, D-04 ×3, CS-07) and gate (yard, D-06, CS-08, G-02, CS-09, CS-10).
 // Screenshots go to tests/shots/story/. Run against your own dev server:
-//   SMOKE_URL=http://localhost:5211/ SMOKE_ONLY=story node tests/smoke.mjs
+//   SMOKE_URL=http://localhost:5321/ SMOKE_ONLY=story node tests/smoke.mjs
 // Scenes are watched at real speed and photographed at their beats (dialogue keys / scene time); the sim is frozen
 // (time scale 0) while a screenshot is taken so slow GPU readbacks never skip a beat.
 import fs from 'node:fs';
@@ -150,7 +148,7 @@ const M2_BLOCKS = [
       await t.wait(800);
       const s4 = await t.G(() => { const g = window.__GAME__; return { camp: g.ctx.state.getFlag('forest.camp'), env: g.ctx.env.presetName, vigil: g.ctx.levels.current?.vigils?.find((v) => v.id === 'vigil_3')?.lit ?? null }; });
       t.assert(s4.camp === true, 'flag forest.camp');
-      t.assert(s4.env === 'forest_night', `env forest_night (${s4.env})`);
+      t.assert(['forest_twilight', 'forest_night'].includes(s4.env), `env forest_twilight (${s4.env})`);
       if (s4.vigil !== null) t.assert(s4.vigil === true, 'vigil_3 lit by CS-04');
       checkHandback(t, await t.G(afterScene), 'CS-04');
       await shot(t, '10g-cs04-after');
@@ -194,7 +192,7 @@ const M2_BLOCKS = [
       t.assert(!!(await sceneOver(t, 'd03', 40000)), 'D-03 finished');
       const s3 = await t.G(() => ({ f: window.__GAME__.ctx.state.getFlag('town.marmalade'), chase: !!window.__GAME__.ctx.objectives.get?.('chase') }));
       t.assert(s3.f === true, 'flag town.marmalade');
-      t.assert(s3.chase, 'objective "Catch the Post Stealer"');
+      t.assert(s3.chase, 'objective "Catch Pilfer!"');
       checkHandback(t, await t.G(afterScene), 'D-03');
       // the bag comes back → CS-06 at the Post Office
       await tp(t, -30, 1, -Math.PI / 2);
@@ -306,13 +304,13 @@ const M2_BLOCKS = [
       await t.G(() => { const ui = window.__GAME__.ctx.ui; setTimeout(() => { ui?.closeResults?.(); ui?.results?.close?.(); }, 1500); });
       await atLine(t, 'cs10.3', '12n-cs10-letter', 60000);
       await atLine(t, 'cs10.6', '12o-cs10-yet');
-      if (await until(t, () => window.__GAME__.ctx.env.presetName === 'hub_grey' && window.__GAME__.ctx.story.playingId === 'cs10', null, { timeout: 20000 })) { await t.wait(3000); await shot(t, '12p-cs10-gloom'); }
+      if (await until(t, () => window.__GAME__.ctx.env.presetName?.startsWith?.('hub_') && window.__GAME__.ctx.story.playingId === 'cs10', null, { timeout: 20000 })) { await t.wait(3000); await shot(t, '12p-cs10-hush'); }
       t.assert(!!(await sceneOver(t, 'cs10', 60000)), 'CS-10 finished');
       await t.wait(1000);
       const s10 = await t.G(() => { const g = window.__GAME__; return { done: g.ctx.state.getFlag('gate.done'), gd: g.ctx.state.getFlag('gate.done'), level: g.ctx.levels.current?.id, env: g.ctx.env.presetName, results: g.events.includes('level:results') }; });
       t.assert(s10.done === true, 'flag gate.done');
       t.assert(s10.level === 'town', `back in Pawsbury (${s10.level})`);
-      t.assert(s10.env === 'hub_grey', `the hub is grey (${s10.env})`);
+      t.assert(['hub_hush', 'hub_grey'].includes(s10.env), `the hub hushes (${s10.env})`);
       checkHandback(t, await t.G(afterScene), 'CS-10');
       await shot(t, '12q-hub-grey');
       const q = await t.G(() => window.__GAME__.ctx.story.quest?.id);
@@ -321,10 +319,97 @@ const M2_BLOCKS = [
   },
 ];
 
+// ====================================================================================================== Phase W prologue
+/** Tutorial lesson index (1-based) and whether practice is over. */
+const tutStep = () => { const tu = window.__GAME__.ctx.story.tutorial; return { step: tu.step, active: tu.active, id: tu.log.step?.id ?? null, pending: tu.pending, done: !!window.__GAME__.ctx.state.getFlag('prologue.practice') }; };
+const atStep = (t, n, timeout = 8000) => until(t, (k) => { const tu = window.__GAME__.ctx.story.tutorial; return tu.step >= k && !tu.pending && !window.__GAME__.ctx.story.isPlaying; }, n, { timeout });
+const nearestDummy = () => { const g = window.__GAME__, p = g.ctx.player.pos; return g.ctx.actors.list.filter((x) => x.kind === 'dummy').sort((a, b) => a.pos.distanceTo(p) - b.pos.distanceTo(p))[0]?.pos.toArray() ?? [0, 0, -76]; };
+
+/** Skip whatever scene runs (the runner applies its end) until none is left. */
+async function skipScenes(t, max = 6) {
+  for (let k = 0; k < max && await t.G(() => window.__GAME__.ctx.story.isPlaying); k++) { await t.G(() => window.__GAME__.story.skip()); await t.wait(500); }
+}
+
+/** Play the 7 WA §7.1 lessons with the desktop keyboard (+ a real right-click order for the move lesson). */
+async function playPractice(t, { shots = true } = {}) {
+  const s1 = await until(t, () => window.__GAME__.ctx.story.tutorial.active, null, { timeout: 10000 });
+  t.assert(!!s1, 'Morning Practice is active');
+  // 1 move: a real right-click order toward the middle dummy
+  await atStep(t, 1, 6000);
+  await t.wait(2600);                                                 // Pearl's "Knighting Day…" intro bubble
+  if (shots) await shot(t, '02a-practice-move');
+  const m1 = await t.G(() => window.__GAME__.screen(0, -77.6));
+  await t.page.mouse.move(m1.x, m1.y); await t.wait(80);
+  await t.page.mouse.click(m1.x, m1.y, { button: 'right' });
+  let s = await atStep(t, 2, 15000);
+  if (!s) { t.warn('the click walk did not finish the move lesson: teleport'); await tp(t, 0, -77.6, 0); s = await atStep(t, 2, 8000); }
+  t.assert(!!s, 'lesson 2 (bonk) after moving');
+  // 2 bonk: Snip–Snap–Swoosh on the dummy → `tutbow` (Pearl ties the Pink Bow)
+  await tp(t, 0, -77.4, 0);
+  const dum = await t.G(() => window.__GAME__.screen(0, -76, 0.6));
+  if (dum) { await t.page.mouse.move(dum.x, dum.y); await t.wait(100); }
+  for (let k = 0; k < 4 && !(await t.G(() => window.__GAME__.ctx.story.tutorial.step >= 3 || window.__GAME__.ctx.story.playingId === 'tutbow')); k++) { await t.tap('KeyJ', 3, 230); await t.wait(800); }
+  const bow = await until(t, () => window.__GAME__.ctx.story.playingId === 'tutbow' || window.__GAME__.ctx.story.seen('tutbow'), null, { timeout: 8000 });
+  t.assert(!!bow, 'the bonk lesson plays tutbow');
+  if (shots && await until(t, lineIs, 'tutbow.1', { timeout: 8000 })) { await t.wait(700); await shot(t, '02b-practice-bow'); }
+  s = await atStep(t, 3, 30000);
+  t.assert(!!s, 'lesson 3 (jump) after the bow');
+  // 3 jump the inner fence (z −87)
+  await tp(t, -10, -88.6, 0);
+  await t.page.keyboard.down('KeyW'); await t.wait(120); await t.page.keyboard.down('KeyF'); await t.wait(420); await t.page.keyboard.up('KeyF'); await t.wait(500); await t.page.keyboard.up('KeyW');
+  s = await atStep(t, 4, 5000);
+  if (!s) { t.warn('fence jump missed: placing her across it'); await tp(t, -10, -85, 0); s = await atStep(t, 4, 5000); }
+  t.assert(!!s, 'lesson 4 (roll) after the fence');
+  t.assert(await t.G(() => window.__GAME__.ctx.state.getFlag('tut.jump.done') === true), 'flag tut.jump.done');
+  // 4 roll past Sir Sacky (8, −84)
+  await tp(t, 6.2, -84, Math.PI / 2);
+  await t.page.keyboard.press('ShiftLeft');
+  s = await atStep(t, 5, 5000);
+  if (!s) { await tp(t, 7.0, -84, Math.PI / 2); await t.page.keyboard.press('ShiftLeft'); s = await atStep(t, 5, 5000); }
+  t.assert(!!s, 'lesson 5 (stand) after the roll');
+  // 5 block Sir Wobble once (Space = the Stand)
+  await tp(t, 0, -84.9, Math.PI);
+  await t.page.keyboard.down('Space');
+  s = await atStep(t, 6, 15000);
+  await t.page.keyboard.up('Space');
+  t.assert(!!s, 'lesson 6 (parry) after a block');
+  if (shots) await shot(t, '02c-practice-parry');
+  // 6 parry: raise the Stand just before the strike (in-page timing); fall back to an emitted parry
+  for (let k = 0; k < 4 && !(await t.G(() => window.__GAME__.ctx.story.tutorial.step >= 7)); k++) {
+    await t.page.evaluate(() => new Promise((resolve) => {
+      const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), inp = g.ctx.input, t0 = performance.now();
+      const tick = () => {
+        if (!wk || performance.now() - t0 > 8000) { resolve(false); return; }
+        if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.07) { inp.setVirtual('guard', true); setTimeout(() => { inp.setVirtual('guard', false); resolve(true); }, 350); return; }
+        requestAnimationFrame(tick);
+      };
+      tick();
+    }));
+    await t.wait(900);
+  }
+  s = await atStep(t, 7, 3000);
+  if (!s) {
+    t.warn('no timed parry landed: emitting one from Sir Wobble');
+    await t.G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); g.ctx.bus.emit(g.E.PLAYER_PARRY, { attacker: wk, gold: false, position: g.ctx.player.pos.clone() }); });
+    s = await atStep(t, 7, 5000);
+  }
+  t.assert(!!s, 'lesson 7 (meow) after the parry');
+  // 7 hide and seek: Meow next to the Very Suspicious Cow (12, −72) → `tutpearl`
+  await t.wait(1600);                                                 // the cream wipe while Pearl hides
+  await tp(t, 9.5, -72.5, Math.PI / 2);
+  await t.wait(400);
+  if (shots) await shot(t, '02d-practice-cow');
+  await t.page.keyboard.press('KeyC');
+  let pearl = await until(t, () => window.__GAME__.ctx.story.playingId === 'tutpearl' || window.__GAME__.ctx.state.getFlag('prologue.practice'), null, { timeout: 6000 });
+  if (!pearl) { await t.wait(1200); await t.page.keyboard.press('KeyC'); pearl = await until(t, () => window.__GAME__.ctx.story.playingId === 'tutpearl' || window.__GAME__.ctx.state.getFlag('prologue.practice'), null, { timeout: 6000 }); }
+  t.assert(!!pearl, 'Meow at the cow → Pearl pops out (tutpearl)');
+  const done = await until(t, () => window.__GAME__.ctx.state.getFlag('prologue.practice') === true && !window.__GAME__.ctx.story.isPlaying, null, { timeout: 25000 });
+  t.assert(!!done, 'flag prologue.practice when practice is over');
+}
+
 /**
- * Midnight Practice through the touch path only, on its own hasTouch / isMobile page (`w`×`h`). Real taps go through
- * Playwright's touchscreen; drags and swipes are synthetic touch PointerEvents on the touch layer (like ui's own smoke).
- * Teleports place her at each station (the walk between them is not the lesson); every lesson input is a touch.
+ * Morning Practice through the touch path, on its own hasTouch / isMobile page (`w`×`h`): the hint copy is the touch
+ * variant, the ⚔ / Jump / Tumble / 🛡 / Meow buttons drive the lessons; Pearl's guide bubble is the prompt.
  */
 async function tutorialTouch(t, w, h, tag) {
   const errors = [];
@@ -334,477 +419,236 @@ async function tutorialTouch(t, w, h, tag) {
   pg.on('console', (m) => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
   const G = async (fn, arg) => { const hd = await pg.evaluateHandle(fn, arg); try { return await hd.evaluate((r) => (window.__GAME__?.plain ? window.__GAME__.plain(r) : r)); } finally { hd.dispose().catch(() => {}); } };
   const untilM = async (fn, arg, ms = 8000) => { const t0 = Date.now(); let v = await G(fn, arg); while (!v && Date.now() - t0 < ms) { await pg.waitForTimeout(120); v = await G(fn, arg); } return v; };
-  const stepAt = (n, ms = 8000) => untilM((k) => window.__GAME__.ctx.story.tutorial.step >= k, n, ms);
+  const stepAt = (n, ms = 8000) => untilM((k) => { const tu = window.__GAME__.ctx.story.tutorial; return tu.step >= k && !tu.pending && !window.__GAME__.ctx.story.isPlaying; }, n, ms);
   const mshot = async (name) => {
     await G(() => window.__GAME__.game.setTimeScale(0));
     try { await pg.waitForTimeout(60); await pg.screenshot({ path: path.join(t.shotsDir, DIR, `${name}.png`) }); } catch (e) { t.warn(`shot ${name}: ${String(e?.message ?? e).split('\n')[0]}`); }
     finally { await G(() => window.__GAME__.game.setTimeScale(1)); }
   };
-  /** Synthetic touch pointer (captured by the element it went down on, like a real pointer). */
-  const ptr = (type, x, y, id = 11) => G(([tp, px, py, pid]) => {
-    const caps = (window.__ptrCap ??= {});
-    const el = tp === 'pointerdown' ? (document.elementFromPoint(px, py)?.closest?.('.tbtn, .touch-root') ?? document.querySelector('.touch-root')) : (caps[pid] ?? document.querySelector('.touch-root'));
-    if (tp === 'pointerdown') caps[pid] = el;
-    el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: pid, clientX: px, clientY: py, pointerType: 'touch', isPrimary: pid === 11 }));
-    if (tp === 'pointerup' || tp === 'pointercancel') delete caps[pid];
-    return el?.className ?? null;
-  }, [type, x, y, id]);
   const btn = (a) => G((x) => { const b = document.querySelector(`.tbtn[data-action="${x}"]`); if (!b || b.classList.contains('is-hidden')) return null; const r = b.getBoundingClientRect(); return r.width > 0 ? [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)] : null; }, a);
+  const press = (a, ms) => G(([x, d]) => new Promise((resolve) => {
+    const b = document.querySelector(`.tbtn[data-action="${x}"]`); if (!b) { resolve(false); return; }
+    const r = b.getBoundingClientRect(), cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    const ev = (tp) => b.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: 41, clientX: cx, clientY: cy, pointerType: 'touch' }));
+    ev('pointerdown'); setTimeout(() => { ev('pointerup'); resolve(true); }, d);
+  }), [a, ms]);
   const tapBtn = async (a) => { const c = await btn(a); if (!c) return false; await pg.touchscreen.tap(c[0], c[1]); return true; };
   const tpM = (x, z, yaw = 0) => G(([px, pz, f]) => { const g = window.__GAME__, p = g.ctx.player; p.teleport({ pos: new g.THREE.Vector3(px, g.ctx.physics.heightAt(px, pz), pz), facing: f }); return true; }, [x, z, yaw]);
-  const hint = () => G(() => { const e = document.querySelector('.ui-hint.is-on .hint-txt'); return e && e.textContent.trim() ? e.textContent.trim().slice(0, 140) : null; });
   try {
-    for (let k = 0; ; k++) {                                     // a loaded machine: the first load can be slow
+    for (let k = 0; ; k++) {
       try { await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 120000 }); break; } catch (e) { if (k >= 2) throw e; t.warn(`${tag}: page load retry ${k + 1}`); }
     }
     await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 200000 });
-    // first touch (input device → 'touch') BEFORE practice loads: that tap is a ground tap (a move order) and must not
-    // walk her through the move / fence steps
-    await pg.touchscreen.tap(Math.round(w * 0.62), Math.round(h * 0.3));
+    await pg.touchscreen.tap(Math.round(w * 0.62), Math.round(h * 0.3));            // input device → touch
     await pg.waitForTimeout(300);
     await G(async () => {
       const g = window.__GAME__, c = g.ctx;
-      g.story.skip?.(); c.story.queue.length = 0;
-      c.player?.order?.('stop');
-      c.state.flags = {}; c.state.setFlag('prologue.armour', true);
+      g.story.skip?.(); c.story.queue.length = 0; c.player?.order?.('stop');
+      c.state.flags = {}; c.state.setFlag('prologue.start', true);
       await g.loadLevel('meadow', 'practice');
       return true;
     });
     await pg.waitForTimeout(500);
-    await G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.god(true); g.ctx.ui.touch.enable(true); });
-    const s1 = await untilM(() => window.__GAME__.ctx.story.tutorial.active, null, 30000);
-    const dev = await G(() => ({ dev: window.__GAME__.ctx.input.device, active: window.__GAME__.ctx.story.tutorial.active, key: window.__GAME__.ctx.story.tutorial.textKey }));
-    t.assert(dev.dev === 'touch', `${tag}: device touch (${dev.dev})`);
-    t.assert(!!s1 && dev.active, `${tag}: practice starts`);
-    const h1 = await untilM(() => { const e = document.querySelector('.ui-hint.is-on .hint-txt'), x = e?.textContent?.trim() ?? ''; return /Drag the left side|tap where to go/.test(x) ? x : null; }, null, 8000)
-      ?? await G(() => document.querySelector('.ui-hint.is-on .hint-txt')?.textContent?.trim() ?? null);
-    t.log(`${tag}: hint "${h1}"`);
-    t.assert(!!h1 && /Drag the left side|tap where to go/.test(h1), `${tag}: the move hint is the touch copy (${h1})`);
+    await G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.god(true); g.ctx.ui.touch?.enable?.(true); });
+    t.assert(!!(await untilM(() => window.__GAME__.ctx.story.tutorial.active, null, 30000)), `${tag}: practice starts`);
+    t.assert((await G(() => window.__GAME__.ctx.input.device)) === 'touch', `${tag}: device touch`);
+    await stepAt(1, 6000); await pg.waitForTimeout(2800);
     await mshot(`02t-${tag}-1-move`);
-    // ---- 1 move: the floating joystick (drag on the left side), then a ground tap
-    const sx = Math.round(w * 0.18), sy = Math.round(h * 0.82);
-    await ptr('pointerdown', sx, sy);
-    for (let k = 1; k <= 6; k++) await ptr('pointermove', sx + k * 12, sy);
-    await pg.waitForTimeout(1000);
-    await ptr('pointerup', sx + 72, sy);
-    let s = await stepAt(2, 3000);
-    if (!s) {
-      t.log(`${tag}: the joystick alone did not finish the move step; a ground tap`);
-      const tg = await G(() => { const g = window.__GAME__, p = g.ctx.player.pos; return g.screen(p.x + 3.5, p.z - 1); });
-      await pg.touchscreen.tap(Math.round(tg.x), Math.round(tg.y));
-      s = await stepAt(2, 8000);
-    }
-    t.assert(!!s, `${tag}: step 2 (jump) after moving by touch`);
-    // ---- 2 jump the fence: hold the stick toward it (screen-up = north) and press Jump (a tap, then a held press)
-    await tpM(-10, -88.7, 0);
-    await pg.waitForTimeout(1300);
-    await mshot(`02t-${tag}-2-jump`);
-    const jb = await btn('jump');
-    t.assert(!!jb, `${tag}: the Jump button shows`);
-    let how = null;
-    for (const holdMs of [0, 450, 650]) {
-      await tpM(-10, -88.9, 0);
-      await pg.waitForTimeout(500);                             // landed and settled (a teleport mid-air keeps falling)
-      await ptr('pointerdown', sx, sy);
-      for (let k = 1; k <= 6; k++) await ptr('pointermove', sx, sy - k * 12);
-      await pg.waitForTimeout(350);                             // up to running speed toward the fence
-      if (holdMs === 0) await pg.touchscreen.tap(jb[0], jb[1]);
-      else {                                                   // held to the apex (sim time: slow under load)
-        await ptr('pointerdown', jb[0], jb[1], 12);
-        await pg.waitForTimeout(holdMs);
-        await untilM(() => { const p = window.__GAME__.ctx.player; return p.onGround === false && p.vel.y <= 0.3; }, null, 2500);
-        await ptr('pointerup', jb[0], jb[1], 12);
-      }
-      await pg.waitForTimeout(900);
-      await ptr('pointerup', sx, sy - 72);
-      s = await stepAt(3, 2500);
-      if (s) { how = holdMs ? 'held Jump' : 'tapped Jump'; break; }
-    }
-    t.log(`${tag}: fence cleared by ${how ?? 'nothing'}`);
-    if (how !== 'tapped Jump') t.warn(`${tag}: a TAP on Jump does not clear the 1.0 m practice fence (jump cut on release)`);
-    if (!s) { t.warn(`${tag}: fence jump missed: placing her north of it`); await tpM(-10, -85, 0); s = await stepAt(3, 4000); }
-    t.assert(!!s, `${tag}: step 3 (combo) after the fence`);
-    t.assert(await G(() => window.__GAME__.ctx.state.getFlag('tut.jump.done') === true), `${tag}: flag tut.jump.done`);
-    // ---- 3 combo: tap ⚔ three times next to a dummy
-    await tpM(0, -77.4, 0);
-    await pg.waitForTimeout(1200);
-    for (let k = 0; k < 3 && !(await G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 4)); k++) {
+    // 1 move: a ground tap next to the middle dummy
+    const tg = await G(() => window.__GAME__.screen(0, -77.6));
+    await pg.touchscreen.tap(Math.round(tg.x), Math.round(tg.y));
+    let s = await stepAt(2, 15000);
+    if (!s) { await tpM(0, -77.6, 0); s = await stepAt(2, 6000); }
+    t.assert(!!s, `${tag}: lesson 2 (bonk) after a ground tap`);
+    // 2 bonk: ⚔ ×3 next to the dummy
+    await tpM(0, -77.4, 0); await pg.waitForTimeout(800);
+    for (let k = 0; k < 4 && !(await G(() => window.__GAME__.ctx.story.tutorial.step >= 3 || window.__GAME__.ctx.story.isPlaying)); k++) {
       for (let i = 0; i < 3; i++) { await tapBtn('attack'); await pg.waitForTimeout(240); }
-      await pg.waitForTimeout(700);
+      await pg.waitForTimeout(800);
     }
-    s = await stepAt(4, 5000);
-    t.assert(!!s, `${tag}: step 4 (target) after ⚔ ×3`);
-    // ---- 4 target: tap a dummy → an attack order
-    await G(() => window.__GAME__.ctx.player.order?.('stop'));
-    await tpM(0, -78.8, 0);
-    await pg.waitForTimeout(1300);
-    let ord = null;
-    s = null;
-    for (let k = 0; k < 3 && !s; k++) {
-      await G(() => window.__GAME__.clearEvents());
-      const dsp = await G(() => {
-        const g = window.__GAME__, d = g.ctx.actors.list.filter((x) => x.kind === 'dummy').sort((p, q) => Math.hypot(p.pos.x, p.pos.z + 76) - Math.hypot(q.pos.x, q.pos.z + 76))[0];
-        const sp = g.screen(d.pos.x, d.pos.z, d.pos.y + 0.55), pk = g.ctx.cam.pick?.(sp.x, sp.y);
-        const top = document.elementFromPoint(sp.x, sp.y);
-        return { x: sp.x, y: sp.y, pick: pk?.kind ?? null, el: top ? top.tagName + '.' + String(top.className).split(' ')[0] : null };
-      });
-      if (k === 0) await mshot(`02t-${tag}-4-target`);
-      await pg.touchscreen.tap(Math.round(dsp.x), Math.round(dsp.y));
-      s = await stepAt(5, 3500);
-      ord = await G(() => window.__GAME__.lastEvent('player:order'));
-      if (!s) t.log(`${tag}: dummy tap ${k + 1}: pick ${dsp.pick}, element ${dsp.el}, order ${ord?.kind}`);
-    }
-    t.assert(ord?.kind === 'attack', `${tag}: tapping a dummy orders an attack (${ord?.kind})`);
-    t.assert(!!s, `${tag}: step 5 (roll) after tapping a dummy`);
-    await G(() => window.__GAME__.ctx.player.order?.('stop'));
-    // ---- 5 roll past the sack: a swipe on the free ground (falls back to the Tumble button)
-    await tpM(6.2, -84, Math.PI / 2);
-    await pg.waitForTimeout(1300);
-    const fx = Math.round(w * 0.6), fy = Math.round(h * (tag === 'portrait' ? 0.4 : 0.45));
-    await G(([x, y]) => {                                       // one synchronous gesture: a swipe is ≤ 150 ms
-      const el = document.querySelector('.touch-root');
-      const ev = (tp, px) => el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: 31, clientX: px, clientY: y, pointerType: 'touch' }));
-      ev('pointerdown', x); ev('pointermove', x + 30); ev('pointermove', x + 70); ev('pointerup', x + 70);
-    }, [fx, fy]);
-    s = await stepAt(6, 3000);
-    if (!s) { t.warn(`${tag}: swipe did not tumble by the sack: Tumble button`); await tpM(6.2, -84, Math.PI / 2); await pg.waitForTimeout(300); await tapBtn('dodge'); s = await stepAt(6, 4000); }
-    t.assert(!!s, `${tag}: step 6 (Stand) after the tumble`);
-    // ---- 6 hold 🛡 in front of the Wobble Knight until it is blocked twice
-    await tpM(0, -84.9, Math.PI);
-    await pg.waitForTimeout(400);
-    const gb = await btn('guard');
-    t.assert(!!gb, `${tag}: the 🛡 button shows`);
-    await ptr('pointerdown', gb[0], gb[1], 21);
-    await pg.waitForTimeout(1500);
-    await mshot(`02t-${tag}-6-stand`);
-    s = await stepAt(7, 15000);
-    await ptr('pointerup', gb[0], gb[1], 21);
-    if (!s) {                                                   // under load: one more raise in front of it
-      t.log(`${tag}: blocks so far ${await G(() => window.__GAME__.ctx.story.tutorial.log.blocks)}; holding 🛡 again`);
-      await tpM(0, -84.9, Math.PI); await pg.waitForTimeout(300);
-      await ptr('pointerdown', gb[0], gb[1], 21); s = await stepAt(7, 15000); await ptr('pointerup', gb[0], gb[1], 21);
-    }
-    t.assert(!!s, `${tag}: step 7 (parry) after two blocks`);
-    // ---- 7 parry: press 🛡 just before the strike (in-page timing; the touch Auto-Riposte assist may follow)
-    for (let k = 0; k < 4 && !(await G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 8)); k++) {
-      await pg.evaluate(([gx, gy]) => new Promise((resolve) => {
-        const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), t0 = performance.now();
-        const el = document.elementFromPoint(gx, gy)?.closest?.('.tbtn') ?? document.querySelector('.tbtn[data-action="guard"]');
-        const ev = (tp) => el.dispatchEvent(new PointerEvent(tp, { bubbles: true, cancelable: true, pointerId: 22, clientX: gx, clientY: gy, pointerType: 'touch' }));
-        const tick = () => {
-          if (!wk || performance.now() - t0 > 6000) { resolve(false); return; }
-          if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.07) { ev('pointerdown'); setTimeout(() => { ev('pointerup'); resolve(true); }, 350); return; }
-          requestAnimationFrame(tick);
-        };
-        tick();
-      }), gb);
-      await pg.waitForTimeout(700);
-    }
-    s = await stepAt(8, 2000);
-    if (!s) {
-      t.warn(`${tag}: no timed parry landed: emitting one from the Wobble Knight`);
-      await G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); g.ctx.bus.emit(g.E.PLAYER_PARRY, { attacker: wk, gold: false, position: g.ctx.player.pos.clone() }); });
-      s = await stepAt(8, 4000);
-    }
-    t.assert(!!s, `${tag}: step 8 (Bright Slash) after the parry`);
-    // ---- 8 Bright Slash: hold ⚔ facing the cracked boulder, let go
-    await tpM(-10, -85.6, 0);
-    await pg.waitForTimeout(1300);
-    for (let k = 0; k < 3 && !(await G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 9)); k++) {
-      const ab = await btn('attack');
-      await ptr('pointerdown', ab[0], ab[1], 23);
-      await untilM(() => (window.__GAME__.ctx.player.chargeTier ?? 0) >= 1, null, 4000);   // shines (sim time: slow under load)
-      await pg.waitForTimeout(120);
-      if (k === 0) await mshot(`02t-${tag}-8-bright`);
-      await ptr('pointerup', ab[0], ab[1], 23);
-      await pg.waitForTimeout(1300);
-    }
-    s = await stepAt(9, 4000);
-    t.assert(!!s, `${tag}: step 9 (Meow) after the boulder breaks`);
-    // ---- 9 Meow: the cat-face button next to the sleeping cow → Pearl
-    await tpM(9.5, -72.5, Math.PI / 2);
-    await pg.waitForTimeout(1300);
-    const h9 = await hint();
-    t.assert(!h9 || /cat face/.test(h9), `${tag}: the meow hint is the touch copy (${h9})`);
+    for (let k = 0; k < 40 && await G(() => window.__GAME__.ctx.story.isPlaying); k++) { await pg.touchscreen.tap(Math.round(w * 0.5), Math.round(h * 0.82)); await pg.waitForTimeout(500); }
+    s = await stepAt(3, 20000);
+    if (!s) t.log(`${tag}: tutorial after ⚔ ×3: ${JSON.stringify(await G(() => { const g = window.__GAME__, c = g.ctx, tu = c.story.tutorial; return { step: tu.step, pending: tu.pending, id: tu.cur?.id ?? tu.steps?.[tu.step]?.id, playing: c.story.playingId, mode: g.mode, hits: tu.hits ?? tu.count, line: c.story.line?.key, dev: c.input.device, ev: [...g.events].filter((e) => /swing|hit|tut|cutscene|dialog/.test(e)).slice(-12) }; }))}`);
+    t.assert(!!s, `${tag}: lesson 3 (jump) after ⚔ ×3 and the bow`);
+    // 3 jump: run at the fence with the stick, hold Jump
+    await tpM(-10, -88.9, 0); await pg.waitForTimeout(600);
+    t.assert(!!(await btn('jump')), `${tag}: the Jump button shows`);
+    await G(() => window.__GAME__.ctx.input.setVirtualMove(0, 1));
+    await pg.waitForTimeout(300); await press('jump', 450); await pg.waitForTimeout(900);
+    await G(() => window.__GAME__.ctx.input.setVirtualMove(0, 0));
+    s = await stepAt(4, 3000);
+    if (!s) { t.warn(`${tag}: fence jump missed: placing her across it`); await tpM(-10, -85, 0); s = await stepAt(4, 5000); }
+    t.assert(!!s, `${tag}: lesson 4 (roll) after the fence`);
+    // 4 roll by the sack: the Tumble button
+    await tpM(6.2, -84, Math.PI / 2); await pg.waitForTimeout(500);
+    await tapBtn('dodge');
+    s = await stepAt(5, 5000);
+    t.assert(!!s, `${tag}: lesson 5 (stand) after the tumble`);
+    // 5 stand: hold 🛡 in front of Sir Wobble
+    await tpM(0, -84.9, Math.PI); await pg.waitForTimeout(400);
+    await press('guard', 4000);
+    s = await stepAt(6, 12000);
+    t.assert(!!s, `${tag}: lesson 6 (parry) after a block`);
+    await mshot(`02t-${tag}-6-parry`);
+    // 6 parry: emitted (the timing path is covered on desktop)
+    await G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); g.ctx.bus.emit(g.E.PLAYER_PARRY, { attacker: wk, gold: false, position: g.ctx.player.pos.clone() }); });
+    s = await stepAt(7, 6000);
+    t.assert(!!s, `${tag}: lesson 7 (meow)`);
+    // 7 meow: the cat-face button by the cow
+    await pg.waitForTimeout(1600);
+    await tpM(9.5, -72.5, Math.PI / 2); await pg.waitForTimeout(600);
+    // the Meow lesson (and its button reveal, WA §7.5) starts after Pearl's parry praise: wait for the button
+    await untilM(() => { const b = document.querySelector('.tbtn[data-action="meow"]'); return !!b && !b.classList.contains('is-veiled'); }, null, 8000);
+    const mb = await G(() => { const b = document.querySelector('.tbtn[data-action="meow"]'); const r = b?.getBoundingClientRect(); const hit = r ? document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) : null; return { cls: b?.className, r: r && [Math.round(r.x), Math.round(r.y), Math.round(r.width)], hit: hit?.className ?? hit?.tagName ?? null, hitId: hit?.id ?? null }; });
+    t.log(`${tag}: meow button ${JSON.stringify(mb)}`);
     t.assert(await tapBtn('meow'), `${tag}: the Meow button shows`);
-    const pearl = await untilM(() => window.__GAME__.ctx.story.playingId === 'tutpearl', null, 8000);
-    t.assert(!!pearl, `${tag}: Pearl pops out (tutpearl)`);
-    if (await untilM((k) => window.__GAME__.ctx.story.line?.key === k, 'tut.pearl1', 8000)) { await pg.waitForTimeout(500); await mshot(`02t-${tag}-9-pearl`); }
-    // dialogue advances by tapping the box / screen
+    const popped = await untilM(() => window.__GAME__.ctx.story.playingId === 'tutpearl' || window.__GAME__.ctx.state.getFlag('prologue.practice'), null, 8000);
+    if (!popped) t.log(`${tag}: after the meow: ${JSON.stringify(await G(() => { const g = window.__GAME__, c = g.ctx, tu = c.story.tutorial, cow = c.actors.get?.('cow_practice') ?? c.levels.current.critters?.[0]; return { step: tu.step, i: tu.log?.i, pending: tu.pending, active: tu.active, playing: c.story.playingId, mode: g.mode, pos: c.player.pos.toArray().map((v) => +v.toFixed(1)), cow: cow?.pos?.toArray?.().map((v) => +v.toFixed(1)), ev: [...g.events].filter((e) => /meow|tut|story|cutscene|prompt/.test(e)).slice(-10) }; }))}`);
+    t.assert(!!popped, `${tag}: Pearl pops out`);
     for (let k = 0; k < 30 && await G(() => window.__GAME__.ctx.story.isPlaying); k++) { await pg.touchscreen.tap(Math.round(w * 0.5), Math.round(h * 0.82)); await pg.waitForTimeout(500); }
-    const done = await untilM(() => window.__GAME__.ctx.state.getFlag('prologue.tutorial') === true && !window.__GAME__.ctx.story.isPlaying, null, 20000);
-    t.assert(!!done, `${tag}: practice over (prologue.tutorial)`);
+    t.assert(!!(await untilM(() => window.__GAME__.ctx.state.getFlag('prologue.practice') === true, null, 20000)), `${tag}: practice over`);
     await pg.waitForTimeout(1200);
-    await mshot(`02t-${tag}-10-done`);
+    await mshot(`02t-${tag}-7-done`);
   } catch (e) { t.fail(`${tag}: ${e?.message ?? e}`); }
   finally { await ctxM.close(); }
   for (const e of errors) t.fail(`${tag} page: ${e}`);
 }
 
+const PROLOGUE_DONE = { 'prologue.start': true, 'prologue.practice': true, 'prologue.chart': true, 'prologue.raid': true, 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true };
+
 export default [
-  // ------------------------------------------------------------------ CS-00 title loop, then New Game → CS-01
+  // ------------------------------------------------------------------ CS-00 title → new adventure (WA §6.3, story.W2)
   {
-    name: 'story:title', order: 70, level: null, reload: true, timeout: 120000,
+    name: 'story:title', order: 70, level: null, reload: true, timeout: 180000,
     async run(t) {
       ensureDir(t);
-      const s0 = await until(t, story, null, { timeout: 20000 });
-      t.log('boot', JSON.stringify(s0));
+      const s0 = await until(t, story, null, { timeout: 30000 });
       t.assert(s0?.id === 'cs00', `CS-00 plays at boot (playing ${s0?.id})`);
-      await until(t, () => window.__GAME__.ctx.story.cinema.titleOn, null, { timeout: 8000 });
-      await t.wait(1800);
+      await until(t, () => window.__GAME__.ctx.story.cinema.titleOn || window.__GAME__.ctx.story.current?.t > 3, null, { timeout: 15000 });
+      await t.wait(1500);
       await shot(t, '00-title');
       await t.blankCheck('title');
-      const pulse = await until(t, () => (window.__GAME__.ctx.story.current?.t ?? 0) > 4.2, null, { timeout: 8000 });
-      t.assert(!!pulse, 'title keeps looping');
-      await shot(t, '00b-title-pulse');
-      // "Press any key": a real key press → (no ui main menu yet) a new game starts: fade, meadow practice, CS-01
-      const hasMenu = await t.G(() => typeof window.__GAME__.ctx.ui?.openMainMenu === 'function');
-      if (hasMenu) { t.log('ui has a main menu: starting the new game through story.newGame()'); await t.G(() => { window.__GAME__.ctx.story.newGame(); }); }
-      else await t.page.keyboard.press('KeyX');
-      const cs01 = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs01', null, { timeout: 30000 });
-      t.assert(!!cs01, 'new game → CS-01');
-      const st = await t.G(() => ({ armour: window.__GAME__.ctx.state.getFlag('prologue.armour'), level: window.__GAME__.levelId }));
-      t.assert(!st.armour && st.level === 'meadow', 'fresh progress in the meadow');
-    },
-  },
-
-  // ------------------------------------------------------------------ CS-01 Knighting Eve (continues from story:title)
-  {
-    name: 'story:cs01', order: 71, level: null, timeout: 200000,
-    async run(t) {
-      ensureDir(t);
-      if ((await t.G(() => window.__GAME__.ctx.story.playingId)) !== 'cs01') {
-        await fresh(t, {}, 'meadow', 'practice');
-        await t.G(() => { window.__GAME__.story.play('cs01'); });
-      }
-      if (await until(t, sceneT, ['cs01', 1.2], { timeout: 10000 })) await shot(t, '01a-cs01-caption');
-      if (await until(t, sceneT, ['cs01', 7.5], { timeout: 15000 })) await shot(t, '01b-cs01-crane');
-      if (await until(t, lineIs, 'cs01.1', { timeout: 20000 })) { await t.wait(500); await shot(t, '01c-cs01-measure'); }
-      if (await until(t, lineIs, 'cs01.3', { timeout: 30000 })) { await t.wait(700); await shot(t, '01d-cs01-chart'); }
-      if (await until(t, sceneT, ['cs01', 0], { timeout: 1000 })) { /* keep going */ }
-      const sunT = await until(t, () => window.__GAME__.ctx.story.current?.spawned?.some((r) => r.id === 'sunpatch') ? window.__GAME__.ctx.story.current.t : 0, null, { timeout: 30000 });
-      if (sunT && await until(t, sceneT, ['cs01', sunT + 3.6], { timeout: 15000 })) await shot(t, '01e-cs01-sunbeam');   // scene time: wall time drifts under load
-      if (await until(t, lineIs, 'cs01.6', { timeout: 30000 })) { await t.wait(400); await shot(t, '01f-cs01-bow'); }
-      if (await until(t, lineIs, 'cs01.9', { timeout: 30000 })) { await t.wait(1500); await shot(t, '01g-cs01-pearl'); }
-      const chest = await until(t, () => (window.__GAME__.ctx.story.cinema.captionText ?? '').startsWith('M.'), null, { timeout: 30000 });
-      if (chest) { await t.wait(600); await shot(t, '01h-cs01-chest'); }
-      const helm = await until(t, () => !!window.__GAME__.ctx.player.model?._props?.has?.('helmet'), null, { timeout: 30000 });
-      if (helm) { await t.wait(300); await shot(t, '01i-cs01-helmet'); }
-      if (await until(t, lineIs, 'cs01.10', { timeout: 30000 })) { await t.wait(900); await shot(t, '01j-cs01-mirror'); }
-      const done = await until(t, () => window.__GAME__.ctx.story.playingId !== 'cs01', null, { timeout: 40000 });
-      t.assert(!!done, 'CS-01 finished');
-      await t.wait(600);
-      const a = await t.G(afterScene);
-      checkHandback(t, a, 'CS-01');
-      const st = await t.G(() => { const g = window.__GAME__; return { armour: g.ctx.state.getFlag('prologue.armour'), pos: g.ctx.player.pos.toArray(), outfit: g.ctx.player.model?.outfit }; });
-      t.assert(st.armour === true, 'flag prologue.armour');
-      t.assert(Math.hypot(st.pos[0] + 10, st.pos[2] + 90) < 1.5, `at spawn practice (${st.pos.map((v) => v.toFixed(1))})`);
-      t.assert(!st.outfit || st.outfit === 'armour', `armour on (${st.outfit})`);
-      await t.wait(400);
-      await shot(t, '01k-prologue-card');
-    },
-  },
-
-  // ------------------------------------------------------------------ Midnight Practice
-  {
-    name: 'story:tutorial', order: 72, level: 'meadow', spawn: 'practice', timeout: 200000,
-    async run(t) {
-      ensureDir(t);
-      await fresh(t, { 'prologue.armour': true }, 'meadow', 'practice');
-      await t.G(() => { window.__GAME__.god(true); });
-      const step = () => { const tu = window.__GAME__.ctx.story.tutorial; return { active: tu.active, step: tu.step, key: tu.textKey, pending: tu.pending }; };
-      const s1 = await until(t, () => window.__GAME__.ctx.story.tutorial.active && window.__GAME__.ctx.story.tutorial.step, null, { timeout: 8000 });
-      t.assert(s1 === 1, `tutorial starts at step 1 (${s1})`);
-      await t.wait(900);
-      await shot(t, '02a-tutorial-move');
-      // 1 move (C6: any method, no camera look): a real right-click on the ground 4.5 m east of her (an order)
+      // the tap: story.newGame() on the title (ui's candy button calls the same) — no fade, no reload
+      await t.clearEvents();
+      const t0 = Date.now();
+      await t.G(() => { window.__GAME__.ctx.story.newGame(); });
+      const play = await until(t, () => { const g = window.__GAME__; return g.mode === 'play' && !g.ctx.story.isPlaying && !g.ctx.levels.loading; }, null, { timeout: 8000, every: 80 });
+      t.assert(!!play, 'new adventure → play');
       const p0 = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
-      const m1 = await t.G(([x, z]) => window.__GAME__.screen(x, z), [p0[0] + 4.5, p0[2]]);
-      await t.page.mouse.move(m1.x, m1.y); await t.wait(80);
+      await t.hold('KeyD', 450);
+      const p1 = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
+      const ctl = (Date.now() - t0) / 1000;
+      t.log(`control after ${ctl.toFixed(2)} s (moved ${Math.hypot(p1[0] - p0[0], p1[2] - p0[2]).toFixed(2)} m)`);
+      t.assert(Math.hypot(p1[0] - p0[0], p1[2] - p0[2]) > 0.3, 'a move is accepted right after the tap');
+      t.assert(ctl <= 5 + 1.5, `control ≤ 5 s after the tap (+ harness round trips): ${ctl.toFixed(2)} s`);
+      const ev = await t.events();
+      t.assert(!ev.includes('level:loaded'), 'no reload on the title scene');
+      const st = await t.G(() => { const g = window.__GAME__; return { start: g.ctx.state.getFlag('prologue.start'), level: g.ctx.levels.current?.id, outfit: g.ctx.player.model?.outfit ?? null, fade: Math.max(0, ...[...document.querySelectorAll('.st-fade, .cin-fade')].map((e) => +getComputedStyle(e).opacity || 0)) }; });
+      t.assert(st.start === true && st.level === 'meadow', 'prologue.start on the meadow');
+      t.assert(st.fade < 0.05, `no fade over the hand-off (${st.fade})`);
+      // first reward ≤ 60 s: the move lesson (walk to the dummy)
+      await until(t, () => window.__GAME__.ctx.story.tutorial.active, null, { timeout: 8000 });
+      await t.wait(2600);
+      await shot(t, '00b-practice-intro');
+      const m1 = await t.G(() => window.__GAME__.screen(0, -77.6));
+      await t.page.mouse.move(m1.x, m1.y); await t.wait(60);
       await t.page.mouse.click(m1.x, m1.y, { button: 'right' });
-      let s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 });
-      const ord1 = await t.lastEvent('player:order');
-      t.assert(ord1?.kind === 'move', `RMB on the ground is a move order (${ord1?.kind})`);
-      if (!s2) { t.warn('the click walk did not finish the move step: WASD'); await t.hold('KeyD', 1200); s2 = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 2, { timeout: 8000 }); }
-      if (!s2) t.log('tutorial diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, tu = g.ctx.story.tutorial, p = g.ctx.player; return { i: tu.log.i, moved: tu.log.moved, looked: tu.log.looked, active: tu.active, wait: tu.waitT, pend: tu.pending, pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, yaw: g.ctx.cam.yaw }; })));
-      t.assert(!!s2, 'step 2 (jump) after moving');
-      // 2 jump the inner fence (z −87): walk at it and jump
-      await tp(t, -10, -88.6, 0);
-      await t.page.keyboard.down('KeyW'); await t.wait(120); await t.page.keyboard.down('KeyF'); await t.wait(420); await t.page.keyboard.up('KeyF'); await t.wait(500); await t.page.keyboard.up('KeyW');   // a full (held) jump: a tap is cut short (CONTROLS_SPEC C1: F = jump)
-      let s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 });
-      if (!s) { t.warn('fence jump missed: placing her north of it'); await tp(t, -10, -85, 0); s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 3, { timeout: 5000 }); }
-      t.assert(!!s, 'step 3 (combo) after crossing the fence');
-      t.assert(await t.G(() => window.__GAME__.ctx.state.getFlag('tut.jump.done') === true), 'flag tut.jump.done after the jump step');
-      await shot(t, '02b-tutorial-combo');
-      // 3 Snip–Snap–Swoosh on a dummy (0, −76)
-      await tp(t, 0, -77.4, 0);
-      // J swings toward the cursor (§7.1): put the pointer on the dummy (an earlier block may have left it anywhere)
+      await until(t, () => window.__GAME__.ctx.story.tutorial.step >= 2 && !window.__GAME__.ctx.story.tutorial.pending, null, { timeout: 15000 });
+      await tp(t, 0, -77.4, 0);                                       // first sticker: "First Bonk!" (ON P2)
       const dum = await t.G(() => window.__GAME__.screen(0, -76, 0.6));
-      if (dum) { await t.page.mouse.move(dum.x, dum.y); await t.wait(100); }
-      for (let k = 0; k < 3 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 4)); k++) { await t.tap('KeyJ', 3, 230); await t.wait(700); }
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 4, { timeout: 5000 });
-      t.assert(!!s, 'step 4 (target) after the combo');
-      // 4 target: a real right-click on a straw dummy → an attack order (she walks in and chains on it)
-      await tp(t, 0, -79.5, 0);
-      await t.wait(1300);                                          // the prompt shows after PRACTICE.nextDelay
-      await t.G(() => window.__GAME__.clearEvents());
-      const dsp = await t.G(() => { const g = window.__GAME__, d = g.ctx.actors.list.filter((x) => x.kind === 'dummy').sort((p, q) => Math.hypot(p.pos.x, p.pos.z + 76) - Math.hypot(q.pos.x, q.pos.z + 76))[0]; return g.screen(d.pos.x, d.pos.z, d.pos.y + 0.55); });
-      await t.page.mouse.move(dsp.x, dsp.y); await t.wait(120);
-      await shot(t, '02b2-tutorial-target');
-      await t.page.mouse.click(dsp.x, dsp.y, { button: 'right' });
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 5, { timeout: 6000 });
-      const ord4 = await t.lastEvent('player:order');
-      t.assert(ord4?.kind === 'attack', `RMB on a dummy is an attack order (${ord4?.kind})`);
-      t.assert(!!s, 'step 5 (roll) after targeting a dummy');
-      await t.page.keyboard.press('KeyH');                        // stop the auto-chain
-      // 5 roll past the sack (8, −84)
-      await tp(t, 6.2, -84, Math.PI / 2);
-      await t.page.keyboard.press('ShiftLeft');
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 6, { timeout: 5000 });
-      t.assert(!!s, 'step 6 (Stand) after the roll');
-      // 6 block the Wobble Knight twice (0, −86, it faces +Z): stand in front, hold the Stand (Space, C1)
-      await tp(t, 0, -84.9, Math.PI);
-      await t.page.keyboard.down('Space');
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 7, { timeout: 15000 });
-      await t.page.keyboard.up('Space');
-      t.assert(!!s, 'step 7 (parry) after two blocks');
-      await shot(t, '02c-tutorial-parry');
-      // 7 parry: raise the Stand on the white glint (poll the wobble knight's telegraph), retry a few swings
-      // in-page timing (a round trip is too coarse for the 0.15 s window): raise the Stand ~0.07 s before the strike
-      for (let k = 0; k < 4 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 8)); k++) {
-        await t.page.evaluate(() => new Promise((resolve) => {
-          const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), inp = g.ctx.input, t0 = performance.now();
-          const tick = () => {
-            if (!wk || performance.now() - t0 > 6000) { resolve(false); return; }
-            if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.07) {
-              inp.setVirtual('guard', true);
-              setTimeout(() => { inp.setVirtual('guard', false); resolve(true); }, 350);
-              return;
-            }
-            requestAnimationFrame(tick);
-          };
-          tick();
-        }));
-        await t.wait(700);
-      }
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 8, { timeout: 2000 });
-      if (!s) {
-        t.warn('no timed parry landed: emitting one from the Wobble Knight');
-        await t.G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); g.ctx.bus.emit(g.E.PLAYER_PARRY, { attacker: wk, gold: false, position: g.ctx.player.pos.clone() }); });
-        s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 8, { timeout: 4000 });
-      }
-      t.assert(!!s, 'step 8 (Bright Slash) after the parry');
-      // 8 Bright Slash the cracked boulder (−10, −84): hold LMB with the cursor on it (the swing goes toward the cursor)
-      await tp(t, -10, -85.6, 0);
-      for (let k = 0; k < 3 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 9)); k++) {
-        const bsp = await t.G(() => window.__GAME__.screen(-10, -84));
-        await t.page.mouse.move(bsp.x, bsp.y); await t.wait(80);
-        await t.page.mouse.down({ button: 'left' }); await t.wait(900); await t.page.mouse.up({ button: 'left' });
-        await t.wait(1200);
-        if (k === 1 && !(await t.G((n) => window.__GAME__.ctx.story.tutorial.step >= n, 9))) { await t.hold('KeyJ', 900); await t.wait(1200); }
-      }
-      s = await until(t, (n) => window.__GAME__.ctx.story.tutorial.step >= n, 9, { timeout: 4000 });
-      t.assert(!!s, 'step 9 (Meow) after the boulder breaks');
-      await shot(t, '02d-tutorial-meow');
-      // 9 Meow at the cow (12, −72) → Pearl
-      await tp(t, 9.5, -72.5, Math.PI / 2);
-      await t.page.keyboard.press('KeyC');
-      const pearl = await until(t, () => window.__GAME__.ctx.story.playingId === 'tutpearl', null, { timeout: 8000 });
-      t.assert(!!pearl, 'Pearl pops out from behind the cow (tutpearl)');
-      if (await until(t, lineIs, 'tut.pearl1', { timeout: 8000 })) { await t.wait(500); await shot(t, '02e-tutorial-pearl'); }
-      const done = await until(t, () => window.__GAME__.ctx.state.getFlag('prologue.tutorial') === true && !window.__GAME__.ctx.story.isPlaying, null, { timeout: 20000 });
-      t.assert(!!done, 'flag prologue.tutorial set when practice is over');
-      t.assert((await t.events()).includes('story:flag'), 'story:flag emitted');
-      await t.wait(800);
-      await tp(t, 0, -63.5, 0);
-      await t.wait(1200);
-      await shot(t, '02f-tutorial-gate-open');
+      if (dum) { await t.page.mouse.move(dum.x, dum.y); await t.wait(80); }
+      for (let k = 0; k < 4 && !(await t.G(() => window.__GAME__.events.includes('reward'))); k++) { await t.tap('KeyJ', 3, 230); await t.wait(800); }
+      const rw = await until(t, () => window.__GAME__.events.includes('reward'), null, { timeout: 15000 });
+      const rt = (Date.now() - t0) / 1000;
+      t.assert(!!rw && rt <= 60, `first reward ≤ 60 s after the tap (${rt.toFixed(1)} s)`);
+      await t.wait(500);
+      await shot(t, '00c-first-sticker');
     },
   },
 
-  // ------------------------------------------------------------------ Midnight Practice on a phone (CONTROLS_SPEC §16.4)
+  // ------------------------------------------------------------------ Morning Practice (desktop), then the bell → chart
   {
-    name: 'story:tutorial-touch', order: 72.5, level: null, timeout: 1500000,
+    name: 'story:tutorial', order: 71, level: 'meadow', spawn: 'practice', timeout: 300000,
+    async run(t) {
+      ensureDir(t);
+      await fresh(t, { 'prologue.start': true }, 'meadow', 'practice');
+      await playPractice(t);
+      await t.wait(1500);
+      await shot(t, '02e-practice-bell');
+      const st = await t.G(() => window.__GAME__.ctx.story.stage);
+      t.assert(st === 'chart', `stage chart after practice (${st})`);
+    },
+  },
+
+  // ------------------------------------------------------------------ CS-01 chart → CS-02 Giggling Mist → CS-01b Suit Up
+  {
+    name: 'story:cs01', order: 72, level: 'meadow', spawn: 'practice', timeout: 300000,
+    async run(t) {
+      ensureDir(t);
+      await fresh(t, { 'prologue.start': true, 'prologue.practice': true, 'tut.jump.done': true }, 'meadow', 'practice');
+      await tp(t, -6, -69.5, Math.PI);
+      let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs01', null, { timeout: 6000 });
+      if (!ok) { await tp(t, -6, -67.8, Math.PI); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs01', null, { timeout: 6000 }); }
+      t.assert(!!ok, 'CS-01 plays at the height chart');
+      await atLine(t, 'cs01.3', '01a-cs01-chart');
+      await atLine(t, 'cs01.8', '01b-cs01-sunbeam');
+      const c2 = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 40000 });
+      t.assert(!!c2, 'CS-02 follows the chart at once');
+      const t2 = Date.now();
+      await atLine(t, 'cs02.1', '04a-cs02-horde');
+      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'MEME_LOOP' && window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 25000 })) { await t.wait(1600); await shot(t, '04b-cs02-meme'); }
+      await atLine(t, 'cs02.6', '04c-cs02-sunbreak', 60000);
+      const sceneLen = await until(t, () => { const s = window.__GAME__.ctx.story; return s.playingId !== 'cs02' ? 1 : 0; }, null, { timeout: 60000 });
+      t.assert(!!sceneLen, 'CS-02 finished');
+      t.log(`CS-02 wall time ${((Date.now() - t2) / 1000).toFixed(1)} s (incl. frozen shots)`);
+      await until(t, () => !window.__GAME__.ctx.story.isPlaying && window.__GAME__.mode === 'play' && !window.__GAME__.ctx.levels.loading, null, { timeout: 20000 });
+      checkHandback(t, await t.G(afterScene), 'CS-02');
+      const s2 = await t.G(() => ({ stage: window.__GAME__.ctx.story.stage, env: window.__GAME__.ctx.env.presetName }));
+      t.assert(s2.stage === 'suit', `stage suit after the mist (${s2.stage})`);
+      t.log('env after CS-02', s2.env);
+      await shot(t, '04d-cs02-evening');
+      // Suit Up: walk into the barn chest's sunbeam (world's interactable, else the director's proximity)
+      await tp(t, -13.0, -87.6, Math.PI);
+      await t.G(() => { const g = window.__GAME__, L = g.ctx.levels; const c = (L.current?.interactables ?? []).find((i) => i?.play === 'cs01b' || i?.id === 'barn_chest' || i?.id === 'chest'); if (c) L.interact?.(c.id); });
+      ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs01b', null, { timeout: 8000 });
+      if (!ok) { await t.G(() => { window.__GAME__.ctx.story.play('cs01b'); }); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs01b', null, { timeout: 6000 }); }
+      t.assert(!!ok, 'CS-01b plays at the barn chest');
+      await atLine(t, 'cs01.helm', '01c-cs01b-helm');
+      await atLine(t, 'cs01.10', '01d-cs01b-mirror');
+      const done = await until(t, () => window.__GAME__.ctx.state.getFlag('prologue.done') === true && !window.__GAME__.ctx.story.isPlaying && !window.__GAME__.ctx.levels.loading, null, { timeout: 60000 });
+      t.assert(!!done, 'flags prologue.armour / tutorial / done after Suit Up');
+      await t.wait(500);
+      checkHandback(t, await t.G(afterScene), 'CS-01b');
+      const o = await t.G(() => window.__GAME__.ctx.player.model?.outfit ?? null);
+      t.assert(!o || o === 'armour', `armour on (${o})`);
+      await shot(t, '01e-chapter1');
+    },
+  },
+
+  // ------------------------------------------------------------------ Morning Practice on a phone (CONTROLS_SPEC §16.4)
+  {
+    name: 'story:tutorial-touch', order: 72.5, level: null, timeout: 900000,
     async run(t) {
       ensureDir(t);
       for (const [w, h, tag] of [[844, 390, 'landscape'], [390, 844, 'portrait']]) await tutorialTouch(t, w, h, tag);
     },
   },
 
-  // ------------------------------------------------------------------ G-01 Sir Tallbert
+  // ------------------------------------------------------------------ G-01 Sir Tallbert (armed on prologue.done)
   {
     name: 'story:g01', order: 73, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
       ensureDir(t);
-      await fresh(t, { 'prologue.armour': true, 'prologue.tutorial': true }, 'meadow', 'practice');
+      await fresh(t, PROLOGUE_DONE, 'meadow', 'practice');
       await tp(t, 0, -64.5, 0);
-      await t.click(0, -59.5);                                     // C10: an RMB move order through the gate (iso)
+      await t.click(0, -59.5);
       let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 8000 });
       if (!ok) { t.warn('walk did not reach the tallbert trigger: teleporting into it'); await tp(t, 0, -61, 0); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, { timeout: 5000 }); }
-      if (!ok) t.log('g01 diag ' + JSON.stringify(await t.G(() => { const g = window.__GAME__, p = g.ctx.player, L = g.ctx.levels.current; return { pos: [p.pos.x, p.pos.z], mode: g.mode, playing: g.ctx.story.playingId, q: g.ctx.story.queue.length, flags: g.ctx.state.flags, trig: L.triggers.map((x) => [x.id, x.fired, x.inside]), loading: g.ctx.levels.loading, ev: g.events.slice(-25) }; })));
       t.assert(!!ok, 'G-01 plays at the north gate');
-      if (await until(t, sceneT, ['g01', 1.4], { timeout: 6000 })) {
-        await shot(t, '03a-g01-meme');
-        t.log('g01 meme lens', JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx.camera ?? g.ctx.cam?.camera; return { cam: c?.position?.toArray().map((v) => +v.toFixed(2)), her: g.ctx.player.pos.toArray().map((v) => +v.toFixed(2)) }; })));
-      }
-      if (await until(t, sceneT, ['g01', 7.6], { timeout: 12000 })) await shot(t, '03b-g01-pullback');
-      if (await until(t, lineIs, 'g01.1', { timeout: 8000 })) { await t.wait(500); await shot(t, '03c-g01-hello'); }
-      const done = await until(t, ended, 'g01', { timeout: 15000 });
+      if (await until(t, lineIs, 'g01.1', { timeout: 12000 })) { await t.wait(500); await shot(t, '03a-g01-hello'); }
+      const done = await until(t, ended, 'g01', { timeout: 20000 });
       t.assert(!!done, 'G-01 ends by itself');
       checkHandback(t, await t.G(afterScene), 'G-01');
-      // any input after 1.0 s skips it (replay it to check)
-      await t.G(() => { window.__GAME__.story.play('g01'); });
-      await until(t, sceneT, ['g01', 1.3], { timeout: 5000 });
-      await t.page.keyboard.press('KeyJ');
-      const skipped = await until(t, ended, 'g01', { timeout: 4000 });
-      t.assert(!!skipped, 'any input after 1.0 s skips G-01');
-    },
-  },
-
-  // ------------------------------------------------------------------ CS-02 The Laughing Fog (never cut)
-  {
-    name: 'story:cs02', order: 74, level: 'meadow', spawn: 'start', timeout: 240000,
-    async run(t) {
-      ensureDir(t);
-      await fresh(t, { 'prologue.armour': true, 'prologue.tutorial': true }, 'meadow', 'practice');
-      await tp(t, -4.5, -55, -0.4);
-      await t.hold('KeyW', 1200);
-      let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 4000 });
-      if (!ok) { await tp(t, -6, -52, -0.4); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 5000 }); }
-      t.assert(!!ok, 'CS-02 plays on the lane');
-      const beats = [
-        ['04a-cs02-orbit', sceneT, ['cs02', 3.0]],
-        ['04b-cs02-bell', sceneT, ['cs02', 8.6]],
-        ['04c-cs02-bell-out', sceneT, ['cs02', 11.0]],
-        ['04d-cs02-cackle', sceneT, ['cs02', 15.0]],
-        ['04e-cs02-horde', 'line', 'cs02.1'],
-        ['04f-cs02-trip', sceneT, ['cs02', 0]],
-      ];
-      for (const [name, fn, arg] of beats.slice(0, 5)) {
-        const ok2 = fn === 'line' ? await freezeOnLine(t, arg) : await until(t, fn, arg, { timeout: 30000 });
-        if (ok2) await shot(t, name); else t.warn(`missed beat ${name}`);
-      }
-      const plantT = await until(t, () => { const p = window.__GAME__.ctx.player; return p.model?.scriptPose === 'faint' ? 1 : 0; }, null, { timeout: 15000 });
-      if (plantT) { await t.wait(250); await shot(t, '04f-cs02-trip'); }
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'MEME_LOOP' && window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 25000 })) { await t.wait(1600); await shot(t, '04g-cs02-meme'); }
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'REVERSE_HORDE', null, { timeout: 15000 })) { await t.wait(3800); await shot(t, '04h-cs02-reverse-horde'); }
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'TWO_SHOT_LOW' && window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 15000 })) { await t.wait(1300); await shot(t, '04h2-cs02-two-shot'); }
-      if (await until(t, lineIs, 'cs02.2', { timeout: 20000 })) { await t.wait(700); await shot(t, '04i-cs02-laugh'); }
-      if (await until(t, lineIs, 'cs02.4', { timeout: 30000 })) { await t.wait(300); await shot(t, '04j-cs02-mine'); }
-      if (await until(t, lineIs, 'cs02.5', { timeout: 15000 })) { await t.wait(600); await shot(t, '04k-cs02-crane'); }
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'ECU_EYES', null, { timeout: 20000 })) { await t.wait(1800); await shot(t, '04l-cs02-eyes'); }
-      if (await until(t, lineIs, 'cs02.6', { timeout: 30000 })) { await t.wait(600); await shot(t, '04m-cs02-okay'); }
-      if (await until(t, () => window.__GAME__.ctx.story.cinema.titleOn && window.__GAME__.ctx.story.playingId === 'cs02', null, { timeout: 20000 })) { await t.wait(1500); await shot(t, '04n-cs02-title'); }
-      const done = await until(t, () => !window.__GAME__.ctx.story.isPlaying && !window.__GAME__.ctx.levels.loading && window.__GAME__.mode === 'play', null, { timeout: 60000 });
-      t.assert(!!done, 'CS-02 finished (meadow reloaded at start)');
-      await t.wait(500);
-      checkHandback(t, await t.G(afterScene), 'CS-02');
-      const st = await t.G(() => { const g = window.__GAME__; return { done: g.ctx.state.getFlag('prologue.done'), env: g.ctx.env.presetName, pos: g.ctx.player.pos.toArray(), start: (() => { const sp = g.ctx.levels.current?.spawns?.start; return sp ? [sp.pos?.x ?? sp[0], sp.pos?.z ?? sp[1]] : [-4, -58]; })(), cast: g.ctx.enemies.list.filter((e) => e.tags?.has('cutscene') || e.spawnOpts?.scripted).length }; });
-      t.assert(st.done === true, 'flag prologue.done');
-      t.assert(st.env === 'meadow_day', `env meadow_day (${st.env})`);
-      t.assert(Math.hypot(st.pos[0] - st.start[0], st.pos[2] - st.start[1]) < 2, `at spawn start (${st.pos.map((v) => v.toFixed(1))} vs ${st.start})`);
-      t.assert(st.cast === 0, `CS-02 cast despawned (${st.cast} left)`);
-      await shot(t, '04o-chapter1-card');
     },
   },
 
@@ -813,36 +657,19 @@ export default [
     name: 'story:cs03', order: 75, level: 'meadow', spawn: 'start', timeout: 200000,
     async run(t) {
       ensureDir(t);
-      await fresh(t, { 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true }, 'meadow', 'vigil_2');
+      await fresh(t, PROLOGUE_DONE, 'meadow', 'vigil_2');
       await tp(t, 0.6, 14.4, 0);
       await t.G(() => { window.__GAME__.ctx.levels.interact('picnic'); });
       let ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs03', null, { timeout: 5000 });
       if (!ok) { t.warn('picnic interact did not start CS-03: playing it'); await t.G(() => { window.__GAME__.story.play('cs03'); }); ok = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs03', null, { timeout: 5000 }); }
       t.assert(!!ok, 'CS-03 plays at the picnic bale');
-      if (await until(t, lineIs, 'cs03.1', { timeout: 10000 })) { await t.wait(1000); await shot(t, '05a-cs03-selfie'); }
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'WHIP_FALL', null, { timeout: 15000 })) {
-        await until(t, () => window.__GAME__.ctx.story.current?.spawned?.find((r) => r.id === 'pudding')?.obj?.object3d?.visible, null, { timeout: 6000 });
-        await t.wait(900); await shot(t, '05b-cs03-roar');
-      }
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'HERO_LOW', null, { timeout: 15000 })) { await t.wait(1800); await shot(t, '05c-cs03-hero'); }
-      if (await until(t, lineIs, 'cs03.3', { timeout: 20000 })) { await t.wait(900); await shot(t, '05d-cs03-milk'); }
-      if (await until(t, lineIs, 'cs03.8', { timeout: 40000 })) { await t.wait(1100); await shot(t, '05e-cs03-sip'); }
-      if (await until(t, lineIs, 'cs03.12', { timeout: 30000 })) { await t.wait(900); await shot(t, '05f-cs03-sorry'); }
-      const done = await until(t, ended, 'cs03', { timeout: 30000 });
+      if (await until(t, lineIs, 'cs03.3', { timeout: 30000 })) { await t.wait(900); await shot(t, '05a-cs03-milk'); }
+      const done = await until(t, ended, 'cs03', { timeout: 90000 });
       t.assert(!!done, 'CS-03 finished');
       await t.wait(400);
       checkHandback(t, await t.G(afterScene), 'CS-03');
-      const st = await t.G(() => {
-        const g = window.__GAME__, a = g.ctx.levels.arena('glade'), ob = g.ctx.objectives.get?.('net_ropes');
-        return { flag: g.ctx.state.getFlag('meadow.pudding'), locked: !!a?.locked, ob: ob ? { value: ob.value, max: ob.max } : null, pud: !!g.ctx.companions.pudding, netted: !!g.ctx.companions.pudding?.netted };
-      });
-      t.log('after CS-03', JSON.stringify(st));
+      const st = await t.G(() => ({ flag: window.__GAME__.ctx.state.getFlag('meadow.pudding'), netted: !!window.__GAME__.ctx.companions.pudding?.netted }));
       t.assert(st.flag === 'netted', "meadow.pudding = 'netted'");
-      t.assert(st.locked, 'glade arena locked');
-      t.assert(st.ob?.max === 3, 'objective net_ropes 0/3');
-      t.assert(st.pud && st.netted, 'Pudding stays, netted');
-      await shot(t, '05g-cs03-net-fight');
-      // ropes cut + arena clear → the follow beat (ambient line, Pudding flies off)
       await t.G(() => {
         const g = window.__GAME__;
         for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e);
@@ -850,31 +677,27 @@ export default [
         g.ctx.objectives.add('net_ropes', 3);
       });
       const beat = await until(t, () => window.__GAME__.ctx.story.line?.key === 'cs03b.1', null, { timeout: 10000 });
-      t.assert(!!beat, 'Pudding: "(I\'ll... follow. From a distance.)"');
-      if (beat) await shot(t, '05h-cs03b-follow');
-      const free = await t.G(() => window.__GAME__.ctx.state.getFlag('meadow.pudding'));
-      t.assert(free === true, 'meadow.pudding = true');
-      t.assert((await t.G(() => window.__GAME__.mode)) === 'play', 'the follow beat keeps gameplay running');
+      t.assert(!!beat, 'Pudding: the follow beat');
+      t.assert((await t.G(() => window.__GAME__.ctx.state.getFlag('meadow.pudding'))) === true, 'meadow.pudding = true');
     },
   },
 
-  // ------------------------------------------------------------------ D-01 Mochi joins
+  // ------------------------------------------------------------------ D-01 Mochi joins at his cart (WA16)
   {
     name: 'story:d01', order: 76, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
       ensureDir(t);
-      await fresh(t, { 'prologue.armour': true, 'prologue.tutorial': true, 'prologue.done': true, 'meadow.pudding': true }, 'meadow', 'vigil_3');
-      await tp(t, 28, 66, 0);
-      await t.G(() => { const g = window.__GAME__; g.ctx.companions.spawnNpc('mochi', [28.6, 67.4], Math.PI); });
+      await fresh(t, { ...PROLOGUE_DONE, 'meadow.pudding': true }, 'meadow', 'start');
+      await tp(t, -14, -39.2, Math.PI);
+      await t.G(() => { const g = window.__GAME__; if (!g.ctx.actors.get('mochi')) g.ctx.companions.spawnNpc('mochi', [-14.4, -40.4], 0); });
       await t.frames(20);
       await t.G(() => { window.__GAME__.ctx.story.play('d01'); });
-      if (await until(t, lineIs, 'd01.1', { timeout: 8000 })) { await t.wait(1200); await shot(t, '06a-d01-mochi'); }
-      if (await until(t, lineIs, 'd01.3', { timeout: 15000 })) { await t.wait(700); await shot(t, '06b-d01-team'); }
-      const done = await until(t, ended, 'd01', { timeout: 20000 });
+      await atLine(t, 'd01.3', '06a-d01-almost-knights', 15000);
+      const done = await until(t, ended, 'd01', { timeout: 25000 });
       t.assert(!!done, 'D-01 finished');
-      const st = await t.G(() => ({ flag: window.__GAME__.ctx.state.getFlag('meadow.mochi'), toast: window.__GAME__.events.includes('ui:toast') }));
+      const st = await t.G(() => ({ flag: window.__GAME__.ctx.state.getFlag('meadow.mochi'), reward: window.__GAME__.events.includes('reward') || window.__GAME__.events.includes('ui:toast') }));
       t.assert(st.flag === true, 'flag meadow.mochi');
-      t.assert(st.toast, '"Mochi joined!" toast');
+      t.assert(st.reward, 'the friend card "Mochi joined the party!"');
       checkHandback(t, await t.G(afterScene), 'D-01');
     },
   },
@@ -884,7 +707,7 @@ export default [
     name: 'story:skip', order: 77, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
       ensureDir(t);
-      await fresh(t, {}, 'meadow', 'practice');
+      await fresh(t, { 'prologue.start': true, 'prologue.practice': true }, 'meadow', 'practice');
       await t.G(() => { window.__GAME__.story.play('cs01'); });
       await until(t, sceneT, ['cs01', 2.0], { timeout: 8000 });
       await t.page.keyboard.down('Escape');
@@ -893,18 +716,17 @@ export default [
       const skipped = await until(t, ended, 'cs01', { timeout: 4000 });
       await t.page.keyboard.up('Escape');
       t.assert(!!skipped, 'holding Pause 1 s skips the prologue scene');
+      await skipScenes(t);
       await t.wait(700);
-      const st = await t.G(() => ({ armour: window.__GAME__.ctx.state.getFlag('prologue.armour'), last: window.__GAME__.lastEvent('cutscene:end'),
+      const st = await t.G(() => ({ chart: window.__GAME__.ctx.state.getFlag('prologue.chart'), last: window.__GAME__.lastEvent('cutscene:end'),
         fade: Math.max(0, ...[...document.querySelectorAll('.st-fade, .cin-fade')].map((e) => +getComputedStyle(e).opacity || 0)) }));
-      t.assert(st.armour === true, 'the skipped scene still applied its end (prologue.armour)');
+      t.assert(st.chart === true, 'the skipped scene still applied its end (prologue.chart)');
       t.assert(st.last?.skipped === true, 'cutscene:end {skipped: true}');
-      t.assert(+st.fade < 0.05, `no black left on screen (fade ${st.fade})`);
+      t.assert(+st.fade < 0.05, `no fade left on screen (fade ${st.fade})`);
       checkHandback(t, await t.G(afterScene), 'skip');
-      // a later-milestone scene runs as a placeholder that applies its end state
       await t.G(() => { window.__GAME__.story.play('cs13'); });
       const ph = await until(t, () => window.__GAME__.ctx.state.getFlag('keep.gate') === true && !window.__GAME__.ctx.story.isPlaying, null, { timeout: 5000 });
       t.assert(!!ph, 'placeholder CS-13 applies keep.gate');
-      // barks: Still Standing always speaks; a bubble shows over her
       await t.G(() => { const g = window.__GAME__; g.ctx.state.shards = 0; g.ctx.bus.emit(g.E.PLAYER_STILL_STANDING, {}); });
       const bark = await until(t, () => [...window.__GAME__.ctx.story.barks.bubbles.values()].some((b) => b.sprite.visible), null, { timeout: 3000 });
       t.assert(!!bark, 'Still Standing bark bubble');

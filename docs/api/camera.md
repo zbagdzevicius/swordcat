@@ -136,3 +136,28 @@ Scattered town houses get an `auto` circle collider. For example, the house at a
 - **Meme Cam (§2.7):** within `memeSpot.r` of `levels.current.memeSpot.at`, the MEME_LOOP framing uses `memeSpot.yaw`
   if that view is clear. Otherwise it uses the clear-view search.
 - Click / tap picking (`Picker.screenToGround`) includes walkable prop tops (`physics.raycast` `tops: true`); a top more than 2.8 m above the terrain under it is skipped (a tall stack the lens looks over), so the click lands on the ground behind it. A taller top is still a target when the nav island audit (`Pathfind.reachableIslands`) shows her island reaching it (walking or auto / authored links: the Lantern Alley balcony via crate hops), or when its plateau steps down; a click on a deck rim snaps to the nearest walkable cell (≤ 1 m) at that height. Interactables: the pick radius is projected at the spot's ground. Vigil Stones and hub stations use ≤ 0.8 m. A Vigil Stone is picked at its foot (base px) or when the pointer ray hits its collider, so near-miss grass stays a move.
+
+## AUTOCAM + Phase W surface (research/next/AUTOCAM_SPEC.md, WARM_ADVENTURE_SPEC.md; read-only unless noted)
+- `cam.footprint` `{ q: Float32Array(8) ground quad, cx, cz, ahead, behind, halfW, halfWTop, slantMax, d, version, valid }`,
+  refreshed once per rendered frame (`version` bumps when a quantised value changes); `cam.inFootprint(x, z, pad)`.
+- `cam.frustum` + `cam.frameId` (one frustum per rendered frame); `cam.inView(p, r)`; `cam.activityOf(actor)` → tier
+  0 in view / 1 ≤ 30 m / 2 ≤ 60 m / 3 beyond (cached per frame on the actor). Perf code uses these.
+- `cam.onScreen(p, margin)` = SafeFrame-visible (gameplay fairness); `cam.safeFrame` { core, herFrame, threat, holes,
+  visible(sx, sy) }; `cam.groundAxes(outU, outR)`; `cam.heroScreen(out)` (CSS px; mirrored for left-handed touch).
+- Far plane (X12): `clamp(ceil5(max(slantMax·1.25 + 25, fogFar)), 45, 90)`, 60 without a fog model; `level.farKeep`
+  entries extend it.
+- `cam.closeUp` (lens within 6.0 m of the framed character, off above 6.3 m; calls `view.setCloseUp(on)`).
+- `postfx.setCinematic` is called on shot / cutscene enter and off on the hand-back (never for Meme Cam or the looping
+  title shot).
+- `cam.blendTo(mode, dur, ease)` (WA camera.W1: title MEME_LOOP → follow 1.1 s inOutSine); `cam.blendLeft` (s of the
+  running pose blend, 0 when none).
+- Debug: `cam.probe()`, `cam.framing()` (allocate; smoke only).
+- `cam.hiddenEngagedInto(out)` (zero alloc): every engaged foe `onScreen()` calls hidden this frame (dropped past the
+  zoom cap, or under a HUD / thumb hole), winding up or not — ui arrows each one (AUTOCAM §7.4). Framing caps: +3 m
+  combat budget, plus the D8 crowd term (≤ 1.5 m) on top, never past the cat clamp; combined lean ≤ the D7 cap; a
+  wind-up on her (THREAT) always outranks ENGAGED in the drop ladder.
+- R3 rate caps: the automatic part of d (fit, snuggle, beats, boss envelopes) is clamped to ≤ 6 m/s out, ≤ 1.5 m/s in;
+  zoom, hints and punches are exempt.
+- Smoke: `tests/smoke/camera.mjs` blocks `camera:steady`, `lead-down`, `safe-frame`, `teamfight`, `frame-threat`,
+  `threat-visibility`, `beats`, `boss-two-shot`, `pinch`, `reduce-motion`, `rotate`, `footprint`, `title-blend`,
+  `no-hands`, `rates`, `perf` (report-only).

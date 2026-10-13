@@ -15,6 +15,8 @@ import { E } from '../core/events.js';
 import { ShieldWall } from './ShieldWall.js';
 import { isEngaged, isFlyer, groundY } from './steering.js';
 import { planAbility, playerAimYaw, playerForwardYaw } from './abilityAim.js';
+import { kitMaterial, RM } from '../characters/index.js';
+import { GeoBuilder } from '../characters/util.js';
 
 export { playerAimYaw, playerForwardYaw };
 
@@ -121,22 +123,24 @@ export class ShieldWallAbility extends Ability {
 
 // ------------------------------------------------------------------ arrows (Sage)
 
-let _arrowGeo = null, _arrowMat = null, _fletchMat = null;
+let _arrowGeo = null;
+/**
+ * Sage's arrow: ONE merged, vertex-coloured geometry (shaft, a rounded wooden tip: WA20 no metal, two crossed fletch
+ * slabs) drawn with the shared toon kit (K6 sc-toon, one draw, no Standard program). Geometry built once, shared.
+ */
 function arrowMesh() {
   if (!_arrowGeo) {
-    const shaft = new THREE.CylinderGeometry(0.012, 0.012, 0.55, 5).rotateX(Math.PI / 2);
-    const head = new THREE.ConeGeometry(0.03, 0.09, 6).rotateX(Math.PI / 2).translate(0, 0, 0.31);
-    _arrowGeo = [shaft, head];
-    _arrowMat = [new THREE.MeshStandardMaterial({ color: '#7A5230', roughness: 0.8 }), new THREE.MeshStandardMaterial({ color: '#B8BCC2', roughness: 0.4, metalness: 0.6 })];
-    _fletchMat = new THREE.MeshStandardMaterial({ color: '#E9E2D2', roughness: 0.9, side: THREE.DoubleSide });
+    const gb = new GeoBuilder(), m = new THREE.Matrix4();
+    gb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.55, 5).rotateX(Math.PI / 2), { color: '#7A5230', rmse: RM.wood });
+    gb.add(new THREE.ConeGeometry(0.03, 0.09, 6).rotateX(Math.PI / 2).translate(0, 0, 0.31), { color: '#E8B87A', rmse: RM.wood });
+    for (let i = 0; i < 2; i++) {
+      gb.add(new THREE.BoxGeometry(0.05, 0.1, 0.006), { matrix: m.makeRotationFromEuler(new THREE.Euler(Math.PI / 2, 0, i * Math.PI / 2)).setPosition(0, 0, -0.24),
+        color: '#E9E2D2', rmse: RM.cloth });
+    }
+    _arrowGeo = gb.build();
   }
   const g = new THREE.Group(); g.name = 'arrow';
-  g.add(new THREE.Mesh(_arrowGeo[0], _arrowMat[0]), new THREE.Mesh(_arrowGeo[1], _arrowMat[1]));
-  for (let i = 0; i < 2; i++) {
-    const f = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.1), _fletchMat);
-    f.position.z = -0.24; f.rotation.set(Math.PI / 2, 0, i * Math.PI / 2);
-    g.add(f);
-  }
+  g.add(new THREE.Mesh(_arrowGeo, kitMaterial()));
   return g;
 }
 
@@ -176,8 +180,8 @@ export class Arrow {
 
   dispose() {
     if (!this.mesh) return;
+    // the merged arrow geometry and the kit material are shared (arrowMesh): nothing per arrow to free
     this.mesh.removeFromParent();
-    for (const ch of this.mesh.children) if (ch.geometry?.type === 'PlaneGeometry') ch.geometry.dispose();
     this.mesh = null;
   }
 }

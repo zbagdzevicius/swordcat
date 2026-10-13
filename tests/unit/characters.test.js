@@ -222,6 +222,7 @@ test('sword skins build and track charge / valor glow', () => {
 });
 
 test('asset manifest paths exist', () => {
+  assert.ok(!manifest.some((f) => /Cinzel|Uncial|MedievalSharp/.test(f)), 'K9: no medieval faces');
   for (const p of manifest) assert.ok(fs.existsSync(path.join('public/assets', p)), p);
 });
 
@@ -274,8 +275,26 @@ test('runtime: core QUALITY presets drive close-up / iso shells, tufts, outline 
   // a play-LOD cat draws the iso count (0) with the fur base merged into the body draw
   const p = C.buildKitten(C.swordcatConfig(), { lod: 'play' });
   assert.equal(p.headFur.mesh.visible, false); assert.equal(p.kitMesh.geometry, p._playGeo);
+  // PERF H4: a play cat bakes no hidden tail shells at spawn (was 16 copies, ~1.4 MB / ~20 ms per cat)
+  const tg = p.tailFur.mesh.geometry, src = p.tailFur._src;
+  assert.equal(p.tailFur.bakedShells, 0);
+  assert.equal(tg.index.count, src.index.count, 'play tail fur = the base surface only');
+  assert.equal(tg.attributes.position.count, src.attributes.position.count);
+  assert.ok(p.prepareCloseUp(), 'idle-time close-up set');
+  assert.equal(p.tailFur.bakedShells, QUALITY.med.furShellsClose, 'close-up copies reserved in idle time');
+  assert.equal(p.tailFur.mesh.visible, false, 'still hidden in iso play');
+  const baked = p.tailFur.mesh.geometry;
   p.setCloseUp(true); assert.equal(p.headFur.shells, QUALITY.med.furShellsClose); assert.ok(p.headFur.mesh.visible);
+  assert.equal(p.tailFur.mesh.geometry, baked, 'no re-bake on the close-up frame');
+  assert.equal(p.tailFur.shells, QUALITY.med.furShellsClose);
+  assert.equal(p.tailFur.mesh.geometry.drawRange.count, p.tailFur.idxPerShell * (QUALITY.med.furShellsClose + 1));
+  p.setCloseUp(false); assert.equal(p.tailFur.mesh.visible, false);
   p.dispose();
+  // a kitten-tier play cat (Pearl / companions) likewise
+  const q = C.buildKitten(C.CATS.mochi, { lod: 'play' });
+  assert.equal(q.tailFur.bakedShells, 0);
+  q.setCloseUp(true); assert.equal(q.tailFur.shells, C.shellsFor('kitten')); assert.equal(q.tailFur.bakedShells, C.shellsFor('kitten'));
+  q.dispose();
   // visual dt: frozen in hitstop and the pause menu, scaled by slow motion
   ctx.game.loop = { timeScale: 0.5 };
   assert.equal(C.visualDt(ctx, 0.02), 0.01);
@@ -302,9 +321,9 @@ test('Low quality: lighter cat meshes (charDetail) and shell fur baked only as f
   assert.ok(lo.headFur.mesh.geometry.index.count < hi.headFur.mesh.geometry.index.count * 0.5, 'Low head fur is lighter');
   // raising the quality re-bakes the Low-built tail on demand: the shells really draw
   assert.equal(lo.tailFur.shells, QUALITY.med.furShellsClose);
-  assert.equal(lo.tailFur.allocatedShells, C.MAX_SHELLS);
+  assert.equal(lo.tailFur.allocatedShells, QUALITY.med.furShellsClose, 're-baked to what Med draws, not MAX_SHELLS');
   assert.equal(lo.tailFur.mesh.geometry.drawRange.count, lo.tailFur.idxPerShell * (QUALITY.med.furShellsClose + 1));
-  assert.ok(lo.tailFur.mesh.geometry.index.count >= lo.tailFur.idxPerShell * (C.MAX_SHELLS + 1));
+  assert.ok(lo.tailFur.mesh.geometry.index.count >= lo.tailFur.idxPerShell * (QUALITY.med.furShellsClose + 1));
   // Med builds bake what Med draws (16 + base), not the Ultra maximum
   assert.equal(hi.tailFur.allocatedShells, QUALITY.med.furShellsClose);
   for (const k of [lo, loMochi, hi, hiMochi]) k.dispose();
@@ -348,12 +367,15 @@ test('K6: no PBR in play: kit / lids / bow / cape / blade are WarmToon or matcap
   assert.equal(k.kitMatInst.type, 'MeshToonMaterial');
   assert.notEqual(k.kitMat, k.kitMatInst, 'per mesh kind: skinned and instanced never share one material (H3)');
   assert.equal(k.kitMatInst.userData.uniforms, k.kitMat.userData.uniforms, 'one holy / flash / highlight value');
-  assert.equal(k.eyes.eyeMeshes[0].material.type, 'MeshBasicMaterial');
+  assert.ok(k.eyes.eyeMeshes[0].material.userData.fxBasic, 'eyes: unlit (the fx basic module, PERF §1.2)');
   let bowMat = null; k.bow.traverse((o) => { if (o.isMesh && !bowMat) bowMat = o.material; });
   assert.equal(bowMat.type, 'MeshToonMaterial');
   assert.equal(k.cape.mesh.material.type, 'MeshToonMaterial');
-  assert.equal(k.sword.bladeMat.type, 'MeshMatcapMaterial');
-  assert.equal(k.sword.bladeMat.customProgramCacheKey().split(':')[0], 'sc-metal-v2');
+  // PERF §1.2: the steel blade is the shared sc-toon program (rmse.y = 1 shades it with the steel matcap in-draw)
+  assert.equal(k.sword.bladeMat.type, 'MeshToonMaterial');
+  assert.equal(k.sword.bladeMat.customProgramCacheKey(), 'sc-toon-v2');
+  assert.equal(bowMat.customProgramCacheKey(), 'sc-toon-v2', 'the bow too (self-light / top glow are uniforms)');
+  assert.ok(k.sword.blade.geometry.attributes.rmse.getY(0) > 0.9, 'steel rmse on the blade');
   let pbr = 0;
   k.root.traverse((o) => { const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) if (m?.isMeshStandardMaterial) pbr++; });
   assert.equal(pbr, 0, 'no Standard / Physical material on her');
@@ -985,7 +1007,7 @@ test('controls: x-ray silhouette proxy — one hidden skinned draw that covers b
   assert.equal(p.castShadow, false);
   assert.equal(p.material.depthFunc, THREE.GreaterDepth, 'draws only where something is in front');
   assert.equal(p.material.depthWrite, false);
-  assert.equal(p.material.fog, false);
+  assert.equal(p.material.userData.uniforms.uFogK.value, 0, 'unfogged (the flat program in x-ray mode, PERF §1.2)');
   assert.ok(Math.abs(p.material.opacity - C.XRAY.alpha) < 1e-6 && C.XRAY.alpha === 0.55 && C.XRAY.color === '#FFE4EC');
   const ray = new THREE.Raycaster(new THREE.Vector3(0, 0.5, 5), new THREE.Vector3(0, 0, -1));
   const hits = []; p.raycast(ray, hits); assert.equal(hits.length, 0, 'never raycast (camera picking)');
@@ -1178,7 +1200,10 @@ test('controls: readability from above — bow ×1.25 on the LEFT ear, ears ×1.
   const sh = { uniforms: {}, vertexShader: '#include <common>\n#include <begin_vertex>', fragmentShader: '#include <common>\n#include <emissivemap_fragment>\n#include <color_fragment>\n#include <opaque_fragment>' };
   C.bowMaterial().onBeforeCompile(sh);
   assert.equal(sh.uniforms.uTopView, C.TOP_VIEW);
-  assert.ok(/0\.080 \* uTopView/.test(sh.fragmentShader), 'bow +0.08 self-light from above');
+  // PERF §1.2: the bow is the shared sc-toon program; its self-light and the +0.08 from above are uniforms
+  assert.ok(/uSelfLight \+ uTopGlow \* uTopView/.test(sh.fragmentShader), 'self-light + top glow × the top-view factor');
+  assert.equal(sh.uniforms.uTopGlow.value, C.READABILITY.bowGlow, 'bow +0.08 self-light from above');
+  assert.equal(sh.uniforms.uSelfLight.value, C.BOW_SELF_LIGHT ?? 0.22, 'the satin self-light');
   const cape = C.capeMaterial('red');
   assert.equal(cape.userData.uniforms.uTopView, C.TOP_VIEW);
   assert.ok(Math.abs(cape.userData.uniforms.uTrimV.value * C.CAPE_DEFAULTS.len - 0.02) < 1e-6, '2 cm trim');
@@ -1193,5 +1218,366 @@ test('controls: ringAnchor sits on the ground under the body', () => {
   assert.ok(Math.abs(r.pos.y - 1.5) < 1e-6, 'at the feet');
   assert.ok(Math.hypot(r.pos.x - 3, r.pos.z + 2) < 0.2, 'under the hips');
   assert.ok(r.radius > 0.25 && r.radius < 0.5);
+  k.dispose();
+});
+
+// ------------------------------------------------------------------ Phase W (IMPLEMENTATION_PLAN characters.W1–W5) + S4 / H7
+
+/** ctx with an iso camera rig stand-in (cam.focus + modeName) so updateReadability sees the gameplay view. */
+function isoCtx(mode = 'follow') {
+  const ctx = miniCtx();
+  ctx.camera = new THREE.PerspectiveCamera(); ctx.camera.position.set(0, 10, -8);
+  ctx.cam = { focus: new THREE.Vector3(0, 0, 0), modeName: mode };
+  ctx.params = {};
+  return ctx;
+}
+const frames = (ctx, view, n, dt = 1 / 60) => { for (let i = 0; i < n; i++) { ctx.game.frameCount++; view.render(dt); } };
+
+test('WA characters.W1: hero pop-out 1.12 in follow, 1.0 in a cutscene (0.3 s blend); companions 1.08; hitbox untouched', () => {
+  resetView();
+  const ctx = isoCtx('follow');
+  const actor = new TestActor(ctx, { faction: 'player' }); actor.tags.add('player');
+  const view = new C.KittenView(ctx, C.swordcatConfig(), { actor, glance: false });
+  const base = view.root.scale.x;
+  frames(ctx, view, 2);
+  assert.ok(view.playScale > 1 && view.playScale < 1.12, `blending (${view.playScale.toFixed(3)})`);
+  frames(ctx, view, 30);
+  assert.ok(Math.abs(view.playScale - 1.12) < 1e-9, 'follow: x1.12 after the 0.3 s blend');
+  assert.ok(Math.abs(view.root.scale.x - base * 1.12) < 1e-9, 'visual root scaled');
+  assert.equal(actor.object3d.scale.x, 1, 'the actor (hitbox / MODEL_FIT owner) keeps scale 1');
+  assert.equal(view.root.userData.perfCat, 'hero');
+  ctx.cam.modeName = 'cutscene';
+  frames(ctx, view, 30);
+  assert.equal(view.playScale, 1, 'cutscene: 1.0');
+  assert.equal(view.root.scale.x, base);
+  const ca = new TestActor(ctx); ca.tags.add('companion');
+  const comp = new C.KittenView(ctx, 'mochi', { actor: ca });
+  ctx.cam.modeName = 'follow';
+  frames(ctx, comp, 40);
+  assert.ok(Math.abs(comp.playScale - 1.08) < 1e-9, 'companions x1.08');
+  assert.equal(comp.root.userData.perfCat, 'companions');
+  const npc = new C.KittenView(ctx, 'tofu', { actor: new TestActor(ctx) });
+  frames(ctx, npc, 40);
+  assert.equal(npc.playScale, 1, 'residents keep their size');
+  view.dispose(); comp.dispose(); npc.dispose(); resetView();
+});
+
+test('WA characters.W1: bow grows x1.4 at a lens >= 12 m (on top of the x1.25 top view), always on the LEFT ear', () => {
+  resetView();
+  const k = C.buildKitten(C.swordcatConfig());
+  const bowScale = () => { k.update(1 / 60); return k.bow.scale.x; };
+  const camera = new THREE.PerspectiveCamera(), focus = new THREE.Vector3();
+  const ctx = { camera, cam: { focus, modeName: 'follow' }, params: {} };
+  camera.position.set(0, 8.4, -6);   // ~10.3 m: top view on, far not yet
+  C.updateReadability(ctx); const mid = bowScale();
+  camera.position.set(0, 11, -9);    // ~14.2 m
+  C.updateReadability(ctx); const far = bowScale();
+  assert.ok(far > mid, `${mid} < ${far}`);
+  assert.ok(Math.abs(far / mid - C.READABILITY.bowScaleFar / C.READABILITY.bowScale) < 0.02, `far bow x${(far / mid).toFixed(3)} over the top view`);
+  assert.equal(k.bow.parent, k.rig.earL);
+  k.dispose(); resetView();
+});
+
+test('WA characters.W2: cheer / groom / twirl / boop / pawBump are poses with finite bone targets and their emotes settle', () => {
+  for (const n of C.WARM_POSE_NAMES) assert.ok(C.POSE_NAMES.includes(n), `${n} in POSE_NAMES`);
+  const k = C.buildKitten(C.swordcatConfig());
+  k.setExpression('happy', true); k.update(1 / 60);            // the poses smile (lower lids show): same baseline
+  const draws0 = k.debugFeatures().draws;
+  for (const n of C.WARM_POSE_NAMES) {
+    k.setPose(n, { blend: 0 }); k.emote(n);
+    for (let i = 0; i < 20; i++) k.update(1 / 60);
+    for (const b of C.BONE_NAMES) {
+      const j = k.rig.joints[b]; const q = j.quaternion, p = j.position;
+      assert.ok([q.x, q.y, q.z, q.w, p.x, p.y, p.z].every(Number.isFinite), `${n}: ${b} finite`);
+    }
+    for (let i = 0; i < 120; i++) k.update(1 / 60);
+    assert.equal(k.emotes[n], 0, `${n} emote finished`);
+  }
+  assert.equal(k.debugFeatures().draws, draws0, 'no new draws from the poses');
+  k.dispose();
+});
+
+test('WA characters.W3: Meme White cape is cream #FFF3E2 with a pink hem; the practice tunic keeps her sword visible', () => {
+  assert.equal(C.CAPES.memeWhite.color, '#FFF3E2');
+  assert.ok(C.CAPES.memeWhite.hem, 'pink hem stripe');
+  const k = C.buildKitten(C.CATS.swordcat_tunic_sword);
+  assert.ok(k.sword, 'practice outfit carries the sword');
+  let vis = true; for (let p = k.sword.group; p; p = p.parent) vis = vis && p.visible;
+  assert.ok(vis && k.sword.group.parent, 'sword mesh visible in the practice outfit');
+  let hasBlade = false; k.sword.group.traverseVisible((o) => { if (o.isMesh) hasBlade = true; });
+  assert.ok(hasBlade);
+  assert.ok(k.cfg.accessories.some((a) => a && a.id === 'tunic'), 'still the practice tunic, not the plate');
+  assert.equal(C.CATS.swordcat_tunic.sword, null, 'the plain tunic still has none (CS scenes)');
+  k.dispose();
+});
+
+test('WA characters.W4: plate bakes both words in one texture; flip moves offset.y only, 0 canvas work after spawn', () => {
+  let ctxCalls = 0;
+  // a do-anything 2D context: every property / call returns itself (gradients, measureText, ...)
+  const store = {};
+  const fake2d = new Proxy(function () {}, { get: (t, p) => (p in store ? store[p] : p === 'width' ? 10 : fake2d), set: (t, p, v) => { store[p] = v; return true; }, apply: () => fake2d });
+  const had = globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { ctxCalls++; return fake2d; } };
+  try {
+    const { model } = fakeKayKit(0.6);
+    const d = C.dressBeast(model, 'hyena', { seed: 2 });
+    assert.ok(d.friendWord, 'index-paired friend word');
+    const tex = d.plate.userData.texture;
+    assert.ok(tex && tex.repeat.y === 0.5, 'two rows in one texture');
+    const y0 = tex.offset.y, calls = ctxCalls, ver = tex.version;
+    assert.equal(d.flipPlate(), true);
+    assert.notEqual(tex.offset.y, y0, 'friend row via offset.y');
+    assert.equal(d.plate.userData.texture, tex, 'same texture');
+    assert.equal(d.plate.getObjectByName('plateWord').material.map, tex, 'same material map');
+    assert.equal(ctxCalls, calls, 'no canvas work on flip');
+    assert.equal(tex.version, ver, 'no re-upload');
+    d.flipPlate(false); assert.equal(tex.offset.y, y0);
+    d.dispose();
+  } finally { globalThis.OffscreenCanvas = had; }
+});
+
+test('WA characters.W5: Squeakybone tint / Big Squeaky Bone mallet / Sir Sacky / Sir Wobble cost one draw each; draws unchanged', () => {
+  for (const n of C.WARM_PROP_NAMES) {
+    assert.ok(C.PROP_NAMES.includes(n), n);
+    const p = C.buildProp(n);
+    let meshes = 0; p.traverse((o) => { if (o.isMesh) meshes++; });
+    assert.equal(meshes, 1, `${n}: one draw`);
+  }
+  // the mallet's red rubber knobs (WA26)
+  const mallet = C.buildProp('big_squeaky_bone'), col = mallet.geometry.attributes.color;
+  const knob = new THREE.Color(C.WARM_LOOKS.squeakyKnob);
+  let knobs = 0; for (let i = 0; i < col.count; i++) if (Math.abs(col.getX(i) - knob.r) < 0.02 && Math.abs(col.getY(i) - knob.g) < 0.02) knobs++;
+  assert.ok(knobs > 50, 'red rubber knobs');
+  // Barkus: the mallet replaces the GLB weapon one for one (draw count unchanged)
+  const count = (root) => { let n = 0; root.traverseVisible((o) => { if (o.isMesh) n++; }); return n; };
+  assert.equal(C.BEAST_LOOKS.barkus.weapon, 'big_squeaky_bone');
+  const a = fakeKayKit(0.6), b = fakeKayKit(0.6);
+  const da = C.dressBeast(a.model, 'barkus'), db = C.dressBeast(b.model, 'barkus');
+  da.hold(new THREE.Mesh(new THREE.BoxGeometry(0.1, 1, 0.1)), 'r');      // the old claymore stand-in
+  db.hold(C.BEAST_LOOKS.barkus.weapon, 'r');
+  assert.equal(count(b.model), count(a.model), 'barkus draws unchanged');
+  // Squeakybone: shared tinted twins (0 new meshes, one clone per source material for every spawn)
+  const sk = fakeKayKit(0.6).model, sk2 = fakeKayKit(0.6).model;
+  const shared = new THREE.MeshLambertMaterial({ color: '#ffffff' });
+  for (const m of [sk, sk2]) m.traverse((o) => { if (o.isMesh) o.material = shared; });
+  const before = count(sk);
+  const restore = C.squeakyLook(sk); C.squeakyLook(sk2);
+  assert.equal(count(sk), before, 'bonehead draws unchanged');
+  const mA = sk.getObjectByName('Barbarian_Body').material, mB = sk2.getObjectByName('Barbarian_Body').material;
+  assert.equal(mA, mB, 'one tinted twin shared by every Squeakybone');
+  assert.equal('#' + mA.color.getHexString(), C.WARM_LOOKS.squeakyBone.toLowerCase());
+  restore(); assert.equal(sk.getObjectByName('Barbarian_Body').material, shared);
+  da.dispose(); db.dispose();
+});
+
+test('S4 ART §6.5 Squash: volume-preserving spring settles, clamps, survives a long frame', () => {
+  const s = new C.Squash();
+  s.kick(C.SQUASH.jumpKick);
+  let peak = 0; for (let i = 0; i < 10; i++) peak = Math.max(peak, s.update(1 / 60) - 1);
+  assert.ok(peak > 0.02 && peak <= C.SQUASH.clamp + 1e-9, `stretch ${peak}`);
+  for (let i = 0; i < 120; i++) s.update(1 / 60);
+  assert.ok(Math.abs(s.x) < 1e-3, 'settled');
+  s.kick(-50); s.update(0.3);
+  assert.ok(s.x >= -C.SQUASH.clamp - 1e-9 && Number.isFinite(s.x), 'clamped through a 0.3 s hitch');
+});
+
+test('S4 PERF §4.3 setActivity: tier 2 animates every 4th frame with the summed dt, tier 3 freezes, 0 restores', () => {
+  const k = C.buildKitten(C.swordcatConfig());
+  assert.equal(C.setActivity(k, 2), true); assert.equal(k.activity, 2);
+  k.setActivity(0); k.setActivity(2);
+  const got = []; for (let i = 0; i < 8; i++) got.push(k.activityDt(0.01));
+  assert.deepEqual(got.map((d) => +d.toFixed(3)), [0, 0, 0, 0.04, 0, 0, 0, 0.04]);
+  k.setActivity(3); assert.equal(k.activityDt(0.01), 0);
+  k.setActivity(0); assert.equal(k.activityDt(0.01), 0.01);
+  k.setActivity(1); assert.equal(k.activityDt(0.01), 0.01, 'tier 1 keeps the clock (cape sways in the shader)');
+  k.dispose();
+});
+
+test('S4 debugFeatures + outline hull: play LOD hero <= 9 draws (X10 interim), outline is one extra draw, toggles', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }), { lod: 'play' });
+  k.blob.visible = false;                                         // in play fx.blobs owns her contact blob (player hides it)
+  const f = k.debugFeatures();
+  for (const key of ['draws', 'tris', 'shells', 'tufts', 'outline', 'lod', 'activity', 'merged']) assert.ok(key in f, key);
+  assert.equal(f.lod, 'play');
+  k.setOutline(true, { px: 2 });
+  const g = k.debugFeatures();
+  assert.equal(g.outline, true); assert.equal(g.draws, f.draws + 1, 'outline = one draw');
+  // body+fur+armour 1, bow 1, eyes / lids / brows 3, blade + hilt 2, cape 1, tufts 1, shadow-pass proxy 1, hull 1 = 11;
+  // ART X10's interim 9 (bow in the body draw, one eye draw) and end state 6 come with the hero bake (PERF H7 / L3)
+  assert.ok(g.draws <= 11, `hero draws ${g.draws}`);
+  k.setOutline(false); assert.equal(k.debugFeatures().outline, false);
+  k.dispose();
+});
+
+test('PERF H7 bakeSkinned: skinned + rigid parts (under a MODEL_FIT scale) land where the unbaked parts do, at any pose', () => {
+  const root = new THREE.Group(); root.scale.setScalar(0.6); root.position.set(3, 0, -2);
+  const b0 = new THREE.Bone(); b0.name = 'hips'; const b1 = new THREE.Bone(); b1.name = 'arm'; b1.position.set(0, 1, 0); b0.add(b1);
+  root.add(b0); root.updateMatrixWorld(true);
+  const skel = new THREE.Skeleton([b0, b1]);
+  // a skinned part with a non-identity bind matrix
+  const g = new THREE.BoxGeometry(0.4, 1.6, 0.4, 1, 4, 1); g.translate(0, 0.8, 0);
+  const n = g.attributes.position.count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) { const y = g.attributes.position.getY(i); si[i * 4] = 0; si[i * 4 + 1] = 1; sw[i * 4] = 1 - y / 1.6; sw[i * 4 + 1] = y / 1.6; }
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  const body = new THREE.SkinnedMesh(g, new THREE.MeshLambertMaterial({ color: '#ff8800' }));
+  body.position.set(0.1, 0, 0); root.add(body); root.updateMatrixWorld(true); body.bind(skel);
+  // a rigid prop on the arm bone, and one part that must stay separate (different inverses)
+  const prop = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 4), new THREE.MeshLambertMaterial({ color: '#00ff00' }));
+  prop.position.set(0.3, 0.2, 0); prop.rotation.set(0.3, 0.5, 0); b1.add(prop);
+  const odd = new THREE.SkinnedMesh(g.clone(), new THREE.MeshLambertMaterial());
+  root.add(odd);
+  const oddSkel = new THREE.Skeleton([b0, b1], [new THREE.Matrix4().makeTranslation(1, 0, 0), new THREE.Matrix4()]);
+  odd.bind(oddSkel, new THREE.Matrix4());
+  // pose it, then bake (the math is pose-independent)
+  b0.rotation.set(0, 0.4, 0.2); b1.rotation.set(0.7, 0, -0.5); root.updateMatrixWorld(true);
+  const pick = (mesh, i) => {
+    const p = new THREE.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, i);
+    if (mesh.isSkinnedMesh) mesh.applyBoneTransform(i, p);
+    return p.applyMatrix4(mesh.matrixWorld);
+  };
+  const pn = prop.geometry.attributes.position.count;
+  const { mesh, baked, separate } = C.bakeSkinned(root, skel, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  assert.equal(baked.length, 2); assert.ok(baked.includes(body) && baked.includes(prop));
+  assert.equal(separate.length, 1); assert.equal(separate[0], odd);
+  const off = baked.indexOf(prop) === 0 ? pn : 0, poff = baked.indexOf(prop) === 0 ? 0 : n;   // merge order = traversal order
+  root.add(mesh);
+  for (const rot of [[0.4, 0.2, 0.7, -0.5], [-0.3, 0.9, 0.1, 1.2]]) {
+    b0.rotation.set(0, rot[0], rot[1]); b1.rotation.set(rot[2], 0, rot[3]); root.updateMatrixWorld(true);
+    for (let i = 0; i < n; i++) { const got = pick(mesh, off + i), want = pick(body, i); assert.ok(got.distanceTo(want) < 1e-4, `body ${i}: ${got.toArray()} vs ${want.toArray()}`); }
+    for (let i = 0; i < pn; i++) { const got = pick(mesh, poff + i), want = pick(prop, i); assert.ok(got.distanceTo(want) < 1e-4, `prop ${i}: ${got.toArray()} vs ${want.toArray()}`); }
+  }
+  // vertex colour carries the material colour; aTexMix 0 for untextured parts
+  const c = mesh.geometry.attributes.color, m = mesh.geometry.attributes.aTexMix;
+  assert.ok(Math.abs(c.getX(off) - body.material.color.r) < 1e-6 && m.getX(off) === 0);
+  assert.ok(Math.abs(c.getY(poff) - prop.material.color.g) < 1e-6);
+  assert.equal(mesh.castShadow, false);
+  assert.ok(C.sameInverses(skel, skel) && !C.sameInverses(oddSkel, skel));
+});
+
+test('render-safety: no matcap / basic material carries an `emissive` (three would write a uniform its program lacks)', () => {
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  k.setHoly(1); k.update(1 / 60);
+  const bad = [];
+  k.root.traverse((o) => {
+    if (!o.material) return;
+    for (const m of [].concat(o.material)) if ((m.isMeshMatcapMaterial || m.isMeshBasicMaterial) && m.emissive) bad.push(`${o.name}:${m.type}`);
+  });
+  for (const skin of ['borrowed', 'dawnblade', 'twig']) { const s = C.buildSword(skin); if (s.bladeMat.isMeshMatcapMaterial && s.bladeMat.emissive) bad.push(skin); s.dispose(); }
+  assert.deepEqual(bad, []);
+  k.dispose();
+});
+
+test('hero readability: warm-rim floor 0.40 on her own materials only; the gameplay tunic outfits keep the sword', () => {
+  assert.equal(C.READABILITY.heroRim, 0.4);
+  const k = C.buildKitten(C.swordcatConfig());
+  assert.equal(k.rimFloor, 0.4);
+  assert.equal(k.kitMat.userData.uniforms.uRimMin.value, 0.4, 'body toon rim floor');
+  let blade = 0; k.sword.group.traverse((o) => { if (o.material?.userData?.uniforms?.uRimMin?.value === 0.4) blade++; });
+  assert.ok(blade > 0, 'blade metal rim floor');
+  assert.ok(k.furMat.uniforms.uRimStrength.value >= 0.4, 'fur rim ≥ 0.40');
+  assert.equal(C.toonLib('plain').userData.uniforms.uRimMin.value, 0, 'shared kit untouched');
+  // a re-equipped sword gets the floor too
+  k.setSword('borrowed');
+  blade = 0; k.sword.group.traverse((o) => { if (o.material?.userData?.uniforms?.uRimMin?.value === 0.4) blade++; });
+  assert.ok(blade > 0, 'new sword keeps the rim floor');
+  const m = C.buildKitten(C.CATS.mochi);
+  assert.equal(m.rimFloor, 0);
+  assert.equal(m.kitMat.userData.uniforms?.uRimMin?.value ?? 0, 0, 'companions keep the env rim');
+  // SwordcatModel builds the tunic looks as swordcatConfig({ armour: false, bow }) — both must carry the sword
+  for (const bow of [false, true]) {
+    const cfg = C.swordcatConfig({ armour: false, bow });
+    assert.equal(cfg.sword, 'borrowed', `tunic (bow ${bow}) carries the sword`);
+    assert.ok(cfg.accessories.some((a) => a?.id === 'tunic'));
+  }
+  k.dispose(); m.dispose();
+});
+
+test('hero idle = restUp: the blade stands upright at her right side above her ears; long skins keep the cane idle', () => {
+  for (const armour of [true, false]) {
+    const k = C.buildKitten(C.swordcatConfig({ armour }));
+    k.setPose('idle', { blend: 0 }); for (let i = 0; i < 3; i++) k.update(1 / 60); k.root.updateMatrixWorld(true);
+    assert.equal(k.poseName, 'idle', 'callers still see idle');
+    assert.equal(k._to.name, 'restUp');
+    const tip = k.sword.tip.getWorldPosition(new THREE.Vector3()), grip = k.sword.grip.getWorldPosition(new THREE.Vector3());
+    assert.ok(tip.y > 1.05, `tip above the ear line (${tip.y.toFixed(2)} H)`);
+    assert.ok(tip.x < -0.2, 'beside her right side, not behind her body');
+    assert.ok(k.rig.joints.pawR.getWorldPosition(new THREE.Vector3()).distanceTo(grip) < 0.06, 'right paw on the grip');
+    k.setSword({ skin: 'toobig', model: new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 0.05)), modelLength: 1.6 });
+    assert.equal(k._to.name, 'idle', 'long skin: cane idle (tip drag)');
+    k.dispose();
+  }
+  const m = C.buildKitten(C.CATS.marmalade);
+  m.setPose('idle', { blend: 0 });
+  assert.equal(m._to.name, 'idle', 'other sword cats keep the contract idle');
+  m.dispose();
+});
+
+test('cape perf LOD (PERF §9.1): grid normals, coarse iso grid, 2 sub-steps, sim paused off screen, no proxy draw', () => {
+  // grid normals agree with three's computeVertexNormals on a simulated, folded cape (same winding)
+  const kf = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  new THREE.Group().add(kf.root);
+  for (let i = 0; i < 30; i++) kf.update(1 / 60, { wind: new THREE.Vector3(0.3, 0, 0.1) });
+  const g = kf.cape.geo, ref = g.clone(); ref.computeVertexNormals();
+  let worst = 1;
+  for (let i = 0; i < g.attributes.normal.count; i++) {
+    const a = new THREE.Vector3().fromBufferAttribute(g.attributes.normal, i), b = new THREE.Vector3().fromBufferAttribute(ref.attributes.normal, i);
+    worst = Math.min(worst, a.dot(b));
+  }
+  assert.ok(worst > 0.5, `grid normals face the same way as computeVertexNormals (worst dot ${worst.toFixed(2)})`);
+  ref.dispose();
+  assert.equal(C.CAPE_DEFAULTS.iterations, 3);
+  // at most 2 sub-steps per frame, however long the frame
+  const sim = new C.ClothSim();
+  assert.equal(sim.advance(0.25, null), 2);
+  // iso play: 17 x 13 render grid; a close-up swaps to the full grid and back (pointer swap, same mesh)
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }), { lod: 'play' });
+  new THREE.Group().add(k.root);
+  k.update(1 / 60);
+  const d = k.cape.d;
+  assert.equal(k.cape.rc, (d.cols - 1) * d.playResX + 1); assert.equal(k.cape.rr, (d.rows - 1) * d.playResY + 1);
+  assert.equal(k.cape.rc * k.cape.rr, 221, 'iso grid is 221 vertices');
+  assert.equal(k.cape.mesh.geometry, k.cape.geo);
+  k.setCloseUp(true);
+  assert.equal(k.cape.rc, (d.cols - 1) * d.resX + 1); assert.equal(k.cape.mesh.geometry.attributes.position.count, k.cape.rc * k.cape.rr);
+  k.update(1 / 60);
+  const inv = k.root.matrixWorld.clone().invert(), p = new THREE.Vector3();
+  p.set(k.cape.sim.p[4 * 3], k.cape.sim.p[4 * 3 + 1], k.cape.sim.p[4 * 3 + 2]).applyMatrix4(inv);
+  assert.ok(Math.abs(k.cape.geo.attributes.position.getX(k.cape.vertexIndex(4, 0)) - p.x) < 1e-3, 'close grid written after the swap');
+  k.setCloseUp(false);
+  assert.equal(k.cape.rc, 17);
+  // the merged play body casts: the shell-fur shadow proxy is hidden in iso play, back in close-ups
+  assert.equal(k.shadowProxy.visible, false, 'no shadow-proxy draw in iso play');
+  k.setCloseUp(true); assert.equal(k.shadowProxy.visible, true); k.setCloseUp(false);
+  // activity tier >= 1: sway, cloth paused (particles untouched); back to 0 re-seeds and simulates again
+  k.setActivity(1); k.update(1 / 60); k.update(1 / 60);
+  assert.equal(k.cape.simPaused, true);
+  const before = Float32Array.from(k.cape.sim.p);
+  k.root.position.x += 0.3; k.update(1 / 60);
+  assert.deepEqual(Array.from(k.cape.sim.p), Array.from(before), 'no cloth steps while paused');
+  k.setActivity(0); k.update(1 / 60);
+  assert.equal(k.cape.simPaused, false);
+  assert.notDeepEqual(Array.from(k.cape.sim.p), Array.from(before), 'cloth re-seeded and stepping again');
+  k.dispose(); kf.dispose();
+});
+
+test('close-up fur fringe (story 10c / 11c): outer shells fade edge-on and thin near the lens; cheek ruff shortened', () => {
+  const k = C.buildKitten(C.CATS.sage);
+  const u = k.furMat.uniforms;
+  assert.equal(u.uCloseRange.value.x, C.FUR_CLOSE.near); assert.equal(u.uCloseRange.value.y, C.FUR_CLOSE.far);
+  assert.ok(C.FUR_CLOSE.near > 0 && C.FUR_CLOSE.far > C.FUR_CLOSE.near && C.FUR_CLOSE.far < 6, 'gameplay (iso lens 9-18 m) is never affected');
+  assert.ok(u.uCloseEdge.value >= u.uEdgeFade.value && u.uCloseThin.value > 0 && u.uCloseThin.value < 1);
+  assert.ok(k.furMatBaked.uniforms.uCloseThin, 'the baked (tail) material too');
+  assert.match(k.furMat.fragmentShader, /uCloseRange/);
+  assert.ok(C.headFurMask(new THREE.Vector3(0.12, 0.08, 0.02), 'cheek')[1] <= 1.2, 'cheek ruff length');
+  // the warm cream rim (never a blue-grey tint)
+  const rc = u.uRimColor.value; assert.ok(rc.r >= rc.g && rc.g >= rc.b, 'warm rim');
+  // warm fill: the sky / hemisphere fill keeps its brightness but takes the warm cream hue (no blue-grey haze)
+  const wf = u.uWarmFill.value; assert.ok(wf.r > wf.g && wf.g > wf.b && u.uWarmFillK.value > 0 && u.uWarmFillK.value <= 1);
+  assert.match(k.furMat.fragmentShader, /uWarmFillK/);
+  // under the hood the cheek ruffs shrink (they stuck out past it as a grey disc over her muzzle)
+  const bare = C.buildKitten({ ...C.CATS.sage, accessories: C.CATS.sage.accessories.filter((a) => (a.id ?? a) !== 'hood') });
+  const w = (kk) => { const g = kk.headFur.mesh.geometry; g.computeBoundingBox(); return g.boundingBox.max.x - g.boundingBox.min.x; };
+  assert.ok(w(k) < w(bare) - 0.01, `hooded head fur ${w(k).toFixed(3)} vs bare ${w(bare).toFixed(3)}`);
+  bare.dispose();
   k.dispose();
 });

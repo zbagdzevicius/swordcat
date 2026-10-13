@@ -1,7 +1,12 @@
 // src/fx/LightPools.js  (owner: fx, with world) — ART_WARM_SPEC §8.1: in the iso play camera the sun-ray cones are
-// replaced by GROUND LIGHT POOLS: 24 soft additive ellipses #FFF0B8 at α 0.16 (Low 12) lying on the ground like sun
-// through gaps in the leaves, ONE instanced draw, meadow and forest only, by day only. They wrap in a tile around the
-// camera footprint (so they always dapple the visible ground) and breathe slowly. Also home of the cloud shadows
+// replaced by GROUND LIGHT POOLS: 24 soft ellipses (Low 12) lying on the ground like sun through gaps in the leaves,
+// ONE instanced draw, meadow and forest only, by day only. They wrap in a tile around the camera footprint (so they
+// always dapple the visible ground) and breathe slowly.
+// Clarity pass (WA §3.2: nothing ambient may read as a gameplay zone): the pools BRIGHTEN the ground multiplicatively
+// (dst × (1 + gain · tint), CustomBlending DstColor / One) instead of adding colour, so green grass stays green (no
+// neon-lime) and the lift is capped (`POOLS.gain` 0.12 ≈ +0.06 luma on 0.5-luma ground); the tint is a warm cream,
+// the falloff a soft smoothstep 0.2 → 1, and each pool fades out inside arena zones and within `POOLS.clearR` m of an
+// alerted enemy so it never competes with a telegraph. Also home of the cloud shadows
 // (`CloudShadows`, the second A:fx.5 draw, off on Low): soft plum shapes drifting with the wind over the ground.
 import * as THREE from 'three';
 import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
@@ -9,7 +14,48 @@ import { FX_COLORS } from './palette.js';
 import { hash01, groundY } from './util.js';
 
 export const POOLS = Object.freeze({ count: 24, countLow: 12, color: FX_COLORS.light, alpha: 0.16, tile: 30, size: [2.2, 4.2], aspect: [0.45, 0.8],
-  levels: Object.freeze(['meadow', 'forest']), drift: 0.12 });
+  levels: Object.freeze(['meadow', 'forest']), drift: 0.12,
+  /** peak multiplicative lift: dst × (1 + gain · tint) at a pool's centre (full breath, base alpha 1) */
+  gain: 0.12,
+  /** soft radial falloff: 1 − smoothstep(falloff[0], falloff[1], r) */
+  falloff: Object.freeze([0.2, 1.0]),
+  /** fade out within `clearR` m of an alerted enemy and inside arena zones (+ `arenaPad` m); eased at `fadeRate` /s */
+  clearR: 4, arenaPad: 1, fadeRate: 4 });
+
+/**
+ * Peak luma a pool adds over a ground colour (linear 0..1 components; pure; unit-tested): the multiplicative lift
+ * ground × gain · tint, luma-weighted (Rec. 709).
+ * @param {number[]} ground @param {string} [tint] @param {number} [gain]
+ */
+export function poolLumaLift(ground, tint = POOLS.color, gain = POOLS.gain) {
+  const c = new THREE.Color(tint);
+  return gain * (0.2126 * ground[0] * c.r + 0.7152 * ground[1] * c.g + 0.0722 * ground[2] * c.b);
+}
+
+/**
+ * Should a pool at (x, z) be hidden (pure; unit-tested)? Inside any arena zone (circle `r` or rectangle `size` around
+ * `center`, + POOLS.arenaPad) or within POOLS.clearR of an alerted, living enemy.
+ * @param {number} x @param {number} z
+ * @param {ReadonlyArray<any>|null|undefined} arenas  world Arena objects ({ center, r, size? })
+ * @param {ReadonlyArray<any>|null|undefined} enemies the enemy list ({ pos, alerted, alive })
+ */
+export function poolSuppressed(x, z, arenas, enemies) {
+  const pad = POOLS.arenaPad, R = POOLS.clearR;
+  if (arenas) for (let i = 0; i < arenas.length; i++) {
+    const a = arenas[i], c = a?.center;
+    if (!c) continue;
+    const dx = x - c.x, dz = z - c.z;
+    if (a.size) { if (Math.abs(dx) <= a.size[0] / 2 + pad && Math.abs(dz) <= a.size[1] / 2 + pad) return true; }
+    else { const r = (a.r ?? 12) + pad; if (dx * dx + dz * dz <= r * r) return true; }
+  }
+  if (enemies) for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (!e?.alerted || e.alive === false || !e.pos) continue;
+    const dx = x - e.pos.x, dz = z - e.pos.z;
+    if (dx * dx + dz * dz <= R * R) return true;
+  }
+  return false;
+}
 export const CLOUDS = Object.freeze({ color: FX_COLORS.blob, alpha: 0.1, scale: 0.035, speed: 0.6, half: 28, grid: 24, snap: 2,
   levels: Object.freeze(['meadow', 'forest', 'town', 'gate', 'bog']) });
 
@@ -38,21 +84,27 @@ void main() {
 const POOL_FRAG = /* glsl */`
 uniform vec3 uColor;
 uniform float uAlpha;
+uniform vec2 uFall;
 varying vec2 vUv;
 varying float vA;
 #include <fog_pars_fragment>
 ${FOG_FACTOR}
+// multiplicative lift: the blend computes dst × src + dst, so src is a per-channel GAIN (no tone mapping or colour
+// space conversion: it is a factor, not a colour)
 void main() {
   float r = length( vUv );
-  float a = ( 1.0 - smoothstep( 0.35, 1.0, r ) ) * vA * uAlpha;
-  if ( a < 0.003 ) discard;
-  gl_FragColor = vec4( uColor * a * ( 1.0 - fxFog() ), 1.0 );
-  ${OUTPUT}
+  float a = ( 1.0 - smoothstep( uFall.x, uFall.y, r ) ) * vA * uAlpha * ( 1.0 - fxFog() );
+  if ( a < 0.002 ) discard;
+  gl_FragColor = vec4( uColor * a, 1.0 );
 }`;
 
 export class LightPools {
   /** @param {any} ctx */
-  constructor(ctx) { this.ctx = ctx; this.mesh = null; this.count = 0; this.on = false; this.alpha = 0; this.levelId = null; this.low = false; }
+  constructor(ctx) {
+    this.ctx = ctx; this.mesh = null; this.count = 0; this.on = false; this.alpha = 0; this.levelId = null; this.low = false;
+    /** per-pool base alpha (hashed) and eased visibility (→ 0 inside arenas / near alerted enemies) */
+    this.baseA = new Float32Array(POOLS.count); this.fade = new Float32Array(POOLS.count).fill(1);
+  }
 
   init(scene) {
     const g = new THREE.InstancedBufferGeometry(), plane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
@@ -61,15 +113,21 @@ export class LightPools {
     this.iSize = new THREE.InstancedBufferAttribute(new Float32Array(POOLS.count * 4), 4);
     for (let i = 0; i < POOLS.count; i++) {
       const s = POOLS.size[0] + (POOLS.size[1] - POOLS.size[0]) * hash01(i * 5 + 1);
-      this.iSize.array.set([s, s * (POOLS.aspect[0] + (POOLS.aspect[1] - POOLS.aspect[0]) * hash01(i * 5 + 2)), hash01(i * 5 + 3), 0.7 + 0.3 * hash01(i * 5 + 4)], i * 4);
+      this.baseA[i] = 0.7 + 0.3 * hash01(i * 5 + 4);
+      this.iSize.array.set([s, s * (POOLS.aspect[0] + (POOLS.aspect[1] - POOLS.aspect[0]) * hash01(i * 5 + 2)), hash01(i * 5 + 3), this.baseA[i]], i * 4);
     }
+    this.iSize.setUsage(THREE.DynamicDrawUsage);
     g.setAttribute('iPos', this.iPos); g.setAttribute('iSize', this.iSize);
     g.instanceCount = 0;
     this.geometry = g;
     this.material = fxShaderMaterial({
       name: 'fx.lightPools', vertexShader: POOL_VERT, fragmentShader: POOL_FRAG, fog: true,
-      uniforms: { ...fogUniforms(), uTime: { value: 0 }, uColor: { value: new THREE.Color(POOLS.color) }, uAlpha: { value: 0 } },
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+      uniforms: { ...fogUniforms(), uTime: { value: 0 }, uColor: { value: new THREE.Color(POOLS.color) }, uAlpha: { value: 0 },
+        uFall: { value: new THREE.Vector2(POOLS.falloff[0], POOLS.falloff[1]) } },
+      transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+      // dst × src + dst: a hue-preserving brighten (never adds lime to green grass)
+      blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.DstColorFactor, blendDst: THREE.OneFactor,
+      blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
     });
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.name = 'fx.lightPools';
@@ -90,15 +148,19 @@ export class LightPools {
     if (!this.mesh.visible) return;
     const time = ctx.game?.realTime ?? 0, f = cam?.footprint, foc = cam?.focus ?? ctx.player?.pos;
     const cx = Number.isFinite(f?.cx) ? f.cx : foc?.x ?? 0, cz = Number.isFinite(f?.cz) ? f.cz : foc?.z ?? 0, cy = foc?.y ?? 0;
-    const T = POOLS.tile, P = this.iPos.array;
+    const T = POOLS.tile, P = this.iPos.array, S = this.iSize.array, F = this.fade;
+    const arenas = ctx.levels?.current?.arenas, enemies = ctx.enemies?.list;
+    const k = dt > 0 ? 1 - Math.exp(-POOLS.fadeRate * dt) : 1;
     for (let i = 0; i < this.count; i++) {
       const hx = hash01(i * 13 + 7) * T + time * POOLS.drift, hz = hash01(i * 13 + 8) * T + time * POOLS.drift * 0.4;
       const x = cx + (((hx - cx) % T) + T * 1.5) % T - T / 2, z = cz + (((hz - cz) % T) + T * 1.5) % T - T / 2;
       P[i * 4] = x; P[i * 4 + 1] = groundY(ctx, x, z, cy) + 0.04; P[i * 4 + 2] = z; P[i * 4 + 3] = hash01(i * 13 + 9) * Math.PI;
+      F[i] += ((poolSuppressed(x, z, arenas, enemies) ? 0 : 1) - F[i]) * k;
+      S[i * 4 + 3] = this.baseA[i] * F[i];
     }
-    this.iPos.needsUpdate = true;
+    this.iPos.needsUpdate = true; this.iSize.needsUpdate = true;
     const u = this.material.uniforms;
-    u.uTime.value = time; u.uAlpha.value = POOLS.alpha * this.alpha;
+    u.uTime.value = time; u.uAlpha.value = POOLS.gain * this.alpha;
   }
 
   dispose() { this.mesh?.removeFromParent(); this.geometry?.dispose(); this.material?.dispose(); this.mesh = null; }

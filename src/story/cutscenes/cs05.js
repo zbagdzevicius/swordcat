@@ -71,7 +71,8 @@ export default {
     // ---- 2 · the shard rises from the cheese shield
     sfx('cs05.shardRise', 'grizzlechop'),
     { t: 'call', fn: shardRises, max: 3 },
-    say('grizzlechop', 'cs05.2', 6.6),
+    say('grizzlechop', 'cs05.2', 4.2),
+    say('grizzlechop', 'cs05.2b', 2.4),
 
     // ---- 3 · HERO_LOW: into the blade
     cam('HERO_LOW', 'swordcat'),
@@ -92,7 +93,8 @@ export default {
     // ---- 4 · "Then I'm going home."
     cam('TWO_SHOT_LOW', 'swordcat', { target: 'grizzlechop', pos: [-1.8, 0.85, 1.8], fov: 40, lookMid: 0.9 }),
     { t: 'actor', id: 'swordcat', pose: 'idle' },
-    say('grizzlechop', 'cs05.3', 3.6),
+    say('grizzlechop', 'cs05.3', 2.6),
+    say('grizzlechop', 'cs05.3b', 1.8),
     { t: 'actor', id: 'swordcat', expression: 'determined' },
     say('swordcat', 'cs05.4', 2.0),
 

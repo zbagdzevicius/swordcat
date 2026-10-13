@@ -5,6 +5,8 @@ import { E } from './events.js';
 import { KITTEN_IDS, MODEL_FIT, QUALITY } from './config.js';
 import { measure, resolveFit } from './Assets.js';
 import { uViewport } from './uniforms.js';
+import { UBER_GROUPS } from './uber.js';
+import * as IsoRig from '../camera/IsoRig.js';
 
 const RING = 200;            // §19.8
 /** High-frequency names kept out of the name ring (still in lastEvent). */
@@ -135,6 +137,8 @@ export function installDebug(game) {
     boss: { setHpFrac: (f) => ctx.enemies.boss?.setHpFrac(f), phase: () => ctx.enemies.boss?.phase,
             freeShard: () => ctx.enemies.boss?.freeShard?.() },
     startBoss: () => ctx.levels.arenaNear(ctx.player.pos)?.lock(),
+    /** camera/IsoRig.js pure helpers for smoke formulas (a build has no /src/ URLs to import). */
+    isoRig: IsoRig,
     spawn: (type, x, z) => ctx.enemies.spawn(type, new THREE.Vector3(x, 0, z)),
     kittens: (n) => { ctx.state.kittens = KITTEN_IDS.slice(0, n); },
     objective: (id) => ctx.objectives.progress(id),
@@ -339,6 +343,8 @@ function makeArtHooks(game) {
     get composerActive() { return !!ctx.postfx?.composerActive; },
     /** ART G11: the linked programs (name + cache key + users). */
     programs: () => (ctx.renderer.info.programs ?? []).map((p) => ({ name: p.name, key: p.cacheKey?.slice?.(0, 120) ?? null, used: p.usedTimes })),
+    /** PERF §1.2: the linked uber programs (modules, register use, late registrations). */
+    uber: () => [...UBER_GROUPS].map((g) => g.info()),
   };
   return art;
 }

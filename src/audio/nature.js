@@ -1,7 +1,9 @@
 // src/audio/nature.js  (owner: audio) — M2 procedural ambience (GAME_DESIGN §16.3 spirit: "no file was downloaded for
 // these"). ASSETS.md has no birdsong, cricket, fire or rumble recordings, so the forest, the hub and the CS-04 / CS-10
 // cues synthesise them: tiny sine chirps (birds, the owl) and short buffers built once per AudioContext (crickets,
-// the campfire crackle, the Gloom rumble). Pure planners / sample generators (node-testable) + small WebAudio players.
+// the campfire crackle; the old Gloom rumble data stays for reference, ART §9.3's breeze replaced it in play).
+// Pure planners / sample generators (node-testable) + small WebAudio players.
+import { drain } from './procedural.js';
 
 export const BIRDS = {
   phrase: [2, 6],             // chirps per phrase
@@ -76,7 +78,10 @@ export const CRICKETS = { sec: 3, voices: 3, freq: [3900, 4700], chirpEvery: [0.
  * A seamless cricket bed: `voices` crickets, each chirping `pulses` short sine pulses every ~0.5 s. The chirp grid
  * wraps around the loop length, so the loop has no seam. @returns {Float32Array}
  */
-export function cricketData(sr, rand, sec = CRICKETS.sec) {
+export function cricketData(sr, rand, sec = CRICKETS.sec) { return drain(cricketGen(sr, rand, sec)); }
+
+/** cricketData as a sliceable generator (bake.js; yields once per chirp). */
+export function* cricketGen(sr, rand, sec = CRICKETS.sec) {
   const n = Math.round(sr * sec), out = new Float32Array(n);
   const pl = Math.max(4, Math.round(sr * CRICKETS.pulseSec)), gap = Math.round(sr * CRICKETS.gapSec);
   for (let v = 0; v < CRICKETS.voices; v++) {
@@ -89,6 +94,7 @@ export function cricketData(sr, rand, sec = CRICKETS.sec) {
         const ps = s0 + p * (pl + gap);
         for (let i = 0; i < pl; i++) out[(ps + i) % n] += Math.sin(2 * Math.PI * f * (ps + i) / sr) * Math.sin(Math.PI * i / pl) * amp;
       }
+      yield c;
     }
   }
   return normalise(out, CRICKETS.peak);
@@ -100,8 +106,12 @@ export const CRACKLE = { sec: 4, popsPerSec: 14, snapEvery: 1.6, bed: 0.12, peak
  * A campfire: a soft brown-noise roar plus random pops (decaying noise bursts of 2–15 ms) and the odd louder snap.
  * The bed is cross-faded at the loop seam. @returns {Float32Array}
  */
-export function crackleData(sr, rand, sec = CRACKLE.sec) {
+export function crackleData(sr, rand, sec = CRACKLE.sec) { return drain(crackleGen(sr, rand, sec)); }
+
+/** crackleData as a sliceable generator (bake.js). */
+export function* crackleGen(sr, rand, sec = CRACKLE.sec) {
   const n = Math.round(sr * sec), out = brown(n, rand, 0.995);
+  yield 0;
   normalise(out, CRACKLE.bed);
   const seam = Math.min(n >> 3, Math.round(sr * 0.1));
   for (let i = 0; i < seam; i++) { const w = i / seam; out[i] = out[i] * w + out[n - seam + i] * (1 - w); }
@@ -111,6 +121,7 @@ export function crackleData(sr, rand, sec = CRACKLE.sec) {
     const len = Math.max(2, Math.round(sr * (snap ? 0.012 + rand() * 0.02 : 0.002 + rand() * 0.012)));
     const amp = snap ? 0.9 : 0.15 + rand() * 0.45;
     for (let i = 0; i < len; i++) out[(at + i) % n] += (rand() * 2 - 1) * amp * Math.exp(-5 * i / len);
+    if ((p & 7) === 7) yield p;
   }
   return normalise(out, CRACKLE.peak);
 }

@@ -1,6 +1,7 @@
 // src/world/Bunting.js  (owner: world) — WA §2.6 / LI W12 candy bunting: the ONE added play draw of Phase W.
-// One InstancedMesh per level: triangular pennants (2 tris, 0.28 × 0.34 m) and / or round paper lanterns (4-sided
-// bicone, 8 tris), hung along catenary strings (sag 12 % of the span, 0.55 m spacing, ≥ 3.2 m above the ground).
+// One InstancedMesh per level: triangular pennants (1 tri, 0.28 × 0.34 m) and / or round paper lanterns (3-sided
+// bicone, 6 tris), each instance carrying one cocoa string triangle (a tent spanning the chords to its neighbours, so the
+// string reads continuous between them: 2 tris per pennant, 7 ≤ 8 per lantern), hung along catenary strings (sag 12 % of the span, 0.55 m spacing, ≥ 3.2 m above the ground).
 // Lambert + the global toon patch (shares the world program family), castShadow false, per-instance colour from the
 // level accent set (cycled, ±4 % L jitter), flutter on the free vertices in the vertex shader (no CPU per frame).
 // Caps (config BUNTING, WA28): ≤ 240 pennants (Low 120), ≤ 60 lanterns (Low 30), and the drawn triangles
@@ -22,7 +23,10 @@ export const BUNTING_ACCENT = Object.freeze({
 });
 
 /** Shape constants (m): pennant width / drop, lantern radius / height / hang, colour jitter. */
-export const BUNTING_SHAPE = Object.freeze({ pennantW: 0.28, pennantH: 0.34, lanternR: 0.13, lanternH: 0.34, hang: 0.04, jitterL: 0.04, triPennant: 2, triLantern: 8, maxTris: 480, maxTrisLow: 240 });
+export const BUNTING_SHAPE = Object.freeze({ pennantW: 0.28, pennantH: 0.34, lanternR: 0.13, lanternH: 0.34, hang: 0.04, jitterL: 0.04, cordT: 0.07, triPennant: 2, triLantern: 8, maxTris: 480, maxTrisLow: 240 });
+
+/** The string colour (cocoa): the line between the pennants / lanterns that makes them read as bunting from above. */
+export const BUNTING_CORD = '#6B4A3A';
 
 /**
  * Lay out the instances of a set of strings (pure): catenary points every `spacing` m, clamped ≥ minH above the
@@ -37,7 +41,9 @@ export function layoutBunting(strings, { low = false, heightAt = () => 0, accent
   let pennants = 0, lanterns = 0, dropped = 0;
   const rnd = mulberry32((seed >>> 0) + 977);
   const col = new THREE.Color();
+  let si = -1;
   for (const st of strings ?? []) {
+    si++;
     if (!Array.isArray(st?.a) || !Array.isArray(st?.b)) continue;
     const kind = st.kind === 'lantern' ? 'lantern' : 'pennant';
     const set = Array.isArray(st.set) && st.set.length ? st.set : accent;
@@ -53,7 +59,7 @@ export function layoutBunting(strings, { low = false, heightAt = () => 0, accent
       const y = Math.max(sagY, heightAt(x, z) + B.minH);
       if (kind === 'pennant' ? pennants >= capP : lanterns >= capL) { dropped++; continue; }
       col.set(set[(items.length) % set.length]).offsetHSL(0, 0, (rnd() * 2 - 1) * S.jitterL);
-      items.push({ x, y, z, yaw, kind, color: col.getHex() });
+      items.push({ x, y, z, yaw, kind, color: col.getHex(), s: si, cord: [0, 0, 0, 0] });
       if (kind === 'pennant') pennants++; else lanterns++;
     }
   }
@@ -64,10 +70,20 @@ export function layoutBunting(strings, { low = false, heightAt = () => 0, accent
     const it = items.pop(); dropped++;
     if (it.kind === 'pennant') pennants--; else lanterns--;
   }
+  // the string tents: each item spans the chords to its neighbours on the same string (local +x = toward the previous)
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i], pv = items[i - 1], nx = items[i + 1];
+    if (pv && pv.s === it.s) { it.cord[0] = Math.hypot(pv.x - it.x, pv.z - it.z); it.cord[1] = pv.y - it.y; }
+    if (nx && nx.s === it.s) { it.cord[2] = Math.hypot(nx.x - it.x, nx.z - it.z); it.cord[3] = nx.y - it.y; }
+  }
   return { items, pennants, lanterns, tris: items.length ? items.length * per() : 0, dropped };
 }
 
-/** Pennant (aKind 0) and lantern (aKind 1) geometry; aFree marks the vertices that flutter / sway. */
+/**
+ * Pennant (aKind 0), lantern (aKind 1) and string (aKind 2) geometry; aFree marks the vertices that flutter / sway.
+ * The string triangle's positions are markers (x +1 = the previous neighbour, x −1 = the next, else the apex) that the
+ * vertex shader resolves from the per-instance `aCord` (prev dist, prev dy, next dist, next dy).
+ */
 export function makeBuntingGeometry({ pennant = true, lantern = false } = {}) {
   const S = BUNTING_SHAPE, P = [], N = [], K = [], F = [];
   const v = (x, y, z, k, f, nx = 0, ny = 1, nz = 0) => { P.push(x, y, z); N.push(nx, ny, nz); K.push(k); F.push(f); };
@@ -78,13 +94,14 @@ export function makeBuntingGeometry({ pennant = true, lantern = false } = {}) {
   }
   if (lantern) {
     const r = S.lanternR, h = S.lanternH, top = -S.hang, mid = top - h / 2, bot = top - h;
-    const eq = [[r, 0], [0, r], [-r, 0], [0, -r]];
-    for (let i = 0; i < 4; i++) {
-      const [x0, z0] = eq[i], [x1, z1] = eq[(i + 1) % 4], nx = (x0 + x1) / 2 / r, nz = (z0 + z1) / 2 / r;
+    const eq = [0, 1, 2].map((k) => [Math.cos(k * 2.0944) * r, Math.sin(k * 2.0944) * r]);
+    for (let i = 0; i < 3; i++) {
+      const [x0, z0] = eq[i], [x1, z1] = eq[(i + 1) % 3], nx = (x0 + x1) / r, nz = (z0 + z1) / r;
       v(0, top, 0, 1, 0, nx, 0.7, nz); v(x1, mid, z1, 1, 1, nx, 0.7, nz); v(x0, mid, z0, 1, 1, nx, 0.7, nz);
       v(0, bot, 0, 1, 1, nx, -0.2, nz); v(x0, mid, z0, 1, 1, nx, -0.2, nz); v(x1, mid, z1, 1, 1, nx, -0.2, nz);
     }
   }
+  v(1, 0, 0, 2, 0, 0, 0.85, 0.53); v(0, -1, 0, 2, 0, 0, 0.85, 0.53); v(-1, 0, 0, 2, 0, 0, 0.85, 0.53);   // the string tent
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
@@ -94,13 +111,17 @@ export function makeBuntingGeometry({ pennant = true, lantern = false } = {}) {
 }
 
 /** Lambert + toon patch; flutter on free vertices (wind), the other kind collapsed per instance. Constant cache key. */
+/** Self-lit share of the pennant colour (WA §2.6: bunting reads candy from any side). */
+export const BUNTING_SELF_LIT = 0.5;
+
+const _cord = new THREE.Color(BUNTING_CORD).toArray();
 export function makeBuntingMaterial(uniforms) {
   const m = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
   m.dithering = true;
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aKind, aFree;\nattribute vec2 aBunt;\nuniform float uTime, uWind, uFlutter;')
+      .replace('#include <common>', '#include <common>\nattribute float aKind, aFree;\nattribute vec2 aBunt;\nattribute vec4 aCord;\nvarying float vCord;\nuniform float uTime, uWind, uFlutter;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 {
   float keep = 1.0 - abs(aKind - aBunt.x);
@@ -108,9 +129,24 @@ export function makeBuntingMaterial(uniforms) {
   transformed.z += sin(uTime * 2.3 + ph) * uFlutter * uWind * aFree * 2.5;
   transformed.x += cos(uTime * 1.9 + ph * 1.3) * uFlutter * uWind * aFree;
   transformed *= keep;
+  vCord = step(1.5, aKind);
+  if (aKind > 1.5) {
+    // the string tent: top edge along the chords to both neighbours, apex below (tilted so it never goes edge-on)
+    float pe = step(0.5, position.x), ne = step(0.5, -position.x), ap = 1.0 - pe - ne;
+    transformed = vec3(pe * aCord.x - ne * aCord.z, pe * aCord.y + ne * aCord.w - ap * ${(BUNTING_SHAPE.cordT * 0.7).toFixed(3)}, ap * ${(BUNTING_SHAPE.cordT * 0.7).toFixed(3)});
+  }
 }`);
+    // candy floor: fabric pennants seen edge-on / from their back face (the title's low lens) must never go maroon or
+    // forest-dark (WA §2.6); a self-lit share of the instance colour keeps them bright at 0 extra cost
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vCord;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(${_cord.map((c) => c.toFixed(4)).join(', ')}), vCord);`)
+      .replace('#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+totalEmissiveRadiance += diffuseColor.rgb * ${BUNTING_SELF_LIT.toFixed(2)};`);
   };
-  m.customProgramCacheKey = () => 'world-bunting-v1';
+  m.customProgramCacheKey = () => 'world-bunting-v3';
   m.userData.owned = true;
   return m;
 }
@@ -128,9 +164,10 @@ export class Bunting {
     const L = this.layout, n = L.items.length;
     if (!n) return;
     this.geometry = makeBuntingGeometry({ pennant: L.pennants > 0, lantern: L.lanterns > 0 });
-    const bunt = new Float32Array(n * 2);
-    L.items.forEach((it, i) => { bunt[i * 2] = it.kind === 'lantern' ? 1 : 0; bunt[i * 2 + 1] = i * 0.7; });
+    const bunt = new Float32Array(n * 2), cord = new Float32Array(n * 4);
+    L.items.forEach((it, i) => { bunt[i * 2] = it.kind === 'lantern' ? 1 : 0; bunt[i * 2 + 1] = i * 0.7; cord.set(it.cord, i * 4); });
     this.geometry.setAttribute('aBunt', new THREE.InstancedBufferAttribute(bunt, 2));
+    this.geometry.setAttribute('aCord', new THREE.InstancedBufferAttribute(cord, 4));
     this.material = makeBuntingMaterial(this.uniforms);
     const mesh = this.mesh = new THREE.InstancedMesh(this.geometry, this.material, n);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), s = new THREE.Vector3(1, 1, 1), c = new THREE.Color();

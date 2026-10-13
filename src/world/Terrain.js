@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { Heightfield } from '../physics/Heightfield.js';
 import { fbmP, valueNoise, smooth, distToPolyline, smoothPolyline } from './noise.js';
+import { worldMaterial, worldStatic } from './Props.js';
 
 /**
  * Ground palette (ART_WARM_SPEC §2.6, designed against the §2.3 luma targets: 70–90 % of every iso frame is ground, so
@@ -26,7 +27,7 @@ export const GROUND = {
  * PERF §7.3 Low-tier vertex AO (height-difference term over 8 neighbours at `r` m: ao = clamp(1 − k · max(0, hAvg − h)
  * / r, min, 1)), which stands in for the shadow map Low does not have.
  */
-export const GROUND_LOOK = Object.freeze({ noise: 0.16, speck: 0.2, flowerNear: 4, ao: Object.freeze({ r: 1.5, k: 0.35, min: 0.65 }) });
+export const GROUND_LOOK = Object.freeze({ noise: 0.16, speck: 0.2, flowerNear: 4, flowerOff: 2, ao: Object.freeze({ r: 1.5, k: 0.35, min: 0.65 }) });
 
 const _a = new THREE.Color(), _c = new THREE.Color();
 
@@ -54,6 +55,28 @@ export function polylineDistanceGrid(pts, size, res, maxD) {
   }
   for (let i = 0; i < out.length; i++) out[i] = Math.sqrt(out[i]);
   return out;
+}
+
+/** Ground tiling (PERF budgets): target tile side (m) so the iso view draws ~1-4 frustum-culled tiles. */
+export const GROUND_TILES = Object.freeze({ target: 40 });
+
+/**
+ * Tiles per side for a ground of `cells` rendered cells of `cellM` m (pure): the divisor of `cells` nearest
+ * `cells · cellM / target`, breaking near-ties toward an even cell count per tile (so the half-resolution LOD fits). The old fixed
+ * 2 × 2 split left every tile ~100 m wide: the camera always stood in (and drew) half the level at full detail.
+ * @param {number} cells @param {number} cellM @param {number} [target] metres
+ * @returns {number}
+ */
+export function groundChunks(cells, cellM, target = GROUND_TILES.target) {
+  cells = Math.max(1, cells | 0);
+  const want = Math.max(1, (cells * cellM) / target);
+  let best = 1, bestScore = Infinity;
+  for (let n = 1; n <= Math.min(cells, Math.ceil(want) * 2 + 2); n++) {
+    if (cells % n) continue;
+    const score = Math.abs(Math.log(n / want)) + ((cells / n) % 2 ? 0.05 : 0);   // even: a tie-breaker only
+    if (score < bestScore) { bestScore = score; best = n; }
+  }
+  return best;
 }
 
 export class Terrain {
@@ -303,8 +326,10 @@ export class Terrain {
       data[i * 4] = toHalf(hf.h[i]);
       data[i * 4 + 1] = toHalf(Math.max(0, Math.min(1, this.density[i])));
       data[i * 4 + 2] = toHalf(Math.max(0, this.hmul[i]));
-      // A = dryness + 2 × near-spine (path edge + GROUND_LOOK.flowerNear m): the tufts' flower share (8 % / 3 %)
-      data[i * 4 + 3] = toHalf(this.dry[i] + (this._dSpine && this._dSpine[i] < this.pathWidth * 0.5 + GROUND_LOOK.flowerNear ? 2 : 0));
+      // A = dryness + 2 × near-spine (path edge + GROUND_LOOK.flowerNear m: the tufts' higher flower share) + 4 × on-path
+      // (path edge + GROUND_LOOK.flowerOff m: no flowers at all, WA §3.2: letters and pickups own the trail)
+      const ds = this._dSpine ? this._dSpine[i] : Infinity, pe = this.pathWidth * 0.5;
+      data[i * 4 + 3] = toHalf(this.dry[i] + (ds < pe + GROUND_LOOK.flowerOff ? 4 : ds < pe + GROUND_LOOK.flowerNear ? 2 : 0));
     }
     const tex = new THREE.DataTexture(data, W, W, THREE.RGBAFormat, THREE.HalfFloatType);
     tex.minFilter = tex.magFilter = THREE.LinearFilter;
@@ -397,30 +422,13 @@ export class Terrain {
   }
 }
 
-/** Lambert ground with vertex colours and calm world-space detail noise (art.md §9.4; ART §2.2 low hue noise). */
+/**
+ * Lambert ground with vertex colours and calm world-space detail noise (art.md §9.4; ART §2.2 low hue noise): the
+ * world-static patch's ground feature (PERF §1.2: the same program as every plain-mesh world material).
+ */
 export function makeGroundMaterial() {
-  const m = new THREE.MeshLambertMaterial({ vertexColors: true });
-  m.dithering = true;
-  m.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGWorld;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
-varying vec3 vGWorld;
-float gH(vec2 p) { p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
-float gN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(gH(i), gH(i + vec2(1.0, 0.0)), f.x), mix(gH(i + vec2(0.0, 1.0)), gH(i + vec2(1.0, 1.0)), f.x), f.y); }`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
-{
-  vec2 wp = vGWorld.xz;
-  float n = gN(wp * 0.35) * 0.5 + gN(wp * 1.3) * 0.3 + gN(wp * 5.1) * 0.2;
-  float speck = smoothstep(0.78, 0.95, gN(wp * 9.0));
-  diffuseColor.rgb *= ${(1 - GROUND_LOOK.noise).toFixed(3)} + ${(GROUND_LOOK.noise * 2).toFixed(3)} * n;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.06, 0.94), speck * ${GROUND_LOOK.speck.toFixed(3)});
-}`);
-  };
-  m.customProgramCacheKey = () => 'world-ground-v2';
+  const m = worldMaterial();
+  worldStatic(m).uWGround.value.set(1, GROUND_LOOK.noise, GROUND_LOOK.speck);
   m.userData.owned = true;
   return m;
 }

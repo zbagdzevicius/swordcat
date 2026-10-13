@@ -159,7 +159,7 @@ export class Results {
       this._stamped = true;
       pulse(this.stamp, 'is-stamped');
       pulse(this.confetti, 'is-on');
-      this.hooks.sfx?.('ui.stamp');
+      this.hooks.sfx?.('rankStamp');                       // audio: PIZZI03 + the stamp (WA21)
       this.hooks.sfx?.('jingles/jingles_PIZZI03', { volume: 0.7 });
       flag(this.btn, 'is-in', true);
     }

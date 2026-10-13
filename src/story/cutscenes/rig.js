@@ -67,6 +67,20 @@ export function buildMirror() {
   return g;
 }
 
+/**
+ * The practice sun ring (WA §7.2: the gold ring at the dummy the first lesson races to): one flat additive ring, `r` m,
+ * lying on the ground. `userData.dispose()` frees it. Its opacity / scale are animated by the caller.
+ */
+export function buildSunRing(r = 0.95, color = '#FFD57A') {
+  const g = new THREE.Mesh(new THREE.RingGeometry(r * 0.78, r, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8,
+    depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: true, toneMapped: false }));
+  g.rotation.x = -Math.PI / 2;
+  g.renderOrder = 2;
+  g.name = 'story:sunring';
+  g.userData.dispose = () => { g.geometry.dispose(); g.material.dispose(); };
+  return g;
+}
+
 /** A pool of last sunlight (CS-01 shot 5: "every kitten flops into it") — a soft warm disc on the grass. */
 export function buildSunPatch() {
   let map = null;

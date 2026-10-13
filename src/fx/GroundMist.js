@@ -7,7 +7,7 @@
 // Standing Ground and the Meme Cam drift ×2 (FX sets `speedMul`). ONE instanced draw; play camera only (it fades with
 // the focus-fog mode, so cutscenes, presets, the Meme Cam's eye-level start and `?cam=classic` never show it).
 import * as THREE from 'three';
-import { NOISE, OUTPUT } from './shaders.js';
+import { NOISE, OUTPUT, fxShaderMaterial } from './shaders.js';
 import { HFOG } from '../world/HeightFog.js';
 import { groundY, hash01 } from './util.js';
 
@@ -144,7 +144,7 @@ export class GroundMist {
     this.count = n;
     this.geometry = g;
     const holes = []; for (let i = 0; i < GROUND_MIST.holes; i++) holes.push(new THREE.Vector4());
-    this.material = new THREE.ShaderMaterial({
+    this.material = fxShaderMaterial({
       name: 'fx.groundMist', vertexShader: VERT, fragmentShader: FRAG, fog: false,
       uniforms: { uColor: { value: new THREE.Color('#F6E4C0') }, uScroll: { value: this._scroll }, uFocus: { value: new THREE.Vector3() },
         uHoles: { value: holes }, uAlpha: { value: 0 }, uScale: { value: GROUND_MIST.scale } },

@@ -41,6 +41,10 @@ export const PRESETS = Object.freeze({
   CRANE_DOWN: Object.freeze({ kind: 'rail', pos: [0, 6, 8], to: [0, 1.6, 4.5], look: [0, 0.8, 0], fov: 40, dur: 8, ease: 'inOutSine' }),
   /** Extreme close-up: trembling eyes, glisten. */
   ECU_EYES: Object.freeze({ kind: 'static', pos: [0, 0.79, 0.35], look: [0, 0.79, 0], fov: 25 }),
+  /** Medium close-up from the front-left (+X = her left), head and shoulders at her eye level, the lens ~1.1 m out
+   *  (well clear of the fur): the quiet emotional line (CS-08 #3 "Nobody's coming.") reads on her whole face, the
+   *  flattened ears inside the letterbox. */
+  MCU: Object.freeze({ kind: 'static', pos: [0.55, 0.82, 0.95], look: [0, 0.72, 0], fov: 40 }),
   /** Kneels and talks at her eye height; looks at the midpoint of the anchor and `target` at y 0.75. */
   TWO_SHOT_LOW: Object.freeze({ kind: 'static', pos: [1.6, 0.75, 1.6], look: [0, 0.75, 0], lookMid: 0.75, fov: 35 }),
   /** Looks up at her: the scale contrast. */

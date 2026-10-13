@@ -208,6 +208,20 @@ export function tx(ctx, key, vars = null) {
   return fill(String(key), vars);
 }
 
+/**
+ * E.TOAST payload → shown text. A keyed toast (`textKey ?? key`) resolves device-aware through tx() (CONTROLS_SPEC §12:
+ * phones see `.touch`, pads `.pad`), unless the emitter pre-resolved text that differs from the key's base copy (e.g.
+ * filled with vars it did not pass along) or the key is not a strings key (LevelKit `zone:blocked`): then `text` wins.
+ * @param {object} ctx @param {{ text?: string, key?: string, textKey?: string, vars?: object }} p @returns {string}
+ */
+export function toastText(ctx, p) {
+  if (!p) return '';
+  const k = p.textKey ?? p.key, s = ctx?.strings;
+  const known = k != null && (s?.has ? s.has(k) : (s?.t != null || UI_STRINGS[k] != null));
+  if (known && (p.text == null || p.vars != null || (s?.t && p.text === s.t(k)))) return tx(ctx, k, p.vars ?? null);
+  return p.text ?? (k != null ? tx(ctx, k, p.vars ?? null) : '');
+}
+
 /** Key or literal text (cutscene `ui` steps pass either). */
 export function txt(ctx, keyOrText, vars = null) {
   if (keyOrText == null || keyOrText === false) return '';

@@ -3,6 +3,10 @@
 // and (on request) a helmet popping off, spinning. Also the arena `spawn` poof (§12.1) and small utility puffs.
 import * as THREE from 'three';
 import { SHAPE, FADE, GROW } from './Particles.js';
+import { worldMaterial } from '../world/Props.js';
+
+/** The popped helmet's warm pewter (vertex colour). */
+const HELMET_COLOR = '#C8B9A6';
 
 /** Faction debris per enemy type id (prefix match: 'bonehead:warrior' → 'bonehead'). */
 export const DEBRIS = Object.freeze({
@@ -72,6 +76,10 @@ function helmGeometry(style) {
     : [[0.0, 1.0], [0.25, 0.97], [0.44, 0.86], [0.55, 0.66], [0.58, 0.42], [0.6, 0.2], [0.66, 0.08], [0.6, 0.04], [0.52, 0.12]];
   const g = new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x * 0.5, y - 0.5)), 18);
   g.computeVertexNormals();
+  // warm pewter as vertex colour: the helmet draws with the world's vertex-coloured material (one shared program)
+  const c = new THREE.Color(HELMET_COLOR), n = g.attributes.position.count, col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return g;
 }
 
@@ -80,8 +88,9 @@ export class HelmetPops {
   constructor({ rng, groundY, max = 6 }) {
     this.rng = rng; this.groundY = groundY;
     this.geos = { kettle: helmGeometry('kettle'), sallet: helmGeometry('sallet') };
-    // K6: no Standard / Physical in play: a warm pewter Lambert (one program shared with the world's Lambert)
-    this.mat = new THREE.MeshLambertMaterial({ name: 'fx.helmet', color: '#C8B9A6' });
+    // K6: no Standard / Physical in play: a warm pewter Lambert. PERF §1.2: world's vertex-coloured world-static
+    // material (the program the ground, gates and letters already use), not a Lambert program of its own
+    this.mat = worldMaterial({ name: 'fx.helmet' });
     this.list = [];
     for (let i = 0; i < max; i++) {
       const m = new THREE.Mesh(this.geos.kettle, this.mat);

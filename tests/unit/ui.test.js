@@ -9,7 +9,7 @@ import { KITTEN_IDS, LEVEL_IDS, DIFFICULTY, TELEGRAPH } from '../../src/core/con
 import { UI, UI_TIMING, storyCanSkip } from '../../src/ui/UI.js';
 import {
   tx, txt, fill, esc, rich, segments, segLength, revealHtml, revealCount, revealDuration, actionGlyph, glyphify,
-  formatTime, heartStates, frac, objectiveText, chapterInfo, rankFor, RANK_KEYS, levelKittens, levelLetterId, titleCase,
+  toastText, formatTime, heartStates, frac, objectiveText, chapterInfo, rankFor, RANK_KEYS, levelKittens, levelLetterId, titleCase,
 } from '../../src/ui/text.js';
 import { resultRows, RESULTS } from '../../src/ui/results.js';
 import { ToastQueue, TOAST, iconFor } from '../../src/ui/toasts.js';
@@ -381,7 +381,7 @@ test('UI constructs without a DOM and keeps the §19.3 contract', async () => {
   await ui.showResults({ levelId: 'meadow' });      // resolves at once without a screen
   await ui.chapter(1); await ui.fade('black');
   assert.equal(ui.toast('hello'), false);
-  assert.deepEqual({ ...ui.handles }, { dialog: true, cinema: true, prompt: true, skip: true, title: true, tutorial: true });
+  assert.deepEqual({ ...ui.handles }, { dialog: true, cinema: true, prompt: true, skip: true, title: true, tutorial: true, reward: true });
   assert.equal(typeof ui.cinema, 'function');
   for (const k of ['letterbox', 'hud', 'apply', 'clear', 'chapter', 'fade']) assert.equal(typeof ui.cinema[k], 'function', k);
   ui.cinema({ letterbox: true });                   // ignored before init
@@ -880,7 +880,7 @@ import nfs from 'node:fs';
 import npath from 'node:path';
 import { flashSpec, FLASH, LAYERS } from '../../src/ui/layers.js';
 import { snapRect, rectsHash, OCCL } from '../../src/ui/occluders.js';
-import { CelebrateQueue, alertedNear, rewardInfo, REWARD_ART, CELEBRATE_TIMING } from '../../src/ui/celebrate.js';
+import { CelebrateQueue, alertedNear, rewardInfo, REWARD_ART, CELEBRATE_TIMING, pollSkip } from '../../src/ui/celebrate.js';
 import { GuideModel, dotFills, GUIDE } from '../../src/ui/guide.js';
 import { offerDue, OFFER } from '../../src/ui/offer.js';
 import { flyPoint } from '../../src/ui/flyIcons.js';
@@ -1145,4 +1145,299 @@ test('PERF I2 / ART G17: the boot font is one Fredoka woff2 (no Cinzel / Uncial 
   assert.ok(!/Cinzel|Uncial|MedievalSharp/.test(nfs.readFileSync('src/ui/fonts.css', 'utf8')));
   const sz = nfs.statSync(npath.join('public/assets', FONT_FILES[0].file)).size;
   assert.ok(sz < 100 * 1024, `woff2 subset ${sz} B`);
+});
+
+test('requests/ui.md: pathPreview is a 3-way choice (Auto / On / Off) inside config SETTING_VALUES', async () => {
+  const { SETTING_VALUES } = await import('../../src/core/config.js');
+  const row = SETTING_BY_KEY.pathPreview;
+  assert.equal(row.type, 'choice');
+  assert.deepEqual(row.options, ['auto', 'on', 'off']);
+  for (const o of row.options) assert.ok(SETTING_VALUES.pathPreview.includes(o), o);
+  assert.equal(stepSetting(row, 'auto', 1), 'on');
+  assert.equal(stepSetting(row, 'on', 1), 'off');
+  assert.equal(stepSetting(row, 'off', -1), 'on');
+});
+
+test('PERF §10.2 boot shell diet: ui never statically imports the camera rig, the picker or physics; hub panels load lazily', async () => {
+  const files = nfs.readdirSync('src/ui').filter((f) => f.endsWith('.js'));
+  for (const f of files) {
+    const src = nfs.readFileSync(npath.join('src/ui', f), 'utf8');
+    assert.ok(!/^import[^;]*from '\.\.\/(camera|physics)\//m.test(src), `${f} imports camera / physics statically`);
+  }
+  const ui = nfs.readFileSync('src/ui/UI.js', 'utf8');
+  assert.ok(!/^import[^;]*from '\.\/(shops|questBoard|shopArt)\.js'/m.test(ui), 'shops / Quest Board are dynamic imports');
+  // the mirrored constants still match their owners
+  const { FRAME, isoFrameOffset } = await import('../../src/camera/IsoRig.js');
+  const { HER_Y, heroPoint } = await import('../../src/ui/touchLayout.js');
+  assert.equal(HER_Y, FRAME.herY);
+  const hp = heroPoint(844, 390, false);
+  assert.ok(Math.abs(hp.y - 390 * (0.5 + isoFrameOffset(390, 0, false))) < 1e-9);
+  const hpp = heroPoint(390, 844, true);
+  assert.ok(Math.abs(hpp.y - 844 * (0.5 + isoFrameOffset(844, 0, true))) < 1e-9);
+  const { HUB_LEVEL } = await import('../../src/ui/questBoard.js');
+  assert.match(ui, new RegExp(`const HUB_LEVEL = '${HUB_LEVEL}'`));
+  const { canvasRect } = await import('../../src/ui/hpBars.js');
+  const r = canvasRect({ renderer: null });
+  assert.ok(r.width > 0 && r.height > 0 && r.left === 0);
+});
+
+test('ui.W2: rewards are not double-burst: fx bursts on `reward` / `kitten:rescued`, the ui only for its own cards', async () => {
+  const { Celebrate } = await import('../../src/ui/celebrate.js');
+  const { CelebrateQueue } = await import('../../src/ui/celebrate.js');
+  const q = new CelebrateQueue();
+  q.push('card', 'holy', null, 'reward');
+  q.push('card', 'shard', { n: 1 }, 'ui');
+  assert.equal(q.items[0].src, 'reward');
+  assert.equal(q.items[1].src, 'ui');
+  assert.equal(typeof Celebrate, 'function');
+  const src = nfs.readFileSync('src/ui/celebrate.js', 'utf8');
+  assert.match(src, /c\.src !== 'reward' && c\.src !== 'kitten'/);
+  assert.ok(!/burst\?\.\('confetti'/.test(src), 'no second confetti burst');
+});
+
+test('integrator: WA §7.5 a re-veil after the idle lift keeps the lessons already taught', async () => {
+  const { UI: UIClass } = await import('../../src/ui/UI.js');
+  const calls = [];
+  const touch = { veiled: null, veil(t) { this.veiled = t ? new Set(['attack', 'guard', 'dodge', 'jump', 'meow'].filter((a) => !t.includes(a))) : null; calls.push(t ? [...t] : null); }, reveal(a) { this.veiled?.delete(a); } };
+  const self = { touch, ctx: { state: { getFlag: () => false } }, _taught: undefined };
+  const lesson = (p) => UIClass.prototype._lesson.call(self, p);
+  lesson({ speaker: 'pearl', action: 'attack' });
+  lesson({ speaker: 'pearl', action: 'meow' });
+  touch.veil(null);                                   // the 3 s idle lift
+  lesson({ speaker: 'pearl', action: null, step: 'praise' });
+  assert.ok(!touch.veiled.has('meow') && !touch.veiled.has('attack'), `re-veil keeps attack + meow (${[...touch.veiled]})`);
+  assert.ok(touch.veiled.has('jump'), 'untaught buttons stay veiled');
+});
+
+// ------------------------------------------------------------------ Phase W review fixes (ui)
+import { bonkedShown } from '../../src/ui/hud.js';
+import { hintLayerOn } from '../../src/ui/prompts.js';
+import { isTip } from '../../src/ui/toasts.js';
+import { revealShow, inPractice, companionJoined, LESSON_SLOTS } from '../../src/ui/reveal.js';
+import { pulse, flag } from '../../src/ui/dom.js';
+
+/** The declarations of the LAST rule in ui.css whose selector list is exactly `sel` (cascade order). */
+function cssRule(sel, has = null) {
+  const css = nfs.readFileSync('src/ui/ui.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m, last = null;
+  while ((m = re.exec(css))) if (m[1].trim() === sel && (!has || has.test(m[2]))) last = m[2];
+  return last;
+}
+
+test('review: the guide bubble / offer are centred without a transform and clamped to the SafeFrame (portrait 390 px)', () => {
+  for (const sel of ['.ui-guide', '.ui-offer']) {
+    const r = cssRule(sel);
+    assert.ok(r, `${sel} rule`);
+    // popIn ends on `transform: none`: a translateX(-50%) centring was wiped, so the bubble ran off the right edge
+    assert.ok(!/transform\s*:/.test(r), `${sel} must not centre with a transform (${r})`);
+    assert.match(r, /left:\s*0;\s*right:\s*0;\s*margin:\s*0 auto/);
+    assert.match(r, /width:\s*min\(420px,\s*calc\(100vw - 32px/);
+  }
+  // the fixture: the box the rules lay out at phone widths stays inside the viewport with 16 px gutters
+  for (const [vw, vh] of [[390, 844], [844, 390], [360, 740], [1280, 720]]) {
+    const w = Math.min(420, vw - 32), left = (vw - w) / 2;
+    assert.ok(left >= 16 - 1e-9 && left + w <= vw - 16 + 1e-9, `${vw}x${vh}: ${left}..${left + w}`);
+  }
+  assert.match(cssRule('.gd-say'), /overflow-wrap:\s*anywhere/);              // the line wraps instead of clipping
+  assert.match(cssRule('.gd-dots'), /flex-wrap:\s*wrap/);                     // all 7 paw dots stay on screen
+  assert.ok(!/transform\s*:/.test(cssRule('.ui-prompt') ?? ''), 'the HOLD prompt is not centred by a transform either');
+});
+
+test('review: "BONKED!" only after the final hit: never while the boss still has HP', () => {
+  assert.equal(bonkedShown({ hp: 40, alive: true }, true), false);           // a defeat signal mid-fight (debug / hand-off)
+  assert.equal(bonkedShown({ hp: 400, alive: true }, true), false);
+  assert.equal(bonkedShown({ hp: 0, alive: true }, true), true);
+  assert.equal(bonkedShown({ hp: 12, alive: false }, true), true);
+  assert.equal(bonkedShown({ hp: 0, alive: false }, false), false);          // no defeat, no stamp
+  for (let hp = 1; hp <= 100; hp += 7) assert.equal(bonkedShown({ hp, alive: true }, true), false, `hp ${hp}`);
+});
+
+test('review: hint / prompt layers show in live play only (never in a scene, a dialogue, the letterbox or a menu)', () => {
+  const play = { hud: true, meme: false, mode: 'play', dialog: false, letterbox: false, menu: false, cinema: false };
+  assert.equal(hintLayerOn(play), true);
+  for (const [k, v] of [['mode', 'cutscene'], ['mode', 'dialog'], ['mode', 'menu'], ['mode', 'memecam'], ['dialog', true], ['letterbox', true], ['menu', true], ['cinema', true], ['meme', true], ['hud', false]]) {
+    assert.equal(hintLayerOn({ ...play, [k]: v }), false, `${k}=${v}`);
+  }
+});
+
+test('review: gameplay tips go one at a time, wait while the guide talks or a scene plays, other toasts are not held', () => {
+  assert.ok(isTip('tut.valor', 'hint') && isTip('tut.reflect', null) && !isTip('toast.kitten', null));
+  const q = new ToastQueue();
+  q.push('Hold Space near foes to fill Valor.', null, true);
+  q.push('Parry the bolt to send it back!', null, true);
+  q.push('Kitten found!', 'kitten');
+  assert.deepEqual(q.shown.map((t) => t.text), ['Hold Space near foes to fill Valor.', 'Kitten found!']);   // never two tips stacked
+  q.update(TOAST.life + 0.01);
+  assert.deepEqual(q.shown.map((t) => t.text), ['Parry the bolt to send it back!']);
+  const h = new ToastQueue();
+  h.tipHold = true;
+  h.push('tip', null, true); h.push('Saved', 'seal');
+  assert.deepEqual(h.shown.map((t) => t.text), ['Saved']);
+  h.tipHold = false; h.update(0.01);
+  assert.deepEqual(h.shown.map((t) => t.text), ['Saved', 'tip']);
+});
+
+test('review: practice reveal on every device: keycaps per lesson; milk, Valor, Golden and the kitten slot wait', () => {
+  const r0 = revealShow({ practice: true, taught: [] });
+  for (const a of LESSON_SLOTS) assert.equal(r0[a], false, a);
+  assert.ok(!r0.milk && !r0.valor && !r0.golden && !r0.ability && !r0.grit && !r0.attack);
+  const r1 = revealShow({ practice: true, taught: ['attack', 'jump', 'guard'] });
+  assert.ok(r1.attack && r1.jump && r1.guard && r1.grit && !r1.dodge && !r1.meow && !r1.milk && !r1.valor);
+  const r2 = revealShow({ practice: false, taught: null });
+  for (const k of [...LESSON_SLOTS, 'attack', 'ability', 'golden', 'milk', 'valor', 'grit']) assert.equal(r2[k], true, k);
+  // practice = the tutorial runs, or the practice-field spawn before Morning Practice is over
+  const flags = new Set();
+  const ctx = { state: { getFlag: (f) => flags.has(f), levelId: 'meadow' }, levels: { current: { id: 'meadow', spawnId: 'practice' } }, story: { tutorial: { active: false } } };
+  assert.equal(inPractice(ctx), true);
+  ctx.levels.current.spawnId = 'start';
+  assert.equal(inPractice(ctx), false);                                      // a debug spawn elsewhere keeps the full bar
+  ctx.story.tutorial.active = true;
+  assert.equal(inPractice(ctx), true);
+  flags.add('prologue.practice');
+  assert.equal(inPractice(ctx), false);
+  // the kitten slot: Mochi only once D-01 sets meadow.mochi; kittens without a join scene always
+  assert.equal(companionJoined(ctx, 'mochi'), false);
+  flags.add('meadow.mochi');
+  assert.equal(companionJoined(ctx, 'mochi'), true);
+  assert.equal(companionJoined(ctx, 'marmalade'), true);
+  // review: one source of truth with the companion system (Q casts for any unlocked kitten, flag or not)
+  const ctx2 = { state: { getFlag: () => false, companions: { unlocked: ['mochi'], active: ['mochi'] } } };
+  assert.equal(companionJoined(ctx2, 'mochi'), true);
+  assert.equal(companionJoined(ctx2, 'sage'), false);
+});
+
+test('review: a pulsed class can be flagged off again (the stray fly-to-HUD fish over the letterbox)', () => {
+  const mk = () => {
+    const set = new Set();
+    return { classList: { add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c), toggle: (c, on) => (on ? set.add(c) : set.delete(c)) }, set };
+  };
+  const e = mk();
+  flag(e, 'is-on', false);
+  pulse(e, 'is-on');
+  assert.ok(e.set.has('is-on'));
+  flag(e, 'is-on', false);                       // the flight landed: this used to be a no-op (stale flag cache)
+  assert.ok(!e.set.has('is-on'));
+  const b = mk();
+  pulse(b, 'is-bonked'); flag(b, 'is-bonked', false);
+  assert.ok(!b.set.has('is-bonked'), 'a stamp class from the last boss never sticks on the next boss bar');
+});
+
+test('review: wardrobe swatches derive from the characters CAPES (memeWhite is cream + pink hem)', async () => {
+  const { CAPE_COLORS, CAPE_HEMS, CAPE_IDS } = await import('../../src/ui/shops.js');
+  const { CAPES } = await import('../../src/characters/palette.js');
+  for (const id of CAPE_IDS) { assert.equal(CAPE_COLORS[id], CAPES[id].color, id); assert.equal(CAPE_HEMS[id], CAPES[id].hem, id); }
+  assert.equal(CAPE_COLORS.memeWhite, '#FFF3E2');
+});
+
+test('review: title CTA sits in the lower third above the footer; the footer has a cream pill', () => {
+  const row = cssRule('.home-row', /position:\s*absolute/);
+  assert.match(row, /bottom:\s*calc\(/);
+  assert.ok(!/top:\s*74%/.test(row));
+  const foot = cssRule('.title-foot');
+  assert.match(foot, /background:\s*#FFF8EE/);
+  assert.match(foot, /border-radius:\s*999px/);
+});
+
+test('review: celebrations skip on a key / pad press after skipAfter (not only on a pointer)', () => {
+  const q = new CelebrateQueue();
+  const acts = new Map([['interact', { pressed: false }], ['attack', { pressed: false }]]);
+  const input = { actions: acts };
+  q.push('card', 'holy');
+  q.update(0.016, false);
+  assert.ok(q.cur && !q.cur.flying);
+  acts.get('interact').pressed = true;
+  assert.equal(pollSkip(q, input), null, 'too early: before skipAfter');
+  acts.get('interact').pressed = false;
+  q.update(0.7, false);
+  assert.equal(pollSkip(q, input), null, 'no press, no skip');
+  acts.get('attack').pressed = true;
+  const c = pollSkip(q, input);
+  assert.equal(c, q.cur, 'a key press moves the current item to its fly phase');
+  const ev = q.update(0.016, false);
+  assert.equal(ev.fly, c);
+  assert.equal(pollSkip(q, input), null, 'already flying');
+});
+
+test('toastText: keyed toasts resolve device-aware; pre-filled or non-key text wins', () => {
+  const S = { 'tut.zoom': 'Scroll to zoom.', 'tut.zoom.touch': 'Pinch to zoom.', 'tut.zoom.pad': '[Zoom] to zoom.', 'toast.n': 'Got {n}!' };
+  const strings = { has: (k) => k in S, t: (k, v) => fill(S[k] ?? k, v) };
+  const ctx = (device) => ({ strings, input: { device } });
+  assert.equal(toastText(ctx('touch'), { key: 'tut.zoom' }), 'Pinch to zoom.');
+  assert.equal(toastText(ctx('pad'), { key: 'hint', textKey: 'tut.zoom' }), '[Zoom] to zoom.');
+  assert.equal(toastText(ctx('kbm'), { key: 'tut.zoom' }), 'Scroll to zoom.');
+  assert.equal(toastText(ctx('touch'), { key: 'tut.zoom', text: 'Scroll to zoom.' }), 'Pinch to zoom.', 'base copy → device variant');
+  assert.equal(toastText(ctx('touch'), { key: 'toast.n', vars: { n: 2 }, text: 'Got 2!' }), 'Got 2!');
+  assert.equal(toastText(ctx('touch'), { key: 'toast.n', text: 'Got 3!' }), 'Got 3!', 'filled without vars: text wins');
+  assert.equal(toastText(ctx('touch'), { key: 'zone:blocked', text: 'Not yet!' }), 'Not yet!');
+  assert.equal(toastText(ctx('touch'), { text: 'plain' }), 'plain');
+  assert.equal(toastText(ctx('touch'), null), '');
+});
+
+test('review: rat / Grizzlechop portraits wear the enemies palette (plum fur on a warm disc, not grey mice)', async () => {
+  const { portraitSVG } = await import('../../src/ui/portraits.js');
+  const { ENEMY_PAL } = await import('../../src/enemies/props.js');
+  for (const id of ['rat', 'grizzlechop']) {
+    const svg = portraitSVG(id, {});
+    assert.ok(svg.includes(ENEMY_PAL.mischiefPlum), `${id} uses the rats' plum fur ${ENEMY_PAL.mischiefPlum}`);
+    assert.ok(!/#9A9AA0|#A6A6AC|#D9D2C2/i.test(svg), `${id} has no grey`);
+  }
+  assert.ok(portraitSVG('grizzlechop', {}).includes('#E8C66A'), 'Grizzlechop keeps his captain hat');
+});
+
+test('review: interaction tags stay out of the boss bar band; Rest waits while a boss fight is on', async () => {
+  const { tagY, tagAllowed } = await import('../../src/ui/prompts.js');
+  assert.equal(tagY(300, 380, 0), 300, 'no band: above the object');
+  assert.equal(tagY(300, 380, 120), 300, 'clear of the band: above the object');
+  assert.equal(tagY(60, 140, 120), 140, 'inside the band: hangs under the object');
+  assert.equal(tagY(20, 90, 120), 120, 'never higher than the band');
+  assert.equal(tagAllowed('vigil', true), false);
+  assert.equal(tagAllowed('vigil', false), true);
+  assert.equal(tagAllowed('talk', true), true);
+});
+
+test('review: objective beacon resolves the quest step target (owner API, zones, caged kittens, anchors) and steps aside', async () => {
+  const { questTarget, beaconState, BEACON, QUEST_TARGETS } = await import('../../src/ui/beacon.js');
+  const out = { x: 0, y: 0, z: 0 };
+  const flags = new Set();
+  const ctx = {
+    state: { getFlag: (f) => flags.has(f) },
+    levels: { current: { def: { zones: [{ id: 'cart', at: [-14, -41] }, { id: 'forge', at: [19, -4] }, { id: 'square', at: [0, 8] }] } }, anchor: (n) => (n === 'steps' ? [0, 34, null, Math.PI] : null) },
+    companions: { actors: [{ kittenId: 'mochi', pos: { x: -13, y: 0.4, z: -40 } }] },
+  };
+  assert.equal(questTarget(ctx, null, out), false);
+  assert.equal(questTarget(ctx, 'meadow.mochi', out), true);
+  assert.deepEqual([out.x, out.y, out.z], [-13, 0.4, -40], 'the caged kitten first');
+  ctx.companions.actors.length = 0;
+  assert.equal(questTarget(ctx, 'meadow.mochi', out), true);
+  assert.deepEqual([out.x, out.z], [-14, -41], 'then its zone');
+  assert.ok(Number.isNaN(out.y), 'zone height comes from the ground');
+  assert.equal(questTarget(ctx, 'town.rescue', out), true); assert.equal(out.x, 19, 'the forge first');
+  flags.add('town.cleared.forge');
+  assert.equal(questTarget(ctx, 'town.rescue', out), true); assert.equal(out.z, 8, 'then the square');
+  assert.equal(questTarget(ctx, 'town.steps', out), true, 'no steps zone here: the level anchor');
+  assert.deepEqual([out.x, out.z], [0, 34]);
+  assert.equal(questTarget(ctx, 'bog.pearl', out), false, 'unknown → no beacon');
+  ctx.story = { questTarget: (id) => (id === 'bog.pearl' ? { x: 5, y: 1, z: 6 } : null) };
+  assert.equal(questTarget(ctx, 'bog.pearl', out), true, 'the owner API wins'); assert.equal(out.x, 5);
+  for (const rows of Object.values(QUEST_TARGETS)) for (const r of rows) assert.match(typeof r === 'string' ? r : r.ref, /^[zka]:/);
+  const base = { world: true, has: true, boss: false, practice: false, dist: 30 };
+  assert.equal(beaconState(base), 'on');
+  assert.equal(beaconState({ ...base, boss: true }), 'off', 'a boss fight: the boss bar is the goal');
+  assert.equal(beaconState({ ...base, practice: true }), 'off');
+  assert.equal(beaconState({ ...base, world: false }), 'off');
+  assert.equal(beaconState({ ...base, dist: BEACON.arriveR - 0.1 }), 'off', 'she is there');
+});
+
+test('review: the beacon edge pointer slides off HUD blocks along its border', async () => {
+  const { dodgeRects, BEACON } = await import('../../src/ui/beacon.js');
+  const W = 1280, H = 720, m = BEACON.edgeMargin;
+  const counters = [{ x: 1000, y: 10, w: 270, h: 50 }];
+  const top = dodgeRects({ x: 1100, y: m }, counters, W, H);           // on the top border, under the counters
+  assert.ok(top.x < 1000 - BEACON.edgePad + 1 && top.y === m, `slides left along the top (${JSON.stringify(top)})`);
+  const side = dodgeRects({ x: W - m, y: 40 }, counters, W, H);       // on the right border, beside the counters
+  assert.ok(side.y >= 60 + BEACON.edgePad - 1 && side.x === W - m, `slides down along the side (${JSON.stringify(side)})`);
+  const free = dodgeRects({ x: 600, y: m }, counters, W, H);
+  assert.deepEqual(free, { x: 600, y: m }, 'a free spot stays');
+  assert.deepEqual(dodgeRects({ x: 1, y: 2 }, null, W, H), { x: 1, y: 2 });
 });

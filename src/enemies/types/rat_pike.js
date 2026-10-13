@@ -11,6 +11,7 @@ export default {
   id: 'rat_pike',
   anims: { ...CLIP_MAPS.rat.roles },
   scamper: true,
+  bake: true,                            // PERF §9.4: body + eyes + gear = 1 draw (the helm / hood keeps its own)
   body: ratBody(),                       // spine capsule: the 0.30 m row circle let its snout pass through her
   build: (e, m) => dressRat(e, m, { helm: true, spear: true, buckler: true }),
 };

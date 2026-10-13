@@ -14,13 +14,19 @@ import { E } from '../../core/events.js';
 import { clamp, damp, dampAngle } from '../../core/math.js';
 import { TUNING, M2, rangeOf } from '../tuning.js';
 import { BASE_STATES, windupFor } from '../Enemy.js';
-import { makeProp, propMaterial, FACE_PARTS } from '../props.js';
+import { makeProp, propMaterial, FACE_PARTS, ENEMY_PAL } from '../props.js';
 import { loadedCharacters } from './kaykitGear.js';
 
 const J = ENEMIES.jelly;
 const SLAM = ATTACKS.jelly_slam;
-const COLORS = { body: '#7FD38A', deep: '#3E8F55', rim: '#C8F5CF' };
+/**
+ * WA §3.1: a periwinkle-teal body (hue ~225°, never grass green) with a darker indigo rim so it reads on grass and
+ * cream path alike; `glow` is the soft inner light (emissive), `deep` its shade. Exported for the foe-hue lint.
+ */
+export const JELLY_COLORS = Object.freeze({ body: ENEMY_PAL.jellyBody, deep: ENEMY_PAL.jellyDeep, rim: ENEMY_PAL.jellyRim, glow: ENEMY_PAL.jellyGlow });
+const COLORS = JELLY_COLORS;
 const _d = new THREE.Vector3();
+const _hv = new THREE.Vector3();   // hopTo scratch (PERF E8: no clone per hop)
 
 /** Size key for a type id ('jelly_m' → 'M', 'jelly_giant' → 'GIANT', 'jelly' → 'L'). Pure. */
 export function jellySize(type) {
@@ -76,7 +82,7 @@ function faceGeometry(size, rx, ry) {
 
 function bodyMaterial() {
   const m = new THREE.MeshStandardMaterial({
-    name: 'gloomjelly', color: COLORS.body, emissive: new THREE.Color(COLORS.deep).multiplyScalar(0.35), roughness: 0.15, metalness: 0,
+    name: 'gloomjelly', color: COLORS.body, emissive: new THREE.Color(COLORS.glow).multiplyScalar(0.35), roughness: 0.15, metalness: 0,
     transparent: true, opacity: M2.jelly.opacity, depthWrite: true,
   });
   const wob = M2.jelly.wobble.toFixed(3), rim = new THREE.Color(COLORS.rim);
@@ -87,10 +93,12 @@ function bodyMaterial() {
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
       `#include <emissivemap_fragment>
   float jFres = pow(1.0 - clamp(abs(dot(normalize(vViewPosition), normal)), 0.0, 1.0), 2.2);
-  totalEmissiveRadiance += vec3(${rim.r.toFixed(3)}, ${rim.g.toFixed(3)}, ${rim.b.toFixed(3)}) * jFres * 0.55;
-  diffuseColor.a = mix(diffuseColor.a, 1.0, jFres * 0.55);`);
+  vec3 jRim = vec3(${rim.r.toFixed(3)}, ${rim.g.toFixed(3)}, ${rim.b.toFixed(3)});
+  diffuseColor.rgb = mix(diffuseColor.rgb, jRim, smoothstep(0.25, 0.9, jFres) * 0.7);
+  totalEmissiveRadiance *= 1.0 - jFres * 0.8;
+  diffuseColor.a = mix(diffuseColor.a, 1.0, jFres * 0.7);`);
   };
-  m.customProgramCacheKey = () => 'gloomjelly-v1';
+  m.customProgramCacheKey = () => 'gloomjelly-v3';
   m.userData.enemyOwned = true;
   return m;
 }
@@ -136,7 +144,7 @@ function takeVisual(size, h, r) {
 function releaseVisual(size, v) {
   v.removeFromParent();
   const body = v.userData.body;
-  if (body?.material?.emissive) body.material.emissive.set(COLORS.deep).multiplyScalar(0.35);
+  if (body?.material?.emissive) body.material.emissive.set(COLORS.glow).multiplyScalar(0.35);
   const list = POOL.get(size) ?? [];
   if (list.length < (J.maxAlive ?? 12)) { list.push(v); POOL.set(size, list); return true; }
   return false;
@@ -149,7 +157,7 @@ function hopTo(e, x, z, dist, air = M2.jelly.hopAir) {
   const d = Math.min(dist, _d.length());
   if (_d.lengthSq() > 1e-6) _d.normalize(); else _d.set(Math.sin(e.facing), 0, Math.cos(e.facing));
   // never hop into deep water
-  if (e.dryStep) { const v = _d.clone().multiplyScalar(d / air); e.dryStep(v); _d.copy(v).multiplyScalar(air); } else _d.multiplyScalar(d);
+  if (e.dryStep) { const v = _hv.copy(_d).multiplyScalar(d / air); e.dryStep(v); _d.copy(v).multiplyScalar(air); } else _d.multiplyScalar(d);
   e.vel.x = _d.x / air; e.vel.z = _d.z / air;
   e.vel.y = (GRAVITY * air) / 2;
   e.onGround = false;

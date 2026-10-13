@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#F6E7D2">
   <title>Swordcat: Nine Lives of Meow Island</title>
   <link rel="icon" href="data:,">
-  <!-- PERF §10.1 / X18: the one game font (Fredoka) starts downloading with the HTML (Vite adds the module preloads) -->
-  <link rel="preload" as="font" type="font/ttf" href="assets/fonts/Fredoka-Variable.ttf" crossorigin>
+  <!-- PERF §10.1 / X18: the one game font (Fredoka, the Latin woff2 subset ui/fonts.js registers) starts downloading with the HTML (Vite adds the module preloads) -->
+  <link rel="preload" as="font" type="font/woff2" href="assets/fonts/Fredoka-Latin.woff2" crossorigin>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #F6E7D2; overscroll-behavior: none;
                  -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }

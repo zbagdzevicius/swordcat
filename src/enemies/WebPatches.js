@@ -11,6 +11,7 @@ import { ATTACKS } from '../core/config.js';
 import { wrapAngle } from '../core/math.js';
 import { M2 } from './tuning.js';
 import { applySlow } from './status.js';
+import { fxBasicMaterial } from '../fx/shaders.js';
 
 const WEB = ATTACKS.spider_web;
 let _tex = null, _geo = null;
@@ -89,7 +90,8 @@ export class WebPatches {
     const tex = webTexture();
     if (!tex || !this.ctx.scene) return;
     _geo ??= new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
-    this.mat ??= new THREE.MeshBasicMaterial({ name: 'enemy-web', map: tex, transparent: true, depthWrite: false, opacity: 0.85,
+    // PERF §1.2: the unlit fx basic module (shared program), not a Basic program of its own
+    this.mat ??= fxBasicMaterial({ name: 'enemy-web', map: tex, transparent: true, depthWrite: false, opacity: 0.85,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: true });
     const m = new THREE.Mesh(_geo, this.mat.clone());
     m.name = 'web-patch';

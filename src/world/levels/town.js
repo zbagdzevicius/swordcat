@@ -150,6 +150,8 @@ function stepsParts(n, w, run, rise) {
 }
 
 /** Bunting: triangle flags strung between two points (vertex coloured). */
+/** Cutscenes whose camera stands inside the bakery stall (it hides while they play). */
+const CS_HIDE = Object.freeze(['cs10']);
 /** LI W11: the occupiers' prank colours (plum + mustard) and the festival candy set once the town is free. */
 const PRANK = Object.freeze(['#7A4E9A', '#E0B043']);
 function buntingParts(a, b, n = 12) {
@@ -198,7 +200,10 @@ function hyenaBannerParts() {
 const SETPIECES = {
   /** The town wall ring (r 60) with towers, the South Gate (doors open), the castle closing the north side. */
   async townWall(kit) {
-    const [wall, gate, tower] = await Promise.all([kit.tpl(M.wall), kit.tpl(M.gate, { hide: ['wall_straight_gate_door_left', 'wall_straight_gate_door_right'] }), kit.tpl(M.towerB)]);
+    // WA §2.2 / integrator art pass: the KayKit wall stone is a cool charcoal that read as a dark medieval block from the
+    // iso lens at the South Gate (town start); bake it lighter and warmer (honey sandstone), the red tower roofs stay red
+    const STONE = { mul: 1.9, tint: '#FFE6C2' };
+    const [wall, gate, tower] = await Promise.all([kit.tpl(M.wall, STONE), kit.tpl(M.gate, { hide: ['wall_straight_gate_door_left', 'wall_straight_gate_door_right'], ...STONE }), kit.tpl(M.towerB, STONE)]);
     const n = 40, chords = [];
     for (let i = 0; i < n; i++) {
       const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
@@ -329,7 +334,13 @@ const SETPIECES = {
     const [bak, post, stall] = await Promise.all([kit.tpl(M.homeBR), kit.tpl(M.marketB), kit.tpl(M.stallR)]);
     if (bak) kit.place(bak, -26.6, -20.4, { fit: { h: 6.5 }, yaw: Math.PI * 0.3, collider: 'box', shrink: 0.86, jitter: 0, clear: 3, camFade: 'roof' });
     kit.place(kit.proc('sign_bread', () => signParts('bread', '#D9A55A')), -23.3, -18.0, { yaw: Math.PI * 0.3 + Math.PI / 2, lift: 3.2, collider: false, clear: false, occupy: false, jitter: 0 });
-    if (stall) kit.place(stall, -21.0, -21.8, { fit: { h: 2.4 }, yaw: Math.PI * 0.3, collider: 'box', jitter: 0.04 });
+    const sp = stall ? kit.place(stall, -21.0, -21.8, { fit: { h: 2.4 }, yaw: Math.PI * 0.3, collider: 'box', jitter: 0.04 }) : null;
+    // CS-10's "hush" wide shot stands at (−21.6, 1.3, −21.4), inside this stall: its awning and flaps filled the
+    // foreground (WA §2.2: no gloomy foreground cloth). Hide it for CS_HIDE cutscenes only (colliders unchanged).
+    if (sp) {
+      level.listen(E.CUTSCENE_START, (p) => { if (CS_HIDE.includes(p?.id)) kit.batch.setVisible(sp.handle, false); });
+      level.listen(E.CUTSCENE_END, () => kit.batch.setVisible(sp.handle, true));
+    }
     kit.anchor('bakery_door', -23.2, -19.2, undefined, Math.PI * 0.3);
     kit.anchor('bakery_meet', -21.4, -16.6, undefined, Math.PI + Math.PI * 0.3);
     kit.anchor('bakery_cot', -22, -20, undefined, -Math.PI / 2);
@@ -424,13 +435,15 @@ const SETPIECES = {
     // landings between flights (east after flight 1, west after flight 2)
     for (const [x0, x1, z0, z1, y] of [[-3, -1.6, 45.0, 48.0, 2], [-8.4, -7, 46.5, 49.5, 4]]) {
       kit.place(kit.proc(`landing_${x0}`, () => landingParts(x0, x1, z0, z1, y)), 0, 0, { y: tGround, collider: false, clear: false, occupy: false, jitter: 0.03, ground: false });
-      kit.collider({ x: (x0 + x1) / 2, z: (z0 + z1) / 2, hx: (x1 - x0) / 2, hz: (z1 - z0) / 2, y0: tGround - 0.6, y1: tGround + y });
+      kit.collider({ x: (x0 + x1) / 2, z: (z0 + z1) / 2, hx: (x1 - x0) / 2, hz: (z1 - z0) / 2, y0: tGround - 0.6, y1: tGround + y, walkTop: true });   // camera Picker: explicit stair landing
     }
-    // the loft ledge (Octree-style box 2.5 × 1.5 at y 6), widened west to meet the last flight
+    // the loft ledge (Octree-style box 2.5 × 1.5 at y 6), widened west to meet the last flight; LEDGE_WEST 2.3 (was 1.8):
+    // the click path's last string-pulled leg from the flight-3 top cuts the corner west of the rail, over a void at 1.8
+    const LEDGE_WEST = 2.3;
     const L = TOWER.ledge, ly = kit.h(L.at[0], L.at[1]) + L.y;
-    kit.place(kit.proc('loft_ledge', () => [[box(L.size[0] + 1.8, 0.16, L.size[1], -0.9, -0.08, 0), C.plank], [box(L.size[0] + 1.8, 0.06, 0.06, -0.9, 0.9, -L.size[1] / 2 + 0.03), C.wood],
+    kit.place(kit.proc('loft_ledge', () => [[box(L.size[0] + LEDGE_WEST, 0.16, L.size[1], -LEDGE_WEST / 2, -0.08, 0), C.plank], [box(L.size[0] + 1.8, 0.06, 0.06, -0.9, 0.9, -L.size[1] / 2 + 0.03), C.wood],
       ...[-2.6, -1.2, 0.2, 1.2].map((x) => [cyl(0.04, 0.04, 0.9, x, 0, -L.size[1] / 2 + 0.03, 5), C.woodDark])]), L.at[0], L.at[1], { y: ly, collider: false, clear: false, occupy: false, jitter: 0, ground: false });
-    kit.collider({ x: L.at[0] - 0.9, z: L.at[1], hx: (L.size[0] + 1.8) / 2, hz: L.size[1] / 2, y0: ly - 0.5, y1: ly, ledge: true });
+    kit.collider({ x: L.at[0] - LEDGE_WEST / 2, z: L.at[1], hx: (L.size[0] + LEDGE_WEST) / 2, hz: L.size[1] / 2, y0: ly - 0.5, y1: ly, ledge: true });
     kit.collider({ ax: L.at[0] - 2.75, az: L.at[1] - L.size[1] / 2, bx: L.at[0] + 1.25, bz: L.at[1] - L.size[1] / 2, r: 0.05, y0: ly, y1: ly + 0.9, walkable: false });
     kit.anchor('loft_ledge', L.at[0], L.at[1], ly, 0);
     // the bell platform (r 2.5) and the Sunbell above it
@@ -447,7 +460,7 @@ const SETPIECES = {
     kit.anchor('sunbell', L.at[0], L.at[1], by + 2.0, 0);
     kit.anchor('bell_platform', L.at[0], L.at[1], by, 0);
     // the Dawnstone glow in the bell once the ending has been seen
-    const glow = makeGlowSprite({ color: '#FFC46B', size: 7, intensity: 2.2, fog: true });
+    const glow = makeGlowSprite({ color: '#FFC46B', size: 7, intensity: 2.2, fog: false });   // one sprite program (PERF §1.2)
     glow.position.set(L.at[0], by + 2.1, L.at[1]);
     level.groups.dawnstone.add(glow);
     kit.onFlag('ending.seen', (v) => level.setDawnstone(!!v));
@@ -489,7 +502,7 @@ export default defineLevel({
   // WA §2.2: CS-10 "Big Yawn" is lavender (hub_hush; `hub_grey` is its alias), never grey
   env: { default: 'town_occupied', byFlag: [['ending.seen', 'ending_gold'], ['gate.done', 'hub_hush'], ['town.free', 'hub_gold']] }, moodLive: true,
   music: { explore: 'village_town_theme', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop',
-    byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'story_lament_warriors_soul'], ['town.free', 'village_bards_tale']] },
+    byFlag: [['ending.seen', 'village_bards_tale'], ['gate.done', 'hub_hush'], ['town.free', 'village_bards_tale']] },
   spine: SPINE,
   // CONTROLS_SPEC §11 iso camera: yaw π (the Castle Steps are north). §4.2 town_occupied / hub_*: ρ 0.04, clear 6 / 7.5,
   // topMul 1.4 (roofs fade from above, §3; the eaves' shadows draw the street edges)
@@ -504,7 +517,9 @@ export default defineLevel({
   paths: [{ pts: BAKERY_ST, width: 5 }, { pts: FORGE_ST, width: 5 }, { pts: EAST_ST, width: 4 }, { pts: LIB_ST, width: 4 }],
   // the castle terrace (+1.2 m) behind its retaining wall
   keep: [{ box: [TERRACE.x0, TERRACE.z0, TERRACE.x1, TERRACE.z1 + 8], h: TERRACE.h, feather: 0.9 }],
-  spawns: { start: [0, -66, 0], hub: [0, -46, 0], bakery_cot: [-22, -20, -Math.PI / 2], belltower: [0, 50.5, 0, TERRACE.h + TOWER.bell.y] },
+  // AUTOCAM §9.3 skyline audit: the Bell Tower top must survive the 22 m boss zoom's far plane
+  farKeep: [[TOWER.at[0], TOWER.at[1], TOWER.h + TERRACE.h]],
+  spawns: { start: [0, -66, 0], hub: [0, -46, 0], square: [SQUARE.at[0], SQUARE.at[1] - 14, 0] /* south rim, facing the fountain (smoke iso view) */, bakery_cot: [-22, -20, -Math.PI / 2], belltower: [0, 50.5, 0, TERRACE.h + TOWER.bell.y] },
   anchors: {
     gate_road: [0, -68, null, 0], square_center: [0, 8], steps: [0, 34, null, Math.PI], crane_sunbell: [0, 30, 14], hub_view: [0, -40, 4],
   },
@@ -547,6 +562,9 @@ export default defineLevel({
   horizon: { n: 70, h: [8, 14] }, horizonFog: 0.6,
   // LI W11: the free town's festival bunting (full candy set) over the streets and Main Street, shown once `town.free`
   accent: 'town',
+  // WA §2.5 / LI W11 candy-row tints: every baked red (KayKit maroon walls, crimson roofs, stall awnings, banners)
+  // becomes candy coral / raspberry (Props.remapReds), so the skyline reads sunny, not medieval
+  reds: '#E06A6A',
   buntingWhen: 'town.free',
   bunting: [
     ...PRANK_STRINGS.map(([a, b]) => ({ a: [a[0], a[1], a[2]], b: [b[0], b[1], b[2]] })),

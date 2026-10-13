@@ -16,7 +16,7 @@ import { Assets } from '../../src/core/Assets.js';
 import { Actor } from '../../src/core/Actor.js';
 import { createRng } from '../../src/core/rng.js';
 import { SCRIPTED_METHODS } from '../../src/core/ScriptedActor.js';
-import { SYSTEMS, STEP_ORDER, RENDER_ORDER, INIT_ORDER, MODE_GATES, GAMEPLAY_SYSTEMS } from '../../src/core/systems.js';
+import { SYSTEMS, loadSystems, STEP_ORDER, RENDER_ORDER, INIT_ORDER, MODE_GATES, GAMEPLAY_SYSTEMS } from '../../src/core/systems.js';
 import * as strings from '../../src/story/strings.js';
 import { fakeCtx } from './_fakeCtx.mjs';
 
@@ -24,6 +24,37 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SRC = path.join(ROOT, 'src');
 
 const fn = (o, m) => typeof o?.[m] === 'function';
+
+test('C16 (PERF §10.2): SYSTEMS entries are lazy; load() resolves the class named by `file`; boot set = ui, save, audio', async () => {
+  const fs = await import('node:fs');
+  assert.equal(await loadSystems(), SYSTEMS, 'loadSystems resolves the table');
+  for (const s of SYSTEMS) {
+    assert.equal(typeof s.load, 'function', `${s.key}: load()`);
+    assert.equal(typeof s.boot, 'boolean', `${s.key}: boot flag`);
+    assert.equal(await s.load(), s.Class, `${s.key}: load() and Class agree`);
+    assert.ok(fs.existsSync(path.join(SRC, s.file)), `${s.file} exists`);
+    assert.equal(s.area, s.file.split('/')[0] === 'camera' ? 'camera' : s.file.split('/')[0], `${s.key}: area matches the folder`);
+  }
+  assert.deepEqual(SYSTEMS.filter((s) => s.boot).map((s) => s.key).sort(), ['audio', 'save', 'ui']);
+  const sys = fs.readFileSync(path.join(SRC, 'core/systems.js'), 'utf8');
+  assert.doesNotMatch(sys, /^import\s/m, 'systems.js has no static system imports (they would pull the play set into boot)');
+});
+
+test('C16: loadSystems(set) resolves the boot set (ui, save, audio) and the play set separately, memoised per set', async () => {
+  const boot = await loadSystems('boot'), play = await loadSystems('play');
+  assert.deepEqual(boot.map((s) => s.key).sort(), ['audio', 'save', 'ui']);
+  assert.ok(play.every((s) => !s.boot) && boot.length + play.length === SYSTEMS.length, 'the two sets partition SYSTEMS');
+  for (const s of [...boot, ...play]) assert.equal(typeof s.Class, 'function', `${s.key}: Class resolved`);
+  assert.equal(loadSystems('boot'), loadSystems('boot'), 'one promise per set');
+});
+
+test('WA §8.2 / §8.6: config BOSSES display names carry no banned grim / war words (displayNameFor falls back to them)', async () => {
+  const { BANNED_NAME_WORDS } = await import('../../src/enemies/names.js');
+  for (const [id, b] of Object.entries(config.BOSSES)) {
+    const n = String(b.name ?? '').toLowerCase();
+    for (const w of BANNED_NAME_WORDS) assert.ok(!n.includes(w), `BOSSES.${id}.name "${b.name}" contains "${w}"`);
+  }
+});
 
 test('U18: every system class implements init / update / dispose (tech.md §4.2)', () => {
   for (const s of SYSTEMS) {
@@ -267,6 +298,7 @@ test('§7.2 core surface: postfx render path API (K1), PERF config + PERF_THERMA
   assert.deepEqual(config.PERF.budgets.I1.frameCalls, { low: 70, med: 120, high: 150 });
   assert.deepEqual(config.PERF.budgets.I2.frameCalls, { low: 60, med: 90, high: 110 });
   assert.deepEqual(config.PERF.budgets.End.sceneCalls, { low: 40, med: 60, high: 90 });
+  assert.deepEqual(config.PERF.budgets.heapMB, { low: 90, med: 120, high: 120 }, 'PERF §5 JS heap in play');
   assert.equal(config.PERF.dynRes.gpuDownMs, 12.5); assert.equal(config.PERF.dynRes.minInterval, 2);
   assert.ok(Object.isFrozen(config.PERF.thermal));
   assert.deepEqual(config.RENDER.cinematic.bloom, [0.6, 0.4, 0.9], 'ART §3.3 defaults, threshold 0.9');
@@ -344,10 +376,10 @@ test('§7.4 + Phase W settings: defaults, allowed values, camLock -> camLockMode
   const s = defaultState().settings;
   const want = { reduceCameraMotion: false, camCursorLead: 0, camLockMode: 'locked', camZoomPortrait: 1, biggerHero: false,
     reduceFlashes: false, quality: 'auto', fpsCap: 'auto', batterySaver: false, hudMode: 'calm', hitWords: true, tutorialHints: true,
-    reduceCameraMotionAuto: true, reduceFlashesAuto: true, camLock: true };
+    reduceCameraMotionAuto: true, reduceFlashesAuto: true, camLock: true, pathPreview: 'auto' };
   for (const [k, v] of Object.entries(want)) assert.equal(s[k], v, `settings.${k}`);
   for (const [k, allowed] of Object.entries(config.SETTING_VALUES)) {
-    if (typeof allowed[0] === 'string') assert.ok(k === 'pathPreview' || allowed.includes(s[k]), `${k} default allowed`);
+    if (typeof allowed[0] === 'string') assert.ok(allowed.includes(s[k]), `${k} default allowed`);
     else assert.ok(s[k] >= allowed[0] && s[k] <= allowed[1], `${k} in range`);
   }
   // K7: an old save with the camera unlocked -> camLockMode 'free'; an unlocked mode keeps the retired camLock false
@@ -356,6 +388,10 @@ test('§7.4 + Phase W settings: defaults, allowed values, camLock -> camLockMode
   assert.equal(new GameState({ settings: { hudMode: 'loud' } }).settings.hudMode, 'calm', 'bad enum -> default');
   assert.equal(new GameState({ settings: { fpsCap: 45 } }).settings.fpsCap, 'auto');
   assert.equal(new GameState({ settings: { fpsCap: 30 } }).settings.fpsCap, 30);
+  // WA §3.6: the pre-W1 boolean toggle keeps what the player saw
+  assert.equal(new GameState({ settings: { pathPreview: true } }).settings.pathPreview, 'on');
+  assert.equal(new GameState({ settings: { pathPreview: false } }).settings.pathPreview, 'off');
+  assert.equal(new GameState({ settings: { pathPreview: 'sometimes' } }).settings.pathPreview, 'auto');
   assert.deepEqual(migrateSettings({ ...s }), s, 'idempotent on the defaults');
   // OS preference: followed until the player edits the key
   const st = { ...s };

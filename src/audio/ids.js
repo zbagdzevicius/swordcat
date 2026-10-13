@@ -2,10 +2,10 @@
 //
 //   'pickup/bubble2'                 → 'audio/sfx/pickup/bubble2.ogg'
 //   'audio/sfx/pickup/bubble2.ogg'   → itself (if listed)
-//   'impact/chain_0x'                → a random existing chain_01..chain_09
+//   'world/wood_hit_0x'              → a random existing wood_hit_01..wood_hit_09
 //   'impact/impactSoft_heavy_00x'    → a random existing _000.._009
 //   'sword/swish_01–13' / '01-13'    → a random one in the range
-//   'creature/c80_scream_01/02'      → one of the two
+//   'creature/crow_caw_01/02'        → one of the two
 //   'music/field_of_dreams'          → 'audio/music/field_of_dreams.mp3'
 
 const SFX_PREFIX = 'audio/sfx/';

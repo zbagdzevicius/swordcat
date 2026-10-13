@@ -597,3 +597,85 @@ test('findPath: a click on the near face of a thick wall stays on her side, not 
   const real = findPath(g, from, { x: 5, z: 16 }, { maxExpand: 20000 });
   assert.ok(!real.redirected && !real.partial && real.goal.z > 12.5);
 });
+
+// ------------------------------------------------------------------ ui request: reachableFrom (grey "unreachable" paw)
+test('reachableFrom: true on her island, false inside a walled yard / no walkable cell, null before the island audit', () => {
+  const wall = (x, z, hx, hz) => ({ x, z, hx, hz, y0: 0, y1: 3, walkable: false });
+  // a closed 8 × 8 m yard (3 m walls, 1 m thick) centred on (10, 10), and a 4 m pillar (no walkable cell) at (-10, 10)
+  const yard = [wall(10, 6, 4.5, 0.5), wall(10, 14, 4.5, 0.5), wall(6, 10, 0.5, 4.5), wall(14, 10, 0.5, 4.5)];
+  const pillar = { x: -10, z: 10, hx: 3, hz: 3, y0: 0, y1: 4, walkable: false };
+  const { ph } = world({ colliders: { circles: [], boxes: [...yard, pillar] } });
+  const her = { x: -10, z: -10 };
+  assert.equal(ph.reachableFrom(her, 0, 0), null, 'no island audit yet');
+  let n = 0;
+  while ((!ph.nav.filled || !ph.nav.islands || ph.nav.islandBuild) && n++ < 5000) ph.render();
+  assert.equal(ph.reachableFrom(her, 0, 0), true, 'open ground');
+  assert.equal(ph.reachableFrom(her, 10, 10), false, 'inside the walled yard');
+  assert.equal(ph.reachableFrom(her, -10, 10, 1), false, 'no walkable cell within the gap');
+  assert.equal(ph.reachableFrom(her, -10, 10, 5), true, 'beside the pillar within a bigger gap');
+  assert.equal(ph.reachableFrom({ x: 10, z: 10 }, 10, 11), true, 'from inside the yard, the yard is reachable');
+  assert.equal(ph.reachableFrom({ x: 10, z: 10 }, 0, 0), false, '... and the outside is not');
+  assert.equal(ph.reachableFrom({ x: NaN, z: 0 }, 0, 0), null);
+  // matches findPath: an unreachable goal snaps (partial), a reachable one does not
+  assert.ok(ph.findPath(her, { x: 10, z: 10 }).snapped);
+  assert.ok(!ph.findPath(her, { x: 0, z: 0 }).partial);
+});
+
+// ------------------------------------------------------------------ physics.W1 / A:physics.1: real levels after the WA swaps
+async function levelNav(id, flags) {
+  const { fakeCtx } = await import('./_fakeCtx.mjs');
+  const { buildLevel } = await import('../../src/world/LevelKit.js');
+  const { LEVELS } = await import('../../src/world/LevelManager.js');
+  const ctx = fakeCtx();
+  // stub glTFs (as tests/unit/world.test.js): a 1 m box, fences a thin plank
+  ctx.assets.gltf = async (p) => {
+    const scene = new THREE.Group(), fence = p.includes('fence');
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, fence ? 0.35 : 1, fence ? 0.07 : 1).translate(0, fence ? 0.175 : 0.5, 0),
+      new THREE.MeshStandardMaterial({ name: p.includes('tree') ? 'leafsGreen' : 'stone' })));
+    return { scene, animations: [] };
+  };
+  ctx.enemies = { list: [], spawn: () => ({ tags: new Set() }), despawn() {}, killAll() {} };
+  ctx.companions = { spawnKitten: () => ({}), clearLevel() {}, markCleared() {} };
+  for (const [k, v] of Object.entries(flags)) ctx.state.setFlag(k, v);
+  const def = (await LEVELS[id]()).default;
+  const L = await buildLevel(ctx, def);
+  const ph = new Physics(ctx); ctx.physics = ph; await ph.init();
+  ph.setLevel(L);
+  while (!ph.nav.filled) ph.render();
+  return { ph, def, L };
+}
+
+/** Distance from (x, z) to the polyline from → points (link landings included). */
+function distToPath(from, pts, x, z) {
+  let best = Infinity, ax = from.x, az = from.z;
+  const seg = (bx, bz) => {
+    const vx = bx - ax, vz = bz - az, l2 = vx * vx + vz * vz || 1, t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / l2));
+    best = Math.min(best, Math.hypot(x - ax - vx * t, z - az - vz * t)); ax = bx; az = bz;
+  };
+  for (const q of pts) { seg(q.x, q.z); if (q.to) seg(q.to.x, q.to.z); }
+  return best;
+}
+
+for (const [id, flags, a, b] of [
+  ['meadow', { 'prologue.done': true, 'meadow.mochi': true }, 'start', [30, 92]],                  // start → the forest exit
+  ['gate', {}, 'start', [4, -80]],                                                                   // the yard → the battlefield end
+]) {
+  test(`physics.W1: ${id} start → exit is one walkable path; no corridor < ${NAV.minCorridor} m on it`, async () => {
+    const { ph, def } = await levelNav(id, flags);
+    const s = def.spawns[a], from = { x: s[0], z: s[1] };
+    const r = ph.findPath(from, { x: b[0], z: b[1] });
+    assert.ok(r.ok && !r.partial, `${id}: reached (${r.goal?.x}, ${r.goal?.z}) partial ${r.partial}`);
+    assert.ok(Math.hypot(r.goal.x - b[0], r.goal.z - b[1]) < 1, 'ends at the exit');
+    assertWalkable(ph.nav, from, r.points);
+    const narrow = ph.nav.corridors().filter((c) => distToPath(from, r.points, c.x, c.z) < 1);
+    assert.deepEqual(narrow.map((c) => `(${c.x}, ${c.z}) ${c.width} m`), [], 'no narrow corridor on the route');
+  });
+}
+
+test('physics.W1: meadow prologue routes — practice field → barn chest, → the north gate, and the Mochi cart from start', async () => {
+  const { ph } = await levelNav('meadow', { 'prologue.done': true });
+  for (const [a, b] of [[[-10, -90], [-12.85, -88.75]], [[-10, -90], [0, -64]], [[-1.5, -54.5], config.STORY.mochiCage]]) {
+    const r = ph.findPath({ x: a[0], z: a[1] }, { x: b[0], z: b[1] });
+    assert.ok(r.ok && Math.hypot(r.goal.x - b[0], r.goal.z - b[1]) < 3, `(${a}) → (${b}): reached (${r.goal.x}, ${r.goal.z})`);
+  }
+});

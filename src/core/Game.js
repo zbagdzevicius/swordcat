@@ -13,7 +13,7 @@ import { PostFX, usesFxaaPath } from './PostFX.js';
 import { installToon } from './toon.js';
 import { PerfMonitor, markOnce } from './perf.js';
 import { createRng } from './rng.js';
-import { SYSTEMS, STEP_ORDER, RENDER_ORDER, INIT_ORDER, MODE_GATES, GAMEPLAY_SYSTEMS } from './systems.js';
+import { SYSTEMS, loadSystems, STEP_ORDER, RENDER_ORDER, INIT_ORDER, MODE_GATES, GAMEPLAY_SYSTEMS } from './systems.js';
 import { S as STRINGS, t as translate, has as hasString } from '../story/strings.js';
 
 /**
@@ -107,6 +107,8 @@ export class Game {
     if (this.started) return;
     this.started = true;
     const params = this.params;
+    // PERF §10.2 / C16: both system sets download while the context and the shell boot (two promises, one per set)
+    const bootReady = loadSystems('boot'), playReady = loadSystems('play');
 
     // S1 (PERF C3 + C11, ART §3.1): toon chunks patched before the first compile; canvas MSAA on every tier (X1:
     // play renders straight to the canvas; `antialias` is a context flag, so only the build-time Med FXAA fallback
@@ -126,6 +128,10 @@ export class Game {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(config.RENDER.background);   // warm until Env sets the level's (WA §2.1)
+    // PERF §8.5 (submit): the scene root never moves. With matrixAutoUpdate on, its per-frame updateMatrix() flags
+    // matrixWorldNeedsUpdate and `force`s a matrixWorld multiply on EVERY descendant each render, so the frozen
+    // statics (world freezeStatics) only skipped the compose. Off, only subtrees that actually changed recompute.
+    scene.matrixAutoUpdate = false;
     const camera = new THREE.PerspectiveCamera(config.RENDER.fov, 16 / 9, config.RENDER.near, config.RENDER.far);
     camera.position.set(0, 2, -4);
     scene.add(camera);   // audio listener / camera-attached fx live under it
@@ -157,6 +163,11 @@ export class Game {
 
     /** @type {Map<string, any>} */
     this.systems = new Map([['input', ctx.input]]);
+    // C16: both sets have been downloading since the top of start(). Every system is constructed in SYSTEMS order once
+    // both land: building the boot set first (staged) blanked every core:levels / art:warm frame in the smoke, so the
+    // construction order stays as it is; and the title backdrop is a world level (CS-00 on `meadow`), so the title
+    // cannot come up on the boot set alone yet.
+    await Promise.all([bootReady, playReady]);
     for (const s of SYSTEMS) {
       const inst = new s.Class(ctx);
       ctx[s.key] = inst;
@@ -193,6 +204,7 @@ export class Game {
     });
     bus.on(E.QUALITY, (p) => { if (this.loop) this.loop.maxSteps = loopStepsFor(p?.name); this._applyCap?.(); });
     bus.on(E.LEVEL_LOADED, () => ctx.postfx.pacing.resetProbe());
+    ctx.assets.init();                     // level-change cache release (PERF §5 heap)
     if (!params.test) this._bindOsSettings();
 
     for (const key of INIT_ORDER) {

@@ -28,8 +28,9 @@ import { Enemy, visualDt } from './Enemy.js';
 import { Boss } from './Boss.js';
 import { TUNING, M2, WARM, rangeOf } from './tuning.js';
 import { VisualPool, dressingKey, waveSizes } from './VisualPool.js';
-import { outlineTargets } from './look.js';
-import { loadedCharacters } from './types/kaykitGear.js';
+import { outlineTargets, buildEnemyHull } from './look.js';
+import { loadSimplifier, setVisualLod, wantsLod } from './lod.js';
+import { outlineMaterial, OUTLINE } from '../characters/Outline.js';
 import ratPike from './types/rat_pike.js';
 import ratXbow from './types/rat_xbow.js';
 import crow from './types/crow.js';
@@ -64,7 +65,8 @@ const BOSS_LOOKS = {
     build: (e, m) => dressKayKit(e, m, { look: 'brutus', headNode: 'Knight_Head', expression: 'neutral', plate: false }) },
   barkus: { hide: ['Knight_Head', 'Knight_Helmet', ...KNIGHT_PROPS], show: ['Knight_Cape'], tint: { Knight_Cape: WARM.boss.barkusCape },
     build: (e, m) => dressKayKit(e, m, { look: 'barkus', headNode: 'Knight_Head', expression: 'angry', plate: false,
-      weapon: { model: 'models/weapons/quaternius/Claymore.glb', bone: 'handslot.r', fit: 'barkus' } }) },
+      hold: { prop: 'big_squeaky_bone', hand: 'r' },                                                   // WA §2.5 mallet
+      weapon: { model: 'models/weapons/quaternius/Claymore.glb', bone: 'handslot.r', fit: 'barkus' } }) },   // fallback
 };
 
 const GENERIC_GRUNT = { hp: 30, radius: 0.35, height: 1, mass: 1, poise: 1, walk: 1.5, run: 3, sight: 10, fov: 2.09, leash: 18,
@@ -148,6 +150,9 @@ export class EnemyManager {
     /** ART §5.4 enemies wearing an outline hull this frame (QUALITY.outline), re-picked at WARM.outline.hz */
     this.outlined = new Set();
     this._outlineNext = new Set(); this._outlineScratch = []; this._outlineT = 0;
+    /** PERF §1.2 body LOD pass timer (WARM.lod.hz); the simplifier chunk starts loading now (lod.js) */
+    this._lodT = 0;
+    loadSimplifier();
   }
 
   async init() {
@@ -609,6 +614,24 @@ export class EnemyManager {
     this._updateDebris(vdt);
     this.webs.render(vdt);
     this._updateOutlines(dt);
+    this._updateLods(dt);
+  }
+
+  /**
+   * PERF §1.2 triangle budget: skinned bodies draw their index-simplified LOD (lod.js) on Low, and on Med / High beyond
+   * WARM.lod.far m from the iso focus or in activity tier ≥ 1 (bosses and scripted actors never), re-picked at
+   * WARM.lod.hz. A swap is a geometry pointer change sharing the body's vertex buffers (no allocation per pass).
+   */
+  _updateLods(dt) {
+    if ((this._lodT -= dt) > 0) return;
+    this._lodT = 1 / WARM.lod.hz;
+    const q = this.ctx.quality?.id ?? 'med';
+    const focus = this.ctx.cam?.focus ?? this.ctx.player?.pos ?? null;
+    for (let i = 0; i < this.list.length; i++) {
+      const e = this.list[i], v = e.visual;
+      if (!v || !e.anim || e.disposed) continue;            // still dressing / procedural: nothing skinned to swap
+      setVisualLod(v, wantsLod(e, focus, q, v.userData.lodOn === true));
+    }
   }
 
   /**
@@ -617,8 +640,6 @@ export class EnemyManager {
    * characters' `buildOutline(view, { px, color })` (characters/Outline.js); without it this is a no-op.
    */
   _updateOutlines(dt) {
-    const build = loadedCharacters()?.buildOutline;
-    if (typeof build !== 'function') return;
     if ((this._outlineT -= dt) > 0) return;
     const O = WARM.outline;
     this._outlineT = 1 / O.hz;
@@ -630,7 +651,14 @@ export class EnemyManager {
     for (const e of this.outlined) if (!next.has(e) && e._hull) e._hull.visible = false;
     for (const e of next) {
       if (!e._hull) {
-        try { e._hull = build(e.dress ?? e.visual, { px: e.def.boss ? O.bossPx : O.px, fadeIn: O.fadeIn }) ?? null; } catch { e._hull = null; }
+        // one hull per visual: a pooled visual brings its hull along (VisualPool, PERF §3.4)
+        const v = e.visual;
+        if (!v || (!e.anim && !e.def.procedural) || !v.visible) continue;    // still dressing: next round
+        if (v.userData.hull === undefined) {
+          try { v.userData.hull = buildEnemyHull(v, { px: e.def.boss ? O.bossPx : O.px, color: OUTLINE.ink, material: outlineMaterial }); }
+          catch (err) { console.warn(`[enemies] outline hull for ${e.type}`, err); v.userData.hull = null; }
+        }
+        e._hull = v?.userData.hull ?? null;
       }
       if (e._hull) e._hull.visible = true;
     }

@@ -212,3 +212,18 @@ Automatic (no call needed):
 - `fx.decals.stats().counts.reticle`: the §6.3 pad right-stick ground reticle (white ring + cross up to 6 m, eased, 1.0 s linger).
 - `fx.decals.counts.reachEdge` / `abilityChip`, `fx.decals.reachEdgeAt` (m or null): a companion reach ring wider than the frame (Volley 14 m) is marked by a dotted arc + outward chevron just inside the frame edge along the aim; the aim point gets a chip (white; grey ring + cross = no target). Hero ring: `DECAL_CFG.heroOutline` dark rim under the pink. Iso crossbow aim strip: `TELE_ISO.aimPx` screen-constant width, `aimCap` (linear, under the bloom threshold), faded within ~1 m of her (`uHole`).
 - Pounce dive circle: drawn at `player.diveAt` when valid. The ambient mist cards fade to `MIST_ISO.ambientA` (0.12) in the iso camera; their leaned cards read as long pale streaks from above, and the GroundMist sheets carry the iso mist.
+
+## PERF §1.2: one linked fx program (shader consolidation)
+- `fx/shaders.js` `FX_UBER` (a core `UberGroup`): every fx `ShaderMaterial` is a *module* of ONE program (+ its
+  instanced vertex variant). `fxShaderMaterial(params)` keeps its old signature (vertexShader / fragmentShader /
+  uniforms / side / fog / blending...); the material is always DoubleSide + single pass + fog on, and the module keeps
+  `side` (a `gl_FrontFacing` discard) and `fog: false` (USE_FOG undefined in its block). `mat.uniforms.<name>` stay
+  the module's own objects (the linked names are live getters).
+- **Register sources at import** with `fxModule({ name, vertexShader, fragmentShader, side, fog, instanced })` when a
+  material is first built after the first compile (per-level effects): a module registered after the program compiled
+  costs a program of its own and logs `[uber:fx] ... registered after the program compiled`.
+- `fxBasicMaterial({ color, map, opacity, fog, side, ... })`: unlit MeshBasic / LineBasic drop-in in the same program
+  (eyes, contact blobs, whiskers, glints, webs, glow cards, far silhouettes). `.color` / `.opacity` / `.fxMap` write
+  uniforms (never `.map`: three would key USE_MAP). `fxFogged(material)` tells whether a module applies fog.
+- Other areas' effect shaders join through the same calls (characters' aura / holy streak / Dawnblade sparkles, world's
+  sky, flames, flame halos and fireflies). Debug: `__GAME__.art.uber()` lists the modules and register use.

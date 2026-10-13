@@ -56,6 +56,7 @@ export default {
   keep: CONTROLS.xbowKeep,
   perchable: true,
   scamper: true,
+  bake: true,                            // PERF §9.4: body + eyes + gear = 1 draw (the helm / hood keeps its own)
   body: ratBody(),                       // spine capsule: the 0.30 m row circle let its snout pass through her
   anims: { ...CLIP_MAPS.rat.roles, rat_bolt: { windup: { clip: 'Rat_Idle', speed: 0.5 }, strike: { clip: 'Rat_Attack', from: 0.35, to: 0.75, speed: 1.2 } } },
   build: (e, m) => dressRat(e, m, { hood: true, crossbow: def.weapon }),

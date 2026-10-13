@@ -24,7 +24,23 @@ export function windParams(wind, mul = 1) {
  * Pink noise (Paul Kellet's refined filter), normalised to `rms`, with the loop seam cross-faded so the 2 s buffer
  * loops without a click. @param {number} n samples @param {() => number} rand [0,1) @param {number} [rms]
  */
-export function pinkNoise(n, rand, rms = WIND.noiseRms, seam = 0) {
+export function pinkNoise(n, rand, rms = WIND.noiseRms, seam = 0) { return drain(pinkNoiseGen(n, rand, rms, seam)); }
+
+/**
+ * Samples generators yield every GEN_CHUNK samples so bake.js can spread one long PCM over several ≤ 2 ms idle slices
+ * (PERF §3.1); `drain()` runs one to the end.
+ */
+export const GEN_CHUNK = 4096;
+
+/** Run a samples generator to completion and return its Float32Array. @param {Iterator<any, Float32Array>} it */
+export function drain(it) {
+  let r = it.next();
+  while (!r.done) r = it.next();
+  return r.value;
+}
+
+/** pinkNoise as a sliceable generator (same output). */
+export function* pinkNoiseGen(n, rand, rms = WIND.noiseRms, seam = 0) {
   const out = new Float32Array(n);
   let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
   for (let i = 0; i < n; i++) {
@@ -33,10 +49,12 @@ export function pinkNoise(n, rand, rms = WIND.noiseRms, seam = 0) {
     b3 = 0.86650 * b3 + w * 0.3104856; b4 = 0.55000 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.0168980;
     out[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362;
     b6 = w * 0.115926;
+    if ((i & (GEN_CHUNK - 1)) === GEN_CHUNK - 1) yield i;
   }
   // remove DC, then normalise
   let mean = 0; for (let i = 0; i < n; i++) mean += out[i]; mean /= n || 1;
   let sq = 0; for (let i = 0; i < n; i++) { out[i] -= mean; sq += out[i] * out[i]; }
+  yield n;
   const k = sq > 0 ? rms / Math.sqrt(sq / n) : 0;
   for (let i = 0; i < n; i++) out[i] *= k;
   // equal-power crossfade of the last `seam` samples into the first ones → seamless loop
@@ -53,13 +71,17 @@ export function pinkNoise(n, rand, rms = WIND.noiseRms, seam = 0) {
  * Call `set(wind, mul)` whenever Env's wind changes (cheap; ramps smoothly).
  */
 export class Wind {
-  /** @param {BaseAudioContext} ac @param {AudioNode} dest @param {() => number} rand */
-  constructor(ac, dest, rand) {
+  /**
+   * @param {BaseAudioContext} ac @param {AudioNode} dest @param {() => number} rand
+   * @param {{data: Float32Array, rate: number}|null} [pcm]  prebaked noise (windData)
+   */
+  constructor(ac, dest, rand, pcm = null) {
     this.ac = ac;
-    const sr = ac.sampleRate, seam = Math.round(sr * WIND.seamSec);
-    const data = pinkNoise(Math.round(sr * WIND.bufferSec) + seam, rand, WIND.noiseRms, seam);
+    // PERF §3.1: the 2 s of pink noise is prebaked on the title (bake.js); without it, bake now at the context rate
+    const sr = pcm?.rate ?? ac.sampleRate;
+    const data = pcm?.data ?? windData(sr, rand);
     this.buffer = ac.createBuffer(1, data.length, sr);
-    this.buffer.getChannelData(0).set(data);
+    if (typeof this.buffer.copyToChannel === 'function') this.buffer.copyToChannel(data, 0); else this.buffer.getChannelData(0).set(data);
     this.src = ac.createBufferSource(); this.src.buffer = this.buffer; this.src.loop = true;
     this.filter = ac.createBiquadFilter(); this.filter.type = 'bandpass'; this.filter.Q.value = WIND.q;
     this.gain = ac.createGain(); this.gain.gain.value = 0;
@@ -322,7 +344,8 @@ export const MARCH = {
   stepEvery: 0.36,      // two files of hyenas at 1.6 m/s
   chainEvery: 1.1,
   stepIds: ['footsteps/sand_l1', 'footsteps/sand_r1', 'footsteps/sand_l2', 'footsteps/sand_r2', 'footsteps/sand_l3', 'footsteps/sand_r3'],
-  chainIds: ['impact/chain_01', 'impact/chain_02', 'impact/chain_03'],
+  // WA §9: no chains anywhere; the carts' wooden wheels knock instead (impactWood_light, rate 1.1 at play)
+  chainIds: ['impact/impactWood_light_000', 'impact/impactWood_light_002', 'impact/impactWood_light_004'],
   stepVol: 0.45, chainVol: 0.35,
   spread: 6,            // m around the centre
 };
@@ -330,4 +353,101 @@ export const MARCH = {
 /** Every procedural-layer file id (manifest + U15). */
 export function proceduralFileIds() {
   return [...LAUGH.sources, ...MARCH.stepIds, ...MARCH.chainIds];
+}
+
+// ------------------------------------------------------------------------------------------------ glockenspiel (ART §9.3)
+/**
+ * The warm "glock" (WA §9 sticker thirds, AUTOCAM X24 rescue arpeggio, ART §9.3 Still Standing third): one C5 bar note
+ * baked to PCM (bar partials 1 : 2.76 : 5.40 : 8.93 with fast-decaying overtones), played at `noteRate(name)` for the
+ * other pitches. No oscillators at runtime: a note is one buffer source.
+ */
+export const GLOCK = {
+  base: 523.25,                       // C5
+  sec: 1.4,
+  partials: [[1, 1, 1.1], [2.76, 0.32, 0.32], [5.4, 0.12, 0.12], [8.93, 0.05, 0.06]],   // [ratio, amp, τ s]
+  attack: 0.002,
+  strike: 0.006,                      // a tiny mallet tick (decaying noise) on top
+  peak: 0.7,
+  gap: 0.11,                          // arpeggio step (s)
+  vol: 0.55,
+};
+
+const NOTE_INDEX = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+/** Semitones of a note name ('C5', 'E5', 'G#5', 'Bb5') above C5. */
+export function noteSemis(name) {
+  const m = /^([A-G])([#b]?)(-?\d)$/.exec(String(name ?? '').trim());
+  if (!m) return 0;
+  return NOTE_INDEX[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (Number(m[3]) - 5) * 12;
+}
+
+/** Playback rate of the baked C5 glock note for `name` (number = semitones above C5). */
+export function noteRate(name) { return 2 ** ((typeof name === 'number' ? name : noteSemis(name)) / 12); }
+
+/** Named glock phrases. */
+export const GLOCK_PHRASES = {
+  sticker: ['C5', 'E5', 'G5'],             // WA §5.4: up a third per sticker in a row (one note per sticker)
+  rescue: ['C5', 'E5', 'G5', 'C6'],        // AUTOCAM X24 / ART §9.3: the rescue arpeggio over a purr
+  stillStanding: ['G5', 'B5'],             // ART §9.3: the rising third over the sleepy purr
+  card: ['E5', 'G5', 'C6'],
+  friend: ['C5', 'E5', 'G5', 'C6', 'E6'],
+  chime: ['G5', 'D6'],                     // the breeze's chime tail (rumble)
+  roomRead: ['G5', 'C6'],                  // AUTOCAM X24 room read (arena lock)
+};
+
+/** Schedule of a phrase: [{ t, rate, gain }] (later notes slightly softer, the last one rings). */
+export function glockPlan(notes, { gap = GLOCK.gap, volume = 1 } = {}) {
+  const list = Array.isArray(notes) ? notes : (GLOCK_PHRASES[notes] ?? [notes]);
+  return list.map((n, i) => ({ t: i * gap, rate: noteRate(n), gain: volume * (i === list.length - 1 ? 1 : 0.85) }));
+}
+
+/** The C5 glock bar note as PCM. @param {number} sr @param {() => number} rand @returns {Float32Array} */
+export function glockData(sr, rand) { return drain(glockGen(sr, rand)); }
+
+/** glockData as a sliceable generator. */
+export function* glockGen(sr, rand) {
+  const n = Math.round(sr * GLOCK.sec), out = new Float32Array(n), a = Math.max(1, Math.round(sr * GLOCK.attack));
+  for (const [ratio, amp, tau] of GLOCK.partials) {
+    const w = 2 * Math.PI * GLOCK.base * ratio / sr, k = Math.exp(-1 / (tau * sr));
+    let env = amp;
+    for (let i = 0; i < n; i++) {
+      out[i] += Math.sin(w * i) * env * (i < a ? i / a : 1); env *= k;
+      if ((i & (GEN_CHUNK - 1)) === GEN_CHUNK - 1) yield i;
+    }
+  }
+  const st = Math.round(sr * GLOCK.strike);
+  for (let i = 0; i < st; i++) out[i] += (rand() * 2 - 1) * 0.25 * (1 - i / st);
+  // 5 ms fade at the tail: no click when the buffer ends
+  const tail = Math.round(sr * 0.005);
+  for (let i = 0; i < tail; i++) out[n - 1 - i] *= i / tail;
+  return normalisePeak(out, GLOCK.peak);
+}
+
+// ------------------------------------------------------------------------------------------------ breeze (ART §9.3)
+/**
+ * ART §9.3: the old sub-bass "Gloom rumble" is now an airy swell: pink noise shaped by a swell envelope, played through
+ * a band-pass (BREEZE.freq) so nothing sits under 80 Hz, with a glock chime tail. @returns {Float32Array}
+ */
+export const BREEZE = { freq: 900, q: 0.6, rise: 0.45, gain: 0.55, chimeAt: 0.7, chimeVol: 0.22 };
+
+export function breezeData(sr, rand, sec = 4, rise = BREEZE.rise) {
+  const n = Math.max(2, Math.round(sr * sec)), out = pinkNoise(n, rand, 0.3), r = Math.max(1, Math.round(n * rise));
+  for (let i = 0; i < n; i++) out[i] *= i < r ? Math.sin((i / r) * Math.PI / 2) : Math.max(0, (n - i) / Math.max(1, n - r));
+  return out;
+}
+
+function normalisePeak(out, to) {
+  let peak = 0; for (let i = 0; i < out.length; i++) { const v = Math.abs(out[i]); if (v > peak) peak = v; }
+  const k = peak > 0 ? to / peak : 0;
+  for (let i = 0; i < out.length; i++) out[i] *= k;
+  return out;
+}
+
+/** The wind bed PCM (WIND.bufferSec of seam-faded pink noise) at `sr` (bake.js prebakes it on the title). */
+export function windData(sr, rand) { return drain(windGen(sr, rand)); }
+
+/** windData as a sliceable generator. */
+export function windGen(sr, rand) {
+  const seam = Math.round(sr * WIND.seamSec);
+  return pinkNoiseGen(Math.round(sr * WIND.bufferSec) + seam, rand, WIND.noiseRms, seam);
 }

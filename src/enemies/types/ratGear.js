@@ -62,7 +62,8 @@ export async function dressRat(e, m, gear) {
     spear.add(tip);
     e.tipNode = tip;
   }
-  if (gear.buckler) {
+  // PERF §1.2 Low: the buckler is secondary gear (the helm is the top colour, the spear the role read): dropped
+  if (gear.buckler && e.ctx?.quality?.id !== 'low') {
     const b = makeProp('buckler');
     attachAligned(space, sh, b, { pos: [sp.x + 0.2 * k, sp.y - 0.12 * k, sp.z + 0.04 * k], rot: [0, -0.25, 0], scale: k * 1.1 });
   }

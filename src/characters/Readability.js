@@ -11,7 +11,8 @@
 //     LOD focus (Fur.FUR_VIEW).
 // node-safe (no DOM / WebGL at import).
 import * as THREE from 'three';
-import { READABILITY, TOP_VIEW } from './materials.js';
+import { READABILITY, TOP_VIEW, own, disown } from './materials.js';
+import { flatPatch } from './flatPatch.js';
 import { FUR_VIEW } from './Fur.js';
 import { smoothstep } from './util.js';
 
@@ -79,21 +80,15 @@ const _xrayMats = new Set();
  * @param {THREE.ColorRepresentation} color @param {number} alpha
  */
 export function xrayMaterial(color = XRAY.color, alpha = XRAY.alpha) {
+  // PERF §1.2: the shared flat program (characters/flatPatch.js) in x-ray mode: front faces, unfogged, depth pull
   const m = new THREE.MeshBasicMaterial({
-    color, transparent: true, opacity: alpha, depthWrite: false, depthTest: true, depthFunc: THREE.GreaterDepth, fog: false,
-    toneMapped: false,
+    color, transparent: true, opacity: alpha, depthWrite: false, depthTest: true, depthFunc: THREE.GreaterDepth,
   });
-  const uniforms = { uPull: { value: XRAY.pull } };
+  const uniforms = { uPull: { value: XRAY.pull }, uOutlinePx: { value: 0 }, uFlatMode: { value: 1 }, uFogK: { value: 0 } };
   m.userData.uniforms = uniforms;
   m.userData.xray = true;
-  m.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, uniforms);
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uPull;')
-      // slide along the view ray toward the lens: same pixels, nearer depth
-      .replace('#include <project_vertex>', '#include <project_vertex>\nmvPosition.xyz += normalize(-mvPosition.xyz) * min(uPull, max(-mvPosition.z - 0.05, 0.0));\ngl_Position = projectionMatrix * mvPosition;');
-  };
-  m.customProgramCacheKey = () => 'sc-xray-v1';
+  flatPatch(m, uniforms);
+  own(m);   // world's height-fog patcher composes the same way as on the hulls (same program key)
   _xrayMats.add(m);
   return m;
 }
@@ -306,7 +301,9 @@ export function buildSilhouetteProxy(root, o = {}) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  if (nrm) g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  // the x-ray pass ignores normals, but three keys `vertexNormals` into the program: without them the x-ray proxy
+  // would not share the flat program with the outline hulls (PERF §1.2), so it carries the position buffer as one
+  g.setAttribute('normal', nrm ? new THREE.Float32BufferAttribute(nrm, 3) : g.attributes.position);
   g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
   g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
@@ -345,7 +342,7 @@ export function buildSilhouetteProxy(root, o = {}) {
   mesh.userData.size = Math.max(_v2.x, _v2.y, _v2.z);
   mesh.userData.disposeData = () => { g.dispose(); skel.dispose(); };
   mesh.userData.dispose = () => {
-    mesh.removeFromParent(); mesh.userData.disposeData(); mesh.material.dispose(); _xrayMats.delete(mesh.material);
+    mesh.removeFromParent(); mesh.userData.disposeData(); disown(mesh.material); _xrayMats.delete(mesh.material);
   };
   return mesh;
 }
@@ -513,6 +510,15 @@ const isInstanceMat = (mat) => !!(mat?.userData?.enemyOwned || mat?.userData?.as
 export function topTintMaterial(mat, color = TOP_TINT.color, o = {}) {
   if (!mat || mat.userData?.topTint) return mat;
   const mix = o.mix ?? TOP_TINT.mix;
+  // WarmToon (sc-toon) has the tint built in as uniforms (PERF §1.2: no '|sc-top' program variant): per-instance /
+  // pooled toon materials are tinted in place, shared ones (toonLib, props) are left alone (it would tint every user)
+  const tu = mat.userData?.toon ? mat.userData.uniforms : null;
+  if (tu?.uTopMix) {
+    if (!(o.perInstance ?? (isInstanceMat(mat) || mat.userData.enemyToon))) return mat;
+    tu.uTopColor.value.set(color); tu.uTopMix.value = mix;
+    mat.userData.topTint = true;
+    return mat;
+  }
   const uniforms = { uTopColor: { value: new THREE.Color(color) }, uTopMix: { value: mix } };
   if (o.perInstance ?? isInstanceMat(mat)) {
     if (_topPatched.has(mat)) return mat;
@@ -537,7 +543,7 @@ export function topTint(root, color = TOP_TINT.color, o = {}) {
   const match = o.match instanceof RegExp ? o.match : Array.isArray(o.match) ? new RegExp(o.match.join('|'), 'i') : /helm|hat|hood|cap\b|kettle/i;
   let n = 0;
   root.traverse((c) => {
-    if (!(c.isMesh || c.isSkinnedMesh) || Array.isArray(c.material) || !c.material?.isMeshStandardMaterial && !c.material?.isMeshLambertMaterial && !c.material?.isMeshPhongMaterial) return;
+    if (!(c.isMesh || c.isSkinnedMesh) || Array.isArray(c.material) || !c.material?.isMeshStandardMaterial && !c.material?.isMeshLambertMaterial && !c.material?.isMeshPhongMaterial && !c.material?.userData?.toon) return;
     let hit = match.test(c.name || '');
     for (let p = c.parent; !hit && p && p !== root.parent; p = p.parent) hit = match.test(p.name || '');
     if (!hit) return;

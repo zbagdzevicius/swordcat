@@ -11,7 +11,7 @@
 // lays a 2 m-wide ground mist band along its line (one more draw per wall, iso only). The ground mist sheets
 // (GroundMist.js) carry the misty screen edges; this field stays for texture, cutscenes and the classic camera.
 import * as THREE from 'three';
-import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxShaderMaterial } from './shaders.js';
+import { FOG_FACTOR, NOISE, OUTPUT, fogUniforms, fxModule, fxShaderMaterial } from './shaders.js';
 import { PLAYER } from '../core/config.js';
 import { groundY, toVec3, hash01, actorWorldPos } from './util.js';
 import { SHAPE, FADE } from './Particles.js';
@@ -208,6 +208,8 @@ void main() {
   gl_FragColor = vec4( uColor, a );
   ${OUTPUT}
 }`;
+// linked into the one fx program at import (the band is first built per level, after the program compiled)
+fxModule({ name: 'fx.mist.band', vertexShader: BAND_VERT, fragmentShader: BAND_FRAG, fog: false });
 
 /**
  * A closed band `width` m wide along the card line `pts` ([x, z, …]), heights from `ground` (pure geometry; one draw).
@@ -297,7 +299,8 @@ export class MistCards {
 
   /**
    * A fog wall. `r` = radius, or `[w, d]` / `{w, d}` for a rectangle (also `opts.size`, as world's Arena passes it).
-   * Options: { size, spacing, height, width, yaw, alpha, rise, id }.
+   * Options: { size, spacing, height, width, yaw, alpha, rise, id, bandW, bandA, warm } (`warm`: a level warm-up wall whose
+   * ground band stays visible at alpha 0 so the warm-up compiles it).
    * @returns {{ center: THREE.Vector3, r: number, size: number[]|null, readonly alive: boolean, dissolve(sec?: number): void, dispose(sec?: number): void, remove(): void }}
    */
   ring(center, r, opts = {}) {
@@ -318,15 +321,15 @@ export class MistCards {
     this.scene?.add(set.mesh);
     // iso: a 2 m-wide ground mist band along the wall line (shown with the iso weight)
     // world's Arena passes its own band width / alpha per wall (requests/world.md)
-    const band = new THREE.Mesh(bandGeometry(pts, opts.bandW ?? MIST_ISO.bandW, (x, z) => groundY(this.ctx, x, z, c.y), rect ? null : c), new THREE.ShaderMaterial({
+    const band = new THREE.Mesh(bandGeometry(pts, opts.bandW ?? MIST_ISO.bandW, (x, z) => groundY(this.ctx, x, z, c.y), rect ? null : c), fxShaderMaterial({
       name: 'fx.mist.band', vertexShader: BAND_VERT, fragmentShader: BAND_FRAG, fog: false, transparent: true, depthWrite: false,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       uniforms: { uColor: { value: new THREE.Color(MIST_DEFAULT) }, uScroll: { value: new THREE.Vector2() }, uAlpha: { value: 0 } },
     }));
     band.material.userData.noHeightFog = true;
-    band.name = 'fx.mist.band'; band.frustumCulled = false; band.matrixAutoUpdate = false; band.renderOrder = 2; band.visible = false;
+    band.name = 'fx.mist.band'; band.frustumCulled = false; band.matrixAutoUpdate = false; band.renderOrder = 2; band.visible = !!opts.warm;   // warm: visible (alpha 0) so a prewarm compiles its program
     this.scene?.add(band);
-    const wall = { set, band, bandA: opts.bandA ?? MIST_ISO.bandA, pts, t: 0, rise: opts.rise ?? WALL.rise, out: -1, outDur: WALL.dissolve, alpha: 0, sparkT: 0, sparkI: 0 };
+    const wall = { set, band, warm: !!opts.warm, bandA: opts.bandA ?? MIST_ISO.bandA, pts, t: 0, rise: opts.rise ?? WALL.rise, out: -1, outDur: WALL.dissolve, alpha: 0, sparkT: 0, sparkI: 0 };
     this.walls.push(wall);
     const self = this;
     return {
@@ -414,7 +417,7 @@ export class MistCards {
         bu.uAlpha.value = w.bandA * a * this.iso;
         bu.uColor.value.copy(_wall).lerp(_white, 0.15);
         bu.uScroll.value.set(time * 0.05 * this._speed, -time * 0.02 * this._speed);
-        w.band.visible = bu.uAlpha.value > 0.003;
+        w.band.visible = w.warm || bu.uAlpha.value > 0.003;
       }
     }
   }

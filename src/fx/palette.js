@@ -22,7 +22,7 @@ export const FX_COLORS = Object.freeze({
   mint: CLASS_MARKS.interact?.color ?? '#9BE3C4', sky: CLASS_MARKS.companion?.color ?? '#8FD3FF',
   butter: '#FFD84A', star: '#FFE066', gold: '#FFD34D', goldCore: '#FFF6DA', lilac: '#C9A8FF', mistLilac: '#D8C8F4',
   twinkle: CLASS_MARKS.pickup?.twinkle ?? '#FFF1C4', twinkleGold: CLASS_MARKS.pickup?.gold ?? '#FFD57A',
-  light: '#FFF0B8',                          // ART §8.1 ground light pools
+  light: '#FFF4E0',                          // ART §8.1 ground light pools: warm cream (the multiplicative tint; never lime)
   stone: '#C9B8A8', warmGrey: '#D9C7B4',     // warm "grey" (never HSV sat < 0.08 cold greys)
   lantern: '#FFC46B',
 });

@@ -1,5 +1,6 @@
 // src/core/prewarm.js  (owner: core) — batched shader warm-up under the veil (PERF_SPEC §3.3, ART §3.6, X37).
 // LevelManager calls it after a build, before the veil drops; the title calls it too. Never call it during play.
+import { uberPrepare } from './uber.js';
 
 const nextFrame = () => new Promise((res) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => res()) : setTimeout(res, 0)));
 
@@ -13,6 +14,7 @@ const nextFrame = () => new Promise((res) => (typeof requestAnimationFrame === '
  * @returns {Promise<void>}
  */
 export async function prewarm(renderer, scene, camera, roots, { batch = 12 } = {}) {
+  uberPrepare(scene);   // uber-program geometries agree on the attributes that key a program (one variant)
   const hidden = [];
   for (const r of roots) { if (r?.visible) { r.visible = false; hidden.push(r); } }
   try {

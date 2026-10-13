@@ -21,7 +21,6 @@ const M = {
   fence: 'models/env/nature/fence_simple.glb',
   barn: 'models/env/village-kaykit/buildings/building_home_A_red.glb',
   windmill: 'models/env/village-kaykit/buildings/building_windmill_red.glb',
-  target: 'models/env/village-kaykit/decoration/target.glb',
   boulder: 'models/env/nature/rock_largeA.glb',
   cow: 'models/creatures/animals/Cow.glb',
   knight: 'models/characters/kaykit/Knight.glb',
@@ -188,6 +187,30 @@ function sackParts() {
   return [[cyl(0.02, 0.02, 1.8, 0, -1.8, 0, 5), C.rope], [sack, LOOK.sacky], [new THREE.CylinderGeometry(0.1, 0.16, 0.12, 8).translate(0, -1.75, 0), C.rope], ...face];
 }
 
+/**
+ * WA §2.5 practice dummy (1.0 m; replaces the KayKit archery target, which read as a bullseye board while every
+ * string says "dummy" / "Bonk it!"): a wooden post, a stuffed burlap sack body with a rope belt and straw-tuft arms,
+ * a round sack head with a stitched happy face and blush (both sides: she may come at it from either one), and a
+ * straw tuft on top. Base at y 0.
+ */
+function strawDummyParts() {
+  const p = [[cyl(0.045, 0.055, 0.42, 0, 0, 0, 6), C.wood], [box(0.34, 0.05, 0.07, 0, 0.03, 0), C.woodDark]];
+  const body = new THREE.SphereGeometry(0.2, 10, 8); body.scale(1, 1.15, 0.85); body.translate(0, 0.56, 0);
+  p.push([body, C.burlap], [new THREE.CylinderGeometry(0.19, 0.19, 0.05, 10).translate(0, 0.5, 0), C.rope]);
+  for (const sx of [1, -1]) {
+    p.push([new THREE.CylinderGeometry(0.045, 0.05, 0.3, 6).rotateZ(Math.PI / 2 - sx * 0.25).translate(sx * 0.3, 0.66, 0), C.straw],
+      [new THREE.ConeGeometry(0.07, 0.12, 6).rotateZ(-sx * (Math.PI / 2 + 0.25)).translate(sx * 0.47, 0.71, 0), C.straw]);
+  }
+  const head = new THREE.SphereGeometry(0.15, 10, 8); head.scale(1, 0.95, 0.9); head.translate(0, 0.86, 0);
+  p.push([head, LOOK.sacky], [new THREE.ConeGeometry(0.06, 0.1, 6).translate(0, 1.0, 0), C.straw]);
+  for (const s of [1, -1]) {
+    p.push([box(0.035, 0.05, 0.02, -0.05, 0.89, 0.13 * s), LOOK.ink], [box(0.035, 0.05, 0.02, 0.05, 0.89, 0.13 * s), LOOK.ink],
+      [new THREE.TorusGeometry(0.045, 0.01, 4, 8, Math.PI).rotateZ(Math.PI).translate(0, 0.84, 0.132 * s), LOOK.ink],
+      [box(0.04, 0.025, 0.015, -0.085, 0.845, 0.125 * s), LOOK.smile], [box(0.04, 0.025, 0.015, 0.085, 0.845, 0.125 * s), LOOK.smile]);
+  }
+  return p;
+}
+
 /** Wobble Knight body (spring dummy) and its sword arm (pivot at the shoulder). */
 function wobbleBodyParts() {
   const p = [[new THREE.CylinderGeometry(0.42, 0.48, 0.16, 14).translate(0, 0.08, 0), C.woodDark]];
@@ -212,8 +235,8 @@ const SETPIECES = {
   /** §12.3 practice field: fences, gate, barn, windmill, height chart, dummies, sack, Wobble Knight, boulder, statue. */
   async practiceField(kit, zone) {
     const ctx = kit.ctx, level = kit.level;
-    const [fence, barn, windmill, target, boulder, knight, rack, sack] = await Promise.all([
-      kit.tpl(M.fence), kit.tpl(M.barn), kit.tpl(M.windmill, { dynamic: ['building_windmill_top_fan_red'] }), kit.tpl(M.target), kit.tpl(M.boulder),
+    const [fence, barn, windmill, boulder, knight, rack, sack] = await Promise.all([
+      kit.tpl(M.fence), kit.tpl(M.barn), kit.tpl(M.windmill, { dynamic: ['building_windmill_top_fan_red'] }), kit.tpl(M.boulder),
       kit.tpl(M.knight, { pose: 'Idle', poseT: 0.1, show: ['2H_Sword', 'Knight_Helmet', 'Knight_Cape'], flatColor: LOOK.tallbert, key: 'tallbert' }),
       kit.tpl(M.weaponrack), kit.tpl(M.sack)]);
     const [cx, cz] = zone.at, half = zone.size[0] / 2;
@@ -239,6 +262,7 @@ const SETPIECES = {
     for (const sx of [-2.15, 2.15]) kit.collider({ x: sx, z: z1, r: 0.16, y0: kit.h(sx, z1) - 0.5, y1: kit.h(sx, z1) + 1.9 });
     const leafTpl = kit.proc('gate_leaf', () => gateLeafParts(4.0));
     const leaf = kit.mesh(leafTpl, { name: 'practiceGate' });
+    leaf.userData.camFade = true; leaf.userData.camFadeBox = true;   // the rails fade like the posts / fence when they cross her (box test: she shows between them)
     const hinge = new THREE.Group(); hinge.name = 'practiceGateHinge';
     hinge.position.set(-2.0, kit.h(-2, z1), z1);
     hinge.add(leaf);
@@ -246,14 +270,14 @@ const SETPIECES = {
     const gy = kit.h(0, z1);
     const gateCol = { ax: -2.05, az: z1, bx: 2.05, bz: z1, r: 0.12, y0: gy - 0.5, y1: gy + 1.5, walkable: false, gate: 'practice' };
     kit.collider(gateCol);
-    let open = 0, target01 = 0, opened = false;
+    let open = 0, target01 = 0, opened = false, refreshFade = false;   // refreshFade: settled, move the leaf's fade boxes
     const setOpen = (on, instant) => {
       target01 = on ? 1 : 0;
-      if (instant) open = target01;
+      if (instant) { open = target01; refreshFade = true; }
       if (on && !opened) { opened = true; level.removeCollider(gateCol); if (!instant) ctx.audio?.play3D?.('world/creak2', new THREE.Vector3(0, gy, z1), { vol: 0.8 }); }
     };
     kit.onFlag('prologue.tutorial', (v, atLoad) => setOpen(!!v, atLoad));
-    level.animators.push({ render: (dt) => { if (open !== target01) { open += Math.sign(target01 - open) * Math.min(Math.abs(target01 - open), dt * 0.9); } hinge.rotation.y = open * 1.75; } });   // swings inward (into the field): the lane stays clear
+    level.animators.push({ render: (dt) => { if (open !== target01) { open += Math.sign(target01 - open) * Math.min(Math.abs(target01 - open), dt * 0.9); if (open === target01) refreshFade = true; } hinge.rotation.y = open * 1.75; if (refreshFade) { refreshFade = false; hinge.updateWorldMatrix(true, true); ctx.cam?.refreshFadeable?.(leaf); } } });   // swings inward (into the field): the lane stays clear
     kit.anchor('practice_gate', 0, z1, undefined, 0);
     // armoury barn (5 m) and windmill (9 m, turning sails)
     kit.place(barn, -14, -92, { fit: { h: 5 }, yaw: 0, collider: 'box', shrink: 0.82, jitter: 0 });
@@ -272,9 +296,10 @@ const SETPIECES = {
     kit.place(chart, -6, -66, { yaw: Math.PI, collider: 'box', jitter: 0, clear: 0.8 });
     kit.anchor('chart', -6, -66, undefined, Math.PI);
     kit.anchor('chart_front', -6, -67.3, undefined, 0);
-    // 3 straw dummies (1.0 m), infinite, wobble on hits
+    // 3 straw dummies (1.0 m, WA §2.5: a sack-and-post dummy with a happy face, never a bullseye), infinite, wobble on hits
+    const dummy = kit.proc('straw_dummy', strawDummyParts);
     [[-5, -76], [0, -76], [5, -76]].forEach(([x, z], i) => {
-      const p = kit.place(target, x, z, { fit: { h: 1.0 }, yaw: Math.PI, collider: 'circle', jitter: 0.04 });
+      const p = kit.place(dummy, x, z, { yaw: Math.PI, collider: 'circle', jitter: 0.04 });
       if (!p) return;
       const a = new PropActor(ctx, { id: `dummy_${i + 1}`, kind: 'dummy', infinite: true, hp: 999, radius: 0.35, height: 1.0, pos: new THREE.Vector3(x, p.y, z),
         facing: Math.PI, wobble: 0.45, visual: { batch: kit.batch, handle: p.handle, base: p.matrix } });
@@ -456,7 +481,7 @@ const SETPIECES = {
     kit.occupy(21, 51, 1.2);
     const [cx, cz] = zone.at, [w, d] = zone.size;
     const rng = kit.rng.fork('wheat');
-    const field = new WheatField({ seed: 23 });
+    const field = new WheatField({ seed: 23, quality: ctx.quality?.id });
     let n = 0;
     const max = zone.wheat ?? 600, keepEvery = ctx.quality?.id === 'low' ? 2 : 1;   // §18 budget: Low keeps every other clump
     const spine = kit.terrain.spine;
@@ -496,7 +521,7 @@ const SETPIECES = {
     } });
   },
 
-  /** Old Bridge (x = 30, z 57–67, 4 m wide) over the stream; Mochi's cage cart at (30, 74); reeds and lily pads. */
+  /** Old Bridge (x = 30, z 57–67, 4 m wide) over the stream; Biscuit's carrier cart at (30, 74) (WA16: Mochi's cage moved to STORY.mochiCage); reeds and lily pads. */
   async oldBridge(kit) {
     const level = kit.level;
     const stone = LOOK.bridge;                                // LI W4: sandstone (was sat 0.15, mul 0.46: half-black)
@@ -592,7 +617,9 @@ export default defineLevel({
   // CAMERA.iso.fog default (clear 5 / 7, topMul 1.5); from above the sun moves to the side (~80° off the view: shadows
   // fall across the screen, not under the props) and the hemisphere lifts ×1.08 (the lens sees mostly ground)
   cam: { yaw: Math.PI, fog: { clear: 5, clearCombat: 7, topMul: 1.5 },
-    light: { meadow_day: { hemiMul: 1.08, sunAz: -1.45 }, meadow_morning: { hemiMul: 1.08, sunAz: -1.45 },
+    // the golden-morning practice field (prologue): the 23° sun laid flat dark slabs from the barn, windmill and trees
+    // across half the field from above, so the iso view lifts the sun to 43° and softens the shadow (ART §3.4 floor)
+    light: { meadow_day: { hemiMul: 1.08, sunAz: -1.45 }, meadow_morning: { hemiMul: 1.08, sunAz: -1.45, sunElev: 0.75, shadowI: 0.45 },
       // Midnight Practice: the moon and a lifted cool sky fill so the field reads from above (ground ≥ ~12 % at 8 m)
       // the periwinkle night callback (WA §2.3) is lifted in the preset itself; from above only a touch more fill
       meadow_night: { hemiMul: 1.15 } } },
@@ -602,7 +629,9 @@ export default defineLevel({
   // hop crosses it either (the gate line), so a click past it walks round the fence end, and the prompt teaches the jump
   navLinks: [{ a: [-14.5, -88.3], b: [-14.5, -85.7], kind: 'fence', when: 'tut.jump.done', gate: [[-20, -87], [-2, -87]] }],
   paths: [{ pts: [[-22, -30], [-38, -27], [-56, -31], [-80, -28]], width: 3 }, { pts: [[-22, -30], [-9, -23], [8, -27], [30, -22]], width: 3 }],
-  spawns: { title: [0, -64, Math.PI], practice: [-10, -90, 0], start: [-1.5, -54.5, -0.4], boss: [30, 66, 0] },   // [x, z, yaw]; yaw 0 faces +Z
+  // AUTOCAM §9.3 skyline audit: the practice-field windmill (9 m, turning sails) reads from the whole field
+  farKeep: [[16, -95, 9]],
+  spawns: { title: [0, -64, Math.PI], practice: [-10, -90, 0], start: [-1.5, -50.5, -0.4], boss: [30, 66, 0] },   // [x, z, yaw]; yaw 0 faces +Z; start 9.5 m north of the gate line (z −60): its rails never cross her in the iso frame
   anchors: {
     bell_far: [-130, -20, 30], horde_a: [-40, -45], horde_b: [30, -55], crane_bell: [-60, -40, 25], crane_field: [0, -70, 3],
     pud_1: [20, 36], pud_2: [36, 50], pud_3: [40, 72], pud_4: [22, 84],
@@ -699,7 +728,7 @@ export default defineLevel({
   horizon: { n: 80 }, horizonFog: 0.84,
   grass: { height: 0.27 },
   // loaded by the setpieces above (listed for the manifest test and per-level preloading)
-  models: [M.fence, M.barn, M.windmill, M.target, M.boulder, M.knight, M.weaponrack, M.sack, M.wall, M.hay, M.bridge, M.bridgePillar, M.cart,
+  models: [M.fence, M.barn, M.windmill, M.boulder, M.knight, M.weaponrack, M.sack, M.wall, M.hay, M.bridge, M.bridgePillar, M.cart,
     M.flowerY, M.flowerP, M.flowerR, M.cropRow, M.cropCarrot, M.cropTurnip, M.cropPumpkin,
     M.lily, M.reeds, M.cow, ...STONES_TALL],
 });

@@ -108,7 +108,7 @@ test('FollowCamera (iso): fixed yaw π, 13 m at 51°, follows her focus; zoom cl
   const s = cam.iso();
   near(s.yaw, Math.PI, 1e-9); near(s.dist, I.dist, 1e-6); near(s.pitch, isoPitch(I.dist), 1e-3);
   assert.equal(cam.isIso, true);
-  near(ctx.camera.near, I.near, 1e-9); near(ctx.camera.far, I.far, 1e-9);
+  near(ctx.camera.near, I.near, 1e-9); near(ctx.camera.far, I.foot?.farFallback ?? I.far, 1e-9);   // X12: no fog model → the 60 m fallback
   // she walks +Z: the camera follows without turning
   ctx.player.pos.set(0, 0, 10); ctx.player.object3d.position.copy(ctx.player.pos);
   for (let i = 0; i < 120; i++) { cam.update(1 / 60); cam.render(0, 1 / 60); }

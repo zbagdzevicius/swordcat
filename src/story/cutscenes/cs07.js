@@ -56,7 +56,7 @@ export default {
     ...VILLAGERS.map((p, i) => ({ t: 'spawn', id: `villager_${i + 1}`, type: `villager_${31 + i}`, at: p, facing: yawOf([-p[0], 36 - p[1]]), visible: false })),
     { t: 'call', fn: onTheSteps },
 
-    // ---- 1 · crane from the dark Sunbell down to the steps; it settles high enough (2.6 m, 5.6 m back from Clem)
+    // ---- 1 · crane from the sleepy Sunbell down to the steps; it settles high enough (2.6 m, 5.6 m back from Clem)
     // to see over the step lips onto Clem, Mochi and the two on the treads above them
     { t: 'cam', anchor: [0, 0, 0], mode: 'rail', pos: [2.5, 16, 44], to: [2.6, 2.6, 30.8], look: BELL, lookTo: [0, 1.15, 38.0], fov: [34, 40], dur: 7, ease: 'inOutSine', nowait: true },
     wait(4.6),
@@ -88,7 +88,7 @@ export default {
     say('swordcat', 'cs07.6', 2.0),
     { t: 'actor', id: 'swordcat', pose: 'idle' },
 
-    // ---- 3 · up at the dark bell; Marmalade points
+    // ---- 3 · up at the sleepy bell; Marmalade points
     { t: 'cam', anchor: [0, 0, 0], mode: 'cut', pos: [1.6, 0.6, 33.2], look: BELL, fov: 46 },
     { t: 'actor', id: 'marmalade', face: [0, 54], faceDur: 0.5, pose: 'oath' },
     sfx('cs07.point', 'marmalade'),

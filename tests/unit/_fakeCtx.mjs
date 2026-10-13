@@ -11,7 +11,10 @@ import { Input } from '../../src/core/Input.js';
 import { Assets } from '../../src/core/Assets.js';
 import { createRng } from '../../src/core/rng.js';
 import * as strings from '../../src/story/strings.js';
-import { SYSTEMS } from '../../src/core/systems.js';
+import { SYSTEMS, loadSystems } from '../../src/core/systems.js';
+
+// C16: SYSTEMS entries are lazy; resolve every Class once so fakeCtx() stays synchronous
+await loadSystems();
 
 /** A minimal Game stand-in: mode, hitstop, slow-mo and simActive behave like core/Game.js. */
 export function fakeGame() {

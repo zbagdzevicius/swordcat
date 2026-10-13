@@ -8,6 +8,7 @@ import cs01b from './cs01b.js';
 import cs02 from './cs02.js';
 import tutbow from './tutbow.js';
 import tutpearl from './tutpearl.js';
+import tutlook from './tutlook.js';
 import g01 from './g01.js';
 import cs03 from './cs03.js';
 import cs03b from './cs03b.js';
@@ -15,7 +16,7 @@ import d01 from './d01.js';
 import { E } from '../../core/events.js';
 
 /** Bundled scenes (meadow: title, Morning Practice, the prologue, Chapter 1). */
-export const EAGER = Object.freeze({ cs00, cs01, cs01b, cs02, tutbow, tutpearl, g01, cs03, cs03b, d01 });
+export const EAGER = Object.freeze({ cs00, cs01, cs01b, cs02, tutbow, tutpearl, tutlook, g01, cs03, cs03b, d01 });
 
 /** Lazy scenes: id → [loader, export name]. One chunk per file (d04 / gate hold several scenes). */
 export const LAZY = Object.freeze({
@@ -69,7 +70,7 @@ export const PLACEHOLDER_ENDS = Object.freeze({
   cs14: {},
   d05: { kind: 'dialog', flags: { 'keep.brutus': true }, unlock: [{ kind: 'skin', id: 'toobig' }] },
   cs15: { flags: { 'keep.boss': true }, bossDefeated: 'barkus', play: 'cs16' },
-  cs16: { flags: { 'ending.seen': true }, unlock: [{ kind: 'skin', id: 'dawnblade' }, { kind: 'cape', id: 'gold' }], cinematic: { bloom: [0.6, 0.4, 0.9] } },
+  cs16: { flags: { 'ending.seen': true }, unlock: [{ kind: 'skin', id: 'dawnblade' }, { kind: 'cape', id: 'gold' }], cinematic: { grade: 'gold', bloom: [0.6, 0.4, 0.9] } },
 });
 
 /** How long a placeholder holds the screen (s): long enough for `cutscene:start` to be seen, short for flows. */

@@ -161,8 +161,8 @@ export class Cinema {
   }
 
   /**
-   * Chapter card (§14.3: parchment, chapter title in Cinzel Decorative, the region in Uncial Antiqua, a wax-seal stamp;
-   * 3.0 s). Resolves when it has gone.
+   * Chapter card (§14.3 in the WA candy skin: a cream card, the chapter title and the region in Fredoka, a wax-seal
+   * stamp; 3.0 s). Resolves when it has gone.
    */
   showChapter(chapter, o = {}) {
     const info = chapterInfo(this.ctx, chapter, o.level ?? this.ctx.levels?.current?.id ?? null);

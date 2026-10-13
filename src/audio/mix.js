@@ -5,9 +5,12 @@
 export const BUSES = ['master', 'music', 'sfx', 'world', 'player', 'ui'];
 
 export const MIX = {
-  /** §16.5: at most 8 2D and 12 3D voices; the oldest is stolen. Loops, wind, bell, shimmer and babble are extra. */
+  /**
+   * §16.5 / PERF §10.5: at most 8 2D and 8 pooled 3D voices (their PannerNodes are reused); the oldest is stolen.
+   * Loops, wind, bells, the glock, shimmer and babble are extra.
+   */
   voices2D: 8,
-  voices3D: 12,
+  voices3D: 8,
   /** §16.3 / tech.md §14 PositionalAudio settings. */
   refDistance: 3,
   rolloff: 1.4,
@@ -25,6 +28,8 @@ export const MIX = {
   lateWindow: 0.25,
   /** steal fade (s) — avoids clicks when the oldest voice is reused */
   stealFade: 0.012,
+  /** ART §9.3 master EQ: a little air, a little less boom (in front of the limiter) */
+  shelf: { high: { freq: 6000, gain: 1.5 }, low: { freq: 120, gain: -2 } },
   /** master safety limiter */
   limiter: { threshold: -4, knee: 4, ratio: 10, attack: 0.003, release: 0.18 },
 };

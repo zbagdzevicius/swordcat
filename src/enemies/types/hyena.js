@@ -1,5 +1,6 @@
 // src/enemies/types/hyena.js  (owner: enemies) — Hyena Raider (GAME_DESIGN §10.2–§10.3; Appendix B.3 shape).
-// The look: Barbarian.glb + characters' hyena head + scratched plate + Skeleton_Blade. Full M2 AI:
+// The look: Barbarian.glb + characters' hyena head + scratched plate + a Squeaky Bone club (WA §3.1 / §8.2 toy props:
+// the old Skeleton_Blade cleaver is only the fallback when the characters prop is missing). Full M2 AI:
 //   hyena_slash (white glint) and hyena_lunge (red, unblockable dash from 3–5 m);
 //   Gloat: after it lands any hit on her it laughs 1.0 s and doesn't attack; a hit during the Gloat chokes it
 //          ("hrk!", stagger 1.0 s, enemy:choke → +10 Valor);
@@ -16,6 +17,12 @@ import { GLOAT, JEER, GIGGLE, canJeer, flankPoint, isBehind, jeerOff } from './h
 
 const def = ENEMIES.hyena;
 
+/**
+ * WA §8.2 toy weapon: characters' squeaky bone (red rubber caps) in the right fist, along the hand slot's +Y like the
+ * blade it replaces (~0.75 m + caps at 1.35 m: about the old weapon's reach; the swing hitbox comes from the attack rows).
+ */
+export const HYENA_BONE = Object.freeze({ prop: 'squeaky_bone', hand: 'r', opts: Object.freeze({ p: [0, -0.05, 0], r: [0, 0, 0], s: 1.25 }) });
+
 export const HYENA_ANIMS = {
   ...CLIP_MAPS.kaykit.roles,
   hyena_slash: { windup: { clip: '1H_Melee_Attack_Slice_Horizontal', from: 0, to: 0.35, speed: 'fit' }, strike: { clip: '1H_Melee_Attack_Slice_Horizontal', from: 0.35, to: 1, speed: 1.3 } },
@@ -28,7 +35,7 @@ export default {
   anims: HYENA_ANIMS,
   expression: 'sneer',
   build: (e, m) => dressKayKit(e, m, {
-    look: 'hyena', headNode: 'Barbarian_Head', head: { chippedEar: e.seed % 3 === 0 ? 'left' : null }, weapon: def.weapon, expression: 'sneer',
+    look: 'hyena', headNode: 'Barbarian_Head', head: { chippedEar: e.seed % 3 === 0 ? 'left' : null }, hold: HYENA_BONE, weapon: def.weapon, expression: 'sneer',
   }),
   states: { gloat: GLOAT, jeer: JEER, giggle: GIGGLE },
   onHitWhile: { gloat: 'choke', jeer: 'choke' },

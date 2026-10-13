@@ -49,7 +49,9 @@ export const SETTINGS = Object.freeze([
   { key: 'castMode', type: 'choice', label: 'settings.castMode', group: 'controls', options: ['smart', 'indicator', 'dragOnly'], optionLabels: ['Smart', 'Show first', 'Drag only'] },
   { key: 'autoRiposte', type: 'choice', label: 'settings.autoRiposte', group: 'controls', options: ['auto', 'on', 'off'], optionLabels: ['Auto', 'On', 'Off'] },
   { key: 'standAutoFace', type: 'toggle', label: 'settings.standAutoFace', group: 'controls' },
-  { key: 'pathPreview', type: 'toggle', label: 'settings.pathPreview', group: 'controls' },
+  // WA §3.6: 'auto' = the whole path on touch during the prologue + Chapter 1 (fx pathPreviewOn); requests/ui.md
+  { key: 'pathPreview', type: 'choice', label: 'settings.pathPreview', group: 'controls', options: ['auto', 'on', 'off'],
+    optionLabels: ['settings.quality.auto', 'settings.on', 'settings.off'] },
   { key: 'edgePanSpeed', type: 'slider', label: 'settings.edgePanSpeed', group: 'camera', cam: 'iso', dev: 'kbm', min: 0.5, max: 2, step: 0.25, fmt: 'mul' },
   { key: 'touchSize', type: 'choice', label: 'settings.touchSize', group: 'controls', dev: 'touch', options: [0.8, 1, 1.2, 1.4], optionLabels: ['S', 'M', 'L', 'XL'] },
   { key: 'tapToMove', type: 'toggle', label: 'settings.tapToMove', group: 'controls', dev: 'touch' },

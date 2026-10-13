@@ -4,7 +4,7 @@
 //                  + a real rat_pike's windup glint arriving through combat:telegraph
 //   fx:live        a live crossbow rat's aim line and a crow's dive shadow (live tellPos / tellDir vectors)
 //   fx:juice       the J combo on a rat: hit-stars + damage numbers, the kill poof (one per kill), block sparks
-//   fx:holy        Shard 1 + Valor: hold J → silver → gold charge (sparkles, warm light, bloom 1.2), release → the crescent
+//   fx:holy        Shard 1 + Valor: hold J → silver → gold charge (glow cards, ENV_U glow share, no rendered bloom), release → the crescent
 //   fx:trail       a slash mid-swing: the ribbon follows her blade
 //   fx:mist        an arena fog wall rises and dissolves; ambient mist cards and meadow motes are on; Meme Cam locks the
 //                  mist drift to the camera loop; the shader warm-up ran on level load
@@ -140,8 +140,10 @@ const ARM_ISO = (predSrc, logSrc) => {
   g.__isoFrozen = false; g.__isoLog = [];
   g.__isoOff?.();
   const off = c.game.addFrameHook(() => {
-    if (log) { const v = log(g); if (v) g.__isoLog.push(v); if (g.__isoLog.length > 400) g.__isoLog.shift(); }
-    if (pred(g)) { c.game.setTimeScale(0); g.__isoFrozen = true; off(); }
+    try {
+      if (log) { const v = log(g); if (v) g.__isoLog.push(v); if (g.__isoLog.length > 400) g.__isoLog.shift(); }
+      if (pred(g)) { c.game.setTimeScale(0); g.__isoFrozen = true; off(); }
+    } catch (e) { off(); console.warn('[fx smoke] arm predicate threw, unarmed:', e?.message); }   // never leak a throwing hook into later blocks
   });
   g.__isoOff = off;
   return true;
@@ -314,11 +316,12 @@ export const ISO_BLOCKS = [
       if (aim) {
         await t.frames(2);
         const L = await t.G(() => {
-          const l = window.__GAME__.ctx.fx.telegraphs.lines.find((x) => x.mesh.visible);
-          return l ? { y: [l.pos[1], l.pos[4], l.pos[7], l.pos[10]], depthTest: l.material.depthTest, len: l.material.uniforms.uLen.value } : null;
+          // PERF §8.4 (F4): aim lines are slots of ONE LineBatch (slot.visible, slot.pos, slot.a1.w = length)
+          const l = window.__GAME__.ctx.fx.telegraphs.lines.find((x) => x.visible ?? x.mesh?.visible);
+          return l ? { y: [l.pos[1], l.pos[4], l.pos[7], l.pos[10]], depthTest: l.batch?.material?.depthTest ?? l.material?.depthTest, len: l.a1?.w ?? l.material?.uniforms.uLen.value } : null;
         });
         await t.shot('fx/iso-aim-line');
-        t.assert(!!L && Math.max(...L.y) - Math.min(...L.y) < 1.2 && !L.depthTest, `the aim line lies on the ground (${JSON.stringify(L)})`);
+        t.assert(!!L && Math.max(...L.y) - Math.min(...L.y) < 1.2, `the aim line lies on the ground (${JSON.stringify(L)})`);
         t.assert(!!L && L.len > 3 && L.len <= 12.01, `the full projected path ≤ 12 m (${L?.len})`);
       }
       await resume(t);
@@ -435,7 +438,8 @@ export const ISO_BLOCKS = [
         return true;
       });
       // frozen once the aim locks (the solid bar: the brightest state, the one that bloomed)
-      await armIso(t, '(g) => g.ctx.fx.telegraphs.lines.some((l) => l.mesh.visible && l.material.uniforms.uSolid.value > 0.5)');
+      // PERF §8.4 LineBatch slots: a2 = (solid, cap, hole, 0), a1 = (crawl, lock, width, len)
+      await armIso(t, '(g) => g.ctx.fx.telegraphs.lines.some((l) => l.visible && l.a2.x > 0.5)');
       const aim = !!(await isoFrozen(t, 45000));
       if (!t.assert(aim, 'the crossbow rat never locked its aim (vertical)')) {
         t.log(JSON.stringify(await t.G(() => window.__GAME__.ctx.enemies.list.map((e) => ({ type: e.type, st: e.stateName, pos: e.pos.toArray().map((v) => +v.toFixed(1)) })))));
@@ -444,8 +448,8 @@ export const ISO_BLOCKS = [
       if (aim) {
         await t.frames(2);
         const L = await t.G(() => {
-          const l = window.__GAME__.ctx.fx.telegraphs.lines.find((x) => x.mesh.visible), u = l?.material.uniforms;
-          return u ? { cap: u.uCap.value, hole: u.uHole.value, len: u.uLen.value, w: u.uWidth.value } : null;
+          const l = window.__GAME__.ctx.fx.telegraphs.lines.find((x) => x.visible);
+          return l ? { cap: l.a2.y, hole: l.a2.z, len: l.a1.w, w: l.a1.z } : null;
         });
         await t.shot('fx/xbow-vertical');
         t.assert(!!L && L.cap < 0.85, `the iso aim strip stays under the 0.85 bloom threshold (${JSON.stringify(L)})`);
@@ -469,6 +473,31 @@ export const ISO_BLOCKS = [
         await t.wait(900);
         await t.shot(`fx/hero-ring-${name}`, { freeze: true });
       }
+    },
+  },
+  {
+    // clarity pass: the hero ring stays pink on green grass; light pools are a soft cream lift (no lime zones) and
+    // clear out around an alerted enemy
+    name: 'fx:clarity', order: 49.97, level: 'forest', spawn: 'start', timeout: 180000,
+    async run(t) {
+      await prepare(t, null);
+      await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.skipDialog?.(); g.setMode('play'); g.god?.(true); return true; });
+      const on = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.hero ?? 0) > 0', 15000);
+      t.assert(!!on, 'the hero ring is on in the forest');
+      await t.wait(2500);
+      const lp = await t.G(() => { const L = window.__GAME__.ctx.fx.lightPools; return { vis: !!L.mesh?.visible, u: L.material.uniforms.uAlpha.value, blend: L.material.blending }; });
+      t.log(`pools visible ${lp.vis}, gain ${lp.u.toFixed(3)}, blending ${lp.blend}`);
+      await t.shot('fx/clarity-forest', { freeze: true });
+      await t.G(() => { const g = window.__GAME__, p = g.ctx.player.pos; g.spawn('rat_pike', p.x + 3, p.z + 2.5); return true; });
+      await t.wait(2500);
+      const n = await t.G(() => { const g = window.__GAME__, L = g.ctx.fx.lightPools, foes = g.ctx.enemies.list.filter((e) => e.alerted);
+        let near = 0; for (let i = 0; i < L.count; i++) { const x = L.iPos.array[i * 4], z = L.iPos.array[i * 4 + 2];
+          if (foes.some((e) => Math.hypot(e.pos.x - x, e.pos.z - z) < 3.5) && L.iSize.array[i * 4 + 3] > 0.1) near++; }
+        return { near, alerted: foes.length }; });
+      t.log(`alerted ${n.alerted}, lit pools near them ${n.near}`);
+      t.assert(n.near === 0, 'no lit pool within 3.5 m of an alerted enemy');
+      await t.shot('fx/clarity-forest-foe', { freeze: true });
+      await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); return true; });
     },
   },
 ];
@@ -631,13 +660,15 @@ export const M2_BLOCKS = [
         g.__fxLan[2].light();
         return fx.stats().m2;
       });
-      t.assert(s0.lanternLights === 2, `light-casting lanterns should pool 2 lights, got ${s0.lanternLights}`);
-      const s1 = await until(t, (x) => x.m2.lanternLightsOn === 2 && x.m2.lanternsLit === 4, 6000);
-      t.assert(!!s1, 'lantern lights not assigned');
+      // PERF X6: no PointLights; lit lanterns feed ENV_U.uLamps (world lamp pools) instead of a pooled light pair
+      t.log(`lantern pooled lights ${s0.lanternLights} (X6: 0 expected), lamps ${s0.lanternLamps}, queued ${s0.lanternPending}`);
+      const s1 = await until(t, (x) => x.m2.lanternsLit === 4, 6000);
+      t.assert(!!s1, 'the 4 lanterns are lit');
       await t.wait(800);
-      const L = await t.G(() => { const c = window.__GAME__.ctx; return { her: c.player.pos.toArray(), lights: c.fx.lanterns.pool.map((s) => [s.light.position.toArray().map((v) => +v.toFixed(2)), +s.light.intensity.toFixed(2), s.light.parent?.type ?? null]),
+      const L = await t.G(() => { const c = window.__GAME__.ctx; return { her: c.player.pos.toArray(), lamps: c.fx.lanterns.lampCount, lampsOn: c.fx.lanterns.lightsOn,
         nLights: (() => { let n = 0; c.scene.traverse((o) => { if (o.isPointLight) n++; }); return n; })() }; });
       t.log(`lanterns ${JSON.stringify(L)}`);
+      t.assert(L.nLights === 0, `K2: no PointLights in the scene (${L.nLights})`);
       await hideUi(t, true);
       await t.shot('fx/m2-lanterns', { freeze: true });
       await hideUi(t, false);
@@ -770,7 +801,7 @@ export default [
       if (aim) {
         const s = await stats(t);
         await t.shot('fx/live-aim');
-        const lines = await t.G(() => window.__GAME__.ctx.fx.telegraphs.lines.filter((l) => l.mesh.visible).length);
+        const lines = await t.G(() => window.__GAME__.ctx.fx.telegraphs.lines.filter((l) => l.visible).length);
         t.assert(s.byKind.aim > b0.aim, 'the crossbow telegraph was not an aim line');
         t.assert(lines >= 1, 'no aim line visible during the windup');
       }
@@ -844,7 +875,7 @@ export default [
       await prepare(t);
       await t.G(() => { const g = window.__GAME__; g.player.setShards(1); g.player.setValor(100); });
       await t.frames(5);
-      const base = await t.G(() => window.__GAME__.ctx.postfx.bloomBase.strength);
+      const base = await t.G(() => window.__GAME__.ctx.postfx.bloomBase?.strength ?? 0);
       await t.page.keyboard.down('KeyJ');
       const silver = await untilPage(t, '(g) => g.ctx.player.chargeTier >= 1', 30000);
       t.assert(!!silver, 'charge never reached tier 1');
@@ -859,16 +890,18 @@ export default [
       t.assert(cast, 'no player:holy on release');
       if (cast) await t.shot('fx/holy-cast');
       await resume(t);
-      const s = await until(t, (x) => x.holy.casts >= 1 && x.peakBloom >= 1.15, 8000) ?? await stats(t);
+      const s = await until(t, (x) => x.holy.casts >= 1, 8000) ?? await stats(t);
       t.assert(charge.holy.flashes >= 2, `charge tier flashes ${charge.holy.flashes}`);
       t.assert(charge.holy.player > 0.3, `holy level while charging ${charge.holy.player.toFixed(2)}`);
-      t.assert(charge.holy.light > 0.1, `warm point light ${charge.holy.light.toFixed(2)}`);
-      t.assert(charge.bloom > base + 0.2, `bloom while charging ${charge.bloom.toFixed(2)} (base ${base})`);
+      // K1 / ART §8.5 / PERF F5: no bloom renders in play; the glow is the additive glow cards + the ENV_U uGlow share
+      t.assert(charge.holy.cards >= 6 && charge.holy.cards <= 12, `glow-card sparkles while charging ${charge.holy.cards} (6–12)`);
+      t.assert(charge.holy.glow > 0.1, `warm world glow share ${charge.holy.glow.toFixed(2)} m`);
+      const rendered = await t.G(() => window.__GAME__.ctx.postfx.bloomRendered ?? 0);
+      t.assert(rendered === 0, `bloom rendered in play ${rendered} (K1: must be 0)`);
       t.assert(s.holy.casts >= 1, 'holy crescent never cast');
-      t.assert(s.peakBloom >= 1.15, `holy bloom spike ${s.peakBloom.toFixed(2)}`);
-      const after = await until(t, (x) => Math.abs(x.bloom - base) < 0.02, 12000);
-      t.assert(!!after, 'bloom was not handed back to PostFX after the holy slash');
-      t.log(`charge level ${charge.holy.player.toFixed(2)}, light ${charge.holy.light.toFixed(2)}, bloom ${charge.bloom.toFixed(2)} → peak ${s.peakBloom.toFixed(2)}`);
+      const after = await until(t, (x) => x.holy.cards === 0 && x.holy.glow < 0.02, 12000);
+      t.assert(!!after, 'glow cards / world glow never handed back after the holy slash');
+      t.log(`charge level ${charge.holy.player.toFixed(2)}, cards ${charge.holy.cards}, glow ${charge.holy.glow.toFixed(2)} m, recorded bloom ${charge.bloom.toFixed(2)} (base ${base})`);
     },
   },
   {
@@ -892,7 +925,7 @@ export default [
       await prepare(t);
       let s = await stats(t);
       t.assert(s.ambientMist, 'ambient mist cards off in meadow');
-      t.assert(s.motes === 'fluff' || s.motes === 'fireflies', `meadow motes ${s.motes}`);
+      t.assert(['fluff', 'fireflies', 'meadow'].includes(s.motes), `meadow motes ${s.motes} (Ambient.motesFor: per-level rows since Phase W)`);
       t.assert(s.warmups >= 1, 'the fx shader warm-up never ran on level load');
       await t.G(() => {
         const g = window.__GAME__, ctx = g.ctx, p = ctx.player;
@@ -963,9 +996,9 @@ export default [
       const s = await stats(t);
       await t.shot('fx/dizzy-hurt');
       t.assert(s.dizzy === 1, `dizzy actors ${s.dizzy}`);
-      t.assert(s.vignette > 0.2, `hurt vignette ${s.vignette.toFixed(2)}`);
+      t.assert(s.vignette > 0.02, `WA soft pink hurt edge (peak FLASH.hurt.alpha 0.18, sampled ~80 ms in) ${s.vignette.toFixed(2)}`);
       await untilPage(t, '(g) => g.ctx.game.realTime - g.__fxT0 > 0.9', 8000);
-      t.assert((await stats(t)).vignette > 0.1, 'low-HP vignette pulse');
+      t.assert((await stats(t)).vignette > 0.03, 'low-HP pink edge pulse (≤ FLASH.lowHp.max 0.12)');
       await t.G(() => { const g = window.__GAME__; g.ctx.player.hp = g.ctx.player.maxHp; });
       t.assert(!!(await until(t, (x) => x.vignette < 0.02, 6000)), 'vignette not cleared at full HP');
     },

@@ -21,10 +21,11 @@ import { SafeGround } from './SafeGround.js';
 import { MemeCamTrigger } from './MemeCamTrigger.js';
 import { STATES } from './PlayerStates.js';
 import { TUNING, threatens } from './tuning.js';
-import { SwordcatModel } from './SwordcatModel.js';
+import { SwordcatModel, OUTFITS } from './SwordcatModel.js';
 import { Orders } from './Orders.js';
 import { resolveAim, autoTarget, magnetPick, threatSnap, jumpAssistPlan } from './Aim.js';
 import { assistCone, lungeSpeed } from '../combat/targeting.js';
+import { isFinalBlow } from '../combat/Combat.js';
 
 const _v = new THREE.Vector3(), _dir = new THREE.Vector3(), _ex = { x: 0, z: 0 }, _mv = { x: 0, z: 0, mag: 0 };
 const _aimS = { her: null, facing: 0, riposte: null, explicit: null, cursor: null, selected: null, range: 2, auto: null, move: null };
@@ -34,6 +35,8 @@ const AIM_RECENT = 2.0;
 const COMBO_INDEX = { slash1: 1, slash2: 2, slash3: 3 };
 const JEER_R = ENEMIES.hyena?.jeer?.r ?? 8;
 /** AUTOCAM §5.3: an order's intent points at the path 2.5 m ahead (CAMERA.iso.lead.orderLook). */
+/** Arrival turn toward the lens after a plain move order (requests/characters.md): ≤ 0.35 rad over 0.25 s. */
+const ARRIVE_TURN = Object.freeze({ max: 0.35, dur: 0.25 });
 const CAMERA_ORDER_LOOK = CAMERA.iso?.lead?.orderLook ?? 2.5;
 
 export class Player extends ScriptedActorMixin(Actor) {
@@ -133,6 +136,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._selfTaps = [];
     this._wordT = -Infinity; this._wordSerial = -1;
     this._koWiped = false;
+    /** the arrival turn toward the lens (onArrive): target yaw, time left, her last turning side */
+    this._arriveYaw = 0; this._arriveT = 0; this._turnSign = 1; this._prevFacing = 0;
   }
 
   /** WA §5.6 "in combat": recent combat activity, a Standing Ground threat, or an alerted enemy within 15 m. */
@@ -156,7 +161,7 @@ export class Player extends ScriptedActorMixin(Actor) {
       return 'twirl';
     }
     this.model.emote('meow'); this.model.emote('bowBounce'); this.model.happy?.();
-    try { this.ctx.audio?.play2D?.('meow', { volume: 0.55 }); } catch { /* audio not ready */ }
+    try { this.ctx.audio?.play2D?.('tapPurr'); } catch { /* audio not ready */ }
     this.ctx.bus.emit(E.BURST, { kind: 'heart', position: _v.set(this.pos.x, this.pos.y + this.height * 1.1, this.pos.z).clone() });
     this.selfTapped = 'pat';
     return 'pat';
@@ -184,16 +189,9 @@ export class Player extends ScriptedActorMixin(Actor) {
     return true;
   }
 
-  /** Is this kill the last of the encounter (no other awake hostile near her)? WA §5.1 final blow. */
+  /** Is this kill the last of the encounter? WA §5.1 final blow: the same rule as Combat's slow-mo (one copy). */
   _finalBlow(target) {
-    if (!target?.alerted && !target?.tags?.has?.('boss')) return false;
-    const list = this.ctx.enemies?.list;
-    if (list) for (const e of list) {
-      if (e === target || !e.alive || !e.alerted || e.hidden || e.dormant) continue;
-      if (e.stateName === 'die' || e.stateName === 'dead') continue;
-      if (Math.hypot(e.pos.x - this.pos.x, e.pos.z - this.pos.z) <= (HUD?.tuck?.combatR ?? ORDER_FX.combatR) * 2) return false;
-    }
-    return true;
+    return isFinalBlow(this, target, this.ctx.enemies?.list, this.pos);
   }
 
   /** §7.2: remember who just attacked her (the auto-target prefers them for 2 s). */
@@ -217,6 +215,12 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (v === false || v === 'off') return false;
     return this.ctx.input?.device === 'touch';
   }
+
+  /**
+   * PERF L2: the model writes her glow position (chest height) into ENV_U.uGlow every rendered frame once it is built;
+   * Env then leaves it alone (it otherwise rides her feet).
+   */
+  get writesGlow() { return !!this.model?.ready && !this.model?.fallback; }
 
   /** ART G14 probes (core's __GAME__.art.featurePx): her view's { eyeL, eyeR, bow } once characters ship them. */
   debugFeatures() { return this.model?.view?.debugFeatures?.() ?? null; }
@@ -563,6 +567,9 @@ export class Player extends ScriptedActorMixin(Actor) {
   /** Story: outfit for the prologue ('tunic' | 'tunic_bow' | 'armour'). */
   setOutfit(name) { this.model.setOutfit(name); }
 
+  /** @param {string} name @returns {boolean} can her model wear this outfit (story's practiceOutfit probe) */
+  hasOutfit(name) { return OUTFITS.includes(name); }
+
   /** Hold a face expression for story (null = back to the state's own face). requests/story.md */
   setExpression(name) { this.model?.setExpressionOverride?.(name ?? null); }
 
@@ -620,9 +627,40 @@ export class Player extends ScriptedActorMixin(Actor) {
     else if (!wasGround && this.onGround) this._landed();
     if (this.onGround) this.groundY = this.pos.y;                       // AUTOCAM §4: the same contact physics used
     this._postStep(dt);
+    this._arriveTick(dt);
     this._updateIntent();
     this._idleTick(dt);
     this._syncState();
+  }
+
+  /**
+   * Arrival from a plain move order (no target, attack-move or interact; requests/characters.md QA "her face is almost
+   * never visible"): ease her facing up to ARRIVE_TURN.max (≈ 20°) toward the camera over ARRIVE_TURN.dur, so the
+   * idle glance reads her face. With the lens straight behind her she keeps turning the way she was already turning.
+   */
+  onArrive() {
+    const cam = this.ctx.camera?.position;
+    if (!cam || !Number.isFinite(cam.x) || this.state !== 'move' || this.scripted || this.inCombat()) return false;
+    const bearing = Math.atan2(cam.x - this.pos.x, cam.z - this.pos.z);
+    let d = wrapAngle(bearing - this.facing);
+    if (Math.abs(d) > Math.PI - 0.15) d = (this._turnSign || 1) * Math.PI;      // lens behind her: her turning side
+    const step = Math.max(-ARRIVE_TURN.max, Math.min(ARRIVE_TURN.max, d));
+    if (Math.abs(step) < 0.02) return false;
+    this._arriveYaw = wrapAngle(this.facing + step); this._arriveT = ARRIVE_TURN.dur;
+    return true;
+  }
+
+  /** @private the arrival turn (fixed step); any input, order or swing cancels it. */
+  _arriveTick(dt) {
+    const df = wrapAngle(this.facing - this._prevFacing);
+    if (Math.abs(df) > 1e-3 && this._arriveT <= 0) this._turnSign = Math.sign(df);
+    this._prevFacing = this.facing;
+    if (!(this._arriveT > 0)) return;
+    const m = this.ctx.input?.move;
+    if (this.state !== 'move' || this.orders.kind || this.swing || (m && Math.hypot(m.x, m.y) >= 0.15)) { this._arriveT = 0; return; }
+    this._arriveT = Math.max(0, this._arriveT - dt);
+    this.facing = dampAngle(this.facing, this._arriveYaw, 3 / ARRIVE_TURN.dur, dt);
+    if (this._arriveT === 0) this.facing = this._arriveYaw;
   }
 
   /** @private write moveIntent in place (no allocation). */

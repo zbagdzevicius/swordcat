@@ -138,3 +138,34 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
 - `reflect(projectile, by, { dir }?)`: a parried bolt flies at the hostile nearest her aim within ±25° and 16 m (the
   cursor, drag, right stick or selected-target aim, else her facing) and homes on it. Otherwise it flies back to the
   shooter as before. The classic camera keeps the M1 rule.
+
+## Warm adventure, performance and auto-camera (Phase W, 2026-10-12): additive
+
+- `tokens.holdersInto(kind, out)` (AUTOCAM §15 combat 1): fills `out` with the live holders of `kind` without
+  allocating. `holders()` returns the Set itself, and iterating a Set allocates. `holdersInto` clears `out` first and
+  returns it.
+- `combat:telegraph` payloads (IMPLEMENTATION_PLAN §7.1, WA §3.4): combat fills in every key an emitter left out. It
+  does this through a bus tap, which runs before any handler. ui and audio subscribe before combat does, and the tap
+  means they still see the filled payload. The keys it fills:
+  - `windup`: defaults to `duration`.
+  - `activeAt`: now + windup, plus the def's `active[0]` for melee kinds.
+  - `targetsPlayer`: true when the attacker's target is the player, or when there is no actor.
+  - `glyph`: `TELEGRAPH.glyph[kind]`, or null for `jeer`.
+  - `end` `{x, y, z}` for `lane` / `line` shapes: pos + unit dir × length. The length comes from `lane.l`, else `l`,
+    else `range`, else `size`.
+
+  A value the emitter sets always wins. The pure helper is `targeting.normalizeTelegraph(p, now, hooks?)`.
+- `telegraph:first {kind}` (combat.W1): fires on the first sighting of each kind that has a glyph, once per save. It
+  counts only in play, dialog and memecam modes, and is stored in the save flag `tele.seen.<kind>`.
+- Final blow (combat.W2, WA §5.1): it counts when her side kills a boss, or the last alerted hostile within
+  2 × `HUD.tuck.combatR`. That hit adds `JUICE.finalBlow.hitstopAdd` to the hitstop and calls
+  `game.slowMo(timeScale, slowMo)` once. There is no camera zoom. `stats.finalBlows` counts these kills. The pure rule
+  is `isFinalBlow(src, tgt, enemies, herPos)`, exported from `Combat.js`. It is the same rule Player's `_finalBlow` uses
+  for the "Bonk!" word.
+- PERF B1: `assistTarget` and `pickAssist` allocate nothing per call when the candidates come as an array. The `out`
+  breakdown rows are pooled on `out._pool` and reused by the next call on the same `out`, so copy anything you keep.
+  `ThreatBook` walks a dense `entries` array, and token pruning uses pre-bound callbacks.
+- PERF B2 / K5: projectiles never cast or receive shadows. Round projectiles with r ≥ 0.2 m (bone orbs, web globs) get
+  a contact blob through `fx.blobs.add(group, r × 1.4)`, removed when the projectile is recycled. Bolts and waves get
+  no blob. The bolt and glob materials are now `MeshLambertMaterial`, so combat adds no Standard shader program.
+

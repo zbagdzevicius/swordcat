@@ -37,7 +37,8 @@ import { RANGED } from '../../src/companions/Companion.js';
 import { playerAimYaw, playerForwardYaw, explicitAim, planAbility, abilityShape, CAST } from '../../src/companions/abilityAim.js';
 import { idleSlot, inNotch, Trail, lodOrigin } from '../../src/companions/steering.js';
 import { NPC_LOD } from '../../src/companions/NpcActor.js';
-import { buildCarrier, CARRIER, CARRIER_COLORS } from '../../src/companions/dressing.js';
+import { buildCarrier, CARRIER, CARRIER_COLORS, buildRopePost, buildRope, buildFishingStick, buildCup, buildTable, buildButterfly, disposeDressing } from '../../src/companions/dressing.js';
+import { Arrow } from '../../src/companions/abilities.js';
 import { activityTier, npcBand, bandAnimates, thinkDue, ACTIVITY } from '../../src/companions/activity.js';
 import { withHeadScale, roleOf, hullFor, GLANCE } from '../../src/companions/KittenVisual.js';
 import { PARTY } from '../../src/companions/party.js';
@@ -951,12 +952,15 @@ test('M2 D-02 (level ropes): the level rope objective finishing lowers the cage 
   assert.equal(ctx.companions.lowerCage('sage'), false, 'already on its way down');
 });
 
-test('M2 D-04 Clover: the town stocks hold her until the Square clears; E (interactable) or 3 blows free her → d04clover → joins', async () => {
+test('M2 D-04 Clover: a WA20 kennel carrier holds her until the Square clears; E (interactable) or 3 blows free her → d04clover → joins', async () => {
   const ctx = makeCtx(); await ctx.companions.init();
   const m = ctx.companions;
   const L = levelOf(ctx, 'town');
+  const row = RESCUES.town.find((r) => r[0] === 'clover');
+  assert.equal(row[3].cage, 'kennel', 'WA20: no stocks / pillory in the town data');
   const k = m.spawnKitten('clover', [10, 0, 14], 'cage', { cage: 'stocks', needClear: 'square', interact: true, play: 'd04clover', facing: Math.PI });
-  assert.equal(k.cage?.userData?.kind, 'stocks');
+  assert.equal(k.cage?.userData?.kind, 'carrier', 'a legacy "stocks" cage builds the kennel carrier');
+  assert.equal(k.cage.userData.style, 'kennel');
   const it = L.interactables.find((i) => i.id === 'free_clover');
   assert.ok(it, 'an interactable is registered');
   assert.equal(it.enabled(), false, 'locked while the Square fights');
@@ -1813,4 +1817,37 @@ test('AUTOCAM §13 companions 2 + §8.5: an aimed ability shares its reach in pl
   assert.deepEqual(plan.targets, [near], 'no off-screen snipes');
   delete ctx.cam.onScreen;
   assert.equal(planAbility(ctx, sage, null).targets.length, 2);
+});
+
+test('K6 (§7.3): no MeshStandardMaterial under any companion-built root; lit props share the one sc-toon kit program', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  const roots = [buildRopePost(), buildRope(new THREE.Vector3(), new THREE.Vector3(0, 2, 0)), buildFishingStick(), buildCup(), buildTable(), buildButterfly('#FF9EC0'),
+    ...['carry', 'cart', 'hanging', 'kennel'].map((style) => buildCarrier({ style }))];
+  // in-play actors: Clover's carrier, Sage's hanging carrier + rope posts, a hub kitten, Pudding's net, Sage's arrow
+  m.spawnKitten('clover', new THREE.Vector3(10, 0, 14), 'cage', { cage: 'stocks', needClear: 'square', interact: true });
+  m.spawnKitten('sage', new THREE.Vector3(18, 0, -8), 'cage', { hang: 4, ropes: TREETOP_ROPES, facing: Math.PI });
+  const pud = m.spawnNpc('pudding', new THREE.Vector3(2, 0, 24), Math.PI);
+  pud._buildNet();
+  const arrow = new Arrow(ctx, m.active[0] ?? pud, pud, { id: 'companion_arrow', dmg: 1 }, new THREE.Vector3(0, 1, 0));
+  roots.push(ctx.scene, arrow.mesh);
+  const kit = new Set();
+  for (const r of roots) r.traverse((o) => {
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const mat of mats) {
+      assert.ok(!mat.isMeshStandardMaterial && !mat.isMeshPhysicalMaterial && !mat.isMeshPhongMaterial, `${o.name || o.type}: ${mat.type} (K6: actors use sc-toon)`);
+      if (mat.userData?.toon && o.isMesh && !o.isSkinnedMesh && !o.isInstancedMesh) {
+        kit.add(mat.customProgramCacheKey());
+        if (mat.vertexColors) assert.ok(o.geometry.attributes.color && o.geometry.attributes.rmse, `${o.name || o.type}: colour + rmse baked`);
+      }
+    }
+  });
+  for (const r of roots.slice(0, 6)) { r.traverse((o) => { if (o.isMesh && !o.material.isMeshBasicMaterial) assert.ok(o.material.userData.toon, `${o.name}: toon`); }); disposeDressing(r); }
+  assert.ok(kit.size >= 1);
+  // the arrow is one merged draw, no metal (WA20), and the net / arrows add no Standard program variant
+  assert.equal(arrow.mesh.children.length, 1);
+  const rm = arrow.mesh.children[0].geometry.attributes.rmse;
+  for (let i = 0; i < rm.count; i++) assert.equal(rm.getY(i), 0, 'wooden tip: no metal');
+  arrow.dispose();
+  m.dispose();
 });

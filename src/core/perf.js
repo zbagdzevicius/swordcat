@@ -33,7 +33,13 @@ export function percentile(ring, n, p) {
   return a[Math.min(n - 1, Math.max(0, Math.round((n - 1) * p)))];
 }
 
-/** GPU frame time from EXT_disjoint_timer_query_webgl2: one query per frame, read 2–3 frames later. */
+/**
+ * GPU frame time from EXT_disjoint_timer_query_webgl2: one query per frame, read 2–3 frames later.
+ * `begin()` polls first (every frame, even when the in-flight cap skips the new query), so the pending queue always
+ * drains. `lastMs` is null until a result resolves, after a disjoint event (results invalid) and once the newest
+ * resolved result is older than `GpuTimer.STALE_FRAMES` frames — consumers (dynamic resolution) then fall back to CPU
+ * timing instead of steering on a frozen value.
+ */
 export class GpuTimer {
   /** @param {WebGL2RenderingContext|null} gl */
   constructor(gl) {
@@ -41,14 +47,20 @@ export class GpuTimer {
     this.ext = null;
     try { this.ext = gl?.getExtension?.('EXT_disjoint_timer_query_webgl2') ?? null; } catch { this.ext = null; }
     this._free = []; this._pending = []; this._active = null;
-    /** last resolved GPU ms, or null (no extension / nothing resolved yet) */
+    /** last resolved GPU ms, or null (no extension / nothing resolved yet / disjoint / stale) */
     this.lastMs = null;
+    /** frames seen by begin(); frame the current lastMs resolved on */
+    this._frame = 0; this._resolvedFrame = -1;
   }
 
   get available() { return !!this.ext; }
 
+  /** Start timing this frame's GPU work. Always polls pending queries first. */
   begin() {
-    if (!this.ext || this._active || this._pending.length >= 4) return;
+    if (!this.ext) return;
+    this._frame++;
+    this.poll();
+    if (this._active || this._pending.length >= GpuTimer.MAX_PENDING) return;
     const gl = this.gl, q = this._free.pop() ?? gl.createQuery();
     gl.beginQuery(this.ext.TIME_ELAPSED_EXT, q);
     this._active = q;
@@ -62,26 +74,36 @@ export class GpuTimer {
     this.poll();
   }
 
+  /** Resolve every available query (oldest first); drop the value on disjoint; expire a stale value. */
   poll() {
     const gl = this.gl, ext = this.ext;
-    if (!ext || !this._pending.length) return;
-    const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
-    while (this._pending.length) {
-      const q = this._pending[0];
-      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
-      this._pending.shift();
-      if (!disjoint) this.lastMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
-      this._free.push(q);
+    if (!ext) return;
+    if (this._pending.length) {
+      const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+      if (disjoint) this.lastMs = null;
+      while (this._pending.length) {
+        const q = this._pending[0];
+        if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+        this._pending.shift();
+        if (!disjoint) { this.lastMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6; this._resolvedFrame = this._frame; }
+        this._free.push(q);
+      }
     }
+    if (this.lastMs != null && this._frame - this._resolvedFrame > GpuTimer.STALE_FRAMES) this.lastMs = null;
   }
 
   dispose() {
     const gl = this.gl;
     if (!gl) return;
     for (const q of [...this._free, ...this._pending]) gl.deleteQuery?.(q);
-    this._free.length = 0; this._pending.length = 0;
+    if (this._active) gl.deleteQuery?.(this._active);
+    this._free.length = 0; this._pending.length = 0; this._active = null;
   }
 }
+/** queries in flight before begin() skips a frame */
+GpuTimer.MAX_PENDING = 4;
+/** frames after which an unrefreshed lastMs is dropped to null */
+GpuTimer.STALE_FRAMES = 30;
 
 /**
  * Frame / CPU / GPU instrumentation for one Game. `detailed` (?test / ?debug / ?perf) adds per-system timers, the
@@ -233,6 +255,8 @@ export function budgetFor(q, stage = PERF.stage) {
   const B = PERF.budgets, col = B[stage] ?? B.I1;
   const out = { stage };
   for (const k of Object.keys(col)) out[k] = col[k][q] ?? col[k].med;
+  if (B.heapMB) out.heapMB = B.heapMB[q] ?? B.heapMB.med;
+  if (B.titleHeapMB) out.titleHeapMB = B.titleHeapMB[q] ?? B.titleHeapMB.med;
   return out;
 }
 

@@ -9,7 +9,8 @@
 import * as THREE from 'three';
 import { defineLevel } from '../LevelKit.js';
 import { PropActor } from '../PropActor.js';
-import { LightPool, addFlame, Fireflies, ropeGeometry } from '../Dressing.js';
+import { addFlame } from '../Dressing.js';
+import { pointAlong, polylineLength, smoothPolyline } from '../noise.js';
 import { BOSSES } from '../../core/config.js';
 import { E } from '../../core/events.js';
 
@@ -488,9 +489,35 @@ function STREAM_Z(x) {
   return p[p.length - 1][1];
 }
 
-/** Level glue: a puff of spores when she bounces off a mushroom cap (audio / fx `bounce`). */
-function decorate(kit) {
+/** WA §2.2 Lantern Night path lanterns: count, offset from the spine (m), spacing guard, pumpkin lantern look. */
+export const PATH_LANTERNS = Object.freeze({ n: 14, off: 3.4, clear: 1.2, arenaPad: 2, color: '#FFC46B' });
+
+/**
+ * WA §2.2 / §2.3a: the cozy twilight needs its own lamps along the whole walk (not only at the two camps), so
+ * `forest_twilight` has warm lamp pools wherever she stands. Pumpkin lanterns on stakes (the rat-camp look, merged
+ * into the props batch: 0 draws) alternate sides of the spine; spots on a setpiece, a checkpoint, water or inside an
+ * arena are skipped. By day `uLampStr` is 0, so only the little flames show.
+ */
+async function pathLanterns(kit) {
+  const level = kit.level, L = PATH_LANTERNS;
+  const pumpkin = await kit.tpl(M.pumpkin, { tint: '#FF9A3C', key: 'pumpkin_lantern' });
+  const stake = kit.proc('lantern_stake', lanternStakeParts);
+  const lane = smoothPolyline(SPINE, 2), len = polylineLength(lane);
+  for (let i = 0; i < L.n; i++) {
+    const [px, pz, yaw] = pointAlong(lane, (i + 0.5) * (len / L.n)), side = i % 2 ? 1 : -1;
+    const x = px + Math.cos(yaw) * L.off * side, z = pz - Math.sin(yaw) * L.off * side;
+    if (!kit.free(x, z, L.clear) || kit.inArena(x, z, L.arenaPad)) continue;
+    const p = kit.place(stake, x, z, { yaw, collider: 'circle', shrink: 1, jitter: 0, clear: 0.6 });
+    const top = p ? p.top : kit.h(x, z) + 1.75;
+    if (pumpkin) kit.place(pumpkin, x, z, { y: top, fit: { h: 0.42 }, yaw, collider: false, clear: false, occupy: false, jitter: 0 });
+    addFlame(level, level.lightPool, x, top + 0.42, z, { size: 0.5, light: 1.8, distance: 9, glow: 1.1, color: L.color, flicker: 0.15 });
+  }
+}
+
+/** Level glue: the path lanterns, and a puff of spores when she bounces off a mushroom cap (audio / fx `bounce`). */
+async function decorate(kit) {
   const ctx = kit.ctx, level = kit.level;
+  await pathLanterns(kit);
   let was = 0;
   level.onUpdate(() => {
     const p = ctx.player, b = p?.bounced ?? 0;
@@ -506,7 +533,7 @@ export default defineLevel({
   grassMask: (x, z) => 0.55 + 0.45 * Math.max(0, Math.sin(x * 0.07 + 1.1) * Math.cos(z * 0.06 - 0.4)),
   // WA §2.2: Lantern Night is a cozy periwinkle twilight with its own lamps (forest_twilight; `forest_night` is its alias)
   env: { default: 'forest_day', byFlag: [['forest.camp', 'forest_twilight']] }, moodLive: true,
-  music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop', byFlag: [['forest.camp', 'field_of_dreams']] },
+  music: { explore: 'field_of_dreams', combat: 'battle_fast_fight_loop', boss: 'boss_epic_battle_loop', byFlag: [['forest.camp', 'lantern_night']] },
   spine: SPINE,
   // CONTROLS_SPEC §11 iso camera: yaw π (the spine runs north). §4.2 fog: forest_day ρ 0.06 clear 5.5 / 7 topMul 1.35;
   // forest_twilight clear 4.5 / 6 (the lantern pools are the stage; the warm-toon twilight preset is bright on its own);

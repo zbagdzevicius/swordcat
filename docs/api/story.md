@@ -164,3 +164,19 @@ cards = `{ id, chapter, label, title, region, available, cleared, next, kittens,
 - **Cutscene hand-back:** `end.cam: 'follow'` no longer forces 0.6 s; the camera picks its default (the 1.0 s reverse
   crane arc, or a veil cut when far, §2.6; 0.6 s with `?cam=classic`). A scene can still pass `{ mode, blend }`.
 - **Smoke:** `story:tutorial` (desktop mouse) and `story:tutorial-touch` (844×390 and 390×844 hasTouch / isMobile).
+
+## Phase W review fixes (2026-10-13)
+- **Quest rows:** the prologue is three steps (`prologue` practice → `prologue.chart` → `prologue.suit` "Borrow armour
+  from the barn!"); `meadow.mochi` now comes before `meadow.follow` / `meadow.pudding`. From `boss:start` until
+  `boss:defeated` (or the boss is gone) the row is `bossQuest(id)` (quest id `boss.<key>`, `quest.boss.<key>` text);
+  `done` updates still follow the story steps underneath.
+- **Suit Up guide:** in the `suit` stage the director shows Clem's guide bubble (`story:prompt { id: 'barn', speaker:
+  'swordcat', say: 'cs02.7', textKey: 'quest.prologue.suit', target: <chest> }`) after `BARN_GUIDE.delay`, plus a gold
+  sparkle trail to the chest every `BARN_GUIDE.every` s (and `fx.guideArrow` when fx has it). Hidden when CS-01b starts.
+- **CS-02:** the closing cream fade is 0.45 s with the HUD hidden; the hand-back keeps it hidden through the 0.5 s
+  fade-out. Shot 4 cuts to Pearl's carrier for `cs02.1` (`PEARL_CU`), then back to Clem.
+- **Morning Practice:** `tutlook` (1.7 s, no letterbox, HUD kept) frames her + the dummy when the move lesson starts
+  > `PRACTICE.lookFrom` m from the dummies; the gold sun ring at the middle dummy is `fx.marker` or the story's
+  `rig.buildSunRing` mesh.
+- **Smoke:** `flow:first-minute` (G-W3): tap → first move, first reward, practice by real input, the walk to the barn,
+  D-01 game time — no teleports.

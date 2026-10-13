@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { canvas2d } from './util.js';
+import { fxBasicMaterial } from '../fx/shaders.js';
 
 /** Hooks other areas can register to patch every material characters create (e.g. world's height fog). */
 const _patchers = new Set();
@@ -42,10 +43,13 @@ export function envMapUsers() { let n = 0; for (const m of _all) if (m.isMeshSta
  * Past `bowFarFrom` the bow keeps growing to ×`bowScaleFar` at `bowFarAt` m (WA: ×1.4 at lens ≥ 12 m).
  * `playScale` / `playScaleCompanion`: visual root scale in the iso gameplay modes (hitboxes, MODEL_FIT unchanged),
  * blended over `scaleBlend` s on the cutscene hand-off. Close-ups (cutscenes, Meme Cam, `?cam=classic`) stay at 0 / 1.
+ * `heroRim`: the hero's own warm-rim floor (WARM_ADVENTURE_SPEC WA4 `rim:'day', hero 0.40`): her toon / metal rim is
+ * max(env uRimK, 0.40) and her fur rim ≥ 0.40, so she separates from beige cobble and grass (other actors keep uRimK).
  */
 export const READABILITY = Object.freeze({
   from: 9, to: 10.5, bowScale: 1.25, bowGlow: 0.08, earScale: 1.1, trimM: 0.02, trimLift: 0.55, bladeGlow: 0.22,
   bowScaleFar: 1.4, bowFarFrom: 10.5, bowFarAt: 12, playScale: 1.12, playScaleCompanion: 1.08, scaleBlend: 0.3,
+  heroRim: 0.40,
 });
 /** Shared top-view factor 0..1 (a uniform object: bow and cape shaders read it). runtime.characterFrame writes it. */
 export const TOP_VIEW = { value: 0, far: 0 };
@@ -118,20 +122,32 @@ const RIM_GLSL = (target) => /* glsl */`
   {
     float ndvR = saturate( dot( normal, normalize( vViewPosition ) ) );
     float rimR = pow( 1.0 - ndvR, ${TOON.rimPow.toFixed(2)} ) * ( ${(1 - TOON.rimTop).toFixed(2)} + ${TOON.rimTop.toFixed(2)} * saturate( vWN.y + 0.4 ) );
-    ${target} += uRim * rimR * uRimK * ( ${TOON.rimBase.toFixed(2)} + ${(1 - TOON.rimBase).toFixed(2)} * vRMSE.z );
+    ${target} += uRim * rimR * max( uRimK, uRimMin ) * ( ${TOON.rimBase.toFixed(2)} + ${(1 - TOON.rimBase).toFixed(2)} * vRMSE.z );
     ${target} += uHolyColor * uHoly * ( rimR * ${TOON.holyRim.toFixed(2)} + ${TOON.holyBase.toFixed(3)} );
     ${target} += vec3( uFlash );
     ${target} += uHighlight * ( pow( 1.0 - ndvR, 2.0 ) * ${TOON.highlightRim.toFixed(2)} + ${TOON.highlightBase.toFixed(2)} );
   }`;
 const PARS_V = '#include <common>\nattribute vec4 rmse;\nvarying vec4 vRMSE;\nvarying vec3 vWN;';
-const PARS_F = '#include <common>\nvarying vec4 vRMSE;\nvarying vec3 vWN;\nuniform vec3 uRim, uHolyColor, uHighlight; uniform float uRimK, uHoly, uFlash;';
+const PARS_F = '#include <common>\nvarying vec4 vRMSE;\nvarying vec3 vWN;\nuniform vec3 uRim, uHolyColor, uHighlight; uniform float uRimK, uRimMin, uHoly, uFlash;';
+/**
+ * Readability's helmet-top tint (CONTROLS_SPEC §12 characters 3) as a uniform feature of the one toon program (PERF
+ * §1.2: no `|sc-top` program variant): upward-facing surfaces take `uTopColor` × `uTopMix` (0 = off). `from` / `to`
+ * mirror Readability.TOP_TINT.
+ */
+export const TOON_TOP = Object.freeze({ from: 0.55, to: 0.85 });
+const TOP_GLSL = /* glsl */`#include <normal_fragment_maps>
+  if ( uTopMix > 0.0 ) {
+    float upK = dot( normal, normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz ) );
+    diffuseColor.rgb = mix( diffuseColor.rgb, uTopColor, smoothstep( ${TOON_TOP.from.toFixed(2)}, ${TOON_TOP.to.toFixed(2)}, upK ) * uTopMix );
+  }`;
 
 /**
- * Per-material uniforms (holy / flash / hover highlight). `uHighlight` is a premultiplied rgb (colour × strength;
+ * Per-material uniforms (holy / flash / hover highlight, `uRimMin`: a per-actor warm-rim floor, 0 = env rim only). `uHighlight` is a premultiplied rgb (colour × strength;
  * ART's vec4 rgb + amount, folded): the enemy wind-up and hover rims write it.
  */
 export function toonUniforms() {
-  return { uHoly: { value: 0 }, uHolyColor: HOLY_COLOR, uFlash: { value: 0 }, uHighlight: { value: new THREE.Color(0, 0, 0) } };
+  return { uHoly: { value: 0 }, uHolyColor: HOLY_COLOR, uFlash: { value: 0 }, uHighlight: { value: new THREE.Color(0, 0, 0) }, uRimMin: { value: 0 },
+    uTopColor: { value: new THREE.Color(1, 1, 1) }, uTopMix: { value: 0 } };
 }
 
 /**
@@ -139,9 +155,12 @@ export function toonUniforms() {
  * a flat `color`), coat gradient (lighter on top), warm top-weighted rim, unlit parts via rmse.w, metal parts (rmse.y)
  * shaded by the steel matcap in the same draw, holy / flash / highlight. `dithering` on.
  * @param {{ map?: THREE.Texture|null, uniforms?: object, kind?: string, side?: THREE.Side, alphaTest?: number,
- *           transparent?: boolean, color?: THREE.ColorRepresentation, topGlow?: number }} [o] `uniforms`: share one
- *           uniform set between the per-kind variants of one character (skinned body + instanced fur base: one holy
- *           value). `topGlow`: extra self-light × the shared top-view factor (readability from the iso lens).
+ *           transparent?: boolean, color?: THREE.ColorRepresentation, topGlow?: number, selfLight?: number }} [o]
+ *           `uniforms`: share one uniform set between the per-kind variants of one character (skinned body + instanced
+ *           fur base: one holy value). `topGlow`: extra self-light × the shared top-view factor (readability from the
+ *           iso lens). `selfLight`: a constant share of the albedo added as light (the bow's satin glow).
+ *           PERF §1.2: `topGlow`, `selfLight`, the helmet-top tint (`uTopColor` / `uTopMix`) and the metal parts are
+ *           uniforms / attributes of the ONE `sc-toon-v2` program, never program-key variants.
  * @returns {THREE.MeshToonMaterial}
  */
 export function makeToonMaterial(o = {}) {
@@ -151,12 +170,13 @@ export function makeToonMaterial(o = {}) {
   });
   if (o.color !== undefined) m.color.set(o.color);
   const u = o.uniforms ?? toonUniforms();
-  const mc = { uMatcap: { value: steelMatcap() }, uTopView: TOP_VIEW };
+  if (!u.uRimMin) u.uRimMin = { value: 0 };   // uniform sets made before the rim floor (enemies, props)
+  if (!u.uTopMix) { u.uTopColor = { value: new THREE.Color(1, 1, 1) }; u.uTopMix = { value: 0 }; }   // ... and the top tint
+  const mc = { uMatcap: { value: steelMatcap() }, uTopView: TOP_VIEW, uTopGlow: { value: o.topGlow ?? 0 }, uSelfLight: { value: o.selfLight ?? 0 } };
   m.userData.uniforms = u;
   m.userData.toon = true;
   m.userData.kind = o.kind ?? 'plain';
   const rmseAttr = o.map == null && o.color === undefined;
-  const topGlow = o.topGlow ? `\ntotalEmissiveRadiance += diffuseColor.rgb * ${o.topGlow.toFixed(3)} * uTopView;` : '';
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, TOON_ENV, u, mc);
     sh.vertexShader = sh.vertexShader
@@ -164,11 +184,12 @@ export function makeToonMaterial(o = {}) {
       .replace('#include <begin_vertex>', `#include <begin_vertex>\nvRMSE = ${rmseAttr ? 'rmse' : 'vec4(0.0, 0.0, 1.0, 0.0)'};`)
       .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvWN = normalize( mat3( modelMatrix ) * objectNormal );');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', PARS_F + '\nuniform sampler2D uMatcap;\nuniform float uTopView;')
+      .replace('#include <common>', PARS_F + '\nuniform sampler2D uMatcap;\nuniform float uTopView, uTopGlow, uSelfLight, uTopMix;\nuniform vec3 uTopColor;')
+      .replace('#include <normal_fragment_maps>', TOP_GLSL)
       .replace('#include <color_fragment>', `#include <color_fragment>
         diffuseColor.rgb *= mix( ${TOON.coatLow.toFixed(2)}, ${TOON.coatHigh.toFixed(2)}, clamp( vWN.y * 0.5 + 0.5, 0.0, 1.0 ) );`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        totalEmissiveRadiance += diffuseColor.rgb * vRMSE.w;${topGlow}${RIM_GLSL('totalEmissiveRadiance')}`)
+        totalEmissiveRadiance += diffuseColor.rgb * ( vRMSE.w + uSelfLight + uTopGlow * uTopView );${RIM_GLSL('totalEmissiveRadiance')}`)
       .replace('#include <opaque_fragment>', `
         if ( vRMSE.y > 0.001 ) {
           vec3 vdM = normalize( vViewPosition );
@@ -181,7 +202,8 @@ export function makeToonMaterial(o = {}) {
         }
         #include <opaque_fragment>`);
   };
-  m.customProgramCacheKey = () => TOON_KEY + (rmseAttr ? '' : ':flat') + (o.topGlow ? ':g' + o.topGlow : '');
+  m.userData.mc = mc;   // per-material extras (uTopGlow / uSelfLight): write .value to change them live
+  m.customProgramCacheKey = () => TOON_KEY + (rmseAttr ? '' : ':flat');
   m.dithering = true;
   return own(m);
 }
@@ -195,6 +217,7 @@ export function makeToonMaterial(o = {}) {
 export function makeMetalMaterial(o = {}) {
   const m = new THREE.MeshMatcapMaterial({ matcap: steelMatcap(), vertexColors: true, fog: true });
   const u = o.uniforms ?? toonUniforms();
+  if (!u.uRimMin) u.uRimMin = { value: 0 };   // uniform sets made before the rim floor (enemies, props)
   if (o.emissive && !u.uEmissive) u.uEmissive = { value: new THREE.Color(0, 0, 0) };
   const extra = { uTopView: TOP_VIEW };
   m.userData.uniforms = u;
@@ -247,6 +270,8 @@ export function getToonMaterial(typeKey, map = null) {
   const m = pool?.length ? pool.pop() : makeToonMaterial({ map, kind: String(typeKey).split(':')[1] ?? 'plain' });
   m.userData.poolKey = key;
   const u = m.userData.uniforms; u.uFlash.value = 0; u.uHoly.value = 0; u.uHighlight.value.setRGB(0, 0, 0);
+  if (u.uTopMix) u.uTopMix.value = 0;          // a helmet top tint belongs to the mesh it was set for (re-applied per load)
+  m.userData.topTint = false;
   return m;
 }
 /** Give a pooled toon material back (no dispose: the next actor of the type reuses it). */
@@ -300,7 +325,8 @@ export const BLOB = Object.freeze({ color: '#5A4E7A', opacity: 0.42 });
 let _blobMat = null;
 export function blobMaterial() {
   if (_blobMat) return _blobMat;
-  _blobMat = own(new THREE.MeshBasicMaterial({ color: BLOB.color, transparent: true, opacity: BLOB.opacity, depthWrite: false, map: blobTexture(), alphaMap: null }));
+  // PERF §1.2: the unlit fx basic module (shared program), not a Basic program of its own
+  _blobMat = own(fxBasicMaterial({ color: BLOB.color, transparent: true, opacity: BLOB.opacity, depthWrite: false, map: blobTexture() }));
   _blobMat.polygonOffset = true; _blobMat.polygonOffsetFactor = -2;
   return _blobMat;
 }

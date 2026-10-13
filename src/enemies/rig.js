@@ -3,6 +3,7 @@
 // weapons natively on `handslot.*`, recolour materials by name, and collect materials for the hit flash.
 import * as THREE from 'three';
 import { findNode } from '../core/Assets.js';
+import { getToonMaterial, releaseToonMaterial, makeToonMaterial } from '../characters/materials.js';
 
 const _a = new THREE.Matrix4();
 const _b = new THREE.Matrix4();
@@ -84,7 +85,7 @@ export function flashMaterials(root, out = []) {
   root.traverse((o) => {
     if (!o.isMesh || o.userData.sharedProp) return;
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-      if (m?.emissive && m.userData?.enemyOwned && !out.some((x) => x.mat === m)) out.push({ mat: m, base: m.emissive.clone(), baseI: m.emissiveIntensity ?? 1 });
+      if (m?.emissive && m.userData?.enemyOwned && !m.userData.enemyToon && !out.some((x) => x.mat === m)) out.push({ mat: m, base: m.emissive.clone(), baseI: m.emissiveIntensity ?? 1 });
     }
   });
   return out;
@@ -96,11 +97,18 @@ export function flashMaterials(root, out = []) {
  * materials or cached GLB geometry.
  */
 export function disposeInstanceMaterials(root) {
+  if (!root) return;
+  const hull = root.userData?.hull;
+  if (hull) { hull.userData.dispose?.(); root.userData.hull = null; }   // the outline hull (look.buildEnemyHull)
   const skeletons = new Set();
   root.traverse((o) => {
     if (o.isSkinnedMesh && o.skeleton) skeletons.add(o.skeleton);
     if (!o.isMesh || o.userData.sharedProp) return;
-    for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m?.userData?.enemyOwned) m.dispose();
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m?.userData?.enemyOwned) continue;
+      if (m.userData.enemyToon) releaseToonMaterial(m);   // pooled (ART D17): the next enemy of the type reuses it
+      else m.dispose();
+    }
   });
   for (const s of skeletons) s.dispose();
 }
@@ -352,3 +360,99 @@ export function setCasting(root, on, depthFor = null) {
     if (cast && depthFor && !o.customDepthMaterial) o.customDepthMaterial = depthFor(o);
   });
 }
+
+// ------------------------------------------------------------------ toon materials (ART §5.1 / §7.3 step 3, X28)
+
+/** 1×1 white map: solid-colour GLB materials take the toon `map` path (flat rmse) with their own `color`. */
+let _white = null;
+function whiteMap() {
+  if (_white) return _white;
+  _white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  _white.colorSpace = THREE.SRGBColorSpace;
+  _white.needsUpdate = true;
+  return _white;
+}
+
+/** Is `m` a GLB material this pass converts (lit, opaque, not glowing, not already toon / top-tinted / shared)? */
+export function toonable(m) {
+  if (!m || !m.userData?.enemyOwned || m.userData.toon || m.userData.enemyToon || m.userData.topTint) return false;
+  if (!(m.isMeshStandardMaterial || m.isMeshLambertMaterial || m.isMeshPhongMaterial)) return false;
+  if (m.transparent || m.alphaTest > 0 || m.emissiveMap) return false;
+  const e = m.emissive;
+  return !(e && (e.r + e.g + e.b) * (m.emissiveIntensity ?? 1) > 0.15);   // glowing eyes / runes keep their look
+}
+
+/**
+ * ART §7.3 step 3 / X28: every loaded enemy mesh takes a pooled per-actor toon material (`getToonMaterial`, the shared
+ * `sc-toon` program: no compile, per-actor `uFlash` / `uHighlight` without clones) in place of its GLB standard
+ * material. Meshes sharing one GLB material share one toon material (a hit flashes the whole body). Solid-colour
+ * materials keep their colour (white map + `color`); atlas materials keep their (palette-remapped) map. The GLB
+ * material clones are disposed; the toon ones go back to their pool in disposeInstanceMaterials.
+ * PERF §1.2: every converted material is DoubleSide (single pass), so a type never splits the toon program into a
+ * front and a double variant; shared (not instance-owned) lit GLB gear such as a mounted weapon takes a shared toon
+ * material per source material (`sharedToon`; no flash, never pooled or disposed per enemy) instead of keeping a
+ * Standard program of its own.
+ * @param {THREE.Object3D} root @param {string} typeKey e.g. 'rat_pike' @returns {number} materials converted
+ */
+export function toonify(root, typeKey) {
+  if (!root) return 0;
+  const done = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh || o.userData.sharedProp) return;
+    const one = !Array.isArray(o.material), list = one ? [o.material] : o.material.slice();
+    let changed = false;
+    const kind = o.isSkinnedMesh ? 'skinned' : o.isInstancedMesh ? 'instanced' : 'plain';
+    for (let i = 0; i < list.length; i++) {
+      const src = list[i];
+      if (!toonable(src)) {
+        if (!sharedToonable(src)) continue;
+        list[i] = sharedToon(src, kind); changed = true;
+        continue;
+      }
+      let t = done.get(src);
+      if (!t) {
+        const map = src.map ?? whiteMap();
+        t = getToonMaterial(`${typeKey}:${kind}:${src.name || 'mat'}${src.map ? '' : ':' + src.color.getHexString()}`, map);
+        t.color.copy(src.map ? WHITE : src.color);
+        t.side = THREE.DoubleSide; t.forceSinglePass = true;
+        t.name = 'enemy-toon:' + (src.name || typeKey);
+        t.userData.enemyOwned = true;
+        t.userData.enemyToon = true;
+        done.set(src, t);
+      }
+      list[i] = t; changed = true;
+    }
+    if (changed) o.material = one ? list[0] : list;
+  });
+  for (const src of done.keys()) src.dispose();
+  return done.size;
+}
+
+/** A shared (asset-cache) lit GLB material that would otherwise keep a program of its own (weapons, shared gear). */
+export function sharedToonable(m) {
+  if (!m || m.userData?.enemyOwned || m.userData?.toon || m.userData?.topTint || m.userData?.sharedToon) return false;
+  if (!(m.isMeshStandardMaterial || m.isMeshLambertMaterial || m.isMeshPhongMaterial)) return false;
+  if (m.transparent || m.alphaTest > 0 || m.emissiveMap) return false;
+  const e = m.emissive;
+  return !(e && (e.r + e.g + e.b) * (m.emissiveIntensity ?? 1) > 0.15);
+}
+
+const _sharedToon = new Map();
+/**
+ * The shared toon twin of a shared GLB material, per mesh kind (PERF §3.5: never share one material across kinds).
+ * @param {THREE.Material} src @param {'plain'|'skinned'|'instanced'} kind @returns {THREE.Material}
+ */
+export function sharedToon(src, kind) {
+  const key = src.uuid + '|' + kind;
+  let t = _sharedToon.get(key);
+  if (!t) {
+    t = makeToonMaterial({ map: src.map ?? whiteMap(), kind, side: THREE.DoubleSide });
+    t.forceSinglePass = true;
+    t.color.copy(src.map ? WHITE : src.color);
+    t.name = 'enemy-toon:' + (src.name || 'shared');
+    t.userData.sharedToon = true;
+    _sharedToon.set(key, t);
+  }
+  return t;
+}
+const WHITE = new THREE.Color(1, 1, 1);

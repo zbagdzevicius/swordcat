@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, Spring, segScale } from './util.js';
-import { own, TOP_VIEW, READABILITY, softRamp } from './materials.js';
+import { READABILITY, makeToonMaterial } from './materials.js';
 
 const _mats = new Map();
 /** Fraction of the bow's albedo added as emission. */
@@ -11,21 +11,13 @@ export const BOW_SELF_LIGHT = 0.22;
 /** Satin material (shared per colour set). Vertex colours carry base/shade/knot. */
 export function bowMaterial(sheenColor = PAL.bowLight) {
   if (_mats.has(sheenColor)) return _mats.get(sheenColor);
-  // WarmToon satin (ART §5.1 family, K6: no Physical in play); `sheenColor` keys the cache (bow colour sets)
-  const m = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp(), side: THREE.DoubleSide });
-  m.forceSinglePass = true;
-  m.dithering = true;
-  // the bow is recognition cue #1 (art.md §0): a touch of self-light keeps it pastel pink in shade, fog and night
-  // (+ READABILITY.bowGlow more from above; the top-view factor is a shared uniform object)
-  m.onBeforeCompile = (sh) => {
-    sh.uniforms.uTopView = TOP_VIEW;
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uTopView;')
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (${BOW_SELF_LIGHT.toFixed(3)} + ${READABILITY.bowGlow.toFixed(3)} * uTopView);`);
-  };
-  m.customProgramCacheKey = () => 'sc-bow-v4';
-  // own() last: the registered patchers (world's height / focus fog) wrap the hook set above instead of being replaced
-  own(m);
+  // WarmToon satin (ART §5.1 family, K6: no Physical in play); `sheenColor` keys the cache (bow colour sets).
+  // The bow is recognition cue #1 (art.md §0): a touch of self-light keeps it pastel pink in shade, fog and night
+  // (+ READABILITY.bowGlow more from above, through the shared top-view factor). PERF §1.2: the shared sc-toon
+  // program (self-light and top glow are uniforms there), not a program of its own.
+  // FrontSide: the ribbon geometry carries mirrored back faces (`withBackFaces`), so the bow shares the kit's front
+  // toon program instead of a DoubleSide variant
+  const m = makeToonMaterial({ selfLight: BOW_SELF_LIGHT, topGlow: READABILITY.bowGlow });
   _mats.set(sheenColor, m);
   return m;
 }
@@ -79,11 +71,34 @@ export function bowGeometry(o = {}) {
 }
 
 /**
+ * Append mirrored back faces (reversed winding, flipped normals) to an indexed or non-indexed geometry, in place: a
+ * FrontSide material then draws the thin satin ribbon from both sides with the right shading (PERF §1.2: no
+ * DoubleSide program variant).
+ * @param {THREE.BufferGeometry} g @returns {THREE.BufferGeometry}
+ */
+export function withBackFaces(g) {
+  if (g.userData.backFaces) return g;
+  const n = g.attributes.position.count;
+  for (const key of Object.keys(g.attributes)) {
+    const a = g.attributes[key], src = a.array, out = new src.constructor(src.length * 2);
+    out.set(src); out.set(src, src.length);
+    if (key === 'normal') for (let i = src.length; i < out.length; i++) out[i] = -out[i];
+    g.setAttribute(key, new THREE.BufferAttribute(out, a.itemSize, a.normalized));
+  }
+  const I = g.index, t = I ? I.count : n, idx = new (n * 2 > 65535 ? Uint32Array : Uint16Array)(t * 2);
+  for (let i = 0; i < t; i++) idx[i] = I ? I.getX(i) : i;
+  for (let i = 0; i < t; i += 3) { idx[t + i] = idx[i] + n; idx[t + i + 1] = idx[i + 2] + n; idx[t + i + 2] = idx[i + 1] + n; }
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.userData.backFaces = true;
+  return g;
+}
+
+/**
  * A bow mesh with a bounce spring (CS-11 "both bows bounce"). Call `bow.userData.update(dt)` each frame
  * (the kitten does this) and `bow.userData.bounce(k)` to kick it.
  */
 export function buildBow(o = {}) {
-  const geo = bowGeometry(o);
+  const geo = withBackFaces(bowGeometry(o));
   const mesh = new THREE.Mesh(geo, bowMaterial(o.light ?? PAL.bowLight));
   mesh.name = 'bow'; mesh.castShadow = true;
   const holder = new THREE.Group(); holder.name = 'bowHolder'; holder.add(mesh);

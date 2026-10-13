@@ -12,12 +12,13 @@
 //   9 Cacklejaw leans in, laughs, his two lines   10 crane: the horde parts around her; Pilfer's two thefts
 //   12 Pearl's carrier last in line: she drops letters one by one behind the cart
 //   13 Clem lifts the sword, a gold sparkle runs up it, sunlight breaks through one hole in the mist; she grins —
-//      "...Okay. Hold on, Pearl. I'm coming."
+//      "...Okay. Hold on, Pearl. I'm coming."  → a short cream fade (HUD hidden)
 // end: flag prologue.raid; golden `meadow_evening`; she stands ~12 m from Marmalade's barn (the Suit Up chest, `cs01b`).
 import { STORY, FADE_COLOR } from '../../core/config.js';
 import { say, cam, wait, sfx, along, unit, yawOf, r2 } from './lib.js';
 import { memeLook, fillLight, buildSign } from './rig.js';
 import { text as stext } from '../strings.js';
+import { setTimeoutish } from '../tutorial.js';
 
 /** The horde line (meadow anchors horde_a → horde_b) and where it crosses the lane. */
 const A = [-40, -45], B = [30, -55];
@@ -51,6 +52,11 @@ const PEARL_HYENA = { from: along(MARK, U, -14, LAT, 0.6).map(r2), to: along(MAR
 const PEARL_LAST = { from: along(MARK, U, -9, LAT, 2.2).map(r2), to: along(MARK, U, 14, LAT, 2.2).map(r2) };
 const CACKLE = { from: along(MARK, U, -16).map(r2), stop: along(MARK, U, -1.45).map(r2), off: along(MARK, U, 26, LAT, 1.0).map(r2) };
 const PILFER = { from: along(MARK, U, -7, LAT, -2.6).map(r2), at: [POST[0] - 0.55, POST[1] + 0.05], off: along(MARK, U, 30, LAT, -3).map(r2) };
+/** Shot 4 close-up on Pearl's carrier (hyena-local: +Z its facing, +X its left = the carrier hand). Low and ahead, so the
+ *  carrier sits above the dialogue box and the hyena's head leaves the top of the frame. */
+export const PEARL_CU = Object.freeze({ pos: Object.freeze([2.4, 0.9, 1.6]), look: Object.freeze([0.3, 0.3, -0.1]), fov: 42 });
+/** The closing cream fade (WA §2.7): short, with the HUD still hidden; the HUD returns once the fade-out is done. */
+export const END_FADE = Object.freeze({ in: 0.45, hold: 0.5, out: 0.5 });
 /** The letters Pearl drops behind her cart (shot 12): every 1.1 s while it rolls past. */
 export const LETTER_DROPS = Object.freeze({ n: 3, every: 1.1 });
 /** Sunbreak (ON §5.3): the sun ×2.4 for 2 s and holy 0.15 on her. */
@@ -169,7 +175,11 @@ export function cs02Steps(cut = true) {
     rattle('hyena_pearl', 0.6),
     giggle('hyena_pearl', 0.5),
     wait(1.0),
+    // her call is the hook of the first minutes: a close two-shot of her carrier and the sign while she speaks (the cut
+    // tracks the cart; the carrier hangs at the hyena's left hand, +X), then back to Clem's face as she decides
+    cam(null, 'hyena_pearl', { pos: PEARL_CU.pos, look: PEARL_CU.look, fov: PEARL_CU.fov }),
     say('pearl', 'cs02.1', 1.7, { portrait: 'pearl' }),
+    cam(null, 'swordcat', { pos: [0.95, 0.95, 1.45], look: [0, 0.78, 0], fov: 38 }),
     { t: 'actor', id: 'swordcat', expression: 'determined' },
 
     // ---- 5 · (long cut) she runs, trips on her cape, gets up
@@ -277,8 +287,8 @@ export function cs02Steps(cut = true) {
     { t: 'env', fogDensity: 0.04, dur: 1.5, nowait: true },
     { t: 'actor', id: 'swordcat', expression: 'happy', emote: 'blink' },
     say('swordcat', 'cs02.6', 2.4),
-    { t: 'ui', fade: { to: FADE_COLOR, alpha: 1, dur: 0.6 } },
-    wait(0.65),
+    { t: 'ui', hud: false, fade: { to: FADE_COLOR, alpha: 1, dur: END_FADE.in } },
+    wait(END_FADE.hold),
   ];
 }
 
@@ -289,12 +299,15 @@ export default {
     call: (ctx, cs, skipped, phase) => {
       if (phase === 'before') { fillLight(cs, null); memeLook(ctx, false); return; }
       cs.host?.barnSet?.(true);
+      // the HUD comes back only after the cream fade-out (no gameplay HUD over a half-faded frame)
+      const host = cs.host;
+      setTimeoutish(ctx, END_FADE.out, () => { if (!host?.current || host.current === cs) host?.cinema?.hud?.(true); });
     },
     flags: { 'prologue.raid': true },
     env: 'meadow_evening',
     actors: { swordcat: { prop: { helmet: false }, pos: RAID_END, facing: RAID_END_FACING, expression: null } },
     music: { track: 'village_bards_tale', fade: 2 },
-    ui: { letterbox: false, hud: true, title: null, fade: { alpha: 0, dur: 1.0 } },
+    ui: { letterbox: false, hud: false, title: null, fade: { alpha: 0, dur: END_FADE.out } },
     cam: 'follow',
     save: true,
   },

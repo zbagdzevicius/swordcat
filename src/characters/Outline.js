@@ -5,8 +5,8 @@
 // static). Width × the live pixel ratio (dynamic resolution included: OUTLINE_U.uPxScale, written by runtime per frame).
 // node-safe (no DOM / WebGL at import).
 import * as THREE from 'three';
-import { uViewport } from '../core/uniforms.js';
 import { own } from './materials.js';
+import { FLAT_U, flatPatch } from './flatPatch.js';
 import { buildSilhouetteProxy, resolveTarget } from './Readability.js';
 
 /**
@@ -28,7 +28,7 @@ export const OUTLINE = Object.freeze({
 });
 
 /** Shared outline uniforms: the live pixel ratio (runtime.characterFrame writes it from ctx.renderer). */
-export const OUTLINE_U = Object.freeze({ uPxScale: { value: 1 } });
+export const OUTLINE_U = FLAT_U;
 
 /**
  * Should an actor of `role` get a hull under the QUALITY.outline tier?
@@ -47,37 +47,17 @@ export function inkFor(key) {
 
 /**
  * The hull material: unlit, back faces, fog on, a clip-space push along the screen-projected normal by `uOutlinePx`
- * (× the pixel ratio) pixels. `userData.uniforms.uPull` exists only because the proxy builder writes it.
+ * (× the pixel ratio) pixels (the shared flat program, `uFlatMode` 0). `userData.uniforms.uPull` exists only because
+ * the proxy builder writes it.
  * @param {THREE.ColorRepresentation} color @param {number} px
  */
 export function outlineMaterial(color = OUTLINE.hero, px = OUTLINE.px.hero) {
-  const m = new THREE.MeshBasicMaterial({ color, side: THREE.BackSide, fog: true });
-  const u = { uOutlinePx: { value: px }, uPull: { value: 0 } };
+  // PERF §1.2: the shared flat program (characters/flatPatch.js) in outline mode: back faces, fogged, normal push
+  const m = new THREE.MeshBasicMaterial({ color, fog: true });
+  const u = { uOutlinePx: { value: px }, uPull: { value: 0 }, uFlatMode: { value: 0 }, uFogK: { value: 1 } };
   m.userData.uniforms = u;
   m.userData.outline = true;
-  m.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, OUTLINE_U, { uViewport });
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uOutlinePx, uPxScale;\nuniform vec2 uViewport;')
-      .replace('#include <project_vertex>', `
-        vec4 mvPosition = vec4( transformed, 1.0 );
-        #ifdef USE_INSTANCING
-          mvPosition = instanceMatrix * mvPosition;
-        #endif
-        mvPosition = modelViewMatrix * mvPosition;
-        vec4 clipO = projectionMatrix * mvPosition;
-        #ifdef USE_SKINNING
-          vec3 nO = normalize( normalMatrix * objectNormal );
-        #else
-          vec3 nO = normalize( normalMatrix * normal );
-        #endif
-        vec2 dirO = ( projectionMatrix * vec4( nO, 0.0 ) ).xy;
-        dirO /= max( length( dirO ), 1e-5 );
-        float pxO = min( uOutlinePx * uPxScale, ${OUTLINE.maxPx.toFixed(1)} * uPxScale );
-        clipO.xy += dirO * ( pxO * 2.0 / max( uViewport, vec2( 1.0 ) ) ) * clipO.w;
-        gl_Position = clipO;`);
-  };
-  m.customProgramCacheKey = () => 'sc-outline-v1';
+  flatPatch(m, u);
   return own(m);
 }
 
@@ -119,5 +99,7 @@ export function setOutlineAlpha(mesh, a) {
   if (!mesh) return;
   const m = mesh.material;
   m.opacity = a; m.transparent = a < 0.999; m.depthWrite = a >= 0.999;
+  // opaque hulls draw unblended, fading ones blend: either way three's `opaque` key stays off (one flat program)
+  m.blending = m.transparent ? THREE.NormalBlending : THREE.NoBlending;
   mesh.visible = a > 0.001;
 }

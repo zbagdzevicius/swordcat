@@ -129,51 +129,40 @@ export default [
         s.flags = {}; s.kittens = []; s.letters = []; s.heartBells = []; s.fish = 0; s.shards = 0;
         s.companions = { unlocked: [], active: [] };
         c.companions.setActive([]);
-        s.setFlag('prologue.armour', true);
+        s.setFlag('prologue.start', true);                         // Phase W: practice comes first (armour later, in the barn)
         g.setMode('play'); g.god(true);
       });
       await t.loadLevel('meadow', 'practice');
       await t.clearEvents();
 
-      // ---------------------------------------------------------------- Midnight Practice (story:tutorial plays every step)
-      step('Midnight Practice');
+      // ---------------------------------------------------------------- Morning Practice (story:tutorial plays every step)
+      step('Morning Practice');
       const tut = await until(t, () => window.__GAME__.ctx.story.tutorial.active, null, { sim: 6 });
-      await must(!!tut, 'Midnight Practice starts at spawn practice');
+      await must(!!tut, 'Morning Practice starts at spawn practice');
       await t.hold('KeyW', 900);
       await t.tap('KeyJ', 3, 230);
       await t.wait(400);
       await shot(t, '01-practice');
       await t.G(() => window.__GAME__.ctx.story.tutorial.skip());
-      const gate = await until(t, () => {
+      // Phase W prologue (practice → chart CS-01 → CS-02 → barn suit-up → CS-01b): Morning Practice sets
+      // prologue.practice; the scenes after it are covered one by one by story:cs01 / story:title / story:skip, so the
+      // slice marks the chain done as SaveManager.newGame({ skipPrologue }) does and goes on in Chapter 1
+      const practiced = await until(t, () => window.__GAME__.ctx.state.getFlag('prologue.practice') === true && !window.__GAME__.ctx.story.tutorial.active, null, { sim: 12 });
+      await must(!!practiced, 'practice over: prologue.practice set');
+      await t.G(() => {
         const g = window.__GAME__, c = g.ctx;
-        return c.state.getFlag('prologue.tutorial') === true && !c.story.isPlaying && !c.levels.current.colliders.segments.some((s) => s.gate === 'practice');
-      }, null, { sim: 12 });
-      await must(!!gate, 'practice over: prologue.tutorial set and the gate open');
-
-      // ---------------------------------------------------------------- G-01 at the north gate (walk through it)
-      step('G-01');
-      await tp(t, 0, -66, 0);
-      const g01 = await walkUntil(t, () => window.__GAME__.ctx.story.playingId === 'g01', null, 6000);
-      await must(!!g01, 'walking out of the gate plays G-01');
-      if (await until(t, () => (window.__GAME__.ctx.story.current?.t ?? 0) > 1.6, null, { sim: 5 })) await shot(t, '02-g01-meme');
-      const g01done = await until(t, idle, null, { sim: 25 });
-      await must(!!g01done, 'G-01 hands back to play');
-
-      // ---------------------------------------------------------------- CS-02 on the lane
-      step('CS-02');
-      await tp(t, -4.5, -55, -0.4);
-      let cs02 = await walkUntil(t, () => window.__GAME__.ctx.story.playingId === 'cs02', null, 3000);
-      if (!cs02) { t.warn('lane trigger missed by walking: stepping into it'); await tp(t, -6, -52, -0.4); cs02 = await until(t, () => window.__GAME__.ctx.story.playingId === 'cs02', null, { sim: 4 }); }
-      await must(!!cs02, 'CS-02 plays on the lane');
-      if (await until(t, () => window.__GAME__.ctx.cam.currentShot?.preset === 'MEME_LOOP', null, { sim: 45, real: 120000 })) { await t.wait(1500); await shot(t, '03-cs02-meme'); }
-      else t.warn('CS-02 Meme Cam beat not seen');
-      if (await until(t, () => window.__GAME__.ctx.story.line?.key === 'cs02.2', null, { sim: 25 })) { await t.wait(600); await shot(t, '04-cs02-laugh'); }
-      await t.G(() => window.__GAME__.story.skip());                 // the rest is covered by story:cs02
+        g.story.skip(); c.story.queue.length = 0;
+        for (const k of ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid', 'prologue.armour', 'prologue.tutorial', 'prologue.done', 'tut.done']) c.state.setFlag(k, true);
+      });
+      await t.loadLevel('meadow', 'start');
+      await t.G(() => { const g = window.__GAME__; g.story.skip(); g.setMode('play'); });
+      const gate = await until(t, () => !window.__GAME__.ctx.levels.current.colliders.segments.some((s) => s.gate === 'practice'), null, { sim: 6 });
+      await must(!!gate, 'Chapter 1: the practice gate is open');
       const day = await until(t, () => {
         const g = window.__GAME__, c = g.ctx;
-        return c.state.getFlag('prologue.done') === true && c.env.presetName === 'meadow_day' && g.mode === 'play' && !c.story.isPlaying && !c.levels.loading;
-      }, null, { sim: 40, real: 120000 });
-      await must(!!day, 'after CS-02: prologue.done, meadow by day, back in play');
+        return c.env.presetName === 'meadow_day' && g.mode === 'play' && !c.story.isPlaying && !c.levels.loading;
+      }, null, { sim: 20, real: 60000 });
+      await must(!!day, 'Chapter 1: meadow by day, in play');
       await t.G(() => window.__GAME__.god(true));
       await t.wait(800);
       await shot(t, '05-day-start');
@@ -194,8 +183,11 @@ export default [
       await tp(t, -26.5, -28.5, Math.atan2(-3.5, 2.5));
       await meow(t);
       t.assert(await touchKitten(t, 'noodle'), 'Noodle rescued (barrel, Meow)');
-      await tp(t, -18, -25.6, 0);
-      await t.hold('KeyW', 500);
+      // ON §6.1: Letter #1 sleeps under the Crow Fields cow (40, 30); a Meow wakes her and she ambles off it
+      await tp(t, 41.5, 27.4, 0);
+      await meow(t);
+      await t.wait(3500);
+      await t.hold('KeyW', 700);
       t.assert(await until(t, () => window.__GAME__.ctx.state.letters.includes('l1'), null, { sim: 3 }), 'Letter #1 picked up');
       await tp(t, -16, -34.8, Math.PI);
       await t.clearEvents();

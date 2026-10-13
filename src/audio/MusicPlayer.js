@@ -1,11 +1,14 @@
 // src/audio/MusicPlayer.js  (owner: audio) — A/B music decks with crossfades (tech.md §14, GAME_DESIGN §16.1) and a
 // one-shot sting deck. Long tracks stream through an <audio> element (MediaElementAudioSourceNode) so a 3-minute
 // track never sits decoded in memory; short seamless loops and stings (`buffer: true`) are decoded AudioBuffers.
+// Each deck runs source → low-pass → gain, so a track def's `rate` / `lowpass` / `loopEnd` (WA §9 warm variants:
+// lantern_night, hub_hush, results_dance) need no extra file.
 import { TRACKS, trackGain } from './musicMap.js';
 
 /**
  * @typedef {object} Deck
  * @property {GainNode} gain
+ * @property {BiquadFilterNode} filter  per-track low-pass (open at FILTER_OPEN)
  * @property {HTMLAudioElement|null} el
  * @property {MediaElementAudioSourceNode|null} elSrc
  * @property {AudioBufferSourceNode|null} src
@@ -14,6 +17,9 @@ import { TRACKS, trackGain } from './musicMap.js';
  * @property {number} token    bumps per start (late buffer decodes for an old request are dropped)
  * @property {number} startedAt
  */
+
+/** Cutoff (Hz) of an "open" deck filter (the track has no `lowpass`). */
+const FILTER_OPEN = 20000;
 
 export class MusicPlayer {
   /**
@@ -34,7 +40,17 @@ export class MusicPlayer {
   /** @returns {Deck} */
   _deck() {
     const gain = this.ac.createGain(); gain.gain.value = 0; gain.connect(this.dest);
-    return { gain, el: null, elSrc: null, src: null, track: null, stopAt: 0, token: 0, startedAt: 0 };
+    const filter = this.ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = this._open(); filter.connect(gain);
+    return { gain, filter, el: null, elSrc: null, src: null, track: null, stopAt: 0, token: 0, startedAt: 0, loopEnd: 0, loopFrom: 0 };
+  }
+
+  /** The open cutoff, kept under Nyquist. */
+  _open() { return Math.min(FILTER_OPEN, (this.ac.sampleRate || 44100) * 0.45); }
+
+  /** Point the deck's filter at the track's `lowpass` (or open it). */
+  _tone(deck, def) {
+    const f = def?.lowpass > 0 ? Math.min(def.lowpass, this._open()) : this._open();
+    deck.filter.frequency.setValueAtTime(f, this.ac.currentTime);
   }
 
   _ramp(param, to, dur) {
@@ -65,13 +81,17 @@ export class MusicPlayer {
     }
     this._stopDeck(next);
     next.track = trackId; next.stopAt = 0; next.startedAt = this.ac.currentTime;
+    next.loopEnd = def.loopEnd > 0 ? def.loopEnd : 0; next.loopFrom = def.offset ?? 0;
+    this._tone(next, def);
     next.gain.gain.cancelScheduledValues(this.ac.currentTime); next.gain.gain.setValueAtTime(0, this.ac.currentTime);
     const token = ++next.token;
     if (def.buffer) {
       this.io.buffer(def.file).then((buf) => {
         if (!buf || next.token !== token || next.track !== trackId) return;
         const s = this.ac.createBufferSource(); s.buffer = buf; s.loop = def.loop !== false;
-        s.connect(next.gain); s.start(this.ac.currentTime, Math.min(def.offset ?? 0, buf.duration - 0.01));
+        if (def.rate) s.playbackRate.value = def.rate;
+        if (next.loopEnd) { s.loopStart = next.loopFrom; s.loopEnd = Math.min(next.loopEnd, buf.duration); }
+        s.connect(next.filter); s.start(this.ac.currentTime, Math.min(def.offset ?? 0, buf.duration - 0.01));
         next.src = s;
         if (!next.stopAt) this._ramp(next.gain.gain, level, fade);
       });
@@ -79,6 +99,9 @@ export class MusicPlayer {
       const el = this._element(next);
       el.loop = def.loop !== false;
       el.src = this.io.url(this._file(def));
+      // warm variants: slower AND lower (pitch follows the rate)
+      el.preservesPitch = false; el.mozPreservesPitch = false; el.webkitPreservesPitch = false;
+      el.defaultPlaybackRate = def.rate ?? 1; el.playbackRate = def.rate ?? 1;
       if (def.offset) {
         const seek = () => { if (next.token === token) { try { el.currentTime = def.offset; } catch { /* not seekable */ } } };
         if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
@@ -100,7 +123,7 @@ export class MusicPlayer {
       el.preload = 'auto'; el.crossOrigin = 'anonymous';
       deck.el = el;
       deck.elSrc = this.ac.createMediaElementSource(el);
-      deck.elSrc.connect(deck.gain);
+      deck.elSrc.connect(deck.filter);
     }
     return deck.el;
   }
@@ -108,7 +131,7 @@ export class MusicPlayer {
   _stopDeck(deck) {
     if (deck.src) { try { deck.src.stop(); } catch { /* stopped */ } deck.src.disconnect(); deck.src = null; }
     if (deck.el && !deck.el.paused) deck.el.pause();
-    deck.track = null; deck.stopAt = 0; deck.token++;
+    deck.track = null; deck.stopAt = 0; deck.token++; deck.loopEnd = 0;
   }
 
   /** One-shot sting (victory fanfare) over the ducked music. Resolves the duration (s) or 0. */
@@ -129,10 +152,15 @@ export class MusicPlayer {
     for (const d of this.decks) if (d.el && d.track && !d.stopAt && d.el.paused) d.el.play().catch(() => {});
   }
 
-  /** Stop decks whose fade-out finished (call per frame). */
+  /** Stop decks whose fade-out finished; wrap streamed `loopEnd` tracks (call per frame). */
   update() {
     const t = this.ac.currentTime;
-    for (const d of this.decks) if (d.stopAt && t >= d.stopAt) this._stopDeck(d);
+    for (const d of this.decks) {
+      if (d.stopAt && t >= d.stopAt) { this._stopDeck(d); continue; }
+      if (d.loopEnd && d.el && !d.src && d.track && d.el.currentTime >= d.loopEnd) {
+        try { d.el.currentTime = d.loopFrom; } catch { /* not seekable yet */ }
+      }
+    }
   }
 
   /** Debug snapshot. */
@@ -142,7 +170,8 @@ export class MusicPlayer {
       track: this.current,
       decks: this.decks.map((k) => ({ track: k.track, gain: +k.gain.gain.value.toFixed(3), fading: !!k.stopAt,
         time: k.el && k.track && !k.src ? +(k.el.currentTime || 0).toFixed(2) : (k.src ? +(this.ac.currentTime - k.startedAt).toFixed(2) : 0),
-        playing: !!(k.src || (k.el && !k.el.paused)), streamed: !!(k.el && !k.src && k.track) })),
+        playing: !!(k.src || (k.el && !k.el.paused)), streamed: !!(k.el && !k.src && k.track),
+        rate: k.track ? (TRACKS[k.track]?.rate ?? 1) : 1, lowpass: Math.round(k.filter.frequency.value), loopEnd: k.loopEnd })),
       active: this.active, liveTrack: d.track, sting: this.sting.endAt > this.ac.currentTime,
     };
   }
@@ -156,7 +185,7 @@ export class MusicPlayer {
     for (const d of this.decks) {
       this._stopDeck(d);
       if (d.el) { d.el.removeAttribute('src'); d.el.load?.(); }
-      d.elSrc?.disconnect(); d.gain.disconnect();
+      d.elSrc?.disconnect(); d.filter.disconnect(); d.gain.disconnect();
     }
     if (this.sting.src) { try { this.sting.src.stop(); } catch { /* */ } }
     this.sting.gain.disconnect();

@@ -5,21 +5,25 @@
 // Additions:         heartbeat(opts) · shimmer(on) · babble(speaker, text, opts) · stopBabble() · laughChorus(center, opts)
 //                    · stopLaughs() · march(on, opts) · loop(id, opts) · stopAll(fade) · setVolumes({master,music,sfx})
 //                    · chargeTone(name) · endCharge(fade) · level(bus) · debugState() · showMeter(on) · resolve(id)
+// Phase W:           glock(notes, opts) · reward(kind, opts) · roomRead(arenaLock) · cue(name, at, opts) (+ BEAT_CUES)
 //
 // play2D / play3D ids: an SFX name (sfxMap.js), a file id ('pickup/bubble2'), a GAME_DESIGN pattern
-// ('impact/chain_0x', 'sword/swish_01–13'), a full path, or a procedural id routed to the builders below so cutscene
+// ('world/wood_hit_0x', 'sword/swish_01–13'), a full path, or a procedural id routed to the builders below so cutscene
 // `sfx` steps can name them: 'laugh' (laugh build), 'laughChorus', 'bell' / 'sunbell', 'bellClunk' (damped Sunbell),
 // 'heartbeat', 'march' (opts.on === false stops it), 'shimmer'. Each returns a `{ name, stop(fade) }` handle.
 // `{ loop: true }` without `dur` becomes loop(): outside the voice pools, following its `at` actor.
 //
-// Graph (one THREE.AudioListener on ctx.camera; its gain is the MASTER bus):
+// Graph (one THREE.AudioListener, NOT in the scene graph: three's per-frame listener ramps are replaced by our own 20 Hz
+// writes, PERF §10.5 / P:U2; its gain is the MASTER bus):
 //   decks ─► musicDuck ─► hitDuck ─► music ─┐
-//   3D voices (panner) / loops / wind ─► world ─┐                       ├─► master (listener) ─► limiter ─► out
+//   3D voices (panner) / loops / wind ─► world ─┐                       ├─► master ─► low/high shelf ─► limiter ─► out
 //   2D voices / shimmer ─► player ──────────────┼─► sfx ─────────────────┘
 //   ui sounds / babble ─► ui ───────────────────┘
 //
 // Nothing is created before the first user gesture (autoplay policy): requests made earlier are logged, music
-// requests are remembered and start on unlock, and audio files are only fetched (decoded on unlock).
+// requests are remembered and start on unlock, and audio files are only fetched. PERF §3.1 / §10.4 (P:U1, U3): every
+// synthesized sample is baked to PCM on the title in ≤ 2 ms idle slices (bake.js), so the unlock is a memcpy per def;
+// files decode lazily (first use jumps the queue, ≤ 4 concurrent; level preloads warm one at a time while calm).
 // Random choices use ctx.rng.fork('audio'), so sound never consumes the gameplay random stream.
 import * as THREE from 'three';
 import { E } from '../core/events.js';
@@ -29,17 +33,23 @@ import { SFX, bindSfx, FOOTSTEP, LEVEL_SURFACE, STEP_CADENCE, TELEGRAPH_SFX, ene
   objectiveSfxFor, SFX_ALIASES } from './sfxMap.js';
 import { MusicDirector, TRACKS, MUSIC_RULES, AMBIENCE, levelMusic, bossMusicFor } from './musicMap.js';
 import { AMBIENT_LAYERS, activeLayers, nextWait, layerPos } from './ambience.js';
-import { birdPlan, hootPlan, playChirps, cricketData, crackleData, rumbleData, playData, BIRDS } from './nature.js';
-import { CUES, partOpts } from './cues.js';
+import { birdPlan, hootPlan, playChirps, cricketData, crackleData, playData, BIRDS } from './nature.js';
+import { CUES, BEAT_CUES, partOpts, stickerNote } from './cues.js';
 import { MusicPlayer } from './MusicPlayer.js';
-import { Wind, strikeBell, tollPlan, laughPlan, laughLength, LAUGH, Shimmer, HEART, heartbeatPlan, MARCH } from './procedural.js';
+import { Wind, strikeBell, tollPlan, laughPlan, laughLength, LAUGH, Shimmer, HEART, heartbeatPlan, MARCH, GLOCK, glockPlan,
+  breezeData, BREEZE } from './procedural.js';
 import { BABBLE, babblePlan, voiceFor, speakerKey } from './babble.js';
-import { bakeZzfx } from './sfxDefs.js';
+import { ZZFX_DEFS, PCM_RATE, pcmBuffer } from './sfxDefs.js';
+import { Prebaker } from './bake.js';
 import { buildIndex, resolveId, isMusicPath } from './ids.js';
 
 const _v = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 const _c = new THREE.Vector3();
+const _lq = new THREE.Quaternion();
+const _ls = new THREE.Vector3();
+const _lf = new THREE.Vector3();
+const _lu = new THREE.Vector3();
 const RECENT = 40;
 const IDLE_STATES = new Set(['idle', 'patrol', 'return', 'sleep', 'hidden', 'dead', 'spawn']);
 /** cutscene actor ids that mean her (until the player registers under 'swordcat') */
@@ -96,12 +106,26 @@ const PROCEDURAL = {
   shopBell: (am, at, o) => am.bell({ ...o, volume: volOf(o) ?? 1, profile: 'handbell', pos: at ?? o.pos }),
   toll: (am, at, o) => am.bell({ ...o, volume: volOf(o), strikes: o.strikes ?? 3, pos: at ?? o.pos }),
   kittenCheer: (am, at, o) => am.kittenCheer(at, { volume: volOf(o) ?? 1, count: o.count }),
+  // ---- Phase W: the baked glock (sticker thirds, rescue arpeggio, Still Standing third, chime tails)
+  glock: (am, at, o) => am.glock(o.notes ?? o.note ?? 'C5', { volume: volOf(o) ?? 1, gap: o.gap, delay: o.delay }),
 };
+
+/**
+ * PERF §10.4 / §10.5 runtime numbers: listener + panner updates at `listenerHz` when moved more than `moveEps` m;
+ * `maxDecodes` concurrent decodeAudioData calls (first use first; level warm-up one at a time while calm).
+ */
+export const RUNTIME = { listenerHz: 20, moveEps: 0.05, turnEps: 0.01, maxDecodes: 4, warmConcurrent: 1 };
+
+/** AUTOCAM X24 room read: once per arena per visit, never right after a (boss intro) cutscene. */
+export const ROOM_READ = { afterCutscene: 2.0 };
+
+/** A manifest `levels` entry: an array (p0) or PERF §10.3 tiers { p0, p1, p2 } → every path. */
+const tierPaths = (v) => (Array.isArray(v) ? v : v && typeof v === 'object' ? Object.values(v).flat() : []);
 
 /** Files to keep decoded for a level: the manifest's '*' subset + that level's subset (+ buffered music). */
 function keepSet(levelId) {
-  const out = new Set(manifestLevels?.['*'] ?? []);
-  for (const p of manifestLevels?.[levelId] ?? []) out.add(p);
+  const out = new Set(tierPaths(manifestLevels?.['*']));
+  for (const p of tierPaths(manifestLevels?.[levelId])) out.add(p);
   for (const t of Object.values(TRACKS)) if (t.buffer) out.add(t.file);
   return out;
 }
@@ -205,6 +229,24 @@ export class AudioManager {
     this.oneshots = new Set();
     /** delayed cue parts: [{ at (this.time), fn }] */
     this._pending = [];
+    /** PERF §3.1: synthesized PCM baked on the title (bake.js) */
+    this.baker = new Prebaker(this.rand);
+    /** the baked C5 glock note (AudioBuffer, after the unlock) */
+    this.glockBuf = null;
+    /** baked PCM not yet wrapped into AudioBuffers (the unlock beat the idle bake) */
+    this._pcmPending = false;
+    /** PERF §10.4 decode queue: jobs not started yet ({ path, urgent, resolve }) and the count in flight */
+    this._dq = [];
+    this._inflight = 0;
+    /** PERF §10.5 listener state: last written position / forward, seconds since the last write */
+    this._lp = new THREE.Vector3(NaN, NaN, NaN);
+    this._lfw = new THREE.Vector3(NaN, NaN, NaN);
+    this._lt = Infinity;
+    this._lIso = null;
+    this._followT = Infinity;
+    /** AUTOCAM X24 room reads already played this visit (`${level}:${arena}`) and the last cutscene end (this.time) */
+    this._roomReads = new Set();
+    this._csEndAt = -Infinity;
   }
 
   /** Music track the director wants right now (id or null). */
@@ -229,7 +271,7 @@ export class AudioManager {
     on(E.BOSS_DEFEATED, () => this.director.bossDefeated());
     on(E.ENEMY_ALERTED, ({ enemy }) => { if (enemy) this.alerted.add(enemy); });
     on(E.ENEMY_DIED, ({ enemy }) => this.alerted.delete(enemy));
-    on(E.LEVEL_RESULTS, () => this.music('victory_8bit_loop', 1));
+    on(E.LEVEL_RESULTS, () => this.music('results_dance', 1));          // WA21: festival dance loop (+ ui's rankStamp)
     on(E.MEME_CAM, ({ on: isOn }) => this._setMeme(!!isOn));
     on(E.GAME_MODE, ({ mode }) => this._onMode(mode));
     on(E.HITSTOP, () => this._hitstopDuck());
@@ -237,13 +279,14 @@ export class AudioManager {
     on(E.SAVE_LOADED, () => { this._readSettings(); this._applyVolumes(); });
     on(E.DIALOG_LINE, ({ speaker, text }) => this.babble(speaker, text));
     on(E.DIALOG_END, () => { this.stopBabble(); this._dialogHold = 0; this._applyDucks(); });
-    on(E.CUTSCENE_END, () => { this.stopBabble(); this.stopLaughs(); this.march(false); this._dialogHold = 0; this._applyDucks(); });
+    on(E.CUTSCENE_END, () => { this._csEndAt = this.time; this.stopBabble(); this.stopLaughs(); this.march(false); this._dialogHold = 0; this._applyDucks(); });
 
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
       const gesture = () => { if (!this.ready || this.ac?.state !== 'running') this.unlock(); };
       for (const ev of ['pointerdown', 'mousedown', 'keydown', 'touchend', 'click']) this._listen(window, ev, gesture, { capture: true, passive: true });
       if (typeof document !== 'undefined') this._listen(document, 'visibilitychange', () => this._onVisibility());
       if (this.ctx.params?.debug) this.showMeter(true);
+      this.baker.schedule();                                    // PERF §3.1: bake on the title, before the first gesture
     }
   }
 
@@ -280,10 +323,25 @@ export class AudioManager {
     this.ac = ac;
     const listener = this.listener = new THREE.AudioListener();
     listener.name = 'audio-listener';
-    this.ctx.camera?.add(listener);
+    // PERF §10.5: never parented, never auto-updated (three would ramp 9 listener params every frame); _listenerTick()
+    // writes the ears at 20 Hz instead
+    listener.matrixAutoUpdate = false; listener.matrixWorldAutoUpdate = false;
+    this._lp.set(NaN, NaN, NaN); this._lt = Infinity; this._lIso = null; this._followT = Infinity;
     const L = MIX.limiter, lim = ac.createDynamicsCompressor();
     lim.threshold.value = L.threshold; lim.knee.value = L.knee; lim.ratio.value = L.ratio; lim.attack.value = L.attack; lim.release.value = L.release;
-    listener.setFilter(lim);
+    // ART §9.3 mix: a touch of air (+1.5 dB high shelf at 6 kHz) and less boom (−2 dB low shelf at 120 Hz)
+    const shelf = (type, { freq, gain }) => {
+      const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+      if (f.gain) f.gain.value = gain;
+      return f;
+    };
+    // master (listener gain) → low shelf → high shelf → limiter → destination (three's setFilter takes only one node)
+    this._shelves = [shelf('lowshelf', MIX.shelf.low), shelf('highshelf', MIX.shelf.high)];
+    this._chain = [...this._shelves, lim];
+    listener.gain.disconnect();
+    for (let i = 0; i < this._chain.length - 1; i++) this._chain[i].connect(this._chain[i + 1]);
+    lim.connect(ac.destination);
+    listener.gain.connect(this._chain[0]);
     const gain = (to, v = 1) => { const g = ac.createGain(); g.gain.value = v; g.connect(to); return g; };
     const master = listener.getInput();
     const music = gain(master), hitDuck = gain(music), musicDuck = gain(hitDuck);
@@ -313,7 +371,7 @@ export class AudioManager {
       stingDest: hitDuck,                                   // the sting plays over the ducked decks
       canOgg: typeof Audio !== 'undefined' ? new Audio().canPlayType('audio/ogg; codecs="vorbis"') !== '' : true,
     });
-    this.wind = new Wind(ac, world, this.rand);
+    this.wind = new Wind(ac, world, this.rand, { data: this.baker.get('gen:wind'), rate: PCM_RATE });
     this.shim = new Shimmer(ac, player);
     ac.onstatechange = () => {
       if (this.ac !== ac) return;
@@ -336,13 +394,47 @@ export class AudioManager {
     this.director.take();
     if (this.director.target) this.musicPlayer.play(this.director.target, MUSIC_RULES.titleFade);
     if (this.levelId) { this._setAmbience(this.levelId); this._ambRefresh(); }
-    // files fetched before the unlock (level preloads) decode in the background; the zzfx bake is quick
-    for (const p of this._fetched) this._decode(p);
-    const m = await bakeZzfx(this.ac);
-    for (const [k, b] of m) this.zz.set(k, b);
+    // PERF §3.1: the synth samples were baked on the title; the unlock only copies them into AudioBuffers
+    this._pcmBuffers();
+    // files fetched before the unlock (level preloads) warm up in the background, one at a time (PERF §10.4)
+    for (const p of this._fetched) this._decode(p, false);
+  }
+
+  /**
+   * Baked PCM → AudioBuffers of this context (zzfx defs + the glock note). A memcpy each. By default only the PCM the
+   * idle slices already finished is wrapped (PERF §3.1: the gesture never synthesizes); the rest is wrapped when the
+   * bake completes (update) or on first use (_zzBuf / glock). `all` bakes anything still missing right now.
+   * @param {boolean} [all]
+   */
+  _pcmBuffers(all = false) {
+    const pcm = all ? (k) => this.baker.get(k) : (k) => this.baker.pcm.get(k);
+    let missing = false;
+    for (const name of Object.keys(ZZFX_DEFS)) {
+      if (this.zz.has(name)) continue;
+      const b = pcmBuffer(this.ac, pcm('zz:' + name));
+      if (b) this.zz.set(name, b); else missing = true;
+    }
+    if (!this.glockBuf) this.glockBuf = pcmBuffer(this.ac, pcm('gen:glock'));
+    /** true while some baked PCM still waits to be wrapped (checked once per update, cheap) */
+    this._pcmPending = !all && (missing || !this.glockBuf);
+  }
+
+  /**
+   * The zzfx AudioBuffer `name`; when the unlock came before the idle bake reached it, bakes and wraps that one def now
+   * (a short def: well under a frame), leaving the rest to the idle slices.
+   * @param {string} name
+   * @returns {AudioBuffer|null}
+   */
+  _zzBuf(name) {
+    let b = this.zz.get(name);
+    if (b || !this.ready || !(name in ZZFX_DEFS)) return b ?? null;
+    b = pcmBuffer(this.ac, this.baker.get('zz:' + name));
+    if (b) this.zz.set(name, b);
+    return b;
   }
 
   update(dt) {
+    if (this._pcmPending && this.ready && this.baker.done) this._pcmBuffers(true);   // the idle bake finished after the unlock
     const game = this.ctx.game, mode = game?.mode ?? 'play';
     // telegraph tings (sim time: they line up with the strike under slow motion)
     if (this.telegraphs.size) {
@@ -364,7 +456,7 @@ export class AudioManager {
     this.time += dt;
     if (!this.ready) return;
     this._applyMusicChanges();
-    this._placeListener();
+    this._listenerTick(dt);
     const ac = this.ac, now = ac.currentTime;
     // hitstop duck (rising edge)
     const hs = (this.ctx.game?.hitstopT ?? 0) > 0;
@@ -374,14 +466,23 @@ export class AudioManager {
     if (this._dialogHold && this.time > this._dialogHold && !this.babbleState) { this._dialogHold = 0; this._applyDucks(); }
     // wind follows Env (0–3), ×1.6 in Meme Cam
     this.wind.set(this.ctx.env?.wind ?? 0.6, this.memeOn ? MEME.windMul : 1);
-    // 3D voices that follow actors
-    for (const v of this.voices3D) {
-      if (!v.follow || v.endAt <= now) { if (v.endAt <= now) v.follow = null; continue; }
-      if (this._posOf(v.follow, v.pos)) this._setPannerPos(v.panner, v.pos, 0.03);
+    // 3D voices / loops that follow actors: 20 Hz, only when moved > 5 cm (PERF §10.5)
+    if ((this._followT += dt) >= 1 / RUNTIME.listenerHz) {
+      this._followT = 0;
+      const eps2 = RUNTIME.moveEps * RUNTIME.moveEps;
+      for (const v of this.voices3D) {
+        if (!v.follow || v.endAt <= now) { if (v.endAt <= now) v.follow = null; continue; }
+        if (this._posOf(v.follow, _v) && _v.distanceToSquared(v.pos) > eps2) { v.pos.copy(_v); this._setPannerPos(v.panner, v.pos); }
+      }
+      if (this.loops.size) {
+        for (const h of this.loops) {
+          if (!h.follow || !h.panner || !this._posOf(h.follow, _v)) continue;
+          h.at ??= new THREE.Vector3(NaN, NaN, NaN);
+          if (!(_v.distanceToSquared(h.at) <= eps2)) { h.at.copy(_v); this._setPannerPos(h.panner, _v); }
+        }
+      }
     }
-    if (this.loops.size) {
-      for (const h of this.loops) if (h.follow && h.panner && this._posOf(h.follow, _v)) this._setPannerPos(h.panner, _v, 0.05);
-    }
+    if (this._dq.length) this._pump();
     if (this.bells.size) {
       for (const b of this.bells) if (now > b.endAt + 0.5) { this.bells.delete(b); try { b.panner?.disconnect(); } catch { /* gone */ } }
     }
@@ -406,6 +507,7 @@ export class AudioManager {
     for (const off of this._dom) off();
     this._dom.length = 0;
     this.meter?.dispose(); this.meter = null;
+    this.baker.cancel?.();
     this._teardownGraph();
     this.telegraphs.clear(); this.alerted.clear(); this.loops.clear(); this.bells.clear(); this.amb.clear(); this.objectives.clear();
     this._pending.length = 0;
@@ -420,7 +522,8 @@ export class AudioManager {
       try { this.wind?.stop(); } catch { /* closed context */ }
       this.shim?.dispose();
       for (const v of [...this.voices2D, ...this.voices3D]) { try { v.panner?.disconnect(); } catch { /* gone */ } }
-      try { this.listener?.removeFilter?.(); } catch { /* already detached */ }
+      for (const n of this._chain ?? []) { try { n.disconnect(); } catch { /* gone */ } }
+      this._chain = null;
       for (const [k, node] of Object.entries(this.bus ?? {})) { if (k !== 'master') { try { node.disconnect(); } catch { /* gone */ } } }
       for (const a of Object.values(this.analysers ?? {})) { try { a.disconnect(); } catch { /* gone */ } }
       this.listener?.parent?.remove(this.listener);
@@ -428,6 +531,9 @@ export class AudioManager {
     }
     this.loops.clear(); this.amb.clear(); this.oneshots.clear(); this._gen.clear(); this._pending.length = 0;
     this.buffers.clear(); this._decoding.clear();
+    for (const j of this._dq) j.resolve(null);
+    this._dq.length = 0; this._inflight = 0;
+    this.zz.clear(); this.glockBuf = null; this._shelves = null;
     this.bus = null; this.analysers = null; this.listener = null; this.musicPlayer = null; this.wind = null; this.shim = null;
     this.voices2D = []; this.voices3D = [];
     this.ac = null; this.ready = false; this.unlocked = false;
@@ -528,24 +634,54 @@ export class AudioManager {
   }
 
   /**
-   * Decoded buffer for a path (fetch + decode once; `_decoding` holds only in-flight decodes, so a buffer dropped by
+   * Decoded buffer for a path (fetch + decode once; `_decoding` holds only pending decodes, so a buffer dropped by
    * evict() decodes again from the cached bytes). Before the unlock it only fetches. Never rejects.
+   * PERF §10.4: decodes are queued, ≤ RUNTIME.maxDecodes at once; `urgent` (a sound asked to play) jumps ahead of the
+   * background warm-up (level preloads), which runs one at a time and pauses while a fight is on.
+   * @param {string} path @param {boolean} [urgent]
    */
-  _decode(path) {
+  _decode(path, urgent = true) {
     const b = this.buffers.get(path);
     if (b) return Promise.resolve(b);
     if (!this.ac) return this._fetch(path).then(() => null, (e) => { this._warnOnce(path, e); return null; });
     let p = this._decoding.get(path);
-    if (!p) {
-      const ac = this.ac;
-      p = this._fetch(path)
-        .then((ab) => ac.decodeAudioData(ab.slice(0)))
-        .then((buf) => { if (this.ac === ac) this.buffers.set(path, buf); return buf; })
-        .catch((e) => { this._warnOnce(path, e); return null; })
-        .finally(() => { this._decoding.delete(path); });
-      this._decoding.set(path, p);
+    if (p) {
+      if (urgent) { const j = this._dq.find((x) => x.path === path); if (j && !j.urgent) { j.urgent = true; this._pump(); } }
+      return p;
     }
+    let resolve;
+    p = new Promise((r) => { resolve = r; });
+    this._decoding.set(path, p);
+    this._dq.push({ path, urgent, resolve });
+    this._pump();
     return p;
+  }
+
+  /** Start queued decodes: urgent ones up to RUNTIME.maxDecodes, warm-ups one at a time while calm. */
+  _pump() {
+    while (this._dq.length && this._inflight < RUNTIME.maxDecodes) {
+      let i = this._dq.findIndex((j) => j.urgent);
+      if (i < 0) {
+        if (this._inflight >= RUNTIME.warmConcurrent || this._threat) return;
+        i = 0;
+      }
+      const [job] = this._dq.splice(i, 1);
+      this._runDecode(job);
+    }
+  }
+
+  _runDecode(job) {
+    const ac = this.ac, path = job.path;
+    this._inflight++;
+    this._fetch(path)
+      .then((ab) => ac.decodeAudioData(ab.slice(0)))
+      .then((buf) => { if (this.ac === ac) this.buffers.set(path, buf); return buf; })
+      .catch((e) => { this._warnOnce(path, e); return null; })
+      .then((buf) => {
+        if (this.ac === ac) { this._inflight = Math.max(0, this._inflight - 1); this._decoding.delete(path); }
+        job.resolve(buf);
+        if (this.ac === ac && this._dq.length) this._pump();
+      });
   }
 
   _warnOnce(key, e) { if (!this._missing.has(key)) { this._missing.add(key); console.warn(`[audio] ${key}: ${e?.message ?? e}`); } }
@@ -566,7 +702,7 @@ export class AudioManager {
     }
     if (this.buffers.has(p)) return p;
     await this._fetch(p).catch((e) => { this._warnOnce(p, e); });
-    if (this.ac) this._decode(p);
+    if (this.ac) this._decode(p, false);                       // warm-up (PERF §10.4), not a decode burst
     return p;
   }
 
@@ -592,7 +728,7 @@ export class AudioManager {
   }
 
   /**
-   * 2D sound (player, UI): a SFX name, a file id ('pickup/bubble2'), a pattern ('impact/chain_0x') or a path.
+   * 2D sound (player, UI): a SFX name, a file id ('pickup/bubble2'), a pattern ('world/wood_hit_0x') or a path.
    * @param {string} id
    * @param {{volume?: number, vol?: number, rate?: number, rateVar?: number, delay?: number, dur?: number,
    *          offset?: number, loop?: boolean, bus?: 'player'|'world'|'ui'}} [opts]
@@ -612,7 +748,7 @@ export class AudioManager {
     this._note(at != null ? '3d' : '2d', name);
     const proc = PROCEDURAL[name];
     if (proc) return proc(this, at, opts);
-    if (CUES[name]) return this.cue(name, at, opts);
+    if (CUES[name] || BEAT_CUES[name]) return this.cue(name, at, opts);
     // an endless loop (cutscene purr, ambience) runs outside the voice pools so a burst of one-shots never steals it
     if (opts.loop && !(opts.dur > 0)) {
       return this.loop(name, { volume: volOf(opts) ?? 1, rate: opts.rate ?? 1, at, bus: opts.bus ?? (at != null ? 'world' : 'player'),
@@ -645,7 +781,7 @@ export class AudioManager {
     if (!this.ready) return null;
     let buf = ready ?? (path ? this.buffers.get(path) : null);
     if (!buf && def?.zzfx) {                                   // the synth stand-in now, the file from next time on
-      buf = this.zz.get(def.zzfx) ?? null;
+      buf = this._zzBuf(def.zzfx);
       if (path) this._decode(path);
     }
     if (!buf) {
@@ -661,7 +797,7 @@ export class AudioManager {
     const vol = (opts.volume ?? opts.vol ?? 1) * (def?.vol ?? 1);
     return this._start(buf, {
       name, at, rate, vol, delay: opts.delay ?? 0, offset: opts.offset ?? 0, dur: opts.dur ?? def?.dur ?? 0,
-      loop: !!opts.loop, bus: opts.bus ?? def?.bus ?? null,
+      loop: !!opts.loop, bus: opts.bus ?? def?.bus ?? null, lowpass: opts.lowpass ?? def?.lowpass ?? 0,
     });
   }
 
@@ -686,13 +822,11 @@ export class AudioManager {
     v.out = null; v.srcs = []; v.endAt = 0; v.follow = null; v.laugh = false;
   }
 
-  _setPannerPos(panner, p, tau = 0) {
-    const t = this.ac.currentTime;
+  /** PERF §10.5: one setValueAtTime per axis (no cancel, no per-frame automation; callers throttle to 20 Hz). */
+  _setPannerPos(panner, p) {
     if (panner.positionX) {
-      if (tau > 0) { panner.positionX.setTargetAtTime(p.x, t, tau); panner.positionY.setTargetAtTime(p.y, t, tau); panner.positionZ.setTargetAtTime(p.z, t, tau); }
-      else {
-        for (const [prm, val] of [[panner.positionX, p.x], [panner.positionY, p.y], [panner.positionZ, p.z]]) { prm.cancelScheduledValues(t); prm.setValueAtTime(val, t); }
-      }
+      const t = this.ac.currentTime;
+      panner.positionX.setValueAtTime(p.x, t); panner.positionY.setValueAtTime(p.y, t); panner.positionZ.setValueAtTime(p.z, t);
     } else panner.setPosition(p.x, p.y, p.z);
   }
 
@@ -719,32 +853,70 @@ export class AudioManager {
     return at.pos?.isVector3 || at.isObject3D ? at : null;
   }
 
+  /** Where the ears are (the last listener write; the lens before the first one). */
   _cameraPos(out) {
-    const L = this.listener;
-    if (L && L.parent && L.parent !== this.ctx.camera) return out.setFromMatrixPosition(L.matrixWorld);
-    const c = this.ctx.camera;
-    if (!c) return out.set(0, 0, 0);
-    return out.setFromMatrixPosition(c.matrixWorld);
+    if (Number.isFinite(this._lp.x)) return out.copy(this._lp);
+    return this._earPose(out, null);
   }
 
   /**
-   * CONTROLS_SPEC §2.8: in the iso play camera the ears sit at the focus + 1.2 m, facing along the camera yaw
-   * (screen-right = right ear); in cutscenes, presets, Meme Cam and `?cam=classic` they ride the lens as before.
+   * CONTROLS_SPEC §2.8 / AUTOCAM §13 audio: in the iso play camera the ears sit at the focus + 1.2 m (the focus includes
+   * the camera's lean and aim pan: ears go where eyes go), facing along the camera yaw (screen-right = right ear); in
+   * cutscenes, presets, Meme Cam and `?cam=classic` they ride the lens. Writes `pos` (and `fwd` when given).
+   * @returns {THREE.Vector3} pos
    */
-  _placeListener() {
-    const L = this.listener, ctx = this.ctx, cam = ctx.cam;
-    if (!L) return;
-    const iso = cam?.isIso && cam.focus?.isVector3 && (cam.modeName === 'follow' || cam.modeName === 'lock' || cam.modeName === 'boss');
-    if (iso) {
-      if (L.parent !== ctx.scene) ctx.scene.add(L);
-      L.position.set(cam.focus.x, cam.focus.y + 1.2, cam.focus.z);
-      L.rotation.set(0, cam.yaw ?? Math.PI, 0);
-      L.updateMatrixWorld(true);
-    } else if (L.parent !== ctx.camera && ctx.camera) {
-      ctx.camera.add(L);
-      L.position.set(0, 0, 0); L.rotation.set(0, 0, 0);
-      L.updateMatrixWorld(true);
+  _earPose(pos, fwd) {
+    const cam = this.ctx.cam, c = this.ctx.camera;
+    if (this._isoEars()) {
+      pos.set(cam.focus.x, cam.focus.y + 1.2, cam.focus.z);
+      const yaw = cam.yaw ?? Math.PI;
+      fwd?.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+      return pos;
     }
+    if (!c) { fwd?.set(0, 0, -1); return pos.set(0, 0, 0); }
+    c.matrixWorld.decompose(pos, _lq, _ls);
+    fwd?.set(0, 0, -1).applyQuaternion(_lq);
+    return pos;
+  }
+
+  _isoEars() {
+    const cam = this.ctx.cam;
+    return !!(cam?.isIso && cam.focus?.isVector3 && (cam.modeName === 'follow' || cam.modeName === 'lock' || cam.modeName === 'boss'));
+  }
+
+  /**
+   * PERF §10.5 (P:U2): write the AudioListener at RUNTIME.listenerHz, only when the ears moved > 5 cm or turned, with
+   * setValueAtTime (three's AudioListener would ramp all nine params every frame). A switch between the iso ears and
+   * the lens writes at once.
+   * @param {number} dt
+   */
+  _listenerTick(dt) {
+    const ac = this.ac, L = ac?.listener;
+    if (!L) return;
+    const iso = this._isoEars();
+    this._lt += dt;
+    if (iso === this._lIso && this._lt < 1 / RUNTIME.listenerHz) return;
+    const snap = iso !== this._lIso;
+    this._lIso = iso; this._lt = 0;
+    this._earPose(_v, _lf);
+    const moved = snap || !(_v.distanceToSquared(this._lp) <= RUNTIME.moveEps * RUNTIME.moveEps);
+    const turned = snap || !(_lf.distanceToSquared(this._lfw) <= RUNTIME.turnEps * RUNTIME.turnEps);
+    if (!moved && !turned) return;
+    const t = ac.currentTime;
+    if (L.positionX) {
+      if (moved) { L.positionX.setValueAtTime(_v.x, t); L.positionY.setValueAtTime(_v.y, t); L.positionZ.setValueAtTime(_v.z, t); }
+      if (turned) {
+        _lu.set(0, 1, 0);
+        if (!iso) _lu.applyQuaternion(_lq);
+        L.forwardX.setValueAtTime(_lf.x, t); L.forwardY.setValueAtTime(_lf.y, t); L.forwardZ.setValueAtTime(_lf.z, t);
+        L.upX.setValueAtTime(_lu.x, t); L.upY.setValueAtTime(_lu.y, t); L.upZ.setValueAtTime(_lu.z, t);
+      }
+    } else {
+      L.setPosition?.(_v.x, _v.y, _v.z);
+      _lu.set(0, 1, 0); if (!iso) _lu.applyQuaternion(_lq);
+      L.setOrientation?.(_lf.x, _lf.y, _lf.z, _lu.x, _lu.y, _lu.z);
+    }
+    this._lp.copy(_v); this._lfw.copy(_lf);
   }
 
   /**
@@ -764,12 +936,16 @@ export class AudioManager {
     out.gain.value = o.vol;
     if (spatial) {
       v.pos.copy(_v); v.follow = this._followOf(o.at);
-      this._setPannerPos(v.panner, v.pos, 0);
+      this._setPannerPos(v.panner, v.pos);
       out.connect(v.panner);
     } else out.connect(this.bus[o.bus ?? 'player'] ?? this.bus.player);
     const src = ac.createBufferSource();
     src.buffer = buf; src.playbackRate.value = o.rate; src.loop = !!o.loop;
-    src.connect(out);
+    let lp = null;
+    if (o.lowpass > 0) {                                      // ART §9.3 softened sounds (the crow)
+      lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = o.lowpass;
+      src.connect(lp); lp.connect(out);
+    } else src.connect(out);
     const offset = Math.max(0, Math.min(o.offset ?? 0, buf.duration - 0.01));
     let len = (buf.duration - offset) / o.rate;
     if (o.dur > 0) {
@@ -779,7 +955,7 @@ export class AudioManager {
       out.gain.linearRampToValueAtTime(0, t + len);
       src.start(t, offset); src.stop(t + len + 0.02);
     } else src.start(t, offset);
-    src.onended = () => { try { out.disconnect(); } catch { /* gone */ } };
+    src.onended = () => { try { out.disconnect(); lp?.disconnect(); } catch { /* gone */ } };
     v.out = out; v.srcs = [src]; v.startAt = t; v.endAt = o.loop && !(o.dur > 0) ? Infinity : t + len; v.name = o.name; v.laugh = false;
     this.started[o.name] = (this.started[o.name] ?? 0) + 1;
     return { name: o.name, voice: v, stop: (fade = 0.08) => { if (v.out === out) this._release(v, fade); } };
@@ -847,7 +1023,7 @@ export class AudioManager {
       if (at != null && this._posOf(at, _v)) {
         const p = ac.createPanner(); p.distanceModel = MIX.distanceModel; p.refDistance = MIX.refDistance; p.rolloffFactor = MIX.rolloff;
         p.maxDistance = MIX.maxDistance;
-        this._setPannerPos(p, _v, 0); p.connect(this.bus.world); dest = p; handle.panner = p;
+        this._setPannerPos(p, _v); p.connect(this.bus.world); dest = p; handle.panner = p;
       }
       out.connect(dest);
       const src = ac.createBufferSource(); src.buffer = buf; src.loop = true; src.playbackRate.value = rate * (def?.rate ?? 1);
@@ -951,6 +1127,13 @@ export class AudioManager {
     this.objectives.clear(); this._pending.length = 0;
     this.telegraphs.clear(); this.alerted.clear();
     this._threat = false;
+    this._roomReads.clear();
+    // queued warm-ups of the old level are dropped (urgent decodes still finish)
+    if (this._dq.length) {
+      const keep = [];
+      for (const j of this._dq) { if (j.urgent) keep.push(j); else { this._decoding.delete(j.path); j.resolve(null); } }
+      this._dq = keep;
+    }
     if (nextId) this.evict(nextId);
   }
 
@@ -997,7 +1180,7 @@ export class AudioManager {
     const paths = LAUGH.sources.map((s) => this.resolve(s));
     const bufs = paths.map((p) => (p ? this.buffers.get(p) : null));
     if (bufs.some((b) => !b)) for (const p of paths) if (p) this._decode(p);     // warm for next time
-    const any = bufs.find(Boolean) ?? null, fb = this.zz.get('hyenaLaugh') ?? null;
+    const any = bufs.find(Boolean) ?? null, fb = this._zzBuf('hyenaLaugh');
     if (!any && !fb) return null;
     let busy = 0;
     for (const v of this.voices3D) if (v.laugh && v.endAt > this.ac.currentTime) busy++;
@@ -1007,7 +1190,7 @@ export class AudioManager {
     const v = this._voice(spatial ? this.voices3D : this.voices2D);
     const t0 = ac.currentTime + Math.max(0, opts.delay ?? 0);
     const out = ac.createGain(); out.gain.value = (opts.volume ?? 1) * LAUGH.vol;
-    if (spatial) { v.pos.copy(_v); v.follow = this._followOf(pos); this._setPannerPos(v.panner, v.pos, 0); out.connect(v.panner); }
+    if (spatial) { v.pos.copy(_v); v.follow = this._followOf(pos); this._setPannerPos(v.panner, v.pos); out.connect(v.panner); }
     else out.connect(this.bus.world);
     const srcs = [];
     for (const s of plan) {
@@ -1082,17 +1265,30 @@ export class AudioManager {
     if (!m) return;
     const c = _c;
     if (!this._posOf(m.center, c)) return;
-    const jitter = () => (this.rand() - 0.5) * 2 * MARCH.spread;
     if ((m.stepT -= dt) <= 0) {
       m.stepT = MARCH.stepEvery * (0.9 + this.rand() * 0.2);
-      _v.set(c.x + jitter(), c.y, c.z + jitter());
-      this.play3D(MARCH.stepIds[m.n++ % MARCH.stepIds.length], _v.clone(), { volume: MARCH.stepVol * m.volume, rate: 0.9 + this.rand() * 0.2 });
+      const p = this._marchPos(c, 0);
+      this.play3D(MARCH.stepIds[m.n++ % MARCH.stepIds.length], p, { volume: MARCH.stepVol * m.volume, rate: 0.9 + this.rand() * 0.2 });
     }
     if ((m.chainT -= dt) <= 0) {
       m.chainT = MARCH.chainEvery * (0.8 + this.rand() * 0.4);
-      _v.set(c.x + jitter(), c.y + 1, c.z + jitter());
-      this.play3D(MARCH.chainIds[Math.floor(this.rand() * MARCH.chainIds.length)], _v.clone(), { volume: MARCH.chainVol * m.volume });
+      const p = this._marchPos(c, 1);
+      this.play3D(MARCH.chainIds[Math.floor(this.rand() * MARCH.chainIds.length)], p, { volume: MARCH.chainVol * m.volume });
     }
+  }
+
+  /** ±MARCH.spread m around the march centre. */
+  _marchJitter() { return (this.rand() - 0.5) * 2 * MARCH.spread; }
+
+  /**
+   * A jittered march position from a small ring of reused vectors (no per-step allocation). The ring outlives the
+   * late-decode replay window (MIX.lateWindow), which is the only place a play keeps its `at` past the call.
+   * @param {THREE.Vector3} c @param {number} dy
+   */
+  _marchPos(c, dy) {
+    const ring = this._marchRing ??= Array.from({ length: 8 }, () => new THREE.Vector3());
+    const p = ring[this._marchRingI = ((this._marchRingI ?? 0) + 1) % ring.length];
+    return p.set(c.x + this._marchJitter(), c.y + dy, c.z + this._marchJitter());
   }
 
   /**
@@ -1109,7 +1305,7 @@ export class AudioManager {
     let dest = profile === 'handbell' && opts.pos == null ? this.bus.ui : this.bus.world, panner = null;
     if (opts.pos != null && this._posOf(opts.pos, _v)) {
       panner = ac.createPanner(); panner.distanceModel = 'inverse'; panner.refDistance = big ? 30 : 4; panner.rolloffFactor = 1;
-      this._setPannerPos(panner, _v, 0); panner.connect(this.bus.world); dest = panner;
+      this._setPannerPos(panner, _v); panner.connect(this.bus.world); dest = panner;
     }
     const vol = opts.volume ?? 1, plan = tollPlan(Math.max(1, opts.strikes ?? 1), opts.interval ?? 2.4);
     const hs = plan.map((s) => strikeBell(ac, dest, { damped, volume: vol * s.gain, base: opts.base, profile, strike: opts.strike ?? true,
@@ -1133,7 +1329,7 @@ export class AudioManager {
    * @param {string} name @param {any} [at] @param {{volume?: number, vol?: number}} [opts]  volume scales every part
    */
   cue(name, at = null, opts = {}) {
-    const parts = CUES[name];
+    const parts = CUES[name] ?? BEAT_CUES[name];
     if (!parts) return null;
     const mul = volOf(opts ?? {}) ?? 1, handles = [];
     const h = { name, dead: false, parts: parts.length, stop: (fade = 0.2) => { h.dead = true; for (const x of handles) x?.stop?.(fade); } };
@@ -1303,16 +1499,21 @@ export class AudioManager {
     if (_cam.distanceToSquared(_v) > (MIX.maxDistance + 5) ** 2) return null;
     const p = this.ac.createPanner();
     p.distanceModel = MIX.distanceModel; p.refDistance = refDistance; p.rolloffFactor = MIX.rolloff; p.maxDistance = MIX.maxDistance;
-    this._setPannerPos(p, _v, 0); p.connect(this.bus.world);
+    this._setPannerPos(p, _v); p.connect(this.bus.world);
     if (Number.isFinite(life)) this.oneshots.add({ panner: p, endAt: this.ac.currentTime + life, stop: () => {} });
     return { dest: p, panner: p };
   }
 
+  /** A generated buffer: the title bake's PCM (`gen:<key>`) when there is one, else made now at the context rate. */
   _genBuf(key, make) {
     let b = this._gen.get(key);
     if (!b) {
-      const data = make(this.ac.sampleRate, this.rand);
-      b = this.ac.createBuffer(1, data.length, this.ac.sampleRate); b.getChannelData(0).set(data);
+      const pcm = this.baker.get('gen:' + key);
+      if (pcm) b = pcmBuffer(this.ac, pcm, PCM_RATE);
+      else {
+        const data = make(this.ac.sampleRate, this.rand);
+        b = this.ac.createBuffer(1, data.length, this.ac.sampleRate); b.getChannelData(0).set(data);
+      }
       this._gen.set(key, b);
     }
     return b;
@@ -1368,15 +1569,72 @@ export class AudioManager {
     return { name: 'owl', endAt: end, stop: () => {} };
   }
 
-  /** A low swell of brown noise (CS-10 the Gloom rolls in; the CS-09 crowd's roar). 2D on the world bus. */
+  /**
+   * ART §9.3: the old sub-bass "Gloom rumble" is an airy swell now — band-passed pink noise (nothing under 80 Hz) with a
+   * glock chime tail (CS-10 the Big Yawn rolls in; under the CS-09 charge). 2D on the world bus. The id stays 'rumble'.
+   */
   rumble({ dur = 4, volume = 1 } = {}) {
     this._note('proc', 'rumble');
     if (!this.ready) return null;
-    const p = playData(this.ac, this.bus.world, rumbleData(this.ac.sampleRate, this.rand, Math.max(0.5, dur)), { volume: volume * 0.8, filter: { type: 'lowpass', freq: 160, q: 0.7 } });
-    const h = { name: 'rumble', endAt: p.endAt, stop: (f) => p.stop(f) };
+    const sec = Math.max(0.5, Math.round(dur * 2) / 2);
+    const buf = this._genBuf('breeze:' + sec, (sr, r) => breezeData(sr, r, sec));
+    const p = playData(this.ac, this.bus.world, buf, { volume: volume * BREEZE.gain, filter: { type: 'bandpass', freq: BREEZE.freq, q: BREEZE.q } });
+    const chime = this.glock('chime', { volume: volume * BREEZE.chimeVol, delay: sec * BREEZE.chimeAt, bus: 'world' });
+    const h = { name: 'rumble', endAt: p.endAt, stop: (f) => { p.stop(f); chime?.stop(f); } };
     this.oneshots.add({ panner: null, endAt: p.endAt, stop: (f) => p.stop(f) });
     this.started.rumble = (this.started.rumble ?? 0) + 1;
     return h;
+  }
+
+  // =============================================================================================== Phase W: glock, rewards, beats
+  /**
+   * The baked glockenspiel (ART §9.3): `notes` = a phrase name (GLOCK_PHRASES: 'sticker', 'rescue', 'stillStanding',
+   * 'card', 'friend', 'chime', 'roomRead'), a note ('E5') or a list of notes. One buffer source per note, outside the
+   * voice pools (never steals a hit). 2D on the ui bus unless `bus` says otherwise.
+   * @param {string|string[]} notes @param {{volume?: number, gap?: number, delay?: number, bus?: string}} [opts]
+   * @returns {{name: string, notes: number, stop: (fade?: number) => void}|null}
+   */
+  glock(notes, { volume = 1, gap, delay = 0, bus = 'ui' } = {}) {
+    this._note('proc', 'glock');
+    if (!this.ready) return null;
+    if (!this.glockBuf && this.ready) this.glockBuf = pcmBuffer(this.ac, this.baker.get('gen:glock'));
+    const buf = this.glockBuf;
+    if (!buf) return null;
+    const plan = glockPlan(notes, { gap: gap ?? GLOCK.gap, volume });
+    const t0 = this.ac.currentTime + Math.max(0, delay || 0), dest = this.bus[bus] ?? this.bus.ui, srcs = [];
+    for (const n of plan) srcs.push(this._oneShot(buf, { when: t0 + n.t, rate: n.rate, gain: GLOCK.vol * n.gain, dest }));
+    this.started.glock = (this.started.glock ?? 0) + plan.length;
+    return { name: 'glock', notes: plan.length, stop: (fade = 0.1) => { const t = this.ac.currentTime + fade; for (const s of srcs) { try { s.stop(t); } catch { /* ended */ } } } };
+  }
+
+  /**
+   * WA §5.4 reward sounds for ui/celebrate.js (one system, three sizes; the ui calls this when the item SHOWS, not when
+   * it is queued). sticker: one glock note a third higher per sticker in a row (`row` 0, 1, 2 → C5, E5, G5);
+   * card: a rising glock triad; friend: the long arpeggio + a pizzicato flourish.
+   * @param {'sticker'|'card'|'friend'} kind @param {{row?: number, volume?: number}} [opts]
+   */
+  reward(kind, { row = 0, volume = 1 } = {}) {
+    this._note('reward', kind);
+    if (kind === 'sticker') return this.glock(stickerNote(row), { volume: 0.9 * volume });
+    if (kind === 'friend') {
+      const h = this.glock('friend', { volume });
+      this.play2D('jingles/jingles_PIZZI06', { volume: 0.5 * volume, bus: 'ui', delay: 0.05 });
+      return h;
+    }
+    return this.glock('card', { volume });
+  }
+
+  /**
+   * AUTOCAM X24 room read: `arena:lock` plays a short sting while the camera reads the room — once per arena per visit,
+   * not during a boss fight and not within ROOM_READ.afterCutscene s of a cutscene (the boss intro already said it).
+   * @param {{id?: string}} [p]
+   */
+  roomRead({ id } = {}) {
+    const key = `${this.levelId ?? ''}:${id ?? 'arena'}`;
+    if (this._roomReads.has(key)) return null;
+    this._roomReads.add(key);
+    if (this.director.boss || this._mode === 'cutscene' || this.time - this._csEndAt < ROOM_READ.afterCutscene) return null;
+    return this.cue('roomRead');
   }
 
   /** Kittens cheering (CS-07, CS-10): a scatter of mews and chirps around `at` over ~1.4 s. */
@@ -1400,7 +1658,7 @@ export class AudioManager {
   heartbeat({ beats = 1, bpm = HEART.bpm, volume = 1 } = {}) {
     this._note('heartbeat', 'heartbeat');
     if (!this.ready) return 0;
-    const buf = this.zz.get('heartThump');
+    const buf = this._zzBuf('heartThump');
     if (!buf) return 0;
     const t = this.ac.currentTime + 0.01;
     for (const b of heartbeatPlan(beats, bpm, volume)) this._oneShot(buf, { when: t + b.t, gain: b.gain * (SFX.heartThump.vol ?? 1), dest: this.bus.player });
@@ -1524,11 +1782,11 @@ export class AudioManager {
     if (v.mode === 'laugh') {
       const p = this.resolve(LAUGH.sources[Math.floor(this.rand() * LAUGH.sources.length)]);
       buf = p ? this.buffers.get(p) : null;
-      if (!buf) { if (p) this._decode(p); buf = this.zz.get('hyenaLaugh'); }
+      if (!buf) { if (p) this._decode(p); buf = this._zzBuf('hyenaLaugh'); }
     } else {
       const p = this.resolve(v.pool[Math.floor(this.rand() * v.pool.length) % v.pool.length]);
       buf = p ? this.buffers.get(p) : null;
-      if (!buf) { if (p) this._decode(p); buf = this.zz.get('blip'); }
+      if (!buf) { if (p) this._decode(p); buf = this._zzBuf('blip'); }
     }
     if (!buf) return;
     b.blips++;
@@ -1559,7 +1817,10 @@ export class AudioManager {
     const busy = (pool) => pool.reduce((n, v) => n + (v.endAt > now ? 1 : 0), 0);
     return {
       unlocked: this.unlocked, ready: this.ready, state: this.ac?.state ?? null, sampleRate: this.ac?.sampleRate ?? 0,
-      time: +now.toFixed(3), buffers: this.buffers.size, zzfx: [...this.zz.keys()],
+      time: +now.toFixed(3), buffers: this.buffers.size, zzfx: [...this.zz.keys()], glock: !!this.glockBuf,
+      bake: { done: this.baker.done, baked: this.baker.pcm.size, total: this.baker.tasks.length },
+      decodes: { inflight: this._inflight, queued: this._dq.length, urgent: this._dq.filter((j) => j.urgent).length },
+      listener: Number.isFinite(this._lp.x) ? [+this._lp.x.toFixed(2), +this._lp.y.toFixed(2), +this._lp.z.toFixed(2)] : null,
       voices2D: busy(this.voices2D), voices3D: busy(this.voices3D), laughs: this.voices3D.concat(this.voices2D).filter((v) => v.laugh && v.endAt > now).length,
       loops: [...this.loops].map((h) => h.name), bells: this.bells.size,
       music: this.musicPlayer ? this.musicPlayer.state() : { track: this.director.target },

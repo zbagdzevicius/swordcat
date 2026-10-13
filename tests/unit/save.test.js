@@ -148,6 +148,81 @@ test('resumeSpawn / hasProgress / summarize', () => {
   assert.equal(summarize(null), null);
 });
 
+// ------------------------------------------------------------------ IMPLEMENTATION_PLAN §7.4 + Phase W (save.1 / save.W1)
+test('save.1 / V1: an old save takes every new setting default; valid new values survive a reload', () => {
+  const def = defaultState().settings;
+  const old = migrate({ ...TECH_V1_DEFAULT(), settings: { master: 0.5, camZoom: 1.2, camLock: true } });
+  for (const k of ['camLockMode', 'camCursorLead', 'camZoomPortrait', 'biggerHero', 'fpsCap', 'batterySaver', 'hudMode',
+    'hitWords', 'tutorialHints', 'pathPreview', 'reduceCameraMotionAuto', 'reduceFlashesAuto']) {
+    assert.deepEqual(old.settings[k], def[k], `default ${k}`);
+  }
+  assert.equal(old.settings.master, 0.5); assert.equal(old.settings.camZoom, 1.2);
+  const set = { camLockMode: 'semi', camCursorLead: 0.1, camZoomPortrait: 0.8, biggerHero: true, fpsCap: 30, batterySaver: true,
+    quality: 'low', hudMode: 'full', hitWords: false, tutorialHints: false, pathPreview: 'off' };
+  const back = migrate(JSON.parse(JSON.stringify({ ...defaultSave(), settings: { ...def, ...set } })));
+  for (const [k, v] of Object.entries(set)) assert.deepEqual(back.settings[k], v, `kept ${k}`);
+  assert.equal(migrate({ settings: { fpsCap: 'off' } }).settings.fpsCap, 'off');
+  assert.equal(migrate({ settings: { fpsCap: 60 } }).settings.fpsCap, 60);
+});
+
+test('save.1: AUTOCAM §13 ranges / enums are validated; booleans stay booleans', () => {
+  const m = migrate({ settings: { camZoomPortrait: 9, camCursorLead: -1, camLockMode: 'spin', fpsCap: 144, hudMode: 'loud',
+    biggerHero: 'yes', batterySaver: 1, hitWords: null, quality: 'ultra' } }).settings;
+  const def = defaultState().settings;
+  assert.equal(m.camZoomPortrait, 1.4); assert.equal(m.camCursorLead, 0);
+  assert.equal(m.camLockMode, def.camLockMode); assert.equal(m.fpsCap, def.fpsCap); assert.equal(m.hudMode, def.hudMode);
+  assert.equal(m.biggerHero, false); assert.equal(m.batterySaver, false); assert.equal(m.hitWords, true); assert.equal(m.quality, 'auto');
+  assert.equal(migrate({ settings: { camZoomPortrait: 0.1, camCursorLead: 0.5 } }).settings.camZoomPortrait, 0.7);
+  assert.equal(migrate({ settings: { camCursorLead: 0.5 } }).settings.camCursorLead, 0.15);
+});
+
+test('save.1 / X19: camLock false → camLockMode free; pathPreview booleans → on / off; OS-following flags', () => {
+  const a = migrate({ settings: { camLock: false } }).settings;
+  assert.equal(a.camLockMode, 'free'); assert.equal(a.camLock, false);
+  const b = migrate({ settings: { camLock: true } }).settings;
+  assert.equal(b.camLockMode, 'locked'); assert.equal(b.camLock, true);
+  assert.equal(migrate({ settings: { camLockMode: 'semi', camLock: true } }).settings.camLock, false, 'retired key follows the mode');
+  assert.equal(migrate({ settings: { pathPreview: true } }).settings.pathPreview, 'on');
+  assert.equal(migrate({ settings: { pathPreview: false } }).settings.pathPreview, 'off');
+  assert.equal(migrate({ settings: { pathPreview: 'sometimes' } }).settings.pathPreview, defaultState().settings.pathPreview);
+  // X31: a pre-W save that turned reduceFlashes on keeps it and stops following the OS; false keeps following it
+  const c = migrate({ settings: { reduceFlashes: true, reduceCameraMotion: false } }).settings;
+  assert.equal(c.reduceFlashes, true); assert.equal(c.reduceFlashesAuto, false); assert.equal(c.reduceCameraMotionAuto, true);
+  const d = migrate({ settings: { reduceFlashes: true, reduceFlashesAuto: true } }).settings;
+  assert.equal(d.reduceFlashesAuto, true, 'a stored Auto key wins');
+  // idempotent on the migrated shape
+  const once = migrate({ settings: { camLock: false, pathPreview: true, reduceFlashes: true } });
+  assert.deepEqual(migrate(JSON.parse(JSON.stringify(once))), once);
+});
+
+test('save.W1: sticker / offer / first-sighting flags persist; memo flags alone are no progress', () => {
+  const flags = { 'sticker.bonk': true, 'sticker.pinkBow': true, 'seen.offer.kitten': true, 'telegraph.seen.red': true, 'telegraph.seen.aoe': true };
+  const m = migrate({ ...defaultSave(), flags });
+  for (const k of Object.keys(flags)) assert.equal(m.flags[k], true, k);
+  assert.equal(hasProgress({ ...defaultSave(), flags: { 'seen.offer.kitten': true, 'telegraph.seen.red': true } }), false);
+  assert.equal(hasProgress({ ...defaultSave(), flags: { 'sticker.bonk': true } }), true);
+  assert.equal(SAVE_VERSION, 1, 'schema stays v1');
+});
+
+test('save.W1: a mid-prologue save resumes at the barn (practice); legacy saves keep their spawn', () => {
+  assert.equal(migrate({ levelId: 'meadow', spawnId: 'start', flags: { 'prologue.armour': true } }).spawnId, 'practice');
+  assert.equal(migrate({ levelId: 'meadow', spawnId: 'vigil_1', flags: { 'prologue.raid': true } }).spawnId, 'practice');
+  assert.equal(migrate({ levelId: 'meadow', spawnId: 'start', flags: { 'prologue.armour': true, 'prologue.done': true } }).spawnId, 'start');
+  assert.equal(migrate({ levelId: 'meadow', spawnId: 'vigil_1', flags: {} }).spawnId, 'vigil_1');
+  assert.equal(resumeSpawn('forest', 'vigil_2', { 'prologue.armour': true }), 'vigil_2');
+  const flags = migrate({ levelId: 'meadow', spawnId: 'title', flags: { 'prologue.armour': true } }).flags;
+  assert.equal(flags['prologue.armour'], true, 'flags kept for story.migrateFlags');
+});
+
+test('save.W1: newGame({skipPrologue}) sets every prologue stage flag', () => {
+  const ctx = fakeCtx();
+  const sm = new SaveManager(ctx, { storage: createMemoryStorage() });
+  sm.newGame({ skipPrologue: true });
+  for (const k of ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid', 'prologue.armour', 'prologue.tutorial', 'prologue.done']) {
+    assert.equal(ctx.state.getFlag(k), true, k);
+  }
+});
+
 // ------------------------------------------------------------------ storage primitives
 test('write → load round trip; backup of the previous save; clear', () => {
   const storage = createMemoryStorage();

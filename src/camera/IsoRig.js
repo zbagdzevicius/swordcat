@@ -119,17 +119,24 @@ export function isoFrame(v, out = {}, I = ISO) {
   // camera tilts down); the pitch depends on the distance, so two passes settle it
   // §2.2 zone hint pitch (landscape, not in boss fights), blended over the distance curve by hintPitchW
   const hpW = !portrait && !v.boss && Number.isFinite(v.hintPitch) ? clamp(v.hintPitchW ?? 1, 0, 1) : 0;
-  const pitchAt = (dd) => (portrait ? I.pitchPortrait : v.boss ? I.pitchBoss : hpW > 0 ? isoPitch(dd, I) + (v.hintPitch - isoPitch(dd, I)) * hpW : isoPitch(dd, I));
   let dMax = Infinity;
   for (let k = 0; k < 3; k++) {
-    const pitch = pitchAt(Math.min(d, dMax));
+    const pitch = framePitch(Math.min(d, dMax), portrait, !!v.boss, hpW, v.hintPitch, I);
     dMax = catClampDist(fov, v.h, minPx, apparentH(pitch, I));
   }
   d = Math.max(Math.min(d, dMax), Math.min(rng[0], dMax));
   out.fov = fov; out.dist = d; out.dMax = dMax; out.portrait = portrait; out.phone = phone; out.aspect = aspect;
-  out.pitch = pitchAt(d);
+  out.pitch = framePitch(d, portrait, !!v.boss, hpW, v.hintPitch, I);
   out.frameOffset = isoFrameOffset(v.h, v.insetBottom ?? 0, portrait, I);
   return out;
+}
+
+/** isoFrame's pitch at distance `dd`: portrait / boss fixed, else the curve with a zone-hint pitch blended in (no closure). */
+function framePitch(dd, portrait, boss, hpW, hintPitch, I) {
+  if (portrait) return I.pitchPortrait;
+  if (boss) return I.pitchBoss;
+  const c = isoPitch(dd, I);
+  return hpW > 0 ? c + (hintPitch - c) * hpW : c;
 }
 
 /** Camera position for a focus / yaw / pitch / distance (writes `out` {x, y, z}). */
@@ -168,6 +175,8 @@ export function capXZ(v, max) {
  * ≤ lead.max, plus the FRAME.upBias screen-up bias (landscape only; 0 now). The cursor's down-screen part is scaled
  * by FRAME.cursorDownMul (the ground below her is foreshortened) so the lead is symmetric in screen terms.
  * Writes the target lead into `out` {x, z}.
+ * @deprecated CONTROLS §2.1 legacy lead, not read by FollowCamera (AUTOCAM: intentLead + the camCursorLead setting);
+ * kept only for tests/unit/controls.test.js until that test moves to intentLead.
  * @param {{x:number,z:number}} vel her horizontal velocity @param {{x:number,z:number}|null} cursorRel cursor ground − her
  * @param {number} yaw @param {{portrait?:boolean, still?:boolean}} o  still = Stand / charge held (no lead)
  */

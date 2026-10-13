@@ -10,7 +10,19 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { el, flag, setVar } from './dom.js';
-import { canvasRect } from '../camera/Picker.js';
+
+/**
+ * The canvas rect in CSS px (one layout read; the viewport when the canvas is not laid out). Same as camera/Picker's
+ * canvasRect, kept local so the boot shell does not pull the picker (and physics' Pathfind) in (PERF §10.2).
+ * @param {any} ctx
+ */
+export function canvasRect(ctx) {
+  const r = ctx.renderer?.domElement?.getBoundingClientRect?.();
+  if (r && r.width > 0) return r;
+  return VIEWPORT_RECT(typeof innerWidth !== 'undefined' ? innerWidth : 1280, typeof innerHeight !== 'undefined' ? innerHeight : 720);
+}
+const _vr = { left: 0, top: 0, width: 1280, height: 720 };
+const VIEWPORT_RECT = (w, h) => { _vr.width = w; _vr.height = h; return _vr; };
 
 export const HPBAR = Object.freeze({
   pool: 12, w: 36, h: 5, wTouch: 44, hTouch: 6, up: 0.3,

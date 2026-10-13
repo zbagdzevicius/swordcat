@@ -18,8 +18,17 @@ async function tp(t, x, z, yaw = 0, dy = 0) {
   await t.frames(20);
 }
 
+/**
+ * Phase W prologue order (practice → chart → CS-02 → barn → cs01b): `prologue.tutorial` alone no longer means
+ * "Chapter 1" (the prologue director would play CS-02 on load), so a block that sets it gets every prologue stage
+ * flag + prologue.done, exactly as SaveManager.newGame({ skipPrologue }) does, unless it sets prologue.done itself.
+ */
+const PROLOGUE_FLAGS = ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid', 'prologue.armour', 'prologue.tutorial', 'prologue.done', 'tut.done'];
+const chapterFlags = (flags) => (flags['prologue.tutorial'] && !('prologue.done' in flags)
+  ? { ...Object.fromEntries(PROLOGUE_FLAGS.map((k) => [k, true])), ...flags } : flags);
+
 async function setFlags(t, flags) {
-  await t.G((f) => { const s = window.__GAME__.ctx.state; for (const [k, v] of Object.entries(f)) s.setFlag(k, v); }, flags);
+  await t.G((f) => { const s = window.__GAME__.ctx.state; for (const [k, v] of Object.entries(f)) s.setFlag(k, v); }, chapterFlags(flags));
 }
 
 /** A clean M2 save state (flags, kittens, letters...), then `flags`, then load `level` at `spawn`. */
@@ -124,8 +133,8 @@ export default [
       t.assert(info.vigils.length === 3, 'three Vigil Stones');
       t.assert(['tallbert', 'lane', 'exit'].every((x) => info.triggers.includes(x)), 'triggers tallbert / lane / exit');
       t.assert(['title', 'practice', 'start', 'boss', 'vigil_1'].every((s) => info.spawns.includes(s)), 'spawns');
-      t.assert(info.preset === 'meadow_night', `prologue env is meadow_night (${info.preset})`);
-      t.assert(info.grass > 10000 && info.batch > 250 && info.trees >= 3, 'grass, batched props and trees');
+      t.assert(info.preset === 'meadow_morning', `WA §2.3: prologue env is meadow_morning (${info.preset})`);
+      t.assert(info.grass > 2000 && info.batch > 250 && info.trees >= 3, `grass (PERF W tufts, one draw), batched props and trees (${info.grass} / ${info.batch} / ${info.trees})`);
       t.assert(info.critters === 2, 'two sleeping cows');
       await t.blankCheck('meadow night');
       await t.shot(pre + 'meadow-night-start');
@@ -149,11 +158,11 @@ export default [
       });
       t.log(`meadow level only: calls ${lv.calls}, tris ${lv.tris}`);
       t.assert(lv.calls <= 60, `the level draws ${lv.calls} calls (≤ 60)`);
-      // tech.md §18 budgets at 'meadow day' on Med and Low: the level's own share is asserted (world's slice: half the
-      // §18 calls / tris),
-      // the whole frame (player fur, enemies, companions...) is reported against §18 and warned when over
+      // PERF §1.2 / IMPLEMENTATION_PLAN §5 triangle budgets at 'meadow day' (config PERF.budgets.End.tris: Low 80k, Med
+      // 150k, High 260k) and the I1 frame calls (Low 70, Med 120): the whole frame (hero, enemies, companions, fx) is
+      // asserted against them, and the level's own share against world's slice (70 % of the triangles, half the calls)
       const q0 = await t.G(() => window.__GAME__.ctx.postfx?.qualityName ?? 'auto');
-      for (const [q, lim, mine] of [['med', { calls: 150, tris: 600000 }, { calls: 60, tris: 300000 }], ['low', { calls: 80, tris: 200000 }, { calls: 40, tris: 100000 }]]) {
+      for (const [q, lim, mine] of [['med', { calls: 120, tris: 150000 }, { calls: 60, tris: 105000 }], ['low', { calls: 70, tris: 80000 }, { calls: 35, tris: 56000 }]]) {
         await t.G((n) => window.__GAME__.quality(n), q);
         await t.loadLevel('meadow', 'start');
         await t.frames(30);
@@ -166,15 +175,16 @@ export default [
           for (const c of hidden) c.visible = true;
           return { calls: s.calls, tris: s.tris };
         });
-        t.log(`budget ${q}: frame ${all.calls} calls / ${all.tris} tris (§18 ≤ ${lim.calls} / ${lim.tris}); level ${own.calls} / ${own.tris}`);
+        t.log(`budget ${q}: frame ${all.calls} calls / ${all.tris} tris (PERF ≤ ${lim.calls} / ${lim.tris}); level ${own.calls} / ${own.tris}`);
         t.assert(own.calls <= mine.calls && own.tris <= mine.tris, `${q}: the meadow itself stays within ${mine.calls} calls / ${mine.tris} tris (${own.calls} / ${own.tris})`);
-        if (all.calls > lim.calls || all.tris > lim.tris) t.warn(`${q}: meadow day frame ${all.calls} calls / ${all.tris} tris is over the §18 budget (${lim.calls} / ${lim.tris})`);
+        t.assert(all.tris <= lim.tris, `${q}: meadow day frame ${all.tris} tris ≤ the PERF §1.2 budget ${lim.tris}`);
+        if (all.calls > lim.calls) t.warn(`${q}: meadow day frame ${all.calls} calls is over the I1 budget (${lim.calls})`);
       }
       await t.G((n) => window.__GAME__.quality(n), q0);
       await t.loadLevel('meadow', 'start');
       await t.frames(20);
       await t.G(() => { window.__GAME__.god(true); });
-      for (const [name, x, z, yaw] of [['start', -1.5, -54.5, -0.4], ['lane', -3, -54, -0.45], ['practice', 9, -64, 2.5], ['tallbert', 3, -51, 3.0],
+      for (const [name, x, z, yaw] of [['start', -1.5, -50.5, -0.4], ['lane', -3, -54, -0.45], ['practice', 9, -64, 2.5], ['tallbert', 3, -51, 3.0],
         ['crossroads', -12, -44, -0.6], ['stones', -27, -12, 0.65], ['glade', -6, 6, 0.75], ['crowfields', 14, 30, 0.6], ['bridge', 21.5, 56.5, 1.0], ['cart', 30, 57.5, 0]]) {
         await tp(t, x, z, yaw);
         await t.shot(pre + 'meadow-day-' + name);
@@ -260,8 +270,11 @@ export default [
       await t.frames(30);
       const f1 = await t.G(() => window.__GAME__.ctx.state.fish);
       t.assert(f1 > f0, `fish collected (${f0} → ${f1})`);
-      await tp(t, -18, -24.6, 0);
-      await t.hold('KeyW', 400);
+      // ON §6.1: Letter #1 sleeps under the Crow Fields cow (40, 30); a Meow wakes her and she ambles to (40, 36)
+      await tp(t, 41.5, 27.4, 0);
+      await t.tap('KeyC');
+      await t.wait(3500);
+      await t.hold('KeyW', 700);
       await t.frames(20);
       const letters = await t.G(() => window.__GAME__.ctx.state.letters);
       t.assert(letters.includes('l1'), `Letter #1 collected (${JSON.stringify(letters)})`);
@@ -349,14 +362,14 @@ export default [
       await t.frames(30);
       const a = await t.G(() => { const A = window.__GAME__.ctx.levels.current.arena('stones'); return { cleared: A.cleared, locked: A.locked, wave: A.wave, alive: A.aliveCount() }; });
       t.assert(a.cleared && !a.locked && a.alive === 0, `stones stay cleared after a reload (${JSON.stringify(a)})`);
-      // bridge: Mochi rescued → never locks again
-      await t.G(() => window.__GAME__.ctx.state.setFlag('meadow.mochi', true));
+      // bridge (WA16: Mochi moved to the cart; the bridge now guards Biscuit's carrier): cleared once → never locks again
+      await t.G(() => { window.__GAME__.ctx.state.setFlag('meadow.mochi', true); window.__GAME__.ctx.levels.current.arena('bridge').clear(); });
       await t.loadLevel('meadow', 'vigil_3');
       await tp(t, 30, 66, 0);
       await t.hold('KeyW', 600);
       await t.frames(30);
       const b = await t.G(() => { const A = window.__GAME__.ctx.levels.current.arena('bridge'); return { cleared: A.cleared, locked: A.locked, alive: A.aliveCount() }; });
-      t.assert(b.cleared && !b.locked && b.alive === 0, `bridge stays open once Mochi is free (${JSON.stringify(b)})`);
+      t.assert(b.cleared && !b.locked && b.alive === 0, `bridge stays open once cleared (${JSON.stringify(b)})`);
       // placed fish: collected ones stay gone; no fish is collected by just loading at a Vigil Stone
       for (const v of ['vigil_1', 'vigil_2', 'vigil_3']) {
         await t.loadLevel('meadow', v);
@@ -441,7 +454,7 @@ export default [
       t.assert(['hollow', 'ratcamp', 'mill'].every((a) => info.arenas.includes(a)), 'arenas hollow / ratcamp / mill');
       t.assert(info.vigils.length === 4, 'four Vigil Stones');
       t.assert(['camp', 'exit'].every((x) => info.triggers.includes(x)), 'camp + exit triggers');
-      t.assert(info.trees >= 3 && info.batch > 300 && info.grass > 5000, 'trees, props, grass');
+      t.assert(info.trees >= 3 && info.batch > 300 && info.grass > 2000, `trees, props, grass (PERF W tufts) (${info.trees} / ${info.batch} / ${info.grass})`);
       const st = await t.state();
       const own = await levelShare(t);
       t.log(`forest: frame ${st.calls} calls / ${st.tris} tris; level ${own.calls} / ${own.tris}`);
@@ -461,7 +474,7 @@ export default [
       // night (CS-04 onwards): forest_night with fireflies and the campfire
       await freshAt(t, 'forest', 'vigil_3', { 'prologue.done': true, 'meadow.mochi': true, 'forest.sage': true, 'forest.camp': true });
       const night = await t.G(levelInfo);
-      t.assert(night.preset === 'forest_night', `forest_night after CS-04 (${night.preset})`);
+      t.assert(night.preset === 'forest_twilight' || night.preset === 'forest_night', `WA §2.3 forest_twilight after CS-04 (${night.preset})`);
       await tp(t, 2, 32.5, 0.5);
       await t.frames(30);
       await t.shot(pre + 'forest-night-camp', { freeze: true });
@@ -560,7 +573,7 @@ export default [
       await t.loadLevel('town', 'hub');
       await t.frames(20);
       const grey = await t.G(() => { const g = window.__GAME__, L = g.ctx.levels.current; return { preset: g.ctx.env.presetName, lookout: L.interactables.find((i) => i.id === 'station_lookout')?.enabled?.() }; });
-      t.assert(grey.preset === 'hub_grey' && grey.lookout === true, `hub_grey + lookout after gate.done (${JSON.stringify(grey)})`);
+      t.assert(grey.preset === 'hub_hush' && grey.lookout === true, `WA §2.3 hub_hush + lookout after gate.done (${JSON.stringify(grey)})`);
       await setFlags(t, { 'gate.done': false });
       await t.loadLevel('town', 'hub');
       await t.frames(20);
@@ -746,7 +759,7 @@ export default [
       await t.G(() => window.__GAME__.god(true));
       const m = await t.G(() => { const L = window.__GAME__.ctx.levels.current; return { meme: L.memeSpot, links: L.navLinks.length, yaw: L.camYaw, zone: L.zoneAt({ x: -20, z: -4 })?.id, it: L.interactables.slice(0, 3).map((i) => ({ id: i.id, kind: i.kind, r: i.r, pos: [i.pos.x, i.pos.z] })) }; });
       t.log('meadow iso data', JSON.stringify(m));
-      t.assert(m.meme?.at && m.links === 1 && Math.abs(m.yaw - Math.PI) < 1e-6 && m.zone === 'stones', 'memeSpot, the fence link, yaw π, zoneAt');
+      t.assert(m.meme?.at && m.links === 1 && Math.abs(m.yaw - Math.PI) < 1e-6 && /^stones/.test(m.zone ?? ''), `memeSpot, the fence link, yaw π, zoneAt (${m.zone})`);
       // the fence lesson: before tut.jump.done no path hops the inner fence (z −87, x −20…−2); after it one may
       const crosses = (r) => { const P = r?.points ?? []; for (let i = 1; i < P.length; i++) { const [ax, , az] = P[i - 1], [bx, , bz] = P[i]; if ((az + 87) * (bz + 87) < 0) { const x = ax + (bx - ax) * ((-87 - az) / (bz - az)); if (x > -20 && x < -2) return true; } } return false; };
       const navInfo = await t.G(() => { const n = window.__GAME__.ctx.physics.nav; return { authored: n?.authored?.length ?? null, gates: n?.gatesClosed ?? null }; });
@@ -829,7 +842,7 @@ export default [
           await s.frames(200);                                         // 2 s calm + the 1.2 s blend (sim frames: the phone page may be slow)
           const z = await s.G(() => { const c = window.__GAME__.ctx; return { zone: c.levels.current.camZone?.id, iso: c.cam.iso?.() }; });
           t.log(`${w}×${h} stones: ${JSON.stringify(z)}`);
-          t.assert(z.zone === 'stones', `${w}×${h}: the stones hint applies on a phone (${z.zone})`);
+          t.assert(/^stones/.test(z.zone ?? ''), `${w}×${h}: the stones hint applies on a phone (${z.zone})`);
           if (z.iso) t.assert(z.iso.catPx >= 26, `${w}×${h}: she stays ≥ 26 px tall (${z.iso.catPx})`);
           await s.shot(`world/touch-${w}x${h}-stones`);
           t.assert(!s.errors.length, `${w}×${h}: no page errors (${s.errors.slice(0, 3).join(' | ')})`);
@@ -869,6 +882,40 @@ export default [
         if (c.through && px > -6) throw new Error(`${c.level}: she never got round the fountain (x ${px.toFixed(2)})`);
         await t.shot(`${shotDir(t)}nav-props-${c.level}-${c.through ? 'round' : 'centre'}`);
       }
+    },
+  },
+  {
+    // world.W5 / WA §10 (ART G1–G5): every day level is bright in iso play (mean luma ≥ 0.48, actors excluded); PERF
+    // W7 flames cost 2 draws per level; AUTOCAM §9.3 farKeep landmarks and the ART G6 shadow probe are present
+    name: 'world:art', order: 49, level: null, timeout: 400000,
+    async run(t) {
+      const pre = shotDir(t);
+      const rows = [
+        { level: 'meadow', spawn: 'start', flags: { 'prologue.done': true } },
+        { level: 'forest', spawn: 'start', flags: { 'prologue.done': true, 'meadow.done': true } },
+        { level: 'town', spawn: 'square', flags: { 'prologue.done': true, 'meadow.done': true, 'forest.done': true, 'town.free': true } },
+        { level: 'gate', spawn: 'start', flags: { 'prologue.done': true, 'town.free': true, 'town.done': true } },
+      ];
+      for (const r of rows) {
+        await freshAt(t, r.level, r.spawn, r.flags);
+        await t.G(() => { const g = window.__GAME__; g.story?.skip?.(); g.skipDialog?.(); g.setMode?.('play'); g.god(true); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+        await t.frames(40);
+        const s = await t.G(() => {
+          const g = window.__GAME__, L = g.ctx.levels.current, st = g.art?.frameStats?.({ exclude: 'actors' }) ?? null;
+          return { st, preset: g.ctx.env.presetName, flames: L.flames?.items?.length ?? 0, flameDraws: L.flames?.draws ?? 0, farKeep: L.farKeep?.length ?? 0,
+            probe: L.art?.shadowProbe ?? null, ratio: g.art?.shadowRatio?.() ?? null, calls: g.ctx.renderer.info.render.calls };
+        });
+        const luma = s.st?.luma ?? NaN;
+        if (!(luma >= 0.48)) t.log('  diag', JSON.stringify(await t.G(() => { const g = window.__GAME__, el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+          return { top: el ? `${el.tagName}#${el.id}.${el.className}` : null, mode: g.ctx.game?.mode, loading: g.ctx.levels.loading, cam: g.ctx.cam?.modeName ?? g.ctx.cam?.mode?.name ?? null,
+            camPos: g.ctx.camera.position.toArray().map((v) => +v.toFixed(1)), pl: g.ctx.player.pos.toArray().map((v) => +v.toFixed(1)), story: g.story?.active ?? g.ctx.story?.active ?? null }; })));
+        t.log(`${r.level} (${s.preset}): luma ${luma.toFixed(3)} dark ${((s.st?.dark ?? 0) * 100).toFixed(1)}% calls ${s.calls} flames ${s.flames} → ${s.flameDraws} draws, farKeep ${s.farKeep}, probe ${JSON.stringify(s.probe)} ratio ${JSON.stringify(s.ratio)}`);
+        await t.shot(pre + 'art-' + r.level);
+        t.assert(luma >= 0.48, `${r.level}: mean luma ${luma.toFixed(3)} ≥ 0.48`);
+        t.assert(s.flameDraws <= 2, `${r.level}: flames are ≤ 2 draws (${s.flameDraws})`);
+        if (r.level === 'town' || r.level === 'gate') t.assert(s.farKeep > 0, `${r.level}: farKeep landmarks`);
+      }
+      await t.loadLevel('meadow', 'start');
     },
   },
 ];

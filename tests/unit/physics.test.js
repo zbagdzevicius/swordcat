@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Heightfield } from '../../src/physics/Heightfield.js';
 import { StaticColliders } from '../../src/physics/StaticColliders.js';
 import { MeshCollider, _internal } from '../../src/physics/MeshCollider.js';
-import { Physics, PHYSICS_DEFAULTS } from '../../src/physics/Physics.js';
+import { Physics, PHYSICS_DEFAULTS, SEP_HASH_MIN, SEP_CELL } from '../../src/physics/Physics.js';
 import * as config from '../../src/core/config.js';
 import { ActorRegistry } from '../../src/core/ActorRegistry.js';
 
@@ -736,4 +736,70 @@ test('robustness: NaN positions recover, attachedTo is skipped, setLevel(null) i
   assert.equal(ph.octree, null);
   assert.equal(ph.heightAt(3, 3), 0);
   ph.dispose();
+});
+
+// ------------------------------------------------------------------ PERF P1 / AUTOCAM physics review
+test('P1 separateActors: above SEP_HASH_MIN solid actors the 2 m hash separates every overlap (cell edges, big radii)', () => {
+  const { ctx, ph } = world({ hf: flat(0, 128, 32) });
+  assert.equal(SEP_HASH_MIN, 24); assert.equal(SEP_CELL, 2);
+  const list = [];
+  // a 8 × 8 horde packed 0.5 m apart (radius 0.35 → every neighbour overlaps), straddling hash-cell edges at x / z = 0, ±2
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) list.push(actor(-1.9 + i * 0.5, 0, -1.9 + j * 0.5, { radius: 0.35 }));
+  // a big one (r 1.5 > a cell) overlapping the horde edge, and a pair split exactly across a cell boundary far away
+  list.push(actor(3.2, 0, 0, { radius: 1.5, mass: 4 }));
+  list.push(actor(19.8, 0, 10, { radius: 0.35 }), actor(20.2, 0, 10, { radius: 0.35 }));
+  for (const a of list) ctx.actors.register(a);
+  assert.ok(list.length > SEP_HASH_MIN);
+  let hashed = 0;
+  const orig = ph._sepHashed.bind(ph);
+  ph._sepHashed = (...a) => { hashed++; return orig(...a); };
+  for (let k = 0; k < 120; k++) ph.separateActors();
+  assert.ok(hashed > 0, 'the hash broad phase ran');
+  let worst = 0;
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = list[i], b = list[j], d = Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z);
+    worst = Math.max(worst, a.radius + b.radius - d);
+  }
+  assert.ok(worst < 0.02, `max remaining overlap ${worst.toFixed(4)} m`);
+  const [p, q] = list.slice(-2);
+  assert.ok(Math.abs(Math.hypot(p.pos.x - q.pos.x, p.pos.z - q.pos.z) - 0.7) < 1e-6, 'the cross-cell pair separated to r + r');
+});
+
+test('P1 separateActors: ≤ SEP_HASH_MIN keeps the all-pairs loop; the hash gives the same answer on a sparse crowd', () => {
+  const mk = () => {
+    const { ctx, ph } = world({ hf: flat(0, 128, 32) });
+    const list = [];
+    for (let i = 0; i < 30; i++) list.push(actor((i % 6) * 3 + (i & 1) * 0.4, 0, Math.floor(i / 6) * 3, { radius: 0.35 + (i % 3) * 0.1 }));
+    for (const a of list) ctx.actors.register(a);
+    return { ph, list };
+  };
+  // pairs only overlap in isolated twos here (3 m spacing), so Gauss-Seidel order cannot change the result
+  const A = mk(), B = mk();
+  A.ph._sepHashed = function (n) { const s = this._sol; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) this._sepPair(s[i], s[j], i, j, this._sepStamp); };
+  A.ph.separateActors(); B.ph.separateActors();
+  for (let i = 0; i < A.list.length; i++) {
+    assert.ok(Math.abs(A.list[i].pos.x - B.list[i].pos.x) < 1e-9 && Math.abs(A.list[i].pos.z - B.list[i].pos.z) < 1e-9, `actor ${i}`);
+  }
+  // a small crowd never builds the hash
+  const { ctx, ph } = world({ hf: flat(0) });
+  let hashed = 0; ph._sepHashed = () => { hashed++; };
+  for (let i = 0; i < SEP_HASH_MIN; i++) ctx.actors.register(actor(i * 0.3, 0, 0));
+  ph.separateActors();
+  assert.equal(hashed, 0);
+});
+
+test('AUTOCAM §4 review: groundY is the last ground contact (terrain, prop top) and is kept while airborne', () => {
+  const crate = { x: 4, z: 0, hx: 1, hz: 1, y0: 0, y1: 0.3 };
+  const { ph } = world({ hf: flat(0), colliders: { boxes: [crate] } });
+  const a = actor(4, 0.3, 0); a.onGround = true;
+  run(ph, a, 0.2);
+  assert.ok(a.onGround && Math.abs(a.groundY - 0.3) < 1e-6 && a.groundKind === 'static', `on the crate top (${a.groundY})`);
+  a.vel.y = 6; a.onGround = false;
+  ph.moveActor(a, DT); ph.moveActor(a, DT);
+  assert.ok(!a.onGround && a.pos.y > 0.4, 'airborne');
+  assert.equal(a.groundKind, null);
+  assert.ok(Math.abs(a.groundY - 0.3) < 1e-6, 'keeps the crate top while airborne');
+  const b = actor(-4, 0, 0); b.onGround = true;
+  run(ph, b, 0.1);
+  assert.equal(b.groundY, 0); assert.equal(b.groundKind, 'terrain');
 });

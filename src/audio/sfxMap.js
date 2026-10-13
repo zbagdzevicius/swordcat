@@ -4,11 +4,12 @@
 // Sound ids accepted by ctx.audio.play2D / play3D:
 //   - a name from SFX below            'swishLight', 'parry', 'ui.click', 'kittenFound', ...
 //   - a file id under audio/sfx/        'pickup/bubble2', 'creature/creature_roar_02'
-//   - a GAME_DESIGN pattern              'impact/chain_0x', 'impact/impactSoft_heavy_00x', 'sword/swish_01–13',
-//                                        'creature/c80_scream_01/02'  (a random existing variant is picked)
+//   - a GAME_DESIGN pattern              'impact/impactWood_light_00x', 'impact/impactSoft_heavy_00x', 'sword/swish_01–13',
+//                                        'creature/crow_caw_01/02'    (a random existing variant is picked)
 //   - a full path                        'audio/sfx/pickup/bubble2.ogg'
 import { E } from '../core/events.js';
 import { ATTACKS, ECONOMY } from '../core/config.js';
+import { PitchLadder } from './cues.js';
 
 /** 'sword/swish_', 1, 13 → ['sword/swish_01', …, 'sword/swish_13'] (pad = digits; 0 = no padding). */
 export function seq(prefix, from, to, pad = 2) {
@@ -27,7 +28,8 @@ export function seq(prefix, from, to, pad = 2) {
  * @property {number} [dur]     max seconds (faded out over the last 0.25 s)
  * @property {number} [minGap]  seconds between two starts of this def (default MIX.minGap)
  * @property {string[]} [also]  layered defs played with it (same position / options)
- * @property {string} [zzfx]    sfxDefs.js fallback when no file buffer is ready
+ * @property {string} [zzfx]    sfxDefs.js fallback when no file buffer is ready (or the sound itself when `files` is empty)
+ * @property {number} [lowpass] low-pass cutoff (Hz) on this play (ART §9.3: the softened crow)
  */
 
 /** @type {Record<string, SfxDef>} */
@@ -43,7 +45,9 @@ export const SFX = {
   guardOn:         { files: ['impact/chainmail1'], vol: 0.22, minGap: 0.25 },
   chargeT1:        { files: ['pickup/powerup_rise01'], vol: 1, rateVar: 0 },
   chargeT2:        { files: ['pickup/powerup_rise03'], vol: 0.9, rateVar: 0 },
-  chargeFizzle:    { files: ['ui/glitch_001'], vol: 0.3 },
+  // ART §9.3: a soft noise "pfft" + a low bubble, not a digital glitch
+  chargeFizzle:    { files: ['pickup/bubble'], vol: 0.35, rate: 0.7, rateVar: 0.02, also: ['chargePfft'] },
+  chargePfft:      { files: [], zzfx: 'pfft', vol: 0.55, rateVar: 0.04 },
   holySlash:       { files: ['magic/spell_fire_03'], vol: 3.5, also: ['holyImpact'] },
   holyImpact:      { files: seq('impact/impactMetal_heavy_', 0, 4, 3), vol: 0.7 },
   holyWave:        { files: ['magic/magic1'], vol: 0.7 },
@@ -59,12 +63,18 @@ export const SFX = {
   hurt:            { files: seq('impact/impactPlate_light_', 0, 4, 3), vol: 0.85, also: ['hurtVoice'] },
   hurtVoice:       { files: seq('cat/cute_creature_', 1, 10), vol: 0.7, rate: 1.2 },
   faint:           { files: ['cat/cat_softmew'], vol: 0.8, rate: 0.8, rateVar: 0 },
-  ghostLife:       { files: ['pickup/powerup_downer01'], vol: 0.7, rateVar: 0 },
+  // WA §5.7 / audio.W3 knock-out "dizzy sit, boing back" (BEAT_CUES.respawnBoing): happy mew-purr at the cream wipe,
+  // a low bubble "boing" as she pops up. No downer sting.
+  respawnPurr:     { files: ['cat/cat_mewpurr'], vol: 0.7, rateVar: 0 },
+  respawnPop:      { files: ['pickup/bubble'], vol: 0.85, rate: 0.8, rateVar: 0 },
+  // WA §5.6: a tap / click on her out of combat (player plays it; a pat, not a meow)
+  tapPurr:         { files: ['cat/cat_mewpurr2'], vol: 0.5, rateVar: 0.04, minGap: 0.4 },
   meow:            { files: ['cat/kitten_mew_01', 'cat/meow_baby_01'], vol: 0.85, rateVar: 0.06, minGap: 0.2 },
   milkSip:         { files: ['pickup/bubble', 'pickup/bubble2', 'pickup/bubble3'], vol: 0.6 },
   vigil:           { files: ['cat/cat_purrsleepy_loop'], vol: 0.6, dur: 2, rateVar: 0, also: ['vigilMagic'] },
   vigilMagic:      { files: ['magic/magic1'], vol: 0.55 },
   stillStanding:   { files: ['magic/spell_02'], vol: 0.85, rateVar: 0 },
+  stillStandingPurr: { files: ['cat/cat_purrsleepy_loop'], vol: 0.55, dur: 1.2, rateVar: 0 },     // ART §9.3 (no heartbeat)
   // footsteps (2D for her, 3D for everyone else)
   footGrass:       { files: seq('footsteps/footstep_grass_', 0, 4, 3), vol: 0.75, rateVar: 0.06, minGap: 0.06 },
   footStone:       { files: ['footsteps/stone_l1', 'footsteps/stone_l2', 'footsteps/stone_l3', 'footsteps/stone_r1', 'footsteps/stone_r2', 'footsteps/stone_r3'], vol: 0.3, rateVar: 0.06, minGap: 0.06 },
@@ -105,13 +115,14 @@ export const SFX = {
   tgAim:           { files: ['world/metalClick'], vol: 1 },
   tgGrab:          { files: ['creature/c80_eat_01'], vol: 0.7 },
   tgShadow:        { files: ['impact/cloth'], vol: 0.6, rate: 0.85 },
-  bossDizzy:       { files: ['jingles/jingles_NES03'], vol: 0.6, rateVar: 0 },
+  bossDizzy:       { files: ['jingles/jingles_PIZZI09'], vol: 0.6, rateVar: 0 },          // ART §9.3: no NES chiptune
 
   // ---------------------------------------------------------------- creatures
   ratAttack:       { files: ['creature/rat_squeak_attack'], vol: 0.35, rateVar: 0.08, minGap: 0.15 },
   ratPain:         { files: ['creature/rat_squeak_pain'], vol: 0.4, rateVar: 0.08, minGap: 0.15 },
   ratDeath:        { files: ['creature/rat_squeak_death'], vol: 0.45, rateVar: 0.06 },
-  crowCaw:         { files: ['creature/c80_scream_01', 'creature/c80_scream_02'], vol: 0.55, rate: 1.4, rateVar: 0.06, zzfx: 'crowCaw', minGap: 0.3 },
+  // ART §9.3 / WA §9: a cartoon "kaw" (crow_caw_*, played at rate 1.7), low-passed at 3 kHz, quieter
+  crowCaw:         { files: ['creature/crow_caw_01', 'creature/crow_caw_02'], vol: 0.4, rate: 1.7, rateVar: 0.06, lowpass: 3000, zzfx: 'crowCaw', minGap: 0.3 },
   crowWings:       { files: ['impact/cloth'], vol: 0.5, rate: 1.2 },
   spider:          { files: seq('creature/c80_bug_', 1, 4), vol: 0.6, rate: 1.3, minGap: 0.15 },
   jelly:           { files: [...seq('creature/slime_', 1, 16), ...seq('creature/rpg_slime', 1, 10, 0)], vol: 0.6, minGap: 0.1 },
@@ -122,34 +133,41 @@ export const SFX = {
   pugBark:         { files: ['creature/c80_barking_01', 'creature/c80_barking_02', 'creature/animal_bark'], vol: 0.7, minGap: 0.25 },
   pugSnort:        { files: ['creature/c80_nose'], vol: 0.6 },
   boneClack:       { files: seq('impact/impactWood_light_', 0, 4, 3), vol: 0.6, rate: 1.15 },
+  // WA26 Squeakybones: a rubber squeak when they pop back together; WA §9 Barkus's Big Squeaky Bone squeaks on a hit
+  squeak:          { files: [], zzfx: 'squeak', vol: 0.75, rateVar: 0.08, minGap: 0.06 },
+  boneSqueak:      { files: [], zzfx: 'squeak', vol: 0.7, rate: 0.9, rateVar: 0.1, also: ['boneClack'] },
+  squeakyBone:     { files: [], zzfx: 'squeak', vol: 0.95, rate: 0.72, rateVar: 0.06, minGap: 0.1 },
   boneCollapse:    { files: seq('impact/impactWood_medium_', 0, 4, 3), vol: 0.8 },
   puddingRoar:     { files: [...seq('creature/creature_roar_', 1, 3), ...seq('creature/c80_roar_', 1, 3)], vol: 0.9, rate: 0.75, rateVar: 0.04 },
   puddingNervous:  { files: ['creature/c80_ooh'], vol: 0.7, rate: 0.8 },
   puddingSnore:    { files: ['creature/c80_snore'], vol: 1, rate: 0.6, rateVar: 0 },
   puddingPurr:     { files: ['cat/cat_purractive_loop'], vol: 0.45, rate: 0.6, rateVar: 0 },
   grizzleRoar:     { files: ['creature/rat_squeak_attack', 'creature/rat_squeak_pain'], vol: 0.5, rate: 0.8, also: ['grizzleMonster'] },
-  grizzleMonster:  { files: seq('creature/rpg_mnstr', 1, 15, 0), vol: 0.7 },
+  // WA §8.7 / §9: Grizzlechop is a comic, befriendable boss — a low rat-squeak grumble + a wooden thump, no monster growl
+  grizzleMonster:  { files: ['creature/rat_squeak_pain', 'creature/rat_squeak_attack'], vol: 0.55, rate: 0.55, rateVar: 0.05, also: ['grizzleThump'] },
+  grizzleThump:    { files: seq('impact/impactWood_heavy_', 0, 4, 3), vol: 0.55, rate: 0.85, rateVar: 0.05 },
   brutus:          { files: seq('creature/rpg_giant', 1, 5, 0), vol: 0.85, minGap: 0.3 },
   barkusBark:      { files: ['creature/c80_barking_01', 'creature/c80_barking_02'], vol: 0.95, rate: 0.7, also: ['barkusGiant'], minGap: 0.3 },
   barkusGiant:     { files: seq('creature/rpg_giant', 1, 5, 0), vol: 0.6 },
-  barkusHowl:      { files: ['creature/c80_howl'], vol: 0.95, rate: 0.9, rateVar: 0 },
+  barkusHowl:      { files: ['creature/c80_howl'], vol: 0.9, rate: 1.05, rateVar: 0.05, dur: 0.8 },   // ART §9.3: Barkus only, short
   ballista:        { files: seq('impact/impactWood_heavy_', 0, 4, 3), vol: 0.85 },
   bolt:            { files: ['sword/blade_01'], vol: 0.7 },
   cow:             { files: ['creature/animal_moo'], vol: 0.85, rateVar: 0.02 },
   donkey:          { files: ['creature/animal_whinny'], vol: 0.8 },
   coo:             { files: ['creature/animal_peeps'], vol: 0.7, rate: 0.7 },
-  farDrums:        { files: seq('creature/c80_monster_', 1, 7), vol: 0.7, rate: 0.6 },
+  woodKnock:       { files: seq('impact/impactWood_medium_', 0, 4, 3), vol: 0.5, rate: 0.6, rateVar: 0.05 },
 
   // ---------------------------------------------------------------- pickups, rescues, world
   fish:            { files: seq('pickup/coins_', 1, 4), vol: 0.55, minGap: 0.05 },
   goldFish:        { files: ['pickup/coin2'], vol: 0.7 },
   smallHeart:      { files: ['pickup/gem_01'], vol: 0.6 },
   heartBell:       { files: ['pickup/powerup_rise05'], vol: 2, rateVar: 0, also: ['heartBellJingle'] },
-  heartBellJingle: { files: ['jingles/jingles_NES02'], vol: 0.6, rateVar: 0 },
+  heartBellJingle: { files: ['jingles/jingles_STEEL02'], vol: 0.6, rateVar: 0 },
   letter:          { files: ['ui/bookFlip1'], vol: 0.7, also: ['letterJingle'] },
-  letterJingle:    { files: ['jingles/jingles_NES00'], vol: 0.6, rateVar: 0 },
+  letterJingle:    { files: ['jingles/jingles_PIZZI01'], vol: 0.6, rateVar: 0 },
   milkPickup:      { files: ['pickup/bottle'], vol: 0.6 },
   kittenFound:     { files: seq('jingles/jingles_PIZZI', 0, 4), vol: 0.6, rateVar: 0, also: ['kittenMew'] },
+  rescuePurr:      { files: ['cat/cat_purrsleepy_loop'], vol: 0.45, dur: 1.6, rateVar: 0 },   // AUTOCAM X24 (BEAT_CUES.rescueBeat)
   kittenMew:       { files: ['cat/kitten_mew_01'], vol: 0.75, rate: 1.3 },
   kittenChirp:     { files: seq('cat/cute_creature_', 1, 10), vol: 0.6 },
   nap:             { files: ['cat/cat_purrsleepy_loop'], vol: 0.45, dur: 1.5, rateVar: 0 },
@@ -160,7 +178,7 @@ export const SFX = {
   keys:            { files: ['world/keys_01'], vol: 0.7 },
   gateOpen:        { files: ['world/metal_open_01'], vol: 0.85 },
   gateClose:       { files: ['world/metal_close_01'], vol: 0.85 },
-  winch:           { files: seq('impact/chain_', 1, 3), vol: 0.6 },
+  winch:           { files: seq('impact/impactWood_light_', 0, 4, 3), vol: 0.55, rate: 1.1 },   // WA §9: a rope winch, no chains
   splash:          { files: seq('creature/splash_', 1, 5), vol: 0.6 },
   shieldWall:      { files: seq('impact/impactMetal_heavy_', 0, 4, 3), vol: 0.7 },
   bellLayer:       { files: ['impact/metal_ringing'], vol: 0.3, rate: 0.5, rateVar: 0 },
@@ -190,7 +208,7 @@ export const SFX = {
   doorClose:       { files: seq('world/doorClose_', 1, 4, 0), vol: 0.7 },
   wings:           { files: ['impact/cloth'], vol: 0.45, rate: 1.6, rateVar: 0.1, minGap: 0.08 },
   // ---------------------------------------------------------------- M2: gate / The Line (§12.6)
-  farHorn:         { files: ['creature/c80_howl'], vol: 0.9, rate: 0.8, rateVar: 0 },
+  farHorn:         { files: ['jingles/jingles_SAX02'], vol: 0.6, rate: 0.85, rateVar: 0 },    // ART §9.3: the howl is Barkus's only
   repairFreeze:    { files: ['world/metalLatch'], vol: 0.8, rate: 0.8, also: ['repairFreezeClunk'] },
   repairFreezeClunk: { files: ['impact/impactMetal_heavy_001'], vol: 0.5, rate: 0.7, rateVar: 0 },
   repairResume:    { files: ['world/metalClick'], vol: 0.9, also: ['winch'] },
@@ -209,11 +227,11 @@ export const SFX = {
   bossIntro:       { files: seq('impact/impactMetal_heavy_', 0, 4, 3), vol: 0.8, rate: 0.6, rateVar: 0, also: ['bossIntroBoom'] },
   bossIntroBoom:   { files: seq('impact/impactPunch_heavy_', 0, 4, 3), vol: 0.8, rate: 0.5, rateVar: 0 },
   bossIntroB1:     { files: seq('impact/impactWood_heavy_', 0, 4, 3), vol: 0.85, rate: 0.6, rateVar: 0, also: ['bossIntroBoom'] },   // the Cheese Mill's fog wall
-  bossIntroB2:     { files: seq('impact/chain_', 1, 3), vol: 0.8, rate: 0.7, rateVar: 0, also: ['bossIntro'] },                    // the causeway gate chains
+  bossIntroB2:     { files: seq('impact/impactWood_heavy_', 0, 4, 3), vol: 0.8, rate: 0.7, rateVar: 0, also: ['bossIntro'] },     // the causeway gate thump
   bossPhase:       { files: seq('impact/impactPlate_heavy_', 0, 4, 3), vol: 0.7, rate: 0.7, also: ['bossIntroBoom'] },
   // ---------------------------------------------------------------- M2: objectives (objective:progress)
   objectiveTick:   { files: ['ui/pluck_002'], vol: 0.45, rateVar: 0, bus: 'ui' },
-  objectiveDone:   { files: ['jingles/jingles_NES07'], vol: 0.5, rateVar: 0, bus: 'ui' },
+  objectiveDone:   { files: ['jingles/jingles_PIZZI07'], vol: 0.5, rateVar: 0, bus: 'ui' },
   unlock:          { files: ['jingles/jingles_PIZZI06'], vol: 0.55, rateVar: 0, bus: 'ui' },
 
   // ---------------------------------------------------------------- UI (2D, ui bus) — ui calls these by name
@@ -229,6 +247,7 @@ export const SFX = {
   'ui.error':      { files: ['ui/error_001'], vol: 0.45, bus: 'ui', rateVar: 0 },
   'ui.toggle':     { files: ['ui/toggle_001'], vol: 0.45, bus: 'ui', rateVar: 0 },
   'ui.blip':       { files: [], zzfx: 'blip', vol: 0.4, bus: 'ui' },
+  'ui.ready':      { files: ['ui/glass_001'], vol: 0.1, bus: 'ui', rateVar: 0, minGap: 0.08 },          // CONTROLS §10.1 cooldown ready
 
   // ---------------------------------------------------------------- M2: hub shops + Quest Board (§13.3; ui calls these)
   'shop.open':     { files: ['ui/open_001'], vol: 0.45, bus: 'ui', rateVar: 0 },              // + the counter bell (shop())
@@ -256,7 +275,13 @@ export const SFX = {
   'quest.select':  { files: seq('ui/switch_', 1, 7, 3), vol: 0.45, bus: 'ui' },
   'quest.pin':     { files: ['ui/drop_003'], vol: 0.6, bus: 'ui', also: ['quest.pinClick'] },
   'quest.pinClick': { files: ['world/metalClick'], vol: 0.4, bus: 'ui', rate: 1.4 },
-  'quest.go':      { files: ['jingles/jingles_NES05'], vol: 0.45, bus: 'ui', rateVar: 0 },
+  'quest.go':      { files: ['jingles/jingles_STEEL05'], vol: 0.45, bus: 'ui', rateVar: 0 },
+
+  // ---------------------------------------------------------------- Phase W (WA §5, §9; AUTOCAM X24) — ui / fx call these
+  comicPop:        { files: ['pickup/bubble'], vol: 0.6, rate: 1.15, rateVar: 0.05, bus: 'ui', minGap: 0.08 },   // WA §5.3 pop words
+  ghostPawPip:     { files: ['ui/glass_001'], vol: 0.3, rate: 1.4, rateVar: 0, bus: 'ui' },                  // WA §7.5 ghost paw
+  rankStamp:       { files: ['jingles/jingles_PIZZI03'], vol: 0.6, rateVar: 0, bus: 'ui', also: ['ui.stamp'] },   // WA21 results
+  roomReadSting:   { files: ['jingles/jingles_PIZZI08'], vol: 0.42, rateVar: 0, bus: 'ui' },              // AUTOCAM room read
 };
 
 /** Ids other areas have used that are not files: read as these SFX names (keeps old calls sounding). */
@@ -301,11 +326,11 @@ export function objectiveSfxFor(p) {
 export const CUTSCENE_SFX = [
   'ui/drop_001', 'ui/drop_002', 'ui/drop_003', 'cat/cat_purrsleepy_loop', 'cat/cat_purractive_loop', 'world/creak1', 'world/creak2',
   'sword/sword_unsheathe', 'sword/sword_unsheathe2', 'sword/sword_unsheathe3', 'impact/armor_light', 'impact/cloth', 'impact/cloth_heavy',
-  ...seq('creature/c80_monster_', 1, 7), ...seq('impact/chain_', 1, 3), 'pickup/bubble', 'pickup/bubble2', ...seq('impact/impactSoft_heavy_', 0, 4, 3),
+  'pickup/bubble', 'pickup/bubble2', ...seq('impact/impactSoft_heavy_', 0, 4, 3), ...seq('impact/impactWood_heavy_', 0, 4, 3),
   ...seq('creature/creature_roar_', 1, 3), ...seq('creature/c80_roar_', 1, 3), 'creature/animal_moo', 'creature/animal_whinny',
   'impact/impactMetal_heavy_003', 'impact/impactPlate_heavy_002', 'jingles/jingles_STEEL03', 'jingles/jingles_STEEL06', 'jingles/jingles_SAX02',
   'magic/magic1', 'magic/spell_fire_03', 'pickup/powerup_rise05', 'pickup/powerup_rise07', 'world/wood_hit_01', 'impact/metal_small2',
-  'creature/c80_howl', 'creature/c80_snore', 'creature/c80_ooh', 'jingles/jingles_PIZZI03',
+  'creature/c80_snore', 'creature/c80_ooh', 'jingles/jingles_PIZZI03', 'cat/cat_mewpurr', 'cat/cat_mewpurr2',
 ];
 
 /** Hit material → layered defs (light / heavy hits). §16.2 fur / armour / bone + §8.2 heavy. */
@@ -324,7 +349,8 @@ export const MATERIAL_HIT = {
 
 /**
  * Per enemy type (Enemy.def.id, matched exactly, then by the longest key prefix). `laugh` = procedural laugh build.
- * Fields: material (hit sound), alert, telegraph (windup voice), pain, death, phase (boss), laughRate.
+ * Fields: material (hit sound), alert, telegraph (windup voice), pain, death, phase (boss), laughRate, revive (the
+ * Squeakybone reassembly: enemies play `enemyVoiceFor(id).revive`), weaponHit (its weapon landing on anyone).
  */
 export const ENEMY_VOICE = {
   rat:              { material: 'fur', telegraph: 'ratAttack', pain: 'ratPain', death: 'ratDeath' },
@@ -336,7 +362,7 @@ export const ENEMY_VOICE = {
   pilfer:           { material: 'fur', alert: 'laugh', laughRate: 1.4, pain: 'hyenaHurt', death: 'hyenaHurt' },
   pug:              { material: 'armour', alert: 'pugBark', telegraph: 'pugSnort', pain: 'pugBark', death: 'pugBark' },
   warhound:         { material: 'fur', alert: 'pugBark', pain: 'pugBark', death: 'pugBark' },
-  bonehead:         { material: 'bone', alert: 'boneClack', pain: 'boneClack', death: 'boneCollapse' },
+  bonehead:         { material: 'bone', alert: 'boneClack', pain: 'boneClack', death: 'boneCollapse', revive: 'boneSqueak' },   // WA26 Squeakybone
   // world PropActors (kind) — §5.4 tutorial set, breakables, cages
   dummy:            { material: 'straw' },
   sack:             { material: 'straw' },
@@ -359,7 +385,7 @@ export const ENEMY_VOICE = {
   boss_grizzlechop: { material: 'fur', alert: 'grizzleRoar', telegraph: 'ratAttack', pain: 'ratPain', death: 'grizzleRoar', phase: 'grizzleRoar' },
   boss_cacklejaw:   { material: 'fur', alert: 'laugh', laughRate: 0.85, pain: 'hyenaHurt', death: 'laugh', phase: 'laugh' },
   boss_brutus:      { material: 'armour', alert: 'brutus', pain: 'brutus', death: 'brutus', phase: 'brutus' },
-  boss_barkus:      { material: 'armour', alert: 'barkusBark', pain: 'barkusBark', death: 'barkusHowl', phase: 'barkusHowl' },
+  boss_barkus:      { material: 'armour', alert: 'barkusBark', pain: 'barkusBark', death: 'barkusHowl', phase: 'barkusHowl', weaponHit: 'squeakyBone' },
 };
 
 const VOICE_KEYS = Object.keys(ENEMY_VOICE).sort((a, b) => b.length - a.length);
@@ -399,6 +425,9 @@ export const FOOTSTEP = { grass: 'footGrass', dirt: 'footDirt', path: 'footDirt'
 export const LEVEL_SURFACE = { meadow: 'grass', forest: 'grass', town: 'stone', gate: 'stone', bog: 'mud', keep: 'stone' };
 /** Fallback cadence for her footsteps when nobody emits actor:footstep: interval = clamp(k / (speed + c), min, max). */
 export const STEP_CADENCE = { k: 0.9, c: 0.8, min: 0.17, max: 0.45, minSpeed: 0.6, armorEvery: 2 };
+
+/** Pickups that climb the WA §5.5 pitch ladder (fish, gold fish, small hearts). */
+export const LADDER_PICKUPS = new Set(['fish', 'goldFish', 'smallHeart']);
 
 /** item:pickup → def. */
 export const PICKUP_SFX = { fish: 'fish', goldFish: 'goldFish', smallHeart: 'smallHeart', heartBell: 'heartBell', letter: 'letter', milk: 'milkPickup' };
@@ -482,10 +511,11 @@ export function bindSfx(am) {
   on(E.PLAYER_PARRY, ({ gold }) => am.play2D('parry', gold ? { rate: 1.12, volume: 1 } : undefined));
   on(E.PLAYER_DAMAGED, ({ amount = 1 }) => { if (amount > 0) am.play2D('hurt'); });
   on(E.PLAYER_DIED, () => am.play2D('faint'));
-  on(E.PLAYER_LIFE_LOST, () => am.play2D('ghostLife', { delay: 0.4 }));
+  on(E.PLAYER_LIFE_LOST, () => am.play2D('respawnBoing'));            // WA §5.7: wipe purr at 1.2 s, boing at 1.55 s
   on(E.PLAYER_MEOW, () => am.play2D('meow'));
   on(E.PLAYER_MILK, ({ phase }) => { if (phase === 'start' || phase === 'heal') am.play2D('milkSip'); });
-  on(E.PLAYER_STILL_STANDING, () => { am.play2D('stillStanding'); am.heartbeat({ beats: 2, volume: 1 }); });
+  // ART §9.3: the sleepy purr + a rising glock third (G5 → B5) replace the heartbeat
+  on(E.PLAYER_STILL_STANDING, () => { am.play2D('stillStanding'); am.play2D('stillStandingBeat'); });
   on(E.CHECKPOINT, () => am.play2D('vigil'));
   on(E.FOOTSTEP, (p) => am.footstep(p.actor, p.position, p.surface));
 
@@ -497,6 +527,8 @@ export function bindSfx(am) {
       if (isPlayer(tgt)) am.play2D('block'); else am.play3D(h.parried ? 'parry' : 'block', pos);
       return;
     }
+    const av = h.attacker ? enemyVoiceFor(actorTypeId(h.attacker)) : null;
+    if (av?.weaponHit) am.play3D(av.weaponHit, pos);               // WA §9: Barkus's Big Squeaky Bone squeaks on a hit
     if (isPlayer(tgt)) return;                                     // PLAYER_DAMAGED plays her hurt layer
     if (tgt?.faction === 'player') { am.play3D('companionHurt', pos); return; }
     const v = enemyVoiceFor(actorTypeId(tgt));
@@ -533,13 +565,19 @@ export function bindSfx(am) {
   on(E.BOSS_DIZZY, ({ dizzy }) => { if (dizzy) am.play2D('bossDizzy'); });
 
   // ---- pickups / kittens / companions / world ----
+  const ladder = new PitchLadder();
   on(E.ITEM_PICKUP, ({ item, id, amount, gold }) => {
     let name = PICKUP_SFX[item];
     if (item === 'fish' && (gold || id === 'gold' || id === 'goldFish' || amount >= (ECONOMY?.fish?.gold ?? 10))) name = 'goldFish';
-    if (name) am.play2D(name);
+    if (!name) return;
+    // WA §5.5 pitch ladder: a run of pickups climbs 6 % per step (≤ 8 steps), reset after 1.5 s
+    if (LADDER_PICKUPS.has(name)) am.play2D(name, { rate: ladder.next(am.time), rateVar: 0 });
+    else am.play2D(name);
   });
   on(E.KITTEN_REVEAL, ({ position }) => am.play3D('kittenMew', position ?? null));
-  on(E.KITTEN_RESCUED, () => am.play2D('kittenFound'));
+  // AUTOCAM X24 Cosy two-shot twin: glock arpeggio over a purr (+ her mew), 2D so it reads as her moment
+  on(E.KITTEN_RESCUED, () => am.play2D('rescueBeat'));
+  on(E.ARENA_LOCK, (p) => am.roomRead(p));
   on(E.COMPANION_ABILITY, ({ ability, position, kittenId }) => {
     am.play3D(ABILITY_SFX[ability] ?? ABILITY_SFX.default, position ?? ctx.actors?.get?.(kittenId) ?? ctx.player);
   });

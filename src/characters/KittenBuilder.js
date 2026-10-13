@@ -28,6 +28,8 @@ import { ACCESSORIES } from './Accessories.js';
 import { POSES, solveTwoBone, swordMatrix } from './Poses.js';
 import { buildProp, PROP_MOUNTS } from './Props/ProcProps.js';
 import { noteRender, envTick } from './runtime.js';
+import { fxBasicMaterial, fxModule, fxShaderMaterial } from '../fx/shaders.js';
+import { shadowOnly } from '../core/depth.js';
 
 // ------------------------------------------------------------------ skeleton definition
 
@@ -66,6 +68,8 @@ export const PROPORTIONS = Object.freeze({
  * `closeOn` / `closeOff`: the close-up hysteresis (lens → her focus, m) used when camera publishes no `cam.closeUp`.
  */
 export const PLAY_LOD = Object.freeze({ detail: 0.4, idleAfter: 60, closeOn: 6.0, closeOff: 6.3, sliceMs: 2 });
+/** Swords at least this long (H) keep the cane idle instead of `cfg.idlePose` (player DRAG.minLength: tip drag). */
+export const IDLE_REST_MAX_LEN = 1.4;
 
 /** Rest (local) transforms for a kitten of width w. @param {{hipsY:number, chestY:number, leg:number}} [pr] */
 function restPose(w, earsLow = 0, pr = PROPORTIONS) {
@@ -105,10 +109,15 @@ export function buildKitten(cfg = {}, o = {}) {
   return new Kitten(cfg, o);
 }
 
+/** Face-framing head wear that hides the head contour (the cheek ruffs shrink under it). */
+const HOODED = Object.freeze(['hood', 'coif']);
+/** Cheek ruff under a hood: radius / fur length / sideways offset factors. */
+const HOOD_CHEEK = Object.freeze({ r: 0.86, len: 0.6, x: 0.9 });
+
 export class Kitten {
   /**
    * @param {object} cfg see buildKitten
-   * @param {{ lod?: 'play'|'full', detail?: number }} [o] lod 'play' (in game: KittenView) = the play-LOD set + merged
+   * @param {{ lod?: 'play'|'full', detail?: number, tailBake?: number }} [o] lod 'play' (in game: KittenView) = the play-LOD set + merged
    *   fur base, close-up set built later; 'full' (default in tools / tests) = the full set, always "close".
    */
   constructor(cfg, o = {}) {
@@ -227,14 +236,14 @@ export class Kitten {
 
     // ---- head fur surfaces (head space)
     const eyeScale = cfg.eyes?.size ?? 1;
-    const headPieces = this._headFurPieces(cfg);
+    const headPieces = this._headFurPieces(cfg, acc);
     if (this.lite) {
       for (const hp of headPieces) A.add('head', hp.geo, { color: coatAt(hp.region), rmse: RM.fur });
     } else {
       const gb = new GeoBuilder({ fur: true });
       const combFor = (region) => (v, n, lp) => (region === 'cheek' ? [Math.sign(lp.x) * 0.55, -0.85, -0.25]
         : region === 'muzzle' ? [Math.sign(lp.x) * 0.9, -0.35, 0.1] : [lp.x * 2.0, -0.45, -1]);
-      for (const hp of headPieces) gb.add(hp.geo, { color: coatAt(hp.region), rmse: RM.fur, fur: (v, n, lp) => headFurMask(lp, hp.region, eyeScale), comb: combFor(hp.region) });
+      for (const hp of headPieces) gb.add(hp.geo, { color: coatAt(hp.region), rmse: RM.fur, fur: (v, n, lp) => { const f = headFurMask(lp, hp.region, eyeScale); f[1] *= hp.len ?? 1; return f; }, comb: combFor(hp.region) });
       this.headFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMatInst, tier: furTier, name: 'furHead', owner: this });
       joints.head.add(this.headFur.mesh);
     }
@@ -321,7 +330,11 @@ export class Kitten {
       this.tuftMesh = tm;
     }
     if (this.tailFurGeo) {
-      this.tailFur = new FurPart(this.tailFurGeo, { bakedMat: this.furMatBaked, sheenMat: this.kitMat, tier: furTier, skeleton, name: 'furTail', owner: this });
+      // play LOD bakes only the iso shells (0 today: the base surface alone); the close-up copies are reserved in idle
+      // time by prepareCloseUp (PERF H4), never ~20 ms of hidden skinned geometry per cat spawn. `o.tailBake`: internal
+      const bake = o.tailBake ?? (this.lod === 'play' ? isoShellsFor(furTier) : undefined);
+      this._tailStub = o.tailBake === 0 && this.lod !== 'play';   // prepareCloseUp's temp cat: its tail is never drawn
+      this.tailFur = new FurPart(this.tailFurGeo, { bakedMat: this.furMatBaked, sheenMat: this.kitMat, tier: furTier, skeleton, name: 'furTail', owner: this, bake, shells: bake });
       this.tailFur.mesh.renderOrder = FUR_RENDER_ORDER - 0.3;
       root.add(this.tailFur.mesh);
     }
@@ -338,6 +351,7 @@ export class Kitten {
       sp.add(tc, { skin: (v, lp, i) => { const s = Math.min(1, tT[i]) * 5, i0 = Math.min(4, Math.floor(s)), f = s - i0; return [boneIndex['tail' + i0], boneIndex['tail' + (i0 + 1)], 0, 0, 1 - f, f, 0, 0]; } });
       const proxy = new THREE.SkinnedMesh(sp.build(), shadowOnlyMaterial());
       proxy.name = 'shadowProxy'; proxy.castShadow = true; proxy.receiveShadow = false; proxy.frustumCulled = false;
+      shadowOnly(proxy);   // drawn into the sun's shadow map only: no colour-pass program (PERF §1.2)
       root.add(proxy); proxy.bind(skeleton, new THREE.Matrix4());
       this.shadowProxy = proxy;
     }
@@ -389,6 +403,7 @@ export class Kitten {
     this._playEyes = null;
     /** Close-up state (camera's cam.closeUp: shells, whiskers, full-detail set). Tools / tests ('full' LOD) stay close. */
     this.closeUp = this.lod !== 'play';
+    this.cape?.setDetail(this.closeUp);   // built above before the LOD flag: iso play takes the coarse cape grid
     /** Activity tier (PERF §4.3, X13): 0 full, 1 no cape verlet / secondary motion, 2 every 4th frame, 3 frozen. */
     this.activity = 0;
     this._actAcc = 0; this._actN = 0;
@@ -427,7 +442,36 @@ export class Kitten {
     this._proxyDirty = false;
     this.highlight = null;
     this._topK = 0;
+    /** Warm-rim floor on her own toon / metal / fur materials (READABILITY.heroRim for the hero, 0 = env rim only). */
+    this.rimFloor = 0;
+    if (this.tier === 'hero') this.setRimFloor(READABILITY.heroRim);
     this._applyLod();
+  }
+
+  /**
+   * Per-actor warm-rim floor (WARM_ADVENTURE_SPEC WA4 `hero 0.40`): her toon / metal rim strength becomes
+   * max(env uRimK, k) and the fur rim ≥ k. Shared (per-kind library) materials are never touched; 0 draws, no compile.
+   * @param {number} k 0..1
+   */
+  setRimFloor(k) {
+    this.rimFloor = Math.max(0, +k || 0);
+    this.root.traverse((o) => {
+      const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+      for (const m of ms) this._rimFloorOn(m);
+    });
+    for (const m of [this.kitMat, this.kitMatInst]) this._rimFloorOn(m);
+    for (const fm of [this.furMat, this.furMatBaked]) {
+      const u = fm?.uniforms?.uRimStrength;
+      if (!u) continue;
+      if (fm.userData.rimBase === undefined) fm.userData.rimBase = u.value;
+      u.value = Math.max(fm.userData.rimBase, this.rimFloor);
+    }
+    return this;
+  }
+  /** @param {THREE.Material|null|undefined} m */
+  _rimFloorOn(m) {
+    const u = m?.userData?.uniforms?.uRimMin;
+    if (u && !isSharedKit(m)) u.value = this.rimFloor;
   }
 
   // ------------------------------------------------------------------ play LOD / close-up (ART §6.1, §6.4)
@@ -457,8 +501,11 @@ export class Kitten {
     const merged = !!this._playGeo && !this.closeUp && n === 0;
     const close = this.closeUp && this._closeSet;
     this.kitMesh.geometry = merged ? this._playGeo : close ? this._closeSet.kit : this._kitGeo;
+    // the merged play body already carries the fur base surfaces and casts: the shell-fur shadow proxy would be a
+    // duplicate caster plus a colour-masked main-pass draw (PERF §9.4 / ART §6.4: no shadow-proxy draw in play)
+    if (this.shadowProxy) this.shadowProxy.visible = !merged;
     for (const f of [this.headFur, this.bibFur, this.tailFur]) {
-      if (!f) continue;
+      if (!f || (f === this.tailFur && this._tailStub)) continue;
       f.mesh.visible = !merged;
       if (!merged) f.setShells(n);
     }
@@ -474,13 +521,14 @@ export class Kitten {
    */
   prepareCloseUp() {
     if (this._closeSet || this.lod !== 'play' || this.lite) return false;
-    const t = new Kitten({ ...this.cfg, sword: null, cape: null, props: [], blob: false, whiskers: false, pose: 'idle' }, { lod: 'full' });
+    // the temp cat bakes no tail shells (its tail source is stolen below; the copies are baked once, here)
+    const t = new Kitten({ ...this.cfg, sword: null, cape: null, props: [], blob: false, whiskers: false, pose: 'idle' }, { lod: 'full', tailBake: 0 });
     const set = { kit: t.kitMesh.geometry, eyes: t.eyes?.geometries() ?? null };
     // steal the geometries the close-up shows; the temp kitten disposes what is left (dummies stand in)
     t.kitMesh.geometry = _DUMMY; t._kitGeo = _DUMMY;
     if (this.headFur && t.headFur) { this.headFur.setSource(t.headFur.mesh.geometry); t.headFur.mesh.geometry = _DUMMY; }
     if (this.bibFur && t.bibFur) { this.bibFur.setSource(t.bibFur.mesh.geometry); t.bibFur.mesh.geometry = _DUMMY; }
-    if (this.tailFur && t.tailFur) { this.tailFur.setSource(t.tailFur._src); t.tailFur._src = null; }
+    if (this.tailFur && t.tailFur) { this.tailFur.setSource(t.tailFur._src, Math.max(shellsFor(this.furTier), isoShellsFor(this.furTier))); t.tailFur._src = null; }
     if (t.eyes) t.eyes.releaseGeometries();
     t.dispose();
     this._playEyes = this.eyes?.geometries() ?? null;
@@ -499,6 +547,7 @@ export class Kitten {
     if (on === this.closeUp) return this;
     if (on && this.lod === 'play' && !this._closeSet) this.prepareCloseUp();
     this.closeUp = on;
+    this.cape?.setDetail(on);   // full cape grid only in close-ups (PERF §9.1)
     this._applyLod();
     return this;
   }
@@ -515,8 +564,8 @@ export class Kitten {
     const was = this.activity;
     this.activity = tier;
     if (this.cape) {
-      if (tier >= 1 && was === 0) this.cape.setMode('sway', { blend: 1e-3 });
-      else if (tier === 0) { this.cape.snap(); this.cape.setMode(this._capeMode ?? 'verlet', { blend: 1e-3 }); }
+      if (tier >= 1 && was === 0) { this.cape.setMode('sway', { blend: 1e-3 }); this.cape.pauseSim(true); }
+      else if (tier === 0) { this.cape.pauseSim(false); this.cape.snap(); this.cape.setMode(this._capeMode ?? 'verlet', { blend: 1e-3 }); }
     }
     if (tier === 0) { this._actAcc = 0; this._actN = 0; }
     return this;
@@ -586,7 +635,13 @@ export class Kitten {
   }
 
   /** Skull, cheek ruffs, whisker pads and chin (art.md §2.2), in head space. */
-  _headFurPieces(cfg) {
+  /**
+   * Head fur surfaces (head space): skull, cheek ruffs, whisker pads, chin. Under a face-framing hood / coif the cheek
+   * ruffs are smaller and shorter: full ones stuck out past the hood's sides and, with the head contour hidden, read as
+   * a featureless grey disc over the muzzle in dialogue close-ups (story 10c / 11c, Sage).
+   * @param {object} cfg @param {{id: string}[]} [acc] normalised accessories
+   */
+  _headFurPieces(cfg, acc = []) {
     const out = [];
     // segment counts per tier (every head-fur triangle is drawn once per shell: hero 17x, companions 11x)
     const S = this.lite ? { skull: [28, 20], cheek: [14, 10], pad: [10, 8], chin: [10, 8] }
@@ -595,8 +650,10 @@ export class Kitten {
     if (!this.lite && this.detail < 1) for (const k in S) S[k] = S[k].map((n) => segScale(n, this.detail, 8));
     const skull = new THREE.SphereGeometry(FACE.skullR, S.skull[0], S.skull[1]).scale(...FACE.skullScale).translate(...FACE.skull);
     out.push({ geo: skull, region: 'head' });
-    const cheekR = FACE.cheekR * (cfg.fur?.cheek ?? 1);
-    for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(cheekR, S.cheek[0], S.cheek[1]).scale(...FACE.cheekScale).translate(s * FACE.cheek[0], FACE.cheek[1], FACE.cheek[2]), region: 'cheek' });
+    const hooded = acc.some((a) => HOODED.includes(a.id));
+    const cheekR = FACE.cheekR * (cfg.fur?.cheek ?? (hooded ? HOOD_CHEEK.r : 1)), cheekLen = hooded ? HOOD_CHEEK.len : 1;
+    const cx = FACE.cheek[0] * (hooded ? HOOD_CHEEK.x : 1);
+    for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(cheekR, S.cheek[0], S.cheek[1]).scale(...FACE.cheekScale).translate(s * cx, FACE.cheek[1], FACE.cheek[2]), region: 'cheek', len: cheekLen });
     for (const s of [1, -1]) out.push({ geo: new THREE.SphereGeometry(0.042, S.pad[0], S.pad[1]).translate(s * FACE.pad[0], FACE.pad[1], FACE.pad[2]), region: 'muzzle' });
     out.push({ geo: new THREE.SphereGeometry(0.034, S.chin[0], S.chin[1]).translate(...FACE.chin), region: 'muzzle' });
     return out;
@@ -893,8 +950,21 @@ export class Kitten {
 
   // ------------------------------------------------------------------ poses
 
+  /**
+   * The pose actually shown for `name`: 'idle' becomes `cfg.idlePose` (Swordcat: 'restUp', the blade upright at her
+   * side for iso readability) while the sword is shorter than IDLE_REST_MAX_LEN (long skins keep the cane idle: the
+   * player drags their tip on the ground).
+   * @param {string} name
+   */
+  poseKey(name) {
+    const alt = this.cfg.idlePose;
+    if (name === 'idle' && alt && POSES[alt] && (this.sword?.length ?? 1) < IDLE_REST_MAX_LEN) return alt;
+    return name;
+  }
+
   /** Compute (and cache) the joint snapshot for a pose name. */
   poseSnapshot(name) {
+    name = this.poseKey(name);
     if (this._snapshots.has(name)) return this._snapshots.get(name);
     const P = POSES[name] || POSES.idle;
     const q = {}, p = {};
@@ -1058,6 +1128,9 @@ export class Kitten {
     if (this._to) this._swordPose(this._to.sword, 0);
     else this.rig.swordSocket.add(this.sword.group);
     if (this.holy) this.sword.setCharge(this.holy);
+    if (this.rimFloor) this.sword.group.traverse((o) => { if (o.material) this._rimFloorOn(o.material); });
+    // a longer / shorter skin can switch the idle variant (poseKey): re-apply the held idle
+    if (this.poseName === 'idle' && this.cfg.idlePose && this._to?.name !== this.poseKey('idle')) this.setPose('idle', { blend: 0, expression: false });
     return this;
   }
 
@@ -1076,10 +1149,10 @@ export class Kitten {
     if (sim === 'verlet') {
       if (this.cape) { this.cape.setStyle(style); this.capeStyle = style; return this; }
       if (this.swayCape) this.setCape(null);
-      this.cape = new HeroCape({ style, rig: this.rig, root: this.root, dims: this._capeDims() });
+      this.cape = new HeroCape({ style, rig: this.rig, root: this.root, dims: this._capeDims(), closeUp: this.closeUp });
       this.cape.mesh.castShadow = false;   // H3: the cape never casts
       this.root.add(this.cape.mesh);
-      if (this.activity >= 1) this.cape.setMode('sway', { blend: 1e-3 });
+      if (this.activity >= 1) { this.cape.setMode('sway', { blend: 1e-3 }); this.cape.pauseSim(true); }
     } else {
       if (this.swayCape) { this.swayCape.material = capeMaterial(style, { sway: true }); this.capeStyle = style; return this; }
       if (this.cape) this.setCape(null);
@@ -1597,24 +1670,34 @@ const _dtQ = new THREE.Quaternion(), _dtP = new THREE.Quaternion(), _UP = new TH
 
 const _whiskerMats = new Map();
 function whiskerMaterial(color) {
-  if (!_whiskerMats.has(color)) _whiskerMats.set(color, own(new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55, depthWrite: false })));
+  // PERF §1.2: the unlit fx basic module (lines too), not a LineBasic program
+  if (!_whiskerMats.has(color)) _whiskerMats.set(color, own(fxBasicMaterial({ color, transparent: true, opacity: 0.55, depthWrite: false })));
   return _whiskerMats.get(color);
 }
 let _shadowOnly = null;
 /** Invisible in the colour pass, still rendered into shadow maps (three uses its depth material there). */
-function shadowOnlyMaterial() { return _shadowOnly || (_shadowOnly = own(new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }))); }
+/**
+ * The shadow proxy's material. The proxy lives on core's SHADOW_ONLY_LAYER (never drawn in a colour pass), but
+ * `renderer.compile` still links a program for every material in the scene: so it borrows the shared skinned kit
+ * toon material, whose program the body already uses (PERF §1.2: 0 extra programs; was a Basic program of its own).
+ */
+function shadowOnlyMaterial() { return _shadowOnly || (_shadowOnly = kitMaterial('skinned')); }
 let _auraMat = null;
-function auraMaterial() {
-  if (_auraMat) return _auraMat;
-  _auraMat = own(new THREE.ShaderMaterial({
-    side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-    uniforms: { uColor: { value: new THREE.Color(PAL.holyRim) }, uI: { value: 0 }, uExpand: { value: 0.0 } },
-    vertexShader: /* glsl */`uniform float uExpand; varying vec3 vN, vV;
+const AURA_VERT = /* glsl */`uniform float uExpand; varying vec3 vN, vV;
       void main(){ vec4 wp = modelMatrix * vec4(position + normal * uExpand, 1.0);
         vN = normalize(mat3(modelMatrix) * normal); vV = normalize(cameraPosition - wp.xyz);
-        gl_Position = projectionMatrix * viewMatrix * wp; }`,
-    fragmentShader: /* glsl */`uniform vec3 uColor; uniform float uI; varying vec3 vN, vV;
-      void main(){ float f = pow(abs(dot(normalize(vN), vV)), 3.0); gl_FragColor = vec4(uColor * f * uI * 0.55, 1.0); }`,
+        gl_Position = projectionMatrix * viewMatrix * wp; }`;
+const AURA_FRAG = /* glsl */`uniform vec3 uColor; uniform float uI; varying vec3 vN, vV;
+      void main(){ float f = pow(abs(dot(normalize(vN), vV)), 3.0); gl_FragColor = vec4(uColor * f * uI * 0.55, 1.0); }`;
+// linked into the one fx program at import, before anything compiles (PERF §1.2)
+fxModule({ name: 'aura', side: THREE.BackSide, fog: false, vertexShader: AURA_VERT, fragmentShader: AURA_FRAG });
+function auraMaterial() {
+  if (_auraMat) return _auraMat;
+  // one module of the linked fx program (PERF §1.2): BackSide is a front-face discard inside it
+  _auraMat = own(fxShaderMaterial({
+    name: 'aura', side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    uniforms: { uColor: { value: new THREE.Color(PAL.holyRim) }, uI: { value: 0 }, uExpand: { value: 0.0 } },
+    vertexShader: AURA_VERT, fragmentShader: AURA_FRAG,
   }));
   return _auraMat;
 }

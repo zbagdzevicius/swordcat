@@ -5,7 +5,7 @@
 //   2 REVERSE_HORDE: 40 silhouettes charge out of the fog (roar of the crowd).
 //   3 HERO_LOW, then an ECU of the blade: she plants the sword (Vigil → Oath); Shard 2 tears out of his belt pouch and
 //     sinks into her blade: holy 0 → 1 over 2 s, 160 sparkles, bloom 0.55 → 1.2. THE ref1 FRAME. powerup_rise07 +
-//     jingles_STEEL03. Toast "Golden Hour unlocked! At full Valor: Stand + ⚔"
+//     jingles_STEEL03. Toast "Golden Hour unlocked! At full Valor: [Golden]"
 //   4 low, from behind her toward the gatehouse: Pudding rises over it, wings across the frame, and ROARS (roar_03 +
 //     c80_roar_02 at 0.7, shake 0.6): "ROOOOAR! (NOT. MY. FRIENDS.)" The horde skids, then scatters into the fog.
 //   5 TWO_SHOT_LOW on the empty causeway: he laughs, and it cracks into a sob; she sits beside him.

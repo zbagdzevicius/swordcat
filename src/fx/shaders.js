@@ -7,7 +7,8 @@
 //   - ends with <tonemapping_fragment> + <colorspace_fragment> so the Low preset (no composer) matches Med/High;
 //   - clamps every pow() base and guards every normalize() (requests/characters.md: one NaN pixel + MSAA + bloom).
 import * as THREE from 'three';
-import { HFOG, patchFogVarying } from '../world/HeightFog.js';
+import { HFOG, HFOG_GLSL, patchFogVarying } from '../world/HeightFog.js';
+import { UberGroup } from '../core/uber.js';
 
 /** Uniform set for a fogged ShaderMaterial (merge with your own). */
 export const fogUniforms = () => THREE.UniformsUtils.clone(THREE.UniformsLib.fog);
@@ -19,6 +20,7 @@ export const fogUniforms = () => THREE.UniformsUtils.clone(THREE.UniformsLib.fog
  * @template {THREE.ShaderMaterial} M @param {M} mat @returns {M}
  */
 export function withFxFog(mat) {
+  if (mat?.isUberMaterial) { Object.assign(mat.uniforms, HFOG); mat.userData.hfog = true; return mat; }   // linked: patched once in FX_UBER
   if (!mat?.fog || typeof mat.fragmentShader !== 'string') return mat;
   if (!mat.fragmentShader.includes('varying vec3 vFogW')) {
     // patchFogVarying treats any source that mentions `hfogFactor` as already patched, and FOG_FACTOR calls it:
@@ -33,8 +35,6 @@ export function withFxFog(mat) {
   return mat;
 }
 
-/** `new THREE.ShaderMaterial(params)` + `withFxFog` (every fogged fx shader material is built through this). */
-export const fxShaderMaterial = (params) => withFxFog(new THREE.ShaderMaterial(params));
 
 /**
  * Fragment helpers: the fog factor 0..1 and the fog colour at this fragment, the same values the level geometry gets
@@ -137,6 +137,12 @@ vec2 fxShape( float shape, vec2 uv ) {
     vec2 q = abs( uv ) - vec2( 0.5, 0.82 );
     float sd = length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - 0.14;
     return vec2( fxAA( sd, 0.06 ), 0.82 + 0.3 * step( 0.0, uv.x * uv.y ) );
+  } else if ( s == 13 ) {                           // PLUS: chunky rounded heal cross (ART §8.6), lit top-left
+    vec2 a = abs( uv );
+    vec2 q1 = a - vec2( 0.78, 0.28 ), q2 = a - vec2( 0.28, 0.78 );
+    float b1 = length( max( q1, 0.0 ) ) + min( max( q1.x, q1.y ), 0.0 );
+    float b2 = length( max( q2, 0.0 ) ) + min( max( q2.x, q2.y ), 0.0 );
+    return vec2( fxAA( min( b1, b2 ) - 0.1, 0.06 ), 0.9 + 0.2 * step( uv.y, uv.x ) );
   }
   return vec2( 0.0, 1.0 );
 }`;
@@ -155,3 +161,112 @@ float fxFbm2( vec2 p ) { return fxNoise( p ) * 0.65 + fxNoise( p * 2.13 + 17.1 )
 export const OUTPUT = /* glsl */`
 #include <tonemapping_fragment>
 #include <colorspace_fragment>`;
+
+/**
+ * PERF_SPEC §1.2 / §3.5: every fx ShaderMaterial is a *module* of ONE linked uber program (core/uber.js), so the ~25
+ * fx effects (particles, marks, telegraphs, decals, mist, trails, rays, holy, webs, horde, butterflies...) cost one
+ * program (+ its instanced variant) instead of one each. The module keeps its own GLSL; `fxMode` picks it per material.
+ * Exported so other areas' effect shaders can join the same program through `fxShaderMaterial` (characters' aura /
+ * streak / sparkles, world's sky, combat's projectiles).
+ */
+export const FX_UBER = new UberGroup('fx', {
+  libs: [{ match: HFOG_GLSL, emit: `#ifdef USE_FOG\n${HFOG_GLSL}\n#endif` }, FOG_FACTOR, SHAPES, NOISE],
+  shared: [...Object.keys(HFOG), 'fogColor', 'fogDensity', 'fogNear', 'fogFar'],
+  sharedVaryings: { vFogW: '#ifdef USE_FOG\nvarying vec3 vFogW;\n#endif' },
+});
+
+/**
+ * Register an fx shader module at import time (so it is linked into the one program before anything compiles).
+ * Same arguments as the material it will be used with (vertexShader, fragmentShader, side, fog, name).
+ * @param {THREE.ShaderMaterialParameters & {instanced?: boolean}} params @returns {object} module record
+ */
+export function fxModule(params) {
+  const src = patchFogVarying({ vertexShader: params.vertexShader, fragmentShader: params.fragmentShader, uniforms: {} });
+  return FX_UBER.module({ vertexShader: src.vertexShader, fragmentShader: src.fragmentShader, side: params.side, fog: params.fog !== false, instanced: params.instanced, name: params.name });
+}
+
+/**
+ * An fx ShaderMaterial (every fx shader material is built through this): a material of the linked `FX_UBER` program
+ * running `params`' own shaders, with world's height / focus fog (C4). Always DoubleSide + single pass (a Front /
+ * Back module discards the other face); `params.side` / `params.fog` keep their meaning per module.
+ * @param {THREE.ShaderMaterialParameters & {instanced?: boolean}} params @returns {THREE.ShaderMaterial}
+ */
+export function fxShaderMaterial(params) {
+  const { instanced, ...p } = params;
+  const m = FX_UBER.material(fxModule(params), p);
+  return withFxFog(m);
+}
+
+// ------------------------------------------------------------------ unlit "basic" module (PERF §1.2)
+
+const BASIC_VERT = /* glsl */`
+varying vec2 vUv;
+#include <fog_pars_vertex>
+void main() {
+  vUv = uv;
+  vec4 mvPosition = vec4( position, 1.0 );
+#ifdef USE_INSTANCING
+  mvPosition = instanceMatrix * mvPosition;
+#endif
+  mvPosition = modelViewMatrix * mvPosition;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}`;
+const BASIC_FRAG = /* glsl */`
+uniform vec3 uColor;
+uniform float uOpacity, uUseMap;
+uniform sampler2D uMap;
+varying vec2 vUv;
+#include <fog_pars_fragment>
+${FOG_FACTOR}
+void main() {
+  vec4 c = vec4( uColor, uOpacity );
+  if ( uUseMap > 0.5 ) c *= texture2D( uMap, vUv );
+  gl_FragColor = vec4( mix( c.rgb, fxFogColor(), fxFog() ), c.a );
+  ${OUTPUT}
+}`;
+/** The basic module per (fog, side): registered at import so they are linked before anything compiles. */
+const BASIC_MODS = new Map();
+for (const fog of [true, false]) {
+  for (const side of [THREE.FrontSide, THREE.DoubleSide, THREE.BackSide]) {
+    BASIC_MODS.set(`${fog}|${side}`, fxModule({ name: `fx.basic${fog ? '' : '.nofog'}${side === THREE.FrontSide ? '' : side === THREE.DoubleSide ? '.double' : '.back'}`,
+      vertexShader: BASIC_VERT, fragmentShader: BASIC_FRAG, fog, side, instanced: 'both' }));
+  }
+}
+
+/** `color` / `fxMap` / `opacity` on a basic fx material read and write its uniforms (MeshBasicMaterial-like). */
+function installBasic(m) {
+  const u = m.uniforms;
+  Object.defineProperty(m, 'color', { get: () => u.uColor.value, set: (v) => u.uColor.value.copy(v), configurable: true });
+  // `fxMap`, never `map`: three keys USE_MAP into the program from `material.map` (a second program for textured ones)
+  Object.defineProperty(m, 'fxMap', { get: () => u.uMap.value, set: (t) => { u.uMap.value = t ?? null; u.uUseMap.value = t ? 1 : 0; }, configurable: true });
+  Object.defineProperty(m, 'opacity', { get: () => u.uOpacity.value, set: (v) => { u.uOpacity.value = v; }, configurable: true });
+}
+
+/**
+ * An unlit material in the one fx program (PERF §1.2): the drop-in for a `MeshBasicMaterial` / `LineBasicMaterial`
+ * with a colour, an optional map and opacity (eyes, contact blobs, whiskers, glints, glow cards, far silhouettes).
+ * Works on plain, instanced and line meshes. `material.color` / `.fxMap` / `.opacity` stay live (they write uniforms).
+ * Fog is world's height / focus fog (`fog: false` to skip it); everything else (blending, depth, polygon offset,
+ * transparent, name) passes through.
+ * @param {{ color?: THREE.ColorRepresentation, map?: THREE.Texture|null, opacity?: number, fog?: boolean,
+ *           side?: THREE.Side } & THREE.MaterialParameters} [o]
+ * @returns {THREE.ShaderMaterial}
+ */
+export function fxBasicMaterial(o = {}) {
+  const { color = '#ffffff', map = null, opacity = 1, fog = true, side = THREE.FrontSide, ...rest } = o;
+  const mod = BASIC_MODS.get(`${fog !== false}|${side}`) ?? BASIC_MODS.get('true|0');
+  const uniforms = { uColor: { value: new THREE.Color(color) }, uOpacity: { value: opacity }, uMap: { value: map }, uUseMap: { value: map ? 1 : 0 } };
+  const m = FX_UBER.material(mod, { ...rest, uniforms });
+  m.userData.uber.install = installBasic;
+  installBasic(m);
+  m.userData.fxBasic = true;
+  if (fog === false) m.userData.noHeightFog = true;
+  return withFxFog(m);
+}
+
+/**
+ * Does `m`'s shader apply fog? Linked fx materials always carry `fog: true` (one program); their module decides.
+ * @param {THREE.Material} m @returns {boolean}
+ */
+export function fxFogged(m) { return m?.userData?.uber ? m.userData.uber.mod.fog !== false : !!m?.fog; }

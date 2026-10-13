@@ -16,6 +16,7 @@ import { SIGNATURE } from '../characters/palette.js';
 import { el, flag, setVar, setText, pulse } from './dom.js';
 import { tx, actionGlyph, codeLabel, preferredCode } from './text.js';
 import { portraitSVG } from './portraits.js';
+import { companionJoined } from './reveal.js';
 import * as I from './icons.js';
 
 /** Slot rows: action, icon, divider before. */
@@ -54,7 +55,6 @@ export function cooldownStart(sl, cd, max) {
 }
 
 /** Tick volume: −20 dB. */
-const TICK_VOL = 0.1;
 
 export class AbilityBar {
   /** @param {any} ctx @param {HTMLElement} parent the ui root */
@@ -73,7 +73,7 @@ export class AbilityBar {
       e.addEventListener('contextmenu', (ev) => ev.preventDefault());
       for (const t of ['pointerup', 'pointerleave', 'pointercancel']) e.addEventListener(t, () => this._fire(s.id, false));
     }
-    // §10.1 hover tooltip (parchment, one line)
+    // §10.1 hover tooltip (cream candy card, one line)
     this.tip = el('div', 'ab-tip', { parent: this.root });
     for (const [id, sl] of this.slots) {
       const def = SLOTS.find((d) => d.id === id);
@@ -157,6 +157,14 @@ export class AbilityBar {
     }
     const p = ctx.player, s = p?.abilityState ? p.abilityState(this.state) : null;
     if (!s) return;
+    // WA §7.5 progressive reveal: in Morning Practice only the keycaps of lessons already started show (visibility only:
+    // the bar keeps its geometry, X22); the panel itself steps back until practice is over
+    const rv = ctx.ui?.reveal;
+    flag(this.root, 'is-practice', !!rv?.practice);
+    for (const [id, sl] of this.slots) {
+      flag(sl.el, 'is-veiled', !!rv && rv[id] === false);
+      if (!rv?.practice) flag(sl.el, 'is-reveal', false);         // its ::after is the cooldown shine's again
+    }
     const small = typeof innerWidth !== 'undefined' && innerWidth < 900;
     flag(this.root, 'is-small', small);
     flag(this.root, 'is-pad', input?.device === 'pad');
@@ -184,7 +192,9 @@ export class AbilityBar {
       this.gritPips.innerHTML = h;
     }
     // kitten slot: portrait, cooldown, zzz
-    const comp = ctx.companions, c = comp?.active?.[0];
+    const comp = ctx.companions, c0 = comp?.active?.[0];
+    // the slot stays empty until the kitten has joined (no portrait of Mochi before D-01 sets meadow.mochi)
+    const c = c0 && companionJoined(ctx, c0.kittenId ?? c0.id) ? c0 : null;
     const ks = this.slots.get('ability');
     flag(ks.el, 'is-empty', !c);
     if (c) {
@@ -209,7 +219,7 @@ export class AbilityBar {
       sl.maxSeen = Math.max(sl.maxSeen ?? 0, max);
     } else if (sl.wasCd) {
       flag(sl.sweep, 'is-run', false);
-      if ((sl.maxSeen ?? 0) >= 2) { pulse(sl.el, 'is-flash-ready'); try { this.ctx.audio?.play2D?.('ui/glass_001', { volume: TICK_VOL }); } catch { /* audio optional */ } }
+      if ((sl.maxSeen ?? 0) >= 2) { pulse(sl.el, 'is-flash-ready'); try { this.ctx.audio?.play2D?.('ui.ready'); } catch { /* audio optional */ } }
       sl.maxSeen = 0;
     }
     flag(sl.el, 'is-cd', on);
@@ -219,6 +229,12 @@ export class AbilityBar {
     if (sl.n !== n) { sl.n = n; setText(sl.num, n ? String(n) : ''); }
     if (this._keysDue) setText(sl.key, slotGlyph(this.ctx.input, id));   // key glyphs re-read at 2 Hz (no per-frame strings)
     return sl.el;
+  }
+
+  /** WA §7.5: a lesson starts: its slot appears with the touch button's pop + 3-ring pulse. */
+  reveal(action) {
+    const sl = this.slots.get(action);
+    if (sl) pulse(sl.el, 'is-reveal');
   }
 
   dispose() {

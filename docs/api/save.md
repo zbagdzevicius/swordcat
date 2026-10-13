@@ -78,3 +78,21 @@ Everything below is additive. Smoke covers it through ui's own Continue / Quit t
   Kitten's `lives: Infinity` serialises as null and migrates back to 9, which Kitten ignores.
 - companions / audio: `save:loaded` also fires on New Game / Continue / back at the title (`reason` set). Your
   existing `_syncFromState` / `_readSettings` handlers cover it.
+
+## Phase W / §7.4 settings (save.1, save.W1, PERF V1, ART A3) — schema stays v1
+- `migrate` validates every new setting from `config.SETTING_VALUES`: ranges `camCursorLead` 0–0.15 and
+  `camZoomPortrait` 0.7–1.4 (clamped); enums `camLockMode` (locked / semi / free), `fpsCap` ('auto' / 30 / 60 / 'off'),
+  `quality`, `hudMode` (calm / full), `pathPreview` (auto / on / off; a legacy boolean becomes 'on' / 'off'); booleans
+  `biggerHero`, `batterySaver`, `hitWords`, `tutorialHints`, `reduceCameraMotionAuto`, `reduceFlashesAuto`. Bad values
+  fall back to the defaults; missing keys take them (old saves load with every default filled).
+- K7 / X19: core's `migrateSettings` runs inside `migrate`: `camLock: false` → `camLockMode: 'free'`; the retired
+  `camLock` stays in sync with the mode.
+- X31: a pre-W save with `reduceFlashes` / `reduceCameraMotion` stored `true` (the player's own choice) gets
+  `<key>Auto: false` (stops following the OS); a stored `false` keeps following it.
+- Flags `sticker.*`, `seen.offer.kitten`, `telegraph.seen.*` persist like every flag (≤ 2048 kept). `seen.*` and
+  `telegraph.seen.*` are UI memory: on their own they do not make `hasProgress` true (no "Continue" for a player who
+  only saw a telegraph).
+- Mid-prologue resume: on the meadow, any `prologue.*` flag without `prologue.done` (e.g. an old `prologue.armour`)
+  resumes at `practice` (the barn / practice field), never north of the closed practice gate. Saves without any
+  prologue flag keep their spawn. Story's `migrateFlags` still maps the old flags onto the WA order at load.
+- `newGame({ skipPrologue: true })` sets every prologue stage flag (start, practice, chart, raid, armour, tutorial, done).

@@ -13,10 +13,14 @@ const done = (s, l) => !!F(s, `${l}.done`);
  * `level` limits where the step is shown (the hub steps show in town). `id` is stable (quest:update questId).
  */
 export const QUESTS = Object.freeze([
-  { id: 'prologue', level: 'meadow', textKey: 'quest.prologue', done: (s) => !!F(s, 'prologue.done') },
+  // the prologue in three steps (StoryManager.prologueStage): practice → the height chart → the barn chest (CS-01b)
+  { id: 'prologue', level: 'meadow', textKey: 'quest.prologue', done: (s) => !!F(s, 'prologue.practice') || !!F(s, 'prologue.done') },
+  { id: 'prologue.chart', level: 'meadow', textKey: 'quest.prologue.chart', done: (s) => !!F(s, 'prologue.chart') || !!F(s, 'prologue.done') },
+  { id: 'prologue.suit', level: 'meadow', textKey: 'quest.prologue.suit', done: (s) => !!F(s, 'prologue.done') },
+  // Mochi's cart (z −41) comes before the Picnic Glade (z 18) on the road north
+  { id: 'meadow.mochi', level: 'meadow', textKey: 'quest.meadow.mochi', done: (s) => !!F(s, 'meadow.mochi') },
   { id: 'meadow.follow', level: 'meadow', textKey: 'quest.meadow.follow', done: (s) => !!F(s, 'meadow.pudding') },
   { id: 'meadow.pudding', level: 'meadow', textKey: 'quest.meadow.pudding', done: (s) => F(s, 'meadow.pudding') === true },
-  { id: 'meadow.mochi', level: 'meadow', textKey: 'quest.meadow.mochi', done: (s) => !!F(s, 'meadow.mochi') },
   { id: 'meadow.exit', level: 'meadow', textKey: 'quest.meadow.exit', done: (s) => done(s, 'meadow') },
   { id: 'forest.sage', level: 'forest', textKey: 'quest.forest.sage', done: (s) => !!F(s, 'forest.sage') },
   { id: 'forest.camp', level: 'forest', textKey: 'quest.forest.camp', done: (s) => !!F(s, 'forest.camp') },
@@ -53,6 +57,19 @@ export function currentQuest(state, levelId = null) {
     if (g.id !== 'done') return g;
   }
   return { id: 'done', textKey: 'quest.done', text: tr('quest.done'), level: null };
+}
+
+/** Boss key (the `boss:start` id, `boss_` prefix stripped) → its quest text key while the fight is on. */
+export const BOSS_QUESTS = Object.freeze({ grizzlechop: 'quest.boss.grizzlechop', cacklejaw: 'quest.boss.cacklejaw', brutus: 'quest.boss.brutus', barkus: 'quest.boss.barkus' });
+
+/**
+ * The quest row shown while boss `id` is up (the objective pill names the boss, not the step before the arena).
+ * Unknown bosses read `quest.boss`. Pure. @returns {{ id: string, textKey: string, text: string, level: null, boss: true }}
+ */
+export function bossQuest(id) {
+  const key = String(id ?? '').replace(/^boss_/, '');
+  const textKey = BOSS_QUESTS[key] ?? 'quest.boss';
+  return { id: `boss.${key || 'boss'}`, textKey, text: tr(textKey), level: null, boss: true };
 }
 
 /** May level `id` be entered (Quest Board / exits)? Each level opens when the one before it is done; the board itself

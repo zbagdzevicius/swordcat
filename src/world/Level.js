@@ -21,6 +21,8 @@ const _v = new THREE.Vector3();
 /** PERF §8.3 iso cull: hide props past R + pad (m), show again inside R (hysteresis), never closer than minIso. */
 export const CULL = Object.freeze({ pad: 2, hyst: 2, minIso: 30, max: 160 });
 const GROUPS = ['terrain', 'props', 'grass', 'water', 'skyline', 'dawnstone', 'pickups', 'actors'];
+/** `userData.perfCat` per level group (core `perf().byCat`, PERF §12): grass is its own row, the rest is 'props'. */
+export const GROUP_PERF_CAT = Object.freeze({ terrain: 'props', props: 'props', grass: 'grass', water: 'props', skyline: 'props', dawnstone: 'props', pickups: 'props', actors: 'props' });
 
 /** Evaluate a zone condition: undefined → true, function(state, ctx) → bool, string → state.cond(). */
 export function condOk(ctx, cond) {
@@ -100,7 +102,7 @@ export class Level {
     this.root = new THREE.Group(); this.root.name = 'level:' + def.id;
     /** @type {Record<string, THREE.Group>} */
     this.groups = {};
-    for (const k of GROUPS) { const g = new THREE.Group(); g.name = k; this.groups[k] = g; this.root.add(g); }
+    for (const k of GROUPS) { const g = new THREE.Group(); g.name = k; g.userData.perfCat = GROUP_PERF_CAT[k]; this.groups[k] = g; this.root.add(g); }
     this.heightfield = null; this.terrain = null;
     this.colliders = { circles: [], boxes: [], segments: [], rings: [] };
     /** @type {THREE.Object3D[]} architecture for physics' Octree (bridge decks) */
@@ -131,6 +133,8 @@ export class Level {
     this.navBlock = (def.navBlock ?? []).map((b) => (b.at && b.size ? { minX: b.at[0] - b.size[0] / 2, maxX: b.at[0] + b.size[0] / 2, minZ: b.at[1] - b.size[1] / 2, maxZ: b.at[1] + b.size[1] / 2 } : b));
     /** §2.2 the camera hint zone in effect (null = the level framing) and the one she is in now */
     this.camZone = null; this._zoneNow = null; this._calmT = 0; this._hintSent = false;
+    /** AUTOCAM D21 / §9.3: tall landmarks the camera keeps inside the far plane ({ position, r }) */
+    this.farKeep = [];
     this.pickups = null; this.grass = null; this.batch = null; this.trees = []; this.skyline = null; this.dawnstone = null; this.waterMeshes = null;
     /** visual-only animators { render(dt, t) } (windmill fans, flags) */
     this.animators = [];
@@ -429,7 +433,11 @@ export class Level {
     this._applyFar();
     // §4.2 grass tiles and LOD follow the iso focus (what the lens looks at), the trample follows her
     const focus = ctx.cam?.focus?.isVector3 && (ctx.env?._focusMode ?? 0) > 0.5 ? ctx.cam.focus : center;
-    this.grass?.update(t, ctx.env, focus, p && p.alive !== false ? p.object3d.position : null, cam, focus === center ? null : ctx.cam?.footprint);
+    if (this.grass) {
+      // PERF §5.4 thermal rung 1 sheds half the tufts (postfx.pacing owns the ladder; a no-op while the scale holds)
+      this.grass.setScale(ctx.postfx?.grassScale ?? 1);
+      this.grass.update(t, ctx.env, focus, p && p.alive !== false ? p.object3d.position : null, cam, focus === center ? null : ctx.cam?.footprint);
+    }
     if (cam && this.groundLod) Terrain.updateGroundLod(this.groups.terrain, focus === center ? cam.position : focus, this.groundLod);
     // PERF §8.3: one 4 Hz fog-radius cull keyed to the iso focus (hide past R + 2 m, show again inside R); the
     // classic / cutscene lens keeps the lens-distance rule

@@ -7,7 +7,7 @@ const XBOW = 'models/weapons/kaykit/crossbow_1handed.glb';
 const BARBARIAN = 'models/characters/kaykit/Barbarian.glb';
 const ROGUE = 'models/characters/kaykit/Rogue_Hooded.glb';
 const KNIGHT = 'models/characters/kaykit/Knight.glb';
-const BLADE = 'models/weapons/skeleton/Skeleton_Blade.glb';
+const BLADE = 'models/weapons/skeleton/Skeleton_Blade.glb';   // Squeakybones (+ the hyenas' missing-prop fallback only)
 const SPIDER = 'models/creatures/polypizza/Spider.glb';
 const SLIME = 'models/creatures/polypizza/Slime.glb';
 const SKELETONS = ['models/creatures/skeletons/Skeleton_Minion.glb', 'models/creatures/skeletons/Skeleton_Warrior.glb',
@@ -22,10 +22,10 @@ export default [RAT, PIGEON, XBOW, BARBARIAN, ROGUE, KNIGHT, BLADE, SPIDER, SLIM
 
 // Gloomjellies are procedural since M2 (Slime.glb stays listed: the §10.2 fallback model and its U11 clip map).
 export const levels = {
-  meadow: [RAT, XBOW, PIGEON, BARBARIAN, ROGUE, KNIGHT, BLADE],                 // rats, crows + the CS-02 cast
+  meadow: [RAT, XBOW, PIGEON, BARBARIAN, ROGUE, KNIGHT],                        // rats, crows + the CS-02 cast (squeaky bones are procedural)
   forest: [RAT, XBOW, PIGEON, SPIDER, SABRE],                                    // + B1 Grizzlechop (Rat.glb ×2 + sabre)
   town: [RAT, XBOW, PIGEON, ROGUE, KNIGHT],                                      // stealers, pugs, Pilfer's chase
-  gate: [BARBARIAN, BLADE, ROGUE, KNIGHT, RAT, XBOW, PIGEON],                    // The Line + B2 Cacklejaw (+ clones)
+  gate: [BARBARIAN, ROGUE, KNIGHT, RAT, XBOW, PIGEON],                           // The Line + B2 Cacklejaw (+ clones)
   bog: [RAT, XBOW, PIGEON, SPIDER, ROGUE, KNIGHT],
   keep: [BARBARIAN, BLADE, KNIGHT, PIGEON, RAT, XBOW, ...SKELETONS, ...SKELETON_GEAR, CLEAVER],
 };

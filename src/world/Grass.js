@@ -1,7 +1,9 @@
 // src/world/Grass.js  (owner: world) — instanced wind grass as iso toon tufts (PERF_SPEC §8.4, ART_WARM_SPEC §8.2,
 // AUTOCAM §9.4; X11). ONE InstancedMesh (1 draw) holds the grass tufts and the flowers:
-//   - a tuft = 3 tapered blades in a fan (0° / 60° / 120°), 2 triangles each (6 tris), plus a 2-tri petal cap that is
-//     collapsed on non-flower instances; blades ×1.6 wide, 0.18–0.32 m tall, normals bent 70 % to world-up (they shade
+//   - a tuft = 3 tapered blades in a fan (0° / 60° / 120°), 2 triangles each (6 tris), plus a 2-tri petal cap
+//     (PERF §8.4 / ART §8.2: a quad shaded as a round 5-petal blossom in the fragment, no alpha test; the corners
+//     outside the blossom take a shaded mid-blade green so the quad never reads as a square) that is collapsed on non-flower
+//     instances; blades ×1.6 wide, 0.18–0.32 m tall, normals bent 70 % to world-up (they shade
 //     like the ground: no dark backfaces, no noisy toon bands), opaque (no alphaTest), no shadow receive;
 //   - a fixed count per quality (`QUALITY.grassTufts`: Low 1300, Med 4000, High 8000), so the boss zoom makes it
 //     sparser, never more expensive;
@@ -9,8 +11,9 @@
 //     the footprint centre (`cam.footprint` when camera publishes it, else the frustum ∩ ground), quantised so zoom
 //     does not shimmer; the last 15 % fades out;
 //   - colours root → tip (ART §2.6 per biome), per-tuft hue ±6° / lightness ±5 %, dry patches from the ground data
-//     (Terrain's texture: R height, G density, B height mul, A dryness + 2 × near-spine), flowers 8 % near the spine and
-//     3 % elsewhere in the ART palette (no pink / orange near the path, G19).
+//     (Terrain's texture: R height, G density, B height mul, A dryness + 2 × near-spine + 4 × on-path), flowers 3.2 %
+//     near the spine and 1.2 % elsewhere (−60 %, WA §3.2: pickups own cream / gold twinkle), none on the path or within
+//     2 m of its edge, tinted from the level's MUTED accent set (`mutedFlowers`; sat ≤ 0.34, never cream).
 // Wind = rolling gust waves (Env wind + gust) and flutter; tufts part around her. No DOM at import.
 import * as THREE from 'three';
 import { mulberry32 } from '../core/rng.js';
@@ -26,24 +29,46 @@ export const GRASS_COLORS = {
   keep:   { root: '#7A6A4E', tip: '#B8C47A', dry: '#D8C48A' },
 };
 
-/** ART §8.2 flower palette (butter, white, sky, cream, lilac) and shares (near the spine / elsewhere). */
-export const FLOWER_COLORS = Object.freeze(['#FFD84A', '#FFFFFF', '#8EC8FF', '#FFF2B0', '#C9A8FF']);
+/** Flower muting (WA §3.2): HSL saturation scale / cap, lightness band (below the cream / gold pickup band), count. */
+export const FLOWER_MUTE = Object.freeze({ satMul: 0.55, satMax: 0.34, lMin: 0.56, lMax: 0.7, n: 5 });
+
+/**
+ * Muted flower tints from a level accent set (pure): the accents cycled to `FLOWER_MUTE.n` entries, each one's HSL
+ * saturation scaled and capped (pink / coral accents become dusty rose, never a G19 hot pink near the path) and its
+ * lightness clamped below the cream / gold pickup band, so a flower never reads as a letter, coin or sticker.
+ * @param {string[]} accent hex colours
+ * @returns {string[]} `FLOWER_MUTE.n` hex colours
+ */
+export function mutedFlowers(accent) {
+  const src = Array.isArray(accent) && accent.length ? accent : ['#8FD3FF', '#C9A8FF', '#FF8FB1'];
+  const M = FLOWER_MUTE, c = new THREE.Color(), hsl = { h: 0, s: 0, l: 0 }, out = [];
+  for (let i = 0; i < M.n; i++) {
+    c.set(src[i % src.length]).getHSL(hsl, THREE.SRGBColorSpace);
+    const l = Math.min(M.lMax, Math.max(M.lMin, hsl.l) + (i >= src.length ? 0.04 : 0));   // repeats a touch lighter
+    c.setHSL(hsl.h, Math.min(M.satMax, hsl.s * M.satMul), l, THREE.SRGBColorSpace);
+    out.push('#' + c.getHexString(THREE.SRGBColorSpace));
+  }
+  return out;
+}
+
+/** The default flower palette: the meadow accent set (butter, sky, pink, lilac), muted. */
+export const FLOWER_COLORS = Object.freeze(mutedFlowers(['#FFD84A', '#8FD3FF', '#FF8FB1', '#C9A8FF']));
 
 /**
  * Tuft constants: blade half-width (×1.6 of the old 0.0625), height band (m), flower shares, the near-spine band
  * (m beyond the path edge), the tile rule (T = tileMul · d, ≥ footprint + pad, quantised), and the default count.
  */
 export const GRASS = Object.freeze({
-  bladeW: 0.1, hMin: 0.18, hMax: 0.32, upBend: 0.7, flowerNear: 0.08, flowerFar: 0.03, nearSpine: 4,
+  bladeW: 0.1, hMin: 0.18, hMax: 0.32, upBend: 0.7, flowerNear: 0.032, flowerFar: 0.012, nearSpine: 4, offPath: 2,
   tileMul: 1.6, tileMin: 14, tileMax: 48, tileQuant: 2, pad: 3, fade: 0.15, defaultD: 12.4, count: 4000,
-  hueJitter: 6 / 360, lJitter: 0.05, capSize: 0.09,
+  hueJitter: 6 / 360, lJitter: 0.05, capSize: 0.1, capTris: 2,
 });
 
 /** Blade fan yaws (rad) of one tuft. */
 const FAN = [0, Math.PI / 3, (Math.PI * 2) / 3];
 
 /**
- * One tuft: 3 blades × (4 verts, 2 tris) + a petal cap (4 verts, 2 tris; aCap = 1). Base at y 0, height 1, blade
+ * One tuft: 3 blades × (4 verts, 2 tris) + a petal cap (a quad: 4 verts, 2 tris; aCap = 1). Base at y 0, height 1, blade
  * half-width 1 (scaled per instance in the shader). Attributes: position, normal (up-bent), aTip (0 base → 1 tip),
  * aCap.
  */
@@ -62,10 +87,11 @@ export function makeTuftGeometry() {
     const tip = vert(fx * 0.35, 1, fz * 0.35, fx, fz, 1, 0);
     idx.push(bl, m, tip, m, br, tip);
   }
-  // petal cap (horizontal quad at the tuft top), collapsed on grass instances
-  const k = 1;
-  const a0 = vert(-k, 1.02, -k, 0, 0, 1, 1), a1 = vert(k, 1.02, -k, 0, 0, 1, 1), a2 = vert(k, 1.02, k, 0, 0, 1, 1), a3 = vert(-k, 1.02, k, 0, 0, 1, 1);
-  idx.push(a0, a2, a1, a0, a3, a2);
+  // petal cap: a horizontal quad (half-side 1, so the unit blossom circle is inscribed) at the tuft top, collapsed on
+  // grass instances; the fragment shades it as a round 5-petal blossom from the interpolated local xz (no discard, so
+  // the draw keeps early-z). PERF §8.4: 2 triangles (the old 6-tri hexagon cost 6 tris on EVERY tuft, flower or not).
+  const c0 = vert(-1, 1.02, -1, 0, 0, 1, 1), c1 = vert(1, 1.02, -1, 0, 0, 1, 1), c2 = vert(1, 1.02, 1, 0, 0, 1, 1), c3 = vert(-1, 1.02, 1, 0, 0, 1, 1);
+  idx.push(c0, c3, c2, c0, c2, c1);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
@@ -111,6 +137,7 @@ uniform vec3 uPlayer;
 uniform sampler2D uGround;
 uniform vec2 uGroundUV;   // uv = xz * x + y
 varying float vH, vTint, vDry, vFl, vFlK;
+varying vec2 vCapP;
 float gh21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float gvn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(gh21(i), gh21(i + vec2(1.0, 0.0)), f.x), mix(gh21(i + vec2(0.0, 1.0)), gh21(i + vec2(1.0, 1.0)), f.x), f.y); }
@@ -123,20 +150,22 @@ vec3 transformed;
   vec2 base = uCenter - 0.5 * S;
   vec2 root = base + mod(aOff.xy * S - base, S);
   vec4 g = texture2D(uGround, root * uGroundUV.x + uGroundUV.y);
-  float near = step(1.4, g.a);
-  float dry = clamp(g.a - 2.0 * near, 0.0, 1.0);
+  float onPath = step(3.4, g.a);
+  float ga = g.a - 4.0 * onPath;
+  float near = step(1.4, ga);
+  float dry = clamp(ga - 2.0 * near, 0.0, 1.0);
   float keep = step(aOff.z, g.g);
   vec2 dc = abs(root - uCenter);
   float cheb = max(dc.x, dc.y);
   float fade = 1.0 - smoothstep(S * 0.5 * (1.0 - uFade), S * 0.5, cheb);
-  float fl = step(aF.x, mix(uFlFar, uFlNear, near));
+  float fl = step(aF.x, mix(uFlFar, uFlNear, near)) * (1.0 - onPath);
   float hgt = mix(uHMin, uHMax, aP.y) * max(g.b, 0.0) * keep * fade * (1.0 + fl * 0.25);
   float wid = uBladeW * (0.8 + 0.4 * aP.w) * keep * (0.5 + 0.5 * fade);
   float cy = cos(aP.x), sy = sin(aP.x);
   vec3 lp = position;
   float tip = aTip;
   vec3 p = vec3(lp.x * wid, lp.y * hgt, lp.z * wid);
-  // the petal cap: flower instances only (collapsed otherwise), a little disc on top of the tuft
+  // the petal cap: flower instances only (collapsed otherwise), a little round blossom on top of the tuft
   p.xz = mix(p.xz, lp.xz * uCap * fl * keep * fade, aCap);
   p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
   float t2 = tip * tip;
@@ -150,7 +179,7 @@ vec3 transformed;
   p.xz += (pd > 1e-3 ? away / pd : vec2(0.0)) * push * hgt * 0.9;
   p.y -= push * hgt * 0.5;
   transformed = vec3(root.x, g.r - 0.02, root.y) + p;
-  vH = tip; vTint = aP.w; vDry = dry; vFl = fl * aCap; vFlK = aF.y;
+  vH = tip; vTint = aP.w; vDry = dry; vFl = fl * aCap; vFlK = aF.y; vCapP = lp.xz * aCap;
 }
 `;
 
@@ -158,6 +187,7 @@ const FRAG_PARS = /* glsl */`
 uniform vec3 uRoot, uTip, uDry;
 uniform vec3 uF0, uF1, uF2, uF3, uF4;
 varying float vH, vTint, vDry, vFl, vFlK;
+varying vec2 vCapP;
 vec3 gHue(vec3 c, float h) { const vec3 k = vec3(0.57735); float co = cos(h); return c * co + cross(k, c) * sin(h) + k * dot(k, c) * (1.0 - co); }
 `;
 
@@ -169,7 +199,15 @@ const FRAG_COLOR = /* glsl */`
   c = gHue(c, (fract(vTint * 7.31) - 0.5) * 2.0 * ${GRASS.hueJitter.toFixed(4)} * 6.2832) * (1.0 + (fract(vTint * 3.71) - 0.5) * 2.0 * ${GRASS.lJitter.toFixed(3)});
   float k = vFlK * 5.0;
   vec3 fc = k < 1.0 ? uF0 : k < 2.0 ? uF1 : k < 3.0 ? uF2 : k < 4.0 ? uF3 : uF4;
-  diffuseColor.rgb = mix(c, fc, step(0.5, vFl));
+  if (vFl > 0.5) {
+    // a round 5-petal blossom on the quad: soft scallops, a honey centre dot. The corners / notches outside it take
+    // the shaded mid-blade green (the up-facing quad lit like the tip colour read as a pale paper square)
+    float r = length(vCapP);
+    float edge = 0.78 + 0.22 * abs(cos(2.5 * atan(vCapP.y, vCapP.x)));
+    vec3 petal = fc * (0.86 + 0.14 * smoothstep(0.2, 0.7, r));
+    c = r < 0.24 ? vec3(0.85, 0.66, 0.36) : r < edge ? petal : mix(uRoot, c, 0.45);
+  }
+  diffuseColor.rgb = c;
 }
 `;
 
@@ -191,7 +229,7 @@ export function makeGrassMaterial(uniforms) {
       // both faces shade like the up-bent front face (no dark backfaces from above)
       .replace('#include <normal_fragment_begin>', 'float faceDirection = 1.0;\nvec3 normal = normalize( vNormal );\nvec3 nonPerturbedNormal = normal;');
   };
-  m.customProgramCacheKey = () => 'world-tuft-v1';
+  m.customProgramCacheKey = () => 'world-tuft-v2';
   m.userData.owned = true;
   return m;
 }
@@ -202,13 +240,14 @@ export function makeGrassMaterial(uniforms) {
 export class Grass {
   /**
    * @param {{ground: THREE.Texture, size:number, res:number, quality?: any, colors?: object, seed?: number,
-   *          height?: number, near?: number, flowers?: number, count?: number}} o
+   *          height?: number, near?: number, flowers?: number, count?: number, flowerColors?: string[]}} o
    */
   constructor(o) {
     const q = o.quality ?? {};
     const W = o.res + 1, scale = (W - 1) / (W * o.size);
     const groundUV = new THREE.Vector2(scale, (o.size / 2) * scale + 0.5 / W);
     const colors = o.colors ?? GRASS_COLORS.meadow;
+    const fcol = o.flowerColors?.length ? o.flowerColors : FLOWER_COLORS;
     const n = Math.max(1, Math.round((o.count ?? q.grassTufts ?? GRASS.count) * (o.near ?? 1)));
     const rnd = mulberry32(((o.seed ?? 7) >>> 0) + 101);
     const base = makeTuftGeometry();
@@ -229,6 +268,8 @@ export class Grass {
     geo.setAttribute('aP', new THREE.InstancedBufferAttribute(prm, 4));
     geo.setAttribute('aF', new THREE.InstancedBufferAttribute(fl, 2));
     geo.instanceCount = n;
+    /** the full tuft count of this quality preset (`setScale` draws a prefix of the random-ordered instances) */
+    this.full = n; this._scale = 1;
     const hMul = (o.height ?? 0.26) / 0.26;
     const tile = grassTile(GRASS.defaultD);
     this.uniforms = {
@@ -239,8 +280,8 @@ export class Grass {
       uPlayer: { value: new THREE.Vector3(0, -999, 0) },
       uGround: { value: o.ground }, uGroundUV: { value: groundUV },
       uRoot: { value: new THREE.Color(colors.root) }, uTip: { value: new THREE.Color(colors.tip) }, uDry: { value: new THREE.Color(colors.dry) },
-      uF0: { value: new THREE.Color(FLOWER_COLORS[0]) }, uF1: { value: new THREE.Color(FLOWER_COLORS[1]) }, uF2: { value: new THREE.Color(FLOWER_COLORS[2]) },
-      uF3: { value: new THREE.Color(FLOWER_COLORS[3]) }, uF4: { value: new THREE.Color(FLOWER_COLORS[4]) },
+      uF0: { value: new THREE.Color(fcol[0 % fcol.length]) }, uF1: { value: new THREE.Color(fcol[1 % fcol.length]) }, uF2: { value: new THREE.Color(fcol[2 % fcol.length]) },
+      uF3: { value: new THREE.Color(fcol[3 % fcol.length]) }, uF4: { value: new THREE.Color(fcol[4 % fcol.length]) },
     };
     this.material = makeGrassMaterial(this.uniforms);
     this.geometry = geo;
@@ -288,10 +329,21 @@ export class Grass {
     bs.center.set(cx, center.y, cz); bs.radius = T * 0.75;
   }
 
+  /**
+   * PERF §5.4 / E.PERF_THERMAL `grassScale`: draw `round(full · s)` tufts (s in (0, 1]). The instances are in random
+   * order, so a prefix thins the field evenly; no buffer is touched. Cheap no-op while `s` is unchanged.
+   */
+  setScale(s) {
+    const v = Number.isFinite(s) ? Math.min(1, Math.max(0.05, s)) : 1;
+    if (v === this._scale) return;
+    this._scale = v;
+    this.geometry.instanceCount = Math.max(1, Math.round(this.full * v));
+  }
+
   /** Tuft instances. */
   get count() { return this.geometry.instanceCount; }
 
-  /** Triangles drawn per frame (6 per tuft + the 2-tri cap, collapsed on grass). */
+  /** Triangles drawn per frame (6 per tuft + the 6-tri cap, collapsed on grass). */
   get tris() { return this.geometry.instanceCount * (this.geometry.index.count / 3); }
 
   dispose() {

@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { fxFogged } from '../../src/fx/shaders.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
@@ -71,7 +72,7 @@ test('Env: every preset exists with the ART §2.5 / WA §2.3 warm values (aliase
   const d = ENV_PRESETS.meadow_day;
   assert.equal(d.fogColor, '#F6E4C0'); assert.equal(d.fogDensity, 0.045); assert.equal(d.skyTop, '#8FCBF2');
   assert.equal(d.hemiSky, '#C4D9FF'); assert.equal(d.hemiGround, '#C9A46A'); assert.equal(d.sunColor, '#FFE7C2'); assert.equal(d.sun, 2.4);
-  assert.deepEqual([d.shadowI, d.exposure, d.rim, d.hero], [0.60, 1.00, 'day', 0.40]);
+  assert.deepEqual([d.shadowI, d.exposure, d.rim, d.hero], [0.60, 0.95, 'day', 0.40]);   // integrator art:warm: exposure 1.00 → 0.95 (luma band top)
   assert.equal(ENV_PRESETS.meadow_night.fogColor, '#5A64A8'); assert.equal(ENV_PRESETS.meadow_night.grade, 'night');
   assert.equal(ENV_PRESETS.meadow_evening.fogDensity, 0.020);
   assert.equal(ENV_PRESETS.bog.fogFalloff, 1.2);
@@ -437,7 +438,7 @@ test('U12 (meadow, complete in M1): §12.3 layout — 3 kittens + letter l1, pra
   const def = await loadDef('meadow');
   assert.deepEqual([def.size, def.res, def.seed, def.hills.amp, def.pathWidth], [200, 200, 11, 1.5, 6]);
   assert.deepEqual(def.spine, [[0, -80], [0, -62], [-6, -50], [-22, -30], [-20, -4], [2, 18], [24, 40], [30, 62], [30, 90]]);
-  assert.deepEqual(def.spawns.title.slice(0, 2), [0, -64]); assert.deepEqual(def.spawns.practice, [-10, -90, 0]); assert.deepEqual(def.spawns.start, [-1.5, -54.5, -0.4]);
+  assert.deepEqual(def.spawns.title.slice(0, 2), [0, -64]); assert.deepEqual(def.spawns.practice, [-10, -90, 0]); assert.deepEqual(def.spawns.start, [-1.5, -50.5, -0.4]);
   const z = Object.fromEntries(def.zones.map((x) => [x.id, x]));
   const kittens = def.zones.filter((x) => x.kind === 'kitten');
   assert.deepEqual(kittens.map((k) => k.kittenId).sort(), [...KITTENS_BY_LEVEL.meadow].sort());
@@ -525,7 +526,7 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.deepEqual(L.stages.map((s) => s.id).sort(), ['bridge', 'cart', 'glade', 'stones']);
   assert.deepEqual(L.vigils.map((v) => v.id), ['vigil_1', 'vigil_2', 'vigil_3']);
   for (const id of ['title', 'practice', 'start', 'boss', 'vigil_1', 'vigil_2', 'vigil_3']) assert.ok(L.spawns[id], `spawn ${id}`);
-  assert.ok(near(L.spawns.start.pos.x, -1.5) && near(L.spawns.start.pos.z, -54.5));
+  assert.ok(near(L.spawns.start.pos.x, -1.5) && near(L.spawns.start.pos.z, -50.5));
   assert.deepEqual(L.triggers.map((t) => t.id).sort(), ['chart', 'exit', 'exit:blocked', 'lane', 'tallbert']);
   assert.ok(L.interactables.some((i) => i.id === 'barn_chest'), 'ON §5.4: the Suit Up chest is an interactable');
   assert.ok(L.anchor('chest'));
@@ -1567,12 +1568,12 @@ test('ARENA.wall: the fog wall is lighter and narrower than the fx defaults (iso
 // ============================================================================================ warm look + perf + auto-camera
 // IMPLEMENTATION_PLAN §6 world (A:world.1–8, P:W1–W10, M:world.1–5) and Phase W (world.W1–W10)
 import { TONE, ENV_U, isoSunAz, fogRadius, ISO_SUN, rimColor, presetNames } from '../../src/world/Env.js';
-import { footprintCorners, fitShadowBox, stepShadowFit, cacheBox, StaticShadow } from '../../src/world/StaticShadow.js';
+import { footprintCorners, fitShadowBox, stepShadowFit, cacheBox, StaticShadow, SHADOW_STAGE, STATIC_CASTER_LAYER, tagStaticCasters } from '../../src/world/StaticShadow.js';
 import { withHeightFog, patchGlow } from '../../src/world/HeightFog.js';
-import { Grass, GRASS, GRASS_COLORS, FLOWER_COLORS, makeTuftGeometry, grassTile } from '../../src/world/Grass.js';
+import { Grass, GRASS, GRASS_COLORS, FLOWER_COLORS, FLOWER_MUTE, mutedFlowers, makeTuftGeometry, grassTile } from '../../src/world/Grass.js';
 import { Bunting, layoutBunting, makeBuntingGeometry, BUNTING_SHAPE } from '../../src/world/Bunting.js';
 import { GROUND } from '../../src/world/Terrain.js';
-import { matFor, worldMaterial, applyInkRim, PROP_PAL, RECOLOR } from '../../src/world/Props.js';
+import { matFor, worldMaterial, applyInkRim, PROP_PAL, RECOLOR, remapReds } from '../../src/world/Props.js';
 import { magnetHop, POP_G, PICKUP_MOTION } from '../../src/world/Pickups.js';
 import { WAYSTONE, STAGE, freezeStatics } from '../../src/world/LevelKit.js';
 import { BUNTING, QUALITY, FADE_COLOR } from '../../src/core/config.js';
@@ -1643,7 +1644,7 @@ test('ART §2.6 palettes: warm grounds, grass, flowers (no pink / orange near th
     assert.ok(hsv(g.mid).luma >= 0.3 && hsv(g.root).luma >= 0.2, `${biome} grass ground is not near-black`);
   }
   for (const [biome, c] of Object.entries(GRASS_COLORS)) assert.ok(hsv(c.tip).luma > hsv(c.root).luma, `${biome}: tips lighter than roots`);
-  for (const f of FLOWER_COLORS) { const c = new THREE.Color(f), h = c.getHSL({}).h * 360, s = c.getHSL({}).s; assert.ok(!(s > 0.35 && (h < 40 || h > 320)), `flower ${f} is not pink / orange (G19)`); }
+  for (const f of FLOWER_COLORS) { const hs = new THREE.Color(f).getHSL({}, THREE.SRGBColorSpace), h = hs.h * 360, s = hs.s; assert.ok(!(s > 0.35 && (h < 40 || h > 320)), `flower ${f} is not pink / orange (G19)`); }
   for (const k of ['wood', 'straw', 'iron', 'stone', 'hyena']) assert.ok(hsv(PROP_PAL[k]).luma >= 0.2, `PROP_PAL.${k}`);
   for (const [k, v] of Object.entries(RECOLOR)) assert.ok(hsv(v).luma >= 0.12, `RECOLOR.${k} ${v} not near-black`);
 });
@@ -1666,7 +1667,7 @@ test('Env: iso sun from the level yaw (+1.75 day / +1.20 night, never a zone hin
   assert.equal(ctx.scene.background.getHexString(), ENV_PRESETS.gate_dusk.fogColor.slice(1).toLowerCase(), 'clear colour = fog colour');
   env.preset('forest_night', 0);
   assert.equal(env.presetName, 'forest_twilight');
-  assert.ok(near(ctx.renderer.toneMappingExposure, 1.10, 1e-6), 'exposure from the preset');
+  assert.ok(near(ctx.renderer.toneMappingExposure, ENV_PRESETS.forest_twilight.exposure, 1e-6), 'exposure from the preset');
   assert.ok(near(ENV_U.uLampStr.value, 1) && near(ENV_U.uGlow.value.w, 3.5), 'twilight: lamps on, full-radius glow');
   env.preset('meadow_day', 0);
   assert.ok(near(ENV_U.uLampStr.value, 0) && near(ENV_U.uGlow.value.w, 2.6), 'day: no lamp pools, the 2.6 m sun spot (WA4)');
@@ -1715,9 +1716,72 @@ test('M:world.1 shadow stage 1: footprint corners from the camera, light-space f
   const st = new StaticShadow({ ctx: {} }); assert.equal(st.place({}, r, u, r, u, new THREE.Vector3()), false, 'no renderer: stage 1 keeps going');
 });
 
-test('PERF §8.4 / AUTOCAM §9.4 grass: one tuft mesh (6 tris + a collapsed petal cap), quality counts, tile ⊇ footprint + 3 m', () => {
+test('PERF §7.3 shadow stage 2: static casters only, cached map re-renders only when the fit leaves its box', () => {
+  assert.equal(SHADOW_STAGE, 2, 'stage 2 ships (cached statics-only sun map)');
+  // tagging: level casters yes; skinned, non-casting, actors-group and dynamicShadow meshes no
+  const geo = new THREE.BoxGeometry(), mat = new THREE.MeshBasicMaterial();
+  const root = new THREE.Group(), actors = new THREE.Group(); root.add(actors);
+  const wall = new THREE.Mesh(geo, mat); wall.castShadow = true; root.add(wall);
+  const grass = new THREE.Mesh(geo, mat); grass.castShadow = false; root.add(grass);
+  const npc = new THREE.Mesh(geo, mat); npc.castShadow = true; actors.add(npc);
+  const gate = new THREE.Mesh(geo, mat); gate.castShadow = true; gate.userData.dynamicShadow = true; root.add(gate);
+  assert.equal(tagStaticCasters(root, actors), 1);
+  assert.ok(wall.layers.isEnabled(STATIC_CASTER_LAYER) && wall.layers.isEnabled(0), 'still drawn by the main camera');
+  for (const o of [grass, npc, gate]) assert.ok(!o.layers.isEnabled(STATIC_CASTER_LAYER));
+  // the shadow pass sees only the static layer; the main camera's mask is restored after it
+  const seen = [];
+  const sm = { autoUpdate: true, needsUpdate: false, render(lights, scene, cam) { seen.push(cam.layers.mask); } };
+  const L = new THREE.DirectionalLight(); L.shadow.camera.updateProjectionMatrix();
+  const env = { ctx: { renderer: { shadowMap: sm }, levels: { current: { root, groups: { actors } } } }, sunLight: L, tweening: false };
+  const st = new StaticShadow(env);
+  const r = new THREE.Vector3(1, 0, 0), u = new THREE.Vector3(0, 0, 1), f = new THREE.Vector3(0, -1, 0), dir = new THREE.Vector3(0, 1, 0);
+  const fit = { cx: 0, cy: 0, halfX: 10, halfY: 10 }, p = new THREE.Vector3();
+  assert.equal(st.place(fit, r, u, f, dir, p), true);
+  assert.equal(sm.autoUpdate, false, 'autoUpdate off: three skips the pass unless needsUpdate');
+  assert.equal(sm.needsUpdate, true); assert.equal(st.renders, 1); assert.equal(st.casters, 1);
+  const cam = new THREE.PerspectiveCamera();
+  sm.render([], null, cam);
+  assert.deepEqual(seen, [1 << STATIC_CASTER_LAYER]); assert.equal(cam.layers.mask, 1, 'main camera mask restored');
+  sm.needsUpdate = false;
+  for (let i = 0; i < 30; i++) { fit.cx = i * 0.1; st.place(fit, r, u, f, dir, p); }
+  assert.equal(sm.needsUpdate, false, 'walking inside the cached box: 0 shadow draws'); assert.equal(st.renders, 1);
+  fit.cx = 20; st.place(fit, r, u, f, dir, p);
+  assert.equal(sm.needsUpdate, true, 'left the box: one re-render'); assert.equal(st.renders, 2);
+  st.dispose();
+  assert.equal(sm.autoUpdate, true); sm.render([], null, cam);
+  assert.equal(seen.at(-1), 1, 'unhooked after dispose');
+});
+
+test('WA §3.2 flowers: sparse (−60 %), off the path ±2 m, muted accent tints below the cream / gold pickup band', async () => {
+  assert.ok(GRASS.flowerNear <= 0.033 && GRASS.flowerFar <= 0.013, 'shares cut ~60 % (8 % / 3 % → 3.2 % / 1.2 %)');
+  assert.ok(GRASS.offPath >= 2);
+  const { BUNTING_ACCENT } = await import('../../src/world/Bunting.js');
+  for (const [k, set] of Object.entries(BUNTING_ACCENT)) {
+    const fl = mutedFlowers(set);
+    assert.equal(fl.length, FLOWER_MUTE.n);
+    for (const f of fl) {
+      const hs = new THREE.Color(f).getHSL({}, THREE.SRGBColorSpace);
+      assert.ok(hs.s <= FLOWER_MUTE.satMax + 0.01, `${k} ${f}: muted (s ${hs.s.toFixed(2)})`);
+      assert.ok(hs.l <= FLOWER_MUTE.lMax + 0.01, `${k} ${f}: never cream / white (l ${hs.l.toFixed(2)})`);
+    }
+  }
+  // the terrain's ground data marks the path ±2 m (A ≥ 4: no flowers) and the near band (A in [2, 3])
+  const { Terrain } = await import('../../src/world/Terrain.js');
+  const T = new Terrain({ size: 60, res: 30, seed: 3, spine: [[0, -25], [0, 25]], pathWidth: 4 });
+  T.build(); const out = T.finalize();
+  {
+    const W = 31, d = out.dataTexture.image.data, fromHalf = THREE.DataUtils.fromHalfFloat;
+    const at = (x, z) => { const i = Math.round((z / 60 + 0.5) * (W - 1)) * W + Math.round((x / 60 + 0.5) * (W - 1)); return fromHalf(d[i * 4 + 3]); };
+    assert.ok(at(0, 0) >= 3.4, 'on the spine: no flowers');
+    assert.ok(at(2, 0) >= 3.4, 'path edge: no flowers'); assert.ok(at(-2, 0) >= 3.4, 'other edge: no flowers');
+    assert.ok(at(4.6, 0) >= 1.4 && at(4.6, 0) < 3.4, 'path edge + 2 m: the near-spine band begins');
+    assert.ok(at(20, 0) < 1.4, 'far field');
+  }
+});
+
+test('PERF §8.4 / AUTOCAM §9.4 grass: one tuft mesh (6 tris + a collapsed 2-tri petal cap), quality counts, tile ⊇ footprint + 3 m', () => {
   const g = makeTuftGeometry();
-  assert.equal(g.index.count / 3, 8); assert.equal(g.attributes.aCap.array.filter((v) => v > 0).length, 4);
+  assert.equal(g.index.count / 3, 8, 'PERF §8.4: 6 blade tris + a 2-tri petal cap'); assert.equal(g.attributes.aCap.array.filter((v) => v > 0).length, 4, '2-tri petal quad');
   for (let i = 0; i < g.attributes.normal.count; i++) assert.ok(g.attributes.normal.getY(i) > 0.6, 'normals bent toward up');
   const tex = new THREE.DataTexture(new Uint16Array(4 * 4), 2, 2, THREE.RGBAFormat, THREE.HalfFloatType);
   for (const q of ['low', 'med', 'high']) {
@@ -1761,7 +1825,8 @@ test('world.W7 Bunting: one draw, caps (240 / Low 120 pennants, 60 / 30 lanterns
   assert.equal(one.items.length, Math.floor(11 / BUNTING.spacing) + 1);
   const b = new Bunting([{ a: [0, 4, 0], b: [0, 4, 10] }]);
   assert.ok(b.mesh.isInstancedMesh && b.mesh.castShadow === false && b.mesh.receiveShadow === false);
-  assert.equal(makeBuntingGeometry({ pennant: true }).attributes.position.count / 3, 2 / 2);
+  assert.equal(makeBuntingGeometry({ pennant: true }).attributes.position.count / 3, BUNTING_SHAPE.triPennant, 'pennant + its string tent');
+  assert.ok(makeBuntingGeometry({ pennant: false, lantern: true }).attributes.position.count / 3 <= BUNTING_SHAPE.triLantern, 'lantern + string ≤ 8 tris');
   b.update(1, { wind: 0.8 }); assert.equal(b.uniforms.uWind.value, 0.8);
   b.dispose();
   assert.equal(new Bunting([]).mesh, null, 'no strings, no draw');
@@ -1773,8 +1838,8 @@ test('world.W8 arena stage floors: every arena zone gets a lighter calm paint (+
   const ctx = fakeCtx(); ctx.assets.gltf = async (p) => stubGltf(p);
   const L = await buildLevel(ctx, def);
   assert.deepEqual(L.stages.map((s) => s.id), ['a1', 'a2']);
-  const path = new THREE.Color(GROUND.meadow.path).getHSL({}).l;
-  for (const s of L.stages) assert.ok(new THREE.Color(s.color).getHSL({}).l > path + STAGE.lift - 1e-3, 'lifted path colour');
+  const path = new THREE.Color(GROUND.meadow.path).getHSL({}, THREE.SRGBColorSpace).l;
+  for (const s of L.stages) assert.ok(new THREE.Color(s.color).getHSL({}, THREE.SRGBColorSpace).l > path + STAGE.lift - 4e-3, 'lifted path colour (sRGB L)');
   assert.ok(L.terrain.densityAt(10, 0) <= STAGE.grass + 1e-6, 'grass thinned to ≤ 0.4 inside');
   assert.ok(freezeStatics(L) > 0, 'static render outputs stop updating matrices');
   assert.equal(L.batch.mesh.matrixAutoUpdate, false);
@@ -1813,7 +1878,10 @@ test('PERF §3.5 / ART §4.2 materials: Lambert + dithering, one clone per mesh 
   assert.equal(matFor(base, 'instanced'), inst, 'cached per kind');
   assert.equal(matFor(base, 'plain'), base);
   const ink = applyInkRim(worldMaterial(), 0.68);
-  assert.ok(ink.customProgramCacheKey().includes('|ink0.68'));
+  // PERF §1.2: the ink rim is a uniform of the one world-static program (no '|ink' key variant)
+  assert.equal(ink.customProgramCacheKey(), 'world-static-v1');
+  assert.equal(ink.userData.wsU.uWInk.value, 0.68);
+  assert.equal(worldMaterial().customProgramCacheKey(), 'world-static-v1', 'plain world materials share it');
   const sh = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader };
   ink.onBeforeCompile(sh);
   assert.ok(sh.fragmentShader.includes('inkE'));
@@ -1858,6 +1926,197 @@ test('LI W10 waystones, meadow warm data (bunting, skyline, chest), cream load v
   const ctx = fakeCtx(); ctx.assets.gltf = async (p) => stubGltf(p);
   const L = await buildLevel(ctx, { id: 'cl', size: 60, res: 20, seed: 2, spine: [[0, -25], [0, 25]], biome: 'meadow', grass: false, skyline: [] });
   const clouds = L.groups.skyline.getObjectByName('clouds');
-  assert.ok(clouds?.isMesh, 'one merged cloud mesh'); assert.ok(clouds.material.fog === false);
+  assert.ok(clouds?.isMesh, 'one merged cloud mesh'); assert.ok(fxFogged(clouds.material) === false);
   L.dispose();
+});
+
+// ------------------------------------------------------------------ Phase W / PERF follow-ups (flames, tiers, probes)
+
+test('PERF W7 flames: every flame of a level shares 2 instanced draws; lighting / dousing only rewrites a matrix', async () => {
+  const { FlameSet, addFlame, FLAME } = await import('../../src/world/Dressing.js');
+  const level = { groups: { props: new THREE.Group() }, animators: [] };
+  const lamps = new LampSet();
+  const pool = new LightPool(level.groups.props, 2, { lamps });
+  const handles = [];
+  for (let i = 0; i < FLAME.cap + 5; i++) handles.push(addFlame(level, pool, i, 1, -i, { size: 0.5, on: i % 2 === 0 }));
+  const fs = level.flames;
+  assert.ok(fs instanceof FlameSet);
+  const meshes = level.groups.props.children.filter((o) => o.isInstancedMesh);
+  assert.equal(meshes.length, 2, 'cones + halos, grown in place past the initial cap');
+  assert.equal(fs.cones.count, FLAME.cap + 5); assert.equal(fs.glows.count, (FLAME.cap + 5) * 2);
+  assert.equal(level.animators.length, 1, 'one flicker clock per level');
+  for (const m of meshes) { assert.equal(m.castShadow, false); assert.equal(m.material.userData.noHeightFog, true); }
+  const m4 = new THREE.Matrix4(), s = new THREE.Vector3();
+  fs.cones.getMatrixAt(1, m4); s.setFromMatrixScale(m4); assert.equal(s.x, 0, 'an unlit flame is a zero-scale instance');
+  const prog = fs.coneMat.customProgramCacheKey();
+  handles[1].set(true);
+  fs.cones.getMatrixAt(1, m4); s.setFromMatrixScale(m4); assert.ok(near(s.x, 0.5));
+  assert.equal(handles[1].on, true); assert.equal(handles[1].source.on, true, 'the lamp pool follows');
+  assert.equal(fs.coneMat.customProgramCacheKey(), prog, 'no program change');
+  level.animators[0].render(0.016, 3.5); assert.equal(fs.uniforms.uTime.value, 3.5);
+  assert.equal(fs.draws, 2);
+  fs.dispose();
+});
+
+test('PERF §5.4 grass thermal scale: a prefix of the tufts, clamped, idempotent; level groups carry perfCat', async () => {
+  const { Grass } = await import('../../src/world/Grass.js');
+  const tex = new THREE.DataTexture(new Uint8Array(4 * 4 * 4), 4, 4);
+  const g = new Grass({ ground: tex, size: 40, res: 3, count: 1000 });
+  assert.equal(g.count, 1000);
+  g.setScale(0.5); assert.equal(g.count, 500);
+  g.setScale(0.5); assert.equal(g.count, 500);
+  g.setScale(7); assert.equal(g.count, 1000);
+  g.setScale(NaN); assert.equal(g.count, 1000);
+  g.dispose();
+  const { GROUP_PERF_CAT } = await import('../../src/world/Level.js');
+  const L = new Level(fakeCtx({ systems: false }), { id: 't', size: 20 });
+  assert.equal(L.groups.grass.userData.perfCat, 'grass');
+  for (const k of Object.keys(GROUP_PERF_CAT)) assert.ok(L.groups[k]?.userData.perfCat, k);
+});
+
+test('PERF §10.3 / §3.3 LevelManager: next-level order, warm roots (level groups + visible scene children)', async () => {
+  const { nextLevelId, warmRoots, PREFETCH, PREWARM } = await import('../../src/world/LevelManager.js');
+  assert.equal(nextLevelId('meadow'), 'forest'); assert.equal(nextLevelId('bog'), 'keep');
+  assert.equal(nextLevelId('keep'), null); assert.equal(nextLevelId('nope'), null);
+  assert.ok(PREFETCH.delay === 5 && PREWARM.batch > 0 && PREWARM.frames === undefined, 'no culling-off real frames any more');
+  const scene = new THREE.Scene(), root = new THREE.Group(), a = new THREE.Group(), b = new THREE.Group(), hidden = new THREE.Group();
+  hidden.visible = false;
+  root.add(a, b, hidden);
+  const enemy = new THREE.Group(), light = new THREE.DirectionalLight();
+  scene.add(root, enemy, light);
+  assert.deepEqual(warmRoots(scene, root), [a, b, enemy]);
+});
+
+test('ART G6 shadow probe: the nearest tall solid by the start spawn; shade down-sun, lit beside it', async () => {
+  const { autoShadowProbe, levelSunAz, SHADOW_PROBE } = await import('../../src/world/LevelKit.js');
+  const cols = { circles: [{ x: 4, z: 0, r: 1, y0: -0.6, y1: 4.0 }, { x: 1, z: 0, r: 0.3, y0: -0.6, y1: 8, camFade: true }, { x: 2, z: 0, r: 1, y0: -0.6, y1: 1 }], boxes: [] };
+  const az = 0;                     // sun toward +Z → shadows fall toward −Z
+  const p = autoShadowProbe(cols, { x: 0, z: 0 }, az, Math.PI / 4);   // 45°: shadow length = h (4.6 − 0.6 = 4 m)
+  const off = Math.max(SHADOW_PROBE.gap, SHADOW_PROBE.mid * 4);
+  assert.deepEqual(p.shade, [4, -(1 + off)], 'mid-shadow, down-sun');
+  assert.deepEqual(p.lit, [4 + 1 + SHADOW_PROBE.litOff, -(1 + off)], 'beside the shade point, out of the shadow width');
+  assert.equal(autoShadowProbe(cols, { x: 100, z: 0 }, az), null, 'nothing near');
+  assert.ok(Number.isFinite(levelSunAz({ cam: { yaw: Math.PI } })));
+  const def = await loadDef('town');
+  assert.ok(Array.isArray(def.farKeep) && def.farKeep.length >= 1, 'town keeps the Bell Tower inside far');
+  assert.ok(def.spawns.square, 'a Square spawn for the iso smoke');
+  const sq = def.spawns.square;
+  assert.ok(near(Math.hypot(sq[0] - SQUARE.at[0], sq[1] - SQUARE.at[1]), SQUARE.r - 1), 'on the south rim of the Square');
+  for (const id of ['meadow', 'gate']) assert.ok((await loadDef(id)).farKeep?.length, `${id} farKeep`);
+});
+
+test('PERF §3.3 Env.prewarmShadows: one shadow render over the whole level, the sun box restored afterwards', async () => {
+  const { Env } = await import('../../src/world/Env.js');
+  const ctx = fakeCtx({ systems: false });
+  ctx.renderer = { toneMappingExposure: 1, shadowMap: { autoUpdate: true, needsUpdate: false } };
+  ctx.quality = QUALITY.med;
+  const env = new Env(ctx); await env.init();
+  const sc = env.sunLight.shadow.camera, before = [sc.left, sc.right, sc.top, sc.bottom, sc.far];
+  let seen = null;
+  const r = { shadowMap: { needsUpdate: false }, render: () => { seen = [sc.left, sc.right, sc.far]; } };
+  assert.equal(env.prewarmShadows(r, new THREE.PerspectiveCamera(), 80), true);
+  assert.ok(seen && seen[0] <= -80 && seen[1] >= 80 && seen[2] >= 240, 'rendered with the whole-level box');
+  assert.deepEqual([sc.left, sc.right, sc.top, sc.bottom, sc.far], before, 'box restored');
+  assert.equal(r.shadowMap.needsUpdate, true, 'the real map re-renders next frame');
+  env.applyQuality(QUALITY.low);
+  assert.equal(env.prewarmShadows(r, new THREE.PerspectiveCamera(), 80), false, 'Low has no shadow map: nothing to warm');
+});
+
+test('WA §2.5 / LI W11 candy-row reds: maroon / crimson bake onto candy coral, other hues untouched, shading order kept', () => {
+  const target = new THREE.Color('#E06A6A'), hsl = {};
+  const maroon = remapReds(new THREE.Color('#6A2A2A'), target).getHSL({}, THREE.SRGBColorSpace);
+  const crimson = remapReds(new THREE.Color('#A8283A'), target).getHSL({}, THREE.SRGBColorSpace);
+  target.getHSL(hsl, THREE.SRGBColorSpace);
+  assert.ok(Math.abs(maroon.h - hsl.h) < 0.01 && maroon.l >= hsl.l * 0.5, `maroon lifted (l ${maroon.l.toFixed(2)})`);
+  assert.ok(crimson.l > maroon.l, 'light / dark order kept');
+  for (const hex of ['#B7773F', '#58A84A', '#6F8FC4', '#E8D8BC']) assert.equal(remapReds(new THREE.Color(hex), target).getHexString(), new THREE.Color(hex).getHexString(), `${hex} untouched`);
+});
+
+test('WA §2.5 practice dummies are straw dummies (no bullseye target model); forest twilight has path lanterns', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../../src/world/levels/meadow.js', import.meta.url), 'utf8');
+  assert.ok(!/decoration\/target\.glb/.test(src), 'the archery target is gone');
+  assert.ok(/kit\.proc\('straw_dummy'/.test(src));
+  const { PATH_LANTERNS } = await import('../../src/world/levels/forest.js');
+  assert.ok(PATH_LANTERNS.n >= 10, 'lamp pools along the whole walk');
+});
+
+test('PERF §1.2 triangle budget: ground tiles ≈ 40 m (frustum-culled), per-tier wheat clumps', async () => {
+  const { groundChunks } = await import('../../src/world/Terrain.js');
+  // meadow / forest (200 cells × 1 m): 5 tiles a side, 40 cells each (even → half-res LOD fits)
+  assert.equal(groundChunks(200, 1), 5);
+  // Low (100 cells × 2 m): 5 a side (40 m tiles)
+  assert.equal(groundChunks(100, 2), 5);
+  // gate (120 × 1.5 m) and town (140 × 1 m)
+  assert.equal(groundChunks(120, 1.5), 5);
+  assert.equal(groundChunks(140, 1), 4, 'town: 35 m tiles (not the old 70 m halves)');
+  assert.equal(groundChunks(20, 2), 1, 'a small ground stays one tile');
+  const { WHEAT } = await import('../../src/world/Wheat.js');
+  const tris = (q) => makeWheatClumpGeometry(3, WHEAT, WHEAT.tiers[q]).index.count / 3;
+  assert.equal(tris('high'), 90); assert.equal(tris('med'), 49); assert.equal(tris('low'), 42);
+  const f = new WheatField({ seed: 2, quality: 'low' }); f.add(0, 0, 0);
+  assert.equal(f.build().geometry.index.count / 3, 42); f.dispose();
+});
+
+test('world review: bunting strings read as strings (cocoa tent to both neighbours, per string, in the same draw)', async () => {
+  const { BUNTING_CORD } = await import('../../src/world/Bunting.js');
+  const L = layoutBunting([{ a: [0, 5, 0], b: [0, 5, 4] }, { a: [3, 5, 0], b: [3, 5, 4], kind: 'lantern' }]);
+  const s0 = L.items.filter((i) => i.s === 0), s1 = L.items.filter((i) => i.s === 1);
+  assert.ok(s0.length > 2 && s1.length > 2);
+  assert.deepEqual(s0[0].cord.slice(0, 2), [0, 0], 'first item: no previous chord');
+  assert.deepEqual(s0.at(-1).cord.slice(2), [0, 0], 'last item: no next chord (never bridges to the next string)');
+  for (let i = 1; i < s0.length; i++) {
+    assert.ok(near(s0[i].cord[0], s0[i - 1].cord[2], 1e-9) && near(s0[i].cord[1], -s0[i - 1].cord[3], 1e-9), 'shared chord');
+    assert.ok(near(s0[i].cord[0], Math.hypot(s0[i].x - s0[i - 1].x, s0[i].z - s0[i - 1].z), 1e-9));
+  }
+  const b = new Bunting([{ a: [0, 4, 0], b: [0, 4, 6] }]);
+  assert.equal(b.geometry.attributes.aCord.itemSize, 4);
+  assert.equal(b.geometry.attributes.aCord.count, b.layout.items.length);
+  const sh = { uniforms: {}, vertexShader: ['#include <common>', '#include <begin_vertex>'].join('\n'),
+    fragmentShader: ['#include <common>', '#include <color_fragment>', '#include <emissivemap_fragment>'].join('\n') };
+  b.material.onBeforeCompile(sh);
+  assert.match(sh.vertexShader, /aCord/); assert.match(sh.fragmentShader, /vCord/);
+  assert.ok(/^#6B4A3A$/i.test(BUNTING_CORD));
+  b.dispose();
+});
+
+test('world review: gate toy gate (wood, rounded teeth, pennants), rope winch, deck paint + parapet bunting / shields', async () => {
+  const gate = await import('../../src/world/levels/gate.js');
+  const cols = (parts) => parts.map(([, c]) => String(c).toUpperCase());
+  const tg = gate.toyGateParts(6.4, 4.9);
+  assert.ok(!cols(tg).includes('#6E7A8E') && !cols(tg).includes('#8E96A2'), 'no iron grey on the gate');
+  assert.ok(tg.some(([g]) => g.type === 'SphereGeometry'), 'rounded teeth');
+  assert.ok(tg.filter(([g]) => g.type === 'ConeGeometry').length >= 9, 'a pennant row under the beam');
+  const tpl = procTemplate('tg', tg);
+  assert.ok(near(tpl.box.min.y, 0, 1e-6) && near(tpl.box.max.x - tpl.box.min.x, 6.6, 1e-6), 'built to the passage');
+  const rope = gate.winchRopeParts(4.8, 6);
+  assert.ok(rope.every(([g, c]) => g.type === 'CylinderGeometry' && String(c).toUpperCase() !== '#6E7A8E'), 'rope, not chain');
+  const paint = gate.deckPaintParts(gate.DECK_PAINT.z0, gate.DECK_PAINT.z1);
+  const band = new THREE.Box3().setFromBufferAttribute(paint[0][0].attributes.position);
+  assert.ok(band.min.z <= -10 && band.max.z >= 30 && band.max.y < 0.012, 'sand band under the chalk across the Line + B2 arena');
+  for (const [z0, z1] of gate.DECK_DRESS.runs) assert.ok(gate.onParapet(z0) && gate.onParapet(z1), `poles stand on parapets (${z0}, ${z1})`);
+  const runs = gateDef.bunting.slice(0, gate.DECK_DRESS.runs.length * 2);
+  assert.ok(runs.every((r) => Math.abs(r.a[0]) === gate.DECK_DRESS.x), 'parapet strings first (Low keeps them)');
+  const low = layoutBunting(gateDef.bunting, { low: true });
+  assert.ok(low.items.some((i) => i.z > -10 && i.z < 30), 'Low keeps bunting over the arena');
+  assert.ok(layoutBunting(gateDef.bunting).dropped === 0, 'High draws every pennant');
+  assert.ok(!gateDef.models.some((m) => /metal-gate/.test(m)), 'iron portcullis model no longer loaded');
+});
+
+test('world review: the prologue practice field lifts the low morning sun and softens shadows from above only', async () => {
+  const ctx = fakeCtx({ systems: false });
+  ctx.renderer = { toneMappingExposure: 1, shadowMap: { autoUpdate: true, needsUpdate: false } };
+  ctx.quality = QUALITY.med;
+  const env = new Env(ctx); await env.init();
+  const { default: meadowDef } = await import('../../src/world/levels/meadow.js');
+  ctx.levels = { current: { cam: meadowDef.cam, camYaw: Math.PI } };
+  env.preset('meadow_morning', 0);
+  env._focusMode = 0; env._apply?.(false);
+  const eye = env.sunDir(new THREE.Vector3());
+  assert.ok(near(Math.asin(eye.y), ENV_PRESETS.meadow_morning.sunElev, 1e-6), 'cutscenes keep the golden low sun');
+  env._focusMode = 1; env._apply?.(false);
+  const iso = env.sunDir(new THREE.Vector3());
+  assert.ok(near(Math.asin(iso.y), 0.75, 1e-6), 'from above: 43° sun, off-screen shadows ~1.1× height');
+  assert.ok(near(env.sunLight.shadow.intensity, 0.45, 1e-6), 'softer shadow (ART §3.4 floor 0.45)');
+  env.preset('meadow_day', 0); env._apply?.(false);
+  assert.ok(near(Math.asin(env.sunDir(new THREE.Vector3()).y), ENV_PRESETS.meadow_day.sunElev, 1e-6), 'a higher preset sun is never lowered');
 });

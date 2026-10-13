@@ -19,14 +19,15 @@ import { segmentHitsBox, distSqPointSegment, OccluderFader, SOLID_MIN_H } from '
 import { ISO, isoProject, isoPosition, subjectOverflow, safeFitDist, isoFrame, isoPitch, pxAt, apparentH, camProfile, intentLead, LeadGate,
   herLimits, clampToLimits, footprintOf, inQuad, farPlane, fogRadius, BIGGER_PX } from '../../src/camera/IsoRig.js';
 import { SafeFrame, fallbackOccluders } from '../../src/camera/SafeFrame.js';
-import { makeView, setYaw, needDAt, dropOne, STRIDE, F_HARD, F_DROP, CLS } from '../../src/camera/framing/FramingSolver.js';
+import { makeView, setYaw, needDAt, dropOne, solveFrame, STRIDE, F_HARD, F_DROP, CLS } from '../../src/camera/framing/FramingSolver.js';
 import { Subjects } from '../../src/camera/framing/Subjects.js';
 import { beatEnvelope } from '../../src/camera/framing/beats.js';
-import { CutsceneCamera, normalizeShot, bezier2, shotScale } from '../../src/camera/CutsceneCamera.js';
+import { CutsceneCamera, normalizeShot, bezier2, shotScale, headSphere, headJointOf, clearSphere, HEAD_CLEAR, HEAD_NEAR_MARGIN, HEAD_LOCAL } from '../../src/camera/CutsceneCamera.js';
 import { MemeCam } from '../../src/camera/MemeCam.js';
 import { FollowCamera, aspectFov, DEFAULT_PITCH, camTransparent, THIN_RADIUS, ARM_GOOD, HANDOVER_RATE, FADE_MAX_DIST, FADE_COLLIDERS, LOCK_SEP, LOCK_BIAS_MAX, COMBAT_PITCH, COMBAT_LIFT, lockYawBias, lockScreenSep, lockSepGoal,
   bossBearing, bossFrameYaw, bossLift, BOSS_EDGE, BOSS_LOOK_GRACE, SOLID_COLLIDERS, BOSS_PASS } from '../../src/camera/FollowCamera.js';
 import manifest from '../../src/camera/assets.manifest.js';
+import { screenToGround, rayLimit, pickAt, worldToScreen } from '../../src/camera/Picker.js';
 
 const { CAMERA, PLAYER } = config;
 const near = (a, b, eps = 1e-6, msg = '') => assert.ok(Math.abs(a - b) <= eps, `${msg} expected ${b}, got ${a}`);
@@ -79,7 +80,7 @@ const frames = (cam, n, dt = 1 / 60) => { for (let i = 0; i < n; i++) cam.render
 test('§5.2 presets: every preset exists with the spec placements', () => {
   for (const n of ['MEME_LOOP', 'REVERSE_HORDE', 'PULLBACK', 'SELFIE', 'WHIP_FALL', 'CRANE_DOWN', 'ECU_EYES', 'TWO_SHOT_LOW', 'HERO_LOW', 'FLIGHT_ORBIT'])
     assert.ok(PRESETS[n], `preset ${n}`);
-  assert.equal(PRESET_NAMES.length, 17);
+  assert.equal(PRESET_NAMES.length, 18);
   const M = PRESETS.MEME_LOOP;
   assert.deepEqual([...M.pos], [0.06, 0.68, 1.9]); assert.deepEqual([...M.look], [0.03, 0.9, 0]);
   assert.equal(M.fov, 38); assert.equal(M.sway, 0.005); assert.equal(M.loop, 3.8); assert.equal(MEME_PERIOD, PLAYER.memeCam.loop);
@@ -354,6 +355,35 @@ test('CutsceneCamera: TWO_SHOT_LOW looks at the midpoint of anchor and target at
   nearV(cc.pose.pos, [1.6, 0.75, 1.6], 1e-9);
 });
 
+test('CutsceneCamera: the lens never enters a framed actor head (>= 1.2 head radii, near plane + margin past the fur)', () => {
+  const ctx = makeCtx();
+  const cc = new CutsceneCamera(ctx);
+  // fallback head sphere (no kitten rig): ECU_EYES at 0.35 m in front of her feet would sit inside her head
+  cc.start({ preset: 'ECU_EYES', anchor: 'swordcat', mode: 'handheld', noise: 0.0025, dur: 2 }, new CamPose());
+  const c = new THREE.Vector3(), r = headSphere(ctx.player, ctx.player.pos, ctx.player.height, c);
+  const min = Math.max(HEAD_CLEAR * r, r + config.RENDER.near + HEAD_NEAR_MARGIN);
+  for (let i = 0; i < 90; i++) { cc.update(1 / 60); assert.ok(cc.pose.pos.distanceTo(c) >= min - 1e-9, `frame ${i}: ${cc.pose.pos.distanceTo(c)} < ${min}`); }
+  nearV(cc.pose.look, [0, PRESETS.ECU_EYES.look[1], 0], 0.01, 'the look point stays on her eyes');
+  // a live head joint (a kitten rig leaning forward) is followed: the head moved 0.2 m toward the lens
+  const head = new THREE.Object3D(); head.scale.setScalar(1.17); head.position.set(0, 0.56, 0.2); ctx.player.object3d.add(head);
+  ctx.player.model = { k: { rig: { joints: { head } } } };
+  ctx.player.object3d.updateMatrixWorld(true);
+  assert.equal(headJointOf(ctx.player), head);
+  const r2 = headSphere(ctx.player, ctx.player.pos, ctx.player.height, c);
+  near(r2, HEAD_LOCAL.r * 1.17, 1e-9, 'radius from the joint scale');
+  near(c.z, 0.2 + HEAD_LOCAL.z * 1.17, 1e-9, 'centre from the joint');
+  cc.start({ preset: 'ECU_EYES', anchor: 'swordcat', mode: 'cut' }, new CamPose());
+  assert.ok(cc.pose.pos.distanceTo(c) >= Math.max(HEAD_CLEAR * r2, r2 + config.RENDER.near + HEAD_NEAR_MARGIN) - 1e-9, 'clear of the leaning head');
+  // a framing already outside the head is untouched (MCU, the CS-08 "Nobody's coming" medium close-up, front-left)
+  cc.start({ preset: 'MCU', anchor: 'swordcat', mode: 'cut' }, new CamPose());
+  nearV(cc.pose.pos, PRESETS.MCU.pos, 1e-9);
+  assert.ok(PRESETS.MCU.pos[0] > 0 && PRESETS.MCU.pos[2] > 0, 'front-left (+X = her left, +Z = her front)');
+  // clearSphere: on-centre lens backs out along the view
+  const p = new THREE.Vector3(0, 1, 0), l = new THREE.Vector3(0, 1, -1);
+  assert.equal(clearSphere(p, l, new THREE.Vector3(0, 1, 0), 0.5), true); nearV(p, [0, 1, 0.5], 1e-9);
+  assert.equal(clearSphere(p, l, new THREE.Vector3(0, 1, 0), 0.5), false);
+});
+
 test('CutsceneCamera: WHIP_FALL = yaw +120° with FOV +15 in 0.18 s, then roll 90° down to ground + 0.12', () => {
   const ctx = makeCtx({ ground: 0.5 });
   const cc = new CutsceneCamera(ctx), from = new CamPose();
@@ -503,7 +533,11 @@ test('FollowCamera: preset() / shot() / camera:mode, handback with a 0.6 s blend
   nearV(ctx.camera.position, [0.8, 0.35, 2.2], 1e-6); near(ctx.camera.fov, 40, 1e-6);
   ctx.bus.emit(E.CAM_MODE, { mode: 'preset', preset: 'ECU_EYES', anchor: 'swordcat' });
   frames(cam, 1);
-  nearV(ctx.camera.position, [0, 0.79, 0.35], 1e-6);
+  { // ECU_EYES [0, 0.79, 0.35], pushed out of her head along head centre -> lens (camera collision vs actor bounds)
+    const c = new THREE.Vector3(), r = headSphere(ctx.player, ctx.player.pos, ctx.player.height, c);
+    const want = new THREE.Vector3(0, 0.79, 0.35).sub(c).setLength(Math.max(HEAD_CLEAR * r, r + config.RENDER.near + HEAD_NEAR_MARGIN)).add(c);
+    nearV(ctx.camera.position, want.toArray(), 1e-6);
+  }
   const done = cam.shot({ preset: 'SELFIE', mode: 'blend', dur: 0.5 });
   frames(cam, 10);
   assert.ok(ctx.camera.position.distanceTo(new THREE.Vector3(0.25, 0.92, 0.45)) > 0.03, 'still blending');
@@ -741,6 +775,25 @@ test('OccluderFader: big merged trees are refined against triangles (passing und
   for (let i = 0; i < 60; i++) fader.update(1 / 60, camPos, subj);
   assert.equal(fader.fadedCount, 1, 'the trunk itself fades');
   fader.clear();
+});
+
+test('OccluderFader: a lattice (userData.camFadeBox: gate leaf, fence rails) fades on its box; sight lines between the rails count', () => {
+  const scene = new THREE.Scene();
+  const a = new THREE.BoxGeometry(4, 0.12, 0.08).translate(0, 0.3, 0).toNonIndexed(), b = new THREE.BoxGeometry(4, 0.12, 0.08).translate(0, 1.3, 0).toNonIndexed();
+  const rails = new THREE.BufferGeometry();
+  const pa = a.attributes.position.array, pb = b.attributes.position.array, pos = new Float32Array(pa.length + pb.length);
+  pos.set(pa); pos.set(pb, pa.length);
+  rails.setAttribute('position', new THREE.BufferAttribute(pos, 3)); rails.computeVertexNormals();
+  const make = (box) => { const m = new THREE.Mesh(rails, new THREE.MeshStandardMaterial()); m.position.set(0, 0, -2); m.userData.camFade = true; if (box) m.userData.camFadeBox = true; scene.add(m); return m; };
+  const camPos = new THREE.Vector3(0, 0.8, -6), subj = [new THREE.Vector3(0, 0.8, 0)];   // the sight line passes between the rails
+  for (const box of [false, true]) {
+    const m = make(box), fader = new OccluderFader({ minOpacity: CAMERA.treeFadeOpacity });
+    assert.equal(fader.scan(scene, scene), 1);
+    assert.equal(fader.units[0].precise, !box);
+    for (let i = 0; i < 60; i++) fader.update(1 / 60, camPos, subj);
+    assert.equal(fader.fadedCount, box ? 1 : 0, box ? 'lattice: fades' : 'precise: the gap lets the line through');
+    fader.clear(); m.removeFromParent();
+  }
 });
 
 test('FollowCamera: memeT follows a MEME_LOOP cutscene shot (title loop sync) and resets on the next shot', async () => {
@@ -1139,7 +1192,8 @@ test('OccluderFader: a lone trunk-named mesh never registers; positional (classi
 });
 
 test('FollowCamera iso x-ray: the share of her capsule hidden (6 samples; > 30 % shows the silhouette)', async () => {
-  const { cam } = await makeCam();
+  const { cam, ctx } = await makeCam();
+  ctx.physics = null;                                                // _hides falls back to _blocked (mocked below)
   const pos = new THREE.Vector3(0, 0, 0), lens = new THREE.Vector3(0, 9, -8);
   cam.yaw = Math.PI;
   cam._blocked = (a, b) => b.x < -0.1;                              // only her screen-right flank (−X at yaw π)
@@ -1148,6 +1202,23 @@ test('FollowCamera iso x-ray: the share of her capsule hidden (6 samples; > 30 %
   cam._blocked = (a, b) => b.y > 0.3;                               // a wall hiding her from the hips up
   near(cam._herOccludedFrac(lens, pos, 0.8), 4 / 6);
   assert.ok(cam._herOccludedFrac(lens, pos, 0.8) > ISO.occl.xrayFrac);
+});
+
+test('FollowCamera iso x-ray: thin props (gate / fence rails) hide her too; arena mist walls never do', async () => {
+  const { cam, ctx } = await makeCam();
+  const lens = new THREE.Vector3(0, 9, -8), her = new THREE.Vector3(0, 0.5, 0);
+  const rail = { ax: -2, az: -1, bx: 2, bz: -1, r: 0.12, y0: 0, y1: 1.5 };   // thin: the arm passes through it
+  const mist = { arenaWall: true, x: 0, z: -1, r: 5 };
+  let first = rail;
+  ctx.physics = { castIgnore: false, raycast: (ray, max) => ({ kind: 'static', object: first, distance: max * 0.6 }) };
+  cam._blocked = () => false;                                        // the arm-style test skips both
+  assert.equal(cam._hides(lens, her), true, 'a rail crossing her chest hides her');
+  first = mist;
+  assert.equal(cam._hides(lens, her), false, 'arena mist: falls back to the arm test');
+  ctx.physics = { castIgnore: true, raycast: (ray, max, opts) => (opts.ignore(rail) ? null : { kind: 'static', object: rail, distance: max * 0.6 }) };
+  assert.equal(cam._hides(lens, her), true, 'castIgnore physics: one ray, rail counts');
+  ctx.physics = { raycast: (ray, max) => ({ kind: 'static', object: rail, distance: max - 0.1 }) };
+  assert.equal(cam._hides(lens, her), false, 'a hit at her own body (within 0.35 m) does not count');
 });
 
 /** FollowCamera in iso mode on a tiny ctx (flat ground, no colliders). */
@@ -1638,6 +1709,64 @@ test('AUTOCAM §6.2 subjects: weights fade in 0.35 s / out 0.5 s; hard only at w
   assert.equal(dropOne(S.data, S.n, F), false, 'the token holder is never dropped');
 });
 
+test('AUTOCAM §6.3 drop ladder: a winding-up THREAT outranks every ENGAGED, even while still easing in; D8 counts it', () => {
+  const S = new Subjects(), t = { id: 't' }, e = { id: 'e' }, p = { id: 'p' };
+  S.setHer(0, 0.4, 0, 0.6);
+  // first gather with a small dt: the THREAT's weight is still < hardMinW (not hard yet)
+  S.begin();
+  S.want(t, CLS.THREAT, 14, 0.5, 0, 0.9, 1, true); S.want(t, CLS.ENGAGED, 14, 0.5, 0, 0.9, 1, true);
+  S.want(e, CLS.ENGAGED, 6, 0.5, 0, 0.9, 1, true); S.want(p, CLS.PRE, 3, 0.5, 0, 0.9, 1, false);
+  S.end(0.05);
+  assert.equal(S.nEngaged, 2, 'the winding-up engaged foe still counts for the crowd term');
+  const it = S.indexOf(t);
+  assert.equal(S.data[it * STRIDE + 6], CLS.THREAT);
+  assert.ok(!(S.data[it * STRIDE + 5] & F_HARD), 'precondition: THREAT not hard yet');
+  const F = { x: 0, y: 0.6, z: 0 };
+  const isDrop = (k) => !!(S.data[S.indexOf(k) * STRIDE + 5] & F_DROP);
+  assert.equal(dropOne(S.data, S.n, F), true);
+  assert.ok(isDrop(p) && !isDrop(e) && !isDrop(t), 'lowest priority soft (pre-attend) first');
+  assert.equal(dropOne(S.data, S.n, F), true);
+  assert.ok(isDrop(e) && !isDrop(t), 'then the ENGAGED foe, never the wind-up before it');
+  assert.equal(dropOne(S.data, S.n, F), true, 'an easing-in THREAT goes only when nothing else is left');
+  // once hard it is never dropped
+  for (let k = 0; k < 4; k++) { S.begin(); S.want(t, CLS.THREAT, 14, 0.5, 0, 0.9, 1, true); S.want(e, CLS.ENGAGED, 6, 0.5, 0, 0.9, 1, true); S.end(0.05); }
+  assert.ok(S.data[S.indexOf(t) * STRIDE + 5] & F_HARD);
+  for (let i = 0; i < S.n; i++) S.data[i * STRIDE + 5] &= ~F_DROP;
+  while (dropOne(S.data, S.n, F));
+  assert.ok(!isDrop(t) && isDrop(e), 'a hard THREAT is never dropped');
+});
+
+test('AUTOCAM §6.3 solve: a 6-rat ring at 8 m — the crowd term extends the cap (≤ capMax); combined lean ≤ the D7 cap', () => {
+  const v = setYaw(makeView(), Math.PI / 4);
+  v.tanH = v.tanV * 16 / 9; v.offY = -0.1;
+  const S = new Subjects();
+  S.setHer(0, 0.4, 0, 0.6);
+  S.begin();
+  for (let k = 0; k < 6; k++) { const a = (k / 6) * Math.PI * 2 + 0.3; S.want({ id: 'r' + k }, CLS.ENGAGED, Math.cos(a) * 8, 0.5, Math.sin(a) * 8, 0.9, 1, true); }
+  S.end(0);
+  const F = { x: 0, y: 0.4, z: 0 }, out = {};
+  const o = { dBase: 12.4, cap: 15.4, dMin: 12.4, capUp: 2.5, capDown: 4, limR: 3, limL: 3, limUp: 3, limDown: 5, nEngaged: S.nEngaged, crowd: true };
+  solveFrame(S.data, S.n, F, v, o, out);
+  near(out.cap, 15.4, 1e-9, 'no capMax: the cap stays the +3 m budget');
+  o.capMax = 30;
+  solveFrame(S.data, S.n, F, v, o, out);
+  near(out.cap, 15.4 + 1.0, 1e-6, '6 engaged → +1.0 m on top of the budget');
+  assert.ok(out.d <= out.cap + 1e-9 && out.d >= 12.4 + 1.0 - 1e-9);
+  o.capMax = 15.9;
+  solveFrame(S.data, S.n, F, v, o, out);
+  near(out.cap, 15.9, 1e-9, 'never past capMax');
+  // the combined lean never passes the D7 cap, even with a strong sideways lean
+  for (const capDown of [4, 3, 2]) {
+    for (const sx of [-6, 6]) {
+      S.begin();
+      S.want({ id: 'side' }, CLS.ENGAGED, sx * v.Rx - 9 * v.Ux, 0.5, sx * v.Rz - 9 * v.Uz, 0.9, 1, true);
+      S.end(0);
+      solveFrame(S.data, S.n, F, v, { ...o, capDown, nEngaged: 1 }, out);
+      assert.ok(Math.hypot(out.leanR, out.leanU) <= capDown + 1e-6, `|lean| ${Math.hypot(out.leanR, out.leanU).toFixed(3)} ≤ ${capDown}`);
+    }
+  }
+});
+
 test('AUTOCAM §8.1 beats: Peekaboo leans toward the kitten and comes back; no beat while a THREAT winds up; Reduce camera motion: none', async () => {
   const { ctx, cam, step } = await makeIsoCamA();
   const f0 = cam.focus.clone();
@@ -1668,6 +1797,35 @@ test('AUTOCAM §8.1 beats: Peekaboo leans toward the kitten and comes back; no b
   step(10);
   assert.equal(cam.beat.active, false, 'Reduce camera motion: no beats');
   near(beatEnvelope(0.3, 0.6, 1, 0.8), 0.5, 1e-9); assert.equal(beatEnvelope(1.0, 0.6, 1, 0.8), 1); assert.equal(beatEnvelope(9, 0.6, 1, 0.8), 0);
+});
+
+test('AUTOCAM R3 rate caps: Cosy two-shot and Exhale never move d faster than 1.5 m/s in / 6 m/s out; the phase breath is a continuous punch', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  step(10);
+  const rec = (n) => {
+    let prev = cam._dCur, maxIn = 0, maxOut = 0, lo = prev, hi = prev;
+    for (let i = 0; i < n; i++) { step(1); const d = cam._dCur; maxIn = Math.max(maxIn, (prev - d) * 60); maxOut = Math.max(maxOut, (d - prev) * 60); prev = d; lo = Math.min(lo, d); hi = Math.max(hi, d); }
+    return { maxIn, maxOut, lo, hi };
+  };
+  const d0 = cam._dCur;
+  ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: 'k9', position: new THREE.Vector3(2, 0, 1) });
+  const cosy = rec(200);
+  assert.ok(cosy.lo < d0 - 1.0, `the Cosy beat dollies in (${d0.toFixed(2)} → ${cosy.lo.toFixed(2)})`);
+  assert.ok(cosy.maxIn <= ISO.framing.dist.inVmax + 1e-6, `cosy in ${cosy.maxIn.toFixed(2)} m/s`);
+  assert.ok(cosy.maxOut <= ISO.framing.dist.outVmax + 1e-6, `cosy out ${cosy.maxOut.toFixed(2)} m/s`);
+  near(cam._dCur, d0, 0.02, 'back to rest after the beat');
+  ctx.bus.emit(E.ARENA_CLEAR, { id: 'a' });
+  const ex = rec(240);
+  assert.ok(ex.maxIn <= ISO.framing.dist.inVmax + 1e-6 && ex.maxOut <= ISO.framing.dist.outVmax + 1e-6, `exhale ${ex.maxIn.toFixed(2)} / ${ex.maxOut.toFixed(2)}`);
+  // §8.2 / D11: the phase breath is a punch (own sine envelope, exempt from R3): on the lens d, not the curve d
+  const r0 = cam.iso().dist;
+  cam._breathT = 0;
+  let prev = r0, hi = r0, maxStep = 0;
+  for (let i = 0; i < 90; i++) { step(1); const d = cam.iso().dist; maxStep = Math.max(maxStep, Math.abs(d - prev)); hi = Math.max(hi, d); prev = d; }
+  assert.ok(hi > r0 + 1.4, `the phase breath pulls out +1.5 m (${r0.toFixed(2)} → ${hi.toFixed(2)})`);
+  assert.ok(maxStep <= 0.1, `continuous (R2): ≤ 0.1 m per frame, got ${maxStep.toFixed(3)}`);
+  near(cam.iso().dist, r0, 0.02, 'no overshoot: back to rest');
+  near(cam._dCur, d0, 0.02, 'the curve d never moved');
 });
 
 test('AUTOCAM §7.3 onScreen = SafeFrame-visible: a foe under the ability bar is hidden; inView / activityOf use the plain frustum', async () => {
@@ -1758,7 +1916,11 @@ test('AUTOCAM §8.3 / WA camera.W1: blendPoseIso eases distance in log space; bl
   step(5);
   cam.blendTo('follow', 1.1, 'inOutSine');
   assert.equal(cam.modeName, 'follow');
-  step(Math.round(1.1 * 60) + 2);
+  near(cam.blendLeft, 1.1, 1e-9, 'blendLeft = the whole blend before the first frame');
+  step(30);
+  near(cam.blendLeft, 0.6, 0.02, 'blendLeft counts down in real time');
+  step(Math.round(0.6 * 60) + 2);
+  assert.equal(cam.blendLeft, 0, 'blendLeft 0 once the blend is done');
   const pose = cam._gamePose;
   near(ctx.camera.position.distanceTo(pose.pos), 0, 1e-3, 'the blend lands on the gameplay pose (no second move)');
   assert.deepEqual(calls, [true, false], 'setCinematic on the shot (not the looping title shot), off on the hand-back');
@@ -1790,3 +1952,324 @@ test('ART §6.1 closeUp: on below 6.0 m, off above 6.3 m (hysteresis); the frame
   assert.equal(cam.closeUp, false);
   assert.deepEqual(got.filter((x, i) => i === 0 || got[i - 1] !== x), [true, false]);
 });
+
+test('integrator: a despawned (disposed) enemy leaves the engaged set at once (the combat fit releases)', async () => {
+  const { fakeCtx } = await import('./_fakeCtx.mjs');
+  const ctx = fakeCtx();
+  const cam = ctx.cam;
+  const e = { alive: true, alerted: true, hp: 10, pos: { x: 3, y: 0, z: 0 }, faction: 'enemy', disposed: false };
+  cam._engA.length = 0; cam._engA.push(e); cam._engTA[0] = 0;   // timers are a typed array parallel to _engA
+  cam._engagedSet({ x: 0, z: 0 }, 1 / 60);
+  assert.equal(cam.engaged.includes(e), true, 'live and alerted: engaged');
+  e.disposed = true;
+  cam._engagedSet({ x: 0, z: 0 }, 1 / 60);
+  assert.equal(cam.engaged.includes(e), false, 'disposed: dropped');
+});
+
+// ---------------------------------------------------------------- PERF §4.5 cursor pick
+test('PERF §4.5 picker: ground rays stop at the far plane (off-axis rays at the far plane, not 400 m)', () => {
+  const ctx = makeCtx();
+  const c = ctx.camera; c.far = 60; c.position.set(0, 20, 20); c.lookAt(0, 0, 0); c.updateMatrixWorld();
+  const fwd = c.getWorldDirection(new THREE.Vector3());
+  assert.ok(Math.abs(rayLimit(c, fwd) - 60) < 1e-6, 'on-axis = far');
+  const off = fwd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.3);
+  assert.ok(Math.abs(rayLimit(c, off) - 60 / Math.cos(fwd.angleTo(off))) < 1e-6, 'off-axis reaches the far plane');
+  assert.equal(rayLimit({ far: Infinity, matrixWorld: c.matrixWorld }, fwd), 400);
+  const seen = [];
+  const rc = ctx.physics.raycast;
+  ctx.physics.raycast = (ray, max, o) => { seen.push(max); return rc(ray, max, o); };
+  const out = screenToGround(ctx, 640, 360, new THREE.Vector3(), { left: 0, top: 0, width: 1280, height: 720 });
+  assert.ok(out && Math.abs(out.y) < 1e-6, 'meets the ground');
+  assert.ok(seen.length === 1 && seen[0] <= 60 / Math.cos(c.fov * Math.PI / 180) + 1e-6, `ray capped (${seen})`);
+});
+
+test('PERF §4.5 hover: the cursor ground ray is skipped while pointer + pose are unchanged, re-cast on a change', async () => {
+  const { ctx, cam } = await makeCam();
+  const c = ctx.camera; c.position.set(0, 12, 10); c.lookAt(0, 0, 0); c.updateMatrixWorld();
+  let n = 0; const rc = ctx.physics.raycast;
+  ctx.physics.raycast = (ray, max, o) => { n++; return rc(ray, max, o); };
+  ctx.input.device = 'kbm';
+  ctx.input.pointer.x = 640; ctx.input.pointer.y = 360; ctx.input.pointer.inside = true;
+  cam._isoCursor();
+  assert.equal(n, 1); assert.ok(cam.cursorValid);
+  const g = cam.cursorGround.clone();
+  for (let i = 0; i < 5; i++) cam._isoCursor();
+  assert.equal(n, 1, 'unchanged → no ray'); assert.ok(cam.cursorValid && cam.cursorGround.equals(g));
+  assert.ok(cam.hover.point.equals(g), 'hover point follows the cached ground');
+  ctx.input.pointer.x = 700; cam._isoCursor();
+  assert.equal(n, 2, 'pointer moved → ray');
+  c.position.x += 0.01; c.updateMatrixWorld(); cam._isoCursor();
+  assert.equal(n, 3, 'camera moved → ray');
+  ctx.player.pos.y += 0.2; cam._isoCursor();
+  assert.equal(n, 4, 'her feet moved → ray');
+  for (let i = 0; i < 10; i++) cam._isoCursor();
+  assert.ok(n >= 5, 'TTL re-casts a static pose now and then');
+  ctx.input.pointer.inside = false; cam._isoCursor();
+  assert.equal(cam.cursorValid, false);
+  ctx.input.pointer.inside = true; const m = n; cam._isoCursor();
+  assert.equal(n, m + 1, 'back inside → fresh ray');
+});
+
+test('AUTOCAM §9.6 occluders: hit tests at 20 Hz, skipped while lens + subjects stand still (< 1 cm), easing at render rate', () => {
+  const scene = new THREE.Scene();
+  const fader = new OccluderFader({ minOpacity: 0.3, fadeIn: 0.15, fadeOut: 0.4 });
+  const trees = [];
+  for (let i = 0; i < 20; i++) {
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 4).translate(0, 2, 0), new THREE.MeshStandardMaterial());
+    t.position.set(i === 0 ? 0 : 30 + i * 3, 0, -2); t.userData.camFade = true; scene.add(t); trees.push(t);
+  }
+  fader.scan(scene, scene);
+  let tests = 0; const occ = fader._occludes.bind(fader);
+  fader._occludes = (...a) => { tests++; return occ(...a); };
+  const camPos = new THREE.Vector3(0, 1.5, -4), subj = [new THREE.Vector3(0, 0.5, 0)], opts = { n: 1, radii: [0.4], her: new THREE.Vector3() };
+  for (let i = 0; i < 6; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 1, 'one full check over 6 frames at 60 Hz (20 Hz checks); the broad phase skips the 19 far trees');
+  assert.ok(trees[0].material.opacity < 1, 'the tree in the way eases every frame');
+  for (let i = 0; i < 24; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 1, 'nothing moved → no re-test');
+  near(trees[0].material.opacity, 0.3, 1e-6, 'settled');
+  camPos.x += 0.005; subj[0].z += 0.005;
+  for (let i = 0; i < 6; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 1, '< 1 cm → no re-test');
+  camPos.x += 0.02;
+  for (let i = 0; i < 3; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 2, '≥ 1 cm → a full re-test');
+  opts.radii[0] = 0.5;
+  for (let i = 0; i < 3; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 3, 'a new radius → re-test');
+  const extra = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 4).translate(0, 2, 0), new THREE.MeshStandardMaterial());
+  extra.position.set(-30, 0, 0); extra.userData.camFade = true; scene.add(extra); fader.add(extra, scene);
+  for (let i = 0; i < 3; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 4, 'a new registration → re-test');
+  for (let i = 0; i < 45; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(tests, 5, 'a still query is re-tested after QUERY_TTL checks anyway');
+  // the subject walks away: the tree restores at render rate though no unit outside `active` is visited
+  subj[0].set(0, 0.5, -10); camPos.set(0, 1.5, -14);
+  for (let i = 0; i < 40; i++) fader.update(1 / 60, camPos, subj, opts);
+  assert.equal(trees[0].material.opacity ?? 1, 1);
+  assert.equal(fader.active.size, 0);
+});
+
+test('AUTOCAM §9.6 occluders: the broad phase never changes a hit (random lenses / subjects over trees, crowns, roofs, solids)', () => {
+  const O = ISO.occl, scene = new THREE.Scene();
+  const mk = (geo, name, x, z, tag) => { const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial()); m.name = name; m.position.set(x, 0, z); if (tag !== undefined) m.userData.camFade = tag; scene.add(m); return m; };
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 40; i++) {
+    const x = rnd() * 40 - 20, z = rnd() * 40 - 20, k = i % 4;
+    if (k === 0) mk(new THREE.CylinderGeometry(1.4, 0.3, 6).translate(0, 3, 0), 'pine', x, z, 'crown');
+    else if (k === 1) mk(new THREE.BoxGeometry(5, 1, 5).translate(0, 4 + rnd() * 6, 0), 'roof', x, z, 'roof');
+    else if (k === 2) mk(new THREE.BoxGeometry(3, 6, 3).translate(0, 3, 0), 'tower', x, z, 'solid');
+    else mk(new THREE.BoxGeometry(0.3, 1.2, 0.3).translate(0, 0.6, 0), 'post', x, z, true);
+  }
+  const opt = { minOpacity: O.opacity, fadeIn: O.fadeIn, fadeOut: O.fadeOut, crownR: O.crownR, roofPad: O.roofPad, checkHz: 0 };
+  const a = new OccluderFader(opt), b = new OccluderFader(opt);
+  a.scan(scene, scene); b.scan(scene, scene); b.broadPhase = false;
+  assert.equal(a.count, 40);
+  const cam = new THREE.Vector3(), subj = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()], her = new THREE.Vector3();
+  const lens = [new THREE.Vector3(), new THREE.Vector3()];
+  let hits = 0;
+  for (let q = 0; q < 300; q++) {
+    her.set(rnd() * 40 - 20, 0, rnd() * 40 - 20);
+    const yaw = rnd() * Math.PI * 2, d = 9 + rnd() * 9;
+    cam.set(her.x + Math.sin(yaw) * d * 0.7, 6 + rnd() * 10, her.z + Math.cos(yaw) * d * 0.7);
+    subj[0].set(her.x, 0.5, her.z);
+    subj[1].set(her.x + rnd() * 8 - 4, 0.6, her.z + rnd() * 8 - 4);
+    subj[2].set(her.x + rnd() * 8 - 4, 0.3, her.z + rnd() * 8 - 4);
+    lens[0].lerpVectors(cam, subj[0], 0.15); lens[1].lerpVectors(cam, subj[1], 0.15);
+    const o = { n: 3, radii: [O.herR, O.enemyR, 0.3], her, lens, nLens: 2, crowns: q % 3 !== 0, solidOnly: q % 7 === 0 };
+    a.update(1 / 60, cam, subj, o); b.update(1 / 60, cam, subj, o);
+    for (let i = 0; i < a.units.length; i++) {
+      assert.equal(a.units[i].hit, b.units[i].hit, `query ${q}, unit ${i} (${a.units[i].root.name})`);
+      if (a.units[i].hit) hits++;
+    }
+  }
+  assert.ok(hits > 50, `the queries hit something (${hits})`);
+});
+
+test('AUTOCAM §9.6 camera: viewport size read once per canvas-rect refresh, isoFrame base cached, x-ray casts skipped when still, setProfiling()', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  // viewport: with a ResizeObserver (browser) clientWidth is read only when Picker refreshes its cached rect
+  const hadRO = 'ResizeObserver' in globalThis;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  try {
+    let reads = 0;
+    const el = { get clientWidth() { reads++; return 1280; }, clientHeight: 720, getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) };
+    ctx.renderer = { domElement: el };
+    for (let i = 0; i < 50; i++) { cam._viewW(); cam._viewH(); }
+    assert.equal(reads, 1, `one clientWidth read for 100 size queries (got ${reads})`);
+    assert.equal(cam._viewW(), 1280);
+  } finally { if (!hadRO) delete globalThis.ResizeObserver; ctx.renderer = { domElement: { clientWidth: 1280, clientHeight: 720, getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) } }; }
+  // isoFrame base: re-derived only on an input change
+  step(5);
+  const hv = cam._hv, b = cam._isoBase(1280, 720, 'kbm', false, hv, false), d0 = b.dist;
+  b.dist = -1;
+  assert.equal(cam._isoBase(1280, 720, 'kbm', false, hv, false).dist, -1, 'same inputs → cached');
+  near(cam._isoBase(1280, 700, 'kbm', false, hv, false).dist, isoFrame({ w: 1280, h: 700, device: 'kbm', zoom: cam._zoomS }).dist, 1e-9, 'new height → recomputed');
+  near(cam._isoBase(1280, 720, 'kbm', false, hv, false).dist, d0, 1e-9);
+  // x-ray: 6 casts per 20 Hz tick only while something moves
+  let casts = 0; const cast = cam._cast.bind(cam);
+  cam._cast = (...a) => { casts++; return cast(...a); };
+  step(30);
+  assert.ok(casts <= 6 * 2, `still: ≤ 2 x-ray ticks re-cast in 0.5 s (got ${casts / 6})`);
+  // profile: per-function EMAs
+  assert.equal(cam.timing, null, 'off by default');
+  const T = cam.setProfiling(true);
+  step(10);
+  assert.equal(T.n, 10);
+  for (const k of ['render', 'cursor', 'gameplay', 'occlusion', 'fader', 'xray', 'footprint', 'fog']) assert.ok(Number.isFinite(T[k]) && T[k] >= 0, k);
+  assert.ok(T.render >= T.gameplay);
+  cam.setProfiling(false); assert.equal(cam.timing, null);
+});
+
+test('PERF §4.5 pickAt: the mid-point cull never drops an enemy the full capsule test would pick', () => {
+  const ctx = makeCtx();
+  const c = ctx.camera; c.fov = 38; c.aspect = 16 / 9; c.near = 0.3; c.far = 60; c.updateProjectionMatrix();
+  c.position.set(0, 9.5, 8); c.lookAt(0, 0, 0); c.updateMatrixWorld();
+  const R = { left: 0, top: 0, width: 1280, height: 720 };
+  ctx.renderer = { domElement: { getBoundingClientRect: () => R } };
+  ctx.cam = { yaw: Math.PI };
+  const { AIM } = config;
+  let s = 7; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const out = { kind: 'ground', actor: null, id: null, interact: null, point: new THREE.Vector3(), px: 0 };
+  const sa = { x: 0, y: 0, z: 0, on: false }, sb = { ...sa }, sr = { ...sa };
+  let hits = 0;
+  for (let n = 0; n < 3000; n++) {
+    const h = 0.3 + rnd() * 3.5, rad = 0.2 + rnd() * 1.6;
+    const p = new THREE.Vector3((rnd() - 0.5) * 30, rnd() * 2, (rnd() - 0.5) * 30 - 4);
+    const e = { pos: p, object3d: { position: p, visible: true }, height: h, radius: rad, alive: true };
+    ctx.enemies.list = [e];
+    const sp = worldToScreen(ctx, { x: p.x, y: p.y + h / 2, z: p.z }, { x: 0, y: 0, z: 0, on: false }, R);
+    const x = sp.x + (rnd() - 0.5) * 400, y = sp.y + (rnd() - 0.5) * 400;
+    // reference: the full capsule test (pre-cull)
+    worldToScreen(ctx, { x: p.x, y: p.y + Math.min(0.15, h * 0.2), z: p.z }, sa, R); worldToScreen(ctx, { x: p.x, y: p.y + h, z: p.z }, sb, R);
+    let ref = false;
+    if (sa.z > -1 && sa.z < 1 && sb.z > -1 && sb.z < 1) {
+      worldToScreen(ctx, { x: p.x + Math.cos(Math.PI) * rad, y: p.y + h / 2, z: p.z - Math.sin(Math.PI) * rad }, sr, R);
+      const rpx = Math.hypot(sr.x - (sa.x + sb.x) / 2, sr.y - (sa.y + sb.y) / 2);
+      const vx = sb.x - sa.x, vy = sb.y - sa.y, l2 = vx * vx + vy * vy;
+      const t = l2 > 1e-9 ? Math.max(0, Math.min(1, ((x - sa.x) * vx + (y - sa.y) * vy) / l2)) : 0;
+      ref = Math.hypot(x - (sa.x + vx * t), y - (sa.y + vy * t)) <= Math.max(AIM.pick.px, rpx + AIM.pick.pad);
+    }
+    pickAt(ctx, x, y, { ground: false }, out, R);
+    assert.equal(out.kind === 'enemy', ref, `trial ${n}: h ${h.toFixed(2)} r ${rad.toFixed(2)} at ${p.toArray().map((v) => v.toFixed(1))}`);
+    if (ref) hits++;
+  }
+  assert.ok(hits > 200, `enough positive trials (${hits})`);
+});
+
+// ---------------------------------------------------------------- AUTOCAM review fixes (hold, punches, R7, R10, D6)
+test('AUTOCAM §6.5 / R4: after a settled fit the camera holds 1.5 s before zooming in (fight end, and a foe dying mid-fight)', async () => {
+  for (const midFight of [false, true]) {
+    const { ctx, cam, step } = await makeIsoCamA();
+    const d0 = cam.iso().dist;
+    const foes = [[9, 3], [-9, -2], [2, 9]].map(([x, z]) => { const e = enemyAt(ctx, x, z, 0.8); e.alerted = true; e.stateName = 'chase'; return e; });
+    const keep = midFight ? enemyAt(ctx, 1.5, 1, 0.8) : null;
+    if (keep) { keep.alerted = true; keep.stateName = 'chase'; }
+    step(240);                                                       // the fit settles (the stale-stamp case)
+    const dFit = cam.iso().dist;
+    assert.ok(dFit > d0 + 0.5, `zoomed out for the fight (${d0.toFixed(2)} → ${dFit.toFixed(2)})`);
+    for (const e of foes) { e.alive = false; e.hp = 0; }
+    step(6);
+    const dHold = cam.iso().dist;
+    step(70);                                                        // ≈ 1.27 s after the need dropped
+    assert.ok(Math.abs(cam.iso().dist - dHold) < 0.03, `${midFight ? 'mid-fight' : 'fight end'}: held (${dHold.toFixed(2)} → ${cam.iso().dist.toFixed(2)})`);
+    step(150);
+    assert.ok(cam.iso().dist < dHold - 0.3, `then eases in (${cam.iso().dist.toFixed(2)})`);
+  }
+});
+
+test('AUTOCAM R2: the Purrfect Dodge punch (−0.4 m) eases in and out (no one-frame step), held through the slow motion', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  step(10);
+  const d0 = cam.iso().dist;
+  ctx.bus.emit(E.PLAYER_PERFECT_DODGE, { graze: false });
+  let prev = d0, lo = d0, maxStep = 0;
+  for (let i = 0; i < 60; i++) { step(1); const d = cam.iso().dist; maxStep = Math.max(maxStep, Math.abs(d - prev)); lo = Math.min(lo, d); prev = d; }
+  near(lo, d0 + ISO.perfectDodge.dd, 0.02, 'punches in −0.4 m');
+  assert.ok(maxStep <= 0.4 / 0.08 / 60 + 1e-3, `≤ ${(0.4 / 0.08 / 60).toFixed(3)} m per frame, got ${maxStep.toFixed(3)}`);
+  step(30);
+  near(cam.iso().dist, d0, 1e-3, 'back after in + hold + out');
+});
+
+test('AUTOCAM §8.2 / D11: the Dizzy punch reads from the 14 m boss floor (d 14 → 13 within 0.45 s), after the R3 clamp', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  const boss = enemyAt(ctx, 0, 4, 1.6); boss.alive = true; boss.hp = 450;
+  ctx.enemies.boss = boss;
+  ctx.bus.emit(E.BOSS_START, { id: 'boss_grizzlechop' });
+  step(240);
+  const dRest = cam.iso().dist;
+  near(dRest, ISO.boss.dist[0], 0.05, 'the two-shot at the boss floor');
+  cam._dizzyFits = () => true;                                       // geometry guard covered elsewhere
+  ctx.bus.emit(E.BOSS_DIZZY, { dizzy: true });
+  step(27);
+  near(cam.iso().dist, ISO.boss.dist[0] + ISO.boss.dizzy.dd, 0.02, 'dipped −1 m below the floor');
+  ctx.bus.emit(E.BOSS_DIZZY, { dizzy: false });
+  step(60);
+  near(cam.iso().dist, dRest, 0.05, 'back to the floor');
+});
+
+test('AUTOCAM R7: a far speaker down-screen never pushes her out of herFrame during the dialogue dolly', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  const sp = new Actor(ctx, { faction: 'neutral', height: 0.8 });
+  sp.pos.set(0, 0, -11.9); sp.object3d.position.copy(sp.pos); ctx.actors.register(sp, 'mochi');
+  ctx.game.mode = 'dialog';
+  ctx.bus.emit(E.DIALOG_LINE, { speaker: 'mochi', text: 'Meow' });
+  step(60);
+  const F = cam.safeFrame.herFrame, eps = 0.01;
+  for (const y of [0, 0.98]) {
+    const q = new THREE.Vector3(0, y, 0).project(ctx.camera), sx = (q.x + 1) / 2, sy = (1 - q.y) / 2;
+    assert.ok(sx >= F.x0 - eps && sx <= F.x1 + eps && sy >= F.y0 - eps && sy <= F.y1 + eps,
+      `her ${y ? 'head' : 'feet'} at (${sx.toFixed(3)}, ${sy.toFixed(3)}) inside herFrame [${F.x0.toFixed(3)}, ${F.y0.toFixed(3)}, ${F.x1.toFixed(3)}, ${F.y1.toFixed(3)}]`);
+  }
+  assert.ok(cam.focus.z < -1, `the focus still moved toward the speaker (${cam.focus.x.toFixed(2)}, ${cam.focus.z.toFixed(2)}; lim ${JSON.stringify(cam._limDlg)})`);
+});
+
+test('AUTOCAM R10: the base FOV changes at ≤ 12°/s (framing.rate.fovDeg); a snap jumps', async () => {
+  const { cam, step } = await makeIsoCamA();
+  step(5);
+  const f0 = cam.iso().fov, orig = cam._isoBase.bind(cam);
+  cam._isoBase = (...a) => { const b = orig(...a); b.fov = f0 + 10; return b; };
+  let prev = f0, maxStep = 0;
+  for (let i = 0; i < 120; i++) { step(1); const f = cam.iso().fov; maxStep = Math.max(maxStep, Math.abs(f - prev)); prev = f; }
+  assert.ok(maxStep <= ISO.framing.rate.fovDeg / 60 + 1e-6, `≤ 0.2° per frame, got ${maxStep.toFixed(3)}`);
+  near(cam.iso().fov, f0 + 10, 0.01, 'reaches the new FOV');
+});
+
+test('AUTOCAM §5.4 / D6: settings.camCursorLead 0 = no cursor lead; 0.15 leads toward the cursor (≤ cursorMax)', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  ctx.input.device = 'kbm';
+  cam._isoCursor = () => { cam.cursorValid = true; cam.cursorGround.set(8, 0, 0); };
+  ctx.state.settings.camCursorLead = 0;
+  step(120);
+  near(Math.hypot(cam.lead.x, cam.lead.z), 0, 1e-6, 'default 0: no cursor lead');
+  ctx.state.settings.camCursorLead = 0.15;
+  ctx.bus.emit(E.SETTINGS_CHANGED, { key: 'camCursorLead', value: 0.15 });
+  step(180);
+  near(cam.lead.x, 8 * 0.15, 0.05, 'gain × (cursor − her) toward the cursor');
+  near(cam.lead.z, 0, 1e-3);
+  cam._isoCursor = () => { cam.cursorValid = true; cam.cursorGround.set(40, 0, 0); };
+  step(180);
+  near(cam.lead.x, ISO.lead.cursorMax, 0.05, 'capped at cursorMax');
+});
+
+test('AUTOCAM: entering cutscene mode keeps the frozen frame where it was (no anchor slide over the held pose)', async () => {
+  const { ctx, cam, step } = await makeIsoCamA();
+  step(30);
+  const v0 = ctx.camera.view ? { x: ctx.camera.view.offsetX, y: ctx.camera.view.offsetY, on: ctx.camera.view.enabled } : null;
+  assert.ok(v0 && v0.on && v0.y !== 0, 'gameplay anchor is off-centre');
+  cam.mode('cutscene');
+  step(30);
+  const v = ctx.camera.view;
+  assert.equal(v.enabled, true); assert.equal(v.offsetX, v0.x); assert.equal(v.offsetY, v0.y, 'anchor frozen with the pose');
+  // a cut into a shot snaps the anchor centred with the pose; the hand-back blend drives it with the blend's eased k
+  cam.shot({ preset: 'HERO_LOW', anchor: 'swordcat', mode: 'cut' });
+  step(1);
+  assert.equal(cam._isoW, 0, 'a cut snaps');
+  cam.mode('follow', { blend: 1 });
+  step(30);
+  const mid = cam._isoW;
+  near(mid, cam._blend.ease(clamp01(cam._blend.t / cam._blend.dur)), 0.02, 'anchor weight = eased blend k');
+  step(40);
+  assert.equal(cam._isoW, 1);
+});
+const clamp01 = (x) => Math.min(1, Math.max(0, x));

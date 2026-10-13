@@ -28,6 +28,7 @@ import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, TELEGRAPH, AIM, CAMERA, CLASS_MARKS } from '../core/config.js';
 import { setHighlight } from '../characters/Readability.js';
 import { FX_COLORS } from './palette.js';
+import { fxShaderMaterial } from './shaders.js';
 
 const MAX = 160;
 /** decal shapes (aParams.x) */
@@ -57,9 +58,18 @@ export const DECAL_ROLES = Object.freeze({
   hero: 'hero', move: 'hero', heart: 'hero', heartEmpty: 'ink', silver: 'neutral', gold: 'neutral', red: 'danger', aggro: 'danger',
   white: 'neutral', cream: 'neutral', grey: 'neutral', green: 'interact', mint: 'interact', sky: 'friend', blob: 'shadow', purple: 'danger', ink: 'ink',
 });
+/**
+ * Her ring's opacity. WA §3.2 rule 1 (pink is hers alone and always reads pink) beats the spec's α 0.55: at 0.55 the
+ * pink #FF8FB1 blended over green grass (its complement) composites to tan / brown (forest, bog, twilight shots), so
+ * the 0.08 m band is drawn near-opaque. It is unfogged and unlit (fog: false, noHeightFog), so the ring is
+ * CLASS_MARKS.hero.color under every Env preset. Unit-tested: the composite over every preset's ground stays pink.
+ */
+export const HERO_RING_ALPHA = 0.92;
+/** The hero ring's draw style (pure; unit-tested): the class-mark colour, near-opaque, never fogged. */
+export const heroRingStyle = () => ({ color: CLASS_MARKS.hero.color, alpha: HERO_RING_ALPHA, fog: false });
 /** Tunables (CONTROLS_SPEC §7.3, §8.2, §10.3; WA §3; metres / seconds). */
 export const DECAL_CFG = Object.freeze({
-  heroR: CLASS_MARKS.hero.r, heroAlpha: CLASS_MARKS.hero.alpha, heroW: CLASS_MARKS.hero.width, heroNotch: 0.25, heroNotchLen: 0.3, pull: 0.45, fanR: 1.05,
+  heroR: CLASS_MARKS.hero.r, heroAlpha: HERO_RING_ALPHA, heroW: CLASS_MARKS.hero.width, heroNotch: 0.25, heroNotchLen: 0.3, pull: 0.45, fanR: 1.05,
   parryRing: { r0: 2.2, lead: 0.6, range: 6 }, freezeLead: 0.15, wedgeMax: 8, rimMin: 0.12,
   // WA §3.4 wedge timing: rim α through 70 % of the wind-up, the glyph pop at parry-window open, the strike flash
   wedge: { rimA: 0.6, rimLate: 0.85, rimOpen: 0.95, fillA: 0.16, fillRed: 0.35, pop: 1.3, popT: 0.08, strikeA: 0.8, strikeHold: 0.05, strikeFade: 0.12 },
@@ -72,8 +82,12 @@ export const DECAL_CFG = Object.freeze({
   heartFlash: 0.12, heartShrink: 0.25, heartPop: 0.2,
 });
 const LIFT = 0.05;
+/** Telegraph glyphs queued per frame at most (8 rim-glyphed telegraphs × 4 + lanes; the batch holds MAX = 160). */
+const GLYPH_MAX = 48;
 /** WA §3.2 rule 4: the ink sandwich (width m, alpha) from config. */
 const INK = Object.freeze({ w: TELEGRAPH.ink?.width ?? 0.03, a: TELEGRAPH.ink?.alpha ?? 0.35 });
+/** Glyph ink alpha: telegraph glyphs need a strong cocoa outline to read on bright grass (config 0.35 is for rings). */
+export const GLYPH_INK = Math.max(0.85, INK.a);
 
 const VERT = /* glsl */`
 attribute vec4 aColor;
@@ -381,7 +395,7 @@ export class GroundDecals {
   init(scene) {
     const geo = new THREE.PlaneGeometry(1, 1);
     geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.ShaderMaterial({
+    const mat = fxShaderMaterial({
       name: 'fx.groundDecals', vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, depthTest: true,
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, fog: false,
       uniforms: { uTime: { value: 0 }, uInk: { value: new THREE.Color(DECAL_COLORS.ink) } },
@@ -434,15 +448,17 @@ export class GroundDecals {
   flash(kind) { if (kind === 'block') this._blockFlashT = 0.3; else if (kind === 'parry') this._parryFlashT = 0.35; }
 
   /**
-   * WA §3.4: a telegraph glyph for this frame (Telegraphs queues one per disc centre / lane end / aim-line end).
-   * `glyph` = a GLYPH_SHAPE name or a telegraph kind; `size` = glyph diameter (m; default the config size, touch bigger).
+   * WA §3.4: a telegraph glyph for this frame (Telegraphs queues 3–4 on each disc rim, rows along lane edges, one at
+   * an aim-line end). `glyph` = a GLYPH_SHAPE name or a telegraph kind; `size` = glyph diameter (m; default the config
+   * size, touch bigger); `inkA` = the cocoa ink alpha (0 = GLYPH_INK). At most GLYPH_MAX a frame.
    */
-  glyph(glyph, x, y, z, yaw = 0, alpha = 1, size = 0, color = DECAL_COLORS.white) {
+  glyph(glyph, x, y, z, yaw = 0, alpha = 1, size = 0, color = DECAL_COLORS.white, inkA = 0) {
     const shape = glyphShape(glyph);
-    if (shape < 0 || !(alpha > 0.01)) return;
-    const g = (this._glyphs[this._glyphN] ??= { shape: 0, x: 0, y: 0, z: 0, yaw: 0, alpha: 0, size: 0, color: '' });
+    if (shape < 0 || !(alpha > 0.01) || this._glyphN >= GLYPH_MAX) return;
+    const g = (this._glyphs[this._glyphN] ??= { shape: 0, x: 0, y: 0, z: 0, yaw: 0, alpha: 0, size: 0, color: '', ink: 1 });
     this._glyphN++;
     g.shape = shape; g.x = x; g.y = y; g.z = z; g.yaw = yaw; g.alpha = alpha; g.size = size; g.color = color;
+    g.ink = (inkA > 0 ? inkA : GLYPH_INK) / Math.max(0.01, INK.a);
   }
 
   /** The tutorial ghost-paw ground spot (ui's ghost paw points here); `null` hides it. */
@@ -477,7 +493,7 @@ export class GroundDecals {
     const yaw = pl ? Math.atan2(at.x - pl.x, at.z - pl.z) : 0;
     const M = DECAL_CFG.marker;
     this.markers.push({ kind, x: at.x, y: at.y ?? 0, z: at.z, t: 0, dur: kind === 'move' || kind === 'follow' ? M.move : M.other,
-      actor: t?.object3d ? t : null, queued: !!p.queued, yaw, delay: 0 });
+      actor: t?.object3d ? t : null, queued: !!p.queued, yaw, delay: 0, double: !!p.double && kind === 'move' });
     if (kind === 'move' || kind === 'attackMove') this._orderT = 0;
   }
 
@@ -635,7 +651,7 @@ export class GroundDecals {
     const aimSrc = aim => aim && aim.dir && (aim.source === 'cursor' || aim.source === 'explicit' || ((aim.source === 'auto' || aim.source === 'selected') && aim.active));
     const aim = p.aim, yaw = aimSrc(aim) && (p.state !== 'move' || aim.active) ? Math.atan2(aim.dir.x, aim.dir.z) : p.facing;
     const ringYaw = this._cursorYaw(p) ?? yaw;
-    // WA §3.2 hero ring: pink #FF8FB1 α 0.55, 0.08 m wide, r 0.75, a solid tick (0.3 m, 0.25 rad) along the aim, inked
+    // WA §3.2 hero ring: pink #FF8FB1 (near-opaque: HERO_RING_ALPHA), 0.08 m wide, r 0.75, a solid tick (0.3 m, 0.25 rad) along the aim, inked
     const Rq = C.heroR + C.heroNotchLen + 0.04, O = C.heroR / Rq, inner = (C.heroR - C.heroW) / Rq;
     this._add(DECAL.RING, pos.x, gy, pos.z, Rq, ringYaw, DECAL_COLORS.hero, C.heroAlpha, inner, 0.012 * O, C.heroNotch, O, C.heroNotchLen / Rq, 0, 1, 1, pull);
     this._count('hero');
@@ -806,7 +822,7 @@ export class GroundDecals {
       const gShape = glyphShape(k);
       if (gShape >= 0) {
         const gr = (gSize / 2 / 0.9) * look.glyph;
-        this._add(gShape, gx, this._gy(gx, gz, pos.y), gz, gr, k === 'gold' ? this._time * 1.5 : yaw, k === 'gold' ? DECAL_COLORS.gold : DECAL_COLORS.white, 0.95, 0, 0.05);
+        this._add(gShape, gx, this._gy(gx, gz, pos.y), gz, gr, k === 'gold' ? this._time * 1.5 : yaw, k === 'gold' ? DECAL_COLORS.gold : DECAL_COLORS.white, 0.95, 0, 0.05, 0, 0, 0, 0, 1, 1, 0, GLYPH_INK / Math.max(0.01, INK.a));
         this._count('glyph');
       }
       this.wedgeList.push({ id: e.id, kind: k, activeAt: e.activeAt, frozen: st.frozen, open: st.open, range: R, half, yaw });
@@ -816,14 +832,14 @@ export class GroundDecals {
     if (this._frozen.size > 32) this._frozen.clear();
   }
 
-  /** Glyphs Telegraphs queued for this frame (WA §3.4: disc centres, lane ends, aim-line ends). */
+  /** Glyphs Telegraphs queued for this frame (WA §3.4: disc / ring rims, lane edges, aim-line ends). */
   _glyphQueue() {
     const touch = this.ctx.input?.device === 'touch';
     const base = touch ? TELEGRAPH.glyphSizeTouch ?? 0.55 : TELEGRAPH.glyphSize ?? 0.45;
     for (let i = 0; i < this._glyphN; i++) {
       const g = this._glyphs[i];
       const size = g.size > 0 ? g.size : base;
-      this._add(g.shape, g.x, g.y, g.z, size / 2 / 0.9, g.shape === DECAL.STAR ? this._time * 1.5 : g.yaw, g.color, g.alpha, 0, 0.05);
+      this._add(g.shape, g.x, g.y, g.z, size / 2 / 0.9, g.shape === DECAL.STAR ? this._time * 1.5 : g.yaw, g.color, g.alpha, 0, 0.05, 0, 0, 0, 0, 1, 1, 0, g.ink);
       this._count('glyph');
     }
     this._glyphN = 0;
@@ -1160,7 +1176,7 @@ export class GroundDecals {
 
   /**
    * Order markers: the tap ripple (WA §3.6: a pink ring 0 → 1.15 → 1.0 in 0.12 s around a cream paw, + 4 collapsing
-   * ticks; gone in 0.6 s), gold attack / use rings, a warm-grey ✕ paw (unreachable); plus the slash smear and the
+   * ticks; gone in 0.6 s; `double` → two paws side by side), gold attack / use rings, a warm-grey ✕ paw (unreachable); plus the slash smear and the
    * Golden Hour gleam lanes.
    */
   _markers(dt, play) {
@@ -1178,7 +1194,13 @@ export class GroundDecals {
           // the ripple: 0 → 1.15 over the grow time, settling to 1.0 by twice it
           const rip = grow < 1 ? grow * M.ripple : 1 + (M.ripple - 1) * Math.max(0, 1 - (m.t - M.grow) / M.grow);
           this._add(DECAL.RING, m.x, m.y, m.z, M.paw * 1.9 * rip, 0, DECAL_COLORS.move, 0.9 * fade, 0.8, 0.03);
-          this._add(DECAL.PAW, m.x, m.y, m.z, M.paw * Math.min(1, rip), m.yaw, DECAL_COLORS.cream, 0.95 * fade, 0, 0.03);
+          if (m.double) {
+            // WA §3.6 double tap on the same spot: two paws side by side (left one a step behind), no extra draw
+            const s = M.paw * Math.min(1, rip), ox = Math.cos(m.yaw) * M.paw * 0.55, oz = -Math.sin(m.yaw) * M.paw * 0.55;
+            const bx = Math.sin(m.yaw) * M.paw * 0.3, bz = Math.cos(m.yaw) * M.paw * 0.3;
+            this._add(DECAL.PAW, m.x - ox - bx, m.y, m.z - oz - bz, s * 0.9, m.yaw, DECAL_COLORS.cream, 0.95 * fade, 0, 0.03);
+            this._add(DECAL.PAW, m.x + ox + bx, m.y, m.z + oz + bz, s * 0.9, m.yaw, DECAL_COLORS.cream, 0.95 * fade, 0, 0.03);
+          } else this._add(DECAL.PAW, m.x, m.y, m.z, M.paw * Math.min(1, rip), m.yaw, DECAL_COLORS.cream, 0.95 * fade, 0, 0.03);
           this._add(DECAL.TICKS, m.x, m.y, m.z, T.r1 + (T.r0 - T.r1) * c * c, Math.PI / 4, DECAL_COLORS.cream, 0.95 * Math.min(1, fade * 1.6), T.inner, 0.025, T.hw, 0, 0, 0);
           break;
         }

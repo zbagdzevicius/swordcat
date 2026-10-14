@@ -9,7 +9,7 @@
 //   game → host: ready { version }, level-complete { levelId, time, kittens, catnip, lives, rank },
 //                kitten-rescued { kittenId }, paused { paused }
 // Security: a message is accepted only when event.source === window.parent and event.origin is in the allowlist
-// (VITE_EMBED_ORIGINS, comma-separated; default below). The first valid `hello` fixes the host origin; after that only
+// (VITE_EMBED_ORIGINS, comma-separated; default below; plus the page's own origin when the parent is same-origin). The first valid `hello` fixes the host origin; after that only
 // that origin is accepted and every post goes to it (never '*'). Nothing is posted before the first `hello`, so the
 // host keeps saying hello until it hears `ready` (no hard stop: a slow phone may need well over 10 s to boot); a hello
 // before game:ready is answered on game:ready, every later one at once (the host's reconnect after a frame reload).
@@ -63,6 +63,22 @@ export function embedOrigins(env) {
   let e = env;
   if (e === undefined) { try { e = import.meta.env; } catch { e = {}; } }
   return parseOrigins(e?.VITE_EMBED_ORIGINS);
+}
+
+/**
+ * The allowlist plus the page's own origin when the parent frame is same-origin (fix round 2, Q1 request §6: the game
+ * is served same-origin under the host at tokentails.com/swordcat, so a Vercel preview or a dev port the build-time
+ * list never named is still its own host). A cross-origin parent throws on `parent.location.origin`: the list stays as
+ * it is. Pure apart from reading `win`.
+ * @param {string[]} allowed @param {any} win @returns {string[]}
+ */
+export function withSameOrigin(allowed, win) {
+  let own = null;
+  try {
+    const o = win?.location?.origin, po = win?.parent?.location?.origin;
+    if (typeof o === 'string' && o && o !== 'null' && o === po) own = o;
+  } catch { own = null; }
+  return own && !allowed.includes(own) ? [...allowed, own] : allowed;
 }
 
 /**
@@ -154,6 +170,7 @@ export function createBridge({ parent, allowed, actions = {} }) {
 export function installEmbedBridge(game, { win = typeof window !== 'undefined' ? window : undefined, allowed = embedOrigins() } = {}) {
   if (!win || !isFramed(win)) return null;
   const parent = win.parent;
+  allowed = withSameOrigin(allowed, win);
   let ready = false, byHost = null, baseMute = null;
   const ctx = () => game?.ctx;
   const actions = {

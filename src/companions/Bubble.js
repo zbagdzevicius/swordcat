@@ -2,11 +2,16 @@
 // speaker for 1.6 s") and the napping "zzz" (§9.1), as screen-sized sprites with CanvasTexture text.
 // Parchment + ink look per art.md §13 (cute medieval parchment, pink accent). No DOM at import: canvases are
 // created on first use and the whole thing is a no-op where `document` is missing (node unit tests).
+// TOKENTAILS-PLAN §10.2.9: a bubble whose speaker is off screen (or behind the lens) is pinned to the screen edge on
+// the speaker's side (where the guide's coin arrow points), `pinned` true; the tail then points at that edge.
 import * as THREE from 'three';
 import { easeOutBack, clamp01 } from '../core/math.js';
 
 const HAS_DOM = () => typeof document !== 'undefined' && typeof document.createElement === 'function';
-const FONT = '"Fredoka", "Trebuchet MS", "Segoe UI", sans-serif';
+// TOKENTAILS-PLAN §10.4 (G1): Token Tails' Nunito (700 text, 800 zzz) on the canvas, rounded system faces until it loads
+const FONT = '"Nunito", "Segoe UI Rounded", "SF Pro Rounded", "Trebuchet MS", "Segoe UI", sans-serif';
+export const BUBBLE_FONT = FONT;
+export const BUBBLE_WEIGHT = Object.freeze({ text: 700, zzz: 800 });
 const INK = '#3B2A20', PAPER = '#F7EFDD', PAPER_EDGE = '#E2D2B0', PINK = '#F2A2B8';
 
 /** Word-wrap `text` to at most `maxChars` per line (3 lines max, ellipsis after). */
@@ -80,6 +85,8 @@ export class TextSprite {
     this.object = new THREE.Group(); this.object.name = 'bubble:' + kind;
     this.object.position.y = y;
     this.t = 0; this.dur = 0; this.on = false; this.text = '';
+    /** the speaker is off screen: the bubble is pinned to the screen edge (§10.2.9) */
+    this.pinned = false;
     this.sprite = null; this.canvas = null; this.tex = null; this.aspect = 1;
     if (!HAS_DOM()) return;
     this.canvas = document.createElement('canvas');
@@ -125,8 +132,11 @@ export class TextSprite {
     const pw = _size.x > 0 ? _size.x : 1280, ph = _size.y > 0 ? _size.y : 720;
     _anchor.setFromMatrixPosition(sp.matrixWorld);
     _anchor.applyMatrix4(camera.matrixWorldInverse);
-    if (camera.isPerspectiveCamera && _anchor.z >= 0) return; // behind the camera: never visible anyway
+    const behind = camera.isPerspectiveCamera && _anchor.z >= 0;
     _anchor.applyMatrix4(camera.projectionMatrix);
+    // behind the lens: mirror it so it pins to the edge on the speaker's side (a guide line must stay readable)
+    if (behind) { _anchor.x = -_anchor.x * 4; _anchor.y = -_anchor.y * 4; if (Math.abs(_anchor.x) + Math.abs(_anchor.y) < 1e-3) _anchor.y = -2; }
+    this.pinned = behind || Math.abs(_anchor.x) > 1 || Math.abs(_anchor.y) > 1;
     // sizeAttenuation:false sprite → its NDC size is worldScale × P00 / P11 regardless of depth
     const e = camera.projectionMatrix.elements;
     const W = _sx.setFromMatrixColumn(sp.matrixWorld, 0).length() * e[0];
@@ -150,19 +160,25 @@ export class TextSprite {
   }
 
   _draw(text, tailX = this.canvas.width / 2) {
-    const c = this.canvas, g = c.getContext('2d');
+    const c = this.canvas, g = c?.getContext?.('2d');
     if (!g) return;
+    // drawn before Nunito arrived (a fallback face): redraw once the document's fonts are ready
+    const fonts = typeof document !== 'undefined' ? document.fonts : null;
+    if (fonts && !this._fontWait && typeof fonts.check === 'function' && !fonts.check(`${BUBBLE_WEIGHT.text} 40px "Nunito"`)) {
+      this._fontWait = true;
+      Promise.resolve(fonts.ready).then(() => { if (this.canvas && this.text) this._draw(this.text, this.tailX); }).catch(() => {});
+    }
     g.clearRect(0, 0, c.width, c.height);
     if (this.kind === 'zzz') {
-      g.font = `700 88px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+      g.font = `${BUBBLE_WEIGHT.zzz} 88px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
       g.lineJoin = 'round'; g.lineWidth = 14; g.strokeStyle = 'rgba(59,42,32,0.85)'; g.fillStyle = '#EAF2FF';
       const parts = [['z', 40, 220, 64], ['Z', 150, 160, 88], ['z', 280, 96, 64]];
-      for (const [s, x, y, size] of parts) { g.font = `700 ${size}px ${FONT}`; g.strokeText(s, x, y); g.fillText(s, x, y); }
+      for (const [s, x, y, size] of parts) { g.font = `${BUBBLE_WEIGHT.zzz} ${size}px ${FONT}`; g.strokeText(s, x, y); g.fillText(s, x, y); }
       this.aspect = c.width / c.height;
     } else {
       const lines = wrapText(text, 24, 3);
       const fs = 40, lh = 48, padX = 26, padY = 18, tail = 26;
-      g.font = `600 ${fs}px ${FONT}`;
+      g.font = `${BUBBLE_WEIGHT.text} ${fs}px ${FONT}`;
       let w = 0; for (const l of lines) w = Math.max(w, g.measureText(l).width);
       const bw = Math.min(c.width - 8, Math.ceil(w + padX * 2)), bh = lines.length * lh + padY * 2;
       // fixed 512 × 256 canvas (a CanvasTexture can't change size once uploaded): the bubble sits on the bottom edge,

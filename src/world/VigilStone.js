@@ -13,7 +13,24 @@ import { fxBasicMaterial } from '../fx/shaders.js';
  * Vigil look: the paper lantern hangs `paperOff` m out on the crook arm at `lanternH` m; unlit it is plain paper, lit
  * it glows lantern gold and feeds the lamp pools (`env.lamps`, radius from `lampDist`).
  */
-export const VIGIL = Object.freeze({ radius: 1.5, lanternH: 0.86, paperOff: 0.26, glow: '#FFD98A', unlit: '#F2E4C6', lit: '#FFC46B', litMul: 2.2, lampDist: 7, lampI: 1.6 });
+export const VIGIL = Object.freeze({ radius: 1.5, lanternH: 0.86, paperOff: 0.26, glow: '#FFD98A', unlit: '#F2E4C6', lit: '#FFC46B', litMul: 2.2, lampDist: 7, lampI: 1.6,
+  /** TT2 §10.3: the Lantern Stone menu never opens while a foe this close is alerted (the stone still saves) */
+  busyR: 18 });
+
+/**
+ * Are foes alerted near `pos` (default: the player)? Live, awake, non-scripted enemy-faction actors with `alerted` set
+ * within `r` m. The Lantern Stone's rest menu waits while this holds (ui `openVigil`). Pure on ctx.
+ * @param {any} ctx @param {{x:number, z:number}|null} [pos] @param {number} [r]
+ */
+export function foesAlerted(ctx, pos = null, r = VIGIL.busyR) {
+  const at = pos ?? ctx?.player?.pos;
+  if (!at) return false;
+  for (const e of ctx?.enemies?.list ?? []) {
+    if (!e?.alive || e.dormant || e.scripted || e.faction !== 'enemy' || !e.alerted || !e.pos) continue;
+    if (Math.hypot(e.pos.x - at.x, e.pos.z - at.z) <= r) return true;
+  }
+  return false;
+}
 
 export class VigilStone {
   /**

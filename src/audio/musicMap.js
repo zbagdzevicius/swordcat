@@ -116,6 +116,13 @@ export const CONTEXT_MUSIC = {
   lanternNight: 'lantern_night', homesick: 'tavern_old_tower_inn',
 };
 
+/**
+ * Short procedural jingles per context (TOKENTAILS-PLAN §10.4): a glock phrase name (procedural.js GLOCK_PHRASES)
+ * played with `ctx.audio.glock(CONTEXT_JINGLES.title)`: the Token Tails coin-ding + meow arpeggio on the title reveal
+ * and on the results card. No third-party audio.
+ */
+export const CONTEXT_JINGLES = Object.freeze({ title: 'ttJingle', results: 'ttJingle' });
+
 /** Ambience loops per level (wind is procedural everywhere). Ids are sfx file ids. */
 export const AMBIENCE = {
   gate: { id: 'world/loop_water_01', vol: 0.18 },

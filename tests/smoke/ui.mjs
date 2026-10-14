@@ -274,17 +274,22 @@ export default [
       const low = await inPage(t, () => !!document.querySelector('.hud-hearts.is-low'));
       t.assert(low, 'hearts pulse at HP ≤ 2');
       // review: the "where next" beacon: a quest step with a target shows the gold paw (over it, or on the edge)
-      await inPage(t, () => { const g = window.__GAME__; g.ctx.bus.emit(g.E.QUEST_UPDATE, { questId: 'meadow.mochi', state: 'active', text: 'Help Mochi out of the tipped cart' }); });
+      // (TT2 G1: the beacon asks story.guideTarget() first; with no story target it falls back to the quest step, which
+      // is what this check is about, so story's answer is held off for it and restored below)
+      await inPage(t, () => { const g = window.__GAME__; g.ctx.story.guideTarget = () => null; g.ctx.bus.emit(g.E.QUEST_UPDATE, { questId: 'meadow.mochi', state: 'active', text: 'Help Mochi out of the tipped cart' }); });
       await t.wait(600);
       const bc = await inPage(t, () => { const b = window.__GAME__.ctx.ui.beacon; return { on: !!document.querySelector('.ui-beacon.is-on'), marker: !!document.querySelector('.bc-marker.is-on'), edge: !!document.querySelector('.bc-edge.is-on'), has: b?.has, st: b?.state, prints: document.querySelectorAll('.bc-print.is-on').length, t: b?.target, boss: !!window.__GAME__.ctx.ui.hud.boss, tut: !!window.__GAME__.ctx.story?.tutorial?.active, sp: window.__GAME__.ctx.levels.current?.spawnId, mode: window.__GAME__.ctx.game.mode, hud: !!document.querySelector('.hud:not(.is-hidden)') }; });
       t.assert(bc.on && (bc.marker || bc.edge), `objective beacon shows the way (${JSON.stringify(bc)})`);
       await shot(t, '03-beacon');
       await inPage(t, () => { const g = window.__GAME__, p = g.ctx.player.pos, b = g.ctx.ui.beacon.target; const f = g.ctx.camera.getWorldDirection(new g.THREE.Vector3()).setY(0).normalize(), x = b.x - f.x * 6, z = b.z - f.z * 6; g.teleport(x, g.ctx.physics.heightAt(x, z), z); });   // 6 m short of it, the cart up-screen
-      await t.wait(1500);
-      const bc2 = await inPage(t, () => { const g = window.__GAME__, b = g.ctx.ui.beacon.target, v = new g.THREE.Vector3(b.x, b.y + 2.6, b.z).project(g.ctx.camera); return { marker: !!document.querySelector('.bc-marker.is-on'), on: !!document.querySelector('.ui-beacon.is-on'), ndc: [+v.x.toFixed(2), +v.y.toFixed(2)], p: g.ctx.player.pos.toArray().map((n) => +n.toFixed(1)), mode: g.ctx.game.mode }; });
+      // (a scene the cart may start on arrival, e.g. the cs03b bark, hides the HUD and so the guide: let it go first)
+      await t.wait(300);
+      await inPage(t, () => { const g = window.__GAME__; if (g.ctx.story.playingId) { g.story.skip?.(); g.setMode('play'); } });
+      await t.wait(1200);
+      const bc2 = await inPage(t, () => { const g = window.__GAME__, b = g.ctx.ui.beacon.target, v = new g.THREE.Vector3(b.x, b.y + 2.6, b.z).project(g.ctx.camera); const bb = g.ctx.ui.beacon; return { marker: !!document.querySelector('.bc-marker.is-on'), on: !!document.querySelector('.ui-beacon.is-on'), ndc: [+v.x.toFixed(2), +v.y.toFixed(2)], p: g.ctx.player.pos.toArray().map((n) => +n.toFixed(1)), mode: g.ctx.game.mode, st: bb.state, hidden: bb.hidden, src: bb.guide.src, id: bb.guide.id, scene: !!g.ctx.story.sceneActive, inScene: !!g.ctx.ui.inScene, playing: g.ctx.story.playingId ?? null, boss: !!g.ctx.ui.hud.boss }; });
       t.assert(bc2.on && bc2.marker, `the beacon floats over the cart when it is on screen (${JSON.stringify(bc2)})`);
       await shot(t, '04-beacon-near');
-      await inPage(t, () => { const g = window.__GAME__; g.player.setHp(g.ctx.player.maxHp); g.god(false); });
+      await inPage(t, () => { const g = window.__GAME__; delete g.ctx.story.guideTarget; g.player.setHp(g.ctx.player.maxHp); g.god(false); });
     },
   },
   {

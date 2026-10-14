@@ -6,7 +6,7 @@
 //     came because nobody knew."  Clem: "Then we tell them."
 //   3 low: Coo hops onto the bag (Pigeon `Jump`). "Coo." "Every knight. Fast as you can." "Coo." Coo flutters off
 //     (Jump + an upward tween over 2 s).
-//   4 ECU_EYES: a yellowed envelope; the full-screen parchment card (Uncial Antiqua) shows `letter.marmalade`; 4 s of
+//   4 ECU_EYES: a yellowed envelope; the full-screen parchment card (the ui lore face, Nunito) shows `letter.marmalade`; 4 s of
 //     1.5 s of silence, then tavern_old_tower_inn fades in over 2 s (homesick, not mournful; WA §8.6a).
 //   5 medium: she folds it and tucks it into her belt.
 // end: flag town.letters; the letter rides on her belt (StoryManager re-attaches it after loads until CS-10);

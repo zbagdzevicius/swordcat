@@ -587,6 +587,14 @@ class Live {
  *  - 'actor'  no `pos` but an actor: centred on the actor's feet and following it (slams, barks, spins);
  *  - 'fixed'  anything else (arrays, anchors, plain objects).
  */
+/**
+ * TT2 (Sir Wobble's ring was drawn away from him): an actor whose visual root is not in the scene graph (a prop that
+ * draws its own mesh: the Wobble Knight) has a stale `object3d`; its marks follow `actor.pos` instead. Pure.
+ */
+export function detached(a) {
+  return !!a?.pos && typeof a.pos.x === 'number' && !!a.object3d && !a.object3d.parent;
+}
+
 export function originMode(desc) {
   if (desc?.pos?.isVector3) return 'live';
   if (desc?.pos == null && isActor(desc?.actor)) return 'actor';
@@ -718,7 +726,7 @@ export class Telegraphs {
       const pattern = patterns ? (n.kind === 'red' ? 1 : n.kind === 'gold' ? 2 : 0) : 0;
       // ---- origin / direction
       if (L.livePos) L.origin.copy(L.livePos);
-      else if (L.follow && L.actor) actorWorldPos(L.actor, L.origin);
+      else if (L.follow && L.actor) { if (detached(L.actor)) L.origin.copy(L.actor.pos); else actorWorldPos(L.actor, L.origin); }
       else if (L.trackTarget && tracking && L.target) actorWorldPos(L.target, L.origin);
       if (L.liveDir && (L.liveDir.x * L.liveDir.x + L.liveDir.z * L.liveDir.z) > 1e-8) L.dir.set(L.liveDir.x, 0, L.liveDir.z).normalize();
       else if (L.follow && L.actor && n.shape === 'cone') { const f = L.actor.object3d.rotation.y; L.dir.set(Math.sin(f), 0, Math.cos(f)); }
@@ -851,11 +859,16 @@ export class Telegraphs {
   /** Weapon / glint point for marks: the live tell point, else the actor's weapon, else the origin + 0.9 m. */
   _glintPoint(L, out) {
     if (L.livePos && L.n.shape === 'glint') return out.copy(L.livePos);
+    if (L.actor && detached(L.actor)) {                 // TT2: a prop whose visual root is not in the scene (Sir Wobble)
+      const a = L.actor, f = a.facing ?? 0;
+      return out.set(a.pos.x + Math.sin(f) * (a.radius ?? 0.35), a.pos.y + (a.height ?? 1) * 0.7, a.pos.z + Math.cos(f) * (a.radius ?? 0.35));
+    }
     if (L.actor) return weaponPoint(L.actor, out);
     return out.copy(L.origin).setY(L.origin.y + 0.9);
   }
 
   _headPoint(L, out, lift) {
+    if (L.actor && detached(L.actor)) return out.set(L.actor.pos.x, L.actor.pos.y + (L.actor.height ?? 1) + lift, L.actor.pos.z);
     if (L.actor) return headPoint(L.actor, out, lift);
     return out.copy(L.origin).setY(L.origin.y + 1.2 + lift);
   }

@@ -6,12 +6,18 @@
 //   rank stamp SLAMS (scale 2.2 → 0.92 → 1, rotate −14° → −8°, 0.3 s) with a ring of 8 DOM stars, the PIZZI sting and
 //   ≤ 24 DOM confetti. Ranks are words, never letter grades: PAW-SOME! · PURR-FECT! · CLAW-SOME! · Good kitty!
 //
+// Token Tails (TOKENTAILS-PLAN §10.4): a gold ":3" coin sits behind the rank stamp, the co-brand pill ("A Token Tails
+// game") and the catnip note ("Catnip here stays in this game for now.") close the card, and the stamp plays the
+// procedural Token Tails jingle (audio/musicMap CONTEXT_JINGLES.results) after the rank sting.
+//
 // `levels.exit` awaits `ui.showResults(payload)`; it resolves on confirm / click ("Onward"), or by itself after a short
 // beat in ?test so smoke runs that walk through an exit never wait on a human.
 import { el, flag, pulse, setText } from './dom.js';
 import { tx, formatTime, esc, rankFor, RANK_KEYS, RANK_ORDER } from './text.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
+import { brandPillHtml } from './menus.js';
+import { CONTEXT_JINGLES } from '../audio/musicMap.js';
 
 export const RESULTS = Object.freeze({ rowGap: 0.08, countUp: 0.4, stampAt: 0.25, minShow: 0.9, testAuto: 1.6, stars: 8, confetti: 24 });
 
@@ -109,7 +115,8 @@ export class Results {
       + `<div class="panel res-panel"><div class="res-hero">${portraitSVG('swordcat', { expression: 'happy' })}</div>`
       + `<div class="res-head"><div class="res-title">${esc(tx(ctx, 'results.title'))}</div>${region ? `<div class="res-region"><span>${esc(region)}</span></div>` : ''}</div>`
       + (ribbons ? `<div class="res-ribbons">${ribbons}</div>` : '') + `<div class="res-rows">${rows}</div>`
-      + `<div class="res-rank"><span class="res-rank-lbl">${esc(tx(ctx, 'results.rank'))}</span><div class="res-stamp res-stamp--${d.rank}" style="--rc:${RANK_COLOR[d.rank] ?? '#FF8FB1'}"><span class="res-stars">${stars}</span><span class="res-word">${esc(d.rankText)}</span></div></div>${bestLine}`
+      + `<div class="res-rank"><span class="res-rank-lbl">${esc(tx(ctx, 'results.rank'))}</span><div class="res-stamp res-stamp--${d.rank}" style="--rc:${RANK_COLOR[d.rank] ?? '#FF8FB1'}"><span class="res-coin" aria-hidden="true">${I.ttCoin(96)}</span><span class="res-stars">${stars}</span><span class="res-word">${esc(d.rankText)}</span></div></div>${bestLine}`
+      + `<div class="res-brand">${brandPillHtml(ctx, 'results')}</div>`
       + `<button class="btn btn--candy res-next" type="button">${esc(tx(ctx, 'results.next'))}</button></div>`;
     this.rows = [...this.root.querySelectorAll('.res-row')];
     this.vals = this.rows.map((r) => r.querySelector('.res-val'));
@@ -160,7 +167,8 @@ export class Results {
       pulse(this.stamp, 'is-stamped');
       pulse(this.confetti, 'is-on');
       this.hooks.sfx?.('rankStamp');                       // audio: PIZZI03 + the stamp (WA21)
-      this.hooks.sfx?.('jingles/jingles_PIZZI03', { volume: 0.7 });
+      // the Token Tails coin-ding + meow jingle right after the sting (procedural glock; no file)
+      try { this.ctx.audio?.glock?.(CONTEXT_JINGLES.results, { volume: 0.7, delay: 0.35 }); } catch { /* audio optional */ }
       flag(this.btn, 'is-in', true);
     }
     if (this.autoContinue && this.t >= Math.max(RESULTS.testAuto, stampAt + 0.3)) this.close();

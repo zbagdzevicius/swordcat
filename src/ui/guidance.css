@@ -1,0 +1,81 @@
+/* src/ui/guidance.css  (owner: ui, package G1) — TOKENTAILS-PLAN §10.2 guidance: the gold Token Tails ":3" coin edge
+   arrow with a pink paw-tip pointer, the coin badge over an on-screen target, the HUD objective line, the love-pink
+   step dots and ghost paw, the phone placement of the guide bubble. Injected by beacon.js after ui.css (same specificity
+   wins here). Transform / opacity only. */
+
+/* ---- the coin badge (target on screen, where the paw trail ends) */
+.ui-beacon .bc-badge { left: -24px; top: -50px; width: 48px; height: 48px; border: 0; background: none; box-shadow: none; border-radius: 50%;
+  filter: drop-shadow(0 3px 0 #4A1D0855) drop-shadow(0 0 10px #FFCC5599); }
+.ui-beacon .bc-badge .ico-ttcoin { width: 44px; height: 44px; display: block; }
+.ui-beacon .bc-col { background: linear-gradient(#FFCC5500, #FFCC55A6 30%, #FF7AA255 80%, #FF7AA200); }
+.ui-beacon .bc-spark { background: #FFF4C2; box-shadow: 0 0 6px #FFCC55; }
+
+/* ---- the edge arrow: a gold coin (56 px desktop / 44 px phone) with a pink paw-tip pointer on the rotor */
+.ui-beacon .bc-edge { width: 56px; height: 56px; margin: -28px 0 0 -28px; }
+/* TT3 R3: the shown coin takes its own tap / click and turns it into a move order toward the target (beacon.js edgeOrder),
+   instead of eating a ground tap; so does the on-screen badge
+   of a `tapMove` guide target (fix round 1: Sir Wobble's stand spot; a tap there never picks him);
+   everything else in the beacon layer stays pointer-events: none */
+.ui-beacon.is-on .bc-marker.is-on.is-tap .bc-badge { pointer-events: auto; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.ui-beacon.is-on .bc-edge.is-on { pointer-events: auto; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.ui-beacon .bc-edge-rot { position: absolute; inset: 0; transform-origin: 50% 50%; }
+.ui-beacon .bc-tip { position: absolute; right: -19px; top: 50%; width: 24px; height: 24px; margin-top: -12px; display: block;
+  animation: bcTipNudge .6s ease-in-out infinite alternate; }
+.ui-beacon .bc-tip svg { width: 100%; height: 100%; display: block; }
+.ui-beacon .bc-coin { position: absolute; inset: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  filter: drop-shadow(0 3px 0 #4A1D0866) drop-shadow(0 0 12px #FFCC5588); animation: bcCoinBob 1.4s ease-in-out infinite; }
+.ui-beacon .bc-coin .ico-ttcoin { width: 100%; height: 100%; display: block; }
+.ui-beacon.is-phone .bc-edge { width: 44px; height: 44px; margin: -22px 0 0 -22px; }
+.ui-beacon.is-phone .bc-tip { right: -16px; width: 20px; height: 20px; margin-top: -10px; }
+.ui-beacon.is-phone .bc-badge { left: -20px; top: -42px; width: 40px; height: 40px; }
+.ui-beacon.is-phone .bc-badge .ico-ttcoin { width: 38px; height: 38px; }
+/* an ordinary fight: the guide steps back to 35 % (threat arrows own the edge then) */
+.ui-beacon:not(.is-calm) .bc-marker.is-on, .ui-beacon:not(.is-calm) .bc-edge.is-on { opacity: .35; }
+@keyframes bcTipNudge { from { transform: translateX(0); } to { transform: translateX(5px); } }
+@keyframes bcCoinBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+/* ---- the objective line (hud.js): one short line with a pink paw, top centre; under the hearts on phones */
+.hud-guide { display: none; align-items: center; gap: .4em; max-width: min(92vw, 30em); padding: .2em .85em .24em .5em; border-radius: 999px;
+  background: #FFF8EEF0; border: 2px solid #4A1D08; box-shadow: 0 3px 0 #4A1D0826; color: #4A1D08; font-family: var(--f-body); font-weight: 800;
+  font-size: max(16px, .92em); line-height: 1.25; white-space: nowrap; pointer-events: none; transition: opacity .3s ease; order: -1; }
+.hud-guide.is-on { display: inline-flex; }
+.hud-guide .hg-ico { width: 1.35em; height: 1.35em; flex: none; display: flex; }
+.hud-guide .hg-ico svg { width: 100%; height: 100%; }
+.hud-guide .hg-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; }
+.hud-guide .ui-key { font-size: max(.85em, 16px); }   /* §14.1: no text under 16 px (fix round 2) */
+.hud.is-hidden .hud-guide, .hud.is-meme .hud-guide { opacity: 0 !important; }
+.hud-guide.is-under { position: absolute; left: var(--gx, 16px); top: var(--gy, 96px); font-size: 16px; max-width: calc(100vw - 32px); }
+.hud-guide.is-dim { opacity: .55; }
+/* TT3 R3: on a phone the line steps under the ❚❚ / counters and, beside the Skip chip, wraps to two lines short of it
+   (hud.js pillPlace sets --gw) instead of running under the chip */
+.hud-guide.is-under.is-wrap { white-space: normal; max-width: var(--gw, calc(100vw - 32px)); border-radius: 18px; }
+.hud-guide.is-wrap .hg-txt { max-width: none; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* ---- love-pink step dots and ghost paw (Token Tails #FF7AA2: pink paw prints mean "this way") */
+.gd-dot.is-full { background: #FF7AA2; box-shadow: 0 0 0 1.5px #4A1D08; }
+.gd-dot.is-half { background: linear-gradient(90deg, #FF7AA2 50%, #5A3B2E33 50%); }
+.ui-ghostpaw .ico-ghostpaw > g:nth-of-type(2) { fill: #FF7AA2; }
+.ui-ghostpaw .gp-ring { border-color: #FF7AA2; box-shadow: 0 0 0 2px #4A1D08; }
+
+/* ---- phones: the guide bubble keeps off Clem (the objective line carries the chip's words, guide.js `is-dup`) */
+@media (max-height: 480px), (max-width: 480px) {
+  .ui-guide.is-dup .gd-chip { display: none; }
+}
+@media (max-height: 480px) and (orientation: landscape) {
+  .ui-guide { left: auto; right: calc(16px + env(safe-area-inset-right)); margin: 0; top: max(112px, calc(var(--tc-b, 0px) + 8px));
+    width: min(300px, 36vw); align-items: flex-end; }
+  .ui-guide .gd-say { font-size: 16px; }
+  /* left-handed play: the HUD and the toasts (hud.js) take the right column, so the bubble takes the left */
+  body.ui-lefty .ui-guide { right: auto; left: calc(16px + env(safe-area-inset-left)); align-items: flex-start; }
+}
+/* portrait: the toasts no longer sit in the top-centre column (hud.js moves them to their own band), so they cannot push
+   the bubble down; hud.js writes --gd-top (bubbleTop: under the toasts, never over Clem) */
+@media (max-width: 480px) and (orientation: portrait) {
+  .ui-guide { top: var(--gd-top, max(150px, calc(var(--tc-b, 0px) + 8px))); }
+  .ui-guide .gd-face { width: 36px; height: 36px; }
+  .ui-guide .gd-say { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-beacon .bc-tip, .ui-beacon .bc-coin { animation: none; }
+}

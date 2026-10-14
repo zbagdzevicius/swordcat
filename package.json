@@ -16,7 +16,8 @@
     "test:unit": "node --import ./tests/unit/_setup.mjs --test \"tests/unit/**/*.test.js\"",
     "smoke": "node tests/smoke.mjs",
     "perf:alloc": "node scripts/dev/_alloc.mjs",
-    "check": "npm run build && npm run test:unit && npm run build:test && npm run smoke"
+    "check": "npm run build && npm run test:unit && npm run build:test && npm run smoke",
+    "bot:onboarding": "node scripts/dev/onboarding-bot.mjs"
   },
   "dependencies": {
     "three": "0.186.1",

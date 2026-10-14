@@ -16,10 +16,12 @@
 // input edges (menus, pause, results); `render(alpha, frameDt)` animates everything on real time.
 import css from './ui.css?inline';
 import fontsCss from './fonts.css?inline';
+import onboardingCss from './onboarding.css?inline';
 import { E } from '../core/events.js';
 import { PLAYER, KO } from '../core/config.js';
 import { el, flag, setVar, hasDom } from './dom.js';
-import { tx, UI_STRINGS, toastText } from './text.js';
+import { tx, UI_STRINGS, toastText, glyphify } from './text.js';
+import { foesAlerted } from '../world/VigilStone.js';
 import { loadFonts } from './fonts.js';
 import { Hud } from './hud.js';
 import { Dialog } from './dialog.js';
@@ -155,7 +157,7 @@ export class UI {
   async init() {
     if (!hasDom()) return;
     const ctx = this.ctx;
-    this.style = el('style', '', { attrs: { id: 'ui-style' }, text: `${fontsCss}\n${css}` });
+    this.style = el('style', '', { attrs: { id: 'ui-style' }, text: `${fontsCss}\n${css}\n${onboardingCss}` });
     document.head.appendChild(this.style);
     this.root = document.getElementById('ui') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'ui' }));
     this.root.classList.add('ui-root');
@@ -191,7 +193,7 @@ export class UI {
     this.prompts = new Prompts(ctx, this.root);
     this.toasts = new Toasts(this.hud.toastSlot, () => ctx.input?.device ?? 'kbm', () => ctx.input ?? null);
     this.dialog = new Dialog(ctx, this.root);
-    this.overlay = new Cinema(ctx, this.root, { onHud: () => {}, rand: this.rand });
+    this.overlay = new Cinema(ctx, this.root, { onHud: () => {}, rand: this.rand, onChip: (on) => ctx.story?.holdSkip?.(on) });
     this.results = new Results(ctx, this.root, { sfx: (id, o) => this.sfx(id, o), onClose: () => this._giveBackMode() });
     this.celebrations = new Celebrate(ctx, this.root, this);
     this.offer = new KittenOffer(ctx, this.root, this);
@@ -245,7 +247,12 @@ export class UI {
     on(E.OBJECTIVE, (p) => { if (p?.done && !doneObj.has(p.id)) { doneObj.add(p.id); if (!this.hud?.objEl) this.toast(T('toast.objective'), { key: 'toast.objective' }); } });
     on(E.CHECKPOINT, () => {
       this.toast(T('toast.checkpoint'), { key: 'toast.checkpoint' });
-      if (!ctx.params?.test) this._after(UI_TIMING.vigilDelay, () => { if (!this.busy && ctx.game.mode === 'play') this.openVigil(); });
+      // TT2 §10.3: the rest menu never opens while foes are alerted (the stone still saved): say so once instead
+      if (!ctx.params?.test) this._after(UI_TIMING.vigilDelay, () => {
+        if (this.busy || ctx.game.mode !== 'play') return;
+        if (foesAlerted(ctx)) { this.toast(T('onb.vigil.busy'), { key: 'onb.vigil.busy' }); return; }
+        this.openVigil();
+      });
     });
     on(E.PLAYER_LIFE_LOST, (p) => {
       if (p?.gameOver) this._after(UI_TIMING.gameOverDelay, () => this.gameOver());
@@ -520,7 +527,7 @@ export class UI {
   }
 
   openVigil() {
-    if (!this.menus || this.busy) return;
+    if (!this.menus || this.busy || foesAlerted(this.ctx)) return;
     this._freeze();
     this.menus.openVigil();
   }
@@ -734,6 +741,22 @@ export class UI {
     else if ((mode === 'play' || mode === 'memecam') && input.pressed?.('controls')) { this.pause(); if (this.menus.paused) this.menus.openControls(); }
   }
 
+  /**
+   * TT2 §10.3 the Skip chip: on from second 0 of every skippable scene and of Morning Practice (story.skipChip), off
+   * under a menu, the title, a load or the results card. Label "Skip ▸▸" + the device hold hint ("hold Esc" / "hold").
+   */
+  _skipChip(title) {
+    const ctx = this.ctx, sc = ctx.story?.skipChip;
+    const on = !!sc?.on && !title && !this.isLoading && !ctx.levels?.loading && !this.menus.active && !this.results.open;
+    if (!on) { this.overlay.setChip(false); return; }
+    const dev = ctx.input?.device ?? 'kbm';
+    const holdKey = dev !== 'kbm' && ctx.strings?.has?.(`onb.skip.hold.${dev}`) ? `onb.skip.hold.${dev}` : 'onb.skip.hold';
+    this.overlay.setChip(true, sc.progress ?? 0, tx(ctx, 'onb.skip'), glyphify(tx(ctx, holdKey), dev, ctx.input));
+  }
+
+  /** The Skip chip's screen rectangle while it shows (G1's `__GAME__.guide()` reads it), else null. */
+  skipChipRect() { return this.overlay?.chipRect?.() ?? null; }
+
   // ------------------------------------------------------------------ per frame
   render(alpha, frameDt) {
     if (!this.root) return;
@@ -763,6 +786,7 @@ export class UI {
     this.hud.render(dt);
     this.dialog.render(dt);
     this.overlay.render(dt);
+    this._skipChip(title);
     const hintOn = hintLayerOn({ hud: hudOn, meme: this.meme, mode, dialog: !!this.dialog.visible, letterbox: !!this.overlay.letterboxOn, menu: !!this.menus.active, cinema: this.inScene });
     this.toasts.render(dt, { tips: hintOn, tipHold: !!this.prompts?.guide?.open });
     const world = hudOn && !this.meme && (mode === 'play' || mode === 'memecam') && !this.menus.active;

@@ -253,46 +253,37 @@ test('touch gestures: tap ≤ 250 ms / 12 px (not right after a button), long-pr
   assert.ok(stickVector(200, 0, 60).follow > 0, 'the base follows past 1.6 R');
 });
 
-// ------------------------------------------------------------------ touch tutorial: a quick Meow by the cow (SC4)
-test('touch tutorial: a Meow inside the hide wipe keeps the Pearl tutpearl spawns, and practice ends', async () => {
+// ------------------------------------------------------------------ touch tutorial (TT2 §10.3): 4 lessons + the Skip chip
+test('touch tutorial (TT2 §10.3): the 4 lessons show the touch copy; holding the Skip chip ends practice and rings the bell', async () => {
   const { Tutorial, TUTORIAL_STEPS } = await import('../../src/story/tutorial.js');
-  const handlers = new Map(), emitted = [], hooks = new Set(), f = { 'prologue.start': true };
+  const handlers = new Map(), emitted = [], f = { 'prologue.start': true };
   const bus = { on: (ev, fn) => { (handlers.get(ev) ?? handlers.set(ev, []).get(ev)).push(fn); return () => {}; }, emit: (ev, p) => { emitted.push([ev, p]); for (const fn of handlers.get(ev) ?? []) fn(p); } };
-  const pos = { x: 9.5, z: -72.5, y: 0, clone() { return { ...this }; }, copy(o) { this.x = o.x; this.z = o.z; return this; } };
-  const actors = [];
-  const npc = (tag) => ({ npcId: 'pearl', alive: true, tag, pos: { x: 0, y: 0, z: -80 }, setScripted() {}, face: () => Promise.resolve(), play: () => Promise.resolve(), moveTo: () => Promise.resolve() });
-  actors.push(npc('guide'));
+  const pos = { x: 0, z: -70, y: 0, clone() { return { ...this, copy(o) { this.x = o.x; this.z = o.z; return this; } }; }, copy(o) { this.x = o.x; this.z = o.z; return this; } };
   const ctx = {
     bus, emitted,
     state: { getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; }, settings: {}, difficulty: 'knight' },
     input: { device: 'touch', preset: 'hybrid', down: () => false },
     cam: { isIso: true },
-    game: { mode: 'play', addFrameHook: (fn) => { hooks.add(fn); return () => hooks.delete(fn); } },
+    game: { mode: 'play' },
     levels: { current: { id: 'meadow', interactables: [], actor: () => null, critter: () => null } },
-    companions: { active: [], actors, spawnNpc: () => { const a = npc('spawned'); actors.push(a); return a; }, despawn: (a) => { a.alive = false; actors.splice(actors.indexOf(a), 1); } },
+    companions: { active: [], actors: [] },
     player: { pos, onGround: true, facing: 0 },
     strings: { t: (k) => k, has: () => true },
   };
-  const frame = (dt) => { for (const fn of [...hooks]) fn(dt); };
-  let scenePearl = null, endScene;
-  const story = { isPlaying: false, cinema: { skip() {}, apply() {} }, flag: (k, v) => { f[k] = v; }, toChart() { this.charted = true; },
-    play: (id) => { if (id === 'tutpearl') { scenePearl = ctx.companions.spawnNpc('pearl'); return new Promise((r) => { endScene = r; }); } return Promise.resolve({ id }); } };
+  let chip = false;
+  const story = { isPlaying: false, cinema: { skip() {}, apply() {} }, flag: (k, v) => { f[k] = v; }, toChart() { this.charted = true; }, skipPressed: () => chip };
   const tu = new Tutorial(ctx, story);
   tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu.active = true; tu._intro = true; tu._shown = null; tu.waitT = 0;
-  tu.update(0.05);                                    // the meow lesson starts: the 1.2 s cream wipe is under way
-  assert.ok(tu._wipeT, 'the hide wipe is pending');
-  frame(0.1);                                         // 0.1 s in: the guide has not hidden yet
-  tu.log.note({ type: 'cow' });                       // the Meow button by the cow, at once (touch)
+  assert.deepEqual(TUTORIAL_STEPS.map((s) => s.id), ['move', 'bonk', 'stand', 'parry']);
   tu.update(0.05);
-  assert.ok(scenePearl, 'tutpearl spawned Pearl in the cow\'s lee');
-  assert.equal(actors.some((a) => a.tag === 'guide'), false, 'the guide Pearl went into hiding first');
-  for (let k = 0; k < 120; k++) frame(1 / 60);        // the old timer would have fired here
-  assert.equal(scenePearl.alive, true, 'the scene\'s Pearl is never despawned by the wipe');
-  endScene({ id: 'tutpearl' });
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(f['prologue.practice'], true, 'practice over');
-  assert.equal(story.charted, true);
+  for (let k = 0; k < 8; k++) tu.update(0.05);
+  const p = emitted.filter(([e]) => e === 'story:prompt').map(([, x]) => x).at(-1);
+  assert.equal(p.textKey, 'tut.move'); assert.equal(p.action, null, 'the move lesson demonstrates on the ground');
+  chip = true;                                            // tap-and-hold the Skip chip
+  for (let k = 0; k < 25; k++) tu.update(0.05);
+  assert.equal(f['prologue.practice'], true, 'practice skipped');
+  assert.equal(story.charted, true, 'the bell (CS-01 next, in place)');
+  assert.ok(emitted.some(([e, x]) => e === 'ui:toast' && x.key === 'tut.skipped'));
 });
 
 test('touch layout: buttons clear her chest where AUTOCAM draws it, up to heroDrop below the rest point (ui:touch-cluster)', async () => {

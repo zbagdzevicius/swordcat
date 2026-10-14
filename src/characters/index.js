@@ -3,7 +3,7 @@ export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELE
 export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, WARM_POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
 export {
   CATS, SWORDCAT, swordcatConfig, villagerConfig, lostKittenConfig, squireConfig, spoonBrigadeConfig, catConfig, eyeSet,
-  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY, tokentailsCatConfig,
+  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY, tokentailsCatConfig, KITTEN_COATS,
 } from './configs.js';
 export { PAL, CAPES, SIGNATURE, VILLAGER_COATS, MISCHIEF, WARM_LOOKS } from './palette.js';
 export {
@@ -13,7 +13,7 @@ export { makeEyeTexture, eyeGeometry, eyeMaterial, EyePair, EXPRESSIONS, EYE } f
 export { buildBow, bowGeometry, bowMaterial } from './Bow.js';
 export { HeroCape, ClothSim, buildSwayCape, capeMaterial, capeGeometry, CAPE_DEFAULTS, CAPE_TIME, CAPE_WIND } from './Cape.js';
 export { buildSword, mountModel, makeStreak, SWORD, BLADE, SWORD_SKINS, DAWN_SPARKLES, makeBladeSparkles, restyleClaymore, guardHeight } from './Sword.js';
-export { makePlateTexture, buildPlate, attachPlate, ensurePlateFont, pickPlateWord, PLATE_WORDS, PLATE, FRIEND_WORDS, friendWordFor, setPlateRow } from './Plate.js';
+export { makePlateTexture, buildPlate, attachPlate, ensurePlateFont, pickPlateWord, PLATE_WORDS, PLATE, FRIEND_WORDS, friendWordFor, setPlateRow, PLATE_FONT, PLATE_FALLBACK, plateFamily } from './Plate.js';
 export { buildBeastHead, attachBeastHead, BEAST_PRESETS, KAYKIT_HEADS } from './BeastHead.js';
 export { addPlateArmour, addGauntlet } from './Armour.js';
 export { ACCESSORIES, coinPieces, coinCrest } from './Accessories.js';
@@ -42,7 +42,7 @@ export { BOW_SELF_LIGHT } from './Bow.js';
 // ---- readability from the iso camera (research/CONTROLS_SPEC.md §3, §7.4, §12 characters)
 export {
   getSilhouetteProxy, setHighlight, setXray, ringAnchor, topTint, topTintMaterial, highlightObject, buildSilhouetteProxy,
-  silhouetteParts, xrayMaterial, setProxyXray, updateReadability, topViewFactor, resolveTarget, XRAY, HIGHLIGHT, TOP_TINT, CLOSE,
+  silhouetteParts, xrayMaterial, setProxyXray, updateReadability, topViewFactor, resolveTarget, XRAY, HIGHLIGHT, TOP_TINT, CLOSE, setHullFur,
 } from './Readability.js';
 export { READABILITY, TOP_VIEW } from './materials.js';
 export { FUR_LOD_ISO, FUR_VIEW, FUR_CLOSE, furLodShells } from './Fur.js';

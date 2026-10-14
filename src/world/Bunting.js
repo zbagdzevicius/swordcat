@@ -11,11 +11,17 @@ import * as THREE from 'three';
 import { BUNTING } from '../core/config.js';
 import { mulberry32 } from '../core/rng.js';
 
-/** Default accent sets (LI §4: the only colours bunting may use on a level). */
+/**
+ * Token Tails tokens for festival bunting (docs/TOKENTAILS-PLAN.md §10.4): gold, love pink, lilac, mint, sky, cream.
+ * Love pink leads the town set (the Pink Paw nod: pink paw prints and pennants mean the rescue town).
+ */
+export const TT_BUNTING = Object.freeze({ gold: '#FFCC55', pink: '#FF7AA2', lilac: '#F0C5FD', mint: '#7FD66B', sky: '#90C5E9', cream: '#FCECBB' });
+
+/** Default accent sets (LI §4: the only colours bunting may use on a level). The festive sets use TT_BUNTING. */
 export const BUNTING_ACCENT = Object.freeze({
-  meadow: Object.freeze(['#FFD84A', '#8FD3FF', '#FF8FB1']),
-  forest: Object.freeze(['#9BE3C4', '#FF8A7A', '#FFD84A']),
-  town: Object.freeze(['#FF8FB1', '#FFD84A', '#8FD3FF', '#9BE3C4', '#C9A8FF']),
+  meadow: Object.freeze([TT_BUNTING.gold, TT_BUNTING.sky, TT_BUNTING.pink]),
+  forest: Object.freeze([TT_BUNTING.mint, TT_BUNTING.pink, TT_BUNTING.gold]),
+  town: Object.freeze([TT_BUNTING.pink, TT_BUNTING.gold, TT_BUNTING.lilac, TT_BUNTING.mint, TT_BUNTING.sky, TT_BUNTING.cream]),
   townOccupied: Object.freeze(['#7A4E9A', '#E0B043']),
   gate: Object.freeze(['#FF9E7A', '#3FC1C9', '#FFF6E8']),
   bog: Object.freeze(['#8FF0D8', '#C9A8FF', '#FFC46B']),

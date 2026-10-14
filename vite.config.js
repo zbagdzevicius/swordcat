@@ -1,6 +1,7 @@
 // vite.config.js  (owner: core) — tech.md §1 + GAME_DESIGN §19.1 A9 + PERF_SPEC §10.2 (chunk groups).
 import { defineConfig } from 'vite';
-import { absoluteSocialUrls } from './scripts/social-meta.mjs';
+import { absoluteSocialUrls, brandHtml } from './scripts/social-meta.mjs';
+import { BRAND } from './src/core/brand.js';
 
 /**
  * PERF §10.2 chunk groups (Rolldown `codeSplitting.groups`; scripts/bundle-budget.mjs checks each against its gz
@@ -17,7 +18,12 @@ export const CHUNK_GROUPS = [
 
 export default defineConfig({
   // share cards need absolute image URLs (scripts/social-meta.mjs); build only, so the dev server keeps og.jpg relative
-  plugins: [{ name: 'tt-social-meta', apply: 'build', transformIndexHtml: (html) => absoluteSocialUrls(html, process.env.VITE_SITE_URL) }],
+  plugins: [
+    // TOKENTAILS-PLAN §10.4: index.html's %GAME_TITLE% / %GAME_SUBTITLE% / … placeholders come from src/core/brand.js
+    // (dev and build; 'pre' so it runs before Vite's own %ENV% replacement)
+    { name: 'tt-brand', transformIndexHtml: { order: 'pre', handler: (html) => brandHtml(html, BRAND) } },
+    { name: 'tt-social-meta', apply: 'build', transformIndexHtml: (html) => absoluteSocialUrls(html, process.env.VITE_SITE_URL) },
+  ],
   base: './',                       // relative paths: dist/ works from any static host or subfolder
   build: {
     target: 'es2022',

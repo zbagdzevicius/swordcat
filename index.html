@@ -5,21 +5,23 @@
   <!-- pinch-zoom stays allowed (WCAG 1.4.4); the canvas and the touch layer keep touch-action: none -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0B0820">
-  <title>Pink Paw Knight · Token Tails</title>
-  <meta name="description" content="Pink Paw Knight: a tiny cat knight with a pink bow rescues 18 lost kittens on Purrhaven Isle. A Token Tails game.">
-  <meta name="application-name" content="Pink Paw Knight">
-  <meta name="apple-mobile-web-app-title" content="Pink Paw Knight">
+  <!-- the game's name lives in src/core/brand.js; vite.config.js fills the percent-wrapped GAME_TITLE / PAGE_TITLE / … placeholders -->
+  <title>%PAGE_TITLE%</title>
+  <meta name="description" content="%GAME_TITLE%: a tiny cat knight with a pink bow rescues 18 lost kittens on Purrhaven Isle. %GAME_SUBTITLE%.">
+  <meta name="application-name" content="%GAME_TITLE%">
+  <meta name="apple-mobile-web-app-title" content="%GAME_TITLE%">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Token Tails">
-  <meta property="og:title" content="Pink Paw Knight · Token Tails">
-  <meta property="og:description" content="A tiny cat knight with a pink bow rescues lost kittens. A Token Tails game.">
+  <meta property="og:title" content="%PAGE_TITLE%">
+  <meta property="og:description" content="%GAME_TAGLINE% A tiny cat knight with a pink bow rescues lost kittens. A Token Tails game.">
   <meta property="og:image" content="og.jpg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="The Token Tails cat on a night-purple background">
+  <meta property="og:image:alt" content="%OG_ALT%">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Pink Paw Knight · Token Tails">
-  <meta name="twitter:description" content="A tiny cat knight with a pink bow rescues lost kittens. A Token Tails game.">
+  <meta name="twitter:title" content="%PAGE_TITLE%">
+  <meta name="twitter:description" content="%GAME_TAGLINE% A tiny cat knight with a pink bow rescues lost kittens. A Token Tails game.">
+  <meta name="twitter:image:alt" content="%OG_ALT%">
   <meta name="twitter:image" content="og.jpg">
   <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -45,7 +47,8 @@
                          background: #FFCC55; color: #4A1D08; font: 800 15px Nunito, Fredoka, system-ui, sans-serif; }
     #boot-error button:focus-visible { outline: 3px solid #FF7AA2; outline-offset: 2px; }
     /* PERF §10.1 splash: the first paint is Token Tails night (#0B0820 → #2A1F45) with a gold glow behind the paw, the
-       tiny sword and the pink bow (never grey). core adds .out when the title (or a ?level) is up and removes the node
+       tiny sword and the pink bow (never grey). The paw is the Token Tails paw (TOKENTAILS-PLAN §10.4): ivory #F3EEE6
+       with a white highlight, love-pink beans #FF7AA2 / #FFB3C7 and a maroon #4A1D08 outline. core adds .out when the title (or a ?level) is up and removes the node
        after the fade. */
     #splash { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; transition: opacity .4s;
               background: radial-gradient(60% 45% at 50% 42%, rgba(255, 204, 85, .22) 0%, rgba(255, 204, 85, 0) 70%),
@@ -57,32 +60,41 @@
   </style>
 </head>
 <body>
-  <div id="splash" aria-label="Pink Paw Knight is loading" role="img">
+  <div id="splash" aria-label="%GAME_TITLE% is loading" role="img">
     <svg viewBox="0 0 120 120" aria-hidden="true">
-      <g stroke="#4A2A1F" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <g stroke="#4A1D08" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
         <path d="M84 14l8 8-38 50-10 2 2-10z" fill="#F4F1EC"/>
         <path d="M43 66l11 11M38 71l11 11" fill="none"/>
         <path d="M36 70l14 14" stroke="#F2C14E" stroke-width="7"/>
         <path d="M33 88l6-6" stroke="#8A5A36" stroke-width="6"/>
-        <ellipse cx="66" cy="84" rx="21" ry="17" fill="#F4A462"/>
-        <ellipse cx="45" cy="60" rx="7.5" ry="9.5" fill="#F4A462"/>
-        <ellipse cx="59" cy="50" rx="7.5" ry="9.5" fill="#F4A462"/>
-        <ellipse cx="75" cy="51" rx="7.5" ry="9.5" fill="#F4A462"/>
-        <ellipse cx="88" cy="62" rx="7.5" ry="9.5" fill="#F4A462"/>
+        <ellipse cx="66" cy="84" rx="21" ry="17" fill="#F3EEE6"/>
+        <ellipse cx="45" cy="60" rx="7.5" ry="9.5" fill="#F3EEE6"/>
+        <ellipse cx="59" cy="50" rx="7.5" ry="9.5" fill="#F3EEE6"/>
+        <ellipse cx="75" cy="51" rx="7.5" ry="9.5" fill="#F3EEE6"/>
+        <ellipse cx="88" cy="62" rx="7.5" ry="9.5" fill="#F3EEE6"/>
         <path d="M27 28c-9-8-17-2-12 7 4 6 11 4 15 0zM35 28c9-8 17-2 12 7-4 6-11 4-15 0z" fill="#FF8FB1"/>
         <circle cx="31" cy="29" r="4.5" fill="#FF6F9C"/>
       </g>
+      <g fill="#FFFFFF" opacity=".9">
+        <ellipse cx="56" cy="76" rx="6" ry="3" transform="rotate(-20 56 76)"/>
+        <ellipse cx="42.5" cy="55" rx="1.8" ry="2.6"/><ellipse cx="56.5" cy="45" rx="1.8" ry="2.6"/>
+        <ellipse cx="72.5" cy="46" rx="1.8" ry="2.6"/><ellipse cx="85.5" cy="57" rx="1.8" ry="2.6"/>
+      </g>
+      <g fill="#FF7AA2">
+        <ellipse cx="66" cy="88" rx="12" ry="9"/>
+        <ellipse cx="45" cy="62" rx="3.5" ry="4.5"/><ellipse cx="59" cy="52" rx="3.5" ry="4.5"/>
+        <ellipse cx="75" cy="53" rx="3.5" ry="4.5"/><ellipse cx="88" cy="64" rx="3.5" ry="4.5"/>
+      </g>
       <g fill="#FFB3C7">
-        <ellipse cx="66" cy="87" rx="12" ry="9"/>
-        <ellipse cx="45" cy="61" rx="3.5" ry="4.5"/><ellipse cx="59" cy="51" rx="3.5" ry="4.5"/>
-        <ellipse cx="75" cy="52" rx="3.5" ry="4.5"/><ellipse cx="88" cy="63" rx="3.5" ry="4.5"/>
+        <ellipse cx="62" cy="85" rx="4.5" ry="2.6"/>
+        <circle cx="44" cy="60" r="1.2"/><circle cx="58" cy="50" r="1.2"/><circle cx="74" cy="51" r="1.2"/><circle cx="87" cy="62" r="1.2"/>
       </g>
     </svg>
   </div>
   <div id="app"></div>
   <div id="touch"></div>
   <div id="ui"></div>
-  <noscript><p style="color:#FFF4D6;font:600 16px system-ui,sans-serif;text-align:center;margin-top:40vh">Pink Paw Knight needs JavaScript and WebGL2.</p></noscript>
+  <noscript><p style="color:#FFF4D6;font:600 16px system-ui,sans-serif;text-align:center;margin-top:40vh">%GAME_TITLE% needs JavaScript and WebGL2.</p></noscript>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

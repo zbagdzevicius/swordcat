@@ -1,6 +1,6 @@
 // src/ui/cursor.js  (owner: ui) — research/CONTROLS_SPEC.md §10.2 context cursors over the game canvas.
 //
-//   ground       a soft ginger paw pointer with toe beans and a pink bow cuff (WA §3.6 / CL §5.4: no gauntlet metal)
+//   ground       a soft ivory Token Tails paw pointer (maroon outline, pink toe beans) and a pink bow cuff (WA §3.6 / CL §5.4: no gauntlet metal)
 //   enemy        a candy sword tilted 30° with a white shine (also breakables)
 //   interact     the paw + a mint speech-dot (interactables, NPCs, carriers; WA2: mint = "you can use this")
 //   pickup       a sparkle paw
@@ -42,9 +42,12 @@ export function cursorKind(s) {
 
 // ------------------------------------------------------------------ art (32 × 32 viewBox)
 const INK = '#5A3B2E';
-/** The paw pointer: a rounded ginger arrow (tip at 3,2) with three toe beans and a pink bow cuff. */
+/** Token Tails paw (TOKENTAILS-PLAN §10.4): ivory pad, white highlight, love-pink beans, maroon outline. */
+const PAW = Object.freeze({ fur: '#F3EEE6', ink: '#4A1D08', bean: '#FF7AA2', hi: '#FFFFFF' });
+/** The paw pointer: a rounded ivory arrow (tip at 3,2) with three pink toe beans and a pink bow cuff. */
 const pawBody = (fill, ink, w) => `<path d="M3 2l4.2 22.4 4.6-6.1 5.6 9.6 4.4-2.6-5.5-9.5 7.6-1z" fill="${fill}" stroke="${ink}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`
-  + '<g fill="#FFB8CF"><circle cx="7.4" cy="10.6" r="1.25"/><circle cx="10.2" cy="13.2" r="1.25"/><circle cx="8.6" cy="15.9" r="1.4"/></g>';
+  + `<path d="M5.1 5.6l1.6 8.4" stroke="${PAW.hi}" stroke-width="1.3" stroke-linecap="round" opacity=".9"/>`
+  + `<g fill="${PAW.bean}"><circle cx="7.4" cy="10.6" r="1.25"/><circle cx="10.2" cy="13.2" r="1.25"/><circle cx="8.6" cy="15.9" r="1.4"/></g>`;
 const ribbon = (ink, hc) => `<g stroke="${ink}" stroke-width="${hc ? 1.6 : 1.2}" stroke-linejoin="round"><path d="M19 25.3l-3.1-3.9 1.2 5.6z" fill="#FF9EC0"/><path d="M19 25.3l4.6-1.9-3.4 4.8z" fill="#FF9EC0"/><circle cx="19" cy="25.3" r="1.6" fill="#FF6F9C"/></g>`;
 const sword = (blade, ink, w) => `<g stroke="${ink}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"><path d="M2.5 2.5l4.5.6 13.3 13.3-3.9 3.9L3.1 7z" fill="${blade}"/>`
   + `<path d="M15.2 21.6l6.4-6.4 2.4 2.4-6.4 6.4z" fill="#FFD86B"/><path d="M21 21l6.2 6.2" stroke-width="${w * 2.1}"/><circle cx="28.2" cy="28.2" r="2" fill="#FFD86B"/></g>`
@@ -62,15 +65,15 @@ const cross = (ink) => `<g stroke-linecap="round"><path d="M20 19l8 8M28 19l-8 8
 /** SVG markup + hotspot (in the 32-unit space) per kind and contrast. */
 function art(kind, hc) {
   const w = hc ? 3 : 2.2, ink = hc ? '#2A1E18' : INK;
-  const fur = hc ? '#FFFFFF' : '#E89A55';
+  const fur = hc ? '#FFFFFF' : PAW.fur, pawInk = hc ? ink : PAW.ink;
   switch (kind) {
     case 'enemy': return { svg: sword(hc ? '#FF5A4E' : '#FF8FB1', ink, w), hx: 3, hy: 3 };
-    case 'interact': return { svg: pawBody(fur, ink, w) + seal(ink, hc ? 1.6 : 1.2), hx: 3, hy: 2 };
-    case 'pickup': return { svg: pawBody(fur, ink, w) + sparkle(ink, hc ? 1.5 : 1), hx: 3, hy: 2 };
+    case 'interact': return { svg: pawBody(fur, pawInk, w) + seal(ink, hc ? 1.6 : 1.2), hx: 3, hy: 2 };
+    case 'pickup': return { svg: pawBody(fur, pawInk, w) + sparkle(ink, hc ? 1.5 : 1), hx: 3, hy: 2 };
     case 'attackMove': return { svg: sword(hc ? '#FF5A4E' : '#FF7A6B', ink, w) + arrow(ink, w), hx: 3, hy: 3 };
     case 'aim': return { svg: reticle(hc), hx: 16, hy: 16 };
     case 'unreachable': return { svg: `<g opacity="${hc ? 1 : 0.9}">${pawBody(hc ? '#E9DCCB' : '#D8C8B6', ink, w)}</g>` + cross(ink), hx: 3, hy: 2 };
-    default: return { svg: pawBody(fur, ink, w) + ribbon(ink, hc), hx: 3, hy: 2 };
+    default: return { svg: pawBody(fur, pawInk, w) + ribbon(pawInk, hc), hx: 3, hy: 2 };
   }
 }
 

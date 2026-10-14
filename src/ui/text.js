@@ -1,7 +1,8 @@
 // src/ui/text.js  (owner: ui) — pure text helpers for every screen (GAME_DESIGN §6.6, §6.8, §14): string lookup with a
 // safe fallback, HTML escaping, *emphasis*, device glyphs for the [Key] tokens in tutorial / prompt strings, times,
-// hearts, objectives, chapter cards and ranks. Node-safe: no DOM, imports only core/config.js.
+// hearts, objectives, chapter cards and ranks. Node-safe: no DOM, imports only core/config.js and the pure strings table.
 import { LEVEL_IDS, KITTENS_BY_LEVEL, INPUT } from '../core/config.js';
+import { S as STORY_STRINGS } from '../story/strings.js';
 
 /**
  * UI copy the ui needs that strings.js (story) does not carry yet (requested in requests/ui.md). strings.js wins as
@@ -18,7 +19,8 @@ export const UI_STRINGS = Object.freeze({
   'credits.made': 'Made with love for one very small knight.',
   'credits.team': 'Design · Code · Art · Music direction: Token Tails',
   'credits.assets': 'Asset attribution',
-  'credits.pinkpaw': 'Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.',
+  // one source (TOKENTAILS-PLAN §10.4): the Pink Paw line lives in story/strings.js; this fallback reads it from there
+  'credits.pinkpaw': STORY_STRINGS['credits.pinkpaw'].default,
   'vigil.swapNone': 'No squires yet. Rescue one!',
   'vigil.active': 'At your side',
   'results.infinite': '∞',

@@ -750,6 +750,21 @@ export const FX = deepFreeze({ comicPops: { parry: 'always', other: 'first', fir
  */
 export const STORY = deepFreeze({ cs02Cut: true, kittenOffer: { knockouts: 2, windowS: 180, failedParries: 3 }, mochiCage: [-14, -41] });
 
+/**
+ * TT2 guided onboarding (docs/TOKENTAILS-PLAN.md §10.3; story G2 reads it). Metres / seconds.
+ *  wobble: Sir Wobble's home; standR: the drill's stand spot from him; stepR: he steps toward her beyond this;
+ *  closeR: past this the prompt says "Get close to Sir Wobble!"; fight: the first fight on the practice field (arena id,
+ *  the rats wait for her first order or `calm` s, the first hit on her deals at most `softHit`); noodleR: Noodle's
+ *  barrel teaches Meow within this; mochiNearR: at Mochi's cart the line teaches the Bright Slash within this; stonesR: the Standing Stones count as reached; sceneCap: measured scene caps (s);
+ *  arriveR: the default guide arrive radius; bowBark: Pearl's bow bark (s).
+ */
+export const ONBOARD = deepFreeze({
+  wobble: [0, -86], standR: 1.3, stepR: 1.4, closeR: 1.6, arriveR: 2.2, bowBark: 2.0,
+  fight: { arena: 'yard', at: [0, -77], r: 13, calm: 3, softHit: 1, spill: [0, -67.5] },
+  noodle: [-30, -26], noodleR: 6, mochiNearR: 4, stones: [-20, -4], stonesR: 12,
+  sceneCap: { cs01: 10, cs02: 20, cs01b: 6, d01: 12 },
+});
+
 /** WA §2.7: load / cutscene fades are cream, never black (core.W3; ui `cinema.js` and world LevelManager read it). */
 export const FADE_COLOR = '#FFF1DE';
 

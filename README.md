@@ -1,9 +1,10 @@
 # Pink Paw Knight (a Token Tails game)
 
-A tiny cat knight with a pink bow rescues 18 lost kittens on Purrhaven Isle. Pink Paw Knight is a
+A tiny cat knight with a pink bow rescues 18 lost kittens on Purrhaven Isle. It is a
 three.js + Vite browser game in the [Token Tails](https://tokentails.com) universe; Token Tails embeds it at
 `/swordcat` behind a flag. The repository and internal ids keep the working name `swordcat` (file names, events,
-the save key `swordcat.save.v1`).
+the save key `swordcat.save.v1`). The display title (not yet approved by Pink Paw as a name) lives in one constant,
+`BRAND` in [src/core/brand.js](src/core/brand.js); `BRAND.usePinkPawName` switches the title and the Rescue House name.
 
 - Status, controls and known issues: [STATUS.md](STATUS.md)
 - Design: [GAME_DESIGN.md](GAME_DESIGN.md); area-agent rules: [CONTRIBUTING_AGENTS.md](CONTRIBUTING_AGENTS.md)

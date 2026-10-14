@@ -16,7 +16,9 @@
 //   orders    the tap ripple (pink ring, cream paw, 4 collapsing ticks), gold attack rings, the warm-grey ✕ paw when
 //             unreachable, queued waypoints, 3 dots along the next segment while RMB is held, pink paws every 1.2 m
 //             along the path with `settings.pathPreview` ('auto' = touch on the prologue / Chapter 1 meadow), the goal;
-//   overlays  the companion ability indicator, the ranges overlay while Ctrl is held, the tutorial ghost-paw spot.
+//   overlays  the companion ability indicator, the ranges overlay while Ctrl is held, the tutorial ghost-paw spot;
+//   guide     TOKENTAILS-PLAN §10.2 the Pink Paw trail (GuideTrail below): ≤ 14 Token Tails paw prints (ivory pad,
+//             love-pink beans, maroon rim) along the nav path to ui's guide target, in this same draw.
 // Contact blobs moved to BlobShadows.js (PERF §7.2): this pool draws no blobs.
 //
 // Every mark gets the WA §3.2 rule-4 "ink sandwich": a 0.03 m cocoa #4A2A1F outer edge at α 0.35, drawn by the same
@@ -29,6 +31,7 @@ import { PLAYER, ATTACKS, TELEGRAPH, AIM, CAMERA, CLASS_MARKS } from '../core/co
 import { setHighlight } from '../characters/Readability.js';
 import { FX_COLORS } from './palette.js';
 import { fxShaderMaterial } from './shaders.js';
+import { findPath } from '../physics/Pathfind.js';
 
 const MAX = 160;
 /** decal shapes (aParams.x) */
@@ -118,6 +121,8 @@ varying vec4 vExtra;    // x dashes / notches / rect half-w, y rotation / rect h
 varying vec2 vInk;
 uniform float uTime;
 uniform vec3 uInk;
+uniform vec3 uTTPad;
+uniform vec3 uTTRim;
 const float PI = 3.14159265;
 float band( float r, float a, float b, float w ) { return smoothstep( a - w, a + w, r ) * ( 1.0 - smoothstep( b - w, b + w, r ) ); }
 float sdEll( vec2 p, vec2 c, vec2 r ) { return ( length( ( p - c ) / r ) - 1.0 ) * min( r.x, r.y ); }
@@ -245,7 +250,27 @@ vec2 shapeCov( vec2 uv ) {
   }
   return vec2( clamp( a, 0.0, 1.0 ), w );
 }
+float pawSd( vec2 p ) {                      // the paw print's distance (main pad + 4 beans; forward = +y)
+  float d = sdEll( p, vec2( 0.0, -0.28 ), vec2( 0.44, 0.36 ) );
+  d = min( d, sdEll( p, vec2( -0.56, 0.18 ), vec2( 0.17, 0.21 ) ) );
+  d = min( d, sdEll( p, vec2( -0.21, 0.52 ), vec2( 0.17, 0.22 ) ) );
+  d = min( d, sdEll( p, vec2( 0.21, 0.52 ), vec2( 0.17, 0.22 ) ) );
+  return min( d, sdEll( p, vec2( 0.56, 0.18 ), vec2( 0.17, 0.21 ) ) );
+}
 void main() {
+  if ( vExtra.y > 0.5 && int( vParams.x + 0.5 ) == 6 ) {
+    // TOKENTAILS-PLAN §10.2 Token Tails print: ivory pads, love-pink beans (vColor), a maroon rim around the outside
+    vec2 p = vec2( vUv.x, -vUv.y );
+    float d = pawSd( p ), aa = max( 0.004, vParams.z );
+    float cov = 1.0 - smoothstep( 0.12 - aa, 0.12 + aa, d );
+    float pad = 1.0 - smoothstep( -aa, aa, d );
+    float bean = 1.0 - smoothstep( -0.08 - aa, -0.08 + aa, d );
+    float ta = cov * vColor.a;
+    if ( ta < 0.003 ) discard;
+    gl_FragColor = vec4( mix( uTTRim, mix( uTTPad, vColor.rgb, bean ), pad ), ta );
+    #include <colorspace_fragment>
+    return;
+  }
   vec2 s0 = shapeCov( vUv );
   float a = s0.x * vColor.a;
   vec3 col = mix( vColor.rgb, vec3( 1.0 ), s0.y );
@@ -353,6 +378,237 @@ export function pointsAlong(from, pts, step, max, out = [], start = 0, pool = nu
   return out;
 }
 
+
+/**
+ * TOKENTAILS-PLAN §10.2 the Pink Paw guide trail (package G1). Numbers in metres / seconds. The print look is the
+ * Token Tails `logo/paw.webp` paw (a generic paw, not Pink Paw's logo): ivory pad, love-pink beans, maroon rim.
+ */
+export const GUIDE_TRAIL = Object.freeze({
+  max: 14,              // prints at most (one pool, the decal batch's single draw)
+  gap: 1.2,             // m between prints along the path
+  side: 0.17,           // m left / right of the path (alternating paws)
+  r: 0.34,              // print radius (m; the quad is 2r wide)
+  touchMul: 1.3,        // prints are drawn 1.3× on touch (≥ 18 px at 844×390)
+  rehz: 2,              // path recomputes per second at most
+  step: 0.12,           // s between prints lighting up, from her outward
+  cycle: 2.5,           // s per light-up cycle while she is idle / not closing in
+  dark: 0.35,           // s at the end of each cycle with the prints dimmed before they relight from her outward
+  ahead: 3,             // prints kept lit just ahead of her while she closes in
+  closeV: 0.6,          // m/s of closing speed that counts as "walking the right way"
+  fadeIn: 0.25, fadeOut: 0.4,   // s (fade-out inside arriveR stays under the 0.5 s budget)
+  arriveR: 2.2,         // m: default arrival radius (the target's own `arriveR` wins)
+  dim: 0.35,            // alpha multiplier during an ordinary fight
+  unlitA: 0.45, litA: 1, litAt: 0.7,   // print alpha unlit / lit; "lit" for tests = alpha ≥ litAt
+  endGap: 0.9,          // m: no print this close to the target (the badge stands there)
+  behind: 0.45,         // m: prints she has passed (path remainder) hide
+  pull: 0.3,            // m toward the lens (grass never cuts a print)
+  pad: '#F3EEE6', bean: '#FF7AA2', rim: '#4A1D08',
+  // fix round 2 (§10.10 #3): ring mode for an in-place lesson (the target carries `ring: { x, z, r }`): `ringN` lit prints
+  // round the lesson's object, toes in, the one on her side last. On once she has arrived (inside the target's arriveR),
+  // where the path trail fades: "you are here, act on this" instead of nothing.
+  ringN: 4, ringNear: 1.5,
+});
+
+/**
+ * Ring-mode prints (pure; unit-tested): `cfg.ringN` prints on a circle of `ring.r` m round (ring.x, ring.z), toes toward
+ * the centre, from the far side round to the print on her side (`from`), which comes last. Writes into `out`.
+ * @param {{x:number, z:number}} from @param {{x:number, z:number, r:number}} ring
+ */
+export function ringPrints(from, ring, cfg = GUIDE_TRAIL, out = []) {
+  const n = Math.max(3, cfg.ringN | 0), r = Math.max(0.3, ring.r ?? 1);
+  let a0 = Math.atan2(from.x - ring.x, from.z - ring.z);
+  if (!Number.isFinite(a0)) a0 = 0;
+  for (let i = 0; i < n; i++) {
+    // evenly spaced; i = 0 opposite her, then alternating round both sides, the last one on her side (offset 0)
+    const j = Math.ceil((n - 1 - i) / 2) * (i % 2 ? 1 : -1), a = a0 + (2 * Math.PI * j) / n;
+    const o = (out[i] ??= { x: 0, z: 0, yaw: 0, rem: 0 });
+    o.x = ring.x + Math.sin(a) * r; o.z = ring.z + Math.cos(a) * r;
+    o.yaw = Math.atan2(ring.x - o.x, ring.z - o.z); o.rem = 0;
+  }
+  out.length = n;
+  return out;
+}
+
+/**
+ * Is the trail in ring mode (pure)? `g` = ui's spec, `her` = her position: a ring target and she is within
+ * arriveR + `ringNear` m of it (a path that short draws no prints; the ring's print on her side is the spot to step to).
+ */
+export function ringWanted(g, her, cfg = GUIDE_TRAIL) {
+  const R = g?.ring;
+  if (!R || !her || !g.on || g.trail === false) return false;
+  return Math.hypot(her.x - g.x, her.z - g.z) <= (g.arriveR ?? cfg.arriveR) + cfg.ringNear;
+}
+
+/** Has she arrived at a ring target (pure)? (ui's snapshot reports the ring only then: "you are here, act on it".) */
+export function ringArrived(g, her) {
+  return !!g?.ring && !!her && Math.hypot(her.x - g.x, her.z - g.z) <= (g.arriveR ?? GUIDE_TRAIL.arriveR);
+}
+
+/**
+ * The prints along a path (pure; unit-tested): `from` → `pts` (path points, the goal last), one every `cfg.gap` m,
+ * alternating `cfg.side` m left / right, toes along the path, none within `cfg.endGap` of the goal, at most `cfg.max`.
+ * Each print carries `rem`, the path length still to go from it to the goal. Writes into `out` (pooled entries).
+ * @param {{x:number, z:number}} from @param {{x:number, z:number}[]} pts
+ * @param {typeof GUIDE_TRAIL} [cfg] @param {{x:number, z:number, yaw:number, rem:number}[]} [out]
+ */
+export function trailPrints(from, pts, cfg = GUIDE_TRAIL, out = []) {
+  let L = 0, px = from.x, pz = from.z;
+  for (const w of pts) { L += Math.hypot(w.x - px, w.z - pz); px = w.x; pz = w.z; }
+  const raw = pointsAlong(from, pts, cfg.gap, cfg.max + 1, trailPrints._tmp, 0, trailPrints._pool);
+  let n = 0;
+  for (let i = 0; i < raw.length && n < cfg.max; i++) {
+    const q = raw[i], rem = L - (i + 1) * cfg.gap;
+    if (rem < cfg.endGap) break;
+    const side = (i & 1 ? 1 : -1) * cfg.side;
+    const o = (out[n] ??= { x: 0, z: 0, yaw: 0, rem: 0 });
+    o.x = q.x + Math.cos(q.yaw) * side; o.z = q.z - Math.sin(q.yaw) * side; o.yaw = q.yaw; o.rem = rem;
+    n++;
+  }
+  out.length = n;
+  return out;
+}
+trailPrints._tmp = [];
+trailPrints._pool = [];
+
+/**
+ * Is the k-th print ahead of her lit (pure; unit-tested)? Reduced motion: all lit. Closing in: the first `ahead`.
+ * Otherwise the light-up wave: print k lights at k·step into the cycle and stays lit until the last `dark` s of it.
+ * @param {number} k @param {number} c seconds into the cycle @param {boolean} closing @param {boolean} reduced
+ */
+export function printLit(k, c, closing, reduced, cfg = GUIDE_TRAIL) {
+  if (reduced) return true;
+  if (closing) return k < cfg.ahead;
+  return c >= k * cfg.step && c < cfg.cycle - cfg.dark;
+}
+
+/**
+ * Should the trail show (pure; unit-tested)? `g` = ui's guide spec ({ on, hard, x, z, arriveR, trail }) and her
+ * distance to the target. Off when there is no target, the setting is off, she has arrived, or ui hid it.
+ */
+export function trailWanted(g, dist) {
+  if (!g || !g.on || g.trail === false) return false;
+  return !(dist <= (g.arriveR ?? GUIDE_TRAIL.arriveR));
+}
+
+/**
+ * The Pink Paw trail's state: the path (re-routed ≤ GUIDE_TRAIL.rehz a second, read-only on physics' NavGrid so it
+ * goes round fences and through gates), the prints, the light-up clock and the fade. ui (beacon.js) feeds it with
+ * `set()` every frame; GroundDecals draws it inside its own batch. No allocation per frame once warmed.
+ */
+export class GuideTrail {
+  /** @param {any} ctx */
+  constructor(ctx) {
+    this.ctx = ctx;
+    /** ui's latest spec: { on, hard, dim, reduced, touch, trail, x, y, z, arriveR, id } (null = no target) */
+    this.g = null;
+    this.prints = [];
+    this.vis = 0;
+    this.cycleT = 0;
+    this.closing = false;
+    this.herRem = Infinity;
+    this._rate = 0;
+    this._reT = 0;
+    this._key = '';
+    this._tx = NaN; this._tz = NaN;
+    this._alpha = new Float32Array(GUIDE_TRAIL.max);
+    /** the prints drawn last frame (pooled): { x, y, z, yaw, r, a, lit } (debug / __GAME__.guide()) */
+    this.drawn = [];
+    this._drawnPool = [];
+    /** fix round 2: ring mode (an in-place lesson) is on; `ringHere`: she has arrived (inside arriveR) */
+    this.ringOn = false; this.ringHere = false;
+  }
+
+  /** ui's guide spec for this frame (null / { on: false } hides the trail; `hard` hides it at once). */
+  set(g) { this.g = g; }
+
+  /** Drop the path (level unload / target gone). */
+  clear() { this.prints.length = 0; this.vis = 0; this.drawn.length = 0; this._key = ''; this.herRem = Infinity; }
+
+  _route(her, g) {
+    const nav = this.ctx.physics?.nav;
+    let pts = null;
+    if (nav) {
+      try { const r = findPath(nav, her, g, {}); if (r?.points?.length) pts = r.points; } catch { pts = null; }
+    }
+    if (!pts) { (this._line ??= [{ x: 0, z: 0 }]); this._line[0].x = g.x; this._line[0].z = g.z; pts = this._line; }
+    trailPrints(her, pts, GUIDE_TRAIL, this.prints);
+    this._alpha.fill(0);
+  }
+
+  /**
+   * Advance (visual dt). `her` = her position, `live` = the decals draw this frame (play, her on the field).
+   * @param {number} dt @param {{x:number, y:number, z:number}|null} her @param {boolean} live
+   */
+  update(dt, her, live) {
+    const C = GUIDE_TRAIL, g = this.g;
+    const dist = g && her ? Math.hypot(g.x - her.x, g.z - her.z) : Infinity;
+    const ring = live && ringWanted(g, her);
+    if (ring !== this.ringOn) { this.ringOn = ring; this._key = ''; this.vis = ring ? this.vis : 0; }
+    this.ringHere = ring && ringArrived(g, her);
+    if (ring) {
+      // in place: the ring round the lesson's object, all lit (no path, no light-up wave)
+      this.vis = Math.min(1, this.vis + dt / C.fadeIn);
+      ringPrints(her, g.ring, C, this.prints);
+      this.herRem = Infinity; this.closing = false; this.cycleT = 0;
+      return;
+    }
+    const want = live && !!her && trailWanted(g, dist);
+    if (!want && (g?.hard || !live)) this.vis = 0;
+    else this.vis = want ? Math.min(1, this.vis + dt / C.fadeIn) : Math.max(0, this.vis - dt / C.fadeOut);
+    if (!g || !her || !g.on) { if (this.vis <= 0) this.clear(); return; }
+    // a new target (id, or it moved > 1.5 m): re-route now and restart the light-up from her
+    const key = String(g.id ?? '');
+    const moved = !(Math.hypot(g.x - this._tx, g.z - this._tz) < 1.5);
+    if (key !== this._key || moved) { this._key = key; this._reT = 0; this.cycleT = 0; this._rate = 0; this.herRem = Infinity; }
+    if (want && (this._reT -= dt) <= 0) {
+      this._reT = 1 / C.rehz;
+      this._tx = g.x; this._tz = g.z;
+      this._route(her, g);
+    }
+    // how much path she still has: the best print remainder + her distance to that print
+    // (fix round 2: the straight-line distance is no path remainder: round a fence it is shorter than every print's
+    // remainder, so the prints nearest her read as "passed" and hid; the barn-chest trail drew none on screen)
+    let rem = this.prints.length ? Infinity : dist;
+    for (const q of this.prints) { const d = q.rem + Math.hypot(q.x - her.x, q.z - her.z); if (d < rem) rem = d; }
+    if (Number.isFinite(this.herRem) && dt > 0) {
+      const v = (this.herRem - rem) / dt, k = Math.min(1, dt / 0.3);
+      this._rate += (Math.max(-8, Math.min(8, v)) - this._rate) * k;
+    }
+    this.herRem = rem;
+    const closing = !g.reduced && this._rate > C.closeV;
+    if (closing) this.cycleT = 0;
+    else if (!g.reduced) { this.cycleT += dt; if (this.cycleT >= C.cycle) this.cycleT -= C.cycle; }
+    this.closing = closing;
+  }
+
+  /**
+   * Draw the prints into the decal batch (`decals._add`) at alpha × vis × dim. Fills `drawn`.
+   * @param {GroundDecals} decals @param {number} dt @param {number} herY
+   */
+  draw(decals, dt, herY) {
+    const C = GUIDE_TRAIL, g = this.g;
+    this.drawn.length = 0;
+    if (!g || this.vis <= 0.003 || !this.prints.length) return 0;
+    const r = C.r * (g.touch ? C.touchMul : 1), dim = g.dim ? C.dim : 1, ka = dt > 0 ? Math.min(1, dt / C.step) : 1;
+    let k = 0;
+    for (let i = 0; i < this.prints.length; i++) {
+      const q = this.prints[i];
+      if (q.rem > this.herRem - C.behind) continue;                    // she has passed it
+      const lit = this.ringOn || printLit(k, this.cycleT, this.closing, !!g.reduced, C);
+      const want = lit ? C.litA : C.unlitA;
+      const a = this._alpha[k] = this._alpha[k] > 0 ? this._alpha[k] + (want - this._alpha[k]) * ka : want;
+      const y = decals._gy(q.x, q.z, herY);
+      const alpha = a * this.vis * dim;
+      decals._add(DECAL.PAW, q.x, y, q.z, r * (0.9 + 0.1 * a), q.yaw, C.bean, alpha, 0, 0.02, 0, 0, 1, 0, 1, 1, C.pull, 0);
+      const d = (this._drawnPool[k] ??= { x: 0, y: 0, z: 0, yaw: 0, r: 0, a: 0, lit: false });
+      d.x = q.x; d.y = y; d.z = q.z; d.yaw = q.yaw; d.r = r; d.a = alpha; d.lit = a >= C.litAt && alpha > 0.05;
+      this.drawn.push(d);
+      k++;
+    }
+    return k;
+  }
+}
+
 export class GroundDecals {
   /** @param {any} ctx */
   constructor(ctx) {
@@ -388,6 +644,8 @@ export class GroundDecals {
     /** the tutorial ghost-paw ground spot (ui's ghost paw; `setGhostPaw`) */
     this.ghost = { on: false, x: 0, y: 0, z: 0, t: 0 };
     this._orderT = Infinity;          // seconds since the last move order (path paws draw outward at 12 m/s)
+    /** TOKENTAILS-PLAN §10.2 the Pink Paw guide trail (ui's beacon feeds it through setGuide) */
+    this.guide = new GuideTrail(ctx);
     this._near = [];                  // scratch: nearest interactables
     this._nearD = [];
   }
@@ -398,7 +656,7 @@ export class GroundDecals {
     const mat = fxShaderMaterial({
       name: 'fx.groundDecals', vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, depthTest: true,
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, fog: false,
-      uniforms: { uTime: { value: 0 }, uInk: { value: new THREE.Color(DECAL_COLORS.ink) } },
+      uniforms: { uTime: { value: 0 }, uInk: { value: new THREE.Color(DECAL_COLORS.ink) }, uTTPad: { value: new THREE.Color(GUIDE_TRAIL.pad) }, uTTRim: { value: new THREE.Color(GUIDE_TRAIL.rim) } },
     });
     mat.userData.noHeightFog = true;
     this.colors = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 4), 4).setUsage(THREE.DynamicDrawUsage);
@@ -425,7 +683,7 @@ export class GroundDecals {
       bus.on(E.PLAYER_SWING, (p) => this._onSwing(p)),
       bus.on(E.PLAYER_DAMAGED, (p) => this._onHp(p, -1)),
       bus.on(E.PLAYER_HEALED, (p) => this._onHp(p, +1)),
-      bus.on(E.LEVEL_UNLOAD, () => { this.markers.length = 0; this._frozen.clear(); this._unhighlight(); this.ghost.on = false; this.hearts.since = Infinity; }),
+      bus.on(E.LEVEL_UNLOAD, () => { this.markers.length = 0; this._frozen.clear(); this._unhighlight(); this.ghost.on = false; this.hearts.since = Infinity; this.guide.clear(); }),
     );
   }
 
@@ -467,6 +725,18 @@ export class GroundDecals {
     if (!pos) { G.on = false; return; }
     G.on = true; G.x = pos.x; G.y = pos.y ?? 0; G.z = pos.z; G.t = 0;
   }
+
+  /**
+   * TOKENTAILS-PLAN §10.2: ui's guide spec for this frame (beacon.js): `{ on, hard, dim, reduced, touch, trail, id,
+   * x, y, z, arriveR }`, or null for no target. The trail routes, lights and fades itself (GuideTrail).
+   */
+  setGuide(g) { this.guide.set(g); }
+
+  /** The prints drawn last frame ({ x, y, z, yaw, r, a, lit }; read-only, pooled). */
+  guidePrints() { return this.guide.drawn; }
+
+  /** fix round 2: the ring centre (world {x, z}) while the trail is in ring mode and drawn, else null (ui's snapshot). */
+  guideRing() { const t = this.guide; return t.ringOn && t.ringHere && t.drawn.length && t.g?.ring ? t.g.ring : null; }
 
   _count(k) { this.counts[k] = (this.counts[k] ?? 0) + 1; }
 
@@ -579,9 +849,14 @@ export class GroundDecals {
       if (heroOn) this._interactables(p, cam);
       this._bolts();
       if (heroOn) { this._path(p); this._queue(p); }
+      // the guide trail is world wayfinding, not her indicator: it skips the hand-back fade (on from the first frame of
+      // play, e.g. while the camera still glides from the title)
+      const gpos = p?.object3d?.position ?? p?.pos ?? null, guideOn = play && !!gpos && p.alive !== false && !p.scripted;
+      this.guide.update(dt, gpos, guideOn);
+      if (guideOn) { const m = this._mul; this._mul = 1; const n = this.guide.draw(this, dt, gpos.y); this._mul = m; if (n) this.counts.guide = n; }
       this._ability();
       this._ghost(dt);
-    } else this._unhighlight();
+    } else { this._unhighlight(); this.guide.update(dt, null, false); this.guide.drawn.length = 0; }
     this._mul = 1;
     this._glyphQueue();
     this._markers(dt, play);

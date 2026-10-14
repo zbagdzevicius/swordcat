@@ -1,23 +1,30 @@
-// src/story/tutorial.js  (owner: story) — Morning Practice, the playable tutorial (WARM_ADVENTURE_SPEC §6–§7, ON §4),
-// and the one-time gameplay hints that follow it (`tut.milk`, `tut.valor`, the WA §7.3 glyph one-shots, …).
+// src/story/tutorial.js  (owner: story) — Morning Practice, the playable tutorial (WARM_ADVENTURE_SPEC §6–§7, ON §4,
+// TT2 G2 docs/TOKENTAILS-PLAN.md §10.3), and the one-time gameplay hints that follow it (`tut.milk`, `tut.valor`, …).
 //
-// Seven lessons on the sunny practice field (meadow, `meadow_morning`), Pearl guiding from a bubble, each one ending in
-// a sticker (E.REWARD) and the next lesson 0.6 s later:
-//   move  race Pearl to the straw dummy (done within PRACTICE.bonkR of a dummy, or 10 m travelled; 3 sun sparkles)
-//   bonk  Snip–Snap–Swoosh on a dummy (slash3, or 6 dummy hits) → `tutbow`: Pearl straightens the Pink Bow (flavour; friend card)
-//   jump  hop the 1.0 m inner fence (z −87, x −20…−2) in either direction (sets flag `tut.jump.done`: the nav link)
-//   roll  tumble past Sir Sacky (8, −84)
-//   stand block Sir Wobble once            parry  parry him once (the first swing runs in 0.45 slow motion)
-//   meow  hide and seek: Pearl hides in the Very Suspicious Cow (12, −72); warmer / colder clues; Meow wakes the cow
-//         → `tutpearl`; Pearl stays and leads Clem to the height chart (StoryManager plays CS-01 there).
-// Done (or skipped: hold Pause 1 s) → flag `prologue.practice` + `tut.jump.done`.
+// Four lessons on the sunny practice field (meadow, `meadow_morning`), Pearl guiding from a bubble, each one ending in
+// a sticker (E.REWARD) and the next lesson 0.6 s later. Every lesson has a guide target (`guideTarget()`: the Pink Paw
+// trail, the coin arrow and the objective line read it):
+//   move  race Pearl to the middle dummy (0, −76) (done within PRACTICE.bonkR of a dummy, or 10 m travelled)
+//   bonk  3 hits on a dummy (slash3, or 3 dummy hits); Pearl's 2-s bark "Bow's perfect. Now bonk!" replaces `tutbow`
+//         (the bow outfit is set silently, the Pink Bow reward card stays)
+//   stand block Sir Wobble once         parry  parry him once (one drill: a stand spot 1.3 m from him; he steps toward
+//         her beyond ONBOARD.stepR; past ONBOARD.closeR the line says "Get close to Sir Wobble!"; the first swing of the
+//         parry lesson runs in 0.45 slow motion; after 3 failed parries every swing does and Kitten mode is offered)
+// Roll is an optional tip by Sir Sacky (taught for real on the first crossbow bolt, hint `tut.bolt`); Jump is taught at
+// the first hop after practice (`tut.jump`: a click / tap across a low fence hops it, or [Jump]); Meow is taught at
+// Noodle's barrel (StoryManager). The old jump / roll / meow lessons, the cow's hide and seek and `tutlook` are gone.
+// Done (or skipped: hold Pause / the Skip chip 1 s) → flag `prologue.practice` → the bell and CS-01 right there.
+// A save made mid-practice under the old 7-lesson flow resumes at the nearest new lesson (`resumeLesson`, sticker flags).
 // Prompts go out as `story:prompt { kind: 'tutorial', id: 'tutorial', textKey, step, total, progress, done, speaker,
-// say, stepDots, folded, wiggle, ok, demo }` (WA §7.5: the guide bubble; payloads without `speaker` render the old
-// card). The pure step logic (PracticeLog) and the pure guide timers (GuideClock) are unit-tested.
+// say, stepDots, folded, wiggle, ok, demo }` (WA §7.5: the guide bubble). The pure step logic (PracticeLog) and the pure
+// guide timers (GuideClock) are unit-tested.
 import { E } from '../core/events.js';
-import { PLAYER, STORY, FADE_COLOR } from '../core/config.js';
+import { PLAYER, STORY, ONBOARD } from '../core/config.js';
 import { reward } from './rewards.js';
 import { buildSunRing } from './cutscenes/rig.js';
+import { registerOnboardingStrings } from './strings.onboarding.js';
+
+registerOnboardingStrings();
 
 /**
  * Device-aware strings lookup (CONTROLS_SPEC §12): `key.touch` / `key.pad` for those devices when present, else `key`.
@@ -29,40 +36,67 @@ export function devText(ctx, key) {
   return s?.t?.(key) ?? key;
 }
 
-/** WA §7.1 lessons, in order. `guide` speaks `intro` when the lesson starts and `praise` when it is done. */
+/**
+ * fix round 2 (§10.10 #3): the in-place lessons (Bonk, Stand, Parry) have no way to walk once she is there, so the guide
+ * rings the lesson's object with lit Pink Paw prints instead (fx GuideTrail ring mode): the dummy at `dummy` m, Sir
+ * Wobble at ONBOARD.standR (the print on her side is the stand spot).
+ */
+export const RING_R = Object.freeze({ dummy: 1.0 });
+
+/** TT2 §10.3 lessons, in order. `guide` speaks `intro` when the lesson starts and `praise` when it is done. */
 export const TUTORIAL_STEPS = Object.freeze([
   { id: 'move', textKey: 'tut.move', guide: 'pearl', intro: 'pearl.race', demo: 'tap' },
-  { id: 'bonk', textKey: 'tut.bonk', guide: 'pearl', intro: 'pearl.bonk', demo: 'tap', reward: 'bonk' },
-  { id: 'jump', textKey: 'tut.jump', guide: 'pearl', intro: 'pearl.fence', demo: 'tap', reward: 'hop' },
-  { id: 'roll', textKey: 'tut.roll', guide: 'pearl', intro: 'pearl.sack', demo: 'swipe', reward: 'roll', praise: 'pearl.roll.ok' },
+  { id: 'bonk', textKey: 'tut.bonk', guide: 'pearl', intro: 'pearl.bow', demo: 'tap', reward: 'bonk' },
   { id: 'stand', textKey: 'tut.stand', guide: 'pearl', intro: 'pearl.wobble', demo: 'hold', need: 1, reward: 'stand' },
   { id: 'parry', textKey: 'tut.parry', guide: 'pearl', intro: 'pearl.parry', demo: 'tap', reward: 'parry', praise: 'pearl.parry.ok' },
-  { id: 'meow', textKey: 'tut.meow', guide: 'pearl', intro: 'pearl.hide', demo: 'tap', reward: 'found' },
 ]);
 
+/** The pre-TT2 lesson ids (7-lesson flow) → the nearest new lesson (old mid-practice saves). */
+export const OLD_LESSONS = Object.freeze({ move: 'move', bonk: 'bonk', jump: 'stand', roll: 'stand', stand: 'stand', parry: 'parry', meow: null });
+
 /**
- * Practice-field facts (§12.3) and the WA §7.1 constants. `spots` = where Pearl waits during each lesson (clear of
- * Sir Wobble's reach and the sack's swing); `hop` = her fence hop (north side → south side).
+ * Where a save resumes practice (TT2 §10.3 save compatibility). Practice progress is not saved; the lesson stickers
+ * (`sticker.<reward>`) are. Returns the index into `steps` of the first new lesson whose sticker is missing, or
+ * `steps.length` when every new lesson was already passed (old saves past the parry: practice ends at once). Pure.
+ * @param {{ getFlag?: (k: string) => any }|null} st
+ */
+export function resumeLesson(st, steps = TUTORIAL_STEPS) {
+  const f = (k) => !!st?.getFlag?.(k);
+  // old saves carry sticker.hop / .roll / .found too: anything past the bonk means the bonk lesson is done
+  const past = { bonk: f('sticker.bonk') || f('sticker.bow') || f('sticker.hop') || f('sticker.roll') || f('sticker.stand') || f('sticker.parry'),
+    stand: f('sticker.stand') || f('sticker.parry'), parry: f('sticker.parry') || f('sticker.found') };
+  let i = 0;
+  for (; i < steps.length; i++) {
+    const id = steps[i].id;
+    if (id === 'move') { if (!past.bonk) break; continue; }
+    if (!past[id]) break;
+  }
+  return i;
+}
+
+/**
+ * Practice-field facts (§12.3) and the lesson constants. `spots` = where Pearl waits during each lesson (clear of
+ * Sir Wobble's reach and the sack's swing).
  */
 export const PRACTICE = Object.freeze({
-  centre: [0, -80], half: 20.5, fenceZ: -87, fenceX: [-20, -2], sack: [8, -84], rollR: 3.4, cow: [12, -72],
-  dummies: [[-5, -76], [0, -76], [5, -76]], bonkR: 2.2, moveDist: 0, moveMax: 10, bonkFallback: 6,
-  nextDelay: 0.6, skipHold: 1.0, idleDemo: 8, chipAfter: 6, demoCycles: 2, demoCycle: 1.6, skipHintAfter: 20, introSec: 2.4,
+  centre: [0, -80], half: 20.5, fenceZ: -87, fenceX: [-20, -2], sack: [5, -85.5], rollR: 3.4, cow: [12, -72],
+  dummies: [[-5, -76], [0, -76], [5, -76]], bonkR: 2.2, moveDist: 0, moveMax: 10, bonkFallback: 3,
+  nextDelay: 0.6, skipHold: 1.0, idleDemo: 6, chipAfter: 6, demoCycles: 2, demoCycle: 1.6, skipHintAfter: 0, introSec: 0.3,
   parrySlowMo: Object.freeze({ scale: 0.45, firstOnly: true, maxReal: 2.0, windup: 0.9 }),
-  bowScene: 'tutbow', cowId: 'cow_practice', boulder: 'practice_boulder',
-  cowClue: Object.freeze({ far: 14, farT: 10, near: 8, meowR: 14 }),
+  cowId: 'cow_practice', boulder: 'practice_boulder',
   pearl: Object.freeze({ speed: 3.0, behind: 1.8, side: 1.4 }),
-  spots: Object.freeze({ move: [1.7, -74.9], bonk: [2.4, -74.4], jump: [-6, -88.6], roll: [5.2, -81.8], stand: [-2.8, -82.8], parry: [-2.8, -82.8] }),
-  hop: Object.freeze([[-6, -85.9], [-6, -88.3]]),
+  spots: Object.freeze({ move: [1.7, -74.9], bonk: [2.4, -74.4], stand: [-1.9, -83.6], parry: [-1.9, -83.6] }),
+  // the Sir Wobble drill: Sir Wobble's home, the stand spot ONBOARD.standR north of him
+  wobble: ONBOARD.wobble, stand: Object.freeze([ONBOARD.wobble[0], ONBOARD.wobble[1] + ONBOARD.standR]),
   // a side flip only counts as a hop if she was airborne (or pressed Jump) within this many seconds of it
   hopWindow: 0.6,
-  // the 3 sun sparkles run from the title spot to the dummy's sun ring (the look shot frames both ends)
+  // the 3 sun sparkles run from the title spot to the dummy's sun ring
   sparkleLine: Object.freeze([[0.4, -67.4], [0.1, -73.4]]), sparkles: 3,
-  lookScene: 'tutlook', lookFrom: 7, sunRing: Object.freeze({ r: 0.95, color: '#FFD57A', pulse: 1.4 }),
-  chart: Object.freeze([-6, -67.3]), chartR: 2.5, chartPath: Object.freeze([[9, -72], [4, -70], [-1, -68.5], [-4.6, -67.6]]),
-  wipe: 1.2,
-  // where Pearl pops out when hide-and-seek ends unfound (skip): the cow's lee, tutpearl's HIDE spot
-  found: Object.freeze([12.3, -73.9]),
+  sunRing: Object.freeze({ r: 0.95, color: '#FFD57A', pulse: 1.4 }),
+  // the height chart (CS-01 plays in place now; kept for the old chart trigger and quest data)
+  chart: Object.freeze([-6, -67.3]), chartR: 2.5,
+  // Sir Sacky's optional roll tip: once, within this many metres of the sack during practice
+  sackTipR: 3.2,
 });
 
 /** Telegraph kind → its WA §7.3 one-shot hint key (story listens for `telegraph:first`). */
@@ -256,7 +290,15 @@ export const HINTS = Object.freeze([
   { key: 'tut.zoom', on: E.ARENA_LOCK, when: (ctx, p) => !!ctx.state?.getFlag?.('prologue.done') && ctx.cam?.isIso !== false && !p?.soft },
   { key: 'tut.talk', on: E.INTERACT_AVAILABLE, when: (ctx, p) => p?.prompt === 'prompt.talk' || p?.target?.kind === 'npc' },
   { key: 'tut.bones', on: E.ENEMY_SPAWNED, when: (ctx, p) => String(p?.enemy?.def?.id ?? '').startsWith('bonehead') },
+  // TT2 §10.3: roll is taught for real on the first crossbow bolt aimed at her (the practice roll is an optional tip)
+  { key: 'tut.bolt', on: E.TELEGRAPH, when: (ctx, p) => !!ctx.state?.getFlag?.('prologue.done') && isXbow(p?.actor) },
 ]);
+
+/** Is `a` a crossbow rat (the bolt hint)? Pure. */
+export function isXbow(a) {
+  const id = String(a?.def?.id ?? a?.type ?? '');
+  return id.startsWith('rat_xbow');
+}
 
 const ID = 'tutorial';
 /** Pearl's praise bubble: shown this long after the mint ✓ (ui shows the ✓ for 0.5 s), and it adds this much to the gap. */
@@ -271,22 +313,24 @@ export class Tutorial {
     this.parryFails = new ParryFails();
     this.active = false;
     this.waitT = 0;              // delay before the next prompt shows
-    this.pending = false;        // a practice scene (tutbow / tutpearl) is playing / queued
+    this.pending = false;        // a practice beat is playing / queued (kept for the old scene hand-offs)
     this.skipHeld = 0;
     this._last = null;           // last player pos sample (moved)
     this._talkScan = 0;          // tut.talk proximity scan timer
     this._shown = null;          // index of the lesson whose prompt is up
-    this._intro = false;         // P0 "Knighting Day is TOMORROW!" shown
-    this._side = 0;              // last fence side (jump lesson; 0 once she leaves the span)
-    this._airT = -Infinity;      // game time she was last airborne / pressed Jump (jump lesson)
+    this._resumed = false;       // the old-save resume ran for this practice
+    this._side = 0;              // last inner-fence side (the post-practice hop)
+    this._airT = -Infinity;      // game time she was last airborne / pressed Jump
     this._prog = 0;              // last progress sent (wiggle on change)
     this._slowDone = false;      // the first-swing parry slow motion ran
+    this._slowAlways = false;    // 3 failed parries: every swing of the drill runs slowly
     this._carryStep = -1;        // lesson index the guard carry-over was sampled for
     this._carry = false;         // parry lesson: the guard has been held without a break since the lesson began
     this._letGoSaid = false;     // Pearl's one-time "let go, then tap" nudge
-    this._cow = { farT: 0, said: new Set() };
-    this._wipeT = null;          // cancels the pending hide-and-seek wipe (meow lesson)
-    this._hidden = false;        // Pearl is hiding (despawned, the cow wears her tail) until found / practice ends
+    this._far = null;            // the drill: is she past ONBOARD.closeR from Sir Wobble (the prompt says "Get close")
+    this._sackTip = false;       // Sir Sacky's optional roll tip shown
+    this._skipToasted = false;   // the "hold to skip" toast (once per practice, from second 0)
+    this._hopScan = 0;           // post-practice hop tip scan timer
     this._hintT = 0;             // seconds left on a post-prologue hint bubble
     this._gameT = 0;
     this._offs = [];
@@ -313,12 +357,8 @@ export class Tutorial {
       else if (h.attacker === p && isMochiLock(h.target) && !this.ctx.state?.getFlag?.('meadow.mochi')) this.hint('tut.bright', { force: true });
     });
     on(E.PLAYER_PARRY, (p) => { if (p?.attacker?.kind === 'wobble_knight') this._fact({ type: 'parry' }); });
-    on(E.PLAYER_JUMP, () => { this._airT = this._gameT; });
-    on(E.PLAYER_DODGE, () => {
-      const p = this.ctx.player, [sx, sz] = PRACTICE.sack;
-      this._fact({ type: 'dodge', nearSack: !!p && Math.hypot(p.pos.x - sx, p.pos.z - sz) <= PRACTICE.rollR });
-    });
-    on(E.PLAYER_MEOW, (m) => this._onMeow(m));
+    on(E.PLAYER_JUMP, () => { this._airT = this._gameT; this._onJump(); });
+    on(E.PLAYER_DODGE, () => this._onDodge());
     on(E.TELEGRAPH, (t) => this._onTelegraph(t));
     on(E.TELEGRAPH_FIRST, (t) => { const k = GLYPH_HINTS[t?.kind]; if (k) this.hint(k); });
     on(E.LEVEL_LOADED, () => { this.reset(); this._clickT = 0; });
@@ -331,13 +371,11 @@ export class Tutorial {
   reset() {
     this.log = new PracticeLog();
     this.clock.reset();
+    this.parryFails = new ParryFails();
     this.active = false; this.waitT = 0; this.pending = false; this.skipHeld = 0;
-    this._last = null; this._shown = null; this._intro = false; this._side = 0; this._airT = -Infinity; this._prog = 0;
-    this._carryStep = -1; this._carry = false; this._letGoSaid = false;
-    this._cow = { farT: 0, said: new Set() };
-    if (this._wipeT) { try { this._wipeT(); } catch { /* gone */ } }
-    this._wipeT = null; this._hidden = false;
-    this._looked = false;
+    this._last = null; this._shown = null; this._resumed = false; this._side = 0; this._airT = -Infinity; this._prog = 0;
+    this._carryStep = -1; this._carry = false; this._letGoSaid = false; this._far = null; this._sackTip = false;
+    this._slowDone = false; this._slowAlways = false; this._skipToasted = false;
     this._sunRing(false);
   }
 
@@ -348,25 +386,29 @@ export class Tutorial {
     this._clickTip(dt);
     this._talkTip(dt);
     this._hintTick(dt);
+    this._hopTip(dt);
     if (!this.eligible() || !p) { if (this.active) this._hide(true); this.active = false; return; }
     if (this.story?.isPlaying || ctx.game?.mode === 'menu') return;
     if (!this.active) {
       if (!inPractice(p.pos.x, p.pos.z)) return;
       this.active = true; this._shown = null;
       this._last = p.pos.clone();
+      // a save made mid-practice (also under the old 7-lesson flow) resumes at the nearest new lesson
+      if (!this._resumed) {
+        this._resumed = true;
+        const i = resumeLesson(ctx.state, this.log.steps);
+        if (i > 0) { this.log.i = Math.min(i, this.log.total); if (this.log.i >= this.log.total) this.log.finished = true; }
+      }
+      if (this.log.finished) { this._end(false); return; }
       this._pearlArrive();
-      // P0: Pearl bounces in front of her with the big news (no pause, no letterbox), then the first lesson
-      if (!this._intro && this.log.i === 0) {
-        this._intro = true;
-        this._emit({ textKey: null, say: 'pearl.start', step: 'intro', action: null, demo: null, target: null });
-        this.waitT = PRACTICE.introSec;
-      } else this.waitT = 0.6;
+      this.waitT = PRACTICE.introSec;
+      // TT2: the skip is offered from second 0 (the Skip chip, and this toast once), never only after 20 s
+      if (!this._skipToasted) { this._skipToasted = true; ctx.bus.emit(E.TOAST, { key: 'tut.skip', icon: 'hint' }); }
     }
     this._sample(dt, p);
 
-    // hold Pause 1 s → skip practice (the hint shows only after 20 s on one lesson, WA §7.2)
-    const input = ctx.input;
-    if (input?.down?.('pause')) {
+    // hold Pause / the Skip chip 1 s → skip practice
+    if (this.story?.skipPressed?.() ?? ctx.input?.down?.('pause')) {
       if (this.skipHeld === 0) this._skipLabel = devText(ctx, 'tut.skip');   // resolved once per hold (device-aware)
       this.skipHeld += dt;
       this.story?.cinema?.skip(Math.min(1, this.skipHeld / PRACTICE.skipHold), this._skipLabel);
@@ -387,32 +429,91 @@ export class Tutorial {
       if (this._last) { this.log.note({ type: 'moved', d: Math.hypot(p.pos.x - this._last.x, p.pos.z - this._last.z) }); this._last.copy(p.pos); }
       this.log.note({ type: 'near', d: nearestDummy(p.pos.x, p.pos.z) });
     } else if (this._last) this._last.copy(p.pos);
-    if (id === 'jump') {
-      // only a real hop counts: walking round the fence end leaves the span (side → 0), and a flip needs air time
-      if (p.onGround === false) this._airT = this._gameT;
-      const s = fenceSide(p.pos.x, p.pos.z);
-      if (fenceHopped(this._side, s, this._gameT - this._airT)) this.log.note({ type: 'crossed' });
-      this._side = s;
-    }
-    if (id === 'meow') this._cowClues(dt, p);
     if (id === 'parry') {
       // a guard still up from the Stand lesson is a carry-over, not a timing miss; it ends the first frame it drops
       if (this._carryStep !== this.log.i) { this._carryStep = this.log.i; this._carry = !!p.guarding; }
       else if (!p.guarding) this._carry = false;
     }
-    const L = this.ctx.levels?.current;
-    if (L?.critter?.(PRACTICE.cowId)?.woke) this.log.note({ type: 'cow' });
+    if (id === 'stand' || id === 'parry') {
+      // the drill: past ONBOARD.closeR the bubble says "Get close to Sir Wobble!" (he steps toward her past stepR)
+      const far = this.wobbleDist() > ONBOARD.closeR;
+      if (this._shown === this.log.i && far !== this._far) { this._far = far; this._emit(far ? { textKey: 'onb.wobble.close' } : {}); }
+    }
+    // Sir Sacky: rolling past him is an optional tip (once), never a lesson
+    if (!this._sackTip && (id === 'stand' || id === 'parry' || id === 'bonk')) {
+      const [sx, sz] = PRACTICE.sack;
+      if (Math.hypot(p.pos.x - sx, p.pos.z - sz) <= PRACTICE.sackTipR) {
+        this._sackTip = true;
+        const pearl = this._pearl(false);
+        if (pearl) this.story?.barks?.say?.(pearl, 'pearl.sack.tip', 'pearl', 2.2);
+      }
+    }
+  }
+
+  /** Distance from her to Sir Wobble (his live position; his home when he is not loaded). */
+  wobbleDist() {
+    const p = this.ctx.player, w = this.ctx.actors?.get?.('wobble_knight');
+    if (!p) return Infinity;
+    const x = w?.pos?.x ?? PRACTICE.wobble[0], z = w?.pos?.z ?? PRACTICE.wobble[1];
+    return Math.hypot(p.pos.x - x, p.pos.z - z);
+  }
+
+  /** The drill's stand spot: ONBOARD.standR from Sir Wobble, on the side facing the field (north). */
+  standSpot() {
+    const w = this.ctx.actors?.get?.('wobble_knight');
+    const x = w?.pos?.x ?? PRACTICE.wobble[0], z = w?.pos?.z ?? PRACTICE.wobble[1];
+    return [x, z + ONBOARD.standR];
+  }
+
+  /**
+   * The current lesson's guide target (TT2 §10.7 contract; StoryManager.guideTarget asks during practice):
+   * `{ id, x, z, arriveR, textKey, kind: 'lesson', speaker }`, or null when practice is not running.
+   */
+  guideTarget() {
+    if (!this.eligible()) return null;
+    const s = this.log.step;
+    if (!s) return null;
+    const P = PRACTICE;
+    if (s.id === 'move' || s.id === 'bonk') {
+      // (fix round 2: Move ends near ANY dummy and a hit on any dummy counts, so Bonk rings the dummy she is at)
+      let [x, z] = P.dummies[1];
+      const p = this.ctx.player?.pos;
+      if (s.id === 'bonk' && p) {
+        let bd = Infinity;
+        for (const d of P.dummies) { const k = Math.hypot(p.x - d[0], p.z - d[1]); if (k < bd) { bd = k; [x, z] = d; } }
+      }
+      // (fix round 2: Bonk arrives where Move did, bonkR: she starts it in place, so the ring shows from its first frame)
+      const t = { id: `tut.${s.id}`, x, z, arriveR: P.bonkR, textKey: s.textKey, kind: 'lesson', speaker: s.guide ?? 'pearl' };
+      // fix round 2 (§10.10 #3): an in-place lesson rings its object with lit prints (fx GuideTrail ring mode), her side last
+      if (s.id === 'bonk') t.ring = { x, z, r: RING_R.dummy };
+      return t;
+    }
+    const [x, z] = this.standSpot();
+    const far = this.wobbleDist() > ONBOARD.closeR;
+    // arrival must also mean "close enough for the drill" (closeR), or the guide hides while the line says "Get close".
+    // Once she is within closeR she has arrived wherever she stands: Sir Wobble hops to keep his distance and the stand
+    // spot moves with him, so a fixed 0.25 m circle could stay just out of reach (Q1 portrait bot: 0.29 m, wobbleDist 1.01).
+    const base = Math.max(0.2, ONBOARD.closeR - ONBOARD.standR - 0.05), p = this.ctx.player?.pos;
+    const arriveR = !far && p ? Math.max(base, Math.hypot(p.x - x, p.z - z) + 0.05) : base;
+    const w = this.ctx.actors?.get?.('wobble_knight');
+    return { id: `tut.${s.id}`, x, z, arriveR, textKey: far ? 'onb.wobble.close' : s.textKey, kind: 'lesson', speaker: s.guide ?? 'pearl',
+      // the badge sits on Wobble's body: a tap on it is a move to the stand spot, not an engage order (beacon.js)
+      tapMove: true,
+      // fix round 2 (§10.10 #3): the drill rings Sir Wobble at the stand distance; the print on her side is the stand spot
+      ring: { x: w?.pos?.x ?? P.wobble[0], z: w?.pos?.z ?? P.wobble[1], r: ONBOARD.standR } };
   }
 
   _fact(f) {
-    // facts count during the short pause between prompts too (a roll right after the bonk still lands); the step
-    // only completes once its prompt is up (update()).
+    // facts count during the short pause between prompts too; the step only completes once its prompt is up (update())
     if ((f.type === 'parryFail' || f.type === 'block') && this.active && this.log.step?.id === 'parry') {
       // a hit blocked by a guard held since the lesson began is the Stand lesson's carry-over, not a missed parry:
       // no Kitten-mode count, and Pearl says once how to do it instead
       const held = f.type === 'block' && this._heldCarry();
       if (held) { f = { type: 'block', held: true }; this._letGo(); }
-      else if (this.parryFails.fail()) this._offerKitten();
+      else {
+        if (this.parryFails.fail()) this._offerKitten();
+        if (this.parryFails.failed >= this.parryFails.cfg.failedParries) this._slowAlways = true;
+      }
     }
     if (!this.active || this.pending) return;
     this.log.note(f);
@@ -426,9 +527,10 @@ export class Tutorial {
    */
   _emit(o = {}) {
     const s = this.log.step, total = this.log.total, step = Math.min(total, this.log.i + 1);
+    const far = (s?.id === 'stand' || s?.id === 'parry') && this._far;
     this.ctx.bus.emit(E.PROMPT, {
       kind: 'tutorial', id: ID, action: s ? DEMO_ACTION[s.id] ?? null : null, hold: 0,
-      textKey: s?.textKey ?? null, step, total, progress: this.log.progress(), done: false,
+      textKey: far ? 'onb.wobble.close' : s?.textKey ?? null, step, total, progress: this.log.progress(), done: false,
       speaker: s?.guide ?? 'pearl', say: s?.intro ?? null, stepDots: this.log.dots(),
       demo: s?.demo ?? null, target: s ? this._demoTarget(s) : null, chipAfter: PRACTICE.chipAfter, idleDemo: PRACTICE.idleDemo,
       ...o,
@@ -439,33 +541,38 @@ export class Tutorial {
     const s = this.log.step;
     if (!s) return;
     this._shown = this.log.i; this._prog = 0;
+    this._far = (s.id === 'stand' || s.id === 'parry') ? this.wobbleDist() > ONBOARD.closeR : null;
     this.clock.reset();
     this._emit();
     this._stepBegin(s);
   }
 
-  /** Lesson start: Pearl goes to her spot, the per-lesson props (sun ring, sparkles, the fence side). */
+  /** Lesson start: Pearl goes to her spot, the per-lesson props (sun ring, sparkles, the bow). */
   _stepBegin(s) {
-    const ctx = this.ctx, p = ctx.player;
-    this._side = p ? fenceSide(p.pos.x, p.pos.z) : 0;
+    const ctx = this.ctx;
     if (s.id === 'move') {
       this._pearlTo(PRACTICE.spots.move);
-      // 3 sun sparkles on the way (+1 fish each; the pickup pitch ladder plays them up) and the sun ring at the dummy
+      // 3 sun sparkles on the way (+1 fish each) and the sun ring at the dummy
       try { ctx.levels?.current?.pickups?.fishLine?.(PRACTICE.sparkleLine[0], PRACTICE.sparkleLine[1], PRACTICE.sparkles, 'practice'); } catch (e) { console.warn(e); }
       this._sunRing(true);
-      // the dummy is off-screen from the title spot (iso yaw π, 12 m south): a short look shot frames her, Pearl running
-      // ahead and the sun ring together, then follow again (once per practice; no look when she starts near it)
-      if (p && !this._looked && nearestDummy(p.pos.x, p.pos.z) > PRACTICE.lookFrom && typeof this.story?.play === 'function') {
-        this._looked = true;
-        this.pending = true;
-        Promise.resolve(this.story.play(PRACTICE.lookScene)).catch(() => {}).finally(() => { this.pending = false; this.clock.reset(); });
-      }
-    } else if (s.id === 'jump') this._pearlHop();
-    else if (s.id === 'meow') this._hideAndSeek();
-    else if (PRACTICE.spots[s.id]) this._pearlTo(PRACTICE.spots[s.id]);
+    } else if (s.id === 'bonk') {
+      this._pearlTo(PRACTICE.spots.bonk);
+      this._bow();
+    } else if (PRACTICE.spots[s.id]) this._pearlTo(PRACTICE.spots[s.id]);
   }
 
-  /** Progress wiggles the chip (one re-send per change); the ghost paw's ground spot; the skip hint after 20 s. */
+  /**
+   * TT2: the old `tutbow` scene is a 2-s Pearl bark now (her lesson intro "Bow's perfect. Now bonk!"). The bow outfit
+   * is set silently (Clem wears the bow from the first frame anyway) and the Pink Bow reward card stays.
+   */
+  _bow() {
+    const ctx = this.ctx;
+    try { ctx.player?.setOutfit?.('tunic_bow'); } catch { /* optional */ }
+    if (ctx.state?.getFlag?.('sticker.bow')) return;
+    setTimeoutish(ctx, ONBOARD.bowBark, () => reward(ctx, 'friend', 'bow'));
+  }
+
+  /** Progress wiggles the chip (one re-send per change); the ghost paw's ground spot. */
   _guide(dt) {
     const pr = this.log.progress();
     if (pr > this._prog + 1e-6) { this._prog = pr; this.clock.poke(); this._emit(); }
@@ -474,14 +581,11 @@ export class Tutorial {
       // ui's bubble plays the paw itself on the same clock; fx marks the world spot it taps (fx.W5, optional)
       try { this.ctx.fx?.ghostSpot?.(this._demoTarget(this.log.step)); } catch { /* fx optional */ }
     }
-    // key only: ui resolves it device-aware (tut.skip.touch on a phone)
-    if (ev.skipHint) this.ctx.bus.emit(E.TOAST, { key: 'tut.skip', icon: 'hint' });
   }
 
   /** World point the ghost paw demonstrates on for a lesson ([x, y, z]; y from the ground). */
   _demoTarget(s) {
-    const P = PRACTICE, xz = s?.id === 'move' || s?.id === 'bonk' ? P.dummies[1] : s?.id === 'jump' ? [-6, P.fenceZ]
-      : s?.id === 'roll' ? P.sack : s?.id === 'meow' ? P.cow : null;
+    const P = PRACTICE, xz = s?.id === 'move' || s?.id === 'bonk' ? P.dummies[1] : s?.id === 'stand' || s?.id === 'parry' ? this.standSpot() : null;
     const p = this.ctx.player;
     const x = xz ? xz[0] : p?.pos.x ?? 0, z = xz ? xz[1] : p?.pos.z ?? 0;
     return [x, this.ctx.physics?.heightAt?.(x, z) ?? p?.pos.y ?? 0, z];
@@ -489,7 +593,6 @@ export class Tutorial {
 
   _stepDone() {
     const s = this.log.step, ctx = this.ctx;
-    if (s?.id === 'jump') this._jumpDone();                          // CONTROLS_SPEC §12 story 2
     if (s?.id === 'move') this._sunRing(false);
     // the chip turns mint with a ✓ (ui, 0.5 s), then the sticker; Pearl's praise line gets its own short bubble
     this._emit({ done: true, ok: true, progress: 1, stepDots: { n: this.log.i + 1, of: this.log.total, half: false } });
@@ -505,28 +608,10 @@ export class Tutorial {
         ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: ID, action: null, hold: 0, textKey: null, step: 'praise', total: this.log.total, progress: 1, done: false, speaker: guide, say: praise, stepDots: dots });
       });
     }
-    if (s.id === 'bonk') {
-      this._releaseDummy();
-      this._bonkPop();
-      this.pending = true;
-      this.log.advance();
-      Promise.resolve(this.story?.play?.(PRACTICE.bowScene)).finally(() => { this.pending = false; this.waitT = PRACTICE.nextDelay; });
-      return;
-    }
+    if (s.id === 'bonk') { this._releaseDummy(); this._bonkPop(); }
     if (s.id === 'parry') this._comicPop('PARRY!');
-    if (s.id === 'meow') {
-      this.pending = true;
-      this.log.advance();
-      this._hide(false);
-      // a Meow inside the wipe's first half (a quick ⚔-free tap right by the cow on touch) used to leave the wipe timer
-      // running: it then despawned the Pearl `tutpearl` had just spawned, her face / clip waits hung to their 30 s
-      // timeouts and practice never ended. Finish the hiding now, before the scene spawns her in the cow's lee.
-      if (this._wipeT) { const off = this._wipeT; this._wipeT = null; off(); this._wipeNow(0.2); }
-      Promise.resolve(this.story?.play?.('tutpearl')).finally(() => this._end(false));
-      return;
-    }
     this.log.advance();
-    this.waitT = PRACTICE.nextDelay + extra;
+    this.waitT = PRACTICE.nextDelay + (this.log.finished ? 0 : extra);
     if (this.log.finished) this._end(false);
   }
 
@@ -617,102 +702,70 @@ export class Tutorial {
     return Promise.resolve(a.moveTo(xz, speed)).then(() => { try { a.face?.(this.ctx.player ?? 0, 0.3); } catch { /* gone */ } });
   }
 
-  /** Jump lesson: Pearl hops the fence first and waves from the far side. */
-  _pearlHop() {
-    const a = this._pearl(), [h0, h1] = PRACTICE.hop;
-    if (!a) return;
-    Promise.resolve(this._pearlTo(h0)).then(() => {
-      if (!a.pos || this.log.step?.id !== 'jump') return;
-      try { a.play?.('jump', { once: true }); } catch { /* optional */ }
-      a.pos.x = h1[0]; a.pos.z = h1[1];
-      a.pos.y = this.ctx.physics?.heightAt?.(h1[0], h1[1]) ?? a.pos.y;
-      a.snap?.();
-      try { a.face?.(this.ctx.player ?? 0, 0.3); a.play?.('wave', { once: true }); } catch { /* optional */ }
-    });
+  /** Rolling near Sir Sacky in practice: an optional sticker, never a lesson (once per save). */
+  _onDodge() {
+    const p = this.ctx.player, [sx, sz] = PRACTICE.sack;
+    if (!this.active || !p || this.ctx.state?.getFlag?.('sticker.roll')) return;
+    if (Math.hypot(p.pos.x - sx, p.pos.z - sz) <= PRACTICE.rollR) this.reward('roll');
   }
 
-  /** Meow lesson (WA §7.4): a 1.2 s cream wipe, Pearl gone; the cow shows a tiny pink tail. */
-  _hideAndSeek() {
-    const ctx = this.ctx, w = PRACTICE.wipe;
-    this.story?.cinema?.apply?.({ fade: { to: FADE_COLOR, alpha: 1, dur: w * 0.35 } });
-    this._wipeT = setTimeoutish(ctx, w * 0.45, () => { this._wipeT = null; this._wipeNow(w * 0.55); });
-    this._cow = { farT: 0, said: new Set() };
-  }
-
-  /** The wipe's middle: the guide Pearl goes into hiding (despawned), the cow shows her tail, the cream fades out. */
-  _wipeNow(fadeOut) {
-    const ctx = this.ctx, a = this._pearl(false);
-    if (a) { try { ctx.companions?.despawn?.(a); } catch { /* gone */ } }
-    this._hidden = true;
-    try { ctx.levels?.current?.critter?.(PRACTICE.cowId)?.setTail?.('pearl'); } catch { /* world optional */ }
-    this.story?.cinema?.apply?.({ fade: { alpha: 0, dur: fadeOut } });
-  }
-
+  // ------------------------------------------------------------------ jump, taught at the first hop after practice
   /**
-   * Hide-and-seek is over (practice ended or skipped): the cow loses Pearl's pink tail and, when nobody found her
-   * (`tutpearl` did not play), Pearl pops out of the cow's lee with "Found me anyway!" so toChart has a guide to run
-   * ahead. Idempotent; a no-op outside the meow lesson.
+   * TT2 §10.3: after practice, the first time her order path takes a hop link (or she stands by a level nav link, the
+   * practice fence on the way to the barn) the jump tip shows once; her first hop there (an order hop: click / tap
+   * across the fence, or [Jump]) sets `tut.jump.done` and the Fence Hopper sticker.
    */
-  _unhide() {
-    const ctx = this.ctx, wiping = !!this._wipeT;
-    if (wiping) { try { this._wipeT(); } catch { /* gone */ } this._wipeT = null; this.story?.cinema?.apply?.({ fade: { alpha: 0, dur: 0.3 } }); }
-    if (!this._hidden && !wiping) return;
-    this._hidden = false;
-    try { ctx.levels?.current?.critter?.(PRACTICE.cowId)?.setTail?.(null); } catch { /* world optional */ }
-    if (this._pearl(false) || typeof ctx.companions?.spawnNpc !== 'function') return;
-    const [x, z] = PRACTICE.found, p = ctx.player;
-    try {
-      const f = p ? Math.atan2(p.pos.x - x, p.pos.z - z) : 0;
-      const a = ctx.companions.spawnNpc('pearl', [x, 0, z], f);
-      if (!a) return;
-      a.setScripted?.(true);
-      try { a.play?.('jump', { once: true }); } catch { /* optional */ }
-      ctx.fx?.burst?.('sparkle', a, { count: 8, color: '#FFD2DE' });
-      this.story?.barks?.say?.(a, 'tut.pearl.anyway', 'pearl', 2.2);
-    } catch (e) { console.warn('[story] pearl respawn failed', e); }
+  _hopTip(dt) {
+    if ((this._hopScan -= dt) > 0) return;
+    this._hopScan = 0.25;
+    const ctx = this.ctx, st = ctx.state, p = ctx.player;
+    if (!p || !st?.getFlag?.('prologue.practice') || st.getFlag('tut.jump.done') || st.getFlag('seen.tut.jump')) return;
+    if (ctx.game?.mode !== 'play' || this.story?.isPlaying) return;
+    if (this._nearHop(p, 3.0)) this.hint('tut.jump', { force: true });
   }
 
-  /** Warmer / colder: the cow's clue bubbles (WA §7.4), each once. */
-  _cowClues(dt, p) {
-    const C = PRACTICE.cowClue, [cx, cz] = PRACTICE.cow, d = Math.hypot(p.pos.x - cx, p.pos.z - cz);
-    const c = this._cow;
-    if (d > C.far) {
-      c.farT += dt;
-      if (c.farT >= C.farT && !c.said.has(1)) {
-        this._cowSay(1);
-        try { this.ctx.audio?.play3D?.('cat/meow_baby_01', { x: cx, y: p.pos.y, z: cz }, { vol: 0.7 }); } catch { /* optional */ }
-      }
-    } else c.farT = 0;
-    if (d < C.near && !c.said.has(2)) this._cowSay(2);
+  /** Is she next to a hop: an order path waypoint that is a link, or within `r` m of a level nav link end? */
+  _nearHop(p, r) {
+    const path = p.orders?.path, wp = p.orders?.wp ?? 0;
+    if (Array.isArray(path)) for (let i = wp; i < Math.min(path.length, wp + 3); i++) {
+      const w = path[i];
+      if (w?.link && w.link !== 'bounce' && Math.hypot(w.x - p.pos.x, w.z - p.pos.z) <= r + 2) return true;
+    }
+    for (const l of this.ctx.levels?.current?.navLinks ?? []) {
+      for (const e of [l?.a, l?.b]) if (Array.isArray(e) && Math.hypot(e[0] - p.pos.x, e[1] - p.pos.z) <= r) return true;
+    }
+    // the practice field's low inner fence (meadow): right by it, with the guide target on the other side
+    if (this.ctx.levels?.current?.id === 'meadow') {
+      const side = fenceSide(p.pos.x, p.pos.z), tg = this.story?.guideTarget?.();
+      if (side && Math.abs(p.pos.z - PRACTICE.fenceZ) <= r * 0.8 && tg && fenceSide(tg.x, tg.z) === -side) return true;
+    }
+    return false;
   }
 
-  _onMeow(m) {
-    if (!this.active || this.log.step?.id !== 'meow') return;
-    const p = this.ctx.player, pos = m?.position ?? p?.pos;
-    if (!pos) return;
-    if (Math.hypot(pos.x - PRACTICE.cow[0], pos.z - PRACTICE.cow[1]) <= PRACTICE.cowClue.meowR) this._cowSay(3);
-  }
-
-  _cowSay(n) {
-    const c = this._cow;
-    if (c.said.has(n)) return;
-    c.said.add(n);
-    const cow = this.ctx.levels?.current?.critter?.(PRACTICE.cowId);
-    if (cow) this.story?.barks?.say?.(cow, `tut.cow.${n}`, 'cow', 2.6);
+  _onJump() {
+    const ctx = this.ctx, st = ctx.state, p = ctx.player;
+    if (!p || !st?.getFlag?.('prologue.practice') || st.getFlag('tut.jump.done')) return;
+    const hop = !!p.orders?._hop || this._nearHop(p, 3.0);
+    if (!hop) return;
+    this._jumpDone();
+    if (!st.getFlag('sticker.hop')) this.reward('hop');
   }
 
   // ------------------------------------------------------------------ parry slow motion, the kitten offer
-  /** The first Sir Wobble swing of the parry lesson runs at 0.45 time scale from the glint to the impact. */
+  /**
+   * Sir Wobble's swings in the parry lesson: the first one runs at 0.45 time scale from the glint to the impact; after
+   * 3 failed parries every one does (and Kitten mode was offered).
+   */
   _onTelegraph(t) {
     const S = PRACTICE.parrySlowMo;
-    if (!this.active || this.log.step?.id !== 'parry' || (S.firstOnly && this._slowDone)) return;
+    if (!this.active || this.log.step?.id !== 'parry') return;
     if (t?.actor?.kind !== 'wobble_knight') return;
+    if (S.firstOnly && this._slowDone && !this._slowAlways) return;
     this._slowDone = true;
     const real = Math.min(S.maxReal, (t.duration ?? t.windup ?? S.windup) / S.scale);
     try { this.ctx.game?.slowMo?.(S.scale, real); } catch { /* optional */ }
   }
 
-  /** The 3rd failed parry in practice: ui offers Kitten mode from Pearl's bubble (ui keeps the once-per-save flag). */
   /** Parry lesson: is the guard still the unbroken one from before the lesson? (sampled now if _sample has not run yet) */
   _heldCarry() {
     const p = this.ctx.player;
@@ -729,6 +782,7 @@ export class Tutorial {
     this._emit({ say: 'pearl.parry.letgo' });
   }
 
+  /** The 3rd failed parry in practice: ui offers Kitten mode from Pearl's bubble (ui keeps the once-per-save flag). */
   _offerKitten() {
     const ctx = this.ctx, st = ctx.state;
     if (st?.getFlag?.('seen.offer.kitten') || (st?.difficulty ?? 'knight') !== 'knight' || ctx.params?.test) return;
@@ -748,14 +802,14 @@ export class Tutorial {
     } catch (e) { console.warn(e); }
   }
 
-  /** Flag `tut.jump.done` through story.flag (emits story:flag, so physics re-evaluates the practice-fence nav link). */
+  /** Flag `tut.jump.done` through story.flag (emits story:flag, so physics re-evaluates gated nav links). */
   _jumpDone() {
     const ctx = this.ctx;
     if (ctx.state?.getFlag?.('tut.jump.done')) return;
     if (this.story?.flag) this.story.flag('tut.jump.done', true); else ctx.state?.setFlag?.('tut.jump.done', true);
   }
 
-  /** Skip the rest of practice (hold Pause 1 s, or ui's menu). */
+  /** Skip the rest of practice (hold Pause / the Skip chip 1 s, or ui's menu). */
   skip() {
     if (!this.eligible()) return;
     this._end(true);
@@ -769,14 +823,14 @@ export class Tutorial {
     this._sunRing(false);
     this._hide(true);
     if (!ctx.state?.getFlag?.('prologue.practice')) this.story?.flag?.('prologue.practice', true);
-    this._jumpDone();                                                // practice over: the fence link opens too
     const dots = skipped ? { n: this.log.dots().n, of: this.log.total, half: false } : { n: this.log.total, of: this.log.total, half: false };
-    this._unhide();                                                  // meow lesson cut short: Pearl back, the cow's tail off
     if (was && !quiet) {
-      ctx.bus.emit(E.TOAST, { key: skipped ? 'tut.skipped' : 'tut.done', icon: 'hint' });
+      // (a finished practice says nothing more: the parry praise and Pearl's bell bubble cover it; a toast here only
+      // surfaced after CS-01 / CS-02)
+      if (skipped) ctx.bus.emit(E.TOAST, { key: 'tut.skipped', icon: 'hint' });
       ctx.bus.emit(E.SAVE_REQUEST, {});
     }
-    if (was) this.story?.toChart?.({ dots });                        // P8: the bell rings, Pearl runs to the chart
+    if (was) this.story?.toChart?.({ dots });                        // the bell rings, CS-01 plays right here
   }
 
   _hide(clear) {

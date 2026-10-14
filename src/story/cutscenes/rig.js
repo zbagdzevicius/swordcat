@@ -189,9 +189,12 @@ export function beside(a, side = 0.5, back = 0.3) {
   return [x + Math.cos(f) * side - Math.sin(f) * back, z - Math.sin(f) * side - Math.cos(f) * back];
 }
 
+/** Token Tails parchment for cutscene signs (docs/TOKENTAILS-PLAN.md §10.4): gradient top → bottom, maroon ink. */
+export const SIGN_LOOK = Object.freeze({ top: '#F7E6B8', bottom: '#E9CF8F', ink: '#4A1D08', edge: '#FF7AA2', font: "'Nunito', system-ui, sans-serif", weight: 800 });
+
 /**
- * Pearl's hand-drawn "HELP (please)" sign (CS-02, ON §5.3): a 128 × 64 canvas on a little stick, cocoa ink on cream.
- * Built by the cutscene `spawn` step (`build`), disposed with the scene.
+ * Pearl's hand-drawn "HELP (please)" sign (CS-02, ON §5.3): a 128 × 64 canvas on a little stick, maroon Nunito 800 on
+ * Token Tails parchment with a love-pink border. Built by the cutscene `spawn` step (`build`), disposed with the scene.
  */
 export function buildSign(text = 'HELP (please)') {
   const g = new THREE.Group();
@@ -200,13 +203,15 @@ export function buildSign(text = 'HELP (please)') {
   if (typeof document !== 'undefined') {
     const c = document.createElement('canvas'); c.width = 128; c.height = 64;
     const x = c.getContext('2d');
-    x.fillStyle = '#FFF6E2'; x.fillRect(0, 0, 128, 64);
-    x.strokeStyle = '#FF8FB1'; x.lineWidth = 4; x.strokeRect(3, 3, 122, 58);
-    x.fillStyle = '#5A3B2E'; x.font = 'bold 22px Fredoka, "Trebuchet MS", sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    const L = SIGN_LOOK;
+    const grad = x.createLinearGradient(0, 0, 0, 64); grad.addColorStop(0, L.top); grad.addColorStop(1, L.bottom);
+    x.fillStyle = grad; x.fillRect(0, 0, 128, 64);
+    x.strokeStyle = L.edge; x.lineWidth = 4; x.strokeRect(3, 3, 122, 58);
+    x.fillStyle = L.ink; x.font = `${L.weight} 22px ${L.font}`; x.textAlign = 'center'; x.textBaseline = 'middle';
     const i = String(text).indexOf(' (');
     const a = i > 0 ? text.slice(0, i) : String(text), b = i > 0 ? text.slice(i + 1) : '';
     x.fillText(a, 64, b ? 24 : 32);
-    if (b) { x.font = '16px Fredoka, "Trebuchet MS", sans-serif'; x.fillText(b, 64, 46); }
+    if (b) { x.font = `700 16px ${L.font}`; x.fillText(b, 64, 46); }
     map = new THREE.CanvasTexture(c); map.colorSpace = THREE.SRGBColorSpace;
   }
   const board = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.23), new THREE.MeshBasicMaterial({ color: '#FFFFFF', map, side: THREE.DoubleSide }));

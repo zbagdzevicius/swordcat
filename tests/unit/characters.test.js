@@ -1686,3 +1686,57 @@ test('Token Tails outline: the tight hull proxy fits ear cones, uses the sword\'
   assert.ok(OUTLINE.px.hero <= 1.5 && OUTLINE.px.hero >= 1.2);
   assert.notEqual(OUTLINE.hero.toUpperCase(), '#5A2A1A');
 });
+
+test('TT2 §10.6 d: close-ups leave the head / instanced-fur parts out of her hull (no maroon band); iso keeps them', async () => {
+  const { buildOutline } = await import('../../src/characters/Outline.js');
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const tight = C.silhouetteParts(k.root, { skeleton: k.skeleton, margin: 0.002, furMargin: 0.01, tight: true });
+  const name = (p) => { const a = tight.anchors[p.anchor].obj; return a.name || ''; };
+  const fur = tight.parts.filter((p) => p.fur).map(name);
+  assert.ok(fur.includes('head') || fur.includes('furHead'), `the head counts as fur (${fur})`);
+  assert.ok(!tight.parts.some((p) => p.fur && /^(ear[LR]|chest|hips|blade)$/.test(name(p))), 'ears, body and sword stay inked');
+  const hull = buildOutline(k, { skeleton: k.skeleton });
+  const g = hull.geometry, n = g.userData.noFurCount;
+  assert.ok(n > 0 && n < g.index.count, 'fur triangles come last in the index');
+  assert.equal(C.setHullFur(hull, false), false); assert.equal(g.drawRange.count, n);
+  assert.equal(C.setHullFur(hull, true), true); assert.equal(g.drawRange.count, Infinity);
+  // the kitten swaps it with its close-up state
+  k.setOutline(true);
+  k.setCloseUp(false); assert.equal(k.outline.geometry.drawRange.count, Infinity, 'iso: the whole hull');
+  k.setCloseUp(true); assert.equal(k.outline.geometry.drawRange.count, k.outline.geometry.userData.noFurCount, 'close-up: no head / fur hull');
+  assert.equal(C.setHullFur(null, false), true, 'no hull: a no-op');
+  k.dispose();
+});
+
+test('TT2 §10.5: the Pink Paw-named kittens wear the real cats\' coats (accessories unchanged)', () => {
+  const look = (id) => C.lostKittenConfig(id);
+  const judas = look('pickles'), zare = look('socks'), raudvis = look('muffin'), simas = look('pebble');
+  assert.equal(judas.coat.pattern, 'tuxedo', 'Judas: tuxedo'); assert.equal(judas.coat.white, '#F5F2EC');
+  assert.ok(new THREE.Color(judas.coat.base).getHSL({}, THREE.SRGBColorSpace).l < 0.2, 'Judas: black coat');
+  assert.deepEqual(zare.coat, C.VILLAGER_COATS.brownTabby, 'Zare: brown tabby');
+  assert.equal(raudvis.coat.pattern, 'mackerel'); assert.equal(raudvis.coat.base, C.VILLAGER_COATS.ginger.base, 'Raudvis: ginger');
+  for (const c of [raudvis.coat.bib, raudvis.coat.cream]) assert.ok(new THREE.Color(c).getHSL({}, THREE.SRGBColorSpace).l > 0.93, `Raudvis: white chest (${c})`);
+  assert.equal(simas.coat.pattern, 'siamese', 'Simas: Siamese'); assert.equal(simas.coat.points, '#4A3830', 'seal points');
+  const eye = new THREE.Color(simas.eyes.outer).getHSL({}, THREE.SRGBColorSpace);
+  assert.ok(eye.h > 0.5 && eye.h < 0.7 && eye.s > 0.4, `Simas: blue eyes (${simas.eyes.outer})`);
+  assert.ok(!('eyes' in simas.coat), 'the eye override never leaks into the coat');
+  // accessories and the rest of the seeded look are unchanged
+  const ids = (c) => c.accessories.map((a) => (typeof a === 'string' ? a : a.id));
+  assert.ok(ids(judas).includes('flowerCrown')); assert.ok(ids(simas).includes('bucketHelm')); assert.ok(ids(raudvis).includes('bakerHat'));
+  assert.equal(C.hubKittenConfig('pebble').coat.pattern, 'siamese', 'the hub resident wears the same coat');
+  // never rolled for random villagers; pink stays Clementine's (Pearl's bow is lilac)
+  assert.ok(!('siamese' in C.VILLAGER_COATS) && !('gingerWhite' in C.VILLAGER_COATS));
+  assert.ok(Object.isFrozen(C.KITTEN_COATS));
+  assert.notEqual(C.CATS.pearl.bow.color.toUpperCase(), C.PAL.bow.toUpperCase());
+});
+
+test('TT2 §10.4: plate words in Passion One 900 with a per-character Nunito fallback; no Fredoka on canvas', () => {
+  assert.equal(C.PLATE_FONT, 'Passion One'); assert.equal(C.PLATE_FALLBACK, 'Nunito'); assert.equal(C.PLATE.weight, 900);
+  assert.match(C.plateFamily(true), /^'Passion One', 'Nunito', sans-serif$/);
+  assert.equal(C.plateFamily(false), 'sans-serif');
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
+  for (const f of ['src/characters/Plate.js', 'src/story/cutscenes/rig.js']) assert.ok(!/Fredoka/.test(fs.readFileSync(path.join(root, f), 'utf8')), `${f}: no Fredoka`);
+  for (const f of ['fonts/passion-one-latin-900-normal.woff2', 'fonts/nunito-latin-wght-normal.woff2', 'fonts/nunito-latin-ext-wght-normal.woff2']) {
+    assert.ok(fs.existsSync(path.join(root, 'public/assets', f)), `${f} ships`);
+  }
+});

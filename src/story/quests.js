@@ -4,6 +4,9 @@
 // (ui shows it in the objective bar / pause); world's Hub and ui's questBoard read `levelCards()` / `nextLevel()`.
 import { LEVEL_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
 import { t as tr } from './strings.js';
+import { registerOnboardingStrings } from './strings.onboarding.js';
+
+registerOnboardingStrings();
 
 const F = (s, k) => s?.getFlag?.(k);
 const done = (s, l) => !!F(s, `${l}.done`);
@@ -13,9 +16,12 @@ const done = (s, l) => !!F(s, `${l}.done`);
  * `level` limits where the step is shown (the hub steps show in town). `id` is stable (quest:update questId).
  */
 export const QUESTS = Object.freeze([
-  // the prologue in three steps (StoryManager.prologueStage): practice → the height chart → the barn chest (CS-01b)
+  // the prologue (StoryManager.prologueStage): practice → the bell / CS-01 → the first fight (TT2: rats in the yard) →
+  // the barn chest (CS-01b)
   { id: 'prologue', level: 'meadow', textKey: 'quest.prologue', done: (s) => !!F(s, 'prologue.practice') || !!F(s, 'prologue.done') },
   { id: 'prologue.chart', level: 'meadow', textKey: 'quest.prologue.chart', done: (s) => !!F(s, 'prologue.chart') || !!F(s, 'prologue.done') },
+  { id: 'prologue.fight', level: 'meadow', textKey: 'onb.fight.quest', when: (s) => !!F(s, 'prologue.raid'),
+    done: (s) => !!F(s, 'meadow.cleared.yard') || !!F(s, 'prologue.armour') || !!F(s, 'prologue.done') },
   { id: 'prologue.suit', level: 'meadow', textKey: 'quest.prologue.suit', done: (s) => !!F(s, 'prologue.done') },
   // Mochi's cart (z −41) comes before the Picnic Glade (z 18) on the road north
   { id: 'meadow.mochi', level: 'meadow', textKey: 'quest.meadow.mochi', done: (s) => !!F(s, 'meadow.mochi') },
@@ -49,6 +55,7 @@ export const QUESTS = Object.freeze([
 export function currentQuest(state, levelId = null) {
   for (const q of QUESTS) {
     if (q.done(state)) continue;
+    if (q.when && !q.when(state)) continue;
     if (levelId && q.level && q.level !== levelId) continue;
     return { id: q.id, textKey: q.textKey, text: tr(q.textKey), level: q.level };
   }
@@ -58,6 +65,33 @@ export function currentQuest(state, levelId = null) {
   }
   return { id: 'done', textKey: 'quest.done', text: tr('quest.done'), level: null };
 }
+
+/**
+ * Quest step id → where its target is (StoryManager.questTarget / guideTarget; ui's beacon asks story first), tried in
+ * order: `z:<zone id>` (the level's zone `at`), `k:<id>` (a companions actor: caged kitten `kittenId` or NPC `npcId`),
+ * `a:<anchor>`. A row may carry `unless: flag` to skip it once that flag is set. Data only (mirrors ui QUEST_TARGETS).
+ */
+export const QUEST_SPOTS = Object.freeze({
+  'prologue.chart': ['z:chart'],
+  'prologue.fight': ['z:yard'],
+  'prologue.suit': ['z:barn_chest'],
+  'meadow.mochi': ['k:mochi', 'z:cart'],
+  'meadow.follow': ['z:glade'],
+  'meadow.pudding': ['z:glade'],
+  'meadow.exit': ['z:exit'],
+  'forest.sage': ['k:sage'],
+  'forest.camp': ['z:camp'],
+  'forest.mill': ['z:mill', 'a:mill_center'],
+  'forest.exit': ['z:exit', 'a:exit_mill'],
+  'town.bakery': ['z:bakery'],
+  'town.chase': ['k:pilfer', 'z:post'],
+  'town.rescue': [{ ref: 'z:forge', unless: 'town.cleared.forge' }, 'z:square'],
+  'town.steps': ['z:steps', 'a:steps'],
+  'gate.scout': ['z:battlefield'],
+  'gate.line': ['z:winch'],
+  'bog.pearl': ['k:pearl'],
+  'keep.boss': ['z:roof'],
+});
 
 /** Boss key (the `boss:start` id, `boss_` prefix stripped) → its quest text key while the fight is on. */
 export const BOSS_QUESTS = Object.freeze({ grizzlechop: 'quest.boss.grizzlechop', cacklejaw: 'quest.boss.cacklejaw', brutus: 'quest.boss.brutus', barkus: 'quest.boss.barkus' });

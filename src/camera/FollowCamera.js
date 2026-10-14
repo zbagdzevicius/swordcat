@@ -127,6 +127,22 @@ const LENS_GRID = Object.freeze([[0, 0], [-0.5, 0], [0.5, 0], [-0.95, 0], [0.95,
 const ENGAGED = new Set(['alert', 'chase', 'windup', 'strike', 'recover', 'circle', 'attack', 'aim']);
 /** Reduce camera motion: a per-step ground-height change below this (m) is followed rigidly; bigger ones ease (steps) */
 export const CALM_GROUND_STEP = 0.08;
+/**
+ * TOKENTAILS-PLAN §10.2.7 guide look-ahead (package G1): while ui's guide target (ctx.ui.beacon.guide) is off screen
+ * and she is not fighting or locked on, the framing leans toward it by up to `max` m, eased in / out over `ease` s.
+ * Once engaged it holds until the target is within `release` m of her or changes (no on / off flutter at the edge).
+ * Kept here, not in core/config.js. The herFrame clamp (R7) still wins. Off with Reduce camera motion (the frame holds still).
+ */
+export const GUIDE_LOOK = Object.freeze({ max: 2.5, ease: 0.6, release: 6, near: 1.2 });
+/**
+ * TOKENTAILS-PLAN §10.2.12: no Photo Cam during the prologue / practice or while an onboarding target is active
+ * (pure; unit-tested). `s` = { prologueDone, onboardDone, practice, tutorial, guideKind, guideHas, meadow }.
+ */
+export function photoCamBlocked(s) {
+  if (s.tutorial || s.practice) return true;
+  if (s.meadow && !s.prologueDone) return true;
+  return !!s.guideHas && !s.onboardDone && s.guideKind !== 'quest';
+}
 /** min/max spring-arm length (m) */
 const ARM_MIN = 0.8, ARM_MARGIN = 0.3, ARM_RADIUS = 0.2;
 /** what the spring arm and the lock-on line of sight test: terrain + architecture + static props (thin ones skipped) */
@@ -540,6 +556,8 @@ export class FollowCamera {
     this._aim = { x: 0, z: 0 }; this._aimT = { x: 0, z: 0 }; this._aimS = { vx: 0, vz: 0 }; this._aimHoldT = 0; this._aimHeld = false;
     this._beatOff = { x: 0, z: 0 }; this._beatS = { vx: 0, vz: 0 };
     this._off = { x: 0, z: 0 };
+    /** §10.2.7 guide look-ahead: the offset (world XZ), its 0..1 ease weight, direction and engaged target id */
+    this.guideLook = { x: 0, z: 0 }; this._glW = 0; this._glDir = { x: 0, z: 0 }; this._glOn = null;
     /** combat / boss fit above the rest distance (m): out fast, in slowly after holdIn (§6.5) */
     this._extra = 0; this._extraS = { v: 0 }; this._lastNeedOut = -1e9; this._calmFit = 0;
     this._needHeld = false; this._wasCombat = false;
@@ -719,6 +737,7 @@ export class FollowCamera {
   update(dt) {
     const ctx = this.ctx, input = ctx.input, gm = ctx.game?.mode;
     if (this._attackerT > 0 && (this._attackerT -= dt) <= 0) this._attacker = null;
+    this._photoCamGuard();
     if (this.isIso) {
       if (gm === 'play' && GAMEPLAY.has(this.modeName)) this._isoInput(dt);
       this._validateLock(dt);
@@ -735,6 +754,34 @@ export class FollowCamera {
     this._validateLock(dt);
     this._threat = this._nearThreat();
     if (this.bossActive && !this._bossForced && ctx.enemies && !ctx.enemies.boss?.alive && !ctx.levels?.loading) this._setBoss(false);
+  }
+
+  /** §10.2.12: is the Photo Cam held off right now (prologue / practice / an onboarding target)? Reads ctx defensively. */
+  photoCamBlocked() {
+    const ctx = this.ctx, st = ctx.state, g = ctx.ui?.beacon?.guide, cur = ctx.levels?.current;
+    const flag = (f) => !!st?.getFlag?.(f);
+    return photoCamBlocked({
+      prologueDone: flag('prologue.done'), onboardDone: flag('onboard.done'),
+      practice: !flag('prologue.practice') && !flag('prologue.tutorial') && !flag('prologue.done') && cur?.id === 'meadow' && cur?.spawnId === 'practice',
+      tutorial: !!ctx.story?.tutorial?.active, guideKind: g?.kind ?? null, guideHas: !!g?.has, meadow: (cur?.id ?? st?.levelId) === 'meadow',
+    });
+  }
+
+  /**
+   * §10.2.12 (the player's MemeCamTrigger owns the trigger; requests/tokentails-tt2-g1.md asks it to read
+   * photoCamBlocked() itself): after the player's step, keep its idle / Stand clocks at zero while blocked, so the idle
+   * and manual triggers never reach their thresholds. Fixed step.
+   */
+  /** A blocked Photo Cam entry: hand the mode straight back (the trigger finishes on its next step). */
+  _refuseMeme() {
+    const g = this.ctx.game;
+    if (g?.mode === 'memecam') g.setMode('play');
+  }
+
+  _photoCamGuard() {
+    const tr = this.ctx.player?.memeCamTrigger;
+    if (!tr || tr.active || this.ctx.params?.test || !this.photoCamBlocked()) return;   // ?test: deterministic smoke hooks stay
+    tr.idleT = 0; tr.standT = 0; tr.bonus = 0;
   }
 
   dispose() {
@@ -781,6 +828,9 @@ export class FollowCamera {
         if (prev === 'meme') break;
         const p = this.ctx.player;
         if (!p) { console.warn('[camera] meme mode needs the player'); break; }
+        // §10.2.12: the player's Photo Cam trigger (game mode 'memecam') never enters during the prologue / practice or an
+        // onboarding target (real play; ?test keeps the hook; scripted callers are not refused)
+        if (this.ctx.game?.mode === 'memecam' && !this.ctx.params?.test && opts.force !== true && this.photoCamBlocked()) { this._refuseMeme(); break; }
         this.unlock();
         this._cut.stop();
         this.beat.stop();
@@ -1152,7 +1202,7 @@ export class FollowCamera {
       t: this._realT, frame: this.frameId, mode: this.modeName, yaw: this.yaw,
       feet: pos ? scr(pos.x, pos.y, pos.z) : null, head: pos ? scr(pos.x, pos.y + (ISO.catHView ?? 1), pos.z) : null,
       d: this.isoInfo.dist, pitch: this.isoInfo.pitch, fov: this.isoInfo.fov, fx: A.x, fy: A.y, W, H,
-      lead: [this._lead.x, this._lead.z], lean: [this._lean.x, this._lean.z], bias: this._bias, aim: [this._aim.x, this._aim.z],
+      lead: [this._lead.x, this._lead.z], lean: [this._lean.x, this._lean.z], bias: this._bias, aim: [this._aim.x, this._aim.z], guideLook: [this.guideLook.x, this.guideLook.z],
       extra: this._extra, snug: this._snug, beat: this.beat.id, beatW: this.beat.w, closeUp: this.closeUp, far: cam?.far,
       core: { ...sf.core }, herFrame: { ...sf.herFrame }, threat: { ...sf.threat }, profile: this.profile,
       footprint: { q: Array.from(fp.q), cx: fp.cx, cz: fp.cz, ahead: fp.ahead, behind: fp.behind, halfW: fp.halfW, halfWTop: fp.halfWTop, slantMax: fp.slantMax, d: fp.d, version: fp.version, valid: fp.valid },
@@ -1703,10 +1753,12 @@ export class FollowCamera {
     this._peekStep(dt, p, feet, combat, snap);
     // desktop lock modes (§10.4): semi = a pan inside herFrame that springs home; free = the leash pan (after the clamp)
     this._panStep(dt, feet, W, H, yaw, combat);
+    // TOKENTAILS-PLAN §10.2.7 the guide look-ahead (off-screen objective, out of combat)
+    this._guideLookStep(frozen ? 0 : dt, feet, combat || !!boss, snap, gmPlay && !calm);
     // ---- compose the offset (focus − her), clamp it to the herFrame limits (R7: she always wins)
     const off = this._off;
-    off.x = ux * this._bias + this._lead.x + this._lean.x + this._aim.x + this._beatOff.x + this._peek.x + this._semi.x;
-    off.z = uz * this._bias + this._lead.z + this._lean.z + this._aim.z + this._beatOff.z + this._peek.z + this._semi.z;
+    off.x = ux * this._bias + this._lead.x + this._lean.x + this._aim.x + this._beatOff.x + this._peek.x + this._semi.x + this.guideLook.x;
+    off.z = uz * this._bias + this._lead.z + this._lean.z + this._aim.z + this._beatOff.z + this._peek.z + this._semi.z + this.guideLook.z;
     // §2.4 dialogue: the focus eases to the speaker midpoint and d × 0.8 over 0.5 s (no cut). The midpoint is part of
     // the offset, and the herFrame limits are re-derived at the dollied distance, so R7 holds through the two-shot
     const dlg = ctx.game?.mode === 'dialog';
@@ -1888,6 +1940,29 @@ export class FollowCamera {
   }
 
   /** §5.6 snuggle: after 5 s with no input, no fight, no order and no beat: −0.6 m (st 1.2 s); any input: back (0.35 s). */
+  /**
+   * §10.2.7: lean the framing toward ui's guide target (≤ GUIDE_LOOK.max m, eased over GUIDE_LOOK.ease s) while it is
+   * off screen and she is not fighting / locked on / in a cutscene. Reads `ctx.ui.beacon` defensively (no beacon: 0).
+   */
+  _guideLookStep(dt, feet, fight, snap, gmPlay) {
+    const G = GUIDE_LOOK, bc = this.ctx.ui?.beacon, g = bc?.guide, L = this.guideLook;
+    const ok = gmPlay && !fight && !this.lockTarget && this.modeName === 'follow' && !this._arena.locked && !!g?.pos && bc.state === 'on' && !bc.hidden;
+    let on = false;
+    if (ok) {
+      const dx = g.x - feet.x, dz = g.z - feet.z, d = Math.hypot(dx, dz), id = g.id ?? '?';
+      // fix round 2: a near target off screen (the barn chest 4.5 m south of her, below the bottom edge at 844×390) leans
+      // too; it releases once she arrives (arriveR) instead of at `release` m, which a near target never passed
+      const rel = Math.min(G.release, Math.max(G.near, Number.isFinite(g.arriveR) ? g.arriveR : 0));
+      if (this._glOn !== null && (this._glOn !== id || d < rel)) this._glOn = null;
+      if (this._glOn === null && bc.offscreen && d >= rel) this._glOn = id;
+      on = this._glOn !== null && d > 1e-3;
+      if (on) { this._glDir.x = dx / d; this._glDir.z = dz / d; }
+    } else this._glOn = null;
+    this._glW = snap ? (on ? 1 : 0) : clamp(this._glW + (on ? dt : -dt) / G.ease, 0, 1);
+    const k = easeInOutSine(this._glW) * G.max;
+    L.x = this._glDir.x * k; L.z = this._glDir.z * k;
+  }
+
   _snuggleStep(dt, p, combat, calm, gmPlay, snap) {
     const S = ISO.snuggle, idle = this.ctx.input?.idleTime ?? 0;
     if (idle < S.after) this._snugArmed = true;

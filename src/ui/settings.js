@@ -63,6 +63,8 @@ export const SETTINGS = Object.freeze([
   { key: 'difficulty', type: 'choice', label: 'settings.difficulty', group: 'game', options: ['kitten', 'knight'], optionLabels: ['difficulty.kitten', 'difficulty.knight'] },
   // WA §4.1 / §5.3 / §7.5
   { key: 'hudMode', type: 'choice', label: 'settings.hudMode', group: 'game', options: ['calm', 'full'], optionLabels: ['settings.hudMode.calm', 'settings.hudMode.full'] },
+  // TOKENTAILS-PLAN §10.2 item 11: off hides the paw prints but keeps the edge arrow and the objective line
+  { key: 'guideTrail', type: 'toggle', label: 'settings.guideTrail', group: 'game' },
   { key: 'hitWords', type: 'toggle', label: 'settings.hitWords', group: 'game' },
   { key: 'tutorialHints', type: 'toggle', label: 'settings.tutorialHints', group: 'game' },
   // PERF I4: the quality panel (Low / Med / High / Auto, the FPS cap, Battery saver)

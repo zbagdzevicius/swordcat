@@ -9,7 +9,9 @@
 //  • Ghost paw: after `idleDemo` (8 s) of no progress, a 64 px cream paw demonstrates the step (`demo`: tap / hold /
 //    swipe) at the world target (`target`: a point or an actor; one transform per frame) or on the touch button of
 //    `action`; on keyboard / pad it bounces the key glyph instead. 2 cycles, then it waits 8 s again. Off with
-//    `settings.tutorialHints`.
+//    `settings.tutorialHints`. TOKENTAILS-PLAN §10.2 (G1): with no prompt target it demonstrates on the beacon's guide
+//    target, and an off-screen target is tapped next to the gold coin edge arrow (never on the chip); the step dots and
+//    the ghost paw are Token Tails love pink #FF7AA2 (guidance.css).
 // The bubble is `pointer-events: none` and never a SafeFrame occluder. Old prompts (no `speaker`) keep prompts.js's card.
 import * as THREE from 'three';
 import { el, flag, setText, setHtml, setVar, place, pulse } from './dom.js';
@@ -18,7 +20,7 @@ import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 
 /** ON §4.1 PRACTICE timings the bubble falls back to when a payload does not carry them. */
-export const GUIDE = Object.freeze({ chipAfter: 6, idleDemo: 8, demoCycle: 1.2, demoCycles: 2, doneShow: 0.5, wiggle: 0.12, dots: 7 });
+export const GUIDE = Object.freeze({ chipAfter: 6, idleDemo: 8, demoCycle: 1.2, demoCycles: 2, doneShow: 0.5, wiggle: 0.12, dots: 7, edgePull: 70 });
 
 /**
  * Normalise `stepDots` to an array of fills (0 | 0.5 | 1). Accepts an array of numbers, or `{ n, of, half }` (n steps
@@ -163,7 +165,9 @@ export class Guide {
 
   /** Screen point of the demo target (CSS px) or null: the world target, else the touch button of the action. */
   _demoPoint(p) {
-    const ctx = this.ctx, cam = ctx.camera, tgt = p.target;
+    const ctx = this.ctx, cam = ctx.camera, bc = ctx.ui?.beacon;
+    // TOKENTAILS-PLAN §10.2: the ghost paw points at the target (the prompt's, else the guide's), never at the chip
+    const tgt = p.target ?? (bc?.guide?.pos ? bc.guide : null);
     if (tgt && cam) {
       const pos = tgt.pos ?? tgt.position ?? tgt;
       const x = pos.x ?? pos[0], y = (pos.y ?? (pos.length === 3 ? pos[1] : 0) ?? 0) + 0.3, z = pos.z ?? (pos.length === 3 ? pos[2] : pos[1]);
@@ -175,6 +179,13 @@ export class Guide {
           if (Math.abs(_v.x) < 1 && Math.abs(_v.y) < 1) { this._pt.x = (_v.x * 0.5 + 0.5) * innerWidth; this._pt.y = (-_v.y * 0.5 + 0.5) * innerHeight; return this._pt; }
         }
       }
+    }
+    // the target is off screen: tap next to the gold coin on the edge (pulled toward the centre)
+    const e = bc?.edgeAt;
+    if (tgt && e) {
+      const cx = innerWidth / 2, cy = innerHeight / 2, dx = cx - e.x, dy = cy - e.y, l = Math.hypot(dx, dy) || 1, k = Math.min(GUIDE.edgePull, l);
+      this._pt.x = e.x + (dx / l) * k; this._pt.y = e.y + (dy / l) * k;
+      return this._pt;
     }
     if (this.device === 'touch' && p.action) {
       const b = ctx.ui?.touch?.layout?.buttons?.[p.action === 'chargeRelease' ? 'attack' : p.action];
@@ -188,6 +199,10 @@ export class Guide {
     const c = this.cur;
     flag(this.root, 'is-dim', !vis);
     if (!c) return;
+    // §10.2.6: the HUD objective line already says the chip's words: phones drop the chip (guidance.css) so the bubble
+    // stays small and off Clem
+    const ok = this.ctx.ui?.beacon?.objective?.textKey;
+    flag(this.root, 'is-dup', !!ok && ok === c.p?.textKey);
     c.t += dt;
     if (c.doneT > 0 && (c.doneT -= dt) <= 0) { this.hide(); return; }
     const p = c.p;
@@ -199,7 +214,7 @@ export class Guide {
     const idleDemo = p.idleDemo ?? GUIDE.idleDemo, run = GUIDE.demoCycle * GUIDE.demoCycles;
     if (c.demoT < 0 && c.idle >= idleDemo) {
       c.demoT = 0; this.demos++;
-      const demo = p.demo ?? 'tap', kbm = this.device !== 'touch' && !p.target;
+      const demo = p.demo ?? 'tap', kbm = this.device !== 'touch' && !p.target && !this.ctx.ui?.beacon?.guide?.pos;
       flag(this.paw, 'is-hold', demo === 'hold');
       flag(this.paw, 'is-swipe', demo === 'swipe');
       flag(this.paw, 'is-key', kbm);

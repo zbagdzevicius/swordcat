@@ -384,6 +384,17 @@ export function noteSemis(name) {
 /** Playback rate of the baked C5 glock note for `name` (number = semitones above C5). */
 export function noteRate(name) { return 2 ** ((typeof name === 'number' ? name : noteSemis(name)) / 12); }
 
+/**
+ * The Token Tails jingle (TOKENTAILS-PLAN §10.4), original and made in code: a two-note gold-coin "ding" (B5 → E6,
+ * very close together, like a coin's bright double ring), a short rest, then a "meow" arpeggio that rises and falls
+ * (mi-a-ow: G5 C6 E6 G6 … E6 C6) with the last note ringing. Timed entries ({ n, t, g }): note, start (s), gain.
+ */
+export const TT_JINGLE = Object.freeze([
+  { n: 'B5', t: 0, g: 0.9 }, { n: 'E6', t: 0.07, g: 1 },
+  { n: 'G5', t: 0.34, g: 0.7 }, { n: 'C6', t: 0.42, g: 0.75 }, { n: 'E6', t: 0.5, g: 0.8 }, { n: 'G6', t: 0.58, g: 0.85 },
+  { n: 'E6', t: 0.72, g: 0.7 }, { n: 'C6', t: 0.86, g: 0.9 },
+]);
+
 /** Named glock phrases. */
 export const GLOCK_PHRASES = {
   sticker: ['C5', 'E5', 'G5'],             // WA §5.4: up a third per sticker in a row (one note per sticker)
@@ -393,12 +404,21 @@ export const GLOCK_PHRASES = {
   friend: ['C5', 'E5', 'G5', 'C6', 'E6'],
   chime: ['G5', 'D6'],                     // the breeze's chime tail (rumble)
   roomRead: ['G5', 'C6'],                  // AUTOCAM X24 room read (arena lock)
+  ttJingle: TT_JINGLE,                     // TOKENTAILS-PLAN §10.4: the Token Tails jingle (title reveal, results card)
 };
 
-/** Schedule of a phrase: [{ t, rate, gain }] (later notes slightly softer, the last one rings). */
+/** Length of the jingle in seconds (last onset + the glock note). */
+export const TT_JINGLE_SEC = TT_JINGLE[TT_JINGLE.length - 1].t + GLOCK.sec;
+
+/**
+ * Schedule of a phrase: [{ t, rate, gain }] (later notes slightly softer, the last one rings). A phrase may also list
+ * timed entries `{ n, t, g }` (TT_JINGLE): those keep their own start and gain (× volume).
+ */
 export function glockPlan(notes, { gap = GLOCK.gap, volume = 1 } = {}) {
   const list = Array.isArray(notes) ? notes : (GLOCK_PHRASES[notes] ?? [notes]);
-  return list.map((n, i) => ({ t: i * gap, rate: noteRate(n), gain: volume * (i === list.length - 1 ? 1 : 0.85) }));
+  return list.map((n, i) => (n && typeof n === 'object'
+    ? { t: Math.max(0, +n.t || 0), rate: noteRate(n.n), gain: volume * (n.g ?? 1) }
+    : { t: i * gap, rate: noteRate(n), gain: volume * (i === list.length - 1 ? 1 : 0.85) }));
 }
 
 /** The C5 glock bar note as PCM. @param {number} sr @param {() => number} rand @returns {Float32Array} */

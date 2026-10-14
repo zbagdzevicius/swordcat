@@ -14,7 +14,7 @@ import { PropActor, SwingingSack, WobbleKnight } from '../PropActor.js';
 import { WheatField } from '../Wheat.js';
 import { makeStoneMaterial } from '../Props.js';
 import { E } from '../../core/events.js';
-import { STORY } from '../../core/config.js';
+import { STORY, ONBOARD } from '../../core/config.js';
 import { smoothPolyline, pointAlong, distToPolyline, inBox } from '../noise.js';
 
 const M = {
@@ -230,6 +230,9 @@ function wobbleArmParts() {
     [new THREE.SphereGeometry(0.1, 10, 8).scale(1, 1, 1.4).translate(0.42, 0, 1.52), C.burlap]];      // a long padded practice blade
 }
 
+/** Sir Sacky's frame (TT2 §10.3: beside Sir Wobble; story's PRACTICE.sack matches). */
+const SACK = Object.freeze([5, -85.5]);
+
 // ---------------------------------------------------------------------------------------------- setpieces
 const SETPIECES = {
   /** §12.3 practice field: fences, gate, barn, windmill, height chart, dummies, sack, Wobble Knight, boulder, statue. */
@@ -305,12 +308,14 @@ const SETPIECES = {
         facing: Math.PI, wobble: 0.45, visual: { batch: kit.batch, handle: p.handle, base: p.matrix } });
       kit.onLoaded(() => kit.actor(a, null));
     });
-    // swinging sack at (8, −84): 0.6 m sack on a 1.8 m rope, 2.0 s period (ATTACKS.sack_swing)
-    kit.place(kit.proc('sack_frame', sackFrameParts), 8, -84, { collider: false, jitter: 0, clear: 1.6 });
-    for (const sx of [6.5, 9.5]) kit.collider({ x: sx, z: -84, r: 0.14, y0: kit.h(sx, -84) - 0.5, y1: kit.h(sx, -84) + 2.7 });
+    // swinging sack ("Sir Sacky"), TT2 §10.3: beside Sir Wobble (5 m east of the drill's stand spot) at SACK: 0.6 m sack
+    // on a 1.8 m rope, 2.0 s period (ATTACKS.sack_swing); rolling past it is an optional tip
+    const [skx, skz] = SACK;
+    kit.place(kit.proc('sack_frame', sackFrameParts), skx, skz, { collider: false, jitter: 0, clear: 1.6 });
+    for (const sx of [skx - 1.5, skx + 1.5]) kit.collider({ x: sx, z: skz, r: 0.14, y0: kit.h(sx, skz) - 0.5, y1: kit.h(sx, skz) + 2.7 });
     const sackMesh = kit.mesh(kit.proc('sack_rope', sackParts), { name: 'swingingSack' });
     const sackRoot = new THREE.Group(); sackRoot.add(sackMesh); kit.object(sackRoot);
-    const sackActor = new SwingingSack(ctx, { id: 'sack', pivot: new THREE.Vector3(8, kit.h(8, -84) + 2.62, -84), axis: 'x', amp: 0.75, mesh: sackRoot, breakable: false });
+    const sackActor = new SwingingSack(ctx, { id: 'sack', pivot: new THREE.Vector3(skx, kit.h(skx, skz) + 2.62, skz), axis: 'x', amp: 0.75, mesh: sackRoot, breakable: false });
     kit.onLoaded(() => kit.actor(sackActor, null));
     // Wobble Knight at (0, −86): swings every 2.0 s with a white glint (dummy_swing) while she is within its reach,
     // spins when parried
@@ -321,7 +326,9 @@ const SETPIECES = {
     kit.clear(0, -86, 0.9, 0.2);
     // §5.4 step 6: the one-time slow-mo parry hint belongs to the Parry step (not the Stand step before it)
     const parryHint = () => ctx.story?.tutorial?.active !== false && ctx.story?.tutorial?.log?.step?.id === 'parry';
-    const wkActor = new WobbleKnight(ctx, { id: 'wobble_knight', pos: new THREE.Vector3(0, kit.h(0, -86), -86), facing: 0, mesh: wk, armPivot: arm, delay: 1.0, hint: parryHint });
+    // TT2: he steps toward her only during the drill (Stand / Parry lessons), so he never blocks the way otherwise
+    const drill = () => { const tu = ctx.story?.tutorial; const id = tu?.log?.step?.id; return !!tu?.active && (id === 'stand' || id === 'parry'); };
+    const wkActor = new WobbleKnight(ctx, { id: 'wobble_knight', pos: new THREE.Vector3(0, kit.h(0, -86), -86), facing: 0, mesh: wk, armPivot: arm, delay: 1.0, hint: parryHint, approach: drill });
     kit.onLoaded(() => kit.actor(wkActor, 'wobble_knight'));
     // cracked boulder (−10, −84): only Bright / Holy (`breaks: ['cracked']`)
     const bp = kit.place(boulder, -10, -84, { fit: { h: 1.2 }, yaw: 0.4, collider: 'circle', shrink: 0.8, color: '#C9BCA6', jitter: 0 });
@@ -625,9 +632,13 @@ export default defineLevel({
       meadow_night: { hemiMul: 1.15 } } },
   // §2.7 the Meme Cam spot: the Tallbert knoll (she faces south, the statue and the misty lane behind her)
   memeSpot: { at: [2, -58.5], yaw: Math.PI, r: 4 },
-  // §5.4 the fence lesson: the 1.0 m inner fence (z −87, x −20…−2) is a gated link; before `tut.jump.done` no automatic
-  // hop crosses it either (the gate line), so a click past it walks round the fence end, and the prompt teaches the jump
-  navLinks: [{ a: [-14.5, -88.3], b: [-14.5, -85.7], kind: 'fence', when: 'tut.jump.done', gate: [[-20, -87], [-2, -87]] }],
+  // TT2 §10.3: the 1.0 m inner practice fence (z −87, x −20…−2) has one open hop link by the barn door: a click / tap
+  // across the fence paths over it (an order hop), and that first hop teaches Jump (story `tut.jump`). It used to stay
+  // shut until `tut.jump.done`, a dead end for click / tap players. The second entry is a gate line that never opens
+  // (`onboard.fenceAuto` is never set): it keeps the automatic jump links off the rest of the fence, where the hop
+  // lands against the barn / chest colliders and bounced her back (a stuck hop loop).
+  navLinks: [{ a: [-14.5, -88.3], b: [-14.5, -85.7], kind: 'fence' },
+    { a: [-8, -88.3], b: [-8, -85.7], kind: 'fence', when: 'onboard.fenceAuto', gate: [[-20, -87], [-2, -87]] }],
   paths: [{ pts: [[-22, -30], [-38, -27], [-56, -31], [-80, -28]], width: 3 }, { pts: [[-22, -30], [-9, -23], [8, -27], [30, -22]], width: 3 }],
   // AUTOCAM §9.3 skyline audit: the practice-field windmill (9 m, turning sails) reads from the whole field
   farKeep: [[16, -95, 9]],
@@ -646,6 +657,12 @@ export default defineLevel({
     { id: 'chart', kind: 'trigger', at: CHART_SPOT, r: 2.5, play: 'cs01', when: 'tut.done && !prologue.chart && !prologue.done', once: true },
     // ON §5.4: after the raid the chest in the barn doorway is the player's choice to become the knight (cs01b)
     { id: 'barn_chest', kind: 'interact', at: BARN_CHEST, r: 1.8, play: 'cs01b', when: 'prologue.raid && !prologue.armour', prompt: 'prompt.open' },
+    // TT2 §10.3 the first fight: CS-02 ends with three rats spilling in through the north gate; they wait for her first
+    // order (or ONBOARD.fight.calm s) and the first hit on her is soft (Arena `calm` / `softHit`). Soft: no fog wall
+    // inside the fenced field. Story flags `onboard.firstFight` on its lock; the barn chest comes after.
+    { id: ONBOARD.fight.arena, kind: 'arena', at: ONBOARD.fight.at, r: ONBOARD.fight.r, soft: true, lockOn: 'cs02:end',
+      autoLockWhen: 'prologue.raid && !prologue.armour && !prologue.done', calm: ONBOARD.fight.calm, softHit: ONBOARD.fight.softHit,
+      waves: [[['rat_pike', 3, { at: ONBOARD.fight.spill, alerted: false, ai: false }]]] },
     { id: 'tallbert', kind: 'trigger', at: [0, -61], r: 2.5, play: 'g01', when: 'prologue.tutorial && !prologue.done', once: true },
     { id: 'lane', kind: 'trigger', at: [-6, -52], r: 3, play: 'cs02', when: 'prologue.tutorial && !prologue.done', once: true },
     { id: 'vigil_1', kind: 'checkpoint', at: [-16, -36] },

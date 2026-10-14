@@ -6,11 +6,15 @@
 // Keys: cutscene lines are `<sceneId>.<n>` (cs03.1 …); barks `bark.<speaker>.<trigger>[.n]`; boss barks keep the short
 // `<boss>.<beat>` keys the enemy data uses (B.4: 'barkus.p2'); lost-kitten lines `kitten.<id>`; names `name.<id>`.
 // `{name}` placeholders are filled from `vars`. Missing keys return the key itself (never throws).
-// Pure data + pure functions: node-safe, no DOM, no imports.
+// Pure data + pure functions: node-safe, no DOM; the only import is core/brand.js (pure data).
+// Brand (TOKENTAILS-PLAN §10.4 / §10.5): the title, the Rescue House name and the four Pink Paw kitten names come from
+// BRAND, so a rename is one edit there. Other packages register their own rows with `addStrings(table)`
+// (G2's strings.onboarding.js). Rows marked `// claim:fiction` invent a story; they state nothing about a real cat.
+import { BRAND, brandKittenName } from '../core/brand.js';
 
-/** §1: the title lives here so a rename is one edit. */
-export const GAME_TITLE = 'PINK PAW KNIGHT';
-export const GAME_SUBTITLE = 'A Token Tails Adventure';
+/** §1: the title comes from core/brand.js so a rename is one edit there. */
+export const GAME_TITLE = BRAND.titleCaps;
+export const GAME_SUBTITLE = BRAND.subtitle;
 
 const d = (text) => ({ default: text });
 
@@ -23,6 +27,8 @@ export const S = {
   'title.tap': d('Tap to play!'),
   'title.prompt': d('Press any key to play!'),
   'title.foot': d('A Token Tails game'),
+  'title.tagline': d(BRAND.tagline),
+  'title.skipPractice': d('Skip practice'),
   'title.settings': d('Settings'),
   'ch.label': d('Chapter {n}'),
   'ch.label.prologue': d('Prologue'),
@@ -42,6 +48,7 @@ export const S = {
   'region.bog': d('Glimmerbog'),
   'region.keep': d('Houndhold Keep'),
   'region.sky': d('Above the Clouds'),
+  'region.rescueHouse': d(BRAND.rescueHouse),
 
   // ================================================================== speaker names (dialogue ribbon)
   'name.swordcat': d('Clem'),
@@ -73,9 +80,9 @@ export const S = {
   'name.hyena': d('Hyena'),
   'name.rat': d('Rat'),
   'name.biscuit': d('Biscuit'), 'name.noodle': d('Noodle'), 'name.button': d('Button'),
-  'name.pickles': d('Judas'), 'name.pebble': d('Simas'), 'name.sprout': d('Sprout'),
-  'name.waffles': d('Waffles'), 'name.toffee': d('Toffee'), 'name.muffin': d('Raudvis'),
-  'name.tater': d('Tater'), 'name.mittens': d('Mittens'), 'name.socks': d('Zare'),
+  'name.pickles': d(brandKittenName('pickles')), 'name.pebble': d(brandKittenName('pebble')), 'name.sprout': d('Sprout'),
+  'name.waffles': d('Waffles'), 'name.toffee': d('Toffee'), 'name.muffin': d(brandKittenName('muffin')),
+  'name.tater': d('Tater'), 'name.mittens': d('Mittens'), 'name.socks': d(brandKittenName('socks')),
   'name.juniper': d('Juniper'), 'name.bramble': d('Bramble'), 'name.fennel': d('Fennel'),
   'name.bean': d('Bean'), 'name.crumpet': d('Crumpet'), 'name.dumpling': d('Dumpling'),
   'name.cow': d('Very Suspicious Cow'),
@@ -368,7 +375,7 @@ export const S = {
   'cs07.9': d("Then I'll be at the gate."),
   'toast.free': d('Pawsbury is awake! Lanterns on!'),
   'toast.shops': d('Shops are open.'),
-  'toast.hub': d('Pawsbury Rescue House: kittens you rescue live here.'),
+  'toast.hub': d(`${BRAND.rescueHouse}: kittens you rescue live here.`),
 
   // ================================================================== D-06 Pip Joins
   'd06.1': d('Took you long enough. I was waiting for dramatic effect.'),
@@ -524,6 +531,10 @@ export const S = {
   'credits.thanks': d('Thank you for playing.'),
   'credits.assets': d('Asset attribution'),
   'credits.pinkpaw': d('Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.'),
+  // TOKENTAILS-PLAN §10.5: the only facts about Pink Paw the game states (true: a real Lithuanian cat shelter, Token
+  // Tails' partner shelter); nothing about numbers, places or what play does
+  'credits.pinkpaw.about': d(`${BRAND.shelterName} (${BRAND.shelterLocal}) is a real cat shelter in Lithuania and Token Tails' partner shelter. Meet its cats at ${BRAND.site}.`),
+  'credits.fiction': d(`The ${BRAND.rescueHouse}, Pawsbury and Purrhaven Isle are made up.`),
 
   // ================================================================== §6.1 Clem's barks
   'bark.clem.alert.1': d('Halt, villain. ...Please.'),
@@ -650,6 +661,12 @@ export const S = {
   'kitten.tater': d("Pip said you'd come. Pip says a lot of things."),
   'kitten.mittens': d('I bit one! On the tail! Gently!'),
   'kitten.socks': d("It's damp under here. I've been very brave about the damp."),
+  // TOKENTAILS-PLAN §10.5: short bios for the four kittens named after Pink Paw cats (rescue card, Kittens grid).
+  // Made-up stories that invent nothing about the real cats.
+  'kitten.pickles.bio': d('Naps in bread baskets. Swears he was guarding them.'),                 // claim:fiction
+  'kitten.pebble.bio': d('Blue eyes, very still, very patient. Has caught zero fish.'),           // claim:fiction
+  'kitten.muffin.bio': d('Climbed the Bell Tower to see the sunrise. Needed help down.'),        // claim:fiction
+  'kitten.socks.bio': d('Follows sunbeams across the square all afternoon.'),                     // claim:fiction
   'kitten.juniper': d('The lights in the water keep winking at me.'),
   'kitten.bramble': d('There were spiders. I named them. Then I ran.'),
   'kitten.fennel': d('Is the tower supposed to be sideways?'),
@@ -687,8 +704,8 @@ export const S = {
   'hub.villager.4': d("Mind the fountain, it bites. It doesn't. But it might."),
   'hub.villager.5': d('Thank you, Dame— um. Squire. Um. Clem!'),
   'hub.villager.6': d('Catnip? Catnip!'),
-  // the Token Tails Cat, keeper of the Pawsbury Rescue House (TOKENTAILS-PLAN §2.4; fiction only)
-  'npc.ttcat.1': d('Welcome to the Rescue House! Every kitten you bring home gets a warm spot here.'),
+  // the Token Tails Cat, keeper of the Rescue House (BRAND.rescueHouse; TOKENTAILS-PLAN §2.4, §10.5; fiction only)
+  'npc.ttcat.1': d(`Welcome to the ${BRAND.rescueHouse}! Every kitten you bring home gets a warm spot here.`),
   'npc.ttcat.2': d('Blankets by the window, naps by the fire. Nobody waits alone.'),
   'npc.ttcat.3': d('Another little one safe? Go on, knight. I will tuck them in.'),
 
@@ -759,6 +776,11 @@ export const S = {
   'results.rank.mewtiful': d('Good kitty!'),
   'results.rank.clawsome': d('CLAW-SOME!'),
   'results.next': d('Onward'),
+  // TOKENTAILS-PLAN §10.4: the in-game catnip is not the per-account Token Tails catnip
+  'results.catnipNote': d('Catnip here stays in this game for now.'),
+  'results.brand': d('A Token Tails game'),
+  'pause.catnipNote': d('Catnip here stays in this game for now.'),
+  'pause.brand': d('A Token Tails game'),
   'toast.kitten': d('Kitten found! {n}/{max}'),   // n/3 for this level, like the HUD (M2); {total} = n/18
   'toast.exit.mochi': d('Mochi\'s still stuck in his carrier! Back to the cart!'),
   'toast.exit.forest': d('The road home runs past the Cheese Mill. Captain Grizzlechop first!'),
@@ -799,6 +821,10 @@ export const S = {
   'loading.tip.12.pad': d('R3 zooms the camera in and out.'),
   'loading.tip.12.touch': d('Pinch to zoom.'),
   'loading.tip.13': d('Every bonked boss becomes a friend. Visit them in Pawsbury!'),
+  // TOKENTAILS-PLAN §10.4: Token Tails fiction tips (the game's own story; no claims about the real world)
+  'loading.tip.14': d('The Token Tails Cat keeps a warm spot for every kitten you bring home.'),
+  'loading.tip.15': d(`Rescued kittens nap at the ${BRAND.rescueHouse}. Pop in and say hi!`),
+  'loading.tip.16': d('Pink paw prints show the way. Follow them!'),
 
   // ================================================================== §14.3 menus (ui reads these keys)
   'menu.continue': d('Keep going!'),
@@ -880,6 +906,8 @@ export const S = {
   'settings.hitWords': d('Hit words'),
   'settings.tutorialHints': d('Tutorial hints'),
   'settings.tutorialHints.help': d('Pearl and Mochi show you how, with a little ghost paw.'),
+  'settings.guideTrail': d('Paw-print trail'),
+  'settings.guideTrail.help': d('Pink paw prints on the ground show where to go next.'),
   'settings.pathPreview': d('Path preview'),
   'settings.pathPreview.auto': d('Auto'),
   'settings.pathPreview.on': d('On'),
@@ -929,6 +957,29 @@ export const S = {
   'loading.hint': d('Loading'),
   'rotate.hint': d('Turn your device sideways'),
 };
+
+/** Number of `loading.tip.<n>` rows (1..n, no gaps): the loading veil may pick from all of them. */
+export function loadingTipCount() {
+  let n = 0;
+  while (Object.prototype.hasOwnProperty.call(S, `loading.tip.${n + 1}`)) n++;
+  return n;
+}
+
+/**
+ * Register more rows (TOKENTAILS-PLAN §10.7): `table` maps key → text or `{ default }`. Later tables override earlier
+ * rows (G2's strings.onboarding.js changes onboarding copy this way). Returns the number of rows written.
+ * @param {Record<string, string|{default: string}>} table
+ */
+export function addStrings(table) {
+  if (!table || typeof table !== 'object') return 0;
+  let n = 0;
+  for (const [k, v] of Object.entries(table)) {
+    const text = typeof v === 'string' ? v : v && typeof v.default === 'string' ? v.default : null;
+    if (text == null) continue;
+    S[k] = d(text); n++;
+  }
+  return n;
+}
 
 /** The text of a row (its default; rows have no variants). Pure. */
 export function pick(row) {

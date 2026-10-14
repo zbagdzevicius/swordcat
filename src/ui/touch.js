@@ -464,7 +464,9 @@ export class TouchControls {
     // (HUD cards take their own pointer events now, so the rest of the top strip is open: foes up-screen are tappable)
     // the dead ring swallows only ground taps: an enemy / NPC / interactable under the finger still wins (a fat-thumb
     // miss next to a button must not walk her off, but a foe standing beside the cluster must stay tappable)
-    if (!fromStick && inDeadRing(L, x, y, (n) => this._visible(n)) && (this.ctx.cam?.pick?.(x, y, { touch: true, ground: false })?.kind ?? 'ground') === 'ground') return;
+    // (fix round 2: a tap on a lit Pink Paw print is never a fat-thumb miss: the guide asked for it)
+    if (!fromStick && inDeadRing(L, x, y, (n) => this._visible(n)) && !this.ctx.ui?.beacon?.printAt?.(x, y)
+      && (this.ctx.cam?.pick?.(x, y, { touch: true, ground: false })?.kind ?? 'ground') === 'ground') return;
     this.free.set(e.pointerId, { x0: x, y0: y, x, y, t0: nowS(), moved: 0, long: false, lastMoveT: 0, swiped: false });
     if (this.free.size === 2) {
       let a = null, b = null;

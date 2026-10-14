@@ -1,0 +1,33 @@
+/* src/ui/onboarding.css  (owner: story / TT2 G2) — the Skip chip (docs/TOKENTAILS-PLAN.md §10.3): "Skip ▸▸ · hold Esc",
+   visible from second 0 of every skippable scene and of Morning Practice. A Token Tails cream pill with a cocoa rim;
+   the love-pink fill grows while a skip is held (Esc / ❚❚ / holding the chip). Desktop: bottom right, clear of the
+   ability bar and above the letterbox; touch: top right, under the counters, away from the ❚❚ at the top centre and
+   the thumb clusters. At least 44 px tall on touch. */
+.cin-skip-chip {
+  position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(10vh + 18px);
+  display: inline-flex; align-items: center; gap: .45em; padding: .38em .95em .42em; min-height: 40px;
+  border-radius: 999px; border: 2px solid var(--cocoa, #5A3B2E); background: #FFF8EE; color: var(--cocoa, #5A3B2E);
+  box-shadow: 0 3px 0 #3A2A1F55; overflow: hidden; isolation: isolate;
+  font-family: var(--f-head, 'Nunito', sans-serif); font-weight: 800; font-size: max(16px, .82em); line-height: 1;
+  opacity: 0; transform: translateY(6px); pointer-events: none; cursor: pointer; user-select: none; -webkit-user-select: none;
+  touch-action: none; -webkit-touch-callout: none; transition: opacity .18s, transform .18s;
+}
+.cin-skip-chip.is-on { opacity: .94; transform: none; pointer-events: auto; }
+.cin-skip-chip:hover, .cin-skip-chip.is-held { opacity: 1; }
+.cin-skip-chip:focus-visible { outline: 3px solid #FFCC55; outline-offset: 2px; }
+.cin-skip-chip .chip-fill {
+  position: absolute; inset: 0; z-index: -1; transform-origin: left center; transform: scaleX(var(--p, 0));
+  background: linear-gradient(90deg, #FFB3C7, #FF7AA2); transition: transform .06s linear;
+}
+.cin-skip-chip .chip-txt { letter-spacing: .02em; white-space: nowrap; }
+.cin-skip-chip .chip-hold { font-weight: 700; font-size: .78em; opacity: .78; white-space: nowrap; }
+.cin-skip-chip .chip-hold .ui-key { font-size: .95em; }
+/* touch: top right, under the HUD counters (the ❚❚ sits at the top centre, the thumb clusters at the bottom) */
+.dev-touch .cin-skip-chip { bottom: auto; top: calc(env(safe-area-inset-top) + 64px); min-height: 44px; padding: .45em 1.05em .5em; }
+@media (max-width: 480px) {
+  .cin-skip-chip { font-size: 15px; }
+  .dev-touch .cin-skip-chip { top: calc(env(safe-area-inset-top) + 92px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cin-skip-chip, .cin-skip-chip .chip-fill { transition: none; }
+}

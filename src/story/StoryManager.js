@@ -8,13 +8,16 @@
 // story's own Overlay.js), hint(key, o) (one-time hints; Mochi says them once he has joined), stage (the prologue
 // stage), toChart(), barnSet(on). See requests/story.md for the ui contract.
 //
-// Flow (WA §6.2, "play first"): boot loads `meadow` spawn `title` → CS-00 (title loop on the sunny practice field,
-// Pearl beside her) → the tap → newGame(): no fade, no reload, the camera blends to follow and she plays at once →
-// Morning Practice (7 lessons, Pearl guiding; `tutbow` after the bonk) → `tutpearl` → Pearl leads her to the height
-// chart → CS-01 (one ear-tuft short, ~20 s) → CS-02 (The Giggling Mist) → she runs to the barn → CS-01b (Suit Up; the
-// chest) → Chapter 1: G-01 on her way north → D-01 (Mochi's cart, companions call it) → CS-03 (picnic interact) → the
-// net ropes → `cs03b` (Pudding follows). The prologue director (`_prologueTick`) plays each beat by position / flag
-// when the level's own triggers do not (or a save resumes mid-prologue). Old saves map through `migrateFlags`.
+// Flow (WA §6.2 "play first", TT2 §10.3 guided onboarding): boot loads `meadow` spawn `title` → CS-00 (title loop on
+// the sunny practice field, Pearl beside her) → the tap → newGame(): no fade, no reload, she plays at once → Morning
+// Practice (4 lessons: move, bonk, the Sir Wobble drill = block + parry; Pearl guiding) → the bell → CS-01 in place
+// (≤ 10 s) → CS-02 (The Giggling Mist, ≤ 20 s) → rats spill into the practice field: the first fight (`yard`, flag
+// `onboard.firstFight`) → the barn chest → CS-01b (Suit Up, ≤ 6 s) → Chapter 1: G-01 (a bark) on her way north → D-01
+// (Mochi's cart) → Noodle's barrel (Meow) → the Standing Stones (`onboard.done`) → CS-03 … Every step has a guide
+// target (`guideTarget()`: the Pink Paw trail, the coin arrow, the objective line). The prologue director
+// (`_prologueTick`) plays each beat by position / flag when the level's own triggers do not (or a save resumes
+// mid-prologue). Old saves map through `migrateFlags`; old mid-practice saves resume at the nearest new lesson.
+// TT2 additive: guideTarget(), sceneActive, skipChip, skipPressed(), holdSkip(on), questTarget(id), onboard.
 // Acts I–II (M2), driven by gameplay events (world / enemies / companions may also call play() directly; a second
 // request for a running or queued id is merged): forest D-02 (Sage's cage, companions) → CS-04 (trigger `camp`) →
 // CS-05 (B1 defeated); town D-03 (Bakery Street cleared) → the Pilfer chase → CS-06 (post bag returned) → D-04 ×3
@@ -27,15 +30,19 @@ import { LEVEL_IDS, FADE_COLOR } from '../core/config.js';
 import { Cutscene } from './Cutscene.js';
 import { Overlay } from './Overlay.js';
 import { Tutorial, PRACTICE, TUTORIAL_STEPS, setTimeoutish } from './tutorial.js';
+import { ONBOARD, STORY } from '../core/config.js';
+import { registerOnboardingStrings } from './strings.onboarding.js';
 import { BarkDirector } from './dialogue/barks.js';
 import { EAGER, LAZY, SCENE_LEVEL, ALIASES, placeholderScene, loadScene } from './cutscenes/registry.js';
 import { BARN, levelChest } from './cutscenes/cs01b.js';
 import { buildSunPatch } from './cutscenes/rig.js';
 import { G01_STATUE } from './cutscenes/g01.js';
 import { t as tr, text as textOf } from './strings.js';
-import { currentQuest, bossQuest, nextLevel, levelCards, entrySpawn } from './quests.js';
+import { currentQuest, bossQuest, nextLevel, levelCards, entrySpawn, QUEST_SPOTS } from './quests.js';
 import { hubLine } from './dialogue/hub.js';
 import { aliveEnemies, levelResults } from './cutscenes/cast.js';
+
+registerOnboardingStrings();
 
 /** Hold Pause this long to skip a skippable scene (§5.1). */
 export const SKIP_HOLD = 1.0;
@@ -57,18 +64,24 @@ export const PREROLL = Object.freeze({ maxAlive: 2, maxWait: 10 });
  * chest interactable), G-01's spot (fallback while world's `tallbert` trigger is still keyed to the old flags), and the
  * barn sunbeam's sparkle period. Radii in metres.
  */
-export const PROLOGUE = Object.freeze({ chartR: PRACTICE.chartR, chestR: 2.2, g01: Object.freeze([0, -61]), g01R: 2.5, sparkleEvery: 1.6, bellSay: 3.0, pathStep: 0.3 });
+export const PROLOGUE = Object.freeze({ chartR: PRACTICE.chartR, chestR: 2.2, g01: Object.freeze([0, -61]), g01R: 2.5, sparkleEvery: 1.6, bellSay: 2.0, bellDelay: 1.2 });
 /** Mochi cheers from his carrier when a foe within this many metres of it is bonked (WA §8.4), at most every `gap` s. */
 export const MOCHI_CHEER = Object.freeze({ r: 16, gap: 2.0, n: 3 });
 /** The prologue director runs every this many seconds of play. */
 export const PROLOGUE_TICK = 0.1;
 /**
- * The Suit Up guide (after CS-02 nothing else names the barn): `delay` s into the suit stage (after the cream fade)
- * Clem's own bubble says "First... armour." with the quest line and the ghost paw on the barn chest, and a trail of
- * `trail` gold sparkles runs from her to the chest, `trailStep` s apart; the trail repeats every `every` s while she is
- * still `farR` m or more from the chest.
+ * The Suit Up guide (after the first fight): `delay` s after the yard is clear Clem's own bubble says "First... armour."
+ * with the chest line and the ghost paw on the barn chest (`idleDemo` s). The way there is the Pink Paw trail
+ * (guideTarget); the old sparkle trails are gone.
  */
-export const BARN_GUIDE = Object.freeze({ delay: 0.6, trail: 6, trailStep: 0.18, every: 7, farR: 5, idleDemo: 4 });
+export const BARN_GUIDE = Object.freeze({ delay: 0.6, idleDemo: 4 });
+
+/** Onboarding target ids that are not quest rows (the bot and G1 read `id` / `kind`). */
+/** Chapter 1 onboarding: alerted foes this close to her (m) take the guide (fight line) before the next step's spot. */
+export const GUIDE_FOE_R = 10;
+/** The barn chest counts as in reach (the "Open" line) within this many metres of it (its tag zone r is 1.8). */
+export const CHEST_NEAR_R = 1.6;
+export const ONBOARD_IDS = Object.freeze({ fight: 'onboard.fight', chest: 'prologue.suit', mochi: 'meadow.mochi', noodle: 'onboard.noodle', stones: 'onboard.stones', chart: 'prologue.chart' });
 
 /**
  * Map pre-Phase-W prologue flags onto the new order (play first; WA §6.2). Old: CS-01 (night barn) set
@@ -286,9 +299,188 @@ export class StoryManager {
     this.bossId = null;
     /** the story step under a boss row (quest:update `done` follows the steps, not the boss row) */
     this._step = null;
-    /** Suit Up guide state: seconds in the suit stage, shown, seconds to the next sparkle trail */
-    this._barnGuide = { t: 0, on: false, trailT: 0 };
-    this._chartTrailT = 0;          // s to the next height-chart sparkle trail (stage 'chart')
+    /** Suit Up guide state: seconds since the yard cleared, the bubble shown */
+    this._barnGuide = { t: 0, on: false };
+    /** the Skip chip is held (ui: tap-and-hold on touch, or a mouse hold) */
+    this._chipHold = false;
+    /** game time CS-01 may start after the bell (toChart); null = at once (old saves in stage 'chart') */
+    this._chartAt = null;
+    /** TT2 onboarding times (game seconds): Play pressed, the first fight locked, the Standing Stones reached */
+    this.onboard = { t0: null, firstFight: null, done: null };
+  }
+
+  // ------------------------------------------------------------------ TT2 guidance contract (docs/TOKENTAILS-PLAN.md §10.7)
+  /** A cutscene or a blocking dialogue is on (ambient barks are not): the trail, edge arrow and badge hide. */
+  get sceneActive() {
+    if (this._loading.size > 0) return true;
+    const cs = this.current;
+    return !!cs && !cs.finished && cs.kind !== 'ambient';
+  }
+
+  /** Is skip asked for right now (Pause held, or the Skip chip held)? */
+  skipPressed() { return !!this._chipHold || !!this.ctx.input?.down?.('pause'); }
+
+  /** ui: the Skip chip is pressed / released (tap-and-hold on touch, a mouse hold on desktop). */
+  holdSkip(on) { this._chipHold = !!on; }
+
+  /**
+   * The Skip chip (ui `.cin-skip-chip`, visible from second 0): `{ on, progress, scene }` — on while a skippable scene
+   * runs (never the title loop, never an ambient bark) or Morning Practice is active.
+   */
+  get skipChip() {
+    const cs = this.current;
+    if (cs && !cs.finished && cs.id !== 'cs00' && cs.kind !== 'ambient' && cs.canSkip) return { on: true, progress: Math.min(1, this.skipHeld / SKIP_HOLD), scene: cs.id };
+    const tu = this.tutorial;
+    if (!cs && tu?.active && tu.eligible?.()) return { on: true, progress: Math.min(1, (tu.skipHeld ?? 0) / PRACTICE.skipHold), scene: 'practice' };
+    return { on: false, progress: 0, scene: null };
+  }
+
+  /**
+   * The current objective as a world target (TT2 §10.7): `{ id, x, z, arriveR, textKey, vars?, kind, speaker? }` for every
+   * practice lesson, every prologue step, the Chapter 1 onboarding steps and every later quest step that has a known
+   * spot; null on the title, during a load or a boss fight, or when the step has no place.
+   */
+  guideTarget() {
+    const ctx = this.ctx, p = ctx.player, st = ctx.state;
+    if (!p || !st || ctx.levels?.loading || this.title.active) return null;
+    const lvl = this.levelId;
+    if (!lvl) return null;
+    if (lvl === 'meadow') {
+      const stage = prologueStage(st);
+      if (stage === 'title') return null;
+      if (stage === 'practice') return this.tutorial.guideTarget() ?? this._spot(ONBOARD_IDS.chart, PRACTICE.dummies[1], PRACTICE.bonkR, 'tut.move', 'lesson', 'pearl');
+      if (stage === 'chart' || stage === 'raid') return this._spot(ONBOARD_IDS.chart, PRACTICE.chart, PRACTICE.chartR, 'quest.prologue.chart', 'quest', 'pearl');
+      if (stage === 'suit') return this._suitTarget();
+      if (!st.getFlag('onboard.done')) { const t = this._chapterOneTarget(); if (t) return t; }
+    }
+    if (this.bossId) return null;
+    const q = this._step ?? currentQuest(st, lvl);
+    if (!q || q.id === 'done') return null;
+    const at = this.questTarget(q.id);
+    return at ? this._spot(q.id, at, 4, q.textKey, 'quest') : null;
+  }
+
+  /** One guide target row. */
+  _spot(id, xz, arriveR, textKey, kind, speaker = null) {
+    const t = { id, x: xz[0], z: xz[1], arriveR: arriveR ?? ONBOARD.arriveR, textKey, kind };
+    if (speaker) t.speaker = speaker;
+    return t;
+  }
+
+  /** Suit stage: the first fight on the practice field (the nearest rat), then the barn chest. */
+  _suitTarget() {
+    const ctx = this.ctx, p = ctx.player, F = ONBOARD.fight;
+    if (!this.yardCleared()) {
+      const a = ctx.levels?.arena?.(F.arena);
+      if (a?.locked) {
+        let best = null, bd = Infinity;
+        for (const e of a.enemies ?? []) {
+          if (!e?.alive || !e.pos || !(ctx.enemies?.list?.includes?.(e) ?? true)) continue;
+          const d = Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
+          if (d < bd) { bd = d; best = e; }
+        }
+        if (best) return this._spot(ONBOARD_IDS.fight, [best.pos.x, best.pos.z], 1.6, 'onb.fight', 'quest');
+        return this._spot(ONBOARD_IDS.fight, F.spill, 2.5, 'onb.fight', 'quest');
+      }
+      return this._spot(ONBOARD_IDS.fight, F.at, Math.max(2, F.r - 3), 'onb.fight.quest', 'quest');
+    }
+    const it = levelChest(ctx);
+    const xz = it?.pos ? [it.pos.x, it.pos.z] : Array.isArray(it?.at) ? it.at : BARN.chest;
+    // in reach of the chest's tag (the `barn_chest` zone's r 1.8, with a margin: fix round 2, the bot stood at 1.81 m,
+    // the line said "[Interact]" and nothing opened)
+    const near = Math.hypot(p.pos.x - xz[0], p.pos.z - xz[1]) <= CHEST_NEAR_R;
+    // fix round 2: the chest is a box collider in the barn doorway (behind the practice fence's hop). The trail and the
+    // edge-coin / print orders go to the stand spot in front of it (cs01b's `BARN.clem`, inside the tag's reach), not the
+    // chest centre: a path to the centre snapped short and a tap there ended "arrived" a step away from the tag
+    const stand = BARN.clem && Math.hypot(BARN.clem[0] - xz[0], BARN.clem[1] - xz[1]) < CHEST_NEAR_R ? BARN.clem : xz;
+    return this._spot(ONBOARD_IDS.chest, stand, near ? 1.2 : 0.9, near ? 'onb.chest.near' : 'onb.chest', 'quest', 'swordcat');
+  }
+
+  /** Chapter 1 onboarding (meadow, after Suit Up, until the Standing Stones): Mochi's cart → Noodle's barrel → the Stones. */
+  _chapterOneTarget() {
+    const ctx = this.ctx, st = ctx.state, p = ctx.player;
+    if (!st.getFlag('meadow.mochi')) {
+      // the cage opens only once the `cart` arena is clear (LostKitten needClear): point at the nearest live rat until then
+      const arena = ctx.levels?.arena?.('cart');
+      if (arena && !arena.cleared) {
+        let best = null, bd = Infinity;
+        for (const e of arena.enemies ?? []) {
+          if (!e?.pos || e.alive === false) continue;
+          const d = Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
+          if (d < bd) { bd = d; best = e; }
+        }
+        if (best) return this._spot(ONBOARD_IDS.mochi, [best.pos.x, best.pos.z], 1.8, 'onb.cart.rats', 'quest');
+      }
+      const lock = (ctx.companions?.actors ?? []).find?.((a) => a?.kittenId === 'mochi' && a.alive !== false && a.pos);
+      const xz = lock ? [lock.pos.x, lock.pos.z] : STORY.mochiCage;
+      // Mochi's latch is cracked (companions CRACKED_LOCKS): a plain blow only "tinks", so at the cart the line says how
+      // to do the Bright Slash (hold Attack, let go) instead of "Bonk" (fix round 1b: the Q1 bot tinked here for 15 s)
+      const d = Math.hypot(p.pos.x - xz[0], p.pos.z - xz[1]);
+      // fix round 2: away from the cart the line is the way ("Follow the paws to Mochi's cart!"), not the attack key:
+      // "Bonk the cart open! [Attack]" 46 m away had the bot (and a player) swinging mid-hop over the practice fence
+      // (fix round 2b: until she is in reach (mochiNearR) the line names the way, never the attack: an attack line 5 m
+      // off had touch players (and the bot) pressing ⚔ at nothing; in reach, the Bright Slash line for the cracked latch)
+      const cracked = lock?.cracked ?? true;
+      const key = d > ONBOARD.mochiNearR ? 'onb.mochi.go' : cracked ? 'onb.mochi.bright' : 'onb.mochi';
+      return this._spot(ONBOARD_IDS.mochi, xz, 1.4, key, 'quest');
+    }
+    // fix round 2: a stray fight on the way (rats alerted within GUIDE_FOE_R of her) points the guide at the nearest
+    // one with the fight line, like the cart arena (the Q1 bot was told "the barrel" / "the Stones" mid rat fight)
+    const foe = this._nearAlertedFoe(GUIDE_FOE_R);
+    if (foe) return this._spot(st.kittens?.includes?.('noodle') ? ONBOARD_IDS.stones : ONBOARD_IDS.noodle, [foe.pos.x, foe.pos.z], 1.8, 'onb.cart.rats', 'quest');
+    if (!st.kittens?.includes?.('noodle')) {
+      const xz = ONBOARD.noodle, near = Math.hypot(p.pos.x - xz[0], p.pos.z - xz[1]) <= ONBOARD.noodleR;
+      return this._spot(ONBOARD_IDS.noodle, xz, 2.5, near ? 'onb.meow' : 'onb.noodle', 'quest');
+    }
+    return this._spot(ONBOARD_IDS.stones, ONBOARD.stones, ONBOARD.stonesR - 2, 'onb.stones', 'quest');
+  }
+
+  /** The nearest live, alerted foe within `r` m of her (or null). */
+  _nearAlertedFoe(r) {
+    const p = this.ctx.player?.pos, list = this.ctx.enemies?.list;
+    if (!p || !list) return null;
+    let best = null, bd = r;
+    for (const e of list) {
+      if (!e || e.alive === false || !e.alerted || !e.pos) continue;
+      const d = Math.hypot(e.pos.x - p.x, e.pos.z - p.z);
+      if (d <= bd) { bd = d; best = e; }
+    }
+    return best;
+  }
+
+  /** Is the first fight (the practice-field `yard` arena) over (or not part of this save's flow)? */
+  yardCleared() {
+    const ctx = this.ctx, st = ctx.state, id = ONBOARD.fight.arena;
+    if (st?.getFlag?.('prologue.armour') || st?.getFlag?.('prologue.done')) return true;
+    const a = ctx.levels?.arena?.(id);
+    if (a) return !!a.cleared;
+    return !!st?.getFlag?.(`meadow.cleared.${id}`);
+  }
+
+  /**
+   * The world spot [x, z] of quest step `id` (QUEST_SPOTS refs: `z:<zone>`, `k:<kitten / npc>`, `a:<anchor>`), or null.
+   * ui's beacon asks this first (requests/story.md).
+   */
+  questTarget(id) {
+    const rows = QUEST_SPOTS[id];
+    if (!rows) return null;
+    const ctx = this.ctx;
+    for (const r of rows) {
+      const ref = typeof r === 'string' ? r : r.ref;
+      if (typeof r !== 'string' && r.unless && ctx.state?.getFlag?.(r.unless)) continue;
+      const kind = ref.slice(0, 2), name = ref.slice(2);
+      if (kind === 'z:') {
+        const z = (ctx.levels?.current?.def?.zones ?? []).find?.((x) => x?.id === name);
+        if (Array.isArray(z?.at)) return [z.at[0], z.at[1]];
+      } else if (kind === 'k:') {
+        const a = (ctx.companions?.actors ?? []).find?.((x) => (x?.kittenId === name || x?.npcId === name) && x.pos && x.alive !== false && !x.disposed);
+        if (a) return [a.pos.x, a.pos.z];
+      } else if (kind === 'a:') {
+        const an = ctx.levels?.anchor?.(name);
+        if (an?.pos) return [an.pos.x, an.pos.z];
+      }
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------ contract
@@ -308,6 +500,9 @@ export class StoryManager {
     on(E.BOSS_DEFEATED, (p) => { this._bossQuest(null); const id = BOSS_SCENES[String(p?.id ?? '').replace(/^boss_/, '')]; if (id) this.play(id); });
     on(E.BOSS_START, (p) => this._bossQuest(p?.id ?? p?.boss?.def?.id ?? 'boss'));
     on(E.CUTSCENE_START, (p) => { if (p?.id === 'cs01b') this._barnGuideOff(); });
+    // TT2: the first fight (rats spill into the practice field after CS-02) and its clear
+    on(E.ARENA_LOCK, (p) => { if (p?.id === ONBOARD.fight.arena) this._onFirstFight(); });
+    on(E.ARENA_CLEAR, (p) => { if (p?.id === ONBOARD.fight.arena) this._onYardClear(); });
     on(E.OBJECTIVE, (p) => this._onObjective(p));
     on(E.ARENA_CLEAR, (p) => { if (p?.id === 'bakery') this._beat('d03', 'town.marmalade', 'town'); });
     on(E.ITEM_RETURNED, (p) => this._onReturned(p));
@@ -571,10 +766,12 @@ export class StoryManager {
    * New adventure (§14.3, WA §6.3): reset progress (settings kept), flag `prologue.start`. On the title scene there is
    * no fade and no reload: CS-00 ends normally (the camera blends MEME_LOOP → follow over 1.1 s), she hops out of the
    * Oath pose in her practice tunic and Morning Practice starts right there (Pearl is already beside her). Anywhere else
-   * a cream fade covers a load of the practice field. `skipPrologue` goes straight to Chapter 1.
-   * @param {{ difficulty?: string, skipPrologue?: boolean }} [o]
+   * a cream fade covers a load of the practice field. `skipPractice` (TT2: the title's "Skip practice" link, for new
+   * players too) starts the same way with practice done: the bell, CS-01, CS-02, the first fight. `skipPrologue` goes
+   * straight to Chapter 1.
+   * @param {{ difficulty?: string, skipPrologue?: boolean, skipPractice?: boolean }} [o]
    */
-  async newGame({ difficulty = null, skipPrologue = false } = {}) {
+  async newGame({ difficulty = null, skipPrologue = false, skipPractice = false } = {}) {
     const ctx = this.ctx, st = ctx.state;
     const onTitle = !skipPrologue && this.current?.id === 'cs00' && this.levelId === 'meadow';
     if (!onTitle) {
@@ -587,7 +784,8 @@ export class StoryManager {
       st.reset({ settings, difficulty: difficulty ?? st.difficulty ?? 'knight' });
     }
     this.tutorial.reset();
-    this._raidAsked = false;
+    this._raidAsked = false; this._chartAt = null; this._yardSaid = false;
+    this.onboard = { t0: ctx.game?.time ?? 0, firstFight: null, done: null };
     if (skipPrologue) {
       if (this.current?.id === 'cs00') this.current.skip();
       this._endTitle();
@@ -600,7 +798,8 @@ export class StoryManager {
       return;
     }
     this.flag('prologue.start', true);
-    const outfit = this.practiceOutfit();
+    if (skipPractice) this.flag('prologue.practice', true);       // the director plays the bell → CS-01 at once
+    const outfit = skipPractice ? 'tunic_bow' : this.practiceOutfit();
     if (onTitle) {
       this._endTitle();
       try { ctx.player?.setOutfit?.(outfit); } catch (e) { console.warn(e); }
@@ -662,31 +861,18 @@ export class StoryManager {
   hint(key, o) { return this.tutorial.hint(key, o); }
 
   /**
-   * P8 (ON §4.2): practice is over. The Sunbell rings far away, Pearl says "The bell! It's measuring time! Come ON!"
-   * and runs ahead to the height chart along a little trail of sparkles; CS-01 plays when Clem reaches it. Until then
-   * the director repeats a sparkle trail from Clem to the chart every BARN_GUIDE.every s while she is far from it.
+   * Practice is over (TT2 §10.3): the Sunbell rings far away, Pearl's bubble says "The bell! It's measuring time! Come
+   * ON!" and CS-01 plays right where she is, PROLOGUE.bellDelay s later (no walk to the height chart any more).
    * @param {{ dots?: { n: number, of: number, half?: boolean } }} [o] `dots`: the paw dots to show (the lessons really
    *   done when practice was skipped; all of them by default)
    */
   toChart({ dots = null } = {}) {
     const ctx = this.ctx;
     const stepDots = dots ? { n: dots.n, of: dots.of, half: false } : { n: TUTORIAL_STEPS.length, of: TUTORIAL_STEPS.length, half: false };
-    ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: PRACTICE.chartPath.length, progress: 1, done: false, speaker: 'pearl', say: 'pearl.bell', stepDots });
-    this._chartTrailT = BARN_GUIDE.every;                            // the one-shot path trail below covers the first beat
+    ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: 0, progress: 1, done: false, speaker: 'pearl', say: 'pearl.bell', stepDots });
     setTimeoutish(ctx, PROLOGUE.bellSay, () => ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'tutorial', action: null, hold: 0, textKey: null, step: 'bell', total: 0, progress: 1, done: true, speaker: 'pearl' }));
     try { ctx.audio?.bell?.({ strikes: 1, volume: 0.55 }); } catch { /* audio optional */ }
-    const pearl = (ctx.companions?.actors ?? []).find?.((a) => a?.npcId === 'pearl') ?? null;
-    const path = PRACTICE.chartPath;
-    path.forEach(([x, z], i) => setTimeoutish(ctx, 0.2 + i * PROLOGUE.pathStep, () => {
-      const y = ctx.physics?.heightAt?.(x, z) ?? ctx.player?.pos?.y ?? 0;
-      try { ctx.fx?.burst?.('sparkle', { x, y: y + 0.2, z }, { count: 6, color: '#FFD57A' }); } catch { /* fx optional */ }
-    }));
-    if (pearl?.moveTo) {
-      pearl.setScripted?.(true);
-      let p = Promise.resolve();
-      for (const pt of path) p = p.then(() => pearl.moveTo(pt, PRACTICE.pearl.speed));
-      p.then(() => { try { pearl.face?.(ctx.player ?? 0, 0.4); pearl.play?.('wave', { once: true }); } catch { /* gone */ } });
-    }
+    this._chartAt = (ctx.game?.time ?? 0) + PROLOGUE.bellDelay;
   }
 
   /**
@@ -723,73 +909,73 @@ export class StoryManager {
     this._directorT = PROLOGUE_TICK;
     const stage = prologueStage(st), near = (xz, r) => Math.hypot(p.pos.x - xz[0], p.pos.z - xz[1]) <= r;
     if (stage === 'chart') {
-      if (near(PRACTICE.chart, PROLOGUE.chartR) || near([PRACTICE.chart[0], PRACTICE.chart[1] + 1.3], PROLOGUE.chartR)) this.play('cs01');
-      else this._chartGuideTick(PROLOGUE_TICK);
+      // TT2: CS-01 plays in place right after the bell (old saves in this stage: at once)
+      if (this._chartAt == null || (ctx.game?.time ?? 0) >= this._chartAt) { this._chartAt = null; this.play('cs01'); }
     }
     else if (stage === 'raid') { if (!this._raidAsked) { this._raidAsked = true; this.play('cs02'); } }
     else if (stage === 'suit') {
       this.barnSet(true);
-      this._barnGuideTick(PROLOGUE_TICK);
-      if (!levelChest(ctx) && near(BARN.chest, PROLOGUE.chestR)) this.play('cs01b');
+      if (this.yardCleared()) this._barnGuideTick(PROLOGUE_TICK);
+      if (!levelChest(ctx) && this.yardCleared() && near(BARN.chest, PROLOGUE.chestR)) this.play('cs01b');
     } else if (stage === 'done') {
       if (!this.seen('g01') && near(PROLOGUE.g01, PROLOGUE.g01R) && p.pos.z < G01_STATUE[1]) this.play('g01');
+      this._onboardTick(p, st);
+    }
+  }
+
+  /** TT2: the first fight locked (the practice-field `yard` arena): flag `onboard.firstFight` once. */
+  _onFirstFight() {
+    const st = this.ctx.state;
+    if (st?.getFlag?.('onboard.firstFight')) return;
+    this.onboard.firstFight = this.ctx.game?.time ?? 0;
+    this.flag('onboard.firstFight', true);
+  }
+
+  /** TT2: the yard is clear: Clem's line, then the Suit Up guide bubble (the trail leads to the barn chest). */
+  _onYardClear() {
+    const ctx = this.ctx;
+    this._barnGuide.t = 0;
+    if (this._yardSaid) return;
+    this._yardSaid = true;
+    try { this.barks.say(ctx.player, 'onb.fight.clear', 'swordcat', 2.0); } catch { /* optional */ }
+    ctx.bus.emit(E.SAVE_REQUEST, {});
+  }
+
+  /**
+   * Chapter 1 onboarding (meadow, after Suit Up): Noodle's barrel teaches Meow within ONBOARD.noodleR (a one-time tip,
+   * the objective line says it too), and reaching the Standing Stones after Mochi and Noodle sets `onboard.done`.
+   */
+  _onboardTick(p, st) {
+    if (st.getFlag('onboard.done')) return;
+    const N = ONBOARD.noodle, S = ONBOARD.stones;
+    if (!st.kittens?.includes?.('noodle') && Math.hypot(p.pos.x - N[0], p.pos.z - N[1]) <= ONBOARD.noodleR) this.hint('tut.meow', { textKey: 'onb.meow', force: true });
+    if (st.getFlag('meadow.mochi') && st.kittens?.includes?.('noodle') && Math.hypot(p.pos.x - S[0], p.pos.z - S[1]) <= ONBOARD.stonesR) {
+      this.onboard.done = this.ctx.game?.time ?? 0;
+      this.flag('onboard.done', true);
     }
   }
 
   /**
-   * The Suit Up guide (the director calls it every PROLOGUE_TICK s in the suit stage): after BARN_GUIDE.delay, Clem's
-   * bubble ("First... armour." + "Borrow armour from the barn!", the ghost paw on the chest), then a gold sparkle trail
-   * from her to the chest every BARN_GUIDE.every s while she is still far from it.
+   * The Suit Up guide (the director calls it every PROLOGUE_TICK s in the suit stage once the yard is clear): after
+   * BARN_GUIDE.delay, Clem's bubble ("First... armour." + the chest line, the ghost paw on the chest). The Pink Paw
+   * trail (guideTarget) leads the way.
    */
   _barnGuideTick(dt) {
     const ctx = this.ctx, G = this._barnGuide, p = ctx.player;
     G.t += dt;
-    if (G.t < BARN_GUIDE.delay || !p) return;
+    if (G.on || G.t < BARN_GUIDE.delay || !p) return;
+    G.on = true;
     const [x, z] = BARN.chest;
-    if (!G.on) {
-      G.on = true; G.trailT = 0;
-      const y = ctx.physics?.heightAt?.(x, z) ?? p.pos.y;
-      ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'barn', action: null, hold: 0, textKey: 'quest.prologue.suit', step: 'barn', total: 0, progress: 0, done: false,
-        speaker: 'swordcat', say: 'cs02.7', demo: 'tap', target: [x, y + 0.4, z], idleDemo: BARN_GUIDE.idleDemo });
-    }
-    if ((G.trailT -= dt) > 0) return;
-    G.trailT = BARN_GUIDE.every;
-    if (Math.hypot(p.pos.x - x, p.pos.z - z) < BARN_GUIDE.farR) return;
-    this._sparkleTrail(p.pos.x, p.pos.z, x, z, BARN_GUIDE.trail, BARN_GUIDE.trailStep);
-  }
-
-  /**
-   * The height-chart guide (stage 'chart', until CS-01 starts): every BARN_GUIDE.every s a gold sparkle trail runs
-   * from Clem to the chart while she is farther than BARN_GUIDE.farR from it (the barn guide's trail, same cadence).
-   */
-  _chartGuideTick(dt) {
-    const p = this.ctx.player;
-    if (!p || (this._chartTrailT -= dt) > 0) return;
-    this._chartTrailT = BARN_GUIDE.every;
-    const [x, z] = PRACTICE.chart;
-    if (Math.hypot(p.pos.x - x, p.pos.z - z) < BARN_GUIDE.farR) return;
-    this._sparkleTrail(p.pos.x, p.pos.z, x, z, BARN_GUIDE.trail, BARN_GUIDE.trailStep);
+    const y = ctx.physics?.heightAt?.(x, z) ?? p.pos.y;
+    ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'barn', action: null, hold: 0, textKey: 'onb.chest', step: 'barn', total: 0, progress: 0, done: false,
+      speaker: 'swordcat', say: 'cs02.7', demo: 'tap', target: [x, y + 0.4, z], idleDemo: BARN_GUIDE.idleDemo });
   }
 
   /** Hide the Suit Up guide bubble (CS-01b starts, a level load). Idempotent. */
   _barnGuideOff() {
     const G = this._barnGuide;
     if (G.on) this.ctx.bus.emit(E.PROMPT, { kind: 'tutorial', id: 'barn', action: null, hold: 0, textKey: null, step: 'barn', total: 0, progress: 1, done: true, speaker: 'swordcat' });
-    G.on = false; G.t = 0; G.trailT = 0;
-  }
-
-  /** `n` gold sparkles from (x0, z0) to (x1, z1), one every `step` s (the "this way" trail; fx bursts only). */
-  _sparkleTrail(x0, z0, x1, z1, n, step) {
-    const ctx = this.ctx;
-    for (let i = 1; i <= n; i++) {
-      const f = i / n, x = x0 + (x1 - x0) * f, z = z0 + (z1 - z0) * f;
-      setTimeoutish(ctx, i * step, () => {
-        const y = ctx.physics?.heightAt?.(x, z) ?? ctx.player?.pos?.y ?? 0;
-        try { ctx.fx?.burst?.('sparkle', { x, y: y + 0.25, z }, { count: 5, color: '#FFD57A' }); } catch { /* fx optional */ }
-      });
-    }
-    // requests/fx.md: a soft ground arrow toward the goal, once fx has one
-    try { ctx.fx?.guideArrow?.({ x: x0, z: z0 }, { x: x1, z: z1 }, { dur: n * step + 1.5 }); } catch { /* fx optional */ }
+    G.on = false; G.t = 0;
   }
 
   /** Mochi cheers each bonk at his cart from inside the carrier (WA §8.4 `bark.mochi.cheer.*`). */
@@ -964,8 +1150,7 @@ export class StoryManager {
   }
 
   _skipHold(dt, cs) {
-    const input = this.ctx.input;
-    const held = !!input?.down?.('pause') && cs.canSkip;
+    const held = this.skipPressed() && cs.canSkip;
     if (held) {
       this.skipHeld += cs._realDt ?? dt;
       this.cinema.skip(Math.min(1, this.skipHeld / SKIP_HOLD));

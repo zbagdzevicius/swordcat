@@ -27,6 +27,8 @@ export const defaultState = () => ({
               camLockMode: 'locked', camCursorLead: 0, camZoomPortrait: 1, biggerHero: false,
               reduceCameraMotionAuto: true, reduceFlashesAuto: true, fpsCap: 'auto', batterySaver: false,
               hudMode: 'calm', hitWords: true, tutorialHints: true,
+              // TOKENTAILS-PLAN §10.2 / §10.7: the Pink Paw paw-print trail toward the objective (G1 reads `!== false`)
+              guideTrail: true,
               // pathPreview: WA §3.6 'auto' | 'on' | 'off' ('auto' = touch during the prologue + Chapter 1; fx pathPreviewOn)
               pathPreview: 'auto' },
 });

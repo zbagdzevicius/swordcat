@@ -1,4 +1,5 @@
-// Breastplate words (GAME_DESIGN §2.4, §18.3; TREND V2; ART_WARM_SPEC §9.2 / K9: Fredoka 700, ±3° per-glyph jitter;
+// Breastplate words (GAME_DESIGN §2.4, §18.3; TREND V2; ART_WARM_SPEC §9.2; Token Tails TT2 §10.4: Passion One 900 with a
+// per-character Nunito fallback for glyphs it lacks, ±3° per-glyph jitter;
 // WARM_ADVENTURE_SPEC §8.3 / characters.W4): ONE CanvasTexture holds BOTH words in two rows (the foe word on top, the
 // index-paired friend word below). The decal shows one row through the texture's repeat / offset; `flipPlate()` swaps
 // `offset.y` only (0 canvas work after spawn, no texture swap, no material change).
@@ -11,32 +12,60 @@ import { kitMaterial, makeToonMaterial } from './materials.js';
 export const PLATE_WORDS = Object.freeze(['GRUMP', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER', 'SNACK SNATCHER', 'GRUMP-IN-CHIEF']);
 /** Friend words for plates whose foe word has no config pair (bosses; WA §8.3). */
 export const FRIEND_WORDS = Object.freeze({ 'GRUMP-IN-CHIEF': 'CHEER-IN-CHIEF', 'SNACK SNATCHER': 'SNACK SHARER' });
-/** The plate font (K9: Fredoka only; the Latin woff2 ui ships). */
-export const PLATE_FONT = 'Fredoka';
+/**
+ * The plate font (Token Tails, docs/TOKENTAILS-PLAN.md §2.6 / §10.4): Passion One 900, the brand display face, for the
+ * ASCII words; it has no Lithuanian glyphs, so the canvas stack falls through to Nunito per character (as ui/fonts.css
+ * does). Both faces ship as woff2 under public/assets/fonts/ (ui/fonts.js registers them too).
+ */
+export const PLATE_FONT = 'Passion One';
+/** The per-character fallback face (Latin + Latin Extended). */
+export const PLATE_FALLBACK = 'Nunito';
+/** The canvas font stack once the faces are ready (and the system fallback before). Pure. */
+export const plateFamily = (ready) => (ready ? `'${PLATE_FONT}', '${PLATE_FALLBACK}', sans-serif` : 'sans-serif');
 /**
  * Plate look: texture size (two rows), per-glyph jitter (±3°), ink colours (cocoa foe word, warm pink friend word,
  * cream on black plates), the soft scratch tone, and the row offsets (`offset.y` of the foe / friend row).
  */
 export const PLATE = Object.freeze({
-  w: 256, h: 256, jitter: 3 * Math.PI / 180, weight: 700,
+  w: 256, h: 256, jitter: 3 * Math.PI / 180, weight: 900,
   ink: '#4A2A1F', friendInk: '#D9467A', inkOnBlack: '#F6EFE4', scratch: 'rgba(255,240,220,0.35)',
   foeOffset: 0.5, friendOffset: 0,
 });
 
+/** The woff2 files the plate stack needs (relative to public/assets/; the same files and ranges as ui/fonts.js). */
+const PLATE_FACES = Object.freeze([
+  { family: PLATE_FONT, file: 'fonts/passion-one-latin-900-normal.woff2', weight: '900',
+    unicodeRange: 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD' },
+  { family: PLATE_FALLBACK, file: 'fonts/nunito-latin-wght-normal.woff2', weight: '200 1000',
+    unicodeRange: 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD' },
+  { family: PLATE_FALLBACK, file: 'fonts/nunito-latin-ext-wght-normal.woff2', weight: '200 1000',
+    unicodeRange: 'U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF' },
+]);
+
 let _fontPromise = null, _fontReady = false;
 const _waiting = new Set();
-/** Load Fredoka once (FontFace API); textures drawn before it loads redraw themselves afterwards. */
+/** Is a face of `family` / `weight` already in document.fonts (ui/fonts.js may have added it)? */
+function hasFace(family, weight) {
+  try { for (const ff of document.fonts) if (ff.family.replace(/["']/g, '') === family && ff.weight === weight && ff.status !== 'error') return true; } catch { /* old engines */ }
+  return false;
+}
+/** Load Passion One and Nunito once (FontFace API); textures drawn before they load redraw themselves afterwards. */
 export function ensurePlateFont() {
   if (_fontPromise) return _fontPromise;
-  if (typeof FontFace === 'undefined' || typeof document === 'undefined') { _fontPromise = Promise.resolve(false); return _fontPromise; }
-  // ui may have registered Fredoka already (ui/fonts.js): then nothing to download
-  try { if (document.fonts?.check?.(`${PLATE.weight} 20px ${PLATE_FONT}`)) { _fontReady = true; _fontPromise = Promise.resolve(true); return _fontPromise; } } catch { /* old engines */ }
-  const ff = new FontFace(PLATE_FONT, `url(${assetUrl('fonts/Fredoka-Latin.woff2')})`, { weight: '300 700' });
-  _fontPromise = ff.load().then((f) => {
-    document.fonts.add(f); _fontReady = true;
-    for (const redraw of _waiting) redraw();
+  if (typeof FontFace === 'undefined' || typeof document === 'undefined' || !document.fonts) { _fontPromise = Promise.resolve(false); return _fontPromise; }
+  const loads = PLATE_FACES.map((f) => {
+    if (hasFace(f.family, f.weight)) return Promise.resolve(true);
+    const ff = new FontFace(f.family, `url(${assetUrl(f.file)})`, { weight: f.weight, unicodeRange: f.unicodeRange });
+    document.fonts.add(ff);
+    return ff.load().then(() => true).catch(() => false);
+  });
+  // the display face decides: without Passion One the plate keeps the system fallback
+  _fontPromise = Promise.all(loads).then(async (ok) => {
+    try { await document.fonts.load(`${PLATE.weight} 20px '${PLATE_FONT}'`, 'GRUMP'); } catch { /* ignore */ }
+    _fontReady = !!ok[0] || hasFace(PLATE_FONT, '900');
+    if (_fontReady) for (const redraw of _waiting) redraw();
     _waiting.clear();
-    return true;
+    return _fontReady;
   }).catch(() => false);
   return _fontPromise;
 }
@@ -103,7 +132,7 @@ export function makePlateTexture(word = 'GRUMP', o = {}) {
     const g = c.getContext('2d');
     const rnd = mulberry32((o.seed ?? 1) * 7919 + hashString(word));
     g.clearRect(0, 0, Wd, Ht);
-    const family = _fontReady ? `'${PLATE_FONT}', sans-serif` : 'sans-serif';
+    const family = plateFamily(_fontReady);
     const rowH = Ht / 2;
     drawRow(g, word, 0, Wd, rowH, o.ink ?? PLATE.ink, rnd, family);
     drawRow(g, friend, rowH, Wd, rowH, o.friendInk ?? PLATE.friendInk, rnd, family);

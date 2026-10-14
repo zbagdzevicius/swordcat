@@ -145,6 +145,14 @@ export function installDebug(game) {
     spawn: (type, x, z) => ctx.enemies.spawn(type, new THREE.Vector3(x, 0, z)),
     kittens: (n) => { ctx.state.kittens = KITTEN_IDS.slice(0, n); },
     objective: (id) => ctx.objectives.progress(id),
+    /**
+     * TOKENTAILS-PLAN §10.7 (G1): what a player can see of the guide, in CSS px: `{ phase, target: { id, kind, textKey }
+     * | null, objective, prompt, prints: [{ sx, sy, lit, w }], edge: { sx, sy } | null, badge: { sx, sy } | null,
+     * ring: { sx, sy } | null (fix round 2: the centre of the lit ring round an in-place lesson's object),
+     * skipChip: { x, y, w, h } | null }` (ui/beacon.js snapshot; the onboarding bot reads nothing else). Dev and
+     * build:test bundles only (this whole module is behind HOOKS_BUILD).
+     */
+    guide: () => ctx.ui?.beacon?.snapshot?.() ?? { phase: 'none', target: null, objective: '', prompt: '', prints: [], edge: null, badge: null, ring: null, skipChip: null },
     events,
 
     // ---- core extras (smoke helpers) ----

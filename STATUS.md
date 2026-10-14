@@ -291,4 +291,127 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
     cache); the build makes `og:image` / `twitter:image` absolute and adds `og:url` (`scripts/social-meta.mjs`;
     `VITE_SITE_URL`, default `https://tokentails.com/swordcat-game/`).
 - **Checks (2026-10-14, final pass):** `npm run build` and `npm run build:test` OK (bundle budgets within the gated limits). Before the rename, on the items 1–8 code: `npm run test:unit` 1087/1087 and full `npm run smoke` run A 258/258 with 0 failures (2986 s); run B was stopped at block 242/258 with 0 failures so far (wrap-up). After the A/B edits: `npm run test:unit` 1088/1088; smoke has not been rerun. Built heap was not re-measured.
-- **Still open:** Smoke has not been rerun after the Pink Paw Knight rename and the same-origin hosting change (A/B). B is only partly done: the copy into `client/public/swordcat-game/` has not been run or measured, the flag-on `/swordcat` dev-server check and its screenshots are not done, and the size figures in the tokentails GAMES.md / CLIENT.md (about 58 MB, about 560 files) come from the prune log, not from a measured copy. In close-ups the heroine's outline hull shows as a maroon band behind her head, the same cause as the Token Tails Cat's hood (in iso play it is the readability line). Plus plan §8 items.
+- **Superseded "still open" (first fix pass):** the items in this bullet were rerun or closed in TT2 (below): smoke ×2,
+  `build:tokentails` measured, flag-ON `/swordcat` checked, Clem's maroon band gone (close-up read).
+- **TT2 (2026-10-14, Q1 QA pass, uncommitted on `tokentails`):** Pink Paw trail + coin edge arrow + objective line (G1),
+  shorter onboarding with a Skip chip from second 0 (G2), brand UI / title constant / credits (G3), Rescue House,
+  night banners, kitten coats (G4), then R1/R2/R3/TT3 (the unowned requests, town banners, phone toasts and edge-coin
+  taps, the tokentails.com check). Plan: `docs/TOKENTAILS-PLAN.md` §10; the numbers below are also in §10.11.
+  - **Onboarding bot** (`npm run build:test && npm run bot:onboarding`; trail-only inputs from `__GAME__.guide()`,
+    1.5 s reaction delay, 3 seeds; report `tests/shots/bot/onboarding-bot.{json,md}`):
+
+    | Viewport | Skip | Play → `onboard.firstFight` (median; per seed) | Limit | Play → `onboard.done` | First-fight deaths |
+    |---|---|---|---|---|---|
+    | 1280×720 mouse | no | **47.9 s** (s1 47.9, s2 50.4, s3 46.6) | 90 s | not reached (3/3 dead end at Mochi's cart) | 0 |
+    | 1280×720 mouse | yes | **11.2 s** (11.2, 11.3, 11.2) | 40 s | not reached (3/3 Mochi's cart) | 0 |
+    | 844×390 touch | no | **54.0 s** (s1 58.0, s2 50.0, s3 stalled at Sir Wobble) | 110 s | not reached (Mochi / barn chest / Wobble) | 0 |
+    | 844×390 touch | yes | **11.3 s** (11.3, 11.2, 11.3) | 40 s | not reached (3/3 Mochi's cart) | 0 |
+
+    First-fight targets are met wherever the run got there. The time to `onboard.done` (≤ 4 min) is **not measured**:
+    no run gets past Mochi's cart. The cage opens only after the cart arena's rats are beaten, but the guide points at
+    the cart, names no key and hides inside 3 m. Fix with exact diffs: `requests/tokentails-tt3-q1.md` §1. Other dead
+    ends: the Sir Wobble stand spot (arrival radius 0.9 m vs close radius 1.6 − 1.3 m; the badge sits on Wobble, so a
+    click engages him; §2), and one touch run at the barn chest (edge-arrow taps, §3). The `flow:first-minute` smoke
+    (world-aware right-clicks) measures 42.8 s. Checks: the way is shown within 1 s for every walking step (move,
+    stand, chart, fight, chest; Mochi's step reports phase `play`, so it is not in this check); `tut.bonk` and `tut.parry` show only the badge or the objective line because
+    Clem is already there (by design, `beacon.js:152`; §7). The smallest lit print at 844×390 is 25.3 px (limit 18).
+    No trail, coin or badge appears in any scene. The Skip chip is on within 0.1 s of every skippable scene. Scenes
+    (median, no skip): CS-01 7.7 s, CS-01b 3.7 s, CS-02 31.5 s as a `sceneActive` span (G2 measured 17.6 s for the
+    scene alone; §7). The parry timing reads Sir Wobble's wind-up, because `guide()` has no parry cue yet (§4).
+  - **`npm run build:tokentails`:** `dist/` built within the bundle budgets and copied to
+    `tokentails-swordcat/client/public/swordcat-game/`: **632 files, 61.6 MiB** (64.6 MB). The largest file is 3.6 MB
+    (no file near the 50 MB limit). There is no Pink Paw logo or photo in `dist/` or the copy (md5 scan against
+    `tokentails-app/client/public/logo/shelters/`).
+  - **Flag-ON `/swordcat`** (`NEXT_PUBLIC_SWORDCAT=1 next dev -p 3021`, stopped afterwards): HTTP 200. `<title>`
+    "Pink Paw Knight - Token Tails". The iframe `/swordcat-game/index.html?embed=1` fills the viewport (1440×900 and
+    390×844) and reaches the title, with the Token Tails logo top-left on wide screens and the "A Token Tails game"
+    pill. Two issues: the host shows "Still loading Pink Paw Knight… Reload" over the loaded title, because the
+    game's origin allowlist has only `localhost:3000` and tokentails.com. Same-origin previews (any other port,
+    `*.vercel.app`) hit the same problem. Fix: trust the page's own origin (§6). On 390×844 the "Skip practice" link
+    overlaps the co-brand footer (§5).
+  - **Smoke** (`SMOKE_PORT=4191 npm run smoke`, 265 blocks): run A 2931 s, **10 blocks with 18 failed assertions**,
+    run B 2976 s, **12 blocks with 21 failed assertions**: the same 10 blocks, plus two that failed only in B
+    (`player:touch` "landscape: tap-to-move arrives", and `art:warm` gate_dusk luma 0.496 against [0.5, 0.58]). Both
+    runs are red. Every failure is documented here as a spec gap; none comes from TT3 work:
+    - Fence-link expectations from before TT2 (G2 moved the jump lesson out of practice and keeps the practice
+      fence's automatic hop off; the jump is now taught at the first hop outside practice): `player:click-move`,
+      `controls:nav` (2), `physics:nav` (3), `world:iso-data` (2). The tests need an update to the TT2 rule; the
+      blocks' owners have no TT3 package.
+    - `brand:surfaces` 390×844 (new in Q1): the "Skip practice" link overlaps the footer. Real bug (§5).
+    - `characters:ttcat` "coin crest on her plate"; `combat:touch` landscape ⚔ auto-target and lunge (2);
+      `world:fog-audit` forest and gate fog at 12 m below the §4.2 table (2); `enemies:hyena` gloat;
+      `enemies:onscreen-rule` (2). These do not touch TT2 code paths and need their owners to triage them. The
+      `enemies:onscreen-rule` block flaked in earlier passes too.
+  - **Read screenshots:** title, loading splash and veil, results, pause, credits (1280×720, 844×390 and 390×844)
+    under `tests/shots/brand/`; the Rescue House with the night ":3" banner (`tests/shots/world/hub-rescue-house.png`);
+    the town square's gold, lilac and night bunting with the pink paw trail (`world/town-square.png`); and a Clem
+    close-up with no maroon band behind her head (`characters/clem-closeup-front.png`). New smoke `brand:rescue-bio`
+    covers the Raudvis bio on the rescue card and no bio for a kitten without one.
+  - **Acceptance greps (§10.10 #8–#10):** "pink paw knight" appears only in `src/core/brand.js` (swordcat) and in
+    `components/swordcat/title.ts` plus tests (tokentails client). No `#F4A462`, `#E89A55` or `#F2A65A` in
+    `index.html`, `cursor.js` or `Overlay.js`. No `Fredoka` in `Plate.js`, `Bubble.js` or `rig.js`. The banned-word test
+    is green (`npm run test:unit` 1135/1135). There is no Pink Paw logo, photo or card art in the repo or in `dist/`.
+  - **Your call (§10.9 defaults applied):** "Pink Paw Rescue House" switches with the title (`BRAND.usePinkPawName`).
+    The credits print "in Lithuania". Currency stays "catnip" with "Catnip here stays in this game for now.". The jump
+    and Meow lessons are taught in context. The four Pink Paw names stay, with a founder check before each release. No
+    starter-cat looks and no mascot `.glb`. `swordcat-game/` (61.6 MiB) is copied as is behind the OFF flag; the
+    Capacitor exclusion is decided later. Also still with the founder: Pink Paw's OK on the game title (one constant:
+    `src/core/brand.js` `BRAND.title` and tokentails `components/swordcat/title.ts`).
+  - **Still open:** `requests/tokentails-tt3-q1.md` §1–§7 (Mochi cart guide, Sir Wobble stand spot, touch edge taps
+    at the chest, a parry cue in `guide()`, the portrait title overlap, the same-origin embed allowlist, CS-02
+    length). After §1–§2 land, rerun the bot for the `onboard.done` time. Then the stale fence-link smoke assertions
+    and the other failures listed above. Plus plan §8 items.
+- **TT2 fix round 2 (2026-10-14, evening, uncommitted on `tokentails`):** `requests/tokentails-tt3-q1.md` §1–§3, §6, §7
+  closed in code; onboarding bot green.
+  - **Onboarding bot** (fresh `build:test`, 13 runs, 3 seeds each, 1.5 s reaction delay; `tests/shots/bot/onboarding-bot.md`):
+    **0 dead ends, every row passes**. Play → `onboard.firstFight` median 50.7 s mouse / 44.9 s touch without skipping,
+    11.1 / 11.3 s with skipping. Play → `onboard.done` 147.4 s mouse / 173.0 s touch without skipping (≤ 240 s), 111.8 /
+    127.1 s with skipping. First-fight deaths 0; 3 later deaths in 13 runs (cart / Stones fights, not the first fight).
+    §10.10 #3 (way shown ≤ 1 s at every step, incl. 390×844 for the first three) passes; smallest print 25.3 px.
+    Scene lengths: CS-01 6.3 s, CS-02 17.6 s, CS-01b 3.3 s, D-01 10.3 s (all inside the caps). The earlier 33 s / 41 s
+    were a bot bug: a scene's length was overwritten by the gap to the next scene's start (fixed in the bot).
+  - **What changed:** the trail's path remainder no longer uses the straight-line distance (round the practice fence
+    it hid the prints nearest her: the barn chest showed none); the guide look-ahead also leans toward a near
+    off-screen target and releases on arrival (the chest was below the bottom edge at 844×390); the chest guide goes
+    to the stand spot in front of it (`BARN.clem`) and says "Open" only within 1.6 m (inside the 1.8 m tag); a tap on
+    a lit print passes the touch buttons' dead ring; the phone edge coin sits 46 px in and slides along its border to
+    stay 70 px off Clem. In-place lessons (Bonk, Stand, Parry) ring their object (the nearest dummy, or Sir Wobble at
+    the stand distance) with 4 lit prints; `guide().ring` reports it once she is there. Chapter 1: an alerted foe within
+    10 m takes the guide with the fight line (Noodle / Stones steps); away from Mochi's cart the line is "Follow the
+    paws to Mochi's cart!" (no attack word) and in reach the Bright Slash line. Embed: the game also accepts its own
+    origin when the parent frame is same-origin (`withSameOrigin`), so dev ports and Vercel previews connect.
+  - **Flag-ON `/swordcat`** (next dev on 3021, `NEXT_PUBLIC_SWORDCAT=1`, after 40 s at 1440×900 and 390×844): the game
+    reaches its title and **no "Still loading" banner** in either size. Still open from Q1 §5: at 390×844 the game's
+    "Skip practice" link overlaps the "A Token Tails game" footer. `swordcat-game/`: 632 files, 61.6 MB.
+  - **Checks:** `npm run test:unit` 1147/1147 (new `tests/unit/fixround2.test.js`, updated `onboarding.test.js` /
+    `guidance.test.js`). Full `npm run smoke` run A: 15 blocks red, of which 5 came from this round's contract changes
+    and are fixed (the chest stand spot in `story:cs01` / `flow:first-minute`, the Bonk ring in `guidance:practice`,
+    a 13.6 px keycap in the objective line, now ≥ 16 px for `ui:touch-cluster`); rerun of those blocks green. Run B
+    (after the fixes): **9 blocks red, all the documented pre-TT2 / untouched-area gaps above** (`player:click-move`,
+    `controls:nav`, `physics:nav`, `world:iso-data` fence-link expectations; `characters:ttcat`; `combat:touch`;
+    `world:fog-audit`; `brand:surfaces` 390×844 skip link; `enemies:onscreen-rule`). `audio:unlock` "the listener sits
+    at the iso focus" failed once in run A (2.0 m) and once in a 6-block rerun, passed alone 4 times and in run B:
+    an order-dependent flake, possibly made more frequent by the guide look-ahead now also leaning toward near
+    targets. The founder's port 5180 dev server was already down when this round started (no listener, curl fails);
+    agents must not restart it, so §10.10 #15 stays open for the founder.
+- **Wrap-up (2026-10-14, night): state handed to the founder.** Nothing new built in this step; this is the honest
+  end state of TT2.
+  - **Done:** Token Tails + Pink Paw theme (title constant in `src/core/brand.js`, Rescue House, night ":3" banners,
+    gold / lilac / night bunting, licensed kitten names with fiction lines in the credits); pink paw-print trail +
+    edge coin + objective line at every onboarding step; onboarding bot 0 dead ends. Play → first fight 50.7 s mouse
+    / 44.9 s touch (11 s with Skip), Play → `onboard.done` 147 s / 173 s (112 s / 127 s with Skip). Before TT2: about
+    141 s of scenes before the first fight, 5–6 min for a realistic player, 12 min in the audit run.
+  - **Checks:** `npm run test:unit` 1147/1147; tokentails client 5 suites / 53 tests, eslint and `tsc` clean;
+    `dist/` identical to `client/public/swordcat-game/` (632 files, 61.6 MB); no `__GAME__` in the production bundle.
+    Theme screenshots: scratchpad `swordcat/theme/` (title, menu, every practice lesson, chart, scenes) plus
+    `tests/shots/brand/`, `tests/shots/bot/`.
+  - **Still red / open:** (1) 390×844 title: "Skip practice" covers the "A Token Tails game" pill (`ui.css` 1612–1620
+    has only the landscape `max-height: 460px` rule; fix = a portrait rule raising `bottom` above the footer, request
+    Q1 §5). (2) Smoke not green: 9 blocks (4 stale fence-link assertions from the G2 jump rule, `brand:surfaces` = (1),
+    `characters:ttcat` crest read from the practice outfit, `combat:touch`, `world:fog-audit`,
+    `enemies:onscreen-rule`) plus the `audio:unlock` flake. (3) Heap and draw calls not re-measured after TT2.
+    (4) `FALLBACK_TITLE` equals the Pink Paw title, so `usePinkPawName: false` renames only the Rescue House; a rename
+    is 2 places in 2 repos (`brand.js`, tokentails `components/swordcat/title.ts`). (5) Real Pink Paw cats' made-up
+    bios show on the rescue card with no nearby "made up" label (credits only). (6) Founder's 5180 dev server is down
+    (agents may not restart it). (7) tokentails worktree: revert `client/next-env.d.ts`, drop `client/.vitest/`
+    before any commit; production embed allowlist still lists `localhost:3000`. (8) Everything is uncommitted.

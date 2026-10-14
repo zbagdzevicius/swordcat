@@ -1,19 +1,14 @@
 // src/story/cutscenes/cs02.js  (owner: story) — CS-02 The Giggling Mist (GAME_DESIGN §5.4 "never removed, may be
-// tightened"; WA15, ON §5.3) [MVP]. ~50 s with `STORY.cs02Cut` (default), the long cut (~80 s) without it.
-// Played right after the height chart (CS-01 `end.play`). Lavender `meadow_giggle` (fog 0.062, cutscene only): sad
-// beats are lavender, never grey; no monster drums, no chains, no trembling close-up. Every story fact stays: the
-// Dawnstone glow goes out, the horde, the kitten carriers, Pearl, Cacklejaw's laugh, Pilfer's two thefts, her stand
-// (sword ready), her choice to follow.
-//   1 the wind drops (orbit)                      2 long lens: the Bell Tower glow goes out, a silly clunk
-//   3 giggles from the mist: ears up, tail puff   4 the horde marches out with carriers on wobbly carts; Pearl's has a
-//     pink ribbon and a hand-drawn "HELP (please)" sign — "CLEM! Follow the letters!"
-//   (5 long cut only: she runs, trips on her cape)
-//   6+7 she plants herself; MEME_LOOP 3.8 s       (8 long cut only: REVERSE_HORDE)
-//   9 Cacklejaw leans in, laughs, his two lines   10 crane: the horde parts around her; Pilfer's two thefts
-//   12 Pearl's carrier last in line: she drops letters one by one behind the cart
-//   13 Clem lifts the sword, a gold sparkle runs up it, sunlight breaks through one hole in the mist; she grins —
-//      "...Okay. Hold on, Pearl. I'm coming."  → a short cream fade (HUD hidden)
-// end: flag prologue.raid; golden `meadow_evening`; she stands ~12 m from Marmalade's barn (the Suit Up chest, `cs01b`).
+// tightened"; WA15, ON §5.3) [MVP]. TT2 §10.3 cut (`STORY.cs02Cut`, the default): measured 17.6 s (in the browser;
+// sceneLength 16.2 s; ≤ ONBOARD.sceneCap.cs02 = 20 s); the long cut (~80 s, `cs02Steps(false)`) keeps every old beat for tools.
+// Played right after CS-01 (`end.play`). Lavender `meadow_giggle` (fog 0.062, cutscene only): sad beats are lavender,
+// never grey. The cut keeps: the Dawnstone glow goes out, the horde with its kitten carriers, Pearl's "HELP (please)"
+// sign and her call, Pilfer's two thefts, her choice ("...Okay. Hold on, Pearl. I'm coming.").
+//   1 long lens: the Bell Tower glow goes out, a silly clunk     2 wide: the horde marches, Pearl's carrier and sign;
+//     a close-up for "CLEM! Follow the letters!"                  3 Pilfer takes the signpost and the post bag
+//   4 she lifts the sword, sunlight breaks through; she grins, her line → a short cream fade (HUD hidden)
+// end: flag prologue.raid; golden `meadow_evening`; she stands in the practice field (RAID_END) facing the north gate,
+// where three rats spill in (the `yard` arena locks on `cs02:end`: the first fight, story flags `onboard.firstFight`).
 import { STORY, FADE_COLOR } from '../../core/config.js';
 import { say, cam, wait, sfx, along, unit, yawOf, r2 } from './lib.js';
 import { memeLook, fillLight, buildSign } from './rig.js';
@@ -32,9 +27,11 @@ const START = along(MARK, LAT, -3.6);
 const BELL_YAW = yawOf([-130 - START[0], -20 - START[1]]);
 const LANE_YAW = yawOf([-6 - 0, -50 - -62]);
 const POST = [-4.0, -52.0];
-/** Where she stands after the raid: ~12 m east of Marmalade's barn door, facing it (ON §5.4 "run 12 m to the barn"). */
-export const RAID_END = Object.freeze([-1.5, -90.5]);
-export const RAID_END_FACING = -Math.PI / 2;
+/** Where she stands after the raid: in the practice field, ~6 m south of where the rats spill in (on screen at once). */
+export const RAID_END = Object.freeze([-1, -73.5]);
+export const RAID_END_FACING = 0;
+/** The measured length of the default (cut) scene (s; tests compare sceneLength against ONBOARD.sceneCap.cs02). */
+export const CS02_LEN = 17.6;
 
 const WORDS = ['GRUMP', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER', 'GRUMP', 'GRUMBLER'];
 /** 8 raiders in two files ±2.5 m, rows 2.4 m apart starting 19 m up the line; 4 push kitten carriers on carts. */
@@ -56,7 +53,7 @@ const PILFER = { from: along(MARK, U, -7, LAT, -2.6).map(r2), at: [POST[0] - 0.5
  *  carrier sits above the dialogue box and the hyena's head leaves the top of the frame. */
 export const PEARL_CU = Object.freeze({ pos: Object.freeze([2.4, 0.9, 1.6]), look: Object.freeze([0.3, 0.3, -0.1]), fov: 42 });
 /** The closing cream fade (WA §2.7): short, with the HUD still hidden; the HUD returns once the fade-out is done. */
-export const END_FADE = Object.freeze({ in: 0.45, hold: 0.5, out: 0.5 });
+export const END_FADE = Object.freeze({ in: 0.35, hold: 0.3, out: 0.45 });
 /** The letters Pearl drops behind her cart (shot 12): every 1.1 s while it rolls past. */
 export const LETTER_DROPS = Object.freeze({ n: 3, every: 1.1 });
 /** Sunbreak (ON §5.3): the sun ×2.4 for 2 s and holy 0.15 on her. */
@@ -128,11 +125,86 @@ const giggle = (at, vol = 0.6) => sfx('laugh', at, { rate: 0.9, vol });
 const rattle = (at, vol = 0.5) => sfx('hitWood', at, { vol, rate: 1.1 });
 
 /**
- * The CS-02 step list. `cut` = the tightened ~50 s scene (WA15); false = the long cut (the trip and REVERSE_HORDE beats,
- * longer holds). Both share the same cast, lines, end and audio. Pure.
+ * The CS-02 step list. `cut` = the TT2 cut (≤ 20 s: glow out, horde, Pearl's sign, Pilfer's thefts, her choice);
+ * false = the long cut (every old beat: the trip, Cacklejaw's lines, REVERSE_HORDE, the crane, the dropped letters).
+ * Both share the same cast, end and audio. Pure.
  */
 export function cs02Steps(cut = true) {
-  const k = cut ? 1 : 1.5;          // hold multiplier for the long cut
+  return cut ? cs02Cut() : cs02Long();
+}
+
+/** TT2 §10.3: the ≤ 20 s cut. */
+function cs02Cut() {
+  return [
+    { t: 'ui', letterbox: true, hud: false },
+    { t: 'music', track: null, fade: 1.2 },
+    { t: 'actor', id: 'swordcat', at: START, facing: LANE_YAW, pose: 'idle' },
+    ...castSpawns,
+
+    // ---- 1 · long lens: the Bell Tower glow goes out (a silly clunk)
+    { t: 'env', preset: 'meadow_giggle', fogDensity: 0.062, wind: 0.1, dur: 1.5, nowait: true },
+    { t: 'actor', id: 'barkus_far', visible: true },
+    cam(null, 'swordcat', { pos: [0.55, 1.05, -1.3], look: 'bell_far', fov: 8, noise: 0.006, mode: 'handheld' }),
+    wait(0.9),
+    { t: 'env', dawnstone: false },
+    sfx('bellClunk', 'bell_far', { vol: 0.9 }),
+    wait(1.3),
+
+    // ---- 2 · wide: the horde, the kitten carriers; Pearl's cart with her sign, her call in a close-up
+    cam(null, 'swordcat', { pos: [-1.5, 1.4, -3.5], look: [1.2, 1.15, 9], fov: 50 }),
+    { t: 'actor', id: 'barkus_far', visible: false },
+    { t: 'sfx', id: 'laughChorus', at: 'swordcat', count: 4, r: 18, dur: 10, vol: 0.55, handle: 'chorus', nowait: true },
+    { t: 'fx', horde: true, at: 'horde_a', laugh: 0.6 },
+    { t: 'sfx', id: 'march', at: MARK, on: true, vol: 0.7, handle: 'march' },
+    { t: 'call', fn: pearlSign },
+    { t: 'actor', id: 'hyena_pearl', visible: true, moveTo: PEARL_HYENA.to, speed: 2.4, nowait: true },
+    { t: 'actor', id: 'swordcat', emote: 'tailPuff', expression: 'worried', face: yawOf(LAT), faceDur: 0.4 },
+    rattle('hyena_pearl', 0.6),
+    wait(1.0),
+    cam(null, 'hyena_pearl', { pos: PEARL_CU.pos, look: PEARL_CU.look, fov: PEARL_CU.fov }),
+    say('pearl', 'cs02.1', 1.7, { portrait: 'pearl' }),
+
+    // ---- 3 · Pilfer's two thefts (the signpost, the post bag)
+    cam(null, 'swordcat', { pos: [0.6, 3.2, 3.0], look: [0, 0.4, 0.3], fov: 44 }),
+    { t: 'actor', id: 'hyena_pearl', visible: false },
+    { t: 'actor', id: 'swordcat', at: MARK, face: FACE, faceDur: 0.2, pose: 'ready', expression: 'earnest' },
+    { t: 'actor', id: 'pilfer', visible: true, moveTo: PILFER.at, speed: 4.6 },
+    { t: 'actor', id: 'pilfer', face: POST, faceDur: 0.2 },
+    { t: 'despawn', id: 'signpost' },
+    { t: 'actor', id: 'pilfer', prop: 'signpost' },
+    { t: 'call', fn: bagFalls },
+    sfx('world/creak1', 'pilfer', { vol: 0.7 }),
+    say('pilfer', 'cs02.4', 1.0),
+    { t: 'despawn', id: 'postbag' },
+    { t: 'actor', id: 'pilfer', prop: 'post_bag', pose: 'sneer' },
+    giggle('pilfer', 0.6),
+    say('pilfer', 'cs02.5', 1.1),
+    { t: 'actor', id: 'pilfer', moveTo: PILFER.off, speed: 5.0, nowait: true },
+
+    // ---- 4 · the sunbreak: she lifts the sword; one hole in the mist; she grins
+    { t: 'fx', horde: false },
+    { t: 'sfx', stop: 'chorus', fade: 1.0 },
+    { t: 'sfx', stop: 'march', fade: 1.2 },
+    { t: 'despawn', ids: ['hyena_*', 'cacklejaw', 'barkus_far'] },
+    cam(null, 'swordcat', { pos: [1.1, 0.8, 2.1], look: [0, 0.7, 0], fov: 38 }),
+    { t: 'actor', id: 'swordcat', face: FACE, faceDur: 0.3, pose: 'oath', expression: 'determined' },
+    sfx('sword/sword_unsheathe3', 'swordcat', { vol: 0.7 }),
+    { t: 'call', fn: sunbreak },
+    { t: 'music', track: 'battle_theme_a', fade: 0.3 },
+    { t: 'actor', id: 'swordcat', holy: [0, SUNBREAK.holy, 0], dur: 0.6 },
+    { t: 'fx', burst: 'sparkle', at: 'swordcat', count: 10, color: '#FFE3A3' },
+    { t: 'env', fogDensity: 0.04, dur: 1.2, nowait: true },
+    { t: 'actor', id: 'swordcat', expression: 'happy', emote: 'blink' },
+    say('swordcat', 'cs02.6', 2.4),
+    { t: 'ui', hud: false, fade: { to: FADE_COLOR, alpha: 1, dur: END_FADE.in } },
+    wait(END_FADE.hold),
+  ];
+}
+
+/** The long cut (~80 s): every old beat (tools / a director's cut; never played in the onboarding). */
+function cs02Long() {
+  const k = 1.5;                    // hold multiplier for the long cut
+  const cut = false;
   return [
     { t: 'ui', letterbox: true, hud: false },
     { t: 'music', track: null, fade: 2.0 },

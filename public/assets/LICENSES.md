@@ -1,6 +1,6 @@
-# Pink Paw Knight - Licenses & Attributions
+# Licenses & Attributions for this game
 
-Every third-party asset under `public/assets/` is either **CC0 1.0 (public domain dedication)** or, for fonts, the **SIL Open Font License 1.1**. The one exception is the Token Tails logo (`ui/tokentails-logo.webp`), which is © Token Tails (see "Token Tails" below). CC0 needs no attribution; the credits below are given as thanks and so the sources can be traced. Licenses were checked on 2026-10-07 against each source page (OpenGameArt license box, poly.pizza model page, quaternius.com pack page) or the license file shipped inside the pack (copied to `licenses/`).
+Every third-party asset under `public/assets/` is either **CC0 1.0 (public domain dedication)** or, for fonts, the **SIL Open Font License 1.1**. The exceptions are the Token Tails logo and wordmark (`ui/tokentails-logo.webp`, `ui/tokentails-logo-text.webp`), which are © Token Tails (see "Token Tails" below). CC0 needs no attribution; the credits below are given as thanks and so the sources can be traced. Licenses were checked on 2026-10-07 against each source page (OpenGameArt license box, poly.pizza model page, quaternius.com pack page) or the license file shipped inside the pack (copied to `licenses/`).
 
 - CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/
 - SIL OFL 1.1: https://openfontlicense.org/ (full texts in `fonts/licenses/`)
@@ -126,9 +126,21 @@ OFL fonts may be bundled and embedded in the game; the font files themselves mus
 
 ## Token Tails
 
-Pink Paw Knight is a Token Tails game. Token Tails logo and mascot © Token Tails.
+This game is a Token Tails game. Token Tails logo and mascot © Token Tails.
+
+| File | Source | License |
+|---|---|---|
+| `ui/tokentails-logo.webp` | Token Tails logo, copied from the Token Tails repo (`client/public/logo/logo.webp`) | © Token Tails, used by Token Tails in its own game |
+| `ui/tokentails-logo-text.webp` | Token Tails wordmark, copied from the Token Tails repo (`client/public/logo/logo-text.webp`) | © Token Tails, used by Token Tails in its own game |
+| `../og.jpg` (share card) | Rendered from this game (Clementine, the title, the co-brand pill) by `scripts/social-meta.mjs` | © Token Tails |
 
 Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.
+
+Pink Paw (Rožinė pėdutė) is a real cat shelter in Lithuania and Token Tails' partner shelter. Meet its cats at tokentails.com.
+
+The Pink Paw Rescue House, Pawsbury and Purrhaven Isle are made up.
+
+The sounds made in code (the bell, the glockenspiel, the title and results jingle, the wind) are original to this game; no third-party audio is used for them.
 
 ## Known gaps in the license evidence
 

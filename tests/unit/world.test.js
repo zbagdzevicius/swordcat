@@ -465,7 +465,7 @@ test('U12 (meadow, complete in M1): §12.3 layout — 3 kittens + letter l1, pra
     for (const [t, n = 1] of zz.spawns ?? []) tally[t] = (tally[t] ?? 0) + n;
     for (const w of zz.waves ?? []) for (const [t, n = 1] of w) tally[t] = (tally[t] ?? 0) + n;
   }
-  assert.deepEqual(tally, { rat_pike: 30, rat_xbow: 8, crow: 6 });   // §12.3 + WA16's 3 cart rats
+  assert.deepEqual(tally, { rat_pike: 33, rat_xbow: 8, crow: 6 });   // §12.3 + WA16's 3 cart rats + TT2 §10.3's 3 first-fight rats
   const fish = def.fishLines.reduce((s, l) => s + l[2], 0);
   assert.ok(fish >= 60 && fish <= 75, `about 66 fish in lines (${fish})`);
   assert.equal(def.crates.n, 12); assert.equal(def.crates.milk, 2);
@@ -519,11 +519,15 @@ test('meadow builds headless: groups, colliders, arenas, vigils (also spawns), t
   assert.ok(L instanceof Level);
   for (const g of ['terrain', 'props', 'grass', 'water', 'skyline', 'dawnstone', 'pickups', 'actors']) assert.ok(L.groups[g]?.isObject3D, `group ${g}`);
   assert.equal(L.heightfield.res, 200);
-  assert.deepEqual(L.arenas.map((a) => a.id).sort(), ['bridge', 'cart', 'glade', 'stones']);
+  // TT2 §10.3: + the first fight's soft arena on the practice field (core ONBOARD.fight.arena)
+  const firstFight = def.zones.find((z) => z.kind === 'arena' && z.lockOn === 'cs02:end')?.id;
+  assert.ok(firstFight, 'the first-fight arena (locks when CS-02 ends)');
+  assert.deepEqual(L.arenas.map((a) => a.id).sort(), ['bridge', 'cart', 'glade', 'stones', firstFight].sort());
+  assert.equal(L.arena(firstFight).soft, true, 'TT2 §10.3: the first fight has no fog wall');
   assert.equal(L.arena('glade').canAutoLock(), false, 'glade waits for CS-03');
   assert.equal(L.arena('cart').soft, true, 'WA16: the cart fight has no fog wall');
   // WA §3.5 arena stage floors: one bright paint per arena zone
-  assert.deepEqual(L.stages.map((s) => s.id).sort(), ['bridge', 'cart', 'glade', 'stones']);
+  assert.deepEqual(L.stages.map((s) => s.id).sort(), ['bridge', 'cart', 'glade', 'stones', firstFight].sort());
   assert.deepEqual(L.vigils.map((v) => v.id), ['vigil_1', 'vigil_2', 'vigil_3']);
   for (const id of ['title', 'practice', 'start', 'boss', 'vigil_1', 'vigil_2', 'vigil_3']) assert.ok(L.spawns[id], `spawn ${id}`);
   assert.ok(near(L.spawns.start.pos.x, -1.5) && near(L.spawns.start.pos.z, -50.5));
@@ -1489,12 +1493,11 @@ test('Env: per-level focus fog (cam.fog, per-preset rows), the zone clear, the i
   HFOG.uFogMode.value = 0; HFOG.uFogClear.value = 5; HFOG.uFogTopMul.value = 1.5;
 });
 
-test('iso level data: the meadow fence link is gated on tut.jump.done (gate line along the fence); forest / town hop links', async () => {
+test('iso level data: the meadow fence link is an open hop (TT2 §10.3: no tut.jump.done gate); forest / town hop links', async () => {
   const defs = await allDefs();
   const fence = defs.meadow.navLinks.find((l) => l.kind === 'fence');
-  assert.equal(fence.when, 'tut.jump.done');
+  assert.equal(fence.when, undefined, 'TT2 §10.3: a click / tap across the fence hops it from the start (it was a dead end)');
   assert.ok(fence.a[1] < -87 && fence.b[1] > -87, 'the link crosses the inner fence (z -87)');
-  assert.deepEqual(fence.gate, [[-20, -87], [-2, -87]]);
   const f = defs.forest.navLinks;
   assert.equal(f.filter((l) => l.kind === 'hop').length, 4 + 7, '2 ledges x 2 hops + 7 stump hops');
   for (const l of f) assert.ok(Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]) <= 3.2, `link length ${JSON.stringify(l)}`);
@@ -2133,4 +2136,111 @@ test('Token Tails: the Rescue House keeper stands by the fountain; only line key
   assert.deepEqual(keeperLines(null), []);
   assert.deepEqual(keeperLines({ has: () => false }), [], 'a missing key is never shown');
   assert.deepEqual(keeperLines({ has: (k) => k !== 'npc.ttcat.2' }), ['npc.ttcat.1', 'npc.ttcat.3']);
+});
+
+/** A recording LevelKit stand-in for buildHub (no GLBs, no scene): every place / anchor / interact is logged. */
+function hubKitStub() {
+  const placed = [], anchors = {}, procs = new Map();
+  const kit = {
+    ctx: { state: { flags: {} }, bus: { emit() {}, on() { return () => {}; } } }, level: { anchors },
+    proc: (key, make) => { if (!procs.has(key)) procs.set(key, { key, parts: make() }); return procs.get(key); },
+    place: (tpl, x, z, o = {}) => { placed.push({ key: tpl.key, x, z, o }); return { handle: placed.length, x, z }; },
+    anchor: (name, x, z, y, facing) => { anchors[name] = { x, z, y, facing }; },
+    interact() {}, clear() {}, trigger() {}, h: () => 0,
+  };
+  return { kit, placed, anchors, procs };
+}
+
+test('TT2 §10.5: the Rescue House landmark stands by the fountain behind the keeper, adds no draw call, no 3D text', async () => {
+  const H = await import('../../src/world/Hub.js');
+  const { RESCUE_HOUSE: RH, RESCUE_KEEPER: K } = H;
+  const dKeeper = Math.hypot(RH.at[0] - K.at[0], RH.at[1] - K.at[1]);
+  assert.ok(dKeeper > 2.5 && dKeeper < 5, `next to the keeper (${dKeeper.toFixed(2)} m)`);
+  const dF = Math.hypot(RH.at[0] - SQUARE.at[0], RH.at[1] - SQUARE.at[1]);
+  assert.ok(dF > 9.5 && dF < SQUARE.r, `by the fountain, outside the kittens' 8 m tag loop (${dF.toFixed(2)} m)`);
+  // its front (+Z local) faces the fountain
+  const fx = Math.sin(RH.yaw), fz = Math.cos(RH.yaw), tx = SQUARE.at[0] - RH.at[0], tz = SQUARE.at[1] - RH.at[1];
+  assert.ok((fx * tx + fz * tz) / Math.hypot(tx, tz) > 0.99, 'faces the fountain');
+  for (const s of H.STATIONS) assert.ok(Math.hypot(s.use[0] - RH.at[0], s.use[1] - RH.at[1]) > 4, `clear of station ${s.id}`);
+  for (const [id, s] of Object.entries(H.HUB_KITTEN_SPOTS)) if (!s.loop) assert.ok(Math.hypot(s.at[0] - RH.at[0], s.at[1] - RH.at[1]) > 3, `clear of ${id}`);
+  // the parts: a love-pink paw (pad + 4 beans, CircleGeometry), the gold ':3' coin crest, daisies; never text geometry
+  const parts = H.rescueHouseParts();
+  const hex = (c) => '#' + new THREE.Color(c).getHexString().toUpperCase();
+  const pinkCircles = parts.filter(([g, c]) => g.type === 'CircleGeometry' && hex(c) === '#FF7AA2');
+  assert.ok(pinkCircles.length >= 5, `pad + four beans in love pink (${pinkCircles.length})`);
+  assert.ok(parts.some(([g]) => g.type === 'TubeGeometry'), "the coin's '3'");
+  assert.ok(parts.some(([, c]) => hex(c) === H.HUB_TT.daisy.toUpperCase()), 'daisy flower boxes');
+  assert.ok(!parts.some(([g]) => /Text|Shape/.test(g.type)), 'no 3D text');
+  // buildHub: one merged procedural template each (batch geometry: 0 extra draws, ≤ 2 allowed), anchored for the trail
+  const { kit, placed, anchors } = hubKitStub();
+  H.buildHub(kit);
+  const mine = placed.filter((p) => ['rescue_house', 'sign_paw', 'tt_banner'].includes(p.key));
+  assert.deepEqual(mine.map((p) => p.key).sort(), ['rescue_house', 'sign_paw', 'tt_banner']);
+  assert.ok(mine.every((p) => !p.o.into && !p.o.tree && !p.o.fade && !p.o.camFade), 'plain batch entries (no new mesh, no new draw)');
+  const house = mine.find((p) => p.key === 'rescue_house');
+  assert.deepEqual([house.x, house.z], [...RH.at]); assert.equal(house.o.collider, 'box');
+  assert.ok(anchors.rescue_house && Math.hypot(anchors.rescue_house.x - K.at[0], anchors.rescue_house.z - K.at[1]) < 3, 'rescue_house anchor in front, by the keeper');
+  assert.equal(kit.level.rescueHouseHandles.length, 3);
+});
+
+test('TT2 §10.4: Token Tails banners (night, gold trim, coin), love-pink barracks pennant, paw sign, TT bunting', async () => {
+  const H = await import('../../src/world/Hub.js');
+  const { BUNTING_ACCENT, TT_BUNTING } = await import('../../src/world/Bunting.js');
+  const hex = (c) => '#' + new THREE.Color(c).getHexString().toUpperCase();
+  for (const make of [H.ttBannerParts, H.ttWallBannerParts]) {
+    const cols = make().map(([, c]) => hex(c));
+    assert.ok(cols.includes('#2A1F45'), 'night cloth'); assert.ok(cols.includes(H.HUB_TT.goldDeep.toUpperCase()), 'gold trim');
+    assert.ok(make().some(([g]) => g.type === 'TubeGeometry'), "the gold ':3' coin emblem");
+    assert.ok(!cols.some((c) => c === '#C9587C'), 'no old pink');
+  }
+  const { kit, procs } = hubKitStub();
+  H.buildHub(kit);
+  const ban = procs.get('barracks_banner').parts.map(([, c]) => hex(c));
+  assert.ok(ban.includes('#FF7AA2') && ban.includes(H.HUB_TT.cream.toUpperCase()) && ban.includes('#FFCC55'), 'love pink on cream, gold finial');
+  assert.ok(!ban.includes('#C9587C'));
+  assert.ok(H.signParts('paw').filter(([g, c]) => g.type === 'CircleGeometry' && hex(c) === '#FF7AA2').length >= 10, 'the paw sign: a paw on both faces');
+  assert.deepEqual(Object.values(TT_BUNTING).map((c) => c.toUpperCase()), ['#FFCC55', '#FF7AA2', '#F0C5FD', '#7FD66B', '#90C5E9', '#FCECBB']);
+  assert.equal(BUNTING_ACCENT.town[0], TT_BUNTING.pink, 'love pink leads the town set');
+  assert.deepEqual([...BUNTING_ACCENT.town].sort(), Object.values(TT_BUNTING).sort(), 'the town set is the Token Tails set');
+  for (const k of ['meadow', 'forest']) for (const c of BUNTING_ACCENT[k]) assert.ok(Object.values(TT_BUNTING).includes(c), `${k} ${c} is a Token Tails token`);
+});
+
+test('TT2 §10.4: the currency pickup is a catnip sprig (mint leaves, lilac spike), within the old fish budget', async () => {
+  const P = await import('../../src/world/Pickups.js');
+  const g = P.makeCatnipGeometry();
+  assert.ok(g.index.count / 3 <= 120, `≤ 120 tris (${g.index.count / 3}): every live sprig draws`);
+  const col = g.attributes.color, pos = g.attributes.position, c = new THREE.Color();
+  let mint = 0, lilac = 0, topLilac = 0;
+  for (let i = 0; i < col.count; i++) {
+    c.setRGB(col.getX(i), col.getY(i), col.getZ(i)); const h = c.getHSL({}, THREE.SRGBColorSpace);
+    if (h.h > 0.25 && h.h < 0.4 && h.s > 0.3) mint++;
+    if (h.h > 0.7 && h.h < 0.85 && h.s > 0.3) { lilac++; if (pos.getY(i) > 0.1) topLilac++; }
+  }
+  assert.ok(mint > 20 && lilac > 10 && topLilac === lilac, `mint leaves (${mint}), lilac spike on top (${lilac})`);
+  g.computeBoundingBox();
+  assert.ok(g.boundingBox.max.y - g.boundingBox.min.y < 0.45, 'about the old fish size');
+  assert.equal(P.CATNIP_LOOK.spikeTip, '#F0C5FD'); assert.equal(P.CATNIP_LOOK.spikeBase, '#9A88C9');
+});
+
+test('TT3 R2 / §10.4: the town square hangs Token Tails night wall banners, not the red KayKit banner', async () => {
+  const def = await loadDef('town');
+  const paths = levelModelPaths(def);
+  assert.ok(!paths.some((p) => p.includes('banner-red')), 'town no longer lists models/env/town/banner-red.glb');
+  assert.ok(!manifest.includes('models/env/town/banner-red.glb') && !(manifestLevels.town ?? []).includes('models/env/town/banner-red.glb'), 'nor does the manifest');
+  // run the square setpiece on a recording stub: GLBs resolve to null, procs are logged
+  const placed = [], procs = new Map();
+  const kit = {
+    level: { anchors: {} }, h: () => 0, tpl: async () => null, roadClearance: () => 9,
+    proc: (key, make) => { if (!procs.has(key)) procs.set(key, { key, parts: make() }); return procs.get(key); },
+    place: (tpl, x, z, o = {}) => { placed.push({ key: tpl.key, x, z, o }); return { handle: placed.length, x, z }; },
+    collider() {}, anchor() {}, onFlag() {}, batch: { setVisible() {} },
+  };
+  await def.setpieces.square(kit, { at: SQUARE.at });
+  const tt = placed.filter((p) => p.key === 'tt_wall_banner');
+  assert.deepEqual(tt.map((p) => [p.x, p.z]), [[-2.9, 31.5], [2.9, 31.5]], 'the two square banner spots');
+  assert.ok(tt.every((p) => p.o.lift === 2.6 && p.o.collider === false), 'hung 2.6 m up, no collider');
+  // the coin face (+Z local) turns to the square, so a cat crossing it reads the coin, not the cloth's back
+  for (const p of tt) assert.ok(Math.cos(p.o.yaw) * (SQUARE.at[1] - p.z) > 0, `banner at ${p.x} faces the square (yaw ${p.o.yaw})`);
+  const hex = (c) => '#' + new THREE.Color(c).getHexString().toUpperCase();
+  assert.ok(procs.get('tt_wall_banner').parts.some(([, c]) => hex(c) === '#2A1F45'), 'night cloth');
 });

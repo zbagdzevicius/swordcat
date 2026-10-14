@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { fakeCtx } from './_fakeCtx.mjs';
 import { E } from '../../src/core/events.js';
-import { PLAYER, FADE_COLOR, STORY } from '../../src/core/config.js';
+import { PLAYER, FADE_COLOR, STORY, ONBOARD } from '../../src/core/config.js';
 import { Actor } from '../../src/core/Actor.js';
 import { ScriptedActorMixin } from '../../src/core/ScriptedActor.js';
 import { S, t, has, pick, fill, text, speakerName, GAME_TITLE, GAME_SUBTITLE } from '../../src/story/strings.js';
@@ -22,7 +22,10 @@ import { announce, REWARD_TOASTS } from '../../src/story/rewards.js';
 import { CUTSCENES, PLACEHOLDER_ENDS, placeholderScene } from '../../src/story/cutscenes/index.js';
 import { PracticeLog, TUTORIAL_STEPS, PRACTICE, inPractice, HINTS, Tutorial, TALK_TIP_R, GuideClock, ParryFails, GLYPH_HINTS, HINT_SHOW, fenceSide, fenceHopped, nearestDummy } from '../../src/story/tutorial.js';
 import { BarkGate, CLEM_BARKS, ENEMY_BARKS, BOSS_BARKS, enemyType, bossKey } from '../../src/story/dialogue/barks.js';
-import { U as HORDE_U, LAT, MARK, FACE as CS02_FACE, FILES, CS02_CAST, cs02Steps, END_FADE } from '../../src/story/cutscenes/cs02.js';
+import { U as HORDE_U, LAT, MARK, FACE as CS02_FACE, FILES, CS02_CAST, cs02Steps, END_FADE, CS02_LEN } from '../../src/story/cutscenes/cs02.js';
+import { CS01_LEN } from '../../src/story/cutscenes/cs01.js';
+import { CS01B_LEN } from '../../src/story/cutscenes/cs01b.js';
+import { D01_LEN } from '../../src/story/cutscenes/d01.js';
 import { CS03_MARKS, NET } from '../../src/story/cutscenes/cs03.js';
 import { titlePulse, TITLE_PULSE, TITLE_BLEND, pearlHops, playReady, TITLE_POSE, TITLE_SHOT, TITLE_TTCAT, ttCatAvailable } from '../../src/story/cutscenes/cs00.js';
 import { glyphs, revealHtml, visibleLength, FONTS as OVERLAY_FONTS, OVERLAY_COLORS, stLogoHtml } from '../../src/story/Overlay.js';
@@ -70,7 +73,7 @@ test('Token Tails IP: title, world, currency, Snack Break, Photo Cam, credits, t
     ['difficulty.nine', 'Nine Lives'], ['card.golden.title', 'Golden Hour!']]) assert.equal(t(k), v, k);
   assert.match(t('credits.team'), /Token Tails$/);
   assert.match(t('prompt.picnic'), /Snack Break/);
-  assert.match(t('toast.hub'), /Pawsbury Rescue House/);
+  assert.match(t('toast.hub'), /(Pink Paw|Pawsbury) Rescue House/);
   for (const k of ['npc.ttcat.1', 'npc.ttcat.2', 'npc.ttcat.3']) assert.ok(has(k) && t(k).length > 10 && t(k).length <= 90, k);
   // TOKENTAILS-PLAN §2.5: four lost kittens carry licensed Pink Paw cat names (ids unchanged) and the credits say so
   const kittenNames = Object.keys(S).filter((k) => /^name\.(biscuit|noodle|button|pickles|pebble|sprout|waffles|toffee|muffin|tater|mittens|socks|juniper|bramble|fennel|bean|crumpet|dumpling)$/.test(k)).map((k) => t(k));
@@ -84,7 +87,7 @@ test('Token Tails IP: title, world, currency, Snack Break, Photo Cam, credits, t
 
 test('Token Tails IP: banned display words in strings.js and ui/text.js (old meme, memecoin and fan-series names; money words)', () => {
   const BAN = /swordcat|meow island|nine lives of|vigil|low gate|memecoin|\bmeme|hater|post ?stealer|postmaster|hype-in-chief|\bmilk|\bfish(es|ies|y)?\b|sickmanai|knightcat|pump\.fun|\b(donat\w*|charity|impact|token|tokens|coin|coins|crypto|blockchain|wallet|money|dollars?|usdc)\b/i;
-  const ok = (v) => v.replace(/Token Tails/g, '');                          // the brand name itself is allowed
+  const ok = (v) => v.replace(/Token Tails/g, '').replace(/caught zero fish/g, '');                          // the brand name itself is allowed
   const bad = [];
   for (const [k, row] of Object.entries(S)) if (BAN.test(ok(row.default))) bad.push(`strings ${k}: ${row.default}`);
   for (const [k, v] of Object.entries(UI_STRINGS)) if (BAN.test(ok(v))) bad.push(`text.js ${k}: ${v}`);
@@ -205,11 +208,14 @@ test('§19.7 + WA §6.2: the prologue scenes set their flags in the new order (c
   assert.ok(CUTSCENES.cs01.prologue && CUTSCENES.cs02.prologue && CUTSCENES.cs01b.prologue && CUTSCENES.g01.prologue, 'the prologue is skippable on the first viewing');
   for (const id of ['cs01', 'cs02', 'cs01b', 'g01']) assert.equal(CUTSCENES[id].once, true, `${id} once per save`);
   assert.equal(CUTSCENES.cs03.prologue, undefined, 'CS-03 is skippable only after a viewing');
-  assert.equal(CUTSCENES.g01.inputSkip, 1.0, 'G-01: any input after 1.0 s');
+  // TT2 §10.3: G-01, tutbow and tutpearl are non-blocking barks now (ambient: no letterbox, no input lock, no camera)
+  for (const id of ['g01', 'tutbow', 'tutpearl', 'tutlook']) { assert.equal(CUTSCENES[id].kind, 'ambient', `${id} is a bark`); assert.equal(CUTSCENES[id].end.cam, false); }
   assert.equal(CUTSCENES.tutbow.letterbox, false); assert.equal(CUTSCENES.tutbow.hud, true, 'tutbow keeps the HUD');
   assert.equal(CUTSCENES.tutbow.end.player.outfit, 'tunic_bow');
-  assert.deepEqual(CUTSCENES.tutpearl.end.keep, ['pearl'], 'Pearl stays as the guide');
+  for (const id of ['cs01', 'cs01b']) assert.equal(CUTSCENES[id].letterbox, false, `${id} plays inline (no letterbox)`);
   walkSteps(CUTSCENES.tutpearl.steps, (s) => assert.ok(!(s.t === 'despawn' || (s.t === 'actor' && s.moveTo === 'barn_door')), 'no scamper back to the barn'));
+  // the first fight follows the raid: CS-02 ends with her in the practice field, facing the north gate
+  assert.deepEqual([...CUTSCENES.cs02.end.actors.swordcat.pos], [-1, -73.5]);
 });
 
 test('WA §6.2: old saves map onto the new prologue order; the stage follows the flags', () => {
@@ -276,7 +282,7 @@ test('story.W1: banned words (WA §8.6) absent from display text; vocabulary swa
   assert.ok(!Object.values(S).some((r) => /Midnight Practice/.test(r.default)), 'no Midnight Practice');
   for (const [k, v] of [['quest.meadow.mochi', 'Help Mochi out of the tipped cart'], ['obj.mochi', "Pop Mochi's carrier open"],
     ['toast.exit.mochi', "Mochi's still stuck in his carrier! Back to the cart!"], ['name.cacklejaw', 'Big Chief Cacklejaw'], ['region.bog', 'Glimmerbog'],
-    ['d01.3', "Then we're the Almost Knights!"], ['cs01.3', 'Just under the line, Clementine. One ear-tuft short. Next year!'],
+    ['d01.3', "Then we're the Almost Knights!"], ['cs01.3', 'One ear-tuft short! Next year, Clementine.'],
     ['cs01.8', "Tomorrow I'm front row. I made a sign!"], ['name.cow', 'Very Suspicious Cow'], ['tut.cow.2', "MOO. (Ooh, you're getting warmer!)"],
     ['menu.continue', 'Keep going!'], ['menu.newGame', 'New adventure'], ['title.tap', 'Tap to play!'], ['title.press', 'Press any key to play!'],
     ['life.lost', 'Boing! Back on her paws. {n} lives left'], ['bark.clem.respawn.2', '...Ow. Okay.'], ['hud.boss.bonked', 'BONKED!'],
@@ -301,23 +307,27 @@ test('story.W1: practice hints ≤ 7 words (glyph tokens count as one), Pearl li
   });
 });
 
-test('story.W5: CS-02 ≤ 55 s with STORY.cs02Cut (the long cut is longer); no prologue scene > 25 s before practice is done', () => {
+test('TT2 §10.3: CS-01 ≤ 10 s, CS-02 ≤ 20 s (STORY.cs02Cut; the long cut keeps every old beat), CS-01b ≤ 6 s, D-01 ≤ 12 s', () => {
   assert.equal(STORY.cs02Cut, true);
   const cut = sceneLength(cs02Steps(true)), long = sceneLength(cs02Steps(false));
-  assert.ok(cut <= 55, `CS-02 cut ${cut.toFixed(1)} s`);
-  assert.ok(cut >= 38, `CS-02 keeps its beats (${cut.toFixed(1)} s)`);
-  assert.ok(long > cut + 8, 'the long cut restores the trip and REVERSE_HORDE beats');
+  assert.ok(cut <= ONBOARD.sceneCap.cs02, `CS-02 cut ${cut.toFixed(1)} s`);
+  assert.ok(cut >= 12, `CS-02 keeps its beats (${cut.toFixed(1)} s)`);
+  assert.ok(long > cut + 30, 'the long cut restores the trip, Cacklejaw and REVERSE_HORDE beats');
   assert.deepEqual(CUTSCENES.cs02.steps.length, cs02Steps(true).length, 'the default export follows STORY.cs02Cut');
-  // WA27: before tut.done only tutbow / tutpearl play (≤ 25 s); the chart (after practice) is ~20 s
-  for (const id of ['tutbow', 'tutpearl']) assert.ok(sceneLength(CUTSCENES[id].steps) <= 25, id);
-  // CS-01 plays after tut.done (stage 'chart'), so WA27's 25 s cap does not bind it; the reading floor makes it ~40 s
-  assert.ok(sceneLength(CUTSCENES.cs01.steps) <= 42, `CS-01 ${sceneLength(CUTSCENES.cs01.steps).toFixed(1)} s`);
-  assert.ok(sceneLength(CUTSCENES.cs01b.steps) <= 25, 'Suit Up ~18 s');
-  // every story fact stays: her stand, Cacklejaw's lines, Pilfer's two thefts, Pearl's call, her choice
-  const keys = [], presets = [];
-  walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'say') keys.push(s.key); if (s.t === 'cam' && s.preset) presets.push(s.preset); });
-  assert.deepEqual(keys, ['cs02.1', 'cs02.2', 'cs02.3', 'cs02.4', 'cs02.5', 'cs02.6']);
-  assert.ok(presets.includes('MEME_LOOP'));
+  for (const id of ['cs01', 'cs01b', 'd01']) assert.ok(sceneLength(CUTSCENES[id].steps) <= ONBOARD.sceneCap[id], `${id} ${sceneLength(CUTSCENES[id].steps).toFixed(1)} s`);
+  for (const id of ['tutbow', 'tutpearl', 'g01']) assert.ok(sceneLength(CUTSCENES[id].steps) <= 3, `${id}: a short bark`);
+  // the header states the measured length (within 1.5 s of sceneLength)
+  for (const [id, len] of [['cs01', CS01_LEN], ['cs02', CS02_LEN], ['cs01b', CS01B_LEN], ['d01', D01_LEN]]) {
+    assert.ok(Math.abs(sceneLength(CUTSCENES[id].steps) - len) <= 1.5, `${id}: header ${len} s vs ${sceneLength(CUTSCENES[id].steps).toFixed(1)} s`);
+    const src = fs.readFileSync(path.join(ROOT, `src/story/cutscenes/${id}.js`), 'utf8').split('\n').slice(0, 4).join(' ');
+    assert.match(src, new RegExp(`measured ${String(len).replace('.', '\\.')} s`), `${id}: header names its length`);
+  }
+  // the facts the cut keeps: Pearl's call, Pilfer's two thefts, her choice
+  const keys = [];
+  walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'say') keys.push(s.key); });
+  assert.deepEqual(keys, ['cs02.1', 'cs02.4', 'cs02.5', 'cs02.6']);
+  const longKeys = []; walkSteps(cs02Steps(false), (s) => { if (s.t === 'say') longKeys.push(s.key); });
+  assert.deepEqual(longKeys, ['cs02.1', 'cs02.2', 'cs02.3', 'cs02.4', 'cs02.5', 'cs02.6']);
 });
 
 test('story.W5 / W7: no night or grey preset cue in the prologue scenes; WA §9 banned audio ids and legacy literals absent from cutscenes', () => {
@@ -336,7 +346,7 @@ test('story.W5 / W7: no night or grey preset cue in the prologue scenes; WA §9 
   }
   const presetOf = (id) => { const out = []; walkSteps(CUTSCENES[id].steps, (s) => { if (s.t === 'env' && s.preset) out.push(s.preset); }); return out; };
   assert.deepEqual(presetOf('cs00'), ['meadow_morning']); assert.deepEqual(presetOf('cs01'), ['meadow_day']);
-  assert.deepEqual(presetOf('cs02'), ['meadow_giggle']); assert.deepEqual(presetOf('cs01b'), ['meadow_evening']);
+  assert.deepEqual(presetOf('cs02'), ['meadow_giggle']); assert.deepEqual(presetOf('cs01b'), [], 'Suit Up is inline: the evening light stays');
   let fog = null; walkSteps(CUTSCENES.cs00.steps, (s) => { if (s.t === 'env' && s.fogDensity != null) fog = s.fogDensity; });
   assert.equal(fog, 0.035);
   // WA §8.6a: the CS-04 / CS-06 / CS-10 swaps
@@ -428,7 +438,7 @@ test('rewards: friends and the Holy card are celebrations (E.REWARD + sticker bo
 });
 
 test('AUTOCAM story.2: prologue and M2 hand-backs all end in follow (CS-04, CS-08, CS-10 included)', () => {
-  for (const id of ['cs04', 'cs08', 'cs10', 'cs01b', 'cs02', 'tutbow', 'tutpearl']) {
+  for (const id of ['cs04', 'cs08', 'cs10', 'cs01b', 'cs02', 'cs01', 'd01']) {
     const c = CUTSCENES[id].end.cam;
     assert.ok(c === 'follow' || c?.mode === 'follow', `${id}: ${JSON.stringify(c)}`);
   }
@@ -770,10 +780,11 @@ test('chapters: card text and the chapter of a level / flags', () => {
 });
 
 // ====================================================================================================== Morning Practice
-test('story.W3: PracticeLog completes the 7 WA §7.1 lessons in order; position facts are latched', () => {
-  assert.deepEqual(TUTORIAL_STEPS.map((s) => s.id), ['move', 'bonk', 'jump', 'roll', 'stand', 'parry', 'meow']);
+test('TT2 §10.3: PracticeLog completes the 4 lessons in order (move, bonk ×3, block, parry); position facts are latched', () => {
+  assert.deepEqual(TUTORIAL_STEPS.map((s) => s.id), ['move', 'bonk', 'stand', 'parry']);
   assert.ok(TUTORIAL_STEPS.every((s) => s.guide === 'pearl'), 'Pearl guides every lesson');
-  assert.deepEqual(TUTORIAL_STEPS.filter((s) => s.reward).map((s) => s.reward), ['bonk', 'hop', 'roll', 'stand', 'parry', 'found']);
+  assert.deepEqual(TUTORIAL_STEPS.filter((s) => s.reward).map((s) => s.reward), ['bonk', 'stand', 'parry']);
+  assert.equal(TUTORIAL_STEPS[1].intro, 'pearl.bow', 'the old tutbow scene is Pearl\'s 2-s bark');
   const log = new PracticeLog();
   assert.equal(log.step.id, 'move');
   log.note({ type: 'moved', d: 4 }); log.note({ type: 'near', d: 5 });
@@ -782,35 +793,34 @@ test('story.W3: PracticeLog completes the 7 WA §7.1 lessons in order; position 
   assert.equal(log.complete(), true, 'reaching the dummy ring ends the move lesson at once'); log.advance();
   log.note({ type: 'hit', attackId: 'slash1', dummy: true }); assert.equal(log.complete(), false);
   assert.ok(log.progress() > 0 && log.dots().half, 'a dummy hit half-fills the paw dot');
-  log.note({ type: 'hit', attackId: 'slash3', dummy: true }); assert.equal(log.complete(), true); log.advance();
-  assert.equal(log.step.id, 'jump'); assert.equal(log.complete(), false);
-  log.note({ type: 'crossed' }); assert.equal(log.complete(), true); log.advance();
-  log.note({ type: 'dodge', nearSack: false }); assert.equal(log.complete(), false);
-  log.note({ type: 'dodge', nearSack: true }); assert.equal(log.complete(), true); log.advance();
-  log.note({ type: 'block' }); assert.equal(log.complete(), true, 'stand needs 1 block (was 2)'); log.advance();
+  log.note({ type: 'hit', attackId: 'slash2', dummy: true }); assert.equal(log.complete(), false);
+  log.note({ type: 'hit', attackId: 'slash1', dummy: true }); assert.equal(log.complete(), true, '3 hits bonk (any 3)'); log.advance();
+  assert.equal(log.step.id, 'stand');
+  log.note({ type: 'crossed' }); log.note({ type: 'dodge', nearSack: true }); assert.equal(log.complete(), false, 'old lesson facts do nothing');
+  log.note({ type: 'block' }); assert.equal(log.complete(), true, 'stand needs 1 block'); log.advance();
   assert.equal(log.step.id, 'parry'); assert.equal(log.complete(), false);
   log.note({ type: 'block' }); assert.equal(log.parryFails, 1, 'a plain block in the parry lesson is a failed parry');
-  log.note({ type: 'parry' }); assert.equal(log.complete(), true); log.advance();
-  assert.equal(log.step.id, 'meow');
-  log.note({ type: 'cow' }); assert.equal(log.complete(), true);
+  log.note({ type: 'parry' }); assert.equal(log.complete(), true);
   assert.equal(log.advance(), null); assert.ok(log.finished);
-  assert.deepEqual(log.dots(), { n: 7, of: 7, half: false });
+  assert.deepEqual(log.dots(), { n: 4, of: 4, half: false });
   assert.ok(inPractice(0, -80) && inPractice(0, -64) && !inPractice(0, -55), 'the title spot is inside the field');
-  assert.equal(PRACTICE.skipHold, 1.0); assert.equal(PRACTICE.nextDelay, 0.6); assert.equal(PRACTICE.idleDemo, 8); assert.equal(PRACTICE.chipAfter, 6);
+  assert.equal(PRACTICE.skipHold, 1.0); assert.equal(PRACTICE.nextDelay, 0.6); assert.equal(PRACTICE.chipAfter, 6);
+  assert.equal(PRACTICE.skipHintAfter, 0, 'no 20-s wait before the skip is offered');
   assert.deepEqual({ scale: PRACTICE.parrySlowMo.scale, firstOnly: PRACTICE.parrySlowMo.firstOnly }, { scale: 0.45, firstOnly: true });
+  assert.deepEqual([...PRACTICE.stand], [ONBOARD.wobble[0], ONBOARD.wobble[1] + ONBOARD.standR], 'the drill spot is 1.3 m from Sir Wobble');
 });
 
-test('tutorial: the move lesson also ends after 10 m; 6 dummy hits without a finisher still bonk', () => {
+test('tutorial: the move lesson also ends after 10 m; 3 dummy hits without a finisher still bonk', () => {
   const log = new PracticeLog();
   log.note({ type: 'moved', d: 9.9 }); assert.equal(log.complete(), false);
   log.note({ type: 'moved', d: 0.2 }); assert.equal(log.complete(), true); log.advance();
-  for (let k = 0; k < 5; k++) log.note({ type: 'hit', attackId: 'slash1', dummy: true });
+  for (let k = 0; k < 2; k++) log.note({ type: 'hit', attackId: 'slash1', dummy: true });
   assert.equal(log.complete(), false);
   log.note({ type: 'hit', attackId: 'slash2', dummy: true });
   assert.equal(log.complete(), true);
 });
 
-test('tutorial: fence side, nearest dummy, the guide clock (fold 6 s, ghost paw at 8 s, skip hint at 20 s)', () => {
+test('tutorial: fence side / hop helpers, nearest dummy, the guide clock (fold 6 s, ghost paw at 6 s, skip hint at once)', () => {
   assert.equal(fenceHopped(1, -1, 0.1), true, 'a flip mid-hop counts');
   assert.equal(fenceHopped(1, -1, Infinity), false, 'a flip with no air time does not');
   assert.equal(fenceHopped(0, -1, 0), false, 'no known side (she left the span) → no cross');
@@ -820,11 +830,10 @@ test('tutorial: fence side, nearest dummy, the guide clock (fold 6 s, ghost paw 
   const c = new GuideClock();
   const ev = [];
   for (let k = 0; k < 220; k++) { const e = c.tick(0.1); if (e.fold) ev.push(['fold', +(c.t.toFixed(1))]); if (e.demo) ev.push(['demo', +(c.t.toFixed(1))]); if (e.skipHint) ev.push(['skip', +(c.t.toFixed(1))]); }
-  assert.equal(ev[0][0], 'fold'); assert.ok(Math.abs(ev[0][1] - 6) <= 0.11, 'speech folds at 6 s');
-  assert.equal(ev[1][0], 'demo'); assert.ok(Math.abs(ev[1][1] - 8) <= 0.11, 'idle demo at 8 s');
-  assert.equal(ev.filter(([k, t]) => k === 'skip' && Math.abs(t - 20) <= 0.11).length, 1, 'skip hint once after 20 s');
-  assert.equal(ev.filter(([k]) => k === 'demo')[1][1] > 8 + PRACTICE.demoCycles * PRACTICE.demoCycle, true, 'then waits 8 s again');
-  const d = new GuideClock(); for (let k = 0; k < 70; k++) d.tick(0.1); d.poke();
+  assert.deepEqual(ev[0], ['skip', 0.1], 'the skip hint is not held back');
+  assert.ok(ev.some(([k, t]) => k === 'fold' && Math.abs(t - 6) <= 0.11), 'speech folds at 6 s');
+  assert.ok(ev.some(([k, t]) => k === 'demo' && Math.abs(t - PRACTICE.idleDemo) <= 0.11), 'idle demo');
+  const d = new GuideClock(); for (let k = 0; k < 50; k++) d.tick(0.1); d.poke();
   assert.equal(d.tick(0.1).demo, false, 'progress resets the idle clock');
   const pf = new ParryFails();
   assert.deepEqual([pf.fail(), pf.fail(), pf.fail(), pf.fail()], [false, false, true, false], 'the 3rd failed parry asks once');
@@ -852,7 +861,7 @@ function tutCtx({ device = 'kbm', preset = 'hybrid', iso = true, flags = {}, int
 const prompts = (ctx) => ctx.emitted.filter(([e]) => e === 'story:prompt').map(([, p]) => p);
 const host = (o = {}) => ({ isPlaying: false, cinema: { skip() {}, apply() {} }, flag(k, v) { this._f?.(k, v); }, play: () => Promise.resolve({}), toChart() { this.charted = true; }, ...o });
 
-test('story.W3: practice starts on the title spot with Pearl\'s intro, then guide bubbles with paw dots and the ghost-paw data', async () => {
+test('TT2: practice starts at once with the move lesson (no look shot, no 2.4-s intro), the skip toast from second 0', async () => {
   const { ctx } = tutCtx({ flags: { 'prologue.start': true } });
   const played = [];
   const tu = new Tutorial(ctx, host({ play: (id) => { played.push(id); return Promise.resolve({}); } }));
@@ -860,206 +869,91 @@ test('story.W3: practice starts on the title spot with Pearl\'s intro, then guid
   assert.ok(tu.eligible());
   tu.update(0.05);
   assert.ok(tu.active);
-  let ps = prompts(ctx);
-  assert.equal(ps.at(-1).speaker, 'pearl'); assert.equal(ps.at(-1).say, 'pearl.start'); assert.equal(ps.at(-1).textKey, null);
-  for (let k = 0; k < 60; k++) tu.update(0.05);                // P0 2.4 s, then the move lesson
-  ps = prompts(ctx);
-  const mv = ps.at(-1);
+  assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.skip'), 'the skip toast at once');
+  for (let k = 0; k < 10; k++) tu.update(0.05);                // 0.3 s
+  const mv = prompts(ctx).at(-1);
   assert.equal(mv.textKey, 'tut.move'); assert.equal(mv.say, 'pearl.race'); assert.equal(mv.speaker, 'pearl');
-  assert.deepEqual(mv.stepDots, { n: 0, of: 7, half: false });
-  assert.equal(mv.demo, 'tap'); assert.equal(mv.target.length, 3); assert.equal(mv.idleDemo, 8); assert.equal(mv.chipAfter, 6);
-  // the dummy is 12 m off-screen from the title spot: the look shot frames her + the dummy once, the lesson waits for it
-  assert.deepEqual(played, ['tutlook']); assert.equal(tu.pending, true);
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(tu.pending, false);
-  // walking: the same bubble wiggles (same speaker / textKey / say), the dot half-fills
+  assert.deepEqual(mv.stepDots, { n: 0, of: 4, half: false });
+  assert.equal(mv.demo, 'tap'); assert.equal(mv.target.length, 3); assert.equal(mv.chipAfter, 6);
+  assert.deepEqual(played, [], 'no tutlook');
   ctx.player.pos.z = -66;
   tu.update(0.05);
   const up = prompts(ctx).at(-1);
-  assert.equal(up.textKey, 'tut.move'); assert.equal(up.say, 'pearl.race'); assert.ok(up.progress > 0); assert.equal(up.stepDots.half, true);
-  // the 18 % strip rule: no payload ever asks for two bubbles (one speaker at a time)
+  assert.equal(up.textKey, 'tut.move'); assert.ok(up.progress > 0); assert.equal(up.stepDots.half, true);
   assert.ok(prompts(ctx).every((p) => p.kind === 'tutorial' && p.id === 'tutorial'));
+  assert.equal(ctx.emitted.filter(([e, p]) => e === 'ui:toast' && p.key === 'tut.skip').length, 1, 'the skip toast once');
 });
 
-test('story.W3: a lesson done → mint ✓ (done), the sticker reward + sticker flag, the next lesson after 0.6 s', () => {
+test('TT2: the bonk lesson is Pearl\'s bow bark (no scene): bow outfit, the Pink Bow card; a lesson done → ✓, sticker, next lesson', () => {
+  const played = [], outfits = [];
   const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
-  const tu = new Tutorial(ctx, host({ flag: (k, v) => { f[k] = v; } }));
+  const hooks = [];
+  ctx.game.addFrameHook = (fn) => { hooks.push(fn); return () => { const i = hooks.indexOf(fn); if (i >= 0) hooks.splice(i, 1); }; };
+  ctx.player.setOutfit = (o) => outfits.push(o);
+  const tu = new Tutorial(ctx, host({ play: (id) => { played.push(id); return Promise.resolve({ id }); }, flag: (k, v) => { f[k] = v; } }));
   tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'jump'); tu.active = true; tu._intro = true; tu._shown = null; tu.waitT = 0;
-  ctx.player.pos.x = -6; ctx.player.pos.z = -86;
-  tu.update(0.05);                                            // the jump prompt
-  assert.equal(prompts(ctx).at(-1).textKey, 'tut.jump');
-  ctx.player.pos.z = -88; ctx.player.onGround = false;        // over the fence, mid-hop
+  tu.log.i = 1; tu.active = true; tu._resumed = true; tu.waitT = 0;
   tu.update(0.05);
-  ctx.player.onGround = true;
+  assert.equal(prompts(ctx).at(-1).say, 'pearl.bow');
+  assert.deepEqual(outfits, ['tunic_bow'], 'the bow is set silently');
+  for (let k = 0; k < 50; k++) for (const h of [...hooks]) h(0.05);
+  assert.deepEqual(ctx.emitted.filter(([e]) => e === 'reward').map(([, p]) => p), [{ kind: 'friend', id: 'bow' }], 'the Pink Bow card stays');
+  for (let k = 0; k < 3; k++) ctx.bus.emit('combat:hit', { attacker: ctx.player, target: { kind: 'dummy' }, attackId: 'slash1' });
   tu.update(0.05);
-  const done = prompts(ctx).find((p) => p.done && p.ok);
-  assert.ok(done, 'the chip turns mint');
-  assert.equal(f['tut.jump.done'], true, 'the fence nav link opens');
-  assert.deepEqual(ctx.emitted.filter(([e]) => e === 'reward').map(([, p]) => p), [{ kind: 'sticker', id: 'hop' }]);
-  assert.equal(f['sticker.hop'], true);
-  assert.equal(tu.log.step.id, 'roll');
+  assert.deepEqual(played, [], 'no tutbow scene');
+  assert.ok(prompts(ctx).find((p) => p.done && p.ok), 'the chip turns mint');
+  assert.equal(f['sticker.bonk'], true);
+  assert.equal(tu.log.step.id, 'stand');
   for (let k = 0; k < 14; k++) tu.update(0.05);
-  assert.equal(prompts(ctx).at(-1).textKey, 'tut.roll');
-  assert.equal(prompts(ctx).at(-1).say, 'pearl.sack');
+  assert.equal(prompts(ctx).at(-1).say, 'pearl.wobble');
 });
 
-test('story.W3: walking round the fence end never counts as the hop; a real hop (Jump) still does', () => {
-  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
-  const tu = new Tutorial(ctx, host({ flag: (k, v) => { f[k] = v; } }));
-  tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'jump'); tu.active = true; tu._intro = true; tu._shown = null; tu.waitT = 0;
-  const P = ctx.player.pos; P.x = -5; P.z = -86;                // north side, inside the span (by the left dummy)
-  tu.update(0.05);
-  assert.equal(prompts(ctx).at(-1).textKey, 'tut.jump');
-  // round the east end on foot: out of the span (x > −1.7), down past the fence line, back into the span on the south side
-  for (const [x, z] of [[-3, -86], [-1, -86], [-0.5, -87], [-0.5, -88.5], [-1, -88.5], [-3, -88.5], [-5, -88.5]]) { P.x = x; P.z = z; tu.update(0.05); }
-  for (let k = 0; k < 4; k++) tu.update(0.05);
-  assert.equal(tu.log.step.id, 'jump', 'no Fence Hopper sticker for a walk-around');
-  assert.ok(!f['tut.jump.done']);
-  assert.ok(!prompts(ctx).some((p) => p.done && p.ok));
-  // a teleport-like flip on the ground (no Jump, no air) inside the span doesn't count either
-  P.z = -86; tu.update(0.05); P.z = -88.5; tu.update(0.05);
-  assert.equal(tu.log.step.id, 'jump');
-  // now a real hop: Jump pressed, then over the fence
-  P.z = -86; tu.update(0.05);
-  ctx.bus.emit(E.PLAYER_JUMP, {});
-  P.z = -88.3; tu.update(0.05); tu.update(0.05);
-  assert.equal(f['tut.jump.done'], true);
-  assert.equal(tu.log.step.id, 'roll');
-});
-
-test('story.W3: the bonk lesson plays `tutbow` (Pink Bow) before the jump; the meow lesson plays `tutpearl` and ends practice', async () => {
-  const played = [];
-  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
-  const story = host({ play: (id) => { played.push(id); return Promise.resolve({ id }); }, flag: (k, v) => { f[k] = v; } });
-  const tu = new Tutorial(ctx, story);
-  tu.init();
-  tu.log.i = 1; tu.active = true; tu._intro = true; tu.waitT = 0;
-  tu.update(0.05);
-  ctx.bus.emit('combat:hit', { attacker: ctx.player, target: { kind: 'dummy' }, attackId: 'slash3' });
-  tu.update(0.05);
-  assert.deepEqual(played, ['tutbow']);
-  assert.ok(tu.pending, 'practice waits for the bow scene');
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(tu.pending, false); assert.equal(tu.log.step.id, 'jump');
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu._shown = null; tu.waitT = 0;
-  tu.update(0.05);
-  tu.log.note({ type: 'cow' });
-  tu.update(0.05);
-  assert.deepEqual(played, ['tutbow', 'tutpearl']);
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(f['prologue.practice'], true, 'practice done');
-  assert.equal(story.charted, true, 'Pearl leads her to the height chart (P8)');
-  assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.done'));
-});
-
-test('story.W3: the first Sir Wobble swing of the parry lesson runs in 0.45 slow motion, once', () => {
+test('TT2: the Sir Wobble drill: "Get close" past 1.6 m; the first parry swing slow, after 3 misses every swing slow + the Kitten offer', () => {
   const { ctx } = tutCtx({ flags: { 'prologue.start': true } });
-  const slow = [];
+  const slow = [], offers = [];
   ctx.game.slowMo = (s, t) => slow.push([s, +t.toFixed(2)]);
+  ctx.ui = { offerKitten: (o) => { offers.push(o); return Promise.resolve(null); } };
+  const wkPos = { x: ONBOARD.wobble[0], z: ONBOARD.wobble[1] };
+  ctx.actors = { get: (id) => (id === 'wobble_knight' ? { pos: wkPos } : null) };
   const tu = new Tutorial(ctx, host());
   tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry'); tu.active = true; tu._intro = true;
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'stand'); tu.active = true; tu._resumed = true; tu.waitT = 0;
+  ctx.player.pos.x = 0; ctx.player.pos.z = -80;                 // 6 m away
+  tu.update(0.05);
+  assert.equal(prompts(ctx).at(-1).textKey, 'onb.wobble.close', 'too far: "Get close to Sir Wobble!"');
+  assert.equal(tu.guideTarget().textKey, 'onb.wobble.close');
+  assert.deepEqual([tu.guideTarget().x, tu.guideTarget().z], [0, ONBOARD.wobble[1] + ONBOARD.standR]);
+  ctx.player.pos.z = ONBOARD.wobble[1] + ONBOARD.standR;        // on the stand spot
+  tu.update(0.05);
+  assert.equal(prompts(ctx).at(-1).textKey, 'tut.stand');
+  assert.equal(tu.guideTarget().textKey, 'tut.stand');
+  // parry lesson: the first swing runs slowly once; three real misses → every swing + the Kitten offer
+  tu.log = new PracticeLog(); tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry');
   const wk = { kind: 'wobble_knight' };
   ctx.bus.emit('combat:telegraph', { id: 1, actor: wk, duration: 0.9 });
   ctx.bus.emit('combat:telegraph', { id: 2, actor: wk, duration: 0.9 });
   assert.deepEqual(slow, [[0.45, 2]]);
-});
-
-test('story.W3: the cow\'s warmer / colder clues each speak once; the 3rd failed parry asks ui for the kitten offer', () => {
-  const { ctx } = tutCtx({ flags: { 'prologue.start': true } });
-  const said = [], offers = [];
-  const cow = { pos: { x: 12, z: -72 } };
-  ctx.levels.current.critter = (id) => (id === PRACTICE.cowId ? cow : null);
-  ctx.ui = { offerKitten: (o) => { offers.push(o); return Promise.resolve(null); } };
-  const tu = new Tutorial(ctx, host({ barks: { say: (a, k) => said.push(k) } }));
-  tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu.active = true; tu._intro = true; tu._shown = tu.log.i;
-  ctx.player.pos.x = 12; ctx.player.pos.z = -95;              // > 14 m away
-  for (let k = 0; k < 220; k++) tu.update(0.05);
-  ctx.player.pos.z = -76;                                     // < 8 m
-  tu.update(0.05); tu.update(0.05);
-  ctx.bus.emit('player:meow', { position: { x: 12, z: -76 } });
-  ctx.bus.emit('player:meow', { position: { x: 12, z: -76 } });
-  assert.deepEqual(said, ['tut.cow.1', 'tut.cow.2', 'tut.cow.3']);
-  // parry lesson: blocked / hit swings are failed parries; the 3rd asks once
-  tu.log = new PracticeLog(); tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry');
-  const wk = { kind: 'wobble_knight' };
-  for (let k = 0; k < 4; k++) ctx.bus.emit('combat:hit', { attacker: wk, target: ctx.player, blocked: k % 2 === 0 });
+  for (let k = 0; k < 3; k++) ctx.bus.emit('combat:hit', { attacker: wk, target: ctx.player, blocked: false });
   assert.deepEqual(offers, [{ speaker: 'pearl' }]);
+  ctx.bus.emit('combat:telegraph', { id: 3, actor: wk, duration: 0.9 });
+  ctx.bus.emit('combat:telegraph', { id: 4, actor: wk, duration: 0.9 });
+  assert.equal(slow.length, 3, 'slow motion stays after 3 misses');
 });
 
-test('story.W3: skipping practice mid hide-and-seek brings Pearl back by the cow, clears its tail, sends the real paw dots', () => {
+test('TT2: the parry ends practice → prologue.practice, toChart with 4/4 dots (the bell; CS-01 in place)', () => {
   const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
-  const hooks = [], tails = [], spawned = [], said = [];
-  ctx.game.addFrameHook = (fn) => { hooks.push(fn); return () => { const i = hooks.indexOf(fn); if (i >= 0) hooks.splice(i, 1); }; };
-  const cow = { pos: { x: 12, z: -72 }, setTail: (t) => tails.push(t) };
-  ctx.levels.current.critter = (id) => (id === PRACTICE.cowId ? cow : null);
-  const actors = [];
-  ctx.companions = { actors, despawn: (a) => actors.splice(actors.indexOf(a), 1), spawnNpc: (id, at) => { const a = { npcId: id, at, pos: { x: at[0], z: at[2] }, setScripted() {}, play() {} }; spawned.push(a); actors.push(a); return a; } };
-  let chart = null;
-  const tu = new Tutorial(ctx, host({ flag: (k, v) => { f[k] = v; }, barks: { say: (a, k) => said.push([a, k]) }, toChart(o) { chart = o; } }));
-  tu.init();
-  actors.push({ npcId: 'pearl', pos: { x: 0, z: -70 } });
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu.active = true; tu._intro = true;
-  tu._hideAndSeek();
-  for (let k = 0; k < 40 && hooks.length; k++) for (const h of [...hooks]) h(0.05);
-  assert.equal(actors.some((a) => a.npcId === 'pearl'), false, 'Pearl hides');
-  assert.deepEqual(tails, ['pearl']);
-  tu.skip();
-  assert.deepEqual(tails, ['pearl', null], 'the cow loses her pink tail');
-  assert.equal(spawned.length, 1); assert.deepEqual([spawned[0].at[0], spawned[0].at[2]], [...PRACTICE.found], 'Pearl pops out of the cow\'s lee');
-  assert.deepEqual(said.map(([a, k]) => [a === spawned[0], k]), [[true, 'tut.pearl.anyway']]);
-  assert.deepEqual(chart, { dots: { n: 6, of: 7, half: false } }, 'the bell bubble shows the lessons really done');
-  assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.skipped'));
-  // ending again (or a normal end with Pearl already found) does not spawn a second Pearl
-  tu._unhide();
-  assert.equal(spawned.length, 1);
-});
-
-test('story.W3: skipping during the hide wipe cancels it (Pearl never vanishes) and a normal end sends 7/7 dots', () => {
-  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
-  const hooks = [], tails = [];
-  ctx.game.addFrameHook = (fn) => { hooks.push(fn); return () => { const i = hooks.indexOf(fn); if (i >= 0) hooks.splice(i, 1); }; };
-  ctx.levels.current.critter = () => ({ setTail: (t) => tails.push(t) });
-  const pearl = { npcId: 'pearl', pos: { x: 0, z: -70 } }, actors = [pearl];
-  ctx.companions = { actors, despawn: (a) => actors.splice(actors.indexOf(a), 1), spawnNpc: () => assert.fail('no respawn') };
   let chart = null;
   const tu = new Tutorial(ctx, host({ flag: (k, v) => { f[k] = v; }, toChart(o) { chart = o; } }));
   tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu.active = true; tu._intro = true;
-  tu._hideAndSeek();
-  tu.skip();
-  for (let k = 0; k < 40; k++) for (const h of [...hooks]) h(0.05);
-  assert.deepEqual(actors, [pearl], 'the wipe never despawns her');
-  assert.ok(!tails.includes('pearl'));
-  assert.deepEqual(chart.dots, { n: 6, of: 7, half: false });
-  const b = tutCtx({ flags: { 'prologue.start': true } });
-  let full = null;
-  const tu2 = new Tutorial(b.ctx, host({ toChart(o) { full = o; } }));
-  tu2.init(); tu2.active = true; tu2.log.i = TUTORIAL_STEPS.length;
-  tu2._end(false);
-  assert.deepEqual(full.dots, { n: 7, of: 7, half: false });
-});
-
-test('story.W3: toChart shows the given paw dots; the chart sparkle trail repeats every BARN_GUIDE.every s until CS-01', () => {
-  const ctx = fakeCtx({ systems: false });
-  const prompts = [], trails = [];
-  ctx.bus.on('story:prompt', (p) => prompts.push(p));
-  const story = new StoryManager(ctx);
-  story._sparkleTrail = (...a) => trails.push(a);
-  story.toChart({ dots: { n: 3, of: 7 } });
-  assert.deepEqual(prompts.find((p) => p.say === 'pearl.bell').stepDots, { n: 3, of: 7, half: false });
-  story.toChart();
-  assert.deepEqual(prompts.filter((p) => p.say === 'pearl.bell').at(-1).stepDots, { n: 7, of: 7, half: false });
-  ctx.player = { pos: { x: 30, y: 0, z: -90 } };                // far from the chart
-  for (let t = 0; t < BARN_GUIDE.every * 2.5; t += PROLOGUE_TICK) story._chartGuideTick(PROLOGUE_TICK);
-  assert.equal(trails.length, 2, 'one trail per BARN_GUIDE.every s (the bell path covers the first)');
-  assert.deepEqual(trails[0].slice(2, 4), [...PRACTICE.chart]);
-  ctx.player.pos.x = PRACTICE.chart[0]; ctx.player.pos.z = PRACTICE.chart[1] + BARN_GUIDE.farR - 1;
-  for (let t = 0; t < BARN_GUIDE.every * 1.5; t += PROLOGUE_TICK) story._chartGuideTick(PROLOGUE_TICK);
-  assert.equal(trails.length, 2, 'no trail when she is already close');
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry'); tu.active = true; tu._resumed = true; tu.waitT = 0;
+  tu.update(0.05);
+  ctx.bus.emit('player:parry', { attacker: { kind: 'wobble_knight' } });
+  tu.update(0.05);
+  assert.equal(f['prologue.practice'], true);
+  assert.equal(f['sticker.parry'], true);
+  assert.deepEqual(chart, { dots: { n: 4, of: 4, half: false } });
+  assert.ok(!ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.done'), 'no stale toast after the scenes');
+  assert.ok(!f['tut.jump.done'], 'jump is taught later, at the first hop');
 });
 
 test('story: parry lesson — a guard held over from Stand is not a failed parry; Pearl says "let go" once; the lesson has an intro', () => {
@@ -1074,7 +968,8 @@ test('story: parry lesson — a guard held over from Stand is not a failed parry
   ctx.ui = { offerKitten: (o) => { offers.push(o); return Promise.resolve(null); } };
   const tu = new Tutorial(ctx, host());
   tu.init();
-  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry'); tu.active = true; tu._intro = true; tu.waitT = 0;
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'parry'); tu.active = true; tu._resumed = true; tu.waitT = 0;
+  ctx.player.pos.z = ONBOARD.wobble[1] + ONBOARD.standR;        // by Sir Wobble
   ctx.player.guarding = true;                                   // still holding from the Stand lesson
   tu.update(0.05);
   assert.equal(prompts(ctx).at(-1).say, 'pearl.parry');
@@ -1084,7 +979,6 @@ test('story: parry lesson — a guard held over from Stand is not a failed parry
   assert.equal(tu.parryFails.failed, 0);
   assert.equal(prompts(ctx).filter((p) => p.say === 'pearl.parry.letgo').length, 1, 'the "let go" nudge speaks once');
   assert.equal(prompts(ctx).find((p) => p.say === 'pearl.parry.letgo').textKey, 'tut.parry', 'it keeps the lesson chip');
-  // she lets go and presses again, but late (a plain block): now it is a real miss
   ctx.player.guarding = false; tu.update(0.05);
   ctx.player.guarding = true; tu.update(0.05);
   hit(true); hit(true); hit(false);
@@ -1128,18 +1022,20 @@ test('ON §4.5: with Mochi in the party a post-prologue hint is his guide bubble
   assert.ok(solo.ctx.emitted.some(([e, q]) => e === 'ui:toast' && q.key === 'tut.milk'), 'a toast before Mochi');
 });
 
-test('tutorial: skipping practice (hold Pause) sets prologue.practice and the fence link, then heads to the chart', () => {
-  const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
-  const story = host({ flag: (k, v) => { f[k] = v; } });
-  const tu = new Tutorial(ctx, story);
-  tu.init();
-  tu.update(0.05);
-  ctx.input.down = (a) => a === 'pause';
-  for (let k = 0; k < 25; k++) tu.update(0.05);
-  assert.equal(f['prologue.practice'], true); assert.equal(f['tut.jump.done'], true);
-  assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.skipped'));
-  assert.equal(story.charted, true);
-  assert.equal(tu.eligible(), false);
+test('tutorial: skipping practice (hold Pause, or the Skip chip) sets prologue.practice, then the bell (toChart)', () => {
+  for (const via of ['pause', 'chip']) {
+    const { ctx, f } = tutCtx({ flags: { 'prologue.start': true } });
+    const story = host({ flag: (k, v) => { f[k] = v; }, skipPressed: () => (via === 'chip' ? true : ctx.input.down('pause')) });
+    const tu = new Tutorial(ctx, story);
+    tu.init();
+    tu.update(0.05);
+    if (via === 'pause') ctx.input.down = (a) => a === 'pause';
+    for (let k = 0; k < 25; k++) tu.update(0.05);
+    assert.equal(f['prologue.practice'], true, via);
+    assert.ok(ctx.emitted.some(([e, p]) => e === 'ui:toast' && p.key === 'tut.skipped'), via);
+    assert.equal(story.charted, true, via);
+    assert.equal(tu.eligible(), false, via);
+  }
 });
 
 test('hints: tut.click after 20 s without an order (pointer schemes only); tut.talk near a talkable NPC; tut.zoom on the first arena', () => {
@@ -1224,9 +1120,13 @@ test('CONTROLS_SPEC §14 + ON §4.3 copy: base / .pad / .touch variants, glyph t
     assert.ok(!/\[(Space|Q|E|J|K|L|RMB|LMB|Mouse)\]/.test(s), `${k}: hard-coded keycap in "${s}"`);
     assert.ok(!/look around with|move the mouse to look|right mouse.*(guard|block)/i.test(s) || k === 'toast.cam.unlocked', `${k}: old camera copy`);
   }
-  assert.equal(t('tut.move'), 'Right-click the ground to walk.');
-  assert.equal(t('tut.jump'), 'Hop the fence! [Jump]');
-  assert.equal(t('tut.bonk.touch'), 'Tap the dummy. Bonk!');
+  // TT2 §10.3 copy (src/story/strings.onboarding.js): the chip names the goal and the device's control
+  assert.equal(t('tut.move'), 'Race Pearl to the dummy! [Move]');
+  assert.equal(t('tut.jump'), 'Little fence? Hop it! [Jump]');
+  assert.equal(t('tut.bonk'), 'Bonk it 3 times! [Attack] or J');
+  assert.equal(t('tut.bonk.touch'), 'Tap ⚔ 3 times. Bonk!');
+  assert.equal(t('onb.meow'), 'Meow [Meow] to call hidden kittens');
+  assert.equal(t('onb.wobble.close'), 'Get close to Sir Wobble!');
   assert.equal(t('tut.title'), 'Morning Practice'); assert.equal(t('quest.prologue'), 'Morning Practice');
   // AUTOCAM story.1: the settings rows ui builds (labels + help)
   for (const k of ['settings.reduceCameraMotion', 'settings.camZoom', 'settings.biggerHero', 'settings.camLockMode', 'settings.camCursorLead',
@@ -1356,7 +1256,7 @@ test('§6.6: tut.riposte hint waits for a melee parry (a reflected bolt has no r
 
 // ====================================================================================================== M2: Acts I–II
 import { spoonRows, spoonSpeakers, arcPoint } from '../../src/story/cutscenes/cast.js';
-import { QUESTS, currentQuest, nextLevel, levelAvailable, levelCards, nextLabel } from '../../src/story/quests.js';
+import { QUESTS, QUEST_SPOTS, currentQuest, nextLevel, levelAvailable, levelCards, nextLabel } from '../../src/story/quests.js';
 import { hubLine, hubCandidates, missingKittens, HUB_LINES } from '../../src/story/dialogue/hub.js';
 import { lineBeat, LINE_BEATS } from '../../src/story/StoryManager.js';
 import { KITTEN_IDS } from '../../src/core/config.js';
@@ -1424,8 +1324,13 @@ test('quests: the current step follows the flags level by level; Quest Board nex
   assert.equal(currentQuest(fstate(), 'meadow').id, 'prologue');
   // the prologue in three steps: practice → the height chart → the barn (nothing else names the barn after CS-02)
   assert.equal(currentQuest(fstate({ 'prologue.start': true, 'prologue.practice': true }), 'meadow').id, 'prologue.chart');
-  const suit = currentQuest(fstate({ 'prologue.start': true, 'prologue.practice': true, 'prologue.chart': true, 'prologue.raid': true }), 'meadow');
+  // TT2: after the raid, the first fight (rats in the yard), then the barn chest
+  const fight = currentQuest(fstate({ 'prologue.start': true, 'prologue.practice': true, 'prologue.chart': true, 'prologue.raid': true }), 'meadow');
+  assert.equal(fight.id, 'prologue.fight'); assert.equal(fight.text, 'Shoo the rats out of the yard!');
+  const suit = currentQuest(fstate({ 'prologue.start': true, 'prologue.practice': true, 'prologue.chart': true, 'prologue.raid': true, 'meadow.cleared.yard': true }), 'meadow');
   assert.equal(suit.id, 'prologue.suit'); assert.equal(suit.text, 'Borrow armour from the barn!');
+  assert.equal(currentQuest(fstate({ 'prologue.start': true, 'prologue.practice': true, 'prologue.chart': true }), 'meadow').id, 'prologue.suit', 'no fight row before the raid');
+  for (const id of ['prologue.chart', 'prologue.fight', 'prologue.suit', 'meadow.mochi', 'meadow.exit']) assert.ok(QUEST_SPOTS[id]?.length, `${id} has a spot`);
   // Mochi's cart (z −41) is reached before the Picnic Glade (z 18): from the prologue-done flags alone, his step is first
   assert.equal(currentQuest(fstate({ 'prologue.done': true }), 'meadow').id, 'meadow.mochi');
   assert.equal(currentQuest(fstate({ 'prologue.done': true, 'meadow.mochi': true }), 'meadow').id, 'meadow.follow');
@@ -1696,7 +1601,7 @@ test('quests: the boss row names the boss while the fight is on (boss:start → 
   story.skipAll();
 });
 
-test('Suit Up guide: after CS-02 Clem\'s bubble names the barn, the ghost paw points at the chest, a sparkle trail leads there', async () => {
+test('Suit Up guide: once the yard is clear Clem\'s bubble names the barn, the ghost paw points at the chest; no sparkle trails', async () => {
   const { ctx, story } = storyCtx();
   ctx.levels.current.id = 'meadow';
   for (const k of ['prologue.start', 'prologue.practice', 'prologue.chart', 'prologue.raid']) ctx.state.setFlag(k, true);
@@ -1705,17 +1610,19 @@ test('Suit Up guide: after CS-02 Clem\'s bubble names the barn, the ghost paw po
   const ps = [], sparks = [];
   ctx.bus.on(E.PROMPT, (p) => ps.push(p));
   ctx.fx = { ...(ctx.fx ?? {}), burst: (kind, at) => { sparks.push([kind, at]); } };
-  const hooks = new Set();
-  ctx.game.addFrameHook = (fn) => { hooks.add(fn); return () => hooks.delete(fn); };
-  ctx.player.pos.set(-1.5, 0, -90.5);
-  for (let i = 0; i < Math.ceil((BARN_GUIDE.delay + 0.5) / PROLOGUE_TICK) + 2; i++) story._prologueTick(PROLOGUE_TICK + 1e-6);
+  ctx.player.pos.set(-1.5, 0, -80);
+  const tick = () => { for (let i = 0; i < Math.ceil((BARN_GUIDE.delay + 0.5) / PROLOGUE_TICK) + 2; i++) story._prologueTick(PROLOGUE_TICK + 1e-6); };
+  tick();
+  assert.ok(!ps.some((p) => p.id === 'barn'), 'no barn bubble while the yard fight is on');
+  ctx.state.setFlag('meadow.cleared.yard', true);
+  tick();
   const g = ps.find((p) => p.id === 'barn' && !p.done);
   assert.ok(g, 'the guide bubble');
-  assert.equal(g.speaker, 'swordcat'); assert.equal(g.say, 'cs02.7'); assert.equal(g.textKey, 'quest.prologue.suit');
+  assert.equal(g.speaker, 'swordcat'); assert.equal(g.say, 'cs02.7'); assert.equal(g.textKey, 'onb.chest');
   assert.ok(Math.abs(g.target[0] - -12.85) < 0.01 && Math.abs(g.target[2] - -88.75) < 0.01, 'the ghost paw on the barn chest');
   assert.equal(t('cs02.7'), 'First... armour.');
-  for (let i = 0; i < 60; i++) for (const fn of [...hooks]) fn(1 / 30);
-  assert.ok(sparks.filter(([k]) => k === 'sparkle').length >= BARN_GUIDE.trail - 1, 'the sparkle trail');
+  assert.equal(sparks.filter(([k]) => k === 'sparkle').length, 0, 'the Pink Paw trail (G1) replaces the sparkle trail');
+  assert.equal(typeof story._sparkleTrail, 'undefined'); assert.equal(typeof story._chartGuideTick, 'undefined');
   ctx.bus.emit(E.CUTSCENE_START, { id: 'cs01b' });
   assert.ok(ps.some((p) => p.id === 'barn' && p.done), 'hidden when the chest scene starts');
 });
@@ -1785,6 +1692,8 @@ test('Token Tails IP: CS-00 no longer recreates the poster (wave, sword lowered,
   assert.equal(ttCatAvailable({ tokentails_cat: { id: 'tokentails_cat' } }), true);
   // CS-02's stand (the MEME_LOOP-framed beat) is a guard stance, not the poster pose
   let prev = null, standPose = null;
-  walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'actor' && s.id === 'swordcat' && s.pose) prev = s.pose; if (s.t === 'cam' && s.preset === 'MEME_LOOP' && standPose == null) standPose = prev; });
-  assert.equal(standPose, 'ready', 'CS-02: her stand before the MEME_LOOP framing');
+  walkSteps(cs02Steps(false), (s) => { if (s.t === 'actor' && s.id === 'swordcat' && s.pose) prev = s.pose; if (s.t === 'cam' && s.preset === 'MEME_LOOP' && standPose == null) standPose = prev; });
+  assert.equal(standPose, 'ready', 'CS-02 (long cut): her stand before the MEME_LOOP framing');
+  const cutPoses = []; walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'actor' && s.id === 'swordcat' && s.pose) cutPoses.push(s.pose); });
+  assert.ok(cutPoses.includes('ready') && !cutPoses.includes('vigil'), 'CS-02 (TT2 cut): she takes her guard stance, never the poster pose');
 });

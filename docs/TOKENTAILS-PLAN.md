@@ -370,3 +370,328 @@ into `dist/` or `dist-test/`; SC5 may build into its own `dist-sc5/` and delete 
 | Rewrite the public Swordcat repo history to purge research media and old screenshots | not done; recommended before launch |
 | Code licence | All rights reserved, Token Tails |
 | Phase 2 score saves | not done; needs OK to edit `shared/` and backend |
+
+---
+
+## 10. Phase TT2: Token Tails + Pink Paw theme, guided onboarding
+
+Status: requested by the founder on 2026-10-14: "make sure it's ultimately Token Tails themed. Currently the intro
+doesn't guide where to go: create footprints showing where to go, as it's not clear how to pass every onboarding
+step (or make it faster). It must be both Pink Paw and Token Tails themed." Built from three read-only audits on
+2026-10-14 (a Playwright playthrough of the intro from a new save, a Token Tails theming audit, a Pink Paw facts
+audit) plus the leftovers of the first fix pass (checkpoints swordcat `d6fa734`, tokentails-swordcat `b76f405f`).
+Hard rules from the top of this file still apply; in addition, the founder's dev server on port **5180** is never
+killed, restarted or bound, and every agent kills only the servers it started.
+
+### 10.1 What the audits found (short)
+
+**Onboarding (playthrough at 1280×720 mouse and keyboard, plus phone landscape).**
+
+- Two dead ends. (1) The jump lesson cannot be passed with click or tap: the move order paths around the fence
+  (the fence nav link opens only after `tut.jump.done`, `meadow.js:630`), so F while walking never counts; only
+  WASD/stick + F works and nothing on screen says WASD. (2) The parry lesson stalls silently: Sir Wobble swings only
+  within 1.6 m and after the block he ended 2.57 m away (about 100 s waited, `parryFails` 10, no feedback).
+- In 5 of 7 lessons the target starts off-screen and nothing points at it: `beaconState()` returns `'off'` in
+  practice (`beacon.js:128`). Clem sits at y≈480 of 720, so only 130–220 px of ground is visible south of her,
+  where the practice field is; clicks lower than that land on the ability bar and are dropped silently.
+- About 141 s of scenes before the first fight (tutlook 1.7, tutbow 11.2, tutpearl 9.1, CS-01 36.6, CS-02 56.1,
+  CS-01b 16.3, G-01 10.0), plus D-01 18.3 after it. A realistic human without blockers needs 5–6 min to the first
+  fight; the audit run needed 12 min. The first fight (2 rats, 8 HP) killed an idle player in 15 s.
+- Skipping exists (hold Esc / ❚❚ 1 s) but is explained only after 20 s on a lesson, and the scene ring appears only
+  while already holding. A new player cannot skip practice from the title.
+- The existing guide (`ui/beacon.js`: gold paw badge, edge pointer, pink DOM paw trail) shows its trail for 3.6 s
+  in a straight line in candy pink #FF8FB1. `StoryManager._sparkleTrail` calls `ctx.fx.guideArrow`, which does not
+  exist (`StoryManager.js:792`).
+- Other bugs: barn chest tag shows the raw "[Interact]" instead of "Open"; Sir Wobble's telegraph ring is drawn away
+  from him; HUD and beacon stay drawn over the G-01 close-up; the Photo Cam fires on idle during the prologue; the
+  tutlook shot is washed out by fog; cutscene file headers state stale lengths; the edge pointer can sit beside the
+  ability bar; Lantern Stone 1's menu opens while foes 8 m away are alerted; the input-device label can flip to touch.
+
+**Token Tails theming.** HTML UI already uses Token Tails fonts and tokens. Still off-brand: the ginger loading
+paw (`index.html:67-71` #F4A462), the ginger cursor (`cursor.js:65`), Clem's ginger dialogue portrait
+(`Overlay.js:30`); Fredoka on canvas text (`Plate.js:15`, `Bubble.js:9`, `rig.js:205,209`); generic KayKit red
+banners and candy bunting; no Rescue House building or sign; a green-leaf catnip icon (Token Tails catnip has a
+lilac flower spike); a catnip name clash with the real per-account Token Tails catnip; the title hard-coded in about
+eight places per repo; no Token Tails mark on the results card or pause menu; an OG image without the game.
+
+**Pink Paw.** True and usable: "Pink Paw" (Rožinė pėdutė), a real Lithuanian cat shelter and Token Tails' partner
+shelter; four licensed cat names (Judas, Raudvis, Zare, Simas). Not usable: Pink Paw's logo (paw holding a
+daisy), any shelter photo or card art inside the game, any number, city, year or size. Pink Paw has no documented
+colour, so the Pink Paw pink in the game is Token Tails love pink #FF7AA2. The four named kittens wear coats that do
+not match the real cats (Judas is shown grey; he is a tuxedo).
+
+### 10.2 Guidance system: the Pink Paw trail (package G1)
+
+One system for every objective, onboarding first, reused for every later quest step.
+
+1. **Target source.** `ctx.story.guideTarget()` (G2) returns the current objective for every practice lesson, every
+   prologue step and every later quest step (contract in 10.7). The beacon falls back to the existing
+   `questTarget` when the method is missing. The beacon is no longer off in practice.
+2. **Paw prints on the ground.** World-space ground decals in `fx/GroundDecals.js` (one instanced pool of at most
+   14 quads, one draw call, reusing `DECAL.PAW`). Each print is an ivory pad #F3EEE6 with love-pink #FF7AA2 toe
+   beans and a maroon #4A1D08 rim (the Token Tails `logo/paw.webp` look; a generic paw, not Pink Paw's logo).
+   Prints alternate left/right, 1.2 m apart, along the NavGrid / Pathfind path (read-only use of
+   `src/physics`), so the trail goes round fences and through gates. The path is recomputed at most at 2 Hz.
+3. **Animation.** Prints light up one by one from Clem outward (0.12 s apart), then the cycle repeats every 2.5 s
+   while she is idle or not closing distance; the 2–3 prints just ahead of her stay lit while she walks the right
+   way. Reduced motion: static prints, no cycling.
+4. **Auto-hide.** The trail fades out within 0.5 s once Clem is inside the target's `arriveR` (default 2.2 m), and
+   during cutscenes, dialogue, boss fights and the results card. In ordinary fights it dims to 35 % but stays.
+5. **Edge arrow.** When the target is off-screen: a gold Token Tails ":3" coin (#FFCC55) with a pink paw-tip
+   pointer, 56 px on desktop and 44 px on phones, kept clear of the ability bar, hearts and the touch clusters
+   (`dodgeRects`). On-screen targets get the gold coin badge where the trail ends. Hidden in cutscene and dialogue
+   modes (it showed over the G-01 close-up).
+6. **Objective line.** One short HUD line (≤ 40 characters, paw icon, from the target's `textKey`) at the top
+   centre on desktop and under the hearts on phones; it is shown in practice too and uses the device-aware key
+   glyphs. It replaces the need to read a chip at the bottom of the screen.
+7. **Camera look-ahead.** `FollowCamera` biases framing toward the active target by up to 2.5 m (eased over 0.6 s)
+   when the target is off-screen and she is not fighting or locked on, so south targets get ground on screen.
+   Constants live in `FollowCamera.js`, not `core/config.js`.
+8. **Clicks under the HUD.** Empty parts of the ability bar pass pointer events through, so a right-click below Clem
+   becomes a move order instead of being dropped.
+9. **Off-screen speakers.** A guide bubble whose speaker (Pearl, a kitten) is off-screen is pinned to the screen
+   edge next to the arrow. Bubble text uses Nunito 800.
+10. **Phones.** Prints are drawn 1.3× on touch devices so each is at least 18 px wide at 844×390; the trail must be
+    readable at 844×390 and 390×844.
+11. **Settings.** `settings.guideTrail` (default on; G3 adds the toggle). Off hides the trail but keeps the edge
+    arrow and the objective line.
+12. **Photo Cam** never fires during the prologue or while an onboarding target is active.
+13. **Test hook.** `__GAME__.guide()` (dev and `build:test` only) returns what a player can see: the projected
+    prints, the edge arrow, the badge, the objective line, the current prompt text and the skip chip rectangle
+    (10.7). The onboarding bot (G6) uses nothing else.
+
+### 10.3 Faster onboarding, no dead ends (package G2)
+
+Target: the first real fight within 60–90 s of pressing Play with no skipping, and within 40 s when every skip chip
+is used. Save flags keep their names (`tut.*.done`, `prologue.raid`, `prologue.armour`); a save made mid-practice
+under the old flow continues at the nearest new step.
+
+| Time | Step | Change |
+|---|---|---|
+| 0 s | Title → play | Control in under 1.5 s. tutlook is dropped (the trail and look-ahead replace it). The title offers "Skip practice" to new players too (G3 draws the link, G2 implements `newGame({ skipPractice: true })`). |
+| 0–8 s | Move | "Race Pearl to the dummy!" Trail to the middle dummy (0, −76). Done within 2.2 m. |
+| 8–12 s | Bonk | 3-hit combo on the dummy; the chip says LMB/J or tap ⚔ (the right-click wording goes). tutbow becomes a 2-s Pearl bark ("Bow's perfect. Now bonk!"); the bow flag is set silently, the reward toast stays. |
+| 12–30 s | Sir Wobble drill | Pearl waits at Wobble; trail to a stand spot 1.3 m from him. Block once, then parry once. Wobble steps toward Clem when she is over 1.4 m away; past 1.6 m the prompt says "Get close to Sir Wobble!". The first swing plays in slow motion; after 3 parry fails the slow motion stays and the Kitten-mode offer appears. His telegraph ring is drawn under him. Sir Sacky stands beside him; rolling past him is an optional tip, and roll is taught for real on the first crossbow bolt. |
+| 30–40 s | Bell → CS-01 | The bell rings right after the parry; CS-01 plays in place, cut to ≤ 10 s (one "one ear-tuft short" gag). The height-chart walk goes. |
+| 40–60 s | CS-02 | Cut to ≤ 20 s: glow out, horde, Pearl's sign, Pilfer's theft; it ends with rats spilling into the practice field. |
+| 60–80 s | First fight | 3 rats on the practice field (`onboard.firstFight`). Forgiving: the rats wait for her first order or 3 s, and the first hit on her is soft. |
+| after | Armour | Trail to the barn chest; the tag reads "Open"; CS-01b becomes a ≤ 6-s inline beat, then the Chapter 1 card. |
+| after | North to Mochi | Trail north; G-01 becomes a non-blocking bark (no letterbox, no input lock). The cart fight and the Bright Slash lesson stay; D-01 ≤ 12 s. |
+| after | Lantern Stone 1, Noodle | The Lantern Stone menu never opens while foes are alerted. Noodle's barrel teaches Meow for real: within 6 m the prompt says "Meow [C] to call hidden kittens" (the cow lesson, its 1.2-s wipe and tutpearl go; tutpearl's lines become a bark). Jump is taught at the first hop link outside practice, and click/tap across a fence + F counts as a hop everywhere. `onboard.done` is set when the Standing Stones arena is reached after Noodle. |
+
+Skipping: a visible "Skip ▸▸" chip (hold Esc / ❚❚, or tap and hold the chip on touch) appears from second 0 of every
+skippable scene and of practice, never only after 20 s. Every scene file header states its measured length.
+The dead `ctx.fx.guideArrow` call and the chart/barn sparkle ticks are removed in favour of `guideTarget()`.
+
+### 10.4 Token Tails theming of every surface
+
+| Surface | Today | TT2 | Package |
+|---|---|---|---|
+| Title constant | `GAME_TITLE` + ~8 hard-coded copies per repo | `src/core/brand.js` `BRAND` (title, titleCaps, subtitle, tagline, shelter names, rescue house names, Pink Paw kitten names, site); `strings.js`, `icons.js`, `Overlay.js`, `recovery.js` import it; `index.html` uses `%GAME_TITLE%` placeholders replaced by `vite.config.js` `transformIndexHtml`; LICENSES.md says "this game". Token Tails: `client/components/swordcat/title.ts` `SWORDCAT_TITLE` used by the page, host, picker and tests | G3, TT2 |
+| Loading splash | ginger paw #F4A462 | ivory #F3EEE6 paw, white highlight, pink beans #FF7AA2/#FFB3C7, maroon #4A1D08 outline | G3 |
+| Loading tips | mechanics only | add 2–3 fiction tips ("The Token Tails Cat keeps a warm spot for every kitten you bring home.") | G3 |
+| Title | gold Passion One logo, 28 px pixel-logo pill | + tagline `BRAND.tagline` ("One tiny knight. Eighteen lost kittens. One warm Rescue House."), small `logo-text.webp` wordmark on wide screens (copied, © Token Tails in LICENSES.md), "Skip practice" link, short procedural coin-ding + meow jingle on reveal | G3 |
+| Cursor | ginger paw | ivory paw, pink beans, maroon outline | G3 |
+| Dialogue portraits | Clem `['#F2A65A','#FFF1DC']` | `['#F3EEE6','#FFF1DC']` with crimson #B3212F accents | G3 |
+| Canvas fonts | Fredoka on plates, bubbles, cutscene signs | plates Passion One 900 for ASCII words with per-character Nunito fallback; bubbles and signs Nunito 700/800 | G4 (plates, signs), G1 (bubbles) |
+| Currency icon | green leaf sprig | mint leaves + lilac flower spike (#F0C5FD → #9A88C9), procedural; 3D pickups match | G3 (icon), G4 (pickups) |
+| Currency name | "catnip", local | keep "catnip"; results card and pause menu say "Catnip here stays in this game for now." Never "Tails" or "treats" | G3 |
+| Results card | puns + count | gold ":3" coin behind the rank badge, "A Token Tails game" pill, the catnip line, the jingle | G3 |
+| Pause menu | generic | co-brand pill at the foot, no link out (the host owns navigation) | G3 |
+| Credits | team + one Pink Paw line (duplicated in `text.js` and `strings.js`) | one source; adds 10.5 lines; tokentails.com link with `target=_blank rel=noopener` | G3 |
+| Banners, bunting | KayKit red, candy colours | night #2A1F45 banners with gold trim and a gold coin emblem (`coinPieces`); bunting gold, love pink, lilac, mint, sky, cream. Done: hub and town square (TT3 R2, `tt_wall_banner`); the gate keeps the hyena fort colours (default) | G4, R2 |
+| Cutscene signs | generic | Token Tails parchment #F7E6B8→#E9CF8F, ink #4A1D08 | G4 |
+| Guide colours | candy pink #FF8FB1 trail, gold dots | love pink #FF7AA2 prints, step dots and ghost paw; gold coin arrow | G1 |
+| OG image | Token Tails cat only | Clem with her bow, the title and the co-brand pill; alt text from BRAND | G3 |
+| Favicon / manifest | Token Tails pixel cat; no manifest | unchanged (same-origin host manifest covers it) | – |
+| Picker card | abstract sword/bow SVG | SVG with Clem's silhouette, pink bow and the gold coin; title from `SWORDCAT_TITLE` | TT2 |
+
+Not in TT2 (see 10.9): Starter-cat looks in the wardrobe, the mascot `.glb` in close-ups, a share/screenshot export,
+a commissioned Token Tails theme.
+
+### 10.5 Pink Paw theming (no false claims)
+
+- **Rescue House.** By the fountain next to the Token Tails Cat: a procedural arch with an awning, a cream board with
+  a love-pink pad and four beans (generic paw, not Pink Paw's daisy logo), a gold ":3" coin crest and a generic daisy
+  flower box. No 3D text: its name lives in strings from `BRAND.rescueHouse` ("Pink Paw Rescue House", falling back
+  to "Pawsbury Rescue House" through one switch `BRAND.usePinkPawName`, which also switches the title). Pawsbury and
+  Purrhaven stay the town and island names. Barracks pennant retinted to #FF7AA2 on cream with a gold finial.
+- **Paw-print motif.** Pink paw prints mean "this way" everywhere (trail, step dots, badge, Rescue House sign). The
+  character rule stays: Clem's bow is the only pink on a character, Pearl's bow is lilac.
+- **Named kittens.** Coats match the real cats: Judas (`pickles`) tuxedo, Zare (`socks`) brown tabby, Raudvis
+  (`muffin`) ginger with a white chest, Simas (`pebble`) Siamese seal point with blue eyes. Accessories stay. Short
+  fictional bios (`kitten.<id>.bio`), shown on the rescue card and in the hub, each marked
+  `// claim:fiction` and inventing nothing about the real cat: Judas "Naps in bread baskets. Swears he was guarding
+  them." Simas "Blue eyes, very still, very patient. Has caught zero fish." Raudvis "Climbed the Bell Tower to see the
+  sunrise. Needed help down." Zare "Follows sunbeams across the square all afternoon." `BRAND.pinkPawKittens` maps
+  each id to its name; deleting an entry reverts that kitten to Pickles / Pebble / Muffin / Socks.
+- **Credits.** Keep: "Four kittens here share their names with real cats at Pink Paw. Their adventures are made up."
+  Add `credits.pinkpaw.about`: "Pink Paw (Rožinė pėdutė) is a real cat shelter in Lithuania and Token Tails' partner
+  shelter. Meet its cats at tokentails.com." Add `credits.fiction`: "The Pink Paw Rescue House, Pawsbury and
+  Purrhaven Isle are made up." LICENSES.md lines 127–131 match.
+- **Never:** Pink Paw's logo or daisy-paw art, shelter photos or card art in the bundle, numbers or places about Pink
+  Paw beyond the line above, "help / save / feed / support / fund / donate" next to a shelter noun, treats, Tails,
+  token or chain words (Token Tails CLAIMS R2, R3, R9, R10; the game also ships inside the app). Headings that need
+  "Rožinė pėdutė" use Nunito (Passion One has no ė).
+
+### 10.6 Leftovers from the first fix pass
+
+| # | Item | Package |
+|---|---|---|
+| a | `npm run build:tokentails` into `tokentails-swordcat/client/public/swordcat-game/`; measure size and file count (estimate ~58 MB / 560 files); record them; apply the 10.9 default | G6 |
+| b | Flag-ON dev-server check of `/swordcat` (`NEXT_PUBLIC_SWORDCAT=1` inline on the command, port 3021+), screenshots 1440×900 and 390×844, read them | G6 |
+| c | Full `npm run smoke` after all TT2 edits, run twice, both green or each failure documented | G6 |
+| d | Clem's maroon outline band behind her head in close-ups (the outline follows the outermost fur shell): fix like the Token Tails Cat fix while keeping her silhouette readable | G4 |
+| e | Stray tracked `tests/_ready_tmp.mjs`: remove if unused | G6 |
+
+### 10.7 Cross-package contracts (fixed here)
+
+- `StoryManager.guideTarget()` (G2) → `{ id, x, z, arriveR, textKey, vars?, kind: 'lesson'|'quest'|'optional', speaker? } | null`.
+  `StoryManager.sceneActive` (G2) is true during cutscenes and blocking dialogue. G1 reads both defensively.
+- `StoryManager.newGame({ skipPractice })` (G2); the title link calls it defensively (G3).
+- Story flags `onboard.firstFight` (first fight arena locks) and `onboard.done` (Standing Stones reached after
+  Noodle) (G2); the bot reads them through the existing state hook.
+- `strings.js` exports `addStrings(table)` (G3); G2 keeps all its new and changed onboarding copy in
+  `src/story/strings.onboarding.js` and registers it with `addStrings?.()`. G3's banned-word test also scans that file.
+- `icons.js` exports `ttCoin(px)` and `pinkPaw(px)` SVG strings (G3); G1 uses them with a local fallback.
+- `settings.guideTrail` default `true` (G3: `GameState.js`, `settings.js`, `text.js` label); G1 reads `!== false`.
+- `__GAME__.guide()` (G1, `src/core/debug.js`) → `{ phase, target: { id, kind, textKey } | null, objective,
+  prompt, prints: [{ sx, sy, lit }], edge: { sx, sy } | null, badge: { sx, sy } | null, skipChip: { x, y, w, h } | null }`.
+  The skip chip is the DOM element `.cin-skip-chip` (G2 creates it in `cinema.js`).
+- New CSS goes in package-owned files: `src/ui/guidance.css` (G1), `src/ui/onboarding.css` (G2); `ui.css` is G3's.
+- A change that breaks another package's test is written to `requests/tokentails-tt2-<id>.md` with the exact edit;
+  the orchestrator applies it. Nobody edits a file it does not own.
+
+### 10.8 Work packages (disjoint file ownership)
+
+| Id | Title | Repo | Dev port |
+|---|---|---|---|
+| G1 | Guidance: Pink Paw trail, coin edge arrow, objective line, look-ahead | swordcat | 5331 |
+| G2 | Onboarding flow: merge, shorten, skip chip, no dead ends | swordcat | 5332 |
+| G3 | Brand UI, title constant, copy, credits, results, audio jingle | swordcat | 5333 |
+| G4 | World and characters: Rescue House, banners, kitten coats, fonts, Clem outline | swordcat | 5334 |
+| TT2 | tokentails.com: title constant, picker card, docs | tokentails | – |
+| G6 | QA and ship: onboarding bot, build:tokentails, flag-ON check, smoke ×2, STATUS | swordcat | 4191–4192, 3021 |
+
+G1–G4 and TT2 run in parallel; G6 writes its bot in parallel and runs its builds and checks only after the others
+finish. Ownership lists are in the orchestrator's package list.
+
+### 10.9 Your call (defaults applied if no answer)
+
+| Question | Default |
+|---|---|
+| Rescue House name | "Pink Paw Rescue House", switched together with the title by `BRAND.usePinkPawName` |
+| "in Lithuania" in the credits | printed (the founder's brief calls Pink Paw a Lithuanian shelter) |
+| Currency | keep "catnip" + "Catnip here stays in this game for now." |
+| Jump and Meow lessons | out of practice, taught in context (first hop, Noodle's barrel) |
+| Four Pink Paw names | kept, with a founder check before each release (the game cannot hide a cat whose status changes) |
+| Starter-cat looks in the wardrobe | not in TT2 |
+| Mascot `.glb` in close-ups | no, the procedural Token Tails Cat stays |
+| `swordcat-game/` size (~58 MB) | copied as is behind the OFF flag; Capacitor exclusion decided later |
+
+### 10.10 Acceptance criteria (TT2)
+
+Guidance and onboarding:
+1. **Trail bot.** `npm run bot:onboarding` (G6) drives a fresh-storage `build:test` bundle opened with `?debug`
+   (not `?test`, which turns off story beats). Its only inputs come from `__GAME__.guide()`: right-click / tap on the
+   farthest lit print (or the edge arrow pulled 80 px inward, or the badge), the key or button named in the visible
+   prompt or objective line, LMB / ⚔ on foes while a fight prompt is shown, and holding the skip chip in skip runs.
+   It never reads world positions. It finishes from Play to `onboard.done` with zero dead ends (a dead end = 15 game
+   seconds with no flag progress and no prompt change) at 1280×720 mouse and 844×390 touch, 3 seeds each, with an
+   injected 1.5 s reaction delay, and dies 0 times in the first fight.
+2. **Times** (game seconds, median of 3 seeds, reported in STATUS.md and in this section): Play → `onboard.firstFight`
+   ≤ 90 s mouse and ≤ 110 s touch without skipping; ≤ 40 s with skipping; Play → `onboard.done` ≤ 4 min without skipping.
+3. Within 1.0 s of every onboarding step starting, at least 3 lit prints or the edge arrow are on screen in both
+   1280×720 and 844×390 (also 390×844 for the first three steps); each print is ≥ 18 px wide at 844×390.
+4. The trail fades within 0.5 s inside `arriveR`; no trail, edge arrow or badge is drawn in a cutscene or blocking
+   dialogue (G-01 included).
+5. The skip chip is visible within 0.5 s of every skippable scene start and of practice; measured CS-01 ≤ 10 s,
+   CS-02 ≤ 20 s, CS-01b ≤ 6 s, D-01 ≤ 12 s; G-01 locks no input.
+6. Click-across-fence + F and tap-across-fence + jump count as a hop; Sir Wobble's lesson completes with the bot's
+   1.5 s delay; the barn chest tag reads "Open"; the Lantern Stone menu does not open while foes are alerted.
+7. Unit tests: `beaconState` with `practice: true` is not `'off'`; trail path routes round the practice fence; auto-hide
+   radius; `guideTarget()` returns a target for every lesson and prologue step; old mid-practice saves resume.
+
+Theming and Pink Paw:
+8. `grep -rni "pink paw knight"` over `src/`, `index.html`, `vite.config.js`, `public/assets/LICENSES.md` hits only
+   `src/core/brand.js`; in tokentails-swordcat `client/` only `components/swordcat/title.ts` and tests. Changing
+   `BRAND.title` changes the title screen, `<title>`, OG tags, recovery screen and dialogue fallback (unit test).
+9. No `#F4A462`, `#E89A55`, `#F2A65A` in `index.html`, `cursor.js`, `Overlay.js`; no `Fredoka` in canvas font strings
+   (`Plate.js`, `Bubble.js`, `rig.js`); the catnip icon contains the lilac spike.
+10. The banned-word test (`tests/unit/brand.test.js`) over all display strings, including `strings.onboarding.js`,
+    finds no donate / donation / treat(s) / Tails (as a noun) / token / airdrop / chain words and no shelter noun
+    next to help / save / feed / support / fund. No file from `tokentails-app/client/public/logo/shelters/` and no
+    Pink Paw photo or card art is in the swordcat repo or its `dist/`.
+11. Kitten coats: a unit test asserts tuxedo / brown tabby / ginger-white / Siamese blue-eyed for Judas / Zare /
+    Raudvis / Simas; bios exist and carry `claim:fiction`.
+12. Screenshots read by the owning agent: title, loading, results, pause, credits (both orientations), the Rescue House
+    in the hub, a Clem close-up without the maroon band.
+
+Leftovers and gates:
+13. `npm run test:unit` green; `npm run smoke` green twice in a row after all edits (or each failure is a documented
+    report-only spec gap in STATUS.md).
+14. `swordcat-game/` size and file count recorded; flag-ON `/swordcat` screenshots at 1440×900 and 390×844 read; with
+    no `NEXT_PUBLIC_SWORDCAT*` set, every page is unchanged. `npx tsc --noEmit`, `npx eslint` on changed files and
+    `npm test` pass in `client/`. Nothing under `backend/src/shelter/**`, `shared/**`, `contracts/**/src`,
+    `catnip-heist/**`, `client/public/heist-game/**`, `client/components/shelter-payouts/**`, the /heist or
+    /shelter-payouts pages or `funding/` changed.
+15. `tests/_ready_tmp.mjs` is gone (or kept with a reason). The founder's port 5180 server is still listening at the end.
+
+### 10.11 Status after the first TT2 pass (2026-10-14, 12:00 Vilnius) and the continuation packages
+
+G1–G4 and the tokentails-side title constant are built in the working tree (uncommitted, on top of swordcat `d6fa734`
+and tokentails-swordcat `b76f405f`). G2 measured Play → `onboard.firstFight` at 42.8 game s (mouse, 1.5 s reaction
+delay, no skipping) and CS-01 7.7 s, CS-02 17.6 s, CS-01b 3.8 s, D-01 11.3 s. `tests/_ready_tmp.mjs` is gone (leftover
+e done). `npm run test:unit`: 1127/1129, the two failures are the ones G2 and G3 asked to fix in files they do not own.
+
+Still open: the cross-owner edits in `requests/tokentails-tt2-g{1,2,3,4}.md` that nobody owned, the phone toast
+placement, the onboarding bot run with its times, `build:tokentails`, the flag-ON `/swordcat` check, two green smoke
+runs and STATUS.md. The continuation packages below take them with disjoint files; QA runs last.
+
+| Id | Title | Takes |
+|---|---|---|
+| R1 | Apply the unowned core/UI/test requests | g1 §1 (MemeCamTrigger), g2 §1 (controls.test.js), g3 §1 (core.test.js), g3 §6 (celebrate.js bio), g3 §7 (ui assets manifest) |
+| R2 | Token Tails banners in the town square | g4 §1 (town.js + world assets manifest); g4 §2 gate banners stay as they are (default) |
+| R3 | Phone toasts and edge-arrow taps | g1 §2 (toast slot on phones), g1 §3 (dead beacon CSS), g2 §2 (a tap on the edge arrow or objective pill becomes a move order toward the target) |
+| TT3 | tokentails.com check | verify `title.ts` / picker / host / docs; tsc, eslint, jest |
+| Q1 | QA and ship | onboarding bot (acceptance 1–3), build:tokentails (leftover a), flag-ON check (b), smoke ×2 (c), Clem close-up (d), STATUS.md, times written into 10.10 |
+
+Acceptance stays 10.10; Q1 writes the measured bot times and the build size into this subsection.
+
+**Q1 measured (2026-10-14, after R1/R2/R3/TT3; report `tests/shots/bot/onboarding-bot.{json,md}`).**
+
+| Viewport | Skip | Play → `onboard.firstFight` median (per seed) | Limit | Play → `onboard.done` | First-fight deaths |
+|---|---|---|---|---|---|
+| 1280×720 mouse | no | 47.9 s (47.9 / 50.4 / 46.6) | ≤ 90 s ✓ | not reached: dead end at Mochi's cart (3/3) | 0 |
+| 1280×720 mouse | yes | 11.2 s (11.2 / 11.3 / 11.2) | ≤ 40 s ✓ | not reached (3/3 Mochi's cart) | 0 |
+| 844×390 touch | no | 54.0 s (58.0 / 50.0 / stalled at Sir Wobble) | ≤ 110 s ✓ (2 of 3) | not reached (Mochi / barn chest / Wobble) | 0 |
+| 844×390 touch | yes | 11.3 s (11.3 / 11.2 / 11.3) | ≤ 40 s ✓ | not reached (3/3 Mochi's cart) | 0 |
+
+- #1 / #2: first-fight targets met; **`onboard.done` ≤ 4 min not met / not measurable**: Mochi's cage needs the cart
+  arena cleared first but the guide points at the cart (`arriveR` 3, no key named, nothing shown inside 3 m); the Sir
+  Wobble stand spot can stall (`arriveR` 0.9 > `closeR − standR` 0.3; the badge sits on Wobble so a click engages him);
+  one touch stall at the barn chest. Fixes with diffs: `requests/tokentails-tt3-q1.md` §1–§3.
+- #3: the way is shown within 1.0 s at every walking step (move, stand, chart, first fight, chest) in all three
+  viewports (390×844 for the first three steps); `tut.bonk` / `tut.parry` show the badge or objective line only because
+  she is already there (§7 of the request: accept that, or draw prints onto the dummy). Smallest lit print at 844×390:
+  25.3 px (≥ 18 ✓).
+- #4 / #5: no trail, coin or badge in any scene ✓; Skip chip ≤ 0.1 s after every skippable scene start ✓; CS-01 7.7 s ✓,
+  CS-01b 3.7 s ✓, CS-02 31.5 s as a `sceneActive` span (> 20 s; G2 measured 17.6 s for the scene alone, request §7).
+- Leftover a: `build:tokentails` → `swordcat-game/` **632 files, 61.6 MiB** (largest file 3.6 MB). Default applied:
+  copied as is behind the OFF flag.
+- Leftover b: flag-ON `/swordcat` at 1440×900 and 390×844 read: title, embed reaching the game title, Token Tails
+  co-brand ✓; the host's "Still loading" note stays up on any origin outside the game's allowlist (dev port 3021,
+  previews; request §6) and "Skip practice" overlaps the footer on 390×844 (request §5).
+- Leftover c: `npm run smoke` run A 2931 s, 10 of 265 blocks with failures (18 assertions), each a documented spec gap
+  in STATUS.md (stale pre-TT2 fence-link assertions, the 390×844 skip-link overlap, untouched-area flakes); run B 2976 s,
+  the same 10 blocks plus two B-only ones (`player:touch` tap-to-move, `art:warm` gate luma 0.496 vs ≥ 0.5): 12 blocks.
+- #8–#11 greps ✓ (title only in `brand.js` / `title.ts` + tests; no ginger hexes; no Fredoka; banned-word test green;
+  no Pink Paw logo or photo in the repo or `dist/`). #12 screenshots read ✓ (Clem close-up without the maroon band).
+
+**Fix round 2 (2026-10-14, evening).** Onboarding bot (13 runs): 0 dead ends; firstFight median 50.7 s mouse / 44.9 s
+touch (11.1 / 11.3 s skipping); `onboard.done` 147.4 s mouse / 173.0 s touch (≤ 240 s ✓); #3 passes at every step
+(in-place lessons now ring their object with lit prints; `guide().ring` = she is there, the bot acts in place);
+scenes CS-01 6.3 s, CS-02 17.6 s, CS-01b 3.3 s, D-01 10.3 s (the 33 s / 41 s readings were a bot measurement bug).
+Flag-ON `/swordcat` shows no "Still loading" banner (same-origin parent accepted, request §6). Open: request §5
+(390×844 Skip-practice / footer overlap), #15 (the founder's 5180 server was already down; agents do not restart it).
+Details: STATUS.md "TT2 fix round 2".

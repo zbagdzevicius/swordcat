@@ -7,7 +7,7 @@
 // Once `town.free` (CS-07) it is the hub: no enemies, the stations open (Hub.js), env hub_gold → hub_grey → ending_gold.
 import * as THREE from 'three';
 import { defineLevel } from '../LevelKit.js';
-import { buildHub, signParts } from '../Hub.js';
+import { buildHub, signParts, ttWallBannerParts } from '../Hub.js';
 import { addFlame, ropeGeometry } from '../Dressing.js';
 import { makeGlowSprite } from '../Sky.js';
 import { E } from '../../core/events.js';
@@ -19,7 +19,7 @@ const M = {
   castle: B('building_castle_red'), homeAR: B('building_home_A_red'), homeAB: B('building_home_A_blue'), homeBR: B('building_home_B_red'), homeBB: B('building_home_B_blue'),
   tavern: B('building_tavern_red'), smith: B('building_blacksmith_red'), marketR: B('building_market_red'), marketB: B('building_market_blue'), church: B('building_church_blue'),
   well: B('building_well_red'), fountain: T('fountain-round'), lantern: T('lantern'), stallR: T('stall-red'), stallG: T('stall-green'), stallBench: T('stall-bench'),
-  banner: T('banner-red'), bannerG: T('banner-green'), hedge: T('hedge'), fence: T('fence'), cart: T('cart'), crate: 'models/env/village-kaykit/decoration/crate_A_big.glb',
+  bannerG: T('banner-green'), hedge: T('hedge'), fence: T('fence'), cart: T('cart'), crate: 'models/env/village-kaykit/decoration/crate_A_big.glb',
   barrel: 'models/env/village-kaykit/decoration/barrel.glb', treeD: 'models/env/nature/tree_default.glb', treeO: 'models/env/nature/tree_oak.glb',
   flowers: 'models/env/nature/plant_bush.glb', sack: 'models/env/village-kaykit/decoration/sack.glb',
 };
@@ -367,7 +367,7 @@ const SETPIECES = {
   /** The Square (0, 8): the fountain (rim 0.6) with the cat statue (base 1.6, top 2.5), stalls round the edge. */
   async square(kit, zone) {
     const level = kit.level, [cx, cz] = zone.at;
-    const [fountain, stallR, stallG, bench, banner] = await Promise.all([kit.tpl(M.fountain), kit.tpl(M.stallR), kit.tpl(M.stallG), kit.tpl(M.stallBench), kit.tpl(M.banner)]);
+    const [fountain, stallR, stallG, bench] = await Promise.all([kit.tpl(M.fountain), kit.tpl(M.stallR), kit.tpl(M.stallG), kit.tpl(M.stallBench)]);
     const g = kit.h(cx, cz);
     if (fountain) {
       const b = fountain.box, s = (SQUARE.fountainR * 2) / (b.max.x - b.min.x), sy = SQUARE.rim / (b.max.y - b.min.y);
@@ -390,7 +390,10 @@ const SETPIECES = {
     const hbs = [];
     for (const [x, z, yaw] of [[-6.5, 18.5, 0.5], [7.5, -3.5, 2.6], [-3.5, -47, 0.2], [3.4, -27, -0.4]]) { const p = kit.place(hb, x, z, { yaw, tiltZ: 0.12, collider: false, clear: 0.4, occupy: 0.5, jitter: 0.03 }); if (p) hbs.push(p); }
     kit.onFlag('town.free', (v) => { for (const p of hbs) kit.batch.setVisible(p.handle, !v); });
-    if (banner) for (const [x, z, yaw] of [[-2.9, 31.5, 0], [2.9, 31.5, 0]]) kit.place(banner, x, z, { fit: { h: 1.6 }, lift: 2.6, yaw, collider: false, clear: false, occupy: false, jitter: 0 });
+    // TT2 §10.4: the Token Tails night banners (gold rod, gold trim, the ':3' coin) where the red KayKit banners hung;
+    // yaw π turns the coin face (+Z local) south to the square (the old KayKit cloth read the same from both sides)
+    const ttBanner = kit.proc('tt_wall_banner', () => ttWallBannerParts(0.9, 1.6));
+    for (const [x, z, yaw] of [[-2.9, 31.5, Math.PI], [2.9, 31.5, Math.PI]]) kit.place(ttBanner, x, z, { lift: 2.6, yaw, collider: false, clear: false, occupy: false, jitter: 0 });
     level.square = { at: zone.at };
   },
 
@@ -574,5 +577,5 @@ export default defineLevel({
   grass: { height: 0.2, near: 0.6, flowers: 1.6 },
   grassMask: (x, z) => (Math.hypot(x, z) > 58 ? 1 : 0.75),
   models: [M.wall, M.gate, M.towerB, M.towerA, M.towerABlue, M.castle, M.homeAR, M.homeAB, M.homeBR, M.homeBB, M.tavern, M.smith, M.marketR, M.marketB, M.church, M.well,
-    M.fountain, M.lantern, M.stallR, M.stallG, M.stallBench, M.banner, M.hedge, M.fence, M.cart, M.crate, M.barrel, M.sack, M.treeD, M.treeO],
+    M.fountain, M.lantern, M.stallR, M.stallG, M.stallBench, M.hedge, M.fence, M.cart, M.crate, M.barrel, M.sack, M.treeD, M.treeO],
 });

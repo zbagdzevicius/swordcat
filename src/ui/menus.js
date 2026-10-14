@@ -22,6 +22,9 @@ import { defaultState } from '../core/GameState.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 import { REWARD_ART } from './celebrate.js';
+import { rescueBioHtml } from './portraits.js';
+import { CONTEXT_JINGLES } from '../audio/musicMap.js';
+import { BRAND } from '../core/brand.js';
 
 /** WA §4.3 title timings: the logo pops at `logo` s, the button(s) appear at `buttons` s. */
 export const TITLE = Object.freeze({ logo: 1.0, buttons: 1.4, quick: 0.35 });
@@ -59,6 +62,30 @@ export function pauseExtras({ hub = false, embed = false } = {}) {
 export function coBrandHtml(ctx) {
   const src = ctx?.assets?.url?.('ui/tokentails-logo.webp') ?? 'assets/ui/tokentails-logo.webp';
   return `<img class="tt-logo" src="${esc(src)}" alt="" width="28" height="28" decoding="async" draggable="false"><span class="tt-foot">${esc(tx(ctx, 'title.foot'))}</span>`;
+}
+
+/**
+ * The Token Tails wordmark for wide title screens (TOKENTAILS-PLAN §10.4; © Token Tails, LICENSES.md). Decorative: the
+ * co-brand footer names the brand in text. Returns HTML.
+ * @param {any} ctx
+ */
+export function wordmarkHtml(ctx) {
+  const src = ctx?.assets?.url?.('ui/tokentails-logo-text.webp') ?? 'assets/ui/tokentails-logo-text.webp';
+  return `<img class="title-wordmark" src="${esc(src)}" alt="" width="600" height="337" decoding="async" draggable="false">`;
+}
+
+/**
+ * The co-brand pill at the foot of the pause menu and on the results card (TOKENTAILS-PLAN §10.4): the Token Tails
+ * logo, "A Token Tails game" and the catnip note ("Catnip here stays in this game for now."). No link out: the host
+ * page owns navigation. Returns HTML.
+ * @param {any} ctx @param {'pause'|'results'} [where]
+ */
+export function brandPillHtml(ctx, where = 'pause') {
+  const src = ctx?.assets?.url?.('ui/tokentails-logo.webp') ?? 'assets/ui/tokentails-logo.webp';
+  const brand = tx(ctx, `${where}.brand`), note = tx(ctx, `${where}.catnipNote`);
+  return `<div class="tt-pill tt-pill--${where}"><img class="tt-logo" src="${esc(src)}" alt="" width="22" height="22" decoding="async" draggable="false">`
+    + `<span class="tt-pill-txt">${esc(brand === `${where}.brand` ? tx(ctx, 'title.foot') : brand)}</span></div>`
+    + (note && note !== `${where}.catnipNote` ? `<p class="tt-note">${I.fish()}<span>${esc(note)}</span></p>` : '');
 }
 
 /**
@@ -138,7 +165,9 @@ export class Menus {
     this.backdrop = el('div', 'menu-backdrop', { parent: this.root });
     this.titleEl = el('div', 'ui-title', { parent: this.root });
     // WA §4.3: no dark `.title-shade` any more: a static warm peach rim
-    this.titleEl.innerHTML = `<div class="title-rim"></div><div class="title-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}</div>`
+    // TOKENTAILS-PLAN §10.4: the tagline under the logo, the Token Tails wordmark on wide screens
+    this.titleEl.innerHTML = `<div class="title-rim"></div><div class="title-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}`
+      + `<div class="title-tagline">${esc(tx(ctx, 'title.tagline'))}</div></div>${wordmarkHtml(ctx)}`
       + `<div class="title-press"><span class="press-paw">${I.paw('#FFF6DA')}</span><span class="press-txt"></span></div>`
       + `<button type="button" class="title-gear" aria-label="${esc(tx(ctx, 'title.settings'))}">${I.gear()}</button>`
       + `<div class="title-foot tt-cobrand">${coBrandHtml(ctx)}</div>`;
@@ -154,11 +183,13 @@ export class Menus {
       // key plays ("Press any key to play!") and the whole screen is the hit target
       const onKey = (e) => {
         if (!this.titleActive || e.repeat) return;
+        // a focused "Skip practice" link takes its own Enter / Space (the click handler starts the game)
+        if (typeof document !== 'undefined' && document.activeElement?.closest?.('.title-skip') && (e.key === 'Enter' || e.key === ' ')) return;
         if (!this.stack.length) this._titleGo(e);
         else if (this.top?.anyKey && e.key !== 'Escape' && e.key !== 'Tab') this._homePlay(e);
       };
       const onPtr = (e) => {
-        if (!this.titleActive || e.target?.closest?.('.title-gear')) return;
+        if (!this.titleActive || e.target?.closest?.('.title-gear, .title-skip')) return;
         if (!this.stack.length) this._titleGo(e);
         else if (this.top?.anyKey) this._homePlay(e);
       };
@@ -304,7 +335,9 @@ export class Menus {
       const quick = this.titleEl.classList.contains('is-quick');
       const dev = this.ctx.input?.device ?? 'kbm';
       if (this._lblDev !== dev) { this._lblDev = dev; this._homeLabel(); this._pressLabel(); }
-      flag(this.titleEl, 'is-logo', this.titleT >= (quick ? 0 : TITLE.logo));
+      const logo = this.titleT >= (quick ? 0 : TITLE.logo);
+      flag(this.titleEl, 'is-logo', logo);
+      if (logo && !this._jingleDone && !this._jinglePending) this._jingle();
       // WA §4.3: the candy button(s) appear by themselves at 1.4 s (story's press:false holds them back)
       if (!this.stack.length && this.pressForced !== false && this.titleT >= (quick ? TITLE.quick : TITLE.buttons)) this._openHome();
     }
@@ -316,6 +349,7 @@ export class Menus {
     on = !!on;
     if (this.titleActive === on) return;
     this.titleActive = on; this.titleT = 0; this.pressText = null; this.pressForced = null;
+    this._jingleDone = false; this._jinglePending = false;
     flag(this.titleEl, 'is-on', on);
     flag(this.titleEl, 'is-quick', on && quick);
     flag(this.titleEl, 'is-ready', false);
@@ -344,8 +378,22 @@ export class Menus {
     this.openMain();
   }
 
+  /**
+   * The Token Tails jingle on the title reveal (TOKENTAILS-PLAN §10.4; audio/musicMap CONTEXT_JINGLES.title). Browsers
+   * keep audio locked until the first gesture, so a reveal before it waits and plays on the unlock instead.
+   */
+  _jingle() {
+    const a = this.ctx.audio;
+    if (!a?.ready) { this._jinglePending = true; return; }
+    this._jinglePending = false; this._jingleDone = true;
+    try { a.glock?.(CONTEXT_JINGLES.title, { volume: 0.8 }); } catch { /* audio optional */ }
+  }
+
   _unlock(e) {
-    try { this.ctx.audio?.unlock?.(); } catch { /* audio optional */ }
+    try {
+      const p = this.ctx.audio?.unlock?.();
+      if (this._jinglePending && !this._jingleDone) Promise.resolve(p).then(() => { if (this._jinglePending && !this._jingleDone) this._jingle(); }).catch(() => {});
+    } catch { /* audio optional */ }
     if (e && e.pointerType === 'touch' && typeof document !== 'undefined' && !document.fullscreenElement && !embedMode()) {
       try { document.documentElement.requestFullscreen?.()?.catch?.(() => {}); } catch { /* not allowed */ }
     }
@@ -432,7 +480,24 @@ export class Menus {
       else items.push(this._button(row, tx(ctx, 'menu.newGame'), () => this._newAdventure(), { cls: 'btn--home btn--sky' }));
     }
     this._homeLabel();
+    // TOKENTAILS-PLAN §10.3 / §10.7: new players may skip Morning Practice (story.newGame({ skipPractice }), G2)
+    if (!hasSave) {
+      const skip = el('button', 'title-skip', { parent: e, attrs: { type: 'button' }, html: `<span>${esc(tx(ctx, 'title.skipPractice'))}</span><span class="title-skip-arr" aria-hidden="true">▸▸</span>` });
+      skip.addEventListener('click', (ev) => { ev.stopPropagation(); if (this.titleActive) { this._unlock(ev); this.sfx('ui.confirm'); this._skipPractice(); } });
+    }
     this.push(this._wire({ id: 'main', el: e, items, layer: 'title', anyKey: !hasSave, back: () => false }), { sound: null });
+  }
+
+  /** "Skip practice": a new game that starts after Morning Practice (story's newGame({ skipPractice }) when it has one). */
+  _skipPractice() {
+    const story = this.ctx.story;
+    if (typeof story?.newGame !== 'function') { this._play(); return; }
+    this._go(async () => {
+      this.closeAll();
+      try { this.ui._giveBackMode?.(); } catch { /* ui optional */ }
+      this.ui.resumePoint = null;
+      await story.newGame({ difficulty: 'knight', skipPractice: true });
+    });
   }
 
   /** The one button follows the device: "Tap to play!" / "Press any key to play!". */
@@ -626,7 +691,7 @@ export class Menus {
     const { e, body } = this._panel('credits', tx(ctx, 'credits.title'), this.titleActive ? 'menu--title' : '');
     const roll = el('div', 'credits-roll', { parent: body });
     roll.innerHTML = `<div class="cr-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}</div>`
-      + `<div class="cr-brand tt-cobrand">${coBrandHtml(ctx)}</div>${creditsTopHtml(ctx)}`
+      + `<div class="cr-brand tt-cobrand">${coBrandHtml(ctx)}</div>${creditsTopHtml(ctx)}${creditsPinkPawHtml(ctx)}`
       + `<p class="cr-big">${esc(tx(ctx, 'credits.made'))}</p><h3>${esc(tx(ctx, 'credits.assets'))}</h3><div class="cr-lic">…</div>`;
     const lic = roll.querySelector('.cr-lic');
     this.ui.licenses?.().then((txt) => { lic.innerHTML = licensesHtml(txt); }).catch(() => { lic.textContent = ''; });
@@ -661,6 +726,8 @@ export class Menus {
       if (id === 'hub') items.push(this._button(body, tx(ctx, 'pause.hub'), () => this.ui.toHub()));
       else items.push(this._button(body, tx(ctx, 'pause.quit'), () => this.openConfirm(tx(ctx, 'menu.quitConfirm'), () => this.ui.quitToTitle())));
     }
+    // TOKENTAILS-PLAN §10.4: the co-brand pill and the catnip note at the foot (no link out)
+    el('div', 'pause-brand', { parent: body, html: brandPillHtml(ctx, 'pause') });
     this.push(this._wire({ id: 'pause', el: e, items, layer: 'pause', back: () => this.ui.resume() }), { sound: 'ui.bookOpen' });
   }
 
@@ -691,7 +758,7 @@ export class Menus {
     const items = cells.map((c) => {
       const cell = el('div', `mi kit-cell${c.found ? ' is-found' : ''}`, { parent: grid });
       cell.innerHTML = `<div class="kit-face">${c.found ? portraitSVG(c.id, { expression: 'happy' }) : '<span class="kit-q">?</span>'}</div>`
-        + `<div class="kit-name">${esc(c.name)}</div><div class="kit-where">${esc(c.where)}</div>`;
+        + `<div class="kit-name">${esc(c.name)}</div><div class="kit-where">${esc(c.where)}</div>${c.found ? rescueBioHtml(ctx, c.id) : ''}`;
       return { el: cell };
     });
     items.push(this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }));
@@ -798,6 +865,22 @@ export function continueSub(ctx, sum) {
 export function creditsTopHtml(ctx) {
   const has = (k) => k === 'credits.team' || !!ctx?.strings?.has?.(k);
   return ['credits.team', 'credits.pinkpaw'].filter(has).map((k) => `<p class="cr-${k.slice(8)}">${esc(tx(ctx, k))}</p>`).join('');
+}
+
+/**
+ * The credits' Pink Paw block (TOKENTAILS-PLAN §10.5): 'credits.pinkpaw.about' with the site as a link (new tab,
+ * rel=noopener) and 'credits.fiction'. Rows strings does not carry are left out. Returns HTML.
+ * @param {any} ctx
+ */
+export function creditsPinkPawHtml(ctx) {
+  const has = (k) => !!ctx?.strings?.has?.(k);
+  let out = '';
+  if (has('credits.pinkpaw.about')) {
+    const site = BRAND.site, text = esc(tx(ctx, 'credits.pinkpaw.about'));
+    out += `<p class="cr-pinkpaw-about">${text.replace(site, `<a href="https://${site}" target="_blank" rel="noopener">${site}</a>`)}</p>`;
+  }
+  if (has('credits.fiction')) out += `<p class="cr-fiction">${esc(tx(ctx, 'credits.fiction'))}</p>`;
+  return out;
 }
 
 /** A Controls-card row label: strings key `controls.<action>` when present, else the row's built-in label. */

@@ -15,6 +15,9 @@
 // type spawned at the centre), `waves: [[[type, n, opts?], ...], ...]`, `restoreUnless` (cond: never restore the
 // saved clear while it holds, e.g. the glade while Pudding is still netted), `clearedWhen` (cond: start cleared, e.g. the
 // town's arenas once `town.free`).
+// TT2 §10.3 (the first fight): `calm: s` — the waves spawn idle (`ai: false` in their opts) and wake on her first
+// order / swing / hit, or `calm` s after they appear; `softHit: n` — the first hit on her inside the fight deals at most
+// n (the rest is given back at once).
 // Saved clears: clear() sets the flag `<level>.cleared.<arenaId>` (the open-zone convention). On load, restore()
 // starts the arena cleared (no trigger, no waves, no events) when that flag is set, or when its `rescue` is done
 // (the bridge once Mochi is rescued).
@@ -76,6 +79,23 @@ export class Arena {
     /** callbacks fired once on clear */
     this.onClear = [];
     this._offs = [];
+    /** TT2 first fight: seconds until the idle wave wakes (0 = awake), and the soft first hit still owed */
+    this.calm = zone.calm ?? 0; this._calmT = 0; this._calmOn = false;
+    this.softHit = zone.softHit ?? null; this._softUsed = false;
+    if (this.calm > 0) {
+      const wake = () => { if (this._calmOn) this.wake(); };
+      this._offs.push(ctx.bus.on(E.PLAYER_ORDER, (o) => { if (o?.valid !== false && o?.kind !== 'stop') wake(); }));
+      this._offs.push(ctx.bus.on(E.PLAYER_SWING, wake));
+      this._offs.push(ctx.bus.on(E.HIT, (h) => { if (h?.target && this.enemies.includes(h.target)) wake(); }));
+    }
+    if (this.softHit != null) {
+      this._offs.push(ctx.bus.on(E.PLAYER_DAMAGED, (d) => {
+        if (!this.locked || this._softUsed || !d || !this.enemies.includes(d.source)) return;
+        this._softUsed = true;
+        const p = ctx.player, give = Math.max(0, (d.amount ?? 0) - this.softHit);
+        if (p && give > 0 && p.alive !== false) p.hp = Math.min(p.maxHp ?? p.hp + give, p.hp + give);
+      }));
+    }
     if (this.lockOn) {
       const [csId, when = 'end'] = String(this.lockOn).split(':');
       const ev = when === 'start' ? E.CUTSCENE_START : E.CUTSCENE_END;
@@ -248,7 +268,21 @@ export class Arena {
       if (e) this.enemies.push(e);
       this.ctx.bus.emit(E.BURST, { kind: String(type).startsWith('bonehead') ? 'spawnBones' : 'spawn', position: _v.clone() });
     }
+    if (this.calm > 0 && this.wave === 1) { this._calmOn = true; this._calmT = this.calm; }
     this.ctx.bus.emit(E.ARENA_WAVE, { id: this.id, wave: this.wave, total: this.waves.length });
+  }
+
+  /** TT2 first fight: the idle wave wakes and charges (her first order / swing / hit, or `calm` s). Idempotent. */
+  wake() {
+    if (!this._calmOn) return;
+    this._calmOn = false; this._calmT = 0;
+    const list = this.ctx.enemies?.list ?? [];
+    for (const e of this.enemies) {
+      if (!e?.alive || !list.includes(e) || e.ai !== false) continue;
+      e.ai = true; e.alerted = true;
+      try { e.setState?.('chase'); } catch (err) { console.warn('[arena] wake', err); }
+    }
+    this.ctx.bus.emit(E.ARENA_WAVE, { id: this.id, wave: this.wave, total: this.waves.length, woke: true });
   }
 
   clear() {
@@ -273,7 +307,7 @@ export class Arena {
       this.enemies.length = 0;
       this.wave = 0;
     }
-    this.locked = false; this._waitT = 0; this._firstT = 0;
+    this.locked = false; this._waitT = 0; this._firstT = 0; this._calmOn = false; this._calmT = 0; this._softUsed = false;
     this._dropWall();
     const explore = this._explore();
     if (explore) this.ctx.bus.emit(E.MUSIC, { track: explore, fade: 1.5 });
@@ -306,6 +340,7 @@ export class Arena {
     if (!this.soft) this._keepInside();
     // AUTOCAM §8 room read: the camera frames the ring first; wave 1 follows ARENA.firstWave s after the lock
     if (this._firstT > 0) { if ((this._firstT -= dt) <= 0) { this._firstT = 0; this._nextWave(); } return; }
+    if (this._calmOn && (this._calmT -= dt) <= 0) this.wake();
     const alive = this.aliveCount();
     if (this.boss) { if (alive === 0 && this.enemies.length) this.clear(); return; }
     if (alive <= 1) {

@@ -5,6 +5,8 @@
 // heal item a tuna-snack tin (internal id stays `milk`); Clementine's head is the ivory Token Tails coat with crimson eyes
 // and her pink bow on the LEFT ear; the logo ties the bow on the first "O", or on the first letter when there is none.
 
+import { BRAND } from '../core/brand.js';
+
 let _uid = 0;
 /** Unique id prefix for SVG defs (several copies of an icon may live in the same document). */
 export function uid(p = 'u') { _uid = (_uid + 1) % 1e9; return `${p}${_uid.toString(36)}`; }
@@ -38,11 +40,13 @@ export function gritShield(state = 'full') {
     + '<path d="M6 6.4 9.5 5.3" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity=".8"/></svg>';
 }
 
-/** Brand palette for the currency and snack icons. */
+/** Brand palette for the currency and snack icons (mint leaves; the Token Tails catnip's lilac flower spike). */
 const NIP = Object.freeze({
-  silver: { hi: '#E9F7E4', mid: '#9FD08F', lo: '#5E9E58', vein: '#3F7A44', stem: '#6E8F4A' },
+  silver: { hi: '#E6FBEF', mid: '#8FE3C0', lo: '#3FA87A', vein: '#2E7D5B', stem: '#4E8F5E' },
   gold: { hi: '#FFF6C8', mid: '#FFCC55', lo: '#D9962A', vein: '#A8681A', stem: '#B8862E' },
 });
+/** The catnip flower spike: lilac #F0C5FD at the tip down to #9A88C9 (TOKENTAILS-PLAN §10.4). */
+export const CATNIP_LILAC = Object.freeze({ hi: '#F0C5FD', lo: '#9A88C9' });
 
 /**
  * The heal item: a tuna-snack tin (§14.2 slot; internal id `milk`, "Snack Break"). Empty tins are outlined.
@@ -69,14 +73,19 @@ export function milkBottle(full = true) {
 }
 
 /**
- * The currency: a catnip sprig (internal id `fish`). `gold` = the golden catnip worth 10 (the silver-green sprig is 1).
+ * The currency: a catnip sprig (internal id `fish`): mint leaves and a lilac flower spike at the tip, as Token Tails
+ * draws catnip. `gold` = the golden catnip worth 10 (gold leaves, same lilac spike; the mint sprig is 1).
  * @param {boolean} [gold]
  */
 export function fish(gold = false) {
-  const g = uid('cn'), c = gold ? NIP.gold : NIP.silver;
+  const g = uid('cn'), f = uid('cf'), c = gold ? NIP.gold : NIP.silver;
   const leaf = (d) => `<path d="${d}" fill="url(#${g})" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"/>`;
+  // the flower spike: stacked lilac florets on the stem tip (top-right), lightest at the tip
+  const florets = [[33.2, 4.6, 2.3, 1.9], [34.9, 3.1, 2.1, 1.7], [36.2, 1.9, 1.7, 1.4]]
+    .map(([x, y, rx, ry]) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" transform="rotate(-32 ${x} ${y})" fill="url(#${f})" stroke="${INK}" stroke-width="1"/>`).join('');
   return `<svg class="ico-fish ico-catnip${gold ? ' is-gold' : ''}" viewBox="0 0 38 22" aria-hidden="true"><defs><linearGradient id="${g}" x1="0" y1="0" x2="0" y2="1">`
-    + `<stop offset="0" stop-color="${c.hi}"/><stop offset=".55" stop-color="${c.mid}"/><stop offset="1" stop-color="${c.lo}"/></linearGradient></defs>`
+    + `<stop offset="0" stop-color="${c.hi}"/><stop offset=".55" stop-color="${c.mid}"/><stop offset="1" stop-color="${c.lo}"/></linearGradient>`
+    + `<linearGradient id="${f}" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${CATNIP_LILAC.hi}"/><stop offset="1" stop-color="${CATNIP_LILAC.lo}"/></linearGradient></defs>`
     // stem (lying across the icon, bottom-left to top-right)
     + `<path d="M4 19.5C12 15 22 10 34 4" fill="none" stroke="${INK}" stroke-width="3.2" stroke-linecap="round"/>`
     + `<path d="M4 19.5C12 15 22 10 34 4" fill="none" stroke="${c.stem}" stroke-width="1.6" stroke-linecap="round"/>`
@@ -86,7 +95,46 @@ export function fish(gold = false) {
     + leaf('M28 7.6c-1.8-2.8-1-6 1.6-6.6 1.2 1 1.6 3.4.8 5.6Z') + leaf('M29.6 7.4c2.2 1.8 5 1.6 6.4-.4-1-1.4-3.4-1.8-5.6-1Z')
     + `<path d="M9.4 9.4 11.6 13M18.8 5.4l1.4 4.4M28.6 2.8l.4 3.4" stroke="${c.vein}" stroke-width=".9" stroke-linecap="round" opacity=".8"/>`
     + `<circle cx="9.6" cy="8.6" r=".9" fill="#fff" opacity=".85"/><circle cx="19" cy="4.6" r=".9" fill="#fff" opacity=".85"/>`
+    + florets
     + (gold ? `<path d="M34.5 12.5l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8Z" fill="#FFF6C8" stroke="${GOLD_DEEP}" stroke-width=".7"/>` : '')
+    + '</svg>';
+}
+
+/**
+ * The Token Tails gold ":3" coin (TOKENTAILS-PLAN §10.2 / §10.7: G1's edge arrow and badge, the results card). A
+ * generic gold disc with a cat face; `px` is the rendered size. Pure SVG string.
+ * @param {number} [px]
+ */
+export function ttCoin(px = 32) {
+  const g = uid('tc'), s = Math.max(8, Math.round(px));
+  return `<svg class="ico-ttcoin" width="${s}" height="${s}" viewBox="0 0 40 40" aria-hidden="true"><defs><radialGradient id="${g}" cx=".4" cy=".35" r=".75">`
+    + '<stop offset="0" stop-color="#FFE9A0"/><stop offset=".55" stop-color="#FFCC55"/><stop offset="1" stop-color="#E0A23A"/></radialGradient></defs>'
+    + '<circle cx="20" cy="20" r="18" fill="#C9862A" stroke="#4A1D08" stroke-width="2.2"/>'
+    + `<circle cx="20" cy="19" r="15" fill="url(#${g})"/>`
+    + '<path d="M9.5 14a12 12 0 0 1 8-6.5" fill="none" stroke="#FFF6D6" stroke-width="2" stroke-linecap="round" opacity=".85"/>'
+    // the ":3" face: two eyes and a little "w" mouth
+    + '<g fill="#4A1D08"><ellipse cx="14.8" cy="17" rx="2" ry="2.5"/><ellipse cx="25.2" cy="17" rx="2" ry="2.5"/></g>'
+    + '<path d="M14.5 23.2q2.8 3 5.5 0q2.7 3 5.5 0" fill="none" stroke="#4A1D08" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '</svg>';
+}
+
+/**
+ * A Pink Paw print (TOKENTAILS-PLAN §10.2 / §10.7: G1's trail prints, step dots and badge): a love-pink #FF7AA2 pad
+ * with soft-pink #FFB3C7 bean highlights and a maroon #4A1D08 rim. A generic paw, never Pink Paw's daisy logo.
+ * `ivory: true` draws the Token Tails ivory pad (#F3EEE6) with pink beans instead.
+ * @param {number} [px] @param {{ ivory?: boolean }} [o]
+ */
+export function pinkPaw(px = 24, { ivory = false } = {}) {
+  const s = Math.max(8, Math.round(px));
+  const pad = ivory ? '#F3EEE6' : '#FF7AA2', bean = '#FF7AA2', hi = ivory ? '#FFFFFF' : '#FFB3C7';
+  const toes = [[15.4, 20.6, -18], [20.6, 16, -6], [27.4, 16, 6], [32.6, 20.6, 18]];
+  return `<svg class="ico-pinkpaw" width="${s}" height="${s}" viewBox="0 0 48 48" aria-hidden="true"><g stroke="#4A1D08" stroke-width="2">`
+    + `<ellipse cx="24" cy="30" rx="8.6" ry="7.2" fill="${pad}"/>`
+    + toes.map(([x, y, r]) => `<ellipse cx="${x}" cy="${y}" rx="3.5" ry="4.4" transform="rotate(${r} ${x} ${y})" fill="${pad}"/>`).join('')
+    + '</g>'
+    + (ivory ? `<ellipse cx="24" cy="31" rx="4.6" ry="3.4" fill="${bean}"/>` + toes.map(([x, y]) => `<ellipse cx="${x}" cy="${y + 0.6}" rx="1.7" ry="2.2" fill="${bean}"/>`).join('') : '')
+    + `<ellipse cx="21" cy="27.4" rx="3" ry="1.6" fill="${hi}" opacity=".85"/>`
+    + toes.map(([x, y]) => `<circle cx="${x - 0.8}" cy="${y - 1.4}" r="1" fill="${hi}" opacity=".85"/>`).join('')
     + '</svg>';
 }
 
@@ -269,10 +317,10 @@ export function sleepingCat() {
 
 /**
  * The game logo (art.md §13 title screen): the title in gold letters with the pink bow tied on the first "O"; a title
- * without an "O" (PINK PAW KNIGHT) gets the bow on its first letter instead (top-left, tilted). Returns HTML.
- * `text` is plain text (escaped here); `sub` is trusted HTML (callers escape it).
+ * without an "O" (like the current one) gets the bow on its first letter instead (top-left, tilted). Returns HTML.
+ * `text` is plain text (escaped here; default: core/brand.js BRAND.titleCaps); `sub` is trusted HTML (callers escape it).
  */
-export function logoHtml(text = 'PINK PAW KNIGHT', sub = '') {
+export function logoHtml(text = BRAND.titleCaps, sub = '') {
   const chars = [...String(text ?? '')];
   let at = chars.findIndex((c) => c === 'O' || c === 'o');
   const onO = at >= 0;

@@ -712,7 +712,7 @@ test('§10.2 cursors: kind from the frame state; sizes x1 / x1.5 / x2 and a high
   assert.equal(cursorCss('none'), 'none');
   assert.equal(cursorCss('default'), 'default');
   assert.ok(decodeURIComponent(cursorCss('ground')).includes('#FF9EC0'), 'the paw wears a pink bow cuff');
-  assert.ok(decodeURIComponent(cursorCss('ground')).includes('#E89A55'), 'a soft ginger paw, no gauntlet metal (WA §3.6)');
+  assert.ok(decodeURIComponent(cursorCss('ground')).includes('#F3EEE6'), 'a soft ivory Token Tails paw, no gauntlet metal (WA §3.6)');
   assert.ok(decodeURIComponent(cursorCss('interact')).includes('#9BE3C4'), 'interactables: the mint speech-dot (WA2)');
   assert.match(cursorCss('aim', 1), /\) 16 16,/);       // the hotspot scales with the size (reticle centred)
   assert.match(cursorCss('aim', 2), /\) 32 32,/);
@@ -1516,7 +1516,10 @@ test('review: objective beacon resolves the quest step target (owner API, zones,
   const base = { world: true, has: true, boss: false, practice: false, dist: 30 };
   assert.equal(beaconState(base), 'on');
   assert.equal(beaconState({ ...base, boss: true }), 'off', 'a boss fight: the boss bar is the goal');
-  assert.equal(beaconState({ ...base, practice: true }), 'off');
+  assert.equal(beaconState({ ...base, practice: true }), 'on', 'TOKENTAILS-PLAN §10.2: practice is guided too (no longer off)');
+  assert.equal(beaconState({ ...base, scene: true }), 'off', 'a cutscene / blocking dialogue hides it');
+  assert.equal(beaconState({ ...base, dist: 3, arriveR: 2.2 }), 'on', "the target's own arriveR wins");
+  assert.equal(beaconState({ ...base, dist: 2, arriveR: 2.2 }), 'off');
   assert.equal(beaconState({ ...base, world: false }), 'off');
   assert.equal(beaconState({ ...base, dist: BEACON.arriveR - 0.1 }), 'off', 'she is there');
 });

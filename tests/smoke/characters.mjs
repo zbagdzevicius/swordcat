@@ -1028,6 +1028,67 @@ export default [
       await unstage(t);
     },
   },
+  {
+    // TT2 §10.6 d: no maroon outline band behind her head in close-ups (the hull no longer follows the fur shells' fading
+    // tips); her silhouette stays inked (the hull is on and covers body, ears, sword)
+    name: 'characters:clem-closeup', order: 36.8, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      dir(t);
+      await stage(t, 'idle');
+      await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset?.('meadow_day', 0); g.quality?.('high'); await g.waitFrames(10); });
+      const info = await t.G(() => {
+        const k = window.__GAME__.ctx.player.model.k, o = k.outline;
+        if (!o) return { hull: false };
+        o.geometry.computeBoundingBox?.();
+        return { hull: !!o.visible, verts: o.geometry.attributes.position.count, coat: k.cfg.coat.base };
+      });
+      t.log(`clem hull: ${JSON.stringify(info)}`);
+      t.assert(info.hull && info.verts > 100, 'her ink hull is on in close-ups (readable silhouette)');
+      for (const [name, pos, look] of [['front', [0.15, 0.95, 1.5], [0, 0.72, 0]], ['back', [-0.55, 1.0, -1.35], [0, 0.72, 0]], ['profile', [1.45, 0.9, 0.1], [0, 0.72, 0]]]) {
+        await camShot(t, pos, look, 34, 40);
+        const h = await t.G(() => { const k = window.__GAME__.ctx.player.model.k, g = k.outline?.geometry; return { closeUp: k.closeUp, noFur: g?.userData?.noFurCount ?? null, drawn: g?.drawRange?.count, all: g?.index?.count, vis: !!k.outline?.visible }; });
+        t.log(`clem ${name}: ${JSON.stringify(h)}`);
+        t.assert(h.closeUp && h.vis && h.noFur > 0 && h.drawn === h.noFur && h.noFur < h.all, `close-up ${name}: the hull draws without the head / fur parts (${JSON.stringify(h)})`);
+        await t.shot('characters/clem-closeup-' + name, { freeze: true });
+      }
+      // back to the iso view: the head is inked again (the whole hull draws)
+      await t.G(async () => { const g = window.__GAME__; g.ctx.cam.mode('follow', { blend: false }); await g.waitFrames(30); });
+      const iso = await t.G(() => { const k = window.__GAME__.ctx.player.model.k, g = k.outline?.geometry; return { closeUp: k.closeUp, drawn: g?.drawRange?.count, all: g?.index?.count }; });
+      t.log(`clem iso: ${JSON.stringify(iso)}`);
+      t.assert(!iso.closeUp && (iso.drawn === Infinity || iso.drawn == null || iso.drawn >= iso.all), `iso: the full hull draws (${JSON.stringify(iso)})`);
+      await t.blankCheck('clem close-up');
+      await unstage(t);
+    },
+  },
+  {
+    // TT2 §10.5: the four kittens named after real Pink Paw cats wear the real cats' coats (tuxedo, brown tabby,
+    // ginger with a white chest, Siamese seal point with blue eyes); accessories unchanged
+    name: 'characters:pinkpaw-kittens', order: 36.9, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      dir(t);
+      await stage(t, 'idle');
+      const info = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, at = p.object3d.position;
+        const ids = ['pickles', 'socks', 'muffin', 'pebble'], out = {};
+        // in a row 1.6 m in front of her, facing the way she faces (towards the camera of the shot below)
+        const f = p.facing, fx = Math.sin(f), fz = Math.cos(f), lx = Math.cos(f), lz = -Math.sin(f);
+        ids.forEach((id, i) => { const o = -1.5 + i * 1.0; ctx.companions.spawnNpc(id, [at.x + fx * 1.6 + lx * o, at.z + fz * 1.6 + lz * o], f); });
+        await g.waitFrames(40);
+        ctx.scene.traverse((o) => { const k = o.userData?.kitten; if (k && ids.includes(k.cfg?.id)) out[k.cfg.id] = { pattern: k.cfg.coat.pattern, base: k.cfg.coat.base, eye: k.cfg.eyes?.outer, acc: (k.cfg.accessories ?? []).map((a) => (typeof a === 'string' ? a : a.id)) }; });
+        return out;
+      });
+      t.log(`pink paw kittens: ${JSON.stringify(info)}`);
+      t.assert(info.pickles?.pattern === 'tuxedo', 'Judas (pickles) is a tuxedo');
+      t.assert(info.socks?.pattern === 'mackerel' && info.socks.base === '#8A6A4A', 'Zare (socks) is a brown tabby');
+      t.assert(info.muffin?.pattern === 'mackerel' && info.muffin.base === '#D08A4E', 'Raudvis (muffin) is a ginger');
+      t.assert(info.pebble?.pattern === 'siamese' && info.pebble.eye === '#4F8FD6', 'Simas (pebble) is a blue-eyed Siamese');
+      await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset?.('meadow_day', 0); g.ctx.player.object3d.visible = false; await g.waitFrames(5); });
+      await camShot(t, [0, 1.3, 4.6], [0, 0.3, 1.6], 40, 40);
+      await t.shot('characters/pinkpaw-kittens', { freeze: true });
+      await t.blankCheck('pink paw kittens');
+      await unstage(t);
+    },
+  },
   ...IsoBlocks,
   ...GlanceBlocks,
   ...HeroReadBlocks,

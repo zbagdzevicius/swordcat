@@ -12,7 +12,7 @@ import { ScriptedActorMixin } from '../core/ScriptedActor.js';
 import { Animator } from '../core/Animator.js';
 import { disposeInstance } from '../core/Assets.js';
 import { E } from '../core/events.js';
-import { ATTACKS, PLAYER, TELEGRAPH } from '../core/config.js';
+import { ATTACKS, PLAYER, TELEGRAPH, ONBOARD } from '../core/config.js';
 import { dampAngle, wrapAngle } from '../core/math.js';
 import { makeToonMaterial } from '../characters/materials.js';
 
@@ -168,13 +168,14 @@ export class SwingingSack extends PropActor {
  * always means the blow can land), and the strike connects up to `hit` (a step back during the windup, or the block
  * pushback, does not make it swing at air). It leans into the strike so the padded arm visibly covers that reach.
  */
-export const WOBBLE_REACH = Object.freeze({ swing: 2.4, hit: 2.8, face: 5, lean: 0.32, keep: 1.7, roam: 2.6, hop: 1.6 });
+export const WOBBLE_REACH = Object.freeze({ swing: 2.4, hit: 2.8, face: 6, lean: 0.32, keep: ONBOARD.standR, step: ONBOARD.stepR, roam: 4, hop: 1.6 });
 
 /**
  * The Wobble Knight (tutorial steps 5–6): a spring dummy that turns to the player and swings ATTACKS.dummy_swing
- * every 2.0 s with a white parry glint while she is within WOBBLE_REACH.swing. When she stands near but out of reach
- * (a block pushes her back ~0.4 m) it hops on its spring base toward her (up to `roam` m from home, to `keep` m from
- * her), and hops home when she leaves. Parried → spins comically
+ * every 2.0 s with a white parry glint while she is within WOBBLE_REACH.swing. TT2 §10.3 (no dead end): whenever she is
+ * near (within `face`) but more than `step` m away (a block pushes her back ~0.4 m) it hops on its spring base toward
+ * her between swings (up to `roam` m from home, to `keep` m from her = the drill's stand spot), and hops home when she
+ * leaves. Its visual root (`object3d`) follows it, so the parry glint, the "!" and the ground ring sit on him. Parried → spins comically
  * (parriedSpin). Blocked hits count for the tutorial (story listens to combat:hit with attacker tag 'wobble_knight').
  * The 0.25× slow-mo parry hint fires once, on the first glint while `hint()` holds (the tutorial's Parry step).
  */
@@ -187,6 +188,8 @@ export class WobbleKnight extends PropActor {
     this.active = o.active ?? (() => true);
     /** may the one-time slow-mo parry hint fire now? (meadow: the tutorial's current step is 'parry') */
     this.hint = o.hint ?? (() => true);
+    /** TT2: may he step toward her now? (meadow: only during the drill, so he never wanders into her path otherwise) */
+    this.approach = o.approach ?? (() => true);
     this.mesh = o.mesh ?? null;  this.armPivot = o.armPivot ?? null;
     this.hintDone = false; this.teleId = 0; this.lean = 0;
     this.home = this.pos.clone(); this.hopT = 0; this.hopping = false;
@@ -206,7 +209,7 @@ export class WobbleKnight extends PropActor {
     const on = !!p?.alive && this.active();
     const near = on && dist < WOBBLE_REACH.face, inReach = on && dist <= WOBBLE_REACH.swing;
     if (near) this.facing = dampAngle(this.facing, Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z), 4, dt);
-    this._hop(dt, p, near, inReach);
+    this._hop(dt, p, near, inReach, dist);
     this.phaseT += dt;
     const leanTo = this.phase === 'strike' ? WOBBLE_REACH.lean : this.phase === 'windup' ? -0.08 : 0;
     this.lean += (leanTo - this.lean) * Math.min(1, dt * (this.phase === 'strike' ? 22 : 6));
@@ -242,15 +245,16 @@ export class WobbleKnight extends PropActor {
   }
 
   /** Between swings: hop toward her when she is near but out of reach, home when she has left. */
-  _hop(dt, p, near, inReach) {
+  _hop(dt, p, near, inReach, dist = Infinity) {
     const R = WOBBLE_REACH;
     let tx = this.home.x, tz = this.home.z;
-    if (near && this.phase === 'idle' && !inReach) {
+    // past `step` he sets off and keeps hopping until he is `keep` m from her (hysteresis: no stop-start at 1.4 m)
+    if (near && this.phase === 'idle' && this.approach() && (!inReach || dist > R.step || (this.hopping && dist > R.keep + 0.05))) {
       const dx = p.pos.x - this.pos.x, dz = p.pos.z - this.pos.z, d = Math.hypot(dx, dz) || 1;
       tx = p.pos.x - (dx / d) * R.keep; tz = p.pos.z - (dz / d) * R.keep;
       const hx = tx - this.home.x, hz = tz - this.home.z, hd = Math.hypot(hx, hz);
       if (hd > R.roam) { tx = this.home.x + (hx / hd) * R.roam; tz = this.home.z + (hz / hd) * R.roam; }
-    } else if (near) { this.hopping = false; return; }          // in reach / mid-swing: stand
+    } else if (near && (inReach || this.approach())) { this.hopping = false; return; }   // in reach / mid-swing: stand
     const mx = tx - this.pos.x, mz = tz - this.pos.z, md = Math.hypot(mx, mz);
     this.hopping = md > 0.05;
     if (!this.hopping) return;
@@ -271,6 +275,8 @@ export class WobbleKnight extends PropActor {
   }
 
   render() {
+    // the visual root follows him (fx reads object3d for the parry glint / "!" / ground ring: it stayed at home, facing +Z)
+    this.object3d.position.copy(this.pos); this.object3d.rotation.y = this.facing;
     if (!this.mesh) return;
     const tilt = Math.hypot(this.wob.x, this.wob.y);
     this.mesh.position.copy(this.pos);

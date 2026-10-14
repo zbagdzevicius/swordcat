@@ -213,14 +213,32 @@ export const LOST_KITTENS = Object.freeze({
 export const KITTEN_IDS = Object.freeze(Object.values(LOST_KITTENS).flat());
 const KITTEN_NAMES = Object.fromEntries(KITTEN_IDS.map((k) => [k, k[0].toUpperCase() + k.slice(1)]));
 
-/** Hand-picked coats for the lost kittens so each reads distinctly (names hint at the look). */
+/**
+ * Hand-picked coats for the lost kittens so each reads distinctly (names hint at the look). The four kittens that share
+ * their names with real Pink Paw cats (docs/TOKENTAILS-PLAN.md §10.5; names from BRAND.pinkPawKittens) wear the real
+ * cats' coats: Judas (`pickles`) a tuxedo, Zare (`socks`) a brown tabby, Raudvis (`muffin`) a ginger with a white chest,
+ * Simas (`pebble`) a Siamese seal point with blue eyes. Accessories stay.
+ */
 const KITTEN_LOOKS = {
-  biscuit: ['cream', 'strawHat'], noodle: ['ginger', 'scarf'], button: ['bicolour', null], pickles: ['grey', 'flowerCrown'],
-  pebble: ['grey', 'bucketHelm'], sprout: ['brownTabby', 'flowerCrown'], waffles: ['ginger', 'bakerHat'], toffee: ['cream', 'scarf'],
-  muffin: ['brownTabby', 'bakerHat'], tater: ['brownTabby', null], mittens: ['bicolour', 'scarf'], socks: ['tuxedoKit', null],
+  biscuit: ['cream', 'strawHat'], noodle: ['ginger', 'scarf'], button: ['bicolour', null], pickles: ['tuxedoKit', 'flowerCrown'],
+  pebble: ['siamese', 'bucketHelm'], sprout: ['brownTabby', 'flowerCrown'], waffles: ['ginger', 'bakerHat'], toffee: ['cream', 'scarf'],
+  muffin: ['gingerWhite', 'bakerHat'], tater: ['brownTabby', null], mittens: ['bicolour', 'scarf'], socks: ['brownTabby', null],
   juniper: ['tortie', 'flowerCrown'], bramble: ['black', 'scarf'], fennel: ['cream', 'strawHat'], bean: ['black', null],
   crumpet: ['ginger', 'bucketHelm'], dumpling: ['white', 'strawHat'],
 };
+
+/**
+ * Coats only hand-picked kittens wear (never rolled for a random villager, so VILLAGER_COATS stays the art.md §7 set):
+ *  tuxedoKit    black with a white bib, blaze and socks (Judas)
+ *  gingerWhite  ginger mackerel with a white chest, muzzle and paws (Raudvis)
+ *  siamese      seal point on cream with blue eyes (Simas; Earl Grey's pattern)
+ * `eyes` overrides the seeded iris colour.
+ */
+export const KITTEN_COATS = Object.freeze({
+  tuxedoKit: Object.freeze({ pattern: 'tuxedo', base: '#2A2B30', deep: '#18191C', light: '#4A4C52', cream: '#F5F2EC', white: '#F5F2EC' }),
+  gingerWhite: Object.freeze({ pattern: 'mackerel', base: '#D08A4E', deep: '#A65E2E', light: '#F0C08F', cream: '#F7F3EC', bib: '#FBF8F2', stripe: 0.35 }),
+  siamese: Object.freeze({ pattern: 'siamese', base: '#EFE2CC', deep: '#D8C6A8', light: '#FAF2E4', cream: '#F6EEE0', points: '#4A3830', eyes: '#4F8FD6' }),
+});
 
 /**
  * Seeded villager kitten (art.md §7: coat ∈ {ginger, cream, grey, black, white, brown tabby, tortie, bicolour},
@@ -232,11 +250,14 @@ export function villagerConfig(seed, o = {}) {
   const rnd = mulberry32(s || 1);
   const coatKeys = Object.keys(VILLAGER_COATS);
   const coatKey = o.coat || coatKeys[Math.floor(rnd() * coatKeys.length)];
-  const coat = coatKey === 'tuxedoKit' ? { pattern: 'tuxedo', base: '#2A2B30', deep: '#18191C', light: '#4A4C52', cream: '#F5F2EC', white: '#F5F2EC' } : VILLAGER_COATS[coatKey];
+  const kc = KITTEN_COATS[coatKey];
+  const coat = kc ? (({ eyes, ...c }) => c)(kc) : VILLAGER_COATS[coatKey];
   const accPool = ['apron', 'strawHat', 'flowerCrown', 'scarf', 'bucketHelm', 'bakerHat', null];
   const accId = o.accessory !== undefined ? o.accessory : accPool[Math.floor(rnd() * accPool.length)];
   const cloth = VILLAGER_CLOTH[Math.floor(rnd() * VILLAGER_CLOTH.length)];
-  const eyeHex = ['#E5A93B', '#8CC63F', '#6FA8DC', '#A58A4A', '#C9D84A', '#4F86C6', '#D6A53A'][Math.floor(rnd() * 7)];
+  // the seeded roll always runs (the rest of the look stays stable); a Siamese coat overrides it with blue eyes
+  const rolled = ['#E5A93B', '#8CC63F', '#6FA8DC', '#A58A4A', '#C9D84A', '#4F86C6', '#D6A53A'][Math.floor(rnd() * 7)];
+  const eyeHex = kc?.eyes ?? rolled;
   const acc = [];
   if (rnd() < 0.55 || accId === 'apron') acc.push({ id: 'tunic', color: cloth, trim: '#6E5638', belt: rnd() < 0.5 });
   if (accId === 'apron') acc.push({ id: 'apron', color: '#E9E2D2' });

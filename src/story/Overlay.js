@@ -7,6 +7,7 @@
 // (`#2A1E18`–`#5A3B2E`, letterbox `#3A2630`); fades are cream `FADE_COLOR`, never black.
 // No DOM at import: everything is built in init() and the class is inert where `document` is missing (node tests).
 import { CHARS_PER_SEC } from './Cutscene.js';
+import { BRAND } from '../core/brand.js';
 
 const HAS_DOM = () => typeof document !== 'undefined' && typeof document.createElement === 'function';
 
@@ -25,9 +26,13 @@ export const OVERLAY_COLORS = Object.freeze({
   pink: '#FF8FB1', pinkDeep: '#E0638A', pinkEdge: '#C24E78', butter: '#FFD86B', gold: '#F2B33D', lilac: '#C9B6F2', mint: '#8FE3C0',
 });
 
-/** Portrait colours per speaker (art.md §7 coats, brightened for WA); unknown speakers get cream. */
+/**
+ * Portrait colours per speaker (art.md §7 coats, brightened for WA); unknown speakers get cream. An optional third
+ * colour is the accent (initial letter and inner ring): Clem is the ivory Token Tails coat with crimson #B3212F
+ * (her eye colour) accents (TOKENTAILS-PLAN §10.4).
+ */
 export const PORTRAIT = Object.freeze({
-  swordcat: ['#F2A65A', '#FFF1DC'], pearl: ['#EDE8F2', '#FFF6FA'], whiskerbottom: ['#B9BCC4', '#F1EEF6'], marmalade: ['#F09A45', '#FFE3B8'],
+  swordcat: ['#F3EEE6', '#FFF1DC', '#B3212F'], pearl: ['#EDE8F2', '#FFF6FA'], whiskerbottom: ['#B9BCC4', '#F1EEF6'], marmalade: ['#F09A45', '#FFE3B8'],
   snowpaw: ['#FFFFFF', '#D9CCF4'], mochi: ['#6A5A6E', '#F7F2EC'], sage: ['#C4C7CA', '#9CC77A'], clover: ['#F2DFC4', '#E88A52'],
   pudding: ['#F2705A', '#FFD49A'], cacklejaw: ['#D9B07A', '#FFE6C2'], pilfer: ['#B89C7C', '#F2E2CC'], coo: ['#C4CAD4', '#F4F2EE'],
   squire: ['#E3C49A', '#FFF1DC'], kitten: ['#F2D9B0', '#FFF8EC'],
@@ -165,7 +170,7 @@ const BOW_HTML = '<span class="st-bow"><i class="l"></i><i class="r"></i><s clas
  * or on the first letter when there is none (as ui/icons.js logoHtml does). Pure; returns HTML.
  */
 export function stLogoHtml(text) {
-  const chars = [...String(text || 'PINK PAW KNIGHT')];
+  const chars = [...String(text || BRAND.titleCaps)];
   let at = chars.findIndex((c) => c === 'O' || c === 'o');
   if (at < 0) at = chars.findIndex((c) => c.trim() !== '');
   return chars.map((c, i) => {
@@ -313,8 +318,11 @@ export class Overlay {
     if (this.line !== line) {
       this.line = line; this._shownChars = -1;
       this.el.name.textContent = line.name ?? '';
-      const [c0, c1] = PORTRAIT[line.portrait] ?? PORTRAIT[String(line.portrait ?? '').replace(/_\d+$/, '')] ?? ['#F2E4CC', '#FFF8EE'];
+      const [c0, c1, accent] = PORTRAIT[line.portrait] ?? PORTRAIT[String(line.portrait ?? '').replace(/_\d+$/, '')] ?? ['#F2E4CC', '#FFF8EE'];
       this.el.port.style.background = `radial-gradient(circle at 50% 38%, ${c1} 0 30%, ${c0} 31% 100%)`;
+      this.el.port.style.color = accent ?? '';
+      this.el.port.style.outline = accent ? `2px solid ${accent}` : '';
+      this.el.port.style.outlineOffset = accent ? '-6px' : '';
       this.el.port.textContent = (line.name ?? '?').trim().charAt(0).toUpperCase();
       this.el.text.innerHTML = '';
     }

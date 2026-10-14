@@ -12,4 +12,5 @@ export default [
   'fonts/licenses/LICENSE-passion-one.txt',
   'fonts/licenses/Fredoka-OFL.txt',
   'ui/tokentails-logo.webp',
+  'ui/tokentails-logo-text.webp',
 ];

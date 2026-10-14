@@ -5,6 +5,31 @@
 // species face. Pure strings; node-safe.
 import { catConfig } from '../characters/configs.js';
 import { uid, INK, PINK, PINK_DEEP, GOLD, GOLD_DEEP, pawPath } from './icons.js';
+import { tx, esc } from './text.js';
+import { BRAND } from '../core/brand.js';
+
+/**
+ * The fictional bio of a kitten named after a Pink Paw cat (TOKENTAILS-PLAN §10.5: `kitten.<id>.bio`, marked
+ * `claim:fiction` in strings.js), or '' for every other kitten and for an id whose Pink Paw name was removed from
+ * BRAND.pinkPawKittens. Pure.
+ * @param {any} ctx @param {string} id
+ */
+export function kittenBio(ctx, id) {
+  if (!id || !Object.prototype.hasOwnProperty.call(BRAND.pinkPawKittens, id)) return '';
+  const key = `kitten.${id}.bio`, s = tx(ctx, key);
+  return s && s !== key ? s : '';
+}
+
+/**
+ * The rescue card's extra line for a named kitten: its name and bio (escaped HTML), '' for other kittens. The
+ * celebration card (celebrate.js) and the Kittens grid (menus.js) show it. Pure.
+ * @param {any} ctx @param {string} id
+ */
+export function rescueBioHtml(ctx, id) {
+  const bio = kittenBio(ctx, id);
+  if (!bio) return '';
+  return `<p class="kit-bio"><b class="kit-bio-name">${esc(tx(ctx, `name.${id}`))}</b> ${esc(bio)}</p>`;
+}
 
 /** Speaker id → species for non-cats (prefix match). */
 const SPECIES = [

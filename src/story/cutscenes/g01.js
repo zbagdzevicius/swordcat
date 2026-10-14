@@ -1,47 +1,28 @@
-// src/story/cutscenes/g01.js  (owner: story) — G-01 Sir Tallbert (GAME_DESIGN §5.4) [MVP], ~8 s gameplay gag [TREND V5].
+// src/story/cutscenes/g01.js  (owner: story) — G-01 Sir Tallbert (GAME_DESIGN §5.4) [MVP], TT2 §10.3: a non-blocking
+// gag bark now (measured: 2.6 s; ambient: no letterbox, no input lock, the HUD and the camera stay; nothing to skip).
 // Chapter 1 (WA §8.4, ON §5.5): armed on `prologue.done`, right on her way north from the barn. World's `tallbert`
-// trigger plays it; StoryManager's prologue director plays it by proximity when the level's trigger is still keyed to the
-// old prologue flags. Once per save (`seen.g01`).
-//   1 her input is ignored for 1.0 s; she is moved to G01_SPOT (2.65, −57.5; see below) with her back to the statue; MEME_LOOP
-//     holds 2.0 s while she stands in Vigil
-//   2 PULLBACK over 6.0 s reveals the 6 m stone knight right behind her, in the same pose
-//   3 "...Hello." (the statue does not answer)
-//   4 any input after 1.0 s skips to the end; control returns
-import { say, wait } from './lib.js';
-import { memeLook } from './rig.js';
+// trigger may play it; StoryManager's prologue director plays it by proximity. Once per save (`seen.g01`).
+//   she glances up at the 6 m stone knight beside the gate, a soft wind gust: "...Hello." (the statue does not answer)
+import { wait } from './lib.js';
 
-/**
- * Her stage spot. On g01_mark (4, −58) the statue's footprint collider (centred ~1.9 m in front of the plinth: the
- * sword) pushes her to z ≈ −58.8, which puts the MEME_LOOP lens (1.9 m in front of her) 0.7 m outside the north fence:
- * the shot then looks through half-faded fence panels. She stands just west of that footprint instead and turns
- * her back to the statue, so the lens sits ~1 m inside the fence, Tallbert still fills the frame right behind her,
- * and the PULLBACK rail leaves the field through the open gate (x ≈ 1) rather than through the rails.
- */
+/** The old stage spot and the statue (kept: world places Tallbert at G01_STATUE; the director arms on its z). */
 export const G01_SPOT = Object.freeze([2.65, -57.5]);
 export const G01_STATUE = Object.freeze([4, -55.5]);
-/** Her back to the statue: facing from the statue through her spot. */
+/** Her back to the statue: facing from the statue through her spot (old staging; kept for tests / tools). */
 export const G01_FACING = Math.atan2(G01_SPOT[0] - G01_STATUE[0], G01_SPOT[1] - G01_STATUE[1]);
+/** The bark's length (s). */
+export const G01_BARK = 2.6;
 
 export default {
-  id: 'g01', kind: 'cutscene', skippable: true, prologue: true, letterbox: false, inputSkip: 1.0, once: true,
+  id: 'g01', kind: 'ambient', skippable: false, prologue: true, letterbox: false, hud: true, player: false, once: true,
   steps: [
-    { t: 'ui', hud: false },
-    { t: 'actor', id: 'swordcat', at: G01_SPOT, facing: G01_FACING, pose: 'vigil' },
-    { t: 'cam', preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut' },
-    { t: 'call', fn: (ctx) => memeLook(ctx, true) },
-    { t: 'env', wind: 1.2, dur: 0.8 },
-    wait(2.0),
-    { t: 'cam', preset: 'PULLBACK', anchor: 'swordcat', mode: 'rail', dur: 6.0, nowait: true },
-    wait(3.4),
-    { t: 'actor', id: 'swordcat', emote: 'blink' },
-    say('swordcat', 'g01.1', 1.8),
-    wait(1.0),
-    { t: 'actor', id: 'swordcat', emote: 'earsFlat' },
-    wait(0.9),
+    { t: 'env', wind: 1.2, dur: 0.8, nowait: true },
+    { t: 'call', fn: (ctx, cs) => { if (ctx.player) cs.host?.barks?.say?.(ctx.player, 'g01.1', 'swordcat', G01_BARK - 0.4); } },
+    wait(G01_BARK),
   ],
   end: {
-    call: (ctx, cs, skipped, phase) => { if (phase === 'before') memeLook(ctx, false); },
     env: { wind: 0.4, dur: 1 },
-    cam: 'follow',
+    ui: { letterbox: false },
+    cam: false,
   },
 };

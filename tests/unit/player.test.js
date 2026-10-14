@@ -1188,6 +1188,12 @@ test('Meme Cam idle (iso): a thumb resting in the joystick dead zone does not re
   const mc = p.memeCamTrigger;
   ctx.input.setDevice('touch');
   ctx.params.test = false;
+  const cam = ctx.cam ?? (ctx.cam = {}), blockedWas = Object.getOwnPropertyDescriptor(cam, 'photoCamBlocked');
+  let blocked = true;
+  cam.photoCamBlocked = () => blocked;                  // TT2 §10.2.12: the prologue / an onboarding target blocks it
+  r.seconds(0.5);
+  assert.equal(mc.idleT, 0, 'no idle clock while the camera blocks the Photo Cam (MemeCamTrigger.suppressed)');
+  blocked = false;                                      // free play: the rest of the test is about the dead zone
   r.seconds(0.5);
   const t0 = mc.idleT;
   ctx.input.setVirtualMove(0, 0);                       // a resting thumb: ui reports a 0 vector
@@ -1195,6 +1201,7 @@ test('Meme Cam idle (iso): a thumb resting in the joystick dead zone does not re
   assert.ok(mc.idleT > t0 + 0.9, `idle keeps counting (${mc.idleT.toFixed(2)})`);
   r.press('meow'); r.step(); r.release('meow');
   assert.equal(mc.idleT, 0, 'a press resets it');
+  if (blockedWas) Object.defineProperty(cam, 'photoCamBlocked', blockedWas); else delete cam.photoCamBlocked;
   ctx.params.test = true;
 });
 

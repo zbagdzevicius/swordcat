@@ -17,7 +17,7 @@ import { CELEBRATE, KITTEN_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
 import { E } from '../core/events.js';
 import { el, flag, setText, setVar, setHtml, pulse } from './dom.js';
 import { tx, levelKittens, glyphify } from './text.js';
-import { portraitSVG } from './portraits.js';
+import { portraitSVG, rescueBioHtml } from './portraits.js';
 import * as I from './icons.js';
 
 /** Fallback numbers when config's table is missing (node tests of older configs). */
@@ -184,7 +184,7 @@ export class Celebrate {
       const st = ctx.state, id = p?.kittenId ?? p?.id;
       const lvl = Object.keys(KITTENS_BY_LEVEL).find((l) => KITTENS_BY_LEVEL[l].includes(id)) ?? ctx.levels?.current?.id;
       const k = levelKittens(st, lvl);
-      const vars = k.max ? { n: Math.max(1, k.n), max: k.max } : { n: st?.kittens?.length ?? 1, max: KITTEN_IDS.length };
+      const vars = { ...(k.max ? { n: Math.max(1, k.n), max: k.max } : { n: st?.kittens?.length ?? 1, max: KITTEN_IDS.length }), kitten: id };
       this.show('card', 'kitten', vars, 'kitten');
     });
     on(E.ITEM_PICKUP, (p) => { if (p?.item === 'heartBell') this.show('card', 'heartbell', null, 'ui'); });
@@ -218,8 +218,9 @@ export class Celebrate {
     flag(this.card, 'is-fly', false);
     setVar(this.card, '--cc', info.color);
     setText(this.titleEl, info.title);
-    setHtml(this.lineEl, info.line ? glyphify(info.line, ctx.input?.device ?? 'kbm', ctx.input) : '');
-    flag(this.lineEl, 'is-on', !!info.line);
+    const bio = c.kind === 'card' && c.id === 'kitten' ? rescueBioHtml(ctx, c.vars?.kitten) : '';   // §10.5: Pink Paw kittens' fictional bios
+    setHtml(this.lineEl, (info.line ? glyphify(info.line, ctx.input?.device ?? 'kbm', ctx.input) : '') + bio);
+    flag(this.lineEl, 'is-on', !!info.line || !!bio);
     if (c.kind === 'sticker') setHtml(this.ico, I.sticker(info.color, info.art.icon ? info.art.icon() : ''));
     else setHtml(this.ico, info.art.portrait ? '' : info.art.icon ? info.art.icon() : '');
     const pid = info.art.portrait ?? (c.kind === 'friend' ? (c.id === 'bow' || c.id === 'knight' ? 'swordcat' : c.id) : null);

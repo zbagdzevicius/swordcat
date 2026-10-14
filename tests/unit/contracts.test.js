@@ -376,7 +376,8 @@ test('§7.4 + Phase W settings: defaults, allowed values, camLock -> camLockMode
   const s = defaultState().settings;
   const want = { reduceCameraMotion: false, camCursorLead: 0, camLockMode: 'locked', camZoomPortrait: 1, biggerHero: false,
     reduceFlashes: false, quality: 'auto', fpsCap: 'auto', batterySaver: false, hudMode: 'calm', hitWords: true, tutorialHints: true,
-    reduceCameraMotionAuto: true, reduceFlashesAuto: true, camLock: true, pathPreview: 'auto' };
+    reduceCameraMotionAuto: true, reduceFlashesAuto: true, camLock: true, pathPreview: 'auto',
+    guideTrail: true };                                              // TOKENTAILS-PLAN §10.7: the paw-print trail is on by default
   for (const [k, v] of Object.entries(want)) assert.equal(s[k], v, `settings.${k}`);
   for (const [k, allowed] of Object.entries(config.SETTING_VALUES)) {
     if (typeof allowed[0] === 'string') assert.ok(allowed.includes(s[k]), `${k} default allowed`);
@@ -393,6 +394,9 @@ test('§7.4 + Phase W settings: defaults, allowed values, camLock -> camLockMode
   assert.equal(new GameState({ settings: { pathPreview: false } }).settings.pathPreview, 'off');
   assert.equal(new GameState({ settings: { pathPreview: 'sometimes' } }).settings.pathPreview, 'auto');
   assert.deepEqual(migrateSettings({ ...s }), s, 'idempotent on the defaults');
+  // TOKENTAILS-PLAN §10.7: an old save without the key gets the trail on; a player's "off" survives a reload
+  assert.equal(new GameState({ settings: { master: 0.5 } }).settings.guideTrail, true);
+  assert.equal(new GameState({ settings: { guideTrail: false } }).settings.guideTrail, false);
   // OS preference: followed until the player edits the key
   const st = { ...s };
   assert.deepEqual(applyOsSettings(st, true), [...OS_SETTINGS]);

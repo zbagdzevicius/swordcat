@@ -865,7 +865,9 @@ test('PERF §1.2 / §7: shadow-only layer + one depth material per kind with thr
 // ---- Token Tails pass (SC3): index.html branding (F21) and WebGL context loss (F5)
 test('F21 / §2.6: index.html is Pink Paw Knight · Token Tails (meta, OG, icons, night theme, pinch-zoom allowed)', async () => {
   const fs = await import('node:fs');
-  const html = fs.readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  const { brandHtml } = await import('../../scripts/social-meta.mjs');
+  const { BRAND } = await import('../../src/core/brand.js');
+  const html = brandHtml(fs.readFileSync(new URL('../../index.html', import.meta.url), 'utf8'), BRAND);
   assert.match(html, /<title>Pink Paw Knight · Token Tails<\/title>/);
   assert.match(html, /<meta name="description" content="[^"]+">/);
   assert.match(html, /<meta name="theme-color" content="#0B0820">/);

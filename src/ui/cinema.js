@@ -9,13 +9,17 @@
 // `Cinema.api` is the object story's Cutscene runner talks to as `host.cinema` (requests/ui.md):
 //   letterbox(on) · hud(on) · apply(step, cutscene, isEnd) for `ui` steps { letterbox, hud, title, caption, chapter,
 //   fade, toast } · clear()
+// TT2 §10.3: the Skip chip (`.cin-skip-chip`, "Skip ▸▸ · hold Esc"), visible from second 0 of every skippable scene and
+// of Morning Practice; holding it (tap-and-hold on touch, a mouse hold on desktop) skips like holding Esc / ❚❚ (the
+// chip fills while held). Its CSS lives in ui/onboarding.css.
 import { E } from '../core/events.js';
 import { FADE_COLOR } from '../core/config.js';
 import { el, flag, setText, setHtml, setVar, pulse } from './dom.js';
 import { tx, txt, chapterInfo, esc } from './text.js';
 import * as I from './icons.js';
+import { loadingTipCount } from '../story/strings.js';
 
-export const CINEMA = Object.freeze({ chapterSec: 3.0, lifeLostSec: 1.5, tipCount: 12, skipHold: 1.0, ringDelay: 0.12, fade: FADE_COLOR ?? '#FFF1DE', darkFade: '#3A2630' });
+export const CINEMA = Object.freeze({ chapterSec: 3.0, lifeLostSec: 1.5, tipCount: typeof loadingTipCount === 'function' ? loadingTipCount() : 12, skipHold: 1.0, ringDelay: 0.12, fade: FADE_COLOR ?? '#FFF1DE', darkFade: '#3A2630' });
 
 /** Relative luma (0..1) of a #rgb / #rrggbb colour, or null for anything else. Pure. */
 function hexLuma(c) {
@@ -74,6 +78,26 @@ export class Cinema {
     this.skip = el('div', 'cin-skip', { parent: root, html: `${I.ring('skip-ring')}<span class="skip-txt"></span>` });
     this.skipRing = this.skip.querySelector('.ring-fg');
     this.skipTxt = this.skip.querySelector('.skip-txt');
+    // TT2: the Skip chip (a real button: pointer events on, the rest of the cinema layer stays click-through)
+    this.chip = el('button', 'cin-skip-chip', { parent: root, attrs: { type: 'button', 'aria-label': 'Skip' },
+      html: '<span class="chip-fill"></span><span class="chip-txt"></span><span class="chip-hold"></span>' });
+    this.chipFill = this.chip.querySelector('.chip-fill');
+    this.chipTxt = this.chip.querySelector('.chip-txt');
+    this.chipHoldEl = this.chip.querySelector('.chip-hold');
+    this.chipOn = false; this.chipHeld = false; this._chipKey = '';
+    const press = (on) => (e) => {
+      if (on && !this.chipOn) return;
+      if (e?.cancelable) e.preventDefault();
+      e?.stopPropagation?.();
+      if (this.chipHeld === on) return;
+      this.chipHeld = on;
+      flag(this.chip, 'is-held', on);
+      try { this.hooks?.onChip?.(on); } catch (err) { console.warn('[ui] skip chip', err); }
+    };
+    this._chipDown = press(true); this._chipUp = press(false);
+    this.chip.addEventListener('pointerdown', this._chipDown);
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) this.chip.addEventListener(ev, this._chipUp);
+    this.chip.addEventListener('contextmenu', (e) => e.preventDefault());
     // loading veil
     this.veil = el('div', 'ui-loading', { parent: root });
     this.veil.innerHTML = '<div class="load-card"><div class="load-title"></div><div class="load-paws"></div><div class="load-tip"></div></div>';
@@ -197,6 +221,31 @@ export class Cinema {
     this.fadeAlpha = p.alpha;
     const prev = this._fadeResolve; prev?.();
     return new Promise((r) => { this._fadeResolve = r; this._fadeT = p.dur; });
+  }
+
+  /**
+   * The Skip chip: `on` shows it, `progress` 0..1 fills it while a skip is being held, `text` / `holdHtml` its label and
+   * the device hint ("hold Esc" / "hold"). Hiding it releases a held chip.
+   * @param {boolean} on @param {number} [progress] @param {string} [text] @param {string} [holdHtml]
+   */
+  setChip(on, progress = 0, text = '', holdHtml = '') {
+    on = !!on;
+    if (on !== this.chipOn) {
+      this.chipOn = on;
+      flag(this.chip, 'is-on', on);
+      if (!on && this.chipHeld) this._chipUp();
+    }
+    if (!on) return;
+    const key = text + '|' + holdHtml;
+    if (key !== this._chipKey) { this._chipKey = key; setText(this.chipTxt, text); setHtml(this.chipHoldEl, holdHtml); }
+    setVar(this.chip, '--p', Math.max(0, Math.min(1, +progress || 0)).toFixed(3));
+  }
+
+  /** The chip's screen rectangle ({ x, y, w, h } px) while it shows, else null (G1's `__GAME__.guide()` hook). */
+  chipRect() {
+    if (!this.chipOn || typeof this.chip.getBoundingClientRect !== 'function') return null;
+    const r = this.chip.getBoundingClientRect();
+    return r.width > 0 ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } : null;
   }
 
   /** Hold-to-skip ring progress 0..1 (0 hides it). */

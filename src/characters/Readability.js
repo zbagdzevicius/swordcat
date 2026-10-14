@@ -266,12 +266,15 @@ export function silhouetteParts(root, o = {}) {
     const m = long
       ? new THREE.Matrix4().makeScale(Math.max(_v2.x / 2 + mrg, 0.012), Math.max(_v2.y / 2 + mrg, 0.012), Math.max(_v2.z / 2 + mrg, 0.012)).setPosition(_box.getCenter(_v))
       : ellipsoidMatrix(_box, mrg);
-    parts.push({ anchor: ai, matrix: m, shape: long ? 'box' : 'ellipsoid' });
+    // `fur`: instanced fur shells (the hero's head and bib): left out of the close-up hull (setHullFur, TT2 §10.6 d)
+    parts.push({ anchor: ai, matrix: m, shape: long ? 'box' : 'ellipsoid', fur: !!(c.isInstancedMesh && furry(c)) });
   });
   for (const [bi, e] of boxes) {
     if (e.pts.length < minVerts * 3) continue;
     if (tight && EAR_BONE.test(skeleton?.bones[bi]?.name ?? '')) { parts.push({ anchor: bi, matrix: coneMatrix(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'cone' }); continue; }
-    parts.push({ anchor: bi, matrix: fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid' });
+    // the head bone's ellipsoid counts as fur in a tight hull: in the play set it wraps the merged head fur skin, which
+    // stands past the soft fur over her face, so close-ups leave it out with the instanced fur (setHullFur)
+    parts.push({ anchor: bi, matrix: fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid', fur: tight && HEAD_BONE.test(skeleton?.bones[bi]?.name ?? '') });
   }
   // drop anchors no part uses (keeps the bone texture small)
   const used = [...new Set(parts.map((p) => p.anchor))].sort((a, b) => a - b);
@@ -279,6 +282,24 @@ export function silhouetteParts(root, o = {}) {
   return { anchors: used.map((a) => anchors[a]), parts: parts.map((p) => ({ ...p, anchor: remap.get(p.anchor) })), skeleton };
 }
 
+/**
+ * Show (true) or leave out (false) the instanced fur parts of a proxy / outline hull (TT2 §10.6 d): a draw-range change
+ * on its geometry (the fur parts are last in its index), no rebuild. The fur parts' hull is a bounding ellipsoid around the fur skin; over the face the fur is
+ * soft and see-through, so in close-ups that ellipsoid read as a maroon band behind her head and along her face.
+ * The head bone's ellipsoid (the merged head fur skin in the play set) counts as fur too. Close-ups leave them out
+ * (ears, body, sword and props keep their ink, so her silhouette still reads); the iso view keeps them.
+ * Returns whether the fur parts are now shown.
+ * @param {THREE.Mesh|null} mesh @param {boolean} on
+ */
+export function setHullFur(mesh, on) {
+  const g = mesh?.geometry, n = g?.userData?.noFurCount;
+  if (!n) return true;
+  g.setDrawRange(0, on ? Infinity : n);
+  return !!on;
+}
+
+/** The head bone (KittenBuilder BONE_NAMES): its tight-hull ellipsoid is a `fur` part (setHullFur). */
+const HEAD_BONE = /^head$/;
 /** Ear bones (KittenBuilder BONE_NAMES) that get a cone in a `tight` proxy. */
 const EAR_BONE = /^ear[LR]$/;
 /** Rigid parts up to this many vertices use their own triangles in a `tight` proxy. */
@@ -367,7 +388,8 @@ function meshShape(geo) {
 export function buildSilhouetteProxy(root, o = {}) {
   const { anchors, parts } = silhouetteParts(root, o);
   if (!parts.length || anchors.length > XRAY.maxBones) return null;
-  const pos = [], idx = [], si = [], sw = [], nrm = o.normals ? [] : null;
+  // the index lists the non-fur parts first, then the instanced fur parts (setHullFur draws only the first run)
+  const pos = [], idx = [], idxFur = [], si = [], sw = [], nrm = o.normals ? [] : null;
   for (const p of parts) {
     const src = p.shape === 'mesh' ? meshShape(p.geo) : null;
     const P = src ? src.position : (p.shape === 'box' ? _cube : p.shape === 'cone' ? _cone : _ell).attributes.position;
@@ -386,8 +408,11 @@ export function buildSilhouetteProxy(root, o = {}) {
       // outward normals (the outline hull pushes along them; the x-ray pass ignores them)
       if (nrm) { _v.fromBufferAttribute(N, i).applyMatrix3(_n3).normalize(); nrm.push(_v.x, _v.y, _v.z); }
     }
-    for (let i = 0; i < I.length; i++) idx.push(base + I[i]);
+    const into = p.fur ? idxFur : idx;
+    for (let i = 0; i < I.length; i++) into.push(base + I[i]);
   }
+  const noFur = idx.length;
+  for (const i of idxFur) idx.push(i);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   // the x-ray pass ignores normals, but three keys `vertexNormals` into the program: without them the x-ray proxy
@@ -396,6 +421,8 @@ export function buildSilhouetteProxy(root, o = {}) {
   g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
   g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
+  // the index count without the instanced fur parts (setHullFur), when there are any
+  g.userData.noFurCount = noFur < idx.length && noFur > 0 ? noFur : null;
   const skel = new THREE.Skeleton(anchors.map((a) => a.obj), anchors.map((a) => a.inverse.clone()));
   // rebuild in place (a sword swap, a new prop): whoever holds the mesh keeps a valid handle
   const into = o.into?.isSkinnedMesh ? o.into : null;

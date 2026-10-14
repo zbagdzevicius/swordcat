@@ -587,6 +587,70 @@ export default [
     },
   },
   {
+    // TT2 §10.4 / §10.5: the Rescue House landmark by the fountain behind the Token Tails cat, the night banner beside it,
+    // the love-pink barracks pennant and the Token Tails bunting over the free town; the house adds at most 2 draws
+    name: 'world:rescue-house', order: 42.5, level: 'town', spawn: 'hub', timeout: 200000,
+    async run(t) {
+      const pre = shotDir(t);
+      await freshAt(t, 'town', 'hub', { 'prologue.done': true, 'meadow.done': true, 'forest.done': true, 'town.marmalade': true, 'town.clover': true, 'town.free': true });
+      await t.G(() => { const g = window.__GAME__; g.god(true); for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); });
+      const info = await t.G(() => {
+        const g = window.__GAME__, L = g.ctx.levels.current, a = L.anchors.rescue_house, k = L.anchors.hub_tokentails_cat;
+        const keys = new Set((L.kit?.templates ?? L.templates ?? []).map((tp) => tp.key));
+        return { anchor: a ? [+a.pos.x.toFixed(2), +a.pos.z.toFixed(2)] : null, keeper: k ? [+k.pos.x.toFixed(2), +k.pos.z.toFixed(2)] : null,
+          house: keys.has('rescue_house') || null, banner: keys.has('tt_banner') || null, wallBanner: keys.has('tt_wall_banner') || null, redBanner: [...keys].some((k) => /banner-red/.test(k)), keyCount: keys.size,
+          bunting: L.bunting ? { n: L.bunting.mesh?.count ?? null } : null };
+      });
+      t.log('rescue house', JSON.stringify(info));
+      t.assert(info.wallBanner && !info.redBanner, `TT3 R2: the square hangs Token Tails wall banners, no KayKit banner-red (${JSON.stringify(info)})`);
+      t.assert(info.anchor && info.keeper && Math.hypot(info.anchor[0] - info.keeper[0], info.anchor[1] - info.keeper[1]) < 4, `the Rescue House stands by the keeper (${JSON.stringify(info)})`);
+      // draw budget: the level's share with the house shown vs. its batch entries hidden (the house is batch geometry)
+      const calls = await t.G(async () => {
+        const g = window.__GAME__, L = g.ctx.levels.current, sc = g.ctx.scene, root = L.root, hidden = [];
+        g.ctx.player.teleport({ pos: new g.THREE.Vector3(2.5, g.ctx.physics.heightAt(2.5, 7), 7), facing: 0.8 }); g.ctx.cam?.snapBehind?.();
+        await g.waitFrames(20);
+        for (const c of sc.children) if (c !== root && !c.isLight && c.name !== 'sky' && c.visible) { c.visible = false; hidden.push(c); }
+        await g.waitFrames(3);
+        const on = g.state().calls;
+        const tpl = (L.kit?.templates ?? L.templates ?? []).filter((tp) => ['rescue_house', 'sign_paw', 'tt_banner'].includes(tp.key));
+        const batch = L.kit?.batch ?? L.batch;
+        let off = on;
+        if (batch?.setVisible && L.rescueHouseHandles?.length) {
+          for (const h of L.rescueHouseHandles) batch.setVisible(h, false);
+          await g.waitFrames(3); off = g.state().calls;
+          for (const h of L.rescueHouseHandles) batch.setVisible(h, true);
+        }
+        for (const c of hidden) c.visible = true;
+        return { on, off, templates: tpl.length, handles: L.rescueHouseHandles?.length ?? 0 };
+      });
+      t.log('rescue house draws', JSON.stringify(calls));
+      t.assert(calls.on - calls.off <= 2, `the Rescue House costs ≤ 2 draws (${JSON.stringify(calls)})`);
+      await t.frames(10);
+      await t.shot(pre + 'hub-rescue-house-iso', { freeze: true });
+      // static shots: her (hidden) frame as the anchor (+Z her facing, +X her left), she stands at `at` facing `yaw`
+      const frame = async (name, at, yaw, pos, lk, fov = 50) => {
+        await t.G(async ([a, f, ps, l, fv]) => {
+          const g = window.__GAME__, p = g.ctx.player;
+          p.teleport({ pos: new g.THREE.Vector3(a[0], g.ctx.physics.heightAt(a[0], a[1]), a[1]), facing: f });
+          await g.waitFrames(3);
+          p.object3d.visible = false;
+          g.ctx.cam.shot({ pos: ps, look: l, fov: fv, anchor: 'swordcat' });
+          await g.waitFrames(30);
+        }, [at, yaw, pos, lk, fov]);
+        await t.shot(pre + name, { freeze: true });
+      };
+      const toHouse = Math.atan2(7.36 - 3.0, 15.06 - 10.9);
+      await frame('hub-rescue-house', [3.0, 10.9], toHouse, [0, 1.6, -0.5], [0, 2.2, 6.0], 55);
+      await frame('hub-rescue-house-wide', [0.5, 6.0], toHouse, [0, 4.5, -3.0], [0, 1.5, 10.0], 55);
+      // the barracks pennant (love pink on cream) and the bunting over the streets
+      await frame('hub-barracks-pennant', [7.6, 2.6], Math.atan2(1.3, -4.0), [0, 1.8, -0.5], [0, 2.4, 4.0], 50);
+      await frame('hub-bunting', [0, 14.0], 0, [0, 2.0, -1.0], [0, 5.2, 9.0], 60);
+      await t.G(() => { window.__GAME__.ctx.player.object3d.visible = true; });
+      await t.blankCheck('rescue house');
+      await t.G(() => { const g = window.__GAME__; g.ctx.cam.mode('follow', { blend: false }); });
+    },
+  },
+  {
     name: 'world:gate', order: 43, level: 'gate', spawn: 'start', timeout: 240000,
     async run(t) {
       const pre = shotDir(t);

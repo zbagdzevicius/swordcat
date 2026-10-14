@@ -13,7 +13,8 @@ import { PLAYER, HUD as HUD_CFG } from '../core/config.js';
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
 import { el, setText, setHtml, flag, setVar, pulse, place } from './dom.js';
-import { tx, heartStates, frac, objectiveText, levelKittens, levelLetterId, actionGlyph, esc } from './text.js';
+import { tx, txt, glyphify, heartStates, frac, objectiveText, levelKittens, levelLetterId, actionGlyph, esc } from './text.js';
+import { clipObjective, isPhone } from './beacon.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 import { alertedNear } from './celebrate.js';
@@ -22,6 +23,85 @@ import { companionJoined } from './reveal.js';
 /** "{n} catnip" for the currency counter's accessible label: strings key 'shop.cost', the copy the shops use. Pure. */
 export function catnipLabel(ctx, n) {
   return tx(ctx, 'shop.cost', { n });
+}
+
+/**
+ * TOKENTAILS-PLAN §10.2.10 (TT3 R3) phone toasts: on a phone the toast stack leaves the top-centre column (where it sat
+ * over Clem and pushed the guide bubble onto her) for its own slot. Landscape: the left column under the HUD block, never
+ * reaching the middle third of the width (Clem stands there); left-handed play mirrors it. Portrait: the band under the
+ * HUD strip, short of the Skip chip. CSS px.
+ */
+export const TOAST_PHONE = Object.freeze({ gutter: 16, gap: 8, maxW: 260, minW: 150, visible: 2, bubbleTop: 150, clemUp: 40, clemDown: 30, toastH: 58, pad: 10, rate: 0.125 });
+
+/**
+ * Where the phone toast slot goes. Pure. `top`: the bottom of the top-left HUD block (and the objective line under it);
+ * `chip`: the Skip chip rect or null; `lefty`: the mirrored HUD.
+ * @param {{ W: number, H: number, top: number, chip?: {x:number, y:number, w:number, h:number}|null, lefty?: boolean }} s
+ * @returns {{ x: number, y: number, w: number, right: boolean }}
+ */
+export function phoneToastBox(s) {
+  const T = TOAST_PHONE, g = T.gutter, y = Math.round(s.top + T.gap);
+  if (s.W > s.H) {
+    // the left third minus its gutters: the slot's right edge stays ≥ T.gap short of W / 3
+    const w = Math.max(T.minW, Math.min(T.maxW, Math.floor(s.W / 3) - g - T.gap));
+    return { x: s.lefty ? s.W - g - w : g, y, w, right: !!s.lefty };
+  }
+  let w = s.W - 2 * g;
+  const c = s.chip;
+  if (c && c.x > s.W / 2 && c.y < y + 96 && c.y + c.h > y) w = Math.max(T.minW, Math.floor(c.x - T.gap - g));
+  return { x: g, y, w, right: false };
+}
+
+/**
+ * Portrait phones: how many toasts may stack in `room` px (from the slot's top down to just above Clem; NaN = she is
+ * off screen): TOAST_PHONE.visible when there is room for them, never fewer than 1. Pure.
+ * @param {number} room
+ */
+export function toastCap(room) {
+  if (!Number.isFinite(room)) return TOAST_PHONE.visible;
+  return Math.max(1, Math.min(TOAST_PHONE.visible, Math.floor((room - TOAST_PHONE.pad) / TOAST_PHONE.toastH)));
+}
+
+/**
+ * Portrait phones: the guide bubble's top, kept off Clem. `base` is its usual top; when that box would cover her
+ * (`clemTop`..`clemBottom`, CSS px) it goes just above her when it fits under `floor` (the toasts / HUD strip), else just
+ * below her when it stays above `ceil` (the touch clusters), else stays. Pure.
+ * @param {{ base: number, h: number, clemTop: number, clemBottom: number, floor: number, ceil: number }} s
+ */
+export function bubbleTop(s) {
+  const { base, h } = s, pad = TOAST_PHONE.pad;
+  if (!(h > 0) || !Number.isFinite(s.clemTop) || !Number.isFinite(s.clemBottom)) return base;
+  if (base + h + pad <= s.clemTop || base >= s.clemBottom + pad) return base;
+  const above = s.clemTop - pad - h;
+  if (above >= s.floor) return Math.round(above);
+  const below = s.clemBottom + pad;
+  if (below + h <= s.ceil) return Math.round(below);
+  return base;
+}
+
+/**
+ * Where the phone objective line goes (it hangs under the hearts). Pure. It steps below any top-band rect to its right
+ * that it would cover (the portrait ❚❚, the counters), starts at the HUD block's left edge once it is below the
+ * portrait, and gets a max width (two lines) short of the Skip chip when the chip shares its row. CSS px.
+ * @param {{ x: number, y: number, pw: number, ph: number, H: number, rects: {x:number, y:number, w:number, h:number}[],
+ *   chip?: {x:number, y:number, w:number, h:number}|null, left: number, leftBottom: number }} s
+ * @returns {{ x: number, y: number, maxW: number|null }}
+ */
+export function pillPlace(s) {
+  let x = s.x, y = s.y, maxW = null;
+  const pw = s.pw > 0 ? s.pw : 0, ph = s.ph > 0 ? s.ph : 0;
+  if (pw > 0) {
+    for (let pass = 0; pass < 2; pass++) {
+      for (const q of s.rects ?? []) {
+        if (q.x < x - 1 || q.y > s.H / 3) continue;                       // the HUD block it hangs from / the lower screen
+        if (q.x < x + pw && q.x + q.w > x && q.y < y + ph && q.y + q.h > y) y = Math.round(q.y + q.h + 6);
+      }
+    }
+  }
+  if (y >= s.leftBottom && Number.isFinite(s.left)) x = Math.min(x, s.left);
+  const c = s.chip;
+  if (pw > 0 && c && c.x > x && c.y < y + ph && c.y + c.h > y && x + pw > c.x - 6) maxW = Math.max(120, Math.floor(c.x - 6 - x));
+  return { x, y, maxW };
 }
 
 const PIP_LIFE = 3.0;          // §14.2: the pip bar fades 3 s after the last hit
@@ -168,6 +248,17 @@ export class Hud {
     this.objTxt = this.objEl.querySelector('.obj-txt');
     this.objFill = this.objEl.querySelector('.obj-fill');
     this.toastSlot = el('div', 'hud-toast-slot', { parent: tc });
+    // TOKENTAILS-PLAN §10.2.6 the guide's objective line (one line ≤ 40 characters, pink paw, device-aware glyphs):
+    // top centre on desktop, under the hearts on phones; text from the beacon's guide target (shown in practice too)
+    this.guideEl = el('div', 'hud-guide', { parent: tc, attrs: { role: 'status' } });
+    tc.insertBefore(this.guideEl, tc.firstChild);
+    this.guideEl.innerHTML = `<span class="hg-ico">${typeof I.pinkPaw === 'function' ? I.pinkPaw(22) : I.paw('#FF7AA2')}</span><span class="hg-txt"></span>`;
+    this.guideTxt = this.guideEl.querySelector('.hg-txt');
+    /** the objective line's plain text (tests / __GAME__.guide()); '' when hidden */
+    this.guideText = '';
+    this._guideKey = ''; this._guidePosT = 0;
+    /** TT3 R3: the phone toast slot / guide bubble placement (re-measured at 1 / TOAST_PHONE.rate Hz) */
+    this._toastT = 0; this.toastBox = null;
     // ---- world-anchored: lock reticle, enemy pips, riposte prompt
     this.reticle = el('div', 'hud-reticle', { parent: root, html: '<div class="ret-ring"></div><div class="ret-pips"></div>' });
     this.retPips = this.reticle.querySelector('.ret-pips');
@@ -452,7 +543,120 @@ export class Hud {
 
   // ------------------------------------------------------------------ per frame
   /** @param {number} dt real seconds */
+  /**
+   * TOKENTAILS-PLAN §10.2.6: the objective line from the beacon's guide (`ctx.ui.beacon.objective`: textKey + vars, or
+   * a quest's text), clipped to 40 characters, glyphs for the current device. DOM writes only on change; the phone
+   * placement under the hearts is re-measured at 4 Hz.
+   */
+  _guideLine(dt) {
+    const ctx = this.ctx, g = ctx.ui?.beacon?.objective ?? null, dev = ctx.input?.device ?? 'kbm';
+    const raw = g ? (g.textKey ? txt(ctx, g.textKey, g.vars) : txt(ctx, g.text, g.vars)) : '';
+    const text = raw ? clipObjective(raw) : '';
+    const key = `${text}|${dev}|${ctx.input?.preset ?? ''}`;
+    if (key !== this._guideKey) {
+      this._guideKey = key;
+      this.guideText = text.replace(/\[([^\]]+)\]/g, (m, a) => actionGlyph(a.trim().toLowerCase(), dev, ctx.input) || a);
+      setHtml(this.guideTxt, text ? glyphify(text, dev, ctx.input) : '');
+      flag(this.guideEl, 'is-on', !!text);
+    }
+    if (!text) return;
+    flag(this.guideEl, 'is-dim', !!ctx.ui?.beacon?.dim);
+    if ((this._guidePosT -= dt) > 0) return;
+    this._guidePosT = 0.25;
+    const W = typeof innerWidth === 'number' ? innerWidth : 1280, H = typeof innerHeight === 'number' ? innerHeight : 720;
+    const under = isPhone(dev, W, H);
+    flag(this.guideEl, 'is-under', under);
+    // (under the hearts it leaves the top-centre column: .hud-tc is transformed, so it is positioned from the hud root)
+    const home = under ? this.root : this.tcEl;
+    if (this.guideEl.parentNode !== home) { if (under) home.appendChild(this.guideEl); else home.insertBefore(this.guideEl, home.firstChild); }
+    if (under) {
+      const r = this.heartsEl.getBoundingClientRect?.();
+      // under the last shown stats row: once the Grit shields / Valor sword are revealed the line no longer covers them
+      if (r && r.width > 0) {
+        // TT3 R3: never over a top-band button to its right (the portrait ❚❚ sat under it, the counters can) or the Skip
+        // chip: below them, from the HUD's left edge, wrapping to two lines short of the chip (pillPlace)
+        flag(this.guideEl, 'is-wrap', false);
+        const pr = this.guideEl.getBoundingClientRect?.(), tl = this.tlEl.getBoundingClientRect?.();
+        const at = pillPlace({
+          x: Math.round(r.left), y: Math.round(this._statsBottom(r.bottom) + 6), pw: pr?.width ?? 0, ph: pr?.height ?? 0, H,
+          rects: ctx.ui?.screenOccluders?.()?.rects ?? [], chip: ctx.ui?.skipChipRect?.() ?? null,
+          left: tl?.width > 0 ? Math.round(tl.left) : Math.round(r.left), leftBottom: tl?.height > 0 ? tl.bottom : 0,
+        });
+        flag(this.guideEl, 'is-wrap', at.maxW != null);
+        setVar(this.guideEl, '--gw', at.maxW != null ? `${at.maxW}px` : '');
+        const gx = at.x, gy = at.y;
+        setVar(this.guideEl, '--gx', `${gx}px`); setVar(this.guideEl, '--gy', `${gy}px`);
+      }
+    }
+  }
+
+  /** The bottom (CSS px) of the shown stats rows: the hearts, plus Grit / Valor while they are not tucked away. */
+  _statsBottom(heartsBottom) {
+    let b = heartsBottom;
+    const cl = this.root.classList;
+    for (const [e, tuck] of [[this.gritEl, 'tuck-grit'], [this.valorEl, 'tuck-valor']]) {
+      if (cl.contains(tuck)) continue;
+      const q = e.getBoundingClientRect?.();
+      if (q && q.height > 0) b = Math.max(b, q.bottom);
+    }
+    return b;
+  }
+
+  /**
+   * TT3 R3 (§10.2.10): on phones the toast slot leaves the top-centre column for its own place (`phoneToastBox`), and in
+   * portrait the guide bubble keeps off Clem (`bubbleTop`, written as `--gd-top` on the bubble; guidance.css reads it).
+   * Desktop puts the slot back in the column. Measured at 1 / TOAST_PHONE.rate Hz, DOM writes only on change.
+   */
+  _phoneLayout(dt) {
+    if ((this._toastT -= dt) > 0) return;
+    this._toastT = TOAST_PHONE.rate;
+    const slot = this.toastSlot, ctx = this.ctx;
+    if (!slot || typeof innerWidth !== 'number') return;
+    const W = innerWidth, H = innerHeight, phone = isPhone(ctx.input?.device ?? 'kbm', W, H);
+    const bubble = ctx.ui?.prompts?.guide?.root ?? null;
+    flag(slot, 'is-phone', phone);
+    if (!phone) {
+      if (slot.parentNode !== this.tcEl) this.tcEl.appendChild(slot);
+      this.toastBox = null;
+      if (bubble) setVar(bubble, '--gd-top', '');
+      return;
+    }
+    if (slot.parentNode !== this.root) this.root.appendChild(slot);
+    // the top-left block: the portrait / stats, and the objective line under the hearts
+    let top = 0;
+    const tl = this.tlEl.getBoundingClientRect?.();
+    if (tl && tl.height > 0) top = tl.bottom;
+    const hr = this.heartsEl.getBoundingClientRect?.();
+    if (hr && hr.height > 0) top = Math.max(top, this._statsBottom(hr.bottom));
+    if (this.guideEl.classList.contains('is-on') && this.guideEl.classList.contains('is-under')) {
+      const g = this.guideEl.getBoundingClientRect?.();
+      if (g && g.height > 0) top = Math.max(top, g.bottom);
+    }
+    const lefty = typeof document !== 'undefined' && document.body?.classList?.contains('ui-lefty');
+    const box = this.toastBox = phoneToastBox({ W, H, top, chip: ctx.ui?.skipChipRect?.() ?? null, lefty });
+    setVar(slot, '--tx', `${box.x}px`); setVar(slot, '--ty', `${box.y}px`); setVar(slot, '--tw', `${box.w}px`);
+    flag(slot, 'is-right', box.right);
+    // portrait: Clem stands under the top band (the guide look-ahead lifts her toward it): the toasts stack only as deep
+    // as fits above her (at least one), and the guide bubble goes under the toasts but never over her
+    const toasts = ctx.ui?.toasts;
+    const p = ctx.player?.pos, sp = W < H && p ? ctx.cam?.worldToScreen?.({ x: p.x, y: p.y + 0.5, z: p.z }) : null;
+    const cy = sp && Number.isFinite(sp.y) && sp.y > 0 && sp.y < H ? sp.y : NaN;
+    if (toasts) toasts.cap = W < H ? toastCap(cy - TOAST_PHONE.clemUp - box.y) : null;
+    if (!bubble) return;
+    if (W > H || !bubble.classList.contains('is-on')) { setVar(bubble, '--gd-top', ''); return; }
+    const sr = slot.getBoundingClientRect?.(), floor = Math.max(box.y, sr && sr.height > 0 ? sr.bottom : box.y) + TOAST_PHONE.gap;
+    const tcb = parseFloat(ctx.ui?.root?.style?.getPropertyValue?.('--tc-b')) || 0;
+    const base = Math.max(TOAST_PHONE.bubbleTop, tcb + TOAST_PHONE.gap, floor);
+    let ceil = H - TOAST_PHONE.gutter;
+    for (const r of ctx.ui?.screenOccluders?.()?.rects ?? []) if (r.y > H / 2) ceil = Math.min(ceil, r.y - TOAST_PHONE.gap);
+    const h = bubble.getBoundingClientRect?.()?.height ?? 0;
+    const t = bubbleTop({ base, h, clemTop: cy - TOAST_PHONE.clemUp, clemBottom: cy + TOAST_PHONE.clemDown, floor, ceil });
+    setVar(bubble, '--gd-top', `${Math.round(t)}px`);
+  }
+
   render(dt) {
+    this._guideLine(dt);
+    this._phoneLayout(dt);
     this._pollT += dt;
     if (this._pollT >= 0.1) { const pt = this._pollT; this._pollT = 0; this.poll(false); this._tick(pt); }
     const ctx = this.ctx, p = ctx.player;

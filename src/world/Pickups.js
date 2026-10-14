@@ -14,7 +14,8 @@ import { procTemplate, worldMaterial } from './Props.js';
 
 const MAX_FISH = 240;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _v = new THREE.Vector3();
-const _silver = new THREE.Color('#E8EEF4'), _gold = new THREE.Color('#FFD57A');
+// instance tints of the catnip sprig: the common one keeps its true colours, the golden one (worth 10) warms to gold
+const _silver = new THREE.Color('#FFFFFF'), _gold = new THREE.Color('#FFE08A');
 
 /**
  * Pickup motion (WA §5.5): the kill-drop pop (apex `popApex` m in `popT` s → its gravity, `bounces` hops each keeping
@@ -33,7 +34,8 @@ export const magnetHop = (u, hop = PICKUP_FX?.hop ?? 0.35) => 4 * hop * Math.max
 
 /** One Lambert material for pickup meshes (dithered, toon-patched like the world). */
 function pickupMat(color, emissive = '#000000', ei = 0) {
-  const m = new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: ei });
+  // vertex colours on both instanced pickups (the catnip sprig is painted per vertex; the heart is white × its colour)
+  const m = new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: ei, vertexColors: true });
   m.dithering = true;
   m.userData.owned = true;
   return m;
@@ -42,7 +44,7 @@ function pickupMat(color, emissive = '#000000', ei = 0) {
 /** Save flag of a placed fish line (bitmask of the fish collected). Pure. */
 export const placedFishFlag = (levelId, key) => `${levelId}.fish.${key}`;
 
-/** Fish mesh (body + tail), ~0.32 m long, facing +Z, centred. */
+/** Fish mesh (body + tail), ~0.32 m long, facing +Z, centred. Kept for tools; the pickup draws makeCatnipGeometry. */
 export function makeFishGeometry() {
   // PERF §1.2: 6 × 5 segments (56 tris with the tail, was 88): every live fish of the level draws, on screen or not
   const body = new THREE.SphereGeometry(0.1, 6, 5); body.scale(0.55, 0.85, 1.35);
@@ -50,6 +52,53 @@ export function makeFishGeometry() {
   const g = mergeSimple([body, tail]);
   body.dispose(); tail.dispose();
   return g;
+}
+
+/**
+ * The catnip look (Token Tails, docs/TOKENTAILS-PLAN.md §10.4; matches ui/icons.js `fish` icon): mint leaves, a darker
+ * stem and a lilac flower spike shading #9A88C9 (base) → #F0C5FD (tip). The golden catnip (worth 10) is the same sprig
+ * tinted warm gold through its instance colour and drawn 1.35×.
+ */
+export const CATNIP_LOOK = Object.freeze({ leaf: '#7FD66B', leafDeep: '#55B04C', stem: '#4E9A44', spikeBase: '#9A88C9', spikeTip: '#F0C5FD',
+  silver: '#FFFFFF', gold: '#FFE08A' });
+
+/**
+ * Catnip sprig (the currency pickup; internal id `fish`), ~0.36 m tall, centred on the origin: a stem, two crossed
+ * pairs of mint leaves and a lilac flower spike on top. Vertex colours; ONE geometry for the instanced draw.
+ */
+export function makeCatnipGeometry() {
+  // PERF §1.2: every live sprig of the level draws (up to 240), so it stays near the old fish's budget: ~100 tris
+  const L = CATNIP_LOOK, parts = [];
+  const stem = new THREE.CylinderGeometry(0.011, 0.015, 0.28, 4, 1, true); stem.translate(0, -0.03, 0);
+  parts.push([stem, L.stem]);
+  // crossed pairs of flat leaves (mint grows in opposite pairs; an 8-tri octahedron flattened to a leaf), the lower
+  // pair larger and a touch deeper
+  for (const [y, rot, sc, col] of [[-0.1, 0, 1.15, L.leafDeep], [-0.02, Math.PI / 2, 0.95, L.leaf], [0.05, Math.PI / 4, 0.7, L.leaf]]) {
+    for (const side of [0, Math.PI]) {
+      const leaf = new THREE.OctahedronGeometry(0.06, 0);
+      leaf.scale(1.05 * sc, 0.16, 0.5 * sc); leaf.translate(0.064 * sc, 0, 0); leaf.rotateZ(0.42); leaf.rotateY(rot + side); leaf.translate(0, y, 0);
+      parts.push([leaf, col]);
+    }
+  }
+  // the flower spike: two stacked whorls tapering to a pale tip, lilac shading up the spike
+  const shade = (y) => (y - 0.11) / 0.13;
+  const w1 = new THREE.ConeGeometry(0.036, 0.08, 6); w1.translate(0, 0.15, 0);
+  const w2 = new THREE.ConeGeometry(0.027, 0.07, 6); w2.translate(0, 0.2, 0);
+  parts.push([w1, shade], [w2, shade]);
+  const lo = new THREE.Color(L.spikeBase), hi = new THREE.Color(L.spikeTip), c = new THREE.Color();
+  const g = mergeSimple(parts.map((p) => (p[0].index ? p[0] : indexed(p[0]))), parts.map(([, col]) => (typeof col === 'function'
+    ? (y) => c.copy(lo).lerp(hi, Math.max(0, Math.min(1, col(y))))
+    : ((cc) => () => cc)(new THREE.Color(col)))));
+  for (const [geo] of parts) geo.dispose();
+  return g;
+}
+
+/** A non-indexed geometry (OctahedronGeometry) as an indexed one (mergeSimple needs an index). */
+function indexed(geo) {
+  const n = geo.attributes.position.count, idx = new Uint32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  return geo;
 }
 
 /** Small heart (two spheres + a cone), ~0.28 m. */
@@ -62,19 +111,26 @@ export function makeHeartGeometry() {
   return g;
 }
 
-function mergeSimple(list) {
+/**
+ * Merge indexed geometries (position + normal). With `colors` (one per geometry: `(y) => THREE.Color`), a vertex
+ * colour attribute is written too; without it every vertex is white (so the heart shares the catnip's program).
+ */
+function mergeSimple(list, colors = null) {
   let n = 0, idx = 0;
   for (const g of list) { n += g.attributes.position.count; idx += g.index.count; }
-  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), index = new Uint32Array(idx);
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3).fill(1), index = new Uint32Array(idx);
   let vo = 0, io = 0;
-  for (const g of list) {
-    pos.set(g.attributes.position.array, vo * 3); nor.set(g.attributes.normal.array, vo * 3);
+  list.forEach((g, gi) => {
+    const P = g.attributes.position;
+    pos.set(P.array, vo * 3); nor.set(g.attributes.normal.array, vo * 3);
+    if (colors?.[gi]) for (let i = 0; i < P.count; i++) { const cc = colors[gi](P.getY(i)); col[(vo + i) * 3] = cc.r; col[(vo + i) * 3 + 1] = cc.g; col[(vo + i) * 3 + 2] = cc.b; }
     for (let i = 0; i < g.index.count; i++) index[io + i] = g.index.getX(i) + vo;
-    vo += g.attributes.position.count; io += g.index.count;
-  }
+    vo += P.count; io += g.index.count;
+  });
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(col, 3));
   out.setIndex(new THREE.BufferAttribute(index, 1));
   return out;
 }
@@ -154,8 +210,9 @@ export class Pickups {
     this._fading = [];
     this.collected = { fish: 0, letters: [], heartBells: [], milk: 0, hearts: 0 };
     this.rnd = mulberry32(hashSeed('pickups:' + levelId));
-    this.fishMat = pickupMat('#FFFFFF', '#FFF1C4', 0.22);
-    this.fishMesh = new THREE.InstancedMesh(makeFishGeometry(), this.fishMat, MAX_FISH);
+    this.fishMat = pickupMat('#FFFFFF', '#FFF1C4', 0.16);
+    // the currency pickup is drawn as a catnip sprig (Token Tails TT2; the internal id stays `fish`)
+    this.fishMesh = new THREE.InstancedMesh(makeCatnipGeometry(), this.fishMat, MAX_FISH);
     // PERF §7.1: pickups never cast (a blob / their twinkle grounds them)
     this.fishMesh.name = 'pickups:fish'; this.fishMesh.count = 0; this.fishMesh.castShadow = false; this.fishMesh.frustumCulled = false;
     this.fishMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_FISH * 3), 3);

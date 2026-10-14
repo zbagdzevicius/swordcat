@@ -73,6 +73,20 @@ export class ToastQueue {
     return Math.max(0, Math.min(a, b));
   }
 
+  /**
+   * TT3 R3: when `visible` drops below what is shown (a portrait phone's stack must stop above Clem), the newest shown
+   * toasts go back to the front of the queue (their clock restarts there). Returns the toasts taken off screen.
+   */
+  shed() {
+    const out = [];
+    while (this.shown.length > Math.max(1, this.cfg.visible)) {
+      const t = this.shown.pop();
+      out.push(t);
+      this.waiting.unshift({ text: t.text, icon: t.icon, tip: t.tip });
+    }
+    return out;
+  }
+
   clear() { this.shown.length = 0; this.waiting.length = 0; }
 }
 
@@ -99,6 +113,14 @@ export function iconFor(key, icon) {
   return icon && typeof icon === 'string' && ICONS[icon] ? icon : null;
 }
 
+/** Toasts shown at once on a phone (hud.js TOAST_PHONE.visible; kept here so toasts.js stays free of hud.js). */
+export const TOAST_PHONE_VISIBLE = 2;
+
+/** Is this a phone layout (touch, or a short / narrow viewport: beacon.js `isPhone`)? Reads the window size. */
+export function phoneToasts(device, W = typeof innerWidth === 'number' ? innerWidth : 1280, H = typeof innerHeight === 'number' ? innerHeight : 720) {
+  return device === 'touch' || Math.min(W, H) < 500;
+}
+
 export class Toasts {
   /** @param {HTMLElement} parent @param {() => string} [device] current input device ('kbm' | 'pad' | 'touch') */
   constructor(parent, device = () => 'kbm', input = () => null) {
@@ -108,9 +130,18 @@ export class Toasts {
     this.root = el('div', 'ui-toasts', { parent });
     /** @type {Map<number, HTMLElement>} */
     this.els = new Map();
+    /** TT3 R3: at most this many at once (hud.js sets it on portrait phones so the stack stops above Clem), or null */
+    this.cap = null;
+  }
+
+  /** TT3 R3 (§10.2.10): a phone shows 2 at a time in its side slot (hud.js phoneToastBox), fewer when `cap` says so. */
+  _cap() {
+    const base = phoneToasts(this.device()) ? TOAST_PHONE_VISIBLE : TOAST.visible;
+    this.q.cfg.visible = Number.isFinite(this.cap) ? Math.max(1, Math.min(base, this.cap)) : base;
   }
 
   push(text, { icon = null, key = null } = {}) {
+    this._cap();
     return this.q.push(text, iconFor(key, icon), isTip(key, icon));
   }
 
@@ -121,9 +152,11 @@ export class Toasts {
    */
   render(dt, o = {}) {
     const tips = o.tips !== false;
+    this._cap();
     this.q.tipHold = !tips || !!o.tipHold;
     for (const t of this.q.shown) if (t.tip && !tips) t.t = Math.max(0, t.t - dt);   // a tip's clock waits out a scene
     const gone = this.q.update(dt);
+    gone.push(...this.q.shed());
     for (const t of gone) { const e = this.els.get(t.id); e?.remove(); this.els.delete(t.id); }
     for (const t of this.q.shown) {
       let e = this.els.get(t.id);

@@ -78,6 +78,12 @@ export function hintLayerOn(s) {
 
 /** Short label for an interaction tag: `prompt.<kind>` beats a long tutorial sentence. Pure. */
 export function tagLabel(ctx, kind, promptKey) {
+  // TT2: an interactable's own short `prompt.*` key wins (the barn chest, kind 'interact', says "Open", not the raw
+  // "[Interact]" that `prompt.interact` resolves to)
+  if (typeof promptKey === 'string' && promptKey.startsWith('prompt.') && promptKey !== 'prompt.interact' && ctx?.strings?.has?.(promptKey)) {
+    const s = tx(ctx, promptKey).replace(/\s*\[[^\]]*\]\.?\s*$/, '');
+    if (s) return s;
+  }
   const k = kind ? `prompt.${kind}` : null;
   if (k && ctx?.strings?.has?.(k)) return tx(ctx, k);
   const s = txt(ctx, promptKey ?? 'prompt.interact');

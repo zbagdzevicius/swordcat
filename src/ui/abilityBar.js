@@ -33,6 +33,25 @@ const SLOTS = [
 
 export { codeLabel };
 
+/** A slot that shows nothing to press (veiled by the practice reveal, empty, locked): clicks pass to the world. */
+export function slotInert(e) {
+  const c = e?.classList;
+  return !!c && (c.contains('is-veiled') || c.contains('is-empty') || c.contains('is-locked') || c.contains('is-hidden'));
+}
+
+/**
+ * Re-send a pointer press that landed on the bar to the game canvas as the mousedown Input listens for (the release
+ * reaches Input's window mouseup by itself). No-op without a canvas.
+ * @param {any} ctx @param {PointerEvent} ev
+ */
+export function passToWorld(ctx, ev) {
+  const cv = ctx?.renderer?.domElement;
+  if (!cv?.dispatchEvent || typeof MouseEvent !== 'function') return false;
+  cv.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: ev.button, buttons: ev.buttons, clientX: ev.clientX, clientY: ev.clientY,
+    ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey, altKey: ev.altKey, metaKey: ev.metaKey }));
+  return true;
+}
+
 /** The glyph shown for `action` (active preset bindings on KBM; pad glyphs on pad). */
 export function slotGlyph(input, action) {
   const dev = input?.device ?? 'kbm';
@@ -69,7 +88,14 @@ export class AbilityBar {
       this.slots.set(s.id, { el: e, ico: e.querySelector('.ab-ico'), sweep: e.querySelector('.ab-sweep'), num: e.querySelector('.ab-num'), key: e.querySelector('.ab-key'), wasCd: false });
       // only the slots catch the pointer (the panel and its gutters pass clicks to the world, ui.css); a right click on
       // a slot does nothing (it must never fire an ability by accident)
-      e.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); ev.preventDefault(); if (ev.button === 0) this._fire(s.id, true); });
+      // TOKENTAILS-PLAN §10.2.8: a right / middle click is not for the bar: it goes on to the world as a canvas
+      // mousedown, so a move order below Clem is never dropped (veiled slots and the gutters pass natively, ui.css);
+      // a left click on an empty / locked slot does nothing
+      e.addEventListener('pointerdown', (ev) => {
+        ev.stopPropagation(); ev.preventDefault();
+        if (ev.button === 0) { if (!slotInert(e)) this._fire(s.id, true); }
+        else if (ev.pointerType !== 'touch') passToWorld(this.ctx, ev);
+      });
       e.addEventListener('contextmenu', (ev) => ev.preventDefault());
       for (const t of ['pointerup', 'pointerleave', 'pointercancel']) e.addEventListener(t, () => this._fire(s.id, false));
     }

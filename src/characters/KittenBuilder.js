@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep, clamp, Spring, damp, earGeometry, hashString, mulberry32, charDetail, segScale, CHAR_Q } from './util.js';
 import { makeKitMaterial, kitMaterial, makeToonMaterial, isSharedKit, RM, own, disown, tuftMaterial, blobMaterial, blobGeometry, HOLY_COLOR, TOP_VIEW, READABILITY } from './materials.js';
-import { buildSilhouetteProxy, HIGHLIGHT } from './Readability.js';
+import { buildSilhouetteProxy, HIGHLIGHT, setHullFur } from './Readability.js';
 import { buildOutline, OUTLINE } from './Outline.js';
 import { FACE, coatColor, headFurMask, makeFurMaterial, FurPart, shellsFor, isoShellsFor, MAX_SHELLS, FUR_WIND, tickFurTime, FUR_RENDER_ORDER } from './Fur.js';
 import { EyePair, EXPRESSIONS, EYE, eyePivotMatrix, ringGeometry } from './Eyes.js';
@@ -547,6 +547,8 @@ export class Kitten {
     if (on === this.closeUp) return this;
     if (on && this.lod === 'play' && !this._closeSet) this.prepareCloseUp();
     this.closeUp = on;
+    // TT2 §10.6 d: no hull round the instanced head / bib fur in close-ups (it showed as a maroon band behind her head)
+    setHullFur(this.outline, !on);
     this.cape?.setDetail(on);   // full cape grid only in close-ups (PERF §9.1)
     this._applyLod();
     return this;
@@ -1263,6 +1265,7 @@ export class Kitten {
   setOutline(on, o = {}) {
     if (on && !this.outline) {
       this.outline = buildOutline(this, { px: o.px ?? OUTLINE.px.hero, color: o.color ?? OUTLINE.hero, skeleton: this.skeleton });
+      setHullFur(this.outline, !this.closeUp);
     }
     if (this.outline) {
       this.outline.visible = !!on;
@@ -1272,7 +1275,7 @@ export class Kitten {
     return this;
   }
   _rebuildOutline() {
-    if (this.outline) buildOutline(this, { into: this.outline, skeleton: this.skeleton });
+    if (this.outline) { buildOutline(this, { into: this.outline, skeleton: this.skeleton }); setHullFur(this.outline, !this.closeUp); }
   }
 
   /**

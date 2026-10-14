@@ -6,12 +6,13 @@
 // `recovery.<kind>.title|body|action` when they exist (ctx.strings), else the English fallbacks below.
 // Also: installPreloadErrorReload() — Vite's `vite:preloadError` (a lazy chunk 404s after a redeploy) reloads the
 // page once per minute (sessionStorage guard); a second failure falls through to the level Retry panel.
-// Importing this module touches no DOM (node-safe for the unit tests).
+// Importing this module touches no DOM (node-safe for the unit tests). The game's name comes from core/brand.js.
+import { BRAND } from './brand.js';
 
 export const RECOVERY_TEXT = Object.freeze({
-  context: { title: 'Pink Paw Knight took a little nap', body: 'Your device paused the graphics. Your progress is saved.', action: 'Tap to continue' },
+  context: { title: `${BRAND.title} took a little nap`, body: 'Your device paused the graphics. Your progress is saved.', action: 'Tap to continue' },
   level: { title: 'This area did not load', body: 'Check your connection and try again.', action: 'Retry' },
-  boot: { title: 'Pink Paw Knight could not start', body: 'Check your connection, then reload. If it keeps happening, try another browser.', action: 'Reload' },
+  boot: { title: `${BRAND.title} could not start`, body: 'Check your connection, then reload. If it keeps happening, try another browser.', action: 'Reload' },
 });
 
 /** Token Tails night / gold (docs/TOKENTAILS-PLAN.md §2.6). */

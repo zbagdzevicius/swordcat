@@ -25,7 +25,7 @@ const BLOCK_DIR = path.join(ROOT, 'tests', 'smoke');
 const ARGS = process.argv.slice(2);
 const VERBOSE = ARGS.includes('--verbose') || !!process.env.SMOKE_VERBOSE;
 const ONLY = (process.env.SMOKE_ONLY ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-const PORT = 4173;
+const PORT = +(process.env.SMOKE_PORT ?? 4173);   // SMOKE_PORT: a second preview port when 4173 is taken (QA uses 4191–4192)
 // F4 / F11: the smoke drives window.__GAME__, which a production build (dist/) never has; `npm run build:test` builds
 // the hooks-on bundle into dist-test/ (VITE_SWORDCAT_DEBUG=1), so smoke never races a production `npm run build`.
 const OUT_DIR = 'dist-test';

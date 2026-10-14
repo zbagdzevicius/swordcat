@@ -257,6 +257,8 @@ export class Cutscene {
     this.kind = KINDS.includes(def.kind) ? def.kind : 'cutscene';
     this.t = 0; this.realT = 0;
     this.started = false; this.finished = false; this.finishing = false; this.skipped = false;
+    /** set by StoryManager.halt(): the end block hands back but chains no scene and changes no level */
+    this.halted = false;
     /** @type {SeqTask|null} */
     this.root = null;
     /** spawned cast: { id, kind: 'enemy'|'npc'|'asset'|'prop', obj, keep } */
@@ -961,13 +963,20 @@ export class Cutscene {
       } catch (e) { console.warn(e); }
     }
     // level change
-    // (a function may decide at run time and await things first, e.g. CS-10's results card when skipped early)
-    let load = end.load;
+    // (a function may decide at run time and await things first, e.g. CS-10's results card when skipped early). A load
+    // that waited is dropped when another level load was asked for meanwhile (Quit to Title during the results card, or
+    // the next smoke block's own load): landing late, it replaced that newer level (the order-dependent smoke flake).
+    const req0 = ctx.levels?.requests ?? 0;
+    let load = end.load, stale = false;
     if (typeof load === 'function') { try { load = await load(ctx, this, skipped); } catch (e) { console.error(`[story] ${this.id}: end load failed`, e); load = null; } }
-    if (load?.level) {
+    if (load?.level && this.halted) stale = true;                  // StoryManager.halt(): no level change
+    else if (load?.level && (ctx.levels?.requests ?? 0) !== req0) {
+      stale = true;
+      console.warn(`[story] ${this.id}: end load ${load.level} dropped (a newer level load came first)`);
+    } else if (load?.level) {
       try { await ctx.levels?.load?.(load.level, load.spawn ?? 'start'); } catch (e) { console.error(`[story] ${this.id}: end load failed`, e); }
     }
-    if (end.player?.spawn) {
+    if (end.player?.spawn && !stale) {
       const sp = ctx.levels?.anchor?.(end.player.spawn);
       if (sp && ctx.player?.teleport) ctx.player.teleport({ pos: sp.pos.clone(), facing: sp.facing ?? 0 });
     }
@@ -980,7 +989,7 @@ export class Cutscene {
     host?.ended?.(this, skipped);
     ctx.bus.emit(E.CUTSCENE_END, { id: this.id, skipped });
     if (end.save) ctx.bus.emit(E.SAVE_REQUEST, {});
-    if (end.play) host?.play?.(end.play);
+    if (end.play && !this.halted) host?.play?.(end.play);           // a halted scene chains nothing
   }
 }
 

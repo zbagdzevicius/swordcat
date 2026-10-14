@@ -304,6 +304,24 @@ test('Player: the 3-hit combo chains in its windows (slash1 → slash2 → slash
   assert.equal(p.swing.def.id, 'slash1', 'late press → new combo');
 });
 
+test('Player: a ⚔ press during Big Swoosh is kept and swings when it ends (the first tap after an auto kill)', async () => {
+  for (const dev of ['touch', 'kbm']) {
+    const r = await rig(), { p, ctx } = r;
+    if (dev === 'touch') ctx.input.setDevice('touch');
+    p.startAttack('slash3');
+    r.seconds(0.1); r.tap('attack');                         // 0.5 s before the finisher ends: past the 0.2 s buffer
+    assert.equal(p.swing?.def.id, 'slash3', `${dev}: the finisher is not cut off`);
+    const serial = p.swingSerial;
+    r.seconds(0.6);
+    assert.ok(p.swingSerial > serial, `${dev}: the press started a new swing when Big Swoosh ended`);
+    assert.equal(r.last(E.PLAYER_SWING)?.combo, 1, `${dev}: a fresh Snip`);
+  }
+  // no press: the finisher lands back in move
+  const r = await rig(), { p } = r;
+  p.startAttack('slash3'); r.seconds(0.8);
+  assert.equal(p.state, 'move');
+});
+
 test('Player: keyboard combo grace — presses ~0.45–0.55 s apart (just after each swing ends) still reach Big Swoosh', async () => {
   for (const gap of [0.45, 0.55]) {
     const r = await rig(), { p } = r;
@@ -763,16 +781,17 @@ test('M2 Meme Cam never starts during Golden Hour', async () => {
   assert.equal(p.memeCamTrigger.suppressed(), true);
 });
 
-test('M2 cosmetics: equipped sword / cape fall back to the Borrowed Blade / Faded Cream; a story override wins', () => {
+test('M2 cosmetics: equipped sword / cape fall back to the Borrowed Blade / the royal red cape (Token Tails); a story override wins', () => {
   assert.equal(equippedSword({ sword: 'toobig' }), 'toobig');
   assert.equal(equippedSword({ sword: 'baguette' }), 'baguette');
   assert.equal(equippedSword({ sword: 'lightsaber' }), 'borrowed');
   assert.equal(equippedSword(null), 'borrowed');
   for (const c of ['cream', 'red', 'memeWhite', 'blue', 'green', 'midnight', 'gold']) assert.equal(equippedCape({ cape: c }), c);
-  assert.equal(equippedCape({ cape: 'toString' }), 'cream');
-  assert.equal(equippedCape({ cape: 'nope' }), 'cream');
+  assert.equal(equippedCape({ cape: 'toString' }), 'red');
+  assert.equal(equippedCape({ cape: 'nope' }), 'red');
   assert.equal(equippedCape({ cape: 'cream' }, 'red'), 'red');
-  assert.equal(equippedCape(undefined), 'cream');
+  assert.equal(equippedCape({ cape: 'red' }, 'cream'), 'cream');
+  assert.equal(equippedCape(undefined), 'red');
 });
 
 // ================================================================== M2 integration: status slow (§10.3 web), jeer radius
@@ -1463,7 +1482,7 @@ test('Player: setOutfit(tunic_sword / tunic_bow) keeps armour off and the sword 
     assert.equal(cfg.outfit.armour, null, `${name}: no plate`);
     assert.ok(cfg.accessories.some((a) => a?.id === 'tunic'), `${name}: tunic`);
     assert.ok(cfg.sword, `${name}: sword in the config`);
-    assert.equal(!!cfg.bow, name === 'tunic_bow', `${name}: bow only after the sticker`);
+    assert.ok(cfg.bow, `${name}: the pink bow from the first frame (no sticker gate)`);
     const k = buildKitten(cfg);
     try {
       assert.ok(k.sword?.group?.parent, `${name}: sword attached`);
@@ -1474,6 +1493,9 @@ test('Player: setOutfit(tunic_sword / tunic_bow) keeps armour off and the sword 
   }
   p.setOutfit('tunic');
   assert.equal(m._config().sword, null, 'plain tunic (cutscenes) stays swordless');
+  assert.ok(m._config().bow, 'plain tunic still wears the bow');
+  p.setOutfit('armour');
+  assert.ok(m._config().bow, 'plate wears the bow');
   p.setOutfit('nonsense');
   assert.equal(m.outfit, 'armour');
   assert.deepEqual([...OUTFITS], ['armour', 'tunic', 'tunic_sword', 'tunic_bow']);

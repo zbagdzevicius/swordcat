@@ -321,7 +321,20 @@ export default [
 
           // a real tap on the ground ahead: input.addTap → a 'tap' click → a move order → she arrives
           const p0 = await s.G(() => window.__GAME__.ctx.player.pos.toArray());
-          const goal = [p0[0] + 1.2, p0[2] + 3.2];
+          // The goal must be open ground under the touch pick, not a prop's pick area: Phase W scatters breakable barrels
+          // and crates (LevelKit, seeded) and one now stands ~0.9 m from the old fixed spot (+1.2, +3.2), well inside the
+          // 56 px touch tolerance, so the tap was (correctly) an attack order. Take the first candidate the game's own
+          // touch pick reports as 'ground'.
+          const goal = await s.G((p) => {
+            const g = window.__GAME__, c = g.ctx;
+            for (const [dx, dz] of [[1.2, 3.2], [-1.2, 3.2], [1.6, 2.6], [-1.6, 2.6], [0, 3.4], [2.2, 1.6], [-2.2, 1.6], [0, -3.0]]) {
+              const sp = g.screen(p[0] + dx, p[2] + dz);
+              if (!sp) continue;
+              const pk = c.cam.pick(sp.x, sp.y, { touch: true });
+              if (pk.kind === 'ground' && Number.isFinite(pk.point?.x) && Math.hypot(pk.point.x - p[0] - dx, pk.point.z - p[2] - dz) < 0.5) return [p[0] + dx, p[2] + dz];
+            }
+            return [p[0] + 1.2, p[2] + 3.2];
+          }, p0);
           await s.G(() => window.__GAME__.clearEvents());
           const tp = await s.tapAt(goal[0], goal[1]);
           t.assert(!!tp, `${tag}: the goal projects on screen`);

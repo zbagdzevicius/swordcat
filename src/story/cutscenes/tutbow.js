@@ -1,6 +1,7 @@
 // src/story/cutscenes/tutbow.js  (owner: story) — Morning Practice P2b "Pink Bow!" (WA §7.2, ON §4.2), ~7 s in-engine.
-// Right after the bonk lesson: Pearl hops up behind her and ties the pink bow on her LEFT ear (a soft white flash, the
-// `tunic_bow` outfit, 14 pink sparkles). No letterbox, the HUD stays, any input after 0.6 s skips.
+// Right after the bonk lesson: Pearl hops up behind her and straightens the pink bow on her LEFT ear (a soft white flash,
+// 14 pink sparkles). Flavour only: Clem wears the bow from the first frame (founder call 2026-10-14), so the
+// `tunic_bow` outfit looks the same as `tunic_sword`. No letterbox, the HUD stays, any input after 0.6 s skips.
 //   Pearl: "There! Now you look like a REAL hero."   Clem: "I already was one."   Pearl: "Obviously."
 // end: outfit tunic_bow (also when skipped); the friend-size **Pink Bow!** reward (E.REWARD); Pearl stays (the guide).
 import { reward } from '../rewards.js';

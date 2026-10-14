@@ -2,7 +2,7 @@
 // - Hero: CPU verlet cloth, 9 x 13 particles, pinned to 3 shoulder/neck anchors that follow the chest joint,
 //   structural + shear constraints, 3 iterations (PERF §9.1), damping 0.985, gravity -20, wind + inertia, sphere
 //   colliders; at most 2 sub-steps per frame.
-// - Meme Cam: cross-fade (0.3 s) to a seamlessly looping sway (3.8 s period, gust peak at 1.2 s), back on exit.
+// - Photo Cam: cross-fade (0.3 s) to a seamlessly looping sway (3.8 s period, gust peak at 1.2 s), back on exit.
 // - NPCs: static drape + vertex-shader sway (no CPU).
 // The 9 x 13 particles drive a finer RENDER grid (Catmull-Rom, CAPE_DEFAULTS.resX/resY): the soft vertical folds,
 // the gathered neckline and the wavy hem live on that grid, with a baked fold-shade (capeAO) so the cloth reads as
@@ -444,12 +444,12 @@ export class HeroCape {
   }
   /** Render-geometry vertex index of sim particle (column c, row r) on the current grid. */
   vertexIndex(c, r) { return r * this._set.resY * this.rc + c * this._set.resX; }
-  /** 'verlet' | 'sway'. blend seconds (Meme Cam: 0.3 in, 0.6 out). */
+  /** 'verlet' | 'sway'. blend seconds (Photo Cam: 0.3 in, 0.6 out). */
   setMode(mode, { blend = 0.3, period, gustPeak, amp } = {}) {
     this.mode = mode; this.wTarget = mode === 'sway' ? 1 : 0; this.blendDur = Math.max(1e-3, blend);
     if (period) this.sway.period = period; if (gustPeak !== undefined) this.sway.gustPeak = gustPeak; if (amp) this.sway.amp = amp;
   }
-  /** Seamless sway clock (Meme Cam syncs this with the camera/grass loop). */
+  /** Seamless sway clock (Photo Cam syncs this with the camera/grass loop). */
   setSwayTime(t) { this.sway.t = t; }
   /** Snap the cloth to the current pose (call after teleports / cutscene cuts). */
   snap() { this._initialised = false; }
@@ -596,7 +596,7 @@ export class HeroCape {
     const t = this.sway.t % T;
     const gust = 0.5 + 0.5 * Math.cos(om * (t - this.sway.gustPeak));
     const amp = this.sway.amp * (0.6 + 0.8 * gust);
-    // 1) sim particles → root local (cross-faded with the looping Meme Cam sway)
+    // 1) sim particles → root local (cross-faded with the looping Photo Cam sway)
     for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
       const k = (r * C + c) * 3;
       const u = c / (C - 1), vv = r / (R - 1);

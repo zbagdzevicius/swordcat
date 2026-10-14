@@ -1,7 +1,7 @@
 // src/ui/cinema.js  (owner: ui) — full-screen overlays: the cutscene layer (§14.3 "Cutscene overlay": letterbox bars
 // 10% each in cocoa-plum with a scalloped inner edge, captions, title and chapter cards, colour fades, the "Hold to
 // skip" ring), the Boot / Loading veil (the warm cream card with a paw progress bar fed by ui:progress, a random
-// loading tip) and the Meme Cam caption (Fredoka, bottom-left).
+// loading tip) and the Photo Cam caption (Fredoka, bottom-left).
 // WA §2.7 / §4.2: every load / cutscene fade is cream FADE_COLOR (#FFF1DE), never black: `'black'`, `'out'`, `true`
 // and any near-black colour resolve to cream; a scene that really wants a dark fade asks for cocoa-plum #3A2630.
 // WA §5.7: a lost life shows no card and no ghost any more (the ui toasts `life.lost` and pops the lives badge).
@@ -208,7 +208,7 @@ export class Cinema {
     this.skipRing.setAttribute('stroke-dashoffset', (I.RING_LEN * (1 - Math.min(1, f))).toFixed(1));
   }
 
-  // ------------------------------------------------------------------ meme cam caption (§7.8 step 4)
+  // ------------------------------------------------------------------ Photo Cam caption (§7.8 step 4)
   memeCaption(text) {
     if (text) { setText(this.memeCap, text); flag(this.memeCap, 'is-on', true); }
     else flag(this.memeCap, 'is-on', false);

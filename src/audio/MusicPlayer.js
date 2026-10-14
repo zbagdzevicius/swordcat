@@ -18,6 +18,9 @@ import { TRACKS, trackGain } from './musicMap.js';
  * @property {number} startedAt
  */
 
+/** 8 samples of 8-bit silence (a 52-byte WAV): the src a deck element plays while it is primed in a gesture (F15). */
+export const SILENT_WAV = 'data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==';
+
 /** Cutoff (Hz) of an "open" deck filter (the track has no `lowpass`). */
 const FILTER_OPEN = 20000;
 
@@ -41,7 +44,7 @@ export class MusicPlayer {
   _deck() {
     const gain = this.ac.createGain(); gain.gain.value = 0; gain.connect(this.dest);
     const filter = this.ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = this._open(); filter.connect(gain);
-    return { gain, filter, el: null, elSrc: null, src: null, track: null, stopAt: 0, token: 0, startedAt: 0, loopEnd: 0, loopFrom: 0 };
+    return { gain, filter, el: null, elSrc: null, src: null, track: null, stopAt: 0, token: 0, startedAt: 0, loopEnd: 0, loopFrom: 0, primed: false };
   }
 
   /** The open cutoff, kept under Nyquist. */
@@ -145,6 +148,37 @@ export class MusicPlayer {
     this.sting.gain.gain.value = trackGain(def) * volume;
     s.start(); this.sting.src = s; this.sting.endAt = this.ac.currentTime + buf.duration;
     return buf.duration;
+  }
+
+  /**
+   * F15 (WebKit / iOS): call synchronously inside a user gesture, before any await. A live deck that autoplay blocked
+   * plays now; every other deck element is created and played once, muted, on a silent src and paused again, so a
+   * later play() outside a gesture (the first track after the unlock, a crossfade) is allowed. The muted flag is
+   * restored when the play() settles. Idempotent per deck (`primed`). Never throws.
+   */
+  prime() {
+    for (const d of this.decks) {
+      if (d.el && d.track && !d.src && !d.stopAt) {            // a live streamed track that autoplay held back
+        if (d.el.paused) { try { d.el.play()?.catch?.(() => {}); } catch { /* not allowed yet */ } }
+        d.primed = true;
+        continue;
+      }
+      if (d.primed || (d.track && d.stopAt)) continue;
+      let el;
+      try { el = this._element(d); } catch { continue; }
+      d.primed = true;
+      if (!el.paused) continue;
+      const wasMuted = !!el.muted, tok = d.token;
+      el.muted = true;
+      if (!d.track) el.src = SILENT_WAV;
+      const done = () => {
+        el.muted = wasMuted;
+        if (d.token === tok && !d.track && !el.paused) el.pause();
+      };
+      let p = null;
+      try { p = el.play(); } catch { p = null; }
+      if (p && typeof p.then === 'function') p.then(done, done); else done();
+    }
   }
 
   /** Resume elements that autoplay blocked (call after the context starts). */

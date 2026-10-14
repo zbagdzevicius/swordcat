@@ -393,7 +393,7 @@ kbd.ui-key--sword { text-shadow: 0 1px 0 var(--pinkDark); }
 .title-logo { position: absolute; left: 50%; top: 9vh; transform: translateX(-50%); transition: top .6s ease, transform .6s ease; }
 .ui-title.has-menu .title-logo { top: 4vh; transform: translateX(-50%) scale(.78); }
 .logo { text-align: center; white-space: nowrap; }
-.logo-word { display: inline-flex; font-family: var(--f-logo); font-weight: 700; font-size: clamp(48px, 9.5vmin, 120px); letter-spacing: .04em; line-height: 1; }
+.logo-word { display: inline-flex; font-family: var(--f-logo); font-weight: 700; font-size: clamp(26px, min(9.5vmin, 7.4vw), 120px); letter-spacing: .04em; line-height: 1; }
 .logo-l { position: relative; display: inline-block;
 }
 .ui-title .logo-l { animation-delay: calc(var(--logo-delay, 1.5s) + var(--i) * .06s); }
@@ -492,7 +492,7 @@ kbd.ui-key--sword { text-shadow: 0 1px 0 var(--pinkDark); }
 /* credits */
 .menu--credits .menu-panel { width: min(40em, 94vw); }
 .credits-roll { max-height: 64vh; overflow-y: auto; text-align: center; padding: .4em 1em 2em; scrollbar-width: thin; }
-.credits-roll .cr-logo .logo-word { font-size: clamp(36px, 6vmin, 64px); }
+.credits-roll .cr-logo .logo-word { font-size: clamp(22px, min(6vmin, 6vw), 64px); }
 .credits-roll .cr-logo .logo-sub { color: var(--ink2); text-shadow: none; }
 .credits-roll .cr-big { font-family: var(--f-lore); font-size: 1.15em; }
 .credits-roll h3, .credits-roll h4 { font-family: var(--f-head); color: var(--pinkDark); letter-spacing: .08em; margin: 1.1em 0 .3em; }
@@ -1518,3 +1518,84 @@ kbd.ui-key--sword { background: linear-gradient(var(--pinkHi), var(--pink)); bor
 @keyframes bcPrint { 0% { opacity: 0; } 15% { opacity: .6; } 70% { opacity: .5; } 100% { opacity: 0; } }
 body.ui-touch .bc-badge { width: 40px; height: 40px; left: -20px; top: -40px; }
 @media (prefers-reduced-motion: reduce) { .bc-badge, .bc-col, .bc-spark, .bc-edge-rot svg { animation: none; } }
+
+/* ==================================================================================================================
+   Token Tails skin (docs/TOKENTAILS-PLAN.md §2.6). Layered last, so it wins over the candy rules above without editing
+   them. Panels: Token Tails parchment (#F7E6B8 → #E9CF8F) with ink #4A1D08; calls to action: gold #FFCC55 on a #713F12
+   shadow; focus and accents: love pink #FF7AA2; the title rim, loading veil and pause / game-over backdrops: night
+   #0B0820 → #2A1F45 with gold. The in-world HUD keeps its light pills (only the ink deepens, which raises contrast), and
+   Clementine's bow stays the candy pink (--pink / icons.js PINK), never the love pink.
+   ================================================================================================================== */
+:root {
+  --tt-night: #0B0820; --tt-night2: #2A1F45; --tt-parch: #F7E6B8; --tt-parch2: #E9CF8F; --tt-ink: #4A1D08; --tt-ink2: #7A4A22;
+  --tt-gold: #FFCC55; --tt-goldHi: #FFE9A0; --tt-goldLo: #F0AE34; --tt-goldShadow: #713F12; --tt-love: #FF7AA2;
+  --cocoa: var(--tt-ink); --cocoa2: var(--tt-ink2); --ink: var(--tt-ink); --ink2: var(--tt-ink2);
+  --butter: var(--tt-gold); --gold: var(--tt-gold); --butterEdge: var(--tt-goldHi); --goldLight: var(--tt-goldHi);
+}
+
+/* ---- panels: parchment card, ink border, a gold inner edge */
+.panel { --cream: var(--tt-parch); --cream2: var(--tt-parch2); --fade: var(--tt-parch);
+  background: linear-gradient(180deg, var(--tt-parch) 0%, var(--tt-parch2) 100%); color: var(--tt-ink); border-color: var(--tt-ink);
+  box-shadow: inset 0 0 0 6px #FFF3D0B3, 0 5px 0 var(--tt-goldShadow), 0 14px 28px #2A1F4559; }
+.menu-title span { background: linear-gradient(180deg, var(--tt-goldHi), var(--tt-gold) 55%, var(--tt-goldLo)); color: var(--tt-ink);
+  border-color: var(--tt-ink); text-shadow: 0 1px 0 #FFF3C4; font-weight: 900; letter-spacing: .06em; }
+.srow-group, .credits-roll h3, .credits-roll h4 { color: var(--tt-goldShadow); }
+.srow.is-focus, .srow:hover { background: #FFF3D0; box-shadow: 0 0 0 2px var(--tt-love), 0 3px 0 #4A1D0822; }
+
+/* ---- calls to action: gold with an ink label (candy buttons, the home CTA, results "Onward") */
+.btn--candy { background: linear-gradient(180deg, var(--tt-goldHi), var(--tt-gold) 48%, var(--tt-goldLo)); color: var(--tt-ink);
+  box-shadow: 0 5px 0 var(--tt-goldShadow), 0 10px 18px #713F1240, inset 0 2px 0 #ffffffb0; text-shadow: 0 1px 0 #FFF3C4; }
+.btn--candy .btn-sub { text-shadow: none; color: var(--tt-ink2); font-weight: 600; }
+.btn--candy.is-focus, .btn--candy:hover { box-shadow: 0 7px 0 var(--tt-goldShadow), 0 0 0 3px #fff, 0 0 0 6px var(--tt-love), inset 0 2px 0 #ffffffb0; }
+.btn--candy:active { box-shadow: 0 2px 0 var(--tt-goldShadow), inset 0 2px 0 #ffffffb0; }
+.btn--candy.is-focus::before { background: var(--tt-love); }
+.btn--plain { background: #FFF3D0; color: var(--tt-ink); border-color: var(--tt-ink); box-shadow: 0 4px 0 #713F1259; }
+.btn--plain.is-focus, .btn--plain:hover { box-shadow: 0 5px 0 #713F1259, 0 0 0 3px #fff, 0 0 0 6px var(--tt-love); }
+.btn--sky { color: #fff; }
+
+/* ---- the title: a night rim around the live scene (the world stays visible), gold logo, the co-brand footer */
+.ui-title .title-rim { background: linear-gradient(180deg, #0B0820A6 0%, #0B082000 34%, #0B082000 70%, #0B0820A6 100%),
+  radial-gradient(120% 90% at 50% 45%, #2A1F4500 52%, #2A1F45B3 100%); }
+.logo-word { font-weight: 900; letter-spacing: .05em; }
+.logo-l { color: var(--tt-gold); background: linear-gradient(180deg, #FFF6D2 0%, var(--tt-gold) 48%, #E8962A 100%); -webkit-background-clip: text; background-clip: text;
+  -webkit-text-stroke: clamp(2.5px, .07em, 5px) var(--tt-ink); }
+.logo-sub { color: #FFF3D0; text-shadow: 0 2px 0 var(--tt-night), 0 0 6px #0B0820B3; font-family: var(--f-body); font-weight: 800; letter-spacing: .14em; }
+/* a title without an "O" ties the bow on its first letter: top-left, tilted, on her left (the viewer's left) */
+.logo-first .logo-bow { left: 0; top: -.06em; width: .6em; transform: translate(-42%, -46%) rotate(-24deg); }
+.tt-cobrand { display: inline-flex; align-items: center; gap: .45em; }
+.tt-cobrand .tt-logo { width: 28px; height: 28px; flex: none; object-fit: contain; border-radius: 50%; }
+.title-foot.tt-cobrand { color: var(--tt-goldHi); font-weight: 800; letter-spacing: .03em; background: #2A1F45E6; border: 2px solid var(--tt-gold);
+  box-shadow: 0 2px 0 #0B082080; padding: .14em .95em .16em .3em; }
+.credits-roll .cr-brand { justify-content: center; margin: .5em auto .3em; padding: .15em .9em .15em .3em; border-radius: 999px;
+  background: var(--tt-night2); color: var(--tt-goldHi); font-weight: 800; font-size: max(16px, .95em); border: 2px solid var(--tt-gold); }
+.credits-roll .cr-team { font-weight: 800; font-size: max(16px, 1em); }
+.credits-roll .cr-pinkpaw { color: var(--tt-ink2); font-style: italic; }
+.credits-roll .cr-logo .logo-sub { color: var(--tt-ink2); text-shadow: none; }
+
+/* ---- night veils: loading, the pause / modal scrim, game over */
+.ui-loading { background: radial-gradient(120% 90% at 50% 35%, var(--tt-night2) 0%, #17112F 60%, var(--tt-night) 100%); }
+.load-title { color: var(--tt-gold); text-shadow: 0 2px 0 var(--tt-goldShadow), 0 0 14px #FFCC5555; }
+.load-tip { color: #F3E9FF; }
+.load-paws .lp svg g { fill: var(--tt-gold); }
+.menu-backdrop { background: radial-gradient(circle at 50% 45%, #2A1F4559, #0B0820C7); }
+.menu-backdrop.is-dark { background: radial-gradient(circle at 50% 40%, #2A1F45F0, #0B0820F5); }
+.go-title { color: var(--tt-ink); }
+
+/* ================================================================== Token Tails embed (`<html data-embed="1">`, core/embed.js)
+   The host page's "Back to games" button sits in the frame's top-left corner (44 px, 6 px in: docs/TOKENTAILS-PLAN.md
+   §5.1, tokentails SwordcatHost SWORDCAT_EXIT_GUTTER_PX), so the HUD keeps that corner free: the top-left block steps
+   right on wide screens and down on portrait phones (stepping right there would push the hearts into ❚❚). The
+   left-handed landscape mirror moves the top-right counters to that corner, so they step right instead. */
+html[data-embed="1"] { --embed-gut: 56px; }
+html[data-embed="1"] body .ui-root .hud-tl { left: calc(16px + var(--embed-gut)); }
+@media (orientation: landscape) {
+  html[data-embed="1"] body.ui-touch.ui-lefty .ui-root .hud-tr { left: calc(16px + var(--embed-gut) + env(safe-area-inset-left)); }
+}
+@media (orientation: portrait) and (max-width: 560px) {
+  html[data-embed="1"] body .ui-root.ui-root .hud-tl { left: 8px; top: calc(8px + var(--embed-gut) + env(safe-area-inset-top)); }
+  html[data-embed="1"] body .ui-root.ui-root .hud-tc { top: calc(92px + var(--embed-gut) + env(safe-area-inset-top)); }
+  html[data-embed="1"] body .ui-root.ui-root .ui-hint { top: calc(96px + var(--embed-gut) + env(safe-area-inset-top)); }
+  html[data-embed="1"] body .ui-root.ui-root .hud-milk { top: calc(84px + var(--embed-gut) + env(safe-area-inset-top)); }
+  html[data-embed="1"] body.ui-touch .ui-root.ui-root .hud-tc { top: max(calc(92px + var(--embed-gut) + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); }
+  html[data-embed="1"] body.ui-touch .ui-root.ui-root .ui-hint { top: max(calc(96px + var(--embed-gut) + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); }
+}

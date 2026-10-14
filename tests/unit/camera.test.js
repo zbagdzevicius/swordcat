@@ -2273,3 +2273,26 @@ test('AUTOCAM: entering cutscene mode keeps the frozen frame where it was (no an
   assert.equal(cam._isoW, 1);
 });
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
+
+test('Reduce camera motion: rolling ground is followed rigidly (her feet keep their screen spot); a step still eases (SC4)', async () => {
+  const run = async (calm) => {
+    const { ctx, cam, step } = await makeIsoCamA();
+    ctx.state.settings.reduceCameraMotion = calm;
+    const p = ctx.player, gyAt = () => cam._gy - (p.groundY + ISO.focusY);
+    let worst = 0;
+    for (let i = 0; i < 120; i++) {                                   // a 0.3 m swell under her as she runs
+      const y = 0.3 * Math.sin(i / 120 * Math.PI);
+      p.groundY = y; p.pos.set(0, y, -i * 0.08); p.object3d.position.copy(p.pos);
+      step(1);
+      if (i > 2) worst = Math.max(worst, Math.abs(gyAt()));
+    }
+    // a 0.5 m ledge: eased, not snapped
+    p.groundY += 0.5; p.pos.y += 0.5; p.object3d.position.copy(p.pos);
+    step(1);
+    return { worst, ledgeLag: -gyAt() };
+  };
+  const calm = await run(true), normal = await run(false);
+  assert.ok(calm.worst < 1e-3, `calm: the focus rides the swell (lag ${calm.worst.toFixed(4)} m)`);
+  assert.ok(normal.worst > 0.01, `default: the eased follow lags the swell (${normal.worst.toFixed(3)} m)`);
+  assert.ok(calm.ledgeLag > 0.3, `calm: a ledge still eases in (lag ${calm.ledgeLag.toFixed(2)} m after one step)`);
+});

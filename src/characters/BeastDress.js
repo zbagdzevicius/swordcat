@@ -18,10 +18,10 @@ import { buildSilhouetteProxy, highlightObject, XRAY } from './Readability.js';
 
 /** Per-look head preset + options and plate word source (§3.7 villains, §11 boss builds). */
 export const BEAST_LOOKS = Object.freeze({
-  hyena: { head: 'hyena', opts: { mane: true }, words: ENEMIES.hyena?.plateWords ?? ['HATER'], style: 'rusty' },
-  stealer: { head: 'hyena', opts: { mane: false }, words: ENEMIES.stealer?.plateWords ?? ['POST STEALER'], style: 'rusty' },
-  pilfer: { head: 'hyena', opts: { mane: false, scale: 1.22 }, words: ['POST STEALER'], style: 'iron' },
-  cacklejaw: { head: 'hyena', opts: { mane: true, chippedEar: 'left', lift: 0.15 }, words: ['HATER-IN-CHIEF'], style: 'rusty' },
+  hyena: { head: 'hyena', opts: { mane: true }, words: ENEMIES.hyena?.plateWords ?? ['GRUMP'], style: 'rusty' },
+  stealer: { head: 'hyena', opts: { mane: false }, words: ENEMIES.stealer?.plateWords ?? ['SNACK SNATCHER'], style: 'rusty' },
+  pilfer: { head: 'hyena', opts: { mane: false, scale: 1.22 }, words: ['SNACK SNATCHER'], style: 'iron' },
+  cacklejaw: { head: 'hyena', opts: { mane: true, chippedEar: 'left', lift: 0.15 }, words: ['GRUMP-IN-CHIEF'], style: 'rusty' },
   pug: { head: 'pug', opts: {}, words: null },
   brutus: { head: 'pug', opts: { scar: true }, words: null },
   // weapon: the hand prop that replaces the GLB weapon (WA §2.5: "Big Squeaky Bone" mallet, same hitbox / timings)

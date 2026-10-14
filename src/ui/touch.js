@@ -21,7 +21,7 @@
 import { PLAYER, TOUCH as TC, CAMERA } from '../core/config.js';
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
-import { el, flag, setVar, place, pulse } from './dom.js';
+import { el, flag, setVar, clearVar, place, pulse } from './dom.js';
 import { applySetting } from './settings.js';
 import { tx } from './text.js';
 import { portraitSVG } from './portraits.js';
@@ -81,6 +81,24 @@ export const LESSON_BUTTONS = Object.freeze(['attack', 'guard', 'dodge', 'jump',
  * Has a two-finger pinch moved far enough to start zooming? Pure.
  * @param {number} d0 finger distance when the second finger landed @param {number} d now
  */
+/**
+ * The portrait hearts row capped to `roomU` (unscaled px): `{ cols, w }` = hearts per row and the heart width. A row
+ * that would wrap shrinks instead while each heart keeps ≥ `HEART_ROW.minK` of its size (≥ `HEART_ROW.minPx`): the
+ * base 4 hearts used to drop the 4th onto a second line on a 390 px phone. Past that (max-HP upgrades) the hearts wrap,
+ * at most two rows (a third row shrinks them again). Pure.
+ * @param {number} n hearts @param {number} hw heart width @param {number} gap column gap @param {number} roomU room
+ */
+export const HEART_ROW = Object.freeze({ minK: 0.7, minPx: 12 });
+export function heartRow(n, hw, gap, roomU) {
+  if (!(hw > 0) || !(n > 0)) return { cols: n, w: hw };
+  const perRow = Math.max(1, Math.floor((roomU + gap) / (hw + gap)));
+  if (n <= perRow) return { cols: n, w: hw };
+  const one = (roomU + gap) / n - gap;
+  if (one >= Math.max(HEART_ROW.minPx, hw * HEART_ROW.minK)) return { cols: n, w: one };
+  if (Math.ceil(n / perRow) > 2) { const cols = Math.ceil(n / 2); return { cols, w: Math.max(10, (roomU + gap) / cols - gap) }; }
+  return { cols: perRow, w: hw };
+}
+
 export function pinchStarted(d0, d) { return Math.abs(d - d0) >= PINCH.startPx; }
 /** ⚔ flick-aim (§9.4): the first slash waits this long (or for a 16 px drag) so a quick drag can aim it. */
 const FLICK_S = 0.1;
@@ -198,7 +216,7 @@ export class TouchControls {
   _unfitHud() {
     for (const e of [this.uiRoot?.querySelector?.('.hud-hearts'), this.uiRoot?.querySelector?.('.hud-valor')]) {
       if (!e) continue;
-      e.style.maxWidth = ''; e.style.width = ''; e.style.removeProperty('--heart-w'); flag(e, 'is-capped', false);
+      e.style.maxWidth = ''; e.style.width = ''; clearVar(e, '--heart-w'); flag(e, 'is-capped', false);
     }
     this._fitT = null;
   }
@@ -224,7 +242,7 @@ export class TouchControls {
       if (!e) continue;
       const prop = e === hearts ? 'maxWidth' : 'width';
       if (e.style[prop]) e.style[prop] = '';
-      if (e === hearts) e.style.removeProperty('--heart-w');
+      if (e === hearts) clearVar(e, '--heart-w');
       flag(e, 'is-capped', false);
       const r = e.getBoundingClientRect();
       if (!(pr.width > 0) || !(r.width > 0) || r.top > pr.bottom || r.bottom < pr.top || r.left > pr.right) continue;
@@ -235,11 +253,11 @@ export class TouchControls {
       e.style[prop] = `${Math.floor(roomU)}px`;
       flag(e, 'is-capped', true);
       if (e === hearts) {
-        // at most two rows: past that the hearts shrink a little instead of stacking a third row into the card below
+        // one row when the hearts can shrink a little to fit (heartRow); else at most two rows: past that the hearts
+        // shrink instead of stacking a third row into the card below
         const n = e.children.length, hw = e.firstElementChild?.offsetWidth || 0, gap = parseFloat(getComputedStyle(e).columnGap) || 0;
-        const perRow = hw > 0 ? Math.max(1, Math.floor((roomU + gap) / (hw + gap))) : n;
-        let w = hw, cols = perRow;
-        if (Math.ceil(n / perRow) > 2) { cols = Math.ceil(n / 2); w = Math.max(10, (roomU + gap) / cols - gap); setVar(e, '--heart-w', `${w.toFixed(2)}px`); }
+        const { cols, w } = heartRow(n, hw, gap, roomU);
+        if (hw > 0 && w !== hw) setVar(e, '--heart-w', `${w.toFixed(2)}px`);
         if (hw > 0) e.style.maxWidth = `${(cols * (w + gap) - gap + 0.5).toFixed(2)}px`;   // exactly `cols` per row
       }
     }

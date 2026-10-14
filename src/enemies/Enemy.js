@@ -276,7 +276,9 @@ export const BASE_STATES = {
     update(e, dt) {
       e.brake(dt);
       const p = e.targetActor();
-      if (p && e.stateT < e.windupDur - TUNING.windupTrackStop) e.faceTo(p.pos, dt, TUNING.windupTurnRate);
+      // − 1e-6: the step that lands exactly on the stop (0.55 − 0.15 = 24 steps) must not turn because the summed
+      // stateT came out a hair short (it did at large game times: smoke enemies:telegraph-payload in full runs)
+      if (p && e.stateT < e.windupDur - TUNING.windupTrackStop - 1e-6) e.faceTo(p.pos, dt, TUNING.windupTurnRate);
       if (e.stateT >= e.windupDur) e.setState('strike');
     },
   },

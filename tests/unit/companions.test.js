@@ -1153,7 +1153,7 @@ test('M2 §12.5 hub: rescued kittens at their activity spots, villagers fill to 
   const nVill = res.filter((r) => r.npcId.startsWith('villager_hub_')).length;
   assert.equal(kit.length + nVill, 20);
   const keepers = res.filter((r) => r.beh === 'station').map((r) => r.npcId).sort();
-  assert.deepEqual(keepers, ['earlgrey', 'marmalade', 'snowpaw', 'tofu'], 'Pip / Pearl / Coo wait for their flags');
+  assert.deepEqual(keepers, ['earlgrey', 'marmalade', 'snowpaw', 'tofu', 'tokentails_cat'], 'Pip / Pearl / Coo wait for their flags');
   assert.ok(res.every((r) => r instanceof HubResident && r.hurtable === false));
   const waffles = res.find((r) => r.npcId === 'waffles');
   assert.ok(Math.abs(waffles.pos.y - 3) < 0.05, 'Waffles waves from the balcony (y 3)');
@@ -1689,7 +1689,9 @@ test('ART §6: role head scale (kittens 1.22, villagers 1.05), hull tiers (X9), 
   assert.equal(c.visual.cfg.headScale, 1.22);
   ctx.camera.position.set(4, 10, 10);
   let held = false, maxYaw = 0;
-  for (let i = 0; i < Math.round(12 / DT); i++) { c.visual.update(DT, { calm: true }); if (c.visual.glancing) { held = true; maxYaw = Math.max(maxYaw, Math.abs(c.visual._gl.yaw)); } }
+  // advance the frame counter like the game does: a 'slow'-band cat animates every 6th frame staggered by its actor id,
+  // so a frozen counter made this depend on how many actors earlier tests had created
+  for (let i = 0; i < Math.round(12 / DT); i++) { ctx.game.frameCount++; c.visual.update(DT, { calm: true }); if (c.visual.glancing) { held = true; maxYaw = Math.max(maxYaw, Math.abs(c.visual._gl.yaw)); } }
   assert.ok(held, 'glanced within 12 s of calm');
   assert.ok(maxYaw <= GLANCE.maxYaw + 1e-9 && GLANCE.maxYaw <= 25 * Math.PI / 180 + 1e-9);
   c.visual.update(DT, { calm: false });
@@ -1850,4 +1852,24 @@ test('K6 (§7.3): no MeshStandardMaterial under any companion-built root; lit pr
   for (let i = 0; i < rm.count; i++) assert.equal(rm.getY(i), 0, 'wooden tip: no metal');
   arrow.dispose();
   m.dispose();
+});
+
+test('Token Tails: the Token Tails cat keeps the Rescue House in hub mode; it only speaks npc.ttcat keys strings has', async () => {
+  const ctx = makeCtx(); await ctx.companions.init();
+  const m = ctx.companions;
+  levelOf(ctx, 'town');
+  ctx.state.setFlag('town.free', true);
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'town' });
+  let tt = m.hub.residents.find((r) => r.npcId === 'tokentails_cat');
+  assert.ok(tt, 'spawned');
+  assert.equal(tt.visual.cfg.bow, null, 'no bow');
+  assert.deepEqual(tt.lines, [], 'no strings yet: nothing to say (a missing key is never shown)');
+  assert.equal(tt.speakerKey, 'name.ttcat');
+  ctx.bus.emit(E.LEVEL_UNLOAD, {});
+  ctx.strings = { t: (k) => 'TEXT:' + k, has: (k) => k === 'name.ttcat' || k === 'npc.ttcat.1', S: {} };
+  ctx.bus.emit(E.LEVEL_LOADED, { id: 'town' });
+  tt = m.hub.residents.find((r) => r.npcId === 'tokentails_cat');
+  assert.deepEqual(tt.lines, ['npc.ttcat.1']);
+  assert.equal(tt.speakerName, 'TEXT:name.ttcat');
+  assert.equal(m.hub.residents.filter((r) => r.npcId === 'tokentails_cat').length, 1, 'one keeper');
 });

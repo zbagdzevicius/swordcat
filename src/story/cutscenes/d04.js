@@ -40,7 +40,7 @@ const faceUp = (who) => [
   cam('TWO_SHOT_LOW', 'swordcat', { target: who, pos: [2.2, 0.8, 0.75], fov: 38 }),
 ];
 
-/** Clover joins the companion roster (party swaps happen at Vigil Stones). */
+/** Clover joins the companion roster (party swaps happen at Lantern Stones). */
 function cloverJoins(ctx) {
   const c = ctx.companions;
   try {

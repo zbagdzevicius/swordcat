@@ -360,7 +360,7 @@ test('core.W1: WA §12 keys present and frozen; IDLE before the Meme Cam; a glyp
   assert.equal(TELEGRAPH.colors.shadow, '#3A2346', 'no black (WA §2.7)');
   assert.deepEqual(JUICE.finalBlow, { hitstopAdd: 0.06, slowMo: 0.25, timeScale: 0.35 });
   assert.equal(ENEMIES.hyena.plateWordsFriend.length, ENEMIES.hyena.plateWords.length, 'friend words index-paired');
-  assert.deepEqual(ENEMIES.stealer.plateWordsFriend, ['POSTMASTER']);
+  assert.deepEqual(ENEMIES.stealer.plateWordsFriend, ['SNACK SHARER'], 'Token Tails pass: POSTMASTER → SNACK SHARER');
   assert.equal(STORY.cs02Cut, true); assert.deepEqual(STORY.mochiCage, [-14, -41]);
   assert.deepEqual(STORY.kittenOffer, { knockouts: 2, windowS: 180, failedParries: 3 });
   assert.ok(Math.abs(KO.sitT + KO.wipeT - 1.55) < 1e-9);

@@ -1,7 +1,7 @@
 // tests/smoke/characters.mjs  (owner: characters) — the procedural cast in the running game (GAME_DESIGN §3, §18.3,
 // §19.10 M1; research/art.md §2–§7):
 //   characters:r1     the player's Swordcat against the R1 checklist (bow on the LEFT ear, eyes ≈ 0.09 H, pauldrons ≥ head
-//                     width, cape V-frame behind her, sword ≈ her height, ginger with a cream bib), the scene-driven
+//                     width, cape V-frame behind her, sword ≈ her height, Token Tails ivory with a white bib), the scene-driven
 //                     character env map, MEME_LOOP + full-body screenshots at prologue night and meadow day
 //   characters:cast   the M1 cast spawned through the real services: Pearl, Whiskerbottom, Marmalade, Mochi, the six
 //                     squires, a caged lost kitten, the CS-02 hyena with Pearl's cage, Cacklejaw and Pilfer
@@ -504,7 +504,9 @@ const HeroReadBlocks = [
       t.assert(a.sword && a.tip && a.tip.x > 0 && a.tip.x < a.tip.w && a.tip.y > 0 && a.tip.y < a.tip.h, 'armour: sword on screen');
       await t.shot('characters/hero-read-play-full', { freeze: true });
       await t.page.screenshot({ path: path.join(t.shotsDir, 'characters', 'hero-read-play.png'), clip: { x: Math.max(0, a.chest.x - 120), y: Math.max(0, a.chest.y - 120), width: 240, height: 240 } });
-      for (const outfit of ['tunic', 'tunic_bow']) {
+      // the practice outfits she plays in (StoryManager.practiceOutfit → 'tunic_sword', 'tunic_bow' after the sticker);
+      // the plain 'tunic' is the empty-pawed look no gameplay path wears (unit: player setOutfit, characters.W3)
+      for (const outfit of ['tunic_sword', 'tunic_bow']) {
         await t.G(async (o) => { const g = window.__GAME__; g.ctx.player.setOutfit(o); await g.waitFrames(20); }, outfit);
         await installChr(t);
         const b = await probe();
@@ -552,7 +554,7 @@ export default [
         return {
           bow: bow && bow.toArray(), bowParent: k.bow?.parent?.name, eye, shoulderW: maxX - minX, skullW, sword,
           cape: k.cape ? { visible: k.cape.mesh.visible, maxZ: cb.max.z, topW: k.cape.d.topW, botW: k.cape.d.botW, style: k.capeStyle, grid: [k.cape.rc, k.cape.rr], closeUp: k.cape.closeUp, aoMin } : null,
-          baseH: base.h, baseS: base.s, baseL: base.l, bibL: bib.l,
+          baseH: base.h, baseS: base.s, baseL: base.l, bibL: bib.l, pattern: coat.pattern,
           envMap: !!k.kitMat.envMap, envColors: !!k.constructor.lib?.characterEnvColors?.(), toon: !!k.kitMat.userData?.toon,
           shells: k.headFur.shells, furBlended: !!k.furMat?.transparent, calls: k.drawCalls(), pose: k.poseName,
         };
@@ -566,7 +568,7 @@ export default [
       t.assert(m.cape && m.cape.maxZ < 0.12, `cape hangs behind her (max local z ${m.cape?.maxZ.toFixed(3)})`);
       // PERF §9.1 / X26: iso play draws the coarse 17 x 13 grid (the full >= 25-column grid is the close-up set)
       t.assert(m.cape && m.cape.grid[0] >= (m.cape.closeUp ? 25 : 17) && m.cape.aoMin < 0.8, `cape renders soft folds (grid ${m.cape?.grid}, closeUp ${m.cape?.closeUp}, fold shade ${m.cape?.aoMin?.toFixed(2)})`);
-      t.assert(m.baseH > 0.04 && m.baseH < 0.11 && m.baseS > 0.4 && m.bibL > m.baseL, 'R1 ginger coat with a lighter cream bib');
+      t.assert(m.baseL > 0.75 && m.baseS < 0.45 && m.bibL >= m.baseL && m.pattern === 'solid', `Token Tails ivory coat, no stripes, white bib (L ${m.baseL.toFixed(2)}, S ${m.baseS.toFixed(2)}, ${m.pattern})`);
       t.assert(m.toon || (m.envMap && m.envColors), 'warm toon kit material (ART_WARM §7), or the env map built from the live scene lights');
       t.assert(m.shells > 0 && m.furBlended, `shell fur on (${m.shells} shells, soft-blended)`);
       t.assert(m.calls <= 24, `hero draw calls ${m.calls} (budget 24)`);
@@ -599,7 +601,7 @@ export default [
       });
       t.assert(oath.tip[1] > 1.2 && oath.tip[0] < 0, `oath: blade up past her head on her right (tip ${oath.tip.map((v) => v.toFixed(2))})`);
       await unstage(t);
-      // gameplay distance (follow camera): the fur must read as a soft ginger ball, not noise
+      // gameplay distance (follow camera): the fur must read as a soft ivory ball, not noise
       await t.G(() => window.__GAME__.waitFrames(45));
       await t.shot('characters/r1-follow-day');
       // the real Meme Cam trigger (player + camera): the hero cape cross-fades to the looping sway
@@ -637,7 +639,7 @@ export default [
         const foe = (type, x, z, opts) => {
           try { const e = ctx.enemies.spawn(type, at(x, z), { facing: face, scripted: true, ai: false, ...opts }); out.enemies.push(e?.def?.id ?? type); } catch (e) { out.errors.push(`${type}: ${e.message}`); }
         };
-        foe('hyena', 1.6, 10, { id: 'smoke_hyena', cage: 'pearl', word: 'HATER' });
+        foe('hyena', 1.6, 10, { id: 'smoke_hyena', cage: 'pearl', word: 'GRUMP' });
         foe('cacklejaw', -0.2, 10.6, { id: 'cacklejaw' });
         foe('pilfer', -2.0, 10, { id: 'pilfer' });
         return out;
@@ -989,6 +991,40 @@ export default [
         await t.G(async (sh) => { const g = window.__GAME__; g.ctx.cam.shot(sh); await g.waitFrames(30); }, s);
         await t.shot('characters/' + name, { freeze: true });
       }
+      await unstage(t);
+    },
+  },
+  {
+    // Token Tails (docs/TOKENTAILS-PLAN.md §2.2 / §2.4): the ivory heroine with her pink LEFT-ear bow beside the Token
+    // Tails cat (no bow, gold ':3' coin in paw)
+    name: 'characters:ttcat', order: 36.7, level: 'meadow', spawn: 'start', timeout: 180000,
+    async run(t) {
+      dir(t);
+      await stage(t, 'idle');
+      const info = await t.G(async () => {
+        const g = window.__GAME__, ctx = g.ctx, p = ctx.player, at = p.object3d.position;
+        const tt = ctx.companions.spawnNpc('tokentails_cat', [at.x - 0.85, at.z + 0.35], p.facing);
+        await g.waitFrames(30);
+        let k = null; ctx.scene.traverse((o) => { if (o.name === 'kitten:tokentails_cat') k = o.userData.kitten; });
+        const hero = p.model.k;
+        const q0 = ctx.postfx?.qualityName;
+        g.quality?.('high'); await g.waitFrames(10);                 // High: every NPC gets a hull, except this one
+        const hull = !!k?.outline?.visible;
+        if (q0 && q0 !== 'high') { g.quality?.(q0); await g.waitFrames(5); }
+        return { spawned: !!tt, built: !!k, bow: !!k?.bow, coin: !!k?.props?.tt_coin?.parent, heroBow: hero.bow?.parent?.name, heroCoat: hero.cfg.coat.base, crest: hero.cfg.outfit?.crest,
+          hull, brows: !!k?.eyes?.browMesh };
+      });
+      t.log(`ttcat: ${JSON.stringify(info)}`);
+      t.assert(info.spawned && info.built, 'the Token Tails cat builds through catConfig');
+      t.assert(!info.bow, 'the Token Tails cat has no bow');
+      t.assert(!info.hull && !info.brows, 'no ink hull and no brows (they read as dark smudges on its ivory head)');
+      t.assert(info.coin, 'the gold coin is in its paw');
+      t.assert(info.heroBow === 'earL', 'the heroine keeps her pink bow on the LEFT ear');
+      t.assert(info.crest === 'ttCoin', 'coin crest on her plate');
+      await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset?.('meadow_day', 0); await g.waitFrames(5); });
+      await t.G(async () => { const g = window.__GAME__; g.ctx.cam.shot({ pos: [-0.2, 0.85, 2.3], look: [-0.4, 0.5, 0.1], fov: 36, anchor: 'swordcat' }); await g.waitFrames(30); });
+      await t.shot('characters/ttcat-pair', { freeze: true });
+      await t.blankCheck('ttcat pair');
       await unstage(t);
     },
   },

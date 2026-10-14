@@ -113,13 +113,31 @@ export const DETAIL_NOISE = 0.08;
 export const INK_BATCH = 0.8;
 
 // ------------------------------------------------------------------ texture sampling (CPU)
-const _pixels = new WeakMap();
-/** RGBA pixels of a texture image (cached per image). Needs a canvas (browser only); null in node. */
+/**
+ * F7 heap: the RGBA copies are needed only while templates bake their vertex colours. Keyed by image in a WeakMap, they
+ * lived as long as the glTF cache kept the image (17 atlases × 4 MB ≈ 68 MB of the 202 MB meadow heap), so the cache is
+ * dropped `PIXEL_TTL_MS` after the last read; a later bake simply reads the image again.
+ */
+export const PIXEL_TTL_MS = 3000;
+let _pixels = new WeakMap();
+let _pixelTimer = null;
+/** Drop every cached texture pixel copy now (tests, or after a build). */
+export function releaseTexturePixels() {
+  _pixels = new WeakMap();
+  if (_pixelTimer != null) { clearTimeout(_pixelTimer); _pixelTimer = null; }
+}
+function touchPixels() {
+  if (typeof setTimeout !== 'function') return;
+  if (_pixelTimer != null) clearTimeout(_pixelTimer);
+  _pixelTimer = setTimeout(releaseTexturePixels, PIXEL_TTL_MS);
+  _pixelTimer?.unref?.();                                         // node: never hold the test process open
+}
+/** RGBA pixels of a texture image (cached per image while a bake runs). Needs a canvas (browser only); null in node. */
 function pixelsOf(tex) {
   const img = tex?.image;
   if (!img) return null;
   let px = _pixels.get(img);
-  if (px !== undefined) return px;
+  if (px !== undefined) { if (px) touchPixels(); return px; }
   px = null;
   try {
     const w = img.width, h = img.height;
@@ -133,6 +151,7 @@ function pixelsOf(tex) {
     }
   } catch (e) { console.warn('[props] cannot read texture pixels', e); px = null; }
   _pixels.set(img, px);
+  if (px) touchPixels();
   return px;
 }
 

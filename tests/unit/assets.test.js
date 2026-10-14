@@ -241,11 +241,35 @@ test('PERF §5 heap: Assets.release drops settled, unlisted, unused gltf / tex e
   put('bin:audio/x.ogg', new ArrayBuffer(8));
   assets.cache.set('gltf:models/pending.glb', new Promise(() => {}));                  // still loading: untouched
   const root = new THREE.Scene(); root.add(b.gltf.scene.clone());
+  // F7: settled raw bytes the level does not list go too (audio bytes of other levels stayed resident; the manifest
+  // keep set is the same one gltf / tex use, and is empty under node)
   const out = assets.release('meadow', root).sort();
-  assert.deepEqual(out, ['gltf:models/a.glb', 'tex:textures/t1.png:true:false:true']);
+  assert.deepEqual(out, ['bin:audio/x.ogg', 'gltf:models/a.glb', 'tex:textures/t1.png:true:false:true']);
   assert.ok(!assets.cache.has('gltf:models/a.glb') && assets.cache.has('gltf:models/b.glb'));
-  assert.ok(assets.cache.has('gltf:models/pending.glb') && assets.cache.has('bin:audio/x.ogg'));
-  assert.equal(a.n.geo, 1); assert.equal(t1d, 1); assert.equal(assets.stats.released, 2);
+  assert.ok(assets.cache.has('gltf:models/pending.glb') && !assets.cache.has('bin:audio/x.ogg') && !assets._values.has('bin:audio/x.ogg'));
+  assert.equal(a.n.geo, 1); assert.equal(t1d, 1); assert.equal(assets.stats.released, 3);
+});
+
+test('F7 heap: dropBinary forgets settled and pending bytes; the next arrayBuffer() fetches again', async () => {
+  const saved = globalThis.fetch;
+  let fetches = 0;
+  globalThis.fetch = async () => { fetches++; return { ok: true, arrayBuffer: async () => new ArrayBuffer(4) }; };
+  try {
+    const assets = new Assets({});
+    const a = await assets.arrayBuffer('audio/sfx/x.ogg');
+    assert.ok(assets.cache.has('bin:audio/sfx/x.ogg') && assets._values.get('bin:audio/sfx/x.ogg') === a);
+    assert.equal(await assets.arrayBuffer('assets/audio/sfx/x.ogg'), a, 'cached (path normalised)');
+    assert.equal(assets.dropBinary('public/assets/audio/sfx/x.ogg'), true);
+    assert.ok(!assets.cache.has('bin:audio/sfx/x.ogg') && !assets._values.has('bin:audio/sfx/x.ogg'));
+    assert.equal(assets.dropBinary('audio/sfx/x.ogg'), false, 'nothing left to drop');
+    const b = await assets.arrayBuffer('audio/sfx/x.ogg');
+    assert.ok(b !== a && fetches === 2, 'fetched again');
+    // a drop while the fetch is in flight: the late value is not recorded as settled
+    const p = assets.arrayBuffer('audio/sfx/y.ogg');
+    assets.dropBinary('audio/sfx/y.ogg');
+    await p;
+    assert.ok(!assets._values.has('bin:audio/sfx/y.ogg') && !assets.cache.has('bin:audio/sfx/y.ogg'));
+  } finally { globalThis.fetch = saved; }
 });
 
 test('PERF §5 heap: the settled-value map follows _cached (loads record, failures do not)', async () => {
@@ -268,4 +292,16 @@ test('PERF §5 heap: releaseCpuOnUpload drops static non-position arrays after u
   assert.equal(g.attributes.normal.array, null); assert.ok(g.attributes.position.array, 'positions kept for raycasts');
   assert.ok(keep.geometry.attributes.normal.array);
   assert.equal(releaseCpuOnUpload(root), 0, 'idempotent');
+});
+
+test('F7 heap: releaseCpuOnUpload after the first render re-uploads once; userData.keepCpu on an ancestor keeps the sub-tree', () => {
+  const g = new THREE.BoxGeometry(), m = new THREE.Mesh(g);
+  const v0 = g.attributes.normal.version;
+  const kept = new THREE.Group(); kept.userData.keepCpu = true;
+  const inner = new THREE.Mesh(new THREE.BoxGeometry()); kept.add(inner);
+  const root = new THREE.Group(); root.add(m, kept);
+  assert.equal(releaseCpuOnUpload(root), 2, 'box normal + uv; the keepCpu group is skipped');
+  assert.ok(g.attributes.normal.version > v0, 'needsUpdate: an already uploaded attribute fires onUpload on the next render');
+  assert.equal(g.attributes.position.version, 0, 'positions untouched');
+  assert.ok(inner.geometry.attributes.normal.array && inner.geometry.attributes.normal.onUploadCallback.name !== '_dropArray');
 });

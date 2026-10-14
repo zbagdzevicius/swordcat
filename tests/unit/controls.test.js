@@ -252,3 +252,61 @@ test('touch gestures: tap ≤ 250 ms / 12 px (not right after a button), long-pr
   near(s.y, 1, 1e-9); assert.equal(stickVector(1, 1, 60).x, 0, 'dead zone');
   assert.ok(stickVector(200, 0, 60).follow > 0, 'the base follows past 1.6 R');
 });
+
+// ------------------------------------------------------------------ touch tutorial: a quick Meow by the cow (SC4)
+test('touch tutorial: a Meow inside the hide wipe keeps the Pearl tutpearl spawns, and practice ends', async () => {
+  const { Tutorial, TUTORIAL_STEPS } = await import('../../src/story/tutorial.js');
+  const handlers = new Map(), emitted = [], hooks = new Set(), f = { 'prologue.start': true };
+  const bus = { on: (ev, fn) => { (handlers.get(ev) ?? handlers.set(ev, []).get(ev)).push(fn); return () => {}; }, emit: (ev, p) => { emitted.push([ev, p]); for (const fn of handlers.get(ev) ?? []) fn(p); } };
+  const pos = { x: 9.5, z: -72.5, y: 0, clone() { return { ...this }; }, copy(o) { this.x = o.x; this.z = o.z; return this; } };
+  const actors = [];
+  const npc = (tag) => ({ npcId: 'pearl', alive: true, tag, pos: { x: 0, y: 0, z: -80 }, setScripted() {}, face: () => Promise.resolve(), play: () => Promise.resolve(), moveTo: () => Promise.resolve() });
+  actors.push(npc('guide'));
+  const ctx = {
+    bus, emitted,
+    state: { getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; }, settings: {}, difficulty: 'knight' },
+    input: { device: 'touch', preset: 'hybrid', down: () => false },
+    cam: { isIso: true },
+    game: { mode: 'play', addFrameHook: (fn) => { hooks.add(fn); return () => hooks.delete(fn); } },
+    levels: { current: { id: 'meadow', interactables: [], actor: () => null, critter: () => null } },
+    companions: { active: [], actors, spawnNpc: () => { const a = npc('spawned'); actors.push(a); return a; }, despawn: (a) => { a.alive = false; actors.splice(actors.indexOf(a), 1); } },
+    player: { pos, onGround: true, facing: 0 },
+    strings: { t: (k) => k, has: () => true },
+  };
+  const frame = (dt) => { for (const fn of [...hooks]) fn(dt); };
+  let scenePearl = null, endScene;
+  const story = { isPlaying: false, cinema: { skip() {}, apply() {} }, flag: (k, v) => { f[k] = v; }, toChart() { this.charted = true; },
+    play: (id) => { if (id === 'tutpearl') { scenePearl = ctx.companions.spawnNpc('pearl'); return new Promise((r) => { endScene = r; }); } return Promise.resolve({ id }); } };
+  const tu = new Tutorial(ctx, story);
+  tu.init();
+  tu.log.i = TUTORIAL_STEPS.findIndex((s) => s.id === 'meow'); tu.active = true; tu._intro = true; tu._shown = null; tu.waitT = 0;
+  tu.update(0.05);                                    // the meow lesson starts: the 1.2 s cream wipe is under way
+  assert.ok(tu._wipeT, 'the hide wipe is pending');
+  frame(0.1);                                         // 0.1 s in: the guide has not hidden yet
+  tu.log.note({ type: 'cow' });                       // the Meow button by the cow, at once (touch)
+  tu.update(0.05);
+  assert.ok(scenePearl, 'tutpearl spawned Pearl in the cow\'s lee');
+  assert.equal(actors.some((a) => a.tag === 'guide'), false, 'the guide Pearl went into hiding first');
+  for (let k = 0; k < 120; k++) frame(1 / 60);        // the old timer would have fired here
+  assert.equal(scenePearl.alive, true, 'the scene\'s Pearl is never despawned by the wipe');
+  endScene({ id: 'tutpearl' });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(f['prologue.practice'], true, 'practice over');
+  assert.equal(story.charted, true);
+});
+
+test('touch layout: buttons clear her chest where AUTOCAM draws it, up to heroDrop below the rest point (ui:touch-cluster)', async () => {
+  const { heroPoint, heroClearR, heroDrop, heroGap } = await import('../../src/ui/touchLayout.js');
+  for (const [w, h] of [[844, 390], [932, 430], [390, 844], [667, 375]]) {
+    const hero = heroPoint(w, h), cr = heroClearR(w, h), drop = heroDrop(w, h);
+    const L = computeLayout(w, h);
+    assert.deepEqual(L.dropped, [], `${w}×${h}: every button still fits`);
+    for (const dy of [0, drop * 0.5, drop]) {
+      const chest = { x: hero.x, y: hero.y + dy };
+      for (const [n, b] of Object.entries(L.buttons)) assert.ok(heroGap(b, chest, cr) >= -0.5, `${w}×${h}: ${n} ${heroGap(b, chest, cr).toFixed(1)} px into her disc with her ${dy.toFixed(0)} px low`);
+    }
+  }
+  // the measured case: the camera's rest point (368, 240) and her chest at rest (370, 267) on an 844 × 390 phone
+  const L = computeLayout(844, 390, { hero: { x: 368, y: 240 } });
+  for (const [n, b] of Object.entries(L.buttons)) assert.ok(heroGap(b, { x: 370, y: 267 }, heroClearR(844, 390)) >= -0.5, `${n} clears her chest`);
+});

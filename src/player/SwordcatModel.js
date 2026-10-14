@@ -67,10 +67,10 @@ export function equippedSword(cos) {
   return typeof id === 'string' && SWORD_SKINS.includes(id) ? id : 'borrowed';
 }
 
-/** The cape to show (§13.5): a story override, else `state.cosmetics.cape`, when it is a known cape; else Faded Cream. */
+/** The cape to show (§13.5): a story override, else `state.cosmetics.cape`, when it is a known cape; else the royal red (Token Tails). */
 export function equippedCape(cos, override = null) {
   const id = override || cos?.cape;
-  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(CAPES, id) ? id : 'cream';
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(CAPES, id) ? id : 'red';
 }
 
 // ------------------------------------------------------------------ temporaries (no per-frame allocation)
@@ -96,7 +96,8 @@ function rot(j, x, y, z) {
   j.quaternion.multiply(_q.setFromEuler(_e.set(x, y, z)));
 }
 
-/** Outfits the hero model can wear: plate, the swordless cutscene tunic, and the two practice tunics (sword visible). */
+/** Outfits the hero model can wear: plate, the swordless cutscene tunic, and the two practice tunics (sword visible).
+ * Every outfit wears the pink bow; 'tunic_bow' stays as a name so old saves and the `tutbow` beat keep working. */
 export const OUTFITS = Object.freeze(['armour', 'tunic', 'tunic_sword', 'tunic_bow']);
 
 export class SwordcatModel {
@@ -240,11 +241,12 @@ export class SwordcatModel {
     const want = equippedSword(cos);
     const sword = SWORD_GLB[want] ? 'borrowed' : want;              // GLB skins are swapped in once loaded
     const o = this.outfit;
-    // practice outfits (tunic_sword before the bow sticker, tunic_bow after) keep her sword visible (sign-off 3);
-    // the plain 'tunic' is the swordless cutscene look
+    // practice outfits ('tunic_sword', 'tunic_bow') keep her sword visible (sign-off 3); the plain 'tunic' is the
+    // swordless cutscene look. The pink bow is on in EVERY outfit from the first frame (founder call 2026-10-14):
+    // the `tutbow` beat is flavour only, so 'tunic_sword' and 'tunic_bow' now look the same.
     return swordcatConfig({
       cape: equippedCape(cos, this.capeOverride), sword, armour: o === 'armour',
-      bow: o === 'armour' || o === 'tunic_bow', tunicSword: o === 'tunic_sword' || o === 'tunic_bow',
+      bow: true, tunicSword: o === 'tunic_sword' || o === 'tunic_bow',
     });
   }
 

@@ -12,13 +12,20 @@ export function eyeSet(hex, o = {}) {
   return { inner: '#' + inner, outer: hex, ring: '#' + ring, pupil: PAL.pupil, ...o };
 }
 
-const SWORDCAT_COAT = Object.freeze({ pattern: 'mackerel', base: PAL.furGinger, deep: PAL.furGingerDeep, light: PAL.furGingerLight, cream: PAL.furCream, bib: '#E2D0BA', face: '#E4D5C3', stripe: 0.42 });
+/**
+ * Clementine's coat (docs/TOKENTAILS-PLAN.md §2.2): the Token Tails ivory, solid, no tabby stripes. The shade key is
+ * the coat's `deep` (folds, ear backs); the white light key is her muzzle / bib cream so the face still separates.
+ */
+const SWORDCAT_COAT = Object.freeze({ pattern: 'solid', base: PAL.furIvory, deep: PAL.furIvoryShade, light: PAL.furIvoryLight, cream: PAL.furIvoryLight, bib: PAL.furIvoryLight, face: PAL.furIvory, stripe: 0 });
+/** Crimson / ruby irises with two catchlights (the Token Tails mascot's eyes). */
+const SWORDCAT_EYES = Object.freeze({ inner: PAL.irisCrimsonInner, outer: PAL.irisCrimson, ring: PAL.irisCrimsonDeep, pupil: PAL.pupil, catchlights: 2 });
 const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade: PAL.bowShade, knot: PAL.bowKnot, scale: 0.85 });
 
 /**
  * Swordcat (Clementine). Options track story state:
- *  cape: 'cream' (start) | 'red' (CS-07+, title on a new save) | any CAPES id
- *  armour: false for the prologue tunic (CS-01 shots 1–5); bow: false only before CS-01 shot 5
+ *  cape: 'red' (royal red with gold trim, the default from the start) | any CAPES id
+ *  armour: false for the practice tunic; bow: always on (the pink bow is there from the first frame, founder call
+ *  2026-10-14; `bow: false` exists only for tests and tools)
  *  sword: skin id ('borrowed' default)
  */
 /** Swordcat's cape drape (overrides CAPE_DEFAULTS). */
@@ -26,18 +33,20 @@ export const SWORDCAT_CAPE = Object.freeze({ topW: 0.18, botW: 0.4, len: 0.4 });
 
 /**
  * Swordcat's config. `tunicSword` (default true): the practice tunic keeps her sword in paw (WARM_ADVENTURE_SPEC §13
- * sign-off 3, characters.W3), so every gameplay tunic look (the player's 'tunic' / 'tunic_bow' outfits included) shows a
- * blade; pass `tunicSword: false` only for a shot that must show her empty-pawed.
+ * sign-off 3, characters.W3), so every gameplay tunic look (the player's 'tunic_sword' / 'tunic_bow' outfits) shows a
+ * blade; `tunicSword: false` is the empty-pawed look (the player's plain 'tunic', which no gameplay path wears).
  * @param {{ cape?: string|null, armour?: boolean, bow?: boolean, sword?: string, tier?: string, tunicSword?: boolean }} [o]
  */
-export function swordcatConfig({ cape = 'cream', armour = true, bow = true, sword = 'borrowed', tier = 'hero', tunicSword = true } = {}) {
+export function swordcatConfig({ cape = 'red', armour = true, bow = true, sword = 'borrowed', tier = 'hero', tunicSword = true } = {}) {
   return {
     id: 'swordcat', name: 'Clementine', tier, scale: 1, width: 1, headScale: 1.0,
     coat: SWORDCAT_COAT,
-    eyes: { inner: PAL.irisInner, outer: PAL.irisOuter, ring: PAL.irisRing, pupil: PAL.pupil, size: 1.0 },
+    eyes: { ...SWORDCAT_EYES, size: 1.0 },
+    earInner: PAL.earInnerSalmon, nose: PAL.noseTT,
     fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 1.15 },   // ART §6.3: a fuller tail (r ≈ 0.08 H)
     bow: bow ? SWORDCAT_BOW : null,
-    outfit: { armour: armour ? 'plate' : null },
+    // plate with the gold ':3' coin crest on the chest (Armour.js `crest`)
+    outfit: { armour: armour ? 'plate' : null, crest: armour ? 'ttCoin' : null },
     accessories: armour ? [] : [{ id: 'tunic', color: '#9C7B57', trim: '#6E5638' }],
     cape: armour && cape ? { style: cape } : null,
     // narrower, shorter hero cape: from the gameplay (behind) view the pauldrons must stand clear of it and the
@@ -53,23 +62,49 @@ export function swordcatConfig({ cape = 'cream', armour = true, bow = true, swor
 
 export const SWORDCAT = swordcatConfig();
 
+/**
+ * The Token Tails cat (docs/TOKENTAILS-PLAN.md §2.1 / §2.4): the mascot's look on the buildKitten path. Solid ivory
+ * fur with no markings, crimson eyes with two catchlights, salmon inner ears, a pink nose, a chibi head, a long thin
+ * white tail, no clothing and NO bow (the pink bow is Clementine's alone). It holds the gold ':3' coin trinket
+ * (prop `tt_coin`, built from Accessories.js `coinPieces`).
+ * @param {{ id?: string, tier?: string, props?: string[] }} [o]
+ */
+export function tokentailsCatConfig(o = {}) {
+  return {
+    id: o.id ?? 'tokentails_cat', name: 'Token Tails Cat', tier: o.tier ?? 'kitten', scale: 0.92, width: 0.96,
+    headScale: 1.1,
+    coat: { pattern: 'solid', base: PAL.furIvory, deep: PAL.furIvoryShade, light: PAL.furIvoryLight, cream: PAL.furIvoryLight, stripe: 0 },
+    // no brows: the mascot has none, and the coat-darkened brow capsules read as two grey smudges on the ivory forehead
+    eyes: { ...SWORDCAT_EYES, size: 1.08, brows: false },
+    earInner: PAL.earInnerSalmon, nose: PAL.noseTT,
+    fur: { len: 0.04, cheek: 1.0 }, tail: { thick: 0.72 },
+    bow: null, cape: null, sword: null, outfit: { armour: null }, accessories: [],
+    // no ink hull (KittenView / KittenVisual honour `outline: false`): its tight proxy follows the outermost fur shell,
+    // wider than the fur that shows (the tips fade out), so on the ivory coat it drew a dark hood behind the head and
+    // dark patches at the sides (High quality, where every NPC gets a hull)
+    outline: false,
+    props: o.props ?? ['tt_coin'],
+    expression: 'happy',
+  };
+}
+
 /** Named cats. Keys are the actor / NPC ids used by companions, story and world. */
 export const CATS = {
   swordcat: SWORDCAT,
   swordcat_red: swordcatConfig({ cape: 'red' }),
   // empty-pawed tunic (no sword): only for a shot that must show her without it
-  swordcat_tunic: swordcatConfig({ armour: false, bow: false, tunicSword: false }),
+  swordcat_tunic: swordcatConfig({ armour: false, bow: true, tunicSword: false }),
   swordcat_tunic_bow: swordcatConfig({ armour: false, bow: true }),
   // Morning Practice (WA §6 / ON §4): the practice tunic WITH the sword (sign-off 3 default: the tunic hid it)
   swordcat_tunic_sword: swordcatConfig({ armour: false, bow: true, tunicSword: true }),
-  swordcat_tunic_sword_nobow: swordcatConfig({ armour: false, bow: false, tunicSword: true }),
 
   // ---- family, mentors, court (§3.2)
   pearl: {
     id: 'pearl', name: 'Pearl', tier: 'kitten', scale: 0.8, headScale: 1.07,
     coat: { pattern: 'dilute', base: '#C7A98E', deep: '#A2846C', light: '#E8D8C6', cream: '#E9DED3', bib: '#E2D6C8', stripe: 0.28 },
     eyes: { inner: PAL.irisInner, outer: '#4E7282', ring: PAL.irisRing, size: 1.04 },
-    bow: { color: '#E9B9B9', light: '#FFE6EA', shade: '#C98A9A', knot: '#D9A0AE', scale: 0.8 },
+    // lilac, so pink stays Clementine's alone (founder call 2026-10-14)
+    bow: { color: '#C3A6E0', light: '#E9DDF7', shade: '#9479B5', knot: '#AE90D0', scale: 0.8 },
     accessories: [{ id: 'tunic', color: '#8FA3B5', trim: '#C9B8A0', belt: true }],
     cape: { style: 'pilgrim' }, expression: 'happy',
   },
@@ -143,6 +178,9 @@ export const CATS = {
     accessories: [{ id: 'scarf', color: '#C2353B', length: 0.55 }, 'dagger'],
     expression: 'smug', signature: '#C2353B',
   },
+
+  // ---- the Token Tails cat (docs/TOKENTAILS-PLAN.md §2.1 / §2.4): keeper of the Pawsbury Rescue House
+  tokentails_cat: tokentailsCatConfig(),
 };
 
 // ---- the old knights of the Order (§3.6): Marmalade's look with varied coats, rusty plate

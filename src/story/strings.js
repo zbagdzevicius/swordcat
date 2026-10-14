@@ -1,21 +1,20 @@
 // src/story/strings.js  (owner: story) — EVERY line of display text in the game (GAME_DESIGN §4.4, §5, §6, §14), plus
 // the resolver exposed as ctx.strings.t(key, vars) / has(key) / S.
 //
-// Format (§19.6): S[key] = { default: '...', homage?: '...' }. `homage` variants are the community / token-site
-// captions (§4.4); they are used only when config.HOMAGE_LINES is true (it ships false until a legal check).
+// Format (§19.6): S[key] = { default: '...' }. There are no alternate caption variants: every row has its default
+// text only (Token Tails pass, 2026-10-13; see docs/PROVENANCE.md).
 // Keys: cutscene lines are `<sceneId>.<n>` (cs03.1 …); barks `bark.<speaker>.<trigger>[.n]`; boss barks keep the short
 // `<boss>.<beat>` keys the enemy data uses (B.4: 'barkus.p2'); lost-kitten lines `kitten.<id>`; names `name.<id>`.
 // `{name}` placeholders are filled from `vars`. Missing keys return the key itself (never throws).
-// Pure data + two pure functions: node-safe, no DOM, imports only core/config.js.
-import { HOMAGE_LINES } from '../core/config.js';
+// Pure data + pure functions: node-safe, no DOM, no imports.
 
 /** §1: the title lives here so a rename is one edit. */
-export const GAME_TITLE = 'SWORDCAT';
-export const GAME_SUBTITLE = 'Nine Lives of Meow Island';
+export const GAME_TITLE = 'PINK PAW KNIGHT';
+export const GAME_SUBTITLE = 'A Token Tails Adventure';
 
-const d = (text, homage) => (homage ? { default: text, homage } : { default: text });
+const d = (text) => ({ default: text });
 
-/** @type {Record<string, {default: string, homage?: string}>} */
+/** @type {Record<string, {default: string}>} */
 export const S = {
   // ================================================================== title, chapters, regions (§1, §4.2, §4.4, §14.3)
   'game.title': d(GAME_TITLE),
@@ -23,23 +22,23 @@ export const S = {
   'title.press': d('Press any key to play!'),
   'title.tap': d('Tap to play!'),
   'title.prompt': d('Press any key to play!'),
-  'title.foot': d('Made with lots of purrs'),
+  'title.foot': d('A Token Tails game'),
   'title.settings': d('Settings'),
   'ch.label': d('Chapter {n}'),
   'ch.label.prologue': d('Prologue'),
   'ch.label.epilogue': d('Epilogue'),
-  'ch.prologue': d('Knighting Morning', 'Too Small for the Sword'),
-  'ch.1': d('Small Paws, Big Sword', 'Holding It Anyway'),
+  'ch.prologue': d('Knighting Morning'),
+  'ch.1': d('Small Paws, Big Sword'),
   'ch.2': d('The Big Cheese'),
   'ch.3': d('Lanterns On, Pawsbury!'),
-  'ch.4': d('Where I Stand', 'Standing My Ground'),
+  'ch.4': d('Where I Stand'),
   'ch.5': d('The Crooked Bow'),
-  'ch.6': d('Sunny Steps for Everyone', 'The Hour Is Gold'),
-  'ch.epilogue': d('Dame Swordcat of the Ninth Seat', 'Protecting Meow Island'),
+  'ch.6': d('Sunny Steps for Everyone'),
+  'ch.epilogue': d('Dame Clementine of Pawsbury'),
   'region.meadow': d('Purrdale Meadows'),
   'region.forest': d('Whiskerwood'),
   'region.town': d('Pawsbury'),
-  'region.gate': d('The Low Gate'),
+  'region.gate': d('Bramble Gate'),
   'region.bog': d('Glimmerbog'),
   'region.keep': d('Houndhold Keep'),
   'region.sky': d('Above the Clouds'),
@@ -63,7 +62,7 @@ export const S = {
   'name.snoozalot': d('Sir Snoozalot'),
   'name.cacklejaw': d('Big Chief Cacklejaw'),
   'name.pilfer': d('Pilfer'),
-  'name.stealer': d('Post Stealer'),
+  'name.stealer': d('Snack Snatcher'),
   'name.grizzlechop': d('Captain Grizzlechop'),
   'name.brutus': d('Sir Brutus'),
   'name.barkus': d('Lord Barkus'),
@@ -74,14 +73,15 @@ export const S = {
   'name.hyena': d('Hyena'),
   'name.rat': d('Rat'),
   'name.biscuit': d('Biscuit'), 'name.noodle': d('Noodle'), 'name.button': d('Button'),
-  'name.pickles': d('Pickles'), 'name.pebble': d('Pebble'), 'name.sprout': d('Sprout'),
-  'name.waffles': d('Waffles'), 'name.toffee': d('Toffee'), 'name.muffin': d('Muffin'),
-  'name.tater': d('Tater'), 'name.mittens': d('Mittens'), 'name.socks': d('Socks'),
+  'name.pickles': d('Judas'), 'name.pebble': d('Simas'), 'name.sprout': d('Sprout'),
+  'name.waffles': d('Waffles'), 'name.toffee': d('Toffee'), 'name.muffin': d('Raudvis'),
+  'name.tater': d('Tater'), 'name.mittens': d('Mittens'), 'name.socks': d('Zare'),
   'name.juniper': d('Juniper'), 'name.bramble': d('Bramble'), 'name.fennel': d('Fennel'),
   'name.bean': d('Bean'), 'name.crumpet': d('Crumpet'), 'name.dumpling': d('Dumpling'),
   'name.cow': d('Very Suspicious Cow'),
   'name.wobble': d('Sir Wobble'),
   'name.sacky': d('Sir Sacky'),
+  'name.ttcat': d('Token Tails Cat'),
 
   // ================================================================== CS-00 Title Loop
   // (no lines; the logo + prompt are 'game.title' / 'game.subtitle' / 'title.prompt')
@@ -89,7 +89,7 @@ export const S = {
   // ================================================================== CS-01 One Ear-Tuft Short (the height chart) + CS-01b Suit Up
   'cs01.1': d('Tall enough! Next!'),
   'cs01.2': d('Tall enough! Next!'),
-  'cs01.3': d('Too small for the sword, Clementine. One ear-tuft short. Next year!'),
+  'cs01.3': d('Just under the line, Clementine. One ear-tuft short. Next year!'),
   'cs01.4': d('I was one ear-tuft short LAST year.'),
   'cs01.5': d('And very consistent about it! Next!'),
   'cs01.6': d('Hey. You bonked that dummy SO hard.'),
@@ -129,11 +129,11 @@ export const S = {
   'tut.pounce.pad': d('Jump, then [Attack] in the air: Pounce!'),
   'tut.pounce.touch': d('Jump, then ⚔ in the air: Pounce!'),
   'tut.reflect': d('Parry the bolt to send it back!'),
-  'tut.milk': d('Low hearts! Sip milk [Milk].'),
-  'tut.milk.touch': d('Low hearts! Tap the milk.'),
-  'tut.vigil': d('Vigil Stone: [Interact] to rest and save.'),
-  'tut.vigil.pad': d('Vigil Stone: [Interact] to rest and save.'),
-  'tut.vigil.touch': d('Tap the Vigil Stone: rest and save.'),
+  'tut.milk': d('Low hearts! Grab a tuna snack [Snack].'),
+  'tut.milk.touch': d('Low hearts! Tap the tuna snack.'),
+  'tut.vigil': d('Lantern Stone: [Interact] to rest and save.'),
+  'tut.vigil.pad': d('Lantern Stone: [Interact] to rest and save.'),
+  'tut.vigil.touch': d('Tap the Lantern Stone: rest and save.'),
   'tut.valor': d('Hold [Stand] near foes to fill Valor.'),
   'tut.companion': d('[Ability]: your friend\'s special move!'),
   'tut.companion.pad': d('[Ability]: your friend\'s special move!'),
@@ -225,7 +225,7 @@ export const S = {
   'card.mochi.title': d('Mochi joined the party!'),
   'card.mochi.line': d("Shield Wall: [Ability] or his portrait, and he'll hold the line."),
   'card.sage.title': d('Sage joined!'),
-  'card.sage.line': d('Swap buddies at any Vigil Stone.'),
+  'card.sage.line': d('Swap buddies at any Lantern Stone.'),
   'card.clover.title': d('Clover joined!'),
   'card.clover.line': d("Three's a party."),
   'card.heartbell.title': d('Heart Bell!'),
@@ -254,10 +254,10 @@ export const S = {
   'cs02.7': d('First... armour.'),
   'cs02.sign': d('HELP (please)'),
 
-  // ================================================================== CS-03 Milk Break (never cut)
+  // ================================================================== CS-03 Snack Break (never cut)
   'cs03.1': d('Day one of rescuing everyone. Morale: high.'),
-  'cs03.2': d('Milk: also high.'),
-  'cs03.3': d('ROOOAAR. (Is that... milk?)'),
+  'cs03.2': d('Snacks: also high.'),
+  'cs03.3': d('ROOOAAR. (Is that... a tuna snack?)'),
   'cs03.4': d('...It is.'),
   'cs03.5': d('RRrrr. (I haven\'t had a snack since Tuesday.)'),
   'cs03.5b': d('(The giggly dogs scared me out of my cave.)'),
@@ -296,8 +296,8 @@ export const S = {
   'banter.sage.3': d('Forty hyenas. Four kittens. One spoon.'),
   'banter.sage.3.clem': d('Two spoons.'),
   'banter.clover.1': d('Did you eat breakfast? A knight needs breakfast.'),
-  'banter.clover.1.clem': d('I had milk.'),
-  'banter.clover.1.end': d("That's a DRINK, sweetpea."),
+  'banter.clover.1.clem': d('I had a tuna snack.'),
+  'banter.clover.1.end': d("That's a SNACK, sweetpea."),
   'banter.clover.2': d("Bramble named the spiders. They're Kevin, Kevin and Susan."),
   'banter.clover.2.clem': d('Hello, Susan.'),
   'banter.clover.3': d("When this is over, I'm knitting you a scarf. A tiny one."),
@@ -309,7 +309,7 @@ export const S = {
   'd02.3': d("You're the one with the sword bigger than you."),
   'd02.4': d('Yes.'),
   'd02.5': d('...Fair.'),
-  'toast.sage': d('Sage joined! Swap kittens at any Vigil Stone.'),
+  'toast.sage': d('Sage joined! Swap kittens at any Lantern Stone.'),
 
   // ================================================================== CS-04 Lantern Night
   'cs04.1': d("Can I ask something? Why you? You're the smallest of us."),
@@ -325,8 +325,8 @@ export const S = {
   'cs05.3': d('The kittens went to Pawsbury. The Woof Brigade moved in!'),
   'cs05.3b': d('They don\'t even wipe their paws!'),
   'cs05.4': d("Then I'm going home."),
-  'cs05.5': d('Want some milk? For the cheese.'),
-  'cs05.6': d('Milk... AND cheese? That\'s a whole *snack*.'),
+  'cs05.5': d('Want a tuna snack? For the cheese.'),
+  'cs05.6': d('Tuna... AND cheese? That\'s a whole *feast*.'),
   'toast.friend': d('New friend: {name}!'),
   'toast.holy': d('Holy Slash learned! Fill Valor, then hold [Attack] till gold.'),
 
@@ -335,7 +335,7 @@ export const S = {
   'd03.2': d("...It's borrowed."),
   'd03.3': d('Is it now.'),
   'd03.4': d("That armour's on loan, then. Bring it back with a story in it."),
-  'd03.5': d("Pilfer, the Post Stealer, nabbed the Royal Post! Get it back, would you? My knees don't run anymore."),
+  'd03.5': d("Pilfer, the Snack Snatcher, nabbed the Royal Post! Get it back, would you? My knees don't run anymore."),
 
   // ================================================================== CS-06 The Letters
   'cs06.1': d("'To the Knights of the Order of Nine Lives. Please come home. The gate needs holding. — Snowpaw.'"),
@@ -364,11 +364,11 @@ export const S = {
   'cs07.5': d('It was a tablecloth. Velvet, mostly.'),
   'cs07.6': d('...Thank you, Your Highness.'),
   'cs07.7': d("The Dawnstone's in three pieces now. You've got one in that sword."),
-  'cs07.8': d("The rats say the hyenas have the second. They'll come for the town, through the Low Gate."),
+  'cs07.8': d("The rats say the hyenas have the second. They'll come for the town, through the Bramble Gate."),
   'cs07.9': d("Then I'll be at the gate."),
   'toast.free': d('Pawsbury is awake! Lanterns on!'),
   'toast.shops': d('Shops are open.'),
-  'toast.hub': d('Kittens you rescue will live here.'),
+  'toast.hub': d('Pawsbury Rescue House: kittens you rescue live here.'),
 
   // ================================================================== D-06 Pip Joins
   'd06.1': d('Took you long enough. I was waiting for dramatic effect.'),
@@ -439,10 +439,10 @@ export const S = {
   'quest.forest.mill': d('Crash the Cheese Mill party'),
   'quest.forest.exit': d('Go home to Pawsbury'),
   'quest.town.bakery': d('Light Lantern Alley and find the bakery'),
-  'quest.town.chase': d('Catch Pilfer, the Post Stealer'),
+  'quest.town.chase': d('Catch Pilfer, the Snack Snatcher'),
   'quest.town.rescue': d('Free the town: the forge and the market square'),
   'quest.town.steps': d('Go to the Castle Steps'),
-  'quest.hub.gate': d('Hold the Low Gate'),
+  'quest.hub.gate': d('Hold the Bramble Gate'),
   'quest.gate.scout': d('Scout the Hyena Toy Fort'),
   'quest.gate.line': d('Hold the gate!'),
   'quest.gate.boss': d('Bonk Big Chief Cacklejaw'),
@@ -451,7 +451,7 @@ export const S = {
   'quest.keep.gate': d('Knock on Houndhold Keep (loudly)'),
   'quest.keep.boss': d('Climb to Barkus\'s sunny spot'),
   'quest.ending': d('Ring the Sunbell'),
-  'quest.done': d('Meow Island is sunny again!'),
+  'quest.done': d('Purrhaven Isle is sunny again!'),
 
   // ================================================================== CS-11 The Bow
   'cs11.1': d('You came!'),
@@ -493,7 +493,7 @@ export const S = {
   'cs15.2': d('Why won\'t you SHOO?'),
   'cs15.3': d('Not strong yet. Still here.'),
   'cs15.4': d('GO, CLEM!'),
-  'cs15.5': d('SWORDCAT! SWORDCAT!'),
+  'cs15.5': d('CLEMENTINE! CLEMENTINE!'),
   'prompt.holdStand': d('HOLD THE STAND'),
   'prompt.chargeRelease': d('Hold [Attack], then let go'),
 
@@ -506,10 +506,10 @@ export const S = {
   'cs16.5': d('Coo.'),
   'cs16.6': d('Kneel, squire.'),
   'cs16.7': d("...Actually, stand. I can't see you."),
-  'cs16.8': d('By the power vested in me by the Order of Nine Lives, and also my mum... Arise, Dame Clementine of the Pink Bow, Knight of the Ninth Seat.'),
-  'cs16.9': d("...Your Highness? Could it be 'Swordcat'? Everyone calls me that."),
-  'cs16.10': d('Arise, Dame Swordcat of the Ninth Seat.'),
-  'cs16.11': d('Still too small. Still a knight.'),
+  'cs16.8': d('By the power vested in me by the Order of Nine Lives, and also my mum... Arise, Dame Clementine of the Pink Bow, Knight of Pawsbury.'),
+  'cs16.9': d("...Your Highness? Could it be just 'Clem'? Everyone calls me that."),
+  'cs16.10': d('Arise, Dame Clem of Pawsbury.'),
+  'cs16.11': d('Still small. Still a knight.'),
   'cs16.12': d("The armour. It's on loan."),
   'cs16.13': d('Bring it back with a story in it, I said.'),
   'cs16.14': d('...There are a few more stories in there yet. Keep it.'),
@@ -518,13 +518,14 @@ export const S = {
   'cs16.18': d("Then sit. There's room."),
   'cs16.19': d('SUNNY STEPS: Cats, dogs, dragons. Naps only.'),
   'postcredits.pilfer1': d('The posts...'),
-  'postcredits.pilfer2': d("...And this time, it's yours.", '...do not stop.'),
-  'ending.caption': d('And the sun came home.', 'The hour is gold.'),
+  'postcredits.pilfer2': d("...And this time, it's yours."),
+  'ending.caption': d('And the sun came home.'),
   'credits.title': d('Credits'),
   'credits.thanks': d('Thank you for playing.'),
   'credits.assets': d('Asset attribution'),
+  'credits.pinkpaw': d('Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.'),
 
-  // ================================================================== §6.1 Swordcat barks
+  // ================================================================== §6.1 Clem's barks
   'bark.clem.alert.1': d('Halt, villain. ...Please.'),
   'bark.clem.alert.2': d('Prepare to be bonked. ...Gently.'),
   'bark.clem.alert.3': d('I am a knight. Mostly.'),
@@ -543,7 +544,7 @@ export const S = {
   'bark.clem.respawn.2': d('...Ow. Okay.'),
   'bark.clem.lastLife': d('Ninth life. Making it count.'),
   'bark.clem.milk.1': d('Mm.'),
-  'bark.clem.milk.2': d('Milk break.'),
+  'bark.clem.milk.2': d('Snack break.'),
   'bark.clem.kitten': d("You're safe now. Follow the lanterns home."),
   'bark.clem.arena.1': d('Small paws. Big sword. Still standing.'),
   'bark.clem.arena.2': d('Sorry! Sorry.'),
@@ -599,9 +600,9 @@ export const S = {
   'bark.hyena.defeat.1': d('...That was actually kinda cool.'),
   'bark.hyena.defeat.2': d('Okay, that was AWESOME.'),
   'bark.hyena.defeat.3': d("I'm telling my mum."),
-  'bark.stealer.snatch': d('Finders keepers! Stealers... also keepers!'),
+  'bark.stealer.snatch': d('Finders keepers! Snatchers... also keepers!'),
   'bark.stealer.hit': d('Ow! Fine! Take it!'),
-  'bark.stealer.escape': d('Bye-bye, fishies!'),
+  'bark.stealer.escape': d('Bye-bye, catnip!'),
   'bark.pug.alert': d('HRRF.'),
   'bark.pug.shield': d('Wall. Am wall.'),
   'bark.bone.collapse': d('*clatter*'),
@@ -666,30 +667,34 @@ export const S = {
   'kitten.where.crumpet': d('A kennel carrier, the cellars'), 'kitten.where.dumpling': d('A banner beam on the ramparts'),
 
   // ================================================================== §6.5 hub lines
-  'hub.marmalade.1': d("Milk's on the house. Straws are extra. Kidding. Straws are free."),
+  'hub.marmalade.1': d("Snacks are on the house. Napkins are extra. Kidding. Napkins are free."),
   'hub.marmalade.2': d("Bend the knees, girl. The tail's for balance, not for swishing at butterflies."),
-  'hub.marmalade.bed': d("Take what you need. Leave the fish in the jar. Doctor's watching."),
+  'hub.marmalade.bed': d("Take what you need. Leave the catnip in the jar. Doctor's watching."),
   'hub.tofu.1': d('Sharpen it? I can barely *lift* it.'),
   'hub.tofu.2': d('Every notch on that blade is a story. Please stop adding notches.'),
   'hub.earlgrey.1': d("Fascinating. The shard resonates with your blade. Or you're vibrating. Kittens do that."),
   'hub.earlgrey.2': d('Knowledge is power. Also, power is power.'),
   'hub.pip.1': d("{n} kittens still out in {level}. One's somewhere silly. Don't ask how I know."),
-  'hub.pip.2': d("Found your fish. ...I'm keeping one."),
+  'hub.pip.2': d("Found your catnip. ...I'm keeping a sprig."),
   'hub.pearl.1': d("Red's your colour. Every colour's your colour. You're my sister."),
   'hub.pearl.2': d("Twirl. ...Okay, don't twirl in armour."),
-  'hub.snowpaw.1': d('The castle steps are yours, Swordcat. Share them nicely.'),
+  'hub.snowpaw.1': d('The castle steps are yours, little knight. Share them nicely.'),
   'hub.snowpaw.2': d("I'm practising knighting people on the cook. He's very patient."),
   'hub.coo.1': d('Coo.'),
-  'hub.villager.1': d("Is that THE Swordcat? She's so small!"),
+  'hub.villager.1': d("Is that THE knight with the big sword? She's so small!"),
   'hub.villager.2': d('My nan says the bell will ring again.'),
   'hub.villager.3': d("I'm going to be a knight too. I'm already too small, so that part's done."),
   'hub.villager.4': d("Mind the fountain, it bites. It doesn't. But it might."),
-  'hub.villager.5': d('Thank you, Dame— um. Squire. Um. Swordcat!'),
-  'hub.villager.6': d('Fish? Fish!'),
+  'hub.villager.5': d('Thank you, Dame— um. Squire. Um. Clem!'),
+  'hub.villager.6': d('Catnip? Catnip!'),
+  // the Token Tails Cat, keeper of the Pawsbury Rescue House (TOKENTAILS-PLAN §2.4; fiction only)
+  'npc.ttcat.1': d('Welcome to the Rescue House! Every kitten you bring home gets a warm spot here.'),
+  'npc.ttcat.2': d('Blankets by the window, naps by the fire. Nobody waits alone.'),
+  'npc.ttcat.3': d('Another little one safe? Go on, knight. I will tuck them in.'),
 
   // ================================================================== §6.7 Lost Letters
   'letter.l1.title': d("Mochi's letter home"),
-  'letter.l1': d("Dear Mum. Squire food is fine. Please send fish. Not the bony ones. — Mochi"),
+  'letter.l1': d("Dear Mum. Squire food is fine. Please send tuna snacks. Not the crunchy ones. — Mochi"),
   'letter.l2.title': d("Grizzlechop's shopping list"),
   'letter.l2': d("Grizzlechop's shopping list: cheese, more cheese, a hat with a bigger feather, cheese."),
   'letter.l3.title': d('A request to the Armour-Painting Office'),
@@ -701,15 +706,14 @@ export const S = {
   'letter.l6.title': d('A pup\'s letter'),
   'letter.l6': d("Dear Mum. The cats said no dogs on the sunny steps again. One day I'll get my own sun. — Barky, age 1"),
   'letter.marmalade.title': d("Marmalade's letter"),
-  'letter.marmalade': d("Dear Knights. They say I'm too little to be a squire. I've decided to be one anyway. I will practise every night. — Marmalade, age 7 months.",
-    'Dear Knights. They say I am too small for the sword. I am going to hold it anyway. — Marmalade, age 7 months.'),
+  'letter.marmalade': d("Dear Knights. They say I'm too little to be a squire. I've decided to be one anyway. I will practise every night. — Marmalade, age 7 months."),
   'letter.summons': d('To the Knights of the Order of Nine Lives. Please come home. The gate needs holding. — Snowpaw.'),
 
-  // ================================================================== §4.4 Meme Cam captions, achievements
-  'meme.cap1': d('Where I stand, the gate holds.', 'Too small for the sword. Holding it anyway.'),
-  'meme.cap2': d('Small paws. Big sword. Still standing.', 'The armor is borrowed. The hour is gold.'),
-  'meme.cap3': d('Not strong yet. Still here.', 'born to :3, forced to ⚔'),
-  'ach.memecam': d('A Legendary Pose', 'me trying to handle things maturely'),
+  // ================================================================== §4.4 Photo Cam captions, achievements (keys keep the old `meme.` ids)
+  'meme.cap1': d('Bow straight. Paws ready. Smile!'),
+  'meme.cap2': d('Somewhere, a kitten is on the way home.'),
+  'meme.cap3': d('Small knight. Sunny day. Big heart.'),
+  'ach.memecam': d('Picture Purrfect'),
 
   // ================================================================== §6.6 objectives
   'obj.ropes': d('Cut the net ropes {n}/{max}'),
@@ -726,7 +730,7 @@ export const S = {
   // ================================================================== prompts (interaction tags, cutscene prompts)
   'prompt.interact': d('[Interact]'),
   'prompt.talk': d('Talk'),
-  'prompt.picnic': d('Sit for a Milk Break [Interact]'),
+  'prompt.picnic': d('Sit for a Snack Break [Interact]'),
   'prompt.vigil': d('Rest'),
   'prompt.read': d('Read'),
   'prompt.open': d('Open'),
@@ -747,7 +751,7 @@ export const S = {
   'results.time': d('Time'),
   'results.kittens': d('Kittens'),
   'results.letter': d('Letter'),
-  'results.fish': d('Fish'),
+  'results.fish': d('Catnip'),
   'results.lives': d('Lives left'),
   'results.rank': d('Rank'),
   'results.rank.pawsome': d('PAW-SOME!'),
@@ -762,15 +766,17 @@ export const S = {
   'toast.exit.gate': d('The gate needs holding. Not yet.'),
   'toast.letter': d('Letter found: {title}'),
   'toast.heartbell': d('Heart Bell! +1 heart'),
-  'toast.stolen': d('A Post Stealer swiped {n} fish! Bonk it to get them back!'),
-  'toast.stolenMilk': d('A Post Stealer swiped your milk! Bonk it to get it back!'),
-  'toast.returned': d('Post returned! +5 fish'),
-  'toast.memecam': d('A legendary pose. (Meme White cape unlocked)'),
+  'toast.stolen': d('A Snack Snatcher swiped {n} catnip! Bonk it to get it back!'),
+  'toast.stolenMilk': d('A Snack Snatcher swiped your tuna snack! Bonk it to get it back!'),
+  'toast.returned': d('Got it back! +5 catnip'),
+  'toast.memecam': d('Picture purrfect! (Moonlight White cape unlocked)'),
   'toast.skin': d('Sword unlocked: {name}'),
   'toast.cape': d('Cape unlocked: {name}'),
   'toast.objective': d('Objective complete!'),
   'toast.saved': d('Saved.'),
-  'toast.checkpoint': d('Vigil Stone lit! Cozy spot saved.'),
+  'toast.noSave': d("Progress can't be saved in this browser mode."),
+  'toast.otherTab': d('This game was saved in another tab. Reload this page to continue from there.'),
+  'toast.checkpoint': d('Lantern Stone lit! Cozy spot saved.'),
   'toast.shard': d('A shard of the Dawnstone! ({n}/3)'),
   'loading.title': d('Loading…'),
   'loading.tip.1': d('Shield on the ground? Parry it!'),
@@ -886,7 +892,7 @@ export const S = {
   'settings.batterySaver.help': d('30 fps and lighter effects. Easier on phones.'),
   'settings.on': d('On'),
   'settings.off': d('Off'),
-  'vigil.title': d('Vigil Stone'),
+  'vigil.title': d('Lantern Stone'),
   'vigil.rest': d('Rest'),
   'vigil.swap': d('Swap kitten'),
   'vigil.difficulty': d('Difficulty'),
@@ -899,8 +905,8 @@ export const S = {
   'shop.owned': d('Owned'),
   'shop.equip': d('Equip'),
   'shop.equipped': d('Equipped'),
-  'shop.cost': d('{n} fish'),
-  'shop.poor': d('Not enough fish.'),
+  'shop.cost': d('{n} catnip'),
+  'shop.poor': d('Not enough catnip.'),
   'board.title': d('Quest Board'),
   'board.next': d('Next: {chapter}'),
   'board.cleared': d('Cleared'),
@@ -910,13 +916,13 @@ export const S = {
   'hud.kittens': d('{n}/{max}'),
   'memecam.hint': d('Any key to stop posing'),
   'hud.riposte': d('Riposte!'),
-  'menu.quitConfirm': d('Return to the title screen? Your progress up to the last Vigil Stone is kept.'),
+  'menu.quitConfirm': d('Return to the title screen? Your progress up to the last Lantern Stone is kept.'),
   'menu.close': d('Close'),
   'pause.foundIn': d('{region}'),
   'pause.kittensCount': d('{n}/{max} found'),
   'pause.lettersCount': d('{n}/{max} found'),
   'credits.made': d('Made with love for one very small knight.'),
-  'credits.team': d('Design · Code · Art · Music direction: the Swordcat team'),
+  'credits.team': d('Design · Code · Art · Music direction: Token Tails'),
   'vigil.swapNone': d('No squires yet. Rescue one!'),
   'vigil.active': d('At your side'),
   'results.infinite': d('∞'),
@@ -924,10 +930,9 @@ export const S = {
   'rotate.hint': d('Turn your device sideways'),
 };
 
-/** Pick the text of a row (homage variant only when HOMAGE_LINES is on). Pure. */
-export function pick(row, homage = HOMAGE_LINES) {
-  if (!row) return null;
-  return homage && row.homage ? row.homage : row.default;
+/** The text of a row (its default; rows have no variants). Pure. */
+export function pick(row) {
+  return row ? row.default : null;
 }
 
 /** Fill `{name}` placeholders from `vars` (unknown placeholders stay as they are). Pure. */

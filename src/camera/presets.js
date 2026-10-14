@@ -16,7 +16,7 @@ export const MEME_PERIOD = PLAYER.memeCam.loop;
 
 export const PRESETS = Object.freeze({
   /** [TREND V1] Chest-up medium close-up, slightly low, static. Handheld sway 0.005 m. Loop 3.8 s.
-   *  Tuned against research/videos/frames/x_GeckoTerminal_*_f1-f3: she fills ~1/3 of the frame height, the sword
+   *  Tuned to this framing: she fills ~1/3 of the frame height, the sword
    *  tip stands well above her head, both gauntlets / pauldrons / the cape edges are in frame, the belt sits on the
    *  bottom edge. */
   MEME_LOOP: Object.freeze({ kind: 'static', pos: [0.06, 0.68, 1.9], look: [0.03, 0.9, 0], fov: 38, sway: 0.005, loop: MEME_PERIOD }),

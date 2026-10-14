@@ -5,6 +5,8 @@
 //   • seeded villager kittens fill the rest, up to 20 residents on screen (12 on Low);
 //   • the station keepers (Marmalade, Tofu, Earl Grey, Pip, Pearl, Snowpaw, Coo) stand at their stalls once their
 //     flag opens them, unless world's Hub already placed them;
+//   • the Token Tails cat (world's Hub RESCUE_KEEPER, characters' `tokentails_cat`) keeps the Rescue House by the
+//     fountain; it only says the `npc.ttcat.*` lines strings actually has;
 //   • walking up to a resident shows its line in a bubble (the kitten's §6.4 rescue line, a §6.5 hub line);
 //   • iso controls (CONTROLS_SPEC §7.6, §14 tut.talk): click / tap a resident (or [Interact] next to it) to hear its
 //     line now: residents are 'npc' pickables and, clear of world's interactables, a `talk_<id>` level interactable
@@ -15,7 +17,8 @@
 import * as THREE from 'three';
 import { KITTEN_IDS, LEVEL_IDS, KITTENS_BY_LEVEL } from '../core/config.js';
 import { damp, dampAngle } from '../core/math.js';
-import { lostKittenConfig, villagerConfig } from '../characters/index.js';
+import { lostKittenConfig, villagerConfig, catConfig } from '../characters/index.js';
+import { RESCUE_KEEPER, keeperLines } from '../world/Hub.js';
 import { NpcActor } from './NpcActor.js';
 import { BarkGate, groundY, lodOrigin } from './steering.js';
 import { lineText } from './lines.js';
@@ -376,7 +379,27 @@ export class HubKittens {
       const r = this._spawn(n.id, n.at, { beh: 'station', facing: n.facing, lines: bed ? [bed.line] : n.lines, bedPose: bed?.pose ?? null });
       if (r && bed) { r.bedPose = bed.pose; r.visual?.setPose(bed.pose, 0); r.visual?.setExpression('sleepy'); }
     }
+    this._spawnKeeper(st);
     return this.residents.length;
+  }
+
+  /**
+   * The Token Tails cat by the fountain (RESCUE_KEEPER): a station-style resident (greets, turns to her), the gold ':3'
+   * coin in paw. Lines = the `npc.ttcat.*` keys strings has; with none it still nods when clicked. Returns it or null.
+   */
+  _spawnKeeper(st) {
+    const k = RESCUE_KEEPER;
+    if (!st?.getFlag?.(k.when) || this.mgr.actors.some((a) => a.npcId === k.id)) return null;
+    const cfg = catConfig(k.cfg);
+    if (!cfg) return null;
+    const s = this.ctx.strings;
+    const r = this._spawn(k.id, k.at, { beh: 'station', facing: k.facing, cfg, lines: keeperLines(s) });
+    if (r) {
+      r.speakerKey = k.speaker;
+      r.speakerName = s?.has?.(k.speaker) ? s.t(k.speaker) : cfg.name;
+      r.tags.add('ttcat');
+    }
+    return r;
   }
 
   _spawn(id, at, o) {

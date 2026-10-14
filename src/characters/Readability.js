@@ -49,7 +49,7 @@ export function updateReadability(ctx) {
   const focus = cam?.focus?.isVector3 ? cam.focus : null;
   const mode = cam?.modeName ?? (typeof cam?.mode === 'string' ? cam.mode : 'follow');
   const iso = !!(focus && lens && !classic && ISO_MODES.has(mode));
-  // lens → subject distance: the focus in iso, else her position (cutscenes, Meme Cam: close-ups stay at 0)
+  // lens → subject distance: the focus in iso, else her position (cutscenes, Photo Cam: close-ups stay at 0)
   const subj = focus ?? ctx?.player?.object3d?.position ?? ctx?.player?.pos ?? null;
   const dist = lens && subj ? lens.distanceTo(subj) : 0;
   FUR_VIEW.focusOn = iso;
@@ -194,6 +194,10 @@ export function fitEllipsoid(pts, margin, o = {}) {
  */
 export function silhouetteParts(root, o = {}) {
   const margin = o.margin ?? XRAY.margin, furMargin = o.furMargin ?? XRAY.furMargin, minVerts = o.minVerts ?? 6;
+  // `tight` (the outline hull, Token Tails pass): ears get a cone fitted to their bind-frame box instead of a round
+  // ellipsoid (that read as dark ear patches on the ivory coat), and small solid rigid parts (sword, hilt, bow) use their
+  // own triangles instead of a bounding ellipsoid / box (a cross-shaped hilt made a dark disc)
+  const tight = !!o.tight;
   root.updateWorldMatrix(true, true);
   let skeleton = o.skeleton ?? null;
   if (!skeleton) root.traverse((c) => { if (!skeleton && c.isSkinnedMesh && c.skeleton && !skippedChain(c, root) && shownUnder(c, root)) skeleton = c.skeleton; });
@@ -241,6 +245,14 @@ export function silhouetteParts(root, o = {}) {
       return;
     }
     if (c.isSkinnedMesh) return;                                          // another skeleton (rare): left out
+    if (tight && keptChain(c, root)) return;                              // the bow: no hull (see TIGHT_KEEP)
+    // furry rigid parts (head ruff, bib) are shells around the body, so an open edge stays hidden inside her
+    if (tight && !c.isInstancedMesh && P.count <= TIGHT_MESH_MAX && !P.isInterleavedBufferAttribute && (furry(c) || meshShape(g).closed)) {
+      const ai = anchors.length;
+      anchors.push({ obj: c, inverse: _I });
+      parts.push({ anchor: ai, matrix: new THREE.Matrix4(), shape: 'mesh', geo: g, margin: margin + (furry(c) ? furMargin : 0) });
+      return;
+    }
     // rigid part anchored to itself: its local bounding box (InstancedMesh fur: instance 0 = the skin layer)
     if (!g.boundingBox) g.computeBoundingBox();
     _box.copy(g.boundingBox);
@@ -258,6 +270,7 @@ export function silhouetteParts(root, o = {}) {
   });
   for (const [bi, e] of boxes) {
     if (e.pts.length < minVerts * 3) continue;
+    if (tight && EAR_BONE.test(skeleton?.bones[bi]?.name ?? '')) { parts.push({ anchor: bi, matrix: coneMatrix(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'cone' }); continue; }
     parts.push({ anchor: bi, matrix: fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid' });
   }
   // drop anchors no part uses (keeps the bone texture small)
@@ -266,12 +279,82 @@ export function silhouetteParts(root, o = {}) {
   return { anchors: used.map((a) => anchors[a]), parts: parts.map((p) => ({ ...p, anchor: remap.get(p.anchor) })), skeleton };
 }
 
+/** Ear bones (KittenBuilder BONE_NAMES) that get a cone in a `tight` proxy. */
+const EAR_BONE = /^ear[LR]$/;
+/** Rigid parts up to this many vertices use their own triangles in a `tight` proxy. */
+const TIGHT_MESH_MAX = 4000;
+/** Rigid parts left out of a `tight` proxy: any hull around the bow's thin overlapping loops inks part of its face. */
+const TIGHT_KEEP = /^(bow|bowHolder)$/;
+
+/**
+ * A unit cone (apex +Y, base −Y, radius 1, see `_cone`) fitted to the bind-frame box of an ear's points (2 % trimmed
+ * per axis so a stray weighted vertex does not widen it), grown by `margin`. Pure.
+ * @param {number[]} pts flat xyz @param {number} margin @returns {THREE.Matrix4}
+ */
+export function coneMatrix(pts, margin) {
+  const n = pts.length / 3, lo = [0, 0, 0], hi = [0, 0, 0], a = new Float64Array(n);
+  const trim = n >= 50 ? 0.02 : 0;
+  for (let k = 0; k < 3; k++) {
+    for (let i = 0; i < n; i++) a[i] = pts[i * 3 + k];
+    a.sort();
+    lo[k] = a[Math.floor(trim * (n - 1))]; hi[k] = a[Math.ceil((1 - trim) * (n - 1))];
+  }
+  const hx = (hi[0] - lo[0]) / 2 + margin, hy = (hi[1] - lo[1]) / 2 + margin, hz = (hi[2] - lo[2]) / 2 + margin;
+  return new THREE.Matrix4().makeScale(Math.max(hx, 0.005), Math.max(hy, 0.005), Math.max(hz, 0.005))
+    .setPosition((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2);
+}
+
+/** `c` or any ancestor below `root` is left out of a `tight` proxy (TIGHT_KEEP). */
+function keptChain(c, root) { for (let p = c; p && p !== root; p = p.parent) if (TIGHT_KEEP.test(p.name || '')) return true; return false; }
+
 /** `c` or any ancestor below `root` is excluded from proxies by name / flag. */
 function skippedChain(c, root) { for (let p = c; p && p !== root; p = p.parent) if (isSkippable(p)) return true; return false; }
 
 const _n3 = new THREE.Matrix3();
 const _ell = new THREE.SphereGeometry(1, 12, 8);
 const _cube = new THREE.BoxGeometry(2, 2, 2);
+const _cone = new THREE.ConeGeometry(1, 2, 12, 1);
+const _nrmCache = new WeakMap();
+/** A rigid part's own geometry with smooth normals (welded by position), cached per geometry. */
+function meshShape(geo) {
+  let s = _nrmCache.get(geo);
+  if (s) return s;
+  const P = geo.attributes.position, n = P.count, N = new Float32Array(n * 3), keyOf = new Map(), key = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const k = `${P.getX(i).toFixed(4)},${P.getY(i).toFixed(4)},${P.getZ(i).toFixed(4)}`;
+    let id = keyOf.get(k); if (id === undefined) keyOf.set(k, (id = keyOf.size)); key[i] = id;
+  }
+  // area-weighted face normals summed per welded position: the push stays closed at hard edges
+  const acc = new Float32Array(keyOf.size * 3), I = geo.index ? geo.index.array : null, tris = I ? I.length : n;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let t = 0; t + 2 < tris; t += 3) {
+    const i0 = I ? I[t] : t, i1 = I ? I[t + 1] : t + 1, i2 = I ? I[t + 2] : t + 2;
+    a.fromBufferAttribute(P, i0); b.fromBufferAttribute(P, i1); c.fromBufferAttribute(P, i2);
+    c.sub(b); a.sub(b); c.cross(a);
+    for (const i of [i0, i1, i2]) { const o = key[i] * 3; acc[o] += c.x; acc[o + 1] += c.y; acc[o + 2] += c.z; }
+  }
+  for (let i = 0; i < n; i++) {
+    const o = key[i] * 3; a.set(acc[o], acc[o + 1], acc[o + 2]);
+    if (a.lengthSq() < 1e-20) a.set(0, 1, 0); a.normalize();
+    N[i * 3] = a.x; N[i * 3 + 1] = a.y; N[i * 3 + 2] = a.z;
+  }
+  const idx = I ? Array.from(I) : Array.from({ length: n }, (_, i) => i);
+  // closed (every welded edge shared by exactly two triangles)? An open shell (a ribbon loop) would show its back faces
+  const edges = new Map();
+  for (let t = 0; t + 2 < idx.length; t += 3) {
+    for (let e = 0; e < 3; e++) {
+      const u = key[idx[t + e]], v = key[idx[t + (e + 1) % 3]];
+      if (u === v) continue;
+      const k = u < v ? u * 1e6 + v : v * 1e6 + u;
+      edges.set(k, (edges.get(k) ?? 0) + 1);
+    }
+  }
+  let closed = edges.size > 0;
+  for (const c2 of edges.values()) if (c2 !== 2) { closed = false; break; }
+  s = { position: P, normal: new THREE.BufferAttribute(N, 3), index: { array: idx }, closed };
+  _nrmCache.set(geo, s);
+  return s;
+}
 
 /**
  * The x-ray proxy for `root`: a hidden SkinnedMesh parented to `root`, one draw, following its skeleton and attached
@@ -286,13 +369,19 @@ export function buildSilhouetteProxy(root, o = {}) {
   if (!parts.length || anchors.length > XRAY.maxBones) return null;
   const pos = [], idx = [], si = [], sw = [], nrm = o.normals ? [] : null;
   for (const p of parts) {
-    const src = p.shape === 'box' ? _cube : _ell, P = src.attributes.position, N = src.attributes.normal, I = src.index.array;
+    const src = p.shape === 'mesh' ? meshShape(p.geo) : null;
+    const P = src ? src.position : (p.shape === 'box' ? _cube : p.shape === 'cone' ? _cone : _ell).attributes.position;
+    const N = src ? src.normal : (p.shape === 'box' ? _cube : p.shape === 'cone' ? _cone : _ell).attributes.normal;
+    const I = src ? src.index.array : (p.shape === 'box' ? _cube : p.shape === 'cone' ? _cone : _ell).index.array;
+    const grow = p.shape === 'mesh' ? p.margin ?? 0 : 0;
     const base = pos.length / 3;
     // part space (unit shape → anchor-local) → proxy bind space (anchor-local → inverse(boneInverse))
     _m.copy(anchors[p.anchor].inverse).invert().multiply(p.matrix);
     if (nrm) _n3.getNormalMatrix(_m);
     for (let i = 0; i < P.count; i++) {
-      _v.fromBufferAttribute(P, i).applyMatrix4(_m);
+      _v.fromBufferAttribute(P, i);
+      if (grow) { _v2.fromBufferAttribute(N, i); _v.addScaledVector(_v2, grow); }
+      _v.applyMatrix4(_m);
       pos.push(_v.x, _v.y, _v.z); si.push(p.anchor, 0, 0, 0); sw.push(1, 0, 0, 0);
       // outward normals (the outline hull pushes along them; the x-ray pass ignores them)
       if (nrm) { _v.fromBufferAttribute(N, i).applyMatrix3(_n3).normalize(); nrm.push(_v.x, _v.y, _v.z); }

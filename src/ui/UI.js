@@ -220,10 +220,11 @@ export class UI {
     const T = (k, v) => tx(ctx, k, v);
     on(E.TOAST, (p) => this.toast(toastText(ctx, p), { icon: p?.icon, key: p?.key }));
     // WA §5.4: kitten rescues, Heart Bells and shards are celebration cards now (celebrate.js); letters stay toasts.
-    // WA §5.5: a fish (heart, milk) picked up in the world flies to its HUD counter.
+    // WA §5.5: catnip (internal id `fish`; golden for a 10-piece), a heart or a snack tin (id `milk`) picked up in the world
+    // flies to its HUD counter.
     on(E.ITEM_PICKUP, (p) => {
       if (p?.item === 'letter') this.toast(T('toast.letter', { title: T(`letter.${p.id}.title`) }), { key: 'toast.letter' });
-      else if (p?.position && (p.item === 'fish' || p.item === 'smallHeart' || p.item === 'milk')) this.fly?.launch(p.item, p.position, p.item === 'fish' ? 'fish' : p.item === 'milk' ? 'milk' : 'hearts');
+      else if (p?.position && (p.item === 'fish' || p.item === 'smallHeart' || p.item === 'milk')) this.fly?.launch(p.item === 'fish' && (p.amount ?? 1) >= 10 ? 'fishGold' : p.item, p.position, p.item === 'fish' ? 'fish' : p.item === 'milk' ? 'milk' : 'hearts');
     });
     on(E.GAME_READY, () => this._splashOut());
     // WA §7.5: during Morning Practice the touch buttons appear lesson by lesson (visibility only)
@@ -232,7 +233,7 @@ export class UI {
     on(E.DIALOG_START, () => this.occluders?.invalidate());
     on(E.DIALOG_END, () => this.occluders?.invalidate());
     on(E.UNLOCK, (p) => {
-      if (!p || (p.kind === 'cape' && p.id === 'memeWhite')) return;     // the Meme Cam trigger toasts that one itself
+      if (!p || (p.kind === 'cape' && p.id === 'memeWhite')) return;     // the Photo Cam trigger toasts that one itself
       const name = ctx.strings?.has?.(`${p.kind}.${p.id}`) ? T(`${p.kind}.${p.id}`) : UI_STRINGS[`ui.${p.kind}.${p.id}`] ? T(`ui.${p.kind}.${p.id}`) : titleCaseId(p.id);
       if (p.kind === 'skin') this.toast(T('toast.skin', { name }), { key: 'toast.skin' });
       else if (p.kind === 'cape') this.toast(T('toast.cape', { name }), { key: 'toast.cape' });
@@ -744,7 +745,7 @@ export class UI {
     if (this.menus.titleActive && mode === 'play' && !this.isLoading) this._takeMode('cutscene');
     // hold-to-skip (§5.1: hold Pause 1.0 s; a ring fills in the corner) — story drives it itself (cinema {skip})
     if (!this.storyDrives) this._skipHold(dt, mode, input);
-    // meme caption (§7.8 step 4: after 1.0 s, one of meme.cap1–3)
+    // Photo Cam caption (§7.8 step 4: after 1.0 s, one of meme.cap1–3)
     if (this.meme) {
       this.memeT += dt;
       if (!this.memeCapShown && this.memeT >= PLAYER.memeCam.captionDelay) {

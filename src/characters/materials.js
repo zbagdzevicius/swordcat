@@ -42,7 +42,7 @@ export function envMapUsers() { let n = 0; for (const m of _all) if (m.isMeshSta
  * `bowGlow` extra self-light (always pink, always on the LEFT ear), ears ×`earScale`, a `trimM` m lighter cape trim.
  * Past `bowFarFrom` the bow keeps growing to ×`bowScaleFar` at `bowFarAt` m (WA: ×1.4 at lens ≥ 12 m).
  * `playScale` / `playScaleCompanion`: visual root scale in the iso gameplay modes (hitboxes, MODEL_FIT unchanged),
- * blended over `scaleBlend` s on the cutscene hand-off. Close-ups (cutscenes, Meme Cam, `?cam=classic`) stay at 0 / 1.
+ * blended over `scaleBlend` s on the cutscene hand-off. Close-ups (cutscenes, Photo Cam, `?cam=classic`) stay at 0 / 1.
  * `heroRim`: the hero's own warm-rim floor (WARM_ADVENTURE_SPEC WA4 `rim:'day', hero 0.40`): her toon / metal rim is
  * max(env uRimK, 0.40) and her fur rim ≥ 0.40, so she separates from beige cobble and grass (other actors keep uRimK).
  */

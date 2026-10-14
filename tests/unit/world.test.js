@@ -2120,3 +2120,17 @@ test('world review: the prologue practice field lifts the low morning sun and so
   env.preset('meadow_day', 0); env._apply?.(false);
   assert.ok(near(Math.asin(env.sunDir(new THREE.Vector3()).y), ENV_PRESETS.meadow_day.sunElev, 1e-6), 'a higher preset sun is never lowered');
 });
+
+test('Token Tails: the Rescue House keeper stands by the fountain; only line keys strings has are spoken', async () => {
+  const { RESCUE_KEEPER, keeperLines, HUB_KITTEN_SPOTS, STATIONS } = await import('../../src/world/Hub.js');
+  assert.equal(RESCUE_KEEPER.id, 'tokentails_cat');
+  assert.equal(RESCUE_KEEPER.speaker, 'name.ttcat');
+  assert.deepEqual([...RESCUE_KEEPER.lines], ['npc.ttcat.1', 'npc.ttcat.2', 'npc.ttcat.3']);
+  const [x, z] = RESCUE_KEEPER.at;
+  assert.ok(Math.hypot(x - 0, z - 8) < 8, 'near the fountain where the rescued kittens gather');
+  for (const s of Object.values(HUB_KITTEN_SPOTS)) assert.ok(Math.hypot(s.at[0] - x, s.at[1] - z) > 1.5, 'clear of the kitten spots');
+  for (const s of STATIONS) assert.ok(Math.hypot(s.use[0] - x, s.use[1] - z) > 3.5, `clear of station ${s.id}`);
+  assert.deepEqual(keeperLines(null), []);
+  assert.deepEqual(keeperLines({ has: () => false }), [], 'a missing key is never shown');
+  assert.deepEqual(keeperLines({ has: (k) => k !== 'npc.ttcat.2' }), ['npc.ttcat.1', 'npc.ttcat.3']);
+});

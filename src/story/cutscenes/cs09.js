@@ -12,7 +12,7 @@
 //     "They used to laugh at me. The runt. So I laughed first. Always first." Clem: "You can stop now. I'll hold it for
 //     a bit." (a real, tiny, wheezy laugh) "...You're very strange." Clem: "I know."
 //   5b bonk, then befriend (WA §8.1): Clem: "...Hee." — "Did you just... laugh? WITH me?" — "LADS! She laughed WITH
-//     me! Best day EVER!" (his plate flips to HYPE-IN-CHIEF through enemies' flipPlate when it exists)
+//     me! Best day EVER!" (his plate flips to CHEER-IN-CHIEF through enemies' flipPlate when it exists)
 //   6 wide: he bounds off into the haze to tell the lads. Wind.
 // end: state.shards = 2; Golden Hour unlocked; flag gate.boss; the Horde despawns; CS-10 follows.
 import * as THREE from 'three';
@@ -165,7 +165,7 @@ export default {
     { t: 'actor', id: 'swordcat', emote: 'blink' },
     say('swordcat', 'cs09.6', 1.2),
 
-    // ---- 5b · bonk, then befriend (WA §8.1): she laughs WITH him; his plate flips to HYPE-IN-CHIEF
+    // ---- 5b · bonk, then befriend (WA §8.1): she laughs WITH him; his plate flips to CHEER-IN-CHIEF
     wait(0.5),
     { t: 'actor', id: 'swordcat', expression: 'happy', emote: 'blink' },
     say('swordcat', 'cs09.7', 1.0),

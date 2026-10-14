@@ -207,9 +207,9 @@ test('beast heads: presets build, expressions animate, attach hides the KayKit h
   const head = C.attachBeastHead(model, 'hyena', { mane: true });
   assert.ok(head && head.root.parent === bone);
   assert.equal(headMesh.visible, false);
-  const plate = C.attachPlate(model, 'HATER', { seed: 3 });
+  const plate = C.attachPlate(model, 'GRUMP', { seed: 3 });
   assert.ok(plate && plate.parent === chest);
-  assert.ok(C.PLATE_WORDS.includes('HATER') && C.PLATE_WORDS.includes('POST STEALER'));
+  assert.ok(C.PLATE_WORDS.includes('GRUMP') && C.PLATE_WORDS.includes('SNACK SNATCHER'));
 });
 
 test('sword skins build and track charge / valor glow', () => {
@@ -424,8 +424,8 @@ test('dressBeast: hyena head + config plate word, carried cage on the hand slot 
   assert.ok(ENEMIES.hyena.plateWords.includes(d.word), `word ${d.word} from ENEMIES.hyena.plateWords`);
   assert.ok(d.plate && d.plate.parent === chest);
   assert.equal(C.dressBeast(fakeKayKit().model, 'hyena', { seed: 4 }).word, d.word, 'word is deterministic per seed');
-  assert.equal(C.dressBeast(fakeKayKit().model, 'stealer').word, 'POST STEALER');
-  assert.equal(C.dressBeast(fakeKayKit().model, 'cacklejaw').word, 'HATER-IN-CHIEF');
+  assert.equal(C.dressBeast(fakeKayKit().model, 'stealer').word, 'SNACK SNATCHER');
+  assert.equal(C.dressBeast(fakeKayKit().model, 'cacklejaw').word, 'GRUMP-IN-CHIEF');
   assert.equal(C.dressBeast(fakeKayKit().model, 'pug').plate, null, 'pugs wear no word plate');
   const cage = d.hold('cage', 'l', { ribbon: true });
   assert.ok(cage && cage.parent.name === 'handslotl', 'cage held on handslot.l');
@@ -1580,4 +1580,109 @@ test('close-up fur fringe (story 10c / 11c): outer shells fade edge-on and thin 
   assert.ok(w(k) < w(bare) - 0.01, `hooded head fur ${w(k).toFixed(3)} vs bare ${w(bare).toFixed(3)}`);
   bare.dispose();
   k.dispose();
+});
+
+// ------------------------------------------------------------------ Token Tails look (docs/TOKENTAILS-PLAN.md §2.1–§2.4)
+test('Token Tails: Clementine is ivory with crimson two-catchlight eyes, a royal red gold-trimmed cape, a coin crest and the pink LEFT-ear bow', () => {
+  const cfg = C.swordcatConfig();
+  assert.equal(cfg.coat.base, C.PAL.furIvory);
+  assert.equal(cfg.coat.light, C.PAL.furIvoryLight);
+  assert.equal(cfg.coat.deep, C.PAL.furIvoryShade);
+  assert.equal(cfg.coat.pattern, 'solid', 'no tabby stripes');
+  assert.ok(!cfg.coat.stripe, 'stripe weight 0');
+  assert.equal(cfg.earInner, C.PAL.earInnerSalmon);
+  assert.equal(cfg.eyes.outer, C.PAL.irisCrimson);
+  assert.equal(cfg.eyes.ring, C.PAL.irisCrimsonDeep);
+  assert.equal(cfg.eyes.catchlights, 2);
+  assert.equal(cfg.cape.style, 'red', 'royal red from the start');
+  assert.equal(C.CAPES.red.hem.toUpperCase(), C.PAL.trimGold.toUpperCase(), 'gold trim on the red cape');
+  assert.equal(cfg.outfit.crest, 'ttCoin');
+  assert.equal(cfg.bow.color, C.PAL.bow);
+  assert.equal(C.PAL.bow.toUpperCase(), '#FF9EC0', 'the pink bow is unchanged');
+  for (const id of ['swordcat', 'swordcat_red', 'swordcat_tunic_bow', 'swordcat_tunic_sword']) {
+    assert.equal(C.CATS[id].coat.base, C.PAL.furIvory, id);
+    assert.equal(C.CATS[id].bow.color, C.PAL.bow, id);
+  }
+  // the ginger keys stay for the other cats
+  assert.equal(C.PAL.furGinger, '#E89A55');
+  const k = C.buildKitten(cfg);
+  assert.ok(k.bow, 'bow built');
+  assert.equal(k.bow.parent, k.rig.earL, 'bow on the LEFT ear joint');
+  k.dispose();
+});
+
+test('Token Tails: the two-catchlight eye texture is its own cache entry', () => {
+  const had = globalThis.OffscreenCanvas;
+  const fake2d = new Proxy(function () {}, { get: (t, p) => (p === 'width' ? 10 : fake2d), set: () => true, apply: () => fake2d });
+  globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return fake2d; } };
+  try {
+    const a = C.makeEyeTexture({ outer: '#B3212F', catchlights: 2 }), b = C.makeEyeTexture({ outer: '#B3212F' });
+    if (a && b) { assert.notEqual(a, b); assert.equal(a.userData.catchlights, 2); assert.equal(b.userData.catchlights, 3); }
+  } finally { globalThis.OffscreenCanvas = had; }
+});
+
+test('Token Tails: tokentails_cat is ivory, crimson-eyed, unclothed, holds the gold coin and has NO bow', () => {
+  const cfg = C.CATS.tokentails_cat;
+  assert.ok(cfg, 'exported in CATS');
+  assert.equal(C.catConfig('tokentails_cat'), cfg);
+  assert.equal(cfg.bow, null, 'the bow is Clementine\'s alone');
+  assert.equal(cfg.coat.base, C.PAL.furIvory);
+  assert.equal(cfg.coat.pattern, 'solid');
+  assert.equal(cfg.eyes.outer, C.PAL.irisCrimson);
+  assert.equal(cfg.earInner, C.PAL.earInnerSalmon);
+  assert.ok(!cfg.cape && !cfg.sword && !cfg.outfit?.armour && !(cfg.accessories ?? []).length, 'no clothing');
+  assert.deepEqual(cfg.props, ['tt_coin']);
+  assert.ok(C.PROP_NAMES.includes('tt_coin'));
+  const k = C.buildKitten(cfg);
+  assert.equal(k.bow, null);
+  assert.ok(k.props.tt_coin, 'coin in paw');
+  assert.equal(k.props.tt_coin.parent, k.rig.joints.pawL);
+  // no brow capsules (they read as two grey smudges on the ivory forehead) and no ink hull (a dark hood behind the head)
+  assert.equal(k.eyes.browMesh, null, 'no brows');
+  assert.equal(cfg.outline, false, 'no outline hull');
+  const hero = C.buildKitten(C.SWORDCAT);
+  assert.ok(hero.eyes.browMesh, 'Clementine keeps her brows (expressions)');
+  hero.dispose();
+  k.dispose();
+});
+
+test('Pearl wears a LILAC bow: pink stays Clementine\'s alone', () => {
+  const pb = new THREE.Color(C.CATS.pearl.bow.color), hb = new THREE.Color(C.PAL.bow), hsl = {}, hh = {};
+  pb.getHSL(hsl); hb.getHSL(hh);
+  assert.ok(hsl.h > 0.7 && hsl.h < 0.8, `Pearl's bow hue is lilac (${(hsl.h * 360).toFixed(0)}°)`);
+  assert.ok(Math.abs(hsl.h - hh.h) > 0.1, 'clearly not the hero pink');
+});
+
+test('Token Tails: the plate is crested with the coin; friendly plate words (no HATER / POST / STEALER)', () => {
+  const plain = C.buildKitten({ ...C.swordcatConfig(), outfit: { armour: 'plate' } }), crest = C.buildKitten(C.swordcatConfig());
+  const verts = (k) => k.kitMesh.geometry.attributes.position.count;
+  assert.ok(verts(crest) > verts(plain), 'crest adds kit geometry (no extra draw)');
+  plain.dispose(); crest.dispose();
+  const words = [...C.PLATE_WORDS, ...Object.keys(C.FRIEND_WORDS), ...Object.values(C.FRIEND_WORDS), ...ENEMIES.hyena.plateWords,
+    ...ENEMIES.hyena.plateWordsFriend, ...ENEMIES.stealer.plateWords, ...ENEMIES.stealer.plateWordsFriend];
+  for (const w of words) assert.ok(!/HATER|POST|STEALER/.test(w), w);
+  for (const w of ['GRUMP', 'SNACK SNATCHER', 'GRUMP-IN-CHIEF', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER']) assert.ok(C.PLATE_WORDS.includes(w), w);
+  assert.equal(C.FRIEND_WORDS['GRUMP-IN-CHIEF'], 'CHEER-IN-CHIEF');
+  assert.equal(C.FRIEND_WORDS['SNACK SNATCHER'], 'SNACK SHARER');
+});
+
+test('Token Tails outline: the tight hull proxy fits ear cones, uses the sword\'s own triangles, leaves the bow out; thin maroon ink', async () => {
+  const { silhouetteParts, coneMatrix } = await import('../../src/characters/Readability.js');
+  const { OUTLINE } = await import('../../src/characters/Outline.js');
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const loose = silhouetteParts(k.root, { skeleton: k.skeleton, margin: 0.002, furMargin: 0.01 });
+  const tight = silhouetteParts(k.root, { skeleton: k.skeleton, margin: 0.002, furMargin: 0.01, tight: true });
+  const name = (r, p) => { const a = r.anchors[p.anchor].obj; return a.name || a.parent?.name || ''; };
+  const ears = tight.parts.filter((p) => /^ear[LR]$/.test(name(tight, p)));
+  assert.equal(ears.length, 2); assert.ok(ears.every((p) => p.shape === 'cone'));
+  assert.ok(loose.parts.filter((p) => /^ear[LR]$/.test(name(loose, p))).every((p) => p.shape === 'ellipsoid'), 'the x-ray proxy is unchanged');
+  assert.ok(!tight.parts.some((p) => /^bow/.test(name(tight, p))), 'no hull around the bow');
+  assert.ok(loose.parts.some((p) => /^bow/.test(name(loose, p))));
+  assert.ok(tight.parts.some((p) => p.shape === 'mesh'), 'small rigid parts use their own triangles');
+  // a cone fitted to a box of points spans it (+ margin)
+  const m = coneMatrix([-1, 0, -0.5, 1, 2, 0.5, 0, 1, 0], 0.1);
+  const e = m.elements;
+  assert.ok(Math.abs(e[0] - 1.1) < 1e-9 && Math.abs(e[5] - 1.1) < 1e-9 && Math.abs(e[10] - 0.6) < 1e-9 && Math.abs(e[13] - 1) < 1e-9);
+  assert.ok(OUTLINE.px.hero <= 1.5 && OUTLINE.px.hero >= 1.2);
+  assert.notEqual(OUTLINE.hero.toUpperCase(), '#5A2A1A');
 });

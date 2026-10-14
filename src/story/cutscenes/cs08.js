@@ -37,7 +37,7 @@ function setup(ctx, cs) {
   if (m?.object3d) m.object3d.visible = false;
   const other = (ctx.companions?.active ?? []).find((c) => c.kittenId !== 'mochi');
   if (other) { cs.script(other); cs.place(other, [LINE_AT[0] - 0.9, LINE_AT[1] + 1.3], FACE_SOUTH); cs._other = other; }
-  RAIDERS.forEach((p, i) => cs.spawnOne({ id: `raider_${i + 1}`, type: 'hyena', kind: 'enemy', at: p, facing: 0, opts: { word: ['HATER', 'GRUMBLER', 'SCOFFER', 'NAYSAYER', 'SNEERER', 'SPOILER'][i] } }));
+  RAIDERS.forEach((p, i) => cs.spawnOne({ id: `raider_${i + 1}`, type: 'hyena', kind: 'enemy', at: p, facing: 0, opts: { word: ['GRUMP', 'GRUMBLER', 'SCOFFER', 'NAYSAYER', 'SNEERER', 'SPOILER'][i] } }));
 }
 
 /** Shot 4: the kittens appear (spawned hidden at the start so their fur builds never pop on screen). */

@@ -9,10 +9,11 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { fakeCtx } from './_fakeCtx.mjs';
 import { E } from '../../src/core/events.js';
-import { HOMAGE_LINES, PLAYER, FADE_COLOR, STORY } from '../../src/core/config.js';
+import { PLAYER, FADE_COLOR, STORY } from '../../src/core/config.js';
 import { Actor } from '../../src/core/Actor.js';
 import { ScriptedActorMixin } from '../../src/core/ScriptedActor.js';
-import { S, t, has, pick, fill, text, speakerName } from '../../src/story/strings.js';
+import { S, t, has, pick, fill, text, speakerName, GAME_TITLE, GAME_SUBTITLE } from '../../src/story/strings.js';
+import { UI_STRINGS } from '../../src/ui/text.js';
 import { Cutscene, STEP_TYPES, END_KEYS, walkSteps, sampleKeys, revealTime, readHold, autoHold, wordCount, READ, isInstant, layoutPoint, spawnKind, isCat, sceneLength } from '../../src/story/Cutscene.js';
 import { StoryManager, chapterInfo, chapterOf, BOSS_SCENES, SKIP_HOLD, migrateFlags, prologueStage, isBlack, BARN_GUIDE, PROLOGUE_TICK } from '../../src/story/StoryManager.js';
 import { EAGER, LAZY, SCENE_LEVEL, loadScene } from '../../src/story/cutscenes/registry.js';
@@ -23,8 +24,8 @@ import { PracticeLog, TUTORIAL_STEPS, PRACTICE, inPractice, HINTS, Tutorial, TAL
 import { BarkGate, CLEM_BARKS, ENEMY_BARKS, BOSS_BARKS, enemyType, bossKey } from '../../src/story/dialogue/barks.js';
 import { U as HORDE_U, LAT, MARK, FACE as CS02_FACE, FILES, CS02_CAST, cs02Steps, END_FADE } from '../../src/story/cutscenes/cs02.js';
 import { CS03_MARKS, NET } from '../../src/story/cutscenes/cs03.js';
-import { titlePulse, TITLE_PULSE, TITLE_BLEND, pearlHops, playReady } from '../../src/story/cutscenes/cs00.js';
-import { glyphs, revealHtml, visibleLength, FONTS as OVERLAY_FONTS, OVERLAY_COLORS } from '../../src/story/Overlay.js';
+import { titlePulse, TITLE_PULSE, TITLE_BLEND, pearlHops, playReady, TITLE_POSE, TITLE_SHOT, TITLE_TTCAT, ttCatAvailable } from '../../src/story/cutscenes/cs00.js';
+import { glyphs, revealHtml, visibleLength, FONTS as OVERLAY_FONTS, OVERLAY_COLORS, stLogoHtml } from '../../src/story/Overlay.js';
 import { say, along, unit, yawOf } from '../../src/story/cutscenes/lib.js';
 import { CUES } from '../../src/audio/cues.js';
 
@@ -47,14 +48,77 @@ test('strings: t / has / fill / text / speakerName; missing keys come back as th
   assert.equal(speakerName('mystery'), 'Mystery');
 });
 
-test('U14: with HOMAGE_LINES = false no homage text is reachable', () => {
-  assert.equal(HOMAGE_LINES, false);
-  let homage = 0;
+test('U14 (Token Tails pass): every row is default text only; no homage variant exists; t() resolves the default', () => {
   for (const [k, row] of Object.entries(S)) {
     assert.equal(typeof row.default, 'string', `${k}: default text`);
-    if (row.homage) { homage++; assert.equal(t(k), row.default, `${k} resolves to the default`); assert.equal(pick(row, true), row.homage); }
+    assert.deepEqual(Object.keys(row), ['default'], `${k}: no variant fields (homage removed)`);
+    assert.equal(pick(row), row.default);
+    assert.equal(pick(row, true), row.default, `${k}: no variant reachable`);
   }
-  assert.ok(homage >= 12, '§4.4 lists 12 homage rows');
+  assert.equal(pick(null), null);
+  const src = fs.readFileSync(path.join(ROOT, 'src/story/strings.js'), 'utf8');
+  assert.ok(!/homage/i.test(src), 'strings.js carries no homage handling');
+});
+
+test('Token Tails IP: title, world, currency, Snack Break, Photo Cam, credits, the Token Tails Cat and the Pink Paw names', () => {
+  assert.equal(GAME_TITLE, 'PINK PAW KNIGHT'); assert.equal(GAME_SUBTITLE, 'A Token Tails Adventure');
+  assert.equal(t('game.title'), GAME_TITLE); assert.equal(t('game.subtitle'), GAME_SUBTITLE);
+  for (const [k, v] of [['title.foot', 'A Token Tails game'], ['region.gate', 'Bramble Gate'], ['ch.epilogue', 'Dame Clementine of Pawsbury'],
+    ['ch.prologue', 'Knighting Morning'], ['ch.6', 'Sunny Steps for Everyone'], ['quest.done', 'Purrhaven Isle is sunny again!'],
+    ['vigil.title', 'Lantern Stone'], ['shop.cost', '{n} catnip'], ['shop.poor', 'Not enough catnip.'], ['results.fish', 'Catnip'],
+    ['name.stealer', 'Snack Snatcher'], ['quest.town.chase', 'Catch Pilfer, the Snack Snatcher'], ['name.ttcat', 'Token Tails Cat'],
+    ['difficulty.nine', 'Nine Lives'], ['card.golden.title', 'Golden Hour!']]) assert.equal(t(k), v, k);
+  assert.match(t('credits.team'), /Token Tails$/);
+  assert.match(t('prompt.picnic'), /Snack Break/);
+  assert.match(t('toast.hub'), /Pawsbury Rescue House/);
+  for (const k of ['npc.ttcat.1', 'npc.ttcat.2', 'npc.ttcat.3']) assert.ok(has(k) && t(k).length > 10 && t(k).length <= 90, k);
+  // TOKENTAILS-PLAN §2.5: four lost kittens carry licensed Pink Paw cat names (ids unchanged) and the credits say so
+  const kittenNames = Object.keys(S).filter((k) => /^name\.(biscuit|noodle|button|pickles|pebble|sprout|waffles|toffee|muffin|tater|mittens|socks|juniper|bramble|fennel|bean|crumpet|dumpling)$/.test(k)).map((k) => t(k));
+  assert.equal(kittenNames.length, 18);
+  for (const n of ['Judas', 'Raudvis', 'Zare', 'Simas']) assert.ok(kittenNames.includes(n), n);
+  assert.equal(t('credits.pinkpaw'), 'Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.');
+  assert.equal(UI_STRINGS['credits.pinkpaw'], t('credits.pinkpaw'));
+  assert.equal(UI_STRINGS['credits.team'], t('credits.team'));
+  assert.equal(UI_STRINGS['title.foot'], t('title.foot'));
+});
+
+test('Token Tails IP: banned display words in strings.js and ui/text.js (old meme, memecoin and fan-series names; money words)', () => {
+  const BAN = /swordcat|meow island|nine lives of|vigil|low gate|memecoin|\bmeme|hater|post ?stealer|postmaster|hype-in-chief|\bmilk|\bfish(es|ies|y)?\b|sickmanai|knightcat|pump\.fun|\b(donat\w*|charity|impact|token|tokens|coin|coins|crypto|blockchain|wallet|money|dollars?|usdc)\b/i;
+  const ok = (v) => v.replace(/Token Tails/g, '');                          // the brand name itself is allowed
+  const bad = [];
+  for (const [k, row] of Object.entries(S)) if (BAN.test(ok(row.default))) bad.push(`strings ${k}: ${row.default}`);
+  for (const [k, v] of Object.entries(UI_STRINGS)) if (BAN.test(ok(v))) bad.push(`text.js ${k}: ${v}`);
+  for (const v of [GAME_TITLE, GAME_SUBTITLE]) if (BAN.test(ok(v))) bad.push(v);
+  assert.deepEqual(bad, []);
+});
+
+test('Token Tails IP: no banned display word in HTML text inside any src/ template literal (the old overlay wordmark lived there)', () => {
+  const BAN = /swordcat|sw\s*o\s*rdcat|meow island|nine lives of|vigil|low gate|memecoin|\bmeme|hater|post ?stealer|postmaster|hype-in-chief|\bmilk|\bfish(es|ies|y)?\b|sickmanai|knightcat|pump\.fun|\b(donat\w*|charity|impact|token|tokens|coin|coins|crypto|blockchain|wallet|money|dollars?|usdc)\b/i;
+  const ROOT_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
+  const bad = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!p.endsWith('.js')) continue;
+      for (const lit of fs.readFileSync(p, 'utf8').matchAll(/`[^`]*`/g)) {
+        // text between tags; joined across inline tags so "SW<span>O</span>RDCAT" reads as one word
+        const txt = [...lit[0].matchAll(/>([^<>`]*)</g)].map((m) => m[1].replace(/\$\{[^}]*\}/g, ' ')).join('');
+        for (const v of txt.split(/\s{2,}|\n/)) {
+          const w = v.replace(/Token Tails/g, '').trim();
+          if (!w || /^\.?[\w.]+\.$/.test(w)) continue;             // dotted ids such as `<level>.fish.<key>` in comments
+          if (BAN.test(w)) bad.push(`${path.relative(ROOT_SRC, p)}: ${w.slice(0, 80)}`);
+        }
+      }
+    }
+  };
+  walk(ROOT_SRC);
+  assert.deepEqual(bad, []);
+  // the story overlay's fallback wordmark is built from the game title, bow on the first "O" or the first letter
+  const logo = stLogoHtml(GAME_TITLE);
+  assert.equal(logo.replace(/<[^>]*>/g, ''), GAME_TITLE);
+  assert.equal((logo.match(/st-bow/g) ?? []).length, 1);
+  assert.ok(!BAN.test(logo.replace(/<[^>]*>/g, '')));
 });
 
 /** Flags (§19.7) and other dotted names that are not strings keys. */
@@ -206,13 +270,13 @@ test('story.W1: banned words (WA §8.6) absent from display text; vocabulary swa
   const bad = [];
   for (const [k, row] of Object.entries(S)) {
     if (k.startsWith('cs08.') || k.startsWith('name.')) continue;
-    for (const v of [row.default, row.homage]) if (v && BAN.test(v.replace(/Nine Lives/g, ''))) bad.push(`${k}: ${v}`);
+    const v = row.default; if (v && BAN.test(v.replace(/Nine Lives/g, ''))) bad.push(`${k}: ${v}`);
   }
   assert.deepEqual(bad, []);
   assert.ok(!Object.values(S).some((r) => /Midnight Practice/.test(r.default)), 'no Midnight Practice');
   for (const [k, v] of [['quest.meadow.mochi', 'Help Mochi out of the tipped cart'], ['obj.mochi', "Pop Mochi's carrier open"],
     ['toast.exit.mochi', "Mochi's still stuck in his carrier! Back to the cart!"], ['name.cacklejaw', 'Big Chief Cacklejaw'], ['region.bog', 'Glimmerbog'],
-    ['d01.3', "Then we're the Almost Knights!"], ['cs01.3', 'Too small for the sword, Clementine. One ear-tuft short. Next year!'],
+    ['d01.3', "Then we're the Almost Knights!"], ['cs01.3', 'Just under the line, Clementine. One ear-tuft short. Next year!'],
     ['cs01.8', "Tomorrow I'm front row. I made a sign!"], ['name.cow', 'Very Suspicious Cow'], ['tut.cow.2', "MOO. (Ooh, you're getting warmer!)"],
     ['menu.continue', 'Keep going!'], ['menu.newGame', 'New adventure'], ['title.tap', 'Tap to play!'], ['title.press', 'Press any key to play!'],
     ['life.lost', 'Boing! Back on her paws. {n} lives left'], ['bark.clem.respawn.2', '...Ow. Okay.'], ['hud.boss.bonked', 'BONKED!'],
@@ -249,7 +313,7 @@ test('story.W5: CS-02 ≤ 55 s with STORY.cs02Cut (the long cut is longer); no p
   // CS-01 plays after tut.done (stage 'chart'), so WA27's 25 s cap does not bind it; the reading floor makes it ~40 s
   assert.ok(sceneLength(CUTSCENES.cs01.steps) <= 42, `CS-01 ${sceneLength(CUTSCENES.cs01.steps).toFixed(1)} s`);
   assert.ok(sceneLength(CUTSCENES.cs01b.steps) <= 25, 'Suit Up ~18 s');
-  // every story fact stays: the meme shot, Cacklejaw's lines, Pilfer's two thefts, Pearl's call, her choice
+  // every story fact stays: her stand, Cacklejaw's lines, Pilfer's two thefts, Pearl's call, her choice
   const keys = [], presets = [];
   walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'say') keys.push(s.key); if (s.t === 'cam' && s.preset) presets.push(s.preset); });
   assert.deepEqual(keys, ['cs02.1', 'cs02.2', 'cs02.3', 'cs02.4', 'cs02.5', 'cs02.6']);
@@ -477,6 +541,56 @@ test('runner: steps run in order with their durations; flags, cutscene:start / e
   assert.equal(shots[0].preset, 'HERO_LOW');
   assert.equal(ctx.cam.modeName, 'follow', 'camera handed back');
   if (seen.length) assert.ok(seen.some(([ty, id]) => ty === E.CUTSCENE_END && id === 't1'));
+});
+
+test('runner: an end load that waited is dropped when a newer level load was asked for meanwhile (smoke flake root cause)', async () => {
+  for (const newer of [false, true]) {
+    const { ctx, story } = storyCtx();
+    await story.init();
+    ctx.levels.requests = 0;
+    const loads = [];
+    ctx.levels.load = async (id, sp) => { ctx.levels.requests++; loads.push([id, sp]); };
+    let release = null;
+    story.registry = { ...story.registry, tl: { id: 'tl', steps: [{ t: 'wait', dur: 5 }],
+      end: { player: { spawn: 'here' }, load: async () => { await new Promise((r) => { release = r; }); return { level: 'town', spawn: 'hub' }; } } } };
+    const done = story.play('tl');
+    await run(ctx, story, 0.1);
+    story.skip();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.ok(release, 'the end load is waiting (CS-10: the results card)');
+    if (newer) await ctx.levels.load('meadow', 'start');       // Quit to Title / the next smoke block
+    release();
+    await done;
+    if (newer) assert.deepEqual(loads, [['meadow', 'start']], 'the stale town load never lands on top of the newer level');
+    else assert.deepEqual(loads, [['town', 'hub']], 'no newer load: the end load runs');
+  }
+});
+
+test('halt(): the running scene ends without chaining its next scene or changing level; skip() still chains (Quit to Title)', async () => {
+  for (const how of ['skip', 'halt']) {
+    const { ctx, story } = storyCtx();
+    await story.init();
+    const loads = [];
+    ctx.levels.load = async (id, sp) => { loads.push([id, sp]); };
+    story.registry = { ...story.registry,
+      ha: { id: 'ha', steps: [{ t: 'wait', dur: 5 }], end: { play: 'hb', load: { level: 'town', spawn: 'hub' }, flags: { 'ha.end': true } } },
+      hb: { id: 'hb', steps: [{ t: 'wait', dur: 5 }] },
+      hq: { id: 'hq', steps: [{ t: 'wait', dur: 1 }] } };
+    story.play('ha');
+    story.play('hq');                                                   // queued behind ha
+    await run(ctx, story, 0.1);
+    story[how]();
+    await run(ctx, story, 0.2);
+    assert.equal(ctx.state.getFlag('ha.end'), true, `${how}: the end block still hands back (flags)`);
+    if (how === 'halt') {
+      assert.equal(story.current, null, 'nothing chained or dequeued');
+      assert.deepEqual(loads, [], 'no level change');
+      assert.equal(ctx.game.mode, 'play');
+    } else {
+      assert.ok(['hb', 'hq'].includes(story.current?.id), `skip chains / dequeues (${story.current?.id})`);
+      assert.deepEqual(loads, [['town', 'hub']]);
+    }
+  }
 });
 
 test('story.read: every auto line in levels 1-3 stays fully visible ≥ 0.8 s + 0.3 s/word (also at dialogSpeed ×2)', () => {
@@ -1658,4 +1772,19 @@ test('CONTROLS_SPEC §12: hint toasts and the practice skip label follow the dev
   skipCtx.ctx.input.down = (a) => a === 'pause';
   t3.update(0.05);
   assert.equal(labels[0], t('tut.skip.touch'));
+});
+
+test('Token Tails IP: CS-00 no longer recreates the poster (wave, sword lowered, wide group framing, optional Token Tails Cat)', () => {
+  let pose = null, shot = null;
+  walkSteps(CUTSCENES.cs00.steps, (s) => { if (s.t === 'actor' && s.id === 'swordcat' && s.pose) pose = s.pose; if (s.t === 'cam') shot = s; });
+  assert.equal(pose, TITLE_POSE); assert.notEqual(pose, 'oath'); assert.notEqual(pose, 'vigil');
+  assert.deepEqual(shot.pos, TITLE_SHOT.pos); assert.deepEqual(shot.look, TITLE_SHOT.look); assert.equal(shot.fov, TITLE_SHOT.fov);
+  assert.ok(Math.hypot(...TITLE_SHOT.pos) > 4, 'a wide shot, not the chest-up close-up');
+  assert.equal(TITLE_TTCAT.config, 'tokentails_cat');
+  assert.equal(ttCatAvailable({}), false, 'no config: the cat is skipped');
+  assert.equal(ttCatAvailable({ tokentails_cat: { id: 'tokentails_cat' } }), true);
+  // CS-02's stand (the MEME_LOOP-framed beat) is a guard stance, not the poster pose
+  let prev = null, standPose = null;
+  walkSteps(CUTSCENES.cs02.steps, (s) => { if (s.t === 'actor' && s.id === 'swordcat' && s.pose) prev = s.pose; if (s.t === 'cam' && s.preset === 'MEME_LOOP' && standPose == null) standPose = prev; });
+  assert.equal(standPose, 'ready', 'CS-02: her stand before the MEME_LOOP framing');
 });

@@ -1,8 +1,10 @@
-# SWORDCAT: Nine Lives of Meow Island — Status
+# Pink Paw Knight (a Token Tails game) — Status
+
+(Working name and internal ids: `swordcat`. The Token Tails pass is summarised at the end; plan: docs/TOKENTAILS-PLAN.md.)
 
 Milestones **M0 (core engine)**, **M1 (meadow vertical slice)** and **M2 (Acts I–II: forest, town + hub, gate)** are done
 (GAME_DESIGN §19.10), and the **controls rework** (research/CONTROLS_SPEC.md: LoL-style iso camera, click / tap to move,
-mobile cluster) is integrated. `npm run check` = build, then the unit tests, then the Playwright smoke blocks.
+mobile cluster) is integrated. `npm run check` = production build, the unit tests, the hooks-on `build:test`, then the Playwright smoke blocks.
 
 ## Implemented
 - **Core:** Game loop, fixed-step systems, EventBus with the frozen event catalog, GameState, Assets (GLTF cache, `fitToHeight`, MODEL_FIT), Input (KBM, gamepad, touch), PostFX (MSAA, bloom, NaN-safe, quality tiers), ScriptedActor, the Appendix A config, and the `?test` / `?debug` hooks (`window.__GAME__`, lil-gui, stats). The asset prune step keeps `dist/` at about 76 MB.
@@ -30,13 +32,15 @@ mobile cluster) is integrated. `npm run check` = build, then the unit tests, the
 ## How to run
 ```
 npm install
-npm run dev            # http://localhost:5173/  (add ?debug for lil-gui + stats, ?test for hooks)
-npm run build          # dist/ (pruned assets)
-npm run test:unit      # node --test, ~1030 tests
-npm run smoke          # Playwright smoke against vite preview :4173 (needs a build); screenshots → tests/shots/
-npm run check          # all three
+npm run dev            # http://localhost:5175/  (add ?debug for lil-gui + stats, ?test for hooks; dev / build:test only)
+npm run build          # dist/ (production: pruned assets, bundle budgets, NO debug hooks: ?test / ?debug / ?perf / ?level ignored)
+npm run build:test     # dist-test/ (VITE_SWORDCAT_DEBUG=1: hooks on; the smoke bundle)
+npm run test:unit      # node --test, ~1080 tests
+npm run smoke          # Playwright smoke against vite preview of dist-test/ on :4173 (run build:test first); screenshots → tests/shots/
+npm run check          # build, test:unit, build:test, smoke
 ```
 Smoke options: `SMOKE_URL=http://localhost:<port>/` (use your own dev server), `SMOKE_ONLY=<area|block>`, `--headed`, `--verbose`, and `SMOKE_GPU=gl|d3d11|swiftshader`.
+The smoke refuses to run without `dist-test/` (it needs `window.__GAME__`, which `dist/` never has).
 `tests/shots/` is generated output and is gitignored. A curated set is in `docs/screens/`.
 
 ## Controls (iso camera, research/CONTROLS_SPEC.md; `?cam=classic` keeps the old orbit camera)
@@ -136,8 +140,9 @@ comic words, glock reward sounds, lazy systems (title-first boot), batched decal
   portrait fight); tests/shots/art/ (every preset), tests/shots/flow/ (whole M2 path).
 
 ### Gaps (honest list)
-- **JS heap (PERF §5) FAILs:** meadow idle on Med holds 202 MB (built) / 257 MB (dev) vs the 120 MB budget
-  (`perf:frame` heap gate). Likely retained GLB / audio ArrayBuffers after upload; needs a heap profile (core / assets).
+- ~~JS heap (PERF §5) FAILs: meadow idle on Med holds 202 MB (built)~~ Fixed 2026-10-14 (Token Tails fix round 1):
+  now **96 MB on Med / 88 MB on High (built `dist-test`, after the title and the meadow; budget 120 MB)**, see the
+  Token Tails section below.
 - AUTOCAM quantitative targets reported, not gated: phone engaged-foe visibility (landscape ≈ 93–96 % vs 98 %; portrait
   ≈ 67 % vs 92 %), portrait ground width 7.5 m vs 9 m (`minCatPxPortrait` 28 caps it: the spec's two numbers conflict),
   lead-down feet 45 % vs 30–36 % (ground below her 5.2 m vs 5.5 m), teamfight fit 0.8–0.9 s wall clock vs 0.6 s,
@@ -162,3 +167,128 @@ comic words, glock reward sounds, lazy systems (title-first boot), batched decal
 4. Companions: Pearl and Coo; the remaining hub keepers (Wardrobe opening by flag, Coo's postage refund in ui).
 5. Optional polish requests: `postfx.setGrade`, story's boss-yield and letter-card hooks.
 6. Keep `slice:meadow` and the `flow:*` playthrough green.
+
+## Token Tails pass 2026-10-13 (core, package SC3; plan: docs/TOKENTAILS-PLAN.md)
+The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swordcat`). Core changes:
+- **F4 production debug gating:** `?test` / `?debug` / `?perf` / `?level` / `?spawn` work only in the dev server and in
+  `npm run build:test` bundles (`VITE_SWORDCAT_DEBUG=1`). `Game.js` `debugAllowed(env)` + `parseParams(search, env,
+  { framed })` are pure and unit-tested; the `debug.js` import sits behind a compile-time constant, so `dist/` has no
+  debug chunk and no `__GAME__` string at all (checked by grep and by smoke `embed:production`). Embed mode never
+  enables hooks. `?seed`, `?quality`, `?mute`, `?cam` stay everywhere.
+- **F11 build / smoke infra:** `npm run build:test` → `dist-test/`; `npm run smoke` previews `dist-test/` (and refuses
+  with a clear message when it is missing); `check` = build, test:unit, build:test, smoke; `engines` node >= 22; the
+  merged `vite.config.js` comment is split; dev port 5175 (5173 is catnip-heist's); preview stays 4173.
+- **Embed bridge** (`src/core/embed.js`, §5.5): `?embed=1` inside a frame sets `<html data-embed="1">` before boot;
+  v1 envelope `{ ns: 'tt-swordcat', v: 1, type }`; source must be `window.parent`, origin in `VITE_EMBED_ORIGINS`
+  (default tokentails.com, www, localhost:3000); the first `hello` fixes the host origin and every post goes only to it.
+  hello → ready, session (stored), audio (master mute through `params.mute` + `audio.setVolumes`), pause / resume (ui
+  pause menu, else `game.pause`), level-complete / kitten-rescued / paused out. Unit: `tests/unit/embed.test.js`; smoke:
+  `embed:bridge`, `embed:wrong-origin`.
+- **F5 WebGL context loss:** preventDefault, loop stopped, `save.save('contextlost')`, a night / gold "Tap to continue"
+  panel (`src/core/recovery.js`); restore or tap reloads. Smoke `embed:bridge` kills the context with
+  `WEBGL_lose_context` and checks the panel.
+- **F6 load failures:** `LevelManager._load` imports the level module and preloads p0 first, then emits `level:loading`
+  and unloads the old level, then builds. A failed fetch keeps the old level, lifts the veil and shows Retry (resolves
+  null, never rejects); a failed module import (browsers cache it) makes Retry save and reload. `vite:preloadError`
+  reloads once a minute at most (sessionStorage guard). The boot error is a friendly panel with Reload. Unit:
+  `tests/unit/levelload.test.js`; smoke: `embed:level-retry`.
+- **F7 (part) CPU geometry release:** after warm-up and `level:loaded`, `releaseCpuOnUpload(level.root)` with skips for
+  shared GLB templates, Batched / Instanced / Skinned meshes, camera occluder / fade meshes, < 1024-vertex geometry and
+  position-aliased normals. Measured in the dev server: it frees only ≈ 0.4–0.7 MB per level (meadow 0.71 MB, town 0.39 MB
+  of non-position attributes; most level geometry is batched or instanced), so the 202 MB heap is mostly elsewhere
+  (SC5: audio bytes, GLB cache). Smoke `world`, `physics` green with it on.
+- **F21 / §2.6 index.html:** title "Pink Paw Knight · Token Tails", description, OG / Twitter tags with `og.jpg`
+  (1200 × 630), `favicon.png` (64 px) and `apple-touch-icon.png` (180 px) from the Token Tails logo on night #0B0820,
+  theme-color #0B0820, night → dusk splash with a gold glow (the original paw / sword / pink-bow SVG stays), pinch-zoom
+  allowed (the canvas keeps `touch-action: none`), Nunito preload.
+- **F20 hygiene:** `_alloc` / `_dbg` / `_fx` / `_rate` moved to `scripts/dev/` (`npm run perf:alloc`); `.gitignore`
+  adds `dist-*/`, `*.map`, research tool outputs, `.DS_Store`; README.md written (code licence: all rights reserved,
+  Token Tails, pending founder decision).
+
+### Open items (plan §8 and this pass)
+- No score saves to Token Tails (Phase 2 needs `shared/` + backend changes and a founder OK); no `GameType`.
+- Hosting / DNS for the build (default proposal: a same-site subdomain such as swordcat.tokentails.com) is not done.
+- Git history rewrite of `tests/shots` / `research/` media and deleting the unused source packs are founder decisions.
+- Phone-portrait AUTOCAM retune, bog / keep (M3), hero bake, hub LOD, meadow prop merging, UI scale, sound captions.
+- A code licence file (README says all rights reserved until the founder picks one); legal sign-off on the renames.
+- Heap: met (96 MB Med, 88 MB High built; see "Fix round 1"). The `perf:no-compile` (1 program during play),
+  `perf:spawn` (2 VisualPool misses) and `perf:composer high` (3 programs from the cinematic) perf gates still fail
+  under `SMOKE_PERF=1`; they are outside the default `npm run smoke` and were failing before this round.
+- `camera:occlusion` "the x-ray goes away once she is visible again" fails with and without the CPU release
+  (camera-owned, F12 / SC4).
+
+### Fix round 1 (2026-10-14)
+- **Heap (F7, acceptance 10):** a heap snapshot of the built meadow showed 17 × 4 MB RGBA copies of texture atlases
+  (≈ 68 MB) held by `world/Props.js` `pixelsOf` in a WeakMap keyed by images the glTF cache keeps alive. The copies are
+  needed only while templates bake vertex colours; the cache now drops 3 s after the last read
+  (`PIXEL_TTL_MS`, `releaseTexturePixels()`). The old 202 MB was also partly a measurement artefact:
+  `performance.memory.usedJSHeapSize` without `--enable-precise-memory-info` is a cached sample (allocating 80 MB in
+  the page left it at 202 MB). `perf:frame`'s heap gate now measures V8 used heap + ArrayBuffer backing stores through
+  CDP `Runtime.getHeapUsage` after a forced GC and logs the old sample beside it. Built `dist-test`, after the title and
+  the meadow: **88 MB on High** (V8 38.3 + ArrayBuffers 49.6) in `perf:frame` alone, **96 MB on Med** (V8 43.0 +
+  ArrayBuffers 52.6) at the end of the full `SMOKE_PERF=1 SMOKE_ONLY=perf` run. Same method before the fix: ≈ 150 MB.
+- **Hero outline:** the ink hull used round ellipsoids for her ears and a bounding ellipsoid for the furry head ruff,
+  which read as dark ear patches on the ivory coat and inked part of the bow. `buildOutline` now asks for a `tight`
+  proxy (ear cones fitted to the ear box, small closed props and the fur ruff / bib use their own triangles, the bow is
+  left out) and the hero ink is 1.4 px #7C3B41 (mascot maroon #5E0E18 mixed 20 % toward the coat). The x-ray proxy is
+  unchanged.
+- **Royal red cape from the start:** `GameState` cosmetics `capes ['cream', 'red'], cape 'red'`; `ECONOMY.capes.red`
+  'start'; shops / `equippedCape` / the story cape fallback default to red; `migrate` moves an old save still wearing
+  the old default cream to red once (a later cream choice is kept).
+- **Old wordmark in the DOM:** the story overlay built "SWORDCAT" into its fallback title; it now builds the wordmark
+  from `game.title` (`stLogoHtml`), and the title block is `aria-hidden` while off. A unit test scans every HTML text
+  run in `src/` template literals for the banned display words.
+- **Portrait logo:** the title / credits logo sizes by width too (`min(9.5vmin, 7.4vw)`, stroke scales with the size);
+  `ui:portrait` asserts the logo and its bow fit a 390 × 844 screen.
+- **Smoke on `dist-test`:** `camera:pullback-cs08` imported `/src/camera/CutsceneCamera.js` (404 in a build); the hooks
+  now expose `__GAME__.cutsceneCamera` (debug.js, hooks builds only).
+- IP hygiene: `docs/TOKENTAILS-PLAN.md` no longer names the creator handle, the token tickers or the fan series; two
+  comments that cited removed reference frames were reworded.
+
+## Token Tails edition (summary, 2026-10-14)
+- **What it is:** Pink Paw Knight, "A Token Tails Adventure", set on Purrhaven Isle. Clementine ("Clem") keeps her
+  pink satin bow on the left ear, now with the Token Tails mascot's ivory coat and crimson eyes, a royal red cape
+  with gold trim and a gold ":3" crest. A bowless Token Tails Cat (holding the ":3" coin) stands in the Pawsbury
+  Rescue House. Currency is catnip (game-local), Lantern Stones replace Vigil Stones, Snack Break replaces Milk
+  Break, Photo Cam replaces Meme Cam. Four lost kittens carry licensed Pink Paw names (Judas, Raudvis, Zare, Simas)
+  with a "made up adventures" credits line. No meme, memecoin or fan-series text remains in display strings.
+- **Embed:** `?embed=1` + postMessage bridge v1 (origin allowlist `VITE_EMBED_ORIGINS`); tokentails.com `/swordcat`
+  behind `NEXT_PUBLIC_SWORDCAT=1` + `NEXT_PUBLIC_SWORDCAT_URL` (picker card: `NEXT_PUBLIC_SWORDCAT_PICKER=1`), all off
+  by default. No score saves (Phase 2).
+- **Founder decisions (2026-10-14):** the game is now **Pink Paw Knight** ("A Token Tails Adventure"; internal ids and
+  save keys unchanged, world and hub names unchanged). Hosting is same origin at `tokentails.com/swordcat-game/`
+  (`npm run build:tokentails` = build + `scripts/copy-to-tokentails.mjs`); `/swordcat` frames it by default, and
+  `NEXT_PUBLIC_SWORDCAT_URL` is now an optional override.
+- **Final fix pass (2026-10-14, founder defaults applied):**
+  - Clem wears her pink bow from the first frame (title, intro, practice). `SwordcatModel._config` puts the bow on in
+    every outfit, `swordcat_tunic` gets it too and `swordcat_tunic_sword_nobow` is gone; `tutbow` stays as flavour
+    (Pearl straightens the bow; same reward card). Outfit names and the `sticker.bow` flag are unchanged, so old saves
+    and the tutorial work as before.
+  - Pearl's bow is lilac (#C3A6E0), so pink stays Clementine's alone.
+  - Smoke flake root cause (real game bug): skipping CS-09 ran its end block, which chained `play: 'cs10'`. CS-10 then
+    ran on the next level, and its end load (`town`/`hub`, after the results card) landed in the middle of a later block
+    (`enemies:onscreen-rule`: "the crossbowman vanished"; `enemies:telegraph-payload` in full runs). The same could
+    happen with Quit to Title during the gate ending. Fix: `StoryManager.halt()` (Quit to Title and the harness reset):
+    the queue is dropped and the running scene ends HALTED, so it chains no scene and changes no level. Also,
+    `LevelManager.requests` counts load requests, and an end load that awaited something is dropped when a newer load
+    was requested meanwhile. Unit tests are in `story.test.js` and `levelload.test.js`.
+  - Embed handshake: the host keeps saying `hello` until `ready` (every 0.5 s for 10 s, then every 2 s, with no hard
+    stop). It shows a "still loading" note with Reload at 10 s and a Reload / Back to games panel at 2 min, a late `ready`
+    still connects, and the handshake restarts when the frame reloads. Tests are in the tokentails
+    `swordcat-bridge.test.ts` / `swordcat-host.test.tsx`, plus a game-side test in `embed.test.js`.
+  - Exit button vs HUD: the host frame now fills the safe area. The exit button is 44 px at every width and sits 6 px
+    inside the frame's top-left corner. In embed mode the game keeps a 56 px corner free (`--embed-gut` in `ui.css`): the
+    top-left HUD moves right on wide screens and down on portrait phones. Smoke `embed:hud-corner` checks this at 1280×720,
+    390×844, 360×740 and 844×390.
+  - Token Tails Cat smudges: the two grey bars on its forehead were the brow capsules (coat colour × 0.53 on ivory). The
+    dark hood behind its head and the dark side patches were the ink hull, which follows the outermost fur shell while
+    the fur tips fade out. The cat now has `brows: false` and `outline: false` (honoured by KittenView and
+    KittenVisual), checked by `characters:ttcat`.
+  - HUD hearts: `touch.js heartRow()` shrinks a row that would wrap (each heart keeps at least 70 % of its size) instead
+    of dropping the 4th heart to a second line; max-HP upgrades still wrap to at most two rows.
+  - Text: `companions/lines.js` milk fallbacks now say tuna snack; the LICENSES.md opening names the © Token Tails logo
+    as the one exception; the `vite.config.js` SMOKE_NOHMR comment is corrected (no watcher means a stale transform
+    cache); the build makes `og:image` / `twitter:image` absolute and adds `og:url` (`scripts/social-meta.mjs`;
+    `VITE_SITE_URL`, default `https://tokentails.com/swordcat-game/`).
+- **Checks (2026-10-14, final pass):** `npm run build` and `npm run build:test` OK (bundle budgets within the gated limits). Before the rename, on the items 1–8 code: `npm run test:unit` 1087/1087 and full `npm run smoke` run A 258/258 with 0 failures (2986 s); run B was stopped at block 242/258 with 0 failures so far (wrap-up). After the A/B edits: `npm run test:unit` 1088/1088; smoke has not been rerun. Built heap was not re-measured.
+- **Still open:** Smoke has not been rerun after the Pink Paw Knight rename and the same-origin hosting change (A/B). B is only partly done: the copy into `client/public/swordcat-game/` has not been run or measured, the flag-on `/swordcat` dev-server check and its screenshots are not done, and the size figures in the tokentails GAMES.md / CLIENT.md (about 58 MB, about 560 files) come from the prune log, not from a measured copy. In close-ups the heroine's outline hull shows as a maroon band behind her head, the same cause as the Token Tails Cat's hood (in iso play it is the readability line). Plus plan §8 items.

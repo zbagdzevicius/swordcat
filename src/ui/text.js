@@ -9,15 +9,16 @@ import { LEVEL_IDS, KITTENS_BY_LEVEL, INPUT } from '../core/config.js';
  */
 export const UI_STRINGS = Object.freeze({
   'hud.riposte': 'Riposte!',
-  'menu.quitConfirm': 'Return to the title screen? Your progress up to the last Vigil Stone is kept.',
+  'menu.quitConfirm': 'Return to the title screen? Your progress up to the last Lantern Stone is kept.',
   'menu.close': 'Close',
   'pause.foundIn': '{region}',
   'pause.kittensCount': '{n}/{max} found',
   'pause.lettersCount': '{n}/{max} found',
   'credits.title': 'Credits',
   'credits.made': 'Made with love for one very small knight.',
-  'credits.team': 'Design · Code · Art · Music direction: the Swordcat team',
+  'credits.team': 'Design · Code · Art · Music direction: Token Tails',
   'credits.assets': 'Asset attribution',
+  'credits.pinkpaw': 'Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.',
   'vigil.swapNone': 'No squires yet. Rescue one!',
   'vigil.active': 'At your side',
   'results.infinite': '∞',
@@ -25,7 +26,7 @@ export const UI_STRINGS = Object.freeze({
   // ---- M2 hub shops (§13.3–§13.5) and the Quest Board (§12.5). `ui.*` keys are ui-local copy (strings.js may override).
   'ui.shop.barracks': 'Barracks',
   'ui.shop.satchel': 'Bigger Satchel {tier}',
-  'ui.shop.satchel.desc': 'Carry {n} milk bottles.',
+  'ui.shop.satchel.desc': 'Carry {n} tuna snacks.',
   'ui.shop.sharp': 'Sharpness {tier}',
   'ui.shop.sharp.desc': 'All your damage ×{mul}.',
   'ui.shop.quickCharge': 'Quick Charge',
@@ -35,8 +36,8 @@ export const UI_STRINGS = Object.freeze({
   'ui.shop.waveReach': 'Holy Wave Reach',
   'ui.shop.waveReach.desc': 'Holy Wave reaches {m} m.',
   'ui.shop.confirm': 'Buy?',
-  'ui.shop.confirmLong': 'Press again to buy for {n} fish.',
-  'ui.shop.buyHint': 'Costs {n} fish.',
+  'ui.shop.confirmLong': 'Press again to buy for {n} catnip.',
+  'ui.shop.buyHint': 'Costs {n} catnip.',
   'ui.shop.equipHint': 'Yours! Choose to equip it.',
   'ui.shop.equippedNote': 'Equipped. Looking sharp!',
   'ui.shop.maxed': 'Fully upgraded.',
@@ -47,7 +48,7 @@ export const UI_STRINGS = Object.freeze({
   'ui.shop.need.keep.brutus': 'Beat Sir Brutus to unlock.',
   'ui.shop.need.ending.seen': 'Finish the game to unlock.',
   'ui.shop.need.town.free': 'Free Pawsbury to unlock.',
-  'ui.shop.need.memeCam': 'Strike a legendary pose to unlock.',
+  'ui.shop.need.memeCam': 'Strike a picture-purrfect pose to unlock.',
   'ui.shop.need.shard2': 'Needs the second Dawnstone shard.',
   'ui.skin.borrowed': 'Borrowed Blade',
   'ui.skin.borrowed.desc': "Marmalade's old sword. Still a bit too big.",
@@ -67,14 +68,14 @@ export const UI_STRINGS = Object.freeze({
   'ui.cape.cream.desc': "Marmalade's old cape. Patched with love.",
   'ui.cape.red': 'Royal Red',
   'ui.cape.red.desc': 'From the Royal Wardrobe. Nothing else fit.',
-  'ui.cape.memeWhite': 'Meme White',
-  'ui.cape.memeWhite.desc': 'For legendary poses only.',
+  'ui.cape.memeWhite': 'Moonlight White',
+  'ui.cape.memeWhite.desc': 'For picture-purrfect poses.',
   'ui.cape.blue': 'Order Blue',
   'ui.cape.blue.desc': 'The colour of the old Order.',
   'ui.cape.green': 'Whiskerwood Green',
   'ui.cape.green.desc': 'Smells faintly of pine and cheese.',
   'ui.cape.midnight': 'Midnight',
-  'ui.cape.midnight.desc': 'For quiet vigils under the stars.',
+  'ui.cape.midnight.desc': 'For quiet watches under the stars.',
   'ui.cape.gold': 'Gold',
   'ui.cape.gold.desc': 'The colour of the Golden Hour.',
   'ui.look.missing': '{n} still out there',
@@ -82,7 +83,7 @@ export const UI_STRINGS = Object.freeze({
   'ui.board.here': 'You are here',
   'ui.board.new': 'New!',
   'ui.board.replay': 'Replay',
-  'ui.board.all': 'Every chapter is cleared. Replay any for fish!',
+  'ui.board.all': 'Every chapter is cleared. Replay any for catnip!',
   // ---- M2 letters viewer, results bests, settings extras
   'ui.letters.from': 'Found in {region}',
   'ui.letters.none': 'Somewhere out there, a letter waits to be found.',
@@ -103,7 +104,7 @@ export const UI_STRINGS = Object.freeze({
   'bar.jump': 'Jump · Hop fences and gaps. Attack in the air to Pounce.',
   'bar.ability': 'Kitten ability · Tap to cast at the cursor, hold to aim, let go to cast.',
   'bar.golden': 'Golden Hour · At full Valor: the sun is on your side.',
-  'bar.milk': 'Milk Break · Heals 2 hearts. Don’t get hit while you sip.',
+  'bar.milk': 'Snack Break · Heals 2 hearts. Don’t get hit while you munch.',
   'bar.meow': 'Meow · Hidden kittens answer. So do cows.',
   'bar.interact': 'Interact · Talk, open, rescue. Lit when something is near.',
   'bar.holy': 'Holy Slash ready: hold Attack until it turns gold.',
@@ -142,7 +143,7 @@ export const UI_STRINGS = Object.freeze({
   'settings.batterySaver': 'Battery saver',
   'title.press': 'Press any key to play!',
   'title.tap': 'Tap to play!',
-  'title.foot': 'Made with lots of purrs',
+  'title.foot': 'A Token Tails game',
   'title.settings': 'Settings',
   'menu.continue': 'Keep going!',
   'menu.newGame': 'New adventure',
@@ -179,7 +180,7 @@ export const UI_STRINGS = Object.freeze({
   'card.mochi.title': 'Mochi joined the party!',
   'card.mochi.line': "Shield Wall: tap his portrait and he'll hold the line.",
   'card.sage.title': 'Sage joined!',
-  'card.sage.line': 'Swap buddies at any Vigil Stone.',
+  'card.sage.line': 'Swap buddies at any Lantern Stone.',
   'card.clover.title': 'Clover joined!',
   'card.clover.line': "Three's a party.",
   'card.heartbell.title': 'Heart Bell!',
@@ -295,18 +296,18 @@ export const ACTION_GLYPH = Object.freeze({
     meow: 'L3', golden: 'RT', pause: 'Start', lockon: 'RB', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'R3', aim: 'R-stick',
     attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: 'D-pad ↓' },
   touch: { attack: '⚔', guard: 'Stand', dodge: 'Tumble', jump: 'Jump', interact: '!', confirm: 'Tap', back: 'Back', ability: 'Kitten',
-    milk: 'Milk', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Stick / tap', wasd: 'Left thumb', look: 'Drag right',
+    milk: 'Snack', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Stick / tap', wasd: 'Left thumb', look: 'Drag right',
     recenter: 'Tap', zoom: 'Pinch', aim: 'Drag', attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: '—' },
 });
 
 /** Semantic glyph tokens (§12 ui 3): resolve through the active bindings / device, never shown as written. */
-const SEMANTIC = new Set(['stand', 'tumble', 'jump', 'move', 'attack', 'interact', 'ability', 'milk', 'meow', 'golden', 'zoom', 'ls', 'rs', 'rb']);
+const SEMANTIC = new Set(['stand', 'tumble', 'jump', 'move', 'attack', 'interact', 'ability', 'milk', 'snack', 'meow', 'golden', 'zoom', 'ls', 'rs', 'rb']);
 
 /** Keyboard token (as written in strings.js) → action. */
 export const TOKEN_ACTION = Object.freeze({
   wasd: 'wasd', mouse: 'look', space: 'guard', shift: 'dodge', rmb: 'move', lmb: 'attack', j: 'attack', l: 'guard', k: 'dodge', f: 'jump',
   e: 'interact', enter: 'confirm', q: 'ability', r: 'milk', c: 'meow', v: 'golden', esc: 'pause', p: 'pause', tab: 'lockon', '⚔': 'attack',
-  stand: 'guard', tumble: 'dodge', jump: 'jump', move: 'move', attack: 'attack', interact: 'interact', ability: 'ability', milk: 'milk',
+  stand: 'guard', tumble: 'dodge', jump: 'jump', move: 'move', attack: 'attack', interact: 'interact', ability: 'ability', milk: 'milk', snack: 'milk',
   meow: 'meow', golden: 'golden', zoom: 'zoom', ls: 'move', rs: 'aim', rb: 'lockon', y: 'camLock', x: 'attackMove', h: 'stop',
 });
 
@@ -504,7 +505,7 @@ export function levelLetterId(levelId) {
   return i >= 0 ? `l${i + 1}` : null;
 }
 
-/** 'memeWhite' → 'Meme White'. */
+/** 'memeWhite' → 'Meme White' (id → words; display names come from strings). */
 export function titleCase(id) {
   return String(id ?? '').replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\b\w/g, (c) => c.toUpperCase()).trim();
 }

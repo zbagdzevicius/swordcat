@@ -4,3 +4,8 @@ research/videos/*.mp4
 research/videos/*.webm
 *.log
 tests/shots/
+dist-*/
+*.map
+research/next/tools/shots/
+research/next/tools/dist_perf2/
+.DS_Store

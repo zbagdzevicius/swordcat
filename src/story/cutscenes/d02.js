@@ -4,7 +4,7 @@
 // (LostKitten opts.play) and add Sage to the roster when the promise resolves.
 //   Sage: "Thanks for the landing."   Mochi: "Mrrf."  (only with Mochi)
 //   Sage: "You're the one with the sword bigger than you."   Clem: "Yes."   Sage: "...Fair."
-//   Toast: "Sage joined! Swap kittens at any Vigil Stone."
+//   Toast: "Sage joined! Swap kittens at any Lantern Stone."
 import * as THREE from 'three';
 import { say, cam, wait, sfx } from './lib.js';
 

@@ -87,8 +87,9 @@ function wrap(defs, body, vb = '0 0 60 220') {
 }
 
 /**
- * Swordcat from behind wearing cape `id` (viewBox 0 0 160 200): ginger ears with the pink bow on her left ear (viewer's
- * left from behind), silver pauldrons, the cape (colour, lining, gold hem) in a swaying group, a striped tail below.
+ * Clementine from behind wearing cape `id` (viewBox 0 0 160 200): ivory Token Tails coat (no stripes) with the pink bow on
+ * her left ear (viewer's left from behind), silver pauldrons, the cape (colour, lining, gold hem) in a swaying group, her
+ * long white tail below.
  */
 export function capeMannequin(id = 'cream') {
   const c = CAPES[id] ?? CAPES.cream;
@@ -96,17 +97,15 @@ export function capeMannequin(id = 'cream') {
   return `<svg class="art-cape" viewBox="0 0 160 200" aria-hidden="true"><defs>`
     + `<linearGradient id="${g}c" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${c.lining}"/><stop offset=".3" stop-color="${c.color}"/><stop offset=".55" stop-color="${c.sheen}" stop-opacity=".9"/><stop offset=".75" stop-color="${c.color}"/><stop offset="1" stop-color="${c.lining}"/></linearGradient>`
     + `<linearGradient id="${g}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F4F6F9"/><stop offset="1" stop-color="#8E949E"/></linearGradient>`
-    + `<radialGradient id="${g}f" cx=".5" cy=".35" r=".7"><stop offset="0" stop-color="#E8A86A"/><stop offset="1" stop-color="#C97A3E"/></radialGradient></defs>`
+    + `<radialGradient id="${g}f" cx=".5" cy=".35" r=".7"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#DCD3C8"/></radialGradient></defs>`
     // tail (behind the cape, curling out at the bottom right)
     + `<path d="M92 168c18 6 30 0 34-14 3-10 12-12 16-6" fill="none" stroke="${INK}" stroke-width="15" stroke-linecap="round"/>`
-    + '<path d="M92 168c18 6 30 0 34-14 3-10 12-12 16-6" fill="none" stroke="#D4935A" stroke-width="11" stroke-linecap="round"/>'
-    + '<path d="M108 172l4-9M122 164l7-6M134 150l7 2" stroke="#A65E2E" stroke-width="4" stroke-linecap="round"/>'
+    + '<path d="M92 168c18 6 30 0 34-14 3-10 12-12 16-6" fill="none" stroke="#F3EEE6" stroke-width="11" stroke-linecap="round"/>'
     // legs / sabatons
     + `<path d="M62 176h14v14H58c0-6 1-10 4-14ZM84 176h14c3 4 4 8 4 14H84Z" fill="url(#${g}s)" stroke="${INK}" stroke-width="2"/>`
     // head (back of the head) + ears
     + `<path d="M44 52 40 10 66 32ZM116 52l4-42-26 22Z" fill="url(#${g}f)" stroke="${INK}" stroke-width="2.2" stroke-linejoin="round"/>`
     + `<ellipse cx="80" cy="54" rx="40" ry="32" fill="url(#${g}f)" stroke="${INK}" stroke-width="2.2"/>`
-    + '<path d="M80 26v14M68 28l3 12M92 28l-3 12" stroke="#A65E2E" stroke-width="3.6" stroke-linecap="round"/>'
     // the bow: ALWAYS pink, on her LEFT ear (viewer's left from behind)
     + `<g transform="translate(46 22) rotate(-16)"><path d="M0 0-13-8c-2-1.2-4.4.2-4.4 2.6v10.8c0 2.4 2.4 3.8 4.4 2.6Z" fill="${PINK}" stroke="${PINK_DEEP}" stroke-width="2"/>`
     + `<path d="M0 0 13-8c2-1.2 4.4.2 4.4 2.6v10.8c0 2.4-2.4 3.8-4.4 2.6Z" fill="${PINK}" stroke="${PINK_DEEP}" stroke-width="2"/><circle r="3.6" fill="#E88AA6" stroke="${PINK_DEEP}" stroke-width="1.6"/>`
@@ -130,7 +129,9 @@ export function itemIcon(kind, opt = {}) {
         + `<path d="M8 18h32l-3 22c-.4 2.4-2.4 4-4.8 4H15.8c-2.4 0-4.4-1.6-4.8-4Z" fill="#B07A4A" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
         + `<path d="M8 18h32v8c-10 4-22 4-32 0Z" fill="#8C5A32" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
         + `<circle cx="24" cy="27" r="3.4" fill="${GOLD}" stroke="${INK}" stroke-width="1.4"/>`
-        + `<rect x="30" y="4" width="8" height="14" rx="2.5" fill="#F7F3EA" stroke="${INK}" stroke-width="1.6"/><rect x="31" y="2" width="6" height="4" rx="1" fill="${PINK_DEEP}" stroke="${INK}" stroke-width="1.2"/></svg>`;
+        // a tuna-snack tin peeking out (the Snack Break item; internal id `milk`)
+        + `<path d="M29 9.5c0-1 2.2-1.8 5-1.8s5 .8 5 1.8v8.5H29Z" fill="#C9D3DC" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/>`
+        + `<path d="M29 12.4h10v3.6H29Z" fill="${PINK}"/><ellipse cx="34" cy="9.5" rx="5" ry="1.8" fill="#E7EAEE" stroke="${INK}" stroke-width="1.2"/></svg>`;
     case 'sharp':
       return `<svg class="art-ico" viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="32" width="36" height="9" rx="3" fill="#8D8A84" stroke="${INK}" stroke-width="2"/>`
         + `<path d="M36 6l6 2-22 24-5-3Z" fill="#E7EAEE" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/><path d="M12 25l8 8" stroke="${GOLD}" stroke-width="4" stroke-linecap="round"/>`

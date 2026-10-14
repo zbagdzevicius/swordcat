@@ -46,18 +46,26 @@ async function settle(t, level, spawn = 'start', frames = 60) {
 const perf = (t) => t.G(() => window.__GAME__.perf());
 
 /**
- * PERF §5 memory gate: JS heap in play (performance.memory.usedJSHeapSize, which counts ArrayBuffer backing stores)
- * after a forced GC ≤ budget.heapMB of the active tier. Machine-independent, so it FAILs now (not REPORT). The dev
- * server adds a few MB of module records; the gate applies to it unchanged.
+ * PERF §5 memory gate: JS heap in play after a forced GC ≤ budget.heapMB of the active tier, measured as V8's used heap
+ * plus ArrayBuffer backing stores (CDP `Runtime.getHeapUsage`: usedSize + backingStorageSize). Machine-independent, so
+ * it FAILs (not REPORT). `performance.memory.usedJSHeapSize` is only the fallback: without Chrome's
+ * --enable-precise-memory-info it is a cached sample that does not move (checked 2026-10-14: +80 MB allocated in the
+ * page left it at 202 MB while the CDP figure went 92 → 174 MB), which is where the old "202 MB" came from. Both are
+ * logged. The dev server adds a few MB of module records; the gate applies to it unchanged.
  */
 async function heapGate(t, label) {
-  let cdp = null;
-  try { cdp = await t.page.context().newCDPSession(t.page); await cdp.send('HeapProfiler.collectGarbage'); }
-  catch { /* non-Chromium: measure without a GC */ } finally { await cdp?.detach().catch(() => {}); }
+  let cdp = null, precise = null;
+  try {
+    cdp = await t.page.context().newCDPSession(t.page);
+    await cdp.send('HeapProfiler.collectGarbage');
+    const u = await cdp.send('Runtime.getHeapUsage');
+    if (Number.isFinite(u?.usedSize)) precise = { mb: (u.usedSize + (u.backingStorageSize ?? 0)) / 1048576, v8: u.usedSize / 1048576, buffers: (u.backingStorageSize ?? 0) / 1048576, embedder: (u.embedderHeapUsedSize ?? 0) / 1048576 };
+  } catch { /* non-Chromium: measure without a GC */ } finally { await cdp?.detach().catch(() => {}); }
   const r = await t.G(() => { const p = window.__GAME__.perf(); return { heapMB: p.heapMB, budget: p.budget.heapMB, q: p.quality }; });
-  if (r.heapMB == null) { t.log(`perf:heap ${label}: performance.memory unavailable`); return; }
-  t.log(`perf:heap ${label} (${r.q}): ${r.heapMB.toFixed(0)} MB (budget ${r.budget} MB)`);
-  t.assert(r.heapMB <= r.budget, `perf:heap ${label} (${r.q}): JS heap ${r.heapMB.toFixed(0)} MB > ${r.budget} MB (PERF §5)`);
+  const mb = precise?.mb ?? r.heapMB;
+  if (mb == null) { t.log(`perf:heap ${label}: no heap measurement available`); return; }
+  t.log(`perf:heap ${label} (${r.q}): ${mb.toFixed(0)} MB (budget ${r.budget} MB)` + (precise ? ` = V8 ${precise.v8.toFixed(1)} + ArrayBuffers ${precise.buffers.toFixed(1)} MB (DOM ${precise.embedder.toFixed(1)} MB; performance.memory sample ${r.heapMB?.toFixed(0) ?? 'n/a'} MB)` : ' (performance.memory)'));
+  t.assert(mb <= r.budget, `perf:heap ${label} (${r.q}): JS heap ${mb.toFixed(0)} MB > ${r.budget} MB (PERF §5)`);
 }
 
 /** Frame intervals (ms) of the next n rendered frames, measured in the page. */
@@ -258,6 +266,39 @@ export default [
       const lt1 = (await perf(t)).longTasks;
       t.log(`long tasks in the 1 s after the first key press: ${lt1 - lt0}`);
       t.assert(lt1 - lt0 === 0, `perf:audio-unlock: ${lt1 - lt0} long task(s) > 50 ms after the first press`);
+    },
+  },
+  {
+    // SC5 / F7 heap: once the first gesture unlocks audio and the level's files are decoded, no raw file bytes stay
+    // resident (AudioManager._bytes or the Assets `bin:` cache) for a decoded file. Always on (≈ 15 s); logs the JS
+    // heap (after a forced GC) before and after the unlock for STATUS.
+    name: 'perf:audio-bytes', order: 87.5, level: null, timeout: 180000, reload: true,
+    async run(t) {
+      await settle(t, 'meadow', 'start', 30);
+      const probe = async () => {
+        let cdp = null;
+        try { cdp = await t.page.context().newCDPSession(t.page); await cdp.send('HeapProfiler.collectGarbage'); }
+        catch { /* non-Chromium */ } finally { await cdp?.detach().catch(() => {}); }
+        return t.page.evaluate(() => {
+          const a = window.__GAME__.ctx.audio, as = window.__GAME__.ctx.assets;
+          let bin = 0, binN = 0, both = 0;
+          for (const [k, v] of as._values) if (k.startsWith('bin:') && v?.byteLength) { bin += v.byteLength; binN++; if (a.buffers.has(k.slice(4))) both++; }
+          for (const p of a._bytes.keys()) if (a.buffers.has(p)) both++;
+          const heap = performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null;
+          return { heapMB: heap, binMB: bin / 1048576, binN, bytesN: a._bytes.size, decoded: a.buffers.size, both, ready: a.ready };
+        });
+      };
+      const pre = await probe();
+      await t.tap('KeyW', 1, 120);
+      const ok = await t.page.waitForFunction(() => { const a = window.__GAME__.ctx.audio; return a.ready && a._decoding.size === 0 && a._dq.length === 0; }, null, { timeout: 30000, polling: 200 }).then(() => true, () => false);
+      t.assert(ok, 'audio never unlocked / decodes never settled');
+      await t.wait(500);
+      const post = await probe();
+      const f = (r) => `heap ${r.heapMB?.toFixed(0) ?? 'n/a'} MB, bin: ${r.binN} files ${r.binMB.toFixed(1)} MB, audio bytes ${r.bytesN}, decoded ${r.decoded}`;
+      t.log(`perf:audio-bytes before unlock: ${f(pre)}`);
+      t.log(`perf:audio-bytes after unlock + decodes: ${f(post)}`);
+      t.assert(post.decoded > 0, 'nothing decoded after the unlock');
+      t.assert(post.both === 0, `F7: ${post.both} decoded file(s) still hold their raw bytes`);
     },
   },
   {

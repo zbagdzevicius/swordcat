@@ -52,10 +52,10 @@ export function computeLayout(w, h, o = {}) {
   // Edit-layout positions are the player's choice and stay put.
   const hero = o.hero ?? heroPoint(w, h, portrait);
   // the disc shrinks with the screen (heroClearR)
-  const clearR = heroClearR(w, h);
+  const clearR = heroClearR(w, h), drop = heroDrop(w, h, portrait);
   const dropped = [];
   const isCustom = (name) => { const c = o.layout?.[layoutKey(name, portrait)]; return Array.isArray(c) && c.length === 2 && c.every(Number.isFinite); };
-  const view = { w, h, left, right, bottom, top, yMin: hudBottom, hero, clearR, ring: T.deadRing, zone: stickZone, keep };
+  const view = { w, h, left, right, bottom, top, yMin: hudBottom, hero, clearR, drop, ring: T.deadRing, zone: stickZone, keep };
   const prio = (n) => { const i = BUTTON_PRIORITY.indexOf(n); return i < 0 ? 99 : i; };
   const clearHero = () => {
     const all = Object.keys(buttons).sort((a, b) => prio(a) - prio(b));
@@ -113,7 +113,7 @@ export function computeLayout(w, h, o = {}) {
   const chipView = { ...view, yMin: top + 4, ring: 0, clearR: Math.min(clearR, 60), zone: { x0: 0, x1: 0, y0: 0, y1: 0 } };
   const spot = freeSpot(want, cr, Object.values(buttons), chipView);
   const cancel = { x: spot?.x ?? want.x, y: spot?.y ?? want.y, r: cr };
-  return { buttons, dropped, anchor: { x: ax, y: ay }, portrait, scale: k, stickZone, hudBottom, hero, clearR, cancel };
+  return { buttons, dropped, anchor: { x: ax, y: ay }, portrait, scale: k, stickZone, hudBottom, hero, clearR, drop, cancel };
 }
 
 /**
@@ -130,6 +130,18 @@ export const HERO_CLEAR = 120;
  *  smaller on a short phone, and 9 buttons must still fit beside her: ≈ 105 px at 375, 89 px at 320). */
 export function heroClearR(w, h) { return (TOUCH.heroClear ?? HERO_CLEAR) * Math.min(1, Math.min(w, h) / 430); }
 
+/** How far (CSS px, at a 430 px short side) below the camera's rest point her chest can sit: AUTOCAM's lead-down lean
+ *  draws her ≈ 25 px under `cam.heroScreen()` in landscape at rest (smoke ui:touch-cluster measured the Meow button's
+ *  dead ring 3 px into her disc). The clearance disc is stretched down into a capsule by this much. */
+export const HERO_DROP = 32;
+
+/** The capsule's downward stretch for a viewport (scaled like heroClearR). Landscape only: in portrait her chest sits
+ *  at (≈ 6 px above) the rest point, and a stretched disc there moved Golden Hour and the SafeFrame anchor with it. */
+export function heroDrop(w, h, portrait = h > w * 1.05) { return portrait ? 0 : HERO_DROP * Math.min(1, Math.min(w, h) / 430); }
+
+/** Distance (px) from (x, y) to her clearance axis: the rest point stretched `drop` px down. */
+const heroDist = (x, y, hero, drop = 0) => Math.hypot(x - hero.x, y - Math.max(hero.y, Math.min(hero.y + drop, y)));
+
 /**
  * Her focus on screen (CSS px) at rest (no lead), from the iso rig's own framing (camera/IsoRig.isoFrameOffset and
  * CAMERA.iso.frameOffsetTouchX, the numbers FollowCamera feeds setViewOffset on a touch device): landscape she sits
@@ -142,9 +154,9 @@ export function heroPoint(w, h, portrait = h > w * 1.05) {
   return { x: w * (0.5 - offX), y: h * (0.5 + offY) };
 }
 
-/** Clearance (px) between a button's dead ring and the hero disc; < 0 = intrudes. */
-export function heroGap(b, hero, clearR = HERO_CLEAR) {
-  return Math.hypot(b.x - hero.x, b.y - hero.y) - b.r - TOUCH.deadRing - clearR;
+/** Clearance (px) between a button's dead ring and the hero disc (a capsule `drop` px down, see heroDrop); < 0 = intrudes. */
+export function heroGap(b, hero, clearR = HERO_CLEAR, drop = 0) {
+  return heroDist(b.x, b.y, hero, drop) - b.r - TOUCH.deadRing - clearR;
 }
 
 /** Does a circle (x, y, r) overlap the rect? */
@@ -157,7 +169,7 @@ const hitsRect = (x, y, r, q) => {
 function legal(p, r, v) {
   const { x, y } = p;
   if (x - r < v.left + 4 - 1e-6 || x + r > v.w - v.right - 4 + 1e-6 || y - r < v.yMin - 1e-6 || y + r > v.h - v.bottom - 4 + 1e-6) return false;
-  if (Math.hypot(x - v.hero.x, y - v.hero.y) - r - v.ring - v.clearR < -0.5) return false;
+  if (heroDist(x, y, v.hero, v.drop) - r - v.ring - v.clearR < -0.5) return false;
   const z = v.zone;
   if (z.x1 > z.x0 && x + r > z.x0 && x - r < z.x1 && y + r > z.y0 && y - r < z.y1) return false;
   return !v.keep.some((q) => hitsRect(x, y, r, q));

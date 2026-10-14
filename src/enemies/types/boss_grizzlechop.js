@@ -156,7 +156,7 @@ const TOSS_STATE = {
     e.brake(dt);
     const p = e.targetActor();
     if (!e.tossed) {
-      if (p && e.stateT < e.windupDur - TUNING.windupTrackStop) e.faceTo(p.pos, dt, TUNING.windupTurnRate);
+      if (p && e.stateT < e.windupDur - TUNING.windupTrackStop - 1e-6) e.faceTo(p.pos, dt, TUNING.windupTurnRate);
       if (e.stateT >= e.windupDur) {
         e.endTelegraph();
         e.tossed = true;

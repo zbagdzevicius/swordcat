@@ -624,6 +624,15 @@ export default [
       await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.BOSS_DEFEATED, { boss: window.__fakeBoss ?? g.ctx.enemies?.boss ?? null, id: 'boss_cacklejaw' }); window.__fakeBoss = null; });
       t.assert(await until(t, () => window.__GAME__.ctx.audio.musicPlayer.state().sting, 5000), 'victory sting after B2');
       await t.G(() => { const g = window.__GAME__; g.god(false); g.ctx.audio.stopAll(0.1); });
+      // the emulated B2 defeat starts story's post-boss scene (g01), which can still be loading when the block ends;
+      // skip it so it does not hold the next block's saves / mode (SC5: save:autosave after audio:gate)
+      const calm = await until(t, () => {
+        const c = window.__GAME__.ctx;
+        if (c.story?.isPlaying) { c.story.skipAll?.(); return false; }
+        if (c.game.mode === 'cutscene') c.game.setMode('play');
+        return true;
+      }, 15000);
+      if (!calm) t.warn('a story scene was still playing at the end of audio:gate');
     },
   },
 ];

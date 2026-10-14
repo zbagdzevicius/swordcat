@@ -7,6 +7,7 @@ import { measure, resolveFit } from './Assets.js';
 import { uViewport } from './uniforms.js';
 import { UBER_GROUPS } from './uber.js';
 import * as IsoRig from '../camera/IsoRig.js';
+import * as CutsceneCamera from '../camera/CutsceneCamera.js';
 
 const RING = 200;            // §19.8
 /** High-frequency names kept out of the name ring (still in lastEvent). */
@@ -70,7 +71,7 @@ export function installDebug(game) {
     },
 
     // ---- §19.8 ----
-    story: { play: (id) => ctx.story.play(id), flag: (k, v) => ctx.story.flag(k, v), skip: () => ctx.story.skip() },
+    story: { play: (id) => ctx.story.play(id), flag: (k, v) => ctx.story.flag(k, v), skip: () => ctx.story.skip(), halt: () => (ctx.story.halt ? ctx.story.halt() : ctx.story.skip()) },
     player: { setValor: (n) => ctx.player.setValor(n), setShards: (n) => { ctx.state.shards = n; }, setHp: (n) => { ctx.player.hp = n; } },
     // ---- PERF §12 / IMPLEMENTATION_PLAN §5 (C1): perf(), .snapshot(), .reset(), .setScale(s) ----
     perf: makePerfHook(game),
@@ -139,6 +140,8 @@ export function installDebug(game) {
     startBoss: () => ctx.levels.arenaNear(ctx.player.pos)?.lock(),
     /** camera/IsoRig.js pure helpers for smoke formulas (a build has no /src/ URLs to import). */
     isoRig: IsoRig,
+    /** camera/CutsceneCamera.js pure helpers (headSphere, HEAD_CLEAR...) for smoke, same reason. */
+    cutsceneCamera: CutsceneCamera,
     spawn: (type, x, z) => ctx.enemies.spawn(type, new THREE.Vector3(x, 0, z)),
     kittens: (n) => { ctx.state.kittens = KITTEN_IDS.slice(0, n); },
     objective: (id) => ctx.objectives.progress(id),

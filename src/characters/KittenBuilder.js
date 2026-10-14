@@ -302,7 +302,7 @@ export class Kitten {
     this._tail(A, kit, bind, boneIndex);
 
     // ---- armour + accessories
-    if (armour) addPlateArmour(A, { style: armour, pouch: cfg.outfit?.pouch !== false });
+    if (armour) addPlateArmour(A, { style: armour, pouch: cfg.outfit?.pouch !== false, crest: cfg.outfit?.crest ?? null });
     for (const a of acc) {
       const fn = ACCESSORIES[a.id];
       if (fn) fn(A, a);
@@ -1169,7 +1169,7 @@ export class Kitten {
     const d = this.cfg.capeDims || {};
     return this.bodyDrop ? { ...d, anchorY: (d.anchorY ?? CAPE_DEFAULTS.anchorY) + this.bodyDrop } : d;
   }
-  /** Meme Cam: cross-fade the hero cape to the looping sway (GAME_DESIGN §7.8) and back. */
+  /** Photo Cam: cross-fade the hero cape to the looping sway (GAME_DESIGN §7.8) and back. */
   setCapeMode(mode, o) {
     this._capeMode = mode;
     // an off-screen cat (activity ≥ 1) keeps the shader sway; the requested mode applies when it comes back

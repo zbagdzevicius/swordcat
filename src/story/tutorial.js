@@ -4,7 +4,7 @@
 // Seven lessons on the sunny practice field (meadow, `meadow_morning`), Pearl guiding from a bubble, each one ending in
 // a sticker (E.REWARD) and the next lesson 0.6 s later:
 //   move  race Pearl to the straw dummy (done within PRACTICE.bonkR of a dummy, or 10 m travelled; 3 sun sparkles)
-//   bonk  Snip–Snap–Swoosh on a dummy (slash3, or 6 dummy hits) → `tutbow`: Pearl ties the Pink Bow (friend card)
+//   bonk  Snip–Snap–Swoosh on a dummy (slash3, or 6 dummy hits) → `tutbow`: Pearl straightens the Pink Bow (flavour; friend card)
 //   jump  hop the 1.0 m inner fence (z −87, x −20…−2) in either direction (sets flag `tut.jump.done`: the nav link)
 //   roll  tumble past Sir Sacky (8, −84)
 //   stand block Sir Wobble once            parry  parry him once (the first swing runs in 0.45 slow motion)
@@ -518,6 +518,10 @@ export class Tutorial {
       this.pending = true;
       this.log.advance();
       this._hide(false);
+      // a Meow inside the wipe's first half (a quick ⚔-free tap right by the cow on touch) used to leave the wipe timer
+      // running: it then despawned the Pearl `tutpearl` had just spawned, her face / clip waits hung to their 30 s
+      // timeouts and practice never ended. Finish the hiding now, before the scene spawns her in the cow's lee.
+      if (this._wipeT) { const off = this._wipeT; this._wipeT = null; off(); this._wipeNow(0.2); }
       Promise.resolve(this.story?.play?.('tutpearl')).finally(() => this._end(false));
       return;
     }
@@ -631,15 +635,17 @@ export class Tutorial {
   _hideAndSeek() {
     const ctx = this.ctx, w = PRACTICE.wipe;
     this.story?.cinema?.apply?.({ fade: { to: FADE_COLOR, alpha: 1, dur: w * 0.35 } });
-    this._wipeT = setTimeoutish(ctx, w * 0.45, () => {
-      const a = this._pearl(false);
-      if (a) { try { ctx.companions?.despawn?.(a); } catch { /* gone */ } }
-      this._wipeT = null;
-      this._hidden = true;
-      try { ctx.levels?.current?.critter?.(PRACTICE.cowId)?.setTail?.('pearl'); } catch { /* world optional */ }
-      this.story?.cinema?.apply?.({ fade: { alpha: 0, dur: w * 0.55 } });
-    });
+    this._wipeT = setTimeoutish(ctx, w * 0.45, () => { this._wipeT = null; this._wipeNow(w * 0.55); });
     this._cow = { farT: 0, said: new Set() };
+  }
+
+  /** The wipe's middle: the guide Pearl goes into hiding (despawned), the cow shows her tail, the cream fades out. */
+  _wipeNow(fadeOut) {
+    const ctx = this.ctx, a = this._pearl(false);
+    if (a) { try { ctx.companions?.despawn?.(a); } catch { /* gone */ } }
+    this._hidden = true;
+    try { ctx.levels?.current?.critter?.(PRACTICE.cowId)?.setTail?.('pearl'); } catch { /* world optional */ }
+    this.story?.cinema?.apply?.({ fade: { alpha: 0, dur: fadeOut } });
   }
 
   /**

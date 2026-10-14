@@ -13,7 +13,7 @@ import {
 } from '../../src/ui/text.js';
 import { resultRows, RESULTS } from '../../src/ui/results.js';
 import { ToastQueue, TOAST, iconFor } from '../../src/ui/toasts.js';
-import { MenuNav, kittenCells, letterCards, licensesHtml, continueSub } from '../../src/ui/menus.js';
+import { MenuNav, kittenCells, letterCards, licensesHtml, continueSub, embedMode, pauseExtras, coBrandHtml, creditsTopHtml, controlLabel } from '../../src/ui/menus.js';
 import {
   SETTINGS, SETTING_BY_KEY, SETTING_GROUPS, readSetting, settingLocked, stepSetting, sliderFromFrac, sliderFrac,
   formatSetting, applySetting,
@@ -24,7 +24,9 @@ import { parseFade, CINEMA } from '../../src/ui/cinema.js';
 import { DIALOG } from '../../src/ui/dialog.js';
 import { portraitSVG, portraitKind, luminance } from '../../src/ui/portraits.js';
 import { tagLabel } from '../../src/ui/prompts.js';
-import { FONT_FILES } from '../../src/ui/fonts.js';
+import { FONT_FILES, FONT_LICENSES } from '../../src/ui/fonts.js';
+import * as Icons from '../../src/ui/icons.js';
+import { catnipLabel } from '../../src/ui/hud.js';
 import manifest from '../../src/ui/assets.manifest.js';
 
 const ctx0 = () => fakeCtx({ systems: false });
@@ -356,15 +358,24 @@ test('interaction tag label: short prompt.<kind>, else the prompt without its [k
 test('fonts: every §14.1 face is in the manifest and on disk', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  // ART §9.2 / K9: Fredoka only (a woff2 Latin subset of the variable font; PERF I2)
-  assert.equal(FONT_FILES.length, 1);
-  assert.equal(FONT_FILES[0].family, 'Fredoka');
-  assert.match(FONT_FILES[0].file, /\.woff2$/);
+  // Token Tails (TOKENTAILS-PLAN §2.6): Nunito body (Latin + Latin Extended), Passion One 900 titles, Fredoka fallback;
+  // every face a woff2 (PERF I2), every licence shipped and listed
+  assert.deepEqual([...new Set(FONT_FILES.map((f) => f.family))], ['Nunito', 'Passion One', 'Fredoka']);
+  assert.ok(FONT_FILES.some((f) => f.file === 'fonts/nunito-latin-wght-normal.woff2'), 'the Nunito Latin file core preloads');
+  assert.ok(FONT_FILES.some((f) => /nunito-latin-ext/.test(f.file) && /U\+0100-02BA/.test(f.unicodeRange)), 'Latin Extended (ž, ė, ų …)');
+  assert.equal(FONT_FILES.find((f) => f.family === 'Passion One').weight, '900');
   assert.ok(!manifest.some((f) => /Cinzel|Uncial|MedievalSharp/.test(f)), 'no medieval faces in the ui manifest');
   for (const f of FONT_FILES) {
+    assert.match(f.file, /\.woff2$/);
     assert.ok(manifest.includes(f.file), f.file);
     assert.ok(fs.existsSync(path.join('public/assets', f.file)), `${f.file} exists`);
   }
+  for (const f of [...FONT_LICENSES, 'ui/tokentails-logo.webp']) {
+    assert.ok(manifest.includes(f), `${f} in the manifest`);
+    assert.ok(fs.existsSync(path.join('public/assets', f)), `${f} exists`);
+  }
+  assert.match(fs.readFileSync('public/assets/fonts/licenses/LICENSE-nunito.txt', 'utf8'), /SIL OPEN FONT LICENSE/i);
+  assert.match(fs.readFileSync('public/assets/fonts/licenses/LICENSE-passion-one.txt', 'utf8'), /SIL OPEN FONT LICENSE/i);
 });
 
 // ------------------------------------------------------------------ the UI facade (node: no DOM)
@@ -531,7 +542,7 @@ test('shops: skins unlock by kittens / flags, equip writes cosmetics and autosav
 test('shops: capes: start / flag / meme cam / 80-fish buys; the bow is never a cape', () => {
   const { ctx, st } = shopCtx({ fish: 100 });
   assert.equal(capeUnlocked(st, 'cream'), true);
-  assert.equal(itemState(st, 'cape:red').status, 'locked');
+  assert.equal(capeUnlocked(st, 'red'), true, 'Token Tails: the royal red cape is hers from the start');
   assert.equal(itemState(st, 'cape:memeWhite').lockKey, 'ui.shop.need.memeCam');
   st.memeCamSeen = 1;
   assert.equal(itemState(st, 'cape:memeWhite').status, 'owned');
@@ -887,7 +898,7 @@ import { flyPoint } from '../../src/ui/flyIcons.js';
 import { HudTuck, TUCK } from '../../src/ui/hud.js';
 import { countText, resultRows as resultRows2 } from '../../src/ui/results.js';
 import { borderPlace, inHoles, perimeterPoint, perimeterS, ARROW_GLYPHS, ARROW } from '../../src/ui/threatArrows.js';
-import { pinchStarted, PINCH, LESSON_BUTTONS, TouchControls } from '../../src/ui/touch.js';
+import { pinchStarted, PINCH, LESSON_BUTTONS, TouchControls, heartRow, HEART_ROW } from '../../src/ui/touch.js';
 import { cooldownStart } from '../../src/ui/abilityBar.js';
 import { titleButtons, stickerCells, STICKER_IDS, TITLE } from '../../src/ui/menus.js';
 import { GLYPH_NAMES } from '../../src/ui/icons.js';
@@ -1121,6 +1132,8 @@ test('ui.W7 / WA §2.7 dark-literal lint: no colour with HSV V < 0.20 in src/ui 
       if (![3, 4, 6, 8].includes(h.length)) continue;
       const full = (h.length <= 4 ? [...h.slice(0, 3)].map((c) => c + c).join('') : h.slice(0, 6)).toUpperCase();
       const v = Math.max(parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)) / 255;
+      // Token Tails night (TOKENTAILS-PLAN §2.6): the title rim, loading veil and menu scrims in ui.css only
+      if (f === 'ui.css' && ['0B0820', '17112F'].includes(full)) continue;
       if (v < 0.2 && !allow.has(`#${full}`)) bad.push(`${f}: ${m[0]}`);
     }
   }
@@ -1141,10 +1154,89 @@ test('WA §5.4 sticker book + §5.5 fly-to-HUD: stickers read save flags; the fl
   assert.deepEqual([end.x, end.y], [200, 100]);
 });
 
-test('PERF I2 / ART G17: the boot font is one Fredoka woff2 (no Cinzel / Uncial / MedievalSharp in ui code)', () => {
-  assert.ok(!/Cinzel|Uncial|MedievalSharp/.test(nfs.readFileSync('src/ui/fonts.css', 'utf8')));
-  const sz = nfs.statSync(npath.join('public/assets', FONT_FILES[0].file)).size;
-  assert.ok(sz < 100 * 1024, `woff2 subset ${sz} B`);
+test('PERF I2 / ART G17: every boot font is a small woff2 (no Cinzel / Uncial / MedievalSharp in ui code)', () => {
+  const css = nfs.readFileSync('src/ui/fonts.css', 'utf8');
+  assert.ok(!/Cinzel|Uncial|MedievalSharp/.test(css));
+  assert.match(css, /--f-round:\s*'Nunito', 'Fredoka'/); assert.match(css, /--f-display:\s*'Passion One'/);
+  let total = 0;
+  for (const f of FONT_FILES) { const sz = nfs.statSync(npath.join('public/assets', f.file)).size; total += sz; assert.ok(sz < 100 * 1024, `${f.file} ${sz} B`); }
+  assert.ok(total < 200 * 1024, `all faces ${total} B`);
+});
+
+// ------------------------------------------------------------------ Token Tails brand (TOKENTAILS-PLAN §2.3, §2.6, §5.5)
+test('logo: the bow ties on the first "O"; a title without one gets it on the first letter', () => {
+  const o = Icons.logoHtml('SWORDCAT');
+  assert.equal((o.match(/logo-bow/g) ?? []).length, 1);
+  assert.match(o, /<span class="logo-l logo-o" style="--i:2">O<span class="logo-bow">/);
+  const pk = Icons.logoHtml('PINK PAW KNIGHT', 'A Token Tails Adventure');
+  assert.equal((pk.match(/logo-bow/g) ?? []).length, 1, 'exactly one bow');
+  assert.match(pk, /<span class="logo-l logo-first" style="--i:0">P<span class="logo-bow">/);
+  assert.ok(!/logo-o/.test(pk));
+  assert.match(pk, /&nbsp;/); assert.match(pk, /logo-sub">A Token Tails Adventure</);
+  assert.match(Icons.logoHtml('  ox'), /--i:2">o<span class="logo-bow"/, 'lower-case o counts');
+  assert.match(Icons.logoHtml(' KIT'), /logo-first" style="--i:1">K/, 'leading spaces are skipped');
+  assert.ok(!/logo-bow/.test(Icons.logoHtml('')), 'empty title: no bow, no crash');
+  const escd = Icons.logoHtml('A<B');
+  assert.ok(escd.includes('style="--i:1">&lt;</span>') && !escd.includes('<B'), 'letters are escaped');
+  assert.match(Icons.logoHtml(), /logo-first/, 'the default is the Token Tails title');
+});
+
+test('catnip and snack icons keep their ids (fish / milk) with the new art', () => {
+  const one = Icons.fish(), ten = Icons.fish(true);
+  for (const svg of [one, ten]) { assert.match(svg, /class="ico-fish ico-catnip/); assert.match(svg, /<\/svg>$/); }
+  assert.ok(!/is-gold/.test(one) && /is-gold/.test(ten), 'golden catnip for 10');
+  assert.ok(/#FFCC55/.test(ten) && !/#FFCC55/.test(one));
+  const full = Icons.milkBottle(true), empty = Icons.milkBottle(false);
+  assert.match(full, /class="ico-milk ico-snack"/); assert.match(empty, /class="ico-milk ico-snack"/);
+  assert.ok(full.length > empty.length, 'the empty tin is an outline');
+  // Clementine's head: ivory, crimson eyes, pink bow; kittens keep their stripes when asked
+  const clem = Icons.catHead();
+  assert.ok(clem.includes('#F3EEE6') && clem.includes('#B3212F') && clem.includes(Icons.PINK) && !clem.includes('#D4935A'));
+  assert.match(Icons.catHead({ deep: '#9A8B6E', bow: false }), /stroke="#9A8B6E"/);
+  assert.ok(!Icons.sleepingCat().includes('#D4935A'), 'the game-over cat is the ivory coat');
+  const ctx = ctx0();
+  assert.equal(catnipLabel(ctx, 7), tx(ctx, 'shop.cost', { n: 7 }), 'the shop cost copy');
+  ctx.strings = { has: (k) => k === 'shop.cost', t: (k, v) => `${v.n} catnip` };
+  assert.equal(catnipLabel(ctx, 7), '7 catnip');
+});
+
+test('credits: "Not included" sections are skipped; team and Pink Paw lines on top', () => {
+  const md = '# Licenses\n\n## Fonts\n- Nunito, OFL\n\n## Not included (never shipped)\n- memecoin pack\n### Sub of it\n- also hidden\n\n## Music\n- CC0 song\n'
+    + '## **Not Included** either\n| a | b |\n|---|---|\n| hidden | row |\n';
+  const html = licensesHtml(md);
+  assert.ok(!/memecoin|also hidden|Not included|Sub of it|hidden/i.test(html), html);
+  assert.match(html, /Nunito, OFL/); assert.match(html, /<h4>Music<\/h4>/); assert.match(html, /CC0 song/);
+  assert.match(licensesHtml('## Not included\n- x\n# Top\n- y'), /<h4>Top<\/h4><p>y<\/p>/, 'a higher heading ends the skip');
+  const ctx = ctx0();
+  ctx.strings = { has: (k) => k === 'credits.team', t: () => 'Token Tails' };
+  const base = creditsTopHtml(ctx);
+  assert.match(base, /class="cr-team"/);
+  assert.ok(!/credits\.pinkpaw|cr-pinkpaw/.test(base), 'no raw key when strings lacks credits.pinkpaw');
+  const S = { 'credits.team': 'Token Tails', 'credits.pinkpaw': 'Four kittens share names with real Pink Paw cats.', 'title.foot': 'A Token Tails game' };
+  ctx.strings = { has: (k) => k in S, t: (k) => S[k] ?? k };
+  const top = creditsTopHtml(ctx);
+  assert.ok(top.indexOf('cr-team') < top.indexOf('cr-pinkpaw'));
+  assert.match(top, /Token Tails/); assert.match(top, /Pink Paw/);
+  const brand = coBrandHtml({ ...ctx, assets: { url: (p) => `./assets/${p}` } });
+  assert.match(brand, /<img class="tt-logo" src="\.\/assets\/ui\/tokentails-logo\.webp" alt=""/);
+  assert.match(brand, /A Token Tails game/);
+  assert.equal(controlLabel(ctx, 'milk', 'Snack Break'), 'Snack Break', 'built-in label without a controls.* key');
+  ctx.strings = { has: (k) => k === 'controls.milk', t: () => 'Snack time' };
+  assert.equal(controlLabel(ctx, 'milk', 'Snack Break'), 'Snack time');
+});
+
+test('embed mode (<html data-embed="1">): no Quit to Title in the pause menu, no fullscreen request', () => {
+  assert.equal(embedMode(null), false);
+  assert.equal(embedMode({ documentElement: { dataset: {} } }), false);
+  assert.equal(embedMode({ documentElement: { dataset: { embed: '0' } } }), false);
+  assert.equal(embedMode({ documentElement: { dataset: { embed: '1' } } }), true);
+  assert.equal(embedMode(), false, 'node: no document');
+  assert.deepEqual(pauseExtras({ hub: true }), ['hub', 'quit']);
+  assert.deepEqual(pauseExtras({ hub: true, embed: true }), ['hub']);
+  assert.deepEqual(pauseExtras({ embed: true }), []);
+  assert.deepEqual(pauseExtras(), ['quit']);
+  const src = nfs.readFileSync('src/ui/menus.js', 'utf8');
+  assert.match(src, /!document\.fullscreenElement && !embedMode\(\)/, 'the touch fullscreen request is skipped in embed mode');
 });
 
 test('requests/ui.md: pathPreview is a 3-way choice (Auto / On / Off) inside config SETTING_VALUES', async () => {
@@ -1440,4 +1532,33 @@ test('review: the beacon edge pointer slides off HUD blocks along its border', a
   const free = dodgeRects({ x: 600, y: m }, counters, W, H);
   assert.deepEqual(free, { x: 600, y: m }, 'a free spot stays');
   assert.deepEqual(dodgeRects({ x: 1, y: 2 }, null, W, H), { x: 1, y: 2 });
+});
+
+test('HUD: the base 4 hearts stay on one row on a narrow phone (shrink, not wrap); upgrades wrap to at most two rows', () => {
+  const hw = 25.6, gap = 2.24;                                         // 1.6em / .14em at the 16 px floor
+  // plenty of room: unchanged
+  assert.deepEqual(heartRow(4, hw, gap, 200), { cols: 4, w: hw });
+  // 390 × 844 / 360 × 740 portrait: ~100 / ~80 unscaled px short of ❚❚ → one row, a little smaller
+  for (const room of [100, 82]) {
+    const r = heartRow(4, hw, gap, room);
+    assert.equal(r.cols, 4, `room ${room}: one row`);
+    assert.ok(r.w < hw && r.w >= hw * HEART_ROW.minK, `room ${room}: w ${r.w.toFixed(1)}`);
+    assert.ok(4 * r.w + 3 * gap <= room + 1e-9, 'fits the room');
+  }
+  // max-HP upgrades (8 hearts) in the same room: two rows of 4 at full size
+  assert.deepEqual(heartRow(8, hw, gap, 112), { cols: 4, w: hw });
+  // too many for two rows: half per row, shrunk
+  const big = heartRow(12, hw, gap, 112); assert.equal(big.cols, 6); assert.ok(big.w < hw);
+  assert.deepEqual(heartRow(0, hw, gap, 50), { cols: 0, w: hw });
+});
+
+test('dom: clearVar drops setVar\'s cache too, so the same value can be set again (the hearts lost --heart-w every other fit)', async () => {
+  const { setVar, clearVar } = await import('../../src/ui/dom.js');
+  const props = new Map();
+  const e = { style: { setProperty: (k, v) => props.set(k, v), removeProperty: (k) => props.delete(k) } };
+  setVar(e, '--heart-w', '20.90px');
+  clearVar(e, '--heart-w');
+  assert.equal(props.has('--heart-w'), false);
+  setVar(e, '--heart-w', '20.90px');
+  assert.equal(props.get('--heart-w'), '20.90px', 'set again after a clear');
 });

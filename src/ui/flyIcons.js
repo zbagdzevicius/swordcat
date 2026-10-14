@@ -1,4 +1,5 @@
-// src/ui/flyIcons.js  (owner: ui) — WARM_ADVENTURE_SPEC §5.5 (CL §6) fly-to-HUD: a picked-up fish (heart, milk) pops
+// src/ui/flyIcons.js  (owner: ui) — WARM_ADVENTURE_SPEC §5.5 (CL §6) fly-to-HUD: picked-up catnip (id `fish`; golden
+// catnip `fishGold` for a 10-piece), a heart or a snack tin (id `milk`) pops
 // out of the world as a DOM icon and flies to its HUD counter along a quadratic Bézier (control point PICKUP_FX.flyLift
 // px above the midpoint, PICKUP_FX.flyMs), then the counter bumps 1.25 → 1 over 0.2 s.
 //
@@ -23,7 +24,7 @@ export function flyPoint(t, dx, dy, lift = P.flyLift, out = { x: 0, y: 0 }) {
   return out;
 }
 
-const ICON = { fish: () => I.fish(), smallHeart: () => I.heart('full'), heart: () => I.heart('full'), milk: () => I.milkBottle(true) };
+const ICON = { fish: () => I.fish(), fishGold: () => I.fish(true), smallHeart: () => I.heart('full'), heart: () => I.heart('full'), milk: () => I.milkBottle(true) };
 const _v = new THREE.Vector3(), _f = new THREE.Vector3(), _d = new THREE.Vector3();
 
 export class FlyIcons {

@@ -8,9 +8,9 @@ import { assetUrl, canvas2d, mulberry32, hashString, GeoBuilder, mat, rgb, mixRg
 import { kitMaterial, makeToonMaterial } from './materials.js';
 
 /** Snickerpack titles (ENEMIES.hyena.plateWords + the stealer's word, GAME_DESIGN §2.4). */
-export const PLATE_WORDS = Object.freeze(['HATER', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER', 'POST STEALER', 'HATER-IN-CHIEF']);
+export const PLATE_WORDS = Object.freeze(['GRUMP', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER', 'SNACK SNATCHER', 'GRUMP-IN-CHIEF']);
 /** Friend words for plates whose foe word has no config pair (bosses; WA §8.3). */
-export const FRIEND_WORDS = Object.freeze({ 'HATER-IN-CHIEF': 'HYPE-IN-CHIEF', 'POST STEALER': 'POSTMASTER' });
+export const FRIEND_WORDS = Object.freeze({ 'GRUMP-IN-CHIEF': 'CHEER-IN-CHIEF', 'SNACK SNATCHER': 'SNACK SHARER' });
 /** The plate font (K9: Fredoka only; the Latin woff2 ui ships). */
 export const PLATE_FONT = 'Fredoka';
 /**
@@ -90,7 +90,7 @@ function drawRow(g, word, y0, Wd, rowH, ink, rnd, family) {
  * @param {{seed?: number, w?: number, h?: number, ink?: string, scratch?: string, friend?: string|null, friendInk?: string}} [o]
  * @returns {THREE.CanvasTexture|null}
  */
-export function makePlateTexture(word = 'HATER', o = {}) {
+export function makePlateTexture(word = 'GRUMP', o = {}) {
   const Wd = o.w ?? PLATE.w, Ht = o.h ?? PLATE.h;
   const c = canvas2d(Wd, Ht);
   if (!c) return null;
@@ -148,7 +148,7 @@ const TONES = Object.freeze({
  * @param {string} word
  * @param {{seed?: number, style?: 'rusty'|'iron'|'black', curve?: number, height?: number, trim?: string, friend?: string|null}} [o]
  */
-export function buildPlate(word = 'HATER', o = {}) {
+export function buildPlate(word = 'GRUMP', o = {}) {
   const group = new THREE.Group(); group.name = 'plate:' + word;
   const R = o.curve ?? 0.85, h = o.height ?? 0.72, span = 1.0 / R; // arc length 1 → angle
   const style = o.style || 'rusty', T = TONES[style] ?? TONES.rusty;

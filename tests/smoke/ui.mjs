@@ -2,7 +2,7 @@
 // Screenshots → tests/shots/ui/*.png. Blocks: HUD (+ boss bar, objective, toasts, threat arrows, interaction tag, story
 // prompt, tutorial hint, lock pips), dialogue + cinema (letterbox, caption, chapter card, life lost), menus (pause,
 // settings, kittens, letters, vigil, game over → retry), title flow (title → main → new game → settings → credits),
-// results (showResults resolves on confirm), touch controls, Meme Cam caption, ui:warm (the warm-adventure layers).
+// results (showResults resolves on confirm), touch controls, Photo Cam caption, ui:warm (the warm-adventure layers).
 // CONTROLS_SPEC (iso controls): ui:ability-bar (desktop bar: glyphs per preset, Tumble + kitten cooldown sweeps,
 // tooltip, Grit arc, cursors, HP pills, controls card per preset, §10.7 settings), ui:touch-cluster (844 × 390 hasTouch:
 // ⚔ tap swings, 🛡 hold guards, a swipe tumbles, the kitten drag aims and ✕ cancels, smart cast, Edit layout) and
@@ -403,6 +403,19 @@ export default [
       await inPage(t, () => window.__GAME__.setMode('play'));
       await t.wait(200);
       t.assert(!(await inPage(t, () => !!document.querySelector('.menu--pause'))), 'external setMode(play) closes the pause menu');
+      // TOKENTAILS-PLAN §5.5 embed mode: the Token Tails host owns the exit, so the pause menu has no Quit to Title
+      const quitIn = (embed) => inPage(t, async (on) => {
+        const g = window.__GAME__, de = document.documentElement;
+        if (on) de.dataset.embed = '1'; else delete de.dataset.embed;
+        g.ctx.ui.pause(); await new Promise((r) => setTimeout(r, 300));
+        const label = g.ctx.strings.t('pause.quit');
+        const n = [...document.querySelectorAll('.menu--pause .mi .btn-lbl')].filter((b) => b.textContent === label).length;
+        delete de.dataset.embed; g.setMode('play');
+        return n;
+      }, embed);
+      const qOff = await quitIn(false), qOn = await quitIn(true);
+      t.assert(qOff === 1 && qOn === 0, `Quit to Title: ${qOff} outside the host page, ${qOn} in embed mode`);
+      await t.wait(200);
       // Vigil Stone menu
       await inPage(t, () => { const g = window.__GAME__; g.ctx.state.companions.unlocked = ['mochi']; g.ctx.ui.openVigil(); });
       await t.wait(500);
@@ -501,7 +514,13 @@ export default [
       t.assert(s.hud, 'HUD hidden on the title');
       t.assert(s.btns.length === 1 && /play/i.test(s.btns[0]), `one button without a save: ${s.btns.join(' · ')}`);
       t.assert(!s.panel && !s.shade, 'no main-menu panel, no dark shade');
-      t.assert(s.gear && /purr/i.test(s.foot), `gear + footer "${s.foot}"`);
+      t.assert(s.gear && /Token Tails|purr/i.test(s.foot), `gear + footer "${s.foot}"`);
+      // Token Tails co-brand (TOKENTAILS-PLAN §2.6): the logo image loads, the pink bow sits on the title once
+      const brand = await inPage(t, () => { const img = document.querySelector('.title-foot .tt-logo');
+        return { img: !!img && img.complete && img.naturalWidth > 0, bows: document.querySelectorAll('.ui-title .logo-bow').length,
+          word: document.querySelector('.ui-title .logo-word')?.textContent.replace(/\s+/g, ' ') ?? '' }; });
+      t.assert(brand.img, 'the Token Tails logo loads in the footer');
+      t.assert(brand.bows === 1, `one pink bow on the title "${brand.word}" (${brand.bows})`);
       await fontAudit(t, 'title');
       await shot(t, '16-title');
       // with a save: two buttons
@@ -1207,6 +1226,20 @@ export default [
         t.assert(!!(await untilM(() => window.__GAME__.events.includes('player:swing'), null, 3000)), 'portrait ⚔ tap swings');
         // the toast is one-time (a flag)
         t.assert(await G(() => window.__GAME__.ctx.state.getFlag('seen.tut.rotate')), 'seen.tut.rotate set');
+        // the title logo fits a portrait phone: the whole word and its pink bow inside the screen (was "AWSBURY KNIGH")
+        await G(() => { const g = window.__GAME__; const ui = g.ctx.ui; ui._hasSaveReal ??= ui.hasSave; ui.hasSave = () => false; ui.showTitle({ fromStory: true }); });
+        await untilM(() => !!document.querySelector('.ui-title.is-on.is-logo'), null, 4000);
+        await pg.waitForTimeout(900); // logoPop
+        const lg = await G(() => {
+          const r = (s) => { const b = document.querySelector(s)?.getBoundingClientRect(); return b ? [b.left, b.right, b.top, b.bottom] : null; };
+          return { word: r('.ui-title .logo-word'), bow: r('.ui-title .logo-bow'), w: innerWidth, h: innerHeight };
+        });
+        t.log(`portrait title logo ${JSON.stringify(lg.word?.map(Math.round))}, bow ${JSON.stringify(lg.bow?.map(Math.round))} in ${lg.w}x${lg.h}`);
+        const inside = (b) => !!b && b[0] >= 0 && b[1] <= lg.w && b[2] >= 0 && b[3] <= lg.h;
+        t.assert(inside(lg.word), `portrait: the title word fits the viewport (${JSON.stringify(lg.word?.map(Math.round))} of ${lg.w})`);
+        t.assert(inside(lg.bow), `portrait: the pink bow is on-screen (${JSON.stringify(lg.bow?.map(Math.round))})`);
+        await mshot('55c-portrait-title');
+        await G(() => { const g = window.__GAME__; const ui = g.ctx.ui; ui.menus.setTitle(false); if (ui._hasSaveReal) ui.hasSave = ui._hasSaveReal; g.setMode('play'); });
         void w;
       });
     },

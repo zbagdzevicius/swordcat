@@ -1,6 +1,6 @@
 // tests/smoke.mjs  (owner: core) — Playwright smoke harness (tech.md §19.4 + GAME_DESIGN §19.9).
 //
-//   npm run build && npm run smoke                       # vite preview on :4173 (dist/ must exist)
+//   npm run build:test && npm run smoke                  # vite preview of dist-test/ on :4173 (the hooks-on bundle)
 //   SMOKE_URL=http://localhost:5301/ node tests/smoke.mjs   # against your own dev server (no preview started)
 //   SMOKE_ONLY=core node tests/smoke.mjs                 # one area's blocks (file name), or a block name,
 //   SMOKE_ONLY=core:levels,player node tests/smoke.mjs   #   comma-separated
@@ -26,6 +26,9 @@ const ARGS = process.argv.slice(2);
 const VERBOSE = ARGS.includes('--verbose') || !!process.env.SMOKE_VERBOSE;
 const ONLY = (process.env.SMOKE_ONLY ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const PORT = 4173;
+// F4 / F11: the smoke drives window.__GAME__, which a production build (dist/) never has; `npm run build:test` builds
+// the hooks-on bundle into dist-test/ (VITE_SWORDCAT_DEBUG=1), so smoke never races a production `npm run build`.
+const OUT_DIR = 'dist-test';
 const BOOT_TIMEOUT = +(process.env.SMOKE_BOOT_TIMEOUT ?? 60000);
 
 // GPU flags (tech.md §19.1 measured d3d11; on this Iris Xe, d3d11 + the MSAA HalfFloat composer target makes
@@ -78,14 +81,19 @@ let server = null;
 let base = process.env.SMOKE_URL;
 if (base) { if (!base.endsWith('/')) base += '/'; }
 else {
-  if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) { console.error('SMOKE FAIL: dist/ missing — run `npm run build` first (or set SMOKE_URL)'); process.exit(1); }
+  if (!fs.existsSync(path.join(ROOT, OUT_DIR, 'index.html'))) {
+    console.error(`SMOKE FAIL: ${OUT_DIR}/ missing — run \`npm run build:test\` first (the smoke needs the hooks-on bundle; dist/ is production and has no test hooks), or set SMOKE_URL to a dev server`);
+    process.exit(1);
+  }
   const { preview } = await import('vite');
-  server = await preview({ root: ROOT, preview: { port: PORT, strictPort: true }, logLevel: 'warn' });
+  server = await preview({ root: ROOT, build: { outDir: OUT_DIR }, preview: { port: PORT, strictPort: true }, logLevel: 'warn' });
   base = `http://localhost:${PORT}/`;
 }
 
 fs.mkdirSync(SHOTS, { recursive: true });
-const browser = await chromium.launch({ headless: !ARGS.includes('--headed'), args: GPU_ARGS });
+// embed blocks frame the game from a page.route()-served host page (http://localhost:3000); Chromium's Local Network
+// Access checks would block that routed (treated as public) page from framing the local game server
+const browser = await chromium.launch({ headless: !ARGS.includes('--headed'), args: [...GPU_ARGS, '--disable-features=LocalNetworkAccessChecks'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => fail(`pageerror: ${e.message}`));
 page.on('console', (m) => {
@@ -110,6 +118,8 @@ const G = async (fn, arg) => {
 /** The harness object every block receives. */
 const t = {
   page, browser, base, args: ARGS, shotsDir: SHOTS, G,
+  /** true when the harness previews a build (dist-test/), false against a SMOKE_URL dev server */
+  preview: !!server, root: ROOT,
   /**
    * Screenshot to tests/shots/<name>.png (returns the path; Read it to review). `{ freeze: true }` holds the sim
    * (time scale 0) while the screenshot is taken under GPU load, then restores the previous scale.
@@ -260,7 +270,9 @@ try {
         for (const button of ['left', 'right', 'middle']) await page.mouse.up({ button }).catch(() => {});
         await G(() => {
           const g = window.__GAME__, c = g.ctx;
-          g.story.skip();
+          // halt, not skip: a skipped scene's end block can chain the next one (CS-09 → CS-10), whose end load then
+          // landed in the middle of this block (StoryManager.halt)
+          if (g.story.halt) g.story.halt(); else g.story.skip();
           if (Array.isArray(c.story?.queue)) c.story.queue.length = 0;
           g.game.setTimeScale?.(1);
           const settings = c.state.settings;

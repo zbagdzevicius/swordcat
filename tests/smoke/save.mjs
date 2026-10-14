@@ -17,7 +17,7 @@ fs.mkdirSync(SHOT_DIR, { recursive: true });
 
 /** The stored record, parsed (null if none). */
 const readRec = (t) => t.page.evaluate((k) => { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; }, KEY);
-const saveInfo = (t) => t.G(() => { const s = window.__GAME__.ctx.save; return { ...s.lastSave, atTitle: s.atTitle, committed: s.committed, enabled: s.enabled, dirty: s.dirty }; });
+const saveInfo = (t) => t.G(() => { const s = window.__GAME__.ctx.save; return { ...s.lastSave, atTitle: s.atTitle, committed: s.committed, enabled: s.enabled, dirty: s.dirty, readOnly: s.readOnly, otherTab: s.otherTab }; });
 
 /** Stand `dist` m in front of a Vigil Stone, facing it, so the follow camera frames her and the lantern. */
 async function faceVigil(t, vigilId, dist = 2.6) {
@@ -175,6 +175,7 @@ export default [
         const fin = await saveInfo(t);
         // M2: story's quest step completes on the load too (quest:update done → a 'quest' save right after the 'level' one)
         t.assert((fin.reason === 'level' || fin.reason === 'quest') && fin.ok === true, `forest load: last save ${fin.reason}/${fin.ok}`);
+        if (!fin.count) t.log(`save state: ${JSON.stringify(fin)} story=${await t.G(() => { const s = window.__GAME__.ctx.story; return JSON.stringify({ p: s?.isPlaying, cur: s?.current?.id ?? s?.playing ?? null, mode: window.__GAME__.ctx.game.mode }); })} loading=${await t.G(() => !!window.__GAME__.ctx.levels?.loading)}`);
         t.log(`saves: ${fin.count}, last=${fin.reason}; record ${JSON.stringify(await readRec(t)).length} bytes`);
       } finally {
         await t.G(() => {

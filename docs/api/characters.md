@@ -57,7 +57,7 @@
   (scale-compensated) should put it under the fist.
 
 ## To camera — MEME_LOOP framing, FYI (no change requested; §5.2 numbers are binding)
-- In the Gecko reference frames (research/videos/frames/x_GeckoTerminal_*_f1–f3) her head (ear tip → chin) fills
+- In the original framing reference her head (ear tip → chin) filled
   ~35–40 % of the frame height; with (0.06, 0.70, 1.15) → (0.03, 0.82, 0) at FOV 32 it fills ~55 %. If the shot reads
   too tight when you tune it side by side, ~1.5 m distance matches the clip.
 

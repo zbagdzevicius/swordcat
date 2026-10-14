@@ -10,7 +10,7 @@ export const defaultState = () => ({
   shards: 0, heartBells: [], kittens: [], letters: [],
   companions: { unlocked: [], active: [] },
   upgrades: { satchel: 0, sharp: 0, quickCharge: false, valorGain: false, waveReach: false },
-  cosmetics: { swords: ['borrowed', 'twig'], capes: ['cream'], sword: 'borrowed', cape: 'cream' },
+  cosmetics: { swords: ['borrowed', 'twig'], capes: ['cream', 'red'], sword: 'borrowed', cape: 'red' },   // Token Tails: the royal red cape from the start
   levels: {},                     // { meadow: { cleared, bestRank, bestTime } }
   flags: {}, memeCamSeen: 0,
   settings: { master: 0.8, music: 0.6, sfx: 0.8, invertY: false, sensitivity: 1, quality: 'auto', shake: 1,

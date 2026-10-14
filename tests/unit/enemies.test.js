@@ -13,7 +13,7 @@ import { E } from '../../src/core/events.js';
 import { ATTACKS, ENEMIES, BOSSES, DIZZY, TELEGRAPH, DIFFICULTY, PLAYER, QUALITY } from '../../src/core/config.js';
 import { Dizzy } from '../../src/enemies/Dizzy.js';
 import { Boss, phaseFor } from '../../src/enemies/Boss.js';
-import { Enemy, windupFor, defaultShape, segSegXZ, telegraphPayload } from '../../src/enemies/Enemy.js';
+import { Enemy, BASE_STATES, windupFor, defaultShape, segSegXZ, telegraphPayload } from '../../src/enemies/Enemy.js';
 import { insideFrustum, pointOnScreen, rangedStartAllowed, ONSCREEN_FALLBACK } from '../../src/enemies/onscreen.js';
 import { resolveEnemyDef, TYPES, countsTowardCap } from '../../src/enemies/EnemyManager.js';
 import { CLIP_MAPS, clipNames, clipKey, isSpec, rigFor, clipsFor, subclip, specDuration } from '../../src/enemies/clipMaps.js';
@@ -1679,11 +1679,11 @@ test('ART §5.1: the wind-up rim (uHighlight) holds until activeAt, then fades i
   assert.equal(mat.userData.hiClone, true, 'pre-tagged: highlightObject never clones our materials');
 });
 
-test('WA §8.3 / enemies.W1: a bonked hyena flips HATER → FAN before it despawns (index-paired); hub hyenas are friends', async () => {
-  assert.equal(friendWordFor('hyena', 'HATER'), 'FAN');
+test('WA §8.3 / enemies.W1: a bonked hyena flips GRUMP → FAN before it despawns (index-paired); hub hyenas are friends', async () => {
+  assert.equal(friendWordFor('hyena', 'GRUMP'), 'FAN');
   assert.equal(friendWordFor('hyena', 'NAYSAYER'), 'YAYSAYER');
-  assert.equal(friendWordFor('stealer', 'POST STEALER'), 'POSTMASTER');
-  assert.equal(friendWordFor('cacklejaw', 'HATER-IN-CHIEF'), 'HYPE-IN-CHIEF');
+  assert.equal(friendWordFor('stealer', 'SNACK SNATCHER'), 'SNACK SHARER');
+  assert.equal(friendWordFor('cacklejaw', 'GRUMP-IN-CHIEF'), 'CHEER-IN-CHIEF');
   assert.equal(friendWordFor('hyena', null), null);
   const ctx = await world();
   const e = ctx.enemies.spawn('hyena', at(0, 3), { alerted: true });
@@ -1692,7 +1692,7 @@ test('WA §8.3 / enemies.W1: a bonked hyena flips HATER → FAN before it despaw
   const foe = new THREE.Texture(), friend = new THREE.Texture();
   const decal = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({ map: foe }));
   e.plate = new THREE.Group(); e.plate.add(decal);
-  e.plateWord = 'HATER'; e.plateFriendWord = friendWordFor('hyena', 'HATER'); e._plateSwap = { decal, foe, friend };
+  e.plateWord = 'GRUMP'; e.plateFriendWord = friendWordFor('hyena', 'GRUMP'); e._plateSwap = { decal, foe, friend };
   const ev = record(ctx, E.BURST);
   e.hp = 1; e.invulnT = 0;
   ctx.combat.applyHit(ctx.player, e, ATTACKS.slash3);
@@ -2229,4 +2229,12 @@ test('WA §3.1 / §8.2: pug, hyena and Cacklejaw wear toy gear, never silver pla
       assert.ok(!(hsl.s < 0.12 && hsl.l > 0.45 && hsl.l < 0.9), `${name}: vertex ${i} is not silver-grey`);
     }
   }
+});
+
+test('windup: the step that lands on the track-stop does not turn, even when the summed stateT is a hair short', () => {
+  const turns = [];
+  const stop = TUNING.windupTrackStop;
+  const e = { stateT: 0, windupDur: 0.55, targetActor: () => ({ pos: { x: 1, y: 0, z: 0 } }), brake() {}, setState() {}, faceTo: () => turns.push(e.stateT) };
+  for (const t of [0.3, 0.55 - stop - 1e-15, 0.55 - stop, 0.5]) { e.stateT = t; BASE_STATES.windup.update(e, 1 / 60); }
+  assert.deepEqual(turns, [0.3], 'turns only before the stop');
 });

@@ -1,11 +1,11 @@
-// src/story/cutscenes/cs03.js  (owner: story) — CS-03 Milk Break (GAME_DESIGN §5.4, Appendix B.2) [MVP, NEVER CUT],
+// src/story/cutscenes/cs03.js  (owner: story) — CS-03 Snack Break (GAME_DESIGN §5.4, Appendix B.2) [MVP, NEVER CUT],
 // ~30 s [TREND V3]. Interact with the picnic hay bale (`meadow` Picnic Glade, world's `picnic` interactable).
-//   1 SELFIE: she sits against the hay bale with a milk cup and straw, sips, talks to her gauntlet like a camera
+//   1 SELFIE: she sits against the hay bale with a snack cup (the `milk_cup` prop), nibbles, talks to her gauntlet like a camera
 //   2 a tremor (shake 0.2): she freezes mid-sip
 //   3 WHIP_FALL: the camera falls and lands sideways in the grass; the dropped cup rolls into the foreground
 //   4 Pudding rises out of the fog and ROARS into the lens (shake 0.8, a wind spike); hold 1.2 s
-//   5 HERO_LOW, upright: she stands over her cup in the meme pose (Vigil → Oath); he is tangled in a hound net
-//   6 two-shots, her and his nose: "Is that... milk?" — he sips through the tiny straw with enormous care
+//   5 HERO_LOW, upright: she stands over her cup, sword planted, then raised; he is tangled in a hound net
+//   6 two-shots, her and his nose: "Is that... a tuna snack?" — he nibbles it with enormous care
 // end: `meadow.pudding` = 'netted' (world raises the 3 rope posts, companions keep him netted), objective net_ropes
 // 0/3 (needs the glade clear), the glade arena locks, music battle_fast_fight_loop.
 import { say, cam, wait, sfx, par, along, yawOf, r2 } from './lib.js';

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 
 /**
- * Show a cape on Swordcat without touching the saved cosmetics (CS-00's red poster cape). `null` restores her equipped
+ * Show a cape on Swordcat without touching the saved cosmetics (CS-00's red title cape). `null` restores her equipped
  * cape. Prefers `player.setCapeOverride` (requested), else the kitten rig's `setCape`.
  */
 export function capeOverride(ctx, cape) {
@@ -12,7 +12,7 @@ export function capeOverride(ctx, cape) {
   try {
     if (typeof p?.setCapeOverride === 'function') { p.setCapeOverride(cape); return; }
     const k = p?.model?.k;
-    k?.setCape?.(cape ?? ctx.state?.cosmetics?.cape ?? 'cream');
+    k?.setCape?.(cape ?? ctx.state?.cosmetics?.cape ?? 'red');
   } catch (e) { console.warn('[story] cape override failed', e); }
 }
 

@@ -1,7 +1,7 @@
 // src/ui/hud.js  (owner: ui) — the §14.2 HUD in the candy skin (ART §9.1, WA §4): portrait (worried at HP ≤ 2,
 // determined + glowing in Golden Hour), hearts (half-hearts, wobble on hit, a soft coral pulse at HP ≤ 2), Grit shields,
 // the sword-shaped Valor meter (lilac well, fills from the hilt; butter notch at 50; all gold with a CSS shine at 100),
-// lives (cat head + ×9; the badge pops on a lost life, WA §5.7), milk bottles, fish / kittens n/3 / letter / the
+// lives (cat head + ×9; the badge pops on a lost life, WA §5.7), snack tins (id `milk`), catnip (id `fish`) / kittens n/3 / letter / the
 // sticker-book corner (bump when a fly-to-HUD icon lands, WA §5.5), the companion portrait with its cooldown ring, the
 // boss bar (plum ribbon, coral fill + butter chip trail, phase pips, Dizzy bar, the "BONKED!" stamp), the objective
 // line + bar, the classic-camera lock reticle / pips and the "⚔ Riposte!" prompt.
@@ -18,6 +18,11 @@ import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 import { alertedNear } from './celebrate.js';
 import { companionJoined } from './reveal.js';
+
+/** "{n} catnip" for the currency counter's accessible label: strings key 'shop.cost', the copy the shops use. Pure. */
+export function catnipLabel(ctx, n) {
+  return tx(ctx, 'shop.cost', { n });
+}
 
 const PIP_LIFE = 3.0;          // §14.2: the pip bar fades 3 s after the last hit
 const CHIP_HOLD = 0.55, CHIP_RATE = 0.45;
@@ -125,7 +130,7 @@ export class Hud {
     this.milkEl = el('div', 'hud-milk', { parent: root });
     // ---- top-right: fish, kittens, letter
     const tr = this.trEl = el('div', 'hud-tr', { parent: root });
-    this.fishEl = el('div', 'hud-count hud-fish', { parent: tr, html: `<span class="c-ico">${I.fish()}</span><span class="c-n">0</span>` });
+    this.fishEl = el('div', 'hud-count hud-fish', { parent: tr, attrs: { role: 'img' }, html: `<span class="c-ico">${I.fish()}</span><span class="c-n">0</span>` });
     this.kitEl = el('div', 'hud-count hud-kits', { parent: tr, html: `<span class="c-ico">${I.catHead({ fur: '#E3C9A2', deep: '#C9A47A', bow: false, eyes: '#5E8FA8' })}</span><span class="c-n">0/3</span>` });
     this.letterEl = el('div', 'hud-count hud-letter', { parent: tr, html: `<span class="c-ico"></span>` });
     /** the sticker book's corner (WA §5.4: stickers fly here) */
@@ -411,7 +416,11 @@ export class Hud {
     // counters (§14.2: pop and bounce on change)
     if (st) {
       const fish = st.fish ?? 0;
-      if (v.fish !== fish) { if (v.fish != null && fish !== v.fish) { this.tuck.countsChanged(); this._pop(this.fishEl); } v.fish = fish; setText(this.fishEl.lastChild, String(fish)); }
+      if (v.fish !== fish) {
+        if (v.fish != null && fish !== v.fish) { this.tuck.countsChanged(); this._pop(this.fishEl); }
+        v.fish = fish; setText(this.fishEl.lastChild, String(fish));
+        this.fishEl.setAttribute('aria-label', catnipLabel(ctx, fish));
+      }
       const lvl = ctx.levels?.current?.id ?? st.levelId;
       const k = levelKittens(st, lvl), ks = `${k.n}/${k.max}`;
       if (v.kits !== ks) { v.kits = ks; setText(this.kitEl.lastChild, tx(ctx, 'hud.kittens', { n: k.n, max: k.max })); }

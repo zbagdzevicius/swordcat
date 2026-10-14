@@ -10,13 +10,15 @@ import { FLAT_U, flatPatch } from './flatPatch.js';
 import { buildSilhouetteProxy, resolveTarget } from './Readability.js';
 
 /**
- * Outline look and tiers (ART §5.4): widths at dpr 1 (hero 2.0, companions / enemies 1.6, bosses 2.4), the cap, the
- * ink (`TONE.ink`) and its 40 % mix with the actor's key hue × 0.3 (hero → #5A2A1A, never #000), the hull margins
- * (m) over the proxy fit, and the engaged fade-in (s).
+ * Outline look and tiers (ART §5.4): widths at dpr 1 (hero 1.4, companions / enemies 1.6, bosses 2.4), the cap, the
+ * ink (`TONE.ink`) and its 40 % mix with the actor's key hue × 0.3 (never #000), the hull margins (m) over the proxy
+ * fit, and the engaged fade-in (s). Token Tails pass: the hero is the ivory mascot with thin maroon lines, so her ink is
+ * the mascot maroon #5E0E18 mixed 20 % toward the ivory coat (#7C3B41) at 1.4 px; the old 2 px cocoa #5A2A1A read as
+ * brown markings on the light coat.
  */
 export const OUTLINE = Object.freeze({
-  px: Object.freeze({ hero: 2.0, companion: 1.6, enemy: 1.6, boss: 2.4 }), maxPx: 3,
-  ink: '#4A2A1E', hero: '#5A2A1A', mix: 0.4, keyK: 0.3,
+  px: Object.freeze({ hero: 1.4, companion: 1.6, enemy: 1.6, boss: 2.4 }), maxPx: 3,
+  ink: '#4A2A1E', hero: '#7C3B41', mix: 0.4, keyK: 0.3,
   margin: 0.002, furMargin: 0.01, fade: 0.2,
   /** QUALITY.outline → which actors get a hull (X9). */
   tiers: Object.freeze({
@@ -74,7 +76,7 @@ export function buildOutline(target, o = {}) {
   const into = o.into ?? null;
   const visible = into ? into.visible : true;
   const mesh = buildSilhouetteProxy(root, {
-    skeleton: o.skeleton ?? r?.kitten?.skeleton, margin: OUTLINE.margin, furMargin: OUTLINE.furMargin, into, normals: true,
+    skeleton: o.skeleton ?? r?.kitten?.skeleton, margin: OUTLINE.margin, furMargin: OUTLINE.furMargin, into, normals: true, tight: true,
   });
   if (!mesh) return into;
   if (!into) {

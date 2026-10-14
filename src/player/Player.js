@@ -78,7 +78,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.sipHealed = false; this.sipActive = false;
     this.swingSerial = 0; this.comboIndex = 0; this.swingGuardLatch = false;
     this.gravityMul = 1; this.terminalFall = PLAYER.terminalFall; this.landImpact = 0;
-    /** respawn point (level spawn or the last Vigil Stone) */
+    /** respawn point (level spawn or the last Lantern Stone) */
     this.respawnPoint = { pos: new THREE.Vector3(), facing: 0 };
     /** jeering enemies (enemy:jeer on/off) */
     this.jeerers = new Set();

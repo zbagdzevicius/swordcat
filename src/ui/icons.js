@@ -1,6 +1,9 @@
 // src/ui/icons.js  (owner: ui) — inline SVG icon strings (art.md §13 "ink-line style: 2px ink, round caps, flat
 // parchment fills, a single pink or gold accent"). No image assets: everything is vector and recoloured by CSS where
 // useful. Pure strings (node-safe). Gradient / clip ids are unique per call (uid()).
+// Token Tails (docs/TOKENTAILS-PLAN.md §2.3, §2.6): the currency icon is a catnip sprig (internal id stays `fish`) and the
+// heal item a tuna-snack tin (internal id stays `milk`); Clementine's head is the ivory Token Tails coat with crimson eyes
+// and her pink bow on the LEFT ear; the logo ties the bow on the first "O", or on the first letter when there is none.
 
 let _uid = 0;
 /** Unique id prefix for SVG defs (several copies of an icon may live in the same document). */
@@ -35,36 +38,70 @@ export function gritShield(state = 'full') {
     + '<path d="M6 6.4 9.5 5.3" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity=".8"/></svg>';
 }
 
-/** Milk bottle (§14.2: empty ones outlined). */
+/** Brand palette for the currency and snack icons. */
+const NIP = Object.freeze({
+  silver: { hi: '#E9F7E4', mid: '#9FD08F', lo: '#5E9E58', vein: '#3F7A44', stem: '#6E8F4A' },
+  gold: { hi: '#FFF6C8', mid: '#FFCC55', lo: '#D9962A', vein: '#A8681A', stem: '#B8862E' },
+});
+
+/**
+ * The heal item: a tuna-snack tin (§14.2 slot; internal id `milk`, "Snack Break"). Empty tins are outlined.
+ * The function keeps its old name so every caller (HUD, ability bar, touch, toasts, fly-to-HUD) is unchanged.
+ */
 export function milkBottle(full = true) {
-  const body = 'M7 10.5c0-1.6.8-2.6 1.6-3.4V4.4h4.8v2.7c.8.8 1.6 1.8 1.6 3.4v18.3c0 1.7-1.4 3.1-3.1 3.1H10.1C8.4 31.9 7 30.5 7 28.8Z';
-  const milk = full ? '<path d="M7.2 14.5h7.6v14.3c0 1.6-1.3 2.9-2.9 2.9h-1.8c-1.6 0-2.9-1.3-2.9-2.9Z" fill="#FBF8F1"/><path d="M7.2 14.5h7.6" stroke="#E8DCC6" stroke-width="1.2"/>' : '';
-  return `<svg class="ico-milk" viewBox="0 0 22 34" aria-hidden="true"><path d="${body}" fill="${full ? '#DDE8EC' : '#3A2A1F'}" fill-opacity="${full ? '.55' : '.3'}"/>${milk}`
-    + `<path d="${body}" fill="none" stroke="${full ? INK : '#5B4A3C'}" stroke-width="1.6" stroke-linejoin="round"/>`
-    + `<rect x="8" y="1.6" width="6" height="3.2" rx="1.2" fill="${full ? PINK_DEEP : '#7B6A5C'}" stroke="${INK}" stroke-width="1.2"/>`
-    + (full ? '<path d="M9.2 17v9" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity=".9"/>' : '') + '</svg>';
+  const body = 'M3 14.5c0-1.4 3.6-2.5 8-2.5s8 1.1 8 2.5v13c0 1.5-3.6 2.8-8 2.8s-8-1.3-8-2.8Z';
+  if (!full) {
+    return `<svg class="ico-milk ico-snack" viewBox="0 0 22 34" aria-hidden="true"><path d="${body}" fill="${INK}" fill-opacity=".3"/>`
+      + `<path d="${body}" fill="none" stroke="#5B4A3C" stroke-width="1.6" stroke-linejoin="round"/>`
+      + '<ellipse cx="11" cy="14.5" rx="8" ry="2.5" fill="none" stroke="#5B4A3C" stroke-width="1.2"/></svg>';
+  }
+  return `<svg class="ico-milk ico-snack" viewBox="0 0 22 34" aria-hidden="true">`
+    // the tin: silver side, a pink paper label with a little fish, a gold pull-ring lid
+    + `<path d="${body}" fill="#C9D3DC"/>`
+    + `<path d="M3 18.4c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v6.6c0 1.4-3.6 2.5-8 2.5S3 26.4 3 25Z" fill="${PINK}"/>`
+    + `<path d="M7 23.2c1.6-1.6 3.6-1.8 5.4-.6l1.8-1.2v3.2l-1.8-1.2c-1.8 1.2-3.8 1-5.4-.2Z" fill="#FFF8EE"/>`
+    + `<path d="${body}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`
+    + `<ellipse cx="11" cy="14.5" rx="8" ry="2.5" fill="#E7EAEE" stroke="${INK}" stroke-width="1.3"/>`
+    + `<ellipse cx="12.6" cy="13.9" rx="2.4" ry="1" fill="none" stroke="${GOLD_DEEP}" stroke-width="1.2"/>`
+    + '<path d="M5 17.5v8" stroke="#fff" stroke-width="1.3" stroke-linecap="round" opacity=".85"/>'
+    // a tiny heart above: it heals
+    + `<path d="M11 9.6C8.4 7.8 7.2 6.4 7.2 5c0-1.1.8-1.9 1.8-1.9.8 0 1.5.5 2 1.2.5-.7 1.2-1.2 2-1.2 1 0 1.8.8 1.8 1.9 0 1.4-1.2 2.8-3.8 4.6Z" fill="${HEART}" stroke="#5A2232" stroke-width=".9"/></svg>`;
 }
 
-/** Silver fish (counter). */
-export function fish() {
-  const g = uid('fi');
-  return `<svg class="ico-fish" viewBox="0 0 38 22" aria-hidden="true"><defs><linearGradient id="${g}" x1="0" y1="0" x2="0" y2="1">`
-    + '<stop offset="0" stop-color="#F3F6FA"/><stop offset=".6" stop-color="#AEB8C6"/><stop offset="1" stop-color="#7D8898"/></linearGradient></defs>'
-    + `<path d="M28 11 37 3.5v15Z" fill="url(#${g})" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/>`
-    + `<path d="M2 11C6 3.5 13 2 18.5 2.5 24 3 28 7 29.5 11 28 15 24 19 18.5 19.5 13 20 6 18.5 2 11Z" fill="url(#${g})" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/>`
-    + '<path d="M17 4.5c2 2 2.6 4.5 2.6 6.5S19 15.5 17 17.5" fill="none" stroke="#7D8898" stroke-width="1.2" stroke-linecap="round"/>'
-    + `<circle cx="8.4" cy="9.4" r="1.7" fill="${INK}"/><circle cx="8" cy="9" r=".55" fill="#fff"/></svg>`;
+/**
+ * The currency: a catnip sprig (internal id `fish`). `gold` = the golden catnip worth 10 (the silver-green sprig is 1).
+ * @param {boolean} [gold]
+ */
+export function fish(gold = false) {
+  const g = uid('cn'), c = gold ? NIP.gold : NIP.silver;
+  const leaf = (d) => `<path d="${d}" fill="url(#${g})" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"/>`;
+  return `<svg class="ico-fish ico-catnip${gold ? ' is-gold' : ''}" viewBox="0 0 38 22" aria-hidden="true"><defs><linearGradient id="${g}" x1="0" y1="0" x2="0" y2="1">`
+    + `<stop offset="0" stop-color="${c.hi}"/><stop offset=".55" stop-color="${c.mid}"/><stop offset="1" stop-color="${c.lo}"/></linearGradient></defs>`
+    // stem (lying across the icon, bottom-left to top-right)
+    + `<path d="M4 19.5C12 15 22 10 34 4" fill="none" stroke="${INK}" stroke-width="3.2" stroke-linecap="round"/>`
+    + `<path d="M4 19.5C12 15 22 10 34 4" fill="none" stroke="${c.stem}" stroke-width="1.6" stroke-linecap="round"/>`
+    // three pairs of serrated heart-shaped leaves
+    + leaf('M11 15.6C7.4 13.6 6.2 9.8 8.4 7.6c1.8.4 3.6 2.6 4 5.2Z') + leaf('M12.6 16.2c1 3.6 4.4 5.2 7 4-.2-2-2.6-3.6-5.4-4.4Z')
+    + leaf('M19.6 11.8C16.6 9 16.4 5 19 3.4c1.6.8 2.8 3.4 2.6 6Z') + leaf('M21.4 12.2c1.6 3.2 5.2 4 7.4 2.4-.6-1.8-3.2-3-6-3Z')
+    + leaf('M28 7.6c-1.8-2.8-1-6 1.6-6.6 1.2 1 1.6 3.4.8 5.6Z') + leaf('M29.6 7.4c2.2 1.8 5 1.6 6.4-.4-1-1.4-3.4-1.8-5.6-1Z')
+    + `<path d="M9.4 9.4 11.6 13M18.8 5.4l1.4 4.4M28.6 2.8l.4 3.4" stroke="${c.vein}" stroke-width=".9" stroke-linecap="round" opacity=".8"/>`
+    + `<circle cx="9.6" cy="8.6" r=".9" fill="#fff" opacity=".85"/><circle cx="19" cy="4.6" r=".9" fill="#fff" opacity=".85"/>`
+    + (gold ? `<path d="M34.5 12.5l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8Z" fill="#FFF6C8" stroke="${GOLD_DEEP}" stroke-width=".7"/>` : '')
+    + '</svg>';
 }
 
-/** Little cat head (lives icon §14.2 "cat head with a bow"; kitten counter). */
-export function catHead({ fur = '#D4935A', deep = '#A65E2E', cream = '#EFE3D2', bow = true, eyes = '#3F6170' } = {}) {
+/**
+ * Little cat head (lives icon §14.2 "cat head with a bow"; kitten counter). The defaults are Clementine in the Token
+ * Tails coat (ivory, no stripes, salmon inner ears, crimson eyes, pink bow). Pass `deep` for tabby stripes (kittens).
+ */
+export function catHead({ fur = '#F3EEE6', deep = null, cream = '#FFFFFF', bow = true, eyes = '#B3212F', ear = '#F2A08C' } = {}) {
   const bowSvg = bow ? `<g transform="translate(29 7.2) rotate(18)"><path d="M0 0-5.6-3.4c-.9-.5-1.9.1-1.9 1.1v4.6c0 1 1 1.6 1.9 1.1Z" fill="${PINK}" stroke="${PINK_DEEP}" stroke-width="1"/>`
     + `<path d="M0 0 5.6-3.4c.9-.5 1.9.1 1.9 1.1v4.6c0 1-1 1.6-1.9 1.1Z" fill="${PINK}" stroke="${PINK_DEEP}" stroke-width="1"/><circle r="1.6" fill="#E88AA6" stroke="${PINK_DEEP}" stroke-width=".8"/></g>` : '';
   return `<svg class="ico-cat" viewBox="0 0 40 36" aria-hidden="true">`
     + `<path d="M7 15 6 3.5 16 9.5M33 15 34 3.5 24 9.5" fill="${fur}" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`
-    + '<path d="M9 12.5 8.4 6.8 13.4 9.6M31 12.5 31.6 6.8 26.6 9.6" fill="#EBB0A6"/>'
+    + `<path d="M9 12.5 8.4 6.8 13.4 9.6M31 12.5 31.6 6.8 26.6 9.6" fill="${ear}"/>`
     + `<path d="M4 21c0-8 7-12.5 16-12.5S36 13 36 21c0 7.5-7 12.5-16 12.5S4 28.5 4 21Z" fill="${fur}" stroke="${INK}" stroke-width="1.6"/>`
-    + `<path d="M20 9.5v4M15.5 10.5l1 3.4M24.5 10.5l-1 3.4" stroke="${deep}" stroke-width="1.6" stroke-linecap="round"/>`
+    + (deep ? `<path d="M20 9.5v4M15.5 10.5l1 3.4M24.5 10.5l-1 3.4" stroke="${deep}" stroke-width="1.6" stroke-linecap="round"/>` : '')
     + `<ellipse cx="20" cy="27" rx="7.5" ry="5" fill="${cream}"/>`
     + `<circle cx="13.6" cy="20.5" r="3.2" fill="${eyes}"/><circle cx="26.4" cy="20.5" r="3.2" fill="${eyes}"/>`
     + `<circle cx="13.6" cy="20.8" r="1.8" fill="${INK}"/><circle cx="26.4" cy="20.8" r="1.8" fill="${INK}"/>`
@@ -200,7 +237,7 @@ export function meowFace() {
     + `<ellipse cx="16" cy="22.5" rx="2.6" ry="2.2" fill="#C97F7A" stroke="${INK}" stroke-width="1"/></svg>`;
 }
 
-/** Game-over illustration: Swordcat curled asleep around her sword (§14.3). */
+/** Game-over illustration: Clementine (ivory coat, pink bow) curled asleep around her sword (§14.3). */
 export function sleepingCat() {
   return '<svg class="ill-sleep" viewBox="0 0 240 130" aria-hidden="true">'
     + '<ellipse cx="120" cy="116" rx="96" ry="9" fill="#3A2A1F" opacity=".18"/>'
@@ -210,39 +247,46 @@ export function sleepingCat() {
     // cape
     + '<path d="M58 98c-6-30 20-58 62-58s70 26 64 58Z" fill="#A3202C" stroke="#5A0E16" stroke-width="2"/>'
     // curled body
-    + `<path d="M66 100c-4-24 18-46 52-46 30 0 56 16 56 40 0 6-2 8-6 8H72c-4 0-6-0-6-2Z" fill="#D4935A" stroke="${INK}" stroke-width="2"/>`
-    + '<path d="M100 62c4 6 4 12 0 18M120 58c4 6 4 14 0 20M140 62c4 6 4 12 0 18" fill="none" stroke="#A65E2E" stroke-width="3" stroke-linecap="round"/>'
+    + `<path d="M66 100c-4-24 18-46 52-46 30 0 56 16 56 40 0 6-2 8-6 8H72c-4 0-6-0-6-2Z" fill="#F3EEE6" stroke="${INK}" stroke-width="2"/>`
     // tail wrapped
-    + `<path d="M170 96c14-2 22-14 14-24-6-8-18-6-20 2" fill="none" stroke="${INK}" stroke-width="13" stroke-linecap="round"/><path d="M170 96c14-2 22-14 14-24-6-8-18-6-20 2" fill="none" stroke="#E8B989" stroke-width="10" stroke-linecap="round"/>`
+    + `<path d="M170 96c14-2 22-14 14-24-6-8-18-6-20 2" fill="none" stroke="${INK}" stroke-width="13" stroke-linecap="round"/><path d="M170 96c14-2 22-14 14-24-6-8-18-6-20 2" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"/>`
     // pauldron
     + '<path d="M118 66c10-6 26-4 32 6-8 2-22 4-32-6Z" fill="#C8CDD5" stroke="#4E535A" stroke-width="1.6"/>'
     // head
-    + `<path d="M58 72 56 50 72 61M96 66 104 46 86 58" fill="#D4935A" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
-    + '<path d="M60 68 59.5 55 68 61" fill="#EBB0A6"/>'
-    + `<ellipse cx="78" cy="80" rx="27" ry="21" fill="#D4935A" stroke="${INK}" stroke-width="2"/>`
-    + '<ellipse cx="78" cy="89" rx="13" ry="8.5" fill="#EFE3D2"/>'
+    + `<path d="M58 72 56 50 72 61M96 66 104 46 86 58" fill="#F3EEE6" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
+    + '<path d="M60 68 59.5 55 68 61" fill="#F2A08C"/>'
+    + `<ellipse cx="78" cy="80" rx="27" ry="21" fill="#F3EEE6" stroke="${INK}" stroke-width="2"/>`
+    + '<ellipse cx="78" cy="89" rx="13" ry="8.5" fill="#FFFFFF"/>'
     + `<path d="M64 78q5 4 10 0M84 78q5 4 10 0" fill="none" stroke="${INK}" stroke-width="2.2" stroke-linecap="round"/>`
     + '<ellipse cx="62" cy="86" rx="4" ry="2.4" fill="#F7B6C8" opacity=".7"/><ellipse cx="96" cy="86" rx="4" ry="2.4" fill="#F7B6C8" opacity=".7"/>'
     + `<path d="M76 85h4l-2 2Z" fill="#C97F7A"/>`
     // bow on her left ear (viewer's right ear here)
     + `<g transform="translate(98 52) rotate(24)"><path d="M0 0-8-5c-1.3-.8-2.8.2-2.8 1.6v6.8c0 1.4 1.5 2.4 2.8 1.6Z" fill="${PINK}" stroke="${PINK_DEEP}" stroke-width="1.4"/><path d="M0 0 8-5c1.3-.8 2.8.2 2.8 1.6v6.8c0 1.4-1.5 2.4-2.8 1.6Z" fill="${PINK}" stroke="${PINK_DEEP}" stroke-width="1.4"/><circle r="2.4" fill="#E88AA6" stroke="${PINK_DEEP}" stroke-width="1"/></g>`
     // zzz
-    + `<g class="zzz" fill="${INK}" font-family="Fredoka, system-ui, sans-serif" font-weight="700"><text x="108" y="38" font-size="15">z</text><text x="122" y="26" font-size="19">z</text><text x="140" y="14" font-size="23">z</text></g>`
+    + `<g class="zzz" fill="${INK}" font-family="Nunito, Fredoka, system-ui, sans-serif" font-weight="800"><text x="108" y="38" font-size="15">z</text><text x="122" y="26" font-size="19">z</text><text x="140" y="14" font-size="23">z</text></g>`
     + '</svg>';
 }
 
-/** The game logo: SWORDCAT with a pink bow tied on the "O" (art.md §13 title screen). Returns HTML. */
-export function logoHtml(text = 'SWORDCAT', sub = '') {
-  let bowDone = false;
-  const letters = [...String(text)].map((c, i) => {
-    if ((c === 'O' || c === 'o') && !bowDone) {
-      bowDone = true;
-      return `<span class="logo-l logo-o" style="--i:${i}">${c}<span class="logo-bow">${bowSvg()}</span></span>`;
-    }
-    return `<span class="logo-l" style="--i:${i}">${c === ' ' ? '&nbsp;' : c}</span>`;
+/**
+ * The game logo (art.md §13 title screen): the title in gold letters with the pink bow tied on the first "O"; a title
+ * without an "O" (PINK PAW KNIGHT) gets the bow on its first letter instead (top-left, tilted). Returns HTML.
+ * `text` is plain text (escaped here); `sub` is trusted HTML (callers escape it).
+ */
+export function logoHtml(text = 'PINK PAW KNIGHT', sub = '') {
+  const chars = [...String(text ?? '')];
+  let at = chars.findIndex((c) => c === 'O' || c === 'o');
+  const onO = at >= 0;
+  if (!onO) at = chars.findIndex((c) => c.trim() !== '');
+  const letters = chars.map((c, i) => {
+    const ch = c === ' ' ? '&nbsp;' : esc1(c);
+    if (i === at) return `<span class="logo-l ${onO ? 'logo-o' : 'logo-first'}" style="--i:${i}">${ch}<span class="logo-bow">${bowSvg()}</span></span>`;
+    return `<span class="logo-l" style="--i:${i}">${ch}</span>`;
   }).join('');
   return `<div class="logo"><div class="logo-word">${letters}</div>${sub ? `<div class="logo-sub">${sub}</div>` : ''}</div>`;
 }
+
+const ESC1 = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function esc1(c) { return ESC1[c] ?? c; }
 
 /** A standalone pink bow (logo, portrait frames). */
 export function bowSvg() {

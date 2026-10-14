@@ -50,7 +50,7 @@ The game recreates the **feeling** of the viral "kitten knight" clips and stills
 | V3: the milk-sipping selfie interrupted by a red dragon roaring out of the fog | L1 cutscene "Milk Break, Interrupted", which introduces **Pudding** the dragon. Milk is the healing item. |
 | V4: riding a red dragon in an aerial battle | **Sky Ride** set piece between L5 and L6 [STRETCH; MVP version is a cutscene] |
 | V5: a camera pull-back that reveals a giant knight beside the kitten | Prologue gag (the giant **Sir Tallbert** statue). L4 pull-back that reveals **every kitten you rescued** standing behind her. |
-| V6 *The Last Vigil* (a fan series, not the creator's): holding a gate alone, lantern by a sleeping dragon, champion kneeling to her level, sunrise flight over clouds | L4 gate defense, L2 "Lantern Night", L4 champion **Gnash** kneels, the ending flight. **Only these generic beats are borrowed; no names, characters or plot from that series.** |
+| V6 (generic "hold the gate" staging; see docs/PROVENANCE.md): holding a gate alone, lantern by a sleeping dragon, champion kneeling to her level, sunrise flight over clouds | L4 gate defense, L2 "Lantern Night", L4 champion **Gnash** kneels, the ending flight. **Only these generic beats are used; no names, characters or plot from any outside work.** |
 | ref1 golden glow and sparkles | **Gold Hour Strike** and **Lit From Within** (§5.5–5.6) |
 | ref2 full-body model sheet with red cape | Default look after Chapter 1, and the **Vigil** pose at checkpoints |
 | ref3 paler cream kitten with a cream cape | **Pearl**, her little sister, and the "Pilgrim" cream cape |
@@ -58,9 +58,9 @@ The game recreates the **feeling** of the viral "kitten knight" clips and stills
 | Captions: "Too small for the sword. Holding it anyway." · "The armor is borrowed. The hour is gold." · "born to :3, forced to (sword emoji)" · "me trying to handle things maturely" | Chapter titles, dialogue and achievement names |
 
 **IP and tone rules**
-- The character design's ownership is **[unverified]**. @sickmanai has implicitly *claimed* the viral loop; that is a claim, not proof [TREND]. Several memecoins use the same imagery and the "Swordcat" name.
+- Provenance of the original concept: see `docs/PROVENANCE.md`. The shipped game (Pawsbury Knight, Token Tails) removed the third-party elements on 2026-10-13.
 - So: no creator names, no token names, no crypto references anywhere in the game. Our heroine has her own name, story and procedural model. Before any public release, the use of "Swordcat" as a title and "Meow Island" as a setting needs a legal check **[unverified]**. Fallback names: *Sword Kitten* and *Purrhaven Isle*.
-- The swordcat.lol lore lines are short quotations used as homage. If legal review says otherwise, the backup lines in §4.8 replace them.
+- No outside quotations are used: the homage caption variants were deleted on 2026-10-13 (docs/PROVENANCE.md).
 - The tone is the meme's: **fierce cuteness, played completely straight.** Swordcat never winks at the camera. The comedy comes from everyone else reacting to her.
 
 ---
@@ -145,7 +145,7 @@ The architecture is medieval storybook at kitten scale [ART §1]: doors are 1.6 
 3. **Midpoint (L4):** "Nobody's coming. So I'm staying." Then she discovers that somebody *did* come: every kitten she rescued.
 4. **End:** "I don't need to be big. I need to be here. And I don't have to be here alone."
 
-The game never makes her big. She does not grow up, transform or level into a giant. She becomes **lit from within** [TREND: swordcat.lol "lit from within"].
+The game never makes her big. She does not grow up, transform or level into a giant. She becomes **lit from within** [TREND V7].
 
 **Voice** [NEW]: no voice acting. She "speaks" in soft pitched kitten mews (§13.3), with text in the dialogue box. Her lines are the shortest in any scene.
 
@@ -1375,7 +1375,7 @@ Module ownership follows tech.md §4/§20. The three.js classes named here exist
 | 2 | **No hyena, crow, wind or bell audio** in the assets | Procedural builds are specified (§13). Someone must audition them. |
 | 3 | **No hyena, mole, hedgehog or beetle models** | Procedural (art.md style) or KayKit rig + procedural head. Head-bone name on the KayKit rig **[unverified]**: check `Barbarian.glb` node names first. |
 | 4 | Pudding: does `Dragon_Evolved.glb` read as cute and red when tinted? Is there a sleeping pose? | **[unverified]**. The S13 clips are all flying. For Lantern Night, use a low hover with `Flying_Idle` at time scale 0.3, or the final frame of `Death` as a "lying down" pose [verify visually]. Fallback: a procedural dragon [STRETCH]. |
-| 5 | Meme Cam framing must match V1 | Tune `MEME_LOOP` against `research/videos/frames/x_GeckoTerminal_*_f1–f3.png` side by side |
+| 5 | Meme Cam framing must match V1 | Tune `MEME_LOOP` (legacy id) for a readable idle loop; the old outside reference frames were removed (docs/PROVENANCE.md) |
 | 6 | Shell fur cost on mobile | 8 shells on mobile, sheen fallback beyond 12 m [ART §14] |
 | 7 | Parry timing on touch | +0.05 s grace on touch, and the Auto-Stand option |
 | 8 | Using the lost-kitten count in the L4 pull-back | Minimum 3 scripted kittens so the beat always works; spawn up to 30 in 3 rows; LOD them |

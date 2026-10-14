@@ -5,6 +5,8 @@
 //   nextLevel(st)       the next chapter the Quest Board offers ("Next: {chapter}"), or null (pure)
 //   questBoard(st)      the board rows: { id, cleared, unlocked, next, bestRank, kittens, kittensTotal } (pure)
 //   HUB_KITTEN_SPOTS    §12.5 activity spots (companions' HubKittens reads them; town defines `hub_<id>` anchors)
+//   RESCUE_KEEPER       the Token Tails cat, keeper of the Pawsbury Rescue House (docs/TOKENTAILS-PLAN.md §2.4):
+//                       where it stands by the rescued kittens, its speaker key and line keys; keeperLines(strings)
 //   buildHub(kit, opts) town setpiece: station props (stalls, banner, notice board, signs), interactables (kind
 //                       'station' / 'questboard' / 'talk', which ui opens on `interact`), the South Gate exit trigger
 // UI listens to `interact {target: {id, kind}}`: 'station_<id>' + kind 'station' opens that shop, kind 'questboard'
@@ -77,6 +79,25 @@ export const HUB_KITTEN_SPOTS = Object.freeze({
   crumpet: { at: [-34, 6], y: 0, act: 'letters' },
   dumpling: { at: [8, -2], y: 0, act: 'guard' },
 });
+
+/**
+ * The Token Tails cat (characters' `tokentails_cat`): keeper of the Pawsbury Rescue House, standing by the fountain
+ * where the rescued kittens fish, guard and play tag (docs/TOKENTAILS-PLAN.md §2.4). Companions' HubKittens spawns it
+ * once `when` is set; `speaker` / `lines` are string keys story writes (`name.ttcat`, `npc.ttcat.1..3`).
+ */
+export const RESCUE_KEEPER = Object.freeze({
+  id: 'tokentails_cat', cfg: 'tokentails_cat', at: Object.freeze([4.8, 12.6]), facing: Math.atan2(0 - 4.8, 8 - 12.6), when: 'town.free',
+  speaker: 'name.ttcat', lines: Object.freeze(['npc.ttcat.1', 'npc.ttcat.2', 'npc.ttcat.3']),
+});
+
+/**
+ * The keeper's line keys that exist in `strings` (the resolver returns a missing key as-is, so a key story has not
+ * written yet is never shown). Pure.
+ * @param {{ has?: (key: string) => boolean }} [strings]
+ */
+export function keeperLines(strings) {
+  return typeof strings?.has === 'function' ? RESCUE_KEEPER.lines.filter((k) => strings.has(k)) : [];
+}
 
 /** The South Gate way out (§12.1): a trigger box, active once the town is free; it opens the Quest Board. */
 export const SOUTH_GATE_EXIT = Object.freeze({ at: [0, -63], size: [8, 2] });
@@ -156,6 +177,7 @@ export function buildHub(kit) {
   kit.trigger({ id: 'south_gate', at: SOUTH_GATE_EXIT.at, size: SOUTH_GATE_EXIT.size, once: false, when: 'town.free',
     fire: () => { if (typeof ctx.ui?.openQuestBoard === 'function') ctx.ui.openQuestBoard(); else ctx.bus.emit(E.INTERACT, { target: { id: 'quest_board', kind: 'questboard', position: new THREE.Vector3(0, 0, -63) } }); } });
   for (const [id, s] of Object.entries(HUB_KITTEN_SPOTS)) kit.anchor('hub_' + id, s.at[0], s.at[1], kit.h(s.at[0], s.at[1]) + (s.y ?? 0));
+  { const k = RESCUE_KEEPER; kit.anchor('hub_' + k.id, k.at[0], k.at[1], undefined, k.facing); kit.clear(k.at[0], k.at[1], 0.9, 0.3); }
   level.hub = { stations: STATIONS, open: (id) => stationOpen(STATIONS.find((s) => s.id === id), ctx.state), next: () => nextLevel(ctx.state), board: () => questBoard(ctx.state),
     active: () => condOk(ctx, 'town.free') };
 }

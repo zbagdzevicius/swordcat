@@ -131,7 +131,7 @@ export const STATES = {
       if (p.orders?.pendingSwingCancel && (preActive || lateRecovery) && !s.queued) {
         p.orders.pendingSwingCancel = false; p.endSwing(); p.comboNext = null; p.setState('move'); return;
       }
-      if (lateRecovery && !s.queued && p.ctx.cam?.isIso && Math.hypot(p.ctx.input.move.x, p.ctx.input.move.y) >= 0.15 && p.attackBuf <= 0) {
+      if (lateRecovery && !s.queued && p.ctx.cam?.isIso && Math.hypot(p.ctx.input.move.x, p.ctx.input.move.y) >= 0.15 && p.attackBuf <= 0 && !s.again) {
         p.endSwing(); p.noteComboEnd(def); p.setState('move'); return;
       }
       // cancels: Golden Hour any time before the active frames; Stand before/after them; Tumble / charge after.
@@ -150,6 +150,10 @@ export const STATES = {
       if (freshGuard && s.queued && !def.noCancel) s.queued = false;
       const comboFrom = p.autoCombo() ? 0 : def.combo?.[0];
       if (!freshGuard && def.next && def.combo && p.attackBuf > 0 && s.t >= comboFrom && s.t <= def.combo[1]) { s.queued = true; p.attackBuf = 0; }
+      // a real press this swing can no longer queue (the finisher, or past its combo window) is kept, not dropped: the
+      // swing runs to its end, then the next one starts. The 0.2 s buffer alone expired inside Big Swoosh's 0.6 s, so
+      // the first ⚔ tap after an auto-attack kill (which lands mid-Swoosh) did nothing (SC4 / smoke controls:touch).
+      if (!s.queued && !freshGuard && p.attackBuf > 0 && !(def.next && def.combo && s.t <= def.combo[1]) && p.attackPressedSince(s.t + 1e-6)) { s.again = true; p.attackBuf = 0; }
       if (s.queued && s.t >= Math.max(def.dur ?? act[1], act[1])) { p.startAttack(def.next); return; }
       const rollFrom = def.rollCancel ?? act[1];
       if (s.t >= rollFrom && p.dodgeBuf > 0 && p.canDodge() && !def.noCancel) { p.endSwing(); p.startDodge(); return; }
@@ -158,7 +162,11 @@ export const STATES = {
       if (recovering && !def.noCancel && def.id !== 'holy' && p.chargeHeld() && p.attackHeldTime() >= PLAYER.charge.start && p.onGround) {
         p.endSwing(); p.setState('charge'); return;
       }
-      if (s.t >= (def.dur ?? act[1])) { p.endSwing(); p.noteComboEnd(def); p.setState('move'); }
+      if (s.t >= (def.dur ?? act[1])) {
+        p.endSwing(); p.noteComboEnd(def);
+        if (s.again && p.onGround) { p.startGroundAttack(); return; }
+        p.setState('move');
+      }
     },
     exit(p) { p.stateName = 'idle'; },
   },

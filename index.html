@@ -2,14 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#F6E7D2">
-  <title>Swordcat: Nine Lives of Meow Island</title>
-  <link rel="icon" href="data:,">
-  <!-- PERF §10.1 / X18: the one game font (Fredoka, the Latin woff2 subset ui/fonts.js registers) starts downloading with the HTML (Vite adds the module preloads) -->
-  <link rel="preload" as="font" type="font/woff2" href="assets/fonts/Fredoka-Latin.woff2" crossorigin>
+  <!-- pinch-zoom stays allowed (WCAG 1.4.4); the canvas and the touch layer keep touch-action: none -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0B0820">
+  <title>Pink Paw Knight · Token Tails</title>
+  <meta name="description" content="Pink Paw Knight: a tiny cat knight with a pink bow rescues 18 lost kittens on Purrhaven Isle. A Token Tails game.">
+  <meta name="application-name" content="Pink Paw Knight">
+  <meta name="apple-mobile-web-app-title" content="Pink Paw Knight">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Token Tails">
+  <meta property="og:title" content="Pink Paw Knight · Token Tails">
+  <meta property="og:description" content="A tiny cat knight with a pink bow rescues lost kittens. A Token Tails game.">
+  <meta property="og:image" content="og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="The Token Tails cat on a night-purple background">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Pink Paw Knight · Token Tails">
+  <meta name="twitter:description" content="A tiny cat knight with a pink bow rescues lost kittens. A Token Tails game.">
+  <meta name="twitter:image" content="og.jpg">
+  <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <!-- PERF §10.1 / X18: the body font (Nunito, the Latin woff2 subset ui/fonts.js registers) starts downloading with the HTML (Vite adds the module preloads); Fredoka stays a fallback -->
+  <link rel="preload" as="font" type="font/woff2" href="assets/fonts/nunito-latin-wght-normal.woff2" crossorigin>
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #F6E7D2; overscroll-behavior: none;
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0B0820; overscroll-behavior: none;
                  -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
     #app { position: fixed; inset: 0; }
     #app canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
@@ -19,12 +36,20 @@
     /* UI overlay: pointer-events none by default; interactive children opt in */
     #ui { position: fixed; inset: 0; z-index: 10; pointer-events: none;
           padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-    #boot-error { position: fixed; left: 16px; bottom: 16px; z-index: 50; padding: 10px 14px; border-radius: 10px;
-                  background: #FFF1DE; color: #3A2A1F; font: 600 14px system-ui, sans-serif; }
-    /* PERF §10.1 warm splash: the first paint is cream / peach with a paw, a tiny sword and the pink bow (never grey).
-       core adds .out when the title (or a ?level) is up and removes the node after the fade. */
+    /* boot / recovery messages (main.js, core/recovery.js): Token Tails night panel with a gold border and button */
+    #boot-error { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 50; box-sizing: border-box;
+                  width: min(360px, calc(100vw - 32px)); padding: 18px 20px; border-radius: 14px; text-align: center;
+                  background: #2A1F45; color: #FFF4D6; border: 2px solid #FFCC55; box-shadow: 0 10px 30px rgba(11, 8, 32, .6);
+                  font: 600 15px/1.4 Nunito, Fredoka, system-ui, sans-serif; }
+    #boot-error button { margin-top: 12px; padding: 10px 22px; border: 0; border-radius: 999px; cursor: pointer;
+                         background: #FFCC55; color: #4A1D08; font: 800 15px Nunito, Fredoka, system-ui, sans-serif; }
+    #boot-error button:focus-visible { outline: 3px solid #FF7AA2; outline-offset: 2px; }
+    /* PERF §10.1 splash: the first paint is Token Tails night (#0B0820 → #2A1F45) with a gold glow behind the paw, the
+       tiny sword and the pink bow (never grey). core adds .out when the title (or a ?level) is up and removes the node
+       after the fade. */
     #splash { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; transition: opacity .4s;
-              background: radial-gradient(120% 90% at 50% 35%, #FFF4E2 0%, #F7D9B8 55%, #EDB98C 100%); }
+              background: radial-gradient(60% 45% at 50% 42%, rgba(255, 204, 85, .22) 0%, rgba(255, 204, 85, 0) 70%),
+                          linear-gradient(180deg, #0B0820 0%, #2A1F45 100%); }
     #splash svg { width: min(42vw, 280px); animation: bob 1.6s ease-in-out infinite; }
     @keyframes bob { 50% { transform: translateY(-6px) rotate(-2deg); } }
     @media (prefers-reduced-motion: reduce) { #splash svg { animation: none; } }
@@ -32,7 +57,7 @@
   </style>
 </head>
 <body>
-  <div id="splash" aria-label="Swordcat is loading" role="img">
+  <div id="splash" aria-label="Pink Paw Knight is loading" role="img">
     <svg viewBox="0 0 120 120" aria-hidden="true">
       <g stroke="#4A2A1F" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
         <path d="M84 14l8 8-38 50-10 2 2-10z" fill="#F4F1EC"/>
@@ -57,7 +82,7 @@
   <div id="app"></div>
   <div id="touch"></div>
   <div id="ui"></div>
-  <noscript>Swordcat needs JavaScript and WebGL2.</noscript>
+  <noscript><p style="color:#FFF4D6;font:600 16px system-ui,sans-serif;text-align:center;margin-top:40vh">Pink Paw Knight needs JavaScript and WebGL2.</p></noscript>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

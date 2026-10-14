@@ -48,7 +48,7 @@ Version 1.0 · 2026-10-07 · Inputs: `research/trend.md`, `research/art.md`, `re
 - Voice acting: mews and text only.
 - Branching dialogue.
 - Multiplayer.
-- **Anything crypto**: no token or wallet features and no memecoin branding.
+- **Anything crypto**: no token or wallet features and no crypto branding.
 - A physics engine or a navmesh.
 - More than 1 save slot.
 
@@ -1081,7 +1081,7 @@ export default defineLevel({
 | R8 | Levels built without an editor look samey or broken | Medium | Medium | The §15.3 spine-and-zones format, per-biome prop lists, hand-placed set pieces only, and smoke-test screenshots per zone |
 | R9 | The cutscene system grows into an editor | Medium | Medium | A fixed DSL (Appendix B); no lip sync, no IK; cuts instead of blends; skippable |
 | R10 | Audio gaps (wind, bell, crow, hyena laugh) and taste mismatch (creepy forest track) | High | Low | zzfx and Web Audio synthesis; an audition list in §12; the fallback tracks noted there |
-| R11 | **IP and legal.** The Swordcat design comes from third-party AI content. @sickmanai claims it ("Original is always HD…") but that is unverified [TREND]. Several memecoins compete over the name. The catchphrases are token-site text, and *The Last Vigil* is someone else's fan series. | Medium | High | Don't ship the reference images (already the case per ASSETS.md); no token names, logos or links; every line of writing is original (§3.5); our story differs from *The Last Vigil* (Dawnstone, Order of Nine Lives, Barkus); the title and island name sit in one constant so they can be renamed. **This is not legal advice; whether the meme can be used commercially is [unverified].** |
+| R11 | **IP and legal.** The original concept drew on third-party content (see `docs/PROVENANCE.md`). On 2026-10-13 the game moved to the Token Tails IP and those elements were removed. | Medium | High | Don't ship outside reference images; no token names, logos or links; every line of writing is original (§3.5); the title and island name sit in one constant (now PAWSBURY KNIGHT / Purrhaven Isle); a git-history rewrite is a founder decision.|
 | R12 | Browser quirks: pointer lock, autoplay, iOS audio interruptions, Ogg playback on Safari [unverified] | Medium | Medium | Resume audio on the first gesture and on `statechange` (tech §14); transcode the `.ogg` music to `.mp3` as well, using the imageio-ffmpeg binary the research agents installed |
 | R13 | **Shipped size.** `public/assets` is about 195 MB and 1,946 files, and Vite copies all of `public/` into `dist/` | High | High | Keep the full library outside `public/` (for example `assets-library/`) and copy only the files listed in a used-assets manifest at build time, or add a prune step. Re-encode music at about 96–128 kbps (it is about 41 MB now). Load each level's assets lazily. Target: initial download under 25 MB and total under 80 MB [rec]. |
 | R14 | Parallel agents break each other's interfaces | Medium | High | tech §3/§20: frozen `events.js`/`ctx`, additive requests (§15.2), contract tests, `npm run check` before every handoff |

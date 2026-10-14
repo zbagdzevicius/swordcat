@@ -7,7 +7,7 @@
 // Part 1: Appendix A (design numbers)
 // ---------------------------------------------------------------------------------------------
 // GAME_DESIGN.md is the source of truth for every number below. Agents read config; no literals.
-export const HOMAGE_LINES = false;            // §4.4: keep false until a legal check
+export const HOMAGE_LINES = false;            // always false: the homage lines were removed (docs/TOKENTAILS-PLAN.md §2.3); kept for the strings.js import
 export const GRAVITY = 22;
 
 export const PLAYER = {
@@ -243,7 +243,7 @@ export const ENEMIES = {
                poise: 1, hopEvery: 1.2, hopDist: 1.5, attacks: [{ id: 'jelly_slam', weight: 1, range: 3 }], split: { L: ['M', 2], M: ['S', 2] }, childInvuln: .3, childPop: 2, maxAlive: 12, sight: 8, leash: 14 },
   spider:    { model: 'models/creatures/polypizza/Spider.glb', fit: { h: 0.5 }, tint: '#4E5A2C', radius: .35, height: .5, mass: .6, hp: 35, poise: 2, burst: { speed: 5, move: 1.2, pause: 1.0 }, sight: 10, fov: 3.14, leash: 16,
                attacks: [{ id: 'spider_web', weight: 1, range: 7 }, { id: 'spider_bite', weight: 2, range: 1.3 }], fish: [3, 3] },
-  hyena:     { model: 'models/characters/kaykit/Barbarian.glb', fit: { h: 1.35 }, head: 'hyena', plateWords: ['HATER', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER'],
+  hyena:     { model: 'models/characters/kaykit/Barbarian.glb', fit: { h: 1.35 }, head: 'hyena', plateWords: ['GRUMP', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER'],
                plateWordsFriend: ['FAN', 'GIGGLER', 'YAYSAYER', 'HUGGER', 'CHEERER', 'SPOONER'],   // WA §12 (index-paired with plateWords)
                hide: ['Barbarian_Head', 'Barbarian_Hat', '1H_Axe', '1H_Axe_Offhand', '2H_Axe', 'Mug', 'Barbarian_Round_Shield'],
                weapon: { model: 'models/weapons/skeleton/Skeleton_Blade.glb', bone: 'handslot.r', fit: { max: 0.9 } },
@@ -251,7 +251,7 @@ export const ENEMIES = {
                attacks: [{ id: 'hyena_slash', weight: 3, range: 1.9 }, { id: 'hyena_lunge', weight: 1, range: 5, minRange: 3, cooldown: 4 }],
                gloat: { dur: 1.0, chokeStagger: 1.0, chokeValor: 10 },
                jeer: { windup: .5, dur: 2.0, r: 8, cooldown: 12, onlyWithin: 10, fogAdd: .01, maxPerPack: 1 }, flank: { giggleLead: .6 }, fish: [4, 6] },
-  stealer:   { model: 'models/characters/kaykit/Rogue_Hooded.glb', fit: { h: 1.2 }, head: 'hyena', plateWords: ['POST STEALER'], plateWordsFriend: ['POSTMASTER'], hide: ['Rogue_Head_Hooded', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
+  stealer:   { model: 'models/characters/kaykit/Rogue_Hooded.glb', fit: { h: 1.2 }, head: 'hyena', plateWords: ['SNACK SNATCHER'], plateWordsFriend: ['SNACK SHARER'], hide: ['Rogue_Head_Hooded', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
                radius: .35, height: 1.2, mass: 1.0, hp: 30, poise: 1, walk: 2.0, run: 6.0, sight: 16, fov: 2.79, leash: 30,
                attacks: [{ id: 'stealer_snatch', weight: 1, range: 4 }], fish: [3, 3] },
   pug:       { model: 'models/characters/kaykit/Knight.glb', fit: { h: 1.25 }, head: 'pug', show: ['Rectangle_Shield', '1H_Sword', 'Knight_Helmet'], helmetScale: .9,
@@ -314,7 +314,7 @@ export const ECONOMY = {
            quickCharge: { cost: 200, tier1: .45, tier2: .85 }, valorGain: { cost: 150, mul: 1.25 }, waveReach: { cost: 200, range: 15, needShards: 2 },
            cape: 80 },
   skins: { borrowed: 'start', twig: 'start', fishbone: { kittens: 6 }, baguette: { kittens: 12 }, diamond: { kittens: 18 }, toobig: { flag: 'keep.brutus' }, dawnblade: { flag: 'ending.seen' } },
-  capes: { cream: 'start', red: { flag: 'town.free' }, memeWhite: { memeCam: 1 }, blue: 80, green: 80, midnight: 80, gold: { flag: 'ending.seen' } },
+  capes: { cream: 'start', red: 'start', memeWhite: { memeCam: 1 }, blue: 80, green: 80, midnight: 80, gold: { flag: 'ending.seen' } },
   heartBells: 3, lettersRefund: 100, replayFishMul: .6,
 };
 
@@ -553,7 +553,7 @@ export const INPUT = {
     mouseOnly: { wasd: true, lmbMoves: false, keys: { guard: ['Mouse4', 'KeyL'], dodge: ['Mouse3', 'KeyK'], jump: ['KeyF', 'Mouse1'], peek: ['AltLeft'] } },
     keyboardOnly: { wasd: true, lmbMoves: false, keys: { attack: ['KeyJ'], guard: ['KeyL'], dodge: ['KeyK'], jump: ['Space'], move: [] } },
   },
-  /** The touch / pointer model (§6.1): mouse speed under which a moving cursor is not "activity" (Meme Cam idle). */
+  /** The touch / pointer model (§6.1): mouse speed under which a moving cursor is not "activity" (Photo Cam idle). */
   pointer: { idlePxPerSec: 24, speedWindow: 0.25, clickQueue: 8 },   // speed = net px over speedWindow s; cursor freshness: AIM.cursorIdle
   move: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] },
   // §6.3 twin-stick pad: RS aims (not look), R3 cycles zoom, D-pad ↓ peeks
@@ -728,7 +728,7 @@ export const KO = deepFreeze({ sitT: 1.2, wipeT: 0.35, starR: 0.35, starRev: 2.5
 /** WA §2.6 `world/Bunting.js` (the one added play draw; no shadow). Low halves pennants and lanterns. */
 export const BUNTING = deepFreeze({ max: 240, maxLow: 120, lanternMax: 60, lanternMaxLow: 30, sag: 0.12, spacing: 0.55, minH: 3.2, flutter: 0.06 });
 
-/** WA §5 idle ladder (s of no input; player): every step before the Meme Cam (`PLAYER.memeCam.idle`), loops from `loopFrom`. */
+/** WA §5 idle ladder (s of no input; player): every step before the Photo Cam (`PLAYER.memeCam.idle`), loops from `loopFrom`. */
 export const IDLE = deepFreeze({ glance: 4, look: 7, groom: 10, twirl: 12.5, loopFrom: 7, sneezeP: 0.1, hubSit: 20 });
 
 /** WA §4.1 calm HUD (the hudMode setting, 'calm' by default): tuck `after` s out of combat (no alerted enemy within `combatR` m). */

@@ -3,7 +3,7 @@ export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELE
 export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, WARM_POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
 export {
   CATS, SWORDCAT, swordcatConfig, villagerConfig, lostKittenConfig, squireConfig, spoonBrigadeConfig, catConfig, eyeSet,
-  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY,
+  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY, tokentailsCatConfig,
 } from './configs.js';
 export { PAL, CAPES, SIGNATURE, VILLAGER_COATS, MISCHIEF, WARM_LOOKS } from './palette.js';
 export {
@@ -16,7 +16,7 @@ export { buildSword, mountModel, makeStreak, SWORD, BLADE, SWORD_SKINS, DAWN_SPA
 export { makePlateTexture, buildPlate, attachPlate, ensurePlateFont, pickPlateWord, PLATE_WORDS, PLATE, FRIEND_WORDS, friendWordFor, setPlateRow } from './Plate.js';
 export { buildBeastHead, attachBeastHead, BEAST_PRESETS, KAYKIT_HEADS } from './BeastHead.js';
 export { addPlateArmour, addGauntlet } from './Armour.js';
-export { ACCESSORIES } from './Accessories.js';
+export { ACCESSORIES, coinPieces, coinCrest } from './Accessories.js';
 export { buildProp, buildCage, PROP_NAMES, PROP_MOUNTS } from './Props/ProcProps.js';
 export { CHEESE, M2_BUILDERS, M2_MOUNTS } from './Props/M2Props.js';
 export { WARM_BUILDERS, WARM_PROP_NAMES, squeakyBone, bigSqueakyBone, sackyFace, wobbleSmile } from './Props/WarmProps.js';

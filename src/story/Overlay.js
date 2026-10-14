@@ -50,7 +50,7 @@ const CSS = `
 .st-title{position:absolute;left:0;right:0;top:12%;text-align:center;z-index:8;opacity:0;transition:opacity 1.2s ease;transform:translateY(10px) scale(.92)}
 .st-title.on{opacity:1;transform:none;transition:opacity 1.2s ease,transform .7s cubic-bezier(.3,1.5,.5,1)}
 .st-logo{display:inline-block;position:relative;font-family:${FONTS.logo};font-weight:700;
-  font-size:clamp(46px,8.2vw,112px);letter-spacing:.03em;line-height:1;
+  font-size:clamp(26px,min(8.2vw,9.5vmin),112px);letter-spacing:.03em;line-height:1;
   background:linear-gradient(180deg,#FFF3B8 0%,${C.butter} 45%,${C.gold} 100%);-webkit-background-clip:text;background-clip:text;color:transparent;
   -webkit-text-stroke:5px ${C.ink};paint-order:stroke fill}
 .st-o{position:relative;display:inline-block}
@@ -158,6 +158,22 @@ export function revealHtml(text, n) {
 /** Visible length (without `*` emphasis markers). Pure. */
 export const visibleLength = (s) => String(s ?? '').replace(/\*/g, '').length;
 
+const LOGO_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const BOW_HTML = '<span class="st-bow"><i class="l"></i><i class="r"></i><s class="l"></s><s class="r"></s><b></b></span>';
+/**
+ * The fallback overlay wordmark, built from the game title (strings `game.title`): the pink bow sits on the first "O",
+ * or on the first letter when there is none (as ui/icons.js logoHtml does). Pure; returns HTML.
+ */
+export function stLogoHtml(text) {
+  const chars = [...String(text || 'PINK PAW KNIGHT')];
+  let at = chars.findIndex((c) => c === 'O' || c === 'o');
+  if (at < 0) at = chars.findIndex((c) => c.trim() !== '');
+  return chars.map((c, i) => {
+    const ch = LOGO_ESC[c] ?? c;
+    return i === at ? `<span class="st-o">${ch}${BOW_HTML}</span>` : ch;
+  }).join('');
+}
+
 export class Overlay {
   /** @param {any} ctx @param {any} story */
   constructor(ctx, story) {
@@ -184,7 +200,7 @@ export class Overlay {
     root.className = 'st-root nolb';
     root.innerHTML = `
       <div class="st-bar top"></div><div class="st-bar bot"></div>
-      <div class="st-title"><div class="st-logo">SW<span class="st-o">O<span class="st-bow"><i class="l"></i><i class="r"></i><s class="l"></s><s class="r"></s><b></b></span></span>RDCAT</div><div class="st-sub"></div></div>
+      <div class="st-title" aria-hidden="true"><div class="st-logo">${stLogoHtml(this.ctx?.strings?.t?.('game.title'))}</div><div class="st-sub"></div></div>
       <div class="st-press"></div>
       <div class="st-caption"></div>
       <div class="st-chapter"><div class="lab"></div><div class="ttl"></div><div class="reg"></div><div class="st-seal"></div></div>
@@ -236,13 +252,14 @@ export class Overlay {
     if (text) { el.textContent = text; el.classList.add('on'); } else el.classList.remove('on');
   }
 
-  /** `{ text, sub, logo }` (logo = the SWORDCAT wordmark with the pink bow on the O), or null. */
+  /** `{ text, sub, logo }` (logo = the game-title wordmark with the pink bow, see stLogoHtml), or null. */
   title(t) {
     const el = this.el.title; if (!el) return;
-    if (!t) { el.classList.remove('on'); return; }
+    if (!t) { el.classList.remove('on'); el.setAttribute('aria-hidden', 'true'); return; }
     this.el.sub.textContent = t.sub ?? '';
     this.el.logo.style.display = t.logo === false ? 'none' : '';
     el.classList.add('on');
+    el.removeAttribute('aria-hidden');
   }
 
   press(on) {

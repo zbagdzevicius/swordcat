@@ -23,7 +23,7 @@ const _parts = new Set();
 /** Max shells a part is allocated for (so quality can be raised later without rebuilding). */
 export const MAX_SHELLS = 24;
 /**
- * Distance LOD (art.md §3 far LOD; §18 budget, requests/world.md M2): full shells inside `near` (close-ups, Meme Cam),
+ * Distance LOD (art.md §3 far LOD; §18 budget, requests/world.md M2): full shells inside `near` (close-ups, Photo Cam),
  * a linear ramp down to `min` shells, then the base layer only beyond `far` (shells off past ~8 m). The follow camera
  * (CAMERA.dist 3.6 m) draws ~13 of 16 hero shells, lock-on (4.5 m) ~10, boss framing (6 m) ~6.
  */
@@ -37,7 +37,7 @@ export const FUR_LOD = { near: 2.6, far: 8, min: 4 };
 export const FUR_LOD_ISO = Object.freeze({ near: 5, far: 14, min: 3, heroLens: 0, dropAt: 12 });   // heroLens 0: ART §6.1 / X8
 /**
  * Which rule the per-draw LOD uses this frame. runtime.characterFrame() writes it from ctx.cam every frame: `focus`
- * on (iso gameplay camera) or off (cutscenes, Meme Cam, `?cam=classic`, tools: the lens rule above).
+ * on (iso gameplay camera) or off (cutscenes, Photo Cam, `?cam=classic`, tools: the lens rule above).
  */
 export const FUR_VIEW = { focusOn: false, focus: new THREE.Vector3(), camDist: 0 };
 const _lodV = new THREE.Vector3();
@@ -64,7 +64,7 @@ export function setFurQuality(q) {
 /**
  * Shells drawn in iso PLAY (ART §6.1, X8: QUALITY.furShellsIso / kittenShellsIso, 0 on every tier today; High hero 4
  * only if PERF S2 passes). `shellsFor` / `setFurQuality` above are the CLOSE-UP counts (cam.closeUp, cutscenes,
- * Meme Cam, tools). Kittens built for play (`lod: 'play'`) switch between the two on `setCloseUp`.
+ * Photo Cam, tools). Kittens built for play (`lod: 'play'`) switch between the two on `setCloseUp`.
  */
 let _iso = { hero: 0, kitten: 0, npc: 0 };
 /** @param {{hero?: number, kitten?: number, npc?: number}} o */
@@ -98,7 +98,7 @@ export function tickFurTime(dt, frameId) {
 // ---------------------------------------------------------------- strand texture (art.md §3.1)
 
 let _strandTex = null;
-/** Strand texture defaults: 512² with 96 strands per side (≈2–3 px per strand in the Meme Cam close-up). */
+/** Strand texture defaults: 512² with 96 strands per side (≈2–3 px per strand in the Photo Cam close-up). */
 export const STRANDS = Object.freeze({ size: 512, cells: 96, seed: 7 });
 /**
  * Strand height field (art.md §3.1), generated once:
@@ -390,7 +390,7 @@ void main() {
 
 /**
  * Close-up fringe (story close-ups): within `near` m of the lens the edge-on fade reaches `edgeFade` (n·v) and starts
- * at shell 0.1, and the outer shells thin out by `thin`; it blends back to the material's own edge fade by `far` m (gameplay / Meme Cam distances unchanged).
+ * at shell 0.1, and the outer shells thin out by `thin`; it blends back to the material's own edge fade by `far` m (gameplay / Photo Cam distances unchanged).
  */
 export const FUR_CLOSE = Object.freeze({ near: 2.0, far: 4.0, edgeFade: 0.7, thin: 0.85 });
 

@@ -3,9 +3,10 @@
 // Charge, Valor Gain, Holy Wave Reach), Wardrobe (Pearl: capes, previewed on a turntable), Lookout (Pip: which kittens
 // are still out there) and the Barracks banner (companion swap).
 //
-// Purchase flow: focus a row → the preview pane explains it → confirm once to arm ("Buy for 120 fish?") → confirm again
-// to buy: fish are deducted from state.fish, the upgrade / cosmetic is written to state (§19.7 `upgrades`, `cosmetics`),
-// the player is nudged to re-read it, and `save:request {reason: 'shop'}` autosaves (§19.7 "shop purchases").
+// Purchase flow: focus a row → the preview pane explains it → confirm once to arm ("Buy for 120 catnip?") → confirm again
+// to buy: catnip (internal id `fish`) is deducted from state.fish, the upgrade / cosmetic is written to state (§19.7
+// `upgrades`, `cosmetics`), the player is nudged to re-read it, and `save:request {reason: 'shop'}` autosaves (§19.7
+// "shop purchases").
 // Equipping a skin / cape writes `state.cosmetics.sword|cape` (the player model polls it) and autosaves too.
 //
 // The model half (STATIONS, itemState, shopRows, purchase, equip) is pure and node-tested; `openShop(menus, id)` builds
@@ -17,6 +18,7 @@ import { tx, esc, rich, levelKittens } from './text.js';
 import { portraitSVG } from './portraits.js';
 import { swordArt, capeMannequin, itemIcon } from './shopArt.js';
 import * as I from './icons.js';
+import { catnipLabel } from './hud.js';
 import { CAPES } from '../characters/palette.js';
 
 /** Sword skins in display order (§13.4) and capes (§13.5). */
@@ -92,7 +94,7 @@ export function itemState(st, itemId) {
       nameKey: `ui.skin.${id}`, descKey: `ui.skin.${id}.desc`, lockKey: ok ? undefined : lk, lockVars: lv, icon: 'sword' };
   }
   if (itemId.startsWith('cape:')) {
-    const id = itemId.slice(5), eq = (st?.cosmetics?.cape ?? 'cream') === id, ok = capeUnlocked(st, id);
+    const id = itemId.slice(5), eq = (st?.cosmetics?.cape ?? 'red') === id, ok = capeUnlocked(st, id);
     const rule = ECONOMY.capes[id], price = typeof rule === 'number' ? rule : 0;
     const status = eq ? 'equipped' : ok ? 'owned' : price ? 'buy' : 'locked';
     const [lk, lv] = lockReason(rule);
@@ -147,7 +149,7 @@ export function purchase(ctx, itemId) {
   st.upgrades ??= {};
   const p = ctx.player;
   if (s.kind === 'cape') {
-    st.cosmetics ??= { swords: ['borrowed', 'twig'], capes: ['cream'], sword: 'borrowed', cape: 'cream' };
+    st.cosmetics ??= { swords: ['borrowed', 'twig'], capes: ['cream', 'red'], sword: 'borrowed', cape: 'red' };
     if (!st.cosmetics.capes.includes(s.value)) st.cosmetics.capes.push(s.value);
     st.cosmetics.cape = s.value;
   } else if (itemId === 'satchel' || itemId === 'sharp') {
@@ -170,7 +172,7 @@ export function equip(ctx, itemId) {
   const st = ctx?.state, s = st && itemState(st, itemId);
   if (!s || (s.kind !== 'skin' && s.kind !== 'cape') || s.status === 'locked' || s.status === 'buy') return false;
   if (s.status === 'equipped') return false;
-  st.cosmetics ??= { swords: ['borrowed', 'twig'], capes: ['cream'], sword: 'borrowed', cape: 'cream' };
+  st.cosmetics ??= { swords: ['borrowed', 'twig'], capes: ['cream', 'red'], sword: 'borrowed', cape: 'red' };
   const list = s.kind === 'skin' ? (st.cosmetics.swords ??= []) : (st.cosmetics.capes ??= []);
   if (!list.includes(s.value)) list.push(s.value);
   if (s.kind === 'skin') st.cosmetics.sword = s.value; else st.cosmetics.cape = s.value;
@@ -320,6 +322,7 @@ export function openShop(menus, station) {
     items.push(menus._button(el('div', 'shop-foot', { parent: p }), tx(ctx, 'menu.close'), () => ui.closeShop?.(), { cls: 'btn--plain' }));
     refreshAll = () => {
       setText(purseN, String(ctx.state?.fish ?? 0));
+      purse.setAttribute('aria-label', catnipLabel(ctx, ctx.state?.fish ?? 0));
       for (const it of items) it.refresh?.();
       const cur = s.nav?.current;
       if (cur?.state) s.onFocus?.(cur);

@@ -282,12 +282,22 @@ export class AudioManager {
     on(E.CUTSCENE_END, () => { this._csEndAt = this.time; this.stopBabble(); this.stopLaughs(); this.march(false); this._dialogHold = 0; this._applyDucks(); });
 
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      const gesture = () => { if (!this.ready || this.ac?.state !== 'running') this.unlock(); };
+      // F15 (WebKit / iOS): the music decks are <audio> elements, which may only start inside a user gesture. unlock()
+      // builds the graph synchronously, then prime() calls play() on each deck element before any await.
+      const gesture = () => {
+        if (!this.ready || this.ac?.state !== 'running') this.unlock();
+        this._primeMedia();
+      };
       for (const ev of ['pointerdown', 'mousedown', 'keydown', 'touchend', 'click']) this._listen(window, ev, gesture, { capture: true, passive: true });
       if (typeof document !== 'undefined') this._listen(document, 'visibilitychange', () => this._onVisibility());
       if (this.ctx.params?.debug) this.showMeter(true);
       this.baker.schedule();                                    // PERF §3.1: bake on the title, before the first gesture
     }
+  }
+
+  /** F15: play() every music deck element inside the current user gesture (muted, then restored). Never throws. */
+  _primeMedia() {
+    try { this.musicPlayer?.prime?.(); } catch (e) { this._warnOnce('prime', e); }
   }
 
   _listen(target, ev, fn, opts) { target.addEventListener(ev, fn, opts); this._dom.push(() => target.removeEventListener(ev, fn, opts)); }
@@ -319,6 +329,12 @@ export class AudioManager {
   }
 
   _build() {
+    // F15 (iOS 17+ / Safari): a 'playback' audio session keeps the game audible with the ring / silent switch on
+    // (the default 'auto' session mutes Web Audio there). Unknown elsewhere: feature-detected, never throws.
+    try {
+      const session = typeof navigator !== 'undefined' ? navigator.audioSession : null;
+      if (session && session.type !== 'playback') session.type = 'playback';
+    } catch { /* read-only or unsupported */ }
     const ac = THREE.AudioContext.getContext();
     this.ac = ac;
     const listener = this.listener = new THREE.AudioListener();
@@ -622,6 +638,18 @@ export class AudioManager {
   /** Path for a sound id / pattern / path (random pick among pattern matches), or null. */
   resolve(id) { return resolveId(id, this.index, this.rand); }
 
+  /**
+   * F7 heap: forget the raw bytes of `path` (our map and the Assets `bin:` cache) so the ArrayBuffer can be collected.
+   * Called right before the bytes go to decodeAudioData (which detaches them) and when a level drops a file.
+   * A later decode (after evict()) fetches again; the HTTP cache serves it.
+   * @param {string} path
+   */
+  _dropBytes(path) {
+    this._bytes.delete(path);
+    this._fetched.delete(path);
+    try { this.ctx.assets?.dropBinary?.(path); } catch { /* assets without the F7 API */ }
+  }
+
   _fetch(path) {
     let p = this._bytes.get(path);
     if (!p) {
@@ -635,7 +663,9 @@ export class AudioManager {
 
   /**
    * Decoded buffer for a path (fetch + decode once; `_decoding` holds only pending decodes, so a buffer dropped by
-   * evict() decodes again from the cached bytes). Before the unlock it only fetches. Never rejects.
+   * evict() decodes again: F7, the bytes are freed after a decode, so it fetches them again from the HTTP cache).
+   * Before the unlock it only fetches. A file that failed to load or decode stays failed (no refetch loop). Never
+   * rejects.
    * PERF §10.4: decodes are queued, ≤ RUNTIME.maxDecodes at once; `urgent` (a sound asked to play) jumps ahead of the
    * background warm-up (level preloads), which runs one at a time and pauses while a fight is on.
    * @param {string} path @param {boolean} [urgent]
@@ -643,6 +673,7 @@ export class AudioManager {
   _decode(path, urgent = true) {
     const b = this.buffers.get(path);
     if (b) return Promise.resolve(b);
+    if (this._missing.has(path)) return Promise.resolve(null);
     if (!this.ac) return this._fetch(path).then(() => null, (e) => { this._warnOnce(path, e); return null; });
     let p = this._decoding.get(path);
     if (p) {
@@ -674,7 +705,9 @@ export class AudioManager {
     const ac = this.ac, path = job.path;
     this._inflight++;
     this._fetch(path)
-      .then((ab) => ac.decodeAudioData(ab.slice(0)))
+      // F7: decode the fetched buffer itself (no slice(0) copy): drop every cached reference first, since
+      // decodeAudioData detaches it and the bytes are no longer needed once the PCM exists
+      .then((ab) => { this._dropBytes(path); return ac.decodeAudioData(ab); })
       .then((buf) => { if (this.ac === ac) this.buffers.set(path, buf); return buf; })
       .catch((e) => { this._warnOnce(path, e); return null; })
       .then((buf) => {
@@ -1147,6 +1180,8 @@ export class AudioManager {
     const keep = keepSet(levelId);
     let n = 0;
     for (const p of [...this.buffers.keys()]) if (!keep.has(p)) { this.buffers.delete(p); n++; }
+    // F7: bytes fetched but never decoded (before the unlock, or a dropped warm-up) for files the next level doesn't use
+    for (const p of [...this._bytes.keys()]) if (!keep.has(p) && !this._decoding.has(p)) this._dropBytes(p);
     return n;
   }
 

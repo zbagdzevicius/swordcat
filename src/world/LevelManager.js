@@ -21,6 +21,8 @@ import { ARENA } from './Arena.js';
 // in before the first compile (a level module importing it later would cost a program of its own)
 import './Dressing.js';
 import { disposeInstanceMaterials } from '../enemies/rig.js';
+import { releaseCpuOnUpload } from '../core/Assets.js';
+import { showRecovery, hideRecovery } from '../core/recovery.js';
 
 /** Dynamic import per level = Vite code-splits each level (§19.1 A1 ids). */
 export const LEVELS = {
@@ -99,6 +101,63 @@ export function disposeOwned(root) {
   });
 }
 
+/** A failed dynamic import (Chromium / Firefox / Safari wording), which the browser will not retry in this page. Pure. */
+export function isModuleImportError(message) {
+  return /dynamically imported module|Importing a module script failed|error loading dynamically imported module|Failed to fetch module/i.test(String(message ?? ''));
+}
+
+/** F7: geometries under this many vertices keep their CPU arrays (see cpuReleaseSkip). */
+export const CPU_RELEASE = Object.freeze({ minVerts: 1024 });
+
+/**
+ * F7 filter (pure): true when the CPU copy of `o`'s geometry must stay. `shared` = geometries owned by the asset cache
+ * (template GLBs), `occl` = meshes / geometries the camera raycasts. Non-meshes return false (releaseCpuOnUpload
+ * ignores them anyway).
+ * @param {any} o @param {Set<any>} [shared] @param {Set<any>} [occl]
+ */
+export function cpuReleaseSkip(o, shared = new Set(), occl = new Set(), minVerts = CPU_RELEASE.minVerts) {
+  if (!o?.isMesh) return false;
+  const g = o.geometry, ud = o.userData ?? {};
+  if (!g?.attributes) return true;
+  // small geometry may come from a module-level cache (eyes, brows, prop parts) that a later build clones or merges;
+  // the heap win is in the big level-unique buffers (terrain tiles, merged props, skyline)
+  if ((g.attributes.position?.count ?? 0) < minVerts) return true;
+  if (o.isBatchedMesh || o.isSkinnedMesh || o.isInstancedMesh) return true;
+  if (shared.has(g) || occl.has(o) || occl.has(g)) return true;
+  // camera fade / occluder tags (Occluders registers and raycasts these; `false` = never registered)
+  if ((ud.camFade !== undefined && ud.camFade !== false) || ud.camFadeBox || ud.camFadeIds || ud.camFadeSolidIds) return true;
+  const at = g.attributes;
+  for (const k in at) if (k !== 'position' && at[k] === at.position) return true;   // uber: normal aliases position
+  return false;
+}
+
+/** Every geometry under the settled glTF cache entries of `assets` (shared templates; never released). */
+export function sharedGeometries(assets) {
+  const out = new Set();
+  const vals = assets?._values;
+  if (!vals?.forEach) return out;
+  vals.forEach((v, key) => {
+    if (typeof key !== 'string' || !key.startsWith('gltf:')) return;
+    const roots = v?.scenes ?? (v?.scene ? [v.scene] : []);
+    for (const r of roots) r?.traverse?.((o) => { if (o.geometry) out.add(o.geometry); });
+  });
+  return out;
+}
+
+/** Meshes and ray geometries the camera's occluder fader registered (read defensively; camera owns the shape). */
+export function occluderMeshes(cam) {
+  const out = new Set();
+  try {
+    const list = cam?.occluderMeshes?.() ?? null;
+    if (list) { for (const m of list) out.add(m); return out; }
+    for (const u of cam?._fader?.units ?? []) for (const p of u?.parts ?? []) {
+      if (p?.mesh) out.add(p.mesh);
+      if (p?.rayGeo) out.add(p.rayGeo);
+    }
+  } catch { /* camera internals changed: skip nothing extra */ }
+  return out;
+}
+
 export class LevelManager {
   constructor(ctx) {
     this.ctx = ctx;
@@ -106,6 +165,9 @@ export class LevelManager {
     this.current = null;
     /** true while a load is in flight (Game skips gameplay systems) */
     this.loading = false;
+    /** load() calls so far (requests, not completions): a caller that awaited something first compares it to learn
+     *  whether a newer load was asked for meanwhile (Cutscene end blocks drop such a stale load) */
+    this.requests = 0;
     this._queue = Promise.resolve();
     this._props = new Set();
     this._offs = [];
@@ -117,27 +179,49 @@ export class LevelManager {
 
   /** Load `id` and place the player at `spawnId` (falls back to 'start'). Loads are serialised. */
   load(id, spawnId = 'start') {
+    this.requests++;
     const run = () => this._load(id, spawnId ?? 'start');
     const p = this._queue.then(run, run);
     this._queue = p.catch(() => {});
     return p;
   }
 
+  /**
+   * F6: the level module and its p0 assets are fetched FIRST, while the old level stays up; only then is the old level
+   * unloaded (`level:loading`, `level:unload`) and the new one built. A failed fetch keeps the old level, lifts the
+   * veil and shows the Retry panel (core/recovery.js), which re-queues `load(id, spawnId)`; the promise resolves to
+   * null (callers such as `exit()` or story steps never see a rejection). A failed build (old level already gone)
+   * shows the same panel. An unknown id still throws (a programming error, not a network one).
+   */
   async _load(id, spawnId) {
     const ctx = this.ctx, { bus, scene } = ctx;
     if (!LEVELS[id]) throw new Error(`[levels] unknown level "${id}"`);
     this.loading = true;
     this._cancelPrefetch();
+    hideRecovery('level');
     ctx.ui?.loading?.(true, { color: FADE_COLOR });     // core.W3 / WA §2.7: load veils are cream, never black
+    // the previous level's delayed cache release must not drop what this load is about to preload (Assets cancels it
+    // on level:loading, which now fires after the preload)
+    try { ctx.assets?._cancelRelease?.(); } catch { /* optional */ }
+    let def;
+    try {
+      // PERF W3 / §10.3: the p0 tier and the level module download in parallel; p1 follows without blocking the veil
+      const [, mod] = await Promise.all([ctx.assets.preloadLevel(id, 'p0'), LEVELS[id]()]);
+      def = mod?.default;
+      if (typeof def?.build !== 'function') throw new Error(`[levels] ${id}: module has no build()`);
+    } catch (e) {
+      this.loading = false;
+      ctx.ui?.loading?.(false);
+      this._loadFailed(id, spawnId, e, 'fetch');
+      return null;
+    }
     try {
       bus.emit(E.LEVEL_LOADING, { id, spawnId });
       this._unload();
-      // PERF W3 / §10.3: the p0 tier and the level module download in parallel; p1 follows without blocking the veil
-      const [, mod] = await Promise.all([ctx.assets.preloadLevel(id, 'p0'), LEVELS[id]()]);
       const p1 = ctx.assets.preloadLevel?.(id, 'p1');
       p1?.catch?.(() => {});
-      const def = mod.default;
-      const level = await def.build(ctx);
+      let level;
+      try { level = await def.build(ctx); } catch (e) { this._loadFailed(id, spawnId, e, 'build'); return null; }
       level.id = id; level.def = def;
       scene.add(level.root);
       ctx.physics.setLevel(level);
@@ -152,6 +236,9 @@ export class LevelManager {
       await this._prewarm(level);
       this.loading = false;
       bus.emit(E.LEVEL_LOADED, { id, level, spawnId });
+      // F7 (PERF §5 heap): after the warm-up and after level:loaded (the camera has registered its occluders, whose
+      // triangles it raycasts), free the CPU copies of the static level geometry once it is on the GPU
+      this._releaseCpu(level);
       const track = this.pickMusic(level.music);
       if (track) bus.emit(E.MUSIC, { track, fade: 1.5 });
       this._schedulePrefetch(id, level);
@@ -160,6 +247,50 @@ export class LevelManager {
       this.loading = false;
       ctx.ui?.loading?.(false);
     }
+  }
+
+  /**
+   * A load failed: log (warn, not error), lift the veil (the caller's finally) and offer Retry. Retry re-queues the load,
+   * except after a failed module import: browsers cache a failed dynamic import for the page's lifetime, so there the
+   * button saves and reloads the page (the title's Continue picks the run up again).
+   */
+  _loadFailed(id, spawnId, err, stage) {
+    console.warn(`[levels] ${id}: ${stage} failed${this.current ? `; keeping ${this.current.id}` : ''}`, err);
+    const message = String(err?.message ?? err);
+    this.lastError = { id, spawnId, stage, message };
+    const reload = stage === 'fetch' && isModuleImportError(message);
+    showRecovery('level', {
+      strings: this.ctx.strings,
+      onAction: () => {
+        if (!reload) { this.load(id, spawnId); return; }
+        try { this.ctx.save?.save?.('retry'); } catch { /* best effort */ }
+        this._reload();
+      },
+    });
+  }
+
+  /** Full page reload (a method so tests can stub it). */
+  _reload() { try { location.reload(); } catch { /* no location (node) */ } }
+
+  /**
+   * F7: mark the level's static geometry for `releaseCpuOnUpload` (core/Assets.js). Skipped (`userData.keepCpu`), see
+   * cpuReleaseSkip: GLB template geometry shared with the asset cache (later levels clone / merge it), BatchedMeshes
+   * (the camera makes views of their buffers), the camera's occluder / fade meshes (triangle raycasts read uv and
+   * normal), small geometry (module caches) and geometry whose `normal` aliases `position` (the uber pass). Returns the
+   * attributes marked.
+   */
+  _releaseCpu(level) {
+    const ctx = this.ctx;
+    if (!level?.root || ctx.params?.keepCpu) return 0;
+    try {
+      const shared = sharedGeometries(ctx.assets);
+      const occl = occluderMeshes(ctx.cam);
+      level.root.traverse((o) => { if (cpuReleaseSkip(o, shared, occl)) o.userData.keepCpu = true; });
+      // releaseCpuOnUpload flags each marked attribute needsUpdate itself (already-uploaded arrays drop on re-upload)
+      const n = releaseCpuOnUpload(level.root);
+      this.cpuReleased = n;
+      return n;
+    } catch (e) { console.warn('[levels] cpu release skipped', e); return 0; }
   }
 
   /**

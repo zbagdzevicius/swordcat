@@ -229,12 +229,13 @@ export function resetSettings(ctx, defaults) {
 
 /**
  * The Controls card (CONTROLS_SPEC §6.2–§6.4): [action, label] rows; glyphs come from text.js per device (the KBM
- * column follows the previewed preset).
+ * column follows the previewed preset). The label shown is strings key `controls.<action>` when strings carries it
+ * (menus.js controlLabel); the label here is the built-in fallback.
  */
 export const CONTROL_ROWS = Object.freeze([
   ['move', 'Move · click / hold to walk'], ['attack', 'Attack · hold to charge'], ['attackMove', 'Attack-move'],
   ['guard', 'Stand · tap to parry'], ['dodge', 'Tumble'], ['jump', 'Jump · ⚔ in the air: Pounce'], ['interact', 'Interact · talk'],
-  ['ability', 'Kitten ability'], ['milk', 'Milk Break'], ['meow', 'Meow'], ['golden', 'Golden Hour'],
+  ['ability', 'Kitten ability'], ['milk', 'Snack Break'], ['meow', 'Meow'], ['golden', 'Golden Hour'],
   ['lockon', 'Select / cycle target'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'], ['peek', 'Peek ahead'],
   ['pause', 'Pause · hold to skip scenes'],
 ]);

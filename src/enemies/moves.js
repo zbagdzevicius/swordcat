@@ -61,7 +61,7 @@ export const CHAIN_STATE = {
     const p = e.targetActor();
     if (e.chainPhase === 'windup') {
       e.brake(dt);
-      if (p && e.chainT < e.chainW - TUNING.windupTrackStop) e.faceTo(p.pos, dt, TUNING.windupTurnRate);
+      if (p && e.chainT < e.chainW - TUNING.windupTrackStop - 1e-6) e.faceTo(p.pos, dt, TUNING.windupTurnRate);
       if (e.chainT >= e.chainW) {
         e.endTelegraph();                                 // §19.4: the glint ends on the strike
         e.swing = e.ctx.combat.beginSwing(e, s);

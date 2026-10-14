@@ -1,0 +1,208 @@
+// src/core/embed.js  (owner: core) — Token Tails embed bridge, version 1 (docs/TOKENTAILS-PLAN.md §5.5).
+//
+// Active only when the page runs inside a frame (window.parent !== window) AND the URL has ?embed=1. main.js marks
+// <html data-embed="1"> before the game starts (ui hides Fullscreen / Quit on it) and installs the bridge; Game's
+// parseParams never enables the debug hooks in embed mode.
+//
+// Envelope: { ns: 'tt-swordcat', v: 1, type, ...payload }. Unknown types are ignored.
+//   host → game: hello (→ ready), session { signedIn } (stored only, never a token), audio { muted }, pause, resume
+//   game → host: ready { version }, level-complete { levelId, time, kittens, catnip, lives, rank },
+//                kitten-rescued { kittenId }, paused { paused }
+// Security: a message is accepted only when event.source === window.parent and event.origin is in the allowlist
+// (VITE_EMBED_ORIGINS, comma-separated; default below). The first valid `hello` fixes the host origin; after that only
+// that origin is accepted and every post goes to it (never '*'). Nothing is posted before the first `hello`, so the
+// host keeps saying hello until it hears `ready` (no hard stop: a slow phone may need well over 10 s to boot); a hello
+// before game:ready is answered on game:ready, every later one at once (the host's reconnect after a frame reload).
+// Layout contract: the host's 44 px exit button sits 6 px inside the frame's top-left corner; ui keeps that corner free
+// (`--embed-gut` in src/ui/ui.css).
+// The parsing / decision helpers are pure (tests/unit/embed.test.js); the DOM / game glue is installEmbedBridge().
+import { E } from './events.js';
+
+export const EMBED_NS = 'tt-swordcat';
+export const EMBED_VERSION = 1;
+export const DEFAULT_EMBED_ORIGINS = 'https://tokentails.com,https://www.tokentails.com,http://localhost:3000';
+/** host → game message types (anything else is ignored) */
+export const HOST_TYPES = Object.freeze(['hello', 'session', 'audio', 'pause', 'resume']);
+
+/** Is `win` framed? (cross-origin safe: comparing window proxies never throws, but a stub might) */
+export function isFramed(win = typeof window !== 'undefined' ? window : undefined) {
+  try { return !!win && win.parent != null && win.parent !== win; } catch { return true; }
+}
+
+/** ?embed=1 (or any value but 0 / false) in `search`. Pure. */
+export function wantsEmbed(search = '') {
+  const q = new URLSearchParams(search);
+  return q.has('embed') && q.get('embed') !== '0' && q.get('embed') !== 'false';
+}
+
+/** Embed mode = framed + ?embed. */
+export function embedActive(search = '', win) { return wantsEmbed(search) && isFramed(win); }
+
+/** Set <html data-embed="1"> (the contract key ui reads). */
+export function markEmbed(doc = typeof document !== 'undefined' ? document : undefined) {
+  if (doc?.documentElement?.dataset) doc.documentElement.dataset.embed = '1';
+}
+
+/**
+ * Allowlist string → normalised origins (scheme://host[:port], no path / trailing slash). Invalid entries are dropped.
+ * @param {string|undefined|null} raw @returns {string[]}
+ */
+export function parseOrigins(raw) {
+  const src = typeof raw === 'string' && raw.trim() ? raw : DEFAULT_EMBED_ORIGINS;
+  const out = [];
+  for (const part of src.split(',')) {
+    const s = part.trim();
+    if (!s) continue;
+    try { const o = new URL(s).origin; if (o && o !== 'null' && !out.includes(o)) out.push(o); } catch { /* not a URL */ }
+  }
+  return out;
+}
+
+/** The configured allowlist (VITE_EMBED_ORIGINS at build time, else the default). */
+export function embedOrigins(env) {
+  let e = env;
+  if (e === undefined) { try { e = import.meta.env; } catch { e = {}; } }
+  return parseOrigins(e?.VITE_EMBED_ORIGINS);
+}
+
+/**
+ * Decide whether a MessageEvent is a valid host message. Pure.
+ * @param {{source?: any, origin?: string, data?: any}} event
+ * @param {{parent: any, allowed: string[], hostOrigin?: string|null}} opts
+ * @returns {{type: string, [k: string]: any} | null}  the message, or null to ignore it
+ */
+export function acceptMessage(event, { parent, allowed, hostOrigin = null }) {
+  if (!event || parent == null || event.source !== parent) return null;
+  const origin = event.origin;
+  if (typeof origin !== 'string' || !allowed.includes(origin)) return null;
+  if (hostOrigin && origin !== hostOrigin) return null;
+  const d = event.data;
+  if (!d || typeof d !== 'object' || d.ns !== EMBED_NS || d.v !== EMBED_VERSION) return null;
+  if (typeof d.type !== 'string' || !HOST_TYPES.includes(d.type)) return null;
+  if (!hostOrigin && d.type !== 'hello') return null;          // nothing but hello before the handshake
+  return d;
+}
+
+/** A game → host envelope. Pure. */
+export function envelope(type, payload = {}) { return { ...payload, ns: EMBED_NS, v: EMBED_VERSION, type }; }
+
+/** level:results payload → the level-complete payload (`fish` is sent as `catnip`). Pure. */
+export function levelCompletePayload(p = {}) {
+  return { levelId: p.levelId ?? null, time: num(p.time), kittens: num(p.kittens), catnip: num(p.fish), lives: p.lives ?? null, rank: p.rank ?? null };
+}
+const num = (v) => (Number.isFinite(v) ? v : 0);
+
+/**
+ * The bridge state machine without DOM / game coupling (unit-tested). `actions` carries the game side:
+ * { pause(), resume(), mute(muted), isReady(), isPaused() }.
+ * @param {{parent: any, allowed: string[], actions?: object}} opts
+ */
+export function createBridge({ parent, allowed, actions = {} }) {
+  const b = {
+    hostOrigin: null,
+    session: { signedIn: false },
+    muted: null,
+    /** a hello arrived before GAME_READY: `ready` is sent on game:ready */
+    readyPending: false,
+    readySent: false,
+    posted: 0,
+    /** Post `type` to the host (only after the handshake, only to the host origin). */
+    post(type, payload) {
+      if (!b.hostOrigin || !parent?.postMessage) return false;
+      try { parent.postMessage(envelope(type, payload), b.hostOrigin); b.posted++; return true; } catch { return false; }
+    },
+    sendReady() { b.readyPending = false; b.readySent = true; return b.post('ready', { version: EMBED_VERSION }); },
+    /** Handle one MessageEvent. Returns the accepted type, or null when ignored. */
+    handle(event) {
+      const msg = acceptMessage(event, { parent, allowed, hostOrigin: b.hostOrigin });
+      if (!msg) return null;
+      switch (msg.type) {
+        case 'hello':
+          b.hostOrigin = event.origin;
+          if (actions.isReady?.() ?? true) b.sendReady(); else b.readyPending = true;
+          break;
+        case 'session':
+          b.session = { signedIn: msg.signedIn === true };
+          break;
+        case 'audio':
+          b.muted = msg.muted === true;
+          actions.mute?.(b.muted);
+          break;
+        case 'pause':
+          // already paused (the player's own pause menu): the host still learns the state
+          if (actions.isPaused?.()) b.post('paused', { paused: true }); else actions.pause?.();
+          break;
+        case 'resume':
+          if (actions.isPaused?.()) actions.resume?.(); else b.post('paused', { paused: false });
+          break;
+        default: return null;
+      }
+      return msg.type;
+    },
+    /** game:ready → answer a hello that came early. */
+    onGameReady() { if (b.readyPending) b.sendReady(); },
+  };
+  return b;
+}
+
+/**
+ * Wire the bridge to the window and the game. Call right after `game.start()` (ctx and its bus exist synchronously).
+ * Returns the bridge (with `dispose()`), or null when not in embed mode.
+ * @param {import('./Game.js').Game} game
+ * @param {{win?: Window, allowed?: string[]}} [opts]
+ */
+export function installEmbedBridge(game, { win = typeof window !== 'undefined' ? window : undefined, allowed = embedOrigins() } = {}) {
+  if (!win || !isFramed(win)) return null;
+  const parent = win.parent;
+  let ready = false, byHost = null, baseMute = null;
+  const ctx = () => game?.ctx;
+  const actions = {
+    isReady: () => ready,
+    isPaused: () => game?.mode === 'menu',
+    pause() {
+      const c = ctx();
+      if (!c || game.mode === 'menu') return;
+      try { c.ui?.pause?.(); } catch (e) { console.warn('[embed] ui.pause', e); }
+      if (game.mode === 'menu') { byHost = 'ui'; return; }
+      game.pause(true);                       // title / busy ui: freeze without a menu (GAME_PAUSE still fires)
+      byHost = 'game';
+    },
+    resume() {
+      const c = ctx();
+      if (!c) return;
+      if (byHost === 'ui') { try { c.ui?.resume?.(); } catch (e) { console.warn('[embed] ui.resume', e); } }
+      else if (byHost === 'game') game.pause(false);
+      else bridge.post('paused', { paused: game.mode === 'menu' });   // the player's own pause stays theirs
+      if (game.mode !== 'menu') byHost = null;
+    },
+    mute(muted) {
+      const c = ctx();
+      if (!c?.params) return;
+      if (baseMute === null) baseMute = !!c.params.mute;
+      c.params.mute = baseMute || muted;
+      try { c.audio?.setVolumes?.({}); } catch { /* audio not unlocked yet: applied on unlock */ }
+    },
+  };
+  const bridge = createBridge({ parent, allowed, actions });
+  const onMessage = (ev) => { try { bridge.handle(ev); } catch (e) { console.warn('[embed] message', e); } };
+  win.addEventListener('message', onMessage);
+  const offs = [];
+  const bus = ctx()?.bus;
+  if (bus) {
+    offs.push(bus.on(E.GAME_READY, () => { ready = true; bridge.onGameReady(); }));
+    offs.push(bus.on(E.LEVEL_RESULTS, (p) => bridge.post('level-complete', levelCompletePayload(p))));
+    offs.push(bus.on(E.KITTEN_RESCUED, (p) => { if (p?.kittenId) bridge.post('kitten-rescued', { kittenId: p.kittenId }); }));
+    // one `paused` per real change (a ui resume can pass through mode 'menu' twice in one step)
+    let lastPaused = null;
+    offs.push(bus.on(E.GAME_PAUSE, (p) => {
+      const paused = !!p?.paused;
+      if (!paused) byHost = null;
+      if (paused === lastPaused) return;
+      if (bridge.post('paused', { paused })) lastPaused = paused;
+    }));
+    // a mute that arrived before the audio system existed is applied once it does
+    offs.push(bus.on(E.GAME_READY, () => { if (bridge.muted !== null) actions.mute(bridge.muted); }));
+  } else ready = true;
+  bridge.dispose = () => { win.removeEventListener('message', onMessage); for (const off of offs) { try { off?.(); } catch { /* */ } } };
+  return bridge;
+}

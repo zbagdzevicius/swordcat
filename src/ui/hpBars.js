@@ -130,7 +130,7 @@ export class HpBars {
     if (this.track.size > 24) this.track.delete(this.track.keys().next().value);
   }
 
-  /** @param {number} dt @param {boolean} visible (play, HUD on, not Meme Cam) */
+  /** @param {number} dt @param {boolean} visible (play, HUD on, not Photo Cam) */
   render(dt, visible) {
     const ctx = this.ctx, cam = ctx.camera, iso = ctx.cam?.isIso === true;
     const on = visible && iso && !!cam;

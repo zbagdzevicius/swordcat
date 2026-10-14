@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TELEGRAPH, CLASS_MARKS } from '../../src/core/config.js';
 import { DECAL_COLORS, DECAL_ROLES } from '../../src/fx/GroundDecals.js';
+import { PINK, bowSvg } from '../../src/ui/icons.js';
 import { INK_ALLOW, hexRgb, rgbHsv, isDarkLiteral, isHeroPink, isDangerHue, FX_COLORS, CONFETTI_COLORS } from '../../src/fx/palette.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -101,8 +102,35 @@ test('WA §2.7 dark-literal lint: no hex colour with HSV V < 0.20 in src/fx/** (
   assert.deepEqual(bad, [], `dark literals:\n${bad.join('\n')}`);
 });
 
-test('WA §2.7 dark-literal lint: no hex colour with HSV V < 0.20 in src/ui/** (ui.W7 sweep)', () => {
+/**
+ * Token Tails night (docs/TOKENTAILS-PLAN.md §2.6): the brand's night tones, allowed ONLY in src/ui/ui.css for the title
+ * rim, the loading veil and the pause / game-over scrims (menus over a frozen world, never the in-world palette).
+ */
+const UI_NIGHT_ALLOW = Object.freeze(['#0B0820', '#17112F']);
+const UI_NIGHT_FILE = path.join('src', 'ui', 'ui.css');
+
+test('WA §2.7 dark-literal lint: no hex colour with HSV V < 0.20 in src/ui/** (ui.W7 sweep; Token Tails night in ui.css only)', () => {
   const bad = [];
-  for (const f of files('src/ui')) for (const d of darkLiterals(fs.readFileSync(path.join(ROOT, f), 'utf8'))) bad.push(`${f}:${d.line} ${d.hex}`);
+  for (const f of files('src/ui')) {
+    for (const d of darkLiterals(fs.readFileSync(path.join(ROOT, f), 'utf8'))) {
+      if (f === UI_NIGHT_FILE && UI_NIGHT_ALLOW.includes(d.hex.slice(0, 7).toUpperCase())) continue;
+      bad.push(`${f}:${d.line} ${d.hex}`);
+    }
+  }
   assert.deepEqual(bad, [], `dark literals:\n${bad.join('\n')}`);
+});
+
+test('Token Tails skin: night only in the menu veils, the HUD stays light, the bow stays candy pink', () => {
+  const css = fs.readFileSync(path.join(ROOT, UI_NIGHT_FILE), 'utf8');
+  const skin = stripComments(css.slice(css.indexOf('Token Tails skin')));
+  assert.match(skin, /--tt-night:\s*#0B0820/); assert.match(skin, /--tt-parch:\s*#F7E6B8/); assert.match(skin, /--tt-gold:\s*#FFCC55/);
+  // every night literal sits in a title / loading / backdrop rule or the token block, never a .hud rule
+  for (const line of stripComments(css).split('\n')) {
+    if (!/#0B0820|#17112F/i.test(line)) continue;
+    assert.ok(!/\.hud\b|\.hud-/.test(line), `night colour in a HUD rule: ${line.trim().slice(0, 100)}`);
+  }
+  // the bow pinks are untouched (hero pink, WA §3.2 rule 1)
+  assert.ok(!/--pink\s*:/.test(skin), 'the skin does not redefine --pink');
+  assert.ok(isHeroPink(PINK), `the bow pink ${PINK} is hero pink`);
+  assert.ok(bowSvg().includes(PINK) && !bowSvg().includes('#FF7AA2'), 'the bow is drawn in the candy pink, not the love pink');
 });

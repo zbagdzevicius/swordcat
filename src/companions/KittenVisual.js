@@ -163,6 +163,8 @@ export class KittenVisual {
    * lands (the view, then the kitten setOutline, then buildOutline(proxy, opts)); a no-op until then.
    */
   _syncHull(on) {
+    // a config may opt out of the hull (`outline: false`: the ivory Token Tails cat, characters' tokentailsCatConfig)
+    if (this.cfg?.outline === false) on = false;
     if (on === this._hullOn) return;
     this._hullOn = on;
     const opts = { px: HULL[this.role] ?? 1.6, color: HULL.ink, kind: this.role };

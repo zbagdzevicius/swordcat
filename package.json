@@ -2,14 +2,21 @@
   "name": "swordcat",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/prune-assets.mjs && node scripts/bundle-budget.mjs dist",
+    "build:tokentails": "npm run build && node scripts/copy-to-tokentails.mjs",
+    "build:test": "VITE_SWORDCAT_DEBUG=1 vite build --outDir dist-test && node scripts/prune-assets.mjs --dist dist-test",
     "glb:optimize": "node scripts/optimize-glb.mjs",
     "preview": "vite preview --port 4173 --strictPort",
+    "preview:test": "vite preview --port 4173 --strictPort --outDir dist-test",
     "test:unit": "node --import ./tests/unit/_setup.mjs --test \"tests/unit/**/*.test.js\"",
     "smoke": "node tests/smoke.mjs",
-    "check": "npm run build && npm run test:unit && npm run smoke"
+    "perf:alloc": "node scripts/dev/_alloc.mjs",
+    "check": "npm run build && npm run test:unit && npm run build:test && npm run smoke"
   },
   "dependencies": {
     "three": "0.186.1",

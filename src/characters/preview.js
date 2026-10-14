@@ -293,7 +293,7 @@ async function setup() {
     }
     case 'hyena': {
       const gltf = await loadGLB('models/characters/kaykit/Barbarian.glb');
-      const words = ['HATER', 'GRUMBLER', 'POST STEALER'];
+      const words = ['GRUMP', 'GRUMBLER', 'SNACK SNATCHER'];
       for (let i = 0; i < 3; i++) {
         const model = cloneSkinned(gltf.scene);
         const box = new THREE.Box3().setFromObject(model); const s = 1.35 / (box.max.y - box.min.y);
@@ -315,7 +315,7 @@ async function setup() {
       break;
     }
     case 'plates': {
-      ['HATER', 'GRUMBLER', 'POST STEALER', 'HATER-IN-CHIEF'].forEach((w, i) => {
+      ['GRUMP', 'GRUMBLER', 'SNACK SNATCHER', 'GRUMP-IN-CHIEF'].forEach((w, i) => {
         const pl = C.buildPlate(w, { seed: i + 1, style: i === 3 ? 'black' : 'rusty' });
         pl.scale.setScalar(0.5); pl.position.set((i - 1.5) * 0.6, 0.5, 0); scene.add(pl);
       });

@@ -21,13 +21,18 @@ export const PAL = Object.freeze({
   // misc cloth / wood / food
   wood: '#8A6440', woodDark: '#5A3E2B', straw: '#D9BC6A', milk: '#F7F4EC', paper: '#EFE2C4', paperOld: '#D8C49A',
   waxRed: '#A3202C', tunic: '#9C7B57', linen: '#E9E2D2',
+  // Token Tails look (docs/TOKENTAILS-PLAN.md §2.1 / §2.2): Clementine's ivory coat, crimson eyes, gold trim and the
+  // gold ':3' coin. New keys only: the ginger keys above stay for the other cats (Sir Marmalade, villagers).
+  furIvory: '#F3EEE6', furIvoryLight: '#FFFFFF', furIvoryShade: '#DCD3C8', earInnerSalmon: '#F2A08C', noseTT: '#F08C9A',
+  irisCrimson: '#B3212F', irisCrimsonDeep: '#5E0E18', irisCrimsonInner: '#E0525C', irisCrimsonRing: '#2E070C',
+  trimGold: '#E2C05A', goldHi: '#FFCC55', coinGold: '#E2C05A', coinGoldDeep: '#B8902E', coinInk: '#5E0E18',
 });
 
 /** Cape colours (GAME_DESIGN §13.5; §13.3 shop capes). id → { color, lining, sheen, hem }. */
 export const CAPES = Object.freeze({
   cream:     { color: '#CDBB98', lining: '#A08C68', sheen: '#EADCC0', hem: '#B09A72' },   // Marmalade's faded cape
-  red:       { color: '#D9323F', lining: '#9A1F3A', sheen: '#F06A72', hem: '#E8C27A' },      // ART §2.6 lift, gold hem trim
-  memeWhite: { color: '#FFF3E2', lining: '#F2DCC8', sheen: '#FFFFFF', hem: '#FF9EC0' },      // WA §3.3: cream + pink hem stripe
+  red:       { color: '#D9323F', lining: '#9A1F3A', sheen: '#F06A72', hem: '#E2C05A' },      // royal red, Token Tails gold trim (PAL.trimGold)
+  memeWhite: { color: '#FFF3E2', lining: '#F2DCC8', sheen: '#FFFFFF', hem: '#FF9EC0' },      // id kept (save / shop / unlock); ivory + pink hem stripe
   blue:      { color: '#3F6FB5', lining: '#25426E', sheen: '#8DB0E8', hem: '#D9B26A' },
   green:     { color: '#5E7F3E', lining: '#3A4F26', sheen: '#A9C57E', hem: '#D9B26A' },
   midnight:  { color: '#3A3F5E', lining: '#2A2E48', sheen: '#7C84B8', hem: '#C9CED8' },   // §13.3 Midnight, lifted (no near-black, ART §2.3)

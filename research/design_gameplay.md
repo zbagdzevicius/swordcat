@@ -39,7 +39,7 @@ Units follow tech.md:
 - "The armor is borrowed. The hour is gold."
 - "Born to :3, forced to ⚔" (adapted for the Act title cards)
 
-The first two lines come from swordcat.lol copy. They are short phrases, but a legal check on reuse is still listed in §17.
+Those caption lines were replaced with original text on 2026-10-13 (docs/PROVENANCE.md).
 
 ---
 
@@ -54,7 +54,7 @@ The first two lines come from swordcat.lol copy. They are short phrases, but a l
 **The Great Drowse.** Nine winters' worth of fog arrived in one night, when the Lantern was stolen.
 - The fog makes grown cats irresistibly sleepy. Knights nap in the fields in full armour, shopkeepers doze at their stalls, and Queen Snowpaw sleeps on her throne.
 - Kittens resist it, being too small and too fidgety to nap on command. That is why the invaders are **kit-napping** every kitten they find.
-- Swordcat stays fully awake for a further reason: the old Dawnwatch sword she borrowed still holds a spark of dawnlight, "lit from within" **[REF: swordcat.lol symbol]**. That spark is her holy glow.
+- Swordcat stays fully awake for a further reason: the old Dawnwatch sword she borrowed still holds a spark of dawnlight, "lit from within" **[TREND V7]**. That spark is her holy glow.
 
 **The Order of the Dawnwatch** were the Queen's knights, who kept watch at standing stones called **Vigil Stones**. They are all asleep now. Vigil Stones are the game's checkpoints.
 
@@ -1685,9 +1685,8 @@ export default { id: 'opening_stand', anchor: 'player', skippable: true, letterb
 
 **Legal and IP** (trend.md, ASSETS.md caveats)
 - The Swordcat design's copyright is unverified.
-- The phrases "Too small for the sword. Holding it anyway." and "The armor is borrowed. The hour is gold." come from swordcat.lol copy.
-- The hyena "HATER" / "POST STEALER" scene and the milk-selfie scene homage @sickmanai clips.
-- The gate-defence scenario is *inspired by* the trend's "hold the gate" content, including the fan series *The Last Vigil*. The story here is original: different premise, names and order.
+- Provenance of the concept and what was removed on 2026-10-13: see `docs/PROVENANCE.md`.
+- The gate-defence scenario is a generic "hold the gate" beat; the story here is original (premise, names and order).
 - **No crypto or token content appears in the game.** All of this needs a legal pass before any public release.
 
 **Story**

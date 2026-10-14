@@ -49,6 +49,14 @@ export function setVar(e, name, v) {
   e.style.setProperty(name, s);
 }
 
+/** Remove a CSS custom property set with setVar, cache included (a bare removeProperty left the cache saying the value
+ *  was still there, so the next identical setVar was skipped: the hearts lost --heart-w every other fit and wrapped). */
+export function clearVar(e, name) {
+  if (!e) return;
+  delete e['_v_' + name];
+  e.style.removeProperty(name);
+}
+
 /** Pending pulse restarts: element -> Set of classes to re-add (see pulse). */
 let _pulseQ = null;
 const _nextFrame = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 16));

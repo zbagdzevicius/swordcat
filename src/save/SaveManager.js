@@ -23,6 +23,11 @@
 // (≤ 4 Hz while a slider drags). Not in ?test (smoke enables it via setEnabled) nor on ?level= dev jumps (?save=1
 // overrides). A pending save is also written on pagehide / tab hidden.
 //
+// Safety (F16): a stored record from a newer build (`v > SAVE_VERSION`) loads read-only and is never written over
+// (`readOnly`); when storage is unavailable or a write fails after the quota retry, a one-time toast says progress
+// can't be saved (`toast.noSave`); when another tab writes the slot (window `storage` event), this tab stops writing
+// (`otherTab`) and a toast asks for a reload (`toast.otherTab`). Both toasts go through ctx.ui.toast (or E.TOAST).
+//
 // Sessions: the `title` spawn never saves. Any other level load (story's / ui's New Game and Continue flows, or
 // newGame()/continueGame()) starts a session, which may overwrite the slot only from its first successful write on, so
 // a New Game abandoned during CS-01 keeps the old save. Loading the `title` spawn ends the session (a final save if it
@@ -40,6 +45,24 @@ export const SAVE_VERSION = 1;
 
 /** §19.7 schema (identical to core GameState.defaultState; the contract test checks it). */
 export const defaultSave = () => defaultState();
+
+/**
+ * One-time player notices (F16): strings key + English fallback (used until story's strings.js has the key).
+ * `session`: shown once a game session runs (a boot-time storage failure waits until play starts).
+ */
+export const NOTICES = Object.freeze({
+  noSave: Object.freeze({ key: 'toast.noSave', text: "Progress can't be saved in this browser mode.", session: true }),
+  otherTab: Object.freeze({ key: 'toast.otherTab', text: 'This game was saved in another tab. Reload this page to continue from there.', session: false }),
+});
+
+/** Delivery attempts (fixed steps) before a notice the ui keeps refusing is dropped. */
+const NOTICE_TRIES = 600;
+
+/** Is a raw stored record (string or parsed) from a newer build than this one? */
+export function isNewerSave(rec) {
+  const r = typeof rec === 'string' ? safeParse(rec) : rec;
+  return isObj(r) && typeof r.v === 'number' && Number.isFinite(r.v) && r.v > SAVE_VERSION;
+}
 
 // ------------------------------------------------------------------ constants
 /** Skip the prologue: every stage flag (WA §6.2 order + the CS-01b trio StoryManager.migrateFlags maps from). */
@@ -239,6 +262,9 @@ function sanitize(d) {
     sword: swords.includes(cos.sword) ? cos.sword : b.cosmetics.sword,
     cape: capes.includes(cos.cape) ? cos.cape : b.cosmetics.cape,
   };
+  // Token Tails: the royal red cape is worn from the start. A record from before that (red not yet owned) still wearing
+  // the old default cream moves to red once; after that red is owned, so a later choice of cream is kept.
+  if (!ownedCapes.includes('red') && (cos.cape === 'cream' || cos.cape == null)) out.cosmetics.cape = 'red';
 
   out.levels = {};
   if (isObj(d.levels)) {
@@ -378,7 +404,16 @@ export class SaveManager {
     this._storage = storage;        // undefined → resolve localStorage lazily
     this._offs = [];
     this._warned = new Set();
+    /** F16: the stored record is from a newer build: it loads, but this build never writes over it */
+    this.readOnly = false;
+    /** F16: another tab wrote the slot; this tab stops writing until it is reloaded */
+    this.otherTab = false;
+    /** F16: notices raised (each at most once per page) and the ones still waiting for the ui */
+    this._noticed = new Set();
+    this._notices = [];
+    this._noticeTries = 0;
     this._onHide = this._onHide.bind(this);
+    this._onStorage = this._onStorage.bind(this);
     this._onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'hidden') this._onHide(); };
   }
 
@@ -400,7 +435,10 @@ export class SaveManager {
       bus.on(E.SAVE_REQUEST, (p) => this.request(typeof p?.reason === 'string' ? p.reason : 'request')),
       bus.on(E.SETTINGS_CHANGED, (p) => this._onSettings(p)),
     );
-    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('pagehide', this._onHide);
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('pagehide', this._onHide);
+      window.addEventListener('storage', this._onStorage);
+    }
     if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', this._onVis);
   }
 
@@ -417,23 +455,27 @@ export class SaveManager {
    * @param {object} d @param {{ progress?: boolean, savedAt?: number, backup?: boolean }} [o]
    */
   write(d, { progress = true, savedAt = now(), backup = true } = {}) {
+    if (this.otherTab) return false;                          // F16: another tab owns the slot now
     const s = this._store();
-    if (!s) return false;
+    if (!s) { this._notice('noSave'); return false; }
+    if (this.readOnly) return false;                          // F16: a newer build's save is never written over
+    let prev = null;
+    try { prev = s.getItem(this.key); } catch { prev = null; }
+    const prevRec = prev ? safeParse(prev) : null;
+    if (isNewerSave(prevRec)) { this._markNewer(prevRec); return false; }
     const clean = migrate(d);
     if (!clean) return false;
     clean.savedAt = savedAt;
     let raw;
     try { raw = JSON.stringify({ ...clean, progress: !!progress }); } catch (e) { this._warn('json', '[save] could not serialise the save', e); return false; }
     try {
-      if (backup) {
-        const prev = s.getItem(this.key);
-        if (prev && prev !== raw && hasProgress(safeParse(prev))) s.setItem(this.backupKey, prev);
-      }
+      if (backup && prev && prev !== raw && hasProgress(prevRec)) s.setItem(this.backupKey, prev);
     } catch { /* backup is best effort */ }
     try { s.setItem(this.key, raw); return true; } catch (e) {
       // quota: drop the backup and retry once
       try { s.removeItem(this.backupKey); s.setItem(this.key, raw); return true; } catch { /* fall through */ }
       this._warn('write', '[save] write failed (storage full or blocked); progress is kept in memory only', e);
+      this._notice('noSave');
       return false;
     }
   }
@@ -442,6 +484,7 @@ export class SaveManager {
   clear() {
     const s = this._store();
     this.loaded = null;
+    this.readOnly = false;                                    // the player chose to delete it (also a newer one)
     if (!s) return;
     try { s.removeItem(this.key); } catch { /* ignore */ }
     try { s.removeItem(this.backupKey); } catch { /* ignore */ }
@@ -462,6 +505,7 @@ export class SaveManager {
       return isObj(b) ? { data: migrate(b), progress: hasProgress(b), savedAt: num(b.savedAt, 0), fromBackup: true } : null;
     }
     if (!isObj(rec)) return null;
+    if (isNewerSave(rec)) this._markNewer(rec);
     return { data: migrate(rec), progress: hasProgress(rec), savedAt: num(rec.savedAt, 0), fromBackup: false };
   }
 
@@ -600,6 +644,7 @@ export class SaveManager {
       const c = this.ctx;
       if (!c.levels?.loading && c.game?.mode !== 'menu') this._titleTime += dt;
     }
+    if (this._notices.length) this._deliver();
     if (this._settingsDirty && realMs() - this._settingsAt >= SETTINGS_INTERVAL) this.saveSettings();
     if (!this.dirty) return;
     this._dirtyT += dt;
@@ -611,7 +656,10 @@ export class SaveManager {
     if (this._settingsDirty) this.saveSettings();
     for (const off of this._offs) off();
     this._offs.length = 0;
-    if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('pagehide', this._onHide);
+    if (typeof window !== 'undefined' && window.removeEventListener) {
+      window.removeEventListener('pagehide', this._onHide);
+      window.removeEventListener('storage', this._onStorage);
+    }
     if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', this._onVis);
   }
 
@@ -637,6 +685,7 @@ export class SaveManager {
   _flush(reason) {
     this.dirty = null; this._dirtyT = 0;
     if (!this.enabled || !this.ctx.state?.toJSON) return false;
+    if (this.otherTab || this.readOnly) return false;          // F16: not ours to write (no failed-save seal either)
     const at = now();
     const ok = this.write(this._compose(), { progress: true, savedAt: at });
     if (ok) { this.ctx.state.savedAt = at; this.committed = true; this._settingsDirty = false; }
@@ -647,7 +696,8 @@ export class SaveManager {
 
   /** Read-modify-write of the stored record (settings, playtime). Creates a settings-only record if none exists. */
   _patch(fn) {
-    if (!this._store()) return false;
+    if (this.otherTab || this.readOnly) return false;
+    if (!this._store()) { this._notice('noSave'); return false; }
     const p = this.peek();                      // same backup fallback as every read: a corrupt record is not lost
     const data = p?.data ?? defaultSave();
     fn(data);
@@ -728,6 +778,57 @@ export class SaveManager {
     }
     this._storage = s;
     return s;
+  }
+
+  /** F16: a newer build's record: read-only from now on (logged once). */
+  _markNewer(rec) {
+    if (this.readOnly) return;
+    this.readOnly = true;
+    this._warn('newer', `[save] this save was written by a newer version of the game (v${rec?.v}, this build reads v${SAVE_VERSION}); ` +
+      'it is loaded read-only and will not be overwritten');
+  }
+
+  /**
+   * F16: window `storage` event. Another tab (same origin) wrote or removed our slot (`key` null = storage.clear()):
+   * stop writing here (its progress would be clobbered by this tab's older state) and ask for a reload, once.
+   * @param {StorageEvent} e
+   */
+  _onStorage(e) {
+    if (!e || this.otherTab) return;
+    if (e.key !== this.key && e.key !== null) return;
+    let s = this._storage;
+    if (s === undefined) { try { s = globalThis.localStorage ?? null; } catch { s = null; } }
+    if (e.storageArea && s && e.storageArea !== s) return;   // sessionStorage / another Storage
+    this.otherTab = true;
+    this.dirty = null; this._settingsDirty = false;
+    this._warn('otherTab', '[save] another tab wrote the save; this tab stops saving until it is reloaded');
+    this._notice('otherTab');
+  }
+
+  /** Raise a one-time player notice (NOTICES key); shown through the ui as soon as it can take it. */
+  _notice(kind) {
+    if (!NOTICES[kind] || this._noticed.has(kind)) return;
+    this._noticed.add(kind);
+    this._notices.push(kind);
+    this._deliver();
+  }
+
+  /** Show the pending notices: ctx.ui.toast when the ui has one (false = not ready yet: retried next step), else E.TOAST. */
+  _deliver() {
+    for (let i = 0; i < this._notices.length;) {
+      const n = NOTICES[this._notices[i]];
+      if (n.session && this.atTitle) { i++; continue; }
+      let shown = true;
+      try {
+        const st = this.ctx.strings;
+        const text = st?.has?.(n.key) ? st.t(n.key) : n.text;
+        const ui = this.ctx.ui;
+        if (typeof ui?.toast === 'function') shown = ui.toast(text) !== false;
+        else this.ctx.bus?.emit(E.TOAST, { text, key: n.key });
+      } catch { shown = true; /* never retry a throwing ui every step */ }
+      // a ui without a toast layer (headless, failed boot) answers false forever: give up after ~10 s of steps
+      if (shown || ++this._noticeTries > NOTICE_TRIES) this._notices.splice(i, 1); else i++;
+    }
   }
 
   _warn(key, msg, err) {

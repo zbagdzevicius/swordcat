@@ -1,6 +1,6 @@
-# Swordcat - Licenses & Attributions
+# Pink Paw Knight - Licenses & Attributions
 
-Every asset under `public/assets/` is either **CC0 1.0 (public domain dedication)** or, for fonts, the **SIL Open Font License 1.1**. CC0 needs no attribution; the credits below are given as thanks and so the sources can be traced. Licenses were checked on 2026-10-07 against each source page (OpenGameArt license box, poly.pizza model page, quaternius.com pack page) or the license file shipped inside the pack (copied to `licenses/`).
+Every third-party asset under `public/assets/` is either **CC0 1.0 (public domain dedication)** or, for fonts, the **SIL Open Font License 1.1**. The one exception is the Token Tails logo (`ui/tokentails-logo.webp`), which is © Token Tails (see "Token Tails" below). CC0 needs no attribution; the credits below are given as thanks and so the sources can be traced. Licenses were checked on 2026-10-07 against each source page (OpenGameArt license box, poly.pizza model page, quaternius.com pack page) or the license file shipped inside the pack (copied to `licenses/`).
 
 - CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/
 - SIL OFL 1.1: https://openfontlicense.org/ (full texts in `fonts/licenses/`)
@@ -119,9 +119,21 @@ Modifications: WAV/AIF sources were transcoded to OGG Vorbis with ffmpeg and fil
 | Cinzel (variable) | https://fonts.google.com/specimen/Cinzel | `fonts/licenses/Cinzel-OFL.txt` |
 | Cinzel Decorative (Regular, Bold) | https://fonts.google.com/specimen/Cinzel+Decorative | `fonts/licenses/CinzelDecorative-OFL.txt` |
 | Uncial Antiqua | https://fonts.google.com/specimen/Uncial+Antiqua | `fonts/licenses/UncialAntiqua-OFL.txt` |
+| Nunito (Latin, Latin Extended; variable weight) | Copied from the Token Tails repo (`client/public/fonts/`); upstream https://github.com/googlefonts/nunito | `fonts/licenses/LICENSE-nunito.txt` |
+| Passion One (Latin, Black 900) | Copied from the Token Tails repo (`client/public/fonts/`); upstream https://fonts.google.com/specimen/Passion+One | `fonts/licenses/LICENSE-passion-one.txt` |
 
 OFL fonts may be bundled and embedded in the game; the font files themselves must not be sold on their own, and the license text must stay with them (it is in `fonts/licenses/`). Copyright holders are named at the top of each OFL text file.
 
-## Not included
+## Token Tails
 
-The Swordcat character design (reference images in `research/ref/`) comes from a viral AI-image meme / memecoin. Its copyright/licensing status is **unverified**. No reference image is shipped in `public/assets/`; the in-game hero is meant to be an original procedural model inspired by the description.
+Pink Paw Knight is a Token Tails game. Token Tails logo and mascot © Token Tails.
+
+Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.
+
+## Known gaps in the license evidence
+
+None of these packs ship in the game build (they stay in the source tree only); the notes record what the files say:
+
+- `licenses/quaternius-ultimate-monsters-License.txt`: the header names the Ultimate Platformer Pack, not Ultimate Monsters. The Ultimate Monsters pack page states CC0.
+- `licenses/kenney_cube-pets_1.0-License.txt`: the file inside the downloaded pack says version 2.0, while the pack is listed here as 1.0.
+- Cute Animated Monsters Pack: no license file came with the downloaded glTF subset; CC0 is stated on the pack page.

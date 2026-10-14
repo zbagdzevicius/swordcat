@@ -23,6 +23,44 @@ function both(A, bone, geo, m, color, rmse, innerColor) {
   A.add(bone, flipShell(geo), { m, color: innerColor ?? (typeof color === 'function' ? color : mixRgb(C(color), [0, 0, 0], 0.35)), rmse });
 }
 
+// ------------------------------------------------------------------ the Token Tails gold ':3' coin
+
+/**
+ * The gold ':3' coin (Token Tails brand prop, docs/TOKENTAILS-PLAN.md §2.1), procedural: a thick gold disc with a
+ * raised rim and a ':3' face in deep crimson, centred at the origin and facing +Z. Returns the pieces so both the
+ * kit assembly (`A.add(bone, geo, { m, color, rmse })`: Clementine's chest crest) and a GeoBuilder (`gb.add(geo,
+ * { matrix, color, rmse })`: the `tt_coin` prop) can use them. Every piece owns its geometry (caller adds it once).
+ * @param {number} [r] coin radius @param {{ seg?: (n:number)=>number }} [o]
+ * @returns {{ geo: THREE.BufferGeometry, matrix: THREE.Matrix4, color: number[], rmse: number[] }[]}
+ */
+export function coinPieces(r = 0.03, o = {}) {
+  const seg = o.seg ?? ((n) => n);
+  const gold = C(PAL.coinGold), deep = C(PAL.coinGoldDeep), hi = C(PAL.goldHi), ink = C(PAL.coinInk);
+  const th = r * 0.22, out = [];
+  // the disc (faces ±Z), a brighter raised rim on the front, and a pale gold boss behind the face
+  out.push({ geo: new THREE.CylinderGeometry(r, r, th, seg(28), 1), matrix: mat([0, 0, 0], [Math.PI / 2, 0, 0]), color: deep, rmse: RM.brass });
+  out.push({ geo: new THREE.TorusGeometry(r * 0.9, r * 0.1, seg(6), seg(28)), matrix: mat([0, 0, th * 0.5]), color: hi, rmse: RM.brass });
+  out.push({ geo: new THREE.CylinderGeometry(r * 0.8, r * 0.8, th * 0.3, seg(24), 1), matrix: mat([0, 0, th * 0.55], [Math.PI / 2, 0, 0]), color: gold, rmse: RM.brass });
+  const z = th * 0.75;
+  // ':' (two dots) then '3' (one tube), read left to right from the front
+  for (const y of [0.2, -0.2]) {
+    out.push({ geo: new THREE.SphereGeometry(r * 0.1, seg(8), seg(6)).scale(1, 1, 0.5), matrix: mat([-r * 0.34, y * r, z]), color: ink, rmse: RM.nose });
+  }
+  const pts = [[-0.04, 0.36], [0.16, 0.42], [0.32, 0.28], [0.26, 0.1], [0.08, 0.02], [0.28, -0.08], [0.34, -0.26], [0.18, -0.4], [-0.04, -0.36]]
+    .map(([x, y]) => new THREE.Vector3(x * r + r * 0.06, y * r, z));
+  out.push({ geo: new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), seg(24), r * 0.065, seg(5), false), matrix: new THREE.Matrix4(), color: ink, rmse: RM.nose });
+  return out;
+}
+
+/**
+ * Clementine's chest crest (docs/TOKENTAILS-PLAN.md §2.2): a small gold ':3' coin on the front of the breastplate.
+ * Kit pieces on the chest bone (no extra draw). `z` = the plate's front surface at the crest height.
+ */
+export function coinCrest(A, { r = 0.03, y = 0.03, z = 0.155 } = {}) {
+  const base = mat([0, y, z + r * 0.12]);
+  for (const p of coinPieces(r, { seg: (n) => sg(A, n) })) A.add('chest', p.geo, { m: base.clone().multiply(p.matrix), color: p.color, rmse: p.rmse });
+}
+
 // ------------------------------------------------------------------ clothing
 
 /** Simple tunic (prologue Clementine, squires, villagers): body sleeve + skirt + sleeves. */

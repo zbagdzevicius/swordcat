@@ -25,13 +25,15 @@ const _texCache = new Map();
 /**
  * Iris texture (cached by its options). Enemies use `slit: true` and an amber/red iris; `sclera: true` adds the cream
  * ring (enemies and grown-ups; kittens keep the all-iris button eye).
- * @param {{inner?:string, outer?:string, ring?:string, pupil?:string, slit?:boolean, pupilR?:number, sclera?:boolean|string}} o
+ * `catchlights: 2` keeps the two big catchlights only (no top sparkle: the Token Tails mascot's eye).
+ * @param {{inner?:string, outer?:string, ring?:string, pupil?:string, slit?:boolean, pupilR?:number, sclera?:boolean|string, catchlights?:number}} o
  */
 export function makeEyeTexture(o = {}) {
   const inner = o.inner ?? PAL.irisInner, outer = o.outer ?? PAL.irisOuter, ring = o.ring ?? PAL.irisRing, pupil = o.pupil ?? PAL.pupil;
   const pr = o.pupilR ?? EYE.pupil.default;
   const sclera = o.sclera ? (typeof o.sclera === 'string' ? o.sclera : EYE.sclera) : null;
-  const key = [inner, outer, ring, pupil, o.slit ? 1 : 0, pr, sclera ?? '-'].join('|');
+  const nCatch = o.catchlights === 2 ? 2 : 3;
+  const key = [inner, outer, ring, pupil, o.slit ? 1 : 0, pr, sclera ?? '-', nCatch].join('|');
   if (_texCache.has(key)) return _texCache.get(key);
   const c = canvas2d(256, 256);
   if (!c) { _texCache.set(key, null); return null; }
@@ -55,13 +57,14 @@ export function makeEyeTexture(o = {}) {
   const low = g.createRadialGradient(128, 128 + 77 * k, 4, 128, 128 + 77 * k, 60 * k);
   low.addColorStop(0, 'rgba(255,255,255,0.24)'); low.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = low; g.beginPath(); g.arc(128, 128, R, 0, Math.PI * 2); g.fill();
-  // three catchlights (ART §5.3): the big upper-left ellipse, a lower-right dot, a small top sparkle
+  // three catchlights (ART §5.3): the big upper-left ellipse, a lower-right dot, a small top sparkle (two: no sparkle)
   const C = EYE.catch, at = (x) => 128 + (x - 128) * k;
   g.fillStyle = '#fff';
   g.beginPath(); g.ellipse(at(C.a[0]), at(C.a[1]), C.a[2] * k, C.a[3] * k, -0.5, 0, Math.PI * 2); g.fill();
   g.beginPath(); g.arc(at(C.b[0]), at(C.b[1]), C.b[2] * k, 0, Math.PI * 2); g.fill();
-  g.beginPath(); g.arc(at(C.sparkle[0]), at(C.sparkle[1]), C.sparkle[2] * k, 0, Math.PI * 2); g.fill();
+  if (nCatch === 3) { g.beginPath(); g.arc(at(C.sparkle[0]), at(C.sparkle[1]), C.sparkle[2] * k, 0, Math.PI * 2); g.fill(); }
   const t = new THREE.CanvasTexture(c);
+  t.userData.catchlights = nCatch;
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   _texCache.set(key, t);
   return t;

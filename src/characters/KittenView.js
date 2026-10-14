@@ -1,7 +1,7 @@
 // KittenView: a buildKitten() cat bound to a core Actor (GAME_DESIGN §19.4). The drop-in visual for the player's
 // Swordcat, companions, NpcActors, LostKittens and the CS-01 squires: it parents the kitten under
 // `actor.object3d`, feeds it the actor's velocity / ground state, honours hitstop, pause and slow motion, follows
-// core's quality preset, flips the hero cape to the looping sway in Meme Cam, and implements the ScriptedActor
+// core's quality preset, flips the hero cape to the looping sway in Photo Cam, and implements the ScriptedActor
 // visual hooks (onPose / onEmote / onProp).
 //
 //   this.view = new KittenView(ctx, swordcatConfig({ cape: 'cream' }), { actor: this });   // in the actor's init()
@@ -23,7 +23,7 @@ import { READABILITY, TOP_VIEW } from './materials.js';
 import { CHAR_Q } from './util.js';
 import { OUTLINE, outlineAllowed, inkFor } from './Outline.js';
 
-/** Meme Cam cape settings (GAME_DESIGN §7.8: 3.8 s loop, gust peak at 1.2 s; 0.3 s in, 0.6 s out; §5.2 cape wind ×1.6). */
+/** Photo Cam cape settings (GAME_DESIGN §7.8: 3.8 s loop, gust peak at 1.2 s; 0.3 s in, 0.6 s out; §5.2 cape wind ×1.6). */
 export const MEME_CAPE = Object.freeze({ in: { blend: 0.3, period: 3.8, gustPeak: 1.2 }, out: { blend: 0.6 }, windMul: 1.6 });
 /** Default pose blend for scripted pose() calls (seconds). */
 export const POSE_BLEND = 0.3;
@@ -32,7 +32,7 @@ export const POSE_BLEND = 0.3;
  * Idle camera glance (the high LoL-style lens mostly sees her back): after `delay` s standing still in the calm 'idle'
  * pose she turns her head (+ a little upper body) up to `maxYaw` toward the lens (an over-the-shoulder look) with a chin lift and a head cock,
  * holds it for `hold` s, looks back ahead for `gap` s, and repeats. Additive on the final joints; any movement,
- * combat pose, scripted staging or Meme Cam cancels it at `outRate`.
+ * combat pose, scripted staging or Photo Cam cancels it at `outRate`.
  */
 export const GLANCE = Object.freeze({
   delay: 2.5, hold: [2.0, 3.4], gap: [3.0, 6.0], maxYaw: THREE.MathUtils.degToRad(75), chestShare: 0.32,
@@ -157,7 +157,8 @@ export class KittenView {
     // outline hull per QUALITY.outline (X9): hero (+ boss) always; companions on Med; everyone on High
     if (this._outlineTier !== CHAR_Q.outline) {
       this._outlineTier = CHAR_Q.outline;
-      const on = this._outlineWant ?? outlineAllowed(CHAR_Q.outline, this.role);
+      // a config may opt out (`outline: false`, the ivory Token Tails cat: configs.js tokentailsCatConfig)
+      const on = this._outlineWant ?? (k.cfg?.outline === false ? false : outlineAllowed(CHAR_Q.outline, this.role));
       if (on || k.outline) {
         const hero = this.role === 'hero';
         k.setOutline(on, { px: hero ? OUTLINE.px.hero : OUTLINE.px.companion, color: hero ? OUTLINE.hero : inkFor(k.coat?.base ?? OUTLINE.ink) });
@@ -181,7 +182,7 @@ export class KittenView {
     const a = this.actor;
     const velocity = o.velocity ?? (a?.attachedTo ? _zero : a?.vel) ?? _zero;
     const airborne = o.airborne ?? (a ? a.onGround === false && !a.attachedTo && !a.scripted : false);
-    // Meme Cam: lock the cape sway to the camera's 3.8 s loop (requests/camera.md: ctx.cam.memeT), so the cape, the
+    // Photo Cam: lock the cape sway to the camera's 3.8 s loop (requests/camera.md: ctx.cam.memeT), so the cape, the
     // camera sway, the grass and the mist all repeat on the same frame (the cape adds this frame's dt itself)
     const cam = this.ctx?.cam, cape = this.kitten.cape;
     this._glance(this._dt);
@@ -281,7 +282,7 @@ export class KittenView {
 
   // ------------------------------------------------------------------ look controls
 
-  /** Meme Cam (§7.8): the hero cape cross-fades to the 3.8 s looping sway and back. */
+  /** Photo Cam (§7.8): the hero cape cross-fades to the 3.8 s looping sway and back. */
   setMemeCam(on) {
     if (on === this._meme) return this;
     this._meme = on;

@@ -26,6 +26,7 @@ import { ZZFX_DEFS, zzfxDuration, zzfxSamples, PCM_RATE } from '../../src/audio/
 import { Prebaker, bakeTasks, BAKE } from '../../src/audio/bake.js';
 import { MIX, DUCK, MEME } from '../../src/audio/mix.js';
 import { AudioManager } from '../../src/audio/AudioManager.js';
+import { SILENT_WAV } from '../../src/audio/MusicPlayer.js';
 import { AMBIENT_LAYERS, ambienceFileIds, layerActive, activeLayers, layerPos, nextWait } from '../../src/audio/ambience.js';
 import { CUES, BEAT_CUES, cueFileIds, partOpts, PitchLadder, LADDER, stickerNote } from '../../src/audio/cues.js';
 import { birdPlan, hootPlan, chirpLength, cricketData, crackleData, rumbleData, CRICKETS } from '../../src/audio/nature.js';
@@ -902,7 +903,7 @@ test('fake WebAudio: level change cleans up voices / loops and evicts buffers ou
     assert.ok(!am.buffers.has(meadowOnly), 'evicted');
     assert.ok(am.buffers.has(star), "'*' stays decoded");
     assert.equal(am.loops.size, 0);
-    // evicted sounds decode again on demand (bytes are cached; no refetch)
+    // evicted sounds decode again on demand (F7: the bytes were freed after the first decode, so they are fetched again)
     const n = ac.decoded;
     await am.decode(meadowOnly);
     assert.ok(ac.decoded > n, "decoded again");
@@ -1620,4 +1621,82 @@ test('WA §9 music variants: rate + low-pass per deck, the results loop wraps at
     ctx.player.pos.set(6, 0, 36); step(0.6);
     assert.equal(mp.current, 'tavern_old_tower_inn');
   } finally { restore(); }
+});
+
+// ================================================================================================ SC5 (Token Tails pass)
+test('F7 heap: a decoded file frees its bytes (no slice copy; Assets bin: entry dropped); evict + replay fetches again', async () => {
+  const { ctx, am, ac, restore } = await withFakeAudio();
+  try {
+    const fetched = [], dropped = [], decodedArgs = [];
+    ctx.assets.arrayBuffer = async (p) => { const b = new ArrayBuffer(16); fetched.push([p, b]); return b; };
+    ctx.assets.dropBinary = (p) => { dropped.push(p); return true; };
+    const dec = ac.decodeAudioData.bind(ac);
+    ac.decodeAudioData = (b) => { decodedArgs.push(b); return dec(b); };
+    await am.unlock();
+    const path = lvl('*').find((p) => /sfx/.test(p));
+    const buf = await am.decode(path);
+    assert.ok(buf, 'decoded');
+    assert.equal(fetched.length, 1);
+    assert.equal(decodedArgs[0], fetched[0][1], 'decodeAudioData gets the fetched buffer itself (no slice(0) copy)');
+    assert.ok(!am._bytes.has(path) && !am._fetched.has(path), 'our byte map forgets it');
+    assert.deepEqual(dropped, [path], 'the Assets bin: cache entry is dropped');
+    // evicted → decodes again from a fresh fetch
+    am.buffers.delete(path);
+    assert.ok(await am.decode(path));
+    assert.equal(fetched.length, 2, 'fetched again (HTTP cache)');
+    assert.ok(!am._bytes.has(path));
+    // bytes fetched before a decode for a file the next level does not list go on evict()
+    const other = lvl('meadow').find((p) => !lvl('bog').includes(p) && !lvl('*').includes(p));
+    am._fetch(other); await flush();
+    assert.ok(am._bytes.has(other));
+    am.evict('bog');
+    assert.ok(!am._bytes.has(other) && dropped.includes(other));
+    // a file that failed to decode stays failed: no refetch loop
+    const bad = lvl('*').filter((p) => /sfx/.test(p))[1];
+    ac.decodeAudioData = () => Promise.reject(new Error('bad data'));
+    const warn = console.warn; console.warn = () => {};
+    try {
+      assert.equal(await am.decode(bad), null);
+      const n = fetched.length;
+      assert.equal(await am.decode(bad), null);
+      assert.equal(fetched.length, n, 'no second fetch');
+    } finally { console.warn = warn; }
+  } finally { restore(); }
+});
+
+test('F15 iOS: the unlock asks for a playback audio session; the gesture plays every music deck element (muted) before any await', async () => {
+  const nav = globalThis.navigator;
+  const hadSession = nav && Object.prototype.hasOwnProperty.call(nav, 'audioSession');
+  const session = { type: 'auto' };
+  if (nav) Object.defineProperty(nav, 'audioSession', { value: session, configurable: true, writable: true });
+  const { am, listeners, restore } = await withFakeAudio();
+  try {
+    const gesture = listeners.find(([ev]) => ev === 'pointerdown')[1];
+    gesture();                                                   // synchronous part of the first gesture
+    if (nav) assert.equal(session.type, 'playback', 'navigator.audioSession.type');
+    const mp = am.musicPlayer;
+    assert.ok(mp, 'the graph is built inside the gesture');
+    for (const d of mp.decks) {
+      assert.ok(d.primed && d.el, 'deck element created and primed');
+      assert.equal(d.el.src, SILENT_WAV);
+      assert.equal(d.el.muted, true, 'muted while the prime play() is pending');
+    }
+    await flush(); await am.unlock(); await flush();
+    for (const d of mp.decks) {
+      assert.equal(d.el.muted, false, 'muted flag restored');
+      if (!d.track) assert.equal(d.el.paused, true, 'a deck without a track is paused again');
+    }
+    // a streamed track that autoplay held back resumes inside the next gesture (synchronously)
+    am.music('village_bards_tale', 0);
+    const live = mp.decks[mp.active];
+    assert.ok(live.el && !live.src && live.track, 'a streamed deck is live');
+    {
+      live.el.pause();
+      gesture();
+      assert.equal(live.el.paused, false, 'resumed in the gesture');
+    }
+  } finally {
+    restore();
+    if (nav) { if (hadSession) nav.audioSession = undefined; else delete nav.audioSession; }
+  }
 });

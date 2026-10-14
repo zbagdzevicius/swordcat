@@ -11,7 +11,7 @@ import { GameState, defaultState, SAVE_KEYS } from '../../src/core/GameState.js'
 import { ActorRegistry, hostileTo } from '../../src/core/ActorRegistry.js';
 import { Actor } from '../../src/core/Actor.js';
 import { ScriptedActorMixin } from '../../src/core/ScriptedActor.js';
-import { parseParams } from '../../src/core/Game.js';
+import { parseParams, debugAllowed } from '../../src/core/Game.js';
 import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS, QUALITY, INPUT, HAPTICS } from '../../src/core/config.js';
 
 test('rng: seeded, reproducible, helpers in range, forks independent', () => {
@@ -306,12 +306,47 @@ test('ScriptedActor defaults: moveTo resolves on arrival, face tweens, setScript
   await a.play('Headbutt', { once: true });   // no animator: resolves immediately
 });
 
-test('parseParams: ?test fixes the seed; level/spawn/quality pass through', () => {
-  const p = parseParams('?test=1');
-  assert.equal(p.test, true); assert.equal(p.seed, 1); assert.equal(p.debug, false);
-  const q = parseParams('?debug&seed=99&level=forest&spawn=boss&quality=low');
-  assert.equal(q.debug, true); assert.equal(q.seed, 99); assert.equal(q.level, 'forest'); assert.equal(q.spawn, 'boss'); assert.equal(q.quality, 'low');
-  assert.equal(parseParams('?test=0').test, false);
+const DEV_ENV = { DEV: true }, PROD_ENV = { DEV: false, PROD: true }, TEST_BUILD_ENV = { DEV: false, PROD: true, VITE_SWORDCAT_DEBUG: '1' };
+
+test('parseParams: ?test fixes the seed; level/spawn/quality pass through (dev / build:test)', () => {
+  for (const env of [DEV_ENV, TEST_BUILD_ENV]) {
+    const p = parseParams('?test=1', env);
+    assert.equal(p.test, true); assert.equal(p.seed, 1); assert.equal(p.debug, false); assert.equal(p.hooks, true);
+    const q = parseParams('?debug&seed=99&level=forest&spawn=boss&quality=low', env);
+    assert.equal(q.debug, true); assert.equal(q.seed, 99); assert.equal(q.level, 'forest'); assert.equal(q.spawn, 'boss'); assert.equal(q.quality, 'low');
+    assert.equal(parseParams('?test=0', env).test, false);
+  }
+});
+
+test('F4: a production build ignores ?test / ?debug / ?perf / ?level / ?spawn; seed, quality, mute and cam stay', () => {
+  assert.equal(debugAllowed(DEV_ENV), true); assert.equal(debugAllowed(TEST_BUILD_ENV), true);
+  assert.equal(debugAllowed(PROD_ENV), false); assert.equal(debugAllowed({ VITE_SWORDCAT_DEBUG: '0' }), false);
+  assert.equal(debugAllowed(undefined), false); assert.equal(debugAllowed(null), false);
+  const p = parseParams('?test=1&debug&perf&level=gate&spawn=boss&quality=low&mute&cam=classic', PROD_ENV);
+  assert.equal(p.hooks, false);
+  assert.equal(p.test, false); assert.equal(p.debug, false); assert.equal(p.perf, false);
+  assert.equal(p.level, null); assert.equal(p.spawn, null);
+  assert.notEqual(p.seed, 1, 'no fixed test seed in production (random)');
+  assert.equal(p.quality, 'low'); assert.equal(p.mute, true); assert.equal(p.cam, 'classic');
+  assert.equal(parseParams('?seed=42', PROD_ENV).seed, 42, '?seed stays');
+  // the unit-test env (DEV false, no flag) behaves like production
+  assert.equal(parseParams('?test=1').test, false);
+});
+
+test('F4 + §5.5: embed mode (framed + ?embed=1) never enables hooks, even in dev', () => {
+  const p = parseParams('?embed=1&test=1&debug&level=forest', DEV_ENV, { framed: true });
+  assert.equal(p.embed, true); assert.equal(p.hooks, false);
+  assert.equal(p.test, false); assert.equal(p.debug, false); assert.equal(p.level, null);
+  const top = parseParams('?embed=1&test=1', DEV_ENV, { framed: false });
+  assert.equal(top.embed, false, 'not framed: not embed mode'); assert.equal(top.test, true);
+});
+
+test('F4: Game gates the debug.js import on a compile-time constant (dropped from production bundles)', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../../src/core/Game.js', import.meta.url), 'utf8');
+  assert.match(src, /const HOOKS_BUILD = !!\(import\.meta\.env\.DEV \|\| import\.meta\.env\.VITE_SWORDCAT_DEBUG === '1'\)/);
+  assert.match(src, /if \(HOOKS_BUILD && params\.hooks && /);
+  assert.equal((src.match(/import\('\.\/debug\.js'\)/g) ?? []).length, 1, 'one guarded debug import');
 });
 
 // ---- M2 integration (core): adopted tuning tables, disposeInstance, token share
@@ -502,7 +537,7 @@ test('S1 renderer helpers: canvas MSAA on every tier, Neutral tone mapping, ?per
   assert.equal(toneMappingOf('neutral'), THREE.NeutralToneMapping); assert.equal(toneMappingOf(undefined), THREE.NeutralToneMapping);
   assert.equal(usesFxaaPath({ id: 'med' }, 'fxaa'), true); assert.equal(usesFxaaPath({ id: 'high' }, 'fxaa'), false);
   assert.equal(usesFxaaPath({ id: 'med' }, 'canvas'), false);
-  assert.equal(parseParams('?perf').perf, true); assert.equal(parseParams('').perf, false);
+  assert.equal(parseParams('?perf', DEV_ENV).perf, true); assert.equal(parseParams('', DEV_ENV).perf, false);
   // PERF §2 auto: phones low (coarse + short side ≤ 500, or ≤ 4 GB), software low, discrete high, else med
   assert.equal(pickAutoQuality(null, { coarse: true, minSide: 390 }), 'low');
   assert.equal(pickAutoQuality(null, { deviceMemory: 4 }), 'low');
@@ -635,7 +670,8 @@ test('core.W3 + PERF §10.1: the first frame and every fade are warm (cream fade
   assert.equal(RENDER.background, '#F6E4C0');
   const html = fs.readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   assert.match(html, /id="splash"/); assert.doesNotMatch(html, /#B7C0C3/i, 'no grey first paint');
-  assert.match(html, /Fredoka/); assert.doesNotMatch(html, /cinzel|uncial|medievalsharp/i, 'X18: Fredoka only');
+  assert.match(html, /nunito-latin-wght-normal\.woff2/, 'Token Tails body font preloaded'); assert.match(html, /Fredoka/, 'Fredoka stays a fallback');
+  assert.doesNotMatch(html, /cinzel|uncial|medievalsharp/i, 'X18: no medieval display fonts');
   const game = fs.readFileSync(new URL('../../src/core/Game.js', import.meta.url), 'utf8');
   assert.doesNotMatch(game, /#B7C0C3|#000000|'black'/i, 'Game.js has no grey / black clear or fade');
 });
@@ -824,4 +860,72 @@ test('PERF §1.2 / §7: shadow-only layer + one depth material per kind with thr
   assert.equal(d.depthPacking, THREE.BasicDepthPacking, 'same program family as three\'s default shadow depth material');
   assert.equal(depthFor(new THREE.Mesh()), d);
   assert.notEqual(depthFor(new THREE.InstancedMesh(new THREE.BufferGeometry(), null, 1)), d, 'per kind');
+});
+
+// ---- Token Tails pass (SC3): index.html branding (F21) and WebGL context loss (F5)
+test('F21 / §2.6: index.html is Pink Paw Knight · Token Tails (meta, OG, icons, night theme, pinch-zoom allowed)', async () => {
+  const fs = await import('node:fs');
+  const html = fs.readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  assert.match(html, /<title>Pink Paw Knight · Token Tails<\/title>/);
+  assert.match(html, /<meta name="description" content="[^"]+">/);
+  assert.match(html, /<meta name="theme-color" content="#0B0820">/);
+  for (const p of ['og:title', 'og:description', 'og:image', 'og:type']) assert.match(html, new RegExp(`property="${p}"`));
+  assert.match(html, /property="og:image" content="og\.jpg"/); assert.match(html, /name="twitter:card" content="summary_large_image"/);
+  assert.match(html, /rel="icon"[^>]+href="favicon\.png"/); assert.match(html, /rel="apple-touch-icon"[^>]+href="apple-touch-icon\.png"/);
+  assert.doesNotMatch(html, /maximum-scale|user-scalable/, 'pinch-zoom allowed');
+  assert.match(html, /#app canvas \{[^}]*touch-action: none/, 'the canvas keeps touch-action none');
+  assert.match(html, /aria-label="Pink Paw Knight is loading"/); assert.match(html, /<noscript>[\s\S]*Pink Paw Knight/);
+  assert.doesNotMatch(html, /Swordcat|Meow Island|Nine Lives/i, 'no old display name');
+  assert.match(html, /#FF8FB1/, 'the original splash bow stays');
+  for (const f of ['favicon.png', 'apple-touch-icon.png', 'og.jpg']) assert.ok(fs.existsSync(new URL(`../../public/${f}`, import.meta.url)), f);
+});
+
+test('§2.6: the build gives the share card absolute image URLs and an og:url (VITE_SITE_URL, else the default host)', async () => {
+  const fs = await import('node:fs');
+  const { absoluteSocialUrls, siteUrl, DEFAULT_SITE_URL } = await import('../../scripts/social-meta.mjs');
+  const html = fs.readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  const def = absoluteSocialUrls(html);
+  assert.match(def, new RegExp(`property="og:image" content="${DEFAULT_SITE_URL}og\\.jpg"`));
+  assert.match(def, new RegExp(`name="twitter:image" content="${DEFAULT_SITE_URL}og\\.jpg"`));
+  assert.equal((def.match(/property="og:url"/g) ?? []).length, 1);
+  const own = absoluteSocialUrls(html, 'https://games.example.com/knight');
+  assert.match(own, /property="og:image" content="https:\/\/games\.example\.com\/knight\/og\.jpg"/);
+  assert.match(own, /property="og:url" content="https:\/\/games\.example\.com\/knight\/"/);
+  assert.equal(absoluteSocialUrls(own, 'https://other.example/'), own, 'idempotent: absolute URLs and og:url are kept');
+  assert.equal(siteUrl('javascript:alert(1)'), null); assert.equal(siteUrl(''), null);
+  assert.match(absoluteSocialUrls(html, 'not a url'), new RegExp(`content="${DEFAULT_SITE_URL}og\\.jpg"`), 'a bad VITE_SITE_URL falls back');
+});
+
+test('F5: webglcontextlost → preventDefault, loop stopped, save, overlay; restored → reload', async () => {
+  const { Game } = await import('../../src/core/Game.js');
+  const listeners = {};
+  const canvas = { addEventListener: (t, f) => { listeners[t] = f; }, removeEventListener: (t) => { delete listeners[t]; } };
+  const g = new Game(null, { params: parseParams('', { DEV: false }) });
+  const calls = [];
+  g.loop = { stop: () => calls.push('stop') };
+  g.ctx = { save: { save: (r) => calls.push(`save:${r}`) }, strings: null };
+  g._bindContextLoss(canvas);
+  assert.ok(listeners.webglcontextlost && listeners.webglcontextrestored);
+  let prevented = false;
+  const warn = console.warn; console.warn = () => {};
+  try {
+    listeners.webglcontextlost({ preventDefault: () => { prevented = true; } });
+    listeners.webglcontextlost({ preventDefault() {} });
+  } finally { console.warn = warn; }
+  assert.equal(prevented, true);
+  assert.deepEqual(calls, ['stop', 'save:contextlost'], 'once, even if the event repeats');
+  assert.equal(g.contextLost, true);
+  g._bindContextLoss({});   // no addEventListener (node): no throw
+});
+
+test('build:tokentails copies dist/ without the chunk manifest or maps, and guards file size', async () => {
+  const { shipped, MAX_FILE_MB } = await import('../../scripts/copy-to-tokentails.mjs');
+  assert.equal(shipped('index.html'), true);
+  assert.equal(shipped('bundle/index-abc.js'), true);
+  assert.equal(shipped('assets/audio/music/field_of_dreams.mp3'), true);
+  assert.equal(shipped('.vite/manifest.json'), false);
+  assert.equal(shipped('bundle/index-abc.js.map'), false);
+  assert.equal(MAX_FILE_MB, 50);
+  const pkg = JSON.parse((await import('node:fs')).readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+  assert.match(pkg.scripts['build:tokentails'], /npm run build && node scripts\/copy-to-tokentails\.mjs/);
 });

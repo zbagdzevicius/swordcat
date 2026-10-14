@@ -15,22 +15,50 @@ import { PerfMonitor, markOnce } from './perf.js';
 import { createRng } from './rng.js';
 import { SYSTEMS, loadSystems, STEP_ORDER, RENDER_ORDER, INIT_ORDER, MODE_GATES, GAMEPLAY_SYSTEMS } from './systems.js';
 import { S as STRINGS, t as translate, has as hasString } from '../story/strings.js';
+import { isFramed } from './embed.js';
+import { showRecovery } from './recovery.js';
 
 /**
- * URL switches: ?test (hooks, auto-start, fixed seed 1, no save load, no pointer lock, no dynamic res),
- * ?debug (hooks + Stats/lil-gui), ?perf (`__GAME__.perf()` + the PERF §12 overlay), ?seed=N, ?level=<id>&spawn=<id>,
- * ?quality=low|med|high|auto.
- * @param {string} search
+ * Debug switches allowed in this build? The Vite dev server, or a build made with VITE_SWORDCAT_DEBUG=1
+ * (`npm run build:test` → dist-test/, the smoke bundle). A production build (`npm run build`) never is (F4). Pure.
+ * @param {{DEV?: boolean, VITE_SWORDCAT_DEBUG?: string}|null|undefined} env  import.meta.env
  */
-export function parseParams(search = '') {
+export function debugAllowed(env) {
+  return !!env && (env.DEV === true || env.VITE_SWORDCAT_DEBUG === '1' || env.VITE_SWORDCAT_DEBUG === 1);
+}
+
+/**
+ * Compile-time twin of debugAllowed(import.meta.env): Vite inlines both operands, so in a production build this is
+ * `false` and the debug.js chunk (window.__GAME__, lil-gui, stats) is dropped from the bundle entirely.
+ */
+const HOOKS_BUILD = !!(import.meta.env.DEV || import.meta.env.VITE_SWORDCAT_DEBUG === '1');
+
+/** import.meta.env, or {} where it does not exist. */
+function viteEnv() { try { return import.meta.env ?? {}; } catch { return {}; } }
+
+/**
+ * URL switches. Debug ones, only where debugAllowed(env) and never in embed mode: ?test (hooks, auto-start, fixed seed
+ * 1, no save load, no pointer lock, no dynamic res), ?debug (hooks + Stats/lil-gui), ?perf (`__GAME__.perf()` + the
+ * PERF §12 overlay), ?level=<id>&spawn=<id>. Everywhere: ?seed=N, ?quality=low|med|high|auto, ?mute, ?cam=classic.
+ * `embed` = ?embed=1 inside a frame (core/embed.js; `framed` comes from the caller so this stays pure).
+ * @param {string} search
+ * @param {{DEV?: boolean, VITE_SWORDCAT_DEBUG?: string}} [env]  defaults to import.meta.env
+ * @param {{framed?: boolean}} [opts]
+ */
+export function parseParams(search = '', env = viteEnv(), { framed = false } = {}) {
   const q = new URLSearchParams(search);
   const flag = (k) => q.has(k) && q.get(k) !== '0' && q.get(k) !== 'false';
-  const test = flag('test'), debug = flag('debug'), perf = flag('perf');
+  const embed = framed && flag('embed');
+  const hooks = debugAllowed(env) && !embed;
+  const test = hooks && flag('test'), debug = hooks && flag('debug'), perf = hooks && flag('perf');
   const seedRaw = q.get('seed');
   const seed = seedRaw != null && seedRaw !== '' && Number.isFinite(+seedRaw) ? (+seedRaw >>> 0) : (test ? 1 : (Date.now() >>> 0));
   // CONTROLS_SPEC §15.3: ?cam=classic keeps the M1/M2 orbit camera, lens fog, pointer lock and bindings
   const cam = q.get('cam') === 'classic' ? 'classic' : 'iso';
-  return { test, debug, seed, level: q.get('level') || null, spawn: q.get('spawn') || null, quality: q.get('quality') || null, mute: flag('mute'), cam, perf };
+  return {
+    test, debug, seed, level: hooks ? q.get('level') || null : null, spawn: hooks ? q.get('spawn') || null : null,
+    quality: q.get('quality') || null, mute: flag('mute'), cam, perf, embed, hooks,
+  };
 }
 
 /**
@@ -83,7 +111,7 @@ export class Game {
   /** @param {HTMLElement} root  canvas host @param {{params?: ReturnType<typeof parseParams>}} [opts] */
   constructor(root, { params } = {}) {
     this.root = root;
-    this.params = params ?? parseParams(typeof location !== 'undefined' ? location.search : '');
+    this.params = params ?? parseParams(typeof location !== 'undefined' ? location.search : '', viteEnv(), { framed: isFramed() });
     /** 'play' | 'dialog' | 'cutscene' | 'menu' | 'memecam' */
     this.mode = 'play';
     this._modeBeforeMenu = 'play';
@@ -125,6 +153,7 @@ export class Game {
     renderer.domElement.tabIndex = 0;
     renderer.domElement.id = 'game-canvas';
     this.root.appendChild(renderer.domElement);
+    this._bindContextLoss(renderer.domElement);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(config.RENDER.background);   // warm until Env sets the level's (WA §2.1)
@@ -176,9 +205,10 @@ export class Game {
     this.stepList = STEP_ORDER.filter((k) => this.systems.has(k)).map((k) => [k, this.systems.get(k)]);
     this.renderList = RENDER_ORDER.filter((k) => this.systems.has(k)).map((k) => [k, this.systems.get(k)]);
 
-    // debug.js is its own lazy chunk (PERF §10.2): only ?test / ?debug / ?perf download it
+    // debug.js is its own lazy chunk (PERF §10.2): only ?test / ?debug / ?perf download it, and only in a dev / build:test
+    // bundle (F4: HOOKS_BUILD is false in a production build, so the import is dropped there)
     this.debugApi = null;
-    if (params.test || params.debug || params.perf) {
+    if (HOOKS_BUILD && params.hooks && (params.test || params.debug || params.perf)) {
       const { installDebug, installPerfOnly } = await import('./debug.js');
       this.debugApi = params.test || params.debug ? installDebug(this) : installPerfOnly(this);
     }
@@ -224,6 +254,29 @@ export class Game {
     bus.emit(E.GAME_READY, {});
     this.loop.start();
     await this.boot();
+  }
+
+  /**
+   * F5: WebGL context loss. `webglcontextlost` → preventDefault (allows a restore), stop the loop, save, show the
+   * "Tap to continue" panel; `webglcontextrestored` or the tap → reload the page (every GPU resource is gone; a full
+   * reload is the one path that rebuilds them all correctly). No-op without addEventListener (node tests).
+   * @param {HTMLCanvasElement} canvas
+   */
+  _bindContextLoss(canvas) {
+    if (typeof canvas?.addEventListener !== 'function') return;
+    const reload = () => { try { location.reload(); } catch { /* */ } };
+    this._onContextLost = (ev) => {
+      ev?.preventDefault?.();
+      if (this.contextLost) return;
+      this.contextLost = true;
+      console.warn('[game] WebGL context lost');
+      safe(() => this.loop?.stop());
+      safe(() => this.ctx?.save?.save?.('contextlost'));
+      safe(() => showRecovery('context', { strings: this.ctx?.strings, onAction: reload }));
+    };
+    this._onContextRestored = () => { console.warn('[game] WebGL context restored; reloading'); reload(); };
+    canvas.addEventListener('webglcontextlost', this._onContextLost, false);
+    canvas.addEventListener('webglcontextrestored', this._onContextRestored, false);
   }
 
   /** Load the first level: ?level/&spawn, else `meadow` spawn `title` (the CS-00 backdrop; story takes over). */
@@ -394,6 +447,8 @@ export class Game {
 
   dispose() {
     this.loop?.stop();
+    const cv = this.ctx?.renderer?.domElement;
+    if (cv && this._onContextLost) { cv.removeEventListener('webglcontextlost', this._onContextLost); cv.removeEventListener('webglcontextrestored', this._onContextRestored); }
     for (const key of [...INIT_ORDER].reverse()) safe(() => this.systems.get(key)?.dispose?.());
     window.removeEventListener('resize', this._onResize);
     this.ctx.postfx.dispose();

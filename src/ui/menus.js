@@ -2,13 +2,15 @@
 // live CS-00 with a warm peach rim, the logo pops in at 1.0 s and bobs; NO main-menu panel and NO difficulty picker on a
 // new save: one candy button "Tap to play!" / "Press any key to play!" appears at 1.4 s and the whole screen is the hit
 // target; with a save, "Keep going!" (with the save line) + "New adventure" (asks "Skip the prologue?" only when the
-// save is past the prologue); a 48 px Settings gear top-right (Credits live inside Settings); the footer "Made with
-// lots of purrs"), Settings (§14.3 list + §14.4 accessibility + the camera / performance / calm-HUD rows, saved
+// save is past the prologue); a 48 px Settings gear top-right (Credits live inside Settings); the co-brand footer: the
+// Token Tails logo + 'title.foot', "A Token Tails game"), Settings (§14.3 list + §14.4 accessibility + the camera / performance / calm-HUD rows, saved
 // immediately), Pause (Resume · Kittens · Letters · Sticker book · Settings · Return to Pawsbury · Quit to Title), the
 // Kittens grid (18 portraits, "???" when missing), Letters, the Sticker book (WA §5.4: flags `sticker.<id>`), Credits
 // (scrolls the asset attribution from LICENSES.md), the Vigil Stone menu (Rest · Swap kitten · Difficulty) and Game
 // over ("Time for a cat nap.": Wake up · Back to Pawsbury). The first title input unlocks audio and on touch asks for
 // fullscreen. New games start at Knight; Kitten mode is offered later, never asked (offer.js).
+// Embed mode (`<html data-embed="1">`, set by core when tokentails.com hosts the game in an iframe): the host page owns
+// fullscreen and leaving the game, so the touch fullscreen request and the pause menu's Quit to Title are left out.
 //
 // One stack of screens; keyboard / gamepad navigate through input actions (navUp/Down/Left/Right, confirm, back,
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
@@ -30,6 +32,33 @@ export const STICKER_IDS = Object.freeze(['bonk', 'bow', 'hop', 'roll', 'stand',
 /** Sticker-book cells: id, label, colour, owned (flag `sticker.<id>`). Pure. */
 export function stickerCells(ctx) {
   return STICKER_IDS.map((id) => ({ id, owned: !!ctx.state?.getFlag?.(`sticker.${id}`), label: tx(ctx, `sticker.${id}`), color: REWARD_ART[id]?.color ?? '#FFE9A8' }));
+}
+
+/** True when the game runs inside the Token Tails host page (core sets `<html data-embed="1">`). Node-safe. */
+export function embedMode(doc = typeof document !== 'undefined' ? document : null) {
+  return doc?.documentElement?.dataset?.embed === '1';
+}
+
+/**
+ * Pause menu entries after the always-on ones (Resume · Kittens · Letters · Stickers · Settings), as ids. Pure.
+ * `hub`: Return to Pawsbury is offered; `embed`: the host page provides the exit, so Quit to Title is left out.
+ * @param {{ hub?: boolean, embed?: boolean }} o @returns {string[]}
+ */
+export function pauseExtras({ hub = false, embed = false } = {}) {
+  const out = [];
+  if (hub) out.push('hub');
+  if (!embed) out.push('quit');
+  return out;
+}
+
+/**
+ * The co-brand line under the title and atop the credits: the Token Tails logo and 'title.foot' ("A Token Tails game").
+ * The image is decorative (the text names the brand). Returns HTML.
+ * @param {any} ctx
+ */
+export function coBrandHtml(ctx) {
+  const src = ctx?.assets?.url?.('ui/tokentails-logo.webp') ?? 'assets/ui/tokentails-logo.webp';
+  return `<img class="tt-logo" src="${esc(src)}" alt="" width="28" height="28" decoding="async" draggable="false"><span class="tt-foot">${esc(tx(ctx, 'title.foot'))}</span>`;
 }
 
 /**
@@ -112,7 +141,7 @@ export class Menus {
     this.titleEl.innerHTML = `<div class="title-rim"></div><div class="title-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}</div>`
       + `<div class="title-press"><span class="press-paw">${I.paw('#FFF6DA')}</span><span class="press-txt"></span></div>`
       + `<button type="button" class="title-gear" aria-label="${esc(tx(ctx, 'title.settings'))}">${I.gear()}</button>`
-      + `<div class="title-foot">${esc(tx(ctx, 'title.foot'))}</div>`;
+      + `<div class="title-foot tt-cobrand">${coBrandHtml(ctx)}</div>`;
     this.pressTxt = this.titleEl.querySelector('.press-txt');
     this.gearEl = this.titleEl.querySelector('.title-gear');
     this.stack = /** @type {Screen[]} */ ([]);
@@ -317,7 +346,7 @@ export class Menus {
 
   _unlock(e) {
     try { this.ctx.audio?.unlock?.(); } catch { /* audio optional */ }
-    if (e && e.pointerType === 'touch' && typeof document !== 'undefined' && !document.fullscreenElement) {
+    if (e && e.pointerType === 'touch' && typeof document !== 'undefined' && !document.fullscreenElement && !embedMode()) {
       try { document.documentElement.requestFullscreen?.()?.catch?.(() => {}); } catch { /* not allowed */ }
     }
   }
@@ -522,7 +551,7 @@ export class Menus {
       const devs = ['kbm', 'pad', 'touch'];
       let html = `<div class="ctl-row ctl-head"><span></span>${devs.map((d) => `<span class="${d === dev ? 'is-dev' : ''}">${d === 'kbm' ? I.keyboardIco() : d === 'pad' ? I.padIco() : I.touchIco()}</span>`).join('')}</div>`;
       for (const [act, label] of CONTROL_ROWS) {
-        html += `<div class="ctl-row"><span class="ctl-lbl">${esc(label)}</span>${devs.map((d) => {
+        html += `<div class="ctl-row"><span class="ctl-lbl">${esc(controlLabel(ctx, act, label))}</span>${devs.map((d) => {
           const g = d === 'kbm' ? presetGlyph(act, preset, bind) : actionGlyph(act, d);
           const cap = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${esc(g)}</kbd>`;
           return `<span class="${d === dev ? 'is-dev' : ''}">${cap}</span>`;
@@ -597,7 +626,8 @@ export class Menus {
     const { e, body } = this._panel('credits', tx(ctx, 'credits.title'), this.titleActive ? 'menu--title' : '');
     const roll = el('div', 'credits-roll', { parent: body });
     roll.innerHTML = `<div class="cr-logo">${I.logoHtml(tx(ctx, 'game.title'), esc(tx(ctx, 'game.subtitle')))}</div>`
-      + `<p class="cr-big">${esc(tx(ctx, 'credits.made'))}</p><p>${esc(tx(ctx, 'credits.team'))}</p><h3>${esc(tx(ctx, 'credits.assets'))}</h3><div class="cr-lic">…</div>`;
+      + `<div class="cr-brand tt-cobrand">${coBrandHtml(ctx)}</div>${creditsTopHtml(ctx)}`
+      + `<p class="cr-big">${esc(tx(ctx, 'credits.made'))}</p><h3>${esc(tx(ctx, 'credits.assets'))}</h3><div class="cr-lic">…</div>`;
     const lic = roll.querySelector('.cr-lic');
     this.ui.licenses?.().then((txt) => { lic.innerHTML = licensesHtml(txt); }).catch(() => { lic.textContent = ''; });
     const items = [this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' })];
@@ -627,8 +657,10 @@ export class Menus {
       this._button(body, tx(ctx, 'menu.stickers'), () => this.openStickers(), { sub: tx(ctx, 'ui.stickers.count', { n: stickerCells(ctx).filter((c) => c.owned).length, max: STICKER_IDS.length }) }),
       this._button(body, tx(ctx, 'pause.settings'), () => this.openSettings()),
     ];
-    if (st?.cond?.('town.free') && !inBoss && ctx.levels?.current?.id !== 'town') items.push(this._button(body, tx(ctx, 'pause.hub'), () => this.ui.toHub()));
-    items.push(this._button(body, tx(ctx, 'pause.quit'), () => this.openConfirm(tx(ctx, 'menu.quitConfirm'), () => this.ui.quitToTitle())));
+    for (const id of pauseExtras({ hub: !!st?.cond?.('town.free') && !inBoss && ctx.levels?.current?.id !== 'town', embed: embedMode() })) {
+      if (id === 'hub') items.push(this._button(body, tx(ctx, 'pause.hub'), () => this.ui.toHub()));
+      else items.push(this._button(body, tx(ctx, 'pause.quit'), () => this.openConfirm(tx(ctx, 'menu.quitConfirm'), () => this.ui.quitToTitle())));
+    }
     this.push(this._wire({ id: 'pause', el: e, items, layer: 'pause', back: () => this.ui.resume() }), { sound: 'ui.bookOpen' });
   }
 
@@ -751,7 +783,6 @@ export class Menus {
   dispose() { for (const off of this._domOffs) off(); this.root.remove(); }
 }
 
-/** LICENSES.md → simple credit HTML (headings, list items, table rows as "a — b — c"). Pure. */
 /** Continue button sub-line: "Purrdale Meadows · 5/18 kittens" from a save summary / resume point. Pure. */
 export function continueSub(ctx, sum) {
   if (!sum?.levelId) return '';
@@ -760,10 +791,40 @@ export function continueSub(ctx, sum) {
   return Number.isFinite(n) ? `${region} · ${n}/${KITTEN_IDS.length}` : region;
 }
 
+/**
+ * The credits' top lines: 'credits.team' ("Token Tails") and, when strings carries it, 'credits.pinkpaw' (the Pink Paw
+ * cat-names note). A missing key is skipped, never shown as a raw key. Returns HTML.
+ */
+export function creditsTopHtml(ctx) {
+  const has = (k) => k === 'credits.team' || !!ctx?.strings?.has?.(k);
+  return ['credits.team', 'credits.pinkpaw'].filter(has).map((k) => `<p class="cr-${k.slice(8)}">${esc(tx(ctx, k))}</p>`).join('');
+}
+
+/** A Controls-card row label: strings key `controls.<action>` when present, else the row's built-in label. */
+export function controlLabel(ctx, act, fallback) {
+  const k = `controls.${act}`;
+  return ctx?.strings?.has?.(k) ? tx(ctx, k) : fallback;
+}
+
+/** A credits heading that must never be shown (F2: "Not included ..." lists packs that do not ship). */
+const SKIP_HEADING = /^not included/i;
+
+/**
+ * LICENSES.md → simple credit HTML (headings, list items, table rows as "a — b — c"). Pure. A section whose heading
+ * starts with "Not included" is skipped up to the next heading of the same or a higher level.
+ */
 export function licensesHtml(md) {
   const out = [];
+  let skipDepth = 0;
   for (const raw of String(md ?? '').split(/\r?\n/)) {
     const line = raw.trim();
+    const hd = /^(#+)\s*(.*)$/.exec(line);
+    if (hd) {
+      const depth = hd[1].length;
+      if (skipDepth && depth > skipDepth) continue;
+      skipDepth = SKIP_HEADING.test(hd[2].replace(/[*_`]/g, '').trim()) ? depth : 0;
+      if (skipDepth) continue;
+    } else if (skipDepth) continue;
     if (!line || /^\|?\s*-{3,}/.test(line) || /^\|\s*:?-+/.test(line)) continue;
     const plain = (s) => esc(s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/[*_`]/g, '').replace(/<[^>]+>/g, ''));
     if (line.startsWith('#')) { out.push(`<h4>${plain(line.replace(/^#+\s*/, ''))}</h4>`); continue; }

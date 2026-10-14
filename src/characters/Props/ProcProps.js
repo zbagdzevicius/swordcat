@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { PAL } from '../palette.js';
 import { GeoBuilder, mat, rgb, mixRgb, smoothstep } from '../util.js';
 import { kitMaterial, RM } from '../materials.js';
-import { potHelmGeometry, flipShell } from '../Accessories.js';
+import { potHelmGeometry, flipShell, coinPieces } from '../Accessories.js';
 import { bowGeometry, bowMaterial } from '../Bow.js';
 import { M2_BUILDERS, M2_MOUNTS } from './M2Props.js';
 import { WARM_BUILDERS } from './WarmProps.js';
@@ -17,7 +17,9 @@ export const PROP_NAMES = Object.freeze(['milk_cup', 'lantern', 'spoon', 'letter
   'book', 'fishing_rod', 'bread_basket', 'teacup', 'hammer', 'butterfly',
   'feathered_hat', 'cheese_shield', 'cheese_wheel', 'cheese_wheel_giant', 'cheese_wedge',
   // Phase W (WARM_ADVENTURE_SPEC §2.5 / §8): squeaky bones, the practice props' faces
-  'squeaky_bone', 'big_squeaky_bone', 'sacky_face', 'wobble_smile']);
+  'squeaky_bone', 'big_squeaky_bone', 'sacky_face', 'wobble_smile',
+  // Token Tails: the gold ':3' coin trinket the Token Tails cat holds (docs/TOKENTAILS-PLAN.md §2.4)
+  'tt_coin']);
 
 /**
  * Where a kitten holds / wears each prop (joint + local transform). `name@at` variants override (e.g. letter@belt).
@@ -39,6 +41,7 @@ export const PROP_MOUNTS = {
   // CS-01 shot 7: Marmalade's old helm is far too big and slides down over her eyes; then she holds it and looks at it
   helmet: { joint: 'head', p: [0.004, 0.118, 0.012], r: [0.2, 0.06, 0.07] },
   'helmet@paw': { joint: 'pawL', p: [-0.05, -0.07, 0.11], r: [-1.35, 0.25, 0] },
+  tt_coin: { joint: 'pawL', p: [0, -0.06, 0.07], r: [0, 0, 0] },
   ...M2_MOUNTS,
 };
 
@@ -129,6 +132,13 @@ export function letter() {
   gb.add(flap, { color: rgb('#C9B283'), rmse: RM.paper });
   gb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.004, 14), { matrix: mat([0, 0.0, 0.004], [Math.PI / 2, 0, 0]), color: rgb(PAL.waxRed), rmse: [0.35, 0, 0, 0] });
   return mesh(gb, 'letter');
+}
+
+/** The gold ':3' coin trinket (Token Tails cat): faces the viewer, kept level in the animated paw. */
+export function ttCoin(o = {}) {
+  const gb = new GeoBuilder();
+  for (const p of coinPieces(o.r ?? 0.06)) gb.add(p.geo, { matrix: p.matrix, color: p.color, rmse: p.rmse });
+  return makeUpright(mesh(gb, 'tt_coin'));
 }
 
 export function potHelm() { const m = new THREE.Mesh(potHelmGeometry(0.95), kitMaterial()); m.name = 'pot_helm'; m.castShadow = true; return m; }
@@ -327,7 +337,7 @@ export function buildCage(o = {}) {
 const BUILDERS = {
   milk_cup: milkCup, milk_bottle: milkBottle, lantern, spoon, letter, pot_helm: potHelm, colander, signpost,
   post_bag: postBag, cot, soup_bowl: soupBowl, jester_hat: jesterHatProp, postmaster_hat: postmasterHat, cage: buildCage,
-  helmet: knightHelm,
+  helmet: knightHelm, tt_coin: ttCoin,
   ...M2_BUILDERS,
   ...WARM_BUILDERS,
 };

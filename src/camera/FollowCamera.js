@@ -125,6 +125,8 @@ const LENS_GRID = Object.freeze([[0, 0], [-0.5, 0], [0.5, 0], [-0.95, 0], [0.95,
   [-0.5, -0.6], [0.5, -0.6], [-0.5, 0.6], [0.5, 0.6], [-0.95, -0.6], [0.95, -0.6], [-0.95, 0.6], [0.95, 0.6]]);
 /** enemy states that count as engaged even without the `alerted` flag */
 const ENGAGED = new Set(['alert', 'chase', 'windup', 'strike', 'recover', 'circle', 'attack', 'aim']);
+/** Reduce camera motion: a per-step ground-height change below this (m) is followed rigidly; bigger ones ease (steps) */
+export const CALM_GROUND_STEP = 0.08;
 /** min/max spring-arm length (m) */
 const ARM_MIN = 0.8, ARM_MARGIN = 0.3, ARM_RADIUS = 0.2;
 /** what the spring arm and the lock-on line of sight test: terrain + architecture + static props (thin ones skipped) */
@@ -547,7 +549,7 @@ export class FollowCamera {
     this._rubber = 0; this._rubberS = { v: 0 }; this._pinchInT = 0; this._fitToast = false;
     this._fovB = NaN; this._fovS = { v: 0 }; this._fovPortrait = false;
     this._pitch = NaN; this._pitchS = { v: 0 }; this._chargeS = { v: 0 }; this._dCur = 0;
-    this._gy = 0; this._gyS = { v: 0 };
+    this._gy = 0; this._gyS = { v: 0 }; this._gyPrevT = NaN;
     this._groundY = 0;
     /** real (rendered) seconds since construction */
     this._realT = 0;
@@ -1637,6 +1639,11 @@ export class FollowCamera {
     const gy0 = Number.isFinite(p.groundY) ? p.groundY : this._groundY, rise = Math.max(0, feet.y - gy0);
     const lift = boss ? Math.max(0, (boss.height ?? 1.6) - I.boss.liftAbove) * I.boss.lift : 0;
     const gyT = gy0 + I.focusY + rise * (this._bounceRise ? I.bounceFollow : I.jumpFollow) + lift;
+    // Reduce camera motion: rolling ground is followed rigidly (her feet keep their screen spot over bumps; the eased
+    // follow left a ≈ 10 px swell, smoke camera:reduce-motion std 3.7 px vs 1.5); only steps (a ledge, a stair, a jump
+    // landing: > CALM_GROUND_STEP m in one step) still ease in
+    if (!snap && calm && Number.isFinite(this._gyPrevT) && Math.abs(gyT - this._gyPrevT) < CALM_GROUND_STEP) this._gy += gyT - this._gyPrevT;
+    this._gyPrevT = gyT;
     this._gy = snap ? gyT : smoothDamp(this._gy, gyT, this._gyS, I.follow.groundST, dt);
     if (snap) this._gyS.v = 0;
     // ---- engaged set, subjects and the 20 Hz solve (an immediate one on a hard add / snap)

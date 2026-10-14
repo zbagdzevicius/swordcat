@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { PAL } from './palette.js';
 import { mat, rgb, mixRgb, fbm3, smoothstep } from './util.js';
 import { RM } from './materials.js';
+import { coinCrest } from './Accessories.js';
 
 /** Material looks per armour style: [colour fn, rmse] for steel / dark steel / brass / mail / leather. */
 function looks(style) {
@@ -55,7 +56,7 @@ function dent(geo, amt, seed = 1) {
 /**
  * Add the full plate set.
  * @param {object} A assembly context from KittenBuilder ({ add(bone, geo, {m, color, rmse}), w, cfg })
- * @param {{style?: string, gauntlets?: boolean, sabatons?: boolean, pauldrons?: boolean, belt?: boolean, pouch?: boolean}} o
+ * @param {{style?: string, gauntlets?: boolean, sabatons?: boolean, pauldrons?: boolean, belt?: boolean, pouch?: boolean, crest?: 'ttCoin'|null}} o
  */
 export function addPlateArmour(A, o = {}) {
   if (!A.seg) A.seg = (n) => n;
@@ -79,6 +80,8 @@ export function addPlateArmour(A, o = {}) {
   // gorget rim (brass-trimmed collar line) + neckline roll
   A.add('chest', new THREE.TorusGeometry(0.084 * w, 0.009, A.seg(8), A.seg(40)), { m: mat([0, 0.212, 0], [Math.PI / 2, 0, 0], [1.08, 1.05, 1]), ...L.steel });
   A.add('chest', new THREE.TorusGeometry(0.13 * w, 0.006, A.seg(6), A.seg(48)), { m: mat([0, -0.06, 0], [Math.PI / 2, 0, 0], [1.08, 1.05, 1]), ...L.brass });
+  // the gold ':3' coin crest (Clementine, docs/TOKENTAILS-PLAN.md §2.2): on the breastplate's front, below the gorget
+  if (o.crest === 'ttCoin') coinCrest(A, { r: 0.03, y: 0.05, z: 0.14 * 1.05 * (0.85 + 0.15 * w) + 0.006 });
   // a few rivets along the plate bottom
   for (let i = -2; i <= 2; i++) {
     const a = i * 0.32, r = 0.128 * w;

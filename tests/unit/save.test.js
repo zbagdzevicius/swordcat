@@ -7,7 +7,7 @@ import { defaultState, SAVE_KEYS, GameState } from '../../src/core/GameState.js'
 import { KITTEN_IDS } from '../../src/core/config.js';
 import {
   KEY, BACKUP_KEY, SAVE_VERSION, defaultSave, migrate, isLegacyV1, hasProgress, resumeSpawn, summarize,
-  createMemoryStorage, SaveManager,
+  createMemoryStorage, SaveManager, NOTICES, isNewerSave,
 } from '../../src/save/SaveManager.js';
 import { EventBus } from '../../src/core/EventBus.js';
 
@@ -102,6 +102,17 @@ test('migrate: identity on §19.7 data, idempotent, null for non-objects', () =>
   assert.deepEqual(migrate({ v: 99, fish: 5 }), { ...defaultSave(), fish: 5 }, 'newer build: best effort, v pinned');
 });
 
+test('migrate: Token Tails red cape: an old save wearing the default cream moves to red once; a later cream choice is kept', () => {
+  const old = { ...defaultSave(), cosmetics: { swords: ['borrowed', 'twig'], capes: ['cream'], sword: 'borrowed', cape: 'cream' } };
+  const m = migrate(old);
+  assert.equal(m.cosmetics.cape, 'red');
+  assert.deepEqual([...m.cosmetics.capes].sort(), ['cream', 'red']);
+  const chose = migrate({ ...m, cosmetics: { ...m.cosmetics, cape: 'cream' } });
+  assert.equal(chose.cosmetics.cape, 'cream', 'red owned: cream is a real choice now');
+  assert.equal(migrate({ ...old, cosmetics: { ...old.cosmetics, capes: ['cream', 'blue'], cape: 'blue' } }).cosmetics.cape, 'blue', 'a bought cape stays');
+  assert.equal(defaultSave().cosmetics.cape, 'red');
+});
+
 test('migrate: garbage values are clamped or defaulted (a bad save never breaks boot)', () => {
   const m = migrate({
     levelId: 'moon', spawnId: 'x', difficulty: 'hard', hp: NaN, maxHp: 99, lives: null, milk: 99, milkMax: 2,
@@ -122,7 +133,7 @@ test('migrate: garbage values are clamped or defaulted (a bad save never breaks 
   assert.deepEqual(m.kittens, []); assert.deepEqual(m.heartBells, ['a', 'b', 'c']); assert.deepEqual(m.letters, ['letter_forest']);
   assert.deepEqual(m.companions, { unlocked: [], active: ['mochi'] });
   assert.deepEqual(m.upgrades, { satchel: 2, sharp: 0, quickCharge: false, valorGain: false, waveReach: false });
-  assert.deepEqual(m.cosmetics, { swords: ['borrowed', 'twig', 'diamond'], capes: ['cream'], sword: 'borrowed', cape: 'cream' });
+  assert.deepEqual(m.cosmetics, { swords: ['borrowed', 'twig', 'diamond'], capes: ['cream', 'red'], sword: 'borrowed', cape: 'red' });
   assert.deepEqual(m.levels, { forest: { cleared: false } });
   assert.deepEqual(m.flags, { ok: true, n: 3, s: 'netted', fn: null });
   assert.equal(m.settings.master, 1); assert.equal(m.settings.music, 0); assert.equal(m.settings.sensitivity, 0.1);
@@ -620,4 +631,124 @@ test('dispose unsubscribes everything', async () => {
   ctx.bus.emit(E.CHECKPOINT, { levelId: 'meadow', spawnId: 'vigil_1' });
   step();
   assert.equal(save.dirty, null);
+});
+
+// ------------------------------------------------------------------ F16 save safety (SC5, Token Tails pass)
+/** A ui stand-in whose toast() records the texts (answers `ready` → true / false). */
+function fakeUi(ready = true) {
+  const ui = { shown: [], ready, toast(text) { if (!ui.ready) return false; ui.shown.push(text); return true; } };
+  return ui;
+}
+
+test('F16: a record from a newer build loads read-only and is never written over (logged once)', (t) => {
+  const warns = quietWarn(t);
+  const newer = JSON.stringify({ ...defaultSave(), v: SAVE_VERSION + 1, fish: 9, progress: true, futureField: { x: 1 } });
+  assert.equal(isNewerSave(newer), true); assert.equal(isNewerSave({ ...defaultSave() }), false); assert.equal(isNewerSave('{oops'), false);
+  const storage = countingStorage({ [KEY]: newer });
+  const ctx = fakeCtx({ params: {} });
+  const save = new SaveManager(ctx, { storage });
+  const d = save.load();
+  assert.equal(d.fish, 9, 'it loads (best effort)');
+  assert.equal(save.readOnly, true);
+  assert.equal(save.write({ ...defaultSave(), fish: 1 }), false);
+  save.beginSession();
+  assert.equal(save.save('manual'), false);
+  assert.equal(save.saveSettings(), false);
+  save.load(); save.peek();
+  assert.equal(storage.getItem(KEY), newer, 'byte for byte untouched');
+  assert.equal(storage.getItem(BACKUP_KEY), null, 'no backup shuffle either');
+  assert.deepEqual(storage.writes, {});
+  assert.equal(warns.filter((w) => w.includes('newer version')).length, 1, 'logged once');
+  // a newer record that shows up between reads (another build wrote it) is caught at write time too
+  const s2 = createMemoryStorage();
+  const save2 = new SaveManager(fakeCtx({ params: {} }), { storage: s2 });
+  assert.equal(save2.write({ ...defaultSave(), fish: 2 }), true);
+  s2.setItem(KEY, newer);
+  assert.equal(save2.write({ ...defaultSave(), fish: 3 }), false);
+  assert.equal(save2.readOnly, true); assert.equal(s2.getItem(KEY), newer);
+  // the player deleting the save is allowed (and lifts read-only)
+  save2.clear();
+  assert.equal(save2.readOnly, false); assert.equal(s2.getItem(KEY), null);
+  assert.equal(save2.write({ ...defaultSave(), fish: 4 }), true);
+});
+
+test('F16: no storage → one "can\'t save" notice, shown once a session runs; quota failure raises it too', (t) => {
+  quietWarn(t);
+  const ctx = fakeCtx({ params: {} });
+  ctx.ui = fakeUi(false);
+  ctx.strings = { has: () => false, t: (k) => k };
+  const save = new SaveManager(ctx, { storage: null });
+  assert.equal(save.write(defaultSave()), false);
+  assert.equal(save.write(defaultSave()), false);
+  save.update(1 / 60);
+  assert.deepEqual(ctx.ui.shown, [], 'waits at the title');
+  save.beginSession();
+  save.update(1 / 60);
+  assert.deepEqual(ctx.ui.shown, [], 'the ui is not ready yet: kept');
+  ctx.ui.ready = true;
+  save.update(1 / 60); save.update(1 / 60);
+  assert.deepEqual(ctx.ui.shown, [NOTICES.noSave.text], 'English fallback, once');
+  save.save('again'); save.update(1 / 60);
+  assert.equal(ctx.ui.shown.length, 1, 'never twice');
+  // the strings key wins once story ships it; a write that fails after the quota retry raises the same notice
+  const ctx2 = fakeCtx({ params: {} });
+  ctx2.ui = fakeUi(); ctx2.strings = { has: (k) => k === 'toast.noSave', t: () => 'Saving is off here.' };
+  const full = createMemoryStorage();
+  full.setItem = () => { throw new Error('QuotaExceededError'); };
+  const save2 = new SaveManager(ctx2, { storage: full });
+  save2.beginSession();
+  assert.equal(save2.write(defaultSave()), false);
+  assert.equal(save2.write(defaultSave()), false);
+  assert.deepEqual(ctx2.ui.shown, ['Saving is off here.']);
+  // no ui: one E.TOAST on the bus instead
+  const ctx3 = fakeCtx({ params: {} });
+  const toasts = []; ctx3.bus.on(E.TOAST, (p) => toasts.push(p));
+  const save3 = new SaveManager(ctx3, { storage: null });
+  save3.beginSession(); save3.write(defaultSave()); save3.write(defaultSave()); save3.update(1 / 60);
+  assert.deepEqual(toasts, [{ text: NOTICES.noSave.text, key: 'toast.noSave' }]);
+});
+
+test('F16: another tab writing the slot stops this tab\'s saves and offers a reload, once', async (t) => {
+  quietWarn(t);
+  const g = globalThis, savedWindow = g.window;
+  const handlers = new Map();
+  g.window = {
+    addEventListener: (ev, fn) => handlers.set(ev, fn),
+    removeEventListener: (ev, fn) => { if (handlers.get(ev) === fn) handlers.delete(ev); },
+  };
+  t.after(() => { if (savedWindow === undefined) delete g.window; else g.window = savedWindow; });
+  const { ctx, save, storage, step } = await rig();
+  ctx.ui = fakeUi();
+  const onStorage = handlers.get('storage');
+  assert.equal(typeof onStorage, 'function', 'listens to window storage');
+  save.beginSession();
+  assert.equal(save.save('first'), true);
+  const mine = storage.getItem(KEY);
+  // unrelated keys / another Storage area are ignored
+  onStorage({ key: 'other.key', storageArea: storage });
+  onStorage({ key: KEY, storageArea: createMemoryStorage() });
+  assert.equal(save.otherTab, false);
+  // the other tab writes our slot
+  const theirs = JSON.stringify({ ...defaultSave(), fish: 50, progress: true });
+  storage.setItem(KEY, theirs);
+  onStorage({ key: KEY, storageArea: storage, newValue: theirs });
+  assert.equal(save.otherTab, true);
+  assert.deepEqual(ctx.ui.shown, [NOTICES.otherTab.text], 'reload offer shown at once');
+  onStorage({ key: KEY, storageArea: storage });
+  assert.equal(ctx.ui.shown.length, 1, 'once');
+  const n = storage.writes[KEY];
+  save.request('kitten'); step(3);
+  assert.equal(save.save('manual'), false);
+  assert.equal(save.write(defaultSave()), false);
+  ctx.bus.emit(E.SETTINGS_CHANGED, { key: 'music', value: 0.1 }); step(30);
+  assert.equal(storage.writes[KEY], n, 'nothing written over the other tab\'s save');
+  assert.equal(storage.getItem(KEY), theirs);
+  assert.notEqual(mine, theirs);
+  // storage.clear() in another tab (key null) counts too
+  const r2 = await rig(); r2.ctx.ui = fakeUi();
+  handlers.get('storage')({ key: null, storageArea: r2.storage });
+  assert.equal(r2.save.otherTab, true);
+  // dispose removes the listener
+  r2.save.dispose();
+  assert.equal(handlers.has('storage'), false);
 });

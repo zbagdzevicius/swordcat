@@ -7,7 +7,7 @@
 //   attackMove   sword + arrow while attack-move is armed
 //   aim          a ring reticle while an ability / aim indicator is open
 //   unreachable  a grey paw with an ✕ over ground with no walkable cell within 2 m (a partial path with a gap > 2 m)
-//   none         cutscenes and the Meme Cam;   default   the plain arrow in menus
+//   none         cutscenes and the Photo Cam;   default   the plain arrow in menus
 //
 // CSS cursors drawn as inline SVG at 32 px, ×1.5 and ×2 (settings.cursorSize): chunky and rounded with a ~3 px cocoa
 // outline, and a high-contrast variant (settings.cursorContrast: a thicker dark-cocoa outline over white / butter

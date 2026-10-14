@@ -223,10 +223,16 @@ const FLOW = [
       if (!t.assert(!!(await tutAt(t, 2, 20000)), `lesson 2 (bonk) by walking to the dummy (${JSON.stringify(await t.G(tut))})`)) return;
       // ---- 2 bonk: Snip–Snap–Swoosh on the dummy (she is at it already) → the Pink Bow (tutbow)
       // come up to it from the south so she faces it, then Snip–Snap–Swoosh (J ×3) with the cursor on it
-      await walkPath(t, [[1.2, -79.2], [0, -77.5]], { stop: 0.35 });
-      const dum = await t.G(() => window.__GAME__.screen(0, -76, 0.6));
-      if (dum?.on !== false && dum) { await t.page.mouse.move(dum.x, dum.y); await t.wait(80); }
-      for (let k = 0; k < 8 && !(await t.G(() => window.__flowReward != null)); k++) { await t.tap('KeyJ', 3, 230); await t.wait(800); }
+      // KBM swings aim at the cursor and lunge toward it. The cursor is a fixed screen point while the camera follows her,
+      // so a combo that missed (seen after the story blocks: 5 dummy hits, then she lunged 8 m north chasing the cursor's
+      // ground point) never came back. Every round: back at the dummy, the cursor re-projected onto it, then J ×3.
+      for (let k = 0; k < 8 && !(await t.G(() => window.__flowReward != null)); k++) {
+        const far = await t.G(() => { const p = window.__GAME__.ctx.player.pos; return Math.hypot(p.x, p.z + 77.5) > 1.0; });
+        if (k === 0 || far) await walkPath(t, [[1.2, -79.2], [0, -77.5]], { stop: 0.35 });
+        const dum = await t.G(() => window.__GAME__.screen(0, -76, 0.6));
+        if (dum?.on !== false && dum) { await t.page.mouse.move(dum.x, dum.y); await t.wait(80); }
+        await t.tap('KeyJ', 3, 230); await t.wait(800);
+      }
       const rT = await until(t, () => (window.__flowReward != null ? window.__flowReward - window.__flowT0 : null), null, { timeout: 15000 });
       if (!t.assert(rT != null && rT <= 60, `first reward ≤ 60 s game time after the tap (${rT?.toFixed?.(1)} s)`)) return;
       await until(t, () => window.__GAME__.ctx.story.playingId === 'tutbow' || window.__GAME__.ctx.story.seen('tutbow'), null, { timeout: 8000 });
@@ -247,6 +253,11 @@ const FLOW = [
       // ---- 5 block Sir Wobble (Space = the Stand), 6 parry him (in-page timing)
       await walkPath(t, [[0, -84.9]], { stop: 0.4 });
       await t.page.keyboard.down('Space');
+      // KBM Stand is planted (Player.aimTurn: the cursor re-aims it only after it moves ≥ AIM.cursorReaimPx). She
+      // arrives here walking west from the roll spot with the cursor still on the dummy (north), so Sir Wobble
+      // (south-east of her) hit her back every time: sweep the cursor onto him so the Stand faces him.
+      const wkS = await t.G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); return wk ? g.screen(wk.pos.x, wk.pos.z, wk.pos.y + 0.5) : null; });
+      if (wkS?.x != null) await t.page.mouse.move(wkS.x, wkS.y, { steps: 6 });
       ok = await tutAt(t, 6, 15000);
       await t.page.keyboard.up('Space');
       t.assert(!!ok, 'lesson 6 (parry) after a block');

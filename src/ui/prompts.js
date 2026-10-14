@@ -69,7 +69,7 @@ export function hintCovers(r, ctx, stick = true) {
 
 /**
  * May the hint / prompt layers (lesson card, guide bubble, tips) show? Only in live play: never in a cutscene, a
- * dialogue scene, under the letterbox, in a menu or the Meme Cam. Pure.
+ * dialogue scene, under the letterbox, in a menu or the Photo Cam. Pure.
  * @param {{ hud?: boolean, meme?: boolean, mode?: string, dialog?: boolean, letterbox?: boolean, menu?: boolean, cinema?: boolean }} s
  */
 export function hintLayerOn(s) {

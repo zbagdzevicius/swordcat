@@ -1,13 +1,16 @@
 // src/story/cutscenes/cs00.js  (owner: story) — CS-00 Title Loop (GAME_DESIGN §5.4; WA §4.3, ON §3) [MVP].
 // `meadow` spawn `title` (the sunny practice field by the north gate), `meadow_morning` with fog 0.035, wind 1.0.
-// Swordcat in the Oath pose with the bow on and — on a new save — the RED cape (the poster look is the first thing
-// anyone sees); afterwards her equipped cape. Pearl bounces 1.4 m to her left (a `jump` every 2.6 s, offset 0.3 s from
-// the holy pulse, 6 pink hearts per hop) and stays for Morning Practice. MEME_LOOP, looping every 3.8 s; every second
-// loop a holy pulse 0 → 0.35 → 0 over 1.2 s with 40 sparkles. The logo pops in at 1.0 s; the press prompt follows once
+// Clem waving hello, her sword lowered at her side, the bow on and — on a new save — the RED cape; afterwards her
+// equipped cape. Pearl bounces 1.4 m to her left (a `jump` every 2.6 s, offset 0.3 s from the holy pulse, 6 pink hearts
+// per hop) and stays for Morning Practice; the Token Tails Cat sits 1.2 m to her right when its character config exists
+// (Token Tails pass: no poster recreation, see docs/PROVENANCE.md). A wide three-quarter group framing (the MEME_LOOP
+// preset id only for its 3.8 s sway loop, with its own pos / look / fov); every second loop a holy pulse
+// 0 → 0.35 → 0 over 1.2 s with 40 sparkles. The logo pops in at 1.0 s; the press prompt follows once
 // `game.playReady` is true (PERF S2t: masked by the logo). Silent until the first input unlocks audio.
 // The loop never ends by itself: StoryManager ends it when a new game / continue is chosen (or a test skips it). A new
 // game ends it normally, so the camera blends MEME_LOOP → follow over TITLE_BLEND s (no cut, no reload; WA §6.3).
 import { PLAYER, FADE_COLOR } from '../../core/config.js';
+import { CATS } from '../../characters/configs.js';
 import { capeOverride, memeLook } from './rig.js';
 
 const LOOP = PLAYER.memeCam.loop;
@@ -15,6 +18,20 @@ const LOOP = PLAYER.memeCam.loop;
 export const TITLE_PULSE = Object.freeze({ peak: 0.35, dur: 1.2, sparkles: 40, every: 2 });
 /** ON §3.1: Pearl beside her on the title (m to her left), her hop period and offset from the pulse, hearts per hop. */
 export const TITLE_PEARL = Object.freeze({ side: 1.4, every: 2.6, offset: 0.3, hearts: 6, color: '#FF8FB1' });
+/** The Token Tails Cat beside her on the title (m to her RIGHT) and its character config id (characters' configs). */
+export const TITLE_TTCAT = Object.freeze({ side: 1.2, config: 'tokentails_cat' });
+/**
+ * The title framing: a wide three-quarter shot from her front-left, a little above head height, that holds her, Pearl
+ * and the Token Tails Cat (anchor-local, +X = her left). Not the old chest-up front close-up.
+ */
+export const TITLE_SHOT = Object.freeze({ pos: [1.5, 1.35, 4.4], look: [0.15, 0.62, 0], fov: 40 });
+/** Her title pose: a wave, the sword hanging lowered at her side. */
+export const TITLE_POSE = 'wave';
+
+/** Is the Token Tails Cat config available (characters may not ship it yet)? Pure. */
+export function ttCatAvailable(cats = CATS, id = TITLE_TTCAT.config) {
+  return !!(cats && Object.prototype.hasOwnProperty.call(cats, id) && cats[id]);
+}
 /** WA §6.3: the camera blend from the title loop to the iso follow rig after the tap (s, inOutSine). */
 export const TITLE_BLEND = 1.1;
 /** Seconds after the logo before the press prompt may show (and the max wait for `game.playReady`). */
@@ -57,6 +74,13 @@ function titleSetup(ctx, cs) {
   if (p) {
     const [x, z] = leftOf(p.pos, p.facing ?? 0, TITLE_PEARL.side);
     cs.spawnOne({ id: 'pearl', type: 'npc', at: [x, z], facing: p.facing ?? 0, keep: true });
+    // the Token Tails Cat on her right, only when its config exists (skipped silently otherwise; despawned at the end)
+    if (ttCatAvailable()) {
+      try {
+        const [tx, tz] = leftOf(p.pos, p.facing ?? 0, -TITLE_TTCAT.side);
+        cs.spawnOne({ id: 'ttcat', type: TITLE_TTCAT.config, kind: 'npc', at: [tx, tz], facing: p.facing ?? 0 });
+      } catch { /* optional cast member */ }
+    }
   }
   let t = 0, last = -1, lit = false;
   cs.every((dt) => {
@@ -91,9 +115,9 @@ export default {
   id: 'cs00', kind: 'cutscene', skippable: false, letterbox: false, prologue: true,
   steps: [
     { t: 'ui', letterbox: false, hud: false, fade: { to: FADE_COLOR, alpha: 0, dur: 0.8 } },
-    { t: 'actor', id: 'swordcat', at: 'title', pose: 'oath' },
+    { t: 'actor', id: 'swordcat', at: 'title', pose: TITLE_POSE },
     { t: 'env', preset: 'meadow_morning', fogDensity: 0.035, wind: 1.0 },
-    { t: 'cam', preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut' },
+    { t: 'cam', preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut', pos: TITLE_SHOT.pos, look: TITLE_SHOT.look, fov: TITLE_SHOT.fov },
     { t: 'call', fn: titleSetup },
     { t: 'wait', dur: TITLE_TIMING.logoAt },
     { t: 'ui', title: { text: 'game.title', sub: 'game.subtitle', logo: true } },

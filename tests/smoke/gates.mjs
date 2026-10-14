@@ -1,7 +1,7 @@
 // tests/smoke/gates.mjs  (owner: core / integrator) — Phase W integration gates (IMPLEMENTATION_PLAN §8 + Phase W):
 // per-level draw calls / triangles / programs against PERF §5, frame luma per level in play, combat with telegraphs, a
 // boss, a celebration card and the phone layouts, with one screenshot each under tests/shots/gates/.
-//   SMOKE_GATES=1 SMOKE_URL=http://localhost:4173/ SMOKE_ONLY=gates node tests/smoke.mjs
+//   npm run build:test && SMOKE_GATES=1 SMOKE_ONLY=gates node tests/smoke.mjs   (previews dist-test/ on :4173)
 // Without SMOKE_GATES=1 every block logs "skipped" (level: null) so `npm run check` stays lean; the same budgets are
 // gated per area by perf:* (SMOKE_PERF=1) and art:warm.
 const ON = process.env.SMOKE_GATES === '1';

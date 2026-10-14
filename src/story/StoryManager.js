@@ -422,6 +422,20 @@ export class StoryManager {
   /** Skip the running scene (its end block runs: flags, spawns, env, positions, camera handback). */
   skip() { this.current?.skip(); }
 
+  /**
+   * Stop every scene for a hard context change (Quit to Title; the smoke harness between blocks): the queue is dropped
+   * and the running scene is skipped as HALTED, so its end block still hands everything back but neither chains its
+   * next scene (CS-09 `play: 'cs10'`) nor changes level. A plain skip() started CS-10 there, whose end load then landed
+   * on the next level (the order-dependent smoke flake).
+   */
+  halt() {
+    this.queue.length = 0;
+    const cs = this.current;
+    if (!cs) return;
+    cs.halted = true;
+    cs.skip();
+  }
+
   /** Skip the running scene and everything queued (test hook `skipDialog`). */
   skipAll() {
     const q = this.queue.splice(0);
@@ -630,8 +644,7 @@ export class StoryManager {
 
   /** Pause → Quit to Title: drop every scene and go back to the title loop. */
   async toTitle() {
-    this.queue.length = 0;
-    this.current?.skip();
+    this.halt();
     this.tutorial.reset();
     this.barnSet(false);
     try { await this.ctx.levels.load('meadow', 'title'); } catch (e) { console.error('[story] to title failed', e); }

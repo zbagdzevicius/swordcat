@@ -209,7 +209,7 @@ export default [
       t.assert(info.found, 'CS-02 cast registered under their cutscene ids');
       t.assert(info.scripted, 'CS-02 cast is scripted and not hurtable');
       t.assert(info.heads, 'beast heads attached');
-      t.assert(info.plates[0] === 'HATER-IN-CHIEF' && info.plates[1] === 'POST STEALER' && info.plates[3] === 'GRUMBLER', `plates ${info.plates}`);
+      t.assert(info.plates[0] === 'GRUMP-IN-CHIEF' && info.plates[1] === 'SNACK SNATCHER' && info.plates[3] === 'GRUMBLER', `plates ${info.plates}`);
       t.assert(info.cage[0] && info.cage[1] === 'pearl' && info.cage[2], 'caged hyenas (Pearl + a squire)');
       t.assert(info.props[0] && info.props[1], 'Pilfer holds the signpost and the post bag');
       t.assert(info.hat, 'Cacklejaw wears the feather crown, not Barbarian_Hat (WA §3.1)');

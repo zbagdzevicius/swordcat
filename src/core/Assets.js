@@ -199,24 +199,36 @@ function _dropArray() { this.array = null; }
  * geometry that is (a) never edited, re-baked or read on the CPU again (no `fromBufferAttribute`, no bake, no BVH),
  * and (b) never drawn again after `geometry.dispose()` (a dispose + redraw would re-upload from a null array).
  * `keepPosition` (default) keeps positions, which raycasts (Picker, Occluders) and physics read; the index is always
- * kept (raycasts walk it). Morph / instanced / interleaved attributes and `userData.keepCpu` meshes are skipped.
- * Returns the number of attributes marked.
+ * kept (raycasts walk it). Morph / instanced / interleaved attributes are skipped.
+ *
+ * `userData.keepCpu = true` opts out: on a mesh or its geometry it keeps that mesh's arrays; on any ancestor (a
+ * group, a level sub-tree) it keeps the whole sub-tree (SC5: mark CPU-read props once instead of every mesh).
+ *
+ * Safe to call after the first render (LevelManager calls it after build + warm-up): an attribute that is already
+ * on the GPU never fires onUpload again by itself, so each marked attribute also gets `needsUpdate` — the next render
+ * re-uploads it once from the still-present array and then drops the array. Calling it twice is a no-op for an
+ * attribute already marked. Returns the number of attributes marked.
  * @param {THREE.Object3D} root @param {{ keepPosition?: boolean }} [opts]
  */
 export function releaseCpuOnUpload(root, { keepPosition = true } = {}) {
   let n = 0;
-  root?.traverse?.((o) => {
+  const visit = (o) => {
+    if (!o || o.userData?.keepCpu) return;                       // the whole sub-tree keeps its arrays
     const g = o.geometry;
-    if (!o.isMesh || o.isSkinnedMesh || o.isInstancedMesh || !g?.attributes || o.userData?.keepCpu || g.userData?.keepCpu) return;
-    if (g.morphAttributes && Object.keys(g.morphAttributes).length) return;
-    if (!g.boundingBox) g.computeBoundingBox();
-    if (!g.boundingSphere) g.computeBoundingSphere();
-    for (const k in g.attributes) {
-      const a = g.attributes[k];
-      if ((keepPosition && k === 'position') || a.isInterleavedBufferAttribute || a.usage !== THREE.StaticDrawUsage) continue;
-      if (a.onUploadCallback !== _dropArray) { a.onUpload(_dropArray); n++; }
+    if (o.isMesh && !o.isSkinnedMesh && !o.isInstancedMesh && g?.attributes && !g.userData?.keepCpu &&
+        !(g.morphAttributes && Object.keys(g.morphAttributes).length)) {
+      if (!g.boundingBox) g.computeBoundingBox();
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      for (const k in g.attributes) {
+        const a = g.attributes[k];
+        if ((keepPosition && k === 'position') || a.isInterleavedBufferAttribute || a.usage !== THREE.StaticDrawUsage || !a.array) continue;
+        if (a.onUploadCallback !== _dropArray) { a.onUpload(_dropArray); a.needsUpdate = true; n++; }
+      }
     }
-  });
+    const kids = o.children;
+    if (kids) for (let i = 0; i < kids.length; i++) visit(kids[i]);
+  };
+  visit(root);
   return n;
 }
 
@@ -269,7 +281,8 @@ export class Assets {
 
   /**
    * PERF §5 / §10.3 memory: drop settled glTF / texture cache entries the level `levelId` does not list (every tier,
-   * plus '*') and that nothing in the live scene draws, and free their GPU resources. Without this every visited
+   * plus '*') and that nothing in the live scene draws, and free their GPU resources. Settled raw-byte (`bin:`)
+   * entries the level does not list are dropped too (F7: audio bytes of other levels stayed resident). Without this every visited
    * level's GLBs (geometry, textures, decoded images and whatever other areas cached per image) stayed resident
    * for the whole session. Called `RELEASE_DELAY_MS` after `level:loaded`; a released path loads again on demand.
    * Allocates (one scene traversal); level-load time only. Returns the released cache keys.
@@ -282,9 +295,10 @@ export class Assets {
     const out = [];
     for (const [key, v] of this._values) {
       const i = key.indexOf(':'), kind = key.slice(0, i);
-      if (kind !== 'gltf' && kind !== 'tex') continue;
+      if (kind !== 'gltf' && kind !== 'tex' && kind !== 'bin') continue;
       const path = kind === 'tex' ? key.slice(i + 1).split(':')[0] : key.slice(i + 1);
       if (keep.has(path)) continue;
+      if (kind === 'bin') { this.dropBinary(path); out.push(key); continue; }
       if (kind === 'gltf') { if (!disposeGltf(v, used)) continue; }
       else if (used.textures.has(v)) continue;
       else v?.dispose?.();
@@ -420,7 +434,23 @@ export class Assets {
     });
   }
 
-  /** Cached raw bytes (audio agents decode with their own AudioContext). */
+  /**
+   * Drop the cached raw bytes of `path` (`bin:` entry, settled or pending), so the ArrayBuffer can be collected. The
+   * audio manager calls it once a file is decoded (F7: the bytes were kept for the whole session); the next
+   * arrayBuffer(path) fetches again (the HTTP cache serves it). Returns true when an entry was dropped.
+   * @param {string} path
+   */
+  dropBinary(path) {
+    const key = 'bin:' + normalizeAssetPath(path);
+    const had = this.cache.delete(key);
+    this._values.delete(key);
+    return had;
+  }
+
+  /**
+   * Cached raw bytes (audio agents decode with their own AudioContext). The promise is shared: a caller that hands the
+   * buffer to `decodeAudioData` (which detaches it) must call dropBinary(path) first.
+   */
   arrayBuffer(path) {
     const p = normalizeAssetPath(path);
     return this._cached('bin:' + p, async () => {

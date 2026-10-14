@@ -1,11 +1,17 @@
-# SWORDCAT: Nine Lives of Meow Island
+# PINK PAW KNIGHT: A Token Tails Adventure
+
+> Token Tails pass (2026-10-13): the game ships as **Pink Paw Knight**, a Token Tails game. Display names below follow
+> `src/story/strings.js` (the source of truth for every line of text). Internal ids (`swordcat`, `VigilStone`,
+> `MEME_LOOP`, `memecam`, event names, the save key) are unchanged. Where the original concept came from, and what was
+> removed, is in `docs/PROVENANCE.md`. Older sections may still say "fish" for the currency (now **catnip**) and
+> "Swordcat" for the heroine's internal id (she is Clementine, "Clem").
 ## Final Game Design Document (v2.1, implementation edition; v2.1 = completeness pass: story continuity, undefined spawns/anchors, arena and flight specs, asset paths re-checked on disk)
 
 Date: 2026-10-07. Status: **final for the parallel build.** It replaces `research/design_story.md`, `research/design_gameplay.md` and `research/design_scope.md`, which are kept only as background.
 
 **How this document was made.** It merges the three drafts as the judges asked:
 - **Production skeleton from the scope draft** (the winner for 2 of 3 judges): asset discipline (`fitToHeight`, `buildBeastHead`), the spine-and-zones level format, the arena template, milestones, cut order and the risk list.
-- **Narrative and charm from the story draft** (top score for charm and meme fidelity from all 3 judges): the heroine, Pudding, the Laughing Fog opening, Standing Ground, the Meme Cam, the rescued-kitten pull-back, the letters, the Final Stand, and the cutscene camera presets.
+- **Narrative and charm from the story draft** (top score for charm and meme fidelity from all 3 judges): the heroine, Pudding, the Laughing Fog opening, Standing Ground, the Photo Cam, the rescued-kitten pull-back, the letters, the Final Stand, and the cutscene camera presets.
 - **Combat feel from the gameplay draft**: the telegraph language, the juice table, Riposte, the whiff lockout, Purrfect Dodge, the boss Dizzy meter, Bright Slash, the Boneheads, the boss lessons, and the unit-test list.
 - **Rejected on purpose:**
   - from the gameplay draft: XP and Knight Rank, the Oath Tree, Paw Points and charms;
@@ -23,7 +29,7 @@ Date: 2026-10-07. Status: **final for the parallel build.** It replaces `researc
 - **[verified]** checked on disk on 2026-10-07: the file exists, or the node, bone or clip name was read from the GLB JSON by script.
 - **[unverified]** an assumption nobody has checked.
 - **[audition]** an audio file picked by its name that someone must check by ear.
-- **[TREND]** a fact from `research/trend.md` (V1–V6 are its video breakdowns). **[REF]** seen in `research/ref/ref1–3`.
+- **[TREND Vn]** a generic staging idea (glossary in `research/trend.md`). The old outside references were removed; see `docs/PROVENANCE.md`.
 - Every gameplay number is a **starting value for tuning**. Nothing has been playtested.
 
 **Units**
@@ -69,9 +75,9 @@ The drafts disagreed on these points. Each row is now final.
 
 | Topic | Drafts | Final decision |
 |---|---|---|
-| Heroine's name | Clementine (story, gameplay); Apricot (scope) | **Clementine, "Clem"**. Everyone calls her **Swordcat**, which starts as teasing. She is knighted **Dame Swordcat of the Ninth Seat**. |
+| Heroine's name | Clementine (story, gameplay); Apricot (scope) | **Clementine, "Clem"**. Everyone calls her **Swordcat**, which starts as teasing. She is knighted **Dame Clementine of Pawsbury**. |
 | Final boss | Lord Cacklejaw (story); Lord Barkus Grimjaw (scope, gameplay, art.md) | **Lord Barkus Grimjaw, the Dog Warlord** (art.md look), on `Knight.glb` with a bulldog beast head. Motive: he was shooed off the sunny castle steps as a pup. |
-| Hyena leader | Cacklejaw / Snickerfang / Hater & Post Stealer duo | **Warchief Cacklejaw** of the Snickerpack, the L4 boss. He gets the story draft's "runt who laughs first" arc. |
+| Hyena leader | Cacklejaw / Snickerfang / Hater & Snack Snatcher duo | **Warchief Cacklejaw** of the Snickerpack, the L4 boss. He gets the story draft's "runt who laughs first" arc. |
 | Champion who kneels (V6) | Gnash (story) / Sir Brutus (gameplay) | **Sir Brutus**, the Hound Legion's pug champion. L6 mini-boss: he kneels to her level, then a duel of Stands. |
 | Macguffin | Sunbell (story); Dawnstone in 3 shards (scope); Dawn Lantern (gameplay) | **The Sunbell holds the Dawnstone.** Barkus splits it into 3 shards. Each recovered shard sinks into her sword and unlocks power (§13.1). |
 | Dragon | Pudding (story) / Ember | **Pudding**: huge, red, scared of everything, roars when nervous, subtitles in parentheses |
@@ -81,12 +87,12 @@ The drafts disagreed on these points. Each row is now final.
 | Guard meter | Grit / Nerve / none | **Grit, 3 pips** |
 | Progression | Oaths + gear / XP + Oath Tree + charms / shards + shops | **No XP.** Shards, fish shops, Heart Bells, cosmetics. "She never gets bigger." |
 | Supers | Gold Hour Strike + Lit From Within + Oath Spin / Golden Hour / only in the story | One ladder: **Big Swoosh → Bright Slash → Holy Slash** (Shard 1), plus one super, **Golden Hour** (Shard 2). Oath Spin and Gold Hour Strike are cut. |
-| Meme Cam | MVP / stretch / MVP+ | **MVP** |
+| Photo Cam (code: `memecam`) | MVP / stretch / MVP+ | **MVP** |
 | Active companions | 2 / 1 then 2 / 1 | **1 in MVP.** `COMPANIONS.maxActive = 2` after L4 is MVP+ if performance allows. |
-| Collectibles | 30 kittens, 30 letters, 12 yarn / 27 kittens, yarns, scraps / 30 Golden Fish | **18 lost kittens (3 per level), 6 Lost Letters, 3 Heart Bells, fish** |
-| Viral catchphrases | Ship them / ship them / don't ship them | **Original lines by default.** The token-site captions sit in a `homage` string table that stays off until a legal check (§4.4). Whether they may be used is [unverified]. |
+| Collectibles | 30 kittens, 30 letters, 12 yarn / 27 kittens, yarns, scraps / 30 golden catnip | **18 lost kittens (3 per level), 6 Lost Letters, 3 Heart Bells, catnip** |
+| Outside catchphrases | Ship them / ship them / don't ship them | **Never.** Every line is original; the old `homage` variants were deleted on 2026-10-13 (§4.4, `docs/PROVENANCE.md`). |
 | Level ids | Several sets | **`meadow`, `forest`, `town`, `gate`, `bog`, `keep`** (+ `sky` [STRETCH]). These replace tech.md's smoke list `meadow/forest/village/castle`. |
-| L4 | Low Gate siege / Mossgate "The Line" / Last Gate wave defence | **The Low Gate**: Pawsbury's own south gate, with The Line winch objective |
+| L4 | Gate siege / Mossgate "The Line" / Last Gate wave defence | **Bramble Gate**: Pawsbury's own south gate, with The Line winch objective |
 | Lore font | IM Fell English (not downloaded) | **Uncial Antiqua** [verified file] |
 | Camera | 3.4 / 4.5 / 3.6 m | **3.6 m**, 4.5 m locked on, 6.0 m for bosses, FOV 45 |
 | Jump | 1.25 / 0.87 / 1.11 m apex | **1.245 m** (v₀ 7.4 m/s, g 22). It clears the 1.0 m fences. |
@@ -97,11 +103,11 @@ The drafts disagreed on these points. Each row is now final.
 
 ## 1. Title, logline, pillars, scope at a glance
 
-- **Title:** **SWORDCAT**. Subtitle: *Nine Lives of Meow Island*. Both live in `src/story/strings.js` as `GAME_TITLE` and `GAME_SUBTITLE`, so a rename is one edit. Fallback names if legal says no: *Sword Kitten*, *Purrhaven Isle* [unverified need].
-- **Logline:** *When the Dog Warlord steals the dawn and the fog swallows Meow Island, the smallest would-be squire, one ear-tuft too short for the sword, straps on borrowed armour and goes after the kittens anyway.*
+- **Title:** **PINK PAW KNIGHT**. Subtitle: *A Token Tails Adventure*. Both live in `src/story/strings.js` as `GAME_TITLE` and `GAME_SUBTITLE`, so a rename is one edit. The title screen foot reads "A Token Tails game".
+- **Logline:** *When the Dog Warlord steals the dawn and the fog swallows Purrhaven Isle, the smallest would-be squire, one ear-tuft too short for the sword, straps on borrowed armour and goes after the kittens anyway.*
 - **Pitch.**
   - Clementine fails the Academy height chart by one ear-tuft on the eve of Knighting Day.
-  - That night the Hound Legion tears the Dawnstone out of the Sunbell. The laughing hyena horde marches every squire away in cages, her little sister Pearl among them.
+  - That night the Hound Legion tears the Dawnstone out of the Sunbell. The laughing hyena horde marches every squire away in carriers, her little sister Pearl among them.
   - She plants herself in their path in borrowed armour. They laugh, and they walk *around* her.
   - She follows them anyway: across six foggy lands, with a growing band of rescued kittens and a giant red dragon who is scared of everything.
   - At the end she rings the dawn back in.
@@ -109,26 +115,26 @@ The drafts disagreed on these points. Each row is now final.
 - **Length:** MVP about 75–90 min on a first clear.
 - **Platforms:** desktop keyboard and mouse, gamepad, and touch.
 - **Audience:** all ages. No blood. Defeated enemies poof into sparkles, lose their helmets and run away [ART §11].
-- **Tone:** fierce cuteness, played completely straight [TREND §4]. Swordcat never winks at the camera; the comedy comes from everyone else reacting to her.
+- **Tone:** fierce cuteness, played completely straight. Clem never winks at the camera; the comedy comes from everyone else reacting to her.
 
 **Pillars**
 1. **Small but ready.** She is the smallest thing on screen in every shot. Low cameras, pull-back reveals, and giants framed to fill the shot.
-2. **Stand your ground.** Guard and parry, called **the Stand**, *is* the meme pose. Holding it near enemies builds Valor (**Standing Ground**). The viral pose is the core verb [TREND V1].
+2. **Stand your ground.** Guard and parry, called **the Stand**, is the core verb. Holding it near enemies builds Valor (**Standing Ground**).
 3. **Never alone.** Every kitten she rescues moves into Pawsbury and stays there visibly. In L4 they stand behind her with spoons; in L6 they raise lanterns.
-4. **Fog to gold.** Fog density is a story variable. The world gets greyer until her golden glow is the only warm light; at the end the fog lifts and the island turns gold [REF ref1].
+4. **Fog to gold.** Fog density is a story variable. The world gets greyer until her golden glow is the only warm light; at the end the fog lifts and the island turns gold.
 
 ### 1.1 Scope at a glance
 
 | Item | MVP | MVP+ / STRETCH |
 |---|---|---|
 | Levels | **6**: `meadow` (incl. prologue), `forest`, `town` (becomes the hub), `gate`, `bog`, `keep` | `sky` dragon-flight level [STRETCH]; Frostwhisker Peaks, Moonlit Abbey [STRETCH] |
-| Enemy types | **9**: Rat Pikeman, Rat Crossbowman, Crow Raider, Gloomjelly (3 sizes), Bramble Spider, Hyena Raider, Post Stealer, Pug Shieldbearer, Bonehead (4 variants) | Warhound, Cellar Bat, Hornet Lancer [MVP+] |
+| Enemy types | **9**: Rat Pikeman, Rat Crossbowman, Crow Raider, Gloomjelly (3 sizes), Bramble Spider, Hyena Raider, Snack Snatcher, Pug Shieldbearer, Bonehead (4 variants) | Warhound, Cellar Bat, Hornet Lancer [MVP+] |
 | Bosses | **3 bosses + 1 mini-boss**: Grizzlechop (L2), Cacklejaw (L4), Sir Brutus (L6 mini), Barkus (L6) | Slime Sovereign (L5) [MVP+] |
 | Companions | **3**: Mochi, Sage, Clover; 1 active | 2 active [MVP+]; Pip and Earl Grey as companions [STRETCH] |
 | Service kittens | Marmalade (bakery), Tofu (forge), Earl Grey (library), Pip (lookout), Pearl (wardrobe) | — |
 | Cutscenes | 25 entries: 17 full in-engine scenes, 6 dialogue-only scenes, 2 gameplay gags (§5.4); about 13 min total, all skippable | Bokeh DOF [MVP+]; interactive ending flight [STRETCH] |
 | Collectibles | Fish, 18 lost kittens, 6 Lost Letters, 3 Heart Bells | — |
-| Signature systems | The Stand + parry + Riposte, Standing Ground, Valor, Golden Hour, Nine Lives, Milk Break, Meow, **Meme Cam**, The Line, Boss Dizzy | Cape Glide [MVP+], Photo Mode [STRETCH] |
+| Signature systems | The Stand + parry + Riposte, Standing Ground, Valor, Golden Hour, Nine Lives, Snack Break, Meow, **Photo Cam**, The Line, Boss Dizzy | Cape Glide [MVP+], Photo Mode [STRETCH] |
 | Not building | XP, stat levels, an inventory beyond Milk and keys, interiors other than the keep's cellars, voice acting, branching dialogue, multiplayer, a physics engine, a navmesh, more than 1 save slot, **anything crypto** (no token, wallet or coin branding) | — |
 
 **Scope rules for every agent**
@@ -145,11 +151,11 @@ The drafts disagreed on these points. Each row is now final.
 
 ## 2. World and setting
 
-### 2.1 Meow Island
+### 2.1 Purrhaven Isle
 - A small island kingdom of cats, wrapped in sea fog, in the Big Sea. The Isle of Woof lies to the north, home of the Hound Legion.
 - Everything is at kitten scale [ART §1]: doors are 1.6 m, cottages 3–5 m, grass 0.1–0.25 m (0.45 m in tall-grass patches).
 - The capital, **Pawsbury**, is a timber-frame town under a small castle. Its **Bell Tower** holds the **Sunbell**.
-- The name comes from the creator's bio line "Protecting meow island with 9 lives" [TREND].
+- **The Pawsbury Rescue House** in the hub is where every rescued kitten lives (fiction). Its keeper is the **Token Tails Cat** (`name.ttcat`, lines `npc.ttcat.1–3`; character config `tokentails_cat`: ivory fur, crimson eyes, no bow).
 
 ### 2.2 Lore
 - **The Sunbell and the Dawnstone.** The Sunbell rings at every dawn. The **Dawnstone** set in its crown sends the sun's first light across the island and the sea fog goes home.
@@ -159,7 +165,7 @@ The drafts disagreed on these points. Each row is now final.
 - **The Order of Nine Lives.** The island's old knighthood has nine seats.
   - Eight are held by very old knights who live scattered around the island. Sir Marmalade is one of them.
   - The ninth seat "is always kept for whoever shows up."
-  - Their oath, the **Vigil Oath**: *"Where I stand, the gate holds."* The oath pose, sword planted point-down with both paws on the pommel, is the **Vigil** pose [REF ref2].
+  - Their oath, the **Lantern Promise**: *"Where I stand, the gate holds."* The promise pose, sword planted point-down with both paws on the pommel, is the **Promise** pose (code id `vigil`).
 - **Nine Lives.** Everyone knows cats have nine. Knights count theirs. Losing one is serious but not tragic: you go home, have soup, and are careful.
 - **The Kitten Academy** trains squires. Squires must be "this tall to hold a sword". A height chart is painted on a board at the practice-field gate.
 
@@ -167,19 +173,19 @@ The drafts disagreed on these points. Each row is now final.
 
 | Level | Region | Mood |
 |---|---|---|
-| `meadow` | **Purrdale Meadows** | Misty grey-green farmland, standing stones, windmill, drystone walls. **The exact look of the reference images.** |
+| `meadow` | **Purrdale Meadows** | Misty grey-green farmland, standing stones, windmill, drystone walls. |
 | `forest` | **Whiskerwood** | Giant oaks, kitten-scale mushrooms, fireflies, a rat camp and the Cheese Mill |
 | `town` | **Pawsbury** | Timber-frame town and castle, cobbles, lanterns. Golden hour in fog. Becomes the hub. |
-| `gate` | **The Low Gate** | Pawsbury's outer south gatehouse, at the end of the south road beyond the town's inner South Gate, and a 105 m stone causeway into a fog bank over tidal flats |
+| `gate` | **Bramble Gate** | Pawsbury's outer south gatehouse, at the end of the south road beyond the town's inner South Gate, and a 105 m stone causeway into a fog bank over tidal flats |
 | `bog` | **Bogmire** | Marsh, boardwalks, lily pads, will-o'-wisps, a sunken tower, the smugglers' landing |
 | `keep` | **Houndhold Keep** | A storm-dark cliff fortress on the Isle of Woof: braziers, red banners with a bone sigil, embers |
 
 ### 2.4 Factions
 - **The Hound Legion** of **Lord Barkus Grimjaw**: pug shieldbearers, Sir Brutus the champion, and **Boneheads**, animated bone soldiers. Dogs love bones; his are the Boneheads.
-- **The Snickerpack**: hyena mercenaries led by **Warchief Cacklejaw**. They scrawl their own titles on their breastplates: **HATER**, **POST STEALER**, **GRUMBLER**, **NAYSAYER**, **SCOFFER**, **SNEERER**, **SPOILER** (the same list as `ENEMIES.hyena.plateWords` plus the stealer's word) [TREND V2]. They laugh at everything small, and their laughter thickens the Gloom.
+- **The Snickerpack**: hyena mercenaries led by **Warchief Cacklejaw**. They scrawl their own titles on their breastplates: **GRUMP**, **SNACK SNATCHER**, **GRUMBLER**, **NAYSAYER**, **SCOFFER**, **SNEERER**, **SPOILER** (the same list as `ENEMIES.hyena.plateWords` plus the stealer's word). Befriended, the plates read **CHEER-IN-CHIEF** (Cacklejaw) and **SNACK SHARER** (Pilfer). They laugh at everything small, and their laughter thickens the Gloom.
 - **The Rat Militia** of **Captain Grizzlechop**, paid in cheese.
 - **Fog wildlife** with no allegiance: Gloomjellies, Bramble Spiders and Crow Raiders, which thrive when the sun is gone. Barkus pays the crows in shiny things.
-- **Meow Island**: Princess Snowpaw's court, the Academy, the townsfolk, and every kitten Swordcat brings home.
+- **Purrhaven Isle**: Princess Snowpaw's court, the Academy, the townsfolk, and every kitten Clem brings home.
 
 ---
 
@@ -187,28 +193,28 @@ The drafts disagreed on these points. Each row is now final.
 
 All cats use `buildKitten(cfg)` (art.md §2, §7): the same proportions within ±10%, different coats and eyes, and **one unique silhouette prop** each. No voice acting. Characters speak in pitched "babble" blips with text (§16.4).
 
-### 3.1 The heroine: Clementine, "Swordcat"
+### 3.1 The heroine: Clementine, "Clem"
 
-**Look** [REF ref2; art.md §2 is binding]
-- A tiny, extremely fluffy ginger/cream long-haired kitten. Her head is 38–40% of her height; her big eyes are blue-grey. Default expression: wide-eyed and slightly worried [TREND V1].
+**Look** [Token Tails look, TOKENTAILS-PLAN §2.2; art.md §2 proportions stay binding]
+- A tiny, extremely fluffy kitten with an **ivory coat** like the Token Tails mascot (no tabby stripes, salmon-pink inner ears, pink nose). Her head is 38–40% of her height; her big eyes are **crimson** with two catchlights. Default expression: wide-eyed and slightly worried.
 - **A pink bow on her left ear.** Pearl ties it on in CS-01 shot 5. It is never removable and appears in every shot from then on (and on the title screen).
 - Polished silver plate that is slightly too big: four-lame pauldrons, gauntlets, tassets, greaves, and a leather belt.
 - **No helmet.** It falls over her eyes in CS-01, so she sets it aside. That is the in-story reason we always see her face.
-- **Cape:** Marmalade's faded cream cape until the end of L3 (matches V1 and ref3). Then the royal red cape (ref2), which is a cut-down royal tablecloth.
-- **The poster look is always on screen first:** the title loop (CS-00) shows the full ref2 look (pink bow, silver plate, **red cape**, long sword, fog, a gold holy pulse) on a new save, so the meme's canonical silhouette is the first thing a player sees. After that the title shows her equipped cape.
+- **Cape:** a **red cape with Token Tails gold trim**; the silver plate carries gold trim and a small gold ":3" coin crest. In the story the royal red cape is a cut-down royal tablecloth (CS-07).
+- **Title screen:** CS-00 shows her waving, sword lowered at her side, beside Pearl and the Token Tails Cat in a wide shot (red cape on a new save, her equipped cape afterwards). It deliberately does not recreate any outside image.
 - **The Borrowed Blade:** a straight longsword about 1.0 m long, her own height [ART §4.3].
 
 **Personality**
 - Earnest and polite. She speaks in short, formal sentences that come out slightly wrong: "Halt, villain." *(beat)* "...Please."
 - Literal-minded: "I am not too small. The sword is too big. That is a different problem."
 - Scared, and stays anyway. **Her tell:** her ears flatten for 0.1 s before every Stand.
-- Loves milk with a straw, sunbeams and Pearl. Fears being sent home, and being laughed at.
+- Loves tuna snacks, sunbeams and Pearl. Fears being sent home, and being laughed at.
 - **Flaw:** she thinks a knight must stand alone. The L4 pull-back cures this.
 - **Writing rule:** her lines are at most 8 words, except in four emotional beats. She never jokes on purpose.
 
 **Arc**
 1. **Start:** "Knights are big. I must prove I'm big enough."
-2. **Middle:** she takes the *posture* of someone strong before she is strong [TREND §4].
+2. **Middle:** she takes the *posture* of someone strong before she is strong.
 3. **L4:** "Nobody's coming. So I'm staying." Then she finds that somebody did come.
 4. **End:** "I don't need to be big. I need to be here. And not alone."
 
@@ -218,7 +224,7 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 
 | Character | Look (art.md §7) | Role | Key line |
 |---|---|---|---|
-| **Pearl** | Tiny dilute cream-silver kitten, pale pink bow, cream pilgrim cape (ref3 interpretation) | Clem's little sister. Pops out from behind the cow in the tutorial, taken in CS-02, rescued in L5 (CS-11). Runs the Wardrobe after that. | "There. Now you look less scary." |
+| **Pearl** | Tiny dilute cream-silver kitten, pale pink bow, cream pilgrim cape | Clem's little sister. Pops out from behind the cow in the tutorial, taken in CS-02, rescued in L5 (CS-11). Runs the Wardrobe after that. | "There. Now you look less scary." |
 | **Sir Marmalade** | Chonky orange tabby, grey muzzle, gold eye and an eyepatch, dented rusty plate, drooping plume, walking-stick greatsword, 1.25× width | Holder of the Eighth Seat of the Order, retired, now Pawsbury's baker. The armour is his, from when he was a kitten. Hides in the bakery during the occupation and runs the Bakery in the hub. Starts on his **eighth life**, spends it in L4, ends on his ninth. | "That armour's on loan. Bring it back with a story in it." |
 | **Princess Snowpaw** | White Turkish angora, odd eyes (blue and gold), lavender gown, tiny tiara with a pink gem; `props/Crown.glb` at the knighting | Young ruler. Hides in the castle cellar during the occupation. Gives the red cape and knights Swordcat. | "By the power vested in me by the Order of Nine Lives, and also my mum..." |
 | **Sergeant Whiskerbottom** | Grumpy grey tabby with a whistle | Academy drill sergeant; runs the height chart. Epilogue gag: he hangs her portrait above the chart. | "Too small for the sword, Clementine." |
@@ -260,7 +266,7 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 
 | Character | What | Role | Asset |
 |---|---|---|---|
-| **Pudding** | A **huge red dragon**, about 6 m long, scared of everything. He roars when nervous, which is always. He speaks only in roars, with parenthetical subtitles: "ROOOAR. (Is that... milk?)" | L1 Milk Break and the net rescue. L2 Lantern Night, asleep. L4 rises behind the gate. L5 carries them north. L6 burns the keep gate. Ending flight. | `creatures/monsters-flying/Dragon_Evolved.glb`, one skinned mesh `Dragon`, bones `Head, Neck, Torso, Body1–4, UpperArm.L/R` [verified]; clips S13 `Flying_Idle, Fast_Flying, Headbutt, HitReact, Yes, No, Punch, Death` [verified]. Red tint `#E0503A` over the atlas [unverified look]. |
+| **Pudding** | A **huge red dragon**, about 6 m long, scared of everything. He roars when nervous, which is always. He speaks only in roars, with parenthetical subtitles: "ROOOAR. (Is that... a tuna snack?)" | L1 Snack Break and the net rescue. L2 Lantern Night, asleep. L4 rises behind the gate. L5 carries them north. L6 burns the keep gate. Ending flight. | `creatures/monsters-flying/Dragon_Evolved.glb`, one skinned mesh `Dragon`, bones `Head, Neck, Torso, Body1–4, UpperArm.L/R` [verified]; clips S13 `Flying_Idle, Fast_Flying, Headbutt, HitReact, Yes, No, Punch, Death` [verified]. Red tint `#E0503A` over the atlas [unverified look]. |
 | **Sir Tallbert** | A giant stone statue of a "Tall Folk" knight at the practice-field gate. Nobody remembers if he was real. | Prologue pull-back gag [TREND V5] | `characters/kaykit/Knight.glb` fitted to 6.0 m; stone material `#8C8F88` (roughness 0.95); frozen on frame 0 of `2H_Melee_Idle`; `2H_Sword` visible, the other weapons hidden |
 | **Coo** | Royal Post courier pigeon. Only ever says "Coo." | Carries the summons in L3; arrives with the old knights in the ending | `creatures/monsters-blob/Pigeon.glb` (S1 clips) [verified], untinted |
 | **The old knights** | The other **seven** seat-holders of the Order: elderly cats in rusty armour (Marmalade's config with varied coats). Their spokescat is **Sir Snoozalot** (white, droopy whiskers, nightcap under his helm), who only ever asks "Did we miss it?" | Ending: they arrive late by donkey cart, having got Coo's letters | `creatures/animals/Donkey.glb` (clips `Walk`, `Idle`, `Idle_Headlow` [verified]) + `env/town/cart.glb` [verified] |
@@ -270,8 +276,8 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 | Character | Look | Role | Personality | Key line |
 |---|---|---|---|---|
 | **Lord Barkus Grimjaw**, the Dog Warlord | 3.0 m bulldog. Brindle `#6B4E3A`, jowls, an underbite with two little fangs, eyepatch, horned helm, spiked collar holding **Shard 3**, black iron plate `#2E3036` with blood-red trim `#8E1B22`, tattered black cape, huge cleaver with a red-hot edge `#FF3B30` [ART §11] | Final boss (B3). Steals the Dawnstone. | Gruff and wounded. As a pup he was shooed off the sunny castle steps where the cats nap. His logic: "If dogs can't have the sun, nobody can." | "No cats. On the sunny. Steps." |
-| **Warchief Cacklejaw** | 2.2 m hyena: tawny with dark spots, mane, chipped left ear (hidden under his hat until phase 3), "HATER-IN-CHIEF" plate, oversized curved blade | Leads the Snickerpack. Laughs at her in the prologue; L4 boss (B2). | Laughs at everything small, and laughs **first**, because as the runt he was laughed at. He can't stand anyone who keeps standing. | "A kitten! With a SWORD! And a little BOW! HAHAHA— no, stop, I can't— leave it. LEAVE it! It isn't even a threat!" |
-| **Pilfer, the Post Stealer** | Skinny hyena in a hood, "POST STEALER" scrawled on his breastplate [TREND V2], mailbag, a stolen signpost under one arm | Recurring thief: signposts and the Royal Post bag (prologue), the chase (L3), the winch pin (L4). Post-credits: Royal Postmaster. | Cheeky coward who loves puns | "Finders keepers! Stealers... also keepers!" |
+| **Warchief Cacklejaw** | 2.2 m hyena: tawny with dark spots, mane, chipped left ear (hidden under his hat until phase 3), "GRUMP-IN-CHIEF" plate, oversized curved blade | Leads the Snickerpack. Laughs at her in the prologue; L4 boss (B2). | Laughs at everything small, and laughs **first**, because as the runt he was laughed at. He can't stand anyone who keeps standing. | "A kitten! With a SWORD! And a little BOW! HAHAHA— no, stop, I can't— leave it. LEAVE it! It isn't even a threat!" |
+| **Pilfer, the Snack Snatcher** | Skinny hyena in a hood, "SNACK SNATCHER" scrawled on his breastplate [TREND V2], mailbag, a stolen signpost under one arm | Recurring thief: signposts and the Royal Post bag (prologue), the chase (L3), the winch pin (L4). Post-credits: Royal Postmaster. | Cheeky coward who loves puns | "Finders keepers! Stealers... also keepers!" |
 | **Captain Grizzlechop** | Rat at 1.6 m: feathered hat, sabre, cheese-wheel shield | L2 boss (B1). Holds Shard 1. | Pompous; paid in cheese | "I yield! I YIELD! Mind the cheese!" |
 | **Sir Brutus** | 1.9 m pug champion in Knight plate with a plain great-helm (`Knight_Helmet`) and a greatsword (`2H_Sword`). The only Legion soldier who never mocks her. | L6 mini-boss. Kneels to her level. | Quiet and honourable | "I don't fight from up there. Down here, we're equals." |
 
@@ -288,7 +294,7 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 |---|---|---|---|
 | One ear-tuft short at the height chart | Prologue | Small, determined | Aww; injustice |
 | The horde laughs and walks around her | Prologue | Humiliated, then resolved ("...Okay.") | "Let's go get them" |
-| Milk Break, then Pudding | L1 | Startled, then kind | Laughter |
+| Snack Break, then Pudding | L1 | Startled, then kind | Laughter |
 | Mochi, a fellow reject | L1 | "I can do this" | Competence |
 | Lantern Night: "I'm not brave. I'm just... here." | L2 | Honest doubt | Warmth |
 | The undelivered letters and Marmalade's kitten letter | L3 | "Nobody came because nobody knew" | Tenderness |
@@ -304,20 +310,20 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 
 ### 4.2 Structure
 
-| Act | Chapter (default title) | Level id | Boss | Who joins | Unlock |
+| Act | Chapter (title as in `strings.js`) | Level id | Boss | Who joins | Unlock |
 |---|---|---|---|---|---|
-| I | Prologue: **"One Ear-Tuft Short"** | `meadow` (practice field, evening then night) | — | — | Basic moves (tutorial) |
+| I | Prologue: **"Knighting Morning"** | `meadow` (practice field, evening then night) | — | — | Basic moves (tutorial) |
 | I | Ch. 1: **"Small Paws, Big Sword"** | `meadow` | — | Mochi | — |
-| I | Ch. 2: **"The Cheese Mill"** | `forest` | B1 Captain Grizzlechop | Sage | **Shard 1: Holy Slash**; Heart Bell #1 |
-| II | Ch. 3: **"The Quiet Town"** | `town` | Pilfer chase (set piece) | Clover; Tofu, Earl Grey, Marmalade (services) | Red cape; **hub opens**; shops |
+| I | Ch. 2: **"The Big Cheese"** | `forest` | B1 Captain Grizzlechop | Sage | **Shard 1: Holy Slash**; Heart Bell #1 |
+| II | Ch. 3: **"Lanterns On, Pawsbury!"** | `town` | Pilfer chase (set piece) | Clover; Tofu, Earl Grey, Marmalade (services) | Red cape; **hub opens**; shops |
 | II | Ch. 4: **"Where I Stand"** | `gate` | B2 Warchief Cacklejaw | Pip (service) | **Shard 2: Holy Wave + Golden Hour**; Heart Bell #2 |
-| III | Ch. 5: **"The Bow"** | `bog` | Elite slime wave [MVP] / B4 Slime Sovereign [MVP+] | Pearl (service) | Heart Bell #3 |
-| III | Ch. 6: **"The Last Light"** | `keep` | Mini: Sir Brutus. B3 Lord Barkus. | — | Shard 3: the finale |
-| — | Epilogue: **"Dame Swordcat of the Ninth Seat"** | `town` (gold) | — | — | Dawnblade skin, Gold cape |
+| III | Ch. 5: **"The Crooked Bow"** | `bog` | Elite slime wave [MVP] / B4 Slime Sovereign [MVP+] | Pearl (service) | Heart Bell #3 |
+| III | Ch. 6: **"Sunny Steps for Everyone"** | `keep` | Mini: Sir Brutus. B3 Lord Barkus. | — | Shard 3: the finale |
+| — | Epilogue: **"Dame Clementine of Pawsbury"** | `town` (gold) | — | — | Dawnblade skin, Gold cape |
 
 ### 4.3 Synopsis, level by level
 
-**PROLOGUE: "One Ear-Tuft Short"** (`meadow`, practice field; CS-01, tutorial, G-01, CS-02)
+**PROLOGUE: "Knighting Morning"** (`meadow`, practice field; CS-01, tutorial, G-01, CS-02)
 - On the eve of Knighting Day, at the Kitten Academy's practice field outside Pawsbury, Clementine fails the height chart by one ear-tuft.
 - Her little sister Pearl, who is sleeping over with the squires to watch from the front row at dawn, ties a pink bow on Clem's ear "so you look less scary".
 - That night Clem sneaks into Marmalade's old armoury barn at the field. She borrows the tiny armour and long sword from a chest marked "M. — my first". The helmet falls over her eyes, so she leaves it.
@@ -325,31 +331,31 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 - **The Laughing Fog.**
   - The wind dies. Far away, the glow in the Bell Tower goes out: a giant dog shape tears the Dawnstone from the Sunbell.
   - Cackling comes from everywhere. The Snickerpack marches out of town along the lane carrying cages: every squire, and Pearl.
-  - Clem plants herself in their path in the meme pose. Warchief Cacklejaw leans down, laughs until he cries, and orders the horde to walk around her: "It isn't even a threat!"
-  - Pilfer the Post Stealer takes the signpost next to her, then the Royal Post bag.
+  - Clem plants herself in their path, sword ready. Warchief Cacklejaw leans down, laughs until he cries, and orders the horde to walk around her: "It isn't even a threat!"
+  - Pilfer the Snack Snatcher takes the signpost next to her, then the Royal Post bag.
   - The fog swallows them. She trembles. "...Okay." She lifts the sword again and walks into the fog. **Title card.**
 
 **CHAPTER 1: "Small Paws, Big Sword"** (`meadow`, dawn)
 - The signposts are gone, so she follows the trail of letters dropping from Pilfer's bag.
 - Rats ambush her at the Standing Stones.
-- At the Picnic Glade she takes a **Milk Break** and records a little selfie. A huge red dragon roars out of the fog: **Pudding**, starving, terrified and tangled in a hound net. She cuts him loose and shares her milk. He follows "at a safe distance", hiding behind trees much smaller than he is.
+- At the Picnic Glade she takes a **Snack Break** and records a little selfie. A huge red dragon roars out of the fog: **Pudding**, starving, terrified and tangled in a hound net. She cuts him loose and shares her tuna snack. He follows "at a safe distance", hiding behind trees much smaller than he is.
 - At the Old Bridge she holds the bridge against three rat waves and frees **Mochi**, a fellow Academy reject ("too clumsy"), from a rat cage cart. The cart tracks lead into Whiskerwood.
 
-**CHAPTER 2: "The Cheese Mill"** (`forest`)
+**CHAPTER 2: "The Big Cheese"** (`forest`)
 - She follows the rat supply trail through giant mushrooms and a spider hollow.
 - She frees **Sage** from a treetop cage.
 - **Lantern Night:** at camp, Pudding sleeps curled around the clearing while Clem keeps watch with a lantern. "I'm not brave. I'm just... here." Mochi: "That's what brave is, I think."
 - She storms the Rat Camp, then the **Cheese Mill**, and beats **Captain Grizzlechop**. He yields and hands over **Shard 1**, which sinks into her sword (**Holy Slash**). "The cages went to Pawsbury. The Legion holds the whole town!"
 
-**CHAPTER 3: "The Quiet Town"** (`town`, occupied)
-- Pawsbury is occupied by rats, pugs and Post Stealers. She lights the lanterns of Lantern Alley to push back the fog.
+**CHAPTER 3: "Lanterns On, Pawsbury!"** (`town`, occupied)
+- Pawsbury is occupied by rats, pugs and Snack Snatchers. She lights the lanterns of Lantern Alley to push back the fog.
 - **Marmalade** is hiding in his bakery. "Is that... my armour?" "...It's borrowed." "That armour's on loan, then. Bring it back with a story in it."
 - **The Pilfer chase** along Bakery Street wins back the Royal Post bag. **The Letters:**
   - Inside are Princess Snowpaw's summons to the eight old knights of the Order: *"Please come home. The gate needs holding."* She wrote them a week before Knighting Day, when hound sails were first seen off the north coast; the bag hung on the lane's post hook waiting for the dawn courier when Pilfer took it. None was ever delivered. **Nobody came because nobody knew.**
   - Coo the courier pigeon flies off with them.
   - Clem also finds a yellowed letter from Marmalade, written at **seven months old**, and tucks it into her belt.
 - She frees **Tofu** at the Forge Yard, and **Clover** from the stocks in the Market Square. A giant Gloomjelly rises from the fountain; popping it frees **Earl Grey**, who was reading inside.
-- At the Castle Steps, under the dark Sunbell, **Princess Snowpaw** gives her the **royal red cape**, "a tablecloth, velvet mostly". Marmalade: the second shard is with the hyenas, and they will come through the **Low Gate**. **The town becomes the hub.**
+- At the Castle Steps, under the dark Sunbell, **Princess Snowpaw** gives her the **royal red cape**, "a tablecloth, velvet mostly". Marmalade: the second shard is with the hyenas, and they will come through the **Bramble Gate**. **The town becomes the hub.**
 
 **CHAPTER 4: "Where I Stand"** (`gate`)
 - The Snickerpack marches on Pawsbury. The portcullis winch is jammed: Pilfer pinched the pin.
@@ -359,19 +365,19 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 - **"Nobody's coming."** The camera pulls back: every kitten she rescued stands behind her in pot helmets, holding spoons.
 - During the last wave, **Marmalade throws himself in front of a ballista bolt** meant for the kittens.
 - The gate is fixed. "Come inside, Clem!" "Not yet." **Warchief Cacklejaw** steps out of the fog.
-- She beats him. In spite, he orders the full horde to charge. **Shard 2** sinks into her blade and she lights gold (ref1). **Pudding rises behind the gatehouse** and roars, for the first time not out of fear. The horde flees.
+- She beats him. In spite, he orders the full horde to charge. **Shard 2** sinks into her blade and she lights gold. **Pudding rises behind the gatehouse** and roars, for the first time not out of fear. The horde flees.
 - Cacklejaw, alone, admits he was the runt who laughed first. "You can stop now. I'll hold it for a bit."
 - Marmalade is in bed with soup, eighth life spent. She gives him back his kitten letter. "...Yet."
 - Furious, Barkus sends the Gloom: **the hub turns grey** until the ending.
 
-**CHAPTER 5: "The Bow"** (`bog`)
+**CHAPTER 5: "The Crooked Bow"** (`bog`)
 - North across the Bogmire to the hound smugglers' landing, where the kittens are shipped to the keep.
 - Slimes that split, spiders, sinking boardwalks, a sunken tower (Heart Bell #3).
 - At the landing she finds **Pearl** in a crate. "You came!" "Of course. I'm a knight." "Since when?" "...Since now." Pearl re-ties her crooked bow.
 - An elite slime wave [MVP] (or the Slime Sovereign [MVP+]) guards the pool.
 - **Pudding** lands: "(Get on. Before I change my mind.)" They fly north through the night.
 
-**CHAPTER 6: "The Last Light"** (`keep`)
+**CHAPTER 6: "Sunny Steps for Everyone"** (`keep`)
 - Pudding burns the keep gate, then flies back south to fetch everyone from Pawsbury: "(Everyone wanted to come. EVERYONE.)" In the Courtyard she disables the ballista crews.
 - **Sir Brutus**, the Legion's champion, kneels to her level and duels her in a duel of Stands. He yields: "...You stood. Hold your gate, little knight."
 - The Kennel Cellars: Boneheads that reassemble unless she scatters their bones. She finds two keys.
@@ -380,36 +386,35 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
   - "Stay down, little thing." She gets up. Pudding lands on the ramparts and her rescued kittens slide off his back and raise lanterns.
   - **HOLD THE STAND**: the cleaver stops on her blade. Golden Hour, and a final Holy Slash.
 
-**ENDING: "Dame Swordcat of the Ninth Seat"** (CS-16)
-- The clouds break. Barkus sits in the sunbeam and she gives him her last milk: "...It *is* warm."
+**ENDING: "Dame Clementine of Pawsbury"** (CS-16)
+- The clouds break. Barkus sits in the sunbeam and she gives him her last tuna snack: "...It *is* warm."
 - Pudding flies everyone home at sunrise: Clem and Pearl on his neck, the kittens in a row along his back.
 - She sets the reunited Dawnstone in the Sunbell and rings it. A golden ring rolls across the island and the fog lifts.
 - The old knights arrive by donkey cart: "Did we miss it?"
-- The knighting: "Arise, Dame Swordcat of the Ninth Seat." Marmalade: "Keep it."
-- Post-credits: Barkus asleep on the sunny steps under three kittens; Pilfer, now Royal Postmaster, stamps a letter.
+- The knighting: "Arise, Dame Clem of Pawsbury." Marmalade: "Keep it."
+- Post-credits: Barkus asleep on the sunny steps under three kittens; Pilfer, now the Snack Sharer, stamps a letter.
 
-### 4.4 Strings, homage lines and IP rules [MVP]
-- **Every line of text** lives in `src/story/strings.js` as `{ key: { default, homage? } }`. Code never hard-codes display text.
-- **`config.HOMAGE_LINES = false`** ships original lines. The `homage` variants are short quotes of community and token-site captions [TREND §4]. Turn them on only after a legal check; the check's outcome is [unverified].
+### 4.4 Strings and IP rules [MVP]
+- **Every line of text** lives in `src/story/strings.js` as `{ key: { default } }` (ui-only copy in `src/ui/text.js` `UI_STRINGS`). Code never hard-codes display text.
+- **No variants.** The old `homage` caption variants and the resolver branch that could show them were deleted on 2026-10-13. `config.HOMAGE_LINES` stays `false` and is no longer read by strings.
+- Chapter titles (match `strings.js`):
 
-  | Key | Default (original, ships) | Homage variant (off) |
-  |---|---|---|
-  | `ch.prologue` | One Ear-Tuft Short | Too Small for the Sword |
-  | `ch.1` | Small Paws, Big Sword | Holding It Anyway |
-  | `ch.4` | Where I Stand | Standing My Ground |
-  | `ch.6` | The Last Light | The Hour Is Gold |
-  | `ch.epilogue` | Dame Swordcat of the Ninth Seat | Protecting Meow Island |
-  | `meme.cap1` | Where I stand, the gate holds. | Too small for the sword. Holding it anyway. |
-  | `meme.cap2` | Small paws. Big sword. Still standing. | The armor is borrowed. The hour is gold. |
-  | `meme.cap3` | Not strong yet. Still here. | born to :3, forced to ⚔ |
-  | `letter.marmalade` | Dear Knights. They say I'm too little to be a squire. I've decided to be one anyway. I will practise every night. — Marmalade, age 7 months. | Dear Knights. They say I am too small for the sword. I am going to hold it anyway. — Marmalade, age 7 months. |
-  | `ending.caption` | And the sun came home. | The hour is gold. |
-  | `postcredits.pilfer2` | ...And this time, it's yours. | ...do not stop. *(preceded by "The posts...")* |
-  | `ach.memecam` | A Legendary Pose | me trying to handle things maturely |
+  | Key | Text |
+  |---|---|
+  | `ch.prologue` | Knighting Morning |
+  | `ch.1` | Small Paws, Big Sword |
+  | `ch.2` | The Big Cheese |
+  | `ch.3` | Lanterns On, Pawsbury! |
+  | `ch.4` | Where I Stand |
+  | `ch.5` | The Crooked Bow |
+  | `ch.6` | Sunny Steps for Everyone |
+  | `ch.epilogue` | Dame Clementine of Pawsbury |
 
+- Photo Cam captions (`meme.cap1–3`, legacy key names) and the achievement `ach.memecam` are original: "Bow straight. Paws ready. Smile!", "Somewhere, a kitten is on the way home.", "Small knight. Sunny day. Big heart." and "Picture Purrfect".
+- **Banned in display text** (unit-tested in `tests/unit/story.test.js`): Swordcat, Meow Island, Vigil, Low Gate, memecoin, meme, hater, post stealer, milk, fish (as the currency), creator handles, token names, and money / donation / crypto words. Token Tails is the only brand named.
 - **No** creator names, token names, tickers, coin art, wallet features or crypto references anywhere in the game or its credits.
-- The reference images and downloaded videos are research only and are **never shipped** (they are outside `public/`).
-- **The Last Vigil** (V6) is a fan series. Only its generic beats are used: a lantern by a sleeping dragon, a champion kneeling, holding a gate, a sunrise flight. No names, characters or plot are taken from it.
+- **Pink Paw nod:** four lost kittens carry the names of licensed Pink Paw (Rožinė pėdutė) cats: Judas (`pickles`), Simas (`pebble`), Raudvis (`muffin`) and Zare (`socks`); ids are unchanged. The credits say: "Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up."
+- Outside reference media are not kept in the repo's working tree (see `docs/PROVENANCE.md`).
 
 ---
 
@@ -446,11 +451,11 @@ She never grows, transforms or levels up. She becomes lit from within: the gold 
 | `end` | the skip end-state block: `flags`, `env`, `actors {id: {pos, facing, visible}}`, `spawns`, `despawns`, `load` | story |
 
 ### 5.2 Camera presets (camera agent; `src/camera/presets.js`)
-Positions are in the **anchor's local frame**: the anchor faces +Z, feet at the origin, +X is the anchor's left. Tune `MEME_LOOP` against `research/videos/frames/x_GeckoTerminal_2104763257340964864_f1–f3.png` side by side.
+Positions are in the **anchor's local frame**: the anchor faces +Z, feet at the origin, +X is the anchor's left. `MEME_LOOP` is a legacy id for the seamless 3.8 s idle framing (Photo Cam); CS-00 overrides its pos / look / fov with a wide group shot.
 
 | Preset | Placement | FOV | Notes |
 |---|---|---|---|
-| `MEME_LOOP` [TREND V1] | camera (0.06, 0.70, 1.15) → look (0.03, 0.82, 0) | 32 | Chest-up medium close-up, slightly low, static. Handheld sway 0.005 m. Cape wind ×1.6, mist cards ×2 speed. **Loop period 3.8 s**, the viral clip's length. DOF focus on the eyes [MVP+]. |
+| `MEME_LOOP` [TREND V1] | camera (0.06, 0.70, 1.15) → look (0.03, 0.82, 0) | 32 | Chest-up medium close-up, slightly low, static. Handheld sway 0.005 m. Cape wind ×1.6, mist cards ×2 speed. **Loop period 3.8 s**. DOF focus on the eyes [MVP+]. |
 | `REVERSE_HORDE` [V2] | (0.35, 0.55, −1.4) → look along her facing at 25 m | 38 | Low over-the-shoulder, cape in the foreground |
 | `PULLBACK` [V5] | from `MEME_LOOP`, dolly to (0, 4.0, 14) over 6.0 s | 32 → 50 | Ease in-out sine |
 | `SELFIE` [V3] | (0.25, 0.92, 0.45) facing her, roll 6° | 50 | Handheld noise 0.015 m; her gauntlet edge in frame |
@@ -484,7 +489,7 @@ The other biome presets are in §12. Both `sky_*` presets are used only with the
 | CS-01 | Knighting Eve | full | ~65 s | `meadow` new game | MVP |
 | G-01 | Sir Tallbert | gameplay gag | ~8 s | `meadow` trigger `tallbert` | MVP |
 | CS-02 | The Laughing Fog | full | ~85 s | `meadow` trigger `lane` after the tutorial | MVP (never cut) |
-| CS-03 | Milk Break | full | ~30 s | `meadow` interact `picnic` | MVP (never cut) |
+| CS-03 | Snack Break | full | ~30 s | `meadow` interact `picnic` | MVP (never cut) |
 | D-01 | Mochi Joins | dialogue | ~10 s | `meadow` cage broken | MVP |
 | D-02 | Sage Joins | dialogue | ~10 s | `forest` cage lowered | MVP |
 | CS-04 | Lantern Night | full | ~40 s | `forest` trigger `camp` | MVP |
@@ -515,18 +520,18 @@ Each scene below is a table with columns # (shot), time, camera, action, audio, 
 
 #### CS-00 Title Loop [MVP]
 - **Setup:** load `meadow` spawn `title`: the practice-field north gate at dawn, `meadow_day` env with fog 0.05.
-- **Pose and cape:** Swordcat in the **Oath** pose, bow on, with the **red cape** (the ref2 poster look) on a new save; afterwards her equipped cape. Wind 1.6.
-- **Camera:** `MEME_LOOP`, looping every 3.8 s.
+- **Pose and cape:** Clem in the **wave** pose, sword lowered at her side, bow on, with the **red cape** on a new save; afterwards her equipped cape. Pearl hops on her left; the **Token Tails Cat** sits on her right when its config exists. Wind 1.6.
+- **Camera:** a wide three-quarter group shot from her front-left (`MEME_LOOP` preset for the 3.8 s sway loop, with `TITLE_SHOT` pos / look / fov overrides in `cs00.js`).
 - **Holy pulse:** every second loop, `holy` 0 → 0.35 → 0 over 1.2 s, with 40 sparkles.
-- **Logo:** fades in at 1.5 s: SWORDCAT in Cinzel Decorative gold with a pink bow tied on the "O" [ART §13]. The subtitle sits under it in Cinzel.
+- **Logo:** fades in at 1.0 s: PINK PAW KNIGHT with the pink bow, "A Token Tails Adventure" under it, and "A Token Tails game" with the Token Tails logo (ui package).
 - **Prompt:** "Press any key / Tap to start". That input also unlocks audio (tech.md §14).
-- **Audio:** silent before the unlock, like the silent viral X loops [TREND §5]. After the unlock, `music/village_bards_tale.mp3` fades in over 2 s under the main menu.
+- **Audio:** silent before the unlock. After the unlock, `music/village_bards_tale.mp3` fades in over 2 s under the main menu.
 
 #### CS-01 Knighting Eve [MVP] (`meadow`, practice field, env `meadow_evening`, then `meadow_night`)
 
 | # | Time | Camera | Action | Audio | Text |
 |---|---|---|---|---|---|
-| 1 | 0:00–0:04 | black | — | procedural wind | Caption: *"Meow Island. The eve of Knighting Day."* |
+| 1 | 0:00–0:04 | black | — | procedural wind | Caption: *"Purrhaven Isle. The eve of Knighting Day."* |
 | 2 | 0:04–0:12 | `CRANE_DOWN` along anchors `crane_bell → crane_field` | The Bell Tower is a far silhouette with a warm glow (the Dawnstone). The camera comes down to the practice field: 6 squire kittens queue at the height-chart board. Long golden shadows. | `village_bards_tale` fades in over 2 s | — |
 | 3 | 0:12–0:20 | medium | Sergeant Whiskerbottom measures two kittens. Stamp, stamp. | `ui/drop_001`, `drop_002` | **Whiskerbottom:** "Tall enough! Next!" · "Tall enough! Next!" |
 | 4 | 0:20–0:30 | low close on the chart | Clementine, in a plain tunic with no bow, steps up. Her ears are below the line. Tiptoes. Ears straight up. Still one ear-tuft short. | babble | **Whiskerbottom:** "Too small for the sword, Clementine." **Clem:** "I was too small last year." **Whiskerbottom:** "And you've been very consistent about it. Next!" |
@@ -571,26 +576,26 @@ The tutorial is complete when all 8 are done or skipped; completing or skipping 
 | 4 | 0:20–0:28 | wide | 24 hyena silhouettes (`fx/Horde`) march along the lane carrying cages; Pearl's cage passes. | footsteps, chains `impact/chain_0x` | **Pearl:** "CLEM!" |
 | 5 | 0:28–0:32 | tracking | Clem runs, trips on her cape (squash), and gets up. | `impact/cloth_heavy` | — |
 | 6 | 0:32–0:36 | medium | She plants herself in the middle of the lane. | `sword/sword_unsheathe2` | — |
-| 7 | 0:36–0:40 | **`MEME_LOOP`** (3.8 s) | **The meme shot.** Sword vertical before her face, cape billowing, fog drifting. Total stillness except wind and fur. | music none; wind only | — |
-| 8 | 0:40–0:46 | **`REVERSE_HORDE`** | The horde emerges toward camera from behind her: HATER, GRUMBLER, POST STEALER plates. | marching | — |
+| 7 | 0:36–0:40 | **`MEME_LOOP`** (3.8 s) | **Her stand.** Guard stance (`ready`), cape billowing, fog drifting. Total stillness except wind and fur. | music none; wind only | — |
+| 8 | 0:40–0:46 | **`REVERSE_HORDE`** | The horde emerges toward camera from behind her: GRUMP, GRUMBLER, SNACK SNATCHER plates. | marching | — |
 | 9 | 0:46–0:56 | `TWO_SHOT_LOW`, then his face fills the frame | **Cacklejaw** leans down, snout to her nose. She doesn't move. He squints, then explodes laughing. | laugh build at rate 0.85 | **Cacklejaw:** "A kitten! With a SWORD! And a little BOW! HAHAHA— no, stop, I can't— leave it. LEAVE it! It isn't even a threat!" |
 | 10 | 0:56–1:06 | top-down crane (y 18) | The horde parts around her like a river around a stone: dozens of laughing hyenas and one tiny unmoving dot. Pilfer plucks the signpost beside her, then lifts the Royal Post bag off its hook. | laughter | **Pilfer:** "Mine." *(the bag)* "Also mine." |
 | 11 | 1:06–1:14 | `ECU_EYES`, then her paws | The fog closes. Silence. Her paws tremble on the grip; her eyes glisten. | wind | — |
 | 12 | 1:14–1:20 | medium | She lowers the sword. Breathes. Lifts it again, higher. **One gold sparkle runs up the blade** (`holy` 0.15 for 0.6 s). | — | **Clem:** "...Okay." |
-| 13 | 1:20–1:25 | wide, behind her | She walks into the fog. **Title card** SWORDCAT, then the chapter card "Chapter 1 — Small Paws, Big Sword". | `music/battle_theme_a.mp3` sting [audition: start offset], then fade | — |
+| 13 | 1:20–1:25 | wide, behind her | She walks into the fog. **Title card** PINK PAW KNIGHT, then the chapter card "Chapter 1 — Small Paws, Big Sword". | `music/battle_theme_a.mp3` sting [audition: start offset], then fade | — |
 
 `end`: flag `prologue.done = true`; env `meadow_day`; load `meadow` spawn `start`; save.
 
-#### CS-03 Milk Break [MVP, never cut] (interact with the picnic hay bale, `meadow` Picnic Glade) [TREND V3]
+#### CS-03 Snack Break [MVP, never cut] (interact with the picnic hay bale, `meadow` Picnic Glade) [TREND V3]
 
 | # | Time | Camera | Action | Audio | Text |
 |---|---|---|---|---|---|
-| 1 | 0:00–0:06 | `SELFIE` | She sits on the hay bale with a milk cup and straw, sips, and talks to her gauntlet as if it were a camera. | `pickup/bubble2` | **Clem:** "Day one of rescuing everyone. Morale: high." *(sip)* "Milk: also high." |
+| 1 | 0:00–0:06 | `SELFIE` | She sits on the hay bale with a snack cup, nibbles, and talks to her gauntlet as if it were a camera. | `pickup/bubble2` | **Clem:** "Day one of rescuing everyone. Morale: high." *(sip)* "Milk: also high." |
 | 2 | 0:06–0:08 | same | Tremor (shake 0.2). She freezes mid-sip. | low rumble `impact/impactSoft_heavy_00x` | — |
 | 3 | 0:08–0:09 | `WHIP_FALL` | The camera falls and lands sideways in the grass. The dropped cup rolls into the foreground. | `impact/cloth_heavy` | — |
 | 4 | 0:09–0:11 | sideways, static | **Pudding** rises from the fog and ROARS into the lens: jaws fill the frame, shake 0.8, grass wind spike 3.0 for 0.5 s. Hold 1.2 s. | `creature/creature_roar_02` + `c80_roar_01` at rate 0.8 | — |
-| 5 | 0:11–0:14 | `HERO_LOW` | Cut, upright: Swordcat stands over her cup in the meme pose (Vigil → Oath). Pudding is tangled in a hound net pegged to 3 posts. | wind | — |
-| 6 | 0:14–0:30 | `TWO_SHOT_LOW` (her and Pudding's nose) | Dialogue. She holds up the cup, thimble-sized next to his nose. He sips through the tiny straw with enormous care. Rats squeak off-screen; he flinches. | `creature/creature_roar_01` per Pudding line at rate 0.8 | **Pudding:** "ROOOAAR. (Is that... milk?)" **Clem:** "...It is." **Pudding:** "RRrrr. (I haven't eaten in three days. The laughing dogs chased me out of my cave.)" **Clem:** "Why are you tied up?" **Pudding:** "(...They also had a net.)" **Clem:** "Here." **Pudding:** "(...It's very good.)" **Clem:** "What's your name?" **Pudding:** "(Pudding.)" **Pudding:** "ROAR! (Sorry! Sorry. I roar when I'm nervous.)" **Clem:** "Hold still. I'll cut you loose." |
+| 5 | 0:11–0:14 | `HERO_LOW` | Cut, upright: Clem stands over her cup, sword planted, then raised. Pudding is tangled in a hound net pegged to 3 posts. | wind | — |
+| 6 | 0:14–0:30 | `TWO_SHOT_LOW` (her and Pudding's nose) | Dialogue. She holds up the cup, thimble-sized next to his nose. He nibbles the snack with enormous care. Rats squeak off-screen; he flinches. | `creature/creature_roar_01` per Pudding line at rate 0.8 | **Pudding:** "ROOOAAR. (Is that... milk?)" **Clem:** "...It is." **Pudding:** "RRrrr. (I haven't eaten in three days. The laughing dogs chased me out of my cave.)" **Clem:** "Why are you tied up?" **Pudding:** "(...They also had a net.)" **Clem:** "Here." **Pudding:** "(...It's very good.)" **Clem:** "What's your name?" **Pudding:** "(Pudding.)" **Pudding:** "ROAR! (Sorry! Sorry. I roar when I'm nervous.)" **Clem:** "Hold still. I'll cut you loose." |
 
 `end`: objective `net_ropes` "Cut the net ropes" 0/3; arena `glade` locks; music `battle_fast_fight_loop`.
 
@@ -610,7 +615,7 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
 - The cage door pops. Sage tumbles out onto Mochi (or onto a hay bale if Mochi isn't active).
 - **Sage:** "Thanks for the landing." **Mochi:** "Mrrf."
 - **Sage:** "You're the one with the sword bigger than you." **Clem:** "Yes." **Sage:** "...Fair."
-- Toast: "Sage joined! Swap kittens at any Vigil Stone."
+- Toast: "Sage joined! Swap kittens at any Lantern Stone."
 
 #### CS-04 Lantern Night [MVP] (`forest` trigger `camp`; env lerps to night over 4 s) [TREND V6]
 
@@ -626,7 +631,7 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
 - Try the last frame of the `Death` clip, clamped, as "lying curled".
 - Fallback: `Flying_Idle` at time scale 0.2, lowered to y 0.4, framed so his head is down behind the lantern.
 
-`end`: Vigil Stone 2 activated; env `forest_night`; music `dark_forest_creepy` at volume 0.6.
+`end`: Lantern Stone 2 activated; env `forest_night`; music `dark_forest_creepy` at volume 0.6.
 
 #### CS-05 First Light [MVP] (`forest`, B1 defeated)
 1. `TWO_SHOT_LOW`. Grizzlechop's hat flies off. **Grizzlechop:** "I yield! I YIELD! Mind the cheese!"
@@ -642,7 +647,7 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
    - *(Long pause. He looks her up and down.)* **Marmalade:** "Is it now."
    - **Marmalade:** "That armour's on loan, then. Bring it back with a story in it."
 2. **Marmalade:** "That hooded thief took the Royal Post. Get it back, would you? My knees don't run anymore."
-3. Objective: "Catch the Post Stealer."
+3. Objective: "Catch the Snack Snatcher."
 
 #### CS-06 The Letters [MVP] (`town`, Post Office steps, after the chase)
 
@@ -673,8 +678,8 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
 | # | Camera | Action | Text |
 |---|---|---|---|
 | 1 | `CRANE_DOWN` from the dark Sunbell to the Castle Steps | The cellar door opens: Princess Snowpaw, with Marmalade behind her. | **Snowpaw:** "You chased off the Legion. All of them. By yourself?" **Clem:** "With friends." **Mochi:** "Mostly her." |
-| 2 | `TWO_SHOT_LOW` | Snowpaw unfolds a red cloth. The cape swaps from cream to red (ref2). | **Snowpaw:** "The Royal Wardrobe has nothing your size. Except this." **Snowpaw:** "It was a tablecloth. Velvet, mostly." **Clem:** "...Thank you, Your Highness." |
-| 3 | low, looking up at the dark bell | Marmalade points with his walking-stick sword. | **Marmalade:** "The Dawnstone's in three pieces now. You've got one in that sword." **Marmalade:** "The rats say the hyenas have the second. They'll come for the town, through the Low Gate." **Clem:** "Then I'll be at the gate." |
+| 2 | `TWO_SHOT_LOW` | Snowpaw unfolds a red cloth. The cape swaps from cream to red. | **Snowpaw:** "The Royal Wardrobe has nothing your size. Except this." **Snowpaw:** "It was a tablecloth. Velvet, mostly." **Clem:** "...Thank you, Your Highness." |
+| 3 | low, looking up at the dark bell | Marmalade points with his walking-stick sword. | **Marmalade:** "The Dawnstone's in three pieces now. You've got one in that sword." **Marmalade:** "The rats say the hyenas have the second. They'll come for the town, through Bramble Gate." **Clem:** "Then I'll be at the gate." |
 | 4 | wide | Villagers peek out; kittens run to the fountain. | Toasts: "Pawsbury is free!" · "Shops are open." · "Kittens you rescue will live here." |
 
 `end`: flag `town.free`; the hub stations activate; cape `red` equipped and unlocked; save.
@@ -712,7 +717,7 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
 |---|---|---|---|---|
 | 1 | `TWO_SHOT_LOW` | Cacklejaw on his knees, hat gone, chipped ear showing. A weak laugh, then a furious one. He points at her. | laugh | **Cacklejaw:** "Get her! ALL OF YOU! Everybody CHARGE!" |
 | 2 | `REVERSE_HORDE` | 40 silhouettes charge out of the fog. | roar of the crowd | — |
-| 3 | `HERO_LOW`, then an ECU of the blade | She plants the sword (Vigil → Oath). **Shard 2** tears out of Cacklejaw's belt pouch and sinks into her blade: `holy` 0 → 1 over 2 s, 160 sparkles, bloom 0.55 → 1.2. **This is the ref1 frame.** | `pickup/powerup_rise07` + `jingles/jingles_STEEL03` | Toast: "Golden Hour unlocked! At full Valor: Stand + ⚔" |
+| 3 | `HERO_LOW`, then an ECU of the blade | She plants the sword (Vigil → Oath). **Shard 2** tears out of Cacklejaw's belt pouch and sinks into her blade: `holy` 0 → 1 over 2 s, 160 sparkles, bloom 0.55 → 1.2.  | `pickup/powerup_rise07` + `jingles/jingles_STEEL03` | Toast: "Golden Hour unlocked! At full Valor: Stand + ⚔" |
 | 4 | low, from behind her toward the gatehouse | **Pudding rises over the gatehouse**, wings spread across the whole frame [TREND V6 f4], and ROARS. The horde skids, then scatters into the fog, laughing nervously. | `creature/creature_roar_03` + `c80_roar_02` at rate 0.7; shake 0.6 | **Pudding:** "ROOOOAR! (NOT. MY. FRIENDS.)" |
 | 5 | `TWO_SHOT_LOW` on the empty causeway | Cacklejaw alone. He laughs again, and it cracks into a sob. Clem sits beside him. | silence, then `cat/cat_purrsleepy_loop` low | **Cacklejaw:** "They used to laugh at me. The runt. So I laughed first. Always first." **Clem:** "You can stop now. I'll hold it for a bit." *(A real, tiny, wheezy laugh.)* **Cacklejaw:** "...You're very strange." **Clem:** "I know." |
 | 6 | wide | He walks off alone into the fog. | wind | — |
@@ -783,7 +788,7 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
 | 2 | 0:05–0:12 | `ECU_EYES`, then `HERO_LOW` | She gets up (the Still Standing rise animation) and pulls the sword free. | heartbeat ×2 | **Barkus:** "Why won't you STAY DOWN?" **Clem:** "Not strong yet. Still here." |
 | 3 | 0:12–0:22 | wide on the ramparts | **Pudding lands on the rampart ring** (back from Pawsbury, CS-13) and **the rescued kittens** slide off his back holding lanterns: count `max(3, state.kittens.length)` (villager kittens fill a shortfall), plus the 3 companions, Pearl, Pip, Earl Grey and Tofu (at most 25), on anchors `rampart_0..27`. Each lantern streams a light ribbon into her sword (additive tube, 1.0 s each, staggered 0.1 s). | `story_lament_warriors_soul` swells [audition] | **Pearl:** "GO, CLEM!" **Mochi:** "SWORDCAT! SWORDCAT!" *(the kittens chant)* |
 | 4 | 0:22–… | low behind her | Barkus raises the cleaver for one last blow. Prompt **"HOLD THE STAND"** (`guard`, hold 2.0 s). The cleaver presses down on her raised blade; screen rumble; visual time scale 0.25. Releasing early restarts the 2.0 s fill. No damage, no failure. | silence plus a heartbeat (`impact/impactSoft_heavy_000` ×2 per second) | prompt text |
-| 5 | +0–3 s | `HERO_LOW` | The cleaver cracks on her blade. **Golden Hour** activates (full ref1 look). | `jingles/jingles_STEEL06` | — |
+| 5 | +0–3 s | `HERO_LOW` | The cleaver cracks on her blade. **Golden Hour** activates (full gold glow). | `jingles/jingles_STEEL06` | — |
 | 6 | +3–… | `MEME_LOOP` | Prompt **"Hold ⚔, then release"** (`chargeRelease`, tier 2). On release: a cinematic Holy Slash. | `magic/spell_fire_03` + `impact/impactMetal_heavy_003` | — |
 
 `end`: flag `keep.boss`; emit `boss:defeated {id: 'barkus'}`; Pudding and the rampart kittens stay spawned for CS-16; go to CS-16.
@@ -794,12 +799,12 @@ When all 3 ropes are cut and the arena is clear (dialogue-only, 8 s):
 |---|---|---|---|---|
 | 1 | crane up from the roof | White-gold flash at time scale 0.2. **The storm clouds part**; a god-ray shaft `#FFE3A3` falls on her. | fog 0.05 → 0.008 over 6 s; sun → `#FFD9A8` × 2.2; PMREM regenerated once; grade `gold` | — |
 | 2 | `TWO_SHOT_LOW` | Barkus sits down in the sunbeam (`Sit_Floor_Down`, then `Sit_Floor_Idle`). | `cat/cat_purrsleepy_loop` | **Barkus:** "Every morning the bell rang. And every morning, the cats got the sunny steps." |
-| 3 | same | She sits beside him. 2 s of silence. She holds out her last bottle of milk with a straw. He sips through the tiny straw. | `pickup/bubble` | **Clem:** "Here. It helps." **Barkus:** "...It *is* warm." |
+| 3 | same | She sits beside him. 2 s of silence. She holds out her last tuna snack. He nibbles it. | `pickup/bubble` | **Clem:** "Here. It helps." **Barkus:** "...It *is* warm." |
 | 4 | `FLIGHT_ORBIT` | Pudding carries everyone home over a **sea of clouds at sunrise** [TREND V6 finale]: Clem and Pearl on his neck, the other kittens in a row along his back (`attach`, sheen fur). CloudSea set (§18.3), env `sky_sunrise` (§5.3). Cape and fur in the wind; sparkles drift. | `music/field_of_dreams.mp3` [audition] | Caption: `ending.caption` |
 | 5 | Pawsbury Bell Tower (`town` spawn `belltower`) | She sets the reunited Dawnstone into the Sunbell. Prompt **"Ring the Sunbell"** (`attack`). | — | prompt |
 | 6 | aerial over Pawsbury | **BONG.** A golden ring (expanding torus, r 0 → 120 m over 4 s) rolls out across the island. The fog lifts. | procedural Sunbell (§16.3); env `ending_gold` | — |
 | 7 | town gate | A donkey cart (Donkey `Walk`) arrives with the seven old knights in rusty armour (§3.6), Coo riding on the donkey's head. | `creature/animal_whinny` [audition] | **Sir Snoozalot:** "Did we miss it?" **Coo:** "Coo." |
-| 8 | courtyard, wide | **The knighting.** Every rescued kitten, the companions, Brutus at the back, Cacklejaw juggling in a jester hat, Pudding peeking over the roofs. Snowpaw drags a sword too heavy for her too. | `music/castle_kings_feast.mp3` | **Snowpaw:** "Kneel, squire." *(She kneels; now she's even smaller.)* **Snowpaw:** "...Actually, stand. I can't see you." **Snowpaw:** "By the power vested in me by the Order of Nine Lives, and also my mum... Arise, Dame Clementine of the Pink Bow, Knight of the Ninth Seat." **Clem:** "...Your Highness? Could it be 'Swordcat'? Everyone calls me that." **Snowpaw:** "Arise, Dame Swordcat of the Ninth Seat." *(Cheering.)* |
+| 8 | courtyard, wide | **The knighting.** Every rescued kitten, the companions, Brutus at the back, Cacklejaw juggling in a jester hat, Pudding peeking over the roofs. Snowpaw drags a sword too heavy for her too. | `music/castle_kings_feast.mp3` | **Snowpaw:** "Kneel, squire." *(She kneels; now she's even smaller.)* **Snowpaw:** "...Actually, stand. I can't see you." **Snowpaw:** "By the power vested in me by the Order of Nine Lives, and also my mum... Arise, Dame Clementine of the Pink Bow, Knight of the Ninth Seat." **Clem:** "...Your Highness? Could it be 'Swordcat'? Everyone calls me that." **Snowpaw:** "Arise, Dame Clementine of Pawsbury." *(Cheering.)* |
 | 9 | medium | Sergeant Whiskerbottom hangs her portrait above the height chart. | — | **Whiskerbottom:** "Still too small. Still a knight." |
 | 10 | bakery two-shot | She holds out the armour's buckle. | — | **Clem:** "The armour. It's on loan." **Marmalade:** "Bring it back with a story in it, I said." **Marmalade:** "...There are a few more stories in there yet. Keep it." |
 | 11 | `MEME_LOOP` in golden light | Sword lit from within, gentle breeze. The logo fades in. Credits roll over the Pawsbury festival. | `music/festival_minstrel_dance.mp3`, then `village_bards_tale.mp3` | Credits (§14.3) |
@@ -818,7 +823,7 @@ All lines are strings keys. **Bark rules:**
 - No repeat of the same line within 60 s.
 - Barks show as a small speech bubble over the speaker for 1.6 s, with babble audio.
 
-### 6.1 Swordcat
+### 6.1 Clem
 
 | Trigger | Lines (one at random) | Rule |
 |---|---|---|
@@ -857,7 +862,7 @@ Napping (any companion): "Just... resting my eyes..." · "Zzz." Waking: "I'm up!
 | Hyena Raider | Gloat / Jeer | "Hehehe-HAHA-hoo!" · "BOOOO!" · "Get off the stage!" |
 | Hyena Raider | choked | "hrk!" |
 | Hyena Raider | defeated | "...That was actually kinda cool." · "Tell no one." · "I'm telling my mum." |
-| Post Stealer (any) | snatch / hit / escape | "Finders keepers! Stealers... also keepers!" / "Ow! Fine! Take it!" / "Bye-bye, fishies!" |
+| Snack Snatcher (any) | snatch / hit / escape | "Finders keepers! Snatchers... also keepers!" / "Ow! Fine! Take it!" / "Bye-bye, catnip!" |
 | Pug | alert / hit on shield | *(snort)* "HRRF." / "Wall. Am wall." |
 | Bonehead | collapse / reassemble / scattered | *(clatter)* / "Ta-daa." / *(a sad little clack)* |
 | **Grizzlechop** | intro · P2 · wheel crash · snack · choke | "Halt! This cheese is under the protection of Captain Grizzlechop!" · "Charge! ...I said CHARGE! Why is nobody charging?" · "My WHEEL!" · "Snack break! Captain's privilege!" · "*hrk*— wrong pipe! WRONG PIPE!" |
@@ -898,9 +903,9 @@ Napping (any companion): "Just... resting my eyes..." · "Zzz." Waking: "I'm up!
 | Earl Grey (Library) | "Fascinating. The shard resonates with your blade. Or you're vibrating. Kittens do that." · "Knowledge is power. Also, power is power." |
 | Pip (Lookout) | "{n} kittens still out in {level}. One's somewhere silly. Don't ask how I know." · "Found your fish. ...I'm keeping one." |
 | Pearl (Wardrobe) | "Red's your colour. Every colour's your colour. You're my sister." · "Twirl. ...Okay, don't twirl in armour." |
-| Princess Snowpaw | "The castle steps are yours, Swordcat. Watch out for dogs." · "I'm practising knighting people on the cook. He's very patient." |
+| Princess Snowpaw | "The castle steps are yours, little knight. Share them nicely." · "I'm practising knighting people on the cook. He's very patient." |
 | Coo | "Coo." |
-| Villager kittens (random) | "Is that THE Swordcat? She's so small!" · "My nan says the bell will ring again." · "I'm going to be a knight too. I'm already too small, so that part's done." · "Mind the fountain, it bites. It doesn't. But it might." · "Thank you, Dame— um. Squire. Um. Swordcat!" · "Fish? Fish!" |
+| Villager kittens (random) | "Is that THE knight with the big sword? She's so small!" · "My nan says the bell will ring again." · "I'm going to be a knight too. I'm already too small, so that part's done." · "Mind the fountain, it bites. It doesn't. But it might." · "Thank you, Dame— um. Squire. Um. Swordcat!" · "Fish? Fish!" |
 
 ### 6.6 Tutorial and prompt strings
 
@@ -922,8 +927,8 @@ The base text is the desktop line (`hybrid` preset). `ui` uses `key.touch` / `ke
 | `tut.riposte` | Parried! [Attack] now for a Riposte. *(first parry in L1)* |
 | `tut.pounce` | Jump, then ⚔ in the air: Pounce. Bounce off crows! *(first crow)* |
 | `tut.reflect` | Parry a bolt to send it back. *(first crossbow)* |
-| `tut.milk` | Milk Break [Milk]: heals 2 hearts. Don't get hit while you sip. |
-| `tut.vigil` | Vigil Stone: click it to rest, save, refill milk, swap kittens. |
+| `tut.milk` | Low hearts! Grab a tuna snack [Snack]. (Snack Break heals 2 hearts; don't get hit while you munch.) |
+| `tut.vigil` | Lantern Stone: click it to rest, save, refill snacks, swap kittens. |
 | `tut.valor` | Standing your ground fills Valor. Hold the Stand near enemies. |
 | `tut.companion` | [Ability] Kitten ability: hold to aim, let go to cast. |
 | `tut.holy` | Holy Slash: hold ⚔ until it turns gold (needs 50 Valor). |
@@ -931,13 +936,13 @@ The base text is the desktop line (`hybrid` preset). `ui` uses `key.touch` / `ke
 | `tut.line` | Hold the Line! Keep enemies away from the winch. |
 | `tut.jeer` | A jeering hyena drains your Valor. Hold the Stand and it can't touch you, or hit it to make it choke. |
 | `tut.bones` | Scatter the bones! Hit a bone pile with a heavy attack before it gets up. |
-| `obj.*` | "Cut the net ropes {n}/3" · "Free the kitten" · "Catch the Post Stealer" · "Light the lanterns {n}/3" · "Hold the Line! Gate repair {p}%" · "Find the keys {n}/2" · "Reach the Bell Tower" |
+| `obj.*` | "Cut the net ropes {n}/3" · "Free the kitten" · "Catch the Snack Snatcher" · "Light the lanterns {n}/3" · "Hold the Line! Gate repair {p}%" · "Find the keys {n}/2" · "Reach the Bell Tower" |
 
 ### 6.7 Lost Letters (6; collectible lore cards; read in Pause → Letters)
 
 | # | Level / spot | Text |
 |---|---|---|
-| 1 | meadow, crossroads | "Dear Mum. Squire food is fine. Please send fish. Not the bony ones. — Mochi" |
+| 1 | meadow, crossroads | "Dear Mum. Squire food is fine. Please send tuna snacks. Not the crunchy ones. — Mochi" |
 | 2 | forest, stump in the stream | "Grizzlechop's shopping list: cheese, more cheese, a hat with a bigger feather, cheese." |
 | 3 | town, Forge Yard | "To the Snickerpack Armour-Painting Office: please change my word from NAYSAYER to YAYSAYER. I've thought about it a lot. — Private Snorkle" |
 | 4 | gate, Old Battlefield | "Dear Pudding. You can come home now. We fixed the cave. — the bats" |
@@ -955,7 +960,7 @@ The base text is the desktop line (`hybrid` preset). `ui` uses `key.touch` / `ke
 | `toast.kitten` | "Lost kitten found! ({n}/{max})" — this level's count, like the HUD n/3 (M2 fix; `{total}` = n/18) |
 | `toast.letter` | "Letter found: {title}" |
 | `toast.heartbell` | "Heart Bell! +1 heart" |
-| `toast.stolen` / `toast.returned` | "The Post Stealer took {n} fish!" / "Post returned! +5 fish" |
+| `toast.stolen` / `toast.returned` | "A Snack Snatcher swiped {n} catnip! Bonk it to get it back!" / "Got it back! +5 catnip" |
 | `toast.memecam` | "A legendary pose. (Meme White cape unlocked)" |
 | `loading.tips` | "A white glint means you can parry it." · "Red means move!" · "Hyenas laugh after hitting you. Hit them while they gloat." · "Meow near barrels. Kittens hide in silly places." · "Bright Slash pops slimes without splitting them." · "Standing your ground fills Valor." · "Nine lives per level. Use them." |
 
@@ -1016,7 +1021,7 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 
 | Move | Input | Numbers |
 |---|---|---|
-| **The Stand** (guard) | hold Space / LB / 🛡 | On press she **snaps to face** a parryable attacker within 5 m whose hit lands within 0.7 s. After that she faces the cursor (once it moves 30 px), the right stick, or on touch the soonest threat. On touch the guard arc is **±90°**. **Vigil pose** in 0.08 s [REF ref2]; her ears flatten for 0.1 s first. She shuffles at **1.2 m/s** and turns at 360°/s. Blocks **frontal ±70°** melee and projectiles: **0 damage**, 0.4 m pushback. Each block costs **1 Grit**; hits with poise ≥ 3 cost 2. **Grit 3**, regaining 1 per 1.5 s after 0.8 s without blocking. At 0 Grit: **guard break**, 0.8 s stagger. **Red (unblockable) attacks** go straight through the Stand: full damage plus a guard break. |
+| **The Stand** (guard) | hold Space / LB / 🛡 | On press she **snaps to face** a parryable attacker within 5 m whose hit lands within 0.7 s. After that she faces the cursor (once it moves 30 px), the right stick, or on touch the soonest threat. On touch the guard arc is **±90°**. **Vigil pose** in 0.08 s; her ears flatten for 0.1 s first. She shuffles at **1.2 m/s** and turns at 360°/s. Blocks **frontal ±70°** melee and projectiles: **0 damage**, 0.4 m pushback. Each block costs **1 Grit**; hits with poise ≥ 3 cost 2. **Grit 3**, regaining 1 per 1.5 s after 0.8 s without blocking. At 0 Grit: **guard break**, 0.8 s stagger. **Red (unblockable) attacks** go straight through the Stand: full damage plus a guard break. |
 | **Parry** | start the Stand **≤ 0.15 s** before a hit lands (Kitten difficulty 0.25 s; touch +0.05 s) | Negates the hit. **+20 Valor**, hitstop 0.12, time scale 0.5 for 0.15 s, gold ring spark, `sword_clash` + `metal_ringing`. Normal enemy: **stagger 1.2 s and a Riposte prompt**. Elite (poise ≥ 5): stagger 0.8 s. Boss: **+35 Dizzy**. **Gold-glint attacks** put a boss straight into Dizzy. **Projectiles are reflected** at 1.5× speed for 25 damage, from the start of the game. |
 | **Whiff lockout** | a Stand pressed and released within 0.25 s that blocked or parried nothing | Parry disabled for 0.30 s (blocking still works). No mashing. |
 | **Standing Ground** | stay in the Stand, planted (speed < 0.1 m/s) for ≥ 1.0 s, with ≥ 1 alerted enemy within 6 m that is targeting her | **+5 Valor/s** (+10/s inside a Jeer aura). **Capped at +30 per Stand**; the cap resets after the Stand has been released for 0.5 s. Her cape billows harder and the mist speeds up around her. The meme as a mechanic. |
@@ -1045,7 +1050,7 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 
 ### 7.5 Golden Hour (the super; Shard 2, unlocked in CS-09)
 - **Trigger:** Valor 100, then Stand + ⚔ pressed within 0.1 s of each other (or V, RT, or the gold touch button).
-- **Activation, 0.8 s:** Oath pose, invulnerable. Enemies within 8 m stagger 0.5 s. The camera punches in to ref1 framing.
+- **Activation, 0.8 s:** Oath pose, invulnerable. Enemies within 8 m stagger 0.5 s. The camera punches in close.
 - **Duration 8.0 s.** During it:
   - damage ×1.5, and every slash also fires a `gleam` crescent;
   - super armour (no stagger);
@@ -1057,24 +1062,24 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 - **End:** an automatic `sunburst`. Valor is locked at 0 for 3 s afterwards.
 - `jingles/jingles_STEEL0x` stinger, plus a high-shelf boost on the music bus.
 
-### 7.6 Health, Milk, Nine Lives, checkpoints
+### 7.6 Health, Snack Break, Nine Lives, checkpoints
 - **Hearts:** start with **4 hearts = 8 HP**. Each Heart Bell adds 1 heart, up to **7 hearts = 14 HP**.
 - **Hurt:** 0.35 s stun, knockback, then **0.9 s of i-frames** with the mesh blinking at 15 Hz. Player-hurt hitstop 0.07 s; shake 0.3 × 1.4; red vignette 0.3 s.
 - **Small hearts** drop from 10% of defeated enemies: +1 HP, magnetised from 3 m.
-- **Milk Break** [TREND V3]:
+- **Snack Break** [TREND V3]:
   - Selfie-sip pose; 0.9 s total; she can turn but moves at only 1.1 m/s.
   - **Heals 4 HP at the 0.5 s mark.** A hit before 0.5 s cancels the sip and **the bottle is kept**.
   - Carry **2** to start; the bakery satchel raises it to 3, then 4. Mochi, while active, adds +1 capacity on top (so the true maximum is 5). Swapping Mochi out removes the extra bottle if it is full.
-  - Vigil Stones refill milk to full.
+  - Lantern Stones refill tuna snacks to full.
 - **Nine Lives** [TREND bio]:
   - Each level attempt starts with **9 lives**: a cat-head-with-bow icon and "×9".
   - At 0 HP: a cute **faint** (she curls up on her cape). A translucent ghost kitten floats up out of the HUD icon and waves. Soft pink-white flash; "8 lives left".
-  - Respawn at the last Vigil Stone with full HP and half her Valor. The current arena resets; **a boss resets to the start of its current phase** at full phase HP.
+  - Respawn at the last Lantern Stone with full HP and half her Valor. The current arena resets; **a boss resets to the start of its current phase** at full phase HP.
   - At 0 lives: "Time for a cat nap." → Retry level (9 lives; rescued kittens, letters and Heart Bells are kept) or Back to Pawsbury.
 - **Still Standing** (last stand): once per checkpoint segment, a lethal blow leaves her at 1 HP. 2.0 s invulnerable, +30 Valor, a slow-motion rise (time scale 0.4 for 0.8 s), bark "...Still standing."
-- **Vigil Stones** (checkpoints): `env/nature/statue_obelisk.glb` plus `env/graveyard/lantern-candle.glb` [verified].
+- **Lantern Stones** (checkpoints): `env/nature/statue_obelisk.glb` plus `env/graveyard/lantern-candle.glb` [verified].
   - Walk within 1.5 m and press E: she plants the sword in Vigil for 0.8 s. The lantern lights gold.
-  - Effect: save, full heal, refill milk, open companion swap, set the respawn point.
+  - Effect: save, full heal, refill snacks, open companion swap, set the respawn point.
   - 2–4 per level (the compact `town` has 2), at most about 3 minutes of play apart, always one at a boss door.
 
 ### 7.7 Meow and cat behaviour
@@ -1090,17 +1095,17 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
   - **slow blink:** stand still for 3 s within 3 m of a companion and they trade slow blinks, with a heart puff;
   - **sneeze:** once per 90 s at random when fog ≥ 0.06.
 
-### 7.8 Meme Cam [MVP]
+### 7.8 Photo Cam [MVP] (code: `memecam`, `camera:meme`)
 - **Idle trigger:** 15 s with no input, on an outdoor level, no alerted enemy within 20 m, fog density ≥ 0.02.
 - **Manual trigger:** hold the Stand 2.5 s while planted with no enemy within 12 m.
 - **What happens:**
   1. **The Descent:** the camera cranes down from the top-down view into `MEME_LOOP` over 2.0 s. The fog blends from focus fog back to lens fog at the same time, so the misty horizon appears as the lens reaches eye level.
-  2. She switches from Vigil to **Oath** (sword vertical before her face).
+  2. She switches from the Promise pose to her Photo Cam pose.
   3. Wind ×1.6, mist ×2. The HUD fades out over 0.5 s.
-  4. After 1.0 s, a caption fades in at the bottom left in Uncial Antiqua italic: one of `meme.cap1–3` at random.
-- It loops seamlessly with a 3.8 s period (cape, wind and fur cycles are synced). A verlet cape can't repeat exactly, so **during Meme Cam the hero cape cross-fades over 0.3 s to the sway-shader cape** driven by a 3.8 s sine (gust peak at 1.2 s), and the grass wind uses the same period; verlet resumes on exit. Any input, or a mouse move of 40 px or more, exits with a 0.9 s rise back to the top-down view. Mouse movement counts toward the idle timer only above 24 px/s.
-- **The first trigger** unlocks the **Meme White** cape and shows `toast.memecam`.
-- **Silent:** wind only, no music, like the silent viral loop [TREND §5].
+  4. After 1.0 s, a caption fades in at the bottom left: one of `meme.cap1–3` (original Photo Cam captions) at random.
+- It loops seamlessly with a 3.8 s period (cape, wind and fur cycles are synced). A verlet cape can't repeat exactly, so **during Photo Cam the hero cape cross-fades over 0.3 s to the sway-shader cape** driven by a 3.8 s sine (gust peak at 1.2 s), and the grass wind uses the same period; verlet resumes on exit. Any input, or a mouse move of 40 px or more, exits with a 0.9 s rise back to the top-down view. Mouse movement counts toward the idle timer only above 24 px/s.
+- **The first trigger** unlocks the **Moonlight White** cape (id `memeWhite`) and shows `toast.memecam`.
+- **Silent:** wind only, no music.
 - Events: `camera:meme {on}`. Test hook: `__GAME__.idle(seconds)`.
 
 ### 7.9 Difficulty
@@ -1115,7 +1120,7 @@ Collision capsule r 0.32, h 1.0 (tech.md §2). All attacks are swept arcs (tech.
 | Parry window | 0.25 s | 0.15 s | 0.12 s |
 | Barkus phase 3 | blocks count as perfect parries | — | — |
 
-Difficulty can be changed at any Vigil Stone, except Nine Lives, which is fixed for the save. Options for all difficulties:
+Difficulty can be changed at any Lantern Stone, except Nine Lives, which is fixed for the save. Options for all difficulties:
 - **Auto-Stand assist** (touch default on): after a parry, the Stand is held automatically for 0.5 s.
 - Toggle-instead-of-hold for the Stand and the charge.
 
@@ -1189,7 +1194,7 @@ Rumble uses `gamepad.vibrationActuator.playEffect('dual-rumble')`. Support outsi
 ## 9. Companions [MVP]
 
 ### 9.1 Rules
-- **1 active companion** (`COMPANIONS.maxActive = 1`). Swap at any Vigil Stone or at the hub Barracks banner. [MVP+]: `maxActive = 2` after `gate.done` if the performance budget holds.
+- **1 active companion** (`COMPANIONS.maxActive = 1`). Swap at any Lantern Stone or at the hub Barracks banner. [MVP+]: `maxActive = 2` after `gate.done` if the performance budget holds.
 - **Follow:** 2.5 m behind and to the side, using seek plus separation steering (tech.md §10). Teleport to her side if more than 15 m away or 4 s out of line of sight.
 - **Engage** only enemies that are already engaging her, within 6 m of her.
   - Basic attack: **5 damage every 1.6 s**.
@@ -1240,7 +1245,7 @@ Rumble uses `gamepad.vibrationActuator.playEffect('dual-rumble')`. Support outsi
 | `jelly_giant` | **Giant Gloomjelly** (variant, not a new type; `ENEMIES.jelly.sizes.GIANT`) | procedural, Earl Grey visible inside; splits into 2 `jelly_m` unless a `popsSlime` attack kills it | h 1.6 | 0.90 | 120 | 1 | 2.0 | hops 1.5 m every 1.2 s | 8 / 360° | 14 | 10 | town (fountain, once) |
 | `spider` | **Bramble Spider** | `creatures/polypizza/Spider.glb`, tint moss `#4E5A2C` | h 0.5 | 0.35 | 35 | 2 | 0.6 | skitters 5.0 for 1.2 s, then pauses 1.0 s | 10 / 180° | 16 | 3 | forest, bog |
 | `hyena` | **Hyena Raider** | `characters/kaykit/Barbarian.glb` + `buildBeastHead('hyena')` + CanvasTexture plate + `weapons/skeleton/Skeleton_Blade.glb` | h 1.35 | 0.40 | 50 | 3 | 1.4 | 2.0 / 5.0 | 14 / 140° | 22 | 4–6 | gate, keep |
-| `stealer` | **Post Stealer** | `characters/kaykit/Rogue_Hooded.glb` + hyena head + "POST STEALER" plate + mailbag | h 1.2 | 0.35 | 30 | 1 | 1.0 | 2.0 / **6.0** | 16 / 160° | 30 | 3 | town, gate, bog |
+| `stealer` | **Snack Snatcher** | `characters/kaykit/Rogue_Hooded.glb` + hyena head + "SNACK SNATCHER" plate + mailbag | h 1.2 | 0.35 | 30 | 1 | 1.0 | 2.0 / **6.0** | 16 / 160° | 30 | 3 | town, gate, bog |
 | `pug` | **Pug Shieldbearer** | `characters/kaykit/Knight.glb` + `buildBeastHead('pug')` under `Knight_Helmet` (×0.9); `Rectangle_Shield`, `1H_Sword` visible | h 1.25 | 0.45 | 60 | 5 | 2.0 | 2.5 / 3.2; **turns at only 120°/s** | 12 / 120° | 18 | 5 | town, gate, bog, keep |
 | `bone_minion` / `_warrior` / `_rogue` / `_mage` | **Bonehead** | `creatures/skeletons/Skeleton_Minion / Warrior / Rogue / Mage.glb`; weapons from `weapons/skeleton/*` on `handslot.r` / `handslot.l` | h 1.0 | 0.35 | 30 / 45 / 30 / 25 | 2 / 3 / 2 / 1 | 1.0 | 1.5 / 3.5 | 12 / 140° | 18 | 3 | keep |
 | `warhound` [MVP+] | **Warhound** | `creatures/animals/Husky.glb`, tint `#3A3436`, procedural barding | length 1.1 | 0.40 | 45 | 3 | 1.2 | 3.0 / 7.5 | 14 / 160° | 25 | 4 | keep |
@@ -1263,7 +1268,7 @@ Columns: telegraph kind (§8.1), windup (s), shape and range, damage (HP), knock
 | hyena | **Gloat** | — | — | — | — | — | — | **After it lands any hit on her, it laughs for 1.0 s** (`Cheer` clip) and doesn't attack. **A hit during the Gloat chokes it:** "hrk!", stagger 1.0 s, **+10 Valor**. |
 | hyena | **Jeer** | jeer | 0.5 head-throw | aura r 8 m for 2.0 s | — | — | — | One jeering hyena per pack at a time; per-hyena cooldown 12 s; only when she's within 10 m. **While she's in the aura and not in the Stand: −6 Valor/s. In the Stand: immune, and Standing Ground runs at +10/s.** Env fog +0.01 while it lasts (max +0.03 total). A hit on the jeerer chokes it (+10 Valor, aura ends). |
 | hyena | Pack flank | — | — | — | — | — | — | The 2nd and later hyenas circle to her back (a "behind" token) and giggle 0.6 s before attacking |
-| stealer | `stealer_snatch` | grab | 0.6 (rubs paws, eyes glint) | dash 9 m/s for 0.35 s | 0 | 2 | — | **Steals 10% of her carried fish** (min 5, max 50). With fewer than 5 fish it steals 1 milk bottle; with no milk, a 1-damage shove. Then it **flees at 6.0 m/s** to the nearest `fog_edge` anchor and **despawns with the loot after 8 s**. **Any hit drops all the loot plus 5 bonus fish** ("Post returned!"). |
+| stealer | `stealer_snatch` | grab | 0.6 (rubs paws, eyes glint) | dash 9 m/s for 0.35 s | 0 | 2 | — | **Steals 10% of her carried catnip** (min 5, max 50). With fewer than 5 catnip it steals 1 tuna snack; with no milk, a 1-damage shove. Then it **flees at 6.0 m/s** to the nearest `fog_edge` anchor and **despawns with the loot after 8 s**. **Any hit drops all the loot plus 5 bonus fish** ("Post returned!"). |
 | pug | **Shield** | — | — | frontal ±70° | — | — | — | Frontal hits spark for 0 damage. **Broken by `bright`, `holy`, `pounce` from above, or by parrying `pug_bash`** → shield drops for 4.0 s and the pug staggers 1.5 s (2.0 s after a parry). Otherwise flank it: it turns at 120°/s. |
 | pug | `pug_bash` | parry | 0.6 shield rim glint | 1.5 m | 2 | 8 | 0.9 | — |
 | pug | `pug_slam` | red | 1.0 (raises the shield high) | **shockwave ring** expanding to r 2.5 over 0.4 s, 0.3 m tall | 2 | 6 | 1.2 | Unblockable; **jump it** or roll through |
@@ -1293,7 +1298,7 @@ Columns: telegraph kind (§8.1), windup (s), shape and range, damage (HP), knock
 ## 11. Bosses
 
 ### 11.1 Shared boss rules [MVP]
-- **Arena:** a circular or causeway arena behind a fog wall (a mist-card ring plus a collider). A Vigil Stone sits at the door. The camera moves to 6.0 m.
+- **Arena:** a circular or causeway arena behind a fog wall (a mist-card ring plus a collider). A Lantern Stone sits at the door. The camera moves to 6.0 m.
 - **Boss bar:** top centre, name in Cinzel Decorative, phase pips at the thresholds, a white chip-damage trail, and a thin gold **Dizzy** bar underneath.
 - **Phase change:** emits `boss:phase`, 1.0 s of invulnerability and a bark. Phase thresholds fire exactly once (unit-tested).
 - **Dizzy meter:**
@@ -1325,7 +1330,7 @@ Columns: telegraph kind (§8.1), windup (s), shape and range, damage (HP), knock
 ### 11.3 B2: Warchief Cacklejaw [MVP] (`gate`, on the causeway)
 - **Build:**
   - `Barbarian.glb` fitted to 2.2 m. `buildBeastHead('hyena', {mane: true, chippedEar: 'left'})`. The `Barbarian_Hat` node stays visible (it hides the chipped ear until phase 3).
-  - "HATER-IN-CHIEF" CanvasTexture plate on bone `chest`. `Skeleton_Blade.glb` ×1.6 on `handslot.r`.
+  - "GRUMP-IN-CHIEF" CanvasTexture plate on bone `chest`. `Skeleton_Blade.glb` ×1.6 on `handslot.r`.
 - **Stats:** HP **700**, poise 15, Dizzy max **120**.
 - **Arena:** the causeway between fog walls at z −10 and z +30 (40 × 12 m). Parapets 0.6 m; falling into the tidal water costs −1 HP and returns her to the causeway.
 - **Lesson:** *punish the gloat*, *interrupt the laugh*, *parry the gold rush*, and *find the real one by its shadow*.
@@ -1401,7 +1406,7 @@ On Kitten difficulty, blocks count as perfect parries in phase 3.
   6. **Death inside an arena** resets it to wave 1.
   7. **Rectangular arenas** (`size: [w, d]` instead of `r`; the keep Courtyard and the Cacklejaw causeway): the trigger is the rectangle inset 2 m; the fog wall is mist cards every 1.5 m along the four edges plus 4 box colliders (edges over deep water get only the cards); the 6 spawn points are the 4 corners and the 2 midpoints of the long sides, each inset 1.5 m. The rest of the template is unchanged.
 - **Open fights** (non-arena): `enemySpawns` with `patrolRadius` and leash (§10.2).
-- **Vigil Stones** (§7.6): `kind: 'checkpoint'`. Ids `vigil_1..n`.
+- **Lantern Stones** (§7.6): `kind: 'checkpoint'`. Ids `vigil_1..n`.
 - **Lost kittens:** `kind: 'kitten'` with `hide`:
   - `meow` (hidden until a Meow within 10 m; a barrel or bush wobbles every 6 s as a hint);
   - `cage` (3 hits to open);
@@ -1413,10 +1418,10 @@ On Kitten difficulty, blocks count as perfect parries in phase 3.
   - crates and barrels: one hit, 1–3 fish (`world/wood_breaking_0x`);
   - Lost Letters: a parchment with a pink seal, r 0.5;
   - Heart Bells: a small gold bell with a pink ribbon on a pedestal;
-  - milk bottles: crates only, about 2 per level.
+  - tuna snacks (code `milk`): crates only, about 2 per level.
 - **Level bounds:** a mist-card wall at the heightfield edge, plus `physics.clampToBounds`.
-- **`fog_edge` anchors** (Post Stealer escape targets): LevelKit generates `fog_edge_0..7` on the bounds, inset 6 m, at 45° steps. Inside a locked arena the stealer instead runs to the nearest point of the fog wall ring. It despawns with the loot when it reaches the target or after 8 s.
-- **Spawn ids:** every level defines `start`. Every level with a boss (or the `bog` pool fight) also defines **`boss`** at its boss-door Vigil Stone (used by retries after a game over at the boss and by smoke step 8): `forest` (−10,70), `gate` (5,+20), `bog` (−6,64), `keep` (−3,36, y 18). Other ids are listed per level.
+- **`fog_edge` anchors** (Snack Snatcher escape targets): LevelKit generates `fog_edge_0..7` on the bounds, inset 6 m, at 45° steps. Inside a locked arena the stealer instead runs to the nearest point of the fog wall ring. It despawns with the loot when it reaches the target or after 8 s.
+- **Spawn ids:** every level defines `start`. Every level with a boss (or the `bog` pool fight) also defines **`boss`** at its boss-door Lantern Stone (used by retries after a game over at the boss and by smoke step 8): `forest` (−10,70), `gate` (5,+20), `bog` (−6,64), `keep` (−3,36, y 18). Other ids are listed per level.
 - **Exits:** a trigger box emits `level:exit {to, spawnId}`, sets flag `<levelId>.done`, then the results screen, then the next level or the hub. Levels that end in a cutscene (`town` CS-07, `gate` CS-10, `bog` CS-12, `keep` CS-16) set the flag in that cutscene's `end` and show results before the `load`.
 - **The hub's way out:** after `town.free` the next level is started from the Quest Board ("Next: {chapter}") or by walking out of the South Gate (trigger box (0,−63), 8 × 2, active only after `town.free`; hub arrivals use spawn `hub`, inside the walls), which opens the Quest Board panel.
 
@@ -1445,7 +1450,7 @@ Contributions:
 Everything tweens over `dur`. It emits `env:changed`.
 
 ### 12.3 L1 `meadow`: Purrdale Meadows (prologue + Ch. 1) [MVP]
-- **Size:** heightfield 200 × 200 m, res 200, seed 11, hills amplitude 1.5 m. `pathWidth` 6. **This level is the reference image** [REF ref2].
+- **Size:** heightfield 200 × 200 m, res 200, seed 11, hills amplitude 1.5 m. `pathWidth` 6. 
 - **Spine:** (0,−80) practice field → (0,−62) field north gate → (−6,−50) lane → (−22,−30) crossroads → (−20,−4) Standing Stones → (2,18) Picnic Glade → (24,40) Crow Fields → (30,62) Old Bridge → (30,90) exit.
 - **Env:** `meadow_evening` (CS-01) → `meadow_night` (prologue) → `meadow_day` (after CS-02).
 - **Music:** prologue `village_bards_tale`, then silence and wind. Chapter: explore `field_of_dreams`, arenas `battle_fast_fight_loop`.
@@ -1493,7 +1498,7 @@ Everything tweens over `dur`. It emits `env:changed`.
 
 ### 12.5 L3 `town`: Pawsbury (Ch. 3, then the hub) [MVP]
 - **Size:** 140 × 140, res 140, seed 31, nearly flat (amplitude 0.4 m). Streets are cobbles (`pavingstones070`), `pathWidth` 6.
-- **Town wall:** a ring at r 60 (`env/castle/wall`, towers). South Gate (`env/castle/gate`) at (0,−60). The Low Gate road leads south from (0,−66).
+- **Town wall:** a ring at r 60 (`env/castle/wall`, towers). South Gate (`env/castle/gate`) at (0,−60). Bramble Gate road leads south from (0,−66).
 - **Buildings:** `env/village-kaykit/buildings/*` fitted to 6–9 m (homes A/B red and blue, `building_tavern_red`, `building_blacksmith_red`, `building_market_red` and `_blue`, `building_church_blue`, `building_well_red`, `building_castle_red` fitted to 18 m at (0,62)). Bell Tower: `building_tower_A_red` fitted to 16 m at (0,54), with a procedural Lathe **Sunbell** (r 1.0) in the top.
 - **Dressing:** `env/town/fountain-round`, `stall-red`, `stall-green`, `lantern`, `banner-red`, `hedge`, `fence`, `cart`.
 - **Env:** `town_occupied` → `hub_gold` (flag `town.free`) → `hub_grey` (`gate.done`) → `ending_gold` (`ending.seen`).
@@ -1520,7 +1525,7 @@ Everything tweens over `dur`. It emits `env:changed`.
 | Library | Earl Grey | (−20,24), `building_church_blue` | `town.free` |
 | Barracks banner (companion swap) | — | (8,−2) | `town.free` |
 | **Quest Board** (level select and replays; exit to the next level) | — | (0,−52) by the South Gate | `town.free` |
-| Hub Vigil Stone (save) | — | (−5,−50) | always |
+| Hub Lantern Stone (save) | — | (−5,−50) | always |
 | Lookout | Pip | (20,30), `building_tower_A_blue` | `gate.done` |
 | Wardrobe | Pearl | (−12,30), stall | `bog.done` |
 | Princess Snowpaw | — | (0,40) | `town.free` |
@@ -1555,7 +1560,7 @@ Everything tweens over `dur`. It emits `env:changed`.
   - Fish about 250.
 - **Enemy totals:** 17 `rat_pike`, 6 `pug`, 6 `stealer`, 2 `rat_xbow`, 2 `crow`, 1 `jelly_giant` (+2 `jelly_m`, +4 `jelly_s`).
 
-### 12.6 L4 `gate`: The Low Gate, "The Line" (Ch. 4) [MVP, never cut]
+### 12.6 L4 `gate`: Bramble Gate, "The Line" (Ch. 4) [MVP, never cut]
 - **Size:** 180 × 180, res 120, seed 41. Mostly tidal water: a water plane at y −1.2 covers |x| > 6. Shore ground (y 0) for z < −60 (the Old Battlefield) and z > +52 (the gatehouse yard).
 - **The causeway:** a procedural Octree box 12 m wide (x −6..+6), deck y 0, from z +45 to z −60 (105 m), textured `bricks076c`.
   - Parapets: 0.6 × 0.4 m boxes along both edges, with gaps every 20 m. Dressed underneath with `env/castle/bridge-straight-pillar` every 10 m.
@@ -1568,7 +1573,7 @@ Everything tweens over `dur`. It emits `env:changed`.
   - Stairs (`env/castle/stairs-stone`) down from the causeway at (6,−52) to a ledge at y −0.8.
 - **Background:** the horde, 40 `fx/Horde` silhouettes, in the fog bank at z −58 to −75.
 - **Hyena ballista raft** (scenery; it fires only in G-02): procedural planks 4 × 3 m + `env/castle/siege-ballista` fitted to 2.5 m, moored in the tidal water at (−16,−4), bobbing 0.1 m at 0.3 Hz, aimed north-east. Anchor `ballista_raft` = the ballista's muzzle (−16,−4, y 1.2).
-- **Where this is:** the Low Gate is Pawsbury's outer gatehouse at the end of the south road, beyond the town's inner South Gate (§12.5). The yard at z > +52 faces north toward town; the causeway runs south.
+- **Where this is:** Bramble Gate is Pawsbury's outer gatehouse at the end of the south road, beyond the town's inner South Gate (§12.5). The yard at z > +52 faces north toward town; the causeway runs south.
 - **Env:** `gate_dusk`.
 - **Music:** explore `village_town_theme` (low) → Line waves `battle_theme_a` → boss `boss_epic_battle_loop`.
 - **Play time:** about 14 min.
@@ -1663,17 +1668,17 @@ Everything tweens over `dur`. It emits `env:changed`.
 |---|---|---|---|---|---|---|
 | meadow | Move, combo, roll, Stand, parry, Bright, Meow, Riposte, Pounce, reflect | Rat packs + crossbows | Crows (air threats) | Bridge waves | 45 / 25 / 5 / 25 | 16 min |
 | forest | Webs, mushroom bounce, rope posts | Mixed rat camp | Night | Grizzlechop: pillar lesson, gold glint, snack choke | 50 / 30 / 5 / 15 | 14 min |
-| town | Pugs (shields), Post Stealers, lanterns | Chase (Zoomies) | Giant slime in the fountain | Square: 4 waves | 50 / 20 / 10 / 20 | 12 min |
+| town | Pugs (shields), Snack Snatchers, lanterns | Chase (Zoomies) | Giant slime in the fountain | Square: 4 waves | 50 / 20 / 10 / 20 | 12 min |
 | gate | Hyenas: Gloat and Jeer; Standing Ground matters | The Line (runners, spatial defence) | Pin theft; Spoon Brigade | Cacklejaw: choke, gold rush, shadow clue | 70 / 5 / 5 / 20 | 14 min |
 | bog | Slime splitting, water hazards | Bright pops slimes; reeds | Lily pads | Elite slime wave | 55 / 30 / 5 / 10 | 12 min |
 | keep | Boneheads (scatter), ballista lanes | Keys hunt | Brutus duel of Stands | Barkus: three perfect parries, then the rally | 60 / 20 / 5 / 15 | 16 min |
-| Hub visits | Shops, kittens, Meme Cam | — | — | — | — | about 5 min |
+| Hub visits | Shops, kittens, Photo Cam | — | — | — | — | about 5 min |
 | **Total** | | | | | | **about 89 min** |
 
 **Rules:**
 - A combat arena takes at most 90 s.
 - After an arena comes at least 45 s of traversal, a rescue or story before the next arena.
-- Every level has one quiet beat: the Milk Break, Lantern Night, the Letters, the pull-back, the Bow, the rampart kittens.
+- Every level has one quiet beat: the Snack Break, Lantern Night, the Letters, the pull-back, the Bow, the rampart kittens.
 
 
 ---
@@ -1686,13 +1691,13 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | Shard | From | Unlocks | Story beat |
 |---|---|---|---|
 | 1 | B1 Grizzlechop (`forest`) | **Holy Slash** (charge tier 2, costs 50 Valor) | CS-05 "First Light" |
-| 2 | B2 Cacklejaw (`gate`) | **Holy Wave** (added to Holy Slash) and **Golden Hour** (the super) | CS-09: she lights gold (ref1) |
+| 2 | B2 Cacklejaw (`gate`) | **Holy Wave** (added to Holy Slash) and **Golden Hour** (the super) | CS-09: she lights gold |
 | 3 | B3 Barkus (`keep`) | The finale: Final Stand → Golden Hour → the Sunbell rings | CS-15 / CS-16 |
 | Post-game | finishing the game | Golden Hour lasts +3 s (11 s); Dawnblade skin; Gold cape | — |
 
-### 13.2 Fish (currency)
-- **Silver fish** = 1; **gold fish** = 10. Sounds `pickup/coins_0x` and `pickup/coin2`.
-- **Sources:** enemies (§10.2), crates and barrels (1–3 each), fish lines along paths, bosses (Grizzlechop 100, Cacklejaw 120, Brutus 50, Barkus 250), and the Post Stealer's +5 return bonus.
+### 13.2 Catnip (currency; code id `fish`)
+- Swordcat-local currency, never the Token Tails balance. **Catnip sprig** = 1; **golden catnip** = 10. Sounds `pickup/coins_0x` and `pickup/coin2`.
+- **Sources:** enemies (§10.2), crates and barrels (1–3 each), fish lines along paths, bosses (Grizzlechop 100, Cacklejaw 120, Brutus 50, Barkus 250), and the Snack Snatcher's +5 return bonus.
 - **Budget, first clear:** meadow 180, forest 250, town 250, gate 300, bog 280, keep 500 = **about 1,760** (about 1,260 is in hand before the keep; the keep's 500 is mostly post-game money).
 - Replays from the Quest Board respawn enemies and crates (not collectibles), at about 60% of the first-clear fish.
 
@@ -1700,7 +1705,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 
 | Shop | Item | Cost | Effect |
 |---|---|---|---|
-| **Bakery** (Marmalade) | Bigger Satchel I / II | 100 / 200 | Milk capacity 2 → 3 → 4 |
+| **Bakery** (Marmalade) | Bigger Satchel I / II | 100 / 200 | Snack capacity 2 → 3 → 4 |
 | **Forge** (Tofu) | Sharpness I / II / III | 120 / 240 / 400 | All player damage ×1.15 / ×1.30 / ×1.50 |
 | | Sword skins | free once unlocked | Equip (§13.4) |
 | **Library** (Earl Grey) | Quick Charge | 200 | Charge tier times 0.60 / 1.10 s → 0.45 / 0.85 s |
@@ -1710,7 +1715,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 
 - Total sink 1,850 fish. A thorough first run buys most of it; replays cover the rest.
 - **Nothing is required to finish the game.**
-- Milk refills are free at Vigil Stones; bottles are never sold.
+- Milk refills are free at Lantern Stones; bottles are never sold.
 
 ### 13.4 Sword skins (cosmetic; same hitbox and timings; the trail colour changes)
 
@@ -1722,15 +1727,15 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | Baguette Blade | 12 kittens rescued | Procedural capsule with score marks |
 | Diamond Sword | all 18 kittens | `weapons/quaternius/Sword_Diamond.glb` fitted to 1.0 m |
 | **Even More Too Big** | beat Sir Brutus | `weapons/quaternius/Claymore.glb` fitted to 1.6 m. **The tip drags on the ground** (visual only). |
-| **Dawnblade** | finish the game | The default blade with a permanent gold emissive and 20 sparkles (ref1) |
+| **Dawnblade** | finish the game | The default blade with a permanent gold emissive and 20 sparkles |
 
 ### 13.5 Capes (the bow is **always pink** and can't be removed: a hard rule)
 
 | Cape | Colour | Unlock |
 |---|---|---|
-| Faded Cream | `#E2D6C0` | start (Marmalade's; matches the viral clips and ref3) |
-| **Royal Red** | `#A3202C` | CS-07 (ref2); equipped by default afterwards |
-| **Meme White** | `#F2EFE8` | first Meme Cam |
+| Faded Cream | `#E2D6C0` | start (Marmalade's) |
+| **Royal Red** | `#A3202C` | CS-07; equipped by default afterwards |
+| **Meme White** | `#F2EFE8` | first Photo Cam |
 | Order Blue / Whiskerwood Green / Midnight | per §13.3 | Pearl, 80 fish each |
 | Gold | `#D9B26A` | finish the game |
 
@@ -1751,7 +1756,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
   - `CinzelDecorative-Bold.ttf` and `-Regular.ttf`: logo, boss names, chapter cards.
   - `Cinzel-Variable.ttf`: menus and headings.
   - `Fredoka-Variable.ttf`: HUD, dialogue, numbers.
-  - `UncialAntiqua-Regular.ttf`: letters, lore, Meme Cam captions.
+  - `UncialAntiqua-Regular.ttf`: letters, lore, Photo Cam captions.
   - `MedievalSharp-Regular.ttf`: shop signs and quest names.
 
 ### 14.2 HUD (16:9; touch moves the action cluster clear of the HUD)
@@ -1773,7 +1778,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | World space | Damage numbers (§8.3); "!" alert bubbles; interaction tags (parchment plus a wax-seal key glyph) | DOM pool, max 20 |
 | Bottom-centre (over the bar) | **Dialogue scroll**: portrait, speaker name on a pink ribbon, typewriter text at 30 chars/s, a bouncing paw for "next" | Babble (§16.4) |
 | Overlay | Cutscene letterbox bars (CSS, 10% each); "Hold to skip" ring | — |
-| Meme Cam | Everything fades except the caption | — |
+| Photo Cam | Everything fades except the caption | — |
 
 ### 14.3 Screens (complete list)
 
@@ -1789,7 +1794,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | **Cutscene overlay** | Letterbox, captions, chapter and title cards, skip ring, prompt overlays ("HOLD THE STAND" with a filling ring) | — |
 | **Chapter card** | Parchment, chapter title in Cinzel Decorative, the level's region in Uncial Antiqua, a wax-seal stamp (`ui/drop_002`) | 3.0 s |
 | **Pause** | Resume · Kittens (an 18-cell portrait grid with names and where found; "???" if missing) · Letters (parchment cards) · Settings · Return to Pawsbury (when `town.free` and outside a boss) · Quit to Title | `ui/bookOpen` / `bookClose` |
-| **Vigil Stone menu** | Rest (save) · Swap kitten (portrait picker of unlocked companions) · Difficulty | — |
+| **Lantern Stone menu** | Rest (save) · Swap kitten (portrait picker of unlocked companions) · Difficulty | — |
 | **Shop panels** | Bakery, Forge (with a skin preview on a turntable), Library, Wardrobe (cape preview on a turntable) | — |
 | **Quest Board** | Level cards (cleared ✓; kittens n/3; letter ✓; best rank); "Next: {chapter}" button | Hub only |
 | **Results** | Time, kittens n/3, letter, fish, lives left, rank stamp | `music/victory_8bit_loop.ogg` [audition] |
@@ -1799,7 +1804,7 @@ She never levels up, because the point is that she doesn't get bigger. Power com
 | **Touch controls** | §15.3 | — |
 | **Rotate hint** | A one-time toast in portrait (`tut.rotate`). Portrait is fully playable. | — |
 | **Credits** | Scroll over the CS-16 festival: team placeholders, then the **full asset attribution from `public/assets/LICENSES.md`** (CC0 courtesy credits; OFL font notices) | No token or creator promotion |
-| **Photo Mode** [STRETCH] | Freeze; free camera within 6 m; poses Vigil / Oath / Milk Selfie; Meme Cam preset; fog and wind sliders; save a PNG (`toBlob` right after a render) | — |
+| **Photo Mode** [STRETCH] | Freeze; free camera within 6 m; poses Vigil / Oath / Milk Selfie; Photo Cam preset; fog and wind sliders; save a PNG (`toBlob` right after a render) | — |
 
 ### 14.4 Accessibility [MVP]
 - All lines are subtitled (there is no voice).
@@ -1833,7 +1838,7 @@ The binding spec is `research/CONTROLS_SPEC.md`. It covers the camera, the nav g
 | Jump (LMB in the air = Pounce at the cursor) | **F** |
 | Interact / confirm | E or Enter |
 | Kitten ability | Q (hold to aim, release to cast) |
-| Milk Break | R |
+| Snack Break | R |
 | **Meow** | C |
 | **Golden Hour** | V, or Stand + Attack together at Valor 100 |
 | Select / cycle target | click a foe / Tab, Shift+Tab |
@@ -1901,7 +1906,7 @@ Any action can be rebound.
 - **Lens:** FOV 38° (portrait 50°). Pitch 46–58° depending on zoom. 13 m on desktop and 12 m on a phone; zoom 9–18 m. She is never less than 30 CSS px tall.
 - **Fog:** measured from her, not the lens (clear 5 m, 7 m in combat). The screen edges are misty and the stage is clear.
 - **Occlusion:** occluders fade (dithered) and roofs and canopies lift. She has a hero ring and an x-ray silhouette.
-- **Cutscenes** keep their presets and crane in and out of the top-down view. The Meme Cam descends from it.
+- **Cutscenes** keep their presets and crane in and out of the top-down view. The Photo Cam descends from it.
 
 ### 15.5 Point-and-go
 - Orders walk a 0.5 m physics nav grid (A*, string-pulled).
@@ -1941,7 +1946,7 @@ Every file below exists under `public/assets/audio/` [verified by name in ASSETS
 | Credits / festival | `music/festival_minstrel_dance.mp3` | — |
 | Boss or arena win sting | `music/victory_fanfare.mp3` | About 4 s |
 | Results | `music/victory_8bit_loop.ogg` | It may clash with the tone [audition]; fallback `jingles/jingles_PIZZI03` |
-| **Meme Cam** | **no music**: duck to 0 over 1 s; wind ×1.6 | Matches the silent viral loops [TREND §5] |
+| **Photo Cam** | **no music**: duck to 0 over 1 s; wind ×1.6 | Quiet, so the pose reads |
 
 **Rules:**
 - A/B crossfade 1.5 s (tech.md §14).
@@ -1965,8 +1970,8 @@ Every file below exists under `public/assets/audio/` [verified by name in ASSETS
 | Player hurt / faint / ghost life | `impact/impactPlate_light_00x` + `cat/cute_creature_0x` at rate 1.2 / `cat/cat_softmew` at rate 0.8 / `pickup/powerup_downer01` |
 | Meow | `cat/kitten_mew_01`, `cat/meow_baby_01` |
 | Milk sip | `pickup/bubble`, `bubble2`, `bubble3` |
-| Vigil Stone / Still Standing | `cat/cat_purrsleepy_loop` (2 s) + `magic/magic1` / `magic/spell_02` + heartbeat |
-| Fish / gold fish / small heart / Heart Bell | `pickup/coins_01–04` / `pickup/coin2` / `pickup/gem_01` / `pickup/powerup_rise05` + `jingles/jingles_NES02` |
+| Lantern Stone / Still Standing | `cat/cat_purrsleepy_loop` (2 s) + `magic/magic1` / `magic/spell_02` + heartbeat |
+| Fish / golden catnip / small heart / Heart Bell | `pickup/coins_01–04` / `pickup/coin2` / `pickup/gem_01` / `pickup/powerup_rise05` + `jingles/jingles_NES02` |
 | Kitten found / letter | `jingles/jingles_PIZZI00–04` + `cat/kitten_mew_01` at rate 1.3 / `ui/bookFlip1` + `jingles/jingles_NES00` |
 | Crates / cage / lock / keys / gate / winch | `world/wood_hit_0x`, `wood_breaking_01–02` / `world/metal_open_01` / `world/lock_open_01` / `world/keys_01` / `world/metal_open_01`, `metal_close_01` / `impact/chain_01–03` loop |
 | Rats | `creature/rat_squeak_attack`, `rat_squeak_pain`, `rat_squeak_death` |
@@ -1974,7 +1979,7 @@ Every file below exists under `public/assets/audio/` [verified by name in ASSETS
 | Spiders | `creature/c80_bug_01–04` at rate 1.3 |
 | Gloomjellies | `creature/slime_01–16`, `rpg_slime1–10`; split `creature/splash_01–05` |
 | Hyenas | laugh build (§16.3); hurt `creature/c80_hurt_0x` at rate 1.2; choke `creature/c80_cough_01` |
-| Post Stealer | snatch `creature/c80_eat_01`; fleeing = laugh build at rate 1.4 |
+| Snack Snatcher | snatch `creature/c80_eat_01`; fleeing = laugh build at rate 1.4 |
 | Pugs | `creature/c80_barking_01/02`, `animal_bark`; snort `c80_nose` |
 | Boneheads | clack `impact/impactWood_light_00x`; reassemble `impact/impactWood_medium_00x` ×3 |
 | Pudding | `creature/creature_roar_01–03` + `c80_roar_01–03` at rate 0.7–0.8; nervous `c80_ooh`; Lantern Night snore `c80_snore` at rate 0.6 |
@@ -2034,7 +2039,7 @@ One blip per 3 typed characters, from the speaker's pool, at ±5% random pitch. 
   - storm (keep);
   - sunrise and gold everywhere (ending).
 - Her glow is the only warm light in the cold biomes.
-- **Signature poses:** **Vigil** (ref2): idle, checkpoints, the Stand. **Oath** (ref1, ref3): charge, title, victory, Meme Cam.
+- **Signature poses:** **Promise** (code `vigil`): idle, checkpoints, the Stand. **Oath**: charge, victory, Photo Cam. The title uses **wave** (sword lowered at her side).
 - **The holy ladder:** blade emissive tracks Valor (0 → 0.6) → the Holy Slash charge (art.md §4.3, §10.2) → the Golden Hour aura hull with 160 sparkles and bloom 1.2 → the finale.
 - **Scale:** low cameras looking slightly up at her; giants framed to fill the shot (Pudding, Tallbert, Barkus); pull-back reveals.
 - **Post-processing** (tech.md §13): MSAA 4 (Med and High), UnrealBloom (0.6 / 0.4 / 0.85, tweened for holy), OutputPass, vignette. Bokeh DOF in cutscenes is [MVP+]. Low quality skips the composer.
@@ -2395,7 +2400,7 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 | Milestone | Scope | Per-agent focus | Exit criteria |
 |---|---|---|---|
 | **M0 Core** | tech.md Phase 0 + §19.1 amendments; stubs for all 14 systems; the event catalog; Appendix A config; empty strings; `fitToHeight`; placeholder Swordcat (`cats/Cat_Blocky.glb` + `weapons/kaykit/sword_2handed.glb`, fitted to 1.0 m) | core only | `npm run check` green with stubs; the contract tests pass; 6 stub levels boot |
-| **M1 Vertical slice: `meadow`** | Prologue + Ch. 1 complete | characters: Swordcat, Mochi, Pearl, Whiskerbottom, squire kittens, **BeastHead (hyena) + breastplate words** (CS-02 needs them), cages, cutscene props. player: the full §7 moveset (Holy and Golden Hour testable via hooks). combat: the full resolve path. enemies: rat_pike, rat_xbow, crow, plus scripted AI-less `hyena`, Cacklejaw and Pilfer actors for CS-02. companions: Mochi, LostKitten, Pudding, NpcActor. world: LevelKit, Env, Arena, `meadow` (practice-field set, Tallbert statue, far skyline, cows). fx: Telegraphs, juice, HolyFX, Horde. camera: presets, Meme Cam. story: CS-00–03, G-01, D-01, tutorial. ui: HUD, dialogue, title, pause, results, touch. audio: maps for meadow, wind, laugh build. save. | Smoke drives `meadow` from `practice` to the bridge exit using hooks. Screenshots are reviewed against ref2 using the **R1 checklist**. U1–U4, U13–U16 green. |
+| **M1 Vertical slice: `meadow`** | Prologue + Ch. 1 complete | characters: Swordcat, Mochi, Pearl, Whiskerbottom, squire kittens, **BeastHead (hyena) + breastplate words** (CS-02 needs them), cages, cutscene props. player: the full §7 moveset (Holy and Golden Hour testable via hooks). combat: the full resolve path. enemies: rat_pike, rat_xbow, crow, plus scripted AI-less `hyena`, Cacklejaw and Pilfer actors for CS-02. companions: Mochi, LostKitten, Pudding, NpcActor. world: LevelKit, Env, Arena, `meadow` (practice-field set, Tallbert statue, far skyline, cows). fx: Telegraphs, juice, HolyFX, Horde. camera: presets, Photo Cam. story: CS-00–03, G-01, D-01, tutorial. ui: HUD, dialogue, title, pause, results, touch. audio: maps for meadow, wind, laugh build. save. | Smoke drives `meadow` from `practice` to the bridge exit using hooks. Screenshots are reviewed against ref2 using the **R1 checklist**. U1–U4, U13–U16 green. |
 | **M2 Acts I–II** | `forest`, `town` (+ hub), `gate` | enemies: spider, jelly, hyena, stealer, pug, B1, B2, Pilfer. companions: Sage, Clover, hub kittens, Spoon Brigade. world: Objectives (ropes, lanterns, The Line), Hub, Quest Board. story: CS-04–10, D-02–04, D-06, G-02. ui: shops, Quest Board, objective bar, threat arrows. player: Golden Hour. | Every level boots in smoke; B1 and B2 can be beaten with `god`; The Line completes in smoke; the hub shops work; U5–U12 green |
 | **M3 Act III** | `bog`, `keep`, ending | enemies: bonehead, Brutus, B3 (hpFloor, shard parries). story: CS-11–16, D-05; credits. world: bog boardwalks and water, keep cellars. fx: light ribbons, CloudSea, the ending env. companions: Pudding ferry and riders (`attach`). audio: procedural bell. | The game is completable end to end via debug teleports with no softlock (smoke fires every trigger and cutscene); U17–U18 green |
 | **M4 Ship** | Polish | core: asset prune, music re-encode, dynamic resolution. Everyone: performance against tech.md §18, a balance pass (deaths per arena logged via `?debug`), accessibility, the touch pass. | Desktop 60 fps on Iris Xe at Med; `dist/` < 80 MB; initial load < 25 MB; zero console errors; all tests green |
@@ -2422,10 +2427,10 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 8. Merge `bog` into a short approach at the start of `keep`. **That is the floor: 5 levels.**
 
 **Never cut:**
-- the Stand, its meme pose and Standing Ground;
-- the **Meme Cam**;
+- the Stand, its pose and Standing Ground;
+- the **Photo Cam**;
 - CS-02 The Laughing Fog;
-- CS-03 Milk Break;
+- CS-03 Snack Break;
 - `gate` The Line with CS-08's pull-back of rescued kittens;
 - the final boss with CS-15 (HOLD THE STAND) and CS-16.
 
@@ -2433,7 +2438,7 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| R1 | **The procedural Swordcat doesn't read as cute or as "the meme cat"** | Medium | Critical | Build her first (M1). Compare screenshots in `MEME_LOOP` with ref2 against this checklist: bow on her **left** ear; eyes about 0.09 H; pauldrons ≥ head width; cape V-frame; sword ≈ her height; ginger with a cream bib. The placeholder unblocks everyone else meanwhile. |
+| R1 | **The procedural Swordcat doesn't read as cute or as the Token Tails pink-bow cat** | Medium | Critical | Build her first (M1). Compare screenshots against this checklist: bow on her **left** ear; eyes about 0.09 H; pauldrons ≥ head width; cape V-frame; sword ≈ her height; ginger with a cream bib. The placeholder unblocks everyone else meanwhile. |
 | R2 | Fur shells look bad or run slowly on the iGPU | Medium | Medium | Quality switch to sheen plus tuft cards; shells on the head only, 16 layers |
 | R3 | **GLB scale and orientation chaos** (raw extents 0.01–5.9; ×100 node scales [verified]) | High | Medium | Mandatory `fitToHeight` + `MODEL_FIT`; a smoke assertion of ±10%; facing checked by screenshot in M0 |
 | R4 | Beast heads look stitched on | Medium | Medium | `Knight_Helmet` or the hood over the seam; heads 1.3× size; fallback hyenas on `Wolf.glb` |
@@ -2442,7 +2447,7 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 | R7 | Performance: grass + fog + bloom + fur + 12 skinned meshes | Medium | High | tech.md §18 budgets; at most 8 active enemies; mixers every 2nd frame beyond 20 m; the horde is instanced; dynamic resolution |
 | R8 | Levels built without an editor look samey | Medium | Medium | The spine-and-zones format, per-biome prop lists, hand-placed set pieces only, smoke screenshots per zone |
 | R9 | Audio gaps (wind, bell, crow, hyena laugh) and taste (the creepy forest track) | High | Low | Procedural builds (§16.3); the audition list; named fallbacks |
-| R10 | **IP and legal**: the character's ownership is unverified; several memecoins use the imagery; the captions are token-site text; *The Last Vigil* is a fan series | Medium | High | Original lines by default (§4.4); no token, coin or creator references; title and island names in one constant; the reference media never ship. **Not legal advice; commercial use is [unverified].** |
+| R10 | **IP and legal**: the original concept drew on third-party content (`docs/PROVENANCE.md`); it was removed on 2026-10-13 | Medium | High | Original lines only (§4.4); no token, coin or creator references; outside media out of the working tree; a git-history rewrite and a lawyer's check are founder decisions |
 | R11 | Browser quirks: pointer lock, autoplay, iOS audio interruptions, Ogg on Safari [unverified] | Medium | Medium | Resume audio on gesture and `statechange`; MP3 copies of the Ogg music |
 | R12 | **Shipped size** (195 MB `public/assets`) | High | High | §18.4 prune plus re-encode; lazy per-level preload |
 | R13 | Parallel agents break each other's interfaces | Medium | High | The frozen §19.4 and §19.5 contracts; additive requests; contract tests; `npm run check` before every hand-off |
@@ -2458,7 +2463,7 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 
 **MVP (must ship):**
 - 6 levels: `meadow` (with the prologue), `forest`, `town` (+ hub), `gate`, `bog`, `keep`.
-- Swordcat's full moveset (§7) including Golden Hour, Meow, **Meme Cam**, Nine Lives, Milk, Still Standing.
+- Swordcat's full moveset (§7) including Golden Hour, Meow, **Photo Cam**, Nine Lives, Milk, Still Standing.
 - Combat feel (§8): telegraphs, juice, Dizzy, threat arrows.
 - 9 enemy types; B1, B2, Brutus, B3.
 - 3 companions (1 active); 5 service kittens; 18 lost kittens with hub activity spots; the Spoon Brigade.
@@ -2481,7 +2486,7 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 **STRETCH:**
 - `sky`: an interactive dragon-flight level (rail, fireballs, a crow swarm; V4).
 - Interactive ending flight.
-- Photo Mode with the Meme Cam preset.
+- Photo Mode with the Photo Cam preset.
 - Pip and Earl Grey as companions.
 - Frostwhisker Peaks (Ermines, Crow Queen), Whiskerwood tunnels (Mole King), Moonlit Abbey.
 - Achievements, localisation, input remapping, local co-op Pearl.
@@ -2490,7 +2495,7 @@ __GAME__.events = [];   // ring buffer (200) of emitted event names, for smoke a
 ---
 
 ## 21. Open questions and unverified items
-- **Legal:** whether "Swordcat", "Meow Island", the meme look and any caption may be used commercially [unverified]. Fallback names are in §1.
+- **Legal:** a lawyer's check of the Token Tails version (Pink Paw Knight) is a founder decision; see `docs/PROVENANCE.md`.
 - How the **red tint** looks on `Dragon_Evolved`'s atlas, and the black tint on `Pigeon`'s; whether `Death`'s last frame reads as "asleep" [unverified].
 - The yaw facing of each GLB (`MODEL_FIT` yaw = 0 until the M0 screenshot check) [unverified].
 - Whether `PickUp` clamped at its lowest frame reads as a kneel for Brutus [unverified].
@@ -2595,14 +2600,14 @@ export const ENEMIES = {
                poise: 1, hopEvery: 1.2, hopDist: 1.5, attacks: [{ id: 'jelly_slam', weight: 1, range: 3 }], split: { L: ['M', 2], M: ['S', 2] }, childInvuln: .3, childPop: 2, maxAlive: 12, sight: 8, leash: 14 },
   spider:    { model: 'models/creatures/polypizza/Spider.glb', fit: { h: 0.5 }, tint: '#4E5A2C', radius: .35, height: .5, mass: .6, hp: 35, poise: 2, burst: { speed: 5, move: 1.2, pause: 1.0 }, sight: 10, fov: 3.14, leash: 16,
                attacks: [{ id: 'spider_web', weight: 1, range: 7 }, { id: 'spider_bite', weight: 2, range: 1.3 }], fish: [3, 3] },
-  hyena:     { model: 'models/characters/kaykit/Barbarian.glb', fit: { h: 1.35 }, head: 'hyena', plateWords: ['HATER', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER'],
+  hyena:     { model: 'models/characters/kaykit/Barbarian.glb', fit: { h: 1.35 }, head: 'hyena', plateWords: ['GRUMP', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER'],
                hide: ['Barbarian_Head', 'Barbarian_Hat', '1H_Axe', '1H_Axe_Offhand', '2H_Axe', 'Mug', 'Barbarian_Round_Shield'],
                weapon: { model: 'models/weapons/skeleton/Skeleton_Blade.glb', bone: 'handslot.r', fit: { max: 0.9 } },
                radius: .40, height: 1.35, mass: 1.4, hp: 50, poise: 3, walk: 2.0, run: 5.0, sight: 14, fov: 2.44, leash: 22,
                attacks: [{ id: 'hyena_slash', weight: 3, range: 1.9 }, { id: 'hyena_lunge', weight: 1, range: 5, minRange: 3, cooldown: 4 }],
                gloat: { dur: 1.0, chokeStagger: 1.0, chokeValor: 10 },
                jeer: { windup: .5, dur: 2.0, r: 8, cooldown: 12, onlyWithin: 10, fogAdd: .01, maxPerPack: 1 }, flank: { giggleLead: .6 }, fish: [4, 6] },
-  stealer:   { model: 'models/characters/kaykit/Rogue_Hooded.glb', fit: { h: 1.2 }, head: 'hyena', plateWords: ['POST STEALER'], hide: ['Rogue_Head_Hooded', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
+  stealer:   { model: 'models/characters/kaykit/Rogue_Hooded.glb', fit: { h: 1.2 }, head: 'hyena', plateWords: ['SNACK SNATCHER'], hide: ['Rogue_Head_Hooded', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
                radius: .35, height: 1.2, mass: 1.0, hp: 30, poise: 1, walk: 2.0, run: 6.0, sight: 16, fov: 2.79, leash: 30,
                attacks: [{ id: 'stealer_snatch', weight: 1, range: 4 }], fish: [3, 3] },
   pug:       { model: 'models/characters/kaykit/Knight.glb', fit: { h: 1.25 }, head: 'pug', show: ['Rectangle_Shield', '1H_Sword', 'Knight_Helmet'], helmetScale: .9,
@@ -2736,7 +2741,7 @@ export default defineLevel({
 });
 ```
 
-### B.2 Cutscene: `src/story/cutscenes/cs03.js` (Milk Break)
+### B.2 Cutscene: `src/story/cutscenes/cs03.js` (Snack Break)
 ```js
 export default {
   id: 'cs03', skippable: true, anchor: 'swordcat',

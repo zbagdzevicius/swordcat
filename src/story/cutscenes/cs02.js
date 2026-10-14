@@ -2,8 +2,8 @@
 // tightened"; WA15, ON §5.3) [MVP]. ~50 s with `STORY.cs02Cut` (default), the long cut (~80 s) without it.
 // Played right after the height chart (CS-01 `end.play`). Lavender `meadow_giggle` (fog 0.062, cutscene only): sad
 // beats are lavender, never grey; no monster drums, no chains, no trembling close-up. Every story fact stays: the
-// Dawnstone glow goes out, the horde, the kitten carriers, Pearl, Cacklejaw's laugh, Pilfer's two thefts, the meme shot,
-// her choice to follow.
+// Dawnstone glow goes out, the horde, the kitten carriers, Pearl, Cacklejaw's laugh, Pilfer's two thefts, her stand
+// (sword ready), her choice to follow.
 //   1 the wind drops (orbit)                      2 long lens: the Bell Tower glow goes out, a silly clunk
 //   3 giggles from the mist: ears up, tail puff   4 the horde marches out with carriers on wobbly carts; Pearl's has a
 //     pink ribbon and a hand-drawn "HELP (please)" sign — "CLEM! Follow the letters!"
@@ -36,7 +36,7 @@ const POST = [-4.0, -52.0];
 export const RAID_END = Object.freeze([-1.5, -90.5]);
 export const RAID_END_FACING = -Math.PI / 2;
 
-const WORDS = ['HATER', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER', 'HATER', 'GRUMBLER'];
+const WORDS = ['GRUMP', 'GRUMBLER', 'NAYSAYER', 'SCOFFER', 'SNEERER', 'SPOILER', 'GRUMP', 'GRUMBLER'];
 /** 8 raiders in two files ±2.5 m, rows 2.4 m apart starting 19 m up the line; 4 push kitten carriers on carts. */
 export const FILES = Array.from({ length: 8 }, (_, i) => {
   const row = i >> 1, side = i % 2 ? 1 : -1;
@@ -207,8 +207,9 @@ export function cs02Steps(cut = true) {
     { t: 'actor', id: 'hyena_pearl', visible: false },
     wait(1.0 * k),
 
-    // ---- 7 · THE MEME SHOT
-    { t: 'actor', id: 'swordcat', pose: 'oath', expression: 'earnest' },
+    // ---- 7 · HER STAND (the MEME_LOOP preset id is only the camera's name for this framing; she takes her guard
+    // stance, sword ready: Token Tails pass, docs/PROVENANCE.md)
+    { t: 'actor', id: 'swordcat', pose: 'ready', expression: 'earnest' },
     { t: 'env', wind: 1.0, dur: 0.8, nowait: true },
     { t: 'call', fn: (ctx) => memeLook(ctx, true) },
     { t: 'cam', preset: 'MEME_LOOP', anchor: 'swordcat', mode: 'cut' },

@@ -1263,3 +1263,33 @@ one-a-day rule. Landing and picker point to the game. With the flag off, product
 - **Title approval.** Pink Paw has not approved the title "Pink Paw Knight". Going live needs the founder to set
   `NEXT_PUBLIC_SWORDCAT` (and `_PICKER`) in Vercel.
 - **Catnip Heist redirect.** The Heist still opens a new tab to give a treat. Left as is.
+
+### 12.7 Status (2026-10-15)
+
+Integrated and committed locally in both repos. Nothing pushed or merged.
+
+- **Commits.** swordcat `tokentails`: `db20bb2` (TT4) and `749e144` (treat panel fixes). tokentails-swordcat
+  `feat/swordcat`: `587fe404` (embed, picker, landing) and `08fd9c98` (landing treat line per rail state, rebuilt embed).
+- **Cats.** 25 slots take real Pink Paw cats (`src/shelter/roster.js`). Fixed: pickles is Judas, pebble is Simas,
+  muffin is Raudvis, socks is Zare. The other 21 slots take cats from a per-install seeded shuffle of the cats at the
+  shelter (live gallery on tokentails.com, else the 99-cat snapshot of 2026-10-15). Bog and keep slots are mapped but not
+  reachable yet.
+- **Treat.** Embedded on `/swordcat`, the game posts `treat-request`. The host calls `sendTreat()` (signed-in route,
+  then guest, `source: "page"`) and posts back `treat-result`. No redirect. Not embedded, the card shows a new-tab link to
+  `/shelter-payouts/give?cat=<name>`. Button: "Send Pink Paw a treat for X". States: checking, live, sending, sent,
+  already today, paused, used up, failed and retry, not open yet. Every state shows the free line and the custody line.
+- **No real treat was sent.** Unit tests stub fetch and `postMessage`. The smoke mocks every `**/shelter/donate**`
+  route and aborts any non-read request to a tokentails.com host. It blocked 0, so none was attempted.
+- **Landing.** `SwordcatSection` after the Heist section, behind `NEXT_PUBLIC_SWORDCAT` and not in the app build.
+  Label "Early access", the title, "Save lost kittens with a tiny knight. Every cat you save is a real cat at Pink Paw
+  in Kaunas.", one treat line per rail state, and a "Play" CTA to `/swordcat?from=landing_swordcat`.
+- **Checks.** `npm run test:unit` 1219/1219. Full smoke: 275 blocks OK on `db20bb2`. On `749e144` the full run failed 7
+  checks in `story:tutorial` only, which passed alone (timing under load). Host: `tsc` clean, eslint clean on changed
+  files, jest 3348/3348.
+- **Go live.** Pink Paw approves the title "Pink Paw Knight" and the cat photos in the game, then merge
+  `feat/swordcat`, then set `NEXT_PUBLIC_SWORDCAT` (and `NEXT_PUBLIC_SWORDCAT_PICKER` for the picker) on Vercel.
+- **Still open.** Signed-out players see "open soon" until `TRUST_PROXY` or `CF_ORIGIN_SECRET` is set (guest route
+  answers 503). No `swordcat` donate source and no `swordcat_open` event. App export size not pruned. `og.jpg` says
+  "Eighteen lost kittens" (game fiction). `/shelter-payouts/give` may ignore `?cat=`. The treat panel has not been seen
+  inside the real `/swordcat` page with the live rail. `not-eligible` and `signed-out` show a generic error. The Heist
+  redirect is unchanged.

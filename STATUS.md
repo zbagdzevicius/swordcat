@@ -499,3 +499,13 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
 - **Tests.** `tests/unit/tt4.test.js` (11). Smoke: `brand:surfaces` checks the title logo vs the Skip link standalone
   and embedded (adds 360×740), `brand:rescue-bio` waits for the requested kitten's card, `camera:threat-visibility`
   tolerates one hidden ranged wind-up on phones.
+
+## TT4: real shelter cats and treats (integrated 2026-10-15; docs/TOKENTAILS-PLAN.md §12)
+- **Cats.** Every save slot (25) carries a real Pink Paw cat with its name, photo and live status ("Waiting for a
+  home" or "Recovering"). Judas, Simas, Raudvis and Zare keep their matched coats. The rest come from a seeded shuffle,
+  kept in `swordcat.shelter.v1`. Off tokentails.com the game uses the bundled snapshot and shows no status.
+- **Treat.** After each save the card offers "Send Pink Paw a treat for X". Embedded, the host sends it (no redirect).
+  Standalone, a new-tab link to the give page. One a day. Free and custody lines in every state.
+- **Tests.** `npm run test:unit` 1219. Smoke `treat:link`, `treat:panel` and `shelter:*` pass, with every write to
+  tokentails.com mocked or blocked. No real treat was sent.
+- **Open.** See §12.7 in the plan.

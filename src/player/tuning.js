@@ -59,7 +59,9 @@ export const TUNING = Object.freeze(Object.fromEntries(Object.keys(DEFAULTS).map
 /** Enemy states that count as "targeting her" for Standing Ground (§7.3). */
 export const PASSIVE_ENEMY_STATES = Object.freeze(['idle', 'patrol', 'return', 'die', 'dead', 'stagger', 'flee', 'sleep',
   // M2 types / bosses: dizzy bosses, napping or hidden enemies, a Bonehead pile, a Stealer running off with the loot
-  'dizzy', 'nap', 'hidden', 'hide', 'dormant', 'caged', 'scattered', 'reassemble', 'pile', 'escape', 'steal', 'intro']);
+  'dizzy', 'nap', 'hidden', 'hide', 'dormant', 'caged', 'scattered', 'reassemble', 'pile', 'escape', 'steal', 'intro',
+  // TT3 Catnip Cloud: on its back in the catnip
+  'giddy']);
 
 /**
  * Standing Ground threat test (§7.3): an alerted, active enemy within `r` (XZ) that is targeting her — not one whose

@@ -45,24 +45,31 @@ The smoke refuses to run without `dist-test/` (it needs `window.__GAME__`, which
 
 ## Controls (iso camera, research/CONTROLS_SPEC.md; `?cam=classic` keeps the old orbit camera)
 A fixed-yaw three-quarter top-down camera (38° FOV, ~50° pitch, 12.4 m on desktop, 12 m on phones, portrait 50° / 58°)
-follows her; you never steer the camera. Keyboard + mouse uses the `hybrid` preset (Settings → Controls also offers
-`moba`, `diablo`, `mouseOnly`, `keyboardOnly`):
+follows her; you never steer the camera. Keyboard + mouse uses the `hybrid` preset (TOKENTAILS-PLAN §11.2, TT3).
+Settings → Controls also offers `moba` (RMB moves, Shift+RMB queues, Space tumbles, T jumps), `diablo` (LMB moves),
+`mouseOnly` (RMB moves) and `keyboardOnly`. No binding uses Ctrl, Alt, Meta or an F-key, and a key pressed with Ctrl
+or Meta held does nothing in the game (Ctrl+W and Ctrl+D stay the browser's). Pause → Controls rebinds keyboard and
+mouse keys (13 actions; a used key swaps; Ctrl, Alt, Meta, F-keys and Esc are refused; "Reset keys to default").
 
 | Action | Keyboard / mouse | Gamepad | Touch |
 |---|---|---|---|
-| Move | RMB click / hold (path-finds, auto-jumps fences and gaps; Ctrl+RMB queues), or WASD | left stick | floating joystick (left side), or tap / long-press the ground |
+| Move | WASD / arrows (click-to-move in `moba` / `diablo` / `mouseOnly`) | left stick | floating joystick (left side), or tap / long-press the ground |
 | Attack, hold to charge (Holy) | LMB, toward the cursor (J) | X (aim with RS) | ⚔ tap / hold, drag to aim |
-| Attack order | RMB on a foe (walks in, auto-chains); X + click = attack-move | — | tap a foe |
-| Stand (hold) / parry (timing) | Space (L, Mouse 5): snaps to the incoming threat | LB | 🛡 hold |
-| Tumble | Shift (K, Mouse 4): toward WASD, else the cursor | B | Tumble button, or swipe the free ground |
-| Jump (Attack in the air = Pounce) | F | A | Jump |
-| Interact / talk | click it (LMB or RMB), or E | Y | tap it, or "!" |
-| Kitten ability | Q: tap = cast at the cursor, hold = aim | LT (+ RS) | portrait tap = smart cast, drag = aim, ✕ cancels |
-| Milk / Meow / Golden Hour | R / C / V (or Space + LMB) | D-pad ↑ / L3 / RT | buttons |
-| Select / cycle target | LMB / RMB on a foe, Tab (Shift+Tab back) | RB, D-pad ← → | tap a foe |
-| Zoom / camera lock / centre / peek | wheel / Y / F1 or Home / Alt or MMB | R3 cycles / — / — / D-pad ↓ + RS | pinch |
+| Attack order | LMB on a foe (walks in, auto-chains); X + click = attack-move | none | tap a foe |
+| Stand (hold) / parry (timing) | RMB, Q or L: snaps to the incoming threat (RMB over the HUD too) | LB or RB | 🛡 hold |
+| Tumble; hold = sprint | Shift (K, Mouse 4): toward WASD, else the cursor; held 0.18 s = sprint | B (hold) | Tumble button (hold), or swipe the free ground |
+| Jump (Attack in the air = Pounce) | Space | A | Jump |
+| Interact / talk | click it (LMB), or E | Y | tap it, or "!" |
+| Paw Trick (tap = cast, hold = aim) / pick one | F / 1, 2, 3 | RT / hold RT + D-pad ← → ↑ | ":3" / long press ":3" |
+| Kitten ability | G: tap = cast at the cursor, hold = aim | LT (+ RS) | portrait tap = smart cast, drag = aim, ✕ cancels |
+| Milk / Meow / Golden Hour | R / C / V (or Stand + Attack within 0.1 s) | D-pad ↑ / L3 / LB + X within 0.1 s | buttons |
+| Select / cycle target | LMB on a foe, Tab (Shift+Tab back) | R3, D-pad ← → | tap a foe |
+| Zoom / camera lock / centre / peek + ranges | wheel / Y / Home / Z or MMB | View cycles / none / none / D-pad ↓ + RS | pinch |
 | Stop | H | — | — |
 | Pause; hold to skip cutscenes | Esc or P | Start | ❚❚ |
+
+Shift is the Tumble key on purpose (§11.7 #6): on Windows, five quick Shift presses can open the Sticky Keys dialog, so
+K and the back mouse button Tumble too, and the controls card says so.
 
 Ground indicators: the pink hero ring (its notch points where the sword goes), the Stand fan (gold for the parry
 window), strike wedges under every melee wind-up, the shrinking parry ring (touch / Kitten), selection, hover and aggro
@@ -415,3 +422,48 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
     bios show on the rescue card with no nearby "made up" label (credits only). (6) Founder's 5180 dev server is down
     (agents may not restart it). (7) tokentails worktree: revert `client/next-env.d.ts`, drop `client/.vitest/`
     before any commit; production embed allowlist still lists `localhost:3000`. (8) Everything is uncommitted.
+
+## TT3 (integrated 2026-10-15; docs/TOKENTAILS-PLAN.md §11)
+- **Controls (K).** The §11.2 table is live: `hybrid` walks on WASD, LMB attacks (LMB on a foe or a breakable gives
+  the attack order and swings only in reach), RMB / Q / L = the Stand (RMB over the HUD still stands), Space = jump,
+  Shift = Tumble (held 0.18 s = `sprint`), F = the Paw Trick, 1 / 2 / 3 pick one, G = the kitten, Z / MMB = peek and
+  ranges, Esc / P pause (hold either skips). Pad: LB / RB Stand, R3 select, RT Paw Trick (hold RT + D-pad ← → ↑
+  picks), View zoom, Golden Hour = Stand + X within 0.1 s. No binding uses Ctrl, Alt, Meta or an F-key; a keydown
+  with Ctrl or Meta sets nothing (`Input._keyDown`). `moba` keeps RMB moves with Shift+RMB queueing (Space tumbles, T
+  jumps there). The controls card moved into the pause menu and rebinds 13 keyboard and mouse actions (swap on
+  conflict, refuses Ctrl / Alt / Meta / F-keys / Esc and the walking keys, "Reset keys to default"). Prompts, loading
+  tips, the skip line ("Hold Esc or P"), the docs and every smoke file follow the new keys. The 390×844 "Skip
+  practice" link sits top-left now (no overlap with the co-brand pill; boxes measured disjoint).
+- **WASD onboarding note.** With no move click in `hybrid`, a desktop player crosses the 1.0 m practice fence with a
+  held Space (a tapped Space is cut to a 0.3 m hop; the `tut.jump` hint shows at the fence). Diagonal walking along the
+  trail rubs on the north gate posts; the bot and the smoke walker slide on the side key when stuck.
+- **Onboarding bot (K's dev server, WASD mouse runs):** Play → `onboard.firstFight` median 48.1 s mouse (4 seeds) /
+  44.2 s touch, `onboard.done` 142.1 s / 161.6 s, skip runs 11.2 s; 0 first-fight deaths; way shown ≤ 1 s at every
+  step; smallest print 25.3 px. (T reruns it on `dist-test`.)
+- **Smoke triage (K):** the 4 fence-hop blocks follow the TT2 rule (one open hop link by the barn door, x −14.5);
+  `brand:surfaces` is fixed by the CSS; `combat:touch` (meadow rats wandered in: despawned first), `enemies:onscreen-
+  rule` (the guide look-ahead leans the frame: the spot search covers both sides), `world:fog-audit` (lifted presets:
+  the §4.2 table is a ceiling with a 30 % floor), `audio:unlock` (waits for a still camera focus instead of 150 ms);
+  `characters:ttcat` and `enemies:hyena` passed unchanged on K's server.
+- **Characters (C):** all 7 P1 defects fixed (pug and Barkus neck, eyes seated inside the head outline, sword off
+  Clem's face, upright tail with no hull rings, Sir Wobble's face and peg, Grizzlechop's hat and cheese shield, Simas's
+  bucket). P2 8 to 18 fixed: no maroon ear / cape-lining bands, no crown or inner-ear strands, Clem `happy`, no
+  under-eye crescent, Token Tails Cat belly + tail + coin at chest height, no sleepy kittens, Judas blaze, Zare forehead
+  stripes, Simas lighter mask, Pearl's bigger round bow, no Barkus helm band, smooth rats / Grizzlechop / spider / crow,
+  crisper hyena spots, no disc in the jelly, bigger pikeman pupils, plain crossbow hood, crow tuft, bigger Cacklejaw plate.
+- **Paw Tricks (A).** One swappable Paw Trick slot (F / RT / the ":3" button; 1 / 2 / 3, hold RT + D-pad or a long
+  press pick one). ":3" Coin Toss (boomerang, unlocked at the end of the meadow), Ribbon Twirl (Jump again in the air
+  and hold, unlocked on entering the forest), Catnip Cloud (foes go `giddy` on their backs and their plates show the
+  friend word, unlocked 1.6 s after entering the town). Nothing is owned before the first fight. Code in
+  `src/player/tricks/`, VFX in `src/fx/TrickFX.js`, 9 zzfx sounds, `docs/api/tricks.md`. Not built: Ribbon Lasso,
+  Purr Shield.
+- **Integration (2026-10-15).** `npm run test:unit` 1188 / 1188. Full `npm run smoke` (272 blocks, ~50 min): run 1 had 4
+  red blocks, run 2 had 1, run 3 was fully green (3012 s), run 4 had 1 (`art:warm` gate luma 0.499), and run 5 on the
+  final tree was fully green (272 / 272, 2958 s). Fixes: 6 smoke blocks were test-side (`core:touch` stray rats, `characters:ttcat` /src import, `story:tutorial` bonks by LMB on the dummy,
+  `tricks:cloud` giddy sampling, `enemies:hyena` gloat fallback, `brand:surfaces` results reset); two game fixes: the
+  844×390 pause menu now fits all 7 rows (the Controls row had pushed "Quit to Title" off screen), and `gate_dusk`
+  exposure 1.10 → 1.13 (its luma sat on the 0.50 floor). Details in
+  `requests/RESOLVED.md`. The embed copy is rebuilt (`npm run build:tokentails`).
+- **Open (optional):** a per-type `giddyPose` hook (C); `meadow.js` still builds the old Wobble geometry before
+  `PropActor.js` re-dresses it; `enemies:hyena` sometimes needs its gloat fallback in a full run (run 3 did, run 5 did not) (no hit lands on her in
+  25 s), which is a WARN, not a failure.

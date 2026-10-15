@@ -83,6 +83,24 @@ export default [
       // CONTROLS_SPEC §2.8 / PERF §10.5: the ears ride the iso focus, written at 20 Hz (the listener is not in the scene graph)
       const listeners = await t.G(() => { const c = window.__GAME__.ctx; let n = 0; c.scene.traverse((o) => { if (o.type === 'AudioListener') n++; }); return n; });
       t.assert(listeners === 0, `no AudioListener in the scene graph (${listeners})`);
+      // TT3 K triage (the order-dependent flake): the ears are written at 20 Hz, so while the camera still pans (the
+      // guide look-ahead easing toward a target) they trail a moving focus. Measure only once the focus is still: no
+      // retry, a precondition (focus moved < 2 cm over 250 ms), then two listener ticks (150 ms)
+      const still = await t.page.evaluate(() => new Promise((res) => {
+        const c = window.__GAME__.ctx, t0 = performance.now();
+        let last = { x: c.cam.focus.x, z: c.cam.focus.z, t: t0 };
+        const tick = () => {
+          const f = c.cam.focus, now = performance.now();
+          if (now - last.t >= 250) {
+            if (Math.hypot(f.x - last.x, f.z - last.z) < 0.02) { res(true); return; }
+            last = { x: f.x, z: f.z, t: now };
+          }
+          if (now - t0 > 8000) { res(false); return; }
+          requestAnimationFrame(tick);
+        };
+        tick();
+      }));
+      t.assert(still, 'the iso focus settles (no endless pan) within 8 s');
       await t.wait(150);
       const ears = await t.G(() => { const c = window.__GAME__.ctx, f = c.cam.focus, l = c.audio.debugState().listener; return c.cam.isIso && l ? Math.hypot(l[0] - f.x, l[2] - f.z) : 0; });
       t.assert(ears < 0.3, `the listener sits at the iso focus (${ears})`);

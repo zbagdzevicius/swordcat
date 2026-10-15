@@ -396,6 +396,9 @@ export function toonable(m) {
  */
 export function toonify(root, typeKey) {
   if (!root) return 0;
+  // TT3: the low-poly animal GLBs (rats, Grizzlechop, spider, crow) read faceted under the toon ramp: smooth their
+  // skinned bodies' normals once per shared geometry (positions untouched)
+  if (SMOOTH_TYPES.test(typeKey ?? '')) root.traverse((o) => { if (o.isSkinnedMesh && !o.userData.sharedProp) smoothNormals(o.geometry); });
   const done = new Map();
   root.traverse((o) => {
     if (!o.isMesh || o.userData.sharedProp) return;
@@ -426,6 +429,45 @@ export function toonify(root, typeKey) {
   });
   for (const src of done.keys()) src.dispose();
   return done.size;
+}
+
+/** Enemy types whose GLB bodies get smooth normals (TT3). */
+export const SMOOTH_TYPES = /^(rat_|boss_grizzlechop|spider|crow)/;
+
+/**
+ * Average the normals of every vertex that shares a position (welded by a 1e-4 m key), in place, once per geometry
+ * (`userData.smoothNormals`). Flat-shaded low-poly bodies turn soft without a topology change. Returns vertices touched.
+ * @param {THREE.BufferGeometry} g
+ */
+export function smoothNormals(g) {
+  const P = g?.attributes?.position, N = g?.attributes?.normal;
+  if (!P || !N || g.userData.smoothNormals) return 0;
+  g.userData.smoothNormals = true;
+  const key = new Int32Array(P.count), ids = new Map();
+  for (let i = 0; i < P.count; i++) {
+    const k = `${Math.round(P.getX(i) * 1e4)},${Math.round(P.getY(i) * 1e4)},${Math.round(P.getZ(i) * 1e4)}`;
+    let id = ids.get(k); if (id === undefined) ids.set(k, (id = ids.size)); key[i] = id;
+  }
+  // area-weighted face normals summed per welded position
+  const acc = new Float32Array(ids.size * 3), I = g.index, t = I ? I.count : P.count;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let f = 0; f + 2 < t; f += 3) {
+    const i0 = I ? I.getX(f) : f, i1 = I ? I.getX(f + 1) : f + 1, i2 = I ? I.getX(f + 2) : f + 2;
+    a.fromBufferAttribute(P, i0); b.fromBufferAttribute(P, i1); c.fromBufferAttribute(P, i2);
+    c.sub(b); a.sub(b); c.cross(a);
+    for (const i of [i0, i1, i2]) { const o = key[i] * 3; acc[o] += c.x; acc[o + 1] += c.y; acc[o + 2] += c.z; }
+  }
+  for (let i = 0; i < P.count; i++) {
+    const o = key[i] * 3; a.set(acc[o], acc[o + 1], acc[o + 2]);
+    if (a.lengthSq() < 1e-20) continue;
+    a.normalize();
+    // keep the winding's side: a normal that would flip against the old one keeps the old one
+    b.fromBufferAttribute(N, i);
+    if (a.dot(b) < 0) continue;
+    N.setXYZ(i, a.x, a.y, a.z);
+  }
+  N.needsUpdate = true;
+  return P.count;
 }
 
 /** A shared (asset-cache) lit GLB material that would otherwise keep a program of its own (weapons, shared gear). */

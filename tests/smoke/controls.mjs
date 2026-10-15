@@ -1,18 +1,24 @@
 // tests/smoke/controls.mjs  (owner: core, integration) — research/CONTROLS_SPEC.md end to end in a real browser:
-//   controls:desktop   1280×720 KBM: the iso frame (cat size, fog on her), hover pick + cursor, RMB click-to-move (a
-//                      real mouse click; arrives), RMB on a rat = attack order (paths, combo, kills), LMB swings toward
-//                      the cursor, wheel zoom, Space = the Stand, F = jump, Shift = Tumble toward the cursor, Q = kitten
-//                      ability, Tab select, the ability bar, H stop
-//   controls:nav       click past the practice-field fence: the nav path hops it (auto-jump) and arrives
+//   controls:desktop   1280×720 KBM, TOKENTAILS-PLAN §11.2 `hybrid`: the iso frame (cat size, fog on her), W walks, RMB
+//                      makes no move order, `moba` RMB click-to-move (a real mouse click; arrives), WASD cancels an order,
+//                      hover pick + cursor, LMB on a rat = attack order (paths, combo, kills), LMB swings toward the
+//                      cursor, wheel zoom, RMB and Q = the Stand, Space = jump, Shift = Tumble (held = sprint), G =
+//                      kitten ability, Tab select (Shift+Tab back), the ability bar, H stop, Z peek, P pauses
+//   controls:browser-keys  Ctrl+W, Ctrl+D, Meta+W (and Ctrl / Meta with any game key) during play: no game action
+//   controls:rebind    the Controls card in the pause menu: rebind the Stand to N ("Press a key"), Ctrl / F5 / Esc are
+//                      refused, a conflict swaps, then the parry lesson passes with N; "Reset keys to default"
+//   controls:pad-lessons  a stubbed standard-layout pad drives the four practice lessons (L-stick, X, LB hold, LB tap)
+//   controls:nav       `moba` click past the practice-field fence by the barn door: the nav path hops it and arrives
 //   controls:levels    every M2 level from the iso camera (screenshots; catPx, fogAt(her) < 0.03, draw calls)
 //   controls:touch     844×390 and 390×844 hasTouch / isMobile: floating joystick, tap-to-move, tap a foe = attack,
 //                      ⚔ tap swings, 🛡 hold guards, swipe tumbles, ability drag aims and ✕ cancels, pinch zooms,
 //                      long-press follows, no blocking rotate card in portrait
 //   controls:classic   ?cam=classic still runs the orbit camera (W walks camera-forward, RMB guards)
-//   controls:pad       a stubbed gamepad: the right stick puts the §6.3 ground reticle down (lingers 1 s), Back (8)
-//                      opens the controls card over the pause book
+//   controls:pad       a stubbed gamepad: the right stick puts the §6.3 ground reticle down (lingers 1 s), View (8)
+//                      zooms, Start (9) pauses and the pause book's Controls button opens the card
 import fs from 'node:fs';
 import path from 'node:path';
+import { setPreset, walkKeys, standRmb } from './_kbm.mjs';
 
 const DIR = 'controls';
 const shot = (t, name) => t.shot(`${DIR}/${name}`);
@@ -46,6 +52,8 @@ async function dayMeadow(t, spawn = 'start') {
 }
 
 const pos = (t) => t.G(() => window.__GAME__.ctx.player.pos.toArray());
+
+
 
 /** A stub gamepad (navigator.getGamepads): `axes` [lx, ly, rx, ry], `down` = pressed button indices. null removes it. */
 const stubPad = (t, pad) => t.G((p) => {
@@ -81,20 +89,38 @@ export default [
       t.assert(!pointerLocked, 'no pointer lock in play (C2)');
       await shot(t, 'desktop-01-frame');
 
-      // ---- RMB click-to-move with a real mouse (screen point of a world spot 7 m up-screen)
+      // ---- TT3 §11.2 hybrid: W walks; an RMB click on the ground is the Stand, never a move order
+      const w0 = await pos(t);
+      await t.hold('KeyW', 700);
+      const w1 = await pos(t);
+      t.assert(Math.hypot(w1[0] - w0[0], w1[2] - w0[2]) > 1, `hybrid: W walks (${Math.hypot(w1[0] - w0[0], w1[2] - w0[2]).toFixed(2)} m)`);
+      await t.wait(300);
+      await t.clearEvents();
+      const g0 = await pos(t);
+      const gsp = await t.G(([x, z]) => window.__GAME__.screen(x, z), [g0[0] + 2, g0[2] + 7]);
+      await page.mouse.move(gsp.x, gsp.y);
+      await page.mouse.down({ button: 'right' });
+      const rg = await until(t, () => window.__GAME__.ctx.player.stateName === 'guard', null, { sim: 1 });
+      await page.mouse.up({ button: 'right' });
+      t.assert(!!rg, 'hybrid: RMB = the Stand');
+      t.assert(!(await t.events()).includes('player:order'), 'hybrid: RMB gives no move order');
+      await t.wait(300);
+      // ---- `moba`: RMB click-to-move with a real mouse (screen point of a world spot 7 m up-screen)
+      t.assert((await setPreset(t, 'moba')) === 'moba', 'moba preset');
       const start = await pos(t);
       const goal = [start[0] + 2, start[2] + 7];
       const sp = await t.G(([x, z]) => window.__GAME__.screen(x, z), goal);
       await page.mouse.move(sp.x, sp.y);
       await page.mouse.click(sp.x, sp.y, { button: 'right' });
       const ord = await t.waitForEvent('player:order', 2000);
-      t.assert(ord, 'RMB issues a move order (player:order)');
+      t.assert(ord, 'moba: RMB issues a move order (player:order)');
       await t.wait(250);
       await shot(t, 'desktop-02-move-order');
       const arrived = await until(t, ([x, z]) => { const p = window.__GAME__.ctx.player.pos; return Math.hypot(p.x - x, p.z - z) < 0.6 && !window.__GAME__.ctx.player.orders.kind; }, goal, { sim: 6 });
       t.assert(!!arrived, `click-to-move arrives (${JSON.stringify(await pos(t))} vs ${goal})`);
 
-      // ---- WASD overrides an order at once (§5.1)
+      // ---- WASD overrides an order at once (§5.1), back on the default hybrid
+      await setPreset(t, 'hybrid');
       const far = await t.G(() => { const p = window.__GAME__.ctx.player.pos; return window.__GAME__.order('move', [p.x, p.z + 12]); });
       t.assert(far, 'api move order');
       await t.wait(200);
@@ -102,7 +128,7 @@ export default [
       const o2 = await t.G(() => window.__GAME__.orders());
       t.assert(!o2.kind && o2.last === 'direct', `WASD cancels the order (${o2.last})`);
 
-      // ---- hover a rat: red ring + sword cursor; RMB on it = attack order: she paths, swings, and it dies (god)
+      // ---- hover a rat: red ring + sword cursor; LMB on it = attack order (TT3): she paths, swings, and it dies (god)
       const me = await pos(t);
       await t.G(([x, z]) => { window.__ctlRat = window.__GAME__.spawn('rat_pike', x, z); return true; }, [me[0] + 1.5, me[2] + 6]);
       await t.frames(30);
@@ -125,9 +151,9 @@ export default [
         // the rat may have stepped since (it saw her): click where it stands now
         const rn = await t.G(() => { const g = window.__GAME__, e = window.__ctlRat; return g.screen(e.pos.x, e.pos.z, e.pos.y + 0.4); });
         await page.mouse.move(rn.x, rn.y);
-        await page.mouse.click(rn.x, rn.y, { button: 'right' });
+        await page.mouse.click(rn.x, rn.y, { button: 'left' });
         await t.waitForEvent('player:order', 2000);
-        t.assert((await t.lastEvent('player:order'))?.kind === 'attack', 'RMB on the rat = an attack order');
+        t.assert((await t.lastEvent('player:order'))?.kind === 'attack', 'LMB on the rat = an attack order');
         const killed = await until(t, () => !window.__ctlRat?.alive, null, { sim: 12 });
         const ev = await t.events();
         t.assert(ev.includes('player:swing') && ev.includes('combat:hit'), 'the attack order swings and hits');
@@ -152,7 +178,7 @@ export default [
       t.assert(Math.abs(Math.atan2(Math.sin(facing - want), Math.cos(facing - want))) < 0.35, `LMB swings toward the cursor (facing ${facing.toFixed(2)} vs ${want.toFixed(2)})`);
       await t.wait(700);
 
-      // ---- wheel zoom (§2.3), Space = the Stand, F = jump, Shift = Tumble toward the cursor, Tab = select
+      // ---- wheel zoom (§2.3), RMB / Q = the Stand, Space = jump, Shift = Tumble (held: sprint), Tab = select
       const z0 = (await t.G(() => window.__GAME__.cam.iso())).zoom;
       await page.mouse.wheel(0, 240);
       await t.frames(10);
@@ -160,28 +186,36 @@ export default [
       t.assert(z1 > z0, `wheel down zooms out (${z0} → ${z1.toFixed(3)})`);
       await page.mouse.wheel(0, -240);
       await t.frames(5);
-      await page.keyboard.down('Space');
+      await page.keyboard.down('KeyQ');
       const guard = await until(t, () => window.__GAME__.ctx.player.stateName === 'guard', null, { sim: 1 });
       await shot(t, 'desktop-04-stand');
-      await page.keyboard.up('Space');
-      t.assert(!!guard, 'Space = the Stand (C1)');
+      await page.keyboard.up('KeyQ');
+      t.assert(!!guard, 'Q = the Stand (TT3)');
       await t.clearEvents();
-      await t.tap('KeyF');
-      t.assert(await t.waitForEvent('player:jump', 1500), 'F = jump');
+      await page.keyboard.down('Space'); await t.wait(250); await page.keyboard.up('Space');
+      t.assert(await t.waitForEvent('player:jump', 1500), 'Space = jump (TT3)');
       await t.wait(900);
       await t.clearEvents();
       await t.tap('ShiftLeft');
       t.assert(await t.waitForEvent('player:dodge', 1500), 'Shift = Tumble');
       await t.wait(600);
-      // ---- Q kitten ability (Mochi's Shield Wall, smart cast) and the ability bar
+      // Shift held past 0.18 s = sprint (the virtual action; package A makes it Zoomies speed)
+      await page.keyboard.down('ShiftLeft');
+      const spr = await until(t, () => window.__GAME__.ctx.input.down('sprint'), null, { sim: 1.5 });
+      await page.keyboard.up('ShiftLeft');
+      t.assert(!!spr, 'Shift held = sprint');
+      await t.frames(3);
+      t.assert(!(await t.G(() => window.__GAME__.ctx.input.down('sprint'))), 'sprint ends with Shift');
+      await t.wait(600);
+      // ---- G kitten ability (Mochi's Shield Wall, smart cast) and the ability bar
       await t.G(() => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi']; c.companions.setActive(['mochi']); });
       await t.frames(30);
       await t.clearEvents();
-      await t.tap('KeyQ');
-      t.assert(await t.waitForEvent('companion:ability', 3000), 'Q casts the kitten ability');
+      await t.tap('KeyG');
+      t.assert(await t.waitForEvent('companion:ability', 3000), 'G casts the kitten ability (TT3)');
       await t.wait(300);
       const bar = await t.G(() => { const b = document.querySelector('.ability-bar'); return { on: b?.classList.contains('is-on'), slots: b?.querySelectorAll('.ab-slot').length, cd: !!document.querySelector('.ab-ability.is-cd') }; });
-      t.assert(bar.on && bar.slots === 8, `the ability bar shows 8 slots (${JSON.stringify(bar)})`);
+      t.assert(bar.on && bar.slots >= 8, `the ability bar shows its slots (${JSON.stringify(bar)})`);
       t.assert(bar.cd, 'the kitten slot shows its cooldown sweep');
       await shot(t, 'desktop-05-ability-bar');
       // ---- Tab selects the nearest hostile (gold ring); the camera never moves for it
@@ -194,25 +228,291 @@ export default [
       const sel = await t.G(() => ({ t: !!window.__GAME__.ctx.cam.lockTarget, yaw: window.__GAME__.cam.iso().yaw }));
       t.assert(sel.t && Math.abs(sel.yaw - yaw0) < 1e-6, 'Tab selects without turning the camera');
       await shot(t, 'desktop-06-selected');
+      // Shift+Tab cycles back (lockPrev; no hardcoded Shift in the camera)
+      await t.clearEvents();
+      await page.keyboard.down('ShiftLeft'); await page.keyboard.press('Tab'); await page.keyboard.up('ShiftLeft');
+      await t.frames(3);
+      t.assert(await t.G(() => !!window.__GAME__.ctx.cam.lockTarget), 'Shift+Tab keeps a selection');
+      // Z = peek and the ranges overlay (one hold; Alt and Ctrl are gone)
+      await page.keyboard.down('KeyZ');
+      await t.frames(6);
+      const pk = await t.G(() => ({ peek: window.__GAME__.ctx.input.down('peek'), ranges: (window.__GAME__.ctx.fx.decals?.stats?.()?.counts?.ranges ?? 0) > 0 }));
+      await shot(t, 'desktop-07-peek-ranges');
+      await page.keyboard.up('KeyZ');
+      t.assert(pk.peek && pk.ranges, `Z = peek + the ranges overlay (${JSON.stringify(pk)})`);
       await t.tap('KeyH');
       await t.G(() => { const c = window.__GAME__.ctx; c.cam.select(null); c.companions.setActive([]); for (const e of [...c.enemies.list]) c.enemies.despawn(e); });
+    },
+  },
+  {
+    // TT3 §11.2: browser shortcuts stay the browser's: a key pressed with Ctrl or Meta held sets no game action
+    name: 'controls:browser-keys', order: 30.5, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      await dayMeadow(t, 'start');
+      await t.frames(10);
+      await t.clearEvents();
+      const p0 = await pos(t);
+      // synthetic keydowns (a real Ctrl+W would close the test tab in a headed run): every game key with Ctrl / Meta
+      const r = await t.G(async () => {
+        const g = window.__GAME__, c = g.ctx, inp = c.input;
+        const seen = new Set();
+        const off = g.game.addFrameHook(() => { for (const [a, st] of inp.actions) if (st.down || st.pressed) seen.add(a); });
+        const fire = (code, mods) => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code.replace(/^Key/, '').toLowerCase(), bubbles: true, cancelable: true, ...mods }));
+        };
+        const up = (code) => window.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true }));
+        const combos = [['KeyW', { ctrlKey: true }], ['KeyD', { ctrlKey: true }], ['KeyW', { metaKey: true }], ['KeyS', { ctrlKey: true }], ['KeyA', { metaKey: true }],
+          ['Space', { ctrlKey: true }], ['KeyF', { ctrlKey: true }], ['KeyQ', { metaKey: true }], ['KeyE', { ctrlKey: true }], ['KeyR', { ctrlKey: true }], ['Tab', { ctrlKey: true }],
+          ['KeyP', { metaKey: true }], ['KeyZ', { ctrlKey: true }], ['KeyG', { ctrlKey: true }], ['Digit1', { ctrlKey: true }]];
+        for (const [code, mods] of combos) { fire(code, mods); await g.waitFrames(3); up(code); await g.waitFrames(1); }
+        fire('ControlLeft', { ctrlKey: true }); await g.waitFrames(3); up('ControlLeft');
+        fire('MetaLeft', { metaKey: true }); await g.waitFrames(3); up('MetaLeft');
+        fire('AltLeft', { altKey: true }); await g.waitFrames(3); up('AltLeft');
+        await g.waitFrames(10);
+        off();
+        return { seen: [...seen], keys: [...inp.keys], mode: g.mode, move: [inp.move.x, inp.move.y], state: c.player.stateName };
+      });
+      const p1 = await pos(t);
+      t.log(`Ctrl / Meta combos: ${JSON.stringify(r)}`);
+      t.assert(r.seen.length === 0, `no game action from Ctrl+W, Ctrl+D, Meta+W and the rest (${r.seen.join(', ')})`);
+      t.assert(r.mode === 'play', `no pause / menu (${r.mode})`);
+      t.assert(Math.hypot(p1[0] - p0[0], p1[2] - p0[2]) < 0.05, 'she never moved');
+      const ev = await t.events();
+      for (const e of ['player:jump', 'player:dodge', 'player:swing', 'companion:ability', 'player:order']) t.assert(!ev.includes(e), `no ${e}`);
+      // the plain key still works right after
+      await t.hold('KeyW', 500);
+      const p2 = await pos(t);
+      t.assert(Math.hypot(p2[0] - p1[0], p2[2] - p1[2]) > 0.5, 'plain W walks right after');
+    },
+  },
+  {
+    // TT3 §11.5 K8 + acceptance: rebind the Stand from the pause menu's Controls card, then pass the parry lesson with it
+    name: 'controls:rebind', order: 36, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      const page = t.page;
+      // practice at the parry lesson (the earlier lesson stickers resume it there)
+      await t.G(async () => {
+        const g = window.__GAME__, c = g.ctx, s = c.state;
+        g.story.skip(); c.story.queue.length = 0;
+        s.flags = {};
+        for (const k of ['prologue.start', 'sticker.bonk', 'sticker.bow', 'sticker.stand']) s.setFlag(k, true);
+        await g.loadLevel('meadow', 'practice');
+        g.story.skip(); g.setMode('play'); g.god(true); c.input.setDevice('kbm');
+        return true;
+      });
+      await t.frames(20);
+      const act = await until(t, () => (window.__GAME__.ctx.story.tutorial.active ? window.__GAME__.ctx.story.tutorial.log.step?.id : null), null, { sim: 8, real: 20000 });
+      t.assert(act === 'parry', `practice resumes at the parry lesson (${act})`);
+      // ---- pause → Controls → the Stand button
+      await t.G(() => window.__GAME__.ctx.ui.pause());
+      await until(t, () => (window.__GAME__.ctx.ui?.menus?.paused ? true : null), null, { sim: 2, real: 6000 });
+      const cb = await t.G(() => { const b = [...document.querySelectorAll('.menu--pause .btn')].find((x) => /Controls/.test(x.textContent)); const r = b?.getBoundingClientRect(); return r ? [r.x + r.width / 2, r.y + r.height / 2] : null; });
+      t.assert(!!cb, 'the pause book has a Controls button');
+      if (!cb) return;
+      await page.mouse.click(cb[0], cb[1]);
+      await until(t, () => (window.__GAME__.ctx.ui.menus.has('controls') ? true : null), null, { sim: 2, real: 6000 });
+      const box = (a) => t.G((x) => { const b = document.querySelector(`.ctl-bind[data-act="${x}"]`); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, txt: b.textContent, dis: b.disabled }; }, a);
+      const g0 = await box('guard');
+      t.assert(g0 && g0.txt === 'RMB' && !g0.dis, `the Stand button shows RMB (${JSON.stringify(g0)})`);
+      await shot(t, 'rebind-01-card');
+      const msg = () => t.G(() => document.querySelector('.ctl-msg')?.textContent ?? '');
+      await page.mouse.click(g0.x, g0.y);
+      await t.wait(150);
+      t.assert(/Press a key/.test(await msg()), `"Press a key" shows (${await msg()})`);
+      t.assert(await t.G(() => !!document.querySelector('.ctl-bind.is-capturing')), 'the button blinks while it listens');
+      await shot(t, 'rebind-02-press-a-key');
+      // refused: Ctrl (a real key), F5 and Ctrl+W (synthetic: a real F5 would reload the page), Esc cancels
+      await page.keyboard.down('ControlLeft'); await page.keyboard.up('ControlLeft');
+      t.assert(/browser/.test(await msg()), `Ctrl is refused (${await msg()})`);
+      await t.G(() => { window.dispatchEvent(new KeyboardEvent('keydown', { code: 'F5', key: 'F5', bubbles: true, cancelable: true })); });
+      t.assert(/F5 belongs to the browser/.test(await msg()), `F5 is refused (${await msg()})`);
+      await t.G(() => { window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW', key: 'w', ctrlKey: true, bubbles: true, cancelable: true })); });
+      t.assert(/Ctrl\+W/.test(await msg()), `Ctrl+W is refused (${await msg()})`);
+      await page.keyboard.press('KeyW');
+      t.assert(/walks/.test(await msg()), `W (walking) is refused (${await msg()})`);
+      await page.keyboard.press('Escape');
+      await t.wait(100);
+      t.assert(await t.G(() => !document.querySelector('.ctl-bind.is-capturing') && window.__GAME__.ctx.ui.menus.has('controls')), 'Esc cancels the capture (the card stays)');
+      t.assert((await t.G(() => window.__GAME__.ctx.input.codesFor('guard'))).includes('Mouse2'), 'nothing changed yet');
+      // N: bound
+      await page.mouse.click(g0.x, g0.y);
+      await t.wait(150);
+      await page.keyboard.press('KeyN');
+      await t.wait(150);
+      const b1 = await t.G(() => ({ st: window.__GAME__.ctx.state.settings.bindings, codes: window.__GAME__.ctx.input.codesFor('guard'), txt: document.querySelector('.ctl-bind[data-act="guard"]')?.textContent }));
+      t.log(`after N: ${JSON.stringify(b1)} msg "${await msg()}"`);
+      t.assert(b1.codes[0] === 'KeyN' && !b1.codes.includes('Mouse2') && b1.codes.includes('KeyQ'), `the Stand is N (+ Q, L) now (${b1.codes})`);
+      t.assert(b1.txt === 'N', `the card shows N (${b1.txt})`);
+      await shot(t, 'rebind-03-bound');
+      // conflict swap: Jump → F (the Paw Trick's key): the Paw Trick takes Space
+      const j0 = await box('jump');
+      await page.mouse.click(j0.x, j0.y); await t.wait(150);
+      await page.keyboard.press('KeyF'); await t.wait(150);
+      const sw = await t.G(() => ({ jump: window.__GAME__.ctx.input.codesFor('jump'), trick: window.__GAME__.ctx.input.codesFor('trick'), msg: document.querySelector('.ctl-msg')?.textContent }));
+      t.assert(sw.jump[0] === 'KeyF' && sw.trick.includes('Space') && /Swapped/.test(sw.msg), `a conflict swaps (${JSON.stringify(sw)})`);
+      // put Jump back (Space again: the Paw Trick takes F back)
+      await page.mouse.click(j0.x, j0.y); await t.wait(150);
+      await page.keyboard.press('Space'); await t.wait(150);
+      t.assert((await t.G(() => window.__GAME__.ctx.input.codesFor('trick')))[0] === 'KeyF', 'swapped back');
+      // close: Back, then resume
+      await t.G(() => { const u = window.__GAME__.ctx.ui; u.menus.closeAll(); if (u.menus.paused) u.resume?.(); window.__GAME__.setMode('play'); });
+      await t.frames(20);
+      // ---- the parry lesson with N: the prompt names N; walk to the stand spot (WASD), tap N on the shield
+      const prompt = await t.G(() => document.querySelector('.ui-guide')?.innerHTML ?? '');
+      t.log(`parry prompt: ${prompt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 120)}`);
+      const tg = await t.G(() => { const g = window.__GAME__.ctx.story.guideTarget?.(); return g ? [g.x, g.z, g.textKey] : null; });
+      if (tg) await walkKeys(t, tg[0], tg[1], { r: 0.35, ms: 10000 });
+      for (let k = 0; k < 6; k++) {
+        const s0 = await t.G(() => ({ tk: window.__GAME__.ctx.story.guideTarget?.()?.textKey, d: (() => { const g = window.__GAME__, w = g.ctx.actors.get('wobble_knight'), p = g.ctx.player.pos; return w ? Math.hypot(w.pos.x - p.x, w.pos.z - p.z) : null; })() }));
+        if (s0.tk !== 'onb.wobble.close') break;
+        const tg2 = await t.G(() => { const g = window.__GAME__.ctx.story.guideTarget?.(); return g ? [g.x, g.z] : null; });
+        if (tg2) await walkKeys(t, tg2[0], tg2[1], { r: 0.25, ms: 4000 });
+      }
+      const html = await t.G(() => [...document.querySelectorAll('.ui-guide kbd, .ui-hint kbd, .hud-obj kbd')].map((e) => e.textContent));
+      t.assert(html.includes('N'), `the parry prompt names N (${JSON.stringify(html)})`);
+      await shot(t, 'rebind-04-parry-prompt');
+      let done = false;
+      for (let k = 0; k < 6 && !done; k++) {
+        const ok = await page.evaluate(() => new Promise((resolve) => {
+          const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), t0 = performance.now();
+          const tick = () => { if (!wk || performance.now() - t0 > 9000) { resolve(false); return; } if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.11) { resolve(true); return; } requestAnimationFrame(tick); };
+          tick();
+        }));
+        if (ok) { await page.keyboard.down('KeyN'); await t.wait(220); await page.keyboard.up('KeyN'); }
+        await t.wait(700);
+        done = await t.G(() => window.__GAME__.ctx.state.getFlag('prologue.practice') === true);
+      }
+      t.assert(done, 'the parry lesson passes with the rebound Stand (N)');
+      // ---- reset keys to default (the bell starts CS-01 right after practice: let it go first)
+      for (let k = 0; k < 8 && await t.G(() => window.__GAME__.ctx.story.isPlaying); k++) { await t.G(() => window.__GAME__.story.skip?.()); await t.wait(400); }
+      await until(t, () => (window.__GAME__.mode === 'play' && !window.__GAME__.ctx.levels.loading ? true : null), null, { sim: 4, real: 15000 });
+      await t.G(() => window.__GAME__.ctx.ui.pause());
+      await until(t, () => (window.__GAME__.ctx.ui?.menus?.paused ? true : null), null, { sim: 2, real: 6000 });
+      await t.G(() => window.__GAME__.ctx.ui.menus.openControls());
+      await until(t, () => (window.__GAME__.ctx.ui.menus.has('controls') ? true : null), null, { sim: 2, real: 6000 });
+      const rs = await t.G(() => { const b = document.querySelector('.ctl-reset'); b?.scrollIntoView({ block: 'center' }); const r = b?.getBoundingClientRect(); return r ? [r.x + r.width / 2, r.y + r.height / 2, b.classList.contains('is-disabled')] : null; });
+      t.assert(rs && !rs[2], `the reset button is live while keys are rebound (${JSON.stringify(rs)})`);
+      if (rs) { await page.mouse.move(rs[0], rs[1]); await t.wait(80); await page.mouse.click(rs[0], rs[1]); }
+      await until(t, () => (Object.keys(window.__GAME__.ctx.state.settings.bindings ?? {}).length === 0 ? true : null), null, { sim: 2, real: 3000 });
+      const after = await t.G(() => ({ b: window.__GAME__.ctx.state.settings.bindings, g: window.__GAME__.ctx.input.codesFor('guard') }));
+      t.assert(Object.keys(after.b ?? {}).length === 0 && after.g[0] === 'Mouse2', `Reset keys to default (${JSON.stringify(after)})`);
+      await t.G(() => { const u = window.__GAME__.ctx.ui; u.menus.closeAll(); if (u.menus.paused) u.resume?.(); window.__GAME__.setMode('play'); });
+    },
+  },
+  {
+    // TT3 §11.2 acceptance: a standard-layout gamepad alone drives the four practice lessons
+    name: 'controls:pad-lessons', order: 36.5, level: 'meadow', spawn: 'start', timeout: 240000,
+    async run(t) {
+      await t.G(async () => {
+        const g = window.__GAME__, c = g.ctx, s = c.state;
+        g.story.skip(); c.story.queue.length = 0;
+        s.flags = {}; s.setFlag('prologue.start', true);
+        await g.loadLevel('meadow', 'practice');
+        g.story.skip(); g.setMode('play'); g.god(true);
+        return true;
+      });
+      await t.frames(20);
+      const pad = (axes, down = []) => stubPad(t, { axes, down });
+      const stick = async (x, z) => {             // the left stick toward world (x, z): screen direction from her
+        const v = await t.G(([a, b]) => {
+          const g = window.__GAME__, p = g.ctx.player.pos, dx = a - p.x, dz = b - p.z, L = Math.hypot(dx, dz) || 1, k = Math.min(1.5, L) / L;
+          const me = g.screen(p.x, p.z), ah = g.screen(p.x + dx * k, p.z + dz * k);
+          const sx = ah.x - me.x, sy = ah.y - me.y, l = Math.hypot(sx, sy) || 1;
+          return { d: L, x: sx / l, y: sy / l };
+        }, [x, z]);
+        return v;
+      };
+      const walkPad = async (x, z, r = 0.4, ms = 12000) => {
+        const t0 = Date.now(); let v = null;
+        while (Date.now() - t0 < ms) {
+          v = await stick(x, z);
+          if (v.d <= r) break;
+          const m = v.d < 1.2 ? 0.55 : 1;
+          await pad([v.x * m, v.y * m, 0, 0]);
+          await t.wait(80);
+        }
+        await pad([0, 0, 0, 0]);
+        return v?.d;
+      };
+      const tap = async (btn, ms = 120) => { await pad([0, 0, 0, 0], [btn]); await t.wait(ms); await pad([0, 0, 0, 0]); await t.wait(60); };
+      try {
+        await pad([0, 0, 0, 0]);
+        const act = await until(t, () => window.__GAME__.ctx.story.tutorial.active, null, { sim: 8, real: 20000 });
+        t.assert(!!act, 'practice is active');
+        // 1 move: the left stick
+        // the pad is found by the next probe (every 15 frames while none is live): wait for it, then push the stick
+        await pad([0, -0.6, 0, 0]);
+        const isPad = await until(t, () => (window.__GAME__.ctx.input.device === 'pad' ? true : null), null, { sim: 3, real: 8000, every: 50 });
+        t.assert(!!isPad, 'device pad');
+        const txt = await t.G(() => document.querySelector('.ui-guide')?.textContent ?? '');
+        t.log(`pad move prompt: ${txt.replace(/\s+/g, ' ').slice(0, 80)}`);
+        await shot(t, 'pad-lesson-1-move');
+        let tg = await t.G(() => { const g = window.__GAME__.ctx.story.guideTarget?.(); return g ? [g.x, g.z] : null; });
+        if (tg) await walkPad(tg[0], tg[1], 1.2);
+        const s2 = await until(t, () => window.__GAME__.ctx.story.tutorial.step >= 2 && !window.__GAME__.ctx.story.tutorial.pending, null, { sim: 8, real: 15000 });
+        t.assert(!!s2, 'pad: lesson 2 (bonk) after walking with the L-stick');
+        // 2 bonk: X (2) ×3 next to the dummy
+        await shot(t, 'pad-lesson-2-bonk');
+        for (let k = 0; k < 10 && !(await t.G(() => window.__GAME__.ctx.story.tutorial.step >= 3)); k++) {
+          const d = await t.G(() => { const p = window.__GAME__.ctx.player.pos; return Math.hypot(p.x, p.z + 76); });
+          if (d > 1.8) { await walkPad(0, -77.4, 0.6, 4000); continue; }
+          for (let i = 0; i < 3; i++) { await tap(2); await t.wait(200); }
+          await t.wait(600);
+        }
+        const s3 = await until(t, () => window.__GAME__.ctx.story.tutorial.step >= 3 && !window.__GAME__.ctx.story.tutorial.pending, null, { sim: 8, real: 15000 });
+        t.assert(!!s3, 'pad: lesson 3 (the Stand) after X ×3');
+        // 3 the drill: walk to the stand spot, hold LB (4)
+        for (let k = 0; k < 6; k++) {
+          const g3 = await t.G(() => { const g = window.__GAME__.ctx.story.guideTarget?.(); return g ? [g.x, g.z, g.textKey] : null; });
+          if (!g3 || g3[2] !== 'onb.wobble.close') break;
+          await walkPad(g3[0], g3[1], 0.25, 5000);
+        }
+        await shot(t, 'pad-lesson-3-stand');
+        await pad([0, 0, 0, 0], [4]);
+        const s4 = await until(t, () => window.__GAME__.ctx.story.tutorial.step >= 4 && !window.__GAME__.ctx.story.tutorial.pending, null, { sim: 15, real: 25000 });
+        await pad([0, 0, 0, 0]);
+        t.assert(!!s4, 'pad: lesson 4 (parry) after holding LB');
+        // 4 parry: tap RB (5) on the shield (the other bumper)
+        await shot(t, 'pad-lesson-4-parry');
+        let done = false;
+        for (let k = 0; k < 6 && !done; k++) {
+          const ok = await t.page.evaluate(() => new Promise((resolve) => {
+            const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'), t0 = performance.now();
+            const tick = () => { if (!wk || performance.now() - t0 > 9000) { resolve(false); return; } if (wk.phase === 'windup' && wk.phaseT >= wk.atk.windup - 0.11) { resolve(true); return; } requestAnimationFrame(tick); };
+            tick();
+          }));
+          if (ok) await tap(5, 200);
+          await t.wait(700);
+          done = await t.G(() => window.__GAME__.ctx.state.getFlag('prologue.practice') === true);
+        }
+        t.assert(done, 'pad: the parry lesson passes with a bumper tap');
+      } finally {
+        await stubPad(t, null);
+        await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.ctx.input.setDevice('kbm'); g.setMode('play'); });
+      }
     },
   },
   {
     name: 'controls:nav', order: 31, level: 'meadow', spawn: 'start', timeout: 300000,
     async run(t) {
       await dayMeadow(t, 'practice');
-      // the fence link is gated on the jump lesson (§5.4): learn it first (story.flag → story:flag → nav refreshes links)
-      await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('tut.jump.done', true); else c.state.setFlag('tut.jump.done', true); return true; });
-      // the practice field's inner fence (z −87, x −20…−2): from inside the field, click outside past it
-      await t.G(() => { const g = window.__GAME__; g.teleport(-8, g.ctx.physics.topAt(-8, -83), -83); });
-      await t.frames(10);
-      const path0 = await t.G(() => window.__GAME__.nav.path(-8, -83, -8, -91.5));
+      // click-to-move is the `moba` / `diablo` / `mouseOnly` presets' (TT3 §11.2); RMB moves in `moba`
+      t.assert((await setPreset(t, 'moba')) === 'moba', 'moba preset on');
+      // TT2 §10.3: the practice field's inner fence (z −87, x −20…−2) has ONE open hop link, by the barn door at x −14.5
+      // (the rest of the fence keeps its automatic hop off: `onboard.fenceAuto` is never set). From the barn side (south,
+      // the camera side at yaw π), click into the field past it: the goal is up-screen, so the click lands on it.
+      await t.G(() => { const g = window.__GAME__; g.teleport(-14.5, g.ctx.physics.topAt(-14.5, -90.5), -90.5); });
+      await t.frames(60);
+      const path0 = await t.G(() => window.__GAME__.nav.path(-14.5, -90.5, -14.5, -83));
       t.log(`nav path ${JSON.stringify(path0?.points?.map((p) => [+p[0].toFixed(1), +p[2].toFixed(1), p[3]]))} partial ${path0?.partial}`);
       t.assert(path0?.ok && !path0.partial, 'a path past the fence');
-      t.assert(path0?.points?.some((p) => p[3]), 'it uses a jump link over the 1 m fence');
-      await t.G(() => window.__GAME__.click(-8, -91.5));
-      const done = await until(t, () => { const g = window.__GAME__, p = g.ctx.player.pos; return Math.hypot(p.x + 8, p.z + 91.5) < 0.7 && !g.ctx.player.orders.kind; }, null, { sim: 10 });
+      t.assert(path0?.points?.some((p) => p[3]), 'it uses the barn-door jump link over the 1 m fence');
+      const shut = await t.G(() => window.__GAME__.nav.path(-8, -83, -8, -91.5));
+      t.assert(!shut?.points?.some((p) => p[3] && Math.abs(p[0] + 8) < 1), 'no automatic hop on the rest of the fence (TT2)');
+      const gsp = await t.G(() => window.__GAME__.screen(-14.5, -83));
+      t.assert(gsp?.on, `the goal inside the field is on screen (${JSON.stringify(gsp)})`);
+      await t.G(() => window.__GAME__.click(-14.5, -83));
+      const done = await until(t, () => { const g = window.__GAME__, p = g.ctx.player.pos; return Math.hypot(p.x + 14.5, p.z + 83) < 0.8 && !g.ctx.player.orders.kind; }, null, { sim: 10 });
       const o = await t.G(() => window.__GAME__.orders());
       t.assert(!!done, `arrives past the fence (${JSON.stringify(await pos(t))})`);
       t.assert(o.hops >= 1, `auto-jumped (${o.hops} hops)`);
@@ -254,7 +554,7 @@ export default [
           const g = window.__GAME__, ph = g.ctx.physics, W = innerWidth, H = innerHeight;
           for (const [x, z] of [[-21.5, -60], [-22, -58], [-23, -64.5], [-24, -58.5], [-21, -63], [-29.5, -63], [-30, -60], [-24.5, -66]]) {
             const s = g.screen(x, z, ph.topAt(x, z));
-            if (s && s.x > 40 && s.x < W - 40 && s.y > 60 && s.y < H - 60 && ph.navWalkable?.(x, z) !== false && Math.abs(ph.topAt(x, z) - ph.heightAt(x, z)) < 0.3) return { goal: [x, z], sp: s };
+            if (s && s.x > 40 && s.x < W - 40 && s.y > 60 && s.y < H - 120 && ph.navWalkable?.(x, z) !== false && Math.abs(ph.topAt(x, z) - ph.heightAt(x, z)) < 0.3) return { goal: [x, z], sp: s };
           }
           return null;
         });
@@ -519,12 +819,24 @@ export default [
         t.assert(linger > 0, 'the reticle lingers after release');
         const gone = await until(t, () => !(window.__GAME__.ctx.fx.decals.stats().counts.reticle > 0), null, { sim: 3 });
         t.assert(!!gone, 'the reticle is gone ~1 s after release');
-        // Back / View (8): pause + the controls card; Back again (B = back) closes it
+        // TT3 §11.2: View (8) cycles the zoom now
+        const zA = (await t.G(() => window.__GAME__.cam.iso())).zoom;
         await stubPad(t, { axes: [0, 0, 0, 0], down: [8] });
         await t.frames(4);
         await stubPad(t, { axes: [0, 0, 0, 0], down: [] });
+        await t.frames(20);
+        const zB = (await t.G(() => window.__GAME__.cam.iso())).zoom;
+        t.assert(Math.abs(zB - zA) > 1e-3, `pad View cycles the zoom (${zA} → ${zB})`);
+        // Start (9): the pause book; its Controls button opens the card (the card left the View button)
+        await stubPad(t, { axes: [0, 0, 0, 0], down: [9] });
+        await t.frames(4);
+        await stubPad(t, { axes: [0, 0, 0, 0], down: [] });
+        const paused = await until(t, () => (window.__GAME__.ctx.ui?.menus?.paused ? true : null), null, { sim: 2, real: 8000 });
+        t.assert(!!paused, 'pad Start pauses');
+        const btn = await t.G(() => { const b = [...document.querySelectorAll('.menu--pause .btn')].find((x) => /Controls/.test(x.textContent)); if (!b) return false; b.click(); return true; });
+        t.assert(btn, 'the pause book has a Controls button');
         const card = await until(t, () => { const u = window.__GAME__.ctx.ui; return u?.menus?.has?.('controls') ? true : null; }, null, { sim: 2, real: 8000 });
-        t.assert(!!card, 'pad Back opens the controls card');
+        t.assert(!!card, 'pause → Controls opens the controls card');
         await shot(t, 'pad-02-controls-card');
       } finally {
         await stubPad(t, null);

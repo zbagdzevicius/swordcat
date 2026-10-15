@@ -1020,7 +1020,15 @@ export default [
       t.assert(!info.hull && !info.brows, 'no ink hull and no brows (they read as dark smudges on its ivory head)');
       t.assert(info.coin, 'the gold coin is in its paw');
       t.assert(info.heroBow === 'earL', 'the heroine keeps her pink bow on the LEFT ear');
-      t.assert(info.crest === 'ttCoin', 'coin crest on her plate');
+      // TT3 K triage: the harness resets progress, so she may wear the practice tunic here (no plate, no crest); her
+      // live outfit must agree with whether she wears the plate. The armoured config's ':3' crest is a unit test
+      // (no /src import here: a build:test preview has no /src URLs and a 404 fails the block)
+      const crest = await t.G(() => {
+        const c = window.__GAME__.ctx.player.model.k?.cfg;
+        return { plate: c?.outfit?.armour ?? null, live: c?.outfit?.crest ?? null };
+      });
+      t.log(`crest ${JSON.stringify(crest)}`);
+      t.assert(crest.plate ? crest.live === 'ttCoin' : crest.live == null, `coin crest on her plate when she wears it (${JSON.stringify(crest)})`);
       await t.G(async () => { const g = window.__GAME__; g.ctx.env.preset?.('meadow_day', 0); await g.waitFrames(5); });
       await t.G(async () => { const g = window.__GAME__; g.ctx.cam.shot({ pos: [-0.2, 0.85, 2.3], look: [-0.4, 0.5, 0.1], fov: 36, anchor: 'swordcat' }); await g.waitFrames(30); });
       await t.shot('characters/ttcat-pair', { freeze: true });

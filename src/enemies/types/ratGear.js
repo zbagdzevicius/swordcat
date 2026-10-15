@@ -40,7 +40,7 @@ export async function dressRat(e, m, gear) {
   const head = bone(m.scene, 'Head'), headEnd = bone(m.scene, 'Head_end');
   if (head) {
     const hp = posIn(space, head, _a), he = headEnd ? posIn(space, headEnd, _b) : _b.copy(hp).add(new THREE.Vector3(0, 0, 0.2 * k));
-    const eyes = makeProp('eyes');
+    const eyes = makeProp(gear.spear ? 'eyesBig' : 'eyes');   // TT3: the pikeman's bigger pupils
     attachAligned(space, head, eyes, { pos: [hp.x, THREE.MathUtils.lerp(hp.y, he.y, 0.3) + 0.075 * k, THREE.MathUtils.lerp(hp.z, he.z, 0.32)], scale: k });
     if (gear.helm || gear.hood) {
       const helm = makeProp(gear.hood ? 'hood' : 'kettleHelm');

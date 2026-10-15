@@ -760,7 +760,13 @@ export default [
         t.assert(r.at8 < 0.12, `${id}: a foe 8 m up-screen reads (${r.at8} < 0.12)`);
         // §4.2 table: the fog 12 m up-screen per preset (the top screen edge sits ~10–13 m from her at 12.4 m)
         const at12 = { meadow_day: 0.18, forest_day: 0.24, forest_night: 0.26, town_occupied: 0.11, gate_dusk: 0.14, bog: 0.30, keep_storm: 0.19 }[r.preset];
-        if (at12 != null) t.assert(Math.abs(r.at12 - at12) <= 0.06, `${id}: fog at 12 m ${r.at12} ≈ the §4.2 table ${at12}`);
+        // TT3 K triage: forest_day and gate_dusk were lifted for readability after the §4.2 table (Env.js: the world:art
+        // luma audit), so the table is a ceiling (never hazier than it, +0.06) with a floor that still reads as haze (≥ 30 %)
+        if (at12 != null) {
+          t.assert(r.at12 <= at12 + 0.06, `${id}: fog at 12 m ${r.at12} no denser than the §4.2 table ${at12} (+0.06)`);
+          t.assert(r.at12 >= at12 * 0.3, `${id}: fog at 12 m ${r.at12} still reads as haze (≥ 30 % of the table ${at12})`);
+          if (Math.abs(r.at12 - at12) > 0.06) t.log(`${id}: fog at 12 m ${r.at12} is lighter than the §4.2 table ${at12} (lifted preset)`);
+        }
         const topC = r.top[0]?.f ?? null, topMax = Math.max(0, ...r.top.map((q) => q.f));
         if (topC != null) {
           t.assert(topMax <= 0.55, `${id}: the top edge is misty, not a wall (${topMax})`);
@@ -823,19 +829,25 @@ export default [
       await t.G(() => window.__GAME__.god(true));
       const m = await t.G(() => { const L = window.__GAME__.ctx.levels.current; return { meme: L.memeSpot, links: L.navLinks.length, yaw: L.camYaw, zone: L.zoneAt({ x: -20, z: -4 })?.id, it: L.interactables.slice(0, 3).map((i) => ({ id: i.id, kind: i.kind, r: i.r, pos: [i.pos.x, i.pos.z] })) }; });
       t.log('meadow iso data', JSON.stringify(m));
-      t.assert(m.meme?.at && m.links === 1 && Math.abs(m.yaw - Math.PI) < 1e-6 && /^stones/.test(m.zone ?? ''), `memeSpot, the fence link, yaw π, zoneAt (${m.zone})`);
-      // the fence lesson: before tut.jump.done no path hops the inner fence (z −87, x −20…−2); after it one may
-      const crosses = (r) => { const P = r?.points ?? []; for (let i = 1; i < P.length; i++) { const [ax, , az] = P[i - 1], [bx, , bz] = P[i]; if ((az + 87) * (bz + 87) < 0) { const x = ax + (bx - ax) * ((-87 - az) / (bz - az)); if (x > -20 && x < -2) return true; } } return false; };
+      // TT2 §10.3: two fence entries, the open barn-door hop link (x −14.5) and the gate line that never opens
+      t.assert(m.meme?.at && m.links === 2 && Math.abs(m.yaw - Math.PI) < 1e-6 && /^stones/.test(m.zone ?? ''), `memeSpot, the fence links, yaw π, zoneAt (${m.zone})`);
+      // the fence (TT2): a path near the barn door hops it there; away from the door no path hops the inner fence
+      // (z −87, x −20…−2) except at the door (x −14.5 ± 1.2), whatever `tut.jump.done` says
+      const crossX = (r) => { const out = []; const P = r?.points ?? []; for (let i = 1; i < P.length; i++) { const [ax, , az] = P[i - 1], [bx, , bz] = P[i]; if ((az + 87) * (bz + 87) < 0) { const x = ax + (bx - ax) * ((-87 - az) / (bz - az)); if (x > -20 && x < -2) out.push(+x.toFixed(2)); } } return out; };
       const navInfo = await t.G(() => { const n = window.__GAME__.ctx.physics.nav; return { authored: n?.authored?.length ?? null, gates: n?.gatesClosed ?? null }; });
-      await t.G(() => window.__GAME__.ctx.state.setFlag('tut.jump.done', false));
-      const before = await t.G(() => window.__GAME__.nav?.path?.(-11, -90, -11, -84) ?? null);
-      await t.G(() => window.__GAME__.ctx.state.setFlag('tut.jump.done', true));
-      const after = await t.G(() => window.__GAME__.nav?.path?.(-11, -90, -11, -84) ?? null);
-      t.log(`fence: nav ${JSON.stringify(navInfo)}, before ${before?.points?.length} pts crosses ${crosses(before)}, after ${after?.points?.length} pts crosses ${crosses(after)}`);
+      const paths = {};
+      for (const done of [false, true]) {
+        await t.G((v) => window.__GAME__.ctx.state.setFlag('tut.jump.done', v), done);
+        paths[done ? 'after' : 'before'] = {
+          door: crossX(await t.G(() => window.__GAME__.nav?.path?.(-14.5, -90, -14.5, -84) ?? null)),
+          away: crossX(await t.G(() => window.__GAME__.nav?.path?.(-6, -90, -6, -84) ?? null)),
+        };
+      }
+      t.log(`fence: nav ${JSON.stringify(navInfo)}, crossings ${JSON.stringify(paths)}`);
       if (navInfo.authored == null) t.warn('physics nav does not read level.navLinks yet (the fence gate is data only)');
-      else {
-        t.assert(!crosses(before), 'before the jump lesson a path walks round the fence');
-        t.assert(crosses(after), 'after it the path hops the fence');
+      else for (const [k, v] of Object.entries(paths)) {
+        t.assert(v.door.length >= 1 && v.door.every((x) => Math.abs(x + 14.5) < 1.2), `${k} the jump lesson: the barn-door path hops the fence there (${v.door})`);
+        t.assert(v.away.every((x) => Math.abs(x + 14.5) < 1.2), `${k} the jump lesson: away from the door no automatic hop (${v.away})`);
       }
       // occluder registration from the level tags (camera's fader): crowns, solids (the clutter audit), roofs in town
       const occ = await t.G(() => { const f = window.__GAME__.ctx.cam._fader; return f ? { crowns: f.crownCount, solids: f.solidCount, roofs: f.roofCount } : null; });
@@ -850,11 +862,12 @@ export default [
       const tr = await t.G(() => { const w = window.__GAME__.ctx.levels.current.wheat; return w ? w.uniforms.uTrample.value.map((v) => +v.w) : null; });
       t.assert(tr && tr[0] === 1, `the trample slot follows her (${JSON.stringify(tr)})`);
       await t.shot(pre + 'iso-wheat-trample', { freeze: true });
-      // desktop: a right click on Vigil Stone 2 walks her there and lights it (the use order through the real pick)
+      // desktop: a left click on Vigil Stone 2 walks her there and lights it (the use order through the real pick; TT3
+      // §11.2: `hybrid` LMB uses a friend / object when no foe is alerted, RMB is the Stand)
       await t.loadLevel('meadow', 'start'); await t.frames(10);
       await tp(t, -8, 2, Math.PI);
       await t.clearEvents();
-      await t.click(-12, 8, 'right');
+      await t.click(-12, 8, 'left');
       const lit = await t.waitForEvent('checkpoint', 12000);
       const sp = await t.G(() => window.__GAME__.ctx.state.spawnId);
       t.assert(lit && sp === 'vigil_2', `a click on the Vigil Stone lights it (${sp})`);

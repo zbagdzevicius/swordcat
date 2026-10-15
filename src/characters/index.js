@@ -1,9 +1,9 @@
 // Public API of the characters area (GAME_DESIGN §19.2 characters row). Import from 'src/characters/index.js' only.
-export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELEASE, Squash, SQUASH, PROPORTIONS, PLAY_LOD, TUFTS, mergeSkinnedParts } from './KittenBuilder.js';
-export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, WARM_POSE_NAMES, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
+export { buildKitten, Kitten, BONE_NAMES, ARM, TAIL_CURVE, EMOTE_DUR, EMOTE_RELEASE, Squash, SQUASH, PROPORTIONS, PLAY_LOD, TUFTS, BLUSH, mergeSkinnedParts } from './KittenBuilder.js';
+export { POSES, POSE_NAMES, EXTRA_POSE_NAMES, WARM_POSE_NAMES, TAIL_LAY, SWORD_PTS, solveTwoBone, swordMatrix } from './Poses.js';
 export {
   CATS, SWORDCAT, swordcatConfig, villagerConfig, lostKittenConfig, squireConfig, spoonBrigadeConfig, catConfig, eyeSet,
-  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY, tokentailsCatConfig, KITTEN_COATS,
+  LOST_KITTENS, KITTEN_IDS, SQUIRE_IDS, OLD_KNIGHT_IDS, hubKittenConfig, HUB_ACTIVITY, tokentailsCatConfig, KITTEN_COATS, NAMED_KITTEN_IDS,
 } from './configs.js';
 export { PAL, CAPES, SIGNATURE, VILLAGER_COATS, MISCHIEF, WARM_LOOKS } from './palette.js';
 export {

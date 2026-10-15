@@ -4,6 +4,11 @@ Author: lead design, 2026-10-10. Status: **binding**. It supersedes `research/co
 (they are background only) and amends GAME_DESIGN §6.6, §7.1–7.3, §7.8, §8.1, §8.3, §14.2–14.4 and §15 (already
 rewritten to match). Where this file and an older section disagree, this file wins.
 
+**TT3 update (2026-10-15).** The default bindings changed in TOKENTAILS-PLAN §11.2. §6.2 and §6.3 below hold the
+current tables: WASD walks, LMB attacks, RMB / Q / L is the Stand, Space jumps, Shift tumbles, F is the Paw Trick,
+G is the kitten. No action uses Ctrl, Alt, Meta or an F-key. Older keys in §0, §14 and the work list (RMB moves,
+Space stands, F jumps) are history. The live prompt text is in `src/story/strings.js`.
+
 User request: *"make this game controlled like League of Legends rather than pure 3rd person from the back (it's hard
 to navigate and it's not mobile friendly), rework what's needed for the best experience."*
 
@@ -320,38 +325,48 @@ click disarm it; while armed the attack button fires it and a move click (RMB) i
 - Mouse activity counts toward `idleTime` only above **24 px/s**.
 
 ### 6.2 Keyboard and mouse: preset **`hybrid` (default)**
+**TT3 change (2026-10-14, docs/TOKENTAILS-PLAN.md §11.2).** The default moved to the common action-game convention.
+Why: the old table put the Stand on Space, jump on F and move orders on RMB, and it used Ctrl (ranges, queue) and Alt
+(peek). Ctrl held with WASD gives Ctrl+W, which closes the tab and cannot be blocked, and Ctrl+D bookmarks. Alt+Left
+goes back in history, F1 opens browser help, and Space + LMB fired Golden Hour by accident. Now no binding uses Ctrl,
+Alt, Meta or an F-key, `Input.js` ignores any keydown that carries Ctrl or Meta, and click-to-move lives in the
+`moba`, `diablo` and `mouseOnly` presets. The old table is kept below the new one for reference.
+
 | Action | Binding | Behaviour |
 |---|---|---|
-| Move (order) | **RMB** click / hold; Ctrl+RMB queues | §5.2; RMB on a hostile = attack order; on an object or NPC = use |
 | Move (direct) | **WASD** / arrows | screen-relative; overrides any order |
 | Attack / combo | **LMB**, J | toward the **cursor** (§7.1); each press is the next combo step |
+| Attack order | **LMB on a hostile** | selects it, walks into reach, chains per `settings.autoAttack`; the press swings only in reach |
 | Charge → Swoosh / Bright / Holy | hold **LMB** | she turns to the cursor at **540°/s**; the reach wedge shows (§7.3) |
-| Riposte | LMB (or RMB on the parried enemy) within 0.8 s of a parry | auto-turn ≤ 4 m (unchanged) |
-| **Stand** (hold) / parry | **Space**, L, Mouse4 (forward side button) | threat snap on press (§8.1); then faces the cursor at 360°/s once it moves ≥ 30 px; WASD shuffles 1.2 m/s; plants her |
-| Standing Ground | hold Space, planted | unchanged rules |
-| Tumble | **Shift**, K, Mouse3 (back side button) | WASD dir, else toward the cursor, else facing |
-| Jump | **F** | §5.4; LMB in the air = Pounce toward the cursor (≤ 3.5 m horizontal; crows within 2.5 m of the cursor magnetised) |
-| Interact / confirm | **E**, Enter | the hovered interactable if in reach, else the nearest (existing world rule) |
-| Kitten ability | **Q** | quick cast at the cursor; hold shows the indicator, release casts (§7.5) |
-| Golden Hour | **V**, or Space + LMB within 0.1 s at Valor 100 | |
-| Milk Break | **R** | |
-| Meow | **C** | |
-| Select / cycle target | LMB/RMB on a hostile selects; **Tab** cycles nearest-to-cursor first; Shift+Tab back | §7.4 |
-| Attack-move | **X**, then click | §5.2 |
-| Stop / hold position | **H** | stops and faces the cursor |
-| Show ranges | hold **Ctrl** | AA reach ring 1.9 m, Stand fan, ability ranges |
-| Zoom | wheel | §2.3 |
-| Peek | hold **Alt** or MMB | §2.3 |
-| Camera lock / centre | **Y** / hold **F1** or **Home** | §2.3 |
-| Pause / hold to skip | Esc, P | |
+| **Stand** (hold) / parry | **RMB**, Q, L | threat snap on press (§8.1); RMB over the HUD (Pearl's bubble, toasts) still stands |
+| Tumble; hold = sprint | **Shift**, K, Mouse3 | the `dodge` key still held 0.18 s after the Tumble starts = `sprint` (Zoomies speed at once) |
+| Jump | **Space** | in the air + LMB = Pounce |
+| Interact / confirm | **E**, Enter | |
+| Paw Trick | **F** (tap = cast, hold = aim); **1 / 2 / 3** pick one | §11.3 of the TT plan |
+| Kitten ability | **G** | quick cast at the cursor; hold shows the indicator, release casts (§7.5) |
+| Golden Hour | **V**, or Stand + Attack within 0.1 s at Valor 100 | the chord is derived in `Input.js` (`golden`) |
+| Milk Break / Meow | **R** / **C** | |
+| Select / cycle target | LMB on a hostile; **Tab**; Shift+Tab back (`lockPrev`) | §7.4 |
+| Attack-move / Stop | **X** then click / **H** | |
+| Peek + show ranges | hold **Z** or MMB | one hold: §2.3 peek and the AA / Stand / ability ranges |
+| Zoom / camera lock / centre | wheel / **Y** / **Home** | |
+| Pause / hold to skip | Esc, P (hold P skips like hold Esc; Esc in fullscreen leaves fullscreen first) | |
+
+Rebinding (Pause → Controls): 13 actions (attack, guard, jump, dodge, interact, trick, ability, milk, meow, golden,
+peek, lockon, pause), keyboard and mouse only; "Press a key" capture; a key another action used is swapped; Ctrl,
+Alt, Meta, the F-keys and Esc are refused (Esc always pauses), so are the walking keys while WASD walks; "Reset keys to
+default". `SaveManager.cleanBindings` also drops modifier and F-key codes from a save.
 
 **Other KBM presets** (Settings → Controls; each is only a binding table plus two flags, `wasd` and `lmbMoves`):
 | Preset | Differences from `hybrid` |
 |---|---|
-| `moba` (LoL classic) | `wasd: false`. **A** + click = attack-move, **S** = stop, **H** = hold, **D** = Milk, arrows pan the camera when unlocked. Everything else as `hybrid`. |
-| `diablo` | `lmbMoves: true`: LMB = move / attack order / use; **Shift+LMB** = attack in place toward the cursor; **RMB** = Stand; **Space** = Tumble; F = Jump; WASD on |
-| `mouseOnly` | RMB move / attack order; LMB attack at the cursor; **Mouse4** Stand; **Mouse3** Tumble; **MMB click** Jump; wheel zoom; abilities, Milk, Meow and Golden by clicking ability-bar slots |
-| `keyboardOnly` | WASD move; J attack; L Stand; K Tumble; **Space** Jump; E interact; Q / R / C / V as `hybrid`; aim = §7.1 without a cursor |
+| `moba` (LoL classic) | `wasd: false`. **RMB** = move / attack order / use, **Shift+RMB** queues; Stand Q / L; **Space** = Tumble, **T** = Jump; **A** + click = attack-move, **S** = stop, **H** = hold, **D** = Milk. |
+| `diablo` | `lmbMoves: true`: LMB = move / attack order / use; **RMB** / Q / L = Stand; **Space** = Tumble; **T** = Jump; WASD on |
+| `mouseOnly` | RMB move / attack order; LMB attack at the cursor; **Mouse4** / Q / L Stand; **Mouse3** / K / Shift Tumble; **MMB click** or Space Jump; Z peek |
+| `keyboardOnly` | WASD move; J attack; L / Q Stand; K / Shift Tumble; **Space** Jump; E interact; F / G / R / C / V as `hybrid` |
+
+Before TT3 (kept for reference): RMB moved (Ctrl+RMB queued), Space / L / Mouse4 stood, F jumped, Q cast the kitten,
+hold Ctrl showed ranges, hold Alt peeked, F1 centred.
 
 ### 6.3 Gamepad (twin-stick; standard mapping indices)
 | Action | Button |
@@ -359,19 +374,20 @@ click disarm it; while armed the attack button fires it and a move click (RMB) i
 | Move | Left stick (screen-relative) |
 | **Aim** | **Right stick** (dead zone 0.25): a ground reticle up to **6 m** from her (radius ∝ deflection, λ 12), hidden 1.0 s after release |
 | Attack / charge | X (2) |
-| Stand / parry | **LB (4)** |
+| Stand / parry | **LB (4)**, RB (5) (TT3) |
 | Tumble | B (1): LS, else RS, else facing |
 | Jump / Pounce | A (0) |
 | Interact | Y (3) |
-| Select nearest / clear | RB (5); D-pad ← → (14 / 15) cycle |
+| Select nearest / clear | **R3 (11)** (TT3; RB is the Stand); D-pad ← → (14 / 15) cycle |
 | Kitten ability | LT (6): tap = smart cast; hold = aim with RS, release casts |
-| Golden Hour | RT (7), or LB + X |
+| Golden Hour | LB / RB + X within 0.1 s (TT3; RT is the Paw Trick) |
+| Paw Trick | **RT (7)**: tap = cast, hold = aim with RS; hold RT + D-pad ← → ↑ picks trick 1 / 2 / 3 |
 | Milk | D-pad ↑ (12) |
 | Peek | hold D-pad ↓ (13) + RS |
 | Meow | L3 (10) |
-| Zoom | **R3 (11)**: 0.80 / 1.00 / 1.25 (it was recentre) |
+| Zoom | **View (8)**: 0.80 / 1.00 / 1.25 (TT3; it was R3) |
 | Pause / hold to skip | Start (9) |
-| Controls card | Back / View (8) |
+| Controls card | Pause menu → Controls (TT3; View zooms now) |
 
 ### 6.4 Touch (§9 has the geometry)
 | Action | Touch |

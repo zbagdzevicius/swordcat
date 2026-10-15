@@ -18,6 +18,7 @@
 // Robust under load (other agents share the GPU / CPU): every moment worth a screenshot is frozen in SIM time by an
 // in-page bus listener (`__fxFreeze`: time scale 0 a fixed sim delay after the event), and every wait polls a condition
 // instead of sleeping a fixed number of milliseconds.
+import { setPreset } from './_kbm.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -249,20 +250,21 @@ export const ISO_BLOCKS = [
       const s0 = await stats(t);
       t.assert(s0.groundMist.visible && s0.groundMist.sheets >= 4, `ground mist sheets on (${JSON.stringify(s0.groundMist)})`);
       const P = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
-      // ---- the move paw (RMB click), frozen right after the click
+      // ---- the move paw (RMB click in `moba`: TT3 §11.2 click-to-move lives in moba / diablo / mouseOnly), frozen
+      await setPreset(t, 'moba');
       await armIso(t, '(g) => g.ctx.fx.decals.markers.some((m) => m.kind === "move" && m.t > 0.15)');
       await t.click(P[0] + 2, P[2] + 3.5, 'right');
       t.assert(!!(await isoFrozen(t, 8000)), 'an RMB click drew no move marker');
       await t.frames(3);
       await t.shot('fx/iso-move-paw');
       await resume(t);
-      // ---- queued waypoints (Ctrl + RMB) with the path preview on
+      // ---- queued waypoints (Shift + RMB, moba) with the path preview on
       await t.G(() => { window.__GAME__.ctx.state.settings.pathPreview = true; return true; });
       await t.click(P[0] - 4, P[2] + 9, 'right');
       await untilPage(t, '(g) => (g.ctx.player.orders?.path?.length ?? 0) > 0', 8000);
-      await t.click(P[0] + 3, P[2] + 12, 'right', { ctrl: true });
+      await t.click(P[0] + 3, P[2] + 12, 'right', { shift: true });
       await t.wait(250);
-      await t.click(P[0] - 1, P[2] + 15, 'right', { ctrl: true });
+      await t.click(P[0] - 1, P[2] + 15, 'right', { shift: true });
       const q = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.queued ?? 0) >= 1 && (g.ctx.fx.decals.counts.path ?? 0) >= 1', 10000);
       await t.G(() => window.__GAME__.ctx.game.setTimeScale(0));
       await t.frames(2);
@@ -271,8 +273,9 @@ export const ISO_BLOCKS = [
       await resume(t);
       t.assert(!!q, `queued waypoints + path preview paws (queued ${d.counts.queued}, path ${d.counts.path})`);
       await t.G(() => { const g = window.__GAME__; g.ctx.state.settings.pathPreview = false; g.ctx.player.order?.('stop'); return true; });
+      await setPreset(t, 'hybrid');
       await t.wait(300);
-      // ---- hover ring + highlight, then LMB selects (gold dashed ring)
+      // ---- hover ring + highlight, then LMB selects (gold dashed ring; TT3: LMB on a foe also orders the attack)
       const rat = await t.G(() => { const e = window.__GAME__.__fxSpawn('rat_pike', 0.9, 3.2, false); window.__isoRat = e; return [...e.pos.toArray(), e.id]; });
       await t.frames(5);
       await t.aimAt(rat[0], rat[2]);
@@ -289,18 +292,19 @@ export const ISO_BLOCKS = [
         t.log(JSON.stringify(await t.G(() => { const c = window.__GAME__.ctx; return { mode: c.game.mode, hover: c.cam.hover?.kind, id: c.cam.hover?.actor?.id, ptr: c.input.pointer }; })));
       }
       await t.G(() => { const g = window.__GAME__; for (const e of [...g.ctx.enemies.list]) g.ctx.enemies.despawn(e); return true; });
-      // ---- the Stand fan (Space) and the ranges overlay (Ctrl)
-      await t.page.keyboard.down('Space');
+      // ---- the Stand fan (Q; RMB / L too) and the ranges overlay (Z / MMB, one hold with the peek; TT3 §11.2)
+      await t.G(() => { const g = window.__GAME__; g.ctx.player.orders?.clear?.('smoke'); g.ctx.cam.select?.(null); return true; });
+      await t.page.keyboard.down('KeyQ');
       const fan = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.fan ?? 0) > 0', 10000);
       await t.shot('fx/iso-stand', { freeze: true });
-      await t.page.keyboard.up('Space');
-      t.assert(!!fan, 'Space: the Stand fan');
+      await t.page.keyboard.up('KeyQ');
+      t.assert(!!fan, 'Q: the Stand fan');
       await untilPage(t, '(g) => g.ctx.player.stateName !== "guard"', 5000);
-      await t.page.keyboard.down('ControlLeft');
+      await t.page.keyboard.down('KeyZ');
       const rng = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.ranges ?? 0) > 0', 10000);
       await t.shot('fx/iso-ranges', { freeze: true });
-      await t.page.keyboard.up('ControlLeft');
-      t.assert(!!rng, 'Ctrl: the ranges overlay');
+      await t.page.keyboard.up('KeyZ');
+      t.assert(!!rng, 'Z: the ranges overlay');
       // ---- the charge reach (hold J)
       await t.page.keyboard.down('KeyJ');
       const ch = await untilPage(t, '(g) => (g.ctx.fx.decals.counts.charge ?? 0) > 0', 10000);
@@ -419,11 +423,11 @@ export const ISO_BLOCKS = [
       await t.wait(1500);
       const P = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
       await t.aimAt(P[0] + 2.5, P[2] + 3);
-      await t.page.keyboard.down('KeyQ');
+      await t.page.keyboard.down('KeyG');                  // TT3 §11.2: G = the kitten ability
       const vol = await untilPage(t, '(g) => g.ctx.companions.aim?.active && (g.ctx.fx.decals.counts.reachEdge ?? 0) > 0 && (g.ctx.fx.decals.counts.abilityChip ?? 0) > 0', 15000);
       const va = await t.G(() => { const c = window.__GAME__.ctx; return { aim: { active: c.companions.aim.active, shape: c.companions.aim.shape, valid: c.companions.aim.valid }, edge: c.fx.decals.reachEdgeAt, range: c.companions.aim.plan?.range }; });
       await t.shot('fx/volley-edge', { freeze: true });
-      await t.page.keyboard.up('KeyQ');                    // no target: the release casts nothing
+      await t.page.keyboard.up('KeyG');                    // no target: the release casts nothing
       await t.G(() => { const g = window.__GAME__; if (g.ctx.game.mode !== 'play') g.setMode('play'); return true; });
       t.assert(!!vol, `held Volley: an edge arc + aim chip are drawn (${JSON.stringify(va)})`);
       t.assert(!!vol && va.edge > 2 && va.edge < va.range, `the edge arc sits inside the frame, short of the off-screen ${va.range} m ring (${va.edge})`);

@@ -31,7 +31,8 @@ export function bowGeometry(o = {}) {
   const base = rgb(o.color ?? PAL.bow), shade = rgb(o.shade ?? PAL.bowShade), knot = rgb(o.knot ?? PAL.bowKnot), light = rgb(o.light ?? PAL.bowLight);
   const gb = new GeoBuilder();
   for (const s of [1, -1]) {
-    const g = new THREE.SphereGeometry(0.035, segScale(24, d, 14), segScale(16, d, 10)).scale(1.5, 0.85, 0.5);
+    // `round` (TT3, Pearl): fuller, rounder loops
+    const g = new THREE.SphereGeometry(0.035, segScale(24, d, 14), segScale(16, d, 10)).scale(o.round ? 1.3 : 1.5, o.round ? 1.08 : 0.85, o.round ? 0.58 : 0.5);
     g.translate(s * 0.035, 0, 0);
     // pinch the inner end (art.md §2.6) + a central fold crease
     const p = g.attributes.position;

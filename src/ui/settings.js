@@ -4,7 +4,7 @@
 // state.difficulty (not settings) and announces itself with the same event (the player re-reads its lives rules).
 // Node-safe: no DOM.
 import { E } from '../core/events.js';
-import { DIFFICULTY } from '../core/config.js';
+import { DIFFICULTY, INPUT } from '../core/config.js';
 
 /**
  * @typedef {object} SettingDef
@@ -230,14 +230,76 @@ export function resetSettings(ctx, defaults) {
 }
 
 /**
- * The Controls card (CONTROLS_SPEC §6.2–§6.4): [action, label] rows; glyphs come from text.js per device (the KBM
- * column follows the previewed preset). The label shown is strings key `controls.<action>` when strings carries it
- * (menus.js controlLabel); the label here is the built-in fallback.
+ * The Controls card (CONTROLS_SPEC §6.2–§6.4, TOKENTAILS-PLAN §11.2): [action, label] rows; glyphs come from text.js per
+ * device (the KBM column follows the previewed preset). The label shown is strings key `controls.<action>` when
+ * strings carries it (menus.js controlLabel); the label here is the built-in fallback.
  */
 export const CONTROL_ROWS = Object.freeze([
-  ['move', 'Move · click / hold to walk'], ['attack', 'Attack · hold to charge'], ['attackMove', 'Attack-move'],
-  ['guard', 'Stand · tap to parry'], ['dodge', 'Tumble'], ['jump', 'Jump · ⚔ in the air: Pounce'], ['interact', 'Interact · talk'],
-  ['ability', 'Kitten ability'], ['milk', 'Snack Break'], ['meow', 'Meow'], ['golden', 'Golden Hour'],
-  ['lockon', 'Select / cycle target'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'], ['peek', 'Peek ahead'],
-  ['pause', 'Pause · hold to skip scenes'],
+  ['move', 'Move'], ['attack', 'Attack · hold to charge · click a foe'], ['guard', 'Stand · tap to parry'],
+  ['jump', 'Jump · ⚔ in the air: Pounce'], ['dodge', 'Tumble · hold to sprint'], ['interact', 'Interact · talk'],
+  ['trick', 'Paw Trick · hold to aim, Esc cancels'], ['trick1', 'Pick Paw Trick 1'], ['trick2', 'Pick Paw Trick 2'], ['trick3', 'Pick Paw Trick 3'],
+  ['twirl', 'Ribbon Twirl · jump again in the air, hold'],
+  ['ability', 'Kitten ability'], ['milk', 'Snack Break'], ['meow', 'Meow'], ['golden', 'Golden Hour · or Stand + Attack'],
+  ['lockon', 'Select / cycle target'], ['attackMove', 'Attack-move'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'],
+  ['peek', 'Peek ahead · show ranges'], ['pause', 'Pause · hold to skip scenes'],
 ]);
+
+// ------------------------------------------------------------------ TT3 §11.5 K8: keyboard and mouse rebinding
+/** The actions the Controls card can rebind (keyboard and mouse only; the pad keeps the standard layout). */
+export const REBIND_ACTIONS = Object.freeze(['attack', 'guard', 'jump', 'dodge', 'interact', 'trick', 'ability', 'milk', 'meow',
+  'golden', 'peek', 'lockon', 'pause']);
+/** Actions that always share the codes of another (one hold): `ranges` follows `peek`. */
+const LINKED = Object.freeze({ peek: ['ranges'] });
+/** Actions a rebind never swaps into (menu navigation and fixed keys). */
+const NO_SWAP = new Set(['navUp', 'navDown', 'navLeft', 'navRight', 'confirm', 'back', 'ranges', 'sprint']);
+
+/**
+ * Why `code` cannot be bound, or null. 'browser': Ctrl, Alt, Meta, an F-key or Esc (browser and system shortcuts;
+ * Esc always pauses); 'walk': a walking key while the preset walks on WASD / arrows. Pure.
+ * @param {string} code @param {{ wasd?: boolean }} [o]
+ */
+export function rebindRefusal(code, { wasd = true } = {}) {
+  if (typeof code !== 'string' || !code) return 'browser';
+  if (code === 'Escape' || INPUT.unbindable?.test(code)) return 'browser';
+  if (wasd && Object.values(INPUT.move).flat().includes(code)) return 'walk';
+  return null;
+}
+
+/** The code an action shows on the card (mouse first for attack / guard / move, else the first key). Pure. */
+export function shownCode(action, codes) {
+  if (!codes?.length) return null;
+  const mouseFirst = action === 'attack' || action === 'guard' || action === 'move';
+  if (mouseFirst) return codes.find((c) => c.startsWith('Mouse')) ?? codes[0];
+  // Esc is never the one replaced (it always pauses): Pause shows and rebinds its other key (P)
+  return codes.find((c) => !c.startsWith('Mouse') && c !== 'Escape') ?? codes.find((c) => c !== 'Escape') ?? codes[0];
+}
+
+/**
+ * Rebind `action` to `code`: the code the card shows for it is replaced by `code` (its other codes stay); any other
+ * action that used `code` gets the replaced code instead (a swap), or loses `code` when it has nothing to take. Returns
+ * the new `settings.bindings` object (a fresh copy) and the swapped action ids. `table` is the active effective
+ * table (`input.keyTable`: preset + bindings). Pure.
+ * @param {Record<string,string[]>} table @param {Record<string,string[]>|null} bindings @param {string} action @param {string} code
+ * @returns {{ bindings: Record<string,string[]>, swapped: string[] }}
+ */
+export function rebindAction(table, bindings, action, code) {
+  const out = {};
+  for (const [a, c] of Object.entries(bindings ?? {})) if (Array.isArray(c)) out[a] = c.slice();
+  const cur = (table?.[action] ?? []).slice();
+  const old = shownCode(action, cur);
+  let next = old ? cur.map((c) => (c === old ? code : c)) : [code, ...cur];
+  next = next.filter((c, i) => next.indexOf(c) === i);
+  next.sort((a, b) => (a === code ? -1 : b === code ? 1 : 0));
+  out[action] = next;
+  const linked = LINKED[action] ?? [];
+  for (const l of linked) out[l] = next.slice();
+  const swapped = [];
+  for (const [a, codes] of Object.entries(table ?? {})) {
+    if (a === action || linked.includes(a) || NO_SWAP.has(a) || !codes?.includes(code)) continue;
+    const give = old && old !== code && !codes.includes(old);
+    out[a] = codes.map((c) => (c === code ? (give ? old : null) : c)).filter(Boolean);
+    for (const l of LINKED[a] ?? []) out[l] = out[a].slice();
+    swapped.push(a);
+  }
+  return { bindings: out, swapped };
+}

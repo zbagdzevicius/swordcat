@@ -7,8 +7,9 @@
 //                                       [--url http://localhost:5191/] [--max 360] [--headed] [--swiftshader]
 //
 // Inputs, and nothing else:
-//   - move: right-click (mouse) / tap (touch) the farthest lit print; else the edge arrow pulled 80 px inward; else
-//     the badge. A lit ring round a lesson's object (`guide().ring`, fix round 2) means she is there: no move, and a
+//   - move: hold WASD (mouse runs: the default `hybrid` preset walks on WASD, TOKENTAILS-PLAN §11.2) from where Clem
+//     stands on screen toward a lit print a few steps out / tap (touch) the farthest lit print; else the edge arrow
+//     pulled 80 px inward; else the badge. A lit ring round a lesson's object (`guide().ring`, fix round 2) means she is there: no move, and a
 //     fight prompt swings at the ring's centre.
 //   - the key / button named in the visible prompt or the objective line ([Key] tokens, <kbd> keycaps, ⚔). On touch
 //     the named on-screen button (.tbtn.tb-<action>) is tapped.
@@ -50,38 +51,74 @@ export const STEP_SHOW_S = 1.0;      // ≥3 lit prints or the edge arrow within
 export const PRINT_MIN_PX = 18;      // each print ≥ 18 px wide at 844×390
 export const SCENE_GRACE_S = 0.5;    // trail fade-out and skip-chip show-up allowance at a scene start
 // §10.10 #2 limits (game s)
-export const LIMITS = { firstFight: { mouse: 90, touch: 110, skip: 40 }, done: 240 };
+// TT3 §11.6 #7: the first fight within 60 s (mouse and touch), onboard.done within 240 s
+export const LIMITS = { firstFight: { mouse: 60, touch: 60, skip: 40 }, done: 240 };
 
 // ------------------------------------------------------------------ pure helpers (unit-testable)
 /** Touch / keyboard label → action (the inverse of ui/text.js ACTION_GLYPH, kbm + touch, lower-cased). */
 const LABEL_ACTION = {
   lmb: 'attack', j: 'attack', '⚔': 'attack', attack: 'attack', '🛡': 'guard',
-  space: 'guard', stand: 'guard', l: 'guard',
+  rmb: 'guard', q: 'guard', stand: 'guard', l: 'guard',
   shift: 'dodge', tumble: 'dodge', k: 'dodge',
-  f: 'jump', jump: 'jump',
+  space: 'jump', jump: 'jump',
   e: 'interact', '!': 'interact', interact: 'interact',
-  q: 'ability', kitten: 'ability',
+  g: 'ability', kitten: 'ability', f: 'trick', ':3': 'trick',
   r: 'milk', snack: 'milk',
   c: 'meow', meow: 'meow',
   v: 'golden', golden: 'golden',
   enter: 'confirm', tap: 'confirm',
-  rmb: 'move', wasd: 'move', 'stick / tap': 'move', 'left thumb': 'move', move: 'move', ls: 'move', 'l-stick': 'move',
+  wasd: 'move', 'stick / tap': 'move', 'left thumb': 'move', move: 'move', ls: 'move', 'l-stick': 'move',
 };
-/** KBM key per action (KeyboardEvent.code). */
-const ACTION_CODE = { guard: 'Space', dodge: 'ShiftLeft', jump: 'KeyF', interact: 'KeyE', ability: 'KeyQ', milk: 'KeyR', meow: 'KeyC', golden: 'KeyV', confirm: 'Enter' };
+/**
+ * KBM input per action (KeyboardEvent.code, or 'RMB' for the right mouse button), TOKENTAILS-PLAN §11.2: the Stand is
+ * RMB (the prompt names it), Space jumps, F is the Paw Trick, G the kitten.
+ */
+export const ACTION_CODE = { guard: 'RMB', dodge: 'ShiftLeft', jump: 'Space', interact: 'KeyE', ability: 'KeyG', trick: 'KeyF', milk: 'KeyR', meow: 'KeyC', golden: 'KeyV', confirm: 'Enter' };
 
 /** Plain-text keycap labels as `guide().prompt` shows them (innerText: "Hold Space to block", "LMB Bonk"). */
 const PLAIN_LABELS = [
-  [/(^|[^\w])(LMB)(?=$|[^\w])/, 'attack'], [/⚔/, 'attack'], [/(^|[^\w])(RMB|WASD)(?=$|[^\w])/, 'move'],
-  [/(^|[^\w])Space(?=$|[^\w])/, 'guard'], [/(^|[^\w])Shift(?=$|[^\w])/, 'dodge'], [/(^|[^\w])Enter(?=$|[^\w])/, 'confirm'],
+  [/(^|[^\w])(LMB)(?=$|[^\w])/, 'attack'], [/⚔/, 'attack'], [/(^|[^\w])(WASD)(?=$|[^\w])/, 'move'], [/(^|[^\w])(RMB)(?=$|[^\w])/, 'guard'],
+  [/(^|[^\w])Space(?=$|[^\w])/, 'jump'], [/(^|[^\w])Shift(?=$|[^\w])/, 'dodge'], [/(^|[^\w])Enter(?=$|[^\w])/, 'confirm'],
   // single-letter keycaps only as an isolated capital (not "a" / "I" in a sentence)
-  [/(^|[\s|(])F(?=$|[\s|)])/, 'jump'], [/(^|[\s|(])E(?=$|[\s|)])/, 'interact'], [/(^|[\s|(])Q(?=$|[\s|)])/, 'ability'],
+  [/(^|[\s|(])F(?=$|[\s|)])/, 'trick'], [/(^|[\s|(])E(?=$|[\s|)])/, 'interact'], [/(^|[\s|(])Q(?=$|[\s|)])/, 'guard'],
+  [/(^|[\s|(])G(?=$|[\s|)])/, 'ability'],
   [/(^|[\s|(])R(?=$|[\s|)])/, 'milk'], [/(^|[\s|(])C(?=$|[\s|)])/, 'meow'], [/(^|[\s|(])V(?=$|[\s|)])/, 'golden'],
   [/(^|[\s|(])J(?=$|[\s|)])/, 'attack'],
   // touch button names (§15.3)
   [/\bStand\b|🛡/, 'guard'], [/\bTumble\b/, 'dodge'], [/\bJump\b/, 'jump'], [/\bMeow\b/, 'meow'], [/\bKitten\b(?! mode)/, 'ability'],
   [/\bSnack\b/, 'milk'], [/\bGolden\b/, 'golden'], [/(^|\s)!(?=$|\s)/, 'interact'],
 ];
+
+/** Index of the first touch button name in PLAIN_LABELS (keyboard keycaps come before it). */
+const TOUCH_LABELS_FROM = PLAIN_LABELS.findIndex(([re]) => re.source.includes('Stand'));
+
+/**
+ * TT3 §11.2 (mouse runs): the WASD keys that walk Clem from her screen point `me` toward the screen point `to` (8 ways,
+ * screen up = W). Empty when either is missing or she is within `dead` px. Pure.
+ * @returns {string[]}
+ */
+export function wasdToward(me, to, dead = 14) {
+  if (!me || !to) return [];
+  const dx = to.x - me.x, dy = to.y - me.y, L = Math.hypot(dx, dy);
+  if (!(L > dead)) return [];
+  const ux = dx / L, uy = dy / L, out = [];
+  if (uy < -0.38) out.push('KeyW'); else if (uy > 0.38) out.push('KeyS');
+  if (ux < -0.38) out.push('KeyA'); else if (ux > 0.38) out.push('KeyD');
+  return out;
+}
+
+/**
+ * Where a WASD walker heads (mouse runs): a lit print about `ahead` prints out from Clem (the trail bends round
+ * fences, so not the farthest), else the edge arrow, else the badge. Pure.
+ */
+export function walkTarget(g, w, h, ahead = 3) {
+  if (!g || g.ring) return null;
+  const lit = (g.prints ?? []).filter((p) => p && p.lit && Number.isFinite(p.sx) && p.sx >= 0 && p.sy >= 0 && p.sx <= w && p.sy <= h);
+  if (lit.length) { const p = lit[Math.min(lit.length - 1, ahead)]; return { x: p.sx, y: p.sy, src: 'print' }; }
+  if (g.edge && Number.isFinite(g.edge.sx)) return { x: g.edge.sx, y: g.edge.sy, src: 'edge' };
+  if (g.badge && Number.isFinite(g.badge.sx)) return { x: g.badge.sx, y: g.badge.sy, src: 'badge' };
+  return null;
+}
 
 /**
  * Actions named in a prompt / objective string: raw `[Key]` tokens, rendered <kbd> keycaps, or the plain innerText the
@@ -94,7 +131,7 @@ export function namedActions(text, device = 'mouse') {
   for (const m of s.matchAll(/\[([^\]]+)\]/g)) add(m[1]);
   for (const m of s.matchAll(/<kbd[^>]*>([^<]+)<\/kbd>/gi)) add(m[1]);
   const plain = s.replace(/<[^>]+>/g, ' ');
-  PLAIN_LABELS.forEach(([re, a], i) => { if (i >= 13 && device !== 'touch') return; if (re.test(plain)) out.add(a); });
+  PLAIN_LABELS.forEach(([re, a], i) => { if (i >= TOUCH_LABELS_FROM && device !== 'touch') return; if (re.test(plain)) out.add(a); });
   return out;
 }
 
@@ -183,6 +220,8 @@ async function oneRun(browser, base, { device, skip, seed }) {
         ff: !!st?.getFlag?.('onboard.firstFight'), done: !!st?.getFlag?.('onboard.done'),
         B: window.__BOT__, scene: !!G.ctx.story?.sceneActive,
         // read-only probe for the §10.10 #5 report (which scene, can it be skipped); never an input
+        // read-only: is she moving? (a player sees her stop against a fence; never used to aim)
+        ppos: G.ctx.player ? [G.ctx.player.pos.x, G.ctx.player.pos.z] : null,
         sceneId: G.ctx.story?.playingId ?? null, canSkip: !!G.ctx.story?.playing?.canSkip, sceneKind: G.ctx.story?.playing?.kind ?? null,
       };
     });
@@ -221,6 +260,23 @@ async function oneRun(browser, base, { device, skip, seed }) {
     // a stuck player who sees nothing to press tries E, then swings at the badge (counted as a guess; --strict: off)
     res.guesses = [];
     let lastGuessT = -99, lastAim = null;
+    // TT3 §11.2 mouse runs walk on WASD: the keys held right now (steered every loop step)
+    const held = new Set();
+    let walkStall = 0, walkHops = 0, lastPos = null;
+    const holdKeys = async (want) => {
+      const w = new Set(want);
+      for (const k of [...held]) if (!w.has(k)) { await page.keyboard.up(k); held.delete(k); }
+      for (const k of w) if (!held.has(k)) { await page.keyboard.down(k); held.add(k); }
+    };
+    const press = async (code, ms = 0) => {
+      if (code === 'RMB') {
+        await page.mouse.move(W / 2, H * 0.45);
+        await page.mouse.down({ button: 'right' }); await page.waitForTimeout(ms || 120); await page.mouse.up({ button: 'right' });
+      } else {
+        // a real key tap lasts ~0.2 s (Space: a full jump; an instant press is cut short to a 0.3 m hop)
+        await page.keyboard.down(code); await page.waitForTimeout(ms || (code === 'Space' ? 300 : 120)); await page.keyboard.up(code);
+      }
+    };
 
     for (;;) {
       s = await snap();
@@ -252,6 +308,7 @@ async function oneRun(browser, base, { device, skip, seed }) {
         break;
       }
       const ready = now - sigT >= REACT_S;
+      if (!touch && (!ready || !g || inScene || s.mode !== 'play')) await holdKeys([]);
 
       // ---- §10.10 #3: the way is shown within 1.0 s (non-scene time) of each onboarding step start
       const onboardingPhase = g && ['practice', 'prologue', 'onboard'].includes(g.phase);
@@ -326,9 +383,27 @@ async function oneRun(browser, base, { device, skip, seed }) {
             else await page.mouse.click(aim.x, aim.y, { button: 'left' });
             if (holdAtk) log.push([el.toFixed(1), 'attack:hold']);
             lastAtkT = now; res.actions++;
+          } else if (!touch && !inScene) {
+            // 3) follow the trail on WASD (the default `hybrid` preset): steer from Clem toward a print a few steps out
+            const wt = walkTarget(g, W, H, 1);
+            const keys = fight ? [] : wasdToward(g.me && { x: g.me.sx, y: g.me.sy }, wt);
+            const was = [...held].join();
+            await holdKeys(keys);
+            if (keys.length && keys.join() !== was) { res.actions++; log.push([el.toFixed(1), `walk:${wt?.src}:${keys.join('')}`]); }
+            // stuck (she does not move while a key is held): a held jump (low fence), then slide on the side key alone
+            const moved = lastPos && s.ppos ? Math.hypot(s.ppos[0] - lastPos[0], s.ppos[1] - lastPos[1]) : 1;
+            lastPos = s.ppos;
+            if (keys.length && moved < 0.04) {
+              if (++walkStall >= 5) {
+                walkStall = 0;
+                if (!(walkHops++ % 2)) { await press('Space', 300); log.push([el.toFixed(1), 'walk:hop']); }
+                else { const side = wt && g.me && wt.x < g.me.sx ? 'KeyA' : 'KeyD'; await holdKeys([side]); await page.waitForTimeout(450); log.push([el.toFixed(1), 'walk:slide']); }
+              }
+            } else walkStall = 0;
+            if (!keys.length && mv && mv.src === 'badge' && now - lastMoveT > 1.0) { await page.mouse.click(mv.x, mv.y, { button: 'left' }); lastMoveT = now; }
           } else if (mv && !inScene && now - lastMoveT > 1.0) {
-            // 3) follow the trail
-            if (touch) await tapXY(mv.x, mv.y); else await page.mouse.click(mv.x, mv.y, { button: 'right' });
+            // 3) follow the trail (touch: tap the farthest lit print)
+            await tapXY(mv.x, mv.y);
             lastMoveT = now; res.actions++; log.push([el.toFixed(1), `move:${mv.src}`]);
           }
           // 3b) guess when stuck: 6 s without progress, nothing named, nothing of the guide shown (she has arrived)
@@ -362,7 +437,7 @@ async function oneRun(browser, base, { device, skip, seed }) {
               }));
               if (cue) {
                 if (touch) { const bb = await btnBox('guard'); if (bb) await touchHold(bb.x, bb.y, 220); }
-                else { await page.keyboard.down('Space'); await page.waitForTimeout(220); await page.keyboard.up('Space'); }
+                else await press(ACTION_CODE.guard, 220);
                 res.actions++; log.push([el.toFixed(1), 'key:parry']);
               }
               lastKeyT[a] = now;
@@ -374,8 +449,8 @@ async function oneRun(browser, base, { device, skip, seed }) {
               const b = a === 'confirm' ? { x: W / 2, y: H * 0.7 } : await btnBox(a);
               if (b) { if (hold) await touchHold(b.x, b.y, 1200); else await tapXY(b.x, b.y); }
             } else if (ACTION_CODE[a]) {
-              if (hold) { await page.keyboard.down(ACTION_CODE[a]); await page.waitForTimeout(1200); await page.keyboard.up(ACTION_CODE[a]); }
-              else await page.keyboard.press(ACTION_CODE[a]);
+              if (hold) { await holdKeys([]); await press(ACTION_CODE[a], 1200); }
+              else await press(ACTION_CODE[a]);
             }
             lastKeyT[a] = now; res.actions++; log.push([el.toFixed(1), `key:${a}`]);
           }

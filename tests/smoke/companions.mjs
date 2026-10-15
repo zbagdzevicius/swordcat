@@ -183,7 +183,7 @@ export default [
         const off = g.game.addFrameHook(() => { if (g.ctx.companions.walls.length) { g.game.setTimeScale(0); window.__cmpFrozen = true; off(); } });
         setTimeout(off, 15000);
       });
-      await t.tap('KeyQ');                                           // ability (Q)
+      await t.tap('KeyG');                                           // ability (G, TT3 §11.2)
       const frozen = await t.page.waitForFunction(() => window.__cmpFrozen === true, null, { timeout: 12000, polling: 50 }).then(() => true, () => false);
       t.assert(frozen, 'Q did not plant a Shield Wall within 12 s');
       let s = await comp(t);
@@ -687,7 +687,7 @@ export default [
         t.assert(await spawnAhead(t, 'crow', 6, 1.5), 'crow spawn failed');
         t.assert(await spawnAhead(t, 'rat_pike', 4.5, -1.2), 'rat spawn failed');
         await t.wait(600);
-        await t.tap('KeyQ', 1, 50);
+        await t.tap('KeyG', 1, 50);
         const used = await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.abilities >= 1, null, { sim: 3 });
         t.assert(used, 'Q did not fire Sage\'s Volley');
         t.assert(await t.G(() => window.__GAME__.lastEvent?.('companion:ability')?.ability ?? window.__GAME__.ctx.companions.active[0].cfg.ability) === 'volley', 'not a volley');
@@ -714,7 +714,7 @@ export default [
         await shot(t, 'companions/swap-clover');
         // Clover: Purr of Mending heals 4 over 3 s
         const hp0 = await t.G(() => { const p = window.__GAME__.ctx.player; p.hp = Math.max(1, p.maxHp - 5); return p.hp; });
-        await t.tap('KeyQ', 1, 50);
+        await t.tap('KeyG', 1, 50);
         await t.wait(1500);
         await shot(t, 'companions/clover-mend');
         const healed = await until(t, (h) => window.__GAME__.ctx.player.hp >= h + 4, hp0, { sim: 5 });
@@ -1130,7 +1130,7 @@ export default [
         // hold Q with the mouse to her right-front: the indicator shows and follows
         const p1 = await toScreen(3, -3);
         if (p1) await t.page.mouse.move(p1.x, p1.y, { steps: 4 });
-        await t.page.keyboard.down('KeyQ');
+        await t.page.keyboard.down('KeyG');
         let a = null;
         try {
           a = await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 }) ? await aim() : await aim();
@@ -1146,7 +1146,7 @@ export default [
           const p2 = await toScreen(3, 3);
           if (p2) await t.page.mouse.move(p2.x, p2.y, { steps: 4 });
           await t.wait(250);
-        } finally { await t.page.keyboard.up('KeyQ'); }
+        } finally { await t.page.keyboard.up('KeyG'); }
         const cast = await until(t, () => window.__GAME__.ctx.companions.walls.length > 0, null, { sim: 2 });
         t.assert(cast, 'releasing Q did not plant the wall');
         const ev = await t.G(() => window.__GAME__.lastEvent?.('companion:ability'));
@@ -1159,13 +1159,13 @@ export default [
         await t.G(() => { const m = window.__GAME__.ctx.companions; for (const w of [...m.walls]) w.end?.(); m.active[0].cooldown = 0; m.active[0]._endAbility(); });
         await t.wait(300);
         const n0 = await t.G(() => window.__GAME__.ctx.companions.active[0].stats.abilities);
-        await t.page.keyboard.down('KeyQ');
+        await t.page.keyboard.down('KeyG');
         try {
           await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 });
           await t.page.keyboard.press('Backspace');
           await t.wait(150);
           t.assert(!(await aim()).active, 'Backspace did not cancel the aim');
-        } finally { await t.page.keyboard.up('KeyQ'); }
+        } finally { await t.page.keyboard.up('KeyG'); }
         await t.wait(300);
         t.assert(await t.G((n) => window.__GAME__.ctx.companions.active[0].stats.abilities === n && window.__GAME__.ctx.companions.active[0].cooldown === 0, n0), 'a cancelled aim cast or spent the cooldown');
         // Sage: the 14 m ring and pips under the chosen targets
@@ -1177,7 +1177,7 @@ export default [
         await t.wait(500);
         const p3 = await toScreen(5, -1.5);
         if (p3) await t.page.mouse.move(p3.x, p3.y, { steps: 4 });
-        await t.page.keyboard.down('KeyQ');
+        await t.page.keyboard.down('KeyG');
         try {
           await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 });
           await t.wait(350);
@@ -1186,20 +1186,20 @@ export default [
           await freeze(t, true);
           await shot(t, 'companions/aim-volley');
           await freeze(t, false);
-        } finally { await t.page.keyboard.up('KeyQ'); }
+        } finally { await t.page.keyboard.up('KeyG'); }
         t.assert(await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.abilities >= 1, null, { sim: 2 }), 'release did not loose the Volley');
         // Clover: the soft green ring around her
         await clearEnemies(t);
         await t.G(() => window.__GAME__.ctx.companions.setActive(['clover']));
         await t.wait(900);
-        await t.page.keyboard.down('KeyQ');
+        await t.page.keyboard.down('KeyG');
         try {
           await until(t, () => window.__GAME__.ctx.companions.aim.active, null, { sim: 2 });
           await t.wait(350);
           a = await aim();
           t.assert(a.shape === 'self', `Purr indicator ${JSON.stringify(a)}`);
           await shot(t, 'companions/aim-purr');
-        } finally { await t.page.keyboard.up('KeyQ'); }
+        } finally { await t.page.keyboard.up('KeyG'); }
         t.assert(await until(t, () => window.__GAME__.ctx.companions.active[0]?.stats.abilities >= 1, null, { sim: 2 }), 'release did not purr');
       } finally {
         await clearEnemies(t);

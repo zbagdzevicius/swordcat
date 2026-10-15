@@ -6,7 +6,12 @@
 //   SMOKE_ONLY=core:levels,player node tests/smoke.mjs   #   comma-separated
 //   flags: --headed  --swiftshader (software GL fallback)  --verbose (echo page warnings/logs); env SMOKE_GPU=gl|d3d11|swiftshader
 //
-// Blocks live in tests/smoke/<area>.mjs (one file per area; areas never edit this file):
+// Blocks live in tests/smoke/<area>.mjs (one file per area; areas never edit this file). Every .mjs there is loaded,
+// so a new area file registers itself: TT3 adds tests/smoke/tricks.mjs (the Paw Tricks, package A). Files that start
+// with `_` are shared helpers, not blocks (tests/smoke/_kbm.mjs: WASD walking, the RMB Stand, KBM presets).
+// TOKENTAILS-PLAN §11.2 bindings (the default `hybrid` preset): WASD walks, LMB attacks (on a foe: the attack order),
+// RMB / Q / L = the Stand, Space = jump, Shift = Tumble, F = the Paw Trick, G = the kitten, Z / MMB = peek. Before each
+// block the harness puts the bindings back (no rebinding, `hybrid`).
 //   export default [
 //     { name: 'player:combo', order: 20, level: 'meadow', spawn: 'start', timeout: 60000, async run(t) { ... } },
 //   ];
@@ -46,7 +51,7 @@ const GPU_ARGS = {
 async function loadBlocks() {
   const out = [];
   if (!fs.existsSync(BLOCK_DIR)) return out;
-  for (const f of fs.readdirSync(BLOCK_DIR).filter((f) => f.endsWith('.mjs')).sort()) {
+  for (const f of fs.readdirSync(BLOCK_DIR).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')).sort()) {
     const area = f.replace(/\.mjs$/, '');
     let mod;
     try { mod = await import(pathToFileURL(path.join(BLOCK_DIR, f)).href); } catch (e) {
@@ -155,7 +160,11 @@ const t = {
   async tap(code, n = 1, gap = 120) { for (let i = 0; i < n; i++) { await page.keyboard.press(code); if (i < n - 1) await page.waitForTimeout(gap); } },
   async blankCheck(label) { const n = await G(() => window.__GAME__.sampleCanvas()); if (n < 4) fail(`${label}: canvas looks blank (${n} colours)`); return n; },
   // ---- CONTROLS_SPEC §12 core 6: iso-control helpers (world points go through the real pick path)
-  /** A mouse click at world (x, z): 'right' = a move / attack / use order, 'left' = swing toward it / use. */
+  /**
+   * A mouse click at world (x, z) through the real pick path. 'right' = RMB: a move / attack / use order in the
+   * click-to-move presets (`moba`, `mouseOnly`), the Stand in `hybrid` (no order); 'left' = LMB: swing toward it, use a
+   * friend / object, or (on a foe) the attack order (TT3 §11.2). `mods.shift` + 'right' queues in `moba`.
+   */
   click: (x, z, button = 'right', mods = {}) => G(([a, b, c, d]) => window.__GAME__.click(a, b, c, d), [x, z, button, mods]),
   /** A touch tap at world (x, z) (the player's tap orders). */
   tapAt: (x, z, kind = 'tap') => G(([a, b, c]) => window.__GAME__.tapAt(a, b, c), [x, z, kind]),
@@ -236,7 +245,8 @@ async function boot() {
 }
 
 /** Keys a block may still hold down if it failed mid-way (released before the next block). */
-const HELD_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyC', 'KeyQ', 'KeyF', 'Space', 'ShiftLeft', 'AltLeft', 'Escape'];
+const HELD_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyC', 'KeyQ', 'KeyF', 'KeyG', 'KeyZ', 'KeyP', 'KeyV', 'KeyN',
+  'Digit1', 'Digit2', 'Digit3', 'Space', 'ShiftLeft', 'Escape'];
 
 const withTimeout = (p, ms) => {
   let id;
@@ -276,7 +286,10 @@ try {
           if (Array.isArray(c.story?.queue)) c.story.queue.length = 0;
           g.game.setTimeScale?.(1);
           const settings = c.state.settings;
+          // TT3: every block starts on the default binding table (a rebinding / preset block never leaks into the next)
+          if (settings) { settings.bindings = {}; settings.controlPreset = 'hybrid'; }
           c.state.reset({ settings });
+          c.input?.rebind?.();
           c.companions?.setActive?.([]);
           for (const e of [...(c.enemies?.list ?? [])]) c.enemies.despawn?.(e);
           c.input?.setVirtualMove?.(0, 0);

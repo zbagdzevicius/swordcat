@@ -123,3 +123,18 @@ The strings `prompt.shop` / `prompt.board` already exist for the tag labels. If 
 - `settings.js`: rows for `camLock`, `autoRiposte`, `standAutoFace`, `pathPreview`, `hapticTaps`, `cursorSize`,
   `cursorContrast`; `invertY` only under `?cam=classic` (`settingVisible(def, iso)`). ui keeps `settings.camLock` and
   `cam.camLocked` in sync both ways (Y in play writes the setting; the setting applies at boot and on change).
+- **TT3 §11.2 controls (package K).** `text.js` `ACTION_GLYPH`: kbm guard RMB, jump Space, ability G, trick F,
+  trick1..3 1 / 2 / 3, peek / ranges Z; pad guard LB, lockon R3, zoom View, trick RT, golden "LB + X"; touch trick ":3".
+  `TOKEN_ACTION` adds `trick`, `peek`, `sprint`, `start`, `r3` and maps space → jump, f → trick, g → ability,
+  q / rmb → guard, z → peek; `guard` is mouse-first, so `[Stand]` reads RMB (a rebinding wins). The `trick.*` strings
+  (§11.4) are in `strings.onboarding.js`; `tutorial.js` shows `trick.<id>.hint` once, 3.2 s after `trick:unlocked` with `bark` (A's event; `E.TRICK_UNLOCKED` once listed)
+  (`EV_TRICK_UNLOCKED`), never in a scene or practice.
+- **Rebinding (Pause → Controls).** `settings.js` `REBIND_ACTIONS` (13), `rebindRefusal(code, { wasd })` ('browser' for
+  Ctrl / Alt / Meta / F-keys / Esc, 'walk' for WASD and arrows while they walk), `shownCode`, `rebindAction(table,
+  bindings, action, code)` → `{ bindings, swapped }` (the shown code is replaced; an action that used `code` takes the
+  replaced one; `peek` carries `ranges`; Esc always stays on pause). `menus.js` `openControls()`: the kbm cells of the
+  active preset are `.ctl-bind` buttons (menu items), a capture-phase "Press a key" listener (`.ctl-msg`), "Reset keys to
+  default" (`.ctl-reset`), and the Sticky Keys note (`.ctl-note`). The pause menu has a Controls button.
+- **Title on portrait phones (≤ 560 px wide):** "Skip practice" sits top-left (the co-brand pill fills the bottom
+  centre under the CTA); in the embed it steps below the host's Back gutter.
+- `beacon.snapshot().me` = Clem's screen point (the bot's WASD walker steers from it).

@@ -430,7 +430,7 @@ export default {
     if (head) {
       const hp = posIn(space, head);
       const hat = makeProp('featherHat');
-      attachAligned(space, head, hat, { pos: [hp.x, hp.y + 0.13 * k, hp.z - 0.05 * k], rot: [-0.2, 0, 0.08], scale: k * 0.7 });
+      attachAligned(space, head, hat, { pos: [hp.x, hp.y + 0.075 * k, hp.z - 0.01 * k], rot: [-0.2, 0, 0.08], scale: k * 0.7 });   // TT3: seated (it floated)
       e.helmet = hat;                                        // spins off on defeat (§10.1)
       // ART §7.2: a monocle over his right eye and a moustache card on the snout (Barkus keeps the eyepatch)
       const he = bone(m.scene, 'Head_end');
@@ -446,7 +446,7 @@ export default {
     const lp = bone(m.scene, 'FrontLowLeg.L'), rp = bone(m.scene, 'FrontLowLeg.R');
     if (lp) {
       // the cheese-wheel shield (§11.2 r 0.45) on his left fore paw, its face turned out to his left
-      const p0 = posIn(space, lp), g = new THREE.Group(), sh = makeProp('cheeseWheel');
+      const p0 = posIn(space, lp), g = new THREE.Group(), sh = makeProp('cheeseShield');   // TT3: reads as cheese, not a cart wheel
       sh.scale.set(0.09, 0.45, 0.45);
       sh.castShadow = true;
       g.add(sh); g.name = 'cheese-shield';

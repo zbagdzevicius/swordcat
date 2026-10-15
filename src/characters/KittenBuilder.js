@@ -42,7 +42,8 @@ const PARENT = { body: null, hips: 'body', chest: 'hips', head: 'chest', mouth: 
   tail0: 'hips', tail1: 'tail0', tail2: 'tail1', tail3: 'tail2', tail4: 'tail3', tail5: 'tail4' };
 export const ARM = Object.freeze({ upper: 0.115, fore: 0.11, pawCentre: [0, -0.038, 0.004] });
 /** Rest tail curve (art.md §2.4), in root space. */
-export const TAIL_CURVE = [[0, 0.2, -0.13], [0.05, 0.1, -0.28], [0.18, 0.05, -0.36], [0.32, 0.06, -0.30]];
+/** TT3: an upright question-mark curl (was a drag along the grass, ending at 0.05 H); sit / lie poses tip it down (Poses TAIL_LAY). */
+export const TAIL_CURVE = [[0, 0.26, -0.12], [0.04, 0.3, -0.26], [0.06, 0.47, -0.29], [0, 0.57, -0.2]];
 
 /** Quaternion from XYZ euler. Pose snapshots are cached per kitten, so this builds only at build / first pose use. */
 const E = (x = 0, y = 0, z = 0) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, 'XYZ'));
@@ -109,6 +110,8 @@ export function buildKitten(cfg = {}, o = {}) {
   return new Kitten(cfg, o);
 }
 
+/** TT3 cheek blush: centre (|x|, y) in head space, radii, strength, colour. */
+export const BLUSH = Object.freeze({ at: [0.094, 0.084], r: [0.03, 0.019], k: 0.5, color: '#F49AB0' });
 /** Face-framing head wear that hides the head contour (the cheek ruffs shrink under it). */
 const HOODED = Object.freeze(['hood', 'coif']);
 /** Cheek ruff under a hood: radius / fur length / sideways offset factors. */
@@ -140,7 +143,8 @@ export class Kitten {
     // ---- accessories pre-pass (flags like earsLow need to be known before the rest pose)
     const flags = {};
     const acc = (cfg.accessories || []).map((a) => (typeof a === 'string' ? { id: a } : a));
-    const earsLowHint = acc.some((a) => ['potHelm', 'plumedHelm', 'bucketHelm', 'jesterHat', 'bakerHat'].includes(a.id)) ? 0.9
+    const earsLowHint = acc.some((a) => ['potHelm', 'plumedHelm', 'jesterHat', 'bakerHat'].includes(a.id)) ? 0.9
+      : acc.some((a) => a.id === 'bucketHelm') ? 0.15   // TT3: the smaller pail sits between upright ears
       : acc.some((a) => ['wizardHat', 'strawHat', 'nightcap', 'sergeantCap'].includes(a.id)) ? 0.6
         : acc.some((a) => ['coif'].includes(a.id)) ? 0.25 : acc.some((a) => a.id === 'hood') ? 0.2 : 0;
 
@@ -232,18 +236,27 @@ export class Kitten {
 
     const coat = this.coat;
     const coatAt = (region, o) => (v, n, lp) => coatColor(coat, region, lp, o);
+    // TT3 cuteness: a soft pink blush painted into the face fur under each eye (every cat; `cfg.blush` 0 turns it off)
+    const blushK = cfg.blush ?? BLUSH.k, blushC = rgb(cfg.blushColor ?? BLUSH.color);
+    const faceAt = (region) => (v, n, lp) => {
+      const c = coatColor(coat, region, lp);
+      if (!(blushK > 0) || lp.z < 0.04) return c;
+      const dx = Math.abs(lp.x) - BLUSH.at[0], dy = lp.y - BLUSH.at[1];
+      const w = Math.exp(-(dx * dx) / (BLUSH.r[0] * BLUSH.r[0]) - (dy * dy) / (BLUSH.r[1] * BLUSH.r[1])) * smoothstep(0.04, 0.09, lp.z);
+      return w > 0.01 ? mixRgb(c, blushC, w * blushK) : c;
+    };
     const coatRoot = (region, o) => (v) => coatColor(coat, region, v, o);
 
     // ---- head fur surfaces (head space)
     const eyeScale = cfg.eyes?.size ?? 1;
     const headPieces = this._headFurPieces(cfg, acc);
     if (this.lite) {
-      for (const hp of headPieces) A.add('head', hp.geo, { color: coatAt(hp.region), rmse: RM.fur });
+      for (const hp of headPieces) A.add('head', hp.geo, { color: faceAt(hp.region), rmse: RM.fur });
     } else {
       const gb = new GeoBuilder({ fur: true });
       const combFor = (region) => (v, n, lp) => (region === 'cheek' ? [Math.sign(lp.x) * 0.55, -0.85, -0.25]
         : region === 'muzzle' ? [Math.sign(lp.x) * 0.9, -0.35, 0.1] : [lp.x * 2.0, -0.45, -1]);
-      for (const hp of headPieces) gb.add(hp.geo, { color: coatAt(hp.region), rmse: RM.fur, fur: (v, n, lp) => { const f = headFurMask(lp, hp.region, eyeScale); f[1] *= hp.len ?? 1; return f; }, comb: combFor(hp.region) });
+      for (const hp of headPieces) gb.add(hp.geo, { color: faceAt(hp.region), rmse: RM.fur, fur: (v, n, lp) => { const f = headFurMask(lp, hp.region, eyeScale); f[1] *= hp.len ?? 1; return f; }, comb: combFor(hp.region) });
       this.headFur = new FurPart(gb.build(), { furMat: this.furMat, sheenMat: this.kitMatInst, tier: furTier, name: 'furHead', owner: this });
       joints.head.add(this.headFur.mesh);
     }
@@ -268,8 +281,10 @@ export class Kitten {
     const eyeCfg = cfg.eyes || {};
     const eyeR = FACE.eyeR0 * eyeScale;
     const eyeColors = eyeCfg.L || eyeCfg.R ? { L: { ...eyeCfg, ...(eyeCfg.L || {}) }, R: { ...eyeCfg, ...(eyeCfg.R || {}) } } : eyeCfg;
-    const posL = [FACE.eyeL[0] * (0.97 + 0.03 * eyeScale), FACE.eyeL[1], this._eyeZ(FACE.eyeL[0], FACE.eyeL[1], eyeScale)];
+    const posL = [FACE.eyeL[0] * (0.97 + 0.03 * eyeScale), FACE.eyeL[1], this._eyeZ(FACE.eyeL[0], FACE.eyeL[1], eyeScale) - EYE.seat];
     const posR = [-posL[0], posL[1], posL[2]];
+    /** TT3: where the eyes sit (head space; tests check no eye passes the head outline in profile). */
+    this.eyeFit = Object.freeze({ posL, posR, r: eyeR, flat: EYE.flat, yaw: 0.3 });
     if (this.lite) {
       this._liteEyes(A, posL, posR, eyeR, eyeColors);
     } else {
@@ -277,7 +292,7 @@ export class Kitten {
       // lids, lashes and brows: vertex-coloured, drawn by the cat's own instanced WarmToon (no extra program)
       const pupilR = eyeCfg.pupilR ?? (tier === 'hero' ? EYE.pupil.hero : tier === 'kitten' ? EYE.pupil.kitten : EYE.pupil.default);
       this.eyes = new EyePair({
-        r: eyeR, posL, posR, yaw: 0.3, colors: eyeColors, lidMat: this.kitMatInst, lidColor: lidC.map((c) => c * 0.86), detail: this.detail,
+        r: eyeR, flat: EYE.flat, posL, posR, yaw: 0.3, colors: eyeColors, lidMat: this.kitMatInst, lidColor: lidC.map((c) => c * 0.86), detail: this.detail,
         slit: eyeCfg.slit, sclera: eyeCfg.sclera, pupilR, lash: eyeCfg.lash ?? 1, brows: eyeCfg.brows, seed: (cfg.id || 'kitten') + ':eyes',
       });
       joints.head.add(this.eyes.group);
@@ -366,7 +381,7 @@ export class Kitten {
       bow.position.copy(headPos.applyMatrix4(toEar));
       const earQ = new THREE.Quaternion(); bind.earL.decompose(_v, earQ, _v2);
       const headQ = new THREE.Quaternion(); bind.head.decompose(_v, headQ, _v2);
-      bow.quaternion.copy(earQ.invert().multiply(headQ).multiply(E(0.25, -0.25, -(cfg.bow.tilt ?? 0.32))));
+      bow.quaternion.copy(earQ.invert().multiply(headQ).multiply(E(cfg.bow.pitch ?? 0.25, -0.25, -(cfg.bow.tilt ?? 0.32))));
       if (cfg.bow.scale2) bow.scale.setScalar(cfg.bow.scale2);
       bow.traverse((c) => { if (c.isMesh) c.castShadow = false; });   // H3: the bow never casts
       this._bowBase = bow.scale.x;
@@ -646,7 +661,8 @@ export class Kitten {
   _headFurPieces(cfg, acc = []) {
     const out = [];
     // segment counts per tier (every head-fur triangle is drawn once per shell: hero 17x, companions 11x)
-    const S = this.lite ? { skull: [28, 20], cheek: [14, 10], pad: [10, 8], chin: [10, 8] }
+    const fd = this.lite ? (cfg.faceDetail ?? 1) : 1;   // TT3: named kittens' finer face (crisp markings)
+    const S = this.lite ? { skull: [Math.round(28 * fd), Math.round(20 * fd)], cheek: [14, 10], pad: [10, 8], chin: [10, 8] }
       : this.tier === 'hero' ? { skull: [46, 34], cheek: [22, 16], pad: [14, 10], chin: [12, 9] }
         : { skull: [38, 28], cheek: [20, 14], pad: [12, 9], chin: [10, 8] };
     if (!this.lite && this.detail < 1) for (const k in S) S[k] = S[k].map((n) => segScale(n, this.detail, 8));
@@ -666,9 +682,11 @@ export class Kitten {
     for (const [pos, side, bone] of [[posL, 1, 'eyeL'], [posR, -1, 'eyeR']]) {
       const c = side > 0 ? (colors.L || colors) : (colors.R || colors);
       const inner = rgb(c.inner ?? PAL.irisInner), outer = rgb(c.outer ?? PAL.irisOuter), ring = rgb(c.ring ?? PAL.irisRing), pupil = rgb(c.pupil ?? PAL.pupil);
-      const g = new THREE.SphereGeometry(r, 24, 18);
+      // TT3: the named kittens' finer face also rounds their vertex-coloured catchlights (they read blocky)
+      const ed = Math.min(1.3, this.cfg.faceDetail ?? 1);
+      const g = new THREE.SphereGeometry(r, Math.round(24 * ed), Math.round(18 * ed));
       const pm = eyePivotMatrix([0, 0, 0], side, 0.3);
-      const toBone = new THREE.Matrix4().makeTranslation(pos[0] - FACE[bone][0], pos[1] - FACE[bone][1], pos[2] - FACE[bone][2]).multiply(pm).multiply(mat([0, 0, 0], [0, 0, 0], [1, 1, 0.55]));
+      const toBone = new THREE.Matrix4().makeTranslation(pos[0] - FACE[bone][0], pos[1] - FACE[bone][1], pos[2] - FACE[bone][2]).multiply(pm).multiply(mat([0, 0, 0], [0, 0, 0], [1, 1, EYE.flat]));
       this.A.add(bone, g, {
         m: toBone,
         color: (v, n, lp) => {
@@ -850,6 +868,8 @@ export class Kitten {
       this.rig.chest.add(this.bibFur.mesh);
       if (!armour && clothed) A.add('chest', bodyGeo, { color: bellyColor, rmse: RM.fur });
     }
+    // TT3 `softBelly` (the Token Tails Cat, no clothes): a soft rounded tummy over the chest / hips / thigh seams
+    if (this.cfg.softBelly && !armour && !clothed) A.add('hips', new THREE.SphereGeometry(0.16, sg(26), sg(18)).scale(1.04 * w, 1.12, 1.0), { m: mat([0, 0.05, 0.012]), color: coatRoot('body'), rmse: RM.fur });
     // lower torso / belly on the hips
     A.add('hips', new THREE.SphereGeometry(0.15, sg(24), sg(16)).scale(1.0 * w, 0.9, 0.95), { m: mat([0, 0.02, 0]), color: coatRoot('body'), rmse: RM.fur });
     // arms and paws
@@ -1459,6 +1479,7 @@ export class Kitten {
       // expressions read stronger from the far iso lens (ART §5.3 `expressionGain`)
       this.eyes.setGain((TOP_VIEW.dist ?? 0) > EYE.gainFrom ? EYE.gain : 1);
       if (!lite) this.eyes.update(dt);
+      else if (this.eyes.blinkT > 0) { this.eyes.blinkT = 0; this.eyes.apply(0); }   // TT3: never freeze mid-blink (half-lidded) when animation pauses
     }
     if (!lite) for (const u of this.updaters) u(dt);
     if (this.cape) {
@@ -1580,8 +1601,9 @@ const DRAG_TIP_FLOOR = 0.012;
 /** Tuft cards (ART §6.2): counts per cluster (hero 32, others 20), sizes [w, h] in H, tilt toward world-up (rad). */
 export const TUFTS = Object.freeze({
   tilt: 35 * Math.PI / 180,
-  hero: Object.freeze({ cheek: 6, crown: 3, ear: 3, bib: 5, tail: 6 }),
-  other: Object.freeze({ cheek: 4, crown: 2, ear: 2, bib: 3, tail: 3 }),
+  // TT3: no crown or inner-ear cards (they read as stray strands and white hash marks in the ears)
+  hero: Object.freeze({ cheek: 6, crown: 0, ear: 0, bib: 5, tail: 6 }),
+  other: Object.freeze({ cheek: 4, crown: 0, ear: 0, bib: 3, tail: 3 }),
   size: Object.freeze({ cheek: [0.05, 0.09], crown: [0.04, 0.07], ear: [0.03, 0.08], bib: [0.05, 0.08], tail: [0.05, 0.10] }),
 });
 /**

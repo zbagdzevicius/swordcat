@@ -16,7 +16,7 @@
 //   orders    the tap ripple (pink ring, cream paw, 4 collapsing ticks), gold attack rings, the warm-grey ✕ paw when
 //             unreachable, queued waypoints, 3 dots along the next segment while RMB is held, pink paws every 1.2 m
 //             along the path with `settings.pathPreview` ('auto' = touch on the prologue / Chapter 1 meadow), the goal;
-//   overlays  the companion ability indicator, the ranges overlay while Ctrl is held, the tutorial ghost-paw spot;
+//   overlays  the companion ability indicator, the ranges overlay while the peek hold (Z / MMB) is down, the tutorial ghost-paw spot;
 //   guide     TOKENTAILS-PLAN §10.2 the Pink Paw trail (GuideTrail below): ≤ 14 Token Tails paw prints (ivory pad,
 //             love-pink beans, maroon rim) along the nav path to ui's guide target, in this same draw.
 // Contact blobs moved to BlobShadows.js (PERF §7.2): this pool draws no blobs.
@@ -1177,7 +1177,7 @@ export class GroundDecals {
     this._count('riposte');
   }
 
-  /** §7.3 the ranges overlay while Ctrl (`ranges`) is held: AA reach, the Stand fan, the kitten's ability range. */
+  /** §7.3 the ranges overlay while `ranges` is held (Z / MMB / D-pad ↓, one hold with the peek; TT3 dropped Ctrl): AA reach, the Stand fan, the kitten's ability range. */
   _ranges(p) {
     const input = this.ctx.input;
     if (!input?.down?.('ranges')) return;
@@ -1315,7 +1315,7 @@ export class GroundDecals {
   }
 
   /**
-   * §10.3 / WA §3.6 the path she is walking: 3 dots along the next segment while RMB is held; with
+   * §10.3 / WA §3.6 the path she is walking: 3 dots along the next segment while the move button is held; with
    * `settings.pathPreview` (pathPreviewOn), pink paws every 1.2 m along the whole path, alternating ±0.08 m and drawn
    * outward at 12 m/s from the order; always a small goal on a move / attack-move.
    */
@@ -1352,7 +1352,7 @@ export class GroundDecals {
     }
   }
 
-  /** §10.3 queued waypoints (Ctrl + RMB): small dots joined by dotted lines from the current goal. */
+  /** §10.3 queued waypoints (Shift + RMB, `moba` only): small dots joined by dotted lines from the current goal. */
   _queue(p) {
     const o = p?.orders, Q = o?.queue;
     if (!Q?.length) return;

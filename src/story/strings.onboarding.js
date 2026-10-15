@@ -14,7 +14,7 @@ export const ONBOARDING_STRINGS = Object.freeze({
   'tut.move': 'Race Pearl to the dummy! [Move]',
   'tut.move.pad': 'Race Pearl to the dummy! [LS]',
   'tut.move.touch': 'Tap the ground. Race Pearl!',
-  'tut.bonk': 'Bonk it 3 times! [Attack] or J',
+  'tut.bonk': 'Bonk it 3 times! [Attack]',
   'tut.bonk.pad': 'Bonk it 3 times! [Attack]',
   'tut.bonk.touch': 'Tap ⚔ 3 times. Bonk!',
   'tut.stand': 'Hold [Stand] to block Sir Wobble!',
@@ -30,7 +30,8 @@ export const ONBOARDING_STRINGS = Object.freeze({
   'pearl.sack.tip': 'Psst: roll past Sir Sacky for fun!',
   'tut.roll': 'Roll past Sir Sacky! [Tumble]',
   'tut.roll.touch': 'Swipe to roll past Sir Sacky!',
-  'tut.skip': 'Hold [Esc] to skip practice',
+  'tut.skip': 'Hold [Esc] or [P] to skip practice',
+  'tut.skip.pad': 'Hold [Start] to skip practice',
   'tut.skip.touch': 'Hold the Skip chip to skip practice',
   'tut.skipped': 'Practice skipped. Off we go!',
   'tut.done': 'Practice: paw-some!',
@@ -43,7 +44,7 @@ export const ONBOARDING_STRINGS = Object.freeze({
 
   // ---- the skip chip (every skippable scene and practice, from second 0)
   'onb.skip': 'Skip ▸▸',
-  'onb.skip.hold': 'hold [Esc]',
+  'onb.skip.hold': 'hold [Esc] / [P]',
   'onb.skip.hold.pad': 'hold [Start]',
   'onb.skip.hold.touch': 'hold',
 
@@ -74,6 +75,18 @@ export const ONBOARDING_STRINGS = Object.freeze({
   'onb.meow': 'Meow [Meow] to call hidden kittens',
   'onb.meow.pad': 'Meow [Meow] to call hidden kittens',
   'onb.meow.touch': 'Tap Meow to call hidden kittens',
+
+  // ---- TT3 §11.4: the Paw Tricks (package A reads these keys; [Trick] / [Jump] resolve to the device glyph)
+  'trick.coin.name': ':3 Coin Toss',
+  'trick.coin.bark': 'Take my lucky coin. Throw it, it comes back!',
+  'trick.coin.hint': '[Trick] Toss the coin at that crow!',
+  'trick.twirl.name': 'Ribbon Twirl',
+  'trick.twirl.bark': 'Twirl your bow!',
+  'trick.twirl.hint': '[Jump] again in the air and hold to twirl',
+  'trick.cloud.name': 'Catnip Cloud',
+  'trick.cloud.bark': "Catnip! They can't stay grumpy in this.",
+  'trick.cloud.hint': '[Trick] Puff catnip on the pack',
+  'trick.swap': 'Paw Trick: {name}',
 
   // ---- the Standing Stones (onboarding done)
   'onb.stones': 'On to the Standing Stones!',

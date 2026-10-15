@@ -361,10 +361,12 @@ export function flowerCrown(A, { colors = ['#F7C6D9', '#F2D16B', '#FFFFFF', '#C7
   }
 }
 export function bucketHelm(A, { color = '#8C8F88' } = {}) {
-  const g = new THREE.CylinderGeometry(0.17, 0.2, 0.2, 24, 1, true);
-  both(A, 'head', g, mat([0, 0.3, 0], [0.15, 0, -0.08]), C(color), [0.45, 0.8, 0, 0]);
-  A.add('head', new THREE.CylinderGeometry(0.17, 0.17, 0.01, 24), { m: mat([0, 0.4, -0.015], [0.15, 0, -0.08]), color: C(color), rmse: [0.45, 0.8, 0, 0] });
-  A.flags.earsLow = 0.9;
+  // TT3 (Simas): a smaller pail perched on the crown between the ears, tipped back, so both ears stand clear of it
+  const g = new THREE.CylinderGeometry(0.105, 0.125, 0.13, 24, 1, true);
+  both(A, 'head', g, mat([0, 0.37, -0.02], [-0.22, 0, -0.1]), C(color), [0.45, 0.8, 0, 0]);
+  A.add('head', new THREE.CylinderGeometry(0.105, 0.105, 0.01, 24), { m: mat([0, 0.433, -0.005], [-0.22, 0, -0.1]), color: C(color), rmse: [0.45, 0.8, 0, 0] });
+  A.add('head', new THREE.TorusGeometry(0.125, 0.008, 6, 28), { m: mat([0, 0.307, -0.034], [Math.PI / 2 - 0.22, 0, -0.1]), color: C('#6E716B'), rmse: [0.45, 0.8, 0, 0] });
+  A.flags.earsLow = 0.15;
 }
 export function nightcap(A, { color = '#7A9CC6' } = {}) {
   const cap = new THREE.ConeGeometry(0.16, 0.3, 20, 6, true);

@@ -56,6 +56,18 @@ export function frontalHit(hitDir, facing, arc = SH.arc) {
   return -(hitDir.x * Math.sin(facing) + hitDir.z * Math.cos(facing)) >= Math.cos(arc);
 }
 
+/**
+ * TT3 (§11.4): true while the pug's shield is up and `dir` (the direction a hit travels INTO it, like `frontalHit`)
+ * meets its front arc. Pure apart from reading `e`; exported for tests.
+ * @param {{alive?: boolean, shieldDownT?: number, facing: number, stateName?: string}} e @param {{x: number, z: number}} dir
+ */
+export function blocksFrom(e, dir) {
+  if (!e || e.alive === false || e.shieldDownT > 0 || e.stateName === 'die' || !dir) return false;
+  if (!Number.isFinite(dir.x) || !Number.isFinite(dir.z) || (dir.x === 0 && dir.z === 0)) return false;
+  const l = Math.hypot(dir.x, dir.z);
+  return frontalHit({ x: dir.x / l, z: dir.z / l }, e.facing);
+}
+
 function shieldNode(e) {
   if (e._shieldNode !== undefined) return e._shieldNode;
   e._shieldNode = e.model?.scene?.getObjectByName('Rectangle_Shield') ?? null;
@@ -87,7 +99,12 @@ export default {
   },
   show: PUG_SHOW, hide: PUG_HIDE,
   build: dressPug,
-  init(e) { e.shieldDownT = 0; },
+  init(e) {
+    e.shieldDownT = 0;
+    // TT3 contract (§11.4): does the raised shield stop something travelling along `dir` (into the pug)? The ":3" coin
+    // clangs off the front and hits from the side.
+    e.blocksFrom = (dir) => blocksFrom(e, dir);
+  },
   tick(e, dt) { if (e.shieldDownT > 0) e.shieldDownT = Math.max(0, e.shieldDownT - dt); },
 
   /** pug_chop only while the shield is down; bash / slam only while it's up. */

@@ -3,9 +3,10 @@
 // ground, never inside a prop, cheap), the real player against a prop wall and an Octree course (stairs, landing,
 // ramp), a fall and landing, actor separation, level bounds, the Old Bridge, a 60° terrain bank (no bunny-hopping up
 // it; steering into it still slides her down), rays. CONTROLS_SPEC §5.3 nav (click / tap to move):
-//   physics:nav        meadow: grid build time, corridor audit, the practice-field fence link gated on `tut.jump.done`
-//                      (closed: an RMB click past it walks round; open: she hops it), dynamic re-path around a new
-//                      collider, query cost, the nav overlay (desktop mouse through the real pick path)
+//   physics:nav        meadow: grid build time, corridor audit, the practice-field fence (TT2: one open hop link by
+//                      the barn door, no automatic hop elsewhere; an RMB click away from the door still gets there, at the
+//                      door she hops it), dynamic re-path around a new collider, query cost, the nav overlay (desktop
+//                      mouse through the real pick path; RMB click-to-move is the `moba` preset's since TT3 §11.2)
 //   physics:nav-forest forest: the Treetop root ledge climbed by a click (hop links), Stump Crossing by gap links
 //                      (no splash), the Mushroom Ring path (hop + bounce), the authored links once world has them
 //   physics:nav-touch  hasTouch / isMobile 390×844 and 844×390: a real touchscreen tap past the fence path-finds over
@@ -17,6 +18,15 @@ import path from 'node:path';
 const shotDir = (t) => fs.mkdirSync(path.join(t.shotsDir, 'physics'), { recursive: true });
 const shot = (t, name) => t.shot(`physics/${name}`);
 const fmt = (a) => a.map((v) => v.toFixed(2)).join(', ');
+
+/** TT3 §11.2: switch the KBM preset (RMB click-to-move is `moba`'s; the harness puts every block back on `hybrid`). */
+const setPreset = (t, name) => t.G((n) => {
+  const c = window.__GAME__.ctx;
+  c.state.settings.controlPreset = n;
+  c.bus.emit('settings:changed', { key: 'controlPreset', value: n });
+  c.input.rebind(n);
+  return c.input.preset;
+}, name);
 
 /** Player + ground summary computed in the page. */
 const ground = (t) => t.G(() => {
@@ -561,25 +571,28 @@ export default [
       if (b.st.ms >= 1000) t.warn(`meadow nav build ${b.st.ms} ms (≥ 1.0 s: machine under load?)`);
       t.assert(b.st.ms < 2500, `meadow nav build ${b.st.ms} ms`);
       t.log(`nav: ${b.nx}×${b.nz} cells, ${b.st.walk} walkable, built in ${b.st.ms} ms (audit ${b.st.auditMs ?? '?'} ms), ${b.ev.links} authored links; corridors < 1.6 m: ${b.cor.length ? b.cor.slice(0, 8).map((c) => `(${c.x}, ${c.z}) ${c.width}`).join(' ') : 'none'}`);
-      // 2. the practice-field fence (1.0 m at z −87, x −20…−2) is gated on tut.jump.done
+      // 2. TT2 §10.3 the practice-field fence (1.0 m at z −87, x −20…−2): ONE open hop link by the barn door (x −14.5);
+      // the rest of the fence keeps its automatic hop off (a gate line on `onboard.fenceAuto`, never set)
+      await setPreset(t, 'moba');                       // TT3 §11.2: RMB click-to-move is the `moba` preset's
       const gate = await t.G(() => {
         const g = window.__GAME__, ph = g.ctx.physics, L = ph.level;
-        const has = (L.navLinks ?? []).some((l) => l.kind === 'fence' && String(l.when ?? '').includes('tut.jump.done'));
-        if (!has) ph.addNavLink({ a: [-14.5, -88.6], b: [-14.5, -85.4], kind: 'fence', when: 'tut.jump.done', gate: [[-20, -87], [-2, -87]] });
-        g.ctx.state.setFlag('tut.jump.done', false);
+        const door = (L.navLinks ?? []).find((l) => l.kind === 'fence' && !l.when && Math.abs(l.a[0] + 14.5) < 0.6);
+        const shut = (L.navLinks ?? []).find((l) => l.kind === 'fence' && String(l.when ?? '').includes('onboard.fenceAuto'));
+        g.ctx.state.setFlag('onboard.fenceAuto', false);
         ph.refreshLinks();
-        // either side of the fence, clear of the field props (a round hay platform sits at (−10.5, −84))
-        const A = ph.nearestWalkable(-14.5, -89.75, 1), B = ph.nearestWalkable(-14.5, -84.25, 1);
+        // either side of the fence away from the door (a round hay platform sits at (−10.5, −84))
+        const A = ph.nearestWalkable(-6, -89.75, 1), B = ph.nearestWalkable(-6, -84.25, 1);
         const r = ph.findPath(A, B);
         const crosses = r.links.filter((q) => q.to && (q.z - -87) * (q.to.z - -87) < 0 && q.x < -2);
-        return { authored: has, A, B, ok: r.ok, partial: r.partial, n: r.points.length, crosses: crosses.length, maxX: Math.max(...r.points.map((q) => q.x)) };
+        const awayFromDoor = crosses.filter((q) => Math.abs(q.x + 14.5) > 1.2).length;
+        return { door: !!door, shut: !!shut, A, B, ok: r.ok, partial: r.partial, crosses: crosses.length, awayFromDoor, maxX: Math.max(...r.points.map((q) => q.x)) };
       });
-      if (!gate.authored) t.warn('meadow has no gated fence navLink yet (requests/world.md): the block adds it at runtime');
-      t.assert(gate.ok && gate.crosses === 0, `closed gate: no jump over the lesson fence (${gate.crosses} crossings)`);
-      t.assert(gate.partial || gate.maxX > -2.5, `closed gate: the path walks round the fence end (max x ${gate.maxX.toFixed(1)}, partial ${gate.partial})`);
+      t.assert(gate.door && gate.shut, `meadow authors the barn-door hop and the shut gate line (${JSON.stringify({ door: gate.door, shut: gate.shut })})`);
+      t.assert(gate.ok && gate.awayFromDoor === 0, `no automatic hop away from the barn door (${gate.awayFromDoor} of ${gate.crosses} crossings)`);
+      t.assert(gate.partial || gate.maxX > -2.5 || gate.crosses >= 1, `away from the door the path walks round the fence end or uses the door (max x ${gate.maxX.toFixed(1)})`);
       const go = async (from, to, sec) => {
         await t.G(([f]) => { const g = window.__GAME__; g.ctx.enemies?.clear?.(); g.ctx.player.orders?.clear?.('test'); g.ctx.player.teleport({ pos: new g.THREE.Vector3(f.x, f.y + 0.05, f.z), facing: 0 }); }, [from]);
-        await t.frames(6);
+        await t.frames(30);
         await t.G(() => { const o = window.__GAME__.ctx.player.orders; if (o) o.hops = 0; });
         await t.click(to.x, to.z, 'right');
         const t0 = await t.G(() => window.__GAME__.game.time);
@@ -588,16 +601,18 @@ export default [
         } catch { /* the asserts report it */ }
         return t.G(([to, t0]) => { const g = window.__GAME__, p = g.ctx.player.pos, o = g.orders(); return { d: Math.hypot(p.x - to.x, p.z - to.z), sec: g.game.time - t0, hops: o.hops, pos: p.toArray() }; }, [to, t0]);
       };
-      const walk = await go(gate.A, gate.B, 14);
-      t.assert(walk.d < 0.6 && walk.hops === 0, `closed: an RMB click past the fence walks round it (d ${walk.d.toFixed(2)}, ${walk.hops} hops, ${walk.sec.toFixed(1)} s)`);
-      await t.G(() => { const g = window.__GAME__; g.ctx.state.setFlag('tut.jump.done', true); g.ctx.bus.emit('story:flag', { key: 'tut.jump.done', value: true }); });
-      const open = await t.G(([A, B]) => { const r = window.__GAME__.ctx.physics.findPath(A, B); return { ok: r.ok, partial: r.partial, links: r.links.map((q) => q.link) }; }, [gate.A, gate.B]);
-      t.assert(open.ok && !open.partial && open.links.length >= 1, `open: the path hops the fence (${JSON.stringify(open)})`);
+      // an RMB click from the barn side into the field (up-screen at yaw π) away from the door gets there
+      const walk = await go(gate.A, gate.B, 16);
+      t.assert(walk.d < 0.6, `away from the door: an RMB click past the fence gets there (d ${walk.d.toFixed(2)}, ${walk.hops} hops, ${walk.sec.toFixed(1)} s)`);
+      // at the barn door: the path hops it, and she does
+      const D = await t.G(() => { const ph = window.__GAME__.ctx.physics; return { A: ph.nearestWalkable(-14.5, -89.75, 1), B: ph.nearestWalkable(-14.5, -84.25, 1) }; });
+      const open = await t.G(([A, B]) => { const r = window.__GAME__.ctx.physics.findPath(A, B); return { ok: r.ok, partial: r.partial, links: r.links.map((q) => q.link) }; }, [D.A, D.B]);
+      t.assert(open.ok && !open.partial && open.links.length >= 1, `barn door: the path hops the fence (${JSON.stringify(open)})`);
       await t.G(() => window.__GAME__.ctx.physics.navDebug(true));
-      const hopP = go(gate.A, gate.B, 8);
+      const hopP = go(D.A, D.B, 8);
       await t.page.waitForFunction(() => { const p = window.__GAME__.ctx.player; return !p.onGround && Math.abs(p.pos.z + 87) < 1.2; }, null, { timeout: 15000, polling: 30 }).then(() => shot(t, 'nav-fence-hop')).catch(() => t.warn('no mid-hop frame caught'));
       const hop = await hopP;
-      t.assert(hop.d < 0.6 && hop.hops >= 1 && hop.sec < walk.sec, `open: she hops the fence (d ${hop.d.toFixed(2)}, ${hop.hops} hops, ${hop.sec.toFixed(1)} s vs ${walk.sec.toFixed(1)} s round)`);
+      t.assert(hop.d < 0.6 && hop.hops >= 1, `barn door: she hops the fence (d ${hop.d.toFixed(2)}, ${hop.hops} hops, ${hop.sec.toFixed(1)} s)`);
       await t.frames(4);
       await shot(t, 'nav-fence');
       // 3. dynamic: a new wall across her way (the arena fog wall / portcullis case) re-routes the next query
@@ -636,7 +651,7 @@ export default [
       });
       t.assert(q.n >= 15 && q.med < 8, `path queries: median ${q.med?.toFixed(2)} ms`);
       t.assert(q.pts <= 48, `≤ 48 points (${q.pts})`);
-      t.log(`fence: round ${walk.sec.toFixed(1)} s, hop ${hop.sec.toFixed(1)} s (${hop.hops} hop); dynamic wall ${dyn.l0.toFixed(1)} → ${dyn.l1.toFixed(1)} m, invalidate ${dyn.ms.toFixed(2)} ms + re-path ${dyn.qms.toFixed(2)} ms; ${q.n} meadow queries: median ${q.med.toFixed(2)} ms, max ${q.max.toFixed(2)} ms, ${q.exp.toFixed(0)} expansions avg, ${q.partial} partial (expansion cap / islands)`);
+      t.log(`fence: away from the door ${walk.sec.toFixed(1)} s, barn-door hop ${hop.sec.toFixed(1)} s (${hop.hops} hop); dynamic wall ${dyn.l0.toFixed(1)} → ${dyn.l1.toFixed(1)} m, invalidate ${dyn.ms.toFixed(2)} ms + re-path ${dyn.qms.toFixed(2)} ms; ${q.n} meadow queries: median ${q.med.toFixed(2)} ms, max ${q.max.toFixed(2)} ms, ${q.exp.toFixed(0)} expansions avg, ${q.partial} partial (expansion cap / islands)`);
     },
   },
   {
@@ -651,6 +666,7 @@ export default [
         return true;
       });
       await t.page.waitForFunction(() => window.__GAME__.ctx.physics.nav?.filled, null, { timeout: 90000, polling: 100 });
+      await setPreset(t, 'moba');                       // TT3 §11.2: RMB click-to-move is the `moba` preset's
       const info = await t.G(() => { const ph = window.__GAME__.ctx.physics; return { st: ph.navStats, links: (ph.level.navLinks ?? []).length, cor: (ph.corridors ?? []).length }; });
       t.log(`forest nav: ${info.st?.walk} walkable, ${info.st?.ms} ms, ${info.links} authored links, ${info.cor} narrow corridors`);
       if (!info.links) t.warn('forest has no authored navLinks yet (Treetop / Stump Crossing, requests/world.md): automatic links only');
@@ -760,11 +776,10 @@ export default [
           await s.page.waitForFunction(() => window.__GAME__.ctx.physics.nav?.filled, null, { timeout: 90000, polling: 100 });
           const dev = await s.G(() => window.__GAME__.ctx.input.device);
           t.assert(dev === 'touch', `${tag}: device ${dev}`);
-          // the lesson fence, open: a tap 2.5 m past it from 2.5 m before it
+          // the lesson fence at the barn door (TT2: its one open hop link): a tap 2.5 m past it from 2.5 m before it
           const AB = await s.G(() => {
             const g = window.__GAME__, ph = g.ctx.physics;
-            if (!(ph.level.navLinks ?? []).some((l) => String(l.when ?? '').includes('tut.jump.done'))) ph.addNavLink({ a: [-14.5, -88.6], b: [-14.5, -85.4], kind: 'fence', when: 'tut.jump.done', gate: [[-20, -87], [-2, -87]] });
-            g.ctx.state.setFlag('tut.jump.done', true); ph.refreshLinks();
+            ph.refreshLinks();
             const A = ph.nearestWalkable(-14.5, -89.25, 1), B = ph.nearestWalkable(-14.5, -84.75, 1);
             g.ctx.player.orders?.clear?.('test');
             g.ctx.player.teleport({ pos: new g.THREE.Vector3(A.x, A.y + 0.05, A.z), facing: 0 });
@@ -775,8 +790,16 @@ export default [
           const sp = await s.screen(AB.B.x, AB.B.z);
           t.assert(sp && sp.x > 0 && sp.x < w && sp.y > 0 && sp.y < h, `${tag}: the target is on screen (${JSON.stringify(sp)})`);
           await s.page.touchscreen.tap(Math.round(sp.x), Math.round(sp.y));
-          const ok = await s.page.waitForFunction((B) => { const p = window.__GAME__.ctx.player.pos; return Math.hypot(p.x - B.x, p.z - B.z) < 0.7; }, AB.B, { timeout: 30000, polling: 50 }).then(() => true).catch(() => false);
+          // the goal is the order's own ground point (the touch pick can land up to ~1.5 m from the projected spot on a
+          // tall portrait view); it must lie past the fence, and she must reach it with at least one hop
+          const ok = await s.page.waitForFunction((B) => {
+            const g = window.__GAME__, p = g.ctx.player.pos, q = g.lastEvent('player:order')?.point;
+            const T = q ? { x: q[0], z: q[2] } : B;
+            return Math.hypot(p.x - T.x, p.z - T.z) < 0.7;
+          }, AB.B, { timeout: 30000, polling: 50 }).then(() => true).catch(() => false);
           const r = await s.G(() => { const g = window.__GAME__; return { o: g.orders(), ev: g.lastEvent('player:order'), p: g.ctx.player.pos.toArray() }; });
+          const fenceZ = (AB.A.z + AB.B.z) / 2, q = r.ev?.point;
+          t.assert(q && q[2] > fenceZ + 0.5 && Math.hypot(q[0] - AB.B.x, q[2] - AB.B.z) < 1.6, `${tag}: the tap's order point lies past the fence (${JSON.stringify(q)}, fence z ${fenceZ.toFixed(2)})`);
           t.assert(ok && r.o.hops >= 1, `${tag}: a tap past the fence path-finds over it (hops ${r.o.hops}, at ${fmt(r.p)}, order ${JSON.stringify(r.ev)})`);
           await s.frames(4);
           await s.shot(`physics/nav-touch-${tag}`);
@@ -810,6 +833,7 @@ export default [
     async run(t) {
       await t.G(() => { const g = window.__GAME__; g.god(true); g.ctx.state.setFlag?.('town.free', true); for (const e of [...(g.ctx.enemies?.list ?? [])]) g.ctx.enemies.despawn?.(e); });
       await t.page.waitForFunction(() => window.__GAME__.ctx.physics.navStats, null, { timeout: 120000, polling: 200 });
+      await setPreset(t, 'moba');                       // TT3 §11.2: RMB click-to-move is the `moba` preset's
       const st = await t.G(() => {
         const ph = window.__GAME__.ctx.physics, nav = ph.nav, k = nav.index(-2.3, 48.6);
         return { walk: nav.walkable(k), h: nav.h[k], trap: nav.trap?.[k] ?? -1, traps: ph.navStats.traps, trapMs: ph.navStats.trapMs };

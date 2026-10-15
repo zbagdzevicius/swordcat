@@ -1347,9 +1347,9 @@ test('iso cast input: KBM tap = quick cast at the cursor; hold = indicator follo
   assert.equal(m.aim.active, false, 'Esc hides the indicator');
   releaseNow(ctx, 'ability');
   assert.equal(c.stats.abilities, n0 + 1, 'a cancelled aim casts nothing'); assert.equal(c.cooldown, 0);
-  // RMB (`move`) cancels too, and ui's ✕ (cancelAbilityAim)
+  // TT3 §11.2: the Stand (`guard`: RMB / Q / LB) cancels too, and ui's ✕ (cancelAbilityAim)
   pressFor(ctx, 'ability', 15, { release: false });
-  inp._p.add('move'); step(ctx, 1); inp._p.clear();
+  inp._p.add('guard'); step(ctx, 1); inp._p.clear();
   assert.equal(m.aim.active, false);
   releaseNow(ctx, 'ability');
   pressFor(ctx, 'ability', 15, { release: false });

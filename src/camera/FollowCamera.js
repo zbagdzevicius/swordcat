@@ -1325,16 +1325,18 @@ export class FollowCamera {
     }
     if (input.pressed('camLock') && input.device === 'kbm') this.setCamLock(!this.camLocked);
     if (input.pressed('centre')) { this._pan.set(0, 0, 0); this._semiHome = true; this._centreT = 0.25; }
-    // selection (§7.4): Tab / RB select the best / cycle (Shift+Tab back); D-pad ← → cycle; LMB / RMB / taps select
-    // through the player's orders
+    // selection (§7.4): Tab / R3 select the best / cycle (Shift+Tab = `lockPrev`, Input.js); D-pad ← → cycle; LMB /
+    // taps select through the player's orders
     if (input.pressed('lockon')) {
-      const back = input.keys?.has?.('ShiftLeft') || input.keys?.has?.('ShiftRight');
       if (input.device === 'pad' && this.lockTarget) this.select(null, 'pad');
-      else if (this.lockTarget) { this._selSource = 'tab'; this.switchLock(back ? -1 : 1, true); this._selSource = null; }
+      else if (this.lockTarget) { this._selSource = 'tab'; this.switchLock(1, true); this._selSource = null; }
       else this.select(this._bestSelectable(), input.device === 'pad' ? 'pad' : 'tab');
     }
     if (input.pressed('lockNext') && this.lockTarget) this.switchLock(1, true);
-    if (input.pressed('lockPrev') && this.lockTarget) this.switchLock(-1, true);
+    if (input.pressed('lockPrev')) {
+      if (this.lockTarget) { this._selSource = 'tab'; this.switchLock(-1, true); this._selSource = null; }
+      else if (input.device === 'kbm') this.select(this._bestSelectable(), 'tab');
+    }
     // stick latch (§2.2): movement keeps the yaw sampled when the stick engaged; re-latch 0.15 s after release
     const m = input.move, held = Math.hypot(m?.x ?? 0, m?.y ?? 0) > 0.1;
     if (held) this._stickFree = 0;
@@ -1749,7 +1751,7 @@ export class FollowCamera {
       smoothDamp2(this._aim, this._aimT.x, this._aimT.z, this._aimS, aim || this._aimHoldT > 0 ? I.aimPan.in : I.aimPan.out, dt, FR.lean.vmax);
       smoothDamp2(this._beatOff, beat.lx * bw, beat.lz * bw, this._beatS, BEAT_ST, dt, FR.lean.vmax);
     }
-    // §2.3 peek (Alt / MMB / pad D-pad ↓ + RS), out of combat
+    // §2.3 peek (Z / MMB / pad D-pad ↓ + RS), out of combat
     this._peekStep(dt, p, feet, combat, snap);
     // desktop lock modes (§10.4): semi = a pan inside herFrame that springs home; free = the leash pan (after the clamp)
     this._panStep(dt, feet, W, H, yaw, combat);

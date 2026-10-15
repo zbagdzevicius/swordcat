@@ -525,6 +525,9 @@ export default [
           // ---- 1) ⚔ with the stick idle: 360° auto-target within 4.5 m, the magnet turns her and the lunge closes in
           const r1 = await G(() => {
             const g = window.__GAME__, c = g.ctx, p = c.player;
+            // TT3 K triage: the meadow's own rats can wander in by now (the landscape run starts later): only the test rat
+            for (const e of [...c.enemies.list]) c.enemies.despawn(e);
+            c.cam.select?.(null); p.orders?.clear?.('smoke'); p.setState?.('move');
             c.combat.log.length = 0;
             const a = p.facing + 2.2, x = p.pos.x + Math.sin(a) * 3.6, z = p.pos.z + Math.cos(a) * 3.6;
             const e = c.enemies.spawn('rat_pike', new g.THREE.Vector3(x, c.physics.heightAt(x, z), z), { facing: a + Math.PI });

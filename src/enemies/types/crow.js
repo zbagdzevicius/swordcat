@@ -17,7 +17,7 @@ const def = ENEMIES.crow;
 const DIVE = ATTACKS.crow_dive;
 /** Gear on the round pigeon body (metres at the 1.2 m wingspan): the mustard crest on the crown, friendly eyes on the
  * face (ART §7.2; the head bone is ×1.35 after dressing, so both grow with it). */
-const CROW_FACE = { hoodY: 0.34, hoodZ: 0.03, hoodScale: 1.6, eyeY: 0.27, eyeZ: 0.25, eyeScale: 0.9 };
+const CROW_FACE = { hoodY: 0.34, hoodZ: 0.03, hoodScale: 1.6, eyeY: 0.27, eyeZ: 0.14, eyeScale: 0.9 };   // TT3: eyes seated on the face (0.25 floated)
 const _d = new THREE.Vector3();
 const _s = new THREE.Vector3();
 

@@ -216,3 +216,28 @@ P3 positional laughter; `play3D('stealerSnatch' | 'pugSnort' | 'grizzleRoar' | '
 - `toonify` makes every converted material DoubleSide (single pass) and converts shared lit GLB gear (weapons) to a
   cached `sharedToon(src, kind)`; it runs before the helmet-top tint (a toon uniform now). Web patches and Cacklejaw's
   blob are `fxBasicMaterial`s.
+
+---
+
+# TT3 package C notes (docs/TOKENTAILS-PLAN.md §11.4 / §11.5)
+
+### Paw Trick hooks (instance methods, attached in the types' `init`)
+- `stealer.dropStolen(frac)` (also the `look: 'pilfer'` stealer): drops `frac` of the fish it carries behind it as
+  pickups (no +5 bonus), keeps the rest and keeps running; `item:returned { item: 'fish', amount, bonus: 0, thief,
+  partial: true }`. A milk bottle or the pin falls only when `frac ≥ 0.5` (a full `dropLoot`). Returns the amount dropped.
+  Pure helper: `dropStolen(e, frac)` (types/stealer.js).
+- `pilfer_chase.dropStolen(frac)`: shakes `round(6 × frac)` letters out of the post bag (cosmetic; the bag still drops
+  on the third hit). The cutscene `pilfer` returns 0.
+- `pug.blocksFrom(dir)`: true while the shield is up and `dir` (the direction a hit travels INTO the pug) meets its
+  front arc (`frontalHit`). Pure helper: `blocksFrom(e, dir)` (types/pug.js).
+
+### Looks
+- `rig.smoothNormals(geo)` / `SMOOTH_TYPES` (`rat_*`, `boss_grizzlechop`, `spider`, `crow`): the low-poly GLB bodies get
+  averaged normals in `toonify` (once per shared geometry); baked geometries and LODs keep them (`userData.smoothNormals`).
+- Props: `cheeseShield` (Grizzlechop's shield: yellow round with holes, no hub), `eyesBig` (the Rat Pikeman, 72 %
+  pupils), the crossbow rat's `hood` is one plain colour; `hood` and `crowHood` never join the ink hull (open shells
+  z-fought with it). The crow wears a small three-feather tuft; its eyes sit on the face (`CROW_FACE.eyeZ` 0.14).
+- Grizzlechop's tricorn sits on his head; the jelly no longer swallows a kettle helm (it read as a grey disc).
+- Sir Wobble (world/PropActor.js `WOBBLE_LOOK`, `wobbleBodyParts`, `wobbleArmParts`): dot eyes with highlights, rosy
+  cheeks, a smile, a pink heart target flush on his tummy, the arm on a wooden peg. The WobbleKnight re-dresses the
+  meadow's body and arm meshes in its constructor (`o.dress: false` keeps the old look).

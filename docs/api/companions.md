@@ -217,7 +217,8 @@ have not landed yet. Nothing needs to change for the game to keep working; each 
 2. Input, as read here (please keep these names, or tell me the real ones): `input.aimStick {x, y}` (pad RS, y up),
    `input.virtualAim {x, y, active}` (touch drag-aim, **screen space with y up**, CSS px or normalised 0..1; the setter
    is `setVirtualAim(x, y, active)`), `input.device`, `input.preset`, `input.down/pressed/released('ability')`,
-   `pressed('back')` and `pressed('move')` (RMB cancels an aim), `input.haptic('kitten' | 'orderRejected')`.
+   `pressed('back')` and `pressed('guard')` (Esc or the Stand: RMB / Q / LB cancels an aim; TT3 §11.2, RMB is no longer
+   a move order), `input.haptic('kitten' | 'orderRejected')`. The kitten ability is G / LT / the portrait (TT3).
 3. `state.settings.castMode` default `'smart'` (§10.7). Already read defensively.
 
 ### To camera (P1)
@@ -239,7 +240,8 @@ have not landed yet. Nothing needs to change for the game to keep working; each 
 ### To fx (P3)
 1. GroundDecals can draw the kitten ability indicator from `ctx.companions.aim` (shapes above). When it does, set
    `ctx.fx.drawsAbilityAim = true`: companions' fallback `AbilityIndicator` then stays hidden.
-2. The ranges overlay (hold Ctrl): `ctx.companions.abilityShape()` gives the active kitten's shape and range.
+2. The ranges overlay (hold Z or MMB, one hold with the peek; TT3 removed Ctrl): `ctx.companions.abilityShape()` gives
+   the active kitten's shape and range.
 
 ### To ui (P2/P3)
 1. Touch portrait button: tap = the `ability` virtual action (smart cast, works today). Drag ≥ 16 px: call

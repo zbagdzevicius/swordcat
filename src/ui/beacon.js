@@ -255,7 +255,8 @@ export function clearOf(p, cx, cy, r, W, H, m) {
 
 /**
  * TT3 R3: a tap / click on the edge coin is a move order toward the guide target, through the same `Orders.order('move')`
- * a ground tap / right-click ends in (the coin no longer swallows it). Only in live play with a positioned target.
+ * a ground tap or a move click ends in (RMB in `moba` / `mouseOnly`, LMB in `diablo`; the default `hybrid` walks on
+ * WASD, TOKENTAILS-PLAN §11.2, and a click on the coin still walks her). Only in live play with a positioned target.
  * Returns whether the order was accepted.
  * @param {any} ctx @param {{ pos?: boolean, x: number, y?: number, z: number }} g the beacon's guide @param {'mouse'|'touch'} [source]
  */
@@ -512,6 +513,14 @@ export class Beacon {
       _v.set(rc.x, y, rc.z);
       if (_d.copy(_v).sub(cam.position).dot(_f) > 0) { _v.project(cam); ring = { sx: Math.round((_v.x * 0.5 + 0.5) * W), sy: Math.round((-_v.y * 0.5 + 0.5) * H) }; }
     }
+    // TT3 §11.2: where Clem stands on screen (what a WASD player steers from; the bot walks from here toward the trail)
+    let me = null;
+    const pp = ctx.player?.object3d?.position ?? ctx.player?.pos;
+    if (cam && pp) {
+      cam.getWorldDirection(_f);
+      _v.set(pp.x, pp.y + 0.3, pp.z);
+      if (_d.copy(_v).sub(cam.position).dot(_f) > 0) { _v.project(cam); me = { sx: Math.round((_v.x * 0.5 + 0.5) * W), sy: Math.round((-_v.y * 0.5 + 0.5) * H) }; }
+    }
     const st = ctx.state;
     const phase = ctx.ui?.menus?.titleActive ? 'title' : ctx.ui?.isLoading ? 'loading' : this.hidden && guideHidden(ctx) ? 'scene'
       : inPractice(ctx) ? 'practice' : !st?.getFlag?.('prologue.done') && (ctx.levels?.current?.id ?? st?.levelId) === 'meadow' ? 'prologue'
@@ -526,6 +535,7 @@ export class Beacon {
       badge: this.badgeAt ? { sx: Math.round(this.badgeAt.x), sy: Math.round(this.badgeAt.y) } : null,
       ring,
       skipChip,
+      me,
     };
   }
 

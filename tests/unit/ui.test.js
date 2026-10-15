@@ -67,18 +67,29 @@ test('typewriter: segments / reveal counts at 30 chars/s × speed (§14.2)', () 
 });
 
 test('device glyphs: keyboard / pad / touch (§6.6, §15)', () => {
-  assert.equal(actionGlyph('jump', 'kbm'), 'F');              // CONTROLS_SPEC C1: F = jump
+  assert.equal(actionGlyph('jump', 'kbm'), 'Space');          // TT3 §11.2: Space = jump
   assert.equal(actionGlyph('jump', 'pad'), 'A');
-  assert.equal(actionGlyph('guard', 'kbm'), 'Space');          // CONTROLS_SPEC C1: Space = the Stand
-  assert.equal(actionGlyph('move', 'kbm'), 'RMB');             // RMB = move orders
-  assert.equal(actionGlyph('lockon', 'pad'), 'RB');          // §15.4: lock-on is RB only
+  assert.equal(actionGlyph('guard', 'kbm'), 'RMB');            // TT3 §11.2: RMB / Q / L = the Stand
+  assert.equal(actionGlyph('move', 'kbm'), 'WASD');            // hybrid walks on WASD
+  assert.equal(actionGlyph('trick', 'kbm'), 'F');              // F = the Paw Trick
+  assert.equal(actionGlyph('ability', 'kbm'), 'G');            // G = the kitten
+  assert.equal(actionGlyph('trick', 'pad'), 'RT');
+  assert.equal(actionGlyph('guard', 'pad'), 'LB');
+  assert.equal(actionGlyph('lockon', 'pad'), 'R3');            // R3 selects (RB is the Stand)
+  assert.equal(actionGlyph('zoom', 'pad'), 'View');
+  assert.equal(actionGlyph('trick', 'touch'), ':3');
   assert.equal(actionGlyph('attack', 'touch'), '⚔');
   assert.equal(actionGlyph('nope', 'pad'), 'nope');
-  const k = glyphify('Press [Space] to stand', 'kbm');
+  const k = glyphify('Press [Space] to jump', 'kbm');
   assert.match(k, /<kbd class="ui-key">Space<\/kbd>/);
   const p = glyphify('Press [Jump] to jump', 'pad');
   assert.match(p, /<kbd class="ui-key">A<\/kbd>/);
-  assert.match(glyphify('Press [Jump] to jump', 'kbm'), /<kbd class="ui-key">F<\/kbd>/, 'semantic tokens resolve through the bindings');
+  assert.match(glyphify('Press [Jump] to jump', 'kbm'), /<kbd class="ui-key">Space<\/kbd>/, 'semantic tokens resolve through the bindings');
+  assert.match(glyphify('[Trick] Toss the coin', 'kbm'), /<kbd class="ui-key">F<\/kbd>/);
+  assert.match(glyphify('[Trick] Toss the coin', 'pad'), /<kbd class="ui-key">RT<\/kbd>/);
+  assert.match(glyphify('[Trick] Toss the coin', 'touch'), /<kbd class="ui-key">:3<\/kbd>/);
+  assert.match(glyphify('Hold [Stand]', 'kbm'), /<kbd class="ui-key">RMB<\/kbd>/, 'the Stand prompt says RMB');
+  assert.match(glyphify('Hold [Esc] or [P]', 'pad'), /Start/);
   assert.match(glyphify('Hold [Stand]', 'touch'), /<kbd class="ui-key">Stand<\/kbd>/);
   assert.match(glyphify('Swing ⚔ ×3', 'kbm'), /ui-key--sword">LMB</);
   assert.match(glyphify('[Weird] <b>', 'kbm'), /<kbd class="ui-key">Weird<\/kbd> &lt;b&gt;/);
@@ -644,11 +655,14 @@ test('§12 ui 3 glyphs: preset-aware tokens resolve through the active bindings'
   assert.equal(codeLabel('Mouse2'), 'RMB');
   assert.equal(codeLabel('ShiftLeft'), 'Shift');
   assert.equal(preferredCode('attack', ['KeyJ', 'Mouse0']), 'Mouse0');      // mouse-first actions show the button
-  assert.equal(preferredCode('guard', ['Mouse4', 'KeyL']), 'KeyL');          // others the key
+  assert.equal(preferredCode('guard', ['Mouse4', 'KeyL']), 'Mouse4');        // TT3: the Stand is mouse-first (RMB)
+  assert.equal(preferredCode('jump', ['Mouse1', 'Space']), 'Space');         // others the key
   const hy = fakeInput('hybrid'), di = fakeInput('diablo'), ko = fakeInput('keyboardOnly'), mo = fakeInput('moba');
-  assert.equal(actionGlyph('guard', 'kbm', hy), 'Space');
+  assert.equal(actionGlyph('guard', 'kbm', hy), 'RMB');
   assert.equal(actionGlyph('attack', 'kbm', hy), 'LMB');
-  assert.equal(actionGlyph('move', 'kbm', hy), 'RMB');
+  assert.equal(actionGlyph('move', 'kbm', hy), 'WASD');
+  assert.equal(actionGlyph('move', 'kbm', mo), 'RMB');                       // moba: RMB moves
+  assert.equal(actionGlyph('guard', 'kbm', mo), 'Q');
   assert.equal(actionGlyph('move', 'kbm', di), 'LMB');                       // diablo: LMB moves
   assert.equal(actionGlyph('dodge', 'kbm', di), 'Space');
   assert.equal(actionGlyph('attack', 'kbm', ko), 'J');
@@ -657,16 +671,17 @@ test('§12 ui 3 glyphs: preset-aware tokens resolve through the active bindings'
   assert.equal(actionGlyph('zoom', 'kbm', hy), 'Wheel');                     // gestures never come from bindings
   assert.equal(actionGlyph('guard', 'pad', hy), 'LB');                       // pad glyphs ignore KBM bindings
   // semantic tokens follow the preset; a literal key token follows a rebinding that moved the action off it
-  assert.match(glyphify('Hold [Stand].', 'kbm', di), /<kbd class="ui-key">L<\/kbd>/);
-  assert.match(glyphify('Hold [Stand].', 'kbm', hy), /<kbd class="ui-key">Space<\/kbd>/);
+  assert.match(glyphify('Hold [Stand].', 'kbm', di), /<kbd class="ui-key">RMB<\/kbd>/);
+  assert.match(glyphify('Hold [Stand].', 'kbm', hy), /<kbd class="ui-key">RMB<\/kbd>/);
+  assert.match(glyphify('Hold [Stand].', 'kbm', fakeInput('hybrid', 'kbm', { guard: ['KeyN', 'KeyQ'] })), /<kbd class="ui-key">N<\/kbd>/, 'a rebound Stand shows its new key');
   assert.match(glyphify('Jump [Jump].', 'touch', hy), />Jump</);
   assert.match(glyphify('Press [Space].', 'kbm', hy), />Space</);
-  assert.match(glyphify('Press [Space].', 'kbm', fakeInput('hybrid', 'kbm', { guard: ['KeyG'] })), />G</);
+  assert.match(glyphify('Press [Space].', 'kbm', fakeInput('hybrid', 'kbm', { jump: ['KeyN'] })), />N</);
   assert.match(glyphify('Snip [Attack] x3', 'kbm', ko), /ui-key--sword">J</);
   // custom rebinding wins over the preset
   assert.equal(actionGlyph('jump', 'kbm', fakeInput('hybrid', 'kbm', { jump: ['KeyT'] })), 'T');
   // the ability bar corner glyph
-  assert.equal(slotGlyph(hy, 'ability'), 'Q');
+  assert.equal(slotGlyph(hy, 'ability'), 'G');
   assert.equal(slotGlyph(fakeInput('hybrid', 'pad'), 'ability'), 'LT');
   assert.equal(slotGlyph(di, 'dodge'), 'Space');
 });
@@ -677,12 +692,16 @@ test('controls card: every preset previews a glyph for every row; move shows WAS
     const g = presetGlyph(act, p);
     assert.ok(typeof g === 'string' && g.length > 0 && g !== act, `${p}.${act} -> ${g}`);
   }
-  assert.equal(presetGlyph('move', 'hybrid'), 'RMB / WASD');
+  assert.equal(presetGlyph('move', 'hybrid'), 'WASD');
   assert.equal(presetGlyph('move', 'moba'), 'RMB');
   assert.equal(presetGlyph('move', 'diablo'), 'LMB / WASD');
+  assert.equal(presetGlyph('move', 'mouseOnly'), 'RMB / WASD');
   assert.equal(presetGlyph('move', 'keyboardOnly'), 'WASD');
-  assert.equal(presetGlyph('guard', 'diablo'), 'L');               // diablo Stand: RMB / L -> first key
-  assert.equal(presetGlyph('guard', 'hybrid', { guard: ['KeyG'] }), 'G');
+  assert.equal(presetGlyph('guard', 'diablo'), 'RMB');
+  assert.equal(presetGlyph('jump', 'diablo'), 'T');
+  assert.equal(presetGlyph('guard', 'hybrid', { guard: ['KeyN'] }), 'N');
+  assert.equal(presetGlyph('pause', 'hybrid'), 'Esc / P');
+  assert.equal(presetGlyph('pause', 'hybrid', { pause: ['KeyO', 'Escape'] }), 'Esc / O');
   assert.ok(!CONTROL_ROWS.some(([a]) => a === 'look'), 'no camera-look row in iso');
 });
 

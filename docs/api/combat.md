@@ -169,3 +169,11 @@ Frozen contract unchanged: `beginSwing(attacker, def)`, `updateSwing(swing, dt)`
   a contact blob through `fx.blobs.add(group, r × 1.4)`, removed when the projectile is recycled. Bolts and waves get
   no blob. The bolt and glob materials are now `MeshLambertMaterial`, so combat adds no Standard shader program.
 
+
+## TT3 Paw Tricks (package A)
+
+- The ":3" coin hits through `applyHit` as a projectile-like attacker (`isProjectile`, `owner` = her). Its defs are
+  `trickCoin` (8 damage), a jelly variant with `popsSlime` (no split) and a boss variant (6 damage). See `docs/api/tricks.md`.
+- The Ribbon Twirl's start spin is an `areaHit` with the `trickTwirl` def (6 damage, 1.0 m, all around).
+- `_critTaken`: a target in the `giddy` state (Catnip Cloud) takes the first hit as a ×`TRICKS.cloud.bellyMul` (1.5)
+  crit, the "belly-rub bonk". `Enemy.onHit` then wakes it, so the bonus is for one hit only.

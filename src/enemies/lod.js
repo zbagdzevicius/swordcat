@@ -104,6 +104,8 @@ export function simplifyGeometry(geo, ratio = WARM.lod.ratio, error = WARM.lod.e
   if (opts.smooth) return weldedSmooth(geo, out, wpos, cList, cStart);
   // 3. rebuild: per output corner the best-matching original vertex, flat face normals
   const N = geo.attributes.normal, names = Object.keys(geo.attributes), nv = outTris * 3;
+  // TT3: a source with smoothed normals (rig.smoothNormals: rats, spider, crow) keeps them in its LOD (no facets)
+  const keepN = !!(N && geo.userData?.smoothNormals);
   const dst = {};
   for (const k of names) {
     const a = geo.attributes[k], arr = a.isInterleavedBufferAttribute ? a.data.array : a.array;
@@ -127,7 +129,7 @@ export function simplifyGeometry(geo, ratio = WARM.lod.ratio, error = WARM.lod.e
       const i = pick(ws[o], _fn.x, _fn.y, _fn.z);
       for (const k of names) {
         const s = geo.attributes[k], d = dst[k];
-        if (k === 'normal') d.setXYZ(v, _fn.x, _fn.y, _fn.z);
+        if (k === 'normal') { if (keepN) d.setXYZ(v, N.getX(i) * sign, N.getY(i) * sign, N.getZ(i) * sign); else d.setXYZ(v, _fn.x, _fn.y, _fn.z); }
         else for (let c = 0; c < s.itemSize; c++) d.setComponent(v, c, s.getComponent(i, c));
       }
       v++;

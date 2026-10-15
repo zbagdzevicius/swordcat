@@ -266,6 +266,8 @@ export function buildBakedGeometry(plan) {
   g.setIndex(new THREE.BufferAttribute(index, 1));
   g.computeBoundingBox(); g.computeBoundingSphere();
   g.userData.enemyBakedShared = true;
+  // TT3: smoothed bodies (rig.smoothNormals) keep their normals in the LOD too (lod.js)
+  if (plan.parts.some((p) => p.mesh.geometry?.userData?.smoothNormals)) g.userData.smoothNormals = true;
   return g;
 }
 

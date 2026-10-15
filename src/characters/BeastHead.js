@@ -12,8 +12,8 @@ import { TOP_TINT } from './Readability.js';
 
 export const BEAST_PRESETS = Object.freeze({
   hyena: { fur: '#C99A5E', furDark: '#9C7448', spots: '#6E5A86', muzzle: '#7A6890', belly: '#E8D2A8', ear: '#5D4A6E', earInner: '#D9A494', nose: '#4A3A5E', mouth: '#9A4A5A', tooth: '#F6EFE4', maneRoot: '#5D4A6E', eye: { inner: '#F6D27A', outer: '#D9962E', ring: '#5A3A22', pupilR: 54, sclera: true }, scale: 1.3 },
-  pug: { fur: '#D9B48A', furDark: '#B89064', mask: '#5D4A6E', ear: '#5D4A6E', nose: '#4A3A5E', eye: { inner: '#C99A6A', outer: '#7A5A3A', ring: '#4A3424', pupilR: 54, sclera: true }, scale: 1.15 },
-  bulldog: { fur: '#9A7458', furDark: '#7A5A44', stripe: '#6A4E3E', muzzle: '#D8C8AE', mask: '#5D4A6E', ear: '#6A4E3E', nose: '#4A3A5E', eye: { inner: '#F2B65A', outer: '#C9702E', ring: '#5A3020', pupilR: 54, sclera: true }, helm: '#5A6E9C', trim: '#F2D06B', horn: '#F6EFE4', patch: '#4A3A5E', scale: 1.3 },
+  pug: { fur: '#D9B48A', furDark: '#B89064', mask: '#5D4A6E', ear: '#5D4A6E', nose: '#4A3A5E', eye: { inner: '#C99A6A', outer: '#7A5A3A', ring: '#4A3424', pupilR: 54, sclera: true }, scale: 1.15, seat: 0.06 },
+  bulldog: { fur: '#9A7458', furDark: '#7A5A44', stripe: '#6A4E3E', muzzle: '#D8C8AE', mask: '#5D4A6E', ear: '#6A4E3E', nose: '#4A3A5E', eye: { inner: '#F2B65A', outer: '#C9702E', ring: '#5A3020', pupilR: 54, sclera: true }, helm: '#5A6E9C', trim: '#F2D06B', horn: '#F6EFE4', patch: '#4A3A5E', scale: 1.3, seat: 0.04 },
 });
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -46,8 +46,9 @@ export function buildBeastHead(preset = 'hyena', opts = {}) {
     const skinCol = (v) => {
       let c = mixRgb(furC, darkC, smoothstep(0.05, 0.3, v.y) * smoothstep(0.1, -0.25, v.z) * 0.7);
       c = mixRgb(c, belly, smoothstep(-0.08, -0.3, v.y) * 0.55);
-      const n = fbm3(v.x * 10 + 3, v.y * 10, v.z * 10, 2);
-      if (n > 0.52 && v.z < 0.3) c = mixRgb(c, spots, smoothstep(0.52, 0.58, n) * 0.95);
+      // TT3: bigger, crisper spots (the 10× noise at this tessellation blurred into smudges)
+      const n = fbm3(v.x * 7 + 3, v.y * 7, v.z * 7, 2);
+      if (n > 0.53 && v.z < 0.3) c = mixRgb(c, spots, smoothstep(0.535, 0.55, n) * 0.95);
       // dark face mask running from the eyes down the snout
       c = mixRgb(c, muzzle, smoothstep(0.16, 0.36, v.z) * smoothstep(0.12, -0.02, Math.abs(v.x) - 0.02) * 0.65);
       return c;
@@ -129,7 +130,8 @@ export function buildBeastHead(preset = 'hyena', opts = {}) {
     for (const s of [1, -1]) gb.add(new THREE.SphereGeometry(0.09, 14, 10).scale(1, 0.6, 0.5), { matrix: mat([s * 0.36, 0.2, -0.02], [0, 0, s * -0.6]), color: rgb(P.ear), rmse: RM.furShort });
     if (opts.eyepatch) {
       gb.add(new THREE.SphereGeometry(0.1, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.42), { matrix: mat([0.16, 0.08, 0.31], [Math.PI / 2 - 0.15, 0, -0.35]), color: rgb(P.patch), rmse: RM.leather });
-      gb.add(new THREE.TorusGeometry(0.42, 0.012, 6, 40), { matrix: mat([0, 0.12, 0.0], [0.15, 0, 0.5], [1.12, 1, 1.02]), color: rgb(P.patch), rmse: RM.leather });
+      // TT3: the eyepatch strap only runs across the face (the full loop drew a dark band over the helm)
+      if (opts.hornedHelm === false) gb.add(new THREE.TorusGeometry(0.42, 0.012, 6, 40), { matrix: mat([0, 0.12, 0.0], [0.15, 0, 0.5], [1.12, 1, 1.02]), color: rgb(P.patch), rmse: RM.leather });
     }
     if (opts.hornedHelm !== false) {
       const hg = new GeoBuilder(), iron = rgb(P.helm), trim = rgb(P.trim), horn = rgb(P.horn);
@@ -266,5 +268,27 @@ export function attachBeastHead(model, preset, opts = {}) {
   head.root.position.set(c.x, c.y + (opts.lift ?? 0.3) * (h0 * scale - h0), c.z + (opts.forward ?? 0) * h0);
   bone.add(head.root);
   head.root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  // TT3: seat the head on the collar (pug, Barkus): its own lowest point comes down to the KayKit head's bottom
+  // (`seat` × the old head height below it), so no neck gap shows from behind
+  const seat = opts.seat ?? BEAST_PRESETS[preset]?.seat;
+  if (Number.isFinite(seat)) {
+    const hb = beastHeadBox(head.root, inv);
+    const gap = hb.min.y - (box.min.y - seat * h0);
+    if (gap > 0) head.root.position.y -= gap;
+  }
   return head;
+}
+
+/** Bounding box of a beast head's meshes in the space `inv` maps world into (the head bone's). */
+function beastHeadBox(root, inv) {
+  const out = new THREE.Box3(), m = new THREE.Matrix4(), v = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    if (!o.isMesh || !o.visible || !o.geometry) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    const bb = o.geometry.boundingBox; if (bb.isEmpty()) return;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    for (const x of [bb.min.x, bb.max.x]) for (const y of [bb.min.y, bb.max.y]) for (const z of [bb.min.z, bb.max.z]) out.expandByPoint(v.set(x, y, z).applyMatrix4(m));
+  });
+  return out;
 }

@@ -18,6 +18,9 @@ async function reset(t) {
   await inPage(t, () => {
     const g = window.__GAME__, ui = g.ctx.ui;
     try { ui.results?.close?.(); } catch { /* not open */ }
+    // the results shots turn autoContinue off; put the test default back, or a later block's level exit waits on the
+    // card forever (ui:hub "Next travels to the gate" right after brand:surfaces)
+    if (ui.results) ui.results.autoContinue = !!g.ctx.params?.test;
     ui.overlay?.loading?.(false);
     ui.menus.closeAll();
     document.querySelector('#splash-copy')?.remove();

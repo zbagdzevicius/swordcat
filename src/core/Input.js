@@ -3,6 +3,12 @@
 // queue, zoom, pad aim stick, touch drag-aim, KBM presets + rebinding, haptics; `?cam=classic` keeps the M1/M2
 // orbit table: RMB guard, Space jump, R3 recenter, pointer lock).
 //
+// TOKENTAILS-PLAN §11.2 (TT3): a keydown that carries Ctrl or Meta never sets an action (Ctrl+W, Ctrl+D, Meta+W stay
+// the browser's); `sprint` is derived (the `dodge` input held INPUT.sprintAfter s); `golden` is also the chord
+// `guard` + `attack` within INPUT.goldenChord s; on a pad, RT (`trick`) held + D-pad ← → ↑ presses `trick1..3`
+// instead of the D-pad's own action; Shift+Tab presses `lockPrev`; a right-click over the HUD still reaches the
+// actions bound to RMB (the Stand).
+//
 // Edge semantics (tech.md §6): `pressed`/`released` are latched from DOM events until the FIRST fixed step
 // consumes them (Game calls endStep() after each non-hitstop step), so edges are never lost or doubled.
 // `heldTime(a)` counts fixed-step (sim) seconds while held; on the step a button is released it still
@@ -57,6 +63,16 @@ export class Input {
     this._padPrev = new Uint8Array(0);
     this._padLive = false; this._padProbe = 0;
     this._wheelCooldown = 0;
+    /** TT3: wall-clock ms of the last `guard` / `attack` press edges (the golden chord) */
+    this._chordT = { guard: -Infinity, attack: -Infinity };
+    /** TT3: pad D-pad buttons currently redirected to `trick1..3` (RT held when they went down) */
+    this._padPick = new Uint8Array(20);
+    /** TT3: actions used as a modifier during their current hold (RT + D-pad picked a trick): `usedAsModifier(a)` */
+    this._modUsed = new Set();
+    /** sim seconds advanced by update(dt) (the chord window counts game time, like Player's own combo window) */
+    this._simT = 0;
+    /** the chord clock in ms (sim time; injectable for unit tests) */
+    this.now = () => this._simT * 1000;
     this._listeners = [];
     this.canvas = null;
 
@@ -103,7 +119,13 @@ export class Input {
     const P = INPUT.presets?.[name] ?? INPUT.presets?.hybrid ?? { keys: {} };
     const table = { ...INPUT.keys, ...(this.iso ? P.keys : INPUT.classicKeys) };
     const over = st?.bindings;
-    if (over && typeof over === 'object') for (const [a, codes] of Object.entries(over)) if (Array.isArray(codes) && table[a]) table[a] = codes.slice();
+    // TT3: a stored binding never holds a modifier, an F-key or Esc (INPUT.unbindable), whatever the save says
+    const bad = INPUT.unbindable;
+    if (over && typeof over === 'object') {
+      for (const [a, codes] of Object.entries(over)) if (Array.isArray(codes) && table[a]) table[a] = codes.filter((c) => typeof c === 'string' && !bad?.test(c));
+      // Esc always pauses and goes back (the rebinding screen never moves it)
+      for (const a of ['pause', 'back']) if (table[a] && !table[a].includes('Escape') && (INPUT.keys[a] ?? []).includes('Escape')) table[a] = [...table[a], 'Escape'];
+    }
     this.keyTable = table;
     this._bind.clear();
     for (const [action, codes] of Object.entries(table)) for (const c of codes ?? []) {
@@ -165,6 +187,13 @@ export class Input {
   update(dt) {
     this._resolveLockLoss();
     for (const s of this.actions.values()) if (s.down) s.held += dt;
+    this._simT += dt;
+    // TT3 §11.2: `sprint` = the dodge input still held INPUT.sprintAfter s after it went down (Zoomies speed at once)
+    const d = this.actions.get('dodge'), sp = this.actions.get('sprint');
+    if (d && sp) {
+      if (d.down && d.held >= (INPUT.sprintAfter ?? 0.18) && !sp.sources.has('dodge')) this._press('sprint', 'dodge');
+      else if (!d.down && sp.sources.has('dodge')) this._release('sprint', 'dodge');
+    }
     if (this._activity) { this.idleTime = 0; this._activity = false; } else this.idleTime += dt;
     if (this._memeMark && this.ctx?.game?.mode !== 'memecam') this._memeMark = null;   // the next Meme Cam re-marks
     if (this._lookActivity) { this.lookIdleTime = 0; this._lookActivity = false; } else this.lookIdleTime += dt;
@@ -178,6 +207,11 @@ export class Input {
   released(a) { return this.actions.get(a)?.released ?? false; }
   /** Seconds held (sim time). On the release step: the final duration. 0 otherwise. */
   heldTime(a) { return this.actions.get(a)?.held ?? 0; }
+  /**
+   * TT3: true when `a` (the pad's RT / `trick`) was used as a modifier during its current or just-released hold (RT +
+   * D-pad picked a Paw Trick), so its release is not a tap-cast. Cleared on its next press.
+   */
+  usedAsModifier(a) { return this._modUsed.has(a); }
   /** True if any action edge or movement happened this step. */
   anyActivity() {
     if (Math.abs(this.move.x) + Math.abs(this.move.y) > 0.1) return true;
@@ -211,14 +245,35 @@ export class Input {
     const s = this.actions.get(action); if (!s) return;
     const was = s.sources.size > 0;
     s.sources.add(src);
-    if (!was) { s.down = true; s.pressed = true; s.held = 0; }
+    if (!was) {
+      s.down = true; s.pressed = true; s.held = 0;
+      if (this._modUsed.size) this._modUsed.delete(action);
+      if (action === 'guard' || action === 'attack') this._chord(action);
+    }
     this._activity = true;
   }
 
   _release(action, src) {
     const s = this.actions.get(action); if (!s) return;
     if (!s.sources.delete(src)) return;
-    if (s.sources.size === 0) { s.down = false; s.released = true; }
+    if (s.sources.size === 0) {
+      s.down = false; s.released = true;
+      if (action === 'guard' || action === 'attack') this._release('golden', 'chord');
+    }
+  }
+
+  /**
+   * TT3 §11.2: a `guard` or `attack` press edge within INPUT.goldenChord s of the other one presses `golden` (source
+   * 'chord'; released with either). Works for every device: RMB / Q + LMB, LB / RB + X, 🛡 + ⚔.
+   */
+  _chord(action) {
+    const t = this.now(), other = action === 'guard' ? 'attack' : 'guard';
+    this._chordT[action] = t;
+    const win = (INPUT.goldenChord ?? 0.1) * 1000;
+    if (this.actions.get(other)?.down && t - this._chordT[other] <= win + 1e-6) {
+      this._chordT.guard = this._chordT.attack = -Infinity;
+      this._press('golden', 'chord');
+    }
   }
 
   /** A one-step edge with no hold (wheel ticks). */
@@ -371,9 +426,10 @@ export class Input {
     }
     if (pads) { this.padConnected = any; this._padLive = any; }
     let padUsed = false;
-    const B = this._padBind, P = this._padPrev;
+    padUsed = this._padTrickPick(merged) || padUsed;
+    const B = this._padBind, P = this._padPrev, pick = this._padPick;
     for (let k = 0; k < B.length; k++) {
-      const b = B[k], now = merged[b.idx] ? 1 : 0, prev = P[k];
+      const b = B[k], now = merged[b.idx] && !pick[b.idx] ? 1 : 0, prev = P[k];
       if (now && !prev) { this._press(b.action, b.src); padUsed = true; }
       else if (!now && prev) this._release(b.action, b.src);
       P[k] = now;
@@ -399,6 +455,27 @@ export class Input {
     if (mx || my) { this._activity = true; padUsed = true; }
     if (padUsed) this.setDevice('pad');
     this._composeMove();
+  }
+
+  /**
+   * TT3 §11.2: while RT (`padTable.trick`) is held, a D-pad press listed in INPUT.padTrickPick presses `trick1..3`
+   * (source 'pk<idx>') instead of the D-pad's own action until that button is released. Returns true if one fired.
+   */
+  _padTrickPick(merged) {
+    const map = INPUT.padTrickPick, pick = this._padPick;
+    if (!map || !this.iso) return false;
+    let rt = false;
+    for (const i of this.padTable?.trick ?? []) if (merged[i]) rt = true;
+    let used = false;
+    for (const key in map) {
+      const idx = +key, on = !!merged[idx];
+      if (on && !pick[idx] && rt && !this._padRawPrev?.[idx]) {
+        pick[idx] = 1; this._press(map[key], PICK_SRC[idx]); this._modUsed.add('trick'); used = true;
+      } else if (!on && pick[idx]) { pick[idx] = 0; this._release(map[key], PICK_SRC[idx]); }
+    }
+    (this._padRawPrev ??= new Uint8Array(20));
+    for (const key in map) this._padRawPrev[+key] = merged[+key] ? 1 : 0;
+    return used;
   }
 
   /** No pad and no probe this frame: keep the pad contributions at zero and compose the keyboard / touch move. */
@@ -440,21 +517,8 @@ export class Input {
       const ro = new ResizeObserver(stale); ro.observe(canvas); this._listeners.push(() => ro.disconnect());
     }
 
-    on(window, 'keydown', (e) => {
-      if (EDITABLE.has(e.target?.tagName)) return;
-      if (INPUT.preventDefault.includes(e.code)) e.preventDefault();
-      if (e.repeat) return;
-      this.keys.add(e.code);
-      this.setDevice('kbm');
-      for (const a of this._bind.get(e.code) ?? []) this._press(a, 'k:' + e.code);
-      if (this._moveCodes.has(e.code)) this._updateKeyMove();
-      this._activity = true;
-    });
-    on(window, 'keyup', (e) => {
-      this.keys.delete(e.code);
-      for (const a of this._bind.get(e.code) ?? []) this._release(a, 'k:' + e.code);
-      if (this._moveCodes.has(e.code)) this._updateKeyMove();
-    });
+    on(window, 'keydown', (e) => this._keyDown(e));
+    on(window, 'keyup', (e) => this._keyUp(e));
     on(window, 'blur', () => this.releaseAll());
     on(document, 'visibilitychange', () => { if (document.hidden) this.releaseAll(); });
 
@@ -480,6 +544,16 @@ export class Input {
       for (const a of this._bind.get(code) ?? []) this._release(a, 'm:' + code);
     });
     on(canvas, 'contextmenu', (e) => e.preventDefault());
+    // TT3 §11.5 K2: a right-click over the HUD (Pearl's bubble, the objective line, a toast) still reaches the actions
+    // bound to RMB (the Stand), without a click order. Buttons, menus and form fields keep their own clicks.
+    on(window, 'mousedown', (e) => {
+      if (e.button !== 2 || e.target === canvas || !this._overHud(e.target)) return;
+      if (this._touchT > nowMs() - 800) return;
+      this.setDevice('kbm');
+      for (const a of this._bind.get('Mouse2') ?? []) if (a !== 'move') this._press(a, 'm:Mouse2');
+      this._activity = true;
+    }, { capture: true });
+    on(window, 'contextmenu', (e) => { if (e.target !== canvas && this._overHud(e.target)) e.preventDefault(); });
     on(window, 'mousemove', (e) => {
       if (!this.pointerLocked) { if (this._touchT < nowMs() - 800) this._pointerAt(e.clientX, e.clientY, true); return; }
       const k = INPUT.mouseSens * this.sensitivity;
@@ -506,6 +580,32 @@ export class Input {
     on(window, 'touchstart', () => { this._touchT = nowMs(); this.setDevice('touch'); }, { passive: true });
     on(window, 'gamepadconnected', () => { this.padConnected = true; this._padLive = true; });
     on(window, 'gamepaddisconnected', () => this.releaseAll());
+  }
+
+  /**
+   * A keydown (window listener; also called directly by tests). TT3 §11.2: a key pressed with Ctrl or Meta held sets
+   * no action and no move (Ctrl+W / Ctrl+D / Meta+W belong to the browser); Shift+Tab presses `lockPrev` instead of
+   * `lockon`.
+   */
+  _keyDown(e) {
+    if (EDITABLE.has(e.target?.tagName)) return;
+    if (e.ctrlKey || e.metaKey) return;
+    if (INPUT.preventDefault.includes(e.code)) e.preventDefault?.();
+    if (e.repeat) return;
+    this.keys.add(e.code);
+    this.setDevice('kbm');
+    const acts = this._bind.get(e.code) ?? [];
+    const backTab = e.code === 'Tab' && e.shiftKey && acts.includes('lockon');
+    for (const a of acts) this._press(backTab && a === 'lockon' ? 'lockPrev' : a, 'k:' + e.code);
+    if (this._moveCodes.has(e.code)) this._updateKeyMove();
+    this._activity = true;
+  }
+
+  /** A key went up: releases whatever its keydown pressed (lockPrev for a Shift+Tab). */
+  _keyUp(e) {
+    this.keys.delete(e.code);
+    for (const a of this._bind.get(e.code) ?? []) { this._release(a, 'k:' + e.code); if (a === 'lockon') this._release('lockPrev', 'k:' + e.code); }
+    if (this._moveCodes.has(e.code)) this._updateKeyMove();
   }
 
   detach() {
@@ -545,6 +645,15 @@ export class Input {
     P.x = x; P.y = y;
     P.ndcX = ((x - left) / w) * 2 - 1; P.ndcY = -(((y - top) / h) * 2 - 1);
     P.inside = x >= left && x <= left + w && y >= top && y <= top + h;
+  }
+
+  /** A HUD element of the game's ui root that is not a control (TT3: RMB there still guards). */
+  _overHud(t) {
+    if (!t?.closest) return false;
+    if (!t.closest('.ui-root')) return false;
+    if (t.closest('button, a, input, select, textarea, label, [role="button"], .menu, .menu-screen, .tbtn, .touch-root, .ab-slot')) return false;
+    const mode = this.ctx?.game?.mode ?? 'play';
+    return mode === 'play' || mode === 'memecam';
   }
 
   /** The canvas bounding rect, cached until a resize / scroll / canvas resize. */
@@ -636,6 +745,8 @@ const _dz = { x: 0, y: 0 };
 const PAD_PROBE_FRAMES = 15;
 /** Precomputed pad source keys ('p0' … 'p19'): no string building per frame. */
 const PAD_SRC = Array.from({ length: 20 }, (_, i) => 'p' + i);
+/** TT3: source keys of the RT + D-pad trick picks ('pk12' …). */
+const PICK_SRC = Array.from({ length: 20 }, (_, i) => 'pk' + i);
 const NO_MODS = Object.freeze({ ctrl: false, shift: false, alt: false });
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 /** Radial dead zone with rescale, written into `out` ({x, y}). */

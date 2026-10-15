@@ -429,3 +429,32 @@ export function sticker(color, inner) {
 export function tick() {
   return `<svg class="ico-tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="#9BE3C4" stroke="${COCOA}" stroke-width="1.8"/><path d="M7 12.4l3.2 3.2L17 8.6" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
+
+/**
+ * TT3 Paw Trick: the Catnip Cloud pouch (TOKENTAILS-PLAN §11.3 #3): a lilac drawstring bag with a mint tie, a catnip
+ * sprig peeking out and two little puffs. Pure SVG string.
+ */
+export function catnipPouch() {
+  const g = uid('cp');
+  return `<svg class="ico-pouch" viewBox="0 0 40 40" aria-hidden="true"><defs><radialGradient id="${g}" cx=".38" cy=".4" r=".75">`
+    + `<stop offset="0" stop-color="${CATNIP_LILAC.hi}"/><stop offset="1" stop-color="${CATNIP_LILAC.lo}"/></radialGradient></defs>`
+    + '<path d="M18 9.5c-1.5-3 .5-5.5 2.6-6 1.4 2.4.8 4.6-.8 6.4" fill="#8FE3C0" stroke="#2E7D5B" stroke-width="1.4" stroke-linejoin="round"/>'
+    + `<path d="M13.5 13.5c-6 4-8.5 10-7.5 15.5C7.2 35 13 37.5 20 37.5S32.8 35 34 29c1-5.5-1.5-11.5-7.5-15.5Z" fill="url(#${g})" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
+    + '<path d="M12.5 12.5q7.5 3.2 15 0" fill="none" stroke="#4E8F5E" stroke-width="3" stroke-linecap="round"/>'
+    + '<path d="M11.5 20.5q2.5-2.8 5.2-1.8" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" opacity=".8"/>'
+    + `<circle cx="31.5" cy="8" r="3.2" fill="${CATNIP_LILAC.hi}" stroke="${INK}" stroke-width="1.2"/><circle cx="35.5" cy="12.5" r="2" fill="${CATNIP_LILAC.hi}" stroke="${INK}" stroke-width="1.1"/>`
+    + `<path d="M17 27.5q3 2.6 6 0" fill="none" stroke="${INK}" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="24" r="1.3" fill="${INK}"/><circle cx="24" cy="24" r="1.3" fill="${INK}"/>`
+    + '</svg>';
+}
+
+/** TT3 Paw Trick: the Ribbon Twirl (§11.3 #2): Clem's pink bow with two spin loops. Pure SVG string. */
+export function ribbonBow() {
+  return '<svg class="ico-ribbon" viewBox="0 0 40 40" aria-hidden="true">'
+    + `<path d="M6 13a16 9 0 0 1 28 0" fill="none" stroke="${PINK}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="4 4"/>`
+    + `<path d="M9 33a13 6 0 0 0 22 0" fill="none" stroke="${PINK}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="3 4"/>`
+    + `<path d="M20 22 8.5 15.5c-2-1-3.5.4-3.3 2.4l.6 6.2c.2 2 2 3 3.8 2.1Z" fill="${PINK}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
+    + `<path d="M20 22l11.5-6.5c2-1 3.5.4 3.3 2.4l-.6 6.2c-.2 2-2 3-3.8 2.1Z" fill="${PINK}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>`
+    + `<circle cx="20" cy="22" r="3.6" fill="${PINK_DEEP}" stroke="${INK}" stroke-width="2"/>`
+    + '<path d="M9 18.5l3 1.4" stroke="#fff" stroke-width="1.6" stroke-linecap="round" opacity=".85"/>'
+    + '</svg>';
+}

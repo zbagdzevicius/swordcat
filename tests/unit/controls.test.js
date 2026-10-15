@@ -301,3 +301,64 @@ test('touch layout: buttons clear her chest where AUTOCAM draws it, up to heroDr
   const L = computeLayout(844, 390, { hero: { x: 368, y: 240 } });
   for (const [n, b] of Object.entries(L.buttons)) assert.ok(heroGap(b, { x: 370, y: 267 }, heroClearR(844, 390)) >= -0.5, `${n} clears her chest`);
 });
+
+// ====================================================================================================== TT3 §11.5 K8 rebinding
+import { REBIND_ACTIONS, rebindAction, rebindRefusal, shownCode, CONTROL_ROWS } from '../../src/ui/settings.js';
+import { cleanBindings } from '../../src/save/SaveManager.js';
+
+test('TT3 rebind model: the shown code is replaced, a conflict swaps, peek drags ranges along, Esc stays on pause', () => {
+  const table = JSON.parse(JSON.stringify(config.INPUT.keys));
+  assert.equal(REBIND_ACTIONS.length, 13);
+  for (const a of REBIND_ACTIONS) assert.ok(CONTROL_ROWS.some(([r]) => r === a), `card row ${a}`);
+  // Stand: RMB (shown) → N; Q and L stay
+  let r = rebindAction(table, null, 'guard', 'KeyN');
+  assert.deepEqual(r.bindings.guard, ['KeyN', 'KeyQ', 'KeyL']);
+  assert.deepEqual(r.swapped, []);
+  // jump → F: F was the Paw Trick, which now takes Space (a swap)
+  r = rebindAction(table, null, 'jump', 'KeyF');
+  assert.deepEqual(r.bindings.jump, ['KeyF']);
+  assert.deepEqual(r.bindings.trick, ['Space']);
+  assert.deepEqual(r.swapped, ['trick']);
+  // ability → Q: Q leaves the Stand; the Stand gets G (the replaced key) in its place
+  r = rebindAction(table, { milk: ['KeyR'] }, 'ability', 'KeyQ');
+  assert.deepEqual(r.bindings.ability, ['KeyQ']);
+  assert.deepEqual(r.bindings.guard, ['Mouse2', 'KeyG', 'KeyL']);
+  assert.deepEqual(r.bindings.milk, ['KeyR'], 'earlier bindings are kept');
+  // peek → B: ranges follow (one hold)
+  r = rebindAction(table, null, 'peek', 'KeyB');
+  assert.deepEqual(r.bindings.peek, ['KeyB', 'Mouse1']);
+  assert.deepEqual(r.bindings.ranges, ['KeyB', 'Mouse1']);
+  // pause → O: Esc is never the replaced one
+  assert.equal(shownCode('pause', table.pause), 'KeyP');
+  r = rebindAction(table, null, 'pause', 'KeyO');
+  assert.deepEqual(r.bindings.pause, ['KeyO', 'Escape']);
+  // a key that only menus use (W = navUp) is never swapped into
+  r = rebindAction(table, null, 'attack', 'KeyJ');
+  assert.ok(!('navUp' in r.bindings));
+});
+
+test('TT3 rebind model: Ctrl, Alt, Meta, F-keys and Esc are refused; walking keys too while WASD walks', () => {
+  for (const c of ['ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight', 'OSLeft', 'F1', 'F5', 'F12', 'Escape', '', null]) assert.equal(rebindRefusal(c), 'browser', String(c));
+  for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp']) assert.equal(rebindRefusal(c), 'walk', c);
+  assert.equal(rebindRefusal('KeyW', { wasd: false }), null, 'moba does not walk on WASD');
+  for (const c of ['KeyF', 'KeyN', 'Space', 'Mouse2', 'Mouse4', 'Digit4', 'Tab', 'ShiftLeft']) assert.equal(rebindRefusal(c), null, c);
+});
+
+test('TT3 cleanBindings drops modifier and F-key codes from a save', () => {
+  const out = cleanBindings({ jump: ['ControlLeft', 'KeyN', 'AltLeft', 'F1', 'MetaLeft'], guard: ['Mouse2', 'KeyQ'], 'bad key!': ['KeyX'], trick: 'KeyF' });
+  assert.deepEqual(out, { jump: ['KeyN'], guard: ['Mouse2', 'KeyQ'] });
+});
+
+test('TT3 Input + rebinding: a rebound Stand drives `guard`; the old key no longer does', () => {
+  const st = { settings: { controlPreset: 'hybrid', bindings: {} } };
+  const inp = new Input({ state: st, params: {}, bus: { emit() {}, on: () => () => {} } });
+  const r = rebindAction(inp.keyTable, st.settings.bindings, 'guard', 'KeyN');
+  st.settings.bindings = r.bindings; inp.rebind();
+  const key = (code) => ({ code, repeat: false, target: { tagName: 'CANVAS' }, preventDefault() {} });
+  inp._keyDown(key('KeyN'));
+  assert.ok(inp.pressed('guard') && inp.down('guard'));
+  inp._keyUp(key('KeyN')); inp.endStep();
+  assert.ok(!(inp._bind.get('Mouse2') ?? []).includes('guard'), 'RMB was the shown code: replaced');
+  inp._keyDown(key('KeyQ'));
+  assert.ok(inp.down('guard'), 'Q still stands');
+});

@@ -11,9 +11,9 @@
 //         her beyond ONBOARD.stepR; past ONBOARD.closeR the line says "Get close to Sir Wobble!"; the first swing of the
 //         parry lesson runs in 0.45 slow motion; after 3 failed parries every swing does and Kitten mode is offered)
 // Roll is an optional tip by Sir Sacky (taught for real on the first crossbow bolt, hint `tut.bolt`); Jump is taught at
-// the first hop after practice (`tut.jump`: a click / tap across a low fence hops it, or [Jump]); Meow is taught at
+// the first hop after practice (`tut.jump`: [Jump] (Space / A / Jump), or a click / tap order across a low fence hops it); Meow is taught at
 // Noodle's barrel (StoryManager). The old jump / roll / meow lessons, the cow's hide and seek and `tutlook` are gone.
-// Done (or skipped: hold Pause / the Skip chip 1 s) → flag `prologue.practice` → the bell and CS-01 right there.
+// Done (or skipped: hold Esc / P / Start / the Skip chip 1 s) → flag `prologue.practice` → the bell and CS-01 right there.
 // A save made mid-practice under the old 7-lesson flow resumes at the nearest new lesson (`resumeLesson`, sticker flags).
 // Prompts go out as `story:prompt { kind: 'tutorial', id: 'tutorial', textKey, step, total, progress, done, speaker,
 // say, stepDots, folded, wiggle, ok, demo }` (WA §7.5: the guide bubble). The pure step logic (PracticeLog) and the pure
@@ -109,6 +109,12 @@ export const MOCHI_LINES = Object.freeze({
   'tut.click': 'mochi.hint.click', 'tut.jeer': 'mochi.hint.jeer', 'tut.bright': 'mochi.hint.bright',
   'tut.fizzle': 'mochi.hint.fizzle',
 });
+
+/** TT3 §11.4: the Paw Trick unlock event (package A emits it; the E constant once core/events.js lists it). */
+export const EV_TRICK_UNLOCKED = E['TRICK_UNLOCKED'] ?? 'trick:unlocked';
+
+/** TT3 §11.4: seconds after `trick.unlocked` before its hint shows (the 3 s unlock bark reads first). */
+export const TRICK_HINT_DELAY = 3.2;
 
 /** Seconds a post-prologue hint bubble stays up. */
 export const HINT_SHOW = 6;
@@ -366,6 +372,19 @@ export class Tutorial {
     on(E.LEVEL_UNLOAD, () => { this._hide(true); this._sunRing(false); });
     on(E.FLAG_SET, (f) => { if (f?.key === 'prologue.practice' && f.value && this.active) this._end(false, { quiet: true }); });
     for (const h of HINTS) on(h.on, (p) => this._hint(h, p));
+    // TT3 §11.4: a Paw Trick unlocked (package A) → its `trick.<id>.hint` once, after the unlock bark / any scene
+    // (`bark: false` = a quiet catch-up on load for a save already past the hand-over: no hint then)
+    on(EV_TRICK_UNLOCKED, (t) => { if (t?.id && t.bark !== false) this._trickHint = { key: `trick.${t.id}.hint`, t: TRICK_HINT_DELAY }; });
+  }
+
+  /** TT3 §11.4: the pending Paw Trick hint, shown once no scene / practice / bark holds the screen. */
+  _trickHintTick(dt) {
+    const h = this._trickHint;
+    if (!h || (h.t -= dt) > 0) return;
+    if (this.story?.isPlaying || this.active || this.ctx.game?.mode !== 'play') return;
+    this._trickHint = null;
+    if (this.ctx.strings?.has?.(h.key) === false) return;
+    this.hint(h.key);
   }
 
   reset() {
@@ -386,6 +405,7 @@ export class Tutorial {
     this._clickTip(dt);
     this._talkTip(dt);
     this._hintTick(dt);
+    this._trickHintTick(dt);
     this._hopTip(dt);
     if (!this.eligible() || !p) { if (this.active) this._hide(true); this.active = false; return; }
     if (this.story?.isPlaying || ctx.game?.mode === 'menu') return;
@@ -840,13 +860,17 @@ export class Tutorial {
   }
 
   // ------------------------------------------------------------------ post-prologue hints
-  /** Can the player click / tap things right now (mouse or touch; not a pad, the keyboard-only preset or classic)? */
+  /**
+   * Can the player give move orders with a click / tap right now (touch, or a KBM preset with a mouse move button:
+   * `moba`, `diablo`, `mouseOnly`; TT3: `hybrid` walks on WASD, so no click tip there)?
+   */
   _pointerScheme() {
     const inp = this.ctx.input;
     if (this.ctx.cam?.isIso === false) return false;
     if (inp?.device === 'pad') return false;
-    if (inp?.device !== 'touch' && inp?.preset === 'keyboardOnly') return false;
-    return true;
+    if (inp?.device === 'touch') return true;
+    const codes = inp?.codesFor?.('move') ?? [];
+    return codes.some((c) => String(c).startsWith('Mouse'));
   }
 
   /** CONTROLS_SPEC §14 `tut.click`: 20 s of meadow play without ever using an order → one tip (mouse / touch only). */
@@ -921,7 +945,7 @@ export function mochiJoined(ctx) {
 
 /**
  * Can she pick a foe with the current scheme (CONTROLS_SPEC §14 `tut.target`)? Iso only; mouse, touch or pad
- * (pad copy: [RB] picks the nearest foe); not the keyboard-only preset, whose base copy would say "right-click".
+ * (pad copy: [R3] picks the nearest foe); not the keyboard-only preset, whose base copy says "Click a foe".
  */
 export function canTarget(ctx) {
   const inp = ctx?.input;

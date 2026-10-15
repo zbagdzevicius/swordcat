@@ -18,7 +18,7 @@ export const POSE_NAMES = Object.freeze(['vigil', 'oath', 'sip', 'selfie', 'fain
 /** Phase W poses (a subset of POSE_NAMES): hold the pose, play `kitten.emote(name)` for the motion. */
 export const WARM_POSE_NAMES = Object.freeze(['cheer', 'groom', 'twirl', 'boop', 'pawBump']);
 /** Extra poses beyond the contract nine (M1 extras + M2 activity poses). */
-export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'restUp', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
+export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'restUp', 'coinHold', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
 
 export const POSES = {
   // ref2: sword planted point-down, both gauntlets stacked on the pommel, head straight, eyes on the camera.
@@ -51,7 +51,7 @@ export const POSES = {
       R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.2, -0.6], twist: [0, 0, 0] },
       L: { paw: [0.035, 0.57, 0.19], pole: [1, -0.6, -0.4], twist: [-0.6, 0.4, -1.0] },
     },
-    expr: 'happy',
+    expr: 'joy',
   },
   // Selfie (TREND V3): right gauntlet held out as the "camera", cup in the left paw, sword stuck in the ground.
   selfie: {
@@ -131,7 +131,8 @@ export const POSES = {
   // Combat-ready base (player animator layers swings on top): two-paw grip at chest height, blade up-forward.
   ready: {
     joints: { chest: [0.08, -0.1, 0], head: [-0.02, 0.06, 0], thighL: [-0.15, 0.1, 0.08], thighR: [0.15, -0.1, -0.08], kneeL: [0.15, 0, 0], kneeR: [0.2, 0, 0], footL: [0.05, 0.35, 0], footR: [0, -0.35, 0] },
-    sword: { mode: 'hand', guard: [-0.04, 0.47, 0.25], dir: [0.12, 0.85, 0.5], face: [0.6, 0, -0.3] },
+    // TT3: held out at her right side and angled away (was straight up in front of her face: walk, hurt)
+    sword: { mode: 'hand', guard: [-0.15, 0.44, 0.22], dir: [-0.5, 0.78, 0.38], face: [0.6, 0, -0.3] },
     arms: {
       R: { grip: SWORD_PTS.gripTop - 0.022, off: [0, 0, 0], pole: [-1, -0.5, -0.4], twist: [0, 0, 0.6] },
       L: { grip: SWORD_PTS.gripLow + 0.006, off: [0.01, 0, 0], pole: [1, -0.6, -0.4], twist: [0, 0, -0.6] },
@@ -185,6 +186,16 @@ export const POSES = {
     arms: {
       R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, 0, -1], twist: [0, 0, 0] },
       L: { fk: { shoulder: [-0.3, 0, 1.6], elbow: [-0.8, 0, 0] } },
+    },
+    expr: 'happy',
+  },
+  // TT3: the Token Tails Cat's idle: the gold ':3' coin held up at chest height in both paws (`idlePose`; no sword).
+  coinHold: {
+    joints: { chest: [0.0, 0.0, 0], head: [-0.04, 0.0, 0.04], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
+    sword: { mode: 'hidden' },
+    arms: {
+      L: { paw: [0.05, 0.41, 0.15], pole: [1, -0.6, -0.4], twist: [0, 0, -0.5] },
+      R: { paw: [-0.05, 0.41, 0.15], pole: [-1, -0.6, -0.4], twist: [0, 0, 0.5] },
     },
     expr: 'happy',
   },
@@ -257,6 +268,13 @@ export const POSES = {
     expr: 'determined',
   },
 };
+// TT3: the rest tail is an upright question-mark curl (KittenBuilder TAIL_CURVE); poses that sit or lie on the ground
+// tip it back down onto the grass first (tail0 pitch), so their sideways curl still wraps around her
+export const TAIL_LAY = -1.25;
+for (const n of ['faint', 'sit', 'sleep', 'read', 'fish']) {
+  const t = POSES[n].tail;
+  if (t) t[0] = [t[0][0] + TAIL_LAY, t[0][1], t[0][2]];
+}
 // derived poses
 POSES.guard = POSES.vigil;
 POSES.nap = POSES.sleep;

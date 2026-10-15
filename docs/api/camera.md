@@ -161,3 +161,9 @@ Scattered town houses get an `auto` circle collider. For example, the house at a
 - Smoke: `tests/smoke/camera.mjs` blocks `camera:steady`, `lead-down`, `safe-frame`, `teamfight`, `frame-threat`,
   `threat-visibility`, `beats`, `boss-two-shot`, `pinch`, `reduce-motion`, `rotate`, `footprint`, `title-blend`,
   `no-hands`, `rates`, `perf` (report-only).
+
+## TT3 §11.2 (package K)
+- Selection: `lockon` (Tab, R3) selects the best / cycles forward; `lockPrev` (Shift+Tab, made by `Input.js`, or the
+  D-pad ←) cycles back or, with nothing selected on KBM, selects the best. No hardcoded Shift check in FollowCamera.
+- Peek: the `peek` hold is Z / MMB / D-pad ↓ (Alt is gone); `ranges` shares the same hold. `zoomCycle` is the pad's
+  View (8) now (R3 selects).

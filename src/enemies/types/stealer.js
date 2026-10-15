@@ -87,6 +87,30 @@ export function dropLoot(e) {
   return true;
 }
 
+/**
+ * TT3 contract (§11.4): drop `frac` (0..1) of the loot it carries, keep the rest and keep running (the ":3" coin drops
+ * half). Fish drop as pickups (no §10.3 bonus: that comes with the full drop); a milk bottle or the pin drop only when
+ * `frac` ≥ 0.5, as one item. Emits `item:returned` for what fell. Returns the amount dropped (0 without loot).
+ * @param {object} e the stealer @param {number} frac
+ */
+export function dropStolen(e, frac) {
+  const loot = e?.loot, f = Math.min(1, Math.max(0, +frac || 0));
+  if (!loot || f <= 0) return 0;
+  if (f >= 1) { const n = loot.amount; dropLoot(e); return n; }
+  if (loot.item !== 'fish') { if (f < 0.5) return 0; const n = loot.amount; dropLoot(e); return n; }
+  const n = Math.min(loot.amount, Math.max(1, Math.round(loot.amount * f)));
+  if (n >= loot.amount) { dropLoot(e); return n; }
+  loot.amount -= n;
+  const pk = e.ctx.levels?.current?.pickups;
+  const at = e.pos.clone();
+  _d.set(Math.sin(e.facing), 0, Math.cos(e.facing)).multiplyScalar(-M2.stealer.dropSpread);   // behind it: it is running away
+  at.add(_d);
+  if (pk?.spawnFish) pk.spawnFish(at, n); else if (e.ctx.state) e.ctx.state.fish = (e.ctx.state.fish ?? 0) + n;
+  e.ctx.bus.emit(E.BURST, { kind: 'fish', position: at.clone().setY(at.y + 0.5), count: 4 });
+  e.ctx.bus.emit(E.ITEM_RETURNED, { item: 'fish', amount: n, bonus: 0, thief: e, partial: true });
+  return n;
+}
+
 const GETAWAY = {
   anim: 'move',
   enter(e) {
@@ -142,7 +166,7 @@ export default {
   build: (e, m) => dressKayKit(e, m, e.spawnOpts?.look === 'pilfer' || e.spawnOpts?.id === 'pilfer'
     ? { look: 'pilfer', headNode: 'Rogue_Head_Hooded', bag: true, expression: 'sneer' }
     : { look: 'stealer', headNode: 'Rogue_Head_Hooded', bag: true, expression: 'sneer' }),
-  init(e) { e.loot = null; e.jeerOverride = null; },
+  init(e) { e.loot = null; e.jeerOverride = null; e.dropStolen = (frac) => dropStolen(e, frac); },   // TT3 §11.4
   moves: { stealer_snatch: SNATCH_DEF },
   states: { getaway: GETAWAY, jeer: JEER },
   onHitWhile: { jeer: 'choke' },
@@ -158,9 +182,10 @@ export default {
       e.setState('getaway');
     }
   },
-  /** Any hit while carrying loot drops it all (+5 fish); then it fights on. */
-  onHit(e) {
-    if (e.loot) dropLoot(e);
+  /** Any hit while carrying loot drops it all (+5 fish); then it fights on. The ":3" coin (`trickCoin`) only knocks
+   *  out the half it already dropped through `dropStolen` (TT3 §11.3), so it keeps the rest and keeps running. */
+  onHit(e, hit) {
+    if (e.loot && hit?.def?.id !== 'trickCoin') dropLoot(e);
   },
   onDeath(e) { if (e.loot) dropLoot(e); },
   onDispose(e) {

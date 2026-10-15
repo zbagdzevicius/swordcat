@@ -47,7 +47,7 @@ const BASE = {
   faction: 'enemy', radius: 0.35, height: 1.2, mass: 1, hp: 30, poise: 1, walk: 2.0, run: 6.0, sight: 0, fov: 2.79, leash: 999,
   smallHeart: false, fish: null,
   anims: { ...CLIP_MAPS.kaykit.roles },
-  init(e) { e.wantProps = {}; },
+  init(e) { e.wantProps = {}; e.dropStolen = () => 0; },   // TT3 §11.4: the cutscene Pilfer carries nothing to drop
   async build(e, m) {
     await dressKayKit(e, m, { look: 'pilfer', headNode: 'Rogue_Head_Hooded', expression: 'sneer' });
     for (const [n, on] of Object.entries(e.wantProps)) setProp(e, n, on);       // props asked for before the model loaded
@@ -201,6 +201,14 @@ export const PILFER_CHASE = {
     idle: { anim: 'idle', update(e, dt) { e.brake(dt); if (!e.bagDropped && e.ai && !e.scripted && e.chasePts) e.setState('run'); } },
   },
   init(e) {
+    // TT3 contract (§11.4): the ":3" coin shakes letters out of the post bag (cosmetic; the bag itself still drops on
+    // the third hit, so the chase keeps its pacing). Returns the letters shaken out.
+    e.dropStolen = (frac) => {
+      if (e.bagDropped) return 0;
+      const n = Math.round(6 * Math.min(1, Math.max(0, +frac || 0)));
+      for (let i = 0; i < n; i++) flutterLetter(e);
+      return n;
+    };
     e.wantProps = { post_bag: true };
     e.chasePts = chasePath(e.ctx, e.spawnOpts?.path ?? null);
     e.chaseIdx = 1; e.chaseT = 0; e.pauseT = 0; e.letterT = C.letterEvery; e.hits = 0; e.bagDropped = false;

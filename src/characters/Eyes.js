@@ -19,6 +19,8 @@ export const EYE = Object.freeze({
   lashR: 0.008, lashWing: 0.012,
   brow: { len: 0.05, thick: 0.012, gap: 0.42, rise: 1.45 },
   gain: 1.4, gainFrom: 8,
+  /** Cat eyes (TT3): lens depth (× r) and the extra sink under the skull surface (H), so no eye passes the head outline in profile. */
+  flat: 0.45, seat: 0.004,
 });
 
 const _texCache = new Map();
@@ -125,8 +127,13 @@ export const EXPRESSIONS = Object.freeze({
   neutral:    { up: 0.06, low: 0.0, tilt: 0.0, glisten: 0, brow: [0, 0] },
   worried:    { up: 0.14, low: 0.0, tilt: 0.38, glisten: 0, brow: [30, 0.008] },
   earnest:    { up: 0.07, low: 0.03, tilt: 0.22, glisten: 0, brow: [16, 0.006] },
-  determined: { up: 0.30, low: 0.08, tilt: -0.30, glisten: 0, brow: [-18, -0.006] },
-  happy:      { up: 0.3, low: 0.75, tilt: 0.1, glisten: 0, brow: [8, 0.01] },
+  // TT3: lighter lids (the 0.30 lid × the far-lens gain hid half the seated eye: it read bored, not brave)
+  determined: { up: 0.15, low: 0.05, tilt: -0.24, glisten: 0, brow: [-18, -0.006] },
+  // TT3: open and bright (the old 0.75 lower lid read as a tired under-eye crescent); the ^^ squint is `joy`
+  happy:      { up: 0.04, low: 0.0, tilt: 0.06, glisten: 0, brow: [6, 0.012] },
+  joy:        { up: 0.3, low: 0.75, tilt: 0.1, glisten: 0, brow: [8, 0.01] },
+  // TT3 ">_<": squeezed shut, the lash lines slanted toward the nose (hurt)
+  wince:      { up: 0.95, low: 0.7, tilt: -0.9, glisten: 0, brow: [-12, -0.004] },
   surprised:  { up: 0.0, low: 0.0, tilt: 0.12, glisten: 0, brow: [6, 0.01] },
   sad:        { up: 0.30, low: 0.04, tilt: 0.5, glisten: 0.8, brow: [28, 0.002] },
   glisten:    { up: 0.12, low: 0.06, tilt: 0.42, glisten: 1, brow: [24, 0.006] },
@@ -143,7 +150,7 @@ const DEG = Math.PI / 180;
 
 /** Lid (+ lash) geometries with baked vertex colours (rmse attribute: the cat's instanced WarmToon draws them). */
 function lidGeometries(r, flat, detail, lidRgb, lashK) {
-  const lid = new THREE.SphereGeometry(r * 1.07, segScale(28, detail, 12), segScale(14, detail, 6), 0, Math.PI, 0, Math.PI).scale(1, 1, Math.max(flat * 1.25, 0.72));
+  const lid = new THREE.SphereGeometry(r * 1.07, segScale(28, detail, 12), segScale(14, detail, 6), 0, Math.PI, 0, Math.PI).scale(1, 1, Math.max(flat * 1.25, 0.5));
   const lash = rgb(PAL.eyeLine);
   const up = new GeoBuilder();
   up.add(lid, { color: lidRgb, rmse: [0.95, 0, 0.6, 0] });
@@ -245,6 +252,8 @@ export class EyePair {
   }
   /** Far-lens readability (ART §5.3): lid and brow deltas × `g` (1.4 past 8 m). */
   setGain(g) { this.gain = g; }
+  /** Show or hide the brows (TT3: the heroine shows them only in story beats). No-op without brows. @param {boolean} on */
+  showBrows(on) { if (this.browMesh) this.browMesh.visible = !!on; }
   /** Hide one eye (eyepatch). @param {1|-1} side */
   hideEye(side) { const e = this.eyes.find((x) => x.side === side); if (e) e.pivot.visible = false; }
   blink() { this.blinkT = this.blinkDur; }

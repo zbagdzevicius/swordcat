@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { fakeCtx } from './_fakeCtx.mjs';
 import { E } from '../../src/core/events.js';
-import { PLAYER, FADE_COLOR, STORY, ONBOARD } from '../../src/core/config.js';
+import { PLAYER, FADE_COLOR, STORY, ONBOARD, INPUT } from '../../src/core/config.js';
 import { Actor } from '../../src/core/Actor.js';
 import { ScriptedActorMixin } from '../../src/core/ScriptedActor.js';
 import { S, t, has, pick, fill, text, speakerName, GAME_TITLE, GAME_SUBTITLE } from '../../src/story/strings.js';
@@ -88,8 +88,10 @@ test('Token Tails IP: title, world, currency, Snack Break, Photo Cam, credits, t
 test('Token Tails IP: banned display words in strings.js and ui/text.js (old meme, memecoin and fan-series names; money words)', () => {
   const BAN = /swordcat|meow island|nine lives of|vigil|low gate|memecoin|\bmeme|hater|post ?stealer|postmaster|hype-in-chief|\bmilk|\bfish(es|ies|y)?\b|sickmanai|knightcat|pump\.fun|\b(donat\w*|charity|impact|token|tokens|coin|coins|crypto|blockchain|wallet|money|dollars?|usdc)\b/i;
   const ok = (v) => v.replace(/Token Tails/g, '').replace(/caught zero fish/g, '');                          // the brand name itself is allowed
+  // TOKENTAILS-PLAN §11.4 (fixed text): the ":3" Coin Toss is a game object (the Token Tails Cat's lucky coin), not money
+  const okKey = (k, v) => (/^trick\.coin\./.test(k) ? ok(v).replace(/\bcoin\b/gi, '') : ok(v));
   const bad = [];
-  for (const [k, row] of Object.entries(S)) if (BAN.test(ok(row.default))) bad.push(`strings ${k}: ${row.default}`);
+  for (const [k, row] of Object.entries(S)) if (BAN.test(okKey(k, row.default))) bad.push(`strings ${k}: ${row.default}`);
   for (const [k, v] of Object.entries(UI_STRINGS)) if (BAN.test(ok(v))) bad.push(`text.js ${k}: ${v}`);
   for (const v of [GAME_TITLE, GAME_SUBTITLE]) if (BAN.test(ok(v))) bad.push(v);
   assert.deepEqual(bad, []);
@@ -848,7 +850,7 @@ function tutCtx({ device = 'kbm', preset = 'hybrid', iso = true, flags = {}, int
   const ctx = {
     bus, emitted, params: {},
     state: { getFlag: (k) => f[k], setFlag: (k, v) => { f[k] = v; }, settings: {}, difficulty: 'knight' },
-    input: { device, preset, down: () => false },
+    input: { device, preset, down: () => false, codesFor: (a) => (a === 'move' ? INPUT.presets[preset]?.keys?.move ?? INPUT.keys.move : INPUT.presets[preset]?.keys?.[a] ?? INPUT.keys[a] ?? []) },
     cam: { isIso: iso },
     game: { mode: 'play' },
     levels: { current: { id: 'meadow', interactables, actor: () => null, critter: () => null } },
@@ -1041,7 +1043,9 @@ test('tutorial: skipping practice (hold Pause, or the Skip chip) sets prologue.p
 test('hints: tut.click after 20 s without an order (pointer schemes only); tut.talk near a talkable NPC; tut.zoom on the first arena', () => {
   const toasts = (ctx) => ctx.emitted.filter(([e]) => e === 'ui:toast').map(([, p]) => p.key);
   // tut.click
-  for (const [opt, want] of [[{ device: 'kbm' }, true], [{ device: 'touch' }, true], [{ device: 'pad' }, false], [{ preset: 'keyboardOnly' }, false]]) {
+  // TT3 §11.2: `hybrid` walks on WASD (no move click), so the click tip is for the click-to-move presets and touch only
+  for (const [opt, want] of [[{ device: 'kbm' }, false], [{ device: 'kbm', preset: 'moba' }, true], [{ device: 'kbm', preset: 'diablo' }, true],
+    [{ device: 'touch' }, true], [{ device: 'pad' }, false], [{ preset: 'keyboardOnly' }, false]]) {
     const { ctx } = tutCtx({ ...opt, flags: { 'prologue.done': true, 'prologue.tutorial': true } });
     const tu = new Tutorial(ctx, { isPlaying: false });
     tu.init();
@@ -1049,7 +1053,7 @@ test('hints: tut.click after 20 s without an order (pointer schemes only); tut.t
     assert.equal(toasts(ctx).includes('tut.click'), want, 'tut.click ' + JSON.stringify(opt));
   }
   {
-    const { ctx } = tutCtx({ flags: { 'prologue.done': true } });
+    const { ctx } = tutCtx({ preset: 'moba', flags: { 'prologue.done': true } });
     const tu = new Tutorial(ctx, { isPlaying: false });
     tu.init();
     ctx.bus.emit('player:order', { kind: 'move', valid: true });
@@ -1123,7 +1127,19 @@ test('CONTROLS_SPEC §14 + ON §4.3 copy: base / .pad / .touch variants, glyph t
   // TT2 §10.3 copy (src/story/strings.onboarding.js): the chip names the goal and the device's control
   assert.equal(t('tut.move'), 'Race Pearl to the dummy! [Move]');
   assert.equal(t('tut.jump'), 'Little fence? Hop it! [Jump]');
-  assert.equal(t('tut.bonk'), 'Bonk it 3 times! [Attack] or J');
+  assert.equal(t('tut.bonk'), 'Bonk it 3 times! [Attack]', 'TT3: no "or J" (one key per prompt)');
+  // TT3 §11.2 / §11.4: the skip names hold Esc or P (Start on a pad); the Paw Trick copy is verbatim
+  assert.equal(t('tut.skip'), 'Hold [Esc] or [P] to skip practice');
+  assert.equal(t('tut.skip.pad'), 'Hold [Start] to skip practice');
+  assert.equal(t('prompt.skip'), 'Hold [Esc] or [P] to skip');
+  assert.equal(t('tut.target.pad'), '[R3] picks the nearest foe.');
+  const TRICK = { 'trick.coin.name': ':3 Coin Toss', 'trick.coin.bark': 'Take my lucky coin. Throw it, it comes back!',
+    'trick.coin.hint': '[Trick] Toss the coin at that crow!', 'trick.twirl.name': 'Ribbon Twirl', 'trick.twirl.bark': 'Twirl your bow!',
+    'trick.twirl.hint': '[Jump] again in the air and hold to twirl', 'trick.cloud.name': 'Catnip Cloud',
+    'trick.cloud.bark': "Catnip! They can't stay grumpy in this.", 'trick.cloud.hint': '[Trick] Puff catnip on the pack', 'trick.swap': 'Paw Trick: {name}' };
+  for (const [k, v] of Object.entries(TRICK)) assert.equal(S[k]?.default, v, k);
+  // no prompt names Right-click, Ctrl, Alt or F1 any more
+  for (const [k, s] of all) assert.ok(!/right-click|\bctrl\b|\balt\b|\bF1\b/i.test(s), `${k}: old binding in "${s}"`);
   assert.equal(t('tut.bonk.touch'), 'Tap ⚔ 3 times. Bonk!');
   assert.equal(t('onb.meow'), 'Meow [Meow] to call hidden kittens');
   assert.equal(t('onb.wobble.close'), 'Get close to Sir Wobble!');

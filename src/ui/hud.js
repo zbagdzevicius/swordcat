@@ -347,7 +347,7 @@ export class Hud {
       lives: p?.infiniteLives ? Infinity : p?.lives,
       menu: ctx.game?.mode === 'menu',
       hub: lvl === 'town' && !!st?.cond?.('town.free'),
-      peek: ctx.input?.device === 'kbm' && !!ctx.input?.down?.('lockon'),
+      peek: ctx.input?.device === 'kbm' && !!ctx.input?.down?.('peek'),   // TT3: the Z / MMB peek hold, not Tab
     });
     // WA §7.5: Morning Practice reveals the armour shields with the Stand lesson; Valor and milk wait until after it
     const rv = ctx.ui?.reveal;

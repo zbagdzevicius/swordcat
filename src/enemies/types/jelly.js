@@ -14,7 +14,7 @@ import { E } from '../../core/events.js';
 import { clamp, damp, dampAngle } from '../../core/math.js';
 import { TUNING, M2, rangeOf } from '../tuning.js';
 import { BASE_STATES, windupFor } from '../Enemy.js';
-import { makeProp, propMaterial, FACE_PARTS, ENEMY_PAL } from '../props.js';
+import { propMaterial, FACE_PARTS, ENEMY_PAL } from '../props.js';
 import { loadedCharacters } from './kaykitGear.js';
 
 const J = ENEMIES.jelly;
@@ -122,14 +122,7 @@ function buildVisual(size, h, r) {
   face.userData.sharedProp = true;
   face.castShadow = false;
   g.add(face);
-  // something it swallowed (art.md §11): a rat's kettle helm, tipped over
-  if (size !== 'S') {
-    const helm = makeProp('kettleHelm', { castShadow: false });
-    helm.scale.setScalar((h / 0.8) * 0.9);
-    helm.position.set(rx * 0.12, ry * 0.75, -rx * 0.1);
-    helm.rotation.set(0.9, 0.4, 2.2);
-    g.add(helm);
-  }
+  // TT3: no swallowed kettle helm any more (through the translucent body it read as a grey disc behind the face)
   g.userData.body = body;
   return g;
 }

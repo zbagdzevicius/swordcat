@@ -271,10 +271,17 @@ export function silhouetteParts(root, o = {}) {
   });
   for (const [bi, e] of boxes) {
     if (e.pts.length < minVerts * 3) continue;
-    if (tight && EAR_BONE.test(skeleton?.bones[bi]?.name ?? '')) { parts.push({ anchor: bi, matrix: coneMatrix(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'cone' }); continue; }
+    // TT3: ear cones without the fur margin (the wider cone drew maroon bands along the ears)
+    if (tight && EAR_BONE.test(skeleton?.bones[bi]?.name ?? '')) { parts.push({ anchor: bi, matrix: coneMatrix(e.pts, margin), shape: 'cone' }); continue; }
+    // TT3: tail segments get a capsule (round ends overlap the next segment): bounding ellipsoids stuck out at every
+    // bend and drew maroon rings across the tail
+    if (tight && TAIL_BONE.test(skeleton?.bones[bi]?.name ?? '')) { const cp = capsulePart(e.pts, margin); if (cp) { parts.push({ anchor: bi, ...cp }); continue; } }
     // the head bone's ellipsoid counts as fur in a tight hull: in the play set it wraps the merged head fur skin, which
     // stands past the soft fur over her face, so close-ups leave it out with the instanced fur (setHullFur)
-    parts.push({ anchor: bi, matrix: fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid', fur: tight && HEAD_BONE.test(skeleton?.bones[bi]?.name ?? '') });
+    // TT3: in a tight hull the head ellipsoid is fitted inside the head fur skin (cover < 1, more trim, no fur margin):
+    // the enclosing fit stood past the face around the eyes and cheeks and drew a maroon band there
+    const headTight = tight && HEAD_BONE.test(skeleton?.bones[bi]?.name ?? '');
+    parts.push({ anchor: bi, matrix: headTight ? fitEllipsoid(e.pts, margin, HEAD_HULL) : fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid', fur: headTight });
   }
   // drop anchors no part uses (keeps the bone texture small)
   const used = [...new Set(parts.map((p) => p.anchor))].sort((a, b) => a - b);
@@ -300,8 +307,12 @@ export function setHullFur(mesh, on) {
 
 /** The head bone (KittenBuilder BONE_NAMES): its tight-hull ellipsoid is a `fur` part (setHullFur). */
 const HEAD_BONE = /^head$/;
+/** TT3: the tight hull's head ellipsoid fit (inside the fur skin; the 1.4 px push still draws the outline at the rim). */
+const HEAD_HULL = Object.freeze({ cover: 0.95, trim: 0.06 });
 /** Ear bones (KittenBuilder BONE_NAMES) that get a cone in a `tight` proxy. */
 const EAR_BONE = /^ear[LR]$/;
+/** Tail bones that get a capsule in a `tight` proxy (TT3). */
+const TAIL_BONE = /^tail\d$/;
 /** Rigid parts up to this many vertices use their own triangles in a `tight` proxy. */
 const TIGHT_MESH_MAX = 4000;
 /** Rigid parts left out of a `tight` proxy: any hull around the bow's thin overlapping loops inks part of its face. */
@@ -323,6 +334,41 @@ export function coneMatrix(pts, margin) {
   const hx = (hi[0] - lo[0]) / 2 + margin, hy = (hi[1] - lo[1]) / 2 + margin, hz = (hi[2] - lo[2]) / 2 + margin;
   return new THREE.Matrix4().makeScale(Math.max(hx, 0.005), Math.max(hy, 0.005), Math.max(hz, 0.005))
     .setPosition((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2);
+}
+
+/**
+ * A capsule fitted to a tail segment's points (TT3): the principal axis, the trimmed extent along it, and the 70th
+ * percentile radial distance (the fur fringe does not inflate it) + `margin`. Returns a 'mesh' part or null. Pure.
+ * @param {number[]} pts flat xyz @param {number} margin
+ */
+export function capsulePart(pts, margin) {
+  const n = pts.length / 3;
+  if (n < 8) return null;
+  let mx = 0, my = 0, mz = 0;
+  for (let i = 0; i < pts.length; i += 3) { mx += pts[i]; my += pts[i + 1]; mz += pts[i + 2]; }
+  mx /= n; my /= n; mz /= n;
+  const C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < pts.length; i += 3) {
+    const x = pts[i] - mx, y = pts[i + 1] - my, z = pts[i + 2] - mz;
+    C[0] += x * x; C[1] += x * y; C[2] += x * z; C[4] += y * y; C[5] += y * z; C[8] += z * z;
+  }
+  C[3] = C[1]; C[6] = C[2]; C[7] = C[5];
+  const { vals, vecs } = eigenSym3(C);
+  const k = vals.indexOf(Math.max(...vals));
+  const ax = new THREE.Vector3(...vecs[k]).normalize();
+  const along = new Float64Array(n), rad = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    _v.set(pts[i * 3] - mx, pts[i * 3 + 1] - my, pts[i * 3 + 2] - mz);
+    along[i] = _v.dot(ax); rad[i] = _v.addScaledVector(ax, -along[i]).length();
+  }
+  along.sort(); rad.sort();
+  const lo = along[Math.floor(0.03 * (n - 1))], hi = along[Math.ceil(0.97 * (n - 1))];
+  const r = rad[Math.floor(0.7 * (n - 1))] + margin;
+  const len = Math.max(0.002, hi - lo - r);
+  const geo = new THREE.CapsuleGeometry(Math.max(r, 0.004), len, 3, 8);
+  const centre = new THREE.Vector3(mx, my, mz).addScaledVector(ax, (lo + hi) / 2);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), ax);
+  return { matrix: new THREE.Matrix4().compose(centre, q, new THREE.Vector3(1, 1, 1)), shape: 'mesh', geo, margin: 0 };
 }
 
 /** `c` or any ancestor below `root` is left out of a `tight` proxy (TIGHT_KEEP). */

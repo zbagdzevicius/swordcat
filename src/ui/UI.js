@@ -731,13 +731,15 @@ export class UI {
     // WA §5.4: any input after 0.6 s sends a celebration home (it never pauses or eats the input)
     const cel = this.celebrations;
     if (cel?.q.cur && input.anyActivity?.() && cel.q.skip()) cel._fly(cel.q.cur);
-    // requests/fx: Esc while a companion ability is held only cancels the aim (CONTROLS_SPEC §7.5)
-    if (ctx.companions?.aim?.active && input.pressed('pause')) return;
+    // requests/fx: Esc while a companion ability is held only cancels the aim (CONTROLS_SPEC §7.5); TT3 §11.3: the same
+    // for a Paw Trick held to aim (package A reads `back` to call the aim off)
+    if ((ctx.companions?.aim?.active || ctx.player?.tricks?.holding || ctx.player?.tricks?.aim?.on) && input.pressed('pause')) return;
     // Morning Practice: a 1 s hold skips the tutorial, so pause opens on the release of a short press
     if (story?.tutorial?.active) {
       if (input.released('pause') && input.heldTime('pause') < UI_TIMING.tutorialTap) this.pause();
     } else if (input.pressed('pause')) this.pause();
-    // CONTROLS_SPEC §6.3: pad Back / View opens the controls card over the pause book (Back closes it as usual)
+    // CONTROLS_SPEC §6.3: a `controls` binding opens the controls card over the pause book (TT3 §11.2: none by default;
+    // the pad's View zooms and the card lives in the pause menu)
     else if ((mode === 'play' || mode === 'memecam') && input.pressed?.('controls')) { this.pause(); if (this.menus.paused) this.menus.openControls(); }
   }
 

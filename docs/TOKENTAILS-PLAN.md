@@ -388,7 +388,7 @@ killed, restarted or bound, and every agent kills only the servers it started.
 **Onboarding (playthrough at 1280×720 mouse and keyboard, plus phone landscape).**
 
 - Two dead ends. (1) The jump lesson cannot be passed with click or tap: the move order paths around the fence
-  (the fence nav link opens only after `tut.jump.done`, `meadow.js:630`), so F while walking never counts; only
+  (the fence nav link opens only after `tut.jump.done`, `meadow.js:630`), so F (jump before TT3; Space since §11.2) while walking never counts; only
   WASD/stick + F works and nothing on screen says WASD. (2) The parry lesson stalls silently: Sir Wobble swings only
   within 1.6 m and after the block he ended 2.57 m away (about 100 s waited, `parryFails` 10, no feedback).
 - In 5 of 7 lessons the target starts off-screen and nothing points at it: `beaconState()` returns `'off'` in
@@ -470,14 +470,14 @@ under the old flow continues at the nearest new step.
 |---|---|---|
 | 0 s | Title → play | Control in under 1.5 s. tutlook is dropped (the trail and look-ahead replace it). The title offers "Skip practice" to new players too (G3 draws the link, G2 implements `newGame({ skipPractice: true })`). |
 | 0–8 s | Move | "Race Pearl to the dummy!" Trail to the middle dummy (0, −76). Done within 2.2 m. |
-| 8–12 s | Bonk | 3-hit combo on the dummy; the chip says LMB/J or tap ⚔ (the right-click wording goes). tutbow becomes a 2-s Pearl bark ("Bow's perfect. Now bonk!"); the bow flag is set silently, the reward toast stays. |
+| 8–12 s | Bonk | 3-hit combo on the dummy; the chip says LMB or tap ⚔ (the right-click wording goes; TT3 dropped "or J" too). tutbow becomes a 2-s Pearl bark ("Bow's perfect. Now bonk!"); the bow flag is set silently, the reward toast stays. |
 | 12–30 s | Sir Wobble drill | Pearl waits at Wobble; trail to a stand spot 1.3 m from him. Block once, then parry once. Wobble steps toward Clem when she is over 1.4 m away; past 1.6 m the prompt says "Get close to Sir Wobble!". The first swing plays in slow motion; after 3 parry fails the slow motion stays and the Kitten-mode offer appears. His telegraph ring is drawn under him. Sir Sacky stands beside him; rolling past him is an optional tip, and roll is taught for real on the first crossbow bolt. |
 | 30–40 s | Bell → CS-01 | The bell rings right after the parry; CS-01 plays in place, cut to ≤ 10 s (one "one ear-tuft short" gag). The height-chart walk goes. |
 | 40–60 s | CS-02 | Cut to ≤ 20 s: glow out, horde, Pearl's sign, Pilfer's theft; it ends with rats spilling into the practice field. |
 | 60–80 s | First fight | 3 rats on the practice field (`onboard.firstFight`). Forgiving: the rats wait for her first order or 3 s, and the first hit on her is soft. |
 | after | Armour | Trail to the barn chest; the tag reads "Open"; CS-01b becomes a ≤ 6-s inline beat, then the Chapter 1 card. |
 | after | North to Mochi | Trail north; G-01 becomes a non-blocking bark (no letterbox, no input lock). The cart fight and the Bright Slash lesson stay; D-01 ≤ 12 s. |
-| after | Lantern Stone 1, Noodle | The Lantern Stone menu never opens while foes are alerted. Noodle's barrel teaches Meow for real: within 6 m the prompt says "Meow [C] to call hidden kittens" (the cow lesson, its 1.2-s wipe and tutpearl go; tutpearl's lines become a bark). Jump is taught at the first hop link outside practice, and click/tap across a fence + F counts as a hop everywhere. `onboard.done` is set when the Standing Stones arena is reached after Noodle. |
+| after | Lantern Stone 1, Noodle | The Lantern Stone menu never opens while foes are alerted. Noodle's barrel teaches Meow for real: within 6 m the prompt says "Meow [C] to call hidden kittens" (the cow lesson, its 1.2-s wipe and tutpearl go; tutpearl's lines become a bark). Jump is taught at the first hop link outside practice, and click/tap across a fence + F (Space since TT3 §11.2) counts as a hop everywhere. `onboard.done` is set when the Standing Stones arena is reached after Noodle. |
 
 Skipping: a visible "Skip ▸▸" chip (hold Esc / ❚❚, or tap and hold the chip on touch) appears from second 0 of every
 skippable scene and of practice, never only after 20 s. Every scene file header states its measured length.
@@ -593,7 +593,7 @@ finish. Ownership lists are in the orchestrator's package list.
 
 Guidance and onboarding:
 1. **Trail bot.** `npm run bot:onboarding` (G6) drives a fresh-storage `build:test` bundle opened with `?debug`
-   (not `?test`, which turns off story beats). Its only inputs come from `__GAME__.guide()`: right-click / tap on the
+   (not `?test`, which turns off story beats). Its only inputs come from `__GAME__.guide()`: WASD from Clem toward the trail (mouse runs, since TT3 §11.2; it was a right-click) / tap on the
    farthest lit print (or the edge arrow pulled 80 px inward, or the badge), the key or button named in the visible
    prompt or objective line, LMB / ⚔ on foes while a fight prompt is shown, and holding the skip chip in skip runs.
    It never reads world positions. It finishes from Play to `onboard.done` with zero dead ends (a dead end = 15 game
@@ -607,7 +607,7 @@ Guidance and onboarding:
    dialogue (G-01 included).
 5. The skip chip is visible within 0.5 s of every skippable scene start and of practice; measured CS-01 ≤ 10 s,
    CS-02 ≤ 20 s, CS-01b ≤ 6 s, D-01 ≤ 12 s; G-01 locks no input.
-6. Click-across-fence + F and tap-across-fence + jump count as a hop; Sir Wobble's lesson completes with the bot's
+6. Click-across-fence + F (Space since TT3) and tap-across-fence + jump count as a hop; Sir Wobble's lesson completes with the bot's
    1.5 s delay; the barn chest tag reads "Open"; the Lantern Stone menu does not open while foes are alerted.
 7. Unit tests: `beaconState` with `practice: true` is not `'off'`; trail path routes round the practice fence; auto-hide
    radius; `guideTarget()` returns a target for every lesson and prologue step; old mid-practice saves resume.
@@ -695,3 +695,360 @@ scenes CS-01 6.3 s, CS-02 17.6 s, CS-01b 3.3 s, D-01 10.3 s (the 33 s / 41 s rea
 Flag-ON `/swordcat` shows no "Still loading" banner (same-origin parent accepted, request §6). Open: request §5
 (390×844 Skip-practice / footer overlap), #15 (the founder's 5180 server was already down; agents do not restart it).
 Details: STATUS.md "TT2 fix round 2".
+
+## 11. Phase TT3: characters, controls, abilities
+
+Three read-only audits (2026-10-14) found 7 serious character defects, a browser-unsafe default binding table and a
+moveset with no ranged option, no air movement and little crowd control. This phase fixes the characters, moves the
+controls to the common convention, and adds three Pink Paw themed Paw Tricks. Audit screenshots:
+`/private/tmp/claude-501/-Users-zygimantasbagdzevicius-me-tokentails-app/90036e17-2f2f-4789-b2bd-035db0b49f4b/scratchpad/swordcat/chars/audit/`
+(`S-*` contact sheets, `d-*` 1280×720, `m-*` 844×390).
+
+Package names here (C, K, A, T) are new. They are not the earlier §10.11 continuation ids (R1–R3, TT3, Q1).
+
+### 11.1 What the audits found (short)
+
+**Characters.** P1: Pug's head floats above the armour collar (Barkus too, weaker); every cat's eyes bulge past the
+head in profile (`KittenBuilder.js:632` seats the eye middle on the skull surface), the crow's eyes float; the sword
+covers Clem's face in the front 3/4 view (first slash wind-up, hurt, run carry, `SwordcatModel.js` `CARRY`); Clem's
+tail drags on the ground (`TAIL_CURVE` ends at 0.05) and shows maroon rings at the joints; Sir Wobble has almost no
+face, his target square stands off the surface and his arm plank passes through the body; Grizzlechop's hat floats
+and his cheese shield reads as a cart wheel; Simas's bucket clips his ears. P2: dark maroon ear and cape-lining bands;
+stray fur strands and white hash marks in the inner ears; Clem defaults to `worried` brows; tired lids and an
+under-eye crescent on the Token Tails Cat and Pearl; the Token Tails Cat's mannequin seams and stick tail; sleepy
+rolls on Raudvis and Zare; Judas's blurry blaze; a dark band over Barkus's helm; faceted shading on rats,
+Grizzlechop, spider and crow; blurry hyena spots; a 2 to 3 px bow at phone size; a jump that looks like idle; a grey
+disc inside the jelly. Correct today: bow from frame one, crimson eyes with catchlights, red cape with gold trim, gold
+":3" badge, the coin in the Token Tails Cat's paws, Pearl's lilac bow, licensed kitten coats, the GRUMP-IN-CHIEF /
+NAYSAYER / SNACK SNATCHER plates.
+
+**Controls.** The default `hybrid` preset puts the Stand on Space, jump on F and move orders on RMB. Ctrl (show
+ranges, queue move) is critical: Ctrl held with WASD gives Ctrl+W (closes the tab, cannot be blocked) and Ctrl+D.
+Alt peeks (Alt+Left goes back in history), F1 opens browser help, Space+LMB fires Golden Hour by accident, Esc in
+fullscreen exits fullscreen instead of skipping. The rebinding backend exists (`settings.bindings`,
+`cleanBindings`, `Input.rebind()`, `input.codesFor`); only the screen is missing.
+
+**Abilities.** No ranged option without Valor, no way to catch a fleeing SNACK SNATCHER (6 m/s vs 5.5 m/s), no answer
+to crows without Sage, no air movement, Meow pauses enemies for only 0.3 s. `PLAYER.glide` (config.js:21) is dead
+config. No stamina system; keep it that way.
+
+**Open from TT2 (commit 023b049).** On 390×844 the title "Skip practice" link overlaps the "A Token Tails game" pill
+(`src/ui/ui.css`). 9 smoke blocks red: 4 still expect the old fence hop, 1 is that overlap, 4 not triaged, plus one
+flaky audio check.
+
+### 11.2 The new default bindings (fixed here)
+
+K implements this table in `INPUT` (config.js). Every other package reads action names only, never key codes.
+
+| Action (`INPUT` name) | Keyboard and mouse | Touch | Gamepad (standard layout) |
+|---|---|---|---|
+| move | WASD / arrows (click-to-move stays in `moba` and `diablo`) | floating stick, tap ground | L-stick |
+| `attack` (hold = charge) | LMB, J. LMB on a foe gives the attack order | ⚔ | X (2) |
+| `guard` (hold = Stand, tap = parry) | RMB, Q, L | 🛡 | LB (4), RB (5) |
+| `jump` (in air + attack = Pounce) | Space | Jump | A (0) |
+| `dodge` (tap = Tumble) | Shift, K, Mouse3 | swipe, Tumble button | B (1) |
+| `sprint` (new, virtual) | `dodge` key still held 0.18 s after the Tumble starts: run at Zoomies speed at once | hold Tumble | hold B |
+| `interact` | E, Enter, click | ! / tap | Y (3) |
+| `ability` (kitten, tap = cast, hold = aim) | G | portrait | LT (6), RS aims |
+| `trick` (new, Paw Trick slot, tap = cast, hold = aim) | F | ":3" button | RT (7), RS aims |
+| `trick1`..`trick3` (new, pick a Paw Trick) | 1, 2, 3 | long press ":3" opens a 3-way picker | hold RT + D-pad left/right/up |
+| `golden` | V, or `guard` + `attack` pressed within 0.1 s | sun | `guard` + X within 0.1 s |
+| `milk` / `meow` | R / C | buttons | D-pad up (12) / L3 (10) |
+| `lockon`, `lockPrev`, `lockNext` | Tab (Shift+Tab back), LMB on a foe | tap foe | R3 (11); D-pad left/right in combat |
+| `attackMove` / `stop` | X / H | none | none |
+| zoom | wheel | pinch | View (8) cycles zoom |
+| `camLock` / `centre` | Y / Home (F1 removed) | none | none |
+| `peek` and `ranges` (one hold) | Z, MMB (Alt removed, Ctrl removed) | none | D-pad down (13) |
+| `pause` | Esc, P | ❚❚ | Start (9) |
+| skip practice / cutscene | hold Esc or hold P | Skip chip | hold Start |
+| `back` (menus, aim cancel) | Esc, Backspace | Back | B |
+
+Rules: no bound action uses Ctrl, Alt, Meta or an F-key. `Input.js` ignores any keydown that carries `ctrlKey` or
+`metaKey`. Queue move is Shift+RMB in `moba` only. Preset changes: `diablo` keeps Space as dodge and moves jump off F
+to KeyT; `mouseOnly` jump from F to Space;
+`keyboardOnly` and `?cam=classic` already match. The controls card moves into the pause menu (View is zoom now).
+
+### 11.3 The Paw Tricks (fixed here)
+
+One swappable Paw Trick slot (like the hats in A Hat in Time), so each device gains one button only. Owned tricks
+are save flags (`trick.coin`, `trick.cloud` = true; equipped = `trick.equipped`), stored through the existing
+generic `flags` record, so `SaveManager.js` does not change for this. All unlocks come after the first fight.
+
+1. **":3" Coin Toss** (boomerang). Out 8 m and back, 0.9 s total; 8 damage out, 8 back; stops at the first foe on the
+   way out, then returns; collects catnip and hearts on the way back. Cooldown 4.0 s, one coin out at a time, +2 Valor
+   per hit. Small foes (rat, jelly S, bonehead mage) stunned 0.6 s; `rat_xbow` hit in `aimLock` loses its bolt and
+   restarts the reload; a crow below 3 m grounded 1.5 s; a SNACK SNATCHER stunned 1.2 s and drops half the stolen
+   catnip; a pug blocks it from the front (clang), takes it from the side; jellies knocked back, never split; bosses
+   6 damage and +4 Dizzy. Aim: tap = cursor (KBM), locked or nearest foe (pad, touch); hold = aim line. Unlock: end of
+   the meadow, before Crow Fields, the Token Tails Cat hands over the coin in a 3 s bark. VFX: spinning gold ":3"
+   disc, sparkle trail, short streak; Clem's tail flicks up. SFX (zzfx): "ting" throw, "tink" hit, soft chime catch.
+2. **Ribbon Twirl** (glide). Press `jump` again in the air and hold it: the pink bow spins like a propeller. Uses
+   `PLAYER.glide` (fall speed capped at 1.8, speed 4.5, up to 1.5 s, once per jump). On start, a spin hits all around
+   within 1.0 m for 6 damage and knocks crows back. After a Pounce pogo it carries further. Always owned after the
+   unlock (it is not in the slot). Unlock: forest entry; Pearl says "Twirl your bow!". VFX: ribbon loops, pink petals,
+   cape flutter. SFX: rising whirr loop, "fwip" on the spin hit.
+3. **Catnip Cloud** (crowd control). Pouch thrown up to 7 m; cloud of 2.5 m radius for 3 s; normal enemies inside are
+   `giddy` 2.5 s: on their backs, no attacks, plate shows the `plateWordsFriend` word (GRUMP → GIGGLER, SNACK
+   SNATCHER → SNACK SHARER); the first hit wakes it for ×1.5 damage ("belly-rub bonk"). Bosses and elites (poise ≥ 5)
+   get +20 Dizzy only. A GRUMP's jeer is cancelled. Cooldown 16 s. Unlock: town, Pearl gives the pouch after her
+   rescue, before the first jeering GRUMP pack. VFX: lilac puffs with small hearts, "z" / "♪" icons. SFX: a "poof"
+   and a giggle babble.
+
+Not built: Ribbon Lasso (stretch goal for a later phase), Purr Shield (overlaps Shield Wall and Standing Ground).
+
+### 11.4 Cross-package contracts (fixed here)
+
+- **Action names** (K writes in `INPUT.actions`, A reads): `sprint`, `trick`, `trick1`, `trick2`, `trick3`. `golden`
+  stays the action name; K derives the chord inside `Input.js`, so `input.pressed('golden')` is true for V and for
+  the chord. `sprint` is held while the dodge key stays down past 0.18 s.
+- **Model poses** (C writes in `SwordcatModel.js`, A calls defensively with `model.setTrickPose?.(...)`):
+  `setTrickPose('toss', w)` (throwing paw forward, tail flicked up), `setTrickPose('twirl', w)` (bow spins, cape
+  flutters, arms out), `setTrickPose(null)`. `w` is 0..1 blend weight.
+- **Enemy hooks** (C writes in the type files, A calls defensively): `enemy.dropStolen?.(frac)` on `stealer` and
+  Pilfer; `enemy.blocksFrom?.(dir)` true on a pug's front arc. Generic stun, giddy and the belly-rub bonus live in
+  `Enemy.js` / `Combat.js` (A), not in the type files.
+- **String keys** (K adds the text verbatim, A reads): `trick.coin.name` ":3 Coin Toss", `trick.coin.bark` "Take my
+  lucky coin. Throw it, it comes back!", `trick.coin.hint` "[Trick] Toss the coin at that crow!", `trick.twirl.name`
+  "Ribbon Twirl", `trick.twirl.bark` "Twirl your bow!", `trick.twirl.hint` "[Jump] again in the air and hold to
+  twirl", `trick.cloud.name` "Catnip Cloud", `trick.cloud.bark` "Catnip! They can't stay grumpy in this.",
+  `trick.cloud.hint` "[Trick] Puff catnip on the pack", `trick.swap` "Paw Trick: {name}". The `[Trick]` and `[Jump]`
+  tokens become glyphs through `text.js` (K adds `trick` to `TOKEN_ACTION`).
+- **Events** (A emits on the bus, K listens in `tutorial.js` for the hint and trail): `trick.unlocked {id}`,
+  `trick.used {id}`. K shows `trick.<id>.hint` once after `trick.unlocked`, with the paw-print trail pointing at the
+  nearest valid target if the guide supports it, else the hint line only.
+- **New smoke file** `tests/smoke/tricks.mjs` (A writes; K registers it in `tests/smoke.mjs`).
+- **CSS**: A styles its buttons in a new `src/ui/tricks.css` imported from `touch.js`; nobody else edits `ui.css`.
+
+### 11.5 Work packages (disjoint file ownership)
+
+C, K and A run in parallel. T runs last. A package that needs a change in a file it does not own writes it, with a
+diff, to `requests/tt3-<pkg>.md` (`tt3-c.md`, `tt3-k.md`, `tt3-a.md`, `tt3-t.md`) and codes defensively. After the
+parallel wave, each owner applies the requests addressed to it in one short fix round. T never edits another
+package's files.
+
+| Id | Title | Dev port | Screenshot folder (under `.../scratchpad/swordcat/chars/`) |
+|---|---|---|---|
+| C | Character fixes and cuteness pass | 5331 | `c/` |
+| K | Control remap, prompts, tutorials, docs, rebinding UI, all smoke fixes | 5332 | `k/` |
+| A | Paw Tricks: Coin Toss, Ribbon Twirl, Catnip Cloud | 5333 | `a/` |
+| T | Integration: contract tests, final runs, embed copy, commits | 5334 (smoke preview 5434) | `t/` |
+
+Agents run targeted smoke against their own dev server: `SMOKE_URL=http://localhost:53xx/ SMOKE_ONLY=<area> node
+tests/smoke.mjs`. Only T builds `dist/` or `dist-test/` and runs the full suite (`SMOKE_PORT=5434`). Kill every
+server you start. Never use ports 5180, 3000, 3005, 5173.
+
+**C owns** `src/characters/**` (KittenBuilder, Eyes, Fur, Bow, Cape, Sword, Poses, BeastHead, BeastDress, Armour,
+Plate, configs, palette, materials, Readability, Outline, ...), `src/player/SwordcatModel.js`,
+`src/companions/KittenVisual.js`, `src/companions/NpcActor.js`, `src/companions/dressing.js`,
+`src/enemies/types/**`, `src/enemies/scripted/**`, `src/enemies/look.js`, `src/enemies/bake.js`,
+`src/enemies/rig.js`, `src/enemies/palette.js`, `src/enemies/lod.js`, `src/enemies/props.js`,
+`src/enemies/VisualPool.js`, `src/world/PropActor.js` (Sir Wobble), `tests/unit/characters.test.js`,
+`tests/unit/enemies.test.js`, `tests/unit/brand.test.js`, `docs/api/characters.md`, `docs/api/enemies.md`,
+`requests/tt3-c.md`.
+
+C tasks:
+1. P1 fixes 1 to 7 from 11.1: close the Pug and Barkus neck gap; seat every cat's eyes deeper (or flatter) so no eye
+   passes the head outline in profile, and seat the crow's eyes on its head; keep the sword off Clem's face in the
+   front 3/4 view for the slash wind-ups, hurt and the run carry; lift the tail into a question-mark curl (start from
+   `[[0,0.2,-0.13],[0.04,0.3,-0.26],[0.06,0.47,-0.29],[0,0.57,-0.2]]`), smooth its joints and add an idle sway; give
+   Sir Wobble big painted dot eyes with highlights, rosy cheeks, a wide smile, a pink heart target flush on the
+   surface and the arm on a visible peg; seat Grizzlechop's hat and recolour the shield as cheese (yellow, holes);
+   shrink and lift Simas's bucket so the ears show.
+2. P2 fixes 8 to 18: no dark maroon ear or cape-lining bands; trim stray fur strands and inner-ear hash marks; Clem
+   defaults to `happy`, brows only in story beats; light thin lids and no under-eye crescent on the Token Tails Cat
+   and Pearl; soft belly over the Token Tails Cat's seams, curled tail, coin raised to chest height in both paws;
+   named kittens never roll `sleepy`; crisp white blaze on Judas; tabby forehead stripes on Zare; lighter seal-point
+   mask on Simas; bigger rounder lilac bow on Pearl; remove Barkus's helm band; smooth shading on rats, Grizzlechop,
+   spider and crow; sharper hyena spots; no disc inside the jelly; bigger pupils on the pikeman; plainer crossbow helmet;
+   a tuft in place of the crow's cone; larger Cacklejaw plate text.
+3. Cuteness: soft pink cheek blush on all cats; Clem's bow 1.3× and tilted toward the back of the head for the high
+   camera; a squash-and-tuck jump; ">_<" eyes when hurt; slashes with more body lean.
+4. Contracts from 11.4: `setTrickPose('toss' | 'twirl' | null, w)`, `dropStolen(frac)` on `stealer` and Pilfer,
+   `blocksFrom(dir)` on the pug.
+5. Do not touch the 14 other lost kittens' coats; re-shoot them to check the shared builder changes did not break them.
+
+C acceptance:
+- Re-shoot the audit set (front, 3/4, side, back, face close-ups, gameplay camera, 844×390) into `chars/c/` and read
+  every image. No head gap from behind on Pug or Barkus; no eye past the head outline in profile on any cat or the
+  crow; no sword over Clem's face in the front 3/4 shots of slash wind-up, hurt and run; no floating hat; no ear
+  through Simas's bucket; no z-fighting, no floating parts, no dark outline bands.
+- Unit tests in `characters.test.js`: each cat's eye bounds in head space stay inside the head radius plus 0.005;
+  Clem's lowest tail point is at least 0.15 above her feet in idle, walk and run; named kittens never get `sleepy`
+  over 200 seeds; Clem's default expression is `happy`; `setTrickPose` exists and blends back to rest.
+- At 844×390 from the gameplay camera the pink bow covers at least 6 px across (measured in a screenshot).
+- Cuteness re-score by the C agent from the new shots: no character below 6; Clem ≥ 8; Sir Wobble ≥ 6.
+- `npm run test:unit` green for C's test files; `scripts/bundle-budget.mjs` still passes; triangle count of Clem plus
+  one kitten within +10% of today.
+- Identity kept: ivory fur, crimson eyes, pink bow from the first frame, red cape with gold trim, gold ":3" badge,
+  Token Tails Cat holding the coin, Pearl's lilac bow, plate words unchanged.
+
+**K owns** `src/core/config.js`, `src/core/Input.js`, `src/player/Orders.js`, `src/fx/GroundDecals.js`,
+`src/camera/**`, `src/ui/hud.js`, `src/ui/UI.js`, `src/ui/text.js`, `src/ui/prompts.js`, `src/ui/settings.js`,
+`src/ui/menus.js`, `src/ui/beacon.js`, `src/ui/guide.js`, `src/ui/guidance.css`, `src/ui/onboarding.css`,
+`src/ui/ui.css`, `src/companions/CompanionManager.js`, `src/companions/abilityAim.js`, `src/save/SaveManager.js`,
+`src/story/strings.js`, `src/story/strings.onboarding.js`, `src/story/tutorial.js`, `scripts/dev/onboarding-bot.mjs`,
+`tests/smoke.mjs`, every existing file in `tests/smoke/`, `tests/unit/core.test.js`, `tests/unit/ui.test.js`,
+`tests/unit/controls.test.js`, `tests/unit/player.test.js`, `tests/unit/companions.test.js`,
+`tests/unit/camera.test.js`, `tests/unit/nav.test.js`, `tests/unit/onboarding.test.js`,
+`tests/unit/guidance.test.js`, `tests/unit/story.test.js`, `tests/unit/contracts.test.js`,
+`tests/unit/save.test.js`, `tests/unit/fixround2.test.js`, `STATUS.md`, `docs/api/player.md`,
+`docs/api/companions.md`, `docs/api/fx.md`, `docs/api/camera.md`, `docs/api/ui.md`, `research/CONTROLS_SPEC.md`,
+`requests/tt3-k.md`.
+
+K tasks:
+1. Implement 11.2 in `INPUT` (keys, presets, pad, `preventDefault`): remove ControlLeft/Right, AltLeft and F1; add
+   KeyZ, KeyG, Digit1 to Digit3 and the new actions. Keep `?cam=classic` as is.
+2. `Input.js`: ignore keydowns with `ctrlKey` or `metaKey`; read RMB on the UI root too (a right-click on the Pearl
+   bubble or any HUD element still guards); derive `sprint` and the `golden` chord; hold P skips like hold Esc.
+3. `Orders.js`: LMB on a foe gives the attack order (walk in and chain); queue move is Shift+RMB in `moba` only.
+4. Rename the ranges hold in `GroundDecals.js`; remove the hardcoded Shift in `FollowCamera.js` (cycle back) and the
+   Tab-hold peek in `hud.js`; aim cancel in `CompanionManager.js:423` and `abilityAim.js` moves from `move` to `back`
+   or `guard`.
+5. `text.js`: keyboard and pad `ACTION_GLYPH`, `TOKEN_ACTION` (space = jump, f = trick, g = ability, z = peek, new
+   `trick`), `guard` in `MOUSE_FIRST` so the Stand prompt says RMB.
+6. Strings: remove "or J" in `tut.bonk` (`strings.onboarding.js:17`); rewrite `tut.click`, `tut.move`, `tut.bonk`
+   "Right-click" text; `prompt.skip` mentions hold P; `loading.tip.*`, settings labels, the `beacon.js:258` copy and
+   the `tutorial.js` comments (around lines 14 and 924); the `trick.*` keys from 11.4 verbatim.
+7. Tutorial: the four lessons keep their count and order. Add the one-time `trick.<id>.hint` after `trick.unlocked`.
+8. Rebinding screen in the Controls card (`menus.js` `openControls`, `settings.js` `CONTROL_ROWS`): keyboard and
+   mouse only, about 13 actions (attack, guard, jump, dodge, interact, trick, ability, milk, meow, golden, peek,
+   lockon, pause); "Press a key" capture, swap on conflict, "Reset to default"; refuse Ctrl, Alt, Meta, F-keys and
+   Esc. `cleanBindings` also rejects modifier keys. Gamepad keeps the standard layout.
+9. Fix the 390×844 "Skip practice" / "A Token Tails game" pill overlap in `ui.css`.
+10. Smoke: update every key in `controls.mjs`, `story.mjs`, `flow.mjs`, `physics.mjs`, `companions.mjs`,
+    `player.mjs`, `core.mjs`; fix the 4 fence-hop blocks, the overlap block, triage and fix the 4 others, and make the
+    audio check deterministic (no retries hiding a race). New blocks: rebind Stand to a new key and pass the parry
+    lesson; Ctrl+W, Ctrl+D and Meta+W during play trigger no game action; gamepad standard layout drives the four
+    lessons. Register `tests/smoke/tricks.mjs`.
+11. Docs: STATUS.md controls table, `docs/api/player.md:134,150`, `docs/api/companions.md:220,242`,
+    `docs/api/fx.md:185–186`, `research/CONTROLS_SPEC.md` (§6.2: record the new default and why). The text edits for
+    TOKENTAILS-PLAN §10 (old §391, §480, §610 binding mentions) go to `requests/tt3-t.md` as exact replacements.
+
+K acceptance:
+- `grep` finds no `ControlLeft`, `ControlRight`, `AltLeft`, `MetaLeft` or `F1` in any `INPUT` table, and no bound
+  code in any preset is a modifier.
+- Unit: binding table (Space = jump, RMB/Q/L = guard, F = trick, G = ability, Z = peek); conflict swap in the rebind
+  model; `cleanBindings` drops modifiers; `sprint` after 0.18 s; `golden` chord within 0.1 s and not after; a keydown
+  with `ctrlKey` sets no action.
+- Every on-screen prompt, tutorial line, help screen, loading tip and settings label shows the new keys on keyboard,
+  touch and pad (screenshots of each lesson prompt in `chars/k/`, read).
+- The onboarding bot (mouse 1280×720 and touch 844×390, 3 seeds each) reaches `onboard.firstFight` with a median
+  ≤ 60 s and `onboard.done` ≤ 240 s, no dead ends.
+- 390×844: the Skip link and the pill do not overlap (bounding boxes disjoint, screenshot read).
+- `npm run test:unit` green for K's files; targeted smoke for every area K touched green on K's dev server, twice.
+
+**A owns** `src/player/Player.js`, `src/player/PlayerStates.js`, `src/player/tricks/**` (new: `PawTricks.js`,
+`CoinToss.js`, `RibbonTwirl.js`, `CatnipCloud.js`, `tuning.js`, `unlocks.js`), `src/combat/**`,
+`src/player/tuning.js`, `src/enemies/Enemy.js`, `src/enemies/EnemyManager.js`, `src/enemies/status.js`, `src/enemies/Dizzy.js`,
+`src/fx/TrickFX.js` (new), `src/audio/sfxMap.js`, `src/audio/cues.js`, `src/ui/abilityBar.js`, `src/ui/icons.js`,
+`src/ui/touch.js`, `src/ui/touchLayout.js`, `src/ui/touchEditor.js`, `src/ui/tricks.css` (new),
+`src/world/levels/forest.js` (only if a twirl gap is added), `tests/unit/tricks.test.js` (new),
+`tests/unit/combat.test.js`, `tests/unit/combat.warm.test.js`, `tests/unit/fx.test.js`,
+`tests/unit/audio.test.js`, `tests/smoke/tricks.mjs` (new), `docs/api/tricks.md` (new), `docs/api/combat.md`,
+`requests/tt3-a.md`.
+
+A tasks:
+1. `PawTricks` controller built by `Player.js` (`this.tricks`), reading `trick`, `trick1..3` and the aim; one slot,
+   flags as in 11.3; tuning in `src/player/tricks/tuning.js` (numbers from 11.3).
+2. Coin Toss: a `coin` projectile kind with a return path in `Projectiles.js`, a 0.25 s `toss` state in
+   `PlayerStates.js`, stun / ground / drop / block rules via the 11.4 hooks.
+3. Ribbon Twirl: the glide state from `PLAYER.glide`, second jump press in the air, 1.0 m spin hit, once per jump.
+4. Catnip Cloud: shared `giddy` state in `Enemy.js` (roll onto the back, wiggle, no attacks, friend plate word),
+   `giddy` added to `PASSIVE_ENEMY_STATES` in `src/player/tuning.js`. Belly-rub ×1.5 in `Combat.js`; poise ≥ 5 and bosses only get +20 Dizzy.
+5. `Player.js` reads `sprint` (Zoomies speed at once) and `golden` (K's chord).
+6. Unlocks in `unlocks.js` from bus events (meadow end, forest entry, Pearl's rescue in town), emitting
+   `trick.unlocked`; barks through the existing bubble API with the 11.4 keys.
+7. UI: Paw Trick slot with cooldown in `abilityBar.js`; ":3" touch button with long-press picker in `touch.js` and
+   `touchLayout.js`; icons; VFX in `TrickFX.js`; zzfx sounds in `sfxMap.js` / `cues.js`.
+
+A acceptance:
+- Unit (`tricks.test.js`): coin out-and-back path and 0.9 s total; first-foe stop; one coin at a time; cooldown;
+  per-enemy rules (stun times, crow ground, steal drop half, pug front block, jelly no split, boss +4 Dizzy); twirl
+  fall cap, 1.5 s limit, once per jump; giddy 2.5 s, no attacks while giddy, wake with ×1.5, bosses only Dizzy;
+  flags round-trip through the save `flags` record.
+- `tests/smoke/tricks.mjs` blocks: Crow Fields coin grounds a crow; forest twirl crosses a gap (or glides 1.5 s if no
+  gap was added); town Catnip Cloud makes a GRUMP pack giddy and flips the plate word. Green twice on A's dev server.
+- Each trick works by KBM, touch (844×390) and pad; screenshots of the throw, twirl and cloud in `chars/a/`, read:
+  readable at phone size, cute, Pink Paw / Token Tails themed.
+- The first fight does not change: no trick is owned or shown before `onboard.firstFight`.
+- `npm run test:unit` green for A's files; no frame-time regression in `perf.mjs` beyond 5%.
+
+**T owns** `tests/unit/tt3.test.js` (new), `docs/TOKENTAILS-PLAN.md`, `requests/tt3-t.md`, and in
+`/Users/zygimantasbagdzevicius/me/tokentails-swordcat`: `client/public/swordcat-game/**` (the `build:tokentails`
+copy only). T also makes the commits.
+
+T tasks:
+1. After the parallel wave, collect every `requests/tt3-*.md`, send each item to its owner for the fix round, and
+   apply the §10 text replacements K asked for in this file.
+2. `tt3.test.js` checks the contracts in 11.4: every action in 11.2 exists in `INPUT.actions` with the listed codes;
+   every `trick.*` string key exists; `setTrickPose`, `dropStolen`, `blocksFrom` exist; no prompt string names a key
+   that is not bound to its action.
+3. Final runs, serialised: `npm run test:unit`, `npm run build`, `npm run build:test`, `SMOKE_PORT=5434 npm run smoke`
+   twice, the onboarding bot, `npm run build:tokentails`, a flag-ON `/swordcat` check at 1440×900 and 390×844.
+4. Write the measured results into 11.8 below.
+5. Commit on `tokentails` in swordcat; commit the embed copy on `feat/swordcat` in tokentails-swordcat (exclude
+   `client/.vitest/` and `client/next-env.d.ts`). No push. Messages end with
+   "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>".
+
+T acceptance: 11.6 all ticked; both smoke runs fully green (0 failing blocks, no retries counted as passes); unit
+fully green; commits made, nothing pushed.
+
+### 11.6 Acceptance criteria (TT3)
+
+1. All 7 P1 character defects are gone in fresh screenshots, read by the agent; P2 items 8 to 18 are fixed or listed
+   with a reason in STATUS.md.
+2. No cat scores below 6 on cuteness; Clem ≥ 8; Sir Wobble ≥ 6.
+3. Default bindings match 11.2 on keyboard and mouse, touch and gamepad; no action uses Ctrl, Alt, Meta or F-keys;
+   Ctrl+W during play does no game action.
+4. Every prompt, tutorial, help screen, doc and smoke test matches the new bindings.
+5. A working rebinding screen with conflict swap and reset, tested by smoke.
+6. Coin Toss, Ribbon Twirl and Catnip Cloud work on all three input types, with VFX, zzfx sounds, touch buttons,
+   pad mapping, unit tests and one smoke block each.
+7. First fight median ≤ 60 s (mouse and touch); `onboard.done` ≤ 240 s; no dead ends.
+8. The 390×844 Skip link no longer overlaps the pill.
+9. `npm run smoke` fully green twice in a row; `npm run test:unit` fully green.
+10. Identity kept (11.5 C acceptance, last line); the title still lives only in `brand.js` / `title.ts`.
+11. `build:tokentails` copied; commits made in both repos; no push.
+
+### 11.7 Your call (defaults applied if no answer)
+
+| # | Question | Default |
+|---|---|---|
+| 1 | Kitten ability key now that Q guards and F is the Paw Trick | G. Alternative: keep Q for the kitten and guard on RMB and L only |
+| 2 | Golden Hour on the pad, now that RT is the Paw Trick | `guard` + X within 0.1 s (it needs full Valor, so accidents are rare) |
+| 3 | How the Paw Trick slot swaps | 1/2/3 on keyboard, long press on touch, hold RT + D-pad on pad |
+| 4 | Ribbon Twirl input | second `jump` press in the air, held (holding from takeoff never twirls) |
+| 5 | Giddy plate words for hyena and stealer | yes, flip to the friend word for 2.5 s |
+| 6 | Shift as Tumble despite Windows Sticky Keys after 5 presses | keep Shift; K and Mouse3 stay as alternatives; note it in the controls card |
+| 7 | Forest gap for the twirl | add one only if `forest.js` supports it cheaply; else unlock on forest entry |
+
+### 11.8 Status
+
+Integrated 2026-10-15 (T). Per acceptance criterion:
+
+1. C fixed all 7 P1 defects and P2 8 to 18 (list in STATUS.md). Clem plus one kitten: 25,614 to 27,716 triangles
+   (+8.2 %, inside +10 %). Bow 13.8 px across at 844×390.
+2. C's scores from the new shots: Clem 8.5, Pearl 8, Token Tails Cat 8, named kittens 7, Sir Wobble 6.5, foes 6 or more.
+3. The 11.2 table is live on all three devices. No action uses Ctrl, Alt, Meta or an F-key; a keydown with Ctrl or
+   Meta does nothing (`controls:browser-keys`).
+4. Prompts, tutorial lessons, the controls card, docs and smoke follow the new keys. `hybrid` has no click-to-move, so
+   WASD players cross the 1.0 m practice fence with a held Space (a tap is cut to a 0.3 m hop; the `tut.jump` hint
+   says so at the fence).
+5. The rebinding screen (pause → Controls) swaps on conflict and resets (`controls:rebind`).
+6. Coin Toss, Ribbon Twirl and Catnip Cloud work on keyboard and mouse, touch and pad (`tricks:*`, 16 unit tests).
+   Changes from 11.3: the coin is its own simulation (`CoinToss.js`); the cloud is handed over 1.6 s after entering
+   the town (Pearl is found in the bog, not the town); the twirl unlocks on forest entry (no gap added).
+7. Onboarding bot (K, WASD mouse runs): first fight median 48.1 s mouse, 44.2 s touch; `onboard.done` 142.1 s /
+   161.6 s; 0 first-fight deaths. The smoke playthrough reached the first fight in 44.9 to 46.8 game s.
+8. "Skip practice" sits top-left at 390×844, clear of the pill.
+9. `npm run test:unit` 1188 / 1188. Full `npm run smoke`, 272 blocks: run 1 had 4 red, run 2 had 1 red (each fixed
+   on the test side), run 3 fully green, run 4 had 1 red (`art:warm` gate luma 0.499 against the 0.50 floor:
+   `gate_dusk` exposure raised to 1.13), run 5 on the final tree fully green (2958 s). Runs 3 and 5 are green, but
+   not twice in a row on one tree: the pause-menu fit, a smoke reset fix and the exposure change landed in between.
+10. Identity kept; the title still lives only in `brand.js` / `title.ts`.
+11. `build:tokentails` copied; local commits in both repos; no push.
+
+Smoke triage (K): the 4 fence-hop blocks follow the TT2 rule (one hop link by the barn door); `combat:touch` clears the
+meadow's own rats first; `enemies:onscreen-rule` searches both sides of the screen; `world:fog-audit` treats the §4.2
+table as a ceiling with a 30 % floor (forest_day and gate_dusk were lifted for readability); `audio:unlock` waits for a
+still camera focus. Integration fixes are listed in `requests/RESOLVED.md` (Phase TT3 integration).

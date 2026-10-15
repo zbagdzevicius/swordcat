@@ -114,7 +114,8 @@ export default [
       // ---- walking the right way keeps the prints ahead lit; inside arriveR the trail fades in ≤ 0.5 s
       const tg = await t.G(() => { const b = window.__GAME__.ctx.ui.beacon.guide; return b.pos ? { x: b.x, z: b.z, r: b.arriveR } : null; });
       if (t.assert(!!tg, 'the step-1 target has a position')) {
-        await t.G(([x, z]) => { const g = window.__GAME__; g.god(true); g.click(x, z, 'right'); }, [tg.x, tg.z]);
+        // a move order toward it (TT3 §11.2: `hybrid` walks on WASD, RMB is the Stand; the order is what a click-to-move preset sends)
+        await t.G(([x, z]) => { const g = window.__GAME__; g.god(true); g.order('move', [x, z]); }, [tg.x, tg.z]);
         await t.wait(700);
         const walk = await t.G(guide);
         t.log(`walking: ${walk.prints.length} prints, ${walk.prints.filter((p) => p.lit).length} lit, edge ${!!walk.edge}, badge ${!!walk.badge}`);

@@ -9,6 +9,7 @@
 // (time scale 0) while a screenshot is taken so slow GPU readbacks never skip a beat.
 import fs from 'node:fs';
 import path from 'node:path';
+import { walkKeys, standRmb } from './_kbm.mjs';
 
 const DIR = 'story';
 const ensureDir = (t) => fs.mkdirSync(path.join(t.shotsDir, DIR), { recursive: true });
@@ -331,22 +332,13 @@ async function skipScenes(t, max = 6) {
   for (let k = 0; k < max && await t.G(() => window.__GAME__.ctx.story.isPlaying); k++) { await t.G(() => window.__GAME__.story.skip()); await t.wait(500); }
 }
 
-/** Right-click the ground at (x, z) (or toward it, 80 px inside the screen edge when it is off-screen). */
-async function orderTo(t, x, z) {
-  const vp = t.page.viewportSize();
-  let p = await t.G(([a, b]) => window.__GAME__.screen(a, b), [x, z]);
-  if (!p || p.x < 30 || p.y < 30 || p.x > vp.width - 30 || p.y > vp.height - 20) {
-    const me = await t.G(() => { const g = window.__GAME__, q = g.ctx.player.pos; return g.screen(q.x, q.z); });
-    const dx = p.x - me.x, dy = p.y - me.y;
-    let k = 1;
-    for (const [v, lo, hi, o] of [[dx, 80, vp.width - 80, me.x], [dy, 80, vp.height - 150, me.y]]) { if (o + v * k > hi) k = (hi - o) / v; if (o + v * k < lo) k = (lo - o) / v; }
-    p = { x: me.x + dx * k, y: me.y + dy * k };
-  }
-  await t.page.mouse.move(p.x, p.y); await t.wait(60);
-  await t.page.mouse.click(p.x, p.y, { button: 'right' });
-}
+/**
+ * Walk toward the ground at (x, z) on WASD for up to ~1.5 s (TT3 §11.2: the default `hybrid` preset walks on WASD; RMB
+ * is the Stand). Callers loop on the guide target, so a short leg per call is enough.
+ */
+async function orderTo(t, x, z) { await walkKeys(t, x, z, { r: 0.45, ms: 1500 }); }
 
-/** Walk to the current guide target by right-clicks only (what the Pink Paw trail invites), up to `ms`. */
+/** Walk to the current guide target on WASD only (what the Pink Paw trail invites), up to `ms`. */
 async function followGuide(t, { ms = 15000, until: done = null, id = null } = {}) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
@@ -372,7 +364,7 @@ async function timedParry(t) {
     };
     tick();
   }));
-  if (ok) { await t.page.keyboard.down('Space'); await t.wait(250); await t.page.keyboard.up('Space'); }
+  if (ok) await standRmb(t, 250);                 // TT3 §11.2: the Stand is RMB (the prompt names it)
   return ok;
 }
 
@@ -380,7 +372,7 @@ async function timedParry(t) {
 async function playPractice(t, { shots = true } = {}) {
   t.assert(!!(await until(t, () => window.__GAME__.ctx.story.tutorial.active, null, { timeout: 10000 })), 'Morning Practice is active');
   t.assert(await t.G(chipOn), 'the Skip chip shows during practice');
-  // 1 move: right-clicks toward the dummy (the guide target)
+  // 1 move: WASD toward the dummy (the guide target)
   await atStep(t, 1, 6000);
   const t1 = await t.G(target);
   t.assert(t1?.id === 'tut.move' && t1.kind === 'lesson' && t1.x === 0 && t1.z === -76, `move target: the middle dummy (${JSON.stringify(t1)})`);
@@ -398,7 +390,11 @@ async function playPractice(t, { shots = true } = {}) {
     if (d > 1.8) { await orderTo(t, 0, -77.4); await t.wait(1000); continue; }
     const dm = await t.G(() => window.__GAME__.screen(0, -76, 0.6));
     if (dm) { await t.page.mouse.move(dm.x, dm.y); await t.wait(80); }
-    await t.tap('KeyJ', 3, 260); await t.wait(700);
+    // TT3 §11.2: LMB on the dummy (the taught key) gives the attack order, so she turns to it and steps into reach. J
+    // swings where she faces: after a WASD walk that ended past the dummy she faced away and the 3 bonks missed (full run)
+    if (dm && k % 2 === 0) { for (let i = 0; i < 3; i++) { await t.page.mouse.click(dm.x, dm.y); await t.wait(260); } }
+    else await t.tap('KeyJ', 3, 260);
+    await t.wait(700);
   }
   s = await atStep(t, 3, 8000);
   t.assert(!!s, 'lesson 3 (Sir Wobble: block) after 3 bonks');
@@ -410,9 +406,9 @@ async function playPractice(t, { shots = true } = {}) {
   const wkS = await t.G(() => { const g = window.__GAME__, wk = g.ctx.actors.get('wobble_knight'); return wk ? g.screen(wk.pos.x, wk.pos.z, wk.pos.y + 0.5) : null; });
   if (wkS?.x != null) await t.page.mouse.move(wkS.x, wkS.y, { steps: 6 });
   if (shots) await shot(t, '02b-practice-wobble');
-  await t.page.keyboard.down('Space');
+  await t.page.mouse.down({ button: 'right' });   // TT3 §11.2: hold RMB = hold the Stand
   s = await atStep(t, 4, 15000);
-  await t.page.keyboard.up('Space');
+  await t.page.mouse.up({ button: 'right' });
   t.assert(!!s, 'lesson 4 (parry) after a block');
   // 4 parry: a timed Stand tap (the first swing runs in slow motion)
   for (let k = 0; k < 5 && !(await t.G(() => window.__GAME__.ctx.state.getFlag('prologue.practice'))); k++) { await timedParry(t); await t.wait(700); }

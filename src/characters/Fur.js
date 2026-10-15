@@ -165,6 +165,11 @@ export function coatColor(coat, region, p, o = {}) {
       const cheek = smoothstep(0.08, 0.13, Math.abs(p.x)) * smoothstep(0.2, 0.12, p.y);
       let s = stripe(p.x * 75 + n * 2.0) * fore * 1.6 + stripe(p.y * 70 + n * 3.0 + Math.abs(p.x) * 20) * cheek * 0.8;
       s += stripe(p.x * 40 + p.z * 25 + n * 4) * smoothstep(0.0, -0.08, p.z) * 0.7; // back of head
+      // TT3 `coat.foreheadM` (Zare): three crisp tabby bars on the forehead (the classic "M")
+      if (coat.foreheadM) for (const k of [-1, 0, 1]) {
+        const w = smoothstep(0.011, 0.005, Math.abs(p.x - k * 0.034)) * smoothstep(0.185, 0.21, p.y - Math.abs(k) * 0.01) * smoothstep(0.305, 0.275, p.y) * smoothstep(0.04, 0.09, p.z);
+        s = Math.max(s, w * 0.95);
+      }
       c = mixRgb(c, deep, s);
     } else if (region === 'tail') {
       c = mixRgb(c, deep, stripe((o.t ?? 0) * 46 + n * 2.0) * 1.1);
@@ -202,7 +207,9 @@ export function coatColor(coat, region, p, o = {}) {
   } else if (region === 'body') creamK = smoothstep(0.05, 0.14, p.z) * smoothstep(0.42, 0.3, p.y) * 0.6;
   if (pat === 'tuxedo' || pat === 'bicolour') {
     if (region === 'head') {
-      const blaze = smoothstep(0.018, 0.008, Math.abs(p.x)) * smoothstep(0.24, 0.2, p.y) * smoothstep(0.08, 0.14, p.z);
+      // TT3 `coat.blaze` (Judas): a wider, crisp blaze that widens down to the muzzle (the 1 cm stripe blurred to grey)
+      const bw = coat.blaze ? 0.022 + Math.max(0, 0.2 - p.y) * 0.35 : 0.013;
+      const blaze = smoothstep(bw + 0.005, bw - 0.002, Math.abs(p.x)) * smoothstep(coat.blaze ? 0.27 : 0.24, coat.blaze ? 0.25 : 0.2, p.y) * smoothstep(0.08, 0.12, p.z);
       creamK = Math.max(creamK, blaze);
       creamK = creamK > 0.5 ? 1 : creamK * 1.4;
     }
@@ -221,7 +228,9 @@ export function coatColor(coat, region, p, o = {}) {
   if (pat === 'siamese' && coat.points) {
     const pc = rgb(coat.points);
     let k = 0;
-    if (region === 'head' || region === 'muzzle' || region === 'cheek') k = smoothstep(0.1, 0.04, _d3(p, FACE.nose)) * 0.95 + smoothstep(0.13, 0.09, _d3(p, FACE.nose)) * 0.25;
+    // TT3 `coat.maskK` (Simas): a lighter, smaller seal-point mask so the blue eyes and the face read
+    const mk = coat.maskK ?? 1;
+    if (region === 'head' || region === 'muzzle' || region === 'cheek') k = (smoothstep(0.1 - 0.02 * (1 - mk), 0.04, _d3(p, FACE.nose)) * 0.95 + smoothstep(0.13 - 0.03 * (1 - mk), 0.09, _d3(p, FACE.nose)) * 0.25) * mk;
     if (region === 'ear') k = 0.95;
     if (region === 'tail') k = smoothstep(0.1, 0.5, o.t ?? 0);
     if (region === 'paw') k = 0.9;

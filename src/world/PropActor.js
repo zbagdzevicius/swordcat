@@ -15,6 +15,7 @@ import { E } from '../core/events.js';
 import { ATTACKS, PLAYER, TELEGRAPH, ONBOARD } from '../core/config.js';
 import { dampAngle, wrapAngle } from '../core/math.js';
 import { makeToonMaterial } from '../characters/materials.js';
+import { procTemplate } from './Props.js';
 
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3();
 const _ax = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
@@ -171,6 +172,99 @@ export class SwingingSack extends PropActor {
 export const WOBBLE_REACH = Object.freeze({ swing: 2.4, hit: 2.8, face: 6, lean: 0.32, keep: ONBOARD.standR, step: ONBOARD.stepR, roam: 4, hop: 1.6 });
 
 /**
+ * TT3 Sir Wobble look (docs/TOKENTAILS-PLAN.md §11.5 C): a cute spring dummy with big painted dot eyes and highlights,
+ * rosy cheeks, a wide smile, a pink heart target painted flush on his tummy (was a red square standing off it) and the
+ * sword arm on a visible wooden peg (the plank used to pass through his body). Colours, metres, facing +Z.
+ */
+export const WOBBLE_LOOK = Object.freeze({
+  burlap: '#E3C38E', burlapDark: '#C9A46A', wood: '#B7773F', woodDark: '#7E4E2A', iron: '#6E7A8E', steel: '#C9D0D8',
+  ink: '#3A2420', white: '#FFFFFF', cheek: '#F59AAE', smile: '#C9455A', heart: '#FF7FA8', heartLight: '#FFC2D6',
+  head: Object.freeze({ y: 1.43, r: 0.22 }), body: Object.freeze({ y: 0.8, r: 0.27, len: 0.32 }), peg: 0.36, armY: 1.0,
+});
+
+/** Map a flat decal (built in the XY plane, depth along +Z) onto a sphere's front (centre `cy`, radius `r`). */
+function onSphere(g, cy, r, lift = 0.003) {
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    p.setZ(i, Math.sqrt(Math.max(0, r * r - x * x - (y - cy) ** 2)) + z + lift);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+/** Map a flat decal onto a vertical cylinder's front (radius `r`). */
+function onCylinder(g, r, lift = 0.003) {
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i); p.setZ(i, Math.sqrt(Math.max(0, r * r - x * x)) + z + lift); }
+  g.computeVertexNormals();
+  return g;
+}
+/** A flat disc decal (radius `r`, thickness `t`) at (x, y), facing +Z. */
+const disc = (r, x, y, t = 0.006, seg = 18) => new THREE.CylinderGeometry(r, r, t, seg, 1).rotateX(Math.PI / 2).translate(x, y, t / 2);
+
+/** Sir Wobble's body parts ([geometry, colour] for procTemplate). Pure. */
+export function wobbleBodyParts() {
+  const L = WOBBLE_LOOK, H = L.head, B = L.body;
+  const p = [[new THREE.CylinderGeometry(0.42, 0.48, 0.16, 18).translate(0, 0.08, 0), L.woodDark]];
+  for (let i = 0; i < 5; i++) p.push([new THREE.TorusGeometry(0.13, 0.03, 6, 14).rotateX(Math.PI / 2).translate(0, 0.22 + i * 0.07, 0), L.iron]);
+  p.push([new THREE.CapsuleGeometry(B.r, B.len, 6, 18).translate(0, B.y, 0), L.burlap]);
+  p.push([new THREE.TorusGeometry(B.r * 0.99, 0.018, 5, 22).rotateX(Math.PI / 2).translate(0, B.y - 0.12, 0), L.burlapDark]);   // a stitched belt seam
+  p.push([new THREE.SphereGeometry(H.r, 20, 14).translate(0, H.y, 0), L.burlap]);
+  const helm = new THREE.SphereGeometry(H.r + 0.035, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, H.y + 0.04, 0);
+  p.push([helm, L.steel], [new THREE.TorusGeometry(H.r + 0.035, 0.022, 6, 22).rotateX(Math.PI / 2).translate(0, H.y + 0.04, 0), L.iron]);
+  p.push([new THREE.SphereGeometry(0.035, 10, 8).translate(0, H.y + H.r + 0.07, 0), L.heart]);                 // a pink pompom on the helm
+  // the face: big painted dot eyes with two highlights each, rosy cheeks, a wide smile (all flush on the head sphere)
+  for (const s of [1, -1]) {
+    p.push([onSphere(disc(0.05, s * 0.078, H.y - 0.015), H.y, H.r, 0.002), L.ink]);
+    p.push([onSphere(disc(0.018, s * 0.078 - 0.016, H.y + 0.005, 0.006, 12), H.y, H.r, 0.006), L.white]);
+    p.push([onSphere(disc(0.008, s * 0.078 + 0.017, H.y - 0.03, 0.006, 10), H.y, H.r, 0.006), L.white]);
+    p.push([onSphere(disc(0.034, s * 0.135, H.y - 0.075, 0.004, 14), H.y, H.r, 0.001), L.cheek]);
+  }
+  const smile = new THREE.TorusGeometry(0.06, 0.012, 6, 16, Math.PI).rotateZ(Math.PI).scale(1.25, 1, 0.4).translate(0, H.y - 0.075, 0);
+  p.push([onSphere(smile, H.y, H.r, 0.004), L.smile]);
+  // the pink heart target, painted flush on his tummy
+  const heart = new THREE.Shape(), hs = 0.13;
+  heart.moveTo(0, -0.9 * hs);
+  heart.bezierCurveTo(-0.15 * hs, -0.55 * hs, -1.0 * hs, -0.2 * hs, -0.95 * hs, 0.3 * hs);
+  heart.bezierCurveTo(-0.9 * hs, 0.85 * hs, -0.2 * hs, 0.95 * hs, 0, 0.45 * hs);
+  heart.bezierCurveTo(0.2 * hs, 0.95 * hs, 0.9 * hs, 0.85 * hs, 0.95 * hs, 0.3 * hs);
+  heart.bezierCurveTo(1.0 * hs, -0.2 * hs, 0.15 * hs, -0.55 * hs, 0, -0.9 * hs);
+  const hg = new THREE.ExtrudeGeometry(heart, { depth: 0.006, bevelEnabled: false, curveSegments: 10 }).translate(0, B.y + 0.06, 0);
+  p.push([onCylinder(hg, B.r, 0.002), L.heart]);
+  const inner = new THREE.ExtrudeGeometry(heart, { depth: 0.006, bevelEnabled: false, curveSegments: 8 }).scale(0.4, 0.4, 1).translate(-0.04, B.y + 0.1, 0);
+  p.push([onCylinder(inner, B.r, 0.006), L.heartLight]);
+  // the arm peg: a wooden dowel from his side out to the shoulder pivot
+  p.push([new THREE.CylinderGeometry(0.035, 0.035, L.peg - B.r + 0.05, 10).rotateZ(Math.PI / 2).translate((L.peg + B.r - 0.05) / 2, L.armY, 0), L.wood]);
+  return p;
+}
+
+/** Sir Wobble's sword arm, pivot at the peg end (+X out of his side): a knob, a short stick, the padded blade forward. Pure. */
+export function wobbleArmParts() {
+  const L = WOBBLE_LOOK;
+  return [[new THREE.SphereGeometry(0.06, 12, 10), L.woodDark],
+    [new THREE.CylinderGeometry(0.04, 0.04, 0.2, 8).rotateZ(Math.PI / 2).translate(0.12, 0, 0), L.wood],
+    [new THREE.BoxGeometry(0.07, 0.07, 1.45).translate(0.24, 0, 0.7), '#C9A87A'],
+    [new THREE.BoxGeometry(0.26, 0.05, 0.06).translate(0.24, 0, -0.04), L.woodDark],
+    [new THREE.SphereGeometry(0.1, 12, 10).scale(1, 1, 1.35).translate(0.24, 0, 1.45), L.burlap]];
+}
+
+/**
+ * Re-dress a Wobble Knight group from meadow.js (body mesh + arm pivot group) with the TT3 look, in place. Built fresh
+ * per level load (the level frees uploaded arrays and disposes its geometries on unload, so a cached copy would come
+ * back empty on the next load); the meadow's own geometries are left to the level's disposal as before.
+ */
+function dressWobble(mesh, armPivot) {
+  if (!mesh?.isObject3D) return;
+  const body = mesh.children.find((c) => c.isMesh && c !== armPivot);
+  if (body) body.geometry = procTemplate('wobble_body_tt3', wobbleBodyParts()).geometry;
+  if (armPivot) {
+    armPivot.position.x = WOBBLE_LOOK.peg; armPivot.position.y = WOBBLE_LOOK.armY;
+    const arm = armPivot.children.find((c) => c.isMesh);
+    if (arm) arm.geometry = procTemplate('wobble_arm_tt3', wobbleArmParts()).geometry;
+  }
+}
+
+/**
  * The Wobble Knight (tutorial steps 5–6): a spring dummy that turns to the player and swings ATTACKS.dummy_swing
  * every 2.0 s with a white parry glint while she is within WOBBLE_REACH.swing. TT2 §10.3 (no dead end): whenever she is
  * near (within `face`) but more than `step` m away (a block pushes her back ~0.4 m) it hops on its spring base toward
@@ -191,6 +285,7 @@ export class WobbleKnight extends PropActor {
     /** TT2: may he step toward her now? (meadow: only during the drill, so he never wanders into her path otherwise) */
     this.approach = o.approach ?? (() => true);
     this.mesh = o.mesh ?? null;  this.armPivot = o.armPivot ?? null;
+    if (o.dress !== false) dressWobble(this.mesh, this.armPivot);   // TT3 look (WOBBLE_LOOK)
     this.hintDone = false; this.teleId = 0; this.lean = 0;
     this.home = this.pos.clone(); this.hopT = 0; this.hopping = false;
   }

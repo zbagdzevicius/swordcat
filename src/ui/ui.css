@@ -1007,6 +1007,17 @@ body.ui-bar .touch-root .touch-cluster .tbtn { opacity: 0; pointer-events: none;
 .ctl-preset { margin-bottom: .5em; }
 .ctl-preset.is-first .ch-l, .ctl-preset.is-last .ch-r { opacity: .3; }
 .ctl-na { opacity: .45; font-weight: 700; }
+/* TT3 §11.5 K8: the rebinding buttons (keyboard and mouse column of the active preset) */
+.ctl-bind { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 36px;
+  padding: 2px 4px; border-radius: 10px; cursor: pointer; border: 2px dashed transparent; transition: border-color .15s, background .15s; }
+.ctl-bind:hover, .ctl-bind.is-focus, .ctl-bind:focus-visible { border-color: #F2A2B8; background: #FFF0F4; }
+.ctl-bind.is-disabled { cursor: default; border-color: transparent; background: none; }
+.ctl-bind.is-capturing { border-color: var(--tt-love, #E8577E); border-style: solid; background: #FFE3EC; animation: ctl-blink .9s ease-in-out infinite; }
+.ctl-bind.is-capturing .ui-key { opacity: .35; }
+@keyframes ctl-blink { 50% { box-shadow: 0 0 0 3px #E8577E55; } }
+@media (prefers-reduced-motion: reduce) { .ctl-bind.is-capturing { animation: none; } }
+.ctl-msg { min-height: 1.4em; margin: 0 .2em .4em; font-weight: 700; font-size: max(16px, .9em); color: var(--cocoa, #5A3A2E); text-align: center; }
+.ctl-note { margin: .5em .2em .2em; font-size: max(16px, .78em); opacity: .85; text-align: center; }
 /* §9.4 while aiming, the rest of the cluster steps back so the ✕ chip and the aim pad read first */
 .touch-root.is-aiming .touch-cluster .tbtn:not(.is-down) { opacity: .3; transition: opacity .12s; }
 /* the hidden contextual buttons ('!', Golden Hour, an empty kitten slot) stay hidden while aiming, not 30 % ghosts */
@@ -1618,6 +1629,13 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
 .title-skip-arr { color: var(--tt-love); letter-spacing: -.12em; }
 /* phones: the footer pill takes the centre; the skip link sits above the right end of the CTA row instead */
 @media (max-height: 460px) { .title-skip { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 48px); font-size: 16px; } }
+/* TT3 §11.5 K9: portrait phones (390×844): the co-brand pill fills the bottom centre and the CTA sits right above it, so
+   the skip link moves to the free top-left corner (the gear is top-right; in the embed it steps below the host's Back
+   button gutter) */
+@media (orientation: portrait) and (max-width: 560px) {
+  .title-skip { right: auto; bottom: auto; left: max(12px, env(safe-area-inset-left)); top: max(14px, env(safe-area-inset-top)); }
+  html[data-embed="1"] .title-skip { top: calc(14px + var(--embed-gut, 56px)); }
+}
 
 .tt-pill { display: inline-flex; align-items: center; gap: .45em; padding: .12em .95em .14em .28em; border-radius: 999px; white-space: nowrap;
   background: var(--tt-night2); color: var(--tt-goldHi); border: 2px solid var(--tt-gold); box-shadow: 0 2px 0 #0B082066;
@@ -1629,7 +1647,12 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
 .pause-brand { display: flex; flex-direction: column; align-items: center; margin-top: .7em; pointer-events: none; }
 /* short landscape screens: the pause list already fills the height, so the pill and note sit beside the panel's foot */
 @media (max-height: 460px) and (orientation: landscape) {
-  .menu--pause .menu-panel { position: relative; }
+  .menu--pause .menu-panel { position: relative; padding-top: 1.7em; padding-bottom: 1em; }
+  /* TT3: the Controls row made the list taller than an 844×390 phone; it scrolls inside the panel instead of spilling */
+  .menu--pause .menu-panel > .menu-body { overflow-y: auto; overscroll-behavior: contain; gap: .45em; padding: .5em .25em .3em; margin: -.5em -.25em -.3em;
+    scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
+  .menu--pause .btn--candy { flex-direction: row; gap: .5em; min-height: 2.2em; padding: .3em 1.2em .38em; }
+  .menu--pause .btn-sub { margin-top: 0; }
   .menu--pause .pause-brand { position: absolute; left: 100%; bottom: .4em; width: 12.5em; margin: 0 0 0 .8em; }
   .menu--pause .pause-brand .tt-note { color: #FFF3D0; text-shadow: 0 1px 0 var(--tt-night), 0 0 6px #0B0820CC; }
 }

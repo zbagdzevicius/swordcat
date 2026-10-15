@@ -122,6 +122,10 @@ export const E = Object.freeze({
   // ---- Phase W: Warm Adventure (WA §12, IMPLEMENTATION_PLAN core.W2; additive) ----
   REWARD: 'reward',                         // { kind: 'sticker'|'card'|'friend', id }  one reward system (ui/celebrate.js shows it; story / world / companions emit)
   TELEGRAPH_FIRST: 'telegraph:first',       // { kind }  the first sighting of a telegraph kind in this save (combat; story shows the glyph one-shot)
+
+  // ---- Phase TT3: Paw Tricks (TOKENTAILS-PLAN §11.4; additive) ----
+  TRICK_UNLOCKED: 'trick:unlocked',         // { id: 'coin'|'twirl'|'cloud', bark }  bark false = a quiet catch-up on load (no hint)
+  TRICK_USED: 'trick:used',                 // { id }  a Paw Trick fired
 });
 
 /** Every known event string (EventBus warns on unknown names). */

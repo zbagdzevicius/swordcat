@@ -13,12 +13,18 @@
 //   golden   Golden Hour activation 0.8 s      rise     Still Standing slow rise 0.8 s
 //   vigil    plant the sword at a Vigil Stone  dead     faint → respawn / game over
 //   memecam  Oath pose while the Meme Cam runs scripted  cutscene control (ScriptedActor)
+//   toss     TT3 Paw Trick throw (0.25 s ":3" coin / 0.3 s catnip pouch; the trick leaves at its release frame)
+//   twirl    TT3 Ribbon Twirl glide (second Jump press in the air, held: fall capped, steer, ≤ 1.5 s once per jump)
 import * as THREE from 'three';
 import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
 import { damp, dampAngle, clamp, wrapAngle } from '../core/math.js';
 import { TUNING } from './tuning.js';
+import { TRICKS } from './tricks/tuning.js';
+import { glideStep } from './tricks/RibbonTwirl.js';
 
 const _wish = new THREE.Vector3();
+const _dir2 = { x: 0, z: 0 };
+const _lim = { speed: 0, fallMax: 0 };
 
 /** Pounce defs derived from ATTACKS.pounce (combat needs `active`/`dur`; the dive re-sweeps its cone every step). */
 export const POUNCE_DIVE = Object.freeze({ ...ATTACKS.pounce, id: 'pounce', active: [0, LOOP.step], dur: LOOP.step });
@@ -98,13 +104,17 @@ export const STATES = {
   move: {
     enter(p) { p.swing = null; },
     update(p, dt) {
+      // TT3 Ribbon Twirl: a fresh Jump press in the air (never the press that jumped), held
+      if (!p.onGround && p.tricks?.wantTwirl?.()) { p.jumpBuf = 0; p.setState('twirl'); return; }
       if (tryActions(p)) return;
       // a charge can also start from neutral (button held through a cancelled swing)
       if (p.onGround && p.chargeHeld() && p.attackHeldTime() >= PLAYER.charge.start) { p.setState('charge'); return; }
-      const mag = locomote(p, dt, { boost: p.zoomies ? PLAYER.zoomies : undefined });
+      // TT3 §11.2 `sprint`: the Tumble key held past the roll runs at Zoomies speed at once (also in a fight)
+      const sprint = !!p.sprinting?.();
+      const mag = locomote(p, dt, { boost: p.zoomies || sprint ? PLAYER.zoomies : undefined });
       p.updateZoomies(dt, mag);
       const sp = Math.hypot(p.vel.x, p.vel.z);
-      p.stateName = !p.onGround ? (p.vel.y > 0 ? 'jump' : 'fall') : p.zoomies ? 'zoomies' : sp > 3.5 ? 'run' : sp > 0.3 ? 'walk' : 'idle';
+      p.stateName = !p.onGround ? (p.vel.y > 0 ? 'jump' : 'fall') : p.zoomies || (sprint && sp > 3.5) ? 'zoomies' : sp > 3.5 ? 'run' : sp > 0.3 ? 'walk' : 'idle';
     },
   },
 
@@ -237,6 +247,7 @@ export const STATES = {
         const hits = p.ctx.combat.updateSwing(s, dt);
         if (hits > 0) {                                  // pogo: bounce up, Pounce refreshes (chain crows)
           p.vel.y = A.pogoV; p.gravityMul = 1; p.pounceReady = true; p.onGround = false;
+          p.tricks?.onPogo?.();                          // TT3: a twirl after a pogo carries further
           p.endSwing(); p.squashEvent = 'pogo'; p.setState('move'); return;
         }
         if (p.onGround) {
@@ -372,6 +383,50 @@ export const STATES = {
       brake(p, dt, 20);
       if (!p.memeCamTrigger.active) p.setState('move');
     },
+  },
+
+  // ------------------------------------------------------------------ TT3 Paw Tricks
+  // toss: arg { id: 'coin' | 'cloud', dir, point }. She faces the aim, the throwing paw comes forward (model
+  // setTrickPose 'toss'), the trick leaves at its release frame; a Tumble cancels the follow-through after it.
+  toss: {
+    enter(p, arg) {
+      p.stateName = 'toss'; p.tossArg = arg ?? null; p.tossDone = false;
+      p.zoomies = false; p.zoomT = 0; p.combatT = Math.max(p.combatT, TUNING.combatStance);
+      if (arg?.dir) p.facing = Math.atan2(arg.dir.x, arg.dir.z);
+    },
+    update(p, dt) {
+      const T = p.tossArg?.id === 'cloud' ? TRICKS.cloud : TRICKS.coin;
+      if (p.onGround) brake(p, dt, 14);
+      if (!p.tossDone && p.stateT >= T.release) { p.tossDone = true; p.tricks?.release?.(p.tossArg); }
+      if (p.tossDone && p.dodgeBuf > 0 && p.canDodge()) { p.startDodge(); return; }
+      if (p.stateT >= T.toss) p.setState('move');
+    },
+    exit(p) { p.tossArg = null; },
+  },
+  // twirl: the bow spins like a propeller; the fall is capped, she steers at the glide speed; Jump released, the time
+  // limit, landing or a Pounce (⚔) end it
+  twirl: {
+    enter(p) {
+      p.stateName = 'twirl';
+      p.tricks?.startTwirl?.();
+      p.twirlLim = p.tricks?.twirlLim ?? { speed: TRICKS.twirl.speed, maxTime: TRICKS.twirl.maxTime, fallMax: TRICKS.twirl.fallMax };
+      p.terminalFall = p.twirlLim.fallMax; p.gravityMul = 0.55;
+      p.jumping = false; p.jumpCutDone = true;
+      p.squashEvent = 'twirl';
+    },
+    update(p, dt) {
+      const L = p.twirlLim;
+      if (p.onGround) { p.setState('move'); return; }
+      if (p.attackBuf > 0 && p.pounceReady) { p.setState('pounce'); return; }
+      if (!p.ctx.input.down('jump') || p.stateT >= L.maxTime) { p.setState('move'); return; }
+      const mag = p.wishDir(_wish);
+      const l = Math.hypot(_wish.x, _wish.z);
+      _dir2.x = l > 1e-6 ? _wish.x / l : 0; _dir2.z = l > 1e-6 ? _wish.z / l : 0;
+      _lim.speed = L.speed * p.speedMul; _lim.fallMax = L.fallMax;
+      glideStep(p.vel, _dir2, mag, _lim, dt);
+      if (mag > 0.05) p.facing = dampAngle(p.facing, Math.atan2(_dir2.x, _dir2.z), PLAYER.turnDamp * 0.5, dt);
+    },
+    exit(p) { p.terminalFall = PLAYER.terminalFall; p.gravityMul = 1; },
   },
 
   // ------------------------------------------------------------------ cutscenes (ScriptedActor)

@@ -501,3 +501,46 @@ test('fix round 2: the in-place lessons (Bonk, Stand, Parry) carry a ring round 
     else { assert.deepEqual([tg.ring.x, tg.ring.z], [...PRACTICE.wobble], `${id} rings Sir Wobble`); assert.equal(tg.ring.r, ONBOARD.standR); }
   }
 });
+
+// ====================================================================================================== TT3 §11.4 trick hints
+test('TT3: a Paw Trick unlock shows its trick.<id>.hint once, after the bark delay and never mid-scene', async () => {
+  const { EV_TRICK_UNLOCKED, TRICK_HINT_DELAY } = await import('../../src/story/tutorial.js');
+  registerOnboardingStrings();
+  const ctx = fakeCtx();
+  ctx.strings = { has, t };
+  for (const k of ['prologue.start', 'prologue.practice', 'prologue.done']) ctx.state.setFlag(k, true);
+  const toasts = [];
+  ctx.bus.on(E.TOAST, (p) => toasts.push(p?.key));
+  const story = { isPlaying: false };
+  const tu = new Tutorial(ctx, story);
+  tu.init();
+  assert.ok(EV_TRICK_UNLOCKED === 'trick:unlocked' || EV_TRICK_UNLOCKED === E.TRICK_UNLOCKED, EV_TRICK_UNLOCKED);
+  ctx.bus.emit(EV_TRICK_UNLOCKED, { id: 'cloud', bark: false });
+  tu.update(TRICK_HINT_DELAY + 1);
+  assert.ok(!toasts.includes('trick.cloud.hint'), 'a quiet catch-up on load (bark: false) shows no hint');
+  ctx.bus.emit(EV_TRICK_UNLOCKED, { id: 'coin', bark: true });
+  tu.update(TRICK_HINT_DELAY - 0.5);
+  assert.ok(!toasts.includes('trick.coin.hint'), 'not during the unlock bark');
+  story.isPlaying = true;
+  tu.update(1);
+  assert.ok(!toasts.includes('trick.coin.hint'), 'not during a scene');
+  story.isPlaying = false;
+  tu.update(0.1);
+  assert.ok(toasts.includes('trick.coin.hint'), 'shown once the bark and the scene are over');
+  assert.equal(ctx.state.getFlag('seen.trick.coin.hint'), true);
+  ctx.bus.emit(EV_TRICK_UNLOCKED, { id: 'coin', bark: true });
+  tu.update(TRICK_HINT_DELAY + 1);
+  assert.equal(toasts.filter((k) => k === 'trick.coin.hint').length, 1, 'once per save');
+  for (const id of ['coin', 'twirl', 'cloud']) for (const s of ['name', 'bark', 'hint']) assert.ok(has(`trick.${id}.${s}`), `trick.${id}.${s}`);
+  assert.ok(has('trick.swap'));
+});
+
+test('TT3: lesson copy names the new keys (keyboard, pad, touch); no Right-click / Space-Stand / F-jump left', () => {
+  registerOnboardingStrings();
+  assert.equal(t('tut.bonk'), 'Bonk it 3 times! [Attack]');
+  assert.equal(t('tut.stand'), 'Hold [Stand] to block Sir Wobble!');
+  assert.equal(t('tut.parry'), 'Tap [Stand] when you see the shield!');
+  assert.equal(t('tut.move'), 'Race Pearl to the dummy! [Move]');
+  assert.equal(t('tut.jump'), 'Little fence? Hop it! [Jump]');
+  for (const [k, v] of Object.entries(ONBOARDING_STRINGS)) assert.ok(!/right-click|\[Space\]|\[F\]|\[Q\]|\bCtrl\b|\bAlt\b|\bF1\b|or J\b/i.test(v), `${k}: "${v}"`);
+});

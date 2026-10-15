@@ -41,7 +41,7 @@ export const PROP_MOUNTS = {
   // CS-01 shot 7: Marmalade's old helm is far too big and slides down over her eyes; then she holds it and looks at it
   helmet: { joint: 'head', p: [0.004, 0.118, 0.012], r: [0.2, 0.06, 0.07] },
   'helmet@paw': { joint: 'pawL', p: [-0.05, -0.07, 0.11], r: [-1.35, 0.25, 0] },
-  tt_coin: { joint: 'pawL', p: [0, -0.06, 0.07], r: [0, 0, 0] },
+  tt_coin: { joint: 'chest', p: [0, 0.06, 0.17], r: [0, 0, 0] },   // TT3: held up at chest height between both paws (Poses.coinHold)
   ...M2_MOUNTS,
 };
 

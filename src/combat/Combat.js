@@ -47,6 +47,7 @@ import { Projectiles } from './Projectiles.js';
 import { COMBAT, GLEAM_FROM, juiceFor, sharpMul, isFullCircle } from './attacks.js';
 import { ThreatBook, timeToContact, PARRY_KINDS, pickAssist, lungeSpeed, aimCfg, normalizeTelegraph, glyphFor } from './targeting.js';
 import { splitOf, jellySize, childBudget, aliveJellies } from '../enemies/types/jelly.js';
+import { TRICKS } from '../player/tricks/tuning.js';
 
 const _dir = new THREE.Vector3();
 const _v = new THREE.Vector3();
@@ -577,6 +578,8 @@ export class Combat {
 
   _critTaken(tgt) {
     if (typeof tgt.critTaken === 'number') return tgt.critTaken;
+    // TT3 Catnip Cloud: the first hit on a giddy foe is the ×1.5 "belly-rub bonk" (Enemy.onHit then wakes it)
+    if (tgt.stateName === 'giddy' && tgt.giddyT > 0) return TRICKS.cloud.bellyMul;
     return tgt.isDizzy === true ? DIZZY.critMul : 1;
   }
 

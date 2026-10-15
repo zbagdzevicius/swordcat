@@ -127,7 +127,9 @@ export default [
       t.assert(along > 0.8, `W walks screen-up (cos ${along.toFixed(2)} to the screen-up ground direction at yaw ${yaw.toFixed(2)})`);
       await t.shot('core/01-wasd');
 
-      // RMB on the ground: a real right click at the projected point → a move order → she arrives
+      // RMB on the ground (`mouseOnly`: RMB moves and WASD walks; TT3 §11.2 `hybrid` RMB is the Stand): a real right
+      // click at the projected point → a move order → she arrives
+      await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.controlPreset = 'mouseOnly'; c.input.rebind('mouseOnly'); });
       const goal = [p1[0] - 1.5, p1[2] + 3];
       const s = await screenOf(t, goal[0], goal[1]);
       t.assert(!!s && s.x > 0 && s.y > 0, `goal projects on screen (${JSON.stringify(s)})`);
@@ -202,6 +204,12 @@ export default [
       const back = await until(t, () => window.__GAME__.ctx.game.mode === 'play', null, 3000);
       t.assert(!!back, 'resume returns to play');
       t.assert(!(await page.evaluate(() => !!document.pointerLockElement)), 'resume does not capture the mouse');
+      // TT3 §11.2: P pauses too (Esc in fullscreen leaves fullscreen first)
+      await t.wait(300);
+      await t.tap('KeyP');
+      t.assert(!!(await until(t, () => window.__GAME__.ctx.game.mode === 'menu' && !!window.__GAME__.ctx.ui.menus?.paused, null, 3000)), 'P opens the pause menu');
+      await t.G(() => window.__GAME__.ctx.ui.resume());
+      await until(t, () => window.__GAME__.ctx.game.mode === 'play', null, 3000);
     },
   },
   {
@@ -216,19 +224,21 @@ export default [
       t.assert(P.inside && Math.abs(P.ndcX) < 0.05 && Math.abs(P.ndcY) < 0.05, `pointer at the centre: ndc (${P.ndcX.toFixed(3)}, ${P.ndcY.toFixed(3)}) inside ${P.inside}`);
       t.assert(P.x === Math.round(vp.width / 2) + 2, `pointer.x in CSS px (${P.x})`);
 
-      // Ctrl+RMB queues behind the current order
+      // TT3 §11.2: Shift+RMB queues behind the current order, in `moba` only (no Ctrl: Ctrl+W closes the tab)
+      await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.controlPreset = 'moba'; c.input.rebind('moba'); });
       const p0 = await pos(t);
       const a = await screenOf(t, p0[0], p0[2] + 5), b = await screenOf(t, p0[0] + 3, p0[2] + 5);
       await t.clearEvents();
       await page.mouse.move(Math.round(a.x), Math.round(a.y));
       await page.mouse.down({ button: 'right' }); await page.mouse.up({ button: 'right' });
       await t.wait(150);
-      await page.keyboard.down('ControlLeft');
+      await page.keyboard.down('ShiftLeft');
       await page.mouse.move(Math.round(b.x), Math.round(b.y));
       await page.mouse.down({ button: 'right' }); await page.mouse.up({ button: 'right' });
-      await page.keyboard.up('ControlLeft');
+      await page.keyboard.up('ShiftLeft');
       const q = await until(t, () => { const e = window.__GAME__.lastEvent('player:order'); return e && e.queued ? e : null; }, null, 2000);
-      t.assert(!!q, 'Ctrl+RMB queues an order (player:order queued: true)');
+      t.assert(!!q, 'moba: Shift+RMB queues an order (player:order queued: true)');
+      t.assert(!(await t.events()).includes('player:dodge'), 'moba: Shift does not Tumble');
       await t.wait(300);
       await t.shot('core/05-queued');
       // the picker may snap the clicked point to the nearest walkable cell: walk to where the queued order points
@@ -281,25 +291,30 @@ export default [
         t.assert(bind.a.includes('KeyA') && bind.s.includes('KeyS'), `moba: A = attack-move, S = stop (${JSON.stringify(bind)})`);
         await setPreset('diablo');
         t.assert(await t.G(() => window.__GAME__.ctx.input.lmbMoves && window.__GAME__.ctx.input.codesFor('move').includes('Mouse0')), 'diablo: LMB moves');
-        // a rebinding on top of the preset: jump on G
+        // a rebinding on top of the preset: jump on N
         await setPreset('hybrid');
-        await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.bindings = { jump: ['KeyG'] }; c.bus.emit('settings:changed', { key: 'bindings', value: c.state.settings.bindings }); });
+        await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.bindings = { jump: ['KeyN'] }; c.bus.emit('settings:changed', { key: 'bindings', value: c.state.settings.bindings }); });
         await t.clearEvents();
-        await t.tap('KeyG'); await t.wait(250);
-        t.assert((await t.events()).includes('player:jump'), 'rebinding: G jumps');
+        await t.hold('KeyN', 250); await t.wait(250);
+        t.assert((await t.events()).includes('player:jump'), 'rebinding: N jumps');
       } finally {
         await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.bindings = {}; c.state.settings.controlPreset = 'hybrid'; c.bus.emit('settings:changed', { key: 'controlPreset', value: 'hybrid' }); });
       }
       await t.wait(400);
       await t.clearEvents();
-      await t.tap('KeyF'); await t.wait(250);
-      t.assert((await t.events()).includes('player:jump'), 'hybrid: F jumps (C1)');
+      await t.hold('Space', 250); await t.wait(250);
+      t.assert((await t.events()).includes('player:jump'), 'hybrid: Space jumps (TT3 §11.2)');
       await t.wait(700);
       await t.clearEvents();
-      await t.page.keyboard.down('Space'); await t.wait(300);
+      await t.page.keyboard.down('KeyQ'); await t.wait(300);
       const guard = await t.G(() => window.__GAME__.ctx.input.down('guard'));
-      await t.page.keyboard.up('Space');
-      t.assert(guard && !(await t.events()).includes('player:jump'), 'hybrid: Space = the Stand, not jump (C1)');
+      await t.page.keyboard.up('KeyQ');
+      t.assert(guard && !(await t.events()).includes('player:jump'), 'hybrid: Q = the Stand, not jump (TT3)');
+      await t.clearEvents();
+      await t.page.keyboard.down('KeyF'); await t.wait(200);
+      const trick = await t.G(() => window.__GAME__.ctx.input.down('trick'));
+      await t.page.keyboard.up('KeyF');
+      t.assert(trick && !(await t.events()).includes('player:jump'), 'hybrid: F = the Paw Trick, not jump (TT3)');
     },
   },
   {
@@ -311,6 +326,9 @@ export default [
         try {
           await s.page.touchscreen.tap(Math.round(w * 0.62), Math.round(h * 0.35));     // first touch → device 'touch'
           await s.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.god(true); g.ctx.ui.touch?.enable?.(true); g.ctx.player.orders?.clear?.('smoke'); });
+          // TT3 integration: a wandering meadow rat inside the 56 px touch tolerance turns the ground tap into an attack
+          // order (seen once in a full run, portrait); this block tests tap-to-move and the stick, so clear the foes
+          await s.G(() => { const c = window.__GAME__.ctx; for (const e of [...(c.enemies?.list ?? [])]) c.enemies.despawn(e); });
           await s.page.waitForTimeout(400);
           const s0 = await s.G(() => { const c = window.__GAME__.ctx; return { dev: c.input.device, lock: c.input.pointerLockEnabled, iso: window.__GAME__.cam.iso(), cluster: document.querySelectorAll('.touch-cluster .tbtn:not(.is-hidden)').length }; });
           t.log(`${tag}: device ${s0.dev}, d ${s0.iso.dist.toFixed(1)}, fov ${s0.iso.fov}, catPx ${s0.iso.catPx.toFixed(1)}, cluster ${s0.cluster}`);
@@ -340,6 +358,7 @@ export default [
           t.assert(!!tp, `${tag}: the goal projects on screen`);
           let order = null;
           for (let k = 0; k < 30 && !order; k++) { await s.page.waitForTimeout(100); order = await s.G(() => window.__GAME__.lastEvent('player:order')); }
+          if (order?.kind !== 'move') t.log(`${tag}: diag goal ${JSON.stringify(goal)} p0 ${JSON.stringify(p0)} order ${JSON.stringify({ kind: order?.kind, target: order?.target?.id ?? order?.target?.kind ?? order?.targetId, keys: order && Object.keys(order) })} pick ${JSON.stringify(await s.G((gl) => { const g = window.__GAME__, sp = g.screen(gl[0], gl[1]); const pk = sp && g.ctx.cam.pick(sp.x, sp.y, { touch: true }); return pk && { kind: pk.kind, id: pk.target?.id ?? pk.actor?.id ?? pk.enemy?.id, keys: Object.keys(pk) }; }, goal))}`);
           t.assert(!!order && order.kind === 'move', `${tag}: a ground tap issues a move order (${JSON.stringify(order && { kind: order.kind, valid: order.valid })})`);
           let arrived = false;
           for (let k = 0; k < 80 && !arrived; k++) { await s.page.waitForTimeout(100); arrived = await s.G((g) => { const p = window.__GAME__.ctx.player.pos; return Math.hypot(p.x - g[0], p.z - g[1]) < 0.9; }, goal); }

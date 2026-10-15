@@ -26,8 +26,9 @@ import { applySetting } from './settings.js';
 import { tx } from './text.js';
 import { portraitSVG } from './portraits.js';
 import { companionJoined } from './reveal.js';
-import { computeLayout, buttonAt, inDeadRing, inStickZone, classifyGesture, stickVector as stickVec, clampTs, clampStickBase } from './touchLayout.js';
+import { computeLayout, buttonAt, inDeadRing, inStickZone, classifyGesture, stickVector as stickVec, clampTs, clampStickBase, TRICK_BUTTON } from './touchLayout.js';
 import * as I from './icons.js';
+import tricksCss from './tricks.css?inline';
 
 /** Legacy constants (the M1 tap-to-lock pick and stick maths; kept for tests and old callers). */
 export const TOUCH = Object.freeze({ stickR: TC.stickR, leftFrac: TC.stickZone[0], deadZone: TC.stickDead, tapPx: TC.tapPx, tapMs: TC.tapMs, tapPickPx: 60, tapRange: 22 });
@@ -64,7 +65,14 @@ const BUTTONS = [
   { action: 'meow', cls: 'tb-meow', icon: () => I.meowFace() },
   { action: 'interact', cls: 'tb-interact', icon: () => '<b>!</b>' },
   { action: 'golden', cls: 'tb-golden', icon: () => I.sun() },
+  // TT3 Paw Trick ":3" (laid out only once a trick is owned): tap = cast, drag = aim, long press = the 3-way picker
+  { action: 'trick', cls: 'tb-trick', icon: () => I.ttCoin(40), ring: true, aim: true },
 ];
+/** TT3: a ":3" press held this long without a drag opens the Paw Trick picker (s). */
+export const TRICK_PICK_S = 0.45;
+/** The picker's three choices (trick1..3): [id, icon, offset (rad) from the fan's middle, which points at the screen centre]. */
+const PICKS = Object.freeze([['coin', () => I.ttCoin(34), -0.8], ['cloud', () => I.catnipPouch(), 0], ['twirl', () => I.ribbonBow(), 0.8]]);
+let _trickStyle = false;
 const nowS = () => performance.now() / 1000;
 /** A second finger within this long of the stick's touch-down (or before the stick goes live) starts a pinch instead. */
 const STICK_PINCH_S = 0.2;
@@ -134,6 +142,21 @@ export class TouchControls {
     this.attackRing = this.btns.get('attack').querySelector('.ring-fg');
     this.abilityRing = this.btns.get('ability').querySelector('.ring-fg');
     this.abilityCd = el('span', 'tb-cd', { parent: this.btns.get('ability') });
+    this.trickRing = this.btns.get('trick').querySelector('.ring-fg');
+    this.trickCd = el('span', 'tb-cd', { parent: this.btns.get('trick') });
+    /** TT3 the long-press picker (3 bubbles around the ":3" button) */
+    this.picker = el('div', 'tb-trick-picker', { parent: this.root });
+    this.pickBtns = PICKS.map(([id, icon], i) => {
+      const e = el('div', `tb-pick tb-pick-${id}`, { parent: this.picker, html: `<span class="tb-ico">${icon()}</span><span class="tb-pick-n">${i + 1}</span>` });
+      e.dataset.trick = id;
+      e.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); ev.preventDefault(); this._pickTrick(i + 1); });
+      return e;
+    });
+    this.pickOpen = false; this._pickT = 0;
+    if (!_trickStyle && typeof document !== 'undefined' && tricksCss) {
+      _trickStyle = true;
+      el('style', '', { parent: document.head, attrs: { id: 'trick-style' }, text: tricksCss });
+    }
     this.milkN = el('span', 'tb-count', { parent: this.btns.get('milk') });
     /** the §9.2 layout editor while it is open (touchEditor.js); `layoutOverride` is its draft */
     this.editing = null;
@@ -190,10 +213,12 @@ export class TouchControls {
     const keepOut = this._keepOut();
     const hs = this.ctx.cam?.heroScreen?.();                           // the camera's own rest point, when it offers one
     const hero = hs && Number.isFinite(hs.x) && Number.isFinite(hs.y) ? { x: Math.round(hs.x / 8) * 8, y: Math.round(hs.y / 8) * 8 } : undefined;
-    const key = `${W}x${H}:${this._ts()}:${!!st.leftHanded}:${!!this.editing}:${JSON.stringify(custom ?? null)}:${JSON.stringify(keepOut)}:${hero ? `${hero.x},${hero.y}` : ''}`;
+    const trick = this._trickOn();
+    const key = `${W}x${H}:${this._ts()}:${!!st.leftHanded}:${!!this.editing}:${JSON.stringify(custom ?? null)}:${JSON.stringify(keepOut)}:${hero ? `${hero.x},${hero.y}` : ''}:${trick}`;
     if (key === this._layoutKey && this.layout) return this.layout;
     this._layoutKey = key;
-    this.layout = computeLayout(W, H, { touchSize: this._ts(), leftHanded: !!st.leftHanded, safe: this._safe(), layout: custom, keepOut, noDrop: !!this.editing, hero });
+    this.layout = computeLayout(W, H, { touchSize: this._ts(), leftHanded: !!st.leftHanded, safe: this._safe(), layout: custom, keepOut, noDrop: !!this.editing, hero,
+      extra: trick ? { trick: TRICK_BUTTON } : undefined });
     for (const [name, e] of this.btns) {
       const b = this.layout.buttons[name];
       flag(e, 'is-dropped', !b);
@@ -330,6 +355,7 @@ export class TouchControls {
       if (!h || h.id !== ev.pointerId || !h.aim) return;
       h.dx = ev.clientX - h.x0; h.dy = ev.clientY - h.y0;
       const len = Math.hypot(h.dx, h.dy);
+      if (action === 'trick' && this.pickOpen) return;                      // sliding toward a picker bubble
       if (!h.aiming && len >= TC.aimPx) {
         if (action === 'dodge') {
           // Tumble: a drag inside the first 0.08 s steers the roll once
@@ -352,6 +378,7 @@ export class TouchControls {
       const h = this.held.get(action);
       this.held.delete(action);
       flag(e, 'is-down', false);
+      if (action === 'trick' && this.pickOpen) this._pickAt(ev?.clientX ?? -1, ev?.clientY ?? -1);
       const overCancel = h?.aiming && this._overCancel(ev?.clientX ?? -1, ev?.clientY ?? -1);
       if (overCancel) this._cancelAim(action);
       if (h?.pending && ev?.type === 'pointerup') inp()?.setVirtual(action, true);      // a quick tap: press + release this step
@@ -369,6 +396,7 @@ export class TouchControls {
     ctx.input?.setVirtualAim(0, 0, false);
     if (action === 'ability') ctx.companions?.cancelAbilityAim?.();
     if (action === 'attack') { const p = ctx.player; if (p?.state === 'charge') { p.cancelCharge?.(); p.setState?.('move'); } if (p) p.attackBuf = 0; }
+    if (action === 'trick') ctx.player?.tricks?.cancelAim?.();
   }
 
   _steerDodge(dx, dy) {
@@ -661,6 +689,7 @@ export class TouchControls {
       flag(ab, 'is-nap', (c.napT ?? 0) > 0);
       flag(ab, 'is-cd', left > 0);
     }
+    this._trickRender();
     // contextual buttons
     flag(this.btns.get('interact'), 'is-hidden', !this.interactOn);
     const goldReady = !!p && (p.valor ?? 0) >= PLAYER.valor.max && (ctx.state?.shards ?? 0) >= 2 && !p.golden;
@@ -676,6 +705,71 @@ export class TouchControls {
       ctx.state?.setFlag?.('seen.tut.rotate', true);
       ctx.bus.emit(E.TOAST, { text: tx(ctx, 'tut.rotate') });
     }
+  }
+
+  /** TT3: is a Paw Trick slot in use (owned and equipped)? The ":3" button joins the layout from then on. */
+  _trickOn() { return !!this.ctx.player?.tricks?.equipped; }
+
+  /** TT3 ":3" button: icon of the equipped trick, cooldown ring + seconds, a thrown coin dims it; the long-press picker. */
+  _trickRender() {
+    const tr = this.ctx.player?.tricks, b = this.btns.get('trick');
+    const on = !!tr?.equipped;
+    flag(b, 'is-hidden', !on);
+    if (!on) { if (this.pickOpen) this._closePicker(); return; }
+    const eq = tr.equipped;
+    if (b._eq !== eq) { b._eq = eq; b.querySelector('.tb-ico').innerHTML = eq === 'cloud' ? I.catnipPouch() : I.ttCoin(40); b.dataset.trick = eq; pulse(b, 'is-reveal'); }
+    const cd = tr.cooldownLeft(eq), max = tr.cooldownMax(eq) || 1;
+    const off = (I.RING_LEN * Math.min(1, cd / max)).toFixed(1);
+    if (this._trOff !== off) { this._trOff = off; this.trickRing?.setAttribute('stroke-dashoffset', off); }
+    const txt = cd >= 1 ? String(Math.ceil(cd)) : '';
+    if (this.trickCd.textContent !== txt) this.trickCd.textContent = txt;
+    flag(b, 'is-cd', cd > 0);
+    flag(b, 'is-out', !!tr.coin?.active);
+    flag(b, 'is-aiming', !!tr.aim?.on);
+    // long press without a drag → the picker (the press no longer casts)
+    const h = this.held.get('trick');
+    if (h && !h.aiming && !this.pickOpen && nowS() - h.t0 >= TRICK_PICK_S) this._openPicker();
+    if (this.pickOpen) {
+      for (const e of this.pickBtns) flag(e, 'is-on', e.dataset.trick === eq);
+      for (const e of this.pickBtns) flag(e, 'is-locked', !tr.owns(e.dataset.trick));
+      if (!this.held.has('trick') && nowS() - this._pickT > 3) this._closePicker();
+    }
+  }
+
+  _openPicker() {
+    const tr = this.ctx.player?.tricks, b = this.layout?.buttons?.trick;
+    if (!tr || !b) return;
+    tr.cancelAim();
+    this.ctx.input?.setVirtualAim?.(0, 0, false);
+    this.pickOpen = true; this._pickT = nowS();
+    // fan the three bubbles from the button toward the middle of the screen (always on screen, never under a thumb)
+    const W = window.innerWidth, H = window.innerHeight, R = b.r + 50 * this._ts();
+    const mid = Math.atan2(W / 2 - b.x, H / 2 - b.y);
+    PICKS.forEach(([, , off], i) => {
+      const a = mid + off, e = this.pickBtns[i];
+      place(e, Math.max(32, Math.min(W - 32, b.x + Math.sin(a) * R)), Math.max(32, Math.min(H - 32, b.y + Math.cos(a) * R)));
+    });
+    flag(this.picker, 'is-open', true);
+    this.ctx.input?.haptic?.('button');
+  }
+
+  _closePicker() { this.pickOpen = false; flag(this.picker, 'is-open', false); }
+
+  /** A picker choice: 1 coin, 2 cloud, 3 the twirl (its hint). */
+  _pickTrick(n) {
+    this.ctx.player?.tricks?.pick?.(n);
+    this.ctx.input?.haptic?.('button');
+    this._closePicker();
+  }
+
+  /** Release of a long press over a picker bubble picks it (the finger slides from ":3" onto a bubble). */
+  _pickAt(x, y) {
+    if (!this.pickOpen) return false;
+    for (let i = 0; i < this.pickBtns.length; i++) {
+      const r = this.pickBtns[i].getBoundingClientRect?.();
+      if (r && x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6) { this._pickTrick(i + 1); return true; }
+    }
+    return false;
   }
 
   /** Refresh the read-only live thumb state (AUTOCAM §7.1 live holes: stickR + thumbPad around the base; the held button). */

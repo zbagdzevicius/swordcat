@@ -1,9 +1,11 @@
 // src/player/Orders.js  (owner: player) — research/CONTROLS_SPEC.md §5.2 point-and-go orders and their path follower.
 //
-//   move(point)        RMB on the ground / a tap on the ground; Ctrl+RMB queues (≤ NAV.queueMax). Paths over the
+//   move(point)        the move button on the ground (RMB in `moba` / `mouseOnly`, LMB in `diablo`; `hybrid` walks on
+//                      WASD, TOKENTAILS-PLAN §11.2) / a tap on the ground; Shift+RMB queues in `moba` only
+//                      (≤ NAV.queueMax; no Ctrl: Ctrl+W closes the tab). Paths over the
 //                      physics nav grid, always runs (Zoomies after 2 s as usual), auto-jumps nav links (assisted hop)
 //   follow             RMB held / a touch long-press: re-targets under the pointer every NAV.follow s
-//   attack(actor)      RMB / tap on a hostile or breakable: selects it, paths to reach (arc + radius − 0.25), faces it,
+//   attack(actor)      the move button / LMB (TT3) / tap on a hostile or breakable: selects it, paths to reach (arc + radius − 0.25), faces it,
 //                      then `settings.autoAttack` (auto/loop: keep chaining, LoL; chain: one Snip–Snap–Swoosh then the
 //                      order ends; off: just face)
 //   attackMove(point)  X then a click: path there, fighting any hostile within NAV.attackMoveR m of her on the way
@@ -44,7 +46,7 @@ export class Orders {
     this.wp = 0;
     this.partial = false;
     this._rejectT = -Infinity;                                  // last "mrr?" (s, wall clock)
-    /** queued move points (Ctrl+RMB) */
+    /** queued move points (Shift+RMB, `moba` only) */
     this.queue = [];
     /** hold-to-follow (RMB held / touch long-press) */
     this.follow = false;
@@ -277,14 +279,22 @@ export class Orders {
       if ((pk.kind === 'interact' || pk.kind === 'npc') && this._useTarget(pk)) { this.order('use', this._useTarget(pk), { source: 'mouse' }); return; }
       if (this._isSelf(c, pk)) { this.p.onSelfTap?.(); return; }          // WA §5.6: a click on her is a pat, not an order
       if (point) {
-        this.order('move', point, { queued: !!c.mods?.ctrl, source: 'mouse', toward: this._towardPoint() });
-        if (!c.mods?.ctrl) { this.follow = true; this._followSrc = 'mouse'; this._followT = NAV.follow * 2; }
+        const queued = !!c.mods?.shift && input.preset === 'moba';
+        this.order('move', point, { queued, source: 'mouse', toward: this._towardPoint() });
+        if (!queued) { this.follow = true; this._followSrc = 'mouse'; this._followT = NAV.follow * 2; }
       }
       return;
     }
-    // LMB (hybrid): swings toward the cursor; on a hostile it also selects it; on a friend / object it uses it when no
-    // hostile is alerted within 10 m (she never swings at friends)
-    if (pk.kind === 'enemy') { cam.select?.(pk.actor, 'click'); return; }
+    // LMB (hybrid): swings toward the cursor; TT3 §11.5 K3: on a hostile it gives the attack order (walk in, then chain
+    // per settings.autoAttack), and the press itself swings only when the foe is already in reach; on a friend / object
+    // it uses it when no hostile is alerted within 10 m (she never swings at friends)
+    if (pk.kind === 'enemy' || pk.kind === 'breakable') {        // a foe, or a practice dummy / crate / Mochi's lock
+      const t = pk.actor, me = this.p.pos;
+      const far = !!t?.pos && Math.hypot(t.pos.x - me.x, t.pos.z - me.z) > SWING.arc.range + (t.radius ?? 0.3) + 0.25;
+      if (this.order('attack', t, { source: 'mouse' }) && far) this.suppressAttack = true;
+      else if (!this.kind && pk.kind === 'enemy') cam.select?.(t, 'click');
+      return;
+    }
     if ((pk.kind === 'interact' || pk.kind === 'npc') && !this.p._alertedWithin(ATTACK_SAFE_R) && this._useTarget(pk)) {
       this.order('use', this._useTarget(pk), { source: 'mouse' });
       this.suppressAttack = true;

@@ -2238,3 +2238,60 @@ test('windup: the step that lands on the track-stop does not turn, even when the
   for (const t of [0.3, 0.55 - stop - 1e-15, 0.55 - stop, 0.5]) { e.stateT = t; BASE_STATES.windup.update(e, 1 / 60); }
   assert.deepEqual(turns, [0.3], 'turns only before the stop');
 });
+
+// ---------------------------------------------------------------- TT3 package C hooks (docs/TOKENTAILS-PLAN.md §11.4)
+import stealerType, { dropStolen } from '../../src/enemies/types/stealer.js';
+import pugType, { blocksFrom } from '../../src/enemies/types/pug.js';
+import pilferType from '../../src/enemies/scripted/Pilfer.js';
+import { smoothNormals, SMOOTH_TYPES } from '../../src/enemies/rig.js';
+
+test('TT3 C: stealer.dropStolen(frac) drops that share of the loot and keeps running with the rest', () => {
+  const emitted = [];
+  const mk = (loot) => ({ loot, pos: new THREE.Vector3(1, 0, 2), facing: 0, extraProps: {}, ctx: { bus: { emit: (n, p) => emitted.push([n, p]) }, state: { fish: 0 }, levels: null, player: { milk: 0, milkMax: 3 } } });
+  const e = mk(null);
+  stealerType.init(e);
+  assert.equal(typeof e.dropStolen, 'function', 'init attaches the hook');
+  e.loot = { item: 'fish', amount: 20 };
+  assert.equal(e.dropStolen(0.5), 10);
+  assert.deepEqual(e.loot, { item: 'fish', amount: 10 }, 'half kept');
+  assert.equal(e.ctx.state.fish, 10, 'half back to her (no pickups layer here)');
+  assert.ok(emitted.some(([n, p]) => n === E.ITEM_RETURNED && p.amount === 10 && p.partial), 'item:returned for the dropped half');
+  assert.equal(dropStolen(e, 0), 0); assert.equal(dropStolen(mk(null), 0.5), 0, 'no loot: nothing');
+  const milk = mk({ item: 'milk', amount: 1 });
+  assert.equal(dropStolen(milk, 0.4), 0, 'a single bottle needs half or more');
+  assert.equal(dropStolen(milk, 0.5), 1); assert.equal(milk.loot, null);
+  const all = mk({ item: 'fish', amount: 7 });
+  assert.equal(dropStolen(all, 1), 7); assert.equal(all.loot, null);
+});
+
+test('TT3 C: pug.blocksFrom(dir): the raised shield stops hits into its front arc only', () => {
+  const e = { alive: true, shieldDownT: 0, facing: 0 };
+  pugType.init(e);
+  assert.equal(typeof e.blocksFrom, 'function');
+  assert.equal(e.blocksFrom({ x: 0, z: -1 }), true, 'a coin flying into its face (it faces +Z)');
+  assert.equal(e.blocksFrom({ x: 1, z: 0 }), false, 'from the side');
+  assert.equal(e.blocksFrom({ x: 0, z: 1 }), false, 'from behind');
+  assert.equal(blocksFrom(e, { x: 0, z: -5 }), true, 'any length');
+  assert.equal(blocksFrom(e, { x: 0, z: 0 }), false); assert.equal(blocksFrom(e, null), false);
+  e.shieldDownT = 1; assert.equal(e.blocksFrom({ x: 0, z: -1 }), false, 'shield down');
+  e.shieldDownT = 0; e.alive = false; assert.equal(e.blocksFrom({ x: 0, z: -1 }), false, 'defeated');
+  assert.equal(frontalHit({ x: 0, z: -1 }, 0), true, 'same rule as melee blocks');
+});
+
+test('TT3 C: the cutscene Pilfer has the hook and drops nothing', () => {
+  const e = {};
+  pilferType.init(e);
+  assert.equal(e.dropStolen(0.5), 0);
+});
+
+test('TT3 C: smoothNormals turns a flat-shaded body soft once, without moving a vertex', () => {
+  const g = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+  const pos = g.attributes.position.array.slice();
+  assert.ok(smoothNormals(g) > 0);
+  assert.deepEqual(Array.from(g.attributes.position.array), Array.from(pos));
+  const n = new THREE.Vector3().fromBufferAttribute(g.attributes.normal, 0);
+  assert.ok(Math.abs(n.x) > 0.3 && Math.abs(n.y) > 0.3 && Math.abs(n.z) > 0.3 && Math.abs(n.length() - 1) < 1e-4, 'a corner takes the averaged normal');
+  assert.equal(smoothNormals(g), 0, 'once per geometry');
+  for (const t of ['rat_pike', 'rat_xbow', 'boss_grizzlechop', 'spider', 'crow']) assert.ok(SMOOTH_TYPES.test(t), t);
+  for (const t of ['hyena', 'pug', 'stealer', 'jelly_l']) assert.ok(!SMOOTH_TYPES.test(t), t);
+});

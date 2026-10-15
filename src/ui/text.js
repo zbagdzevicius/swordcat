@@ -112,6 +112,17 @@ export const UI_STRINGS = Object.freeze({
   'bar.holy': 'Holy Slash ready: hold Attack until it turns gold.',
   'ui.controls.preset': 'Keyboard and mouse',
   'ui.controls.na': '—',
+  // TT3 §11.5 K8: the rebinding screen (keyboard and mouse only)
+  'ui.controls.rebindHint': 'Click a key to change it.',
+  'ui.controls.press': 'Press a key or mouse button for {action}. Esc cancels.',
+  'ui.controls.refused': '{key} belongs to the browser. Pick another key.',
+  'ui.controls.walk': '{key} walks. Pick another key.',
+  'ui.controls.swapped': 'Swapped: {other} now uses {key}.',
+  'ui.controls.saved': '{action}: {key}',
+  'ui.controls.reset': 'Reset keys to default',
+  'ui.controls.resetDone': 'Keys back to default.',
+  'ui.controls.sticky': 'Tip: on Windows, pressing Shift 5 times may open Sticky Keys. K or the back mouse button also Tumble.',
+  'pause.controls': 'Controls',
   'ui.tag.tap': 'Tap',
   'ui.touch.edit': 'Edit touch layout',
   'ui.touch.editHint': 'Drag the buttons where your thumbs like them.',
@@ -290,27 +301,33 @@ export function revealDuration(len, speed = 1, cps = 30) { return Math.max(0, le
 // ------------------------------------------------------------------ device glyphs (§6.6: "glyphs are swapped in by ui")
 /** Short label per action and device (§15.1 keyboard, §15.2 gamepad, §15.3 touch). */
 export const ACTION_GLYPH = Object.freeze({
-  // CONTROLS_SPEC §6.2 preset `hybrid` (C1: Space = the Stand, F = jump, RMB = move)
-  kbm: { attack: 'LMB', guard: 'Space', dodge: 'Shift', jump: 'F', interact: 'E', confirm: 'Enter', back: 'Esc', ability: 'Q', milk: 'R',
-    meow: 'C', golden: 'V', pause: 'Esc', lockon: 'Tab', move: 'RMB', wasd: 'WASD', look: 'Mouse', recenter: 'F1', zoom: 'Wheel', attackMove: 'X',
-    stop: 'H', camLock: 'Y', aim: 'Mouse' },
+  // TOKENTAILS-PLAN §11.2 (TT3) preset `hybrid`: WASD moves, LMB attacks, RMB / Q = the Stand, Space = jump,
+  // Shift = Tumble, F = the Paw Trick, G = the kitten, Z / MMB = peek and ranges
+  kbm: { attack: 'LMB', guard: 'RMB', dodge: 'Shift', jump: 'Space', interact: 'E', confirm: 'Enter', back: 'Esc', ability: 'G', milk: 'R',
+    meow: 'C', golden: 'V', pause: 'Esc', lockon: 'Tab', move: 'WASD', wasd: 'WASD', look: 'Mouse', recenter: 'Home', zoom: 'Wheel', attackMove: 'X',
+    stop: 'H', camLock: 'Y', aim: 'Mouse', trick: 'F', trick1: '1', trick2: '2', trick3: '3', sprint: 'hold Shift', peek: 'Z', ranges: 'Z', centre: 'Home' },
   pad: { attack: 'X', guard: 'LB', dodge: 'B', jump: 'A', interact: 'Y', confirm: 'A', back: 'B', ability: 'LT', milk: 'D-pad ↑',
-    meow: 'L3', golden: 'RT', pause: 'Start', lockon: 'RB', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'R3', aim: 'R-stick',
-    attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: 'D-pad ↓' },
+    meow: 'L3', golden: 'LB + X', pause: 'Start', lockon: 'R3', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'View', aim: 'R-stick',
+    attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: 'D-pad ↓', ranges: 'D-pad ↓', trick: 'RT', trick1: 'RT + ←', trick2: 'RT + →', trick3: 'RT + ↑',
+    sprint: 'hold B' },
   touch: { attack: '⚔', guard: 'Stand', dodge: 'Tumble', jump: 'Jump', interact: '!', confirm: 'Tap', back: 'Back', ability: 'Kitten',
     milk: 'Snack', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Stick / tap', wasd: 'Left thumb', look: 'Drag right',
-    recenter: 'Tap', zoom: 'Pinch', aim: 'Drag', attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: '—' },
+    recenter: 'Tap', zoom: 'Pinch', aim: 'Drag', attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: '—', ranges: '—', trick: ':3',
+    trick1: 'Hold :3', trick2: 'Hold :3', trick3: 'Hold :3', sprint: 'Hold Tumble' },
 });
 
 /** Semantic glyph tokens (§12 ui 3): resolve through the active bindings / device, never shown as written. */
-const SEMANTIC = new Set(['stand', 'tumble', 'jump', 'move', 'attack', 'interact', 'ability', 'milk', 'snack', 'meow', 'golden', 'zoom', 'ls', 'rs', 'rb']);
+const SEMANTIC = new Set(['stand', 'tumble', 'jump', 'move', 'attack', 'interact', 'ability', 'milk', 'snack', 'meow', 'golden', 'zoom', 'ls', 'rs', 'rb',
+  'trick', 'peek', 'sprint', 'pause', 'skip']);
 
 /** Keyboard token (as written in strings.js) → action. */
 export const TOKEN_ACTION = Object.freeze({
-  wasd: 'wasd', mouse: 'look', space: 'guard', shift: 'dodge', rmb: 'move', lmb: 'attack', j: 'attack', l: 'guard', k: 'dodge', f: 'jump',
-  e: 'interact', enter: 'confirm', q: 'ability', r: 'milk', c: 'meow', v: 'golden', esc: 'pause', p: 'pause', tab: 'lockon', '⚔': 'attack',
-  stand: 'guard', tumble: 'dodge', jump: 'jump', move: 'move', attack: 'attack', interact: 'interact', ability: 'ability', milk: 'milk', snack: 'milk',
-  meow: 'meow', golden: 'golden', zoom: 'zoom', ls: 'move', rs: 'aim', rb: 'lockon', y: 'camLock', x: 'attackMove', h: 'stop',
+  // TT3 §11.2: Space = jump, RMB / Q = the Stand, F = the Paw Trick, G = the kitten, Z = peek
+  wasd: 'wasd', mouse: 'look', space: 'jump', shift: 'dodge', rmb: 'guard', lmb: 'attack', j: 'attack', l: 'guard', k: 'dodge', f: 'trick',
+  e: 'interact', enter: 'confirm', q: 'guard', g: 'ability', r: 'milk', c: 'meow', v: 'golden', esc: 'pause', p: 'pause', tab: 'lockon', '⚔': 'attack',
+  z: 'peek', stand: 'guard', tumble: 'dodge', jump: 'jump', move: 'move', attack: 'attack', interact: 'interact', ability: 'ability', milk: 'milk', snack: 'milk',
+  meow: 'meow', golden: 'golden', zoom: 'zoom', ls: 'move', rs: 'aim', rb: 'guard', y: 'camLock', x: 'attackMove', h: 'stop',
+  trick: 'trick', peek: 'peek', sprint: 'sprint', pause: 'pause', skip: 'pause', start: 'pause', home: 'centre', r3: 'lockon',
 });
 
 /** Short readable label for a KeyboardEvent.code / mouse code (keycaps, the ability-bar corner glyph). Pure. */
@@ -320,13 +337,13 @@ export function codeLabel(code) {
   if (m) return m[1];
   const n = /^(?:Digit|Numpad)(\d)$/.exec(code);
   if (n) return n[1];
-  return ({ Space: 'Space', ShiftLeft: 'Shift', ShiftRight: 'Shift', ControlLeft: 'Ctrl', ControlRight: 'Ctrl', AltLeft: 'Alt', AltRight: 'Alt', Tab: 'Tab',
+  return ({ Space: 'Space', ShiftLeft: 'Shift', ShiftRight: 'Shift', Tab: 'Tab',
     Escape: 'Esc', Enter: 'Enter', NumpadEnter: 'Enter', Backspace: 'Bksp', Mouse0: 'LMB', Mouse1: 'MMB', Mouse2: 'RMB', Mouse3: 'M4', Mouse4: 'M5',
-    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', F1: 'F1', Home: 'Home' })[code] ?? code;
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Home: 'Home' })[code] ?? code;
 }
 
-/** Actions whose KBM glyph prefers a mouse button when one is bound (LMB attack, RMB move). */
-const MOUSE_FIRST = new Set(['attack', 'move']);
+/** Actions whose KBM glyph prefers a mouse button when one is bound (LMB attack, RMB Stand, RMB move). */
+const MOUSE_FIRST = new Set(['attack', 'move', 'guard']);
 
 /**
  * The preferred bound code for an action from the active KBM bindings (`input.codesFor`), or null. Pure given the
@@ -340,13 +357,15 @@ export function preferredCode(action, codes) {
 }
 
 /** Actions whose KBM glyph never comes from a binding (they name a gesture, not a key). */
-const FIXED_KBM = new Set(['wasd', 'look', 'aim', 'zoom', 'confirm', 'back']);
+const FIXED_KBM = new Set(['wasd', 'look', 'aim', 'zoom', 'confirm', 'back', 'sprint']);
 
 /**
  * Glyph label for an action on a device ('kbm' | 'pad' | 'touch'). With `input` (the core Input) on KBM the label
  * follows the active preset and rebinding (`input.codesFor`), so presets never need new strings (§12 ui 3).
  */
 export function actionGlyph(action, device = 'kbm', input = null) {
+  // TT3 §11.3 Ribbon Twirl: the jump key again, held in the air (a row on the controls card, not an action)
+  if (action === 'twirl') return `${actionGlyph('jump', device, input)} ×2`;
   if (device === 'kbm' && input?.codesFor && !FIXED_KBM.has(action)) {
     const c = preferredCode(action, input.codesFor(action));
     if (c) return codeLabel(c);
@@ -372,6 +391,11 @@ export function presetGlyph(action, preset = 'hybrid', bindings = null) {
     const c = preferredCode('move', codesOf('move'));
     const parts = [c ? codeLabel(c) : null, P.wasd !== false ? 'WASD' : null].filter(Boolean);
     return parts.join(' / ') || ACTION_GLYPH.kbm.move;
+  }
+  if (action === 'twirl') return `${presetGlyph('jump', preset, bindings)} ×2`;
+  if (action === 'pause') {           // Esc always pauses; the card shows the rebindable key beside it
+    const other = codesOf('pause').find((c) => c !== 'Escape' && !c.startsWith('Mouse'));
+    return other ? `Esc / ${codeLabel(other)}` : 'Esc';
   }
   return actionGlyph(action, 'kbm', { codesFor: codesOf });
 }

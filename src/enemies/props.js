@@ -187,7 +187,7 @@ const BUILD = {
   hood() {
     const open = Math.PI * 0.62;                                  // face opening centred on +Z (phi = π/2 in SphereGeometry)
     const cowl = part(new THREE.SphereGeometry(0.16, 20, 12, Math.PI / 2 + open / 2, Math.PI * 2 - open, 0, Math.PI * 0.6),
-      (v) => (v.y < 0.03 ? ENEMY_PAL.hoodDark : ENEMY_PAL.hood), { scale: [1.05, 0.85, 1.1] });
+      ENEMY_PAL.hood, { scale: [1.05, 0.85, 1.1] });   // TT3: one plain colour (the two-tone split read as blotches)
     const rim = part(new THREE.TorusGeometry(0.152, 0.015, 6, 20, Math.PI * 2 - open), ENEMY_PAL.cream,
       { pos: [0, -0.042, 0], rot: [Math.PI / 2, 0, Math.PI / 2 + open / 2], scale: [1.05, 1.1, 1] });   // hem
     const tip = part(new THREE.ConeGeometry(0.055, 0.22, 8), ENEMY_PAL.hood, { pos: [0, 0.05, -0.2], rot: [-2.0, 0, 0] });
@@ -197,8 +197,9 @@ const BUILD = {
   /** Crow's 3-tuft mustard crest on a little slate cap (ART §7.2 top colour), origin at the cap centre. */
   crowHood() {
     const cap = part(new THREE.SphereGeometry(0.07, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.5), ENEMY_PAL.slateLight, { scale: [1, 0.6, 1.15] });
-    const tufts = [-0.45, 0, 0.45].map((a, i) => part(new THREE.CapsuleGeometry(0.018, i === 1 ? 0.12 : 0.09, 3, 8), ENEMY_PAL.mustard,
-      { pos: [Math.sin(a) * 0.03, 0.08, -0.02], rot: [-0.55, 0, a * 0.9] }));
+    // TT3: a soft three-feather tuft curling forward (the long capsules read as a yellow cone)
+    const tufts = [-0.75, 0, 0.75].map((a, i) => part(new THREE.CapsuleGeometry(0.011, i === 1 ? 0.032 : 0.022, 3, 8), ENEMY_PAL.mustard,
+      { pos: [Math.sin(a) * 0.026, 0.038, 0.01], rot: [0.6, 0, a * 1.5] }));
     return merged([cap, ...tufts]);
   },
   /** Pilfer's dropped crate (0.7 m wooden box with darker slats), origin at the bottom centre. */
@@ -323,6 +324,17 @@ const BUILD = {
     const hub = [-1, 1].map((s) => part(new THREE.CylinderGeometry(0.16, 0.16, 0.04, 12), '#B98A30', { pos: [s * 0.5, 0, 0], rot: [0, 0, Math.PI / 2] }));
     return merged([body, ...hub]);
   },
+  /**
+   * TT3: Grizzlechop's cheese shield (the wheel prop read as a cart wheel): a butter-yellow round with an orange rind, a
+   * few round holes on each face and no hub. Axis along X like `cheeseWheel` (radius 1, thickness 1: scale it).
+   */
+  cheeseShield() {
+    const body = part(new THREE.CylinderGeometry(1, 1, 1, 30, 1), (v) => (Math.abs(v.x) > 0.49 && Math.hypot(v.y, v.z) < 0.9 ? '#F4CF55' : '#E5A13A'), { rot: [0, 0, Math.PI / 2] });
+    const holes = [];
+    const at = [[0.42, 0.18, 0.2], [-0.3, 0.45, 0.17], [0.05, -0.38, 0.22], [-0.5, -0.25, 0.13], [0.55, -0.42, 0.11], [-0.05, 0.05, 0.1], [0.2, 0.62, 0.1]];
+    for (const s of [1, -1]) for (const [y, z, r] of at) holes.push(part(new THREE.SphereGeometry(r, 12, 8), '#C88E2C', { pos: [s * 0.49, y, s * z], scale: [0.35, 1, 1] }));
+    return merged([body, ...holes]);
+  },
   /** A cheese wedge (snack / cheese bomb), ~0.18 m. */
   cheeseWedge() {
     const w = part(new THREE.CylinderGeometry(0.18, 0.18, 0.1, 3, 1, false, 0, 1.0),
@@ -372,11 +384,18 @@ const BUILD = {
   eyes() {
     return merged([...eyeParts(1), ...eyeParts(-1)]);
   },
+  /** TT3: the Rat Pikeman's eyes: the same friendly eyes with bigger pupils (72 % of the eye), cuter at iso size. */
+  eyesBig() {
+    return merged([...eyeParts(1, { pupil: 0.72 }), ...eyeParts(-1, { pupil: 0.72 })]);
+  },
 };
 
+/** Open (non-closed) prop shells that never join an outline hull (TT3). */
+const OPEN_SHELLS = new Set(['hood', 'crowHood']);
+
 const PROP_MAT = {
-  kettleHelm: 'metal', spear: 'gear', buckler: 'gear', hood: 'cloth', crowHood: 'cloth', eyes: 'eyes', crate: 'gear', letter: 'cloth',
-  featherHat: 'crown', cheeseWheel: 'cheese', cheeseWedge: 'cheese', monocle: 'metal', moustache: 'cloth', leafHat: 'cloth', fuzzCoat: 'cloth',
+  kettleHelm: 'metal', spear: 'gear', buckler: 'gear', hood: 'cloth', crowHood: 'cloth', eyes: 'eyes', eyesBig: 'eyes', crate: 'gear', letter: 'cloth',
+  featherHat: 'crown', cheeseWheel: 'cheese', cheeseShield: 'cheese', cheeseWedge: 'cheese', monocle: 'metal', moustache: 'cloth', leafHat: 'cloth', fuzzCoat: 'cloth',
   practiceSword: 'gear', potHelm: 'metal', chiefCrown: 'crown',
 };
 
@@ -431,7 +450,10 @@ export function makeProp(name, opts = {}) {
   mesh.castShadow = opts.castShadow ?? CASTS.has(name);
   mesh.userData.sharedProp = true;
   // PERF §1.2: the eyes sit inside the head's silhouette, so the outline hull skips them (−600 hull tris a rat)
-  if (name === 'eyes') mesh.userData.noOutline = true;
+  if (name === 'eyes' || name === 'eyesBig') mesh.userData.noOutline = true;
+  // TT3: open cloth shells (the crossbow rat's cowl, the crow's cap) stay out of the ink hull: its back faces showed
+  // through the open cowl and z-fought with it (brown "camo" blotches on the crossbow rat's hood)
+  if (OPEN_SHELLS.has(name)) mesh.userData.noOutline = true;
   return mesh;
 }
 

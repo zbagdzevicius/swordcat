@@ -525,17 +525,23 @@ export const INPUT = {
   actions: ['attack', 'guard', 'dodge', 'jump', 'interact', 'confirm', 'back', 'lockon', 'lockPrev', 'lockNext',
             'pause', 'ability', 'milk', 'meow', 'golden', 'recenter', 'navUp', 'navDown', 'navLeft', 'navRight',
             // CONTROLS_SPEC §6.1 (iso controls)
-            'move', 'attackMove', 'stop', 'zoomIn', 'zoomOut', 'zoomCycle', 'peek', 'camLock', 'centre', 'ranges', 'controls'],
-  // CONTROLS_SPEC §6.2 preset `hybrid` (the default; C1): RMB = move order, Space = the Stand, F = jump, Shift = Tumble,
-  // LMB = attack toward the cursor. Mouse3 = the back side button (Tumble), Mouse4 = the forward one (Stand).
+            'move', 'attackMove', 'stop', 'zoomIn', 'zoomOut', 'zoomCycle', 'peek', 'camLock', 'centre', 'ranges', 'controls',
+            // TOKENTAILS-PLAN §11.2 (TT3): `sprint` is virtual (the dodge key held past INPUT.sprintAfter), `trick` the
+            // Paw Trick slot, `trick1`..`trick3` pick a Paw Trick
+            'sprint', 'trick', 'trick1', 'trick2', 'trick3'],
+  // TOKENTAILS-PLAN §11.2 (TT3) preset `hybrid`, the default: WASD moves, LMB attacks (LMB on a foe walks in and
+  // chains), RMB / Q / L = the Stand, Space = jump, Shift = Tumble (held = sprint), F = the Paw Trick, G = the kitten.
+  // No action uses Ctrl, Alt, Meta or an F-key (Ctrl+W closes the tab and cannot be blocked). Mouse1 = MMB,
+  // Mouse3 = the back side button (Tumble), Mouse4 = the forward one.
   keys: {
-    attack: ['KeyJ', 'Mouse0'], guard: ['Space', 'KeyL', 'Mouse4'], dodge: ['ShiftLeft', 'ShiftRight', 'KeyK', 'Mouse3'], jump: ['KeyF'],
+    attack: ['Mouse0', 'KeyJ'], guard: ['Mouse2', 'KeyQ', 'KeyL'], dodge: ['ShiftLeft', 'ShiftRight', 'KeyK', 'Mouse3'], jump: ['Space'],
     interact: ['KeyE', 'Enter', 'NumpadEnter'], confirm: ['Enter', 'NumpadEnter', 'KeyE'], back: ['Escape', 'Backspace'],
-    lockon: ['Tab'], pause: ['Escape', 'KeyP'], ability: ['KeyQ'], milk: ['KeyR'], meow: ['KeyC'], golden: ['KeyV'],
+    lockon: ['Tab'], pause: ['Escape', 'KeyP'], ability: ['KeyG'], milk: ['KeyR'], meow: ['KeyC'], golden: ['KeyV'],
+    trick: ['KeyF'], trick1: ['Digit1'], trick2: ['Digit2'], trick3: ['Digit3'], sprint: [],
     recenter: [], lockPrev: [], lockNext: [],
     navUp: ['ArrowUp', 'KeyW'], navDown: ['ArrowDown', 'KeyS'], navLeft: ['ArrowLeft', 'KeyA'], navRight: ['ArrowRight', 'KeyD'],
-    move: ['Mouse2'], attackMove: ['KeyX'], stop: ['KeyH'], zoomIn: [], zoomOut: [], zoomCycle: [], peek: ['AltLeft', 'Mouse1'],
-    camLock: ['KeyY'], centre: ['F1', 'Home'], ranges: ['ControlLeft', 'ControlRight'], controls: [],
+    move: [], attackMove: ['KeyX'], stop: ['KeyH'], zoomIn: [], zoomOut: [], zoomCycle: [], peek: ['KeyZ', 'Mouse1'],
+    camLock: ['KeyY'], centre: ['Home'], ranges: ['KeyZ', 'Mouse1'], controls: [],
   },
   /** `?cam=classic` (§15.3): the M1/M2 orbit-camera binding table (RMB guard, Space jump, MMB lock-on, wheel switch). */
   classicKeys: {
@@ -544,29 +550,44 @@ export const INPUT = {
   },
   /**
    * §6.2 KBM presets: each a `keys` table merged over `keys` (then `settings.bindings` on top) plus two flags:
-   * `wasd` (WASD moves her) and `lmbMoves` (LMB issues orders, diablo).
+   * `wasd` (WASD moves her) and `lmbMoves` (LMB issues orders, diablo). Click-to-move lives in `moba` (RMB),
+   * `diablo` (LMB) and `mouseOnly` (RMB); `hybrid` and `keyboardOnly` walk on WASD.
    */
   presets: {
     hybrid: { wasd: true, lmbMoves: false, keys: {} },
-    moba: { wasd: false, lmbMoves: false, keys: { attackMove: ['KeyA'], stop: ['KeyS', 'KeyH'], milk: ['KeyD', 'KeyR'] } },
-    diablo: { wasd: true, lmbMoves: true, keys: { move: ['Mouse0'], attack: ['KeyJ'], guard: ['Mouse2', 'KeyL'], dodge: ['Space', 'KeyK'], jump: ['KeyF'] } },
-    mouseOnly: { wasd: true, lmbMoves: false, keys: { guard: ['Mouse4', 'KeyL'], dodge: ['Mouse3', 'KeyK'], jump: ['KeyF', 'Mouse1'], peek: ['AltLeft'] } },
-    keyboardOnly: { wasd: true, lmbMoves: false, keys: { attack: ['KeyJ'], guard: ['KeyL'], dodge: ['KeyK'], jump: ['Space'], move: [] } },
+    // moba: Shift+RMB queues moves (Orders.js), so Shift does not Tumble here: Space does (as in diablo), jump is T
+    moba: { wasd: false, lmbMoves: false, keys: { move: ['Mouse2'], guard: ['KeyQ', 'KeyL'], dodge: ['Space', 'KeyK', 'Mouse3'], jump: ['KeyT'], attackMove: ['KeyA'], stop: ['KeyS', 'KeyH'], milk: ['KeyD', 'KeyR'] } },
+    diablo: { wasd: true, lmbMoves: true, keys: { move: ['Mouse0'], attack: ['KeyJ'], guard: ['Mouse2', 'KeyQ', 'KeyL'], dodge: ['Space', 'KeyK'], jump: ['KeyT'] } },
+    mouseOnly: { wasd: true, lmbMoves: false, keys: { move: ['Mouse2'], guard: ['Mouse4', 'KeyQ', 'KeyL'], dodge: ['Mouse3', 'KeyK', 'ShiftLeft', 'ShiftRight'], jump: ['Space', 'Mouse1'], peek: ['KeyZ'], ranges: ['KeyZ'] } },
+    keyboardOnly: { wasd: true, lmbMoves: false, keys: { attack: ['KeyJ'], guard: ['KeyL', 'KeyQ'], dodge: ['KeyK', 'ShiftLeft', 'ShiftRight'], jump: ['Space'], peek: ['KeyZ'], ranges: ['KeyZ'], move: [] } },
   },
+  /** TT3 §11.2: the `dodge` key still held this long (s) after the Tumble starts = `sprint` (Zoomies speed at once). */
+  sprintAfter: 0.18,
+  /** TT3 §11.2: `guard` + `attack` pressed within this many seconds of each other = `golden` (KBM and pad). */
+  goldenChord: 0.1,
+  /**
+   * TT3 §11.5 K task 8, the rebinding screen: codes a binding may never hold (modifiers, F-keys). Esc is refused by the
+   * screen too, but stays bound to `pause` / `back` always (Input.rebind keeps it there).
+   */
+  unbindable: /^(?:Control|Alt|Meta|OS|F\d{1,2}$|ContextMenu$|CapsLock$|Fn)/,
   /** The touch / pointer model (§6.1): mouse speed under which a moving cursor is not "activity" (Photo Cam idle). */
   pointer: { idlePxPerSec: 24, speedWindow: 0.25, clickQueue: 8 },   // speed = net px over speedWindow s; cursor freshness: AIM.cursorIdle
   move: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] },
-  // §6.3 twin-stick pad: RS aims (not look), R3 cycles zoom, D-pad ↓ peeks
-  pad: { jump: [0], confirm: [0], dodge: [1], back: [1], attack: [2], interact: [3], guard: [4], lockon: [5], ability: [6],
-         golden: [7], controls: [8], pause: [9], meow: [10], zoomCycle: [11], milk: [12], lockPrev: [14], lockNext: [15], peek: [13],
-         navUp: [12], navDown: [13], navLeft: [14], navRight: [15] },
-  classicPad: { recenter: [11], zoomCycle: [], peek: [], controls: [] },
+  // §6.3 twin-stick pad, standard layout (TT3 §11.2): A jump, B Tumble, X attack, Y interact, LB / RB the Stand,
+  // LT kitten, RT Paw Trick (hold RT + D-pad ← → ↑ picks one), View zooms, R3 selects, D-pad ↓ peeks. Golden Hour is
+  // the Stand + X within INPUT.goldenChord s (Input.js derives it).
+  pad: { jump: [0], confirm: [0], dodge: [1], back: [1], attack: [2], interact: [3], guard: [4, 5], lockon: [11], ability: [6],
+         trick: [7], golden: [], controls: [], zoomCycle: [8], pause: [9], meow: [10], milk: [12], lockPrev: [14], lockNext: [15],
+         peek: [13], ranges: [13], navUp: [12], navDown: [13], navLeft: [14], navRight: [15] },
+  /** TT3 §11.2: while RT (`trick`) is held, these D-pad buttons pick a Paw Trick instead of their own action. */
+  padTrickPick: { 14: 'trick1', 15: 'trick2', 12: 'trick3' },
+  classicPad: { recenter: [11], lockon: [5], guard: [4], zoomCycle: [], peek: [], ranges: [], controls: [] },
   deadZone: 0.15, triggerThreshold: 0.5,
   mouseSens: 0.0025,          // rad per px at sensitivity 1
   padLookSpeed: 2.6,          // rad/s at full right-stick deflection, sensitivity 1
   touchLookSens: 0.006,       // rad per px (tech.md §7 TouchControls)
   wheelRepeat: 0.12,          // s between wheel lock-switch edges
-  preventDefault: ['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'F1', 'AltLeft', 'Home'],
+  preventDefault: ['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Home'],
 };
 
 // ---- core+ M2: area tuning tables adopted into config (requests/combat.md, enemies.md, physics.md). The owning

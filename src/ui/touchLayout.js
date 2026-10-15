@@ -7,7 +7,14 @@ import { TOUCH, CAMERA } from '../core/config.js';
 export const clampTs = (ts) => Math.max(0.8, Math.min(1.4, Number.isFinite(ts) ? ts : 1));
 
 /** Placement priority: when a small screen can't fit every default button clear of her, the last ones go first. */
-export const BUTTON_PRIORITY = Object.freeze(['attack', 'guard', 'dodge', 'ability', 'jump', 'interact', 'milk', 'golden', 'meow']);
+export const BUTTON_PRIORITY = Object.freeze(['attack', 'guard', 'dodge', 'ability', 'jump', 'trick', 'interact', 'milk', 'meow', 'golden']);
+
+/**
+ * TT3 Paw Trick ":3" button ([size, dx, dy] from the ⚔ centre, like TOUCH.buttons): laid out only when a trick is owned
+ * (`computeLayout(w, h, { extra: TRICK_BUTTONS })`), so the cluster is unchanged before the first hand-over. Landscape:
+ * above the kitten portrait; portrait: the right-hand column is full, so it sits left of her, above the joystick zone.
+ */
+export const TRICK_BUTTON = Object.freeze({ landscape: Object.freeze([60, -196, -212]), portrait: Object.freeze([60, -180, -460]) });
 
 /**
  * Cluster layout for a viewport (CSS px). Returns { buttons: { name: { x, y, r, size } } (centres), dropped: [names],
@@ -17,7 +24,8 @@ export const BUTTON_PRIORITY = Object.freeze(['attack', 'guard', 'dodge', 'abili
  *   hero: her screen point override (default heroPoint).
  * @param {number} w @param {number} h
  * @param {{ touchSize?: number, leftHanded?: boolean, safe?: { top?: number, right?: number, bottom?: number, left?: number },
- *   layout?: object|null, keepOut?: {x0:number,y0:number,x1:number,y1:number}[], noDrop?: boolean, hero?: {x:number,y:number} }} [o]
+ *   layout?: object|null, keepOut?: {x0:number,y0:number,x1:number,y1:number}[], noDrop?: boolean, hero?: {x:number,y:number},
+ *   extra?: object }} [o]  extra: TT3 buttons laid out only when given (TRICK_BUTTON)
  */
 export function computeLayout(w, h, o = {}) {
   const T = TOUCH, ts = clampTs(o.touchSize ?? 1), safe = o.safe ?? {};
@@ -29,7 +37,12 @@ export function computeLayout(w, h, o = {}) {
   const ax = mirror ? left + T.anchor * Math.max(1, k) : w - right - T.anchor * Math.max(1, k);
   const ay = h - bottom - T.anchor * Math.max(1, k);
   const buttons = {};
-  for (const [name, [size, dx, dy]] of Object.entries(portrait && T.buttonsPortrait ? T.buttonsPortrait : T.buttons)) {
+  const table = portrait && T.buttonsPortrait ? T.buttonsPortrait : T.buttons;
+  // TT3: extra buttons (the Paw Trick ":3") join the table only when asked for: { name: [size, dx, dy] } or
+  // { name: { landscape: [...], portrait: [...] } }
+  const rows = o.extra ? { ...table } : table;
+  if (o.extra) for (const [n, v] of Object.entries(o.extra)) { const r = Array.isArray(v) ? v : (portrait ? v?.portrait : v?.landscape); if (Array.isArray(r) && r.length === 3) rows[n] = r; }
+  for (const [name, [size, dx, dy]] of Object.entries(rows)) {
     const sz = Math.max(T.minBtn, size * k);
     let x = ax + (mirror ? -dx : dx) * k, y = ay + dy * k;
     // §9.2 Edit layout: settings.touchLayout offsets from the ⚔ anchor in unscaled, unmirrored px (portrait entries

@@ -87,13 +87,22 @@ test('Input: edges latch until endStep; heldTime counts sim time and survives th
   // A2 actions all exist
   for (const a of ['guard', 'ability', 'milk', 'meow', 'golden', 'recenter', 'attack', 'dodge', 'jump', 'interact', 'lockon', 'pause'])
     assert.ok(inp.actions.has(a), `action ${a}`);
-  // CONTROLS_SPEC C1 (preset hybrid): Space / L / Mouse4 = the Stand, RMB = move orders, F = jump; J / K / L aliases kept
-  assert.deepEqual(INPUT.keys.guard, ['Space', 'KeyL', 'Mouse4'], 'Space = the Stand (C1)');
-  assert.deepEqual(INPUT.keys.move, ['Mouse2'], 'RMB = move orders');
-  assert.deepEqual(INPUT.keys.jump, ['KeyF'], 'F = jump');
+  // TOKENTAILS-PLAN §11.2 (TT3, preset hybrid): RMB / Q / L = the Stand, Space = jump, WASD walks (no click-to-move),
+  // F = the Paw Trick, G = the kitten, Z / MMB = peek + ranges; J / K / L aliases kept
+  assert.deepEqual(INPUT.keys.guard, ['Mouse2', 'KeyQ', 'KeyL'], 'RMB / Q / L = the Stand');
+  assert.deepEqual(INPUT.keys.move, [], 'hybrid: WASD walks, no move click');
+  assert.deepEqual(INPUT.keys.jump, ['Space'], 'Space = jump');
+  assert.deepEqual(INPUT.keys.trick, ['KeyF'], 'F = the Paw Trick');
+  assert.deepEqual(INPUT.keys.ability, ['KeyG'], 'G = the kitten ability');
+  assert.deepEqual(INPUT.keys.peek, ['KeyZ', 'Mouse1'], 'Z / MMB = peek');
+  assert.deepEqual(INPUT.keys.ranges, ['KeyZ', 'Mouse1'], 'ranges share the peek hold');
+  assert.deepEqual([INPUT.keys.trick1, INPUT.keys.trick2, INPUT.keys.trick3], [['Digit1'], ['Digit2'], ['Digit3']]);
   assert.ok(!INPUT.keys.dodge.includes('Mouse2'), 'RMB never dodges');
-  assert.deepEqual(INPUT.pad.lockon, [5], 'gamepad select is RB only');
-  assert.deepEqual(INPUT.pad.zoomCycle, [11], 'R3 cycles the zoom (C1)');
+  assert.deepEqual(INPUT.pad.guard, [4, 5], 'LB / RB = the Stand');
+  assert.deepEqual(INPUT.pad.trick, [7], 'RT = the Paw Trick');
+  assert.deepEqual(INPUT.pad.lockon, [11], 'R3 selects');
+  assert.deepEqual(INPUT.pad.zoomCycle, [8], 'View cycles the zoom');
+  assert.deepEqual(INPUT.pad.golden, [], 'pad Golden Hour is the Stand + X chord');
   // ?cam=classic keeps the old table (RMB guard, Space jump, R3 recentre)
   assert.deepEqual(INPUT.classicKeys.guard, ['KeyL', 'Mouse2']);
   assert.deepEqual(INPUT.classicPad.recenter, [11]);
@@ -106,19 +115,25 @@ test('Input (iso): presets merge over the keys, settings.bindings on top; clicks
   const inp = new Input(ctx);
   assert.equal(inp.iso, true);
   assert.equal(inp.pointerLockEnabled, false, 'no pointer lock in iso (C2)');
-  assert.ok(inp._bind.get('Space').includes('guard'));
-  assert.ok(inp._bind.get('Mouse2').includes('move'));
+  assert.ok(inp._bind.get('Space').includes('jump'));
+  assert.ok(inp._bind.get('Mouse2').includes('guard') && !inp._bind.get('Mouse2').includes('move'), 'hybrid: RMB stands');
   assert.equal(inp.preset, 'hybrid');
   st.settings.controlPreset = 'moba';
   inp.rebind();
   assert.equal(inp.preset, 'moba');
   assert.equal(inp.wasd, false, 'moba: WASD does not move');
   assert.ok(inp._bind.get('KeyA').includes('attackMove'));
+  assert.ok(inp._bind.get('Mouse2').includes('move') && !inp._bind.get('Mouse2').includes('guard'), 'moba: RMB moves, Q stands');
   assert.deepEqual(events.at(-1), ['input:scheme', { preset: 'moba' }]);
   st.settings.controlPreset = 'diablo'; inp.rebind();
   assert.ok(inp.lmbMoves && inp._bind.get('Mouse0').includes('move'), 'diablo: LMB moves');
-  st.settings.controlPreset = 'hybrid'; st.settings.bindings = { jump: ['KeyG'] }; inp.rebind();
-  assert.deepEqual(inp.codesFor('jump'), ['KeyG'], 'rebinding wins');
+  assert.deepEqual(inp.codesFor('jump'), ['KeyT'], 'diablo: Space tumbles, jump moves to T');
+  st.settings.controlPreset = 'hybrid'; st.settings.bindings = { jump: ['KeyN'] }; inp.rebind();
+  assert.deepEqual(inp.codesFor('jump'), ['KeyN'], 'rebinding wins');
+  st.settings.bindings = { jump: ['ControlLeft', 'KeyN', 'F5', 'MetaLeft', 'AltLeft'], pause: ['KeyO'] }; inp.rebind();
+  assert.deepEqual(inp.codesFor('jump'), ['KeyN'], 'a stored modifier / F-key binding is dropped');
+  assert.deepEqual(inp.codesFor('pause'), ['KeyO', 'Escape'], 'Esc always pauses');
+  st.settings.bindings = {}; inp.rebind();
   inp.addTap(10, 20, 'tap'); inp.addTap(30, 40, 'long');
   const c1 = inp.takeClick(), c2 = inp.takeClick();
   assert.equal(c1.button, 'tap'); assert.equal(c1.kind, 'tap'); assert.equal(c2.kind, 'long');
@@ -149,14 +164,15 @@ test('Input (iso): §6.1 mouse speed threshold, pad 8 = controls card, presets o
   assert.equal(inp._activity, true, 'a 40 px / 16 ms move is activity');
   inp.update(1 / 60); assert.equal(inp.idleTime, 0);
   assert.ok(inp.pointer.movedPx >= 41 && inp.pointer.lastMoveT > 0);
-  // §6.3 pad Back/View (8) opens the controls card
-  assert.deepEqual(INPUT.pad.controls, [8]);
+  // TT3 §11.2: the pad's View (8) zooms now; the controls card lives in the pause menu
+  assert.deepEqual(INPUT.pad.controls, []);
   assert.ok(INPUT.actions.includes('controls'));
-  // §6.2 mouseOnly: MMB click = Jump (peek stays on Alt)
+  // §6.2 mouseOnly: MMB click = Jump, Space jumps too, RMB still moves (peek moves to Z)
   const st = { settings: { controlPreset: 'mouseOnly', bindings: {} } };
   const mo = new Input({ state: st, params: {} });
   assert.ok(mo._bind.get('Mouse1').includes('jump') && !mo._bind.get('Mouse1').includes('peek'));
   assert.ok(mo._bind.get('Mouse4').includes('guard') && mo._bind.get('Mouse3').includes('dodge'));
+  assert.ok(mo._bind.get('Space').includes('jump') && mo._bind.get('Mouse2').includes('move'), 'mouseOnly: Space jumps, RMB moves');
   st.settings.controlPreset = 'keyboardOnly'; mo.rebind();
   assert.ok(mo._bind.get('Space').includes('jump') && !(mo._bind.get('Mouse2') ?? []).includes('move'), 'keyboardOnly: Space jumps, no RMB orders');
   st.settings.controlPreset = 'nonsense'; mo.rebind();
@@ -166,6 +182,95 @@ test('Input (iso): §6.1 mouse speed threshold, pad 8 = controls card, presets o
   const up = mo.takeClick();
   assert.ok(up && up.button === 2 && up.down === false);
   assert.equal(mo._clickDown.size, 0);
+});
+
+test('TT3 §11.2: no binding in any table uses Ctrl, Alt, Meta or an F-key', () => {
+  const bad = /^(?:Control|Alt|Meta|OS|F\d{1,2}$)/;
+  const tables = { keys: INPUT.keys, classicKeys: INPUT.classicKeys, ...Object.fromEntries(Object.entries(INPUT.presets).map(([k, p]) => [k, p.keys])) };
+  for (const [name, t] of Object.entries(tables)) for (const [a, codes] of Object.entries(t)) for (const c of codes ?? []) assert.ok(!bad.test(c), `${name}.${a}: ${c}`);
+  for (const c of INPUT.preventDefault) assert.ok(!bad.test(c), `preventDefault: ${c}`);
+  for (const a of ['sprint', 'trick', 'trick1', 'trick2', 'trick3', 'golden']) assert.ok(INPUT.actions.includes(a), a);
+});
+
+test('TT3 §11.2: a keydown with Ctrl or Meta sets no action and no move; Shift+Tab = lockPrev', () => {
+  const inp = new Input({ params: {} });
+  const key = (code, mods = {}) => ({ code, repeat: false, target: { tagName: 'CANVAS' }, preventDefault() {}, ...mods });
+  for (const [code, mods] of [['KeyW', { ctrlKey: true }], ['KeyD', { ctrlKey: true }], ['KeyW', { metaKey: true }], ['KeyF', { ctrlKey: true }], ['Space', { metaKey: true }]]) {
+    inp._keyDown(key(code, mods));
+    for (const [a, s] of inp.actions) assert.ok(!s.down && !s.pressed, `${mods.ctrlKey ? 'Ctrl' : 'Meta'}+${code} set ${a}`);
+    assert.equal(inp.move.y, 0); assert.equal(inp.move.x, 0);
+    assert.ok(!inp.keys.has(code));
+  }
+  inp._keyDown(key('KeyW'));
+  assert.ok(inp.move.y > 0, 'plain W walks');
+  inp._keyUp(key('KeyW'));
+  inp._keyDown(key('Tab', { shiftKey: true }));
+  assert.ok(inp.pressed('lockPrev') && !inp.pressed('lockon'), 'Shift+Tab cycles back');
+  inp._keyUp(key('Tab'));
+  assert.ok(!inp.down('lockPrev'));
+  inp.endStep();
+  inp._keyDown(key('Tab'));
+  assert.ok(inp.pressed('lockon') && !inp.pressed('lockPrev'));
+});
+
+test('TT3 §11.2: sprint = the dodge input held INPUT.sprintAfter s; released with it', () => {
+  const inp = new Input({ params: {} });
+  inp._press('dodge', 'k:ShiftLeft');
+  const dt = 1 / 60;
+  let t = 0;
+  while (t + dt < INPUT.sprintAfter - 1e-9) { inp.update(dt); inp.endStep(); t += dt; assert.ok(!inp.down('sprint'), `no sprint at ${t.toFixed(3)} s`); }
+  inp.update(dt); inp.update(dt);
+  assert.ok(inp.down('sprint') && inp.pressed('sprint'), 'sprint after 0.18 s');
+  inp.endStep();
+  inp._release('dodge', 'k:ShiftLeft'); inp.update(dt);
+  assert.ok(!inp.down('sprint') && inp.released('sprint'));
+  // a tap never sprints
+  inp.endStep();
+  inp._press('dodge', 'v'); inp.update(0.05); inp._release('dodge', 'v'); inp.update(0.2);
+  assert.ok(!inp.down('sprint'));
+  assert.equal(INPUT.sprintAfter, 0.18);
+});
+
+test('TT3 §11.2: golden = guard + attack pressed within 0.1 s (either order), not after', () => {
+  let now = 1000;
+  const mk = () => { const i = new Input({ params: {} }); i.now = () => now; return i; };
+  let inp = mk();
+  inp._press('guard', 'm:Mouse2'); now += 60; inp._press('attack', 'm:Mouse0');
+  assert.ok(inp.pressed('golden') && inp.down('golden'), 'RMB then LMB 60 ms later');
+  inp._release('attack', 'm:Mouse0');
+  assert.ok(!inp.down('golden'), 'released with either');
+  inp = mk();
+  inp._press('attack', 'p2'); now += 100; inp._press('guard', 'p4');
+  assert.ok(inp.pressed('golden'), 'X then LB at exactly 0.1 s');
+  inp = mk();
+  inp._press('guard', 'k:KeyQ'); now += 150; inp._press('attack', 'k:KeyJ');
+  assert.ok(!inp.pressed('golden') && !inp.down('golden'), '0.15 s apart: no Golden Hour');
+  inp = mk();
+  inp._press('guard', 'k:KeyQ'); now += 40; inp._release('guard', 'k:KeyQ'); inp._press('attack', 'k:KeyJ');
+  assert.ok(!inp.pressed('golden'), 'the Stand already let go: no chord');
+  inp = mk();
+  inp._press('golden', 'k:KeyV');
+  assert.ok(inp.pressed('golden'), 'V still works');
+});
+
+test('TT3 §11.2: pad RT held + D-pad ← → ↑ picks trick1..3 instead of the D-pad action', () => {
+  const inp = new Input({ params: {} });
+  const merged = new Array(20).fill(false);
+  merged[7] = true; inp._padTrickPick(merged);
+  merged[14] = true; assert.ok(inp._padTrickPick(merged));
+  assert.ok(inp.pressed('trick1') && inp.usedAsModifier('trick'));
+  merged[14] = false; merged[15] = true; inp._padTrickPick(merged);
+  assert.ok(!inp.down('trick1') && inp.pressed('trick2'));
+  merged[15] = false; merged[12] = true; inp._padTrickPick(merged);
+  assert.ok(inp.pressed('trick3'));
+  assert.equal(inp._padPick[12], 1, 'D-pad up redirected: milk does not fire');
+  merged[12] = false; merged[7] = false; inp._padTrickPick(merged);
+  // without RT the D-pad is not redirected
+  inp.endStep();
+  merged[14] = true; assert.ok(!inp._padTrickPick(merged));
+  assert.ok(!inp.pressed('trick1') && inp._padPick[14] === 0);
+  inp._press('trick', 'p7');
+  assert.ok(!inp.usedAsModifier('trick'), 'cleared on the next RT press');
 });
 
 test('Input: §10.6 haptics buzz a phone on parry / hurt / block / order rejected; scaled, never in menus or on KBM', async () => {

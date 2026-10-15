@@ -182,8 +182,8 @@ Automatic (no call needed):
   `activeAt`, the rim flashes at parry-window open; gold tip star, red filled + jagged, purple grab); the parry ring
   (`settings.parryRing`, auto = touch / Kitten; red attacks get a dodge chevron); selection / hover (+ `setHighlight`) /
   aggro rings; contact blobs under enemies; bolt shadow dots; order markers (cream paw + 4 ticks collapsing onto the
-  spot, a cream 4-tick goal crosshair while she walks; red / gold rings, grey ✕ paw; pink is hers alone), queued waypoints (cream ticks), 3 dots while RMB is held, `settings.pathPreview` paws; the kitten ability indicator; the
-  ranges overlay (Ctrl). Her indicators are pulled 0.45 m toward the lens so grass never cuts them. The hero ring's
+  spot, a cream 4-tick goal crosshair while she walks; red / gold rings, grey ✕ paw; pink is hers alone), queued waypoints (cream ticks, Shift+RMB in `moba`), 3 dots while the move button is held, `settings.pathPreview` paws;
+  the kitten ability indicator; the ranges overlay (the `ranges` hold: Z / MMB / D-pad ↓, TT3 §11.2). Her indicators are pulled 0.45 m toward the lens so grass never cuts them. The hero ring's
   notch is a solid 0.3 m / 0.25 rad arrow tick (the cursor on KBM, else her aim / facing). Nothing is drawn while
   `game.mode !== 'play'` (dialog, cutscene, Meme Cam); her decals fade back in over the last 0.3 s of the hand-back.
 - **Telegraphs**: glints and "!" at a constant 28 / 34 CSS px on the overlay batch `fx.marksTop` (depthTest off);

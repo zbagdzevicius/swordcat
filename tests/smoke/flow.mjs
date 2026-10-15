@@ -9,6 +9,7 @@
 // Screenshots: tests/shots/flow/.
 import fs from 'node:fs';
 import path from 'node:path';
+import { walkKeys, standRmb, followTrail } from './_kbm.mjs';
 
 const DIR = 'flow';
 
@@ -170,27 +171,18 @@ async function walkPath(t, pts, { ms = 9000, stop = 0.7 } = {}) {
   return at;
 }
 
-/** Right-click the ground at (x, z), or toward it 80 px inside the screen edge when it is off-screen. */
-async function orderTo(t, x, z) {
-  const vp = t.page.viewportSize();
-  let p = await t.G(([a, b]) => window.__GAME__.screen(a, b), [x, z]);
-  if (!p || p.x < 30 || p.y < 30 || p.x > vp.width - 30 || p.y > vp.height - 20) {
-    const me = await t.G(() => { const g = window.__GAME__, q = g.ctx.player.pos; return g.screen(q.x, q.z); });
-    const dx = p.x - me.x, dy = p.y - me.y;
-    let k = 1;
-    for (const [v, lo, hi, o] of [[dx, 80, vp.width - 80, me.x], [dy, 80, vp.height - 150, me.y]]) { if (o + v * k > hi) k = (hi - o) / v; if (o + v * k < lo) k = (lo - o) / v; }
-    p = { x: me.x + dx * k, y: me.y + dy * k };
-  }
-  await t.page.mouse.move(p.x, p.y); await t.wait(60);
-  await t.page.mouse.click(p.x, p.y, { button: 'right' });
-}
+/**
+ * Walk toward (x, z) on WASD for a short leg (TT3 §11.2: the default `hybrid` preset walks on WASD; RMB is the Stand).
+ * The callers loop on the guide target.
+ */
+async function orderTo(t, x, z) { await walkKeys(t, x, z, { r: 0.45, ms: 1500 }); }
 const guide = () => { const tg = window.__GAME__.ctx.story.guideTarget?.(); return tg ? { id: tg.id, x: tg.x, z: tg.z, textKey: tg.textKey, kind: tg.kind, arriveR: tg.arriveR } : null; };
 const chipOn = () => { const e = document.querySelector('.cin-skip-chip'); return !!e && e.classList.contains('is-on'); };
 
 const FLOW = [
   // ====================================================================================== TT2: the first minutes
-  // The title tap → Morning Practice (4 lessons by real input, the way found by guideTarget alone: right-clicks toward
-  // it, the device keys the lesson names) → the bell → CS-01 in place → CS-02 (watched, never skipped) → the first
+  // The title tap → Morning Practice (4 lessons by real input, the way found by guideTarget alone: WASD toward it, the
+  // device keys the lesson names: LMB / J, RMB for the Stand) → the bell → CS-01 in place → CS-02 (watched, never skipped) → the first
   // fight in the yard (onboard.firstFight) → the barn chest (the fence hop) → CS-01b → north to Mochi's cart → D-01.
   // Gates (TOKENTAILS-PLAN §10.10): the first move accepted ≤ 0.5 s after the tap, control ≤ 5 s, the first reward
   // ≤ 60 s, Play → onboard.firstFight ≤ 90 game s without skipping, the Skip chip ≤ 0.5 s into every skippable scene,
@@ -238,7 +230,7 @@ const FLOW = [
       t.assert(!(await t.events()).includes('level:loaded'), 'no reload on the title tap');
       t.assert(!!(await until(t, () => window.__GAME__.ctx.story.tutorial.active, null, { timeout: 8000 })), 'Morning Practice starts');
       t.assert(await t.G(chipOn), 'the Skip chip from second 0 of practice');
-      // the guided steps: every step's target comes from guideTarget(); the player only right-clicks toward it and
+      // the guided steps: every step's target comes from guideTarget(); the player only walks toward it on WASD and
       // presses the key the lesson names
       let last = null;
       const T_END = Date.now() + 240000;
@@ -263,12 +255,12 @@ const FLOW = [
           const wk = await t.G(() => { const g = window.__GAME__, w = g.ctx.actors.get('wobble_knight'); return w ? g.screen(w.pos.x, w.pos.z, w.pos.y + 0.5) : null; });
           if (wk?.x != null) await t.page.mouse.move(wk.x, wk.y, { steps: 4 });
           if (tg.id === 'tut.stand') {
-            await t.page.keyboard.down('Space');
+            await t.page.mouse.down({ button: 'right' });               // TT3 §11.2: hold RMB = the Stand
             await until(t, () => window.__GAME__.ctx.story.tutorial.log.step?.id !== 'stand', null, { timeout: 12000 });
-            await t.page.keyboard.up('Space');
+            await t.page.mouse.up({ button: 'right' });
           } else {
             const ok = await t.page.evaluate(() => new Promise((res) => { const g = window.__GAME__, w = g.ctx.actors.get('wobble_knight'), t0 = performance.now(); const tick = () => { if (!w || performance.now() - t0 > 9000) return res(false); if (w.phase === 'windup' && w.phaseT >= w.atk.windup - 0.11) return res(true); requestAnimationFrame(tick); }; tick(); }));
-            if (ok) { await t.page.keyboard.down('Space'); await t.wait(250); await t.page.keyboard.up('Space'); }
+            if (ok) await standRmb(t, 250);
             await t.wait(700);
           }
         } else await t.wait(250);
@@ -288,7 +280,7 @@ const FLOW = [
       t.log(`yard fight ${JSON.stringify(fightRes)}`);
       t.assert(!!(await until(t, () => window.__GAME__.ctx.levels.arena('yard')?.cleared === true, null, { timeout: 10000 })), 'the yard clears');
       await t.G(() => window.__GAME__.god(true));
-      // ---- the barn chest by the guide alone (right-clicks; the fence hop by the barn door), tag "Open", E
+      // ---- the barn chest by the guide alone (WASD; the fence hop by the barn door: Space), tag "Open", E
       let tag = null;
       for (let k = 0; k < 20 && !tag; k++) {
         const tg = await t.G(guide);
@@ -311,7 +303,8 @@ const FLOW = [
         const p = await t.G(() => window.__GAME__.ctx.player.pos.toArray());
         if (Math.hypot(p[0] - tg.x, p[2] - tg.z) < 4) break;
         if (await t.G(() => window.__GAME__.ctx.story.sceneActive)) { await t.wait(300); continue; }
-        await orderTo(t, tg.x, tg.z); await t.wait(1200);
+        // WASD along the paw trail (the road north bends round the fields; a straight line to the cart gets stuck)
+        await followTrail(t, { ms: 3000 });
       }
       const q2 = await t.G(() => window.__GAME__.ctx.story.quest?.id);
       t.assert(q2 === 'meadow.mochi', `quest row on the road north: Mochi's cart (${q2})`);

@@ -394,7 +394,7 @@ export class CompanionManager {
    * The ability input (Q / LT / the touch portrait through the `ability` action), per fixed step in play (§6.2–6.4,
    * §7.5): press → hold ≥ CAST.hold (or castMode 'indicator', or an explicit drag / RS aim) shows the indicator;
    * release casts (a tap: at the cursor on KBM, smart on pad and touch; 'dragOnly' touch taps cast nothing);
-   * Esc / RMB (`back` / `move`) or ui's ✕ cancel.
+   * Esc / RMB (`back` / `guard`) or ui's ✕ cancel.
    */
   _updateCast(dt) {
     const ctx = this.ctx, inp = ctx.input, p = ctx.player;
@@ -420,7 +420,8 @@ export class CompanionManager {
     if (cast.viaApi) { if (!cast.cancelled) this._refreshAim(c); return; }   // ui drives it (aimAbility / useAbility)
     if (!pressed && !down && !released) { this._endAim(); return; }           // the release was lost (focus loss)
     cast.t += dt;
-    if (!cast.cancelled && (inp?.pressed?.('back') || inp?.pressed?.('move'))) { cast.cancelled = true; this.aim.active = false; }
+    // TT3 §11.2: Esc / Backspace or the Stand (RMB / Q / LB) cancels the aim (RMB is no longer a move order)
+    if (!cast.cancelled && (inp?.pressed?.('back') || inp?.pressed?.('guard'))) { cast.cancelled = true; this.aim.active = false; }
     if (!cast.cancelled) {
       if (!cast.shown && (cast.t >= CAST.hold || explicitAim(ctx, _ex))) cast.shown = true;
       this._refreshAim(c);

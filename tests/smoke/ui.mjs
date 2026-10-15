@@ -763,6 +763,7 @@ export default [
       await t.page.keyboard.press('Enter');
       const went = await t.waitForEvent('level:loaded', 60000);
       const at = await inPage(t, () => window.__GAME__.ctx.levels.current?.id);
+      if (at !== 'gate') t.log('diag', JSON.stringify(await inPage(t, () => ({ ev: window.__GAME__.events.slice(-25), mode: window.__GAME__.mode, top: window.__GAME__.ctx.ui.menus?.top?.id ?? null }))));
       t.assert(went && at === 'gate', `Next travels to the gate (${at})`);
       t.assert(await inPage(t, () => window.__GAME__.events.includes('level:results')), 'the town exit shows its results card');
     },
@@ -853,10 +854,11 @@ export default [
           slot: b.querySelector('.ab-dodge').getBoundingClientRect().width };
       });
       t.log(`bar ${JSON.stringify(bar)}`);
-      t.assert(bar.on && bar.slots === 8, 'the ability bar shows 8 slots on desktop');
+      t.assert(bar.on && bar.slots >= 8, `the ability bar shows its slots on desktop (${bar.slots}; TT3 may add the Paw Trick slot)`);
       t.assert(Math.abs(bar.cx - bar.w / 2) < 4 && bar.bottom < 40, 'bottom centre');
       t.assert(bar.slot >= 47.5, `slots ≥ 48 px (${bar.slot})`);
-      t.assert(bar.keys.guard === 'Space' && bar.keys.dodge === 'Shift' && bar.keys.jump === 'F' && bar.keys.ability === 'Q' && bar.keys.golden === 'V'
+      // TOKENTAILS-PLAN §11.2 hybrid: RMB Stand, Shift Tumble, Space jump, G kitten
+      t.assert(bar.keys.guard === 'RMB' && bar.keys.dodge === 'Shift' && bar.keys.jump === 'Space' && bar.keys.ability === 'G' && bar.keys.golden === 'V'
         && bar.keys.milk === 'R' && bar.keys.meow === 'C' && bar.keys.interact === 'E', `hybrid glyphs ${JSON.stringify(bar.keys)}`);
       t.assert(bar.milkHud === 'none', 'the HUD milk row moved into the bar');
       // ---- Tumble: the dodge slot sweeps (0.2 s)
@@ -877,12 +879,12 @@ export default [
       const dcd = await inPage(t, () => { window.__dodgeMo?.disconnect(); return window.__dodgeSeen; });
       t.assert(dcd.cd, `Tumble starts the dodge slot cooldown (${JSON.stringify(dcd)})`);
       await t.wait(700);
-      // ---- kitten ability: Q casts, the Q slot shows the conic sweep + whole seconds
+      // ---- kitten ability: G casts (TT3 §11.2), its slot shows the conic sweep + whole seconds
       await inPage(t, () => { const c = window.__GAME__.ctx; c.state.companions.unlocked = ['mochi']; c.state.setFlag('meadow.mochi', true); c.companions.setActive(['mochi']); });
       await t.frames(30);
       await t.clearEvents();
-      await t.tap('KeyQ');
-      t.assert(await t.waitForEvent('companion:ability', 3000), 'Q casts the kitten ability');
+      await t.tap('KeyG');
+      t.assert(await t.waitForEvent('companion:ability', 3000), 'G casts the kitten ability');
       await t.wait(400);
       const kcd = await inPage(t, () => {
         const e = document.querySelector('.ab-ability');
@@ -900,25 +902,25 @@ export default [
       await page.mouse.move(sr.x, sr.y);
       await t.wait(300);
       const tip = await inPage(t, () => { const e = document.querySelector('.ab-tip'); return { on: e.classList.contains('is-on'), text: e.textContent }; });
-      t.assert(tip.on && /Stand/.test(tip.text) && /Space/.test(tip.text), `tooltip "${tip.text}"`);
+      t.assert(tip.on && /Stand/.test(tip.text) && /RMB/.test(tip.text), `tooltip "${tip.text}"`);
       await fontAudit(t, 'ability bar + tooltip');
       await shot(t, '41-ability-tip');
       await page.mouse.move(640, 300);
       // ---- the Stand: Grit arc above her head
-      await page.keyboard.down('Space');
+      await page.keyboard.down('KeyQ');                  // TT3 §11.2: Q (and RMB / L) = the Stand
       await t.wait(400);
       const grit = await inPage(t, () => ({ arc: document.querySelector('.grit-arc')?.classList.contains('is-on'), slot: document.querySelector('.ab-guard').classList.contains('is-active'), segs: document.querySelectorAll('.grit-arc .ga-seg.f').length }));
       await shot(t, '42-stand-grit-arc');
-      await page.keyboard.up('Space');
+      await page.keyboard.up('KeyQ');
       // a long Stand is the Meme Cam pose trigger: end it (Meme Cam has its own block)
       await inPage(t, () => { const g = window.__GAME__; g.ctx.player.memeCamTrigger?.reset?.(); if (g.mode !== 'play') g.setMode('play'); });
       await t.wait(300);
       t.assert(grit.arc && grit.slot && grit.segs >= 1, `Grit arc + active Stand slot (${JSON.stringify(grit)})`);
-      // ---- presets: glyphs follow the bindings (diablo: Space = Tumble, L = Stand)
+      // ---- presets: glyphs follow the bindings (diablo: Space = Tumble, RMB = Stand)
       await inPage(t, () => { const g = window.__GAME__, c = g.ctx; c.state.settings.controlPreset = 'diablo'; c.bus.emit(g.E.SETTINGS_CHANGED, { key: 'controlPreset', value: 'diablo' }); });
       for (let k = 0; k < 30 && (await inPage(t, () => document.querySelector('.ab-dodge .ab-key').textContent)) !== 'Space'; k++) await t.wait(100);
       const dk = await inPage(t, () => ({ dodge: document.querySelector('.ab-dodge .ab-key').textContent, guard: document.querySelector('.ab-guard .ab-key').textContent, preset: window.__GAME__.ctx.input.preset, mode: window.__GAME__.mode, cam: window.__GAME__.ctx.cam.modeName, bar: document.querySelector('.ability-bar').className, ev: window.__GAME__.events.slice(-15) }));
-      t.assert(dk.dodge === 'Space' && dk.guard === 'L', `diablo glyphs ${JSON.stringify(dk)}`);
+      t.assert(dk.dodge === 'Space' && dk.guard === 'RMB', `diablo glyphs ${JSON.stringify(dk)}`);
       await inPage(t, () => { const g = window.__GAME__, c = g.ctx; c.state.settings.controlPreset = 'hybrid'; c.bus.emit(g.E.SETTINGS_CHANGED, { key: 'controlPreset', value: 'hybrid' }); });
       // ---- §10.2 cursors: ground paw, sword over a foe, ×2 size, high contrast (no kitten around: Mochi is an NPC pick)
       await inPage(t, () => window.__GAME__.ctx.companions.setActive([]));
@@ -977,7 +979,7 @@ export default [
       await t.wait(200);
       const card1 = await inPage(t, () => ({ head: document.querySelector('.ctl-preset .ch-val')?.textContent, move: [...document.querySelectorAll('.ctl-row')].find((r) => /^Move/.test(r.textContent))?.textContent }));
       t.log(`controls card ${JSON.stringify(card0)} → ${JSON.stringify(card1)}`);
-      t.assert(/Hybrid/.test(card0.head) && /RMB \/ WASD/.test(card0.move), 'card: hybrid page');
+      t.assert(/Hybrid/.test(card0.head) && /WASD/.test(card0.move) && !/RMB/.test(card0.move), `card: hybrid page, Move = WASD (TT3 §11.2) (${card0.move})`);
       t.assert(/Diablo/.test(card1.head) && /LMB \/ WASD/.test(card1.move), 'card: diablo page');
       await fontAudit(t, 'controls card');
       await shot(t, '44-controls-card-diablo');

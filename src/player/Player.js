@@ -26,6 +26,8 @@ import { Orders } from './Orders.js';
 import { resolveAim, autoTarget, magnetPick, threatSnap, jumpAssistPlan } from './Aim.js';
 import { assistCone, lungeSpeed } from '../combat/targeting.js';
 import { isFinalBlow } from '../combat/Combat.js';
+import { PawTricks } from './tricks/PawTricks.js';
+import { TRICKS as TRICK_TUNING } from './tricks/tuning.js';
 
 const _v = new THREE.Vector3(), _dir = new THREE.Vector3(), _ex = { x: 0, z: 0 }, _mv = { x: 0, z: 0, mag: 0 };
 const _aimS = { her: null, facing: 0, riposte: null, explicit: null, cursor: null, selected: null, range: 2, auto: null, move: null };
@@ -95,6 +97,10 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._stillStandingPending = false;
     this._offs = [];
     this.model = new SwordcatModel(this);
+    /** TT3 Paw Tricks (docs/TOKENTAILS-PLAN.md §11.3): the ":3" Coin Toss / Catnip Cloud slot and the Ribbon Twirl */
+    this.tricks = new PawTricks(ctx, this);
+    /** the toss state's trick ({ id, dir, point }), whether it left yet; the twirl's limits for this jump */
+    this.tossArg = null; this.tossDone = false; this.twirlLim = null; this._trickPoseOn = false;
     // ---- CONTROLS_SPEC §5.2 / §7 iso controls
     /** point-and-go orders (move / attack / attackMove / use / stop) and their path follower */
     this.orders = new Orders(this);
@@ -338,6 +344,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     out.goldenLocked = this.shards < TUNING.goldenMinShards;
     out.riposteReady = this.riposteReady();
     out.airborne = !this.onGround;
+    // TT3 Paw Trick slot (abilityBar / touch): { any, equipped, cd, cdMax, ready, coinOut, aiming, twirl, owned }
+    out.trick = this.tricks.uiState(out.trick ?? {});
     return out;
   }
 
@@ -392,12 +400,14 @@ export class Player extends ScriptedActorMixin(Actor) {
       bus.on(E.PLAYER_PARRY, () => this.sayWord('parry')),
       bus.on(E.PLAYER_PERFECT_DODGE, (p) => { if (!p?.graze) this.sayWord('perfectDodge'); }),
     );
+    this.tricks.init();
     await this.model.init();
   }
 
   dispose() {
     for (const off of this._offs) off();
     this._offs.length = 0;
+    this.tricks.dispose();
     if (this.golden) this.ctx.env?.clear?.('golden');
     this.model.dispose();
     this.ctx.actors.unregister(this);
@@ -531,6 +541,7 @@ export class Player extends ScriptedActorMixin(Actor) {
     if (this.swing) this.endSwing();
     if (this.state === 'guard') this.stopGuard();
     this.memeCamTrigger.reset();
+    this.tricks.cancelAim();
     const r = this.livesState.loseLife();
     this._koWiped = false;
     this.idleLadder.reset();
@@ -611,9 +622,10 @@ export class Player extends ScriptedActorMixin(Actor) {
 
     STATES[this.state].update(this, dt);
     this._refreshAim();
+    this.tricks.update(dt);
 
-    // gravity: snappier falls; pounce sets its own
-    if (this.state !== 'pounce') this.gravityMul = this.vel.y < 0 ? PLAYER.fallGravityMul : 1;
+    // gravity: snappier falls; pounce and the Ribbon Twirl set their own
+    if (this.state !== 'pounce' && this.state !== 'twirl') this.gravityMul = this.vel.y < 0 ? PLAYER.fallGravityMul : 1;
     // variable jump height: releasing Jump cuts the rise (not on touch: a finger tap is 50–120 ms, and the copy says
     // "tap [Jump]" to clear the practice fence, §14)
     if (this.jumping && !this.jumpCutDone && !this.onGround && this.vel.y > 0 && !ctx.input.down('jump') && ctx.input.device !== 'touch') {
@@ -677,7 +689,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   _updateIntent() {
     const st = this.state, input = this.ctx.input;
     if (!this.alive || st === 'dead' || st === 'memecam' || st === 'vigil' || st === 'golden' || st === 'rise') { this._setIntent('idle', 0, 0, 0); return; }
-    if (st === 'dodge' || st === 'pounce' || st === 'attack' || st === 'hurt' || st === 'stagger' || this.moveLockT > 0) {
+    if (st === 'dodge' || st === 'pounce' || st === 'attack' || st === 'hurt' || st === 'stagger' || st === 'toss' || this.moveLockT > 0) {
       this._setIntent('other', 0, 0, 0); return;
     }
     const mx = input?.move?.x ?? 0, my = input?.move?.y ?? 0, mag = Math.min(1, Math.hypot(mx, my));
@@ -764,7 +776,11 @@ export class Player extends ScriptedActorMixin(Actor) {
     this.milkPressed = input.pressed('milk');
     this.chargeToggleRelease = pa && this.state === 'charge';
     if (input.pressed('meow')) this.tryMeow();
+    if (this.alive && this.state !== 'dead') this.tricks.readInput(dt);
   }
+
+  /** TT3 §11.2 `sprint` (Input derives it: the Tumble key still held past the roll): Zoomies speed at once. */
+  sprinting() { return !!this.ctx.input?.down?.('sprint') && this.alive && this.onGround; }
 
   _landed() {
     const impact = this.landImpact || 0;
@@ -1647,7 +1663,23 @@ export class Player extends ScriptedActorMixin(Actor) {
   // ------------------------------------------------------------------ visuals
   render(alpha, frameDt) {
     super.render(alpha);
+    this._trickPose();
     this.model.render(alpha, frameDt);
+    this.tricks.render(alpha, frameDt);
+  }
+
+  /** TT3 §11.4: the model's Paw Trick pose (characters' setTrickPose, called defensively): toss / twirl / null. */
+  _trickPose() {
+    const m = this.model;
+    if (typeof m?.setTrickPose !== 'function') return;
+    const st = this.state;
+    const k = st === 'toss' ? 'toss' : st === 'twirl' ? 'twirl' : null;
+    if (k === 'toss') {
+      const T = this.tossArg?.id === 'cloud' ? TRICK_TUNING.cloud.toss : TRICK_TUNING.coin.toss;
+      m.setTrickPose('toss', Math.sin(Math.min(1, this.stateT / T) * Math.PI));
+    } else if (k === 'twirl') m.setTrickPose('twirl', Math.min(1, this.stateT / 0.12));
+    else if (this._trickPoseOn) m.setTrickPose(null);
+    this._trickPoseOn = !!k;
   }
 }
 

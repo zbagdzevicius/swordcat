@@ -140,13 +140,19 @@ function ids(arr, { allowed = null, max = 64 } = {}) {
   return out;
 }
 
-/** settings.bindings: { action: [KeyboardEvent.code | 'MouseN', ...] } with sane ids only. */
-function cleanBindings(v) {
+/**
+ * TT3 §11.5 K8: codes a binding may never hold: Ctrl, Alt, Meta / OS (browser and system shortcuts: Ctrl+W closes the
+ * tab) and the F-keys. Kept in step with INPUT.unbindable (core/config.js).
+ */
+export const UNBINDABLE_CODE = /^(?:Control|Alt|Meta|OS|F\d{1,2}$|ContextMenu$|CapsLock$|Fn)/;
+
+/** settings.bindings: { action: [KeyboardEvent.code | 'MouseN', ...] } with sane ids only (no modifier or F-key). */
+export function cleanBindings(v) {
   const out = {};
   if (!isObj(v)) return out;
   for (const [a, codes] of Object.entries(v)) {
     if (!ID_RE.test(a) || !Array.isArray(codes)) continue;
-    const list = codes.filter((c) => typeof c === 'string' && ID_RE.test(c)).slice(0, 4);
+    const list = codes.filter((c) => typeof c === 'string' && ID_RE.test(c) && !UNBINDABLE_CODE.test(c)).slice(0, 4);
     out[a] = list;
   }
   return out;

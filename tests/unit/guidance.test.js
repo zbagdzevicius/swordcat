@@ -399,3 +399,26 @@ test('TT3 R3: the old DOM paw-trail / gold-paw beacon CSS is gone; the shown edg
   // the landscape toast rules that position: fixed inside the contained .hud-tc (they never escaped it) are gone
   assert.ok(!/hud-toast-slot \{ position: fixed/.test(ui));
 });
+
+// ====================================================================================================== TT3 bot inputs
+test('TT3 onboarding bot: reads the new keycaps and walks on WASD toward the trail (mouse runs)', async () => {
+  const bot = await import('../../scripts/dev/onboarding-bot.mjs');
+  const n = (s, d = 'mouse') => [...bot.namedActions(s, d)].sort();
+  assert.deepEqual(n('Hold RMB to block Sir Wobble!'), ['guard']);
+  assert.deepEqual(n('Little fence? Hop it! Space'), ['jump']);
+  assert.deepEqual(n('Race Pearl to the dummy! WASD'), ['move']);
+  assert.deepEqual(n('F Toss the coin at that crow!'), ['trick']);
+  assert.deepEqual(n('Tap Stand when you see the shield!', 'touch'), ['guard']);
+  assert.deepEqual(n('Tap Stand when you see the shield!', 'mouse'), [], 'touch button names only on touch runs');
+  assert.equal(bot.ACTION_CODE.guard, 'RMB');
+  assert.equal(bot.ACTION_CODE.jump, 'Space');
+  assert.equal(bot.ACTION_CODE.ability, 'KeyG');
+  assert.deepEqual(bot.wasdToward({ x: 100, y: 100 }, { x: 100, y: 20 }), ['KeyW']);
+  assert.deepEqual(bot.wasdToward({ x: 100, y: 100 }, { x: 200, y: 200 }), ['KeyS', 'KeyD']);
+  assert.deepEqual(bot.wasdToward({ x: 100, y: 100 }, { x: 105, y: 100 }), [], 'arrived (dead zone)');
+  assert.deepEqual(bot.wasdToward(null, { x: 1, y: 1 }), []);
+  const g = { prints: [{ sx: 10, sy: 10, lit: true }, { sx: 20, sy: 20, lit: true }, { sx: 30, sy: 30, lit: true }, { sx: 40, sy: 40, lit: true }, { sx: 50, sy: 50, lit: true }] };
+  assert.deepEqual(bot.walkTarget(g, 100, 100), { x: 40, y: 40, src: 'print' }, 'a few prints out, not the farthest');
+  assert.equal(bot.walkTarget({ ...g, ring: { sx: 1, sy: 1 } }, 100, 100), null, 'a ring: she is there');
+  assert.equal(bot.walkTarget({ prints: [], edge: { sx: 99, sy: 5 } }, 100, 100).src, 'edge');
+});

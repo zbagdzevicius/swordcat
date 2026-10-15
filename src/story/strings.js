@@ -108,9 +108,10 @@ export const S = {
   'cs01.10': d('...Borrowing this.'),
 
   // ================================================================== Morning Practice (WA §7, ON §4; post-prologue hints §6.6)
-  // CONTROLS_SPEC §14: the iso controls. Base = KBM `hybrid`; `.pad` / `.touch` variants are picked by ui's tx() for
-  // the active device; [Token] glyphs resolve through the active bindings.
-  'tut.move': d('Right-click the ground to walk.'),
+  // CONTROLS_SPEC §14: the iso controls. Base = KBM `hybrid` (TOKENTAILS-PLAN §11.2: WASD walks, LMB attacks, RMB / Q
+  // = the Stand, Space = jump); `.pad` / `.touch` variants are picked by ui's tx() for the active device; [Token] glyphs
+  // resolve through the active bindings.
+  'tut.move': d('Walk with [Move].'),
   'tut.move.pad': d('Walk with [LS].'),
   'tut.move.touch': d('Tap the ground to walk.'),
   'tut.jump': d('Hop the fence! [Jump]'),
@@ -156,12 +157,12 @@ export const S = {
   'tut.pug': d('Shield pup? Go around, or shine!'),
   'tut.bones': d('Squeakybones! Bonk the pile, hard!'),
   'tut.target': d('Click a foe: she charges in!'),
-  'tut.target.pad': d('[RB] picks the nearest foe.'),
+  'tut.target.pad': d('[R3] picks the nearest foe.'),
   'tut.target.touch': d('Tap a foe: she charges in!'),
   'tut.zoom': d('Scroll to zoom.'),
   'tut.zoom.pad': d('[Zoom] to zoom.'),
   'tut.zoom.touch': d('Pinch to zoom.'),
-  'tut.click': d('Right-click anywhere: she walks there!'),
+  'tut.click': d('[Move] the ground: she walks there!'),
   'tut.click.touch': d('Tap anywhere: she walks there!'),
   'tut.talk': d('Click a friend to chat.'),
   'tut.talk.pad': d('[Interact] to chat with a friend.'),
@@ -172,11 +173,12 @@ export const S = {
   'toast.cam.fitHold': d('The camera keeps foes in view'),
   'tut.title': d('Morning Practice'),
   'tut.step': d('{n}/{total}'),
-  'tut.skip': d('Hold [Esc] to skip practice'),
+  'tut.skip': d('Hold [Esc] or [P] to skip practice'),
+  'tut.skip.pad': d('Hold [Start] to skip practice'),
   'tut.skip.touch': d('Hold ❚❚ to skip practice'),
   'tut.done': d('Practice: paw-some!'),
   'tut.skipped': d('Practice skipped. To the bell!'),
-  'tut.bonk': d('Right-click the dummy. Bonk!'),
+  'tut.bonk': d('Bonk the dummy! [Attack]'),
   'tut.bonk.pad': d('[Attack] to bonk!'),
   'tut.bonk.touch': d('Tap the dummy. Bonk!'),
   'tut.red': d('Arrows on the ground? Roll away!'),
@@ -753,7 +755,9 @@ export const S = {
   'prompt.open': d('Open'),
   'prompt.shop': d('Browse'),
   'prompt.board': d('Quest Board'),
-  'prompt.skip': d('Hold [Esc] to skip'),
+  'prompt.skip': d('Hold [Esc] or [P] to skip'),
+  'prompt.skip.pad': d('Hold [Start] to skip'),
+  'prompt.skip.touch': d('Hold Skip to skip'),
   'prompt.next': d('Next'),
   'prompt.continue': d('Continue'),
 
@@ -815,10 +819,10 @@ export const S = {
   'loading.tip.10.pad': d('Let go of the stick and she stands still.'),
   'loading.tip.10.touch': d('Let go of the joystick and she stands still.'),
   'loading.tip.11': d('Click a foe to charge in.'),
-  'loading.tip.11.pad': d('RB picks the nearest foe.'),
+  'loading.tip.11.pad': d('R3 picks the nearest foe.'),
   'loading.tip.11.touch': d('Tap a foe to charge in.'),
   'loading.tip.12': d('[Y] frees the camera.'),
-  'loading.tip.12.pad': d('R3 zooms the camera in and out.'),
+  'loading.tip.12.pad': d('View zooms the camera in and out.'),
   'loading.tip.12.touch': d('Pinch to zoom.'),
   'loading.tip.13': d('Every bonked boss becomes a friend. Visit them in Pawsbury!'),
   // TOKENTAILS-PLAN §10.4: Token Tails fiction tips (the game's own story; no claims about the real world)
@@ -850,6 +854,7 @@ export const S = {
   'pause.kittens': d('Kittens'),
   'pause.letters': d('Letters'),
   'pause.settings': d('Settings'),
+  'pause.controls': d('Controls'),
   'pause.hub': d('Return to Pawsbury'),
   'pause.quit': d('Quit to Title'),
   'pause.missing': d('???'),

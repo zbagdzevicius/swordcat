@@ -21,7 +21,8 @@ export const BEAST_LOOKS = Object.freeze({
   hyena: { head: 'hyena', opts: { mane: true }, words: ENEMIES.hyena?.plateWords ?? ['GRUMP'], style: 'rusty' },
   stealer: { head: 'hyena', opts: { mane: false }, words: ENEMIES.stealer?.plateWords ?? ['SNACK SNATCHER'], style: 'rusty' },
   pilfer: { head: 'hyena', opts: { mane: false, scale: 1.22 }, words: ['SNACK SNATCHER'], style: 'iron' },
-  cacklejaw: { head: 'hyena', opts: { mane: true, chippedEar: 'left', lift: 0.15 }, words: ['GRUMP-IN-CHIEF'], style: 'rusty' },
+  // TT3: a bigger plate so the long GRUMP-IN-CHIEF word reads at play distance
+  cacklejaw: { head: 'hyena', opts: { mane: true, chippedEar: 'left', lift: 0.15 }, words: ['GRUMP-IN-CHIEF'], style: 'rusty', plate: { scale: 1.3, offset: [0, 0.1, 0] } },
   pug: { head: 'pug', opts: {}, words: null },
   brutus: { head: 'pug', opts: { scar: true }, words: null },
   // weapon: the hand prop that replaces the GLB weapon (WA §2.5: "Big Squeaky Bone" mallet, same hitbox / timings)
@@ -65,7 +66,7 @@ export function dressBeast(model, look = 'hyena', o = {}) {
   const word = o.word !== undefined ? o.word : L.words ? pickPlateWord(L.words, seed) : null;
   // both words bake into one texture at dress time (WA §8.3): the bonk flip is a UV offset swap, 0 canvas work
   const friendWord = o.friendWord !== undefined ? o.friendWord : word ? friendWordFor(word) : null;
-  const plate = word && o.plate !== false ? attachPlate(model, word, { seed, style: L.style, friend: friendWord, ...(o.plateOpts || {}) }) : null;
+  const plate = word && o.plate !== false ? attachPlate(model, word, { seed, style: L.style, friend: friendWord, ...(L.plate || {}), ...(o.plateOpts || {}) }) : null;
   const held = {};
   let activity = 0, headAcc = 0, headN = 0;
   const dress = {

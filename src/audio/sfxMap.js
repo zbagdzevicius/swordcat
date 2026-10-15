@@ -10,6 +10,33 @@
 import { E } from '../core/events.js';
 import { ATTACKS, ECONOMY } from '../core/config.js';
 import { PitchLadder } from './cues.js';
+import { ZZFX_DEFS } from './sfxDefs.js';
+
+/**
+ * TT3 Paw Trick synth sounds (zzfx 1.4 parameter order, see sfxDefs.js). They join ZZFX_DEFS at import so the idle
+ * bake and the AudioManager unlock treat them like every other zzfx def (sfxMap is imported before either runs).
+ *   trickTing    the coin leaves her paw: a bright "ting" with a little pitch jump
+ *   trickTink    the coin bonks a foe: a short high "tink"
+ *   trickChime   back in her paw: a soft two-note chime
+ *   trickWhoosh  a quick air swish (coin throw, pouch lob)
+ *   trickWhirr   the Ribbon Twirl: a rising propeller whirr
+ *   trickFwip    the twirl's spin hits: a cloth "fwip"
+ *   trickPoof    the catnip pouch bursts: a soft low "poof"
+ *   trickGiggle  giddy foes: a wobbly giggle babble
+ *   trickSparkle a Paw Trick handed over: a sparkly up-arpeggio
+ */
+export const TRICK_ZZFX = Object.freeze({
+  trickTing: [0.6, 0, 1760, 0, 0.02, 0.16, 0, 1.5, 0, 0, 520, 0.045, 0, 0, 0, 0, 0, 0.7, 0.02, 0, 0],
+  trickTink: [0.5, 0, 2400, 0, 0.01, 0.07, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.6, 0.01, 0, 0],
+  trickChime: [0.45, 0, 1320, 0.01, 0.08, 0.32, 0, 1, 0, 0, 660, 0.08, 0, 0, 0, 0, 0.05, 0.6, 0.05, 0.1, 0],
+  trickWhoosh: [0.35, 0, 500, 0.02, 0.04, 0.1, 4, 1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0.5, 0.03, 0, -2400],
+  trickWhirr: [0.4, 0, 260, 0.05, 0.3, 0.2, 1, 1, 6, 0, 0, 0, 0.06, 0, 12, 0, 0, 0.6, 0.05, 0.3, 0],
+  trickFwip: [0.5, 0, 900, 0.005, 0.03, 0.08, 4, 1, -8, 0, 0, 0, 0, 0, 0, 0, 0, 0.6, 0.02, 0, 1500],
+  trickPoof: [0.7, 0, 180, 0.01, 0.08, 0.25, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.5, 0.05, 0, -900],
+  trickGiggle: [0.4, 0, 1100, 0.01, 0.12, 0.1, 1, 1.2, 3, 0, 0, 0, 0.04, 0, 20, 0, 0, 0.7, 0.02, 0.4, -4000],
+  trickSparkle: [0.5, 0, 880, 0.01, 0.12, 0.3, 0, 1, 0, 0, 440, 0.07, 0.07, 0, 0, 0, 0, 0.7, 0.03, 0, 0],
+});
+for (const [k, v] of Object.entries(TRICK_ZZFX)) if (!(k in ZZFX_DEFS)) ZZFX_DEFS[k] = v;
 
 /** 'sword/swish_', 1, 13 → ['sword/swish_01', …, 'sword/swish_13'] (pad = digits; 0 = no padding). */
 export function seq(prefix, from, to, pad = 2) {
@@ -233,6 +260,17 @@ export const SFX = {
   objectiveTick:   { files: ['ui/pluck_002'], vol: 0.45, rateVar: 0, bus: 'ui' },
   objectiveDone:   { files: ['jingles/jingles_PIZZI07'], vol: 0.5, rateVar: 0, bus: 'ui' },
   unlock:          { files: ['jingles/jingles_PIZZI06'], vol: 0.55, rateVar: 0, bus: 'ui' },
+  // ---------------------------------------------------------------- TT3 Paw Tricks (TOKENTAILS-PLAN §11.3; zzfx, TRICK_ZZFX)
+  trickCoinThrow:  { files: [], zzfx: 'trickTing', vol: 0.6, rateVar: 0.04, also: ['trickWhoosh'] },
+  trickCoinHit:    { files: [], zzfx: 'trickTink', vol: 0.7, rateVar: 0.05, minGap: 0.05 },
+  trickCoinCatch:  { files: [], zzfx: 'trickChime', vol: 0.5, rateVar: 0 },
+  trickWhoosh:     { files: [], zzfx: 'trickWhoosh', vol: 0.4, rateVar: 0.06 },
+  trickTwirl:      { files: [], zzfx: 'trickWhirr', vol: 0.5, rateVar: 0.03, minGap: 0.2 },
+  trickFwip:       { files: [], zzfx: 'trickFwip', vol: 0.6, rateVar: 0.05 },
+  trickPouch:      { files: [], zzfx: 'trickWhoosh', vol: 0.45, rate: 0.8, rateVar: 0.04 },
+  trickPoof:       { files: [], zzfx: 'trickPoof', vol: 0.75, rateVar: 0.04, also: ['trickGiggle'] },
+  trickGiggle:     { files: [], zzfx: 'trickGiggle', vol: 0.45, rateVar: 0.08, minGap: 0.15 },
+  trickUnlock:     { files: [], zzfx: 'trickSparkle', vol: 0.5, rateVar: 0, bus: 'ui', also: ['unlock'] },
 
   // ---------------------------------------------------------------- UI (2D, ui bus) — ui calls these by name
   'ui.click':      { files: seq('ui/click_', 1, 5, 3), vol: 0.5, bus: 'ui', rateVar: 0.02 },

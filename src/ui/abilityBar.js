@@ -106,6 +106,8 @@ export class AbilityBar {
       sl.el.addEventListener('pointerenter', (ev) => { if (ev.pointerType !== 'touch') this._showTip(id, def.tip); });
       sl.el.addEventListener('pointerleave', () => this._showTip(null));
     }
+    /** TT3 the Paw Trick slot: built the first time a trick is owned (the bar keeps its 8 slots before that) */
+    this.trickSlot = null;
     const g = this.slots.get('guard');
     this.gritPips = el('span', 'ab-grit', { parent: g.el });
     this.milkN = el('span', 'ab-count', { parent: this.slots.get('milk').el });
@@ -231,6 +233,64 @@ export class AbilityBar {
       flag(this._set('ability', left, max), 'is-nap', (c.napT ?? 0) > 0);
       if ((c.napT ?? 0) > 0) setText(ks.num, 'zzz');
     } else this._set('ability', 0, 0);
+    this._trick(s.trick);
+  }
+
+  /**
+   * TT3 Paw Trick slot (§11.3): after Golden Hour, shown once a trick is owned. The icon follows the equipped trick
+   * (the ":3" coin / the catnip pouch), the sweep runs its cooldown, a thrown coin dims it until it is back.
+   */
+  _trick(t) {
+    if (!t?.any || !t.equipped) { if (this.trickSlot) flag(this.trickSlot.el, 'is-hidden', true); return; }
+    if (!this.trickSlot) this._buildTrickSlot();
+    const sl = this.trickSlot;
+    flag(sl.el, 'is-hidden', false);
+    if (sl.eq !== t.equipped) {
+      sl.eq = t.equipped;
+      sl.ico.innerHTML = t.equipped === 'cloud' ? I.catnipPouch() : I.ttCoin(40);
+      sl.el.dataset.trick = t.equipped;
+      pulse(sl.el, 'is-reveal');
+    }
+    this._set('trick', t.cd, t.cdMax);
+    flag(sl.el, 'is-out', !!t.coinOut);
+    flag(sl.el, 'is-aiming', !!t.aiming);
+    flag(sl.el, 'is-ready', !!t.ready);
+  }
+
+  _buildTrickSlot() {
+    const before = this.slots.get('golden')?.el?.nextSibling ?? null;
+    const e = el('div', 'ab-slot ab-trick', { html: '<span class="ab-ico"></span><span class="ab-sweep"></span><span class="ab-num"></span><span class="ab-key"></span>' });
+    this.root.insertBefore(e, before);
+    e.dataset.action = 'trick';
+    const sl = { el: e, ico: e.querySelector('.ab-ico'), sweep: e.querySelector('.ab-sweep'), num: e.querySelector('.ab-num'), key: e.querySelector('.ab-key'), wasCd: false, eq: null };
+    this.slots.set('trick', sl);
+    this.trickSlot = sl;
+    e.addEventListener('pointerdown', (ev) => {
+      ev.stopPropagation(); ev.preventDefault();
+      if (ev.button === 0) { if (!slotInert(e)) this._fire('trick', true); }
+      else if (ev.pointerType !== 'touch') passToWorld(this.ctx, ev);
+    });
+    e.addEventListener('contextmenu', (ev) => ev.preventDefault());
+    for (const t of ['pointerup', 'pointerleave', 'pointercancel']) e.addEventListener(t, () => this._fire('trick', false));
+    e.addEventListener('pointerenter', (ev) => { if (ev.pointerType !== 'touch') this._showTrickTip(); });
+    e.addEventListener('pointerleave', () => this._showTip(null));
+    pulse(e, 'is-reveal');
+  }
+
+  /** The trick slot's tooltip: its name and hint (strings when story has them, else the plan's text). */
+  _showTrickTip() {
+    const tr = this.ctx.player?.tricks, id = tr?.equipped;
+    if (!id) return;
+    this._tipId = 'trick';
+    const head = tr.text(`trick.${id}.name`), body = String(tr.text(`trick.${id}.hint`)).replace(/\[[A-Za-z]+\]\s*/g, '');
+    const key2 = slotGlyph(this.ctx.input, 'trick');
+    this.tip.innerHTML = '';
+    el('b', 'ab-tip-h', { parent: this.tip, text: head });
+    if (key2) el('kbd', 'ui-key', { parent: this.tip, text: key2 });
+    el('span', 'ab-tip-b', { parent: this.tip, text: body });
+    const sl = this.trickSlot.el;
+    setVar(this.tip, '--x', `${sl.offsetLeft + sl.offsetWidth / 2}px`);
+    flag(this.tip, 'is-on', true);
   }
 
   /**

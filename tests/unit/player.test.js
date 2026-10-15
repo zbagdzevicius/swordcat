@@ -1526,3 +1526,67 @@ test('Player: the "Bonk!" final-blow word uses Combat.isFinalBlow (one rule)', a
   ctx.enemies = { list: [tgt] };
   assert.equal(p._finalBlow({ ...tgt, breakable: true }), false, 'breakables never Bonk');
 });
+
+// ====================================================================================================== TT3 §11.2 clicks
+test('TT3 Orders: hybrid LMB on a foe = the attack order (no air swing far off); RMB on the ground = no order (the Stand)', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const inp = ctx.input;
+  ctx.state.settings.autoAttack = 'chain';
+  const e = r.enemy(5, 0.3);
+  e.maxHp = e.hp = 9999;
+  let pick = { kind: 'enemy', actor: e, point: e.pos.clone() };
+  const selected = [];
+  ctx.cam = { pick: () => pick, select: (a) => selected.push(a), cursorValid: false };
+  const click = (button, mods = {}) => {
+    inp._queueClick({ button, x: 10, y: 10, down: true, t: 0, mods: { ctrl: false, shift: false, alt: false, ...mods } });
+    inp._queueClick({ button, x: 10, y: 10, down: false, t: 0, mods: { ctrl: false, shift: false, alt: false, ...mods } });
+  };
+  assert.equal(inp.preset, 'hybrid');
+  click(0); r.press('attack'); r.step(); r.release('attack');
+  assert.equal(p.orders.kind, 'attack', 'LMB on a foe gives the attack order');
+  assert.equal(p.orders.target, e);
+  assert.equal(r.count(E.PLAYER_SWING), 0, '5 m off: the press does not swing at the air');
+  r.seconds(3);
+  assert.ok(r.count(E.PLAYER_SWING) >= 1, 'she walks in and swings');
+  // RMB on open ground in hybrid: no move order
+  p.order('stop'); r.seconds(0.5);
+  pick = { kind: 'ground', actor: null, point: { x: 3, y: 0, z: 3 } };
+  r.events.length = 0;
+  click(2); r.step();
+  assert.equal(p.orders.kind, null, 'hybrid: RMB is the Stand, never a move order');
+  assert.equal(r.count(E.PLAYER_ORDER), 0);
+});
+
+test('TT3 Orders: Shift+RMB queues in moba only (no Ctrl queue); a plain RMB moves', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const inp = ctx.input;
+  ctx.state.settings.controlPreset = 'moba'; inp.rebind();
+  assert.equal(inp.preset, 'moba');
+  let pt = { x: 0, y: 0, z: 6 };
+  ctx.cam = { pick: () => ({ kind: 'ground', actor: null, point: pt }), select() {}, cursorValid: false };
+  const click = (button, mods = {}) => inp._queueClick({ button, x: 400, y: 300, down: true, t: 0, mods: { ctrl: false, shift: false, alt: false, ...mods } });
+  click(2); r.step();
+  assert.equal(p.orders.kind, 'move', 'moba: RMB moves');
+  pt = { x: 3, y: 0, z: 6 };
+  click(2, { ctrl: true }); r.step();
+  assert.equal(p.orders.queue.length, 0, 'Ctrl does not queue (TT3)');
+  pt = { x: -3, y: 0, z: 8 };
+  click(2, { shift: true }); r.step();
+  assert.equal(p.orders.queue.length, 1, 'Shift+RMB queues');
+  // in mouseOnly Shift does not queue (moba only)
+  ctx.state.settings.controlPreset = 'mouseOnly'; inp.rebind();
+  p.order('stop'); r.step();
+  click(2); r.step();
+  click(2, { shift: true }); r.step();
+  assert.equal(p.orders.queue.length, 0, 'mouseOnly: Shift+RMB is a plain move');
+});
+
+test('TT3 Orders: hybrid LMB on a breakable (a practice dummy) out of reach walks in (attack order)', async () => {
+  const r = await rig(), { p, ctx } = r;
+  const e = r.enemy(3.3, 0); e.faction = 'neutral'; e.maxHp = e.hp = 9999;
+  ctx.cam = { pick: () => ({ kind: 'breakable', actor: e, point: e.pos.clone() }), select() {}, cursorValid: false };
+  ctx.input._queueClick({ button: 0, x: 1, y: 1, down: true, t: 0, mods: { ctrl: false, shift: false, alt: false } });
+  r.press('attack'); r.step(); r.release('attack');
+  assert.equal(p.orders.kind, 'attack');
+  assert.equal(r.count(E.PLAYER_SWING), 0, 'no swing at the air 3.3 m short');
+});

@@ -363,6 +363,30 @@ export const BASE_STATES = {
       if (left < 0.5 || e.stateT > 20) { if (TUNING.returnHeal) e.hp = e.maxHp; e.setState('idle'); }
     },
   },
+  // TT3 Catnip Cloud (docs/TOKENTAILS-PLAN.md §11.3 #3): on its back, paws wiggling, no attacks, the plate shows its
+  // friend word; a jeer is cancelled (JEER.exit). The first hit wakes it (Combat: ×1.5 "belly-rub bonk"); else it gets
+  // up after `giddyT` and goes back to the fight.
+  giddy: {
+    anim: 'idle',
+    enter(e) {
+      e.endTelegraph(); e.swing = null; e.followUp = null; e.preTold = false; e.releaseToken(); e.attack = null; e.attackChoice = null;
+      e.brakeHard();
+      e._giddyFlip = !e.plateFlipped && e.flipPlate();
+      e.head?.setExpression?.('happy');
+    },
+    update(e, dt) {
+      e.brake(dt, 8);
+      e.giddyT -= dt;
+      if (e.giddyT > 0) return;
+      e.giddyT = 0;
+      e.setState(e.alerted && e.targetActor() ? 'chase' : 'idle');
+    },
+    exit(e) {
+      e.giddyT = 0;
+      if (e._giddyFlip) { e._giddyFlip = false; e.unflipPlate(); }
+      e.head?.setExpression?.(e.def.expression ?? 'sneer');
+    },
+  },
   die: {
     // ART §7.1 "faint and poof": the death clip plays 0.25 s at most (Enemy._updateAnim holds it), then the squash
     anim: (e) => (e.faint ? ['death', { once: true, clampEnd: true }] : e.def.scamper ? ['run', { speed: 1.3 }] : ['death', { once: true, clampEnd: true }]),
@@ -505,6 +529,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     /** dressed-visual visibility snapshot (VisualPool restores it on reuse) */
     this._visSnapshot = null;
     this.disposed = false; this.dormant = false;
+    /** TT3 Catnip Cloud: seconds left on its back (`giddy` state), whether the giddy flip turned the plate, the roll */
+    this.giddyT = 0; this._giddyFlip = false; this._giddyW = 0; this._giddyPh = 0;
     def.init?.(this);
     this.setState('idle');
   }
@@ -1153,6 +1179,24 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     this.stagger(sec);
   }
 
+  /**
+   * TT3 Catnip Cloud: roll onto its back for `sec` s (no attacks; the plate flips to its friend word). Bosses, elites
+   * (poise ≥ PLAYER.guard.eliteMinPoise) and flyers are not giddy (the cloud gives them Dizzy / grounds them).
+   * @returns {boolean} true when it went giddy
+   */
+  makeGiddy(sec) {
+    if (!this.alive || this.dormant || this.scripted || !this.ai || this.disposed || !(sec > 0)) return false;
+    if (this.def.boss || this.isBoss || this.maxPoise >= PLAYER.guard.eliteMinPoise || (this.def.fly && !this.grounded)) return false;
+    if (this.stateName === 'die') return false;
+    this.giddyT = Math.max(this.giddyT, sec);
+    this.staggerT = 0;
+    if (this.stateName !== 'giddy') this.setState('giddy');
+    return true;
+  }
+
+  /** Is it on its back in the catnip right now? */
+  get isGiddy() { return this.stateName === 'giddy' && this.giddyT > 0; }
+
   /** The player blocked our hit: recoil a step. */
   onBlocked(byActor, def) {
     if (this.def.onBlocked?.(this, byActor, def) === true) return;
@@ -1166,6 +1210,12 @@ export class Enemy extends ScriptedActorMixin(Actor) {
 
   onHit(hit) {
     this.flashT = TUNING.hitFlash;
+    // TT3: the belly-rub bonk wakes a giddy foe (Combat already dealt the ×1.5)
+    if (this.stateName === 'giddy' && this.alive) {
+      this.giddyT = 0;
+      this.ctx.bus.emit(E.BURST, { kind: 'hearts', position: this.pos.clone().setY(this.pos.y + this.height), count: 2 });
+      if (!this.scripted && this.ai) { this.alerted = true; this.setState(this.staggerT > 0 ? 'stagger' : 'chase'); }
+    }
     // WA §5.1: flash 1 → 0 over the freeze (+0.06 s), Squash.kick(-2), a shake while frozen — on unscaled time
     this.look?.hit(this.ctx.game?.hitstopT ?? 0);
     if (this.roleSpec('hit')) this.hitReactT = TUNING.hitReact; else if (!this.look) this.squashT = TUNING.squash.dur;
@@ -1296,7 +1346,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       this.refreshOrbitAxes();
       if (this.alerted && DISENGAGE.has(this.stateName) && !this.def.boss && this.targetWalledOff()) { this.interrupt(); this.setState('return'); }
     }
-    if (this.staggerT > 0 && this.alive && this.stateName !== 'stagger' && this.stateName !== 'die' && this.stateName !== 'flee' && !this.state.noStagger) this.setState('stagger');
+    if (this.staggerT > 0 && this.alive && this.stateName !== 'stagger' && this.stateName !== 'die' && this.stateName !== 'flee' && this.stateName !== 'giddy' && !this.state.noStagger) this.setState('stagger');
     this.state.update?.(this, dt);
     this.move(dt);
     this.resolveBody();
@@ -1665,6 +1715,18 @@ export class Enemy extends ScriptedActorMixin(Actor) {
     const sxz = 1 / Math.sqrt(sy);
     const pl = this.def.pulse ? this.def.pulse(this) : null;          // [sx, sy, sz] multipliers (abdomen pulse, jelly squash)
     v.scale.set(base * sxz * k * (pl?.[0] ?? 1), base * sy * k * (pl?.[1] ?? 1), base * sxz * k * (pl?.[2] ?? 1));
+    // TT3 giddy: rolled onto its back, paws wiggling (eases in / out over ~0.15 s)
+    const gw = this.stateName === 'giddy' && this.alive ? 1 : 0;
+    if (gw || this._giddyW > 0) {
+      this._giddyW = gw ? Math.min(1, this._giddyW + dt * 7) : Math.max(0, this._giddyW - dt * 7);
+      this._giddyPh += dt * 11;
+      const w = this._giddyW, e2 = w * w * (3 - 2 * w);
+      v.rotation.x = -Math.PI * 0.5 * e2;
+      v.position.y = (this.radius ?? 0.35) * 0.75 * e2;
+      v.rotation.z = Math.sin(this._giddyPh) * 0.16 * e2;
+      if (w === 0) { v.rotation.x = 0; v.position.y = 0; }
+      return;
+    }
     // stagger wobble
     if (this.wobbleT > 0) {
       this.wobbleT -= dt;

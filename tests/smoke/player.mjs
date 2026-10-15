@@ -12,11 +12,11 @@
 //   player:upgrades  M2 §13.3: satchel II → milkMax 4 (filled), Valor Gain ×1.25, Sharpness III ×1.5, Quick Charge tier 2 < 1.05 s
 //   player:standing  M2 §7.3: Standing Ground pays through a block; stops when the rat targets a companion → standing-ground.png
 //   player:cosmetics M2 §13.4/§13.5: six skin + cape pairs → look-skin-*.png; Even More Too Big tip on the ground / trailing
-//   player:click-move    CONTROLS_SPEC §12: a real RMB click ≥ 9 m away past the practice fence (tut.jump.done):
-//                        the path takes the fence link, she auto-hops it and arrives within 0.5 m → click-move-*.png
-//   player:attack-order  hover a rat (player.hover = enemy), RMB it: attack order + selection, paths, chains, hits
-//   player:stand-snap    a rat winds up behind her: Space turns her to it on the Stand's first step; parry / block
-//   player:wasd-override D cancels a click-move at once ('direct'); J cancels a move order and swings at the cursor
+//   player:click-move    CONTROLS_SPEC §12: a real RMB click (`moba`) ≥ 9 m away past the practice fence at the barn
+//                        door (TT2's open link): the path takes it, she auto-hops it and arrives within 0.5 m
+//   player:attack-order  hover a rat (player.hover = enemy), LMB it (TT3 §11.2): attack order + selection, paths, chains
+//   player:stand-snap    a rat winds up behind her: the Stand turns her to it on its first step; parry / block (Q fan)
+//   player:wasd-override D cancels a click-move (`mouseOnly`) at once ('direct'); J cancels a move order and swings
 //   player:touch         844×390 + 390×844 hasTouch: tap-to-move, tap a rat = loop auto-attack until it falls,
 //                        hold 🛡 → parry → Auto-Riposte by itself, the ±90° touch guard arc
 //   player:warm      Phase W / AUTOCAM: moveIntent order + groundY, idle steps (glance, groom, twirl), the knock-out sit
@@ -755,10 +755,13 @@ export default [
       await t.G(() => { const c = window.__GAME__.ctx; if (c.story?.flag) c.story.flag('tut.jump.done', true); else c.state.setFlag('tut.jump.done', true); return true; });
       await isoPlay(t, 'practice');
       await install(t);
-      // outside the practice field's inner fence (z −87, x −20…−2), the lesson done; zoomed out so the far side is on screen
+      // TT3 §11.2: RMB click-to-move is the `moba` preset's (`hybrid` walks on WASD; RMB is the Stand there)
+      await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.controlPreset = 'moba'; c.bus.emit('settings:changed', { key: 'controlPreset', value: 'moba' }); c.input.rebind('moba'); return true; });
+      // outside the practice field's inner fence (z −87, x −20…−2) by the barn door, the fence's one open hop link
+      // (TT2 §10.3, x −14.5); zoomed out so the far side is on screen
       await t.G(() => {
         const g = window.__GAME__, c = g.ctx;
-        g.teleport(-8, c.physics.topAt(-8, -92), -92);
+        g.teleport(-14.5, c.physics.topAt(-14.5, -92), -92);
         c.cam.zoom?.(1.4);
         return true;
       });
@@ -767,13 +770,13 @@ export default [
       const goal = await t.G(() => {
         const g = window.__GAME__, W = innerWidth, H = innerHeight;
         for (let z = -77; z >= -83; z -= 0.5) {
-          const s = g.screen(-8, z);
-          if (s && s.x > 40 && s.x < W - 40 && s.y > 60 && s.y < H - 60) return { x: -8, z, sx: s.x, sy: s.y };
+          const s = g.screen(-14.5, z);
+          if (s && s.x > 40 && s.x < W - 40 && s.y > 60 && s.y < H - 60) return { x: -14.5, z, sx: s.x, sy: s.y };
         }
         return null;
       });
       if (!t.assert(goal, 'a goal past the fence is on screen')) {
-        t.log(JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx; return { lvl: c.levels?.current?.id, pos: c.player.pos.toArray(), s: g.screen(-8, -80), W: innerWidth, H: innerHeight, mode: c.game.mode }; })));
+        t.log(JSON.stringify(await t.G(() => { const g = window.__GAME__, c = g.ctx; return { lvl: c.levels?.current?.id, pos: c.player.pos.toArray(), s: g.screen(-14.5, -80), W: innerWidth, H: innerHeight, mode: c.game.mode }; })));
         return;
       }
       const from = await ps(t);
@@ -871,7 +874,7 @@ export default [
     },
   },
 
-  // ------------------------------------------------------------------ RMB on a rat: path, select, auto-chain, hits
+  // ------------------------------------------------------------------ LMB on a rat (TT3 §11.2): path, select, auto-chain, hits
   {
     name: 'player:attack-order', order: 28.2, level: 'meadow', spawn: 'start', timeout: 150000,
     async run(t) {
@@ -892,9 +895,10 @@ export default [
       const hover = await t.G(() => window.__GAME__.ctx.player.hover?.kind ?? null);
       t.assert(hover === 'enemy', `player.hover = the rat (${hover})`);
       await clearEv(t);
-      await t.page.mouse.down({ button: 'right' }); await t.page.mouse.up({ button: 'right' });
-      t.assert(await waitEv(t, 'player:order', 3000), 'RMB → player:order');
-      const o = await t.G(() => ({ o: window.__GAME__.orders(), sel: window.__GAME__.ctx.cam.lockTarget === window.__GAME__.__plRat }));
+      await t.page.mouse.down({ button: 'left' }); await t.page.mouse.up({ button: 'left' });
+      t.assert(await waitEv(t, 'player:order', 3000), 'LMB on the rat → player:order (TT3: hybrid has no RMB orders)');
+      const o = await t.G(() => ({ o: window.__GAME__.orders(), sel: window.__GAME__.ctx.cam.lockTarget === window.__GAME__.__plRat, swing: window.__GAME__.events.includes('player:swing') }));
+      t.assert(!o.swing, 'the press does not swing at the air 5.5 m short of it');
       t.assert(o.o.kind === 'attack', `an attack order (${o.o.kind})`);
       t.assert(o.sel, 'the rat is selected (gold ring)');
       const swung = await until(t, 'ctx.player.state === "attack"', 8000);
@@ -954,7 +958,10 @@ export default [
             if (tr.guardAt === undefined && p.state === 'guard') tr.guardAt = +(now - pressAt).toFixed(3);
             const hs = hitsOnHer();
             if (hs.length > hits0 || now - pressAt > 1.2) {
-              tr.result = hs.length > hits0 ? hs[hs.length - 1].result : 'none';
+              // only the poke that was due (lead + 0.2 s) counts; a later poke (the due one was cancelled, e.g. her
+              // swing pushed the rat out of reach) lands on a held Stand and says nothing about the parry window
+              const due = hs.length > hits0 && hs[hs.length - 1].t - pressAt <= tr.lead + 0.2;
+              tr.result = due ? hs[hs.length - 1].result : 'none';
               tr.hitDt = +((hs.length > hits0 ? hs[hs.length - 1].t : now) - pressAt).toFixed(3);
               tr.ratState = e.stateName ?? e.state ?? null; tr.ratStag = !!(e.staggerT > 0 || e.stunned);
               input._release('guard', 'k:Space'); phase = 2; pressAt = now;
@@ -1032,10 +1039,10 @@ export default [
       await t.G(() => { const g = window.__GAME__; if (g.__plRat.alive) g.ctx.enemies.despawn(g.__plRat); return true; });
       // the fan screenshot: a fresh Stand facing the cursor
       await t.G(() => { const g = window.__GAME__, p = g.ctx.player; g.aimAt(p.pos.x - 3, p.pos.z + 1); return true; });
-      await t.page.keyboard.down('Space');
+      await t.page.keyboard.down('KeyQ');                                // TT3 §11.2: Q (and RMB / L) = the Stand
       await until(t, 'p.state === "guard"', 3000);
       await shot(t, 'player/stand-fan');
-      await t.page.keyboard.up('Space');
+      await t.page.keyboard.up('KeyQ');
     },
   },
 
@@ -1045,6 +1052,8 @@ export default [
     async run(t) {
       await install(t);
       await isoPlay(t);
+      // TT3 §11.2: a click order AND WASD walking: `mouseOnly` (RMB moves, WASD walks); `hybrid` has no move click
+      await t.G(() => { const c = window.__GAME__.ctx; c.state.settings.controlPreset = 'mouseOnly'; c.bus.emit('settings:changed', { key: 'controlPreset', value: 'mouseOnly' }); c.input.rebind('mouseOnly'); return true; });
       await t.G(() => { window.__GAME__.ctx.cam.zoom?.(1.4); return true; });
       await t.frames(10);
       const p0 = await ps(t);

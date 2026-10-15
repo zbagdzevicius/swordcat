@@ -748,7 +748,7 @@ test('cape never folds over her head: Tumble roll (body flips over) and a deep h
   k.dispose();
 });
 
-test('tuft cards: toon-lit alpha-test cut-outs in one pass (no sorting, no re-resolve); 32 hero / 20 kitten crossed pairs', async () => {
+test('tuft cards: toon-lit alpha-test cut-outs in one pass (no sorting, no re-resolve); 23 hero / 14 kitten crossed pairs (TT3: no crown / ear cards)', async () => {
   const { tuftMaterial } = await import('../../src/characters/materials.js');
   const m = tuftMaterial();
   assert.equal(m.side, THREE.DoubleSide);
@@ -757,10 +757,10 @@ test('tuft cards: toon-lit alpha-test cut-outs in one pass (no sorting, no re-re
   assert.equal(m.forceSinglePass, true, 'DoubleSide without forceSinglePass draws twice and flips needsUpdate every draw');
   assert.notEqual(tuftMaterial('plain'), m, 'per mesh kind');
   const hero = C.buildKitten(C.swordcatConfig());
-  assert.equal(hero.tuftMesh.userData.cards, 32);
-  assert.equal(hero.tuftMesh.geometry.index.count / 3, 32 * 4, 'crossed pair of quads = 4 tris each (128 tris, 1 draw)');
+  assert.equal(hero.tuftMesh.userData.cards, 23);
+  assert.equal(hero.tuftMesh.geometry.index.count / 3, 23 * 4, 'crossed pair of quads = 4 tris each (92 tris, 1 draw)');
   const mochi = C.buildKitten(C.CATS.mochi);
-  assert.equal(mochi.tuftMesh.userData.cards, 20);
+  assert.equal(mochi.tuftMesh.userData.cards, 14);
   C.setCharQuality({ tufts: false });
   const low = C.buildKitten(C.swordcatConfig());
   assert.equal(low.tuftMesh, undefined, 'Low: no tuft cards');
@@ -1635,8 +1635,9 @@ test('Token Tails: tokentails_cat is ivory, crimson-eyed, unclothed, holds the g
   assert.ok(C.PROP_NAMES.includes('tt_coin'));
   const k = C.buildKitten(cfg);
   assert.equal(k.bow, null);
-  assert.ok(k.props.tt_coin, 'coin in paw');
-  assert.equal(k.props.tt_coin.parent, k.rig.joints.pawL);
+  assert.ok(k.props.tt_coin, 'coin held');
+  // TT3: held up at chest height between both paws (Poses.coinHold); it rides the chest so the IK paws never drop it
+  assert.equal(k.props.tt_coin.parent, k.rig.joints.chest);
   // no brow capsules (they read as two grey smudges on the ivory forehead) and no ink hull (a dark hood behind the head)
   assert.equal(k.eyes.browMesh, null, 'no brows');
   assert.equal(cfg.outline, false, 'no outline hull');
@@ -1713,7 +1714,9 @@ test('TT2 §10.5: the Pink Paw-named kittens wear the real cats\' coats (accesso
   const judas = look('pickles'), zare = look('socks'), raudvis = look('muffin'), simas = look('pebble');
   assert.equal(judas.coat.pattern, 'tuxedo', 'Judas: tuxedo'); assert.equal(judas.coat.white, '#F5F2EC');
   assert.ok(new THREE.Color(judas.coat.base).getHSL({}, THREE.SRGBColorSpace).l < 0.2, 'Judas: black coat');
-  assert.deepEqual(zare.coat, C.VILLAGER_COATS.brownTabby, 'Zare: brown tabby');
+  // TT3: the same brown tabby plus the forehead "M" (KITTEN_COATS.zareTabby)
+  assert.deepEqual({ ...zare.coat, foreheadM: undefined }, { ...C.VILLAGER_COATS.brownTabby, foreheadM: undefined }, 'Zare: brown tabby');
+  assert.equal(zare.coat.foreheadM, true, 'Zare: tabby forehead stripes');
   assert.equal(raudvis.coat.pattern, 'mackerel'); assert.equal(raudvis.coat.base, C.VILLAGER_COATS.ginger.base, 'Raudvis: ginger');
   for (const c of [raudvis.coat.bib, raudvis.coat.cream]) assert.ok(new THREE.Color(c).getHSL({}, THREE.SRGBColorSpace).l > 0.93, `Raudvis: white chest (${c})`);
   assert.equal(simas.coat.pattern, 'siamese', 'Simas: Siamese'); assert.equal(simas.coat.points, '#4A3830', 'seal points');
@@ -1739,4 +1742,142 @@ test('TT2 §10.4: plate words in Passion One 900 with a per-character Nunito fal
   for (const f of ['fonts/passion-one-latin-900-normal.woff2', 'fonts/nunito-latin-wght-normal.woff2', 'fonts/nunito-latin-ext-wght-normal.woff2']) {
     assert.ok(fs.existsSync(path.join(root, 'public/assets', f)), `${f} ships`);
   }
+});
+
+// ---------------------------------------------------------------- TT3 package C (docs/TOKENTAILS-PLAN.md §11.5)
+
+test('TT3 C: no cat eye passes the head outline in profile or from the front (skull radius + 0.005)', async () => {
+  const { FACE } = await import('../../src/characters/Fur.js');
+  const { eyeGeometry, eyePivotMatrix } = await import('../../src/characters/Eyes.js');
+  const [sx, sy, sz] = FACE.skullScale, cy = FACE.skull[1], R = FACE.skullR, TOL = 0.005;
+  const across = (y) => Math.sqrt(Math.max(0, R * R - ((y - cy) / sy) ** 2));   // skull half-extent at height y (unit scale)
+  const cfgs = [['swordcat', C.swordcatConfig({ cape: 'red' })], ['tokentails_cat', C.tokentailsCatConfig()]];
+  for (const id of Object.keys(C.CATS)) cfgs.push([id, C.CATS[id]]);
+  for (const id of C.NAMED_KITTEN_IDS) cfgs.push([id, C.lostKittenConfig(id)]);
+  const v = new THREE.Vector3();
+  for (const [id, cfg] of cfgs) {
+    const k = C.buildKitten(cfg);
+    const f = k.eyeFit;
+    assert.ok(f, `${id}: eyeFit`);
+    const g = eyeGeometry(f.r, f.flat, 1), P = g.attributes.position;
+    for (const [pos, side] of [[f.posL, 1], [f.posR, -1]]) {
+      const m = eyePivotMatrix(pos, side, f.yaw);
+      for (let i = 0; i < P.count; i++) {
+        v.fromBufferAttribute(P, i).applyMatrix4(m);
+        assert.ok(v.z <= across(v.y) * sz + TOL, `${id}: eye front ${v.z.toFixed(4)} past the profile ${(across(v.y) * sz).toFixed(4)} at y ${v.y.toFixed(3)}`);
+        assert.ok(Math.abs(v.x) <= across(v.y) * sx + TOL, `${id}: eye past the head side at y ${v.y.toFixed(3)}`);
+      }
+    }
+    g.dispose(); k.dispose();
+  }
+});
+
+test('TT3 C: Clem\'s tail curls up: its lowest point stays ≥ 0.15 above her feet in idle, walk and run', async () => {
+  const { SwordcatModel } = await import('../../src/player/SwordcatModel.js');
+  const { PLAYER } = await import('../../src/core/config.js');
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const J = k.rig.joints, thick = k.cfg.tail?.thick ?? 1;
+  // the tube radius along the tail (KittenBuilder._tail), at each joint (t = i / 5)
+  const rAt = (t) => (0.04 + 0.027 * Math.sin(Math.PI * Math.min(1, t * 1.15))) * thick;
+  const lowest = () => {
+    k.root.updateMatrixWorld(true);
+    let lo = Infinity; const p = new THREE.Vector3();
+    for (let i = 0; i < 6; i++) lo = Math.min(lo, J['tail' + i].getWorldPosition(p).y - rAt(i / 5));
+    return lo;
+  };
+  k.setPose('idle', { blend: 0 }); k.animate(0);
+  assert.ok(lowest() >= 0.15, `idle: lowest tail point ${lowest().toFixed(3)}`);
+  const m = new SwordcatModel({ ctx: {} });
+  m.k = k;
+  for (const [name, speed] of [['walk', 2.5], ['run', 7.5]]) {
+    for (let ph = 0; ph < 2; ph += 0.125) {
+      m.player = { state: 'move', onGround: true, gait: ph, zoomies: false, vel: { x: 0, y: 0, z: speed } };
+      k.setPose('ready', { blend: 0 }); k.animate(0);
+      m.gaitAmp = Math.min(1.3, speed / PLAYER.run);   // settled stride (the layer adds its bounce once per frame)
+      m._layerGait(J, 1 / 60, speed);
+      const lo = lowest();
+      assert.ok(lo >= 0.15, `${name} (phase ${ph}): lowest tail point ${lo.toFixed(3)}`);
+    }
+  }
+  assert.ok(C.TAIL_CURVE.every((p) => p[1] >= 0.23), 'the rest curve never dips toward the grass');
+  k.dispose();
+});
+
+test('TT3 C: the Pink Paw kittens never roll `sleepy` (200 seeds); grown-up villagers still can', () => {
+  for (const id of C.NAMED_KITTEN_IDS) {
+    assert.notEqual(C.lostKittenConfig(id).expression, 'sleepy', id);
+    for (let s = 0; s < 200; s++) assert.notEqual(C.villagerConfig(s, { id, kid: true }).expression, 'sleepy', `${id} seed ${s}`);
+  }
+  let sleepy = 0;
+  for (let s = 0; s < 200; s++) if (C.villagerConfig(s).expression === 'sleepy') sleepy++;
+  assert.ok(sleepy > 0, 'the roll itself is unchanged for grown-ups');
+  assert.deepEqual([...C.NAMED_KITTEN_IDS], ['pickles', 'muffin', 'socks', 'pebble']);
+});
+
+test('TT3 C: Clem defaults to `happy` (open eyes, brows only in story beats); hurt is ">_<"', async () => {
+  const { SwordcatModel } = await import('../../src/player/SwordcatModel.js');
+  const { EXPRESSIONS } = await import('../../src/characters/Eyes.js');
+  assert.equal(C.swordcatConfig().expression, 'happy');
+  assert.ok(EXPRESSIONS.happy.low < 0.1 && EXPRESSIONS.happy.up < 0.1, 'happy keeps the big eyes open (no under-eye crescent)');
+  assert.ok(EXPRESSIONS.joy.low > 0.5, 'the squint survives as `joy`');
+  const set = [], brows = [];
+  const m = new SwordcatModel({ ctx: {} });
+  m.k = { setExpression: (x) => set.push(x), eyes: { showBrows: (on) => brows.push(on) } };
+  m.player = { state: 'move', meowT: 0, zoomies: false, hp: 5, alive: true, golden: false, combatT: 0 };
+  m._expression();
+  assert.equal(set.at(-1), 'happy');
+  m.player.state = 'hurt'; m._expression();
+  assert.equal(set.at(-1), 'wince');
+  assert.ok(EXPRESSIONS.wince.up > 0.9 && EXPRESSIONS.wince.tilt < -0.5, 'wince: squeezed shut, slanted lash lines');
+});
+
+test('TT3 C: setTrickPose (§11.4 contract) blends in and back to rest', async () => {
+  const { SwordcatModel, TrickPose, TRICK_POSE } = await import('../../src/player/SwordcatModel.js');
+  assert.equal(typeof SwordcatModel.prototype.setTrickPose, 'function');
+  assert.deepEqual([...TRICK_POSE.names], ['toss', 'twirl']);
+  const tp = new TrickPose();
+  tp.set('toss', 1);
+  for (let i = 0; i < 30; i++) tp.step(1 / 60);
+  assert.ok(tp.w > 0.95 && tp.name === 'toss' && tp.active);
+  tp.set('nonsense', 1);
+  assert.equal(tp.target, 0, 'unknown names blend out');
+  tp.set(null);
+  for (let i = 0; i < 60; i++) tp.step(1 / 60);
+  assert.equal(tp.w, 0); assert.equal(tp.name, null); assert.equal(tp.active, false);
+  // on the real rig: the toss lifts the free paw, and once blended out the joints are the base pose again
+  const k = C.buildKitten(C.swordcatConfig({ cape: 'red' }));
+  const J = k.rig.joints;
+  const m = new SwordcatModel({ ctx: {} });
+  m.k = k;
+  const base = () => { k.setPose('ready', { blend: 0 }); k.animate(0); };
+  base(); const rest = J.shoulderL.quaternion.clone(), bowRest = k.bow.quaternion.clone();
+  for (const name of ['toss', 'twirl']) {
+    m.setTrickPose(name, 1);
+    for (let i = 0; i < 30; i++) { base(); m._layerTrick(J, 1 / 60); }
+    assert.ok(J.shoulderL.quaternion.angleTo(rest) > 0.5, `${name}: the left arm moves`);
+    if (name === 'twirl') assert.ok(k.bow.quaternion.angleTo(bowRest) > 0.01, 'twirl: the bow spins');
+    m.setTrickPose(null);
+    for (let i = 0; i < 120; i++) { base(); m._layerTrick(J, 1 / 60); }
+    assert.ok(J.shoulderL.quaternion.angleTo(rest) < 1e-6, `${name}: back to rest`);
+    assert.ok(k.bow.quaternion.angleTo(bowRest) < 1e-3, `${name}: the bow settles`);
+  }
+  k.dispose();
+});
+
+test('TT3 C: identity kept and the cuteness pass is wired (bow 1.3x and tipped up, Pearl\'s round lilac bow, blush, coin held up)', () => {
+  const clem = C.swordcatConfig();
+  assert.equal(clem.bow.color, C.PAL.bow, 'pink bow'); assert.ok(clem.bow.scale >= 0.85 * 1.3 - 1e-9, 'bow 1.3x');
+  assert.ok(clem.bow.pitch < 0, 'bow face tipped toward the high play camera');
+  assert.equal(clem.coat.base, C.PAL.furIvory, 'ivory fur'); assert.equal(clem.eyes.outer, C.PAL.irisCrimson, 'crimson eyes');
+  assert.equal(clem.cape.style, 'red'); assert.equal(C.CAPES.red.hem, '#E2C05A', 'gold trim'); assert.equal(clem.outfit.crest, 'ttCoin', 'gold :3 badge');
+  const lin = new THREE.Color(C.CAPES.red.lining).getHSL({}, THREE.SRGBColorSpace);
+  assert.ok(lin.l > 0.45, `cape lining is no dark maroon band (${C.CAPES.red.lining})`);
+  const pearl = C.CATS.pearl;
+  assert.equal(pearl.bow.round, true); assert.ok(pearl.bow.scale >= 1);
+  assert.notEqual(pearl.bow.color.toUpperCase(), C.PAL.bow.toUpperCase(), 'Pearl\'s bow stays lilac');
+  assert.ok(C.BLUSH.k > 0 && C.BLUSH.at[1] < 0.1, 'cheek blush under the eyes');
+  const tt = C.tokentailsCatConfig();
+  assert.deepEqual(tt.props, ['tt_coin']); assert.equal(tt.idlePose, 'coinHold'); assert.ok(C.POSES.coinHold);
+  assert.ok(C.POSES.coinHold.arms.L.paw[1] > 0.35 && C.POSES.coinHold.arms.R.paw[1] > 0.35, 'the coin is held at chest height in both paws');
+  assert.equal(tt.bow, null, 'the Token Tails Cat has no bow');
 });

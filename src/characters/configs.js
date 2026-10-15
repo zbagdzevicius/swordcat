@@ -19,7 +19,8 @@ export function eyeSet(hex, o = {}) {
 const SWORDCAT_COAT = Object.freeze({ pattern: 'solid', base: PAL.furIvory, deep: PAL.furIvoryShade, light: PAL.furIvoryLight, cream: PAL.furIvoryLight, bib: PAL.furIvoryLight, face: PAL.furIvory, stripe: 0 });
 /** Crimson / ruby irises with two catchlights (the Token Tails mascot's eyes). */
 const SWORDCAT_EYES = Object.freeze({ inner: PAL.irisCrimsonInner, outer: PAL.irisCrimson, ring: PAL.irisCrimsonDeep, pupil: PAL.pupil, catchlights: 2 });
-const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade: PAL.bowShade, knot: PAL.bowKnot, scale: 0.85 });
+/** TT3: 1.3× (0.85 → 1.11) and pitched back so its face turns up toward the high play camera (`pitch`, KittenBuilder). */
+const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade: PAL.bowShade, knot: PAL.bowKnot, scale: 1.11, pitch: -1.0 });
 
 /**
  * Swordcat (Clementine). Options track story state:
@@ -43,7 +44,7 @@ export function swordcatConfig({ cape = 'red', armour = true, bow = true, sword 
     coat: SWORDCAT_COAT,
     eyes: { ...SWORDCAT_EYES, size: 1.0 },
     earInner: PAL.earInnerSalmon, nose: PAL.noseTT,
-    fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 1.15 },   // ART §6.3: a fuller tail (r ≈ 0.08 H)
+    fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 0.95 },   // ART §6.3 fuller tail; TT3: 0.95 so the upright curl reads as a cat's question mark, not a squirrel's
     bow: bow ? SWORDCAT_BOW : null,
     // plate with the gold ':3' coin crest on the chest (Armour.js `crest`)
     outfit: { armour: armour ? 'plate' : null, crest: armour ? 'ttCoin' : null },
@@ -55,7 +56,7 @@ export function swordcatConfig({ cape = 'red', armour = true, bow = true, sword 
     sword: armour || tunicSword ? sword : null,
     // gameplay rest stand: the blade upright at her right side (reads from the iso lens; Poses.restUp)
     idlePose: 'restUp',
-    expression: 'worried',
+    expression: 'happy',   // TT3: bright and open by default; worried / determined only in story beats and danger
     holy: true,
   };
 }
@@ -77,8 +78,11 @@ export function tokentailsCatConfig(o = {}) {
     // no brows: the mascot has none, and the coat-darkened brow capsules read as two grey smudges on the ivory forehead
     eyes: { ...SWORDCAT_EYES, size: 1.08, brows: false },
     earInner: PAL.earInnerSalmon, nose: PAL.noseTT,
-    fur: { len: 0.04, cheek: 1.0 }, tail: { thick: 0.72 },
+    // TT3: a full curled tail (0.72 read as a stick) and a soft belly over the limb seams
+    fur: { len: 0.04, cheek: 1.0 }, tail: { thick: 0.85 }, softBelly: true,
     bow: null, cape: null, sword: null, outfit: { armour: null }, accessories: [],
+    // TT3: the coin held up at chest height in both paws (Poses.coinHold)
+    pose: 'coinHold', idlePose: 'coinHold',
     // no ink hull (KittenView / KittenVisual honour `outline: false`): its tight proxy follows the outermost fur shell,
     // wider than the fur that shows (the tips fade out), so on the ivory coat it drew a dark hood behind the head and
     // dark patches at the sides (High quality, where every NPC gets a hull)
@@ -104,7 +108,7 @@ export const CATS = {
     coat: { pattern: 'dilute', base: '#C7A98E', deep: '#A2846C', light: '#E8D8C6', cream: '#E9DED3', bib: '#E2D6C8', stripe: 0.28 },
     eyes: { inner: PAL.irisInner, outer: '#4E7282', ring: PAL.irisRing, size: 1.04 },
     // lilac, so pink stays Clementine's alone (founder call 2026-10-14)
-    bow: { color: '#C3A6E0', light: '#E9DDF7', shade: '#9479B5', knot: '#AE90D0', scale: 0.8 },
+    bow: { color: '#C3A6E0', light: '#E9DDF7', shade: '#9479B5', knot: '#AE90D0', scale: 1.0, round: true },   // TT3: bigger, rounder
     accessories: [{ id: 'tunic', color: '#8FA3B5', trim: '#C9B8A0', belt: true }],
     cape: { style: 'pilgrim' }, expression: 'happy',
   },
@@ -222,7 +226,7 @@ const KITTEN_NAMES = Object.fromEntries(KITTEN_IDS.map((k) => [k, k[0].toUpperCa
 const KITTEN_LOOKS = {
   biscuit: ['cream', 'strawHat'], noodle: ['ginger', 'scarf'], button: ['bicolour', null], pickles: ['tuxedoKit', 'flowerCrown'],
   pebble: ['siamese', 'bucketHelm'], sprout: ['brownTabby', 'flowerCrown'], waffles: ['ginger', 'bakerHat'], toffee: ['cream', 'scarf'],
-  muffin: ['gingerWhite', 'bakerHat'], tater: ['brownTabby', null], mittens: ['bicolour', 'scarf'], socks: ['brownTabby', null],
+  muffin: ['gingerWhite', 'bakerHat'], tater: ['brownTabby', null], mittens: ['bicolour', 'scarf'], socks: ['zareTabby', null],
   juniper: ['tortie', 'flowerCrown'], bramble: ['black', 'scarf'], fennel: ['cream', 'strawHat'], bean: ['black', null],
   crumpet: ['ginger', 'bucketHelm'], dumpling: ['white', 'strawHat'],
 };
@@ -235,9 +239,11 @@ const KITTEN_LOOKS = {
  * `eyes` overrides the seeded iris colour.
  */
 export const KITTEN_COATS = Object.freeze({
-  tuxedoKit: Object.freeze({ pattern: 'tuxedo', base: '#2A2B30', deep: '#18191C', light: '#4A4C52', cream: '#F5F2EC', white: '#F5F2EC' }),
+  tuxedoKit: Object.freeze({ pattern: 'tuxedo', base: '#2A2B30', deep: '#18191C', light: '#4A4C52', cream: '#F5F2EC', white: '#F5F2EC', blaze: true }),
   gingerWhite: Object.freeze({ pattern: 'mackerel', base: '#D08A4E', deep: '#A65E2E', light: '#F0C08F', cream: '#F7F3EC', bib: '#FBF8F2', stripe: 0.35 }),
-  siamese: Object.freeze({ pattern: 'siamese', base: '#EFE2CC', deep: '#D8C6A8', light: '#FAF2E4', cream: '#F6EEE0', points: '#4A3830', eyes: '#4F8FD6' }),
+  siamese: Object.freeze({ pattern: 'siamese', base: '#EFE2CC', deep: '#D8C6A8', light: '#FAF2E4', cream: '#F6EEE0', points: '#4A3830', eyes: '#4F8FD6', maskK: 0.62 }),
+  // TT3: Zare's brown tabby with the forehead "M" (the shared brownTabby stays as is for the other kittens)
+  zareTabby: Object.freeze({ pattern: 'mackerel', base: '#8A6A4A', deep: '#3E2C1E', light: '#C4A27E', cream: '#E8DCCB', stripe: 0.5, foreheadM: true }),
 });
 
 /**
@@ -266,7 +272,8 @@ export function villagerConfig(seed, o = {}) {
   return {
     id: o.id || 'villager_' + s, name: o.name || 'Villager', tier: o.tier || 'lite', seed: s,
     scale: o.scale ?? 0.78 + rnd() * 0.22, width: 0.95 + rnd() * 0.12, headScale: 1 + rnd() * 0.06,
-    coat, eyes: eyeSet(eyeHex), accessories: acc, expression: ['happy', 'neutral', 'surprised', 'sleepy'][Math.floor(rnd() * 4)],
+    // TT3: kittens (lost, named Pink Paw kittens, squires) never roll `sleepy`: heavy lids read as tired, not cute
+    coat, eyes: eyeSet(eyeHex), accessories: acc, expression: ((x) => (o.kid && x === 'sleepy' ? 'happy' : x))(['happy', 'neutral', 'surprised', 'sleepy'][Math.floor(rnd() * 4)]),
     ears: { size: 0.9 + rnd() * 0.25 },
   };
 }
@@ -274,8 +281,15 @@ export function villagerConfig(seed, o = {}) {
 /** Config for one of the 18 lost kittens (stable per id). */
 export function lostKittenConfig(kittenId, o = {}) {
   const look = KITTEN_LOOKS[kittenId] || [];
-  return villagerConfig('kitten:' + kittenId, { id: kittenId, name: KITTEN_NAMES[kittenId] || kittenId, coat: look[0], accessory: look[1] ?? null, scale: 0.72, tier: o.tier || 'lite', kid: true, ...o });
+  const c = villagerConfig('kitten:' + kittenId, { id: kittenId, name: KITTEN_NAMES[kittenId] || kittenId, coat: look[0], accessory: look[1] ?? null, scale: 0.72, tier: o.tier || 'lite', kid: true, ...o });
+  // TT3: the four Pink Paw kittens get a finer face mesh so their markings (blaze, "M", mask) stay crisp on the lite tier
+  if (NAMED_KITTEN_IDS.includes(kittenId)) c.faceDetail = NAMED_FACE_DETAIL;
+  return c;
 }
+/** The lost kittens that wear real Pink Paw cats' names and coats (Judas, Raudvis, Zare, Simas; BRAND.pinkPawKittens). */
+export const NAMED_KITTEN_IDS = Object.freeze(['pickles', 'muffin', 'socks', 'pebble']);
+/** Lite-tier head tessellation multiplier for NAMED_KITTEN_IDS (TT3). */
+export const NAMED_FACE_DETAIL = 1.4;
 
 /** The 6 squire kittens at the height chart (CS-01). Wooden swords, plain tunics. */
 export const SQUIRE_IDS = Object.freeze(['squire_1', 'squire_2', 'squire_3', 'squire_4', 'squire_5', 'squire_6']);

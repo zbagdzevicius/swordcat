@@ -95,6 +95,8 @@ const ICONS = {
   kitten: () => I.catHead({ fur: '#E3C9A2', deep: '#C9A47A', bow: false, eyes: '#5E8FA8' }),
   letter: () => I.letter(true), bell: () => I.bell(), cape: () => I.cape(), sword: () => I.sword(), shard: () => I.shard(),
   flag: () => I.flag(), seal: () => I.waxSeal(I.PINK_DEEP, 'check'), fish: () => I.fish(), milk: () => I.milkBottle(true), heart: () => I.heart('full'),
+  // TT3 §11.3: Paw Trick toasts (unlock, "Paw Trick: {name}") wear the gold ":3" coin
+  trick: () => I.ttCoin?.(24) ?? I.shard(),
 };
 
 /** Strings key → icon id (toasts emitted by other areas carry `key`). */

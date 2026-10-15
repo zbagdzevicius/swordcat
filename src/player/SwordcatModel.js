@@ -27,7 +27,7 @@ import { Squash, SQUASH, FEEL, ORDER_FX } from './juice.js';
 // e0 → e1: blade elevation (rad above horizontal) across the active window; eb: wind-up elevation; r: grip reach;
 // h: grip height (H); twist: chest share of the arc; hop: body hop (H) at the strike; spin: full-circle body spin.
 const VIS = {
-  slash1:   { e0: 0.45, e1: -0.35, eb: 0.75, r: 1, h: 0.50, twist: 0.35 },
+  slash1:   { e0: 0.3, e1: -0.35, eb: 0.4, r: 1, h: 0.48, twist: 0.4 },   // TT3: a chest-high sweep (the raised wind-up crossed her face)
   slash2:   { e0: -0.25, e1: 0.40, eb: -0.30, r: 1, h: 0.46, twist: 0.35 },
   slash3:   { e0: 0.85, e1: -0.45, eb: 1.15, r: 1.1, h: 0.53, twist: 0.45, hop: 0.05 },
   bright:   { e0: 1.05, e1: -0.60, eb: 1.35, r: 1.1, h: 0.56, twist: 0.45, hop: 0.07 },
@@ -39,8 +39,9 @@ const VIS = {
 };
 /** WA §5.6 idle twirl: a 0.6 s flourish (visual clip only; never a Combat swing). */
 const TWIRL = Object.freeze({ id: 'twirl', dur: FEEL.twirl.dur, active: [0.08, FEEL.twirl.dur - 0.1], arc: { from: Math.PI, to: -Math.PI } });
-/** Running carry (look only): both paws low on the grip, blade forward-up and out to her right so the face stays clear. */
-const CARRY = { a: -0.55, e: 0.55, reach: 0.9, h: 0.40, bob: 0.07, minSpeed: 2.2 };
+/** Running carry (look only, TT3): both paws on the grip at her right hip, the blade trailing low behind her right side, so
+ * no front view shows it over her face (the old forward-up carry crossed it in the front 3/4 view). */
+const CARRY = { a: -2.0, e: -0.28, reach: 0.95, h: 0.36, bob: 0.05, minSpeed: 2.2 };
 /**
  * "Even More Too Big" (§13.4: the tip drags on the ground, visual only): any blade at least `minLength` long rests its
  * tip on the ground while she stands (forward-right, `idleA`) and trails it behind her while she runs (`runA`). The
@@ -50,7 +51,7 @@ const DRAG = { minLength: 1.4, idleA: -0.5, runA: -2.3, h: 0.36, reach: 0.95, tw
 /** Tumble look: pivot height (H), hop at the upside-down moment (H), ball squash. */
 const ROLL = { pivot: 0.42, lift: 0.3, ball: 0.14 };
 /** Upper-body pitch (rad, + = forward) during a swing: lean back on the wind-up, into the strike, settle after. */
-const SWING_LEAN = { back: 0.07, strike: 0.16 };
+const SWING_LEAN = { back: 0.1, strike: 0.24 };   // TT3: more body lean into the slash
 const ANTIC = 0.35;          // extra wind-up beyond the arc start (rad), tech.md §11.2
 const SIDE = 1.25;           // max sword angle relative to the body before the body turns with it
 const GRIP_X = 0.17, GRIP_Z = 0.12, GRIP_Z0 = 0.1;
@@ -100,6 +101,31 @@ function rot(j, x, y, z) {
  * Every outfit wears the pink bow; 'tunic_bow' stays as a name so old saves and the `tutbow` beat keep working. */
 export const OUTFITS = Object.freeze(['armour', 'tunic', 'tunic_sword', 'tunic_bow']);
 
+/** TT3 Paw Trick poses (docs/TOKENTAILS-PLAN.md §11.4): blend rate (1/s), bow spin (rad/s), cape wind gain. */
+export const TRICK_POSE = Object.freeze({ names: Object.freeze(['toss', 'twirl']), rate: 16, bowSpin: 18, capeWind: 2.5 });
+
+/**
+ * Paw Trick pose weight (pure, node-safe): `set(name, w)` sets the weight ('toss' | 'twirl', w 0..1; package A sends
+ * it every frame) and `set(null)` blends back to rest; `step(dt)` follows a set weight at once, eases the release out
+ * (`TRICK_POSE.rate`) and keeps the last name while it fades.
+ */
+export class TrickPose {
+  constructor() { this.name = null; this.target = 0; this.w = 0; }
+  set(name, w = 1) {
+    if (name && TRICK_POSE.names.includes(name)) { this.name = name; this.target = clamp(+w || 0, 0, 1); }
+    else this.target = 0;
+    return this;
+  }
+  step(dt) {
+    // A drives `w` every frame (a bell for the toss, a ramp for the twirl): follow it as given; only the release eases out
+    if (this.target > 0) this.w = this.target;
+    else this.w = damp(this.w, 0, TRICK_POSE.rate, Math.max(0, dt));
+    if (this.target === 0 && this.w < 1e-3) { this.w = 0; this.name = null; }
+    return this.w;
+  }
+  get active() { return this.w > 1e-3 && !!this.name; }
+}
+
 export class SwordcatModel {
   /** @param {import('./Player.js').Player} player */
   constructor(player) {
@@ -145,6 +171,8 @@ export class SwordcatModel {
     this.t = 0;
     this._offs = [];
     this._props = new Set();
+    /** TT3 Paw Trick pose (setTrickPose) and the bow spin angle it drives */
+    this.trick = new TrickPose(); this._bowSpin = 0; this._bowQ0 = null; this._bowK = null;
   }
 
   // ------------------------------------------------------------------ lifecycle
@@ -414,6 +442,9 @@ export class SwordcatModel {
     }
     if (!p.scripted || !this.scriptPose) this._expression();
     else if (this.exprOverride && this.expr !== this.exprOverride) { this.expr = this.exprOverride; k.setExpression(this.exprOverride); }
+    // TT3: brows only in story beats (scripted / an override); in play the lids carry the mood
+    const brows = !!(p.scripted || this.exprOverride);
+    if (brows !== this._brows || k !== this._browK) { this._brows = brows; this._browK = k; k.eyes?.showBrows?.(brows); }
     this._propsForState();
     this.view.animate(frameDt);
 
@@ -436,6 +467,7 @@ export class SwordcatModel {
     this._layerHead(J, dt);
     this._layerIdle(J, dt);
     this._layerKO(J, dt);
+    this._layerTrick(J, dt);
 
     // squash & stretch (ART §6.5, volume preserving) on the body pivot at the feet — before the IK reads the chain
     const sy = Math.max(0.3, this.squash.update(dt, this._squashTarget(dt))), sxz = 1 / Math.sqrt(sy);
@@ -450,6 +482,7 @@ export class SwordcatModel {
 
     this._glow(dt);
     if (k.cape) k.cape.windMul = this.meme ? MEME_CAPE.windMul : p.standingGround ? TUNING.standCapeWind : 1;
+    if (k.cape && this.trick.active && this.trick.name === 'twirl') k.cape.windMul *= 1 + TRICK_POSE.capeWind * this.trick.w;
     // the cape pins read the rig's world matrices: bring the actor root up to date first (teleports, turns)
     p.object3d.updateWorldMatrix(true, false);
     this.view.simulate({ velocity: p.attachedTo ? _zero : p.vel, airborne: !p.onGround && !p.attachedTo });
@@ -486,10 +519,10 @@ export class SwordcatModel {
 
   _expression() {
     const p = this.player, k = this.k;
-    let x = 'neutral';
+    let x = 'happy';                                  // TT3: bright and open by default (was 'neutral')
     switch (p.state) {
       case 'dead': x = 'faint'; break;                // dizzy, eyes squeezed shut (stars circle her head: fx)
-      case 'hurt': case 'stagger': x = 'surprised'; break;
+      case 'hurt': case 'stagger': x = 'wince'; break;   // TT3: ">_<"
       case 'guard': x = p.standingGround ? 'determined' : 'worried'; break;
       case 'charge': case 'golden': case 'attack': case 'pounce': case 'rise': x = 'determined'; break;
       case 'memecam': x = 'earnest'; break;
@@ -504,6 +537,13 @@ export class SwordcatModel {
     if (this.exprOverride) x = this.exprOverride;
     if (x !== this.expr) { this.expr = x; k.setExpression(x); }
   }
+
+  /**
+   * TT3 Paw Trick pose (§11.4 contract; package A calls `model.setTrickPose?.(...)`): 'toss' (throwing paw forward, tail
+   * flicked up), 'twirl' (bow spins like a propeller, cape flutters, arms out), null = blend back to rest.
+   * @param {'toss'|'twirl'|null} name @param {number} [w] 0..1 blend weight
+   */
+  setTrickPose(name, w = 1) { this.trick.set(name, w); return this; }
 
   /** Story: hold a face expression (null = back to the state's own). */
   setExpressionOverride(name) {
@@ -541,8 +581,9 @@ export class SwordcatModel {
     rot(J.chest, 0.05 * A, -sn * 0.12 * A, 0);
     rot(J.head, -0.12 * A, sn * 0.05 * A, 0);
     // tail streams behind and lifts; zoomies: straight up, ears pinned back
-    rot(J.tail0, (0.45 + 0.7 * this.zoom) * A, Math.sin(ph * 0.5) * 0.15 * A, 0);
-    rot(J.tail1, 0.15 * A, Math.sin(ph * 0.5 - 0.6) * 0.15 * A, 0);
+    // TT3: the upright curl streams back a little at a run (−x); zoomies stand it straight up
+    rot(J.tail0, (-0.2 + 0.35 * this.zoom) * A, Math.sin(ph * 0.5) * 0.15 * A, 0);
+    rot(J.tail1, 0, Math.sin(ph * 0.5 - 0.6) * 0.15 * A, 0);
     if (this.zoom > 0.01) {
       const z = this.zoom;
       rot(J.earL, -0.75 * z, 0, -0.55 * z); rot(J.earR, -0.75 * z, 0, 0.55 * z);
@@ -556,11 +597,12 @@ export class SwordcatModel {
     const a = this.air;
     if (a < 0.002) return;
     const rising = p.vel.y > 0.5 ? 1 : p.vel.y < -2 ? 0 : 0.5;
-    const tuck = a * (0.4 + 0.6 * rising);
-    rot(J.thighL, -0.7 * tuck - 0.15 * a, 0, 0.08 * a); rot(J.thighR, -0.55 * tuck - 0.1 * a, 0, -0.08 * a);
-    rot(J.kneeL, 1.1 * tuck + 0.25 * a, 0, 0); rot(J.kneeR, 0.9 * tuck + 0.3 * a, 0, 0);
-    rot(J.chest, -0.08 * a * rising, 0, 0);
-    rot(J.tail0, 0.5 * a, 0, 0);
+    // TT3: a clear squash-and-tuck jump (it read as idle): knees up to the chest on the way up, legs reach on the way down
+    const tuck = a * (0.5 + 0.7 * rising);
+    rot(J.thighL, -1.0 * tuck - 0.15 * a, 0, 0.12 * a); rot(J.thighR, -0.85 * tuck - 0.1 * a, 0, -0.12 * a);
+    rot(J.kneeL, 1.5 * tuck + 0.25 * a, 0, 0); rot(J.kneeR, 1.3 * tuck + 0.3 * a, 0, 0);
+    rot(J.chest, -0.14 * a * rising, 0, 0); rot(J.head, -0.1 * a * rising, 0, 0);
+    rot(J.tail0, -0.3 * a, 0, 0);
     const flop = a * (1 - rising);                                                      // falling: ears float up
     rot(J.earL, -0.35 * flop, 0, 0.15 * flop); rot(J.earR, -0.35 * flop, 0, -0.15 * flop);
   }
@@ -640,7 +682,7 @@ export class SwordcatModel {
       this.parryKick = Math.max(0, this.parryKick - dt / 0.25);
     }
     const f = easeOutCubic(this.flinch), r = this.recoil, pk = this.parryKick;
-    if (f > 0) { rot(J.chest, -0.45 * f, 0, 0.1 * f); rot(J.head, -0.3 * f, 0, -0.08 * f); rot(J.hips, -0.12 * f, 0, 0); rot(J.tail0, 0.6 * f, 0, 0); }
+    if (f > 0) { rot(J.chest, -0.45 * f, 0, 0.1 * f); rot(J.head, -0.3 * f, 0, -0.08 * f); rot(J.hips, -0.12 * f, 0, 0); rot(J.tail0, 0.25 * f, 0, 0); }
     if (r > 0) { rot(J.chest, -0.2 * r, 0, 0); rot(J.hips, -0.07 * r, 0, 0); rot(J.head, 0.08 * r, 0, 0); }
     if (pk > 0) { rot(J.chest, 0.12 * pk, 0, 0); rot(J.head, -0.1 * pk, 0, 0); }
   }
@@ -724,6 +766,34 @@ export class SwordcatModel {
     if (this.idlePose === 'sit' && this.poseName === 'sit') {
       const s = Math.sin(this.t * Math.PI * 2 * F.tailSwish.hz) * F.tailSwish.amp;
       rot(J.tail1, 0, s, 0); rot(J.tail3, 0, s * 0.8, 0);
+    }
+  }
+
+  /** TT3 Paw Trick pose layer: additive joint offsets × the live weight; the twirl spins the bow on its own axis. */
+  _layerTrick(J, dt) {
+    const tp = this.trick, k = this.k;
+    tp.step(dt);
+    const bow = k?.bow;
+    if (bow && this._bowK !== k) { this._bowK = k; this._bowQ0 = bow.quaternion.clone(); this._bowSpin = 0; }
+    const w = tp.active ? easeInOutSine(tp.w) : 0;
+    if (tp.name === 'twirl' && w > 0) this._bowSpin += dt * TRICK_POSE.bowSpin * w;
+    else this._bowSpin = damp(wrapAngle(this._bowSpin), 0, 10, dt);
+    if (bow && this._bowQ0) bow.quaternion.copy(this._bowQ0).multiply(_q.setFromAxisAngle(_v.set(0, 0, 1), this._bowSpin));
+    if (w <= 0) return;
+    if (tp.name === 'toss') {
+      // the free (left) paw flung forward and up, the chest turning into it, the tail flicking up, ears perked
+      rot(J.shoulderL, -1.55 * w, 0.15 * w, 0.3 * w); rot(J.elbowL, -0.35 * w, 0, 0);
+      rot(J.chest, 0.06 * w, 0.32 * w, 0); rot(J.head, 0, -0.12 * w, 0);
+      rot(J.tail1, 0.35 * w, 0, 0); rot(J.tail3, 0.3 * w, 0, 0);
+      rot(J.earL, -0.2 * w, 0, 0); rot(J.earR, -0.2 * w, 0, 0);
+    } else if (tp.name === 'twirl') {
+      // arms out like wings, a little lift in the chest, the tail curled up for balance
+      rot(J.shoulderL, 0, 0, 1.15 * w); rot(J.shoulderR, 0, 0, -1.15 * w);
+      rot(J.elbowL, -0.2 * w, 0, 0); rot(J.elbowR, -0.2 * w, 0, 0);
+      rot(J.chest, -0.08 * w, 0, 0); rot(J.head, -0.1 * w, 0, 0);
+      rot(J.tail1, 0.25 * w, 0, 0); rot(J.tail2, 0.2 * w, 0, 0);
+      rot(J.thighL, -0.35 * w, 0, 0.1 * w); rot(J.thighR, -0.25 * w, 0, -0.1 * w);
+      rot(J.kneeL, 0.6 * w, 0, 0); rot(J.kneeR, 0.5 * w, 0, 0);
     }
   }
 
@@ -980,7 +1050,7 @@ export class SwordcatModel {
     for (const side of ['R', 'L']) {
       const grip = side === 'R' ? SWORD_PTS.gripTop - 0.022 : SWORD_PTS.gripLow + 0.006;
       _T.copy(_posS).addScaledVector(_Y, grip).applyMatrix4(_mChestInv);
-      this._solveArm(J, side, _T, armW);
+      this._solveArm(J, side, _T, side === 'L' && this.trick.name === 'toss' ? armW * (1 - this.trick.w) : armW);   // TT3: the throwing paw is free
     }
     // ---- sword local transform under its parent
     if (parentIsHand) this._handMatrix(J, _mHand); else _mHand.identity();

@@ -273,3 +273,35 @@ so world's fog patcher (C4 focus fog) wraps them instead of being replaced.
   `uFogK`); `setOutlineAlpha` switches blending with transparency. Eyes, glints, contact blobs and whiskers are
   `fxBasicMaterial`s; aura, holy streak and Dawnblade sparkles are fx modules. The shadow proxy lives on core's
   `SHADOW_ONLY_LAYER` with the shared skinned kit material. Beast brows are vertex-coloured kit geometry.
+
+## TT3: character fixes and cuteness pass (package C, docs/TOKENTAILS-PLAN.md §11.5)
+- **Eyes** sit deeper and flatter (`EYE.flat` 0.45, `EYE.seat` 0.004 H under the skull surface). No eye passes the head
+  outline in profile or from the front (skull radius + 0.005; unit test over every named cat). `Kitten.eyeFit`
+  `{ posL, posR, r, flat, yaw }` says where they sit. A paused cat (activity tier ≥ 1) never freezes mid-blink.
+- **Expressions**: `happy` is open and bright now (`up` 0.04, no lower lid: the old one read as a tired under-eye
+  crescent); the old squint is `joy` (the `sip` pose uses it). New `wince` (">_<", hurt). `determined` has lighter lids.
+  `EyePair.showBrows(on)`: the heroine shows brows only while scripted or with a story override.
+- **Tail**: `TAIL_CURVE` is an upright question-mark curl (root at 0.26 H, tip at 0.57 H). `Poses.TAIL_LAY` (−1.25) tips it
+  down for `faint`, `sit`, `sleep`, `read` and `fish`. In a tight hull every tail bone is a capsule
+  (`Readability.capsulePart`), so no maroon rings at the joints; the head ellipsoid is fitted inside the fur skin
+  (`HEAD_HULL`) and the ear cones carry no fur margin.
+- **Face**: `BLUSH` paints soft pink cheeks into the face fur of every cat (`cfg.blush` 0 turns it off). `cfg.faceDetail`
+  (named Pink Paw kittens 1.4, `NAMED_FACE_DETAIL`) gives the lite tier a finer skull and rounder eye catchlights.
+  Coat options: `blaze` (Judas, a wide crisp blaze), `foreheadM` (Zare, `KITTEN_COATS.zareTabby`), `maskK` (Simas,
+  a lighter seal-point mask). Kittens (`kid: true`) never roll `sleepy`. No crown or inner-ear tuft cards (hero 23 cards,
+  others 14).
+- **Bow**: `cfg.bow.pitch` (Clem −1.0, so its face turns up to the play camera), Clem scale 1.11 (1.3×), `cfg.bow.round`
+  (Pearl, fuller loops).
+- **Token Tails Cat**: `idlePose` / `pose` `coinHold` (both paws hold the coin up at chest height; `tt_coin` rides the
+  chest joint), `softBelly`, a full curled tail (thick 0.85).
+- **Clem** (`player/SwordcatModel.js`): defaults to `happy`; the `ready` pose holds the blade out at her right side; the
+  run carry trails the blade low at her right hip; `slash1` sweeps at chest height; more body lean into slashes; a bigger
+  jump tuck. Red cape lining `#C9505E` (no dark band).
+- **Paw Trick poses** (§11.4 contract): `model.setTrickPose('toss' | 'twirl' | null, w = 1)`. `toss`: the free left paw
+  flung forward (the sword IK lets go of it), chest turned into it, tail flicked up. `twirl`: arms out, bow spinning
+  like a propeller (`TRICK_POSE.bowSpin` rad/s), cape wind ×(1 + 2.5 w). `null` blends back to rest
+  (`TRICK_POSE.rate`). Pure helper: `TrickPose` (`set`, `step`, `active`).
+- **Accessories**: `bucketHelm` is a smaller pail perched on the crown between upright ears (`earsLow` 0.15).
+- **Beast heads**: `BEAST_PRESETS.<preset>.seat` (pug 0.06, bulldog 0.04) seats the head on the collar (no neck gap).
+  Barkus's eyepatch strap no longer loops over his helm. Hyena spots are bigger and crisper. `BEAST_LOOKS.<look>.plate`
+  passes plate options (Cacklejaw: `{ scale: 1.3, offset: [0, 0.1, 0] }`).

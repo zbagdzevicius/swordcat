@@ -48,7 +48,9 @@ export default {
     ] },
     { t: 'spawn', id: 'sunbeam', build: buildSunPatch, at: BARN.chest, y: 0.05 },
     { t: 'actor', id: 'swordcat', face: 'chest', faceDur: 0.2, expression: 'earnest' },
-    cam(null, 'swordcat', { pos: [1.35, 0.95, 1.7], look: [0, 0.55, -0.2], fov: 40 }),
+    // TT4: a more frontal three-quarter (from 1.35 m to the side her far eye sat behind her cheek fur, only its
+    // catchlights showing: it read as a blank white eye)
+    cam(null, 'swordcat', { pos: [0.75, 0.95, 1.9], look: [0, 0.55, -0.2], fov: 40 }),
     { t: 'actor', id: 'swordcat', pose: 'kneel' },
     sfx('world/creak1', BARN.chest, { vol: 0.9 }),
     { t: 'call', fn: (ctx, cs) => { cs.spawned.find((r) => r.id === 'chest')?.anim?.play?.('open', { once: true, clampEnd: true }); } },

@@ -16,7 +16,7 @@
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
 import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS } from '../core/config.js';
 import { el, flag, setText, setVar, pulse } from './dom.js';
-import { tx, esc, actionGlyph, presetGlyph, codeLabel, PRESET_IDS } from './text.js';
+import { tx, esc, actionGlyph, presetGlyph, codeLabel, PRESET_IDS, keyCapInner } from './text.js';
 import { SETTINGS, SETTING_GROUPS, visibleSettings, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS,
   REBIND_ACTIONS, rebindAction, rebindRefusal } from './settings.js';
 import { defaultState } from '../core/GameState.js';
@@ -635,7 +635,7 @@ export class Menus {
           }
         } else {
           const g = actionGlyph(act, d);
-          cell.innerHTML = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${esc(g)}</kbd>`;
+          cell.innerHTML = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${keyCapInner(g)}</kbd>`;
         }
       }
       rows.set(act, { row, kbm, bind, label: lbl.split(' · ')[0] });
@@ -650,7 +650,7 @@ export class Menus {
       const bindings = ctx.state?.settings?.bindings ?? null;
       for (const [act, r] of rows) {
         const g = presetGlyph(act, preset, bindings);
-        const cap = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${esc(g)}</kbd>`;
+        const cap = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${keyCapInner(g)}</kbd>`;
         if (r.bind) {
           r.bind.innerHTML = cap;
           flag(r.bind, 'is-disabled', !live);

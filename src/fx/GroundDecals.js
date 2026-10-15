@@ -1177,7 +1177,7 @@ export class GroundDecals {
     this._count('riposte');
   }
 
-  /** §7.3 the ranges overlay while `ranges` is held (Z / MMB / D-pad ↓, one hold with the peek; TT3 dropped Ctrl): AA reach, the Stand fan, the kitten's ability range. */
+  /** §7.3 the ranges overlay while `ranges` is held (Z / MMB / L3 held, one hold with the peek; TT3 dropped Ctrl): AA reach, the Stand fan, the kitten's ability range. */
   _ranges(p) {
     const input = this.ctx.input;
     if (!input?.down?.('ranges')) return;

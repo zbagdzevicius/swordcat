@@ -753,12 +753,12 @@ K implements this table in `INPUT` (config.js). Every other package reads action
 | `trick` (new, Paw Trick slot, tap = cast, hold = aim) | F | ":3" button | RT (7), RS aims |
 | `trick1`..`trick3` (new, pick a Paw Trick) | 1, 2, 3 | long press ":3" opens a 3-way picker | hold RT + D-pad left/right/up |
 | `golden` | V, or `guard` + `attack` pressed within 0.1 s | sun | `guard` + X within 0.1 s |
-| `milk` / `meow` | R / C | buttons | D-pad up (12) / L3 (10) |
+| `milk` / `meow` | R / C | buttons | D-pad up (12) / D-pad down (13) (TT4: was L3) |
 | `lockon`, `lockPrev`, `lockNext` | Tab (Shift+Tab back), LMB on a foe | tap foe | R3 (11); D-pad left/right in combat |
 | `attackMove` / `stop` | X / H | none | none |
 | zoom | wheel | pinch | View (8) cycles zoom |
 | `camLock` / `centre` | Y / Home (F1 removed) | none | none |
-| `peek` and `ranges` (one hold) | Z, MMB (Alt removed, Ctrl removed) | none | D-pad down (13) |
+| `peek` and `ranges` (one hold) | Z, MMB (Alt removed, Ctrl removed) | none | L3 held (10) (TT4: was D-pad down) |
 | `pause` | Esc, P | ❚❚ | Start (9) |
 | skip practice / cutscene | hold Esc or hold P | Skip chip | hold Start |
 | `back` (menus, aim cancel) | Esc, Backspace | Back | B |

@@ -8,9 +8,9 @@ and `src/ui/tricks.css`.
 
 | Id | Name | Input | What it does |
 |---|---|---|---|
-| `coin` | ":3" Coin Toss | `trick` (F, RT, the ":3" button) | A boomerang. Out 8 m and back in 0.9 s. It stops at the first foe, hangs 0.14 s, then flies home and hits that foe again. 8 damage each way, +2 Valor per hit. Cooldown 4 s, one coin at a time. It scoops up catnip and small hearts on the way back. |
+| `coin` | ":3" Coin Toss | `trick` (F, RT, the ":3" button) | A boomerang. It leaves her paw 0.45 m in front of her (small and without its glow while it is near her face). Out 8 m and back in 0.9 s. It stops at the first foe, hangs 0.14 s, then flies home and hits that foe again. 8 damage each way, +2 Valor per hit. Cooldown 4 s, one coin at a time. It scoops up catnip and small hearts on the way back. |
 | `cloud` | Catnip Cloud | `trick` with the cloud equipped | A pouch lobbed up to 7 m. A lilac cloud, 2.5 m radius, stays 3 s. Normal foes inside go `giddy` for 2.5 s. Cooldown 16 s. |
-| `twirl` | Ribbon Twirl | a second `jump` press in the air, held | The bow spins like a propeller. The fall is capped at 1.8 m/s, she steers at 4.5 m/s, up to 1.5 s, once per jump. The start spins a 1.0 m hit for 6 damage and knocks crows back. After a Pounce pogo it carries 1.35 times further. Holding Jump from the take-off never twirls. |
+| `twirl` | Ribbon Twirl | a second `jump` press in the air, held | Her pink bow lifts to her crown, lies flat and spins like a propeller (two thin pink swish arcs ride it). Her arms go out like wings and she turns a slow pirouette. The fall is capped at 1.8 m/s, she steers at 4.5 m/s, up to 1.5 s, once per jump. The start spins a 1.0 m hit for 6 damage and knocks crows back. After a Pounce pogo it carries 1.35 times further. Holding Jump from the take-off never twirls. A press inside the coyote time after walking off a ledge is a jump, not a twirl. |
 
 ## Per-enemy rules
 
@@ -34,6 +34,8 @@ The cloud (`cloudRule(e)` in `CatnipCloud.js`, pure):
 
 - `enemy.makeGiddy(sec)` returns true when it went giddy. Bosses, elites and flying crows refuse.
 - The `giddy` state: on its back, paws wiggling, no attacks. A jeer is cut off (the jeer state's exit ends the aura).
+- While it lies there its held weapon (`enemy.weaponRoot`) is hidden, so no club points up from its back (TT4).
+- The cloud's reach is its bold lilac rim (2.5 m). The big white ring some fights show is a hyena's jeer wave, not the cloud.
 - The plate flips to its friend word (GRUMP to GIGGLER, SNACK SNATCHER to SNACK SHARER) and flips back when it gets up.
 - The first hit wakes it. Combat counts that hit as a ×1.5 crit (`Combat._critTaken`). Hearts pop.
 - `giddy` is in `PASSIVE_ENEMY_STATES`, so a giddy foe is no Standing Ground threat.

@@ -20,6 +20,8 @@ export const OUTLINE = Object.freeze({
   px: Object.freeze({ hero: 1.4, companion: 1.6, enemy: 1.6, boss: 2.4 }), maxPx: 3,
   ink: '#4A2A1E', hero: '#7C3B41', mix: 0.4, keyK: 0.3,
   margin: 0.002, furMargin: 0.01, fade: 0.2,
+  /** Depth offset [factor, units] of a lite kitten's bare-skin hull (TT4). */
+  bareOffset: Object.freeze([4, 8]),
   /** QUALITY.outline → which actors get a hull (X9). */
   tiers: Object.freeze({
     hero: Object.freeze(['hero', 'boss']),
@@ -77,11 +79,16 @@ export function buildOutline(target, o = {}) {
   const visible = into ? into.visible : true;
   const mesh = buildSilhouetteProxy(root, {
     skeleton: o.skeleton ?? r?.kitten?.skeleton, margin: OUTLINE.margin, furMargin: OUTLINE.furMargin, into, normals: true, tight: true,
+    // TT4: lite (bare, vertex-coloured) kittens are inked from their own skinned body (no scalloped tail bands)
+    bareSkin: !!r?.kitten?.lite,
   });
   if (!mesh) return into;
   if (!into) {
     const xr = mesh.material;
     mesh.material = outlineMaterial(o.color ?? OUTLINE.hero, o.px ?? OUTLINE.px.hero);
+    // TT4: a hull from the body's own triangles sits right under thin layers (tunic, bib): pushed back in depth so its
+    // back faces never poke through them
+    if (r?.kitten?.lite) Object.assign(mesh.material, { polygonOffset: true, polygonOffsetFactor: OUTLINE.bareOffset[0], polygonOffsetUnits: OUTLINE.bareOffset[1] });
     xr.dispose();
     const dispose = mesh.userData.dispose;
     mesh.userData.dispose = () => { dispose?.(); };

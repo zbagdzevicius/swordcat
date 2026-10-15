@@ -423,7 +423,8 @@ export class Tutorial {
       this._pearlArrive();
       this.waitT = PRACTICE.introSec;
       // TT2: the skip is offered from second 0 (the Skip chip, and this toast once), never only after 20 s
-      if (!this._skipToasted) { this._skipToasted = true; ctx.bus.emit(E.TOAST, { key: 'tut.skip', icon: 'hint' }); }
+      // TT4: only when no Skip chip shows ("Skip ▸▸ hold Start" already says it: the controls pass saw it twice)
+      if (!this._skipToasted) { this._skipToasted = true; if (!this.story?.skipChip?.on) ctx.bus.emit(E.TOAST, { key: 'tut.skip', icon: 'hint' }); }
     }
     this._sample(dt, p);
 

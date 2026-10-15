@@ -1052,6 +1052,8 @@ body:not(.ui-touch) .ui-hint.is-on:not(.is-dim) { pointer-events: auto; }
   body.ui-touch.ui-lefty .ui-root .hud-tr { right: auto; left: calc(16px + env(safe-area-inset-left)); }
   body.ui-touch.ui-lefty .ui-root .ui-hint { left: auto; right: calc(16px + env(safe-area-inset-right)); }
 }
+/* TT4: the objective pill steps aside while the guide bubble's chip says the same line (hud.js `is-dup`) */
+.hud-guide.is-dup { opacity: 0 !important; pointer-events: none; }
 /* TT3 R3 (TOKENTAILS-PLAN §10.2.10) phone toasts: hud.js moves the slot out of the top-centre column on phones and sets
    --tx / --ty / --tw (phoneToastBox): landscape the left column under the HUD block, short of the middle third where Clem
    stands (mirrored for left-handed play); portrait the band under the HUD strip, short of the Skip chip. 2 at a time. */
@@ -1066,6 +1068,8 @@ body:not(.ui-touch) .ui-hint.is-on:not(.is-dim) { pointer-events: auto; }
 @media (orientation: portrait) and (max-width: 560px) {
   body.ui-touch .ui-root.ui-root .hud-tc { top: max(calc(92px + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); }
   body.ui-touch .ui-root.ui-root .ui-hint { top: max(calc(96px + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); }
+  /* TT4: under the objective line (hud.js sets --guide-b): the card covered the pill at 390×844 */
+  body .ui-root.ui-root.has-guide-under .ui-hint, body.ui-touch .ui-root.ui-root.has-guide-under .ui-hint { top: calc(var(--guide-b, 150px) + 8px); }
 }
 
 
@@ -1110,6 +1114,9 @@ body:not(.ui-touch) .ui-hint.is-on:not(.is-dim) { pointer-events: auto; }
 /* ---- keycaps: white pills, cocoa Fredoka 600 (WA §4.2) */
 kbd.ui-key { color: var(--cocoa); background: #FFFFFF; border: 2px solid var(--cocoa); border-radius: 999px; box-shadow: 0 2px 0 var(--cocoa); font-weight: 600; }
 kbd.ui-key--sword { background: linear-gradient(var(--pinkHi), var(--pink)); border-color: var(--pinkDark); box-shadow: 0 2px 0 var(--pinkDark); color: #fff; }
+/* TT4: the touch Attack chip carries the sword icon (the UI font has no ⚔ glyph) */
+kbd.ui-key--sword .ico-sword { width: 1.25em; height: 1.25em; vertical-align: -.25em; display: inline-block; }
+.ui-key-a11y { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---- ART §9.1 A0 layers: the warm vignette and the opacity-only flash (pointer-events none; never occluders) */
 .ui-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(120% 95% at 50% 46%, transparent 62%, #B4664A2E 100%); }
@@ -1304,6 +1311,10 @@ kbd.ui-key--sword { background: linear-gradient(var(--pinkHi), var(--pink)); bor
 .cel-card.is-sticker.is-pop .cel-pop { animation: popIn .28s var(--ease-pop) both, stickerWiggle 1.2s ease-in-out .3s 1; }
 @keyframes stickerWiggle { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(2deg); } 75% { transform: rotate(-2deg); } }
 .cel-card.is-sticker .cel-burst { display: none; }
+/* TT4: on touch the sticker pops in the upper middle, clear of the thumb cluster (at the right edge it covered Attack
+   and Jump while it wiggled and flew home) */
+body.ui-touch .cel-card.is-sticker { right: auto; left: calc(50% + 64px); top: 18vh; }
+@media (orientation: portrait) { body.ui-touch .cel-card.is-sticker { top: 30vh; } }
 .cel-card.is-sticker .cel-ico { width: 88px; height: 88px; }
 .cel-card.is-sticker .cel-title { font-size: 20px; -webkit-text-stroke: 4px var(--cocoa); color: #FFF8EE; }
 /* docked (an alerted foe within 15 m): 60 % under the objective line, no flash, no pose */
@@ -1635,6 +1646,8 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
 @media (orientation: portrait) and (max-width: 560px) {
   .title-skip { right: auto; bottom: auto; left: max(12px, env(safe-area-inset-left)); top: max(14px, env(safe-area-inset-top)); }
   html[data-embed="1"] .title-skip { top: calc(14px + var(--embed-gut, 56px)); }
+  /* TT4: in the embed the link sits below the host's CLOSE gutter, so the logo steps down under it (it covered "PINK") */
+  html[data-embed="1"] .title-logo, html[data-embed="1"] .ui-title.has-menu .title-logo { top: calc(66px + var(--embed-gut, 56px) + env(safe-area-inset-top)); }
 }
 
 .tt-pill { display: inline-flex; align-items: center; gap: .45em; padding: .12em .95em .14em .28em; border-radius: 999px; white-space: nowrap;

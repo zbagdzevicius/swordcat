@@ -65,6 +65,8 @@ export function capeMaterial(style = 'red', o = {}) {
         diffuseColor.rgb = mix(diffuseColor.rgb, uHem, hemK);
         diffuseColor.rgb *= mix(0.82, 1.0, smoothstep(0.0, 0.25, vCapeUv.y)); // grimy hem / fold shade
         diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.72, 1.0, vCapeUv.y));  // tucked under the collar / head
+        // TT4: rounder across the back with three soft folds, a little deeper toward the hem (the back read flat and loud)
+        diffuseColor.rgb *= (0.6 + 0.4 * sin(clamp(vCapeUv.x, 0.0, 1.0) * PI)) * (0.84 + 0.16 * cos(vCapeUv.x * 18.85)) * mix(0.86, 1.0, smoothstep(0.1, 0.6, vCapeUv.y));
         // readability from above: a lighter trim on the cape tip (the bottom 2 cm), faded in by the top-view factor
         {
           vec3 trimC = min(max(diffuseColor.rgb, uHem) * 1.3 + 0.06, vec3(1.0));

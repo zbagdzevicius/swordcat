@@ -1,7 +1,7 @@
 // src/fx/TrickFX.js  (owner: fx, TT3 package A) — the Paw Trick visuals (docs/TOKENTAILS-PLAN.md §11.3). Driven by
 // player.tricks (PawTricks) from Player.render; visual only, never touches the simulation.
 //   ":3" Coin Toss   a spinning gold ":3" coin (the Token Tails coin), a gold sparkle trail and a short streak
-//   Ribbon Twirl     two pink ribbon loops spinning over her bow, pink petals / hearts while she glides
+//   Ribbon Twirl     two thin pink swish arcs around her spinning bow rotor, pink petals / hearts while she glides
 //   Catnip Cloud     the lilac pouch in flight, then a soft lilac dome with puffs, little hearts, "z" and "♪" icons
 //   aim              a dotted gold line (coin) or the lilac landing ring (cloud) while the trick button is held
 // Particles go through ctx.fx.burst (the shared pooled particles); the few meshes here are built once on first use and
@@ -14,6 +14,11 @@ const PAL = Object.freeze({
   lilac: '#C9A8F0', lilacDeep: '#9A88C9', lilacHi: '#F0C5FD', leaf: '#7FD66B',
 });
 const DOTS = 14;
+/** TT4 coin look: radius (m; her head is ~0.5 m wide) and the halo sprite size (m). */
+const COIN_FX = Object.freeze({ r: 0.16, halo: 0.62 });
+const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** TT4 twirl swish arcs: radius (m) around the bow rotor. */
+const TWIRL_FX = Object.freeze({ r: 0.2 });
 /** fx.burst option bags (reused: no allocation per frame) */
 const B_TRAIL = Object.freeze({ count: 1, color: PAL.gold, scale: 0.6 });
 const B_PUFF = Object.freeze({ count: 2, color: PAL.lilac, scale: 1.2 });
@@ -91,14 +96,14 @@ export class TrickFX {
     const tex = coinTexture();
     const face = owned(new THREE.MeshBasicMaterial({ map: tex, color: '#FFFFFF' }));
     const rim = owned(new THREE.MeshBasicMaterial({ color: PAL.goldDeep }));
-    const coinGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.06, 28, 1).rotateX(Math.PI / 2);   // faces along ±Z
+    const coinGeo = new THREE.CylinderGeometry(COIN_FX.r, COIN_FX.r, 0.045, 28, 1).rotateX(Math.PI / 2);   // faces along ±Z
     this.coin = new THREE.Mesh(coinGeo, [rim, face, face]);
     this.coin.name = 'trick:coin';
     this.coin.visible = false; this.coin.renderOrder = 4;
     this.root.add(this.coin);
     // a soft gold glow behind it so the coin reads at phone size against grass and stone
     this.halo = new THREE.Sprite(owned(new THREE.SpriteMaterial({ map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false, toneMapped: false })));
-    this.halo.visible = false; this.halo.renderOrder = 3; this.halo.scale.setScalar(0.95);
+    this.halo.visible = false; this.halo.renderOrder = 3; this.halo.scale.setScalar(COIN_FX.halo);
     this.root.add(this.halo);
     // the streak behind it: a stretched additive quad, always facing up-ish
     const streakMat = owned(new THREE.MeshBasicMaterial({ color: PAL.sparkle, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }));
@@ -129,8 +134,10 @@ export class TrickFX {
     this.dome = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), domeMat);
     this.dome.visible = false; this.dome.renderOrder = 2;
     this.root.add(this.dome);
-    const rimMat = owned(new THREE.MeshBasicMaterial({ color: PAL.lilacHi, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
-    this.cloudRim = new THREE.Mesh(new THREE.RingGeometry(0.94, 1.0, 48).rotateX(-Math.PI / 2), rimMat);
+    // TT4: a bolder rim (the reach of the cloud must read at a glance next to a hyena's big jeer wave)
+    const rimMat = owned(new THREE.MeshBasicMaterial({ color: PAL.lilacDeep, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+    this.cloudRim = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48).rotateX(-Math.PI / 2), rimMat);
+    this.cloudRim.renderOrder = 3;
     this.cloudRim.visible = false;
     this.root.add(this.cloudRim);
     this.glyphs = [];
@@ -143,13 +150,14 @@ export class TrickFX {
       this.root.add(s);
       this.glyphs.push(s);
     }
-    // ---- the twirl: two pink ribbon loops over her bow
-    const ribMat = owned(new THREE.MeshBasicMaterial({ color: PAL.pink, transparent: true, opacity: 0.9, side: THREE.DoubleSide, toneMapped: false }));
-    const ribDeep = owned(new THREE.MeshBasicMaterial({ color: PAL.pinkDeep, transparent: true, opacity: 0.8, side: THREE.DoubleSide, toneMapped: false }));
+    // ---- the twirl: two thin pink swish arcs around her spinning bow (TT4: centred on the bow itself, small, so the
+    // bow reads as the propeller; they were a big disc a head above her)
+    const ribMat = owned(new THREE.MeshBasicMaterial({ color: PAL.pink, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
+    const ribDeep = owned(new THREE.MeshBasicMaterial({ color: PAL.pinkDeep, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
     this.ribbons = new THREE.Group();
-    const loopGeo = new THREE.TorusGeometry(0.34, 0.03, 6, 28, Math.PI * 1.6);
+    const loopGeo = new THREE.TorusGeometry(TWIRL_FX.r, 0.012, 5, 24, Math.PI * 0.9);
     const l1 = new THREE.Mesh(loopGeo, ribMat); l1.rotation.x = Math.PI / 2;
-    const l2 = new THREE.Mesh(loopGeo, ribDeep); l2.rotation.x = Math.PI / 2; l2.rotation.z = Math.PI; l2.scale.setScalar(0.78); l2.position.y = 0.07;
+    const l2 = new THREE.Mesh(loopGeo, ribDeep); l2.rotation.x = Math.PI / 2; l2.rotation.z = Math.PI;
     this.ribbons.add(l1, l2);
     this.ribbons.visible = false;
     this.root.add(this.ribbons);
@@ -184,7 +192,11 @@ export class TrickFX {
     if (cam) m.lookAt(cam.position);
     m.rotateY(Math.sin(c.spin * 0.55) * 0.9);
     m.rotateZ(Math.sin(c.spin * 0.21) * 0.25);
-    this.halo.scale.setScalar(0.9 + 0.12 * Math.sin(this._t * 18));
+    // TT4: small and halo-less beside her (the glow tinted her crimson eyes amber); full size once it is away
+    const p = this.tricks.player, d = Math.hypot(v.x - p.pos.x, v.z - p.pos.z);
+    m.scale.setScalar(0.45 + 0.55 * smooth(0.3, 0.9, d));
+    this.halo.scale.setScalar(COIN_FX.halo * (0.9 + 0.12 * Math.sin(this._t * 18)));
+    this.halo.material.opacity = smooth(0.7, 1.5, d);
     const sp = Math.hypot(c.vel.x, c.vel.z);
     s.visible = sp > 2;
     if (s.visible) {
@@ -235,7 +247,7 @@ export class TrickFX {
     this.dome.position.copy(c.pos); this.dome.scale.set(k, k * 0.42 * (1 + 0.04 * Math.sin(this._t * 3)), k);
     this.dome.material.opacity = 0.22 * fade;
     this.cloudRim.position.set(c.pos.x, c.pos.y + 0.04, c.pos.z); this.cloudRim.scale.setScalar(k);
-    this.cloudRim.material.opacity = 0.5 * fade;
+    this.cloudRim.material.opacity = 0.8 * fade;
     for (let i = 0; i < this.glyphs.length; i++) {
       const s = this.glyphs[i], a = this._t * 0.8 + (i / this.glyphs.length) * Math.PI * 2, rr = R * (0.35 + 0.35 * ((i * 37) % 10) / 10);
       const rise = ((this._t * 0.5 + i * 0.37) % 1);
@@ -256,7 +268,9 @@ export class TrickFX {
     const rb = this.ribbons;
     if (!on) { rb.visible = false; return; }
     rb.visible = true;
-    rb.position.set(p.object3d.position.x, p.object3d.position.y + (p.height ?? 1) * 1.15, p.object3d.position.z);
+    const bow = p.model?.k?.bow;
+    if (bow?.parent) { bow.updateWorldMatrix(true, false); bow.getWorldPosition(rb.position); }
+    else rb.position.set(p.object3d.position.x, p.object3d.position.y + (p.height ?? 1) * 0.95, p.object3d.position.z);
     rb.rotation.y += dt * 18;
     const sq = 1 + 0.08 * Math.sin(this._t * 20);
     rb.scale.set(sq, 1, sq);

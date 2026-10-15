@@ -22,6 +22,7 @@ export const TRICKS = Object.freeze({
     valor: 2,            // Valor per hit
     r: 0.32,             // coin hit radius (m)
     lift: 0.6,           // flies at her chest: feet + lift
+    spawnFwd: 0.45,      // m in front of her where it leaves her paw (TT4: it used to start inside her head)
     toss: 0.25,          // the `toss` state (s); the coin leaves at `release`
     release: 0.08,
     catchR: 0.7,         // back in her paw within this (m)

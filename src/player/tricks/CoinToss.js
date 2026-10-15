@@ -129,7 +129,7 @@ export class CoinToss {
     if (this.active) return false;
     const p = this.player, l = Math.hypot(dx, dz) || 1;
     this.dir.x = dx / l; this.dir.z = dz / l;
-    this.origin.x = p.pos.x; this.origin.y = p.pos.y + C.lift; this.origin.z = p.pos.z;
+    this.origin.x = p.pos.x + this.dir.x * C.spawnFwd; this.origin.y = p.pos.y + C.lift; this.origin.z = p.pos.z + this.dir.z * C.spawnFwd;
     this._set(this.pos, this.origin); this._set(this.prev, this.origin);
     this.phase = 'out'; this.t = 0; this.legT = 0; this.legDur = C.total / 2; this.hoverT = 0;
     this.hitsOut.clear(); this.hitsBack.clear();
@@ -170,7 +170,7 @@ export class CoinToss {
     this.t += dt; this.legT += dt; this.spin += dt * 22;
     if (!p?.alive || Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) > C.range * 4) { this.reset(); return; }
     if (this.phase === 'out') {
-      const u = Math.min(1, this.legT / this.legDur), d = C.range * Math.sin(u * Math.PI * 0.5);
+      const u = Math.min(1, this.legT / this.legDur), d = (C.range - C.spawnFwd) * Math.sin(u * Math.PI * 0.5);   // apex 8 m from her
       this.pos.x = this.origin.x + this.dir.x * d; this.pos.z = this.origin.z + this.dir.z * d;
       this.pos.y = this.origin.y;
       if (this._wall()) { this.turnBack('wall'); }
@@ -244,7 +244,13 @@ export class CoinToss {
       }
     }
     this._q.length = 0;
-    if (out && best) { set.add(best.id); this.hit(best, true); if (this.lastRes === 'none') set.delete(best.id); }
+    if (out && best) {
+      // TT4: the bonk lands on the foe (just in front of its centre), so the hop back still leaves it in reach of the
+      // return pass whatever the step size or the spawn point in front of her paw
+      const rr = (best.radius ?? 0.35) * 0.5;
+      this.pos.x = best.pos.x - this.dir.x * rr; this.pos.z = best.pos.z - this.dir.z * rr;
+      set.add(best.id); this.hit(best, true); if (this.lastRes === 'none') set.delete(best.id);
+    }
   }
 
   /**

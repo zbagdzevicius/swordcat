@@ -150,7 +150,7 @@ export class TextSprite {
     let si = null;
     try { si = safeInsetsOf?.(); } catch { si = null; }
     const k = si?.h > 0 ? ph / si.h : 1;
-    const insB = Math.min(ph * 0.45, Math.max(0, (si?.bottom ?? 0) * k)), insT = Math.min(ph * 0.45, Math.max(0, (si?.top ?? 0) * k));
+    const insB = Math.min(ph * 0.45, Math.max(0, (si?.bottom ?? 0) * k)), insT = Math.min(ph * 0.45, Math.max(0, (si?.bubbleTop ?? si?.top ?? 0) * k));
     const { dx, dy } = clampShift(_anchor.x, _anchor.y, l, r, b, t, (BUBBLE_MARGIN_PX * 2) / pw, (BUBBLE_MARGIN_PX * 2) / ph,
       ((insB + BUBBLE_MARGIN_PX) * 2) / ph, ((insT + BUBBLE_MARGIN_PX) * 2) / ph);
     sp.center.set(0.5 - dx / W, -dy / H);

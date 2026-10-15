@@ -34,6 +34,8 @@ export class SafeFrame {
     this.core = { x0: 0.06, y0: 0.12, x1: 0.94, y1: 0.88 };
     this.threat = { x0: 0.02, y0: 0.02, x1: 0.98, y1: 0.98 };
     this.herFrame = { x0: 0.125, y0: 0.125, x1: 0.875, y1: 0.875 };
+    /** herFrame for calm walking (TT4): the landscape bottom raised by `frame.herBottomPad` */
+    this.herFrameCalm = { x0: 0.125, y0: 0.125, x1: 0.875, y1: 0.875 };
     /** the anchor (where her focus sits) */
     this.ax = 0.5; this.ay = 0.54;
     /** holes: [x0, y0, x1, y1] × (static + live), normalised, padded */
@@ -96,6 +98,12 @@ export class SafeFrame {
     F.x0 = Math.max(C.x0, hi); F.x1 = Math.min(C.x1, 1 - hi); F.y0 = Math.max(C.y0, hi); F.y1 = Math.min(C.y1, 1 - hi);
     if (F.x1 < F.x0) F.x0 = F.x1 = this.ax;
     if (F.y1 < F.y0) F.y0 = F.y1 = this.ay;
+    // TT4 calm frame (out of combat, no boss): in landscape her bottom edge sits `herBottomPad` higher (her ring and feet
+    // hang below her focus point; walking toward the paw trail put the ring on the desktop ability bar). Fights keep
+    // herFrame, so a boss / pack fit keeps its room at the top
+    const K = this.herFrameCalm;
+    K.x0 = F.x0; K.x1 = F.x1; K.y0 = F.y0;
+    K.y1 = Math.max(F.y0, Math.min(F.y1, C.y1 - (this.portrait ? 0 : cfg.herBottomPad ?? 0)));
     this.version++;
     return this;
   }

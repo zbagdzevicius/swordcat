@@ -1707,7 +1707,9 @@ export class FollowCamera {
       this._solveT = 1 / FR.hz;
       this._tel.dirty = false;
       this._gather(feet, boss, tick);
-      herLimits(this._pitch || base.pitch, Math.max(base.dist, this._dCur || base.dist), v.tanV, v.tanH, A.toX, A.toY, this.safeFrame.herFrame, this._lim);
+      // TT4: calm walking keeps her ring off the ability bar (herFrameCalm); fights and bosses use the full herFrame
+      const hf = boss || this.subjects.n > 1 ? this.safeFrame.herFrame : this.safeFrame.herFrameCalm;
+      herLimits(this._pitch || base.pitch, Math.max(base.dist, this._dCur || base.dist), v.tanV, v.tanH, A.toX, A.toY, hf, this._lim);
       this._solve(feet, boss, base, prof, calm);
       this._forceSolve = false;
     }
@@ -1751,7 +1753,7 @@ export class FollowCamera {
       smoothDamp2(this._aim, this._aimT.x, this._aimT.z, this._aimS, aim || this._aimHoldT > 0 ? I.aimPan.in : I.aimPan.out, dt, FR.lean.vmax);
       smoothDamp2(this._beatOff, beat.lx * bw, beat.lz * bw, this._beatS, BEAT_ST, dt, FR.lean.vmax);
     }
-    // §2.3 peek (Z / MMB / pad D-pad ↓ + RS), out of combat
+    // §2.3 peek (Z / MMB / pad L3 held + RS), out of combat
     this._peekStep(dt, p, feet, combat, snap);
     // desktop lock modes (§10.4): semi = a pan inside herFrame that springs home; free = the leash pan (after the clamp)
     this._panStep(dt, feet, W, H, yaw, combat);

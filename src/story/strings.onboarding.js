@@ -57,8 +57,12 @@ export const ONBOARDING_STRINGS = Object.freeze({
 
   // ---- after the fight: the barn chest, then north
   'onb.chest': 'Open the chest in the barn!',
+  // TT4: touch and pad name their open button already on the way (the controls pass found the step slow: players
+  // guessed the button); the barn chest tag says "Open" with the same glyph
+  'onb.chest.pad': 'Open the chest in the barn! [Interact]',
+  'onb.chest.touch': 'Go to the chest, tap it or [Interact]!',
   'onb.chest.near': 'Open the chest! [Interact]',
-  'onb.chest.near.touch': 'Tap the chest to open it!',
+  'onb.chest.near.touch': 'Tap the chest or [Interact] to open it!',
   'onb.north': 'North, to Mochi\'s cart!',
   'onb.mochi': 'Bonk the cart open! [Attack]',
   'onb.mochi.go': 'Follow the paws to Mochi\'s cart!',

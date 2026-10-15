@@ -1724,6 +1724,8 @@ export class Enemy extends ScriptedActorMixin(Actor) {
       v.rotation.x = -Math.PI * 0.5 * e2;
       v.position.y = (this.radius ?? 0.35) * 0.75 * e2;
       v.rotation.z = Math.sin(this._giddyPh) * 0.16 * e2;
+      // TT4: the weapon is let go while it lies giggling (held on, it pointed straight up from its back)
+      if (this.weaponRoot) this.weaponRoot.visible = e2 < 0.35;
       if (w === 0) { v.rotation.x = 0; v.position.y = 0; }
       return;
     }
@@ -1743,6 +1745,7 @@ export class Enemy extends ScriptedActorMixin(Actor) {
    */
   detachVisual() {
     if (!this.poolKey || !this.visual || this.disposed || (this.def.model && !this.anim)) return null;
+    if (this.weaponRoot) this.weaponRoot.visible = true;   // TT4: a giddy foe hides it; the pooled visual gets it back
     const rec = { key: this.poolKey, fields: {}, extraProps: { ...this.extraProps }, vis: this._visSnapshot ?? null };
     for (const k of VISUAL_FIELDS) { rec.fields[k] = this[k]; this[k] = k === '_flash' ? [] : null; }
     this.extraProps = {};

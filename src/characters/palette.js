@@ -31,7 +31,7 @@ export const PAL = Object.freeze({
 /** Cape colours (GAME_DESIGN §13.5; §13.3 shop capes). id → { color, lining, sheen, hem }. */
 export const CAPES = Object.freeze({
   cream:     { color: '#CDBB98', lining: '#A08C68', sheen: '#EADCC0', hem: '#B09A72' },   // Marmalade's faded cape
-  red:       { color: '#D9323F', lining: '#C9505E', sheen: '#F06A72', hem: '#E2C05A' },      // royal red, Token Tails gold trim (PAL.trimGold); TT3: a rosy lining (the #9A1F3A maroon read as a dark band)
+  red:       { color: '#D9323F', lining: '#B8505C', sheen: '#EC7A80', hem: '#E2C05A' },      // royal red, Token Tails gold trim (PAL.trimGold); TT3: a rosy lining (the #9A1F3A maroon read as a dark band); TT4: a lining of the same hue, and Cape.js shades the back rounder with soft folds (it read flat and loud)
   memeWhite: { color: '#FFF3E2', lining: '#F2DCC8', sheen: '#FFFFFF', hem: '#FF9EC0' },      // id kept (save / shop / unlock); ivory + pink hem stripe
   blue:      { color: '#3F6FB5', lining: '#25426E', sheen: '#8DB0E8', hem: '#D9B26A' },
   green:     { color: '#5E7F3E', lining: '#3A4F26', sheen: '#A9C57E', hem: '#D9B26A' },

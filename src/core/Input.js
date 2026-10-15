@@ -542,6 +542,8 @@ export class Input {
       // the release of a queued press is queued wherever it lands (over the HUD too), so hold-to-follow always ends
       if (this.iso && this._clickDown.delete(e.button)) this._queueClick({ button: e.button, x: e.clientX, y: e.clientY, down: false, t: nowMs(), mods: { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } });
       for (const a of this._bind.get(code) ?? []) this._release(a, 'm:' + code);
+      // TT4: Chrome and Firefox go Back / Forward on the side buttons' release, so their mouseup is held too (Mouse3 Tumbles)
+      if (e.button === 3 || e.button === 4) e.preventDefault();
     });
     on(canvas, 'contextmenu', (e) => e.preventDefault());
     // TT3 §11.5 K2: a right-click over the HUD (Pearl's bubble, the objective line, a toast) still reaches the actions

@@ -74,7 +74,9 @@ export const PROLOGUE_TICK = 0.1;
  * with the chest line and the ghost paw on the barn chest (`idleDemo` s). The way there is the Pink Paw trail
  * (guideTarget); the old sparkle trails are gone.
  */
-export const BARN_GUIDE = Object.freeze({ delay: 0.6, idleDemo: 4 });
+// TT4: delay 0.6 → 2.1 s: the bubble waits for Clem's 2 s "Yard clear!" bark to end (they overlapped on screen); the
+// paw trail leads to the chest from the start either way
+export const BARN_GUIDE = Object.freeze({ delay: 2.1, idleDemo: 4 });
 
 /** Onboarding target ids that are not quest rows (the bot and G1 read `id` / `kind`). */
 /** Chapter 1 onboarding: alerted foes this close to her (m) take the guide (fight line) before the next step's spot. */

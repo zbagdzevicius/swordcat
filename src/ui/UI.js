@@ -855,6 +855,17 @@ export class UI {
     let tcb = 0;
     if (tc && this.hud.visible !== false) { const b = tc.getBoundingClientRect(); if (b.height > 0) tcb = Math.ceil(b.bottom); }
     setVar(this.root, '--tc-b', `${tcb}px`);
+    // TT4: world speech bubbles (Bubble.js) also stay under the top band's screen text: the top-centre column, the
+    // objective line and the lesson card (a hyena's "Hehehe" sat on the hint, a kitten's line on the objective pill)
+    let bt = top;
+    if (this.hud?.visible !== false) {
+      for (const el of [tc, this.hud?.guideEl, this.prompts?.hintEl, this.prompts?.guide?.root]) {
+        if (!el || el.offsetParent === null) continue;
+        const b = el.getBoundingClientRect();
+        if (b.height > 0 && b.top - r.top < r.height * 0.4) bt = Math.max(bt, Math.ceil(b.bottom - r.top));
+      }
+    }
+    s.bubbleTop = Math.min(bt, r.height * 0.4);
   }
 
   _skipHold(dt, mode, input) {

@@ -19,6 +19,9 @@ import { E } from '../core/events.js';
 import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
 import { damp, clamp, lerp, easeSwing, easeOutCubic, easeInOutSine, wrapAngle, dampAngle, Spring } from '../core/math.js';
 import { KittenView, MEME_CAPE, visualDt, swordcatConfig, solveTwoBone, ARM, SWORD_PTS, POSES, mulberry32, SWORD_SKINS, CAPES } from '../characters/index.js';
+import { EXPRESSIONS } from '../characters/Eyes.js';
+/** TT4: story brows show only for expressions whose brow angle is at least this (deg): worried, sad, angry, grumpy. */
+export const BROW_MIN_DEG = 12;
 import { ENV_U } from '../world/tone.js';
 import { TUNING } from './tuning.js';
 import { Squash, SQUASH, FEEL, ORDER_FX } from './juice.js';
@@ -102,7 +105,9 @@ function rot(j, x, y, z) {
 export const OUTFITS = Object.freeze(['armour', 'tunic', 'tunic_sword', 'tunic_bow']);
 
 /** TT3 Paw Trick poses (docs/TOKENTAILS-PLAN.md §11.4): blend rate (1/s), bow spin (rad/s), cape wind gain. */
-export const TRICK_POSE = Object.freeze({ names: Object.freeze(['toss', 'twirl']), rate: 16, bowSpin: 18, capeWind: 2.5 });
+export const TRICK_POSE = Object.freeze({ names: Object.freeze(['toss', 'twirl']), rate: 16, bowSpin: 18, capeWind: 2.5,
+  /** TT4 twirl: the bow lifts to her crown (head space, H) and spins flat like a rotor, scaled up; the body pirouettes. */
+  rotor: Object.freeze({ at: Object.freeze([0, 0.39, -0.01]), scale: 1.5, tilt: 0.12 }), bodySpin: 9 });
 
 /**
  * Paw Trick pose weight (pure, node-safe): `set(name, w)` sets the weight ('toss' | 'twirl', w 0..1; package A sends
@@ -443,7 +448,8 @@ export class SwordcatModel {
     if (!p.scripted || !this.scriptPose) this._expression();
     else if (this.exprOverride && this.expr !== this.exprOverride) { this.expr = this.exprOverride; k.setExpression(this.exprOverride); }
     // TT3: brows only in story beats (scripted / an override); in play the lids carry the mood
-    const brows = !!(p.scripted || this.exprOverride);
+    // TT4: and only for a face that needs them (a clear brow angle); the small happy / neutral brows read as flat patches
+    const brows = !!(p.scripted || this.exprOverride) && Math.abs(EXPRESSIONS[this.expr]?.brow?.[0] ?? 0) >= BROW_MIN_DEG;
     if (brows !== this._brows || k !== this._browK) { this._brows = brows; this._browK = k; k.eyes?.showBrows?.(brows); }
     this._propsForState();
     this.view.animate(frameDt);
@@ -477,7 +483,7 @@ export class SwordcatModel {
     this._swordDriver(J, dt, alpha);
 
     // whole-body spin (full-circle attacks) and hop live on the kitten root (actor yaw is the sim facing)
-    k.root.rotation.y = this.sw.spin;
+    k.root.rotation.y = this.sw.spin + (this._twirlYaw ?? 0);
     k.root.position.y = Math.max(0, this.sw.hop) + this._stepSmooth(dt) + this._hopY(dt);
 
     this._glow(dt);
@@ -503,7 +509,8 @@ export class SwordcatModel {
     }
     switch (p.state) {
       case 'dead': return 'sit';                     // WA §5.7: a dizzy sit, never lying flat
-      case 'guard': case 'vigil': return 'vigil';
+      case 'guard': return 'block';                  // TT4: the blade flat across her (the vigil hid it from behind)
+      case 'vigil': return 'vigil';
       case 'charge': case 'golden': case 'memecam': return 'oath';
       case 'sip': return 'sip';
       case 'rise': return p.stateT < PLAYER.stillStanding.riseDur * 0.45 ? 'kneel' : 'ready';
@@ -530,7 +537,7 @@ export class SwordcatModel {
       case 'vigil': x = 'earnest'; break;
       default:
         if (p.meowT > 0 || p.zoomies || this.happyT > 0 || this.idleAnim?.name === 'groom' || this.idlePose === 'sit') x = 'happy';
-        else if (this.slowBlinkT > 0) x = 'sleepy';
+        else if (this.slowBlinkT > 0) x = 'joy';     // TT4: the cat slow blink is a happy ^^ squint (heavy sleepy lids read grumpy)
         else if (p.hp <= 2 && p.alive) x = 'worried';
         else if (p.golden || p.combatT > 0) x = 'determined';
     }
@@ -776,9 +783,25 @@ export class SwordcatModel {
     const bow = k?.bow;
     if (bow && this._bowK !== k) { this._bowK = k; this._bowQ0 = bow.quaternion.clone(); this._bowSpin = 0; }
     const w = tp.active ? easeInOutSine(tp.w) : 0;
-    if (tp.name === 'twirl' && w > 0) this._bowSpin += dt * TRICK_POSE.bowSpin * w;
-    else this._bowSpin = damp(wrapAngle(this._bowSpin), 0, 10, dt);
-    if (bow && this._bowQ0) bow.quaternion.copy(this._bowQ0).multiply(_q.setFromAxisAngle(_v.set(0, 0, 1), this._bowSpin));
+    const twirl = tp.name === 'twirl' && w > 0;
+    if (twirl) { this._bowSpin += dt * TRICK_POSE.bowSpin * w; this._twirlYaw = (this._twirlYaw ?? 0) + dt * TRICK_POSE.bodySpin * w; }
+    else {
+      this._bowSpin = damp(wrapAngle(this._bowSpin), 0, 10, dt);
+      this._twirlYaw = damp(wrapAngle(this._twirlYaw ?? 0), 0, 12, dt);
+      if (Math.abs(this._twirlYaw) < 1e-4) this._twirlYaw = 0;
+    }
+    if (bow && this._bowQ0) {
+      if (!this._bowP0 || this._bowPK !== k) { this._bowPK = k; this._bowP0 = bow.position.clone(); this._rotorOn = false; }
+      if (twirl && J.head && bow.parent) {
+        // the rest scale is the readability scale (setTopView) at the twirl's start; put back when it ends
+        if (!this._rotorOn) { this._rotorOn = true; this._bowS0 = bow.scale.x; }
+        bow.position.copy(this._bowP0);
+        this._bowRotor(bow, J.head, w);
+      } else {
+        if (this._rotorOn) { this._rotorOn = false; bow.position.copy(this._bowP0); bow.scale.setScalar(this._bowS0); }
+        bow.quaternion.copy(this._bowQ0).multiply(_q.setFromAxisAngle(_v.set(0, 0, 1), this._bowSpin));
+      }
+    }
     if (w <= 0) return;
     if (tp.name === 'toss') {
       // the free (left) paw flung forward and up, the chest turning into it, the tail flicking up, ears perked
@@ -787,14 +810,33 @@ export class SwordcatModel {
       rot(J.tail1, 0.35 * w, 0, 0); rot(J.tail3, 0.3 * w, 0, 0);
       rot(J.earL, -0.2 * w, 0, 0); rot(J.earR, -0.2 * w, 0, 0);
     } else if (tp.name === 'twirl') {
-      // arms out like wings, a little lift in the chest, the tail curled up for balance
-      rot(J.shoulderL, 0, 0, 1.15 * w); rot(J.shoulderR, 0, 0, -1.15 * w);
-      rot(J.elbowL, -0.2 * w, 0, 0); rot(J.elbowR, -0.2 * w, 0, 0);
+      // TT4: arms out like wings (absolute targets: the additive offsets vanished under the two-handed ready grip), a
+      // little lift in the chest, the tail curled up for balance; the body pirouettes (k.root yaw, see render)
+      for (const [j, x, z] of [[J.shoulderL, -0.15, 1.25], [J.shoulderR, -0.15, -1.25], [J.elbowL, -0.35, 0], [J.elbowR, -0.35, 0], [J.pawL, 0, 0], [J.pawR, 0, 0]]) {
+        if (j) j.quaternion.slerp(_q.setFromEuler(_e.set(x, 0, z)), w);
+      }
       rot(J.chest, -0.08 * w, 0, 0); rot(J.head, -0.1 * w, 0, 0);
       rot(J.tail1, 0.25 * w, 0, 0); rot(J.tail2, 0.2 * w, 0, 0);
       rot(J.thighL, -0.35 * w, 0, 0.1 * w); rot(J.thighR, -0.25 * w, 0, -0.1 * w);
       rot(J.kneeL, 0.6 * w, 0, 0); rot(J.kneeR, 0.5 * w, 0, 0);
     }
+  }
+
+  /**
+   * TT4 twirl rotor: the bow (parented to earL) moves to her crown, lies flat and spins about the head's up axis, scaled
+   * up, blended from its rest transform by `w`. Uses last frame's world matrices (the ear sits still on the head).
+   */
+  _bowRotor(bow, head, w) {
+    const R = TRICK_POSE.rotor, par = bow.parent;
+    _mTmp.copy(par.matrixWorld).invert().multiply(head.matrixWorld);   // head space -> ear space
+    _mTmp.decompose(_v2, _q2, _s);
+    _v.set(R.at[0], R.at[1], R.at[2]).applyMatrix4(_mTmp);
+    bow.position.lerp(_v, w);
+    // flat (its face up, the loops spread out), spinning about the head's up axis, tipped a little toward the lens
+    _q.setFromAxisAngle(_v.set(0, 1, 0), this._bowSpin).multiply(_qP.setFromAxisAngle(_v.set(1, 0, 0), -Math.PI / 2 + R.tilt));
+    _q.premultiply(_q2);
+    bow.quaternion.copy(this._bowQ0).slerp(_q, w);
+    bow.scale.setScalar(this._bowS0 * (1 + (R.scale - 1) * w));
   }
 
   /** WA §5.7 knock-out: the sit pose gets a 15° dizzy head tilt (stars: fx; the dropped sword: _swordDriver). */

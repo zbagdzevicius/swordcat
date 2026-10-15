@@ -69,7 +69,8 @@ CAMERA.iso = {
   // dist 13 → 12.4: her measured height (feet → ear tips, foreshortened at ~51°) is 77 px at 1080p at 13 m; §16.2 asks ≥ 80
   yaw: Math.PI, fov: 38, fovPortrait: 50, dist: 12.4, distPhone: 12, zoom: [0.70, 1.40], distMin: 9, distMax: 18,
   pitchNear: 0.803 /* 46° */, pitchFar: 1.012 /* 58° */, pitchPortrait: 1.012, pitchBoss: 0.977 /* 56° */,
-  catH: 0.8, minCatPx: 30, minCatPxBoss: 26, minCatPxPortrait: 28, portraitWidth: 9,
+  // TT4: portraitWidth 9 → 7.5 (a 390 px phone showed her ~45 px tall: the width fit set ~21 m); combat still zooms out
+  catH: 0.8, minCatPx: 30, minCatPxBoss: 26, minCatPxPortrait: 28, portraitWidth: 7.5,
   // integration: the clamp measures her APPARENT size (feet → ear tips ≈ 1.0 m × cos pitch; 0.98 keeps a margin), what a screenshot shows
   catHView: 0.98,
   focusY: 0.6, followDamp: 12, followDampY: 6, jumpFollow: 0.3, bounceFollow: 0.5,
@@ -110,7 +111,7 @@ Object.assign(CAMERA.iso, {
   aimPan: { minRange: 5, gain: 0.40, dead: 3.0, in: 0.30, hold: 0.35, out: 0.6,
             cap: { desktop: 2.5, tablet: 2.0, phone: 1.6, portrait: 1.0 } },
   frame: { coreInset: 0.04, threatInset: 0.02, holePad: 12, thumbPad: 36, maxShiftX: 0.06, maxShiftY: 0.12,
-           landBiasY: 0.04, herInner: 0.75, herHeadPad: 0.6, herFeetPad: 0.3, herSidePad: 0.4,
+           landBiasY: 0.04, herInner: 0.75, herHeadPad: 0.6, herFeetPad: 0.3, herSidePad: 0.4, herBottomPad: 0.07 /* TT4 */,
            fitScale: 0.90, fitBottomExtra: 0.04, hysteresisFrame: 0.92, anchorEase: 0.4, grid: [32, 18] },
   framing: { solver: true, hz: 20, maxSubjects: 16, ternarySteps: 10, pitchPasses: 2, holeRepair: [0.5, 4],
              engage: { in: 10, out: 12.5, hold: 1.5 }, selHard: 12, selSoft: 16,
@@ -574,11 +575,12 @@ export const INPUT = {
   pointer: { idlePxPerSec: 24, speedWindow: 0.25, clickQueue: 8 },   // speed = net px over speedWindow s; cursor freshness: AIM.cursorIdle
   move: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] },
   // §6.3 twin-stick pad, standard layout (TT3 §11.2): A jump, B Tumble, X attack, Y interact, LB / RB the Stand,
-  // LT kitten, RT Paw Trick (hold RT + D-pad ← → ↑ picks one), View zooms, R3 selects, D-pad ↓ peeks. Golden Hour is
-  // the Stand + X within INPUT.goldenChord s (Input.js derives it).
+  // LT kitten, RT Paw Trick (hold RT + D-pad ← → ↑ picks one), View zooms, R3 selects, D-pad ↑ Milk, D-pad ↓ Meow
+  // (TT4: Meow was L3, easy to press by accident while moving and odd for an action the onboarding teaches), L3 held
+  // peeks (+ RS) and shows the ranges. Golden Hour is the Stand + X within INPUT.goldenChord s (Input.js derives it).
   pad: { jump: [0], confirm: [0], dodge: [1], back: [1], attack: [2], interact: [3], guard: [4, 5], lockon: [11], ability: [6],
-         trick: [7], golden: [], controls: [], zoomCycle: [8], pause: [9], meow: [10], milk: [12], lockPrev: [14], lockNext: [15],
-         peek: [13], ranges: [13], navUp: [12], navDown: [13], navLeft: [14], navRight: [15] },
+         trick: [7], golden: [], controls: [], zoomCycle: [8], pause: [9], meow: [13], milk: [12], lockPrev: [14], lockNext: [15],
+         peek: [10], ranges: [10], navUp: [12], navDown: [13], navLeft: [14], navRight: [15] },
   /** TT3 §11.2: while RT (`trick`) is held, these D-pad buttons pick a Paw Trick instead of their own action. */
   padTrickPick: { 14: 'trick1', 15: 'trick2', 12: 'trick3' },
   classicPad: { recenter: [11], lockon: [5], guard: [4], zoomCycle: [], peek: [], ranges: [], controls: [] },

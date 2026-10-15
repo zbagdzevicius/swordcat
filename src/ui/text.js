@@ -3,6 +3,7 @@
 // hearts, objectives, chapter cards and ranks. Node-safe: no DOM, imports only core/config.js and the pure strings table.
 import { LEVEL_IDS, KITTENS_BY_LEVEL, INPUT } from '../core/config.js';
 import { S as STORY_STRINGS } from '../story/strings.js';
+import { sword as swordIcon } from './icons.js';
 
 /**
  * UI copy the ui needs that strings.js (story) does not carry yet (requested in requests/ui.md). strings.js wins as
@@ -307,8 +308,8 @@ export const ACTION_GLYPH = Object.freeze({
     meow: 'C', golden: 'V', pause: 'Esc', lockon: 'Tab', move: 'WASD', wasd: 'WASD', look: 'Mouse', recenter: 'Home', zoom: 'Wheel', attackMove: 'X',
     stop: 'H', camLock: 'Y', aim: 'Mouse', trick: 'F', trick1: '1', trick2: '2', trick3: '3', sprint: 'hold Shift', peek: 'Z', ranges: 'Z', centre: 'Home' },
   pad: { attack: 'X', guard: 'LB', dodge: 'B', jump: 'A', interact: 'Y', confirm: 'A', back: 'B', ability: 'LT', milk: 'D-pad ↑',
-    meow: 'L3', golden: 'LB + X', pause: 'Start', lockon: 'R3', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'View', aim: 'R-stick',
-    attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: 'D-pad ↓', ranges: 'D-pad ↓', trick: 'RT', trick1: 'RT + ←', trick2: 'RT + →', trick3: 'RT + ↑',
+    meow: 'D-pad ↓', golden: 'LB + X', pause: 'Start', lockon: 'R3', move: 'L-stick', wasd: 'L-stick', look: 'R-stick', recenter: 'R3', zoom: 'View', aim: 'R-stick',
+    attackMove: '—', stop: '—', camLock: '—', centre: '—', peek: 'L3 (hold)', ranges: 'L3 (hold)', trick: 'RT', trick1: 'RT + ←', trick2: 'RT + →', trick3: 'RT + ↑',
     sprint: 'hold B' },
   touch: { attack: '⚔', guard: 'Stand', dodge: 'Tumble', jump: 'Jump', interact: '!', confirm: 'Tap', back: 'Back', ability: 'Kitten',
     milk: 'Snack', meow: 'Meow', golden: 'Golden', pause: '❚❚', lockon: 'Tap foe', move: 'Stick / tap', wasd: 'Left thumb', look: 'Drag right',
@@ -400,6 +401,13 @@ export function presetGlyph(action, preset = 'hybrid', bindings = null) {
   return actionGlyph(action, 'kbm', { codesFor: codesOf });
 }
 
+/**
+ * Inner HTML of a keycap: the touch Attack glyph ⚔ is drawn as the sword icon (TT4: the UI font has no ⚔, so it showed
+ * as a tiny "×" in the pink chip), anything else is escaped text.
+ * @param {string} label
+ */
+export function keyCapInner(label) { return label === '⚔' ? `${swordIcon('#FFFFFF')}<span class="ui-key-a11y">⚔</span>` : esc(label); }
+
 /** One `[token]` → keycap HTML for `device`. Unknown tokens stay as written. */
 function tokenHtml(inner, device, input) {
   const parts = inner.split(/\s+/);
@@ -417,7 +425,7 @@ function tokenHtml(inner, device, input) {
     }
   }
   const cls = act === 'attack' ? 'ui-key ui-key--sword' : 'ui-key';
-  return `<kbd class="${cls}">${esc(label)}</kbd>${rest ? `<span class="ui-key-x">${esc(rest)}</span>` : ''}`;
+  return `<kbd class="${cls}">${keyCapInner(label)}</kbd>${rest ? `<span class="ui-key-x">${esc(rest)}</span>` : ''}`;
 }
 
 /**
@@ -440,7 +448,7 @@ export function glyphify(text, device = 'kbm', input = null) {
 }
 
 function plainGlyphs(s, device, input) {
-  return rich(s).replace(/⚔/g, `<kbd class="ui-key ui-key--sword">${esc(actionGlyph('attack', device, input))}</kbd>`);
+  return rich(s).replace(/⚔/g, `<kbd class="ui-key ui-key--sword">${keyCapInner(actionGlyph('attack', device, input))}</kbd>`);
 }
 
 // ------------------------------------------------------------------ numbers

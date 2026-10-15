@@ -216,6 +216,12 @@ export function silhouetteParts(root, o = {}) {
       const SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, shell = g.attributes.aShell;
       if (!SI || !SW) return;
       const fur = furry(c);
+      // TT4: a bare (no fur) body in a tight hull uses its own skinned triangles. Per-bone ellipsoids and capsules stood
+      // past the lite kittens' tube tails and tunics and drew dark scalloped bands there
+      if (tight && o.bareSkin && !fur && !shell && !P.isInterleavedBufferAttribute && g.attributes.normal) {
+        parts.push({ anchor: -1, shape: 'skinned', geo: g, bindMatrix: c.bindMatrix.clone(), bones: skeleton.bones.length });
+        return;
+      }
       const nb = skeleton.bones.length, mats = new Array(nb);
       // baked fur shells are stored shell-major: the skin copy is the first run of aShell == 0
       let end = P.count;
@@ -283,10 +289,13 @@ export function silhouetteParts(root, o = {}) {
     const headTight = tight && HEAD_BONE.test(skeleton?.bones[bi]?.name ?? '');
     parts.push({ anchor: bi, matrix: headTight ? fitEllipsoid(e.pts, margin, HEAD_HULL) : fitEllipsoid(e.pts, margin + (e.fur ? furMargin : 0)), shape: 'ellipsoid', fur: headTight });
   }
-  // drop anchors no part uses (keeps the bone texture small)
-  const used = [...new Set(parts.map((p) => p.anchor))].sort((a, b) => a - b);
+  // drop anchors no part uses (keeps the bone texture small); a 'skinned' part keeps every bone
+  const usedSet = new Set(parts.map((p) => p.anchor));
+  for (const p of parts) if (p.shape === 'skinned') for (let b = 0; b < p.bones; b++) usedSet.add(b);
+  usedSet.delete(-1);
+  const used = [...usedSet].sort((a, b) => a - b);
   const remap = new Map(used.map((a, i) => [a, i]));
-  return { anchors: used.map((a) => anchors[a]), parts: parts.map((p) => ({ ...p, anchor: remap.get(p.anchor) })), skeleton };
+  return { anchors: used.map((a) => anchors[a]), parts: parts.map((p) => (p.shape === 'skinned' ? { ...p, remap } : { ...p, anchor: remap.get(p.anchor) })), skeleton };
 }
 
 /**
@@ -371,6 +380,24 @@ export function capsulePart(pts, margin) {
   return { matrix: new THREE.Matrix4().compose(centre, q, new THREE.Vector3(1, 1, 1)), shape: 'mesh', geo, margin: 0 };
 }
 
+/** Append a bare skinned body ('skinned' part) to the proxy buffers: bind-space positions, normals, remapped skin. */
+function pushSkinned(p, pos, nrm, si, sw, idx) {
+  const g = p.geo, P = g.attributes.position, N = g.attributes.normal, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight;
+  const base = pos.length / 3;
+  if (nrm) _n3.getNormalMatrix(p.bindMatrix);
+  for (let i = 0; i < P.count; i++) {
+    _v.fromBufferAttribute(P, i).applyMatrix4(p.bindMatrix);
+    pos.push(_v.x, _v.y, _v.z);
+    if (nrm) { _v.fromBufferAttribute(N, i).applyMatrix3(_n3).normalize(); nrm.push(_v.x, _v.y, _v.z); }
+    for (let k = 0; k < 4; k++) {
+      const w = SW.getComponent(i, k);
+      si.push(w > 0 ? (p.remap.get(SI.getComponent(i, k)) ?? 0) : 0); sw.push(w);
+    }
+  }
+  if (g.index) { const I = g.index.array; for (let i = 0; i < I.length; i++) idx.push(base + I[i]); }
+  else for (let i = 0; i < P.count; i++) idx.push(base + i);
+}
+
 /** `c` or any ancestor below `root` is left out of a `tight` proxy (TIGHT_KEEP). */
 function keptChain(c, root) { for (let p = c; p && p !== root; p = p.parent) if (TIGHT_KEEP.test(p.name || '')) return true; return false; }
 
@@ -437,6 +464,7 @@ export function buildSilhouetteProxy(root, o = {}) {
   // the index lists the non-fur parts first, then the instanced fur parts (setHullFur draws only the first run)
   const pos = [], idx = [], idxFur = [], si = [], sw = [], nrm = o.normals ? [] : null;
   for (const p of parts) {
+    if (p.shape === 'skinned') { pushSkinned(p, pos, nrm, si, sw, idx); continue; }
     const src = p.shape === 'mesh' ? meshShape(p.geo) : null;
     const P = src ? src.position : (p.shape === 'box' ? _cube : p.shape === 'cone' ? _cone : _ell).attributes.position;
     const N = src ? src.normal : (p.shape === 'box' ? _cube : p.shape === 'cone' ? _cone : _ell).attributes.normal;

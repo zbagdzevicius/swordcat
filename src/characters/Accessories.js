@@ -361,11 +361,13 @@ export function flowerCrown(A, { colors = ['#F7C6D9', '#F2D16B', '#FFFFFF', '#C7
   }
 }
 export function bucketHelm(A, { color = '#8C8F88' } = {}) {
-  // TT3 (Simas): a smaller pail perched on the crown between the ears, tipped back, so both ears stand clear of it
-  const g = new THREE.CylinderGeometry(0.105, 0.125, 0.13, 24, 1, true);
-  both(A, 'head', g, mat([0, 0.37, -0.02], [-0.22, 0, -0.1]), C(color), [0.45, 0.8, 0, 0]);
-  A.add('head', new THREE.CylinderGeometry(0.105, 0.105, 0.01, 24), { m: mat([0, 0.433, -0.005], [-0.22, 0, -0.1]), color: C(color), rmse: [0.45, 0.8, 0, 0] });
-  A.add('head', new THREE.TorusGeometry(0.125, 0.008, 6, 28), { m: mat([0, 0.307, -0.034], [Math.PI / 2 - 0.22, 0, -0.1]), color: C('#6E716B'), rmse: [0.45, 0.8, 0, 0] });
+  // TT3 (Simas): a smaller pail perched on the crown between the ears, tipped back, so both ears stand clear of it.
+  // TT4: seated 4 cm lower, its open rim sunk into the crown fur (the rim ring floated over his head at 3/4), rim in
+  // the pail's own grey
+  const g = new THREE.CylinderGeometry(0.105, 0.128, 0.13, 24, 1, true);
+  both(A, 'head', g, mat([0, 0.33, -0.02], [-0.22, 0, -0.1]), C(color), [0.45, 0.8, 0, 0]);
+  A.add('head', new THREE.CylinderGeometry(0.105, 0.105, 0.01, 24), { m: mat([0, 0.393, -0.005], [-0.22, 0, -0.1]), color: C(color), rmse: [0.45, 0.8, 0, 0] });
+  A.add('head', new THREE.TorusGeometry(0.128, 0.007, 6, 28), { m: mat([0, 0.267, -0.034], [Math.PI / 2 - 0.22, 0, -0.1]), color: C('#7E817B'), rmse: [0.45, 0.8, 0, 0] });
   A.flags.earsLow = 0.15;
 }
 export function nightcap(A, { color = '#7A9CC6' } = {}) {

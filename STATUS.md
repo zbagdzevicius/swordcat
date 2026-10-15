@@ -62,9 +62,9 @@ mouse keys (13 actions; a used key swaps; Ctrl, Alt, Meta, F-keys and Esc are re
 | Interact / talk | click it (LMB), or E | Y | tap it, or "!" |
 | Paw Trick (tap = cast, hold = aim) / pick one | F / 1, 2, 3 | RT / hold RT + D-pad ← → ↑ | ":3" / long press ":3" |
 | Kitten ability | G: tap = cast at the cursor, hold = aim | LT (+ RS) | portrait tap = smart cast, drag = aim, ✕ cancels |
-| Milk / Meow / Golden Hour | R / C / V (or Stand + Attack within 0.1 s) | D-pad ↑ / L3 / LB + X within 0.1 s | buttons |
+| Milk / Meow / Golden Hour | R / C / V (or Stand + Attack within 0.1 s) | D-pad ↑ / D-pad ↓ / LB + X within 0.1 s | buttons |
 | Select / cycle target | LMB on a foe, Tab (Shift+Tab back) | R3, D-pad ← → | tap a foe |
-| Zoom / camera lock / centre / peek + ranges | wheel / Y / Home / Z or MMB | View cycles / none / none / D-pad ↓ + RS | pinch |
+| Zoom / camera lock / centre / peek + ranges | wheel / Y / Home / Z or MMB | View cycles / none / none / L3 held + RS | pinch |
 | Stop | H | — | — |
 | Pause; hold to skip cutscenes | Esc or P | Start | ❚❚ |
 
@@ -467,3 +467,35 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
 - **Open (optional):** a per-type `giddyPose` hook (C); `meadow.js` still builds the old Wobble geometry before
   `PropActor.js` re-dresses it; `enemies:hyena` sometimes needs its gloat fallback in a full run (run 3 did, run 5 did not) (no hit lands on her in
   25 s), which is a WARN, not a failure.
+
+## TT4 fix pass (2026-10-15; visual critic, controls and verify round 1)
+- **Kittens.** The lite eyes are a lathe whose rings sit on the pupil and iris edges, so Judas, Raudvis, Zare and Simas
+  have round pupils with real catchlights (the UV-sphere grid drew a jagged cross). Lite kittens are inked from their
+  own skinned body (`buildOutline` `bareSkin`, depth-offset under the tunic): no scalloped bands on the tails. Simas's
+  pail sits 4 cm lower on his crown.
+- **Clem.** The coin leaves her paw 0.45 m in front of her, smaller (r 0.16 m), small and without its glow near her face.
+  Ribbon Twirl: the bow lifts to her crown and spins flat like a rotor (thin pink swish arcs on it), arms out, a slow
+  pirouette. The Stand shows a new `block` pose (the blade flat across her face). Cheer: the fist sits beside her head.
+  Wave and boop hold the sword point down in her right paw (the wave uses the left paw). From behind: the tail curls out
+  to her left, slimmer with shorter fur; the cape back has soft folds and a rounder shade, the lining the same hue; the
+  bow sits on the ear's outer edge, a touch bigger. Face: finer lash line, brows only for faces that need them
+  (|angle| ≥ 12°), the slow blink is the happy squint. The chest close-up is more frontal (the far eye hid behind her
+  cheek fur).
+- **Token Tails Cat.** Short shell fur on the arms and legs (`furLimbs`), with round joint balls (no elbow seam).
+- **Catnip Cloud.** A bold lilac rim shows its 2.5 m reach. Giddy foes let go of their weapon. The big white ring in
+  hyena fights is the jeer wave, not the cloud.
+- **Camera.** Calm walking keeps her ring above the ability bar (`herFrameCalm`, landscape pad 0.07); fights and bosses
+  keep the full `herFrame`. Portrait width fit 9 → 7.5 m (she is about 20 % bigger on a 390 px phone).
+- **UI.** On phones the lesson card sits under the objective line. World speech bubbles stay below the top band's text.
+  The objective pill hides while the guide bubble says the same line. The skip toast shows only when no Skip chip does.
+  The Suit Up bubble waits for the 2 s "Yard clear!" bark. Touch stickers pop in the upper middle, clear of the thumb
+  cluster. The touch Attack keycap is the sword icon (the font has no ⚔). In the embed portrait title the logo steps
+  below the Skip practice link.
+- **Controls.** Pad Meow is D-pad ↓; L3 held peeks and shows the ranges. The chest lines name the open button on touch
+  ("!") and pad ("Y") from the start. The side mouse buttons' release is held too (Back / Forward). The chest stand spot
+  is reachable from the practice field without a hop (nav path checked with links off).
+- **Not changed.** Twirl after a teleport up: a press inside the coyote time is a jump by design. The back mouse button
+  in real Firefox and inside the Token Tails iframe is still unverified (Playwright cannot press it).
+- **Tests.** `tests/unit/tt4.test.js` (11). Smoke: `brand:surfaces` checks the title logo vs the Skip link standalone
+  and embedded (adds 360×740), `brand:rescue-bio` waits for the requested kitten's card, `camera:threat-visibility`
+  tolerates one hidden ranged wind-up on phones.

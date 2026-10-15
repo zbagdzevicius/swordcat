@@ -61,6 +61,7 @@ export async function dressRat(e, m, gear) {
     const tip = new THREE.Object3D(); tip.name = 'tell'; tip.position.set(0, 0, 1.2);
     spear.add(tip);
     e.tipNode = tip;
+    e.weaponRoot = spear;
   }
   // PERF §1.2 Low: the buckler is secondary gear (the helm is the top colour, the spear the role read): dropped
   if (gear.buckler && e.ctx?.quality?.id !== 'low') {

@@ -204,8 +204,10 @@ export class EyePair {
     this.browMesh = null;
     if (o.brows !== false) {
       const B = EYE.brow, bg = new GeoBuilder();
-      const cap = new THREE.CapsuleGeometry(B.thick / 2, B.len - B.thick, 2, segScale(8, detail, 5)).rotateZ(Math.PI / 2).scale(1, 1, 0.6);
-      bg.add(cap, { color: lidRgb.map((c) => c * 0.62), rmse: [0.9, 0, 0.3, 0] });
+      // TT4: a thin soft arch a shade darker than the coat (the flat tan capsule read as a patch stuck on the forehead)
+      const ar = B.len * 0.62, arc = 2 * Math.asin(Math.min(0.99, B.len / (2 * ar)));
+      const cap = new THREE.TorusGeometry(ar, B.thick * 0.36, 4, segScale(10, detail, 6), arc).rotateZ(Math.PI / 2 - arc / 2).translate(0, -ar * Math.cos(arc / 2), 0).scale(1, 1, 0.6);
+      bg.add(cap, { color: lidRgb.map((c) => c * 0.74), rmse: [0.9, 0, 0.3, 0] });
       cap.dispose();
       this._browGeo = bg.build();
       this.browMesh = inst(this._browGeo, lidMat, 'brows');

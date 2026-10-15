@@ -559,8 +559,13 @@ export class Hud {
       setHtml(this.guideTxt, text ? glyphify(text, dev, ctx.input) : '');
       flag(this.guideEl, 'is-on', !!text);
     }
-    if (!text) return;
+    const uiRoot = ctx.ui?.root;
+    if (!text) { if (uiRoot) flag(uiRoot, 'has-guide-under', false); return; }
     flag(this.guideEl, 'is-dim', !!ctx.ui?.beacon?.dim);
+    // TT4: while a guide bubble (Pearl's practice lines) shows the same line in its chip, the pill steps aside (the
+    // controls pass saw every practice step twice)
+    const gp = ctx.ui?.prompts?.guide, gc = gp?.open ? gp.cur?.p : null;
+    flag(this.guideEl, 'is-dup', !!gc?.textKey && txt(ctx, gc.textKey, gc.vars) === raw);
     if ((this._guidePosT -= dt) > 0) return;
     this._guidePosT = 0.25;
     const W = typeof innerWidth === 'number' ? innerWidth : 1280, H = typeof innerHeight === 'number' ? innerHeight : 720;
@@ -586,8 +591,12 @@ export class Hud {
         setVar(this.guideEl, '--gw', at.maxW != null ? `${at.maxW}px` : '');
         const gx = at.x, gy = at.y;
         setVar(this.guideEl, '--gx', `${gx}px`); setVar(this.guideEl, '--gy', `${gy}px`);
+        // TT4: the lesson card (.ui-hint) steps below the line on phones (it covered the objective pill at 390×844)
+        const gb = this.guideEl.getBoundingClientRect?.();
+        if (uiRoot && gb?.height > 0) setVar(uiRoot, '--guide-b', `${Math.ceil(gb.bottom)}px`);
       }
     }
+    if (uiRoot) flag(uiRoot, 'has-guide-under', under);
   }
 
   /** The bottom (CSS px) of the shown stats rows: the hearts, plus Grit / Valor while they are not tucked away. */

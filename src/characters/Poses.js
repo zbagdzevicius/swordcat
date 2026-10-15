@@ -18,7 +18,7 @@ export const POSE_NAMES = Object.freeze(['vigil', 'oath', 'sip', 'selfie', 'fain
 /** Phase W poses (a subset of POSE_NAMES): hold the pose, play `kitten.emote(name)` for the motion. */
 export const WARM_POSE_NAMES = Object.freeze(['cheer', 'groom', 'twirl', 'boop', 'pawBump']);
 /** Extra poses beyond the contract nine (M1 extras + M2 activity poses). */
-export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'restUp', 'coinHold', 'guard', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
+export const EXTRA_POSE_NAMES = Object.freeze(['ready', 'restUp', 'coinHold', 'guard', 'block', 'selfie_sit', 'cheer', 'hug', 'wave', 'read', 'fish', 'aim', 'heal', 'spoonReady', 'nap']);
 
 export const POSES = {
   // ref2: sword planted point-down, both gauntlets stacked on the pommel, head straight, eyes on the camera.
@@ -162,11 +162,15 @@ export const POSES = {
     },
     expr: 'happy',
   },
-  // Boop: leaning in, nose first, head tilted (kitten rescue reunion); sword stuck in the ground beside her.
+  // Boop: leaning in, nose first, head tilted (kitten rescue reunion). TT4: the sword rests point-down in her right paw
+  // (planted beside her it read as a sword standing on its own), the left paw reaches in.
   boop: {
     joints: { body: [0.12, 0, 0], chest: [0.18, 0, 0], head: [0.1, 0, 0.21], thighL: [-0.1, 0.05, 0.05], thighR: [-0.1, -0.05, -0.05] },
-    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
-    arms: { L: { fk: { shoulder: [-0.5, 0, 0.2], elbow: [-0.6, 0, 0] } }, R: { fk: { shoulder: [-0.5, 0, -0.2], elbow: [-0.6, 0, 0] } } },
+    sword: { mode: 'hand', guard: [-0.2, 0.3, 0.14], dir: [-0.08, -1, 0.38], face: [0.45, 0, 1] },
+    arms: {
+      L: { fk: { shoulder: [-0.6, 0, 0.15], elbow: [-0.6, 0, 0] } },
+      R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.2, -0.6], twist: [0, 0, 0] },
+    },
     expr: 'happy',
   },
   // Paw bump: right paw held out forward at chest height (companions after an encounter clear).
@@ -179,10 +183,24 @@ export const POSES = {
     },
     expr: 'happy',
   },
-  // Victory cheer: sword raised high in the right paw.
+  // TT4 Stand (her block): the blade held flat across in front of her face, the right paw on the grip, the left paw
+  // bracing the flat; feet apart, chest and head tucked. Reads from behind and from the iso lens as a bar across her
+  // (the planted-sword vigil hid the blade behind her body).
+  block: {
+    joints: { hips: [0.04, 0, 0], chest: [0.1, 0, 0], head: [0.08, 0, 0], thighL: [-0.12, 0.08, 0.14], thighR: [0.1, -0.08, -0.14], kneeL: [0.22, 0, 0], kneeR: [0.18, 0, 0], footL: [0, 0.3, 0], footR: [0, -0.3, 0] },
+    sword: { mode: 'hand', guard: [-0.16, 0.6, 0.24], dir: [1, 0.12, 0.08], face: [0, 0.3, 1] },
+    arms: {
+      R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.6, -0.4], twist: [0, 0, 0] },
+      L: { paw: [0.16, 0.6, 0.25], pole: [1, -0.6, -0.4], twist: [0, 0, -0.6] },
+    },
+    tail: [[0, 0.15, 0], [0, 0.15, 0], [0, 0.12, 0], [0, 0.1, 0], [0, 0.06, 0], [0, 0, 0]],
+    expr: 'determined',
+  },
+  // Victory cheer: sword raised high in the right paw. TT4: the fist up and out beside her head, the blade leaning out
+  // and the head tipped the other way (the old grip at x −0.2 was out of the arm's reach and pressed the fist into her cheek)
   cheer: {
-    joints: { chest: [-0.12, 0, 0], head: [-0.2, 0, 0], thighL: [0, 0.05, 0.06], thighR: [0, -0.05, -0.06], footL: [0, 0.3, 0], footR: [0, -0.3, 0] },
-    sword: { mode: 'hand', guard: [-0.2, 0.8, 0.1], dir: [-0.15, 1, 0.1], face: [0, 0, 1] },
+    joints: { chest: [-0.1, 0, 0.08], head: [-0.16, 0, 0.12], thighL: [0, 0.05, 0.06], thighR: [0, -0.05, -0.06], footL: [0, 0.3, 0], footR: [0, -0.3, 0] },
+    sword: { mode: 'hand', guard: [-0.36, 0.66, 0.1], dir: [-0.45, 1, 0.06], face: [0, 0, 1] },
     arms: {
       R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, 0, -1], twist: [0, 0, 0] },
       L: { fk: { shoulder: [-0.3, 0, 1.6], elbow: [-0.8, 0, 0] } },
@@ -209,10 +227,15 @@ export const POSES = {
   // ---- M2 activity / companion poses (§12.5 hub spots, §3.3 companions, §9.3 Spoon Brigade). The sword (if any) is
   // stuck in the ground beside her, like 'hug'.
   // Waving (Waffles on the balcony, Clover greeting): right paw high; the wave itself is the 'wave' emote / idle life.
+  // TT4: the LEFT paw waves (the wave emote follows the pose), the sword rests point-down in the right paw (planted beside
+  // her it read as a sword standing on its own)
   wave: {
-    joints: { chest: [-0.04, 0.08, 0], head: [-0.08, 0.12, -0.08], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
-    sword: { mode: 'root', pommel: [-0.32, 0.5, -0.05], dir: [0.06, -1, 0.0], face: [0.2, 0, 1] },
-    arms: { R: { fk: { shoulder: [-0.25, 0, -2.5], elbow: [-0.5, 0, 0] } }, L: { fk: { shoulder: [0.05, 0, 0.12], elbow: [-0.25, 0, 0] } } },
+    joints: { chest: [-0.04, -0.08, 0], head: [-0.08, -0.12, 0.08], thighL: [0, 0.05, 0.05], thighR: [0, -0.05, -0.05], footL: [0, 0.28, 0], footR: [0, -0.28, 0] },
+    sword: { mode: 'hand', guard: [-0.2, 0.3, 0.14], dir: [-0.08, -1, 0.38], face: [0.45, 0, 1] },
+    arms: {
+      L: { fk: { shoulder: [-0.45, 0, 1.95], elbow: [-0.75, 0, 0] } },
+      R: { grip: SWORD_PTS.gripMid, off: [0, 0, 0], pole: [-1, -0.2, -0.6], twist: [0, 0, 0] },
+    },
     tail: [[0, 0.3, 0], [0, 0.25, 0], [0, 0.2, 0], [0, 0.15, 0], [0, 0.1, 0], [0, 0, 0]],
     expr: 'happy',
   },

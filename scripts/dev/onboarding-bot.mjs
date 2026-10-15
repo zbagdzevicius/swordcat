@@ -75,7 +75,7 @@ const LABEL_ACTION = {
  */
 export const ACTION_CODE = { guard: 'RMB', dodge: 'ShiftLeft', jump: 'Space', interact: 'KeyE', ability: 'KeyG', trick: 'KeyF', milk: 'KeyR', meow: 'KeyC', golden: 'KeyV', confirm: 'Enter' };
 
-/** Plain-text keycap labels as `guide().prompt` shows them (innerText: "Hold Space to block", "LMB Bonk"). */
+/** Plain-text keycap labels as `guide().prompt` shows them (innerText: "Hold RMB to block", "LMB Bonk"). */
 const PLAIN_LABELS = [
   [/(^|[^\w])(LMB)(?=$|[^\w])/, 'attack'], [/⚔/, 'attack'], [/(^|[^\w])(WASD)(?=$|[^\w])/, 'move'], [/(^|[^\w])(RMB)(?=$|[^\w])/, 'guard'],
   [/(^|[^\w])Space(?=$|[^\w])/, 'jump'], [/(^|[^\w])Shift(?=$|[^\w])/, 'dodge'], [/(^|[^\w])Enter(?=$|[^\w])/, 'confirm'],

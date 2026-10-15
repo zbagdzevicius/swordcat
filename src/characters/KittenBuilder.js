@@ -68,12 +68,32 @@ export const PROPORTIONS = Object.freeze({
  * into the body draw; the full-detail close-up set (`setCloseUp`) is built in idle slices after `idleAfter` frames.
  * `closeOn` / `closeOff`: the close-up hysteresis (lens → her focus, m) used when camera publishes no `cam.closeUp`.
  */
+/** Lite-tier eye look (TT4): pupil and iris edge radii (× r) and the catchlights [x, y, radius] (× r). */
+export const LITE_EYE = Object.freeze({ pupil: 0.5, iris: 0.92, catch: Object.freeze([[-0.33, 0.36, 0.24], [0.36, -0.34, 0.09]]) });
+
+/**
+ * Lite eye: a sphere of radius r turned so its pole looks down +Z, with extra rings just inside and outside the pupil
+ * and iris edges (so vertex colours switch on a circle). Pure.
+ * @param {number} r @param {number} radial
+ */
+export function liteEyeGeometry(r, radial = 24) {
+  const ds = [0, 0.2, 0.36, LITE_EYE.pupil - 0.025, LITE_EYE.pupil + 0.025, 0.68, 0.82, LITE_EYE.iris - 0.02, LITE_EYE.iris + 0.02, 0.98];
+  const pts = ds.map((d) => new THREE.Vector2(d * r, Math.sqrt(1 - d * d) * r));
+  for (const a of [0.5, 0.6, 0.72, 0.85, 1]) pts.push(new THREE.Vector2(Math.sin(Math.PI * a) * r, Math.cos(Math.PI * a) * r));
+  pts[pts.length - 1].x = 0;
+  // LatheGeometry spins around +Y and faces outward for a bottom-up profile; then +Y (the pupil pole) turns to +Z
+  return new THREE.LatheGeometry(pts.reverse(), radial).rotateX(Math.PI / 2);
+}
+
+/** TT4 `furLimbs` shell fur length (× the cat's fur length) on the arms and legs. */
+export const LIMB_FUR = 0.55;
+
 export const PLAY_LOD = Object.freeze({ detail: 0.4, idleAfter: 60, closeOn: 6.0, closeOff: 6.3, sliceMs: 2 });
 /** Swords at least this long (H) keep the cane idle instead of `cfg.idlePose` (player DRAG.minLength: tip drag). */
 export const IDLE_REST_MAX_LEN = 1.4;
 
 /** Rest (local) transforms for a kitten of width w. @param {{hipsY:number, chestY:number, leg:number}} [pr] */
-function restPose(w, earsLow = 0, pr = PROPORTIONS) {
+function restPose(w, earsLow = 0, pr = PROPORTIONS, tailCurve = TAIL_CURVE) {
   const L = pr.leg ?? 1;
   const P = {
     body: [0, 0, 0], hips: [0, pr.hipsY, 0], chest: [0, pr.chestY, 0], head: [0, pr.neckY ?? 0.22, 0], mouth: [...FACE.mouth],
@@ -89,7 +109,7 @@ function restPose(w, earsLow = 0, pr = PROPORTIONS) {
   };
   // tail joints along the rest curve
   const dy = pr.hipsY - PROPORTIONS.legacy.hipsY;
-  const curve = new THREE.CatmullRomCurve3(TAIL_CURVE.map((p) => new THREE.Vector3(p[0], p[1] + dy, p[2])));
+  const curve = new THREE.CatmullRomCurve3(tailCurve.map((p) => new THREE.Vector3(p[0], p[1] + dy, p[2])));
   let prev = new THREE.Vector3(0, pr.hipsY, 0);
   for (let i = 0; i < 6; i++) {
     const pt = curve.getPointAt(i / 5);
@@ -157,7 +177,7 @@ export class Kitten {
     // sits lower on the shoulders instead of growing her taller (cages, doors, camera catH keep working)
     const L0 = PROPORTIONS.legacy, prop = legacy ? L0
       : { ...PROPORTIONS, neckY: Math.max(PROPORTIONS.neckMin, L0.hipsY + L0.chestY + L0.neckY + L0.headTop * (cfg.headScale ?? 1) - PROPORTIONS.hipsY - PROPORTIONS.chestY - L0.headTop * this.headScale) };
-    const { P, R, curve } = restPose(w, earsLowHint, prop);
+    const { P, R, curve } = restPose(w, earsLowHint, prop, cfg.tail?.curve ?? TAIL_CURVE);
     /** Torso height change vs the M1/M2 rest pose (root-space pose targets and the cape neckline follow it). */
     this.bodyDrop = (prop.hipsY + prop.chestY) - (PROPORTIONS.legacy.hipsY + PROPORTIONS.legacy.chestY);
     this.tailCurve = curve;
@@ -677,30 +697,39 @@ export class Kitten {
     return out;
   }
 
-  /** Vertex-coloured eyes for the lite tier, skinned to eyeL / eyeR (blink = bone scale). */
+  /**
+   * Vertex-coloured eyes for the lite tier, skinned to eyeL / eyeR (blink = bone scale). TT4: the eye is a lathe whose
+   * rings are concentric around the forward pole, with paired rings at the pupil and iris edges, so the vertex colours
+   * draw a round pupil (a UV sphere's grid drew a jagged cross); the catchlights are small white domes on the surface.
+   */
   _liteEyes(A, posL, posR, r, colors) {
+    const ed = Math.min(1.3, this.cfg.faceDetail ?? 1);
+    const geo = liteEyeGeometry(r, Math.round(24 * ed));
     for (const [pos, side, bone] of [[posL, 1, 'eyeL'], [posR, -1, 'eyeR']]) {
       const c = side > 0 ? (colors.L || colors) : (colors.R || colors);
       const inner = rgb(c.inner ?? PAL.irisInner), outer = rgb(c.outer ?? PAL.irisOuter), ring = rgb(c.ring ?? PAL.irisRing), pupil = rgb(c.pupil ?? PAL.pupil);
-      // TT3: the named kittens' finer face also rounds their vertex-coloured catchlights (they read blocky)
-      const ed = Math.min(1.3, this.cfg.faceDetail ?? 1);
-      const g = new THREE.SphereGeometry(r, Math.round(24 * ed), Math.round(18 * ed));
       const pm = eyePivotMatrix([0, 0, 0], side, 0.3);
       const toBone = new THREE.Matrix4().makeTranslation(pos[0] - FACE[bone][0], pos[1] - FACE[bone][1], pos[2] - FACE[bone][2]).multiply(pm).multiply(mat([0, 0, 0], [0, 0, 0], [1, 1, EYE.flat]));
-      this.A.add(bone, g, {
+      this.A.add(bone, geo, {
         m: toBone,
         color: (v, n, lp) => {
-          const x = lp.x / r, y = lp.y / r;
           if (lp.z < 0) return ring;
-          const d = Math.hypot(x, y + 0.05);
-          if (Math.hypot(x + 0.33, y - 0.36) < 0.24) return [1, 1, 1];
-          if (d < 0.5) return pupil;
-          if (d < 0.92) return mixRgb(inner, outer, smoothstep(0.5, 0.92, d));
+          const d = Math.hypot(lp.x, lp.y) / r;
+          if (d < LITE_EYE.pupil) return pupil;
+          if (d < LITE_EYE.iris) return mixRgb(inner, outer, smoothstep(LITE_EYE.pupil, LITE_EYE.iris, d));
           return ring;
         },
         rmse: RM.eye,
       });
+      // catchlights: the big upper-left one and a small lower-right dot, seated on the eye surface
+      for (const [cx, cy, cr] of LITE_EYE.catch) {
+        const z = Math.sqrt(Math.max(0, 1 - cx * cx - cy * cy)) * r;
+        const cg = new THREE.SphereGeometry(cr * r, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI / 2).scale(1, 1, 0.35).translate(cx * r, cy * r, z - cr * r * 0.05);
+        this.A.add(bone, cg, { m: toBone, color: [1, 1, 1], rmse: RM.eye });
+        cg.dispose();
+      }
     }
+    geo.dispose();
   }
 
   /**
@@ -872,10 +901,20 @@ export class Kitten {
     if (this.cfg.softBelly && !armour && !clothed) A.add('hips', new THREE.SphereGeometry(0.16, sg(26), sg(18)).scale(1.04 * w, 1.12, 1.0), { m: mat([0, 0.05, 0.012]), color: coatRoot('body'), rmse: RM.fur });
     // lower torso / belly on the hips
     A.add('hips', new THREE.SphereGeometry(0.15, sg(24), sg(16)).scale(1.0 * w, 0.9, 0.95), { m: mat([0, 0.02, 0]), color: coatRoot('body'), rmse: RM.fur });
+    // TT4 `furLimbs` (an unclothed full-detail cat: the Token Tails Cat): the arm and leg capsules also get short shell
+    // fur (the ear / tail FurPart, no extra draw), with a round joint ball at the elbow and knee to hide the seam
+    const furGB = this.cfg.furLimbs && !lite && !armour && !clothed ? this._skinFurGB : null;
+    const limbFur = (bone, geo, m) => {
+      if (!furGB) return;
+      const down = new THREE.Vector3(0, -1, 0).transformDirection(bind[bone]);
+      furGB.add(geo, { matrix: _m.multiplyMatrices(bind[bone], m).clone(), bone: boneIndex[bone], color: coatRoot('leg'), rmse: RM.fur, fur: [1, LIMB_FUR], comb: [down.x, down.y, down.z] });
+    };
+    const limb = (bone, geo, m) => { A.add(bone, geo, { m, color: coatRoot('leg'), rmse: RM.fur }); limbFur(bone, geo, m); };
     // arms and paws
     for (const s of ['L', 'R']) {
-      A.add('shoulder' + s, new THREE.CapsuleGeometry(0.045, 0.07, 4, sg(12)), { m: mat([0, -0.055, 0]), color: coatRoot('leg'), rmse: RM.fur });
-      A.add('elbow' + s, new THREE.CapsuleGeometry(0.042, 0.07, 4, sg(12)), { m: mat([0, -0.05, 0]), color: coatRoot('leg'), rmse: RM.fur });
+      limb('shoulder' + s, new THREE.CapsuleGeometry(0.045, 0.07, 4, sg(12)), mat([0, -0.055, 0]));
+      limb('elbow' + s, new THREE.CapsuleGeometry(0.042, 0.07, 4, sg(12)), mat([0, -0.05, 0]));
+      if (furGB) A.add('elbow' + s, new THREE.SphereGeometry(0.047, sg(12), sg(8)), { m: mat([0, 0.004, 0]), color: coatRoot('leg'), rmse: RM.fur });
       if (!armour) {
         A.add('paw' + s, new THREE.SphereGeometry(0.047, sg(18), sg(14)).scale(1, 0.85, 1.05), { m: mat([0, -0.035, 0.006]), color: coatRoot('paw'), rmse: RM.fur });
         for (let t = 0; t < 3; t++) A.add('paw' + s, new THREE.SphereGeometry(0.0085, 8, 6), { m: mat([(t - 1) * 0.017, -0.068, 0.03]), color: rgb('#E7A3A8'), rmse: RM.skin });
@@ -883,8 +922,9 @@ export class Kitten {
     }
     // legs and feet
     for (const s of ['L', 'R']) {
-      A.add('thigh' + s, new THREE.CapsuleGeometry(0.052, 0.05, 4, sg(12)), { m: mat([0, -0.04, 0]), color: coatRoot('leg'), rmse: RM.fur });
-      A.add('knee' + s, new THREE.CapsuleGeometry(0.045, 0.06, 4, sg(12)), { m: mat([0, -0.05, 0]), color: coatRoot('leg'), rmse: RM.fur });
+      limb('thigh' + s, new THREE.CapsuleGeometry(0.052, 0.05, 4, sg(12)), mat([0, -0.04, 0]));
+      limb('knee' + s, new THREE.CapsuleGeometry(0.045, 0.06, 4, sg(12)), mat([0, -0.05, 0]));
+      if (furGB) A.add('knee' + s, new THREE.SphereGeometry(0.05, sg(12), sg(8)), { m: mat([0, 0.004, 0]), color: coatRoot('leg'), rmse: RM.fur });
       if (!armour) {
         A.add('foot' + s, new THREE.SphereGeometry(1, sg(18), sg(10), 0, Math.PI * 2, 0, Math.PI / 2).scale(0.052, 0.05, 0.07), { m: mat([0, -0.03, 0.025]), color: coatRoot('paw'), rmse: RM.fur });
         A.add('foot' + s, new THREE.CircleGeometry(0.045, 16).rotateX(Math.PI / 2).scale(1, 1, 1.35), { m: mat([0, -0.0295, 0.025]), color: rgb('#C98A90'), rmse: RM.skin });
@@ -923,8 +963,9 @@ export class Kitten {
       kit.add(cap, { color: (v, n, lp) => colorT(lp, 1, 0), rmse: RM.fur, skin: () => skinFor(1) });
     } else {
       const gb = this._skinFurGB;
-      gb.add(tg, { color: (v, n, lp, i) => colorT(lp, tArr[i], under[i]), rmse: RM.fur, fur: (v, n, lp, i) => [1, 1.75 * (1 - 0.3 * tArr[i])], skin: (v, lp, i) => skinFor(tArr[i]), comb: [0.3, -0.6, -0.6] });
-      gb.add(cap, { color: (v, n, lp) => colorT(lp, 1, 0), rmse: RM.fur, fur: [1, 1.3], skin: () => skinFor(1), comb: [0.6, 0, 0.2] });
+      const fl = this.cfg.tail?.fur ?? 1.75;   // TT4: per-cat tail fur length (Clem's long fur blurred over her cape)
+      gb.add(tg, { color: (v, n, lp, i) => colorT(lp, tArr[i], under[i]), rmse: RM.fur, fur: (v, n, lp, i) => [1, fl * (1 - 0.3 * tArr[i])], skin: (v, lp, i) => skinFor(tArr[i]), comb: [0.3, -0.6, -0.6] });
+      gb.add(cap, { color: (v, n, lp) => colorT(lp, 1, 0), rmse: RM.fur, fur: [1, 1.3 * fl / 1.75], skin: () => skinFor(1), comb: [0.6, 0, 0.2] });
       this.tailFurGeo = gb.build(); this._skinFurGB = null;
     }
   }
@@ -1372,12 +1413,14 @@ export class Kitten {
     // waving: the 'wave' pose waves on its own; the emote raises the paw and waves whatever the pose
     if (this.poseName === 'wave' || em.wave > 0) {
       const w = Math.sin(t * 9) * 0.35;
+      // TT4: the 'wave' pose raises the LEFT paw (the right one holds the sword); the emote alone raises the right
+      const side = this.poseName === 'wave' ? 'L' : 'R';
       if (this.poseName !== 'wave') {
         const up = Math.min(1, em.wave / 0.15, (EMOTE_DUR.wave - em.wave) / 0.15);
         J.shoulderR.quaternion.multiply(Es(-0.25 * up, 0, -2.3 * up));
       }
-      J.shoulderR.quaternion.multiply(Es(0, 0, w * 0.3));
-      J.elbowR.quaternion.multiply(Es(w * 0.5, 0, 0));
+      J['shoulder' + side].quaternion.multiply(Es(0, 0, w * 0.3));
+      J['elbow' + side].quaternion.multiply(Es(w * 0.5, 0, 0));
     }
     // overarm throw: wind up behind the head, snap forward at the release, follow through
     if (em.throw > 0) {

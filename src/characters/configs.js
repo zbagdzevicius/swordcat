@@ -18,9 +18,11 @@ export function eyeSet(hex, o = {}) {
  */
 const SWORDCAT_COAT = Object.freeze({ pattern: 'solid', base: PAL.furIvory, deep: PAL.furIvoryShade, light: PAL.furIvoryLight, cream: PAL.furIvoryLight, bib: PAL.furIvoryLight, face: PAL.furIvory, stripe: 0 });
 /** Crimson / ruby irises with two catchlights (the Token Tails mascot's eyes). */
-const SWORDCAT_EYES = Object.freeze({ inner: PAL.irisCrimsonInner, outer: PAL.irisCrimson, ring: PAL.irisCrimsonDeep, pupil: PAL.pupil, catchlights: 2 });
+// TT4: a finer lash line (the full one swept over the eye as a heavy dark half-lid on every blink)
+const SWORDCAT_EYES = Object.freeze({ inner: PAL.irisCrimsonInner, outer: PAL.irisCrimson, ring: PAL.irisCrimsonDeep, pupil: PAL.pupil, catchlights: 2, lash: 0.7 });
 /** TT3: 1.3× (0.85 → 1.11) and pitched back so its face turns up toward the high play camera (`pitch`, KittenBuilder). */
-const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade: PAL.bowShade, knot: PAL.bowKnot, scale: 1.11, pitch: -1.0 });
+// TT4: seated on the ear's outer edge (`at`, head space), a touch bigger: from behind (the usual iso view) the ear hid it
+const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade: PAL.bowShade, knot: PAL.bowKnot, scale: 1.22, pitch: -1.0, at: [0.15, 0.3, 0.035] });
 
 /**
  * Swordcat (Clementine). Options track story state:
@@ -31,6 +33,8 @@ const SWORDCAT_BOW = Object.freeze({ color: PAL.bow, light: PAL.bowLight, shade:
  */
 /** Swordcat's cape drape (overrides CAPE_DEFAULTS). */
 export const SWORDCAT_CAPE = Object.freeze({ topW: 0.18, botW: 0.4, len: 0.4 });
+/** TT4: Clem's rest tail curve (root space, H): from under the cape out to her left side, then up in a question mark. */
+export const SWORDCAT_TAIL = Object.freeze([[0.02, 0.26, -0.12], [0.11, 0.28, -0.23], [0.22, 0.39, -0.24], [0.24, 0.53, -0.17]]);
 
 /**
  * Swordcat's config. `tunicSword` (default true): the practice tunic keeps her sword in paw (WARM_ADVENTURE_SPEC §13
@@ -44,7 +48,10 @@ export function swordcatConfig({ cape = 'red', armour = true, bow = true, sword 
     coat: SWORDCAT_COAT,
     eyes: { ...SWORDCAT_EYES, size: 1.0 },
     earInner: PAL.earInnerSalmon, nose: PAL.noseTT,
-    fur: { len: 0.046, cheek: 0.97 }, tail: { thick: 0.95 },   // ART §6.3 fuller tail; TT3: 0.95 so the upright curl reads as a cat's question mark, not a squirrel's
+    fur: { len: 0.046, cheek: 0.97 },
+    // TT3: 0.95 so the upright curl reads as a cat's question mark, not a squirrel's. TT4: slimmer, shorter fur and curled
+    // out to her left, so from the usual view behind her it frames the cape instead of crossing it as a blurry plume
+    tail: { thick: 0.82, fur: 1.1, curve: SWORDCAT_TAIL },
     bow: bow ? SWORDCAT_BOW : null,
     // plate with the gold ':3' coin crest on the chest (Armour.js `crest`)
     outfit: { armour: armour ? 'plate' : null, crest: armour ? 'ttCoin' : null },
@@ -80,6 +87,8 @@ export function tokentailsCatConfig(o = {}) {
     earInner: PAL.earInnerSalmon, nose: PAL.noseTT,
     // TT3: a full curled tail (0.72 read as a stick) and a soft belly over the limb seams
     fur: { len: 0.04, cheek: 1.0 }, tail: { thick: 0.85 }, softBelly: true,
+    // TT4: short shell fur on the arms and legs (bare tubes with an elbow seam read odd against the fluffy body)
+    furLimbs: true,
     bow: null, cape: null, sword: null, outfit: { armour: null }, accessories: [],
     // TT3: the coin held up at chest height in both paws (Poses.coinHold)
     pose: 'coinHold', idlePose: 'coinHold',

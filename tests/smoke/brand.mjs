@@ -6,7 +6,7 @@
 //   SMOKE_URL=http://localhost:5333/ SMOKE_ONLY=brand node tests/smoke.mjs
 const inPage = (t, fn, arg) => t.G(fn, arg);
 // 390×844: portrait phone (§10.10 #12 asks for credits in both orientations; Q1 added it with the rescue-card bio check)
-const SIZES = [[1280, 720], [844, 390], [390, 844]];
+const SIZES = [[1280, 720], [844, 390], [390, 844], [360, 740]];
 
 async function shot(t, name) {
   await t.frames(2);
@@ -45,7 +45,7 @@ async function screens(t, w, h) {
       word: q('.ui-title .logo-word')?.textContent.replace(/\s+/g, ' ').trim() ?? '',
       sub: q('.ui-title .logo-sub')?.textContent ?? '', tagline: q('.ui-title .title-tagline')?.textContent ?? '', taglineVis: vis(q('.ui-title .title-tagline')),
       mark: vis(mark), markLoaded: !!mark && mark.complete && mark.naturalWidth > 0,
-      skip: q('.title-skip')?.textContent ?? '', skipVis: vis(q('.title-skip')), skipR: rect(q('.title-skip')),
+      skip: q('.title-skip')?.textContent ?? '', skipVis: vis(q('.title-skip')), skipR: rect(q('.title-skip')), logo: rect(q('.title-logo')),
       play: rect(q('.btn--play')), foot: rect(q('.title-foot')), footTxt: q('.title-foot')?.textContent ?? '',
       docTitle: document.title, ogAlt: q('meta[property="og:image:alt"]')?.content ?? '',
       vw: innerWidth, vh: innerHeight,
@@ -65,7 +65,23 @@ async function screens(t, w, h) {
   t.assert(inside(ti.skipR), `${tag}: skip link inside the viewport ${JSON.stringify(ti.skipR)}`);
   const over = (a, b) => a && b && a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
   t.assert(!over(ti.skipR, ti.play) && !over(ti.skipR, ti.foot), `${tag}: skip link clear of the play button and footer`);
+  t.assert(!over(ti.skipR, ti.logo), `${tag}: skip link clear of the title logo ${JSON.stringify(ti.skipR)} ${JSON.stringify(ti.logo)}`);
   await shot(t, `title-${tag}`);
+  // TT4: the Token Tails embed (data-embed="1": the host's CLOSE gutter top-left) moves the link; it stays off the logo
+  if (h > w) {
+    const em = await inPage(t, async () => {
+      document.documentElement.dataset.embed = '1';
+      await new Promise((r) => setTimeout(r, 700));      // the logo's top transition (.6 s)
+      const rect = (e) => { const r = e?.getBoundingClientRect(); return r ? { l: r.left, t: r.top, r: r.right, b: r.bottom } : null; };
+      const out = { skipR: rect(document.querySelector('.title-skip')), logo: rect(document.querySelector('.title-logo')), play: rect(document.querySelector('.btn--play')) };
+      delete document.documentElement.dataset.embed;
+      return out;
+    });
+    t.log(`${tag} embed title: skip ${JSON.stringify(em.skipR)} logo ${JSON.stringify(em.logo)}`);
+    t.assert(!over(em.skipR, em.logo), `${tag} embed: skip link clear of the title logo`);
+    t.assert(!over(em.logo, em.play), `${tag} embed: the logo clear of the play button`);
+    await t.wait(700);
+  }
 
   // ---- loading: the index.html splash (re-inserted from the served, brand-filled page) and the loading veil
   const splash = await inPage(t, async () => {
@@ -164,7 +180,10 @@ async function rescueBio(t) {
     const tick = () => {
       const c = document.querySelector('.ui-celebrate .cel-card'), line = c?.querySelector('.cel-line');
       // the card's line was filled for this rescue (the card animates in, so opacity is not a reliable signal)
-      const txt = line?.textContent ?? '', shown = !!c && txt.length > 0 && (kid !== 'biscuit' || !/Raudvis/.test(txt));
+      // TT4: and only once the card on screen is THIS kitten's (`_start` filled it): a leftover card's line was read
+      // as "shown" before the muffin card started (a race under load: bio null)
+      const cel = g.ctx.ui.celebrations, mine = cel?.lastStarted?.vars?.kitten === kid && cel?.q?.cur === cel.lastStarted;
+      const txt = line?.textContent ?? '', shown = !!c && mine && txt.length > 0 && (kid !== 'biscuit' || !/Raudvis/.test(txt));
       if (shown || performance.now() - t0 > 4000) return done({ shown, lineOn: !!line?.classList.contains('is-on'), bio: line?.querySelector('.kit-bio')?.textContent ?? null });
       requestAnimationFrame(tick);
     };

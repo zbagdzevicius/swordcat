@@ -1375,10 +1375,10 @@ test('review: hint / prompt layers show in live play only (never in a scene, a d
 test('review: gameplay tips go one at a time, wait while the guide talks or a scene plays, other toasts are not held', () => {
   assert.ok(isTip('tut.valor', 'hint') && isTip('tut.reflect', null) && !isTip('toast.kitten', null));
   const q = new ToastQueue();
-  q.push('Hold Space near foes to fill Valor.', null, true);
+  q.push('Hold RMB near foes to fill Valor.', null, true);
   q.push('Parry the bolt to send it back!', null, true);
   q.push('Kitten found!', 'kitten');
-  assert.deepEqual(q.shown.map((t) => t.text), ['Hold Space near foes to fill Valor.', 'Kitten found!']);   // never two tips stacked
+  assert.deepEqual(q.shown.map((t) => t.text), ['Hold RMB near foes to fill Valor.', 'Kitten found!']);   // never two tips stacked
   q.update(TOAST.life + 0.01);
   assert.deepEqual(q.shown.map((t) => t.text), ['Parry the bolt to send it back!']);
   const h = new ToastQueue();

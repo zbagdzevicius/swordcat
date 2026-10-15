@@ -12,6 +12,16 @@ const T = TRICKS.twirl;
 export const TWIRL_SPIN = Object.freeze({ id: 'trickTwirl', dmg: T.spinDmg, knock: 3, poise: 1, telegraph: null,
   arc: Object.freeze({ range: T.spinR, from: Math.PI, to: -Math.PI, y0: -1.2, y1: 1.8 }) });
 
+/** The glide's gravity while she falls (× GRAVITY). Never while she rises: TT5 removed the twirl super-jump. */
+export const TWIRL_FALL_GRAVITY = 0.55;
+
+/**
+ * The twirl's gravity multiplier for a vertical speed (TT5 §13.1 #2): the low glide gravity only while she falls,
+ * normal gravity while she still rises, so a twirl started on the way up never lifts her above a plain jump. Pure.
+ * @param {number} vy
+ */
+export function twirlGravityMul(vy) { return vy < 0 ? TWIRL_FALL_GRAVITY : 1; }
+
 /**
  * Can a twirl start now? Pure on a plain snapshot:
  *   owned, airborne, a FRESH Jump press (holding Jump from take-off never twirls), past the take-off grace, not used

@@ -2244,3 +2244,45 @@ test('TT3 R2 / §10.4: the town square hangs Token Tails night wall banners, not
   const hex = (c) => '#' + new THREE.Color(c).getHexString().toUpperCase();
   assert.ok(procs.get('tt_wall_banner').parts.some(([, c]) => hex(c) === '#2A1F45'), 'night cloth');
 });
+
+// ------------------------------------------------------------------ TT5 package J: sequence guards for the 1.6 m jump
+test('TT5 J: the practice perimeter fence and gate (2.0 m) and the town road hedges (1.9 m) stay above the 1.6 m jump; the lesson fence stays 1.0 m', async () => {
+  const { PLAYER: P, GRAVITY: G } = await import('../../src/core/config.js');
+  const apex = P.jumpV ** 2 / (2 * G);
+  assert.ok(apex > 1.59 && apex < 1.61, `apex ${apex}`);
+  const top = (L, c) => c.y1 - Math.max(L.heightAt(c.ax, c.az), L.heightAt(c.bx, c.bz));
+  let { L } = await buildM2('meadow');
+  const segs = L.colliders.segments;
+  // perimeter: x −20 / 20 (z −100…−60), z −100, z −60 (x −20…−2.2 and 2.2…20)
+  const onLine = (c, f) => f(c.ax, c.az) && f(c.bx, c.bz);
+  const perim = segs.filter((c) => !c.walkable && !c.gate && (onLine(c, (x) => Math.abs(Math.abs(x) - 20) < 0.3) || onLine(c, (x, z) => Math.abs(z + 100) < 0.3 || (Math.abs(z + 60) < 0.3 && Math.abs(x) <= 20.3))));
+  assert.ok(perim.length >= 4, `perimeter fence segments (${perim.length})`);
+  for (const c of perim) assert.ok(top(L, c) >= 2.0 - 0.01, `perimeter segment ${c.ax},${c.az}→${c.bx},${c.bz} top ${top(L, c).toFixed(2)} m`);
+  const gate = segs.find((c) => c.gate === 'practice');
+  assert.ok(gate && top(L, gate) >= 2.0 - 0.01, `the gate collider is 2.0 m (${gate && top(L, gate).toFixed(2)})`);
+  const posts = L.colliders.circles.filter((c) => Math.abs(Math.abs(c.x) - 2.15) < 0.01 && Math.abs(c.z + 60) < 0.01);
+  assert.equal(posts.length, 2);
+  for (const c of posts) assert.ok(c.y1 - L.heightAt(c.x, c.z) >= 2.0 - 0.01, 'gate posts 2.0 m');
+  const lesson = segs.filter((c) => Math.abs(c.az + 87) < 0.01 && Math.abs(c.bz + 87) < 0.01);
+  assert.ok(lesson.length >= 1);
+  for (const c of lesson) { const h = c.y1 - Math.min(L.heightAt(c.ax, c.az), L.heightAt(c.bx, c.bz)); assert.ok(h <= 1.1 && h < 1.0 + 0.2, `the lesson fence stays a 1.0 m hop (${h.toFixed(2)})`); }
+  // the only gate collider in the meadow is the practice gate (the 1.2 m drystone walls may now be hopped: no lane gate)
+  assert.deepEqual([...new Set(segs.filter((c) => c.gate).map((c) => c.gate))], ['practice']);
+  L.dispose();
+  ({ L } = await buildM2('town'));
+  const hedges = L.colliders.segments.filter((c) => Math.abs(Math.abs(c.ax) - 4.2) < 0.01 && Math.abs(c.ax - c.bx) < 0.01 && c.az <= -62.9 && c.bz <= -62.9);
+  assert.ok(hedges.length >= 2, `road hedges (${hedges.length})`);
+  for (const c of hedges) assert.ok(top(L, c) >= 1.9 - 0.01 && top(L, c) > apex + 0.25, `hedge top ${top(L, c).toFixed(2)} m`);
+  L.dispose();
+});
+
+test('TT5 J: the Mushroom Ring bounce caps spring at PLAYER.mushroomBounceV (10): 2.27 m over the cap, the next cap in reach', async () => {
+  const { PLAYER: P, GRAVITY: G } = await import('../../src/core/config.js');
+  assert.equal(P.mushroomBounceV, 10);
+  for (const c of MUSHROOM_CAPS.filter((c) => c.bounce)) assert.equal(c.bounce, P.mushroomBounceV);
+  const apex = P.jumpV ** 2 / (2 * G), bounce = P.mushroomBounceV ** 2 / (2 * G);
+  for (let i = 1; i < MUSHROOM_CAPS.length; i++) {
+    const rise = MUSHROOM_CAPS[i].y - MUSHROOM_CAPS[i - 1].y, reach = MUSHROOM_CAPS[i - 1].bounce ? bounce : apex;
+    assert.ok(reach > rise + 0.15, `cap ${i} → ${i + 1}: rise ${rise} m, reach ${reach.toFixed(2)} m`);
+  }
+});

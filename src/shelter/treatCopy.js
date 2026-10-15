@@ -1,10 +1,10 @@
-// src/shelter/treatCopy.js  (owner: T, TT4 §12.2) — every word the treat panel shows. Plain short sentences, no em
+// src/shelter/treatCopy.js  (owner: T, TT4 §12.2, TT5 §13.1 item 3) — every word the treat panel shows. Plain short sentences, no em
 // dashes, no "adopt", no token, no number that is not read live (the amount comes from the host's `amountLabel`).
 // The treat is sponsored: Token Tails pays it, the player never does.
 
 export const TREAT_COPY = Object.freeze({
   heading: 'Send a free treat',
-  free: 'Token Tails sends the treat. It is free for you.',
+  free: 'Token Tails sends a free treat. You pay nothing.',
   custody: 'Held by Token Tails for the shelter until handover.',
   send: (name) => `Send Pink Paw a treat for ${name}`,
   sendPlain: 'Send Pink Paw a treat',
@@ -19,15 +19,13 @@ export const TREAT_COPY = Object.freeze({
   soon: 'Real shelter treats open soon.',
   error: 'The treat could not be sent. Your game progress is safe.',
   retry: 'Try again',
-  link: 'Send a treat on Token Tails',
-  linkNote: 'Opens Token Tails in a new tab.',
+  checking: "Checking today's treat…",
+  link: 'Open tokentails.com/swordcat',
+  linkNote: 'Play on tokentails.com/swordcat to send a free treat. Opens in a new tab.',
+  copy: 'Copy link',
+  copied: 'Link copied. Open it in your browser to send the treat.',
+  copyFailed: 'Copy did not work. The link is tokentails.com/swordcat',
 });
 
-/** Where a player outside the Token Tails frame sends a treat (new tab, never a redirect of the game). */
-export const GIVE_URL = 'https://tokentails.com/shelter-payouts/give';
-
-/** `GIVE_URL?cat=<name>` (the name is URL-encoded; an empty name gives the bare page). Pure. */
-export function giveHref(catName) {
-  const n = typeof catName === 'string' ? catName.trim().slice(0, 32) : '';
-  return n ? `${GIVE_URL}?cat=${encodeURIComponent(n)}` : GIVE_URL;
-}
+/** Where a player on another host plays the game with treats on (new tab, never a redirect of the game). */
+export const PLAY_URL = 'https://tokentails.com/swordcat';

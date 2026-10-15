@@ -9,6 +9,7 @@ import { el, flag, setHtml, setText, setVar, place, pulse } from './dom.js';
 import { tx, txt, glyphify, actionGlyph } from './text.js';
 import * as I from './icons.js';
 import { Guide } from './guide.js';
+import { sameLine } from './messages.js';
 
 const _v = new THREE.Vector3(), _f = new THREE.Vector3(), _d = new THREE.Vector3();
 const HINT_CALM = 2;      // s clear before a faded hint card comes back
@@ -239,6 +240,8 @@ export class Prompts {
     const h = this.hintData;
     if (h) { h.t += dt; if (h.sec > 0 && h.t >= h.sec) this.hint(null); }
     flag(this.hintEl, 'is-dim', !vis.hint);
+    // TT5: the lesson card never repeats the objective line word for word (the same line showed twice)
+    flag(this.hintEl, 'is-dup', !!h && !!hud?.guideEl?.classList?.contains('is-on') && sameLine(h.text, hud.guideRaw ?? hud.guideText));
     this.guide.render(dt, !!vis.hint);
     flag(this.hintEl, 'is-guided', this.guide.open);      // one bubble on screen (WA §6.1 rule 6)
     this._busy(this.hintEl, this._hintB, dt, !!h && vis.hint);

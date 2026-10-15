@@ -7,6 +7,10 @@
 // tooltip, Grit arc, cursors, HP pills, controls card per preset, §10.7 settings), ui:touch-cluster (844 × 390 hasTouch:
 // ⚔ tap swings, 🛡 hold guards, a swipe tumbles, the kitten drag aims and ✕ cancels, smart cast, Edit layout) and
 // ui:portrait (390 × 844: ≥ 56 px buttons ≥ 8 px apart, condensed HUD strip, the one-time rotate toast).
+// TT5 ui:messages (TOKENTAILS-PLAN §13.3 M): audit scenes 02 to 08 (Pink Bow, sticker burst, kitten card burst, combat
+// card, offer, rescue + shelter card) at 390×844, 844×390, 667×375 (touch), 1024×768, 1280×720 and 1920×1080: no P1-P3
+// box over another message, a touch button or Clem by more than 4 %, nothing behind the shelter scrim, Continue fully
+// inside at 667×375, an Attack tap never skips a card (a tap on the card does). Shots → tests/shots/ui/messages/.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -155,7 +159,154 @@ async function touchRun(t, w, h, tag, body) {
   }
 }
 
+
+/** TT5: rects of the message layers, the touch buttons and Clem (CSS px, visible only). Runs in the page. */
+function msgRects() {
+  const g = window.__GAME__, p = g.ctx.player?.pos;
+  const vis = (e) => { for (let n = e; n && n !== document.body; n = n.parentElement) { const cs = getComputedStyle(n); if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.05) return false; } return !!e; };
+  const R = (e) => { if (!vis(e)) return null; const r = e.getBoundingClientRect(); return r.width > 2 && r.height > 2 ? { x: r.left, y: r.top, w: r.width, h: r.height } : null; };
+  const sel = { toast: '.ui-toast', card: '.cel-card.is-on:not(.is-fly) .cel-pop', guide: '.ui-guide.is-on', hint: '.ui-hint.is-on', tbtn: '.touch-root .touch-cluster .tbtn:not(.is-hidden)' };
+  const out = {};
+  for (const [k, s] of Object.entries(sel)) out[k] = [...document.querySelectorAll(s)].map(R).filter(Boolean);
+  if (p) {
+    const f = g.ctx.cam.worldToScreen({ x: p.x, y: p.y, z: p.z }), h = g.ctx.cam.worldToScreen({ x: p.x, y: p.y + 1.3, z: p.z });
+    if (f && h) { const hh = Math.max(20, f.y - h.y); out.clem = [{ x: f.x - hh * 0.4, y: h.y, w: hh * 0.8, h: hh }]; }
+  }
+  return out;
+}
+
+/** P1-P3 boxes that overlap another message, a touch button or Clem by more than 4 % of either box. Pure (node side). */
+function msgOverlaps(m) {
+  const frac = (a, b) => { const ix = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), iy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y); if (ix <= 0 || iy <= 0) return 0; const o = ix * iy; return Math.max(o / (a.w * a.h), o / (b.w * b.h)); };
+  const bad = [];
+  const msgs = ['card', 'toast', 'guide', 'hint'];
+  for (const [i, k] of msgs.entries()) for (const a of m[k] ?? []) {
+    for (const k2 of [...msgs.slice(i + 1), 'tbtn', 'clem']) for (const b of m[k2] ?? []) { const f = frac(a, b); if (f > 0.04) bad.push(`${k} x ${k2} ${Math.round(f * 100)}%`); }
+  }
+  return bad;
+}
+
+const MSG_VIEWPORTS = [['phone-portrait', 390, 844, true], ['phone-land', 844, 390, true], ['phone-land-small', 667, 375, true], ['tablet', 1024, 768, true], ['desktop', 1280, 720, false], ['desktop-hd', 1920, 1080, false]];
+
+const messagesBlock = {
+  name: 'ui:messages', order: 52, level: null, timeout: 900000,
+  async run(t) {
+    const dir = path.join(t.root, 'tests', 'shots', 'ui', 'messages');
+    fs.mkdirSync(dir, { recursive: true });
+    let blocked = 0;
+    for (const [tag, W, H, touch] of MSG_VIEWPORTS) {
+      const context = await t.browser.newContext({ viewport: { width: W, height: H }, hasTouch: touch, isMobile: touch, deviceScaleFactor: 1 });
+      // never a real write: every non-GET to tokentails.com is aborted (counted, must stay 0); the rail GET is faked
+      await context.route(/^https?:\/\/([a-z0-9-]+\.)*tokentails\.com\//i, (route) => {
+        const r = route.request();
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(r.method())) { blocked++; return route.abort('blockedbyclient'); }
+        if (/\/shelter\/donate\/status/.test(r.url())) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: true, railState: 'live' }) });
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      });
+      const pg = await context.newPage();
+      const errs = [];
+      pg.on('pageerror', (e) => errs.push(e.message));
+      const G = (fn, a) => pg.evaluate(fn, a);
+      const wait = (ms) => pg.waitForTimeout(ms);
+      const check = async (scene) => {
+        const bad = msgOverlaps(await G(msgRects));
+        await pg.screenshot({ path: path.join(dir, `${tag}-${scene}.png`) });
+        t.assert(!bad.length, `${tag} ${scene}: ${bad.join(', ')}`);
+      };
+      try {
+        await pg.goto(`${t.base}?test=1&seed=1`, { timeout: 300000 });
+        await pg.waitForFunction(() => window.__GAME__?.ready === true, null, { timeout: 300000 });
+        await G(async () => {
+          const g = window.__GAME__, c = g.ctx;
+          if (g.story.halt) g.story.halt(); else g.story.skip();
+          for (const f of ['prologue.practice', 'prologue.tutorial', 'prologue.done', 'meadow.mochi']) c.state.setFlag?.(f, true);
+          await g.loadLevel('meadow', 'start');
+          g.setMode('play');
+        });
+        await wait(3000);
+        await G(() => { const g = window.__GAME__; if (g.story.halt) g.story.halt(); else g.story.skip(); g.setMode('play'); g.god(true); });
+        await wait(800);
+        const E = await G(() => window.__GAME__.E.REWARD);
+        // 02 Pink Bow friend card
+        await G((ev) => window.__GAME__.ctx.bus.emit(ev, { kind: 'friend', id: 'bow' }), E);
+        await wait(450); await check('02-pinkbow');
+        // an Attack tap (or a world click) after 0.8 s keeps the card; a tap on the card skips it
+        await wait(450);
+        const atk = await G(() => { const b = document.querySelector('.touch-root .tbtn.tb-attack'); if (!b) return null; const r = b.getBoundingClientRect(); return r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; });
+        if (touch && atk) await pg.touchscreen.tap(atk.x, atk.y); else await pg.mouse.click(Math.round(W * 0.25), Math.round(H * 0.8));
+        await wait(100);
+        t.assert(await G(() => { const c = window.__GAME__.ctx.ui.celebrations.q.cur; return !!c && !c.flying; }), `${tag}: an attack tap does not skip the card`);
+        const cr = await G(() => { const r = document.querySelector('.cel-card.is-on .cel-pop')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; });
+        if (cr) { if (touch) await pg.touchscreen.tap(cr.x, cr.y); else await pg.mouse.click(cr.x, cr.y); }
+        await wait(80);
+        t.assert(await G(() => { const c = window.__GAME__.ctx.ui.celebrations.q.cur; return !c || c.flying; }), `${tag}: a tap on the card skips it`);
+        await wait(800);
+        // 03 / 04 a burst: sticker + kitten card + three toasts in the same second
+        await G((ev) => {
+          const g = window.__GAME__, c = g.ctx, ui = c.ui;
+          c.bus.emit(ev, { kind: 'sticker', id: 'hop' });
+          c.bus.emit(g.E.KITTEN_RESCUED, { kittenId: 'biscuit', position: c.player.pos.clone() });
+          ui.toast('Letter found: A note from Pearl', { key: 'toast.letter' });
+          ui.toast('Checkpoint! Progress saved.', { key: 'toast.checkpoint' });
+          ui.toast('Skin unlocked: Pink Paw Knight', { key: 'toast.skin' });
+        }, E);
+        await wait(400); await check('03-burst');
+        await wait(1200); await check('04-burst-later');
+        await wait(3000);
+        await G(() => { const ui = window.__GAME__.ctx.ui; ui.celebrations.q.clear(); ui.celebrations._end(); ui.toasts.clear(); });
+        // 05 combat: a card becomes an icon toast; damage words capped at 2
+        const before = await G(() => window.__GAME__.ctx.ui.celebrations.asToast);
+        await G(() => { const g = window.__GAME__, p = g.ctx.player.pos; for (const [dx, dz] of [[2.5, 1], [-2, 2]]) { const e = g.spawn('pug', p.x + dx, p.z + dz); if (e) e.alerted = true; } });
+        await wait(300);
+        await G((ev) => {
+          const g = window.__GAME__, c = g.ctx, p = c.player.pos, V = g.THREE.Vector3;
+          for (const e of c.enemies.list) e.alerted = true;
+          c.bus.emit(ev, { kind: 'card', id: 'heartbell' });
+          c.fx.numbers.word('slash3', new V(p.x, p.y + 1.6, p.z), { force: true });
+          c.fx.numbers.pop('bonk', new V(p.x + 1.5, p.y + 1.2, p.z));
+          c.fx.numbers.pop('parry', new V(p.x - 1.5, p.y + 1.2, p.z));
+        }, E);
+        await wait(250); await check('05-combat');
+        t.assert(await G((b) => window.__GAME__.ctx.ui.celebrations.asToast > b && !document.querySelector('.cel-card.is-on'), before), `${tag}: a card in combat is an icon toast`);
+        t.assert(await G(() => window.__GAME__.ctx.fx.numbers.texts <= 2), `${tag}: at most 2 damage words`);
+        // the shelter card waits out the fight
+        await G(() => { window.__GAME__.shelter.cards(true); window.__GAME__.shelter.save('pickles'); });
+        await wait(4500);
+        t.assert(await G(() => !window.__GAME__.shelter.card()?.open), `${tag}: the shelter card waits while foes are alerted near`);
+        await G(() => { const c = window.__GAME__.ctx; c.ui.toasts.clear(); for (const e of [...c.enemies.list]) { try { c.enemies.despawn(e); } catch { /* */ } } });
+        // 08 the shelter card: nothing behind the scrim; Continue fully inside
+        await pg.waitForFunction(() => window.__GAME__.shelter.card()?.open, null, { timeout: 20000 });
+        await G(() => { const ui = window.__GAME__.ctx.ui; ui.toast('A toast that must wait', { key: 'toast.x' }); });
+        await wait(700);
+        await pg.screenshot({ path: path.join(dir, `${tag}-08-shelter.png`) });
+        const sh = await G(() => {
+          const vis = (e) => { for (let n = e; n && n !== document.body; n = n.parentElement) { const cs = getComputedStyle(n); if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.05) return false; } return true; };
+          const behind = [...document.querySelectorAll('.ui-toast, .ui-hint.is-on, .ui-guide.is-on, .ui-offer.is-on, .cel-card.is-on, .hud-guide.is-on')].filter(vis).map((e) => e.className);
+          const r = document.querySelector('.sh-card.is-on .sh-continue')?.getBoundingClientRect();
+          return { behind, cont: r ? r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth : false };
+        });
+        t.assert(!sh.behind.length, `${tag}: nothing behind the shelter scrim (${sh.behind.join(' | ')})`);
+        t.assert(sh.cont, `${tag}: Continue fully inside the viewport`);
+        await G(() => window.__GAME__.shelter.close());
+        await wait(300);
+        // 06 the offer: placed off the HUD, hides nothing it should not; a card waits for it
+        await G(() => { const g = window.__GAME__, o = g.ctx.ui.offer; g.ctx.state.setFlag('seen.offer.kitten', false); o.offer(); });
+        await wait(450);
+        await pg.screenshot({ path: path.join(dir, `${tag}-06-offer.png`) });
+        await G(() => window.__GAME__.ctx.ui.celebrate('card', 'golden'));
+        await wait(300);
+        t.assert(await G(() => !document.querySelector('.cel-card.is-on') && window.__GAME__.ctx.ui.celebrations.q.items.length === 1), `${tag}: a card waits while the offer is up`);
+        await G(() => { const o = window.__GAME__.ctx.ui.offer; if (o.open) o._close(false); });
+        await wait(700); await check('07-card-after-offer');
+        t.assert(!errs.length, `${tag}: no page errors (${errs.join(' | ')})`);
+      } finally { await context.close(); }
+    }
+    t.assert(blocked === 0, `no write request to tokentails.com (${blocked} blocked)`);
+  },
+};
+
 export default [
+  messagesBlock,
   {
     name: 'ui:hud', order: 40, level: 'meadow', spawn: 'start', timeout: 90000,
     async run(t) {
@@ -607,7 +758,8 @@ export default [
       await t.wait(2200);
       await inPage(t, () => window.__GAME__.ctx.ui.celebrate('sticker', 'bonk'));
       await t.wait(450);
-      t.assert(await inPage(t, () => !!document.querySelector('.cel-card.is-on.is-sticker')), 'sticker');
+      // TT5: a sticker is an icon toast in the top slot (it no longer lands on the play field)
+      t.assert(await inPage(t, () => [...document.querySelectorAll('.ui-toast')].some((e) => !!e.querySelector('.toast-ico svg') && /bonk/i.test(e.textContent ?? '') || e.textContent.length > 0) && window.__GAME__.ctx.ui.celebrations.asToast > 0), 'sticker toast');
       t.assert(await inPage(t, () => !!window.__GAME__.ctx.state.getFlag('sticker.bonk')), 'the sticker book flag');
       await shot(t, '32-sticker');
       await t.wait(1800);

@@ -11,7 +11,7 @@ import { defineLevel } from '../LevelKit.js';
 import { PropActor } from '../PropActor.js';
 import { addFlame } from '../Dressing.js';
 import { pointAlong, polylineLength, smoothPolyline } from '../noise.js';
-import { BOSSES } from '../../core/config.js';
+import { BOSSES, PLAYER } from '../../core/config.js';
 import { E } from '../../core/events.js';
 
 const N = (n) => `models/env/nature/${n}.glb`;
@@ -35,10 +35,10 @@ const C = { bark: '#7E4E2A', barkDark: '#5E3A22', wood: '#B7773F', woodDark: '#7
 
 /** §12.4 spine (+ a bend at (27, 0) so the path passes beside the giant oak instead of through its trunk). */
 const SPINE = [[0, -85], [-20, -58], [-10, -30], [18, -8], [27, 0], [24, 18], [6, 40], [-16, 56], [-10, 84]];
-/** Mushroom Ring caps (§12.4): ~2.5 m apart in a spiral, heights 1 / 2 / 3 / 4 / 5.2, caps 2 and 4 bounce (vy 9). */
+/** Mushroom Ring caps (§12.4): ~2.5 m apart in a spiral, heights 1 / 2 / 3 / 4 / 5.2, caps 2 and 4 bounce (vy PLAYER.mushroomBounceV, 10 since TT5). */
 export const MUSHROOM_CAPS = Object.freeze([
-  { at: [-26.6, -55.3], y: 1.0, bounce: 0 }, { at: [-28.3, -57.1], y: 2.0, bounce: 9 }, { at: [-28.2, -59.6], y: 3.0, bounce: 0 },
-  { at: [-26.4, -61.3], y: 4.0, bounce: 9 }, { at: [-24.0, -62.0], y: 5.2, bounce: 0 },
+  { at: [-26.6, -55.3], y: 1.0, bounce: 0 }, { at: [-28.3, -57.1], y: 2.0, bounce: PLAYER.mushroomBounceV }, { at: [-28.2, -59.6], y: 3.0, bounce: 0 },
+  { at: [-26.4, -61.3], y: 4.0, bounce: PLAYER.mushroomBounceV }, { at: [-24.0, -62.0], y: 5.2, bounce: 0 },
 ]);
 export const CAP_R = 1.2;
 /** CONTROLS_SPEC §11 the Mushroom Ring hint: the camera swings to the spiral's open (east) side, flatter and closer. */

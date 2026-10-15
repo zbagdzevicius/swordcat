@@ -31,7 +31,7 @@ export function catnipLabel(ctx, n) {
  * reaching the middle third of the width (Clem stands there); left-handed play mirrors it. Portrait: the band under the
  * HUD strip, short of the Skip chip. CSS px.
  */
-export const TOAST_PHONE = Object.freeze({ gutter: 16, gap: 8, maxW: 260, minW: 150, visible: 2, bubbleTop: 150, clemUp: 40, clemDown: 30, toastH: 58, pad: 10, rate: 0.125 });
+export const TOAST_PHONE = Object.freeze({ gutter: 16, gap: 8, maxW: 260, minW: 150, visible: 1, bubbleTop: 150, clemUp: 40, clemDown: 30, toastH: 58, pad: 10, rate: 0.125 });
 
 /**
  * Where the phone toast slot goes. Pure. `top`: the bottom of the top-left HUD block (and the objective line under it);
@@ -555,6 +555,7 @@ export class Hud {
     const key = `${text}|${dev}|${ctx.input?.preset ?? ''}`;
     if (key !== this._guideKey) {
       this._guideKey = key;
+      this.guideRaw = text;                // TT5: the line as written ([action] tokens kept; prompts.js dedupes the hint)
       this.guideText = text.replace(/\[([^\]]+)\]/g, (m, a) => actionGlyph(a.trim().toLowerCase(), dev, ctx.input) || a);
       setHtml(this.guideTxt, text ? glyphify(text, dev, ctx.input) : '');
       flag(this.guideEl, 'is-on', !!text);

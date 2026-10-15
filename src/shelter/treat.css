@@ -1,4 +1,4 @@
-/* src/shelter/treat.css  (owner: T, TT4 §12.2) — the treat panel inside the rescued cat card (R's card.css owns the card).
+/* src/shelter/treat.css  (owner: T, TT4 §12.2, TT5 §13.1) — the treat panel inside the rescued cat card (R's card.css owns the card).
    Injected once by treat.js. Parchment and gold like the Token Tails panels; text stays >= 16px on phones. */
 .tt-treat {
   display: flex; flex-direction: column; align-items: center; gap: .45em; width: 100%;
@@ -19,3 +19,17 @@
 }
 .tt-treat-note { margin: 0; font-size: max(16px, .8em); line-height: 1.2; color: var(--tt-ink2, #7A4A22); }
 .tt-treat-custody { font-style: italic; }
+.tt-treat-msg--checking { opacity: .8; }
+.tt-treat-copy {
+  min-height: 44px; padding: 0 1em; border-radius: 999px; font-weight: 800; font-size: max(16px, .9em);
+  background: #FFFDF5; color: var(--tt-ink, #4A1D08); border: 2px solid var(--tt-ink2, #7A4A22); cursor: pointer;
+}
+.tt-treat-copy:focus-visible { outline: 3px solid var(--tt-love, #FF7AA2); outline-offset: 3px; }
+.tt-treat-btn.is-disabled { cursor: progress; }
+/* short landscape phones (667x375, 844x390): the panel must leave room for Continue inside the card */
+@media (max-height: 420px) {
+  .tt-treat { gap: .35em; margin: .15em 0 0; padding: .3em .6em .35em; }
+  .tt-treat-head { line-height: 1.1; }
+  .tt-treat-msg, .tt-treat-note { line-height: 1.12; }
+  .tt-treat-link { min-height: 40px; }
+}

@@ -157,10 +157,10 @@ test('results rows (§14.3: time, kittens n/3, letter, fish, lives left, rank)',
 });
 
 // ------------------------------------------------------------------ toasts
-test('toast queue: 3 visible, 2.5 s each, extras wait, duplicates dropped (§14.3)', () => {
-  assert.equal(TOAST.visible, 3);
+test('toast queue: 3 visible (TT5 default 2 on tablet / desktop), 2.5 s each, extras wait, duplicates dropped (§14.3)', () => {
+  assert.equal(TOAST.visible, 2, 'TT5: two toasts in the top slot on tablet and desktop');
   assert.equal(TOAST.life, 2.5);
-  const q = new ToastQueue();
+  const q = new ToastQueue({ visible: 3 });
   for (const s of ['a', 'b', 'c', 'd', 'e']) assert.equal(q.push(s), true);
   assert.equal(q.push('a'), false, 'duplicate of a shown toast');
   assert.equal(q.push('   '), false, 'empty');
@@ -1450,21 +1450,27 @@ test('review: title CTA sits in the lower third above the footer; the footer has
   assert.match(foot, /border-radius:\s*999px/);
 });
 
-test('review: celebrations skip on a key / pad press after skipAfter (not only on a pointer)', () => {
+test('TT5: a card skips only on Enter (or a tap on the card), never on attack / jump / a pad button', () => {
   const q = new CelebrateQueue();
-  const acts = new Map([['interact', { pressed: false }], ['attack', { pressed: false }]]);
-  const input = { actions: acts };
+  const acts = new Map([['confirm', { pressed: false }], ['attack', { pressed: false }], ['jump', { pressed: false }], ['interact', { pressed: false }]]);
+  const input = { actions: acts, device: 'kbm' };
   q.push('card', 'holy');
   q.update(0.016, false);
   assert.ok(q.cur && !q.cur.flying);
-  acts.get('interact').pressed = true;
+  acts.get('confirm').pressed = true;
   assert.equal(pollSkip(q, input), null, 'too early: before skipAfter');
-  acts.get('interact').pressed = false;
+  acts.get('confirm').pressed = false;
   q.update(0.7, false);
   assert.equal(pollSkip(q, input), null, 'no press, no skip');
-  acts.get('attack').pressed = true;
+  for (const a of ['attack', 'jump', 'interact']) {
+    acts.get(a).pressed = true;
+    assert.equal(pollSkip(q, input), null, `${a} never skips a card`);
+    acts.get(a).pressed = false;
+  }
+  acts.get('confirm').pressed = true;
+  assert.equal(pollSkip(q, { actions: acts, device: 'pad' }), null, 'the pad A (also Jump) never skips');
   const c = pollSkip(q, input);
-  assert.equal(c, q.cur, 'a key press moves the current item to its fly phase');
+  assert.equal(c, q.cur, 'Enter moves the current item to its fly phase');
   const ev = q.update(0.016, false);
   assert.equal(ev.fly, c);
   assert.equal(pollSkip(q, input), null, 'already flying');

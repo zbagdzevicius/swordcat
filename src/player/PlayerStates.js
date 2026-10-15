@@ -20,7 +20,7 @@ import { PLAYER, ATTACKS, LOOP } from '../core/config.js';
 import { damp, dampAngle, clamp, wrapAngle } from '../core/math.js';
 import { TUNING } from './tuning.js';
 import { TRICKS } from './tricks/tuning.js';
-import { glideStep } from './tricks/RibbonTwirl.js';
+import { glideStep, twirlGravityMul } from './tricks/RibbonTwirl.js';
 
 const _wish = new THREE.Vector3();
 const _dir2 = { x: 0, z: 0 };
@@ -410,7 +410,7 @@ export const STATES = {
       p.stateName = 'twirl';
       p.tricks?.startTwirl?.();
       p.twirlLim = p.tricks?.twirlLim ?? { speed: TRICKS.twirl.speed, maxTime: TRICKS.twirl.maxTime, fallMax: TRICKS.twirl.fallMax };
-      p.terminalFall = p.twirlLim.fallMax; p.gravityMul = 0.55;
+      p.terminalFall = p.twirlLim.fallMax; p.gravityMul = twirlGravityMul(p.vel.y);   // low gravity only while falling (TT5)
       p.jumping = false; p.jumpCutDone = true;
       p.squashEvent = 'twirl';
     },
@@ -424,6 +424,7 @@ export const STATES = {
       _dir2.x = l > 1e-6 ? _wish.x / l : 0; _dir2.z = l > 1e-6 ? _wish.z / l : 0;
       _lim.speed = L.speed * p.speedMul; _lim.fallMax = L.fallMax;
       glideStep(p.vel, _dir2, mag, _lim, dt);
+      p.gravityMul = twirlGravityMul(p.vel.y);                // TT5: no twirl super-jump on the way up
       if (mag > 0.05) p.facing = dampAngle(p.facing, Math.atan2(_dir2.x, _dir2.z), PLAYER.turnDamp * 0.5, dt);
     },
     exit(p) { p.terminalFall = PLAYER.terminalFall; p.gravityMul = 1; },

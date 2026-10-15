@@ -4,7 +4,7 @@
 import { embedActive, markEmbed, installEmbedBridge } from './core/embed.js';
 import { installPreloadErrorReload, showRecovery } from './core/recovery.js';
 import { Game, dropSplash } from './core/Game.js';
-import { installTreatPanel } from './shelter/treat.js';
+import { installTreatPanel, standaloneMode } from './shelter/treat.js';
 
 const embedded = embedActive(location.search, window);
 if (embedded) markEmbed(document);
@@ -15,7 +15,9 @@ const game = new Game(host);
 
 const started = game.start();
 if (embedded) installEmbedBridge(game);
-else installTreatPanel(game); // outside the Token Tails frame: the card links to the give page in a new tab
+// outside the Token Tails frame: on https://tokentails.com the card sends the guest treat itself (treatApi.js); on any
+// other host it shows a new-tab link to tokentails.com/swordcat and a Copy link button. The game tab never navigates.
+else installTreatPanel(game, { mode: standaloneMode(location) });
 
 started.catch((e) => {
   console.error('[boot] failed to start', e);

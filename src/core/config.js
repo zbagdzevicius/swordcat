@@ -14,9 +14,14 @@ export const PLAYER = {
   height: 1.0, radius: 0.32, mass: 1.0, hpStart: 8, hpMax: 14, lives: 9,
   walk: 2.0, run: 5.5, zoomies: 7.2, zoomiesAfter: 2.0, zoomiesClearRadius: 15,
   accelDamp: 14, decelDamp: 18, airDamp: 4, airMax: 5.5, turnDamp: 16,
-  jumpV: 7.4, fallGravityMul: 1.35, jumpCut: 0.5, coyote: 0.12, jumpBuffer: 0.15,
-  terminalFall: 14, hardLandSpeed: 9, hardLandLock: 0.15, squashLand: -0.25, stretchJump: 0.18,
-  stepUp: 0.3, mushroomBounceV: 9,
+  // TT5 jump preset B (docs/TOKENTAILS-PLAN.md §13.1 #2): apex 8.4²/44 = 1.604 m (was 1.245); a release cuts the rise
+  // to 0.65× only after jumpCutAfter s of rise, so an 80 ms keyboard tap peaks ≈ 1.17 m and clears the 1.0 m lesson
+  // fence at a run (plan: 0.10 s ≈ 1.10 m, which keeps her above the rail too briefly to cross it: smoke player:jumps)
+  // hardLandSpeed 12.5 (plan: 12): a full jump onto ground 0.5 m lower meets it at 11.8 m/s, and the fixed step can
+  // report up to 0.55 m/s more on the landing frame (Physics reads the post-gravity speed)
+  jumpV: 8.4, fallGravityMul: 1.5, jumpCut: 0.65, jumpCutAfter: 0.12, coyote: 0.15, jumpBuffer: 0.20,
+  terminalFall: 14, hardLandSpeed: 12.5, hardLandLock: 0.15, squashLand: -0.25, stretchJump: 0.18,
+  stepUp: 0.3, mushroomBounceV: 10,
   water: { shallowMul: 0.6, deepDamage: 1, safeSamples: 8, safeEvery: 0.5 },
   glide: { fallMax: 1.8, speed: 4.5, maxTime: 1.5 },                                   // MVP+
   dodge: { dur: 0.40, v0: 9, v1: 4, iframes: [0.04, 0.30], cooldown: 0.20, perfect: [0.04, 0.20],
@@ -168,7 +173,7 @@ export const AIM = {
   touchRange: 4.5, kbRange: 3.0, padDead: 0.25, padAimMax: 6, cursorIdle: 3.0, sticky: 0.75, lungeExtra: 1.0,
   score: { angle: 2.0, windup: 2.5, selected: 1.0, lowHp: 0.8, lowHpFrac: 0.3, recentHit: 0.5, breakable: 3.0 },
   breakableClear: 6, standSnapRange: 5, standSnapLead: 0.7, cursorReaimPx: 30, chargeTurn: 9.42,
-  pounceMax: 3.5, pounceMagnet: 2.5, pounceTouchDisc: 3.0, jumpAssist: { range: 2.4, dv: 1.2, ang: 0.349, inset: 0.3 },
+  pounceMax: 3.5, pounceMagnet: 2.5, pounceTouchDisc: 3.0, jumpAssist: { range: 2.4, dv: 1.5, ang: 0.349, inset: 0.3, maxRise: 1.4 },   // TT5: dv 1.2 → 1.5 (the 1.6 m jump flies longer; a full run must still land on a 1.2 m stump), maxRise 1.1 → 1.4
   pick: { px: 28, pad: 6, touchPx: 56, interactR: 1.2 }, autoChainRest: 0.10, autoRiposte: 0.15,
   onScreenMargin: 0.5, rangedNear: 9,
   // combat (CONTROLS_SPEC prose numbers; combat/targeting.js aimCfg merges these over its AIM_FALLBACK)

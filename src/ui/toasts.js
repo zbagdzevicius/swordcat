@@ -1,11 +1,14 @@
 // src/ui/toasts.js  (owner: ui) — GAME_DESIGN §14.3 Toasts: "Kitten found, letter, Heart Bell, skin unlocked,
 // objective done. Queue of 3; 2.5 s each." `ToastQueue` is the pure timing model (node-tested); `Toasts` renders it as
 // cream candy pills under the objective line (top-centre) with an icon per kind; gameplay tips go one at a time.
+// TT5 (TOKENTAILS-PLAN §13.1, messages.js): the top toast slot shows 1 toast on phones and 2 on tablet and desktop;
+// toasts wait (hidden, clocks held) under a modal and, on phones, while a centre card is up. A toast may carry its own
+// inline SVG icon (`svg`: stickers and rewards shown as toasts).
 import { el, flag } from './dom.js';
 import { glyphify } from './text.js';
 import * as I from './icons.js';
 
-export const TOAST = Object.freeze({ visible: 3, life: 2.5, fadeIn: 0.25, fadeOut: 0.35, dedupe: 0.6, maxQueue: 12 });
+export const TOAST = Object.freeze({ visible: 2, life: 2.5, fadeIn: 0.25, fadeOut: 0.35, dedupe: 0.6, maxQueue: 12 });
 
 /**
  * Is this toast a gameplay tip (a `tut.*` hint, icon 'hint')? Tips go one at a time (WA §6.1 rule 6: one instruction
@@ -116,11 +119,15 @@ export function iconFor(key, icon) {
 }
 
 /** Toasts shown at once on a phone (hud.js TOAST_PHONE.visible; kept here so toasts.js stays free of hud.js). */
-export const TOAST_PHONE_VISIBLE = 2;
+export const TOAST_PHONE_VISIBLE = 1;
 
-/** Is this a phone layout (touch, or a short / narrow viewport: beacon.js `isPhone`)? Reads the window size. */
+/**
+ * Is this a phone-sized viewport (short or narrow, messages.js `viewportKind`)? TT5: a touch tablet gets the tablet
+ * count (2), so the device no longer decides. Reads the window size.
+ */
 export function phoneToasts(device, W = typeof innerWidth === 'number' ? innerWidth : 1280, H = typeof innerHeight === 'number' ? innerHeight : 720) {
-  return device === 'touch' || Math.min(W, H) < 500;
+  void device;
+  return Math.min(W, H) < 500;
 }
 
 export class Toasts {
@@ -136,24 +143,27 @@ export class Toasts {
     this.cap = null;
   }
 
-  /** TT3 R3 (§10.2.10): a phone shows 2 at a time in its side slot (hud.js phoneToastBox), fewer when `cap` says so. */
+  /** TT5: a phone shows 1 at a time in its side slot (hud.js phoneToastBox), tablet / desktop 2; `cap` can lower it. */
   _cap() {
     const base = phoneToasts(this.device()) ? TOAST_PHONE_VISIBLE : TOAST.visible;
     this.q.cfg.visible = Number.isFinite(this.cap) ? Math.max(1, Math.min(base, this.cap)) : base;
   }
 
-  push(text, { icon = null, key = null } = {}) {
+  push(text, { icon = null, key = null, svg = null } = {}) {
     this._cap();
-    return this.q.push(text, iconFor(key, icon), isTip(key, icon));
+    return this.q.push(text, svg ? { svg: String(svg) } : iconFor(key, icon), isTip(key, icon));
   }
 
   /**
    * Real seconds (toasts keep their pace during hitstop / slow motion).
    * @param {number} dt @param {{ tips?: boolean, tipHold?: boolean }} [o] `tips`: the hint layers may show (live play);
    *   `tipHold`: the guide bubble is up. A shown tip hides (and its clock pauses) while `tips` is false.
+   *   `hold` (TT5 messages.js): every toast waits, hidden with its clock held (a modal is up, or a card on a phone).
    */
   render(dt, o = {}) {
     const tips = o.tips !== false;
+    flag(this.root, 'is-held', !!o.hold);
+    if (o.hold) return;
     this._cap();
     this.q.tipHold = !tips || !!o.tipHold;
     for (const t of this.q.shown) if (t.tip && !tips) t.t = Math.max(0, t.t - dt);   // a tip's clock waits out a scene
@@ -163,7 +173,8 @@ export class Toasts {
     for (const t of this.q.shown) {
       let e = this.els.get(t.id);
       if (!e) {
-        const ic = t.icon && ICONS[t.icon] ? `<span class="toast-ico">${ICONS[t.icon]()}</span>` : '';
+        const svg = t.icon && typeof t.icon === 'object' ? t.icon.svg : t.icon && ICONS[t.icon] ? ICONS[t.icon]() : '';
+        const ic = svg ? `<span class="toast-ico">${svg}</span>` : '';
         e = el('div', 'ui-toast', { html: `${ic}<span class="toast-txt">${glyphify(t.text, this.device(), this.input())}</span>`, parent: this.root });
         this.els.set(t.id, e);
       }

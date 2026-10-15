@@ -39,3 +39,16 @@
 .kit-face { position: relative; }
 .kit-face .kit-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .kit-status { font-size: max(14px, .66em); font-weight: 700; color: var(--pinkDark, #B8557A); }
+/* TT5 (TOKENTAILS-PLAN §13.2 M): short landscape phones (667×375): the photo shrinks to a strip beside the text, the
+   sheet scrolls inside the screen and Continue sticks to the sheet's foot, always fully visible */
+@media (max-height: 420px) and (orientation: landscape) {
+  .sh-card { padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+  .sh-sheet { gap: 12px; padding: 10px 12px 0; max-height: 100%; overscroll-behavior: contain; }
+  .sh-pic { width: min(28%, 170px); aspect-ratio: auto; height: auto; max-height: calc(100vh - 40px); align-self: flex-start; position: sticky; top: 0; }
+  .sh-pic img { height: auto; max-height: calc(100vh - 40px); aspect-ratio: 3 / 4; }
+  .sh-body { gap: 6px; }
+  .sh-name { font-size: 1.4em; }
+  .sh-meet { font-size: 16px; }
+  .sh-continue { position: sticky; bottom: 0; margin-top: 4px; min-height: 44px; box-shadow: 0 -10px 0 var(--parch, #FFF8EE), 0 10px 0 var(--parch, #FFF8EE); z-index: 1; }
+  .sh-body::after { content: ''; display: block; height: 8px; flex: none; }
+}

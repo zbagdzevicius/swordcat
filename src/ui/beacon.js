@@ -66,6 +66,31 @@ export const QUEST_TARGETS = Object.freeze({
 
 const _v = new THREE.Vector3(), _f = new THREE.Vector3(), _d = new THREE.Vector3(), _r = new THREE.Vector3();
 const _edge = { x: 0, y: 0, angle: 0 };
+const _clem = { x: 0, y: 0, r: BEACON.clemClear };
+/** TT5 B (requests tt5-b M2): the objective pill joins the edge keep-outs; its rect is re-read every 0.25 s */
+const _pill = { x: 0, y: 0, w: 0, h: 0 };
+const _keep = [];
+let _pillT = -1, _pillOn = false;
+
+/**
+ * The occluder rects plus the objective pill (`ctx.ui.hud.guideEl` while `is-on`), in one reused array.
+ * @param {ReadonlyArray<{x:number, y:number, w:number, h:number}>|undefined} rects @param {any} hud @param {number} now (s)
+ */
+export function keepOuts(rects, hud, now) {
+  const g = hud?.guideEl;
+  if (now - _pillT >= 0.25 || now < _pillT) {
+    _pillT = now; _pillOn = false;
+    if (g?.classList?.contains('is-on') && typeof g.getBoundingClientRect === 'function') {
+      const r = g.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) { _pill.x = r.left; _pill.y = r.top; _pill.w = r.width; _pill.h = r.height; _pillOn = true; }
+    }
+  }
+  if (!_pillOn) return rects;
+  _keep.length = 0;
+  if (rects) for (let i = 0; i < rects.length; i++) _keep.push(rects[i]);
+  _keep.push(_pill);
+  return _keep;
+}
 const _demo = { x: 0, y: 0, z: 0 };
 
 /** Read an [x, z] / [x, y, z] / {x, y, z} / {pos} position into `out` ({x, y, z}; y NaN when unknown). */
@@ -232,6 +257,57 @@ export function dodgeRects(p, rects, W, H, m = BEACON.edgeMargin) {
     if (!hit) break;
   }
   return p;
+}
+
+/**
+ * TT5 B: the edge coin's final spot. `dodgeRects` and `clearOf` slide one way at a time, so in a dense touch cluster
+ * (667x375: Milk over Jump, 28 px gaps) they bounce between two buttons and can end on one. This walks the border band
+ * (`m` px in) both ways from `p` in `step` px and takes the nearest spot that keeps the coin `pad` px clear of every
+ * occluder rect and `clem.r` px from Clem. If no spot is free of both, Clem's rule is dropped; if still none, `p` keeps
+ * the old dodge result. Pure; mutates `p`. Returns whether a free spot was found.
+ * @param {{x:number, y:number}} p @param {{x:number, y:number, w:number, h:number}[]|null|undefined} rects
+ * @param {{x:number, y:number, r:number}|null} clem @param {number} W @param {number} H @param {number} m
+ * @param {number} [pad] px between the coin centre and a rect @param {number} [step]
+ */
+export function placeEdge(p, rects, clem, W, H, m, pad = BEACON.edgePad, step = 4) {
+  const x0 = m, y0 = m, x1 = Math.max(m, W - m), y1 = Math.max(m, H - m);
+  const bw = x1 - x0, bh = y1 - y0, per = 2 * (bw + bh);
+  if (!(per > 0)) return edgeFree(p.x, p.y, rects, pad, clem);
+  // perimeter coordinate of p (clockwise from the band's top-left corner)
+  const cx = Math.max(x0, Math.min(x1, p.x)), cy = Math.max(y0, Math.min(y1, p.y));
+  const dT = cy - y0, dR = x1 - cx, dB = y1 - cy, dL = cx - x0, dm = Math.min(dT, dR, dB, dL);
+  const s0 = dm === dT ? cx - x0 : dm === dR ? bw + (cy - y0) : dm === dB ? bw + bh + (x1 - cx) : 2 * bw + bh + (y1 - cy);
+  for (let pass = 0; pass < 2; pass++) {
+    const c = pass === 0 ? clem : null;
+    if (edgeFree(p.x, p.y, rects, pad, c)) return true;
+    for (let d = step; d <= per / 2; d += step) {
+      for (let k = 0; k < 2; k++) {
+        bandAt(s0 + (k === 0 ? d : -d), x0, y0, x1, y1, per, _q);
+        if (edgeFree(_q.x, _q.y, rects, pad, c)) { p.x = _q.x; p.y = _q.y; return true; }
+      }
+    }
+  }
+  return false;
+}
+const _q = { x: 0, y: 0 };
+
+/** Is (x, y) at least `pad` px outside every rect and (with `clem`) `clem.r` px from Clem? Pure. */
+function edgeFree(x, y, rects, pad, clem) {
+  const n = rects?.length ?? 0;
+  for (let i = 0; i < n; i++) {
+    const r = rects[i];
+    if (x >= r.x - pad && x <= r.x + r.w + pad && y >= r.y - pad && y <= r.y + r.h + pad) return false;
+  }
+  return !(clem && Math.hypot(x - clem.x, y - clem.y) < clem.r);
+}
+
+/** The point at perimeter coordinate `s` (clockwise from the top-left) of the band rect. Pure; writes `out`. */
+function bandAt(s, x0, y0, x1, y1, per, out) {
+  const bw = x1 - x0, bh = y1 - y0;
+  s = ((s % per) + per) % per;
+  if (s <= bw) { out.x = x0 + s; out.y = y0; } else if (s <= bw + bh) { out.x = x1; out.y = y0 + (s - bw); }
+  else if (s <= 2 * bw + bh) { out.x = x1 - (s - bw - bh); out.y = y1; } else { out.x = x0; out.y = y1 - (s - 2 * bw - bh); }
+  return out;
 }
 
 /**
@@ -419,8 +495,13 @@ export class Beacon {
     } else {
       const em = this.phone ? BEACON.edgeMarginPhone : BEACON.edgeMargin;
       edgePoint(_v.x, _v.y, behind, W, H, em, _edge);
-      dodgeRects(_edge, ctx.ui?.screenOccluders?.()?.rects, W, H, em);
-      if (p) { _v.set(p.x, p.y + 0.4, p.z).project(cam); clearOf(_edge, (_v.x * 0.5 + 0.5) * W, (-_v.y * 0.5 + 0.5) * H, BEACON.clemClear, W, H, em); }
+      const rects = keepOuts(ctx.ui?.screenOccluders?.()?.rects, ctx.ui?.hud, (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000);
+      dodgeRects(_edge, rects, W, H, em);
+      let clem = null;
+      if (p) { _v.set(p.x, p.y + 0.4, p.z).project(cam); clem = _clem; clem.x = (_v.x * 0.5 + 0.5) * W; clem.y = (-_v.y * 0.5 + 0.5) * H; clearOf(_edge, clem.x, clem.y, BEACON.clemClear, W, H, em); }
+      // TT5 B: the two slides above can still leave the coin on a touch button; walk the border to the nearest free spot
+      // (the pad keeps the whole coin, its radius plus 8 px, off every button and HUD block)
+      placeEdge(_edge, rects, clem, W, H, em, Math.max(BEACON.edgePad, (this.phone ? BEACON.coinPxPhone : BEACON.coinPx) / 2 + 8));
       place(this.edge, _edge.x, _edge.y);
       const deg = (_edge.angle * 180 / Math.PI).toFixed(0);
       if (this.edgeRot._deg !== deg) { this.edgeRot._deg = deg; this.edgeRot.style.transform = `rotate(${deg}deg)`; }

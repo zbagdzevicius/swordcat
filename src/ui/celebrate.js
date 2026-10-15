@@ -7,9 +7,12 @@
 //   friend   Mochi / Sage / Clover joining, Pink Bow, Knight-ish: a card + a 200 px portrait + ≤ 24 DOM confetti + a
 //            short sting
 //
-// One queue, one item at a time, NEVER pauses gameplay (never touches game.timeScale / mode), skippable by any input
-// after CELEBRATE.skipAfter. In combat (an alerted enemy within CELEBRATE.safeR m) a card / friend docks at
-// CELEBRATE.dockScale under the objective line with no flash and no pose, and flies home after CELEBRATE.dockFly s.
+// One queue, one item at a time, NEVER pauses gameplay (never touches game.timeScale / mode). TT5 (TOKENTAILS-PLAN
+// §13.1, messages.js): a card is skipped only by a tap / click on the card itself (or Enter on a keyboard), never by an
+// attack tap; stickers are icon toasts in the top slot; in combat (an alerted enemy within CELEBRATE.safeR m) a card /
+// friend becomes an icon toast too (no flash, no pose). The card is placed by messages.js (off the HUD, the touch
+// buttons and Clem, sized per viewport); its confetti stays inside the card box. A new card waits while a modal (the
+// shelter card, the results, the offer) is up. Reduced motion / reduce flashes: a 120 ms fade, no confetti, no flight.
 // Sources: `reward {kind, id}` (story / world / companions), `kitten:rescued`, Heart Bell pickups, shards and the
 // Holy Slash / Golden Hour unlocks. Stickers also set the save flag `sticker.<id>` (the pause-menu sticker book).
 // DOM only, transform / opacity animation only (CSS), 0 draws.
@@ -110,10 +113,11 @@ export class CelebrateQueue {
    * Advance by dt (real seconds). `combat`: dock new cards / friends. Returns { started, fly, done } (items or null).
    * @param {number} dt @param {boolean} combat
    */
-  update(dt, combat = false) {
+  update(dt, combat = false, hold = false) {
     const ev = this._ev ?? (this._ev = { started: null, fly: null, done: null });
     ev.started = ev.fly = ev.done = null;
     if (!this.cur && this.items.length) {
+      if (hold) return ev;                                  // TT5: a modal is up, the next card waits
       const c = this.cur = this.items.shift();
       c.t = 0; c.started = true;
       c.docked = combat && c.kind !== 'sticker';
@@ -132,25 +136,43 @@ export class CelebrateQueue {
   clear() { this.items.length = 0; this.cur = null; }
 }
 
+/** TT5: the only key that skips a card (keyboard Enter). Attack, jump and the pad's A never do (A is also Jump). */
+export const SKIP_ACTIONS = Object.freeze(['confirm']);
+
 /**
- * Did any input action press on this step (keyboard, pad, or touch buttons routed through the input layer)? Pointer
- * presses are caught separately by the window listener. No allocation (walks the input's action map).
+ * Did a skip key press on this step? Keyboard only (`input.device` 'kbm' or unset); taps and clicks skip through the
+ * card's own pointer listener. No allocation.
  * @param {any} input ctx.input
  */
-export function anyActionPressed(input) {
+export function skipPressed(input) {
   const acts = input?.actions;
-  if (!acts) return false;
-  for (const s of acts.values()) if (s.pressed) return true;
+  if (!acts || (input.device && input.device !== 'kbm')) return false;
+  for (const a of SKIP_ACTIONS) if (acts.get?.(a)?.pressed) return true;
   return false;
 }
 
 /**
- * Skip the item on screen when any action pressed (keeps the queue's skipAfter / already-flying guards). Returns the
+ * Skip the item on screen when a skip key pressed (keeps the queue's skipAfter / already-flying guards). Returns the
  * item that was sent flying, or null.
  * @param {CelebrateQueue} q @param {any} input
  */
 export function pollSkip(q, input) {
-  return q.cur && anyActionPressed(input) && q.skip() ? q.cur : null;
+  return q.cur && skipPressed(input) && q.skip() ? q.cur : null;
+}
+
+/** Is the reduced-motion / reduce-flashes look on (120 ms fade, no confetti, no flight)? */
+export function calmLook(ctx) {
+  if (ctx?.state?.settings?.reduceFlashes) return true;
+  try { return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
+}
+
+/** The toast icon (inline SVG) of a reward shown as a toast: the sticker disc, a friend's face, else the card icon. */
+export function rewardToastIcon(info, kind, id) {
+  const art = info.art ?? {};
+  if (kind === 'sticker') return I.sticker(info.color, art.icon ? art.icon() : '');
+  const pid = art.portrait ?? (kind === 'friend' ? (id === 'bow' || id === 'knight' ? 'swordcat' : id) : null);
+  if (pid) return portraitSVG(pid, { expression: 'happy' });
+  return art.icon ? art.icon() : '';
 }
 
 export class Celebrate {
@@ -177,6 +199,8 @@ export class Celebrate {
     this._rot = 0;
     this.shown = 0;                          // items shown (tests)
     this.lastStarted = null;
+    this.asToast = 0;                        // rewards shown as icon toasts (stickers, combat cards; tests)
+    this.pop = this.card.querySelector('.cel-pop');
     const bus = ctx.bus, on = (n, f) => this._offs.push(bus.on(n, f));
     this._offs = [];
     on(E.REWARD, (p) => this.show(p?.kind, p?.id, p?.vars ?? null, 'reward'));
@@ -191,9 +215,14 @@ export class Celebrate {
     on(E.SHARD, (p) => this.show('card', 'shard', { n: p?.n ?? ctx.state?.shards ?? 1 }, 'ui'));
     on(E.UNLOCK, (p) => { if (p?.kind === 'ability' && (p.id === 'holy' || p.id === 'golden')) this.show('card', p.id, null, 'ui'); });
     on(E.LEVEL_LOADING, () => { this.q.clear(); this._end(); });
-    if (typeof window !== 'undefined') {
-      this._skip = () => { if (this.q.cur && this.q.skip()) this._fly(this.q.cur); };
-      window.addEventListener('pointerdown', this._skip, { capture: true, passive: true });
+    // TT5: only a tap / click on the card itself skips it (any tap used to, and it ate the attack tap under it)
+    this._skip = (e) => {
+      e?.stopPropagation?.();
+      if (this.q.cur && !this.q.cur.flying && this.q.skip()) this._fly(this.q.cur);
+    };
+    if (typeof this.pop?.addEventListener === 'function') {
+      this.pop.addEventListener('pointerdown', this._skip);
+      for (const ev of ['pointerup', 'mousedown', 'touchstart', 'click']) this.pop.addEventListener(ev, (e) => e.stopPropagation(), { passive: ev !== 'click' });
     }
   }
 
@@ -226,8 +255,16 @@ export class Celebrate {
     const pid = info.art.portrait ?? (c.kind === 'friend' ? (c.id === 'bow' || c.id === 'knight' ? 'swordcat' : c.id) : null);
     setHtml(this.portrait, pid ? portraitSVG(pid, { expression: 'happy' }) : '');
     flag(this.card, 'has-portrait', !!pid);
+    // TT5: the last card's flight transforms snap back with no transition (they eased back from the HUD corner over
+    // 0.45 s, so a card that came soon after another one swept in from the HUD across the screen)
+    this.flyX.style.transition = 'none'; this.flyY.style.transition = 'none';
     this.flyX.style.transform = ''; this.flyY.style.transform = '';
+    void this.flyX.offsetWidth;
+    this.flyX.style.transition = ''; this.flyY.style.transition = '';
+    this._calm = calmLook(ctx);
+    flag(this.card, 'is-calm', this._calm);
     flag(this.card, 'is-on', true);
+    this.ui?.messages?.placeCard?.(this.card, this.pop);
     pulse(this.card, 'is-pop');
     // the moment: flash, pose, world burst (never when docked; stickers stay small)
     // fx already bursts on `reward` (Beats.reward) and on `kitten:rescued` (Beats.rescue, with its own rescue flash),
@@ -238,9 +275,30 @@ export class Celebrate {
       try { if (typeof p?.onEmote === 'function') p.onEmote('cheer'); else p?.emote?.('cheer'); } catch { /* pose optional (characters W2) */ }
       if (c.src !== 'reward' && c.src !== 'kitten' && p) { try { ctx.fx?.burst?.('celebrate', p, { size: c.kind }); } catch { /* fx optional */ } }
     }
-    if (c.kind === 'friend' && !c.docked) this._confettiStart();
-    // sound (WA §5.4): audio's baked glock when it exists (stickers a third higher per sticker in a row, a triad for
-    // cards, the arpeggio + pizzicato for friends); the old raw ui sounds otherwise
+    if (c.kind === 'friend' && !c.docked && !this._calm) this._confettiStart();
+    this._sound(c);
+  }
+
+  /**
+   * TT5: a sticker, or a card in combat, is an icon toast in the top slot (it never lands on the play field or covers
+   * the fight). The HUD home still bumps; the sound still plays.
+   */
+  _toast(c) {
+    const ctx = this.ctx, info = rewardInfo(ctx, c.kind, c.id, c.vars, c.kind === 'sticker' ? 0 : this._rot++);
+    this.lastStarted = c; this.shown++; this.asToast++;
+    c.toast = true;
+    this.ui?.toast?.(info.title, { svg: rewardToastIcon(info, c.kind, c.id), key: `reward.${c.kind}.${c.id}` });
+    this._sound(c);
+    const home = c.kind === 'sticker' ? 'stickers' : REWARD_HOME[c.id] ?? null;
+    if (home) this.ui?.bumpHome?.(home);
+  }
+
+  /**
+   * Sound (WA §5.4): audio's baked glock when it exists (stickers a third higher per sticker in a row, a triad for
+   * cards, the arpeggio + pizzicato for friends); the old raw ui sounds otherwise.
+   */
+  _sound(c) {
+    const ctx = this.ctx;
     try {
       if (c.kind === 'sticker') {
         this._row = this._rowT > 0 ? this._row + 1 : 0;
@@ -254,12 +312,15 @@ export class Celebrate {
     } catch { /* audio optional */ }
   }
 
-  /** Fly the card into its HUD home (two nested transforms: X linear, Y eased = a soft arc). */
+  /** Fly the card into its HUD home (two nested transforms: X linear, Y eased = a soft arc); a calm card just fades. */
   _fly(c) {
+    if (this._calm) { this._homeKey = c.kind === 'sticker' ? 'stickers' : REWARD_HOME[c.id] ?? null; flag(this.card, 'is-fly', true); return; }
     const home = this.ui?.homeRect?.(c.kind === 'sticker' ? 'stickers' : REWARD_HOME[c.id] ?? 'portrait');
-    const r = this.card.getBoundingClientRect?.();
+    const r = (this.pop ?? this.card).getBoundingClientRect?.();      // the card box itself is 0 × 0 (an anchor)
     if (home && r && r.width > 0) {
-      const dx = home.x + home.w / 2 - (r.left + r.width / 2), dy = home.y + home.h / 2 - (r.top + r.height / 2);
+      // the card may be docked smaller (messages.js --cs scales the whole card, its flight too)
+      const k = this.ui?.messages?.placed?.scale || 1;
+      const dx = (home.x + home.w / 2 - (r.left + r.width / 2)) / k, dy = (home.y + home.h / 2 - (r.top + r.height / 2)) / k;
       this.flyX.style.transform = `translate3d(${dx.toFixed(0)}px,0,0)`;
       this.flyY.style.transform = `translate3d(0,${dy.toFixed(0)}px,0) scale(.18)`;
       this._homeKey = c.kind === 'sticker' ? 'stickers' : REWARD_HOME[c.id] ?? null;
@@ -277,7 +338,7 @@ export class Celebrate {
   _confettiStart() {
     for (let i = 0; i < this.confettiEls.length; i++) {
       const e = this.confettiEls[i];
-      setVar(e, '--x', `${((i * 37) % 100).toFixed(0)}vw`);
+      setVar(e, '--x', `${((i * 37) % 100).toFixed(0)}%`);
       setVar(e, '--d', `${(0.9 + ((i * 13) % 7) * 0.1).toFixed(2)}s`);
       setVar(e, '--r', `${((i * 53) % 360) - 180}deg`);
       setVar(e, '--dl', `${((i * 7) % 5) * 0.06}s`);
@@ -293,16 +354,27 @@ export class Celebrate {
     if (this._confT > 0 && (this._confT -= dt) <= 0) flag(this.confetti, 'is-on', false);
     // skippable by any input (WA §5.4): keyboard / pad / touch-button edges here, pointer presses via the listener
     // (the queue's update below sees the moved fly time and sends the card home this same frame)
-    pollSkip(this.q, this.ctx.input);
-    const ev = this.q.update(dt, this.q.cur || !this.q.items.length ? false : alertedNear(this.ctx, C.safeR));
-    if (ev.started) this._start(ev.started);
-    if (ev.fly) this._fly(ev.fly);
+    const skipped = pollSkip(this.q, this.ctx.input);
+    if (skipped) this._fly(skipped);
+    const hold = !!this.ui?.messages?.holdCards?.();
+    const ev = this.q.update(dt, this.q.cur || !this.q.items.length ? false : alertedNear(this.ctx, C.safeR), hold);
+    if (ev.started) {
+      const c = ev.started;
+      if (c.kind === 'sticker' || c.docked) { this._toast(c); this.q.cur = null; return; }
+      this._start(c);
+    }
+    if (ev.fly && !skipped) this._fly(ev.fly);
+    // TT5: re-place a showing card at 4 Hz (the objective line or the HUD can change under it)
+    const c = this.q.cur;
+    if (c && !c.flying && !c.toast && (this._placeT = (this._placeT ?? 0) - dt) <= 0) {
+      this._placeT = 0.25;
+      if (c.t > 0.15) this.ui?.messages?.placeCard?.(this.card, this.pop);
+    }
     if (ev.done) { this._end(); if (this._homeKey) this.ui?.bumpHome?.(this._homeKey); this._homeKey = null; }
   }
 
   dispose() {
     for (const off of this._offs) off();
-    if (this._skip && typeof window !== 'undefined') window.removeEventListener('pointerdown', this._skip, { capture: true });
     this.root.remove();
   }
 }

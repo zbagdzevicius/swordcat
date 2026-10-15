@@ -51,6 +51,7 @@ import { Celebrate } from './celebrate.js';
 import { KittenOffer } from './offer.js';
 import { FlyIcons } from './flyIcons.js';
 import { installShelter } from '../shelter/card.js';
+import { Messages } from './messages.js';
 
 export const UI_TIMING = Object.freeze({ skipHold: 1.0, skipRingAfter: 0.12, pauseTap: 0.3, tutorialTap: 0.35, gameOverDelay: 1.4, vigilDelay: 0.9, splashOut: 0.45 });
 
@@ -90,6 +91,7 @@ export class UI {
     /** AUTOCAM §7.1 SafeFrame inputs */ this.occluders = null;
     /** WA §5.4 */ this.celebrations = null;
     /** WA §6.3 */ this.offer = null;
+    /** TT5 §13.1: where and when every message shows (messages.js) */ this.messages = new Messages(ctx, this);
     /** WA §5.5 fly-to-HUD */ this.fly = null;
     /** WA §7.5 / §4.1 progressive reveal (reveal.js `revealShow`; 10 Hz): what the bar / HUD / cluster may show */ this.reveal = null;
     this._lastUnlocked = 'free';
@@ -125,7 +127,7 @@ export class UI {
     if ('chapter' in cmd) { if (cmd.chapter) o.showChapter(cmd.chapter, { sec: 6, sound: false }); else o.hideChapter(); }
     if ('title' in cmd) this._titleCmd(cmd.title);
     if ('press' in cmd) this._pressCmd(cmd.press);
-    if ('skip' in cmd) o.skipProgress(+cmd.skip || 0, cmd.skipText ?? tx(this.ctx, 'prompt.skip'));
+    if ('skip' in cmd) o.skipProgress(+cmd.skip || 0, cmd.skipText ?? this._skipText());
     if (cmd.clear) o.clear();
   }
 
@@ -733,9 +735,8 @@ export class UI {
       }
     }
     if (mode !== 'play' && mode !== 'memecam' && mode !== 'dialog') return;
-    // WA §5.4: any input after 0.6 s sends a celebration home (it never pauses or eats the input)
-    const cel = this.celebrations;
-    if (cel?.q.cur && input.anyActivity?.() && cel.q.skip()) cel._fly(cel.q.cur);
+    // TT5 §13.1: a celebration card is skipped only by a tap on the card itself or Enter (celebrate.js), never by the
+    // attack / move input that happens to come while it shows
     // requests/fx: Esc while a companion ability is held only cancels the aim (CONTROLS_SPEC §7.5); TT3 §11.3: the same
     // for a Paw Trick held to aim (package A reads `back` to call the aim off)
     if ((ctx.companions?.aim?.active || ctx.player?.tricks?.holding || ctx.player?.tricks?.aim?.on) && input.pressed('pause')) return;
@@ -759,6 +760,16 @@ export class UI {
     const dev = ctx.input?.device ?? 'kbm';
     const holdKey = dev !== 'kbm' && ctx.strings?.has?.(`onb.skip.hold.${dev}`) ? `onb.skip.hold.${dev}` : 'onb.skip.hold';
     this.overlay.setChip(true, sc.progress ?? 0, tx(ctx, 'onb.skip'), glyphify(tx(ctx, holdKey), dev, ctx.input));
+  }
+
+  /**
+   * TT5: the hold-to-skip ring's label for the current device ("Hold Skip to skip" on touch, "Hold [Start] to skip" on a
+   * pad); it said "Hold [Esc] or [P]" on a phone. Glyphs resolved.
+   */
+  _skipText() {
+    const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
+    const key = dev !== 'kbm' && ctx.strings?.has?.(`prompt.skip.${dev}`) ? `prompt.skip.${dev}` : 'prompt.skip';
+    return glyphify(tx(ctx, key), dev, ctx.input).replace(/<[^>]*>/g, '');
   }
 
   /** The Skip chip's screen rectangle while it shows (G1's `__GAME__.guide()` reads it), else null. */
@@ -795,7 +806,8 @@ export class UI {
     this.overlay.render(dt);
     this._skipChip(title);
     const hintOn = hintLayerOn({ hud: hudOn, meme: this.meme, mode, dialog: !!this.dialog.visible, letterbox: !!this.overlay.letterboxOn, menu: !!this.menus.active, cinema: this.inScene });
-    this.toasts.render(dt, { tips: hintOn, tipHold: !!this.prompts?.guide?.open });
+    this.messages?.update(dt);
+    this.toasts.render(dt, { tips: hintOn, tipHold: !!this.prompts?.guide?.open, hold: !!this.messages?.holdToasts() });
     const world = hudOn && !this.meme && (mode === 'play' || mode === 'memecam') && !this.menus.active;
     this.prompts.render(dt, { world, hint: hintOn });
     this.beacon?.render(dt, world);
@@ -884,7 +896,7 @@ export class UI {
       this.pauseHeld += dt;
       const can = storyCanSkip(story);
       if (can && !this.skipped && this.pauseHeld >= UI_TIMING.skipRingAfter) {
-        this.overlay.skipProgress(Math.min(1, this.pauseHeld / UI_TIMING.skipHold), tx(this.ctx, 'prompt.skip'));
+        this.overlay.skipProgress(Math.min(1, this.pauseHeld / UI_TIMING.skipHold), this._skipText());
         if (this.pauseHeld >= UI_TIMING.skipHold) {
           this.skipped = true;
           this.overlay.skipProgress(0);

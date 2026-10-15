@@ -527,7 +527,9 @@ kbd.ui-key--sword { text-shadow: 0 1px 0 var(--pinkDark); }
 .ui-root.dev-touch .hud-save { bottom: auto; top: calc(14px + 2.6em); right: 18px; }
 .ui-root.dev-touch .hud-milk { left: auto; right: auto; bottom: auto; top: calc(14px + 7.4em); left: 16px; }
 /* touch: the objective card tucks under the top-left HUD (portrait + hearts + valor), out of the stick's thumb arc and off her */
-.ui-root.dev-touch .ui-hint { top: calc(20px + 5.9 * clamp(16px, 1.05vmin + 9px, 22px) + env(safe-area-inset-top)); bottom: auto; max-width: min(19em, 33vw); }
+.ui-root.dev-touch .ui-hint { top: max(calc(20px + 5.9 * clamp(16px, 1.05vmin + 9px, 22px) + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px)); bottom: auto; max-width: min(19em, 33vw); }
+/* TT5: under the objective line too when it hangs under the hearts (landscape phones stacked three boxes there) */
+.ui-root.dev-touch.has-guide-under .ui-hint { top: max(calc(20px + 5.9 * clamp(16px, 1.05vmin + 9px, 22px) + env(safe-area-inset-top)), calc(var(--tl-b, 0px) + 8px), calc(var(--guide-b, 0px) + 8px)); }
 /* touch: the ❚❚ button owns the top centre (72 px × touch size × .62 + margins), so the boss bar / objective sit below it */
 body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe-area-inset-top)); }
 #touch { --ts: 1; --tb: calc(72px * var(--ts)); }
@@ -960,8 +962,11 @@ body.ui-bar .touch-root .touch-cluster .tbtn { opacity: 0; pointer-events: none;
   .ui-toast { border-radius: 18px; }
   /* the lesson card sits just under the HUD strip: mid-screen it covered the practice fence right above her (requests/story.md) */
   .ui-root.ui-root .ui-hint { top: calc(96px + env(safe-area-inset-top)); bottom: auto; max-width: 70vw; }
-  /* both share the strip under the HUD: the card steps aside while a toast is up instead of drawing over it */
-  .ui-root.ui-root:has(.ui-toast:not(.is-out):not(.is-hid)) .ui-hint { opacity: 0; }
+  /* both share the strip under the HUD: the card steps aside while a toast is up (TT5: messages.js `msg-toast`, which
+     also covers a toast fading out and a short linger, so the card no longer fades back over a leaving toast) */
+  .ui-root.ui-root.msg-toast .ui-hint { opacity: 0 !important; }
+  /* TT5: in a boss fight the lesson card steps aside for the bar here too (it covered the boss name in portrait) */
+  .ui-root.ui-root:has(.hud-boss.is-on) .ui-hint { opacity: 0 !important; pointer-events: none; }
   .ui-root.ui-root .hud-milk { left: 10px; right: auto; bottom: auto; top: calc(84px + env(safe-area-inset-top)); transform: scale(.8); transform-origin: top left; }
   .ui-root.ui-root .hud-save { right: 10px; bottom: auto; top: calc(8px + 7.2em + env(safe-area-inset-top)); }
   .tb-pause { top: calc(10px + env(safe-area-inset-top)); left: 50%; }
@@ -1042,7 +1047,7 @@ body:not(.ui-touch) .ui-hint.is-on:not(.is-dim) { pointer-events: auto; }
    portrait / hearts / card block sits opposite the mirrored cluster. */
 @media (orientation: landscape) {
   body.ui-touch.has-tc-band .ui-root .hud-tc { left: var(--tc-l); width: var(--tc-w); transform: none; }
-  body.ui-touch .ui-root:has(.ui-toast:not(.is-out):not(.is-hid)) .ui-hint { opacity: 0; }
+  body.ui-touch .ui-root.msg-toast .ui-hint { opacity: 0 !important; }
   body.ui-touch .ui-root:has(.hud-boss.is-on) .ui-hint, body.ui-touch .ui-root:has(.hud-boss.is-on) .hud-obj { opacity: 0; pointer-events: none; }
   body.ui-touch .ui-root .hud-boss .boss-medal { width: 2.8em; height: 2.8em; }
   body.ui-touch .ui-root .hud-boss .boss-name { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -1283,7 +1288,7 @@ kbd.ui-key--sword .ico-sword { width: 1.25em; height: 1.25em; vertical-align: -.
 /* ---- WA §5.4 celebrations (sticker / card / friend; one at a time; never pauses) */
 .ui-celebrate { position: absolute; inset: 0; pointer-events: none; overflow: hidden; transition: opacity .25s; }
 .ui-celebrate.is-dim { opacity: 0; }
-.cel-card { position: absolute; left: 50%; top: 21vh; width: 0; height: 0; opacity: 0; }
+.cel-card { position: absolute; left: var(--cx, 50%); top: var(--cy, 21vh); width: 0; height: 0; opacity: 0; scale: var(--cs, 1); }
 .cel-card.is-on { opacity: 1; }
 .cel-fly { transition: transform .45s linear; }
 .cel-fly-y { transition: transform .45s cubic-bezier(.55, 0, .95, .55); }
@@ -1685,3 +1690,62 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
 .credits-roll .cr-pinkpaw-about { font-weight: 700; color: var(--tt-ink); }
 .credits-roll .cr-pinkpaw-about a { color: #C2185B; font-weight: 800; text-decoration: underline; text-underline-offset: 2px; pointer-events: auto; }
 .credits-roll .cr-fiction { color: var(--tt-ink2); font-style: italic; }
+
+/* ================================================================== TT5 (TOKENTAILS-PLAN §13.1) one message system (messages.js)
+   Root classes: msg-p0 (the shelter card, the results or the offer is up: everything below hides), msg-card (a centre
+   card is up: Pearl's bubble folds to its chip, phones hold the toasts and the hint), msg-toast (a toast is up or just
+   left: the hint waits where they share a column), msg-phone, vp-*. Toasts held by messages.js get .is-held. */
+.ui-toasts.is-held { visibility: hidden; }
+.ui-root.msg-p0 :is(.ui-toasts, .ui-hint, .ui-guide, .ui-celebrate, .ui-prompt, .ui-tag, .hud-guide, .ui-ghostpaw, .ui-beacon) { visibility: hidden !important; }
+.ui-root.msg-shelter .ui-offer, .ui-root.msg-results .ui-offer { visibility: hidden !important; }
+.ui-root.msg-card .ui-guide .gd-bubble { position: absolute; top: 0; opacity: 0; transform: scale(.92) translateY(-6px); }
+.ui-root.msg-card .ui-guide .gd-dots { display: none; }
+.ui-root.msg-phone.msg-card .ui-hint, .ui-root.msg-phone.msg-toast .ui-hint, .ui-root.msg-toast:has(.hud-toast-slot.is-phone) .ui-hint { opacity: 0 !important; pointer-events: none; }
+.ui-root .ui-hint { transition: opacity .2s ease; }
+.ui-root .ui-hint.is-dup { display: none !important; }
+
+/* the centre card: messages.js places it (--cx / --cy / --cs); only a tap on the card skips it */
+.cel-card.is-on:not(.is-fly) .cel-pop { pointer-events: auto; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.cel-pop { box-sizing: border-box; }
+.cel-card .kit-bio { max-width: 18em; }
+/* phone portrait: min(92vw, 340px), a 64 px portrait, a 24 px title */
+.cel-card.vp-phone-portrait .cel-pop { min-width: 0; width: min(92vw, 340px); max-width: 92vw; padding: .5em .9em .6em; gap: .2em; }
+.cel-card.vp-phone-portrait .cel-portrait, .cel-card.vp-phone-portrait.has-portrait:not(.is-friend) .cel-portrait { width: 64px; height: 64px; }
+.cel-card.vp-phone-portrait .cel-ico { width: 48px; min-height: 48px; }
+.cel-card.vp-phone-portrait .cel-title { font-size: 24px; -webkit-text-stroke: 4px var(--cocoa); }
+.cel-card.vp-phone-portrait .cel-line { font-size: 16px; line-height: 1.25; }
+.cel-card.vp-phone-portrait .cel-burst { top: 2em; width: 5em; height: 5em; margin: -2.5em 0 0 -2.5em; }
+/* phone landscape: a horizontal card min(46vw, 360px), at most 52vh tall, a 56 px portrait */
+.cel-card.vp-phone-land .cel-pop { min-width: 0; width: min(46vw, 360px); max-width: 46vw; max-height: 52vh; overflow: hidden; flex-direction: row; align-items: center;
+  text-align: left; gap: .6em; padding: .45em .8em .5em .55em; }
+.cel-card.vp-phone-land .cel-portrait, .cel-card.vp-phone-land.has-portrait:not(.is-friend) .cel-portrait { width: 56px; height: 56px; flex: none; }
+.cel-card.vp-phone-land .cel-ico { width: 48px; min-height: 48px; flex: none; }
+.cel-card.vp-phone-land .cel-txt { min-width: 0; }
+.cel-card.vp-phone-land .cel-title { font-size: 22px; -webkit-text-stroke: 4px var(--cocoa); }
+.cel-card.vp-phone-land .cel-line { font-size: 16px; line-height: 1.2; }
+.cel-card.vp-phone-land .kit-bio { display: none; }
+.cel-card.vp-phone-land .cel-burst { left: 2.2em; top: 50%; width: 4.6em; height: 4.6em; margin: -2.3em 0 0 -2.3em; }
+/* tablet: a 120 px friend portrait, desktop 160 px */
+.cel-card.vp-tablet .cel-pop { min-width: min(18em, 70vw); max-width: min(26em, 70vw); }
+.cel-card.vp-tablet.is-friend .cel-portrait { width: 120px; height: 120px; }
+.cel-card.vp-tablet .cel-title { font-size: 30px; }
+.cel-card.vp-tablet .cel-line { font-size: 18px; }
+.cel-card.vp-desktop .cel-pop { max-width: min(28em, 60vw); }
+.cel-card.vp-desktop.is-friend .cel-portrait { width: 160px; height: 160px; }
+/* the confetti stays inside the card box (it fell over the HUD and the whole screen) */
+.cel-confetti { inset: auto; left: var(--cfx, 30vw); top: var(--cfy, 15vh); width: var(--cfw, 40vw); height: var(--cfh, 30vh); overflow: hidden; border-radius: var(--r-l); }
+.cel-confetti .cf { top: -14px; }
+.cel-confetti.is-on .cf { animation-name: confFallBox; }
+@keyframes confFallBox { 0% { opacity: 1; transform: translateY(0) rotate(0); } 100% { opacity: 0; transform: translateY(calc(var(--cfh, 30vh) + 14px)) rotate(var(--r, 120deg)); } }
+/* reduced motion / reduce flashes: a 120 ms fade, no pop, no flight (celebrate.js is-calm) */
+.cel-card.is-calm.is-pop .cel-pop { animation: celFade .12s linear both; }
+.cel-card.is-calm .cel-pop { transition: opacity .12s; }
+.cel-card.is-calm .cel-burst { animation: none; }
+.cel-card.is-calm .cel-fly, .cel-card.is-calm .cel-fly-y { transition: none; }
+@keyframes celFade { from { opacity: 0; } to { opacity: 1; } }
+
+/* the pad's D-pad labels on the ability bar ("D-pad ↑" next to "D-pad ↓" collided): short, centred under the slot */
+.ability-bar.is-pad .ab-key { right: 50%; transform: translateX(50%); bottom: -13px; font-size: 16px; padding: 1px 5px; min-width: 22px;
+  max-width: 3.2em; white-space: normal; line-height: 1; text-align: center; border-radius: 10px; }
+/* the offer placed by messages.js (off the HUD block and the touch buttons) */
+.ui-offer.is-placed { left: var(--ofx); top: var(--ofy); right: auto; margin: 0; }

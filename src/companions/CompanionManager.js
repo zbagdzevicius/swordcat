@@ -47,7 +47,7 @@ import { CATS, visualDt } from '../characters/index.js';
 
 import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } from './abilityAim.js';
 import { AbilityIndicator } from './AbilityIndicator.js';
-import { setBubbleSafeInsets } from './Bubble.js';
+import { setBubbleSafeInsets, setBubbleHush } from './Bubble.js';
 import { PartyLife } from './party.js';
 import { emitCatSaved } from '../shelter/roster.js';
 
@@ -71,6 +71,8 @@ export class CompanionManager {
   constructor(ctx) {
     // every speech bubble (ours, NPCs', story/enemy barks) stays clear of the HUD's safe insets (ability bar, boss plate)
     setBubbleSafeInsets(() => ctx.ui?.safeInsets);
+    // TT5: no world bubble draws behind a modal's scrim (shelter card, results, offer)
+    setBubbleHush(() => !!ctx.ui?.messages?.p0);
     this.ctx = ctx;
     /** @type {Companion[]} */
     this.active = [];

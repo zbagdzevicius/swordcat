@@ -138,7 +138,7 @@ export function jumpAssistPlan(her, vel, probe, o) {
   const sp = Math.hypot(vel.x, vel.z);
   if (sp < 0.5) return null;                                       // straight up: nothing to aim at
   const yaw0 = Math.atan2(vel.x, vel.z);
-  const minRise = o.minRise ?? 0.3, maxRise = o.maxRise ?? 1.1, step = o.step ?? 0.15;
+  const minRise = o.minRise ?? 0.3, maxRise = o.maxRise ?? 1.4, step = o.step ?? 0.15;
   const apex = (o.v0 * o.v0) / (2 * o.g);
   let best = null, bestScore = Infinity;
   for (let k = 0; k <= 8; k++) {

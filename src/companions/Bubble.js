@@ -44,6 +44,18 @@ let safeInsetsOf = null;
 export function setBubbleSafeInsets(fn) { safeInsetsOf = typeof fn === 'function' ? fn : null; }
 
 /**
+ * TT5: true while a modal message is up (`ctx.ui.messages.p0`: the shelter card, the results, the Kitten-mode offer).
+ * World bubbles are canvas sprites, so the UI's CSS cannot hide them; they draw fully transparent instead and come
+ * back as they were when the modal closes. Set once by the CompanionManager; null = never hushed.
+ * @type {null | (() => boolean)}
+ */
+let hushOf = null;
+/** @param {null | (() => boolean)} fn */
+export function setBubbleHush(fn) { hushOf = typeof fn === 'function' ? fn : null; }
+/** @returns {boolean} */
+export function bubblesHushed() { try { return !!hushOf?.(); } catch { return false; } }
+
+/**
  * Pure clamp: how far (in NDC) to shift a bubble so its rect stays inside the screen minus a margin.
  * The rect is given relative to the anchor (the speaker's projected point): x from ax+l to ax+r, y from ay+b to ay+t.
  * A rect larger than the usable span is centred in it. Returns {dx, dy}.
@@ -103,13 +115,18 @@ export class TextSprite {
     this.sprite.visible = false;
     /** tail tip x on the canvas (px) the texture was last drawn with; bubble body rect (canvas px) */
     this.tailX = 256; this.body = null;
-    if (kind === 'bubble') this.sprite.onBeforeRender = (renderer, _scene, camera) => this._clampToScreen(renderer, camera);
+    /** opacity the animation wants; the render hook applies it, or 0 while a modal hushes bubbles (TT5) */
+    this.opacity = 1;
+    this.sprite.onBeforeRender = (renderer, _scene, camera) => {
+      this.sprite.material.opacity = bubblesHushed() ? 0 : this.opacity;
+      if (this.kind === 'bubble') this._clampToScreen(renderer, camera);
+    };
     this.object.add(this.sprite);
   }
 
   /** Show `text` for `dur` seconds (Infinity = until hide()). */
   show(text, dur = 1.6) {
-    this.on = true; this.t = 0; this.dur = dur;
+    this.on = true; this.t = 0; this.dur = dur; this.opacity = 1;
     if (this.sprite && text !== this.text) { this.sprite.center.set(0.5, 0); this._draw(text, this.canvas.width / 2); }
     this.text = text;
     if (this.sprite) this.sprite.visible = true;
@@ -214,12 +231,14 @@ export class TextSprite {
       this.sprite.scale.set(s * this.aspect * k, s * k, 1);
       this.sprite.position.y = 0.08 * Math.sin(this.t * 1.6);
       this.sprite.position.x = 0.12;
-      this.sprite.material.opacity = 0.65 + 0.35 * Math.sin(this.t * 2.2 + 1);
+      this.opacity = 0.65 + 0.35 * Math.sin(this.t * 2.2 + 1);
+      this.sprite.material.opacity = bubblesHushed() ? 0 : this.opacity;
     } else {
       const pop = easeOutBack(clamp01(this.t / 0.16));
       const fade = this.dur === Infinity ? 1 : clamp01((this.dur - this.t) / 0.25);
       this.sprite.scale.set(s * this.aspect * pop, s * pop, 1);
-      this.sprite.material.opacity = fade;
+      this.opacity = fade;
+      this.sprite.material.opacity = bubblesHushed() ? 0 : fade;
     }
   }
 

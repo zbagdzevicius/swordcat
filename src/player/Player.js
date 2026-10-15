@@ -75,6 +75,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     this._softBreak = false;
     this.pounceReady = true; this.pouncePhase = 'hang'; this.landT = 0;
     this.jumping = false; this.jumpCutDone = false;
+    /** TT5: seconds since take-off (the release cut waits PLAYER.jumpCutAfter), whether Jump was held at take-off */
+    this.jumpT = 0; this.jumpHeldAtTakeoff = false;
     this.zoomies = false; this.zoomT = 0; this.zoomHeading = 0;
     this.gait = 0; this.stepCount = 0;
     this.sipHealed = false; this.sipActive = false;
@@ -627,10 +629,14 @@ export class Player extends ScriptedActorMixin(Actor) {
     // gravity: snappier falls; pounce and the Ribbon Twirl set their own
     if (this.state !== 'pounce' && this.state !== 'twirl') this.gravityMul = this.vel.y < 0 ? PLAYER.fallGravityMul : 1;
     // variable jump height: releasing Jump cuts the rise (not on touch: a finger tap is 50–120 ms, and the copy says
-    // "tap [Jump]" to clear the practice fence, §14)
-    if (this.jumping && !this.jumpCutDone && !this.onGround && this.vel.y > 0 && !ctx.input.down('jump') && ctx.input.device !== 'touch') {
+    // "tap [Jump]" to clear the practice fence, §14). TT5: the cut waits PLAYER.jumpCutAfter s of rise, so a keyboard
+    // tap still clears the 1.0 m fence; a buffered jump whose key was already up at take-off is never cut (it used to
+    // become a 0.31 m hop the moment she landed)
+    if (this.jumping && !this.jumpCutDone && this.jumpHeldAtTakeoff && !this.onGround && this.vel.y > 0
+      && this.jumpT >= PLAYER.jumpCutAfter - 1e-9 && !ctx.input.down('jump') && ctx.input.device !== 'touch') {
       this.vel.y *= PLAYER.jumpCut; this.jumpCutDone = true;
     }
+    if (this.jumping) this.jumpT += dt;                                  // rise time counted from the take-off step
     const wasGround = this.onGround;
     this.landImpact = 0; this.bounced = 0;
     ctx.physics.moveActor(this, dt);
@@ -961,6 +967,7 @@ export class Player extends ScriptedActorMixin(Actor) {
   doJump() {
     this.vel.y = PLAYER.jumpV; this.onGround = false; this.coyoteT = 0; this.jumpBuf = 0;
     this.jumping = true; this.jumpCutDone = false;
+    this.jumpT = 0; this.jumpHeldAtTakeoff = !!this.ctx.input?.down?.('jump');
     this.squashEvent = 'jump';
     this.ctx.bus.emit(E.PLAYER_JUMP, {});
   }

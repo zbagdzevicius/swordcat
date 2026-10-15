@@ -237,19 +237,27 @@ test('locomotion: walk ≤ half stick at 2.0 m/s, full stick runs 5.5 m/s; appro
 
 // ================================================================== Player integration (headless)
 /** fakeCtx + a flat-ground physics stub; returns helpers to drive the fixed step. */
-async function rig({ difficulty = 'knight' } = {}) {
+/**
+ * @param {{ difficulty?: string, floor?: (x:number, z:number) => number, exact?: boolean }} [o]
+ *   floor: the ground height (default 0); exact: integrate the vertical move with the mean of the speed before and
+ *   after gravity, like physics/Physics.js (the default semi-implicit Euler peaks ~v·dt/2 low)
+ */
+async function rig({ difficulty = 'knight', floor = () => 0, exact = false } = {}) {
   const ctx = fakeCtx();
   ctx.state.difficulty = difficulty;
   ctx.physics = {
     moveActor(a, dt) {
       if (a.attachedTo) return;
+      const vy0 = a.vel.y;
       if (!a.onGround || a.vel.y > 0) a.vel.y = Math.max(a.vel.y - GRAVITY * (a.gravityMul ?? 1) * dt, -(a.terminalFall ?? 14));
-      a.pos.addScaledVector(a.vel, dt);
+      const ny = a.pos.y + (exact ? (vy0 + a.vel.y) / 2 : a.vel.y) * dt;
+      a.pos.addScaledVector(a.vel, dt); a.pos.y = ny;
       a.landImpact = 0; a.stepY = 0;
-      if (a.pos.y <= 0) { if (!a.onGround) a.landImpact = -a.vel.y; a.pos.y = 0; if (a.vel.y < 0) a.vel.y = 0; a.onGround = true; }
+      const fy = floor(a.pos.x, a.pos.z);
+      if (a.pos.y <= fy) { if (!a.onGround) a.landImpact = -a.vel.y; a.pos.y = fy; if (a.vel.y < 0) a.vel.y = 0; a.onGround = true; }
       else a.onGround = false;
     },
-    heightAt: () => 0, isDeepWater: () => false, isShallowWater: () => false,
+    heightAt: (x, z) => floor(x, z), isDeepWater: () => false, isShallowWater: () => false,
   };
   const p = ctx.player;
   p.model.init = async () => {};                        // no WebGL / DOM in node: the kitten is never built
@@ -496,17 +504,17 @@ test('Player: Milk Break heals 4 at 0.5 s; a hit before then cancels it and keep
   p.hp = p.maxHp; r.seconds(1); r.tap('milk'); assert.equal(p.state, 'move', 'no sip at full HP');
 });
 
-test('Player: jump apex ≈ 1.245 m, early release cuts it; Meow emits with a cooldown; Meme Cam via idle(16)', async () => {
+test('Player: jump apex ≈ 1.604 m (TT5), early release cuts it; Meow emits with a cooldown; Meme Cam via idle(16)', async () => {
   const r = await rig(), { p, ctx } = r;
   r.press('jump');
   let apex = 0;
   for (let i = 0; i < 90; i++) { r.step(); apex = Math.max(apex, p.pos.y); }
   r.release('jump');
-  near(apex, 1.245, 0.08, 'apex (fixed-step Euler loses ~v·dt/2)');
+  near(apex, 1.604, 0.09, 'apex (fixed-step Euler loses ~v·dt/2)');
   assert.equal(p.onGround, true);
-  r.tap('jump'); let low = 0;
+  r.press('jump'); r.seconds(0.15); r.release('jump'); let low = 0;     // released after 0.15 s of rise: cut
   for (let i = 0; i < 90; i++) { r.step(); low = Math.max(low, p.pos.y); }
-  assert.ok(low < 0.7, `cut jump apex ${low.toFixed(2)}`);
+  assert.ok(low < apex - 0.2, `cut jump apex ${low.toFixed(2)} (full ${apex.toFixed(2)})`);
   r.tap('meow'); r.tap('meow');
   assert.equal(r.count(E.PLAYER_MEOW), 1, 'cooldown 1 s');
   r.seconds(1.1); r.tap('meow'); assert.equal(r.count(E.PLAYER_MEOW), 2);
@@ -1132,7 +1140,7 @@ test('Aim: player.aim stays live (active in the Stand; the auto-target on touch)
   assert.equal(p.aim.target, other, 'the one that just attacked her wins a tie');
 });
 
-test('Jump assist §5.4: a run-up jump toward a 0.8 m stump is nudged (≤ +1.2 m/s, ≤ 20°) to land 0.3 m inside its edge', () => {
+test('Jump assist §5.4: a run-up jump toward a 0.8 m stump is nudged (≤ ±1.5 m/s since TT5, ≤ 20°) to land 0.3 m inside its edge', () => {
   const A = AIM.jumpAssist, o = { ...A, v0: PLAYER.jumpV, g: GRAVITY, fallMul: PLAYER.fallGravityMul };
   // a stump: top 0.8 m, front edge at z 1.6, 1.2 m deep, centred 0.4 m to her side (≈ 10° off her run)
   const stump = (x, z) => (z >= 1.6 && z <= 2.8 && Math.abs(x - 0.4) <= 0.6 ? { top: 0.8, walkable: true } : { top: 0, walkable: true });
@@ -1140,15 +1148,15 @@ test('Jump assist §5.4: a run-up jump toward a 0.8 m stump is nudged (≤ +1.2 
   const plan = jumpAssistPlan(her, { x: 0, z: 3.0 }, stump, o);
   assert.ok(plan, 'assisted');
   const sp = Math.hypot(plan.vx, plan.vz);
-  assert.ok(Math.abs(sp - 3.0) <= A.dv + 1e-9, `within ±1.2 m/s (${sp.toFixed(2)})`);
+  assert.ok(Math.abs(sp - 3.0) <= A.dv + 1e-9, `within ±${A.dv} m/s (${sp.toFixed(2)})`);
   assert.ok(Math.abs(plan.yaw) <= A.ang + 1e-9, `≤ 20° (${(plan.yaw * 57.3).toFixed(1)}°)`);
   const lz = Math.cos(plan.yaw) * plan.dist, lx = Math.sin(plan.yaw) * plan.dist;
   assert.ok(lz >= 1.6 + A.inset - 0.16 && lz <= 2.8 - A.inset + 0.16 && Math.abs(lx - 0.4) <= 0.6, `lands inside the top (${lx.toFixed(2)}, ${lz.toFixed(2)})`);
   near(hopSpeed(plan.dist, plan.rise, o.v0, o.g, Infinity, o.fallMul), sp, 1e-6, 'the hop maths agree');
-  // a full run (5.5 m/s) would overshoot the 1.2 m deep stump: the nudge slows her (≤ 1.2 m/s) instead
+  // a full run (5.5 m/s) would overshoot the 1.2 m deep stump: the nudge slows her (≤ A.dv) instead
   const run = jumpAssistPlan(her, { x: 0, z: 5.5 }, stump, o);
   assert.ok(run && Math.hypot(run.vx, run.vz) < 5.5 && Math.cos(run.yaw) * run.dist <= 2.8 - A.inset + 0.16, 'slowed onto the stump');
-  // standing still: straight up; a 2 m wall is no hop target; a walk-speed hop that needs > +1.2 m/s: a plain jump
+  // standing still: straight up; a 2 m wall is no hop target; a walk-speed hop that needs more than A.dv: a plain jump
   assert.equal(jumpAssistPlan(her, { x: 0, z: 0.1 }, stump, o), null);
   assert.equal(jumpAssistPlan(her, { x: 0, z: 3 }, (x, z) => ({ top: z > 1 ? 2 : 0, walkable: true }), o), null);
   const far = (x, z) => (z >= 2.3 ? { top: 1.0, walkable: true } : { top: 0, walkable: true });
@@ -1589,4 +1597,150 @@ test('TT3 Orders: hybrid LMB on a breakable (a practice dummy) out of reach walk
   r.press('attack'); r.step(); r.release('attack');
   assert.equal(p.orders.kind, 'attack');
   assert.equal(r.count(E.PLAYER_SWING), 0, 'no swing at the air 3.3 m short');
+});
+
+
+// ------------------------------------------------------------------ TT5 package J: jumps (docs/TOKENTAILS-PLAN.md §13)
+/** Run until she lands again (≤ 3 s); returns the highest feet height and the landing impact. */
+function flight(r, onStep = null) {
+  let top = -Infinity, impact = 0;
+  for (let i = 0; i < 180; i++) {
+    r.step(); top = Math.max(top, r.p.pos.y);
+    if (onStep) onStep(i);
+    if (r.p.landImpact > 0) impact = r.p.landImpact;
+    if (r.p.onGround && i > 2) break;
+  }
+  return { top, impact };
+}
+
+test('TT5 J: preset B numbers (jumpV 8.4, fall ×1.5, cut 0.65 after 0.12 s, coyote 0.15, buffer 0.20, hard land 12.5, bounce 10)', () => {
+  assert.deepEqual([PLAYER.jumpV, PLAYER.fallGravityMul, PLAYER.jumpCut, PLAYER.jumpCutAfter, PLAYER.coyote, PLAYER.jumpBuffer],
+    [8.4, 1.5, 0.65, 0.12, 0.15, 0.20]);
+  assert.deepEqual([PLAYER.hardLandSpeed, PLAYER.mushroomBounceV, GRAVITY, PLAYER.airDamp], [12.5, 10, 22, 4]);
+  near(PLAYER.jumpV ** 2 / (2 * GRAVITY), 1.604, 0.001, 'apex');
+  assert.equal(AIM.jumpAssist.maxRise, 1.4);
+  assert.deepEqual([NAV.hop.upMax, NAV.fence.top], [1.1, 1.05], 'tap paths still never auto-hop onto walls');
+});
+
+test('TT5 J: a held jump peaks at 1.60 ± 0.02 m; an 80 ms keyboard tap still clears 1.0 m (the cut waits 0.12 s)', async () => {
+  const r = await rig({ exact: true }), { p } = r;
+  r.press('jump');
+  const held = flight(r);
+  r.release('jump');
+  near(held.top, 1.604, 0.02, 'held apex');
+  r.seconds(0.3);
+  // an 80 ms tap: 5 fixed steps held
+  r.press('jump'); r.step(5); r.release('jump');
+  const tapTop = Math.max(p.pos.y, flight(r).top);
+  assert.ok(tapTop >= 1.0, `tap apex ${tapTop.toFixed(3)} m clears the 1.0 m lesson fence`);
+  assert.ok(tapTop < held.top - 0.25, `still a short hop (${tapTop.toFixed(2)} vs ${held.top.toFixed(2)})`);
+  r.seconds(0.3);
+  // a one-frame tap is cut at 0.12 s of rise, never sooner
+  r.tap('jump');
+  const one = flight(r);
+  assert.ok(one.top >= 1.0, `one-frame tap ${one.top.toFixed(3)} m`);
+});
+
+test('TT5 J: a buffered jump whose key is already up at take-off is a full jump, not a 0.31 m hop', async () => {
+  const r = await rig({ exact: true }), { p } = r;
+  r.press('jump'); flight(r); r.release('jump');
+  r.seconds(0.3);
+  // jump, then press Jump again 0.15 s before landing and let go before she lands
+  r.press('jump'); r.step(); r.release('jump');
+  for (let i = 0; i < 180 && !(p.vel.y < 0 && p.pos.y < 0.45); i++) r.step();
+  assert.equal(p.onGround, false, 'still in the air');
+  r.press('jump'); r.step(); r.release('jump');
+  let jumpedAgain = false, top = 0;
+  for (let i = 0; i < 200; i++) {
+    r.step();
+    if (!jumpedAgain && p.vel.y > 5) jumpedAgain = true;
+    if (jumpedAgain) { top = Math.max(top, p.pos.y); if (p.onGround) break; }
+  }
+  assert.ok(jumpedAgain, 'the buffered press jumped on landing');
+  assert.equal(p.jumpHeldAtTakeoff, false);
+  assert.ok(top >= 1.0, `buffered jump apex ${top.toFixed(3)} m`);
+  near(top, 1.604, 0.02, 'never cut: a full jump');
+});
+
+test('TT5 J: coyote 0.15 s and buffer 0.20 s windows', async () => {
+  const r = await rig({ exact: true }), { p } = r;
+  // buffer: a press 0.18 s before landing still jumps
+  r.press('jump'); r.step(); r.release('jump');
+  for (let i = 0; i < 180 && !(p.vel.y < 0 && p.pos.y < 1.2); i++) r.step();
+  let t = 0; while (!p.onGround && t < 3) { r.step(); t += DT; }   // time from this height to the ground
+  assert.ok(t > 0.18, `fall time ${t.toFixed(2)}`);
+  r.seconds(0.3);
+  r.press('jump'); r.step(); r.release('jump');
+  for (let i = 0; i < 180 && !(p.vel.y < 0 && p.pos.y < 1.2); i++) r.step();
+  const steps = Math.round((t - 0.18) / DT);
+  r.step(Math.max(0, steps));
+  r.press('jump'); r.step(); r.release('jump');
+  let again = false;
+  for (let i = 0; i < 30; i++) { r.step(); if (p.vel.y > 5) { again = true; break; } }
+  assert.ok(again, 'a press 0.18 s before landing jumps on landing');
+  // coyote: walking off a ledge, a press 0.13 s later still jumps
+  const r2 = await rig({ exact: true, floor: (x, z) => (z < 1 ? 0.6 : 0) });
+  r2.p.pos.set(0, 0.6, 0.95); r2.p.onGround = true; r2.step();
+  r2.p.pos.z = 1.05; r2.step();                               // stepped off the ledge
+  assert.equal(r2.p.onGround, false);
+  r2.step(Math.round(0.12 / DT));
+  r2.press('jump'); r2.step(); r2.release('jump');
+  assert.ok(r2.p.vel.y > 5, 'coyote jump inside 0.15 s');
+});
+
+test('TT5 J: no hard landing after a full jump onto ground 0.5 m lower (or from a full jump on flat ground)', async () => {
+  let lower = false;
+  const r = await rig({ exact: true, floor: () => (lower ? 0 : 0.5) }), { p } = r;
+  p.pos.set(0, 0.5, 0); p.onGround = true;
+  const states = [];
+  const orig = p.setState.bind(p);
+  p.setState = (s, ...a) => { states.push(s); return orig(s, ...a); };
+  r.press('jump'); r.step(); lower = true;
+  const f = flight(r);
+  r.release('jump');
+  near(f.top, 0.5 + 1.604, 0.03, 'full jump from the ledge');
+  assert.ok(f.impact > 9 && f.impact < PLAYER.hardLandSpeed, `impact ${f.impact.toFixed(2)} (> the old 9, < ${PLAYER.hardLandSpeed})`);
+  assert.ok(!states.includes('land'), `no hard-landing lock (${states.join(',')})`);
+  r.step(); assert.equal(p.state, 'move');
+  // a drop from 2.5 m above the ground still lands hard
+  p.pos.y = 3.0; p.onGround = false; p.vel.y = 0;
+  flight(r);
+  assert.ok(states.includes('land'), 'a real fall still locks the landing');
+});
+
+test('TT5 J: the Ribbon Twirl uses its low gravity only while falling: no twirl super-jump (apex ≤ 1.8 m)', async () => {
+  const { twirlGravityMul, TWIRL_FALL_GRAVITY } = await import('../../src/player/tricks/RibbonTwirl.js');
+  const { TRICK_FLAGS } = await import('../../src/player/tricks/tuning.js');
+  assert.equal(twirlGravityMul(3), 1, 'rising: normal gravity');
+  assert.equal(twirlGravityMul(-0.1), TWIRL_FALL_GRAVITY);
+  assert.equal(TWIRL_FALL_GRAVITY, 0.55);
+  const r = await rig({ exact: true }), { p, ctx } = r;
+  ctx.state.setFlag('onboard.firstFight', true);
+  ctx.state.setFlag(TRICK_FLAGS.twirl, true);
+  p.tricks.init?.();
+  // the super-jump input: tap Jump, press it again right after the take-off grace and hold it on the way up
+  r.press('jump'); r.step(4); r.release('jump'); r.step();
+  r.press('jump');
+  let twirled = false, top = 0;
+  for (let i = 0; i < 180; i++) {
+    r.step(); top = Math.max(top, p.pos.y);
+    if (p.state === 'twirl') { twirled = true; if (p.vel.y > 0) assert.equal(p.gravityMul, 1, 'normal gravity while rising in the twirl'); }
+    if (p.onGround && i > 2) break;
+  }
+  r.release('jump');
+  assert.ok(twirled, 'the twirl started on the way up');
+  assert.ok(top <= 1.8, `twirl apex ${top.toFixed(3)} m ≤ 1.8`);
+  assert.ok(top <= PLAYER.jumpV ** 2 / (2 * GRAVITY) + 0.02, 'never above a plain held jump');
+});
+
+test('TT5 J: jump assist aims at tops up to 1.4 m (a 1.3 m crate yes, a 1.6 m wall no)', () => {
+  const o = { ...AIM.jumpAssist, v0: PLAYER.jumpV, g: GRAVITY, fallMul: PLAYER.fallGravityMul };
+  const box = (top) => (x, z) => (z >= 1.6 && z <= 2.8 && Math.abs(x) <= 0.6 ? { top, walkable: true } : { top: 0, walkable: true });
+  const her = { x: 0, y: 0, z: 0 };
+  const hi = jumpAssistPlan(her, { x: 0, z: 3.0 }, box(1.3), o);
+  assert.ok(hi && Math.abs(hi.rise - 1.3) < 0.2, `a 1.3 m top is a hop target (${JSON.stringify(hi)})`);
+  assert.equal(jumpAssistPlan(her, { x: 0, z: 3.0 }, box(1.6), o), null, 'above maxRise: a plain jump');
+  // the default (no maxRise passed) is the TT5 1.4 too
+  const { maxRise, ...noMax } = o; void maxRise;
+  assert.ok(jumpAssistPlan(her, { x: 0, z: 3.0 }, box(1.3), noMax), 'default maxRise 1.4');
 });

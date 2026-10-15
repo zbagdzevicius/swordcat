@@ -34,7 +34,7 @@
 // snap 0.3 m that never snaps through architecture (a grounded capsule follows step edges down and slips off ledges);
 // slopes with normal.y < 0.7 can't be walked up and slide (GAME_DESIGN §7.1) — the slide is physics-owned
 // (`slideSpeed`), so an actor steering into a bank can't hang on it; separation shoves are swept too. Gravity is
-// integrated exactly for constant acceleration (jump apex = v²/2g: 1.245 m for the player, §7.1).
+// integrated exactly for constant acceleration (jump apex = v²/2g: 1.604 m for the player, jumpV 8.4 since TT5, §7.1).
 import * as THREE from 'three';
 import { PHYSICS, NAV } from '../core/config.js';
 import { E } from '../core/events.js';
@@ -632,7 +632,7 @@ export class Physics {
 
     const flying = !!a.flying;
     // exact for constant acceleration: the step moves by the mean of the vertical velocity before and after gravity
-    // (semi-implicit Euler would lose v·dt/2 of every jump: 6 cm of the player's 1.245 m apex)
+    // (semi-implicit Euler would lose v·dt/2 of every jump: 6 cm of the player's 1.604 m apex)
     let vyBias = 0;
     if (!flying) {
       if (!wasGround || v.y > 0) {

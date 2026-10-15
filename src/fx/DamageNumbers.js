@@ -7,6 +7,8 @@
 //            under-stroke, skewed −4°, 0.25 m above HER head, at most one per 0.25 s, off with settings.hitWords false;
 //   pops     comic pops over the TARGET ("BONK!", "PARRY!", "CLANK!", "BOING!"): butter fill, cocoa stroke, 40 px,
 //            scale 0 → 1.2 → 1 in 180 ms, rise 0.6 m, faded by 0.7 s.
+// TT5 (TOKENTAILS-PLAN §13.1): at most DAMAGE_FX.wordCap words and pops on screen at once (a new one retires the
+// oldest), and her words alternate between two lanes either side of her head so they never stack on each other.
 // One pool of 20 DOM nodes (pointer-events: none, created in init(), never at import); per frame only `transform` and
 // `opacity` are written (PERF §10.5). The pool works without a DOM (node tests count nodes; nothing is drawn).
 import * as THREE from 'three';
@@ -24,7 +26,8 @@ export const DAMAGE_STYLE = Object.freeze({
 
 /** WA §5.2 / §5.3 timing and motion (s, m). */
 export const DAMAGE_FX = Object.freeze({ mergeWindow: 0.35, bump: 1.15, life: 0.95, lifeCrit: 1.2, rise: 0.6, dx: 0.25,
-  t1: 0.06, s1: 1.35, t2: 0.14, s2: 0.95, t3: 0.2, outScale: 0.7, fade: 0.25, wordLift: 0.25, wordLife: 0.8, popLife: 0.7, popIn: 0.18, popPeak: 1.2 });
+  t1: 0.06, s1: 1.35, t2: 0.14, s2: 0.95, t3: 0.2, outScale: 0.7, fade: 0.25, wordLift: 0.25, wordLife: 0.8, popLife: 0.7, popIn: 0.18, popPeak: 1.2,
+  wordCap: 2, wordLane: 0.35 });
 
 /** WA §5.3 words (display text; story may override through ctx.strings `word.<id>`). */
 export const WORDS = Object.freeze({ slash1: 'Snip!', slash2: 'Snap!', slash3: 'Swoosh!', bright: 'Shine!', holy: 'Sunburst!', parry: 'Ting!',
@@ -122,6 +125,7 @@ export class DamageNumbers {
     this.shown = 0;          // total numbers / words / pops shown (smoke/tests)
     this.merged = 0;         // hits merged into a live number (tests)
     this.words = 0; this.pops = 0;
+    this._lane = 1;
     this._style = null;
   }
 
@@ -222,8 +226,12 @@ export class DamageNumbers {
     if (!text) return false;
     this._wordAt = now;
     this.shown++; this.words++;
+    this._capTexts();
     const n = this._take();
     n.pos.copy(pos); if (!opts?.lifted) n.pos.y += DAMAGE_FX.wordLift;
+    // two lanes either side of her head (screen-right in world space), alternating
+    const cam = this.ctx.camera;
+    if (cam?.matrixWorld) { this._lane = -this._lane; _r.setFromMatrixColumn(cam.matrixWorld, 0); n.pos.addScaledVector(_r, DAMAGE_FX.wordLane * this._lane); }
     n.t = 0; n.kind = 'word'; n.active = true; n.key = null; n.style = 'word'; n.life = DAMAGE_FX.wordLife; n.dx = 0; n.rise = 0.35;
     n.size = DAMAGE_STYLE.word.size; n.value = NaN; n.bump = 0;
     this._paint(n, text, 'word');
@@ -235,11 +243,25 @@ export class DamageNumbers {
     const text = this._str(`pop.${id}`) ?? POPS[id] ?? String(id);
     if (!text) return false;
     this.shown++; this.pops++;
+    this._capTexts();
     const n = this._take();
     n.pos.copy(pos); n.t = 0; n.kind = 'pop'; n.active = true; n.key = null; n.style = 'pop'; n.life = DAMAGE_FX.popLife; n.dx = 0; n.rise = DAMAGE_FX.rise;
     n.size = DAMAGE_STYLE.pop.size; n.value = NaN; n.bump = 0;
     this._paint(n, text, 'pop');
     return true;
+  }
+
+  /** Words and pops on screen now. */
+  get texts() { let k = 0; for (const n of this.pool) if (n.active && (n.kind === 'word' || n.kind === 'pop')) k++; return k; }
+
+  /** TT5: make room for one more word / pop (retire the oldest while DAMAGE_FX.wordCap are up). */
+  _capTexts() {
+    for (let guard = 0; guard < MAX && this.texts >= DAMAGE_FX.wordCap; guard++) {
+      let old = null;
+      for (const n of this.pool) if (n.active && (n.kind === 'word' || n.kind === 'pop') && (!old || n.t > old.t)) old = n;
+      if (!old) break;
+      old.active = false; if (old.el) old.el.style.opacity = '0';
+    }
   }
 
   /** A strings row when story defines it (ctx.strings.t returns the key itself for a missing row). */

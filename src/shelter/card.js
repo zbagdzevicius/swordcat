@@ -19,12 +19,16 @@ import { UI_STRINGS } from '../ui/text.js';
 import { FALLBACK as LINE_FALLBACK } from '../companions/lines.js';
 import { SERVICE_FLAGS } from '../companions/steering.js';
 import { portraitSVG } from '../ui/portraits.js';
+import { alertedNear } from '../ui/celebrate.js';
+import { CELEBRATE } from '../core/config.js';
 
 const CARD_OPEN = E.SHELTER_CARD_OPEN ?? 'shelter:card-open';
 const CARD_CLOSE = E.SHELTER_CARD_CLOSE ?? 'shelter:card-close';
 
 /** Seconds after the save before the card may open (the reunion boop plays first). */
 export const CARD_DELAY = 1.2;
+/** TT5 integration: the longest a queued card waits on an alerted foe nearby (s); a foe that cannot reach her never holds it */
+export const CARD_FIGHT_WAIT_MAX = 25;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -125,22 +129,31 @@ export class ShelterCard {
     return true;
   }
 
-  /** Can a card open now? (play mode, no menu, no scene, no celebration on screen, not mid-fight, not loading) */
+  /**
+   * Can a card open now? (play mode, no menu, no scene, no celebration on screen or waiting, no Kitten-mode offer, not
+   * mid-fight, not loading). TT5: it waits while an alerted foe is within CELEBRATE.safeR m (it opened mid-fight).
+   */
   canOpen() {
     const ctx = this.ctx, g = ctx.game, ui = this.ui;
     if (!g || (g.mode !== 'play' && g.mode !== 'memecam')) return false;
     if (ctx.levels?.loading || ctx.story?.isPlaying || ui?.busy || ui?.isLoading) return false;
     if (ui?.celebrations?.busy) return false;
+    if (ui?.offer?.open) return false;
+    if (ui?.messages && !ui.messages.modalMayOpen('shelter')) return false;
     if (ui?.menus?.titleActive) return false;
+    if ((this.fightWaitT ?? 0) < CARD_FIGHT_WAIT_MAX && alertedNear(ctx, CELEBRATE?.safeR ?? 15)) return false;
     return true;
   }
 
   /** Per fixed step (UI.update): opens a queued card when it may, runs the open card's input. */
   update(dt, input) {
     if (this.open) { this._input(input, dt); return true; }
-    if (!this.queue.length) return false;
+    if (!this.queue.length) { this.fightWaitT = 0; return false; }
     this.waitT += dt;
+    // only waiting on a fight counts toward CARD_FIGHT_WAIT_MAX (menus, scenes and other modals do not)
+    if (this.waitT >= CARD_DELAY && alertedNear(this.ctx, CELEBRATE?.safeR ?? 15)) this.fightWaitT = (this.fightWaitT ?? 0) + dt;
     if (this.waitT < CARD_DELAY || !this.canOpen()) return false;
+    this.fightWaitT = 0;
     this._show(this.queue.shift());
     return true;
   }

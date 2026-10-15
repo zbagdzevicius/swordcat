@@ -694,6 +694,67 @@ const FLOW = [
       await shot(t, 'g10-hub-grey');
     },
   },
+  // ====================================================================================== TT5 B (TOKENTAILS-PLAN §13.2)
+  // The guide's edge coin never lands on a touch button at 667x375 or after rotating to 375x667 (before TT5 it sat on
+  // Jump, between Milk and Jump), and the HUD sticker's inner icon stays inside its disc.
+  {
+    name: 'flow:tt5-edge-coin', order: 88, level: null, timeout: 420000,
+    async run(t) {
+      const coinHits = () => {
+        const coin = document.querySelector('.bc-edge.is-on .bc-coin');
+        if (!coin) return null;
+        const a = coin.getBoundingClientRect(), hits = [];
+        for (const e of document.querySelectorAll('.touch-root .tbtn:not(.is-hidden), .tb-pause, .ability-bar.is-on .ab-slot')) {
+          const cs = getComputedStyle(e);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.05) continue;
+          const q = e.getBoundingClientRect();
+          const ix = Math.max(0, Math.min(a.right, q.right) - Math.max(a.left, q.left)), iy = Math.max(0, Math.min(a.bottom, q.bottom) - Math.max(a.top, q.top));
+          if (ix * iy > 4) hits.push(`${e.className.split(' ').slice(0, 2).join('.')}:${Math.round(ix * iy)}`);
+        }
+        return { x: Math.round(a.x), y: Math.round(a.y), hits };
+      };
+      const face = (i) => {
+        const g = window.__GAME__, c = g.ctx, p = c.player.pos;
+        c.player.teleport({ pos: new g.THREE.Vector3(p.x, p.y, p.z), facing: i * Math.PI / 8 });
+        c.cam?.snapBehind?.();
+        return true;
+      };
+      const s = await t.viewport(667, 375, { touch: true, level: 'meadow', spawn: 'start' });
+      try {
+        await s.G(() => { window.__GAME__.ctx.input.setDevice?.('touch'); return true; });
+        const sweep = async (tag) => {
+          let shown = 0; const bad = [];
+          for (let i = 0; i < 16; i++) {
+            await s.G(face, i);
+            await s.page.waitForTimeout(400);
+            const r = await s.G(coinHits);
+            if (!r) continue;
+            shown++;
+            if (r.hits.length) bad.push({ i, ...r });
+          }
+          t.log(`${tag}: edge coin shown ${shown}/16, on a button ${bad.length}`);
+          t.assert(shown > 0, `${tag}: the edge coin showed at least once`);
+          t.assert(!bad.length, `${tag}: the edge coin is never on a touch button (${JSON.stringify(bad.slice(0, 3))})`);
+          await s.shot(`${DIR}/tt5-edge-coin-${tag}`);
+        };
+        await sweep('667x375');
+        await s.page.setViewportSize({ width: 375, height: 667 });
+        await s.page.waitForTimeout(1200);
+        await sweep('375x667-rotated');
+        // the HUD sticker: its nested icon box sits inside the disc box
+        const st = await s.G(() => {
+          const o = document.querySelector('.hud-stickers .ico-sticker'), i = o?.querySelector('svg');
+          if (!o || !i) return null;
+          const a = o.getBoundingClientRect(), b = i.getBoundingClientRect();
+          return { a: [a.x, a.y, a.width, a.height].map(Math.round), b: [b.x, b.y, b.width, b.height].map(Math.round) };
+        });
+        if (st && st.a[2] > 0) {
+          const [ax, ay, aw, ah] = st.a, [bx, by, bw, bh] = st.b;
+          t.assert(bx >= ax && by >= ay && bx + bw <= ax + aw && by + bh <= ay + ah && bw <= aw * 0.6, `the sticker icon stays inside its disc (${JSON.stringify(st)})`);
+        } else t.log(`HUD sticker not laid out here (${JSON.stringify(st)})`);
+      } finally { await s.close(); }
+    },
+  },
 ];
 
 export default FLOW;

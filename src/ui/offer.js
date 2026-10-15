@@ -6,6 +6,8 @@
 // Triggers: the 2nd knock-out within STORY.kittenOffer.windowS s (counted here), or story's own call
 // `ui.offerKitten()` (the 3rd failed parry in practice). The chips take input, so while open they are a SafeFrame
 // occluder of kind `chip` (occluders.js). Not modal: the game keeps running; the bubble goes by itself after OFFER.ttl.
+// TT5 (messages.js): the offer is a P0 message. It waits (up to OFFER.waitMax s) while a celebration card, the shelter
+// card or the results card is up or queued, and hides the lower layers while it shows.
 import { STORY } from '../core/config.js';
 import { E } from '../core/events.js';
 import { el, flag, setText, setHtml, pulse } from './dom.js';
@@ -13,7 +15,7 @@ import { tx } from './text.js';
 import { applySetting } from './settings.js';
 import { portraitSVG } from './portraits.js';
 
-export const OFFER = Object.freeze({ flag: 'seen.offer.kitten', ttl: 12, ...(STORY?.kittenOffer ?? { knockouts: 2, windowS: 180, failedParries: 3 }) });
+export const OFFER = Object.freeze({ flag: 'seen.offer.kitten', ttl: 12, waitMax: 30, ...(STORY?.kittenOffer ?? { knockouts: 2, windowS: 180, failedParries: 3 }) });
 
 /**
  * Should the offer show now? Pure. `kos` = knock-out times (s, game clock), `now` = the clock.
@@ -46,6 +48,7 @@ export class KittenOffer {
     this.open = false; this.t = 0;
     this.kos = [];
     this._resolve = null;
+    this._pending = null;          // TT5: an offer waiting for a card / modal to clear { speaker, t, resolve }
     this._offs = [
       ctx.bus.on(E.PLAYER_LIFE_LOST, (p) => {
         if (p?.gameOver) return;
@@ -54,7 +57,7 @@ export class KittenOffer {
         if (this.kos.length > 8) this.kos.shift();
         if (this._due()) this.ui?._after?.(2.2, () => this.offer());     // after the boing-back (WA §5.7)
       }),
-      ctx.bus.on(E.LEVEL_LOADING, () => { if (this.open) this._close(); }),
+      ctx.bus.on(E.LEVEL_LOADING, () => { if (this.open) this._close(); this._drop(); }),
     ];
   }
 
@@ -70,8 +73,21 @@ export class KittenOffer {
    * @param {{ speaker?: string }} [o]
    */
   offer({ speaker = null } = {}) {
-    const ctx = this.ctx;
     if (this.open || !this._due(true) || this.ui?.busy) return Promise.resolve(null);
+    // TT5: never over a celebration card, the shelter card or the results: wait for them (messages.js)
+    const m = this.ui?.messages;
+    if (m && !m.modalMayOpen('offer')) {
+      if (this._pending) return Promise.resolve(null);
+      return new Promise((r) => { this._pending = { speaker, t: 0, resolve: r }; });
+    }
+    return this._show(speaker);
+  }
+
+  /** A waiting offer gives up (level load, waited too long). */
+  _drop() { const p = this._pending; this._pending = null; p?.resolve?.(null); }
+
+  _show(speaker) {
+    const ctx = this.ctx;
     try { ctx.state?.setFlag?.(OFFER.flag, true); } catch { /* state optional */ }
     const who = speaker ?? (ctx.companions?.active?.some?.((c) => (c.kittenId ?? c.id) === 'mochi') ? 'mochi' : 'pearl');
     setHtml(this.face, portraitSVG(who, { expression: 'happy' }));
@@ -80,6 +96,7 @@ export class KittenOffer {
     setText(this.no, tx(ctx, 'offer.kitten.no'));
     this.open = true; this.t = 0;
     flag(this.root, 'is-on', true);
+    this.ui?.messages?.placeOffer?.(this.root);          // TT5: off the HUD block and the touch buttons
     pulse(this.root, 'is-enter');
     this.ui?.occluders?.invalidate?.();
     return new Promise((r) => { this._resolve = r; });
@@ -106,6 +123,15 @@ export class KittenOffer {
 
   /** @param {number} dt real seconds @param {boolean} vis */
   render(dt, vis) {
+    const p = this._pending;
+    if (p && !this.open) {
+      if ((p.t += dt) > OFFER.waitMax) this._drop();
+      else if (vis && !this.ui?.busy && this.ui?.messages?.modalMayOpen?.('offer') !== false) {
+        this._pending = null;
+        if (!this._due(true)) p.resolve(null);
+        else this._show(p.speaker).then(p.resolve);
+      }
+    }
     if (!this.open) return;
     flag(this.root, 'is-dim', !vis);
     if ((this.t += dt) >= OFFER.ttl) this._close(false);

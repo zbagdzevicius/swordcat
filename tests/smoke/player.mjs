@@ -94,6 +94,66 @@ const HELPERS = `({
   },
 })`;
 
+// ------------------------------------------------------------------ TT5 package J: the jump driver (page side)
+/**
+ * window.__jd(o): teleport her to (o.x, o.z) on the highest walkable top, then for o.dur s of SIMULATION time push the
+ * stick toward (o.dx, o.dz) (world; converted through the camera's stick yaw) at o.mag, press Jump at o.jumpAt s and
+ * release it o.hold s later; with o.twirl press it again right after the release and hold it (the Ribbon Twirl).
+ * Resolves { start, end, top (feet above the start), twirled, jumped }.
+ */
+const JUMP_DRIVER = `window.__jd = (o) => new Promise((res) => {
+  const g = window.__GAME__, c = g.ctx, p = c.player, input = c.input, ph = c.physics, game = c.game;
+  const y = ph.topAt ? ph.topAt(o.x, o.z) : ph.heightAt(o.x, o.z);
+  g.teleport(o.x, y + 0.02, o.z);
+  p.vel.set(0, 0, 0); p.orders?.clear?.('smoke');
+  const l = Math.hypot(o.dx, o.dz) || 1, dx = o.dx / l, dz = o.dz / l, mag = o.mag ?? 1;
+  let settle = 0, t0 = null, y0 = 0, top = -1e9, tj = null, released = false, again = false, twirled = false, jumped = false;
+  const start = [p.pos.x, p.pos.y, p.pos.z];
+  const finish = () => { off(); input.virtualMove.x = 0; input.virtualMove.y = 0; input._release('jump', 'k:Space');
+    res({ start, end: [p.pos.x, p.pos.y, p.pos.z], top, twirled, jumped, state: p.state }); };
+  const off = game.addFrameHook(() => {
+    if (t0 === null) {                                  // settle on the ground first (3 frames)
+      if (++settle < 4) return;
+      t0 = game.time; y0 = p.pos.y; start[0] = p.pos.x; start[1] = p.pos.y; start[2] = p.pos.z;
+    }
+    const t = game.time - t0;
+    const yaw = (c.cam?.isIso ? c.cam.stickYaw : null) ?? c.cam?.yaw ?? Math.PI, sn = Math.sin(yaw), cs = Math.cos(yaw);
+    input.virtualMove.x = (cs * dx - sn * dz) * mag; input.virtualMove.y = (-sn * dx - cs * dz) * mag;
+    top = Math.max(top, p.pos.y - y0);
+    if (tj === null && t >= o.jumpAt) { input._press('jump', 'k:Space'); tj = game.time; }
+    if (tj !== null && !jumped && !p.onGround) jumped = true;
+    if (tj !== null && !released && game.time - tj >= o.hold) { input._release('jump', 'k:Space'); released = true; }
+    else if (o.twirl && released && !again) { input._press('jump', 'k:Space'); again = true; }
+    if (p.state === 'twirl') twirled = true;
+    if (t >= o.dur) finish();
+  });
+  setTimeout(finish, 20000);
+});`;
+
+/** Which side of the line a→b (x, z) the point is on (sign of the cross product). */
+const sideOf = (a, b, q) => Math.sign((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]));
+
+/** Jump-attempts over a guard line: from both sides, with and without the twirl. Returns the crossings. */
+async function attempts(t, label, guards) {
+  const crossed = [];
+  for (const gd of guards) {
+    const [a, b] = gd.line, mx = (a[0] + b[0]) / 2 + (gd.shift?.[0] ?? 0), mz = (a[1] + b[1]) / 2 + (gd.shift?.[1] ?? 0);
+    let nx = -(b[1] - a[1]), nz = b[0] - a[0]; const nl = Math.hypot(nx, nz); nx /= nl; nz /= nl;
+    for (const sgn of gd.sides ?? [1, -1]) for (const twirl of [false, true]) {
+      const x = mx + nx * sgn * (gd.from ?? 1.6), z = mz + nz * sgn * (gd.from ?? 1.6);
+      const r = await t.G((o) => window.__jd(o), { x, z, dx: -nx * sgn, dz: -nz * sgn, jumpAt: 0.12, hold: twirl ? 0.3 : 0.6, twirl, dur: twirl ? 2.6 : 1.6 });
+      const s0 = sideOf(a, b, [r.start[0], r.start[2]]), s1 = sideOf(a, b, [r.end[0], r.end[2]]);
+      const tag = `${label} ${gd.name} from ${sgn > 0 ? '+' : '-'} side${twirl ? ' + twirl' : ''}`;
+      t.log(`${tag}: top ${r.top.toFixed(2)} m, ${r.jumped ? 'jumped' : 'NO JUMP'}${twirl ? (r.twirled ? ', twirled' : ', no twirl') : ''}, end ${r.end.map((v) => v.toFixed(2))}`);
+      t.assert(r.jumped, `${tag}: she jumped`);
+      if (twirl) t.assert(r.twirled, `${tag}: the twirl started`);
+      t.assert(r.top <= 1.8 + 0.03, `${tag}: apex ${r.top.toFixed(2)} ≤ 1.8 m`);
+      if (s0 !== s1) crossed.push(tag);
+    }
+  }
+  return crossed;
+}
+
 async function install(t, { god = true } = {}) {
   await t.G(([src, godOn]) => {
     const g = window.__GAME__;
@@ -230,7 +290,7 @@ export default [
       t.assert(moved > 0.5, `W: moved only ${moved.toFixed(2)} m`);
       t.assert(mid.speed > 4.5 && (mid.name === 'run' || mid.name === 'zoomies'), `W: expected a run at ~5.5 m/s, got ${mid.name} ${mid.speed.toFixed(2)} m/s`);
       await t.wait(400);
-      // jump: Space → airborne → lands (apex ~1.2 m)
+      // jump: Space → airborne → lands (apex ~1.6 m since TT5)
       await clearEv(t);
       const apex = await t.G(() => new Promise((resolve) => {        // held jump, measured in the page (no latency)
         const g = window.__GAME__, p = g.ctx.player, input = g.ctx.input, y0 = p.pos.y; let top = 0, left = false;
@@ -241,7 +301,7 @@ export default [
       }));
       const ev = await pev(t);
       t.assert(ev.includes('player:jump') && ev.includes('player:land'), 'Space: player:jump / player:land not emitted');
-      t.assert(apex > 0.9 && apex < 1.5, `jump apex ${apex.toFixed(2)} m (expected ~1.2)`);
+      t.assert(apex > 1.3 && apex < 1.75, `jump apex ${apex.toFixed(2)} m (expected ~1.6)`);
       // the 3-hit combo
       await clearEv(t);
       await t.G(async () => {                                              // presses paced by the swing clock, page-side: the
@@ -832,6 +892,121 @@ export default [
       await probe('move onto the balcony', `return c.player.order('move', { x: 5, y: 3, z: -30.3 });`);
       await shot(t, 'player/crate-balcony-move');
       await probe('move under the balcony', `return c.player.order('move', { x: 5.71, y: 0, z: -30.98 });`);
+    },
+  },
+
+  // ------------------------------------------------------------------ TT5 package J: jumps (docs/TOKENTAILS-PLAN.md §13)
+  // held apex 1.60 ± 0.02 m (real physics), an 80 ms Space tap ≥ 1.0 m and over the 1.0 m lesson fence, the practice
+  // perimeter fence and its closed gate (2.0 m) never cleared from either side with or without the Ribbon Twirl, twirl
+  // apex ≤ 1.8 m, a tap up onto Mushroom Ring cap 1 and onto Waffles' first crate step; town road hedges (1.9 m) hold.
+  // Screenshots at the six TT5 viewports: her held-jump apex beside the lesson fence (J_SHOTS_DIR, default tests/shots).
+  {
+    name: 'player:jumps', order: 28.05, level: null, timeout: 900000,
+    async run(t) {
+      const SHOT_DIR = process.env.J_SHOTS_DIR || path.join(t.shotsDir, 'player');
+      const TAG = process.env.J_SHOTS_TAG || 'jumps';
+      fs.mkdirSync(SHOT_DIR, { recursive: true });
+      const setup = async (G, level, spawn, closedGate = false) => G(async ([lv, sp, closed, src]) => {
+        const g = window.__GAME__, c = g.ctx;
+        g.story.skip?.(); if (Array.isArray(c.story?.queue)) c.story.queue.length = 0;
+        for (const k of ['prologue.armour', 'prologue.done']) c.state.setFlag(k, true);
+        c.state.setFlag('prologue.tutorial', !closed);
+        c.state.setFlag('trick.twirl', true); c.state.setFlag('onboard.firstFight', true);
+        await g.loadLevel(lv, sp); g.story.skip?.(); if (Array.isArray(c.story?.queue)) c.story.queue.length = 0;
+        g.setMode('play'); g.god(true); c.input.setDevice?.('kbm'); c.player.orders.clear('smoke');
+        g.ctx.game.setTimeScale(1); c.player.tricks?.init?.();
+        new Function(src)();
+        return true;
+      }, [level, spawn, closedGate, JUMP_DRIVER]);
+      await setup(t.G, 'meadow', 'practice', true);
+      await t.frames(20);
+      await t.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); return true; });
+      // 1. held apex and the 80 ms tap on open ground inside the field (−10, −72), straight up
+      const held = await t.G((o) => window.__jd(o), { x: -12, z: -72, dx: 0, dz: 1, mag: 0, jumpAt: 0.05, hold: 0.8, dur: 1.4 });
+      t.assert(Math.abs(held.top - 1.604) <= 0.02, `held jump apex ${held.top.toFixed(3)} m (1.60 ± 0.02)`);
+      const tap = await t.G((o) => window.__jd(o), { x: -12, z: -72, dx: 0, dz: 1, mag: 0, jumpAt: 0.05, hold: 0.08, dur: 1.2 });
+      t.assert(tap.top >= 1.0 && tap.top < held.top - 0.2, `80 ms tap apex ${tap.top.toFixed(3)} m (≥ 1.0, below the held jump)`);
+      t.log(`held apex ${held.top.toFixed(3)} m, 80 ms tap ${tap.top.toFixed(3)} m`);
+      // 2. the 1.0 m lesson fence (z −87) at x −16 with an 80 ms tap, running north from 2.2 m south of it
+      let over = null;
+      for (const jumpAt of [0.22, 0.26, 0.3]) {
+        const r = await t.G((o) => window.__jd(o), { x: -16, z: -89.2, dx: 0, dz: 1, jumpAt, hold: 0.08, dur: 1.4 });
+        t.log(`lesson fence tap at ${jumpAt}s: top ${r.top.toFixed(2)}, end z ${r.end[2].toFixed(2)}`);
+        if (r.end[2] > -86.6) { over = r; break; }
+      }
+      t.assert(!!over, 'an 80 ms tap clears the 1.0 m lesson fence');
+      // 3. the practice perimeter (2.0 m) and the closed gate: never over, from either side, with or without the twirl
+      const crossed = await attempts(t, 'meadow', [
+        { name: 'north fence', line: [[-20, -60], [-2.2, -60]], shift: [-4, 0] },
+        { name: 'gate', line: [[-2.05, -60], [2.05, -60]] },
+        { name: 'south fence', line: [[-20, -100], [20, -100]], shift: [6, 0] },
+        { name: 'east fence', line: [[20, -100], [20, -60]], shift: [0, -4] },
+        { name: 'west fence', line: [[-20, -100], [-20, -60]], shift: [0, 4] },
+      ]);
+      t.assert(!crossed.length, `the practice field fence / gate was jumped: ${crossed.join('; ')}`);
+      // 4. Mushroom Ring (forest): a tap from the ground onto cap 1 (1.0 m), a tap from cap 1 onto cap 2
+      await setup(t.G, 'forest', 'start');
+      await t.frames(20);
+      const caps = [[-26.6, -55.3, 1.0], [-28.3, -57.1, 2.0]];
+      const g0 = await t.G(() => window.__GAME__.ctx.physics.heightAt(-26.6, -55.3));
+      let onCap = null;
+      for (const jumpAt of [0.1, 0.16, 0.22]) {
+        const r = await t.G((o) => window.__jd(o), { x: -26.6 + 2.2, z: -55.3, dx: -1, dz: 0, mag: 0.6, jumpAt, hold: 0.08, dur: 1.4 });
+        t.log(`cap 1 tap at ${jumpAt}s: top ${r.top.toFixed(2)}, end y ${(r.end[1] - g0).toFixed(2)} at ${r.end.map((v) => v.toFixed(2))}`);
+        if (r.end[1] - g0 > 0.9 && Math.hypot(r.end[0] - caps[0][0], r.end[2] - caps[0][1]) < 1.3) { onCap = r; break; }
+      }
+      t.assert(!!onCap, 'a tap gets her onto Mushroom Ring cap 1 (1.0 m)');
+      // 5. Waffles' crate steps (town): a tap from the street onto crate 1 (1.0 m)
+      await setup(t.G, 'town', 'start');
+      await t.frames(20);
+      const gc = await t.G(() => window.__GAME__.ctx.physics.heightAt(5.1, -37.6));
+      let onCrate = null;
+      for (const jumpAt of [0.12, 0.18, 0.24]) {
+        const r = await t.G((o) => window.__jd(o), { x: 5.1, z: -37.6, dx: 0, dz: 1, mag: 0.7, jumpAt, hold: 0.08, dur: 1.2 });
+        t.log(`crate 1 tap at ${jumpAt}s: end y ${(r.end[1] - gc).toFixed(2)} at ${r.end.map((v) => v.toFixed(2))}`);
+        if (r.end[1] - gc > 0.9) { onCrate = r; break; }
+      }
+      t.assert(!!onCrate, 'a tap gets her onto the first crate step (1.0 m)');
+      // 6. the town road hedges (1.9 m) between the gate and the level edge, from the road (the road runs in a cutting:
+      // the bank behind each hedge rises to ~1.7 m, so the outside is never a place she stands)
+      const hedges = await attempts(t, 'town', [
+        { name: 'west hedge', line: [[-4.2, -63.5], [-4.2, -68]], sides: [1], from: 1.2 },
+        { name: 'east hedge', line: [[4.2, -63.5], [4.2, -68]], sides: [-1], from: 1.2 },
+      ]);
+      t.assert(!hedges.length, `a town road hedge was jumped: ${hedges.join('; ')}`);
+      // 7. screenshots: her held-jump apex beside the lesson fence at the six TT5 viewports
+      const apexShot = async (G, shoot, frames) => {
+        await G(() => { const g = window.__GAME__, c = g.ctx; g.teleport(-12.5, c.physics.heightAt(-12.5, -88.6), -88.6); c.player.facing = 0; return true; });
+        await frames(30);
+        await G(() => new Promise((res) => {
+          const g = window.__GAME__, c = g.ctx, p = c.player, game = c.game; let up = false;
+          c.input._press('jump', 'k:Space');
+          const off = game.addFrameHook(() => { if (p.vel.y > 0) up = true; if (up && p.vel.y <= 0.3) { off(); game.setTimeScale(0); res(true); } });
+          setTimeout(() => { off(); game.setTimeScale(0); res(false); }, 5000);
+        }));
+        await frames(2);
+        await shoot();
+        await G(() => { const g = window.__GAME__; g.ctx.input._release('jump', 'k:Space'); g.ctx.game.setTimeScale(1); return true; });
+      };
+      await setup(t.G, 'meadow', 'practice', true);
+      await t.frames(20);
+      for (const [w, h] of [[1024, 768], [1280, 720], [1920, 1080]]) {
+        await t.viewport(w, h);
+        await t.frames(10);
+        await apexShot(t.G, () => t.page.screenshot({ path: path.join(SHOT_DIR, `${TAG}-${w}x${h}.png`) }), t.frames);
+      }
+      await t.viewport(1280, 720);
+      for (const [w, h] of [[390, 844], [844, 390], [667, 375]]) {
+        const s = await phone(t, w, h);
+        try {
+          await s.page.touchscreen.tap(Math.round(w * 0.6), Math.round(h * 0.35));
+          await setup(s.G, 'meadow', 'practice', true);
+          await s.frames(20);
+          await s.G(() => { const g = window.__GAME__; g.story.skip?.(); g.setMode('play'); g.ctx.input.setDevice?.('touch'); g.ctx.ui?.touch?.enable?.(true); return true; });
+          await s.frames(10);
+          await apexShot(s.G, () => s.page.screenshot({ path: path.join(SHOT_DIR, `${TAG}-${w}x${h}-touch.png`) }), s.frames);
+        } finally { await s.close(); }
+      }
     },
   },
 

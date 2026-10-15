@@ -152,7 +152,7 @@ test('falls under GRAVITY, lands with landImpact, then rests', () => {
 
 test('jumping leaves the ground; apex is exactly v²/2g (constant-acceleration integration)', () => {
   const { ph } = world({ hf: flat(0) });
-  for (const [v0, name] of [[PLAYER.jumpV, 'jump 1.245 m'], [PLAYER.mushroomBounceV, 'mushroom ≈ 1.8 m']]) {
+  for (const [v0, name] of [[PLAYER.jumpV, 'jump 1.604 m'], [PLAYER.mushroomBounceV, 'mushroom ≈ 2.27 m']]) {
     const a = actor(0, 0, 0);
     a.vel.y = v0; a.onGround = false;
     let apex = 0, steps = 0;
@@ -240,12 +240,14 @@ test('angled cliff banks: the body never rests against the face; steering into i
     };
     // run at it, jumping whenever grounded: grounded spots never have the body inside the face, and no jump goes
     // higher than one jump from ground she stood on
+    // TT5: the 1.6 m jump can land one frame with the rim up to 0.07 m into the face (measured 0.066 at 1.0 rad; the
+    // old 1.245 m jump: 0.050); physics pushes her off on the next step, so resting (a second grounded frame) keeps 0.06
     const a = actor(0, 0, 0, { onGround: true });
-    let stood = 0, top = 0;
-    run(ph, a, 4, (x, i) => { x.vel.x = fx * PLAYER.run; x.vel.z = fz * PLAYER.run; if (x.onGround && i % 20 === 0) { x.vel.y = PLAYER.jumpV; x.onGround = false; } },
+    let stood = 0, top = 0, prevGround = true;
+    run(ph, a, 4, (x, i) => { prevGround = x.onGround; x.vel.x = fx * PLAYER.run; x.vel.z = fz * PLAYER.run; if (x.onGround && i % 20 === 0) { x.vel.y = PLAYER.jumpV; x.onGround = false; } },
       (x) => {
         top = Math.max(top, x.pos.y);
-        if (x.onGround) { stood = Math.max(stood, x.pos.y); assert.ok(rimRise(x) < 0.06, `${ang}: grounded with the body ${rimRise(x).toFixed(2)} m into the face`); }
+        if (x.onGround) { stood = Math.max(stood, x.pos.y); const lim = prevGround ? 0.06 : 0.08; assert.ok(rimRise(x) < lim, `${ang}: grounded with the body ${rimRise(x).toFixed(2)} m into the face (${prevGround ? 'resting' : 'landing frame'})`); }
       });
     assert.ok(stood < 0.4, `${ang}: stood ${stood.toFixed(2)} m up the bank`);
     assert.ok(top < stood + apex + 0.02, `${ang}: hopped to ${top.toFixed(2)} (stood ${stood.toFixed(2)} + jump ${apex.toFixed(2)})`);

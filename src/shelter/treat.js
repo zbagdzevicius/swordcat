@@ -1,18 +1,24 @@
 // src/shelter/treat.js  (owner: T, TT4 §12.2 / §12.3) — the "send Pink Paw a treat" panel inside the rescued cat card.
 //
 // R's card emits SHELTER_CARD_OPEN { slot, kind, cat, actionsEl }; this module mounts its button and panel into
-// `actionsEl`. The game never calls the treat API itself:
+// `actionsEl`. Three modes (TT5 §13.1 item 3); the game tab never navigates in any of them:
 //   - embedded (the Token Tails frame): the panel posts `treat-request` over the embed bridge; the host page calls the
 //     sponsored treat endpoint with the player's own session and answers `treat-result`. Tokens never enter the frame.
-//   - not embedded: the panel shows a new-tab link to the Token Tails give page. No postMessage, no fetch.
+//   - direct (standalone on https://tokentails.com, CORS allows it): the panel reads the rail and today's row and sends
+//     the guest treat itself through src/shelter/treatApi.js. This file never calls fetch.
+//   - link (any other host): a new-tab link to tokentails.com/swordcat plus a Copy link button. No request at all.
 // The state machine (createTreatController) and the view model (treatView) are pure and unit-tested
 // (tests/unit/treat.test.js); renderTreat / installTreatPanel are the DOM glue (smoke tests/smoke/treat.mjs).
 import { E } from '../core/events.js';
-import { TREAT_COPY as T, giveHref } from './treatCopy.js';
+import { TREAT_COPY as T, PLAY_URL } from './treatCopy.js';
+import { createDirectTransport, directAllowed } from './treatApi.js';
 import css from './treat.css?inline';
 
 export const EV_CARD_OPEN = E.SHELTER_CARD_OPEN ?? 'shelter:card-open';
 export const EV_CARD_CLOSE = E.SHELTER_CARD_CLOSE ?? 'shelter:card-close';
+export const MODES = Object.freeze(['embedded', 'direct', 'link']);
+/** A direct-mode rail read older than this is read again when the next card opens. */
+export const RAIL_TTL_MS = 60000;
 /** A request with no answer after this long shows the error state with "Try again". */
 export const TREAT_TIMEOUT_MS = 15000;
 /** DOM event the panel dispatches (bubbling) on `actionsEl` after each render, so the card rebuilds its nav items. */
@@ -33,15 +39,17 @@ export function treatEligible(card) {
  * The panel's view for one card. Pure.
  * @param {{phase?: string, retry?: boolean, explorerUrl?: string|null, receiptPath?: string|null, amountLabel?: string|null, cat?: any}} card
  * @param {{rail: string, sentToday: boolean, amountLabel?: string|null}} state
- * @param {{embedded: boolean}} opts
+ * @param {{embedded?: boolean, mode?: 'embedded'|'direct'|'link'}} opts  (`embedded` is the TT4 spelling)
  * @returns {{phase: string, message: string|null, button: {id: string, label: string, disabled?: boolean}|null,
  *   links: {href: string, label: string}[], free: string, custody: string}}
  */
-export function treatView(card, state, { embedded }) {
+export function treatView(card, state, { embedded, mode } = {}) {
+  const m = MODES.includes(mode) ? mode : embedded ? 'embedded' : 'link';
   const name = card?.cat?.name ?? '';
   const base = { free: T.free, custody: T.custody, links: [], message: null, button: null };
-  if (!embedded) {
-    return { ...base, phase: 'link', message: T.linkNote, links: [{ href: giveHref(name), label: T.link }] };
+  if (m === 'link') {
+    const message = card?.copied === 'ok' ? T.copied : card?.copied === 'fail' ? T.copyFailed : T.linkNote;
+    return { ...base, phase: 'link', message, links: [{ href: PLAY_URL, label: T.link }], button: { id: 'copy', label: T.copy } };
   }
   switch (card?.phase) {
     case 'sending': return { ...base, phase: 'sending', message: null, button: { id: 'send', label: T.sending, disabled: true } };
@@ -57,7 +65,10 @@ export function treatView(card, state, { embedded }) {
     case 'error': return { ...base, phase: 'error', message: T.error, button: card.retry ? { id: 'send', label: T.retry } : null };
     default: break;
   }
-  // idle card: the shared rail decides
+  // idle card: the shared rail decides. Direct mode waits for its own reads (the host does that for the frame).
+  if (m === 'direct' && (!state || state.rail === 'checking')) {
+    return { ...base, phase: 'checking', message: null, button: { id: 'send', label: T.checking, disabled: true } };
+  }
   if (state?.sentToday) return { ...base, phase: 'already', message: T.already };
   if (state?.rail === 'exhausted') return { ...base, phase: 'exhausted', message: T.exhausted };
   if (state?.rail === 'soon') return { ...base, phase: 'soon', message: T.soon };
@@ -86,44 +97,90 @@ export function newRequestId(now = Date.now()) {
 
 /**
  * The treat state machine, without DOM. One controller per game.
- * @param {{embedded: boolean, post?: (type: string, payload: object) => boolean, timers?: {set: Function, clear: Function},
- *   timeoutMs?: number, idFn?: () => string, onChange?: (card: object) => void}} opts
+ * `mode` 'embedded' posts `treat-request` with `post`; 'direct' calls `direct.send({chainId})` (treatApi transport) and
+ * feeds its answer through the same `result()`; 'link' never sends. `embedded: true|false` is the TT4 spelling.
+ * @param {{embedded?: boolean, mode?: string, post?: (type: string, payload: object) => boolean,
+ *   direct?: {send: Function, readRail?: Function, readMe?: Function}|null, timers?: {set: Function, clear: Function},
+ *   timeoutMs?: number, idFn?: () => string, onChange?: (card: object) => void, now?: () => number}} opts
  */
-export function createTreatController({ embedded, post = () => false, timers, timeoutMs = TREAT_TIMEOUT_MS, idFn = newRequestId, onChange = () => {} } = {}) {
+export function createTreatController({ embedded, mode, post = () => false, direct = null, timers, timeoutMs = TREAT_TIMEOUT_MS, idFn = newRequestId, onChange = () => {}, now = () => Date.now() } = {}) {
   const tm = timers ?? { set: (fn, ms) => setTimeout(fn, ms), clear: (h) => clearTimeout(h) };
   /** @type {Map<string, object>} requestId → card */
   const pending = new Map();
   /** slots whose treat went out (one treat per save) */
   const sentSlots = new Set();
+  const m0 = MODES.includes(mode) ? mode : embedded ? 'embedded' : 'link';
   const c = {
-    embedded: !!embedded,
-    state: { rail: 'checking', sentToday: false, amountLabel: null },
+    mode: m0,
+    embedded: m0 === 'embedded',
+    direct,
+    state: { rail: 'checking', sentToday: false, amountLabel: null, chainId: null },
+    /** direct mode: when the rail was last read (0 = never), and the read in flight */
+    readAt: 0,
+    reading: null,
     card: null,
     pending,
     sentSlots,
     /** A card opened: returns the card model, or null when this card gets no panel. */
     open(p) {
       const card = { slot: p?.slot ?? null, kind: p?.kind ?? null, cat: p?.cat ?? null, alreadySaved: !!p?.alreadySaved,
-        phase: null, retry: false, requestId: null, explorerUrl: null, receiptPath: null, amountLabel: null };
+        phase: null, retry: false, requestId: null, explorerUrl: null, receiptPath: null, amountLabel: null, copied: null };
       if (!treatEligible(card)) { c.card = null; return null; }
       if (card.slot != null && sentSlots.has(card.slot)) card.phase = 'sent';
       c.card = card;
       return card;
     },
     close() { c.card = null; },
-    view(card = c.card) { return card ? treatView(card, c.state, { embedded: c.embedded }) : null; },
+    view(card = c.card) { return card ? treatView(card, c.state, { mode: c.mode }) : null; },
+    /** Switch mode (test builds only, and at boot). Resets the rail so direct mode reads it again. */
+    setMode(next, transport) {
+      if (!MODES.includes(next)) return;
+      c.mode = next; c.embedded = next === 'embedded';
+      if (transport !== undefined) c.direct = transport;
+      c.state = { rail: 'checking', sentToday: false, amountLabel: null, chainId: null };
+      c.readAt = 0;
+      if (c.card) { c.card.phase = c.card.phase === 'sent' ? 'sent' : null; c.card.copied = null; onChange(c.card); }
+    },
+    /** direct mode: read the rail and today's row (both GETs), at most once per RAIL_TTL_MS. Resolves when done. */
+    refresh(force = false) {
+      if (c.mode !== 'direct' || !c.direct?.readRail) return Promise.resolve(false);
+      if (c.reading) return c.reading;
+      if (!force && c.readAt && now() - c.readAt < RAIL_TTL_MS) return Promise.resolve(false);
+      const modeAt = c.mode;
+      c.reading = Promise.all([
+        Promise.resolve().then(() => c.direct.readRail()).catch(() => ({ rail: 'soon' })),
+        Promise.resolve().then(() => c.direct.readMe?.() ?? { sentToday: false }).catch(() => ({ sentToday: false })),
+      ]).then(([rail, me]) => {
+        c.reading = null;
+        if (c.mode !== modeAt) return false;
+        c.readAt = now();
+        c.setState({
+          rail: RAILS.includes(rail?.rail) && rail.rail !== 'checking' ? rail.rail : 'soon',
+          sentToday: c.state.sentToday || me?.sentToday === true,
+          amountLabel: rail?.amountLabel ?? null,
+          chainId: Number.isSafeInteger(rail?.chainId) ? rail.chainId : null,
+        });
+        return true;
+      });
+      return c.reading;
+    },
+    /** link mode: remember how Copy link went ('ok' | 'fail'). */
+    copied(ok, card = c.card) { if (!card) return; card.copied = ok ? 'ok' : 'fail'; onChange(card); },
     /** The player pressed send (or Try again). Returns the requestId, or null when nothing was sent. */
     send(card = c.card) {
-      if (!c.embedded || !card) return null;
+      if (c.mode === 'link' || !card) return null;
       const v = c.view(card);
-      if (!v?.button || v.button.disabled) return null;
+      if (!v?.button || v.button.disabled || v.button.id !== 'send') return null;
+      if (c.mode === 'direct' && (pending.size > 0 || !c.direct?.send)) return null; // one send in flight per game
       const requestId = idFn();
-      const payload = { requestId, slot: card.slot ?? '', catName: card.cat.name };
-      if (card.cat.id) payload.catId = card.cat.id;
-      if (!post('treat-request', payload)) {
-        Object.assign(card, { phase: 'error', retry: true });
-        onChange(card);
-        return null;
+      if (c.mode === 'embedded') {
+        const payload = { requestId, slot: card.slot ?? '', catName: card.cat.name };
+        if (card.cat.id) payload.catId = card.cat.id;
+        if (!post('treat-request', payload)) {
+          Object.assign(card, { phase: 'error', retry: true });
+          onChange(card);
+          return null;
+        }
       }
       Object.assign(card, { phase: 'sending', retry: false, requestId });
       const entry = { card, timer: null };
@@ -134,12 +191,19 @@ export function createTreatController({ embedded, post = () => false, timers, ti
       }, timeoutMs);
       pending.set(requestId, entry);
       onChange(card);
+      if (c.mode === 'direct') {
+        const chainId = c.state.chainId ?? undefined;
+        Promise.resolve()
+          .then(() => c.direct.send(chainId ? { chainId } : {}))
+          .catch(() => ({ kind: 'retry' }))
+          .then((r) => { c.result({ ...(r && typeof r === 'object' ? r : { kind: 'retry' }), requestId }); });
+      }
       return requestId;
     },
     /** Host → game `treat-state` (already validated). */
     setState(s) {
       if (!s || !RAILS.includes(s.rail)) return;
-      c.state = { rail: s.rail, sentToday: s.sentToday === true, amountLabel: s.amountLabel ?? null };
+      c.state = { rail: s.rail, sentToday: s.sentToday === true, amountLabel: s.amountLabel ?? null, chainId: Number.isSafeInteger(s.chainId) ? s.chainId : null };
       if (c.card && !c.card.phase) onChange(c.card);
     },
     /** Host → game `treat-result` (already validated). Unknown requestIds are ignored. Returns true when applied. */
@@ -181,10 +245,11 @@ function injectCss(doc) {
 }
 
 /**
- * Render `view` into `root` (replaces its children). `onSend` runs on the send / Try again button.
- * @param {HTMLElement} root @param {ReturnType<typeof treatView>} view @param {() => void} onSend
+ * Render `view` into `root` (replaces its children). `onAction(id)` runs on the button: 'send' (send / Try again) or
+ * 'copy' (link mode).
+ * @param {HTMLElement} root @param {ReturnType<typeof treatView>} view @param {(id: string) => void} onAction
  */
-export function renderTreat(root, view, onSend) {
+export function renderTreat(root, view, onAction) {
   const doc = root.ownerDocument;
   const hadFocus = root.contains(doc.activeElement);
   root.replaceChildren();
@@ -197,16 +262,17 @@ export function renderTreat(root, view, onSend) {
     m.textContent = view.message;
     root.appendChild(m);
   }
+  let btn = null;
   if (view.button) {
-    const b = doc.createElement('button');
+    const b = btn = doc.createElement('button');
     b.type = 'button';
-    b.className = 'btn btn--candy tt-treat-btn';
-    b.dataset.treat = 'send';
+    b.className = view.button.id === 'copy' ? 'btn tt-treat-btn tt-treat-copy' : 'btn btn--candy tt-treat-btn';
+    b.dataset.treat = view.button.id;
     b.disabled = !!view.button.disabled;
-    if (b.disabled) b.classList.add('is-disabled');
+    if (b.disabled) { b.classList.add('is-disabled'); b.setAttribute('aria-busy', 'true'); }
     const l = doc.createElement('span'); l.className = 'btn-lbl'; l.textContent = view.button.label; b.appendChild(l);
-    b.addEventListener('click', (e) => { e.stopPropagation(); if (!b.disabled) onSend(); });
-    root.appendChild(b);
+    b.addEventListener('click', (e) => { e.stopPropagation(); if (!b.disabled) onAction(view.button.id); });
+    if (view.button.id !== 'copy') root.appendChild(b); // Copy link goes under the link row
   }
   if (view.links.length) {
     const row = doc.createElement('div'); row.className = 'tt-treat-links';
@@ -222,28 +288,55 @@ export function renderTreat(root, view, onSend) {
     }
     root.appendChild(row);
   }
+  if (btn && view.button.id === 'copy') root.appendChild(btn);
   for (const [cls, text] of [['tt-treat-free', view.free], ['tt-treat-custody', view.custody]]) {
     const p = doc.createElement('p'); p.className = `tt-treat-note ${cls}`; p.textContent = text; root.appendChild(p);
   }
-  if (hadFocus) (root.querySelector('button:not([disabled]), a[href]') ?? null)?.focus?.();
+  if (hadFocus) (root.querySelector(`[data-treat="${view.button?.id ?? ''}"]:not([disabled])`) ?? root.querySelector('button:not([disabled]), a[href]') ?? null)?.focus?.();
   try { root.dispatchEvent(new (doc.defaultView?.CustomEvent ?? CustomEvent)(ACTIONS_CHANGED, { bubbles: true })); } catch { /* */ }
 }
 
+/** Copy `text` to the clipboard; resolves true on success. Falls back to a hidden textarea + execCommand. */
+export async function copyText(text, doc = typeof document !== 'undefined' ? document : undefined) {
+  const nav = doc?.defaultView?.navigator;
+  try { if (nav?.clipboard?.writeText) { await nav.clipboard.writeText(text); return true; } } catch { /* fall back */ }
+  try {
+    const ta = doc.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    doc.body.appendChild(ta); ta.select();
+    const ok = doc.execCommand?.('copy') === true;
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+/** The standalone mode for this page: 'direct' on https://tokentails.com, else 'link'. */
+export function standaloneMode(loc = typeof location !== 'undefined' ? location : null) {
+  return directAllowed(loc) ? 'direct' : 'link';
+}
+
 /**
- * Wire the panel to the game bus. `bridge` is the embed bridge (null when not embedded).
- * @param {any} game @param {{bridge?: any, doc?: Document}} [opts]
+ * Wire the panel to the game bus. `bridge` is the embed bridge (null when not embedded). Without a bridge, `mode`
+ * ('direct' | 'link', default from the page location) decides; `direct` is the treatApi transport (injected in tests).
+ * @param {any} game @param {{bridge?: any, doc?: Document, mode?: string, direct?: any}} [opts]
  * @returns {ReturnType<typeof createTreatController> & {uninstall: () => void}} | null
  */
-export function installTreatPanel(game, { bridge = null, doc = typeof document !== 'undefined' ? document : undefined } = {}) {
+export function installTreatPanel(game, { bridge = null, doc = typeof document !== 'undefined' ? document : undefined, mode, direct } = {}) {
   const bus = game?.ctx?.bus;
   if (!bus || !doc) return null;
   let root = null;
+  const m = bridge ? 'embedded' : mode === 'direct' || mode === 'link' ? mode : standaloneMode(doc.defaultView?.location ?? null);
   const ctl = createTreatController({
-    embedded: !!bridge,
+    mode: m,
     post: (type, payload) => bridge?.post?.(type, payload) ?? false,
+    direct: m === 'direct' ? (direct ?? createDirectTransport()) : (direct ?? null),
     onChange: (card) => { if (card === ctl.card) draw(); },
   });
-  const draw = () => { if (root && ctl.card) renderTreat(root, ctl.view(), () => ctl.send()); };
+  const onAction = (id) => {
+    if (id === 'copy') { const card = ctl.card; void copyText(PLAY_URL, doc).then((ok) => ctl.copied(ok, card)); return; }
+    ctl.send();
+  };
+  const draw = () => { if (root && ctl.card) renderTreat(root, ctl.view(), onAction); };
   const offs = [
     bus.on(EV_CARD_OPEN, (p) => {
       if (root) { root.remove(); root = null; }
@@ -257,6 +350,7 @@ export function installTreatPanel(game, { bridge = null, doc = typeof document !
       host.appendChild(root);
       draw();
       root.querySelector('[data-treat="send"]:not([disabled])')?.focus?.({ preventScroll: true });
+      if (ctl.mode === 'direct') void ctl.refresh();
     }),
     bus.on(EV_CARD_CLOSE, () => { ctl.close(); root?.remove(); root = null; }),
   ];
@@ -265,7 +359,11 @@ export function installTreatPanel(game, { bridge = null, doc = typeof document !
   // test builds only (dist-test, VITE_SWORDCAT_DEBUG): the smoke drives the panel, also inside the embed frame where
   // window.__GAME__ is never installed. Production bundles drop this branch.
   if (import.meta.env?.VITE_SWORDCAT_DEBUG && typeof window !== 'undefined') {
-    const api = { ctl, openCard: (p) => bus.emit(EV_CARD_OPEN, p), closeCard: (p) => bus.emit(EV_CARD_CLOSE, p ?? {}) };
+    const api = {
+      ctl, openCard: (p) => bus.emit(EV_CARD_OPEN, p), closeCard: (p) => bus.emit(EV_CARD_CLOSE, p ?? {}),
+      // the TT5 smoke forces the standalone mode (directAllowed is false on localhost); never in production bundles
+      setMode: (next) => { if (!bridge && (next === 'direct' || next === 'link')) ctl.setMode(next, next === 'direct' ? (direct ?? createDirectTransport()) : null); return ctl.mode; },
+    };
     window.__SWORDCAT_TREAT__ = api;
     if (window.__GAME__ && typeof window.__GAME__ === 'object') window.__GAME__.treat = api;
   }

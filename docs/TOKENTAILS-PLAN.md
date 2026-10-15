@@ -1293,3 +1293,162 @@ Integrated and committed locally in both repos. Nothing pushed or merged.
   "Eighteen lost kittens" (game fiction). `/shelter-payouts/give` may ignore `?cat=`. The treat panel has not been seen
   inside the real `/swordcat` page with the live rail. `not-eligible` and `signed-out` show a generic error. The Heist
   redirect is unchanged.
+
+## 13. Phase TT5: messages, jumps, fixes, in-modal treats
+
+Founder requests (2026-10-15):
+1. "It should be allowed to send a treat from that modal itself without navigating away. Same thing for Catnip Heist
+   as well, as that navigation will clear in-game progress and is bad UX."
+2. "Improve in-game messages display (banners like Pink Bow etc. that appear after doing something; on mobile they
+   overlap too much, similar on desktop). Make jumps higher so it is easier to jump on things. Also verify for bugs
+   and issues."
+
+Inputs: the TT5 audits in the scratchpad (`inline-treats/knight-audit/`, `inline-treats/knight/`), summarised below.
+Base: `tokentails` at `7e51988`. Time box: about 4 hours for the Knight packages, 3 hours for the Heist.
+
+### 13.1 Decisions (defaults, no founder answer needed)
+
+1. **One message system.** A new `src/ui/messages.js` decides where and when every banner shows. The existing
+   renderers (toasts, celebrate, guide, offer, prompts) stay; they ask `messages` for a slot.
+   - Levels: P0 modal (shelter card, results, offer chips), P1 moment (friend, kitten, ability cards), P2 toast,
+     P3 tip (`tut.*`, hint card). A P0 hides P1 to P3. A new message never covers an older one; it waits.
+   - Two slots only. Top toast slot under the HUD inside the safe area (1 toast on phones, 2 on tablet and desktop;
+     the hint card is the slot's bottom row; stickers become an icon toast). Centre card slot at
+     `max(tc-b + 8px, 12vh)`, sized per viewport (phone portrait `min(92vw, 340px)` with a 64px portrait and 24px
+     title; phone landscape a horizontal card `min(46vw, 360px)`, at most 52vh tall, 56px portrait; tablet 120px;
+     desktop 160px). Cards avoid the touch buttons and HUD rects from `occluders.js`; if no room, they dock small.
+   - While a centre card shows, Pearl's guide bubble folds to its chip, and the offer waits.
+   - Taps: a card is skipped only by a tap on the card itself (today any tap skips it and eats an attack tap).
+   - In combat (alerted foe within 15m) a card becomes an icon toast instead of the 0.6 scale dock.
+   - Confetti stays inside the card box on phones. Damage words: at most 2 on screen, in lanes away from the card.
+   - Reduced motion or reduce flashes: 120ms fade, no confetti, no fly-home.
+   - Every slot uses `env(safe-area-inset-*)`. P2 and P3 paint below the touch buttons.
+2. **Jump preset "B".** `jumpV` 7.4 to 8.4, fall multiplier 1.35 to 1.5, jump cut 0.5 to 0.65 applied only after
+   0.10 s of rise, coyote 0.12 to 0.15 s, buffer 0.15 to 0.20 s (after fixing the buffered tiny hop), hard landing
+   9 to 12, mushroom bounce 9 to 10 (config and the `forest.js` literals). Gravity stays 22 (shared by every actor).
+   Air damping stays 4. Apex 1.245 m to 1.604 m. A keyboard tap of 80 ms reaches about 1.03 m.
+   - Jump assist rise limit 1.1 to 1.4, moved into `AIM.jumpAssist`.
+   - `NAV.hop.upMax` (1.1) and `NAV.fence.top` (1.05) stay, so tap paths do not auto-hop onto walls.
+   - Twirl: 0.55x gravity only while falling (no twirl super-jump).
+   - Sequence guards: practice perimeter fence and gate colliders 2.0 m (models stay 1.5 m); town road hedge
+     colliders 1.9 m. Meadow dry-stone walls (1.2 m, walkable) become reachable; that is fine if no lane gate is
+     skipped (checked by a test).
+3. **Standalone treat in the modal.** The game sends the treat itself when it runs unframed on `https://tokentails.com`
+   (`/swordcat-game/`), which CORS allows. It calls `POST https://api.tokentails.com/shelter/donate/guest` with
+   `{source:'page', chainId?}`, JSON headers and `credentials:'omit'`. It reads `GET /shelter/donate/status` and
+   `GET /shelter/donate/guest/me` first. The response mapping copies `sendTreat` in the host (a 429 with
+   `DONATE_ALREADY_TODAY` is "already today", a bare 429 is retry). Never a `text/plain` request.
+   - Panel modes: `embedded` (bridge, as TT4), `direct` (tokentails.com over https), `link` (any other host).
+   - `link` no longer points at `/shelter-payouts/give`. It is a new-tab link to `https://tokentails.com/swordcat`
+     with "Play on tokentails.com/swordcat to send a free treat. Opens in a new tab." plus a Copy link button.
+   - The game tab never navigates. Receipt and explorer links open in a new tab.
+   - While `checking`, the button is disabled ("Checking today's treat…").
+   - Standalone sends always use the guest route, even for a signed-in player; the game never reads the Firebase token.
+4. **Ownership.** Strict file ownership below. A package that needs a change in another package's file writes a request
+   in `requests/tt5-<owner>.md` (this repo) or `/Users/zygimantasbagdzevicius/me/tokentails-swordcat/requests/tt5-<owner>.md`.
+5. **Ports.** Smoke runs use `SMOKE_PORT=54xx` (M 5431, T 5432, J 5433, B 5434, integration 5435). Never 4173 if
+   another run may hold it, never 5180, 3000, 3005 or 5173. The founder's dev server on 5180 is never stopped.
+6. **No real treat.** Every test mocks the treat POST. `tests/smoke.mjs` keeps aborting every non-GET to
+   `*.tokentails.com`, and the run must report 0 blocked.
+
+### 13.2 Work packages (disjoint file ownership)
+
+**M: messages and layout**
+- Owns: `src/ui/messages.js` (new), `src/ui/toasts.js`, `src/ui/celebrate.js`, `src/ui/guide.js`, `src/ui/offer.js`,
+  `src/ui/prompts.js`, `src/ui/hud.js`, `src/ui/layers.js`, `src/ui/UI.js`, `src/ui/text.js`, `src/ui/ui.css`,
+  `src/ui/guidance.css`, `src/ui/onboarding.css`, `src/fx/DamageNumbers.js`, `src/shelter/card.js`,
+  `src/shelter/card.css`, `index.html`, `tests/unit/ui.test.js`, `tests/unit/guidance.test.js`,
+  `tests/unit/messages.test.js` (new), `tests/smoke/ui.mjs`, `tests/smoke/guidance.mjs`, `tests/smoke/shelter.mjs`,
+  `tests/smoke.mjs` (block registry only).
+- Does: decision 1, and these audit bugs, all in M's files:
+  - hint fades back over a leaving toast (`ui.css:964`, `:1045`);
+  - three boxes stack in a phone-landscape fight (hint top ignores `--tl-b`; `ui.css:962`, `:1070`, `hud.js:575+`);
+  - celebration cards too big, card over Pearl's bubble, confetti over the HUD;
+  - toasts under the kitten card; tablet toast column jumps rows;
+  - sticker lands on the play field;
+  - portrait boss fight: lesson card over the boss name (rule only in the landscape query, `ui.css:1046`);
+  - same line twice: objective pill and lesson card (`hud.js:565-568`, `prompts.js:243`);
+  - gamepad labels "D-pad ↑" and "D-pad ↓" collide (`text.js:310-311`, `ui.css:911/913`);
+  - offer visible behind the shelter scrim; offer can stack over a card (check `ui.busy` in real play);
+  - shelter card: at `max-height: 420px` the photo shrinks and Continue is sticky and fully visible (667x375);
+  - shelter card opens mid-fight: `canOpen()` waits while `alertedNear` (`card.js:128-136`);
+  - card skip listens to every window pointer-down (`celebrate.js:196`);
+  - cinema Skip chip copy says "hold Esc / P" on touch (copy in `text.js`; if the fix is in `cinema.js`, request to B).
+- Does not touch `src/shelter/treat*.js` (T). The treat panel sits inside the card; M only sizes the card around it.
+
+**T: standalone in-modal treat (and host, if needed)**
+- Owns: `src/shelter/treatApi.js` (new), `src/shelter/treat.js`, `src/shelter/treatCopy.js`, `src/shelter/treat.css`,
+  `src/core/embed.js`, `src/main.js`, `src/shelter/roster.js` (only to share `API_HOSTS`), `tests/unit/treat.test.js`,
+  `tests/unit/embed.test.js`, `tests/smoke/treat.mjs`, `tests/smoke/embed.mjs`, and in
+  `/Users/zygimantasbagdzevicius/me/tokentails-swordcat`: `client/components/swordcat/**`, `client/__test__/*swordcat*`,
+  `client/public/swordcat-game/**` (rebuild only, at integration).
+- Does: decision 3, as specified in the TT5 treat spec (`treatApi.js`: `directAllowed`, `readRail`, `readMe`,
+  `sendGuestTreat`; controller gets an injected `direct` transport, stores `chainId`, reuses `result()`; one in-flight
+  send; 15 s timeout; receipt `https://tokentails.com/shelter-payouts/receipt?chain=..&tx=..` only for a valid
+  `0x` + 64 hex hash). Host change only if the rebuilt embed needs it (expected: none). Keep `isAppBuild` handling as is.
+- Test hook: a `VITE_SWORDCAT_DEBUG`-only override of `directAllowed` through `__SWORDCAT_TREAT__`. Production builds
+  never carry it.
+
+**J: jumps**
+- Owns: `src/core/config.js`, `src/player/Player.js`, `src/player/PlayerStates.js`, `src/player/Orders.js`,
+  `src/player/tricks/RibbonTwirl.js`, `src/player/Aim.js`, `src/world/levels/meadow.js`, `forest.js`, `town.js`
+  (colliders and bounce literals only), `tests/unit/player.test.js`, `tests/unit/physics.test.js`,
+  `tests/unit/controls.test.js`, `tests/unit/world.test.js`, `tests/smoke/player.mjs`, `tests/smoke/physics.mjs`,
+  `tests/smoke/world.mjs`.
+- Does: decision 2, plus jump bugs: buffered jump becomes a 0.31 m hop (remember whether Jump was held at take-off);
+  tap cannot clear the 1.0 m fence; hard landings on ordinary jumps; twirl super-jump.
+- If M needs a value in `config.js` (`config.js:761`, celebrate), M asks J in `requests/tt5-j.md`; default: M keeps its
+  numbers in `messages.js`.
+
+**B: bug fixes (high and medium; low only if cheap)**
+- Owns: every other file under `src/`, in particular `src/ui/icons.js`, `src/ui/beacon.js`, `src/ui/occluders.js`,
+  `src/ui/cinema.js`, `src/ui/touch.js`, `src/ui/touchLayout.js`, `src/ui/abilityBar.js`, plus
+  `tests/unit/fixtt5.test.js` (new), `tests/smoke/flow.mjs`.
+- Does:
+  - sticker inner icon draws off the disc (`icons.js:425`: give the inner icon `width="32" height="32"` or use a `<g>`);
+  - guide marker (edge coin) sits on touch buttons at 667x375, after rotating, and next to the ability bar on desktop
+    (`beacon.js` edge placement must avoid the occluder rects);
+  - a fresh bug sweep after M, T and J land: console errors, softlocks, stuck input, out-of-bounds sweep with the new
+    jump at the six viewports. Bugs in other owners' files go to `requests/tt5-<owner>.md`.
+
+### 13.3 Acceptance
+
+Shared: `npm run test:unit` green, `npm run build` green (bundle budget), `npm run build:test` then
+`SMOKE_PORT=54xx npm run smoke` green with 0 blocked writes, no console errors. Screenshots at 390x844, 844x390,
+667x375 (touch), 1024x768, 1280x720, 1920x1080 under the scratchpad `inline-treats/<package>/`, every image read.
+
+- **M.** A messages smoke replays audit scenes 02 to 08 (Pink Bow, sticker burst, kitten card burst, combat card,
+  offer, shelter card) at the six viewports. No P1, P2 or P3 box overlaps another message, a touch button or Clem's
+  box by more than 4% of either box. Nothing visible behind the shelter scrim. Continue fully inside the viewport at
+  667x375. A tap on Attack never skips a card. Unit tests for the queue (priority, wait, dedupe, P0 hides lower).
+- **T.** Unit: `directAllowed` (tokentails.com https true; www, localhost, http false); every response (200, 429 with
+  and without the code, both 409 codes, 424, 503, 401, thrown TypeError); receipt building and https-only explorer;
+  controller direct flow and timeout; checking state disables the button. Smoke with `page.route('**/shelter/donate/**')`
+  fulfilling both GETs and the POST: sending, sent with links `target=_blank`, already, used up, paused, retry;
+  `page.url()` never changes; `link` mode shows the `/swordcat` new-tab link and no `/shelter-payouts/give`.
+  Embedded path from TT4 unchanged (existing tests green). Copy: "Token Tails sends a free treat", custody line in
+  every state, no "adopt", no token words.
+- **J.** Apex 1.60 ± 0.02 m held, 80 ms tap at least 1.0 m, buffered jump with early release at least 1.0 m, no hard
+  landing after a full jump onto ground 0.5 m lower, twirl apex at most 1.8 m. Perimeter fence, gate and road hedges
+  not jumpable (smoke tries from every side, with and without twirl). Mushroom Ring, crate steps and lesson fence
+  passable with a tap. Updated pinned numbers in the listed tests.
+- **B.** Each fixed bug has a test. The post-merge sweep reports what it ran and finds no high bug.
+
+### 13.4 Order and integration
+
+1. M, T, J and B work in parallel on their files. Requests are answered by the owner before integration.
+2. Integration (one agent): run all checks once on the merged tree, then `npm run build:tokentails` to refresh
+   `/Users/zygimantasbagdzevicius/me/tokentails-swordcat/client/public/swordcat-game`, run the host jest tests there
+   (`npx jest`, node_modules symlinked from tokentails-app and removed before commit), and screenshot `/swordcat`
+   with the treat mocked.
+3. Commit locally: this repo on `tokentails`; tokentails-swordcat on `feat/swordcat` (never `client/.vitest/` or
+   `client/next-env.d.ts`). No push.
+
+### 13.5 Mention, not fix
+
+- Standalone sends use the guest route, so a signed-in player can get one account treat on `/swordcat` and one
+  address treat standalone per day. The per-chain daily budget caps it.
+- The guest route answers 503 when it sees no visitor address; that shows as "paused".
+- `www.tokentails.com` is not in CORS; today it 307s to the apex, so it does not matter.
+- `tokentails.com/swordcat-game/` is not deployed yet, so the real-origin send is only checked with mocks.
+- The "sent" text uses the host's amount label ("0.01 USDC"); check it against the copy rules at go-live.

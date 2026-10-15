@@ -353,7 +353,8 @@ test('TT3 R3: the portrait guide bubble and toast stack keep off Clem; the objec
   // the toast stack: only as deep as fits above her, never fewer than one
   assert.equal(toastCap(NaN), TOAST_PHONE.visible);
   assert.equal(toastCap(20), 1);
-  assert.equal(toastCap(2 * TOAST_PHONE.toastH + TOAST_PHONE.pad), 2);
+  assert.equal(TOAST_PHONE.visible, 1, 'TT5: one toast at a time on a phone');
+  assert.equal(toastCap(2 * TOAST_PHONE.toastH + TOAST_PHONE.pad), 1);
   assert.equal(toastCap(999), TOAST_PHONE.visible);
   // the objective line under the hearts (portrait 390×844): it sat over the ❚❚ and the Skip chip
   const rects = [{ x: 8, y: 8, w: 152, h: 60 }, { x: 166, y: 10, w: 58, h: 56 }, { x: 280, y: 734, w: 84, h: 84 }];
@@ -366,14 +367,16 @@ test('TT3 R3: the portrait guide bubble and toast stack keep off Clem; the objec
   assert.deepEqual(land, { x: 89, y: 49, maxW: null });
 });
 
-test('TT3 R3: a phone shows 2 toasts at a time; a lowered cap sends the newest back to the queue', async () => {
+test('TT5: a phone shows 1 toast at a time (a touch tablet 2); a lowered cap sends the newest back to the queue', async () => {
   const { ToastQueue, phoneToasts, TOAST_PHONE_VISIBLE } = await import('../../src/ui/toasts.js');
   const { TOAST_PHONE } = await import('../../src/ui/hud.js');
   assert.equal(TOAST_PHONE_VISIBLE, TOAST_PHONE.visible, 'one number in both files');
-  assert.equal(phoneToasts('touch', 1280, 800), true);
+  assert.equal(TOAST_PHONE_VISIBLE, 1);
+  assert.equal(phoneToasts('touch', 1280, 800), false, 'a touch tablet is not a phone (2 toasts)');
+  assert.equal(phoneToasts('touch', 390, 844), true);
   assert.equal(phoneToasts('kbm', 844, 390), true);
   assert.equal(phoneToasts('kbm', 1280, 720), false);
-  const q = new ToastQueue();
+  const q = new ToastQueue({ visible: 3 });
   q.push('a'); q.push('b'); q.push('c');
   assert.equal(q.shown.length, 3);
   q.cfg.visible = 1;

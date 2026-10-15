@@ -76,6 +76,9 @@
   .ui-guide .gd-say { font-size: 16px; }
 }
 
+/* TT5 (messages.js): while a centre card is up on a phone, the edge coin steps back (it sat on the card) */
+.ui-root.msg-phone.msg-card .ui-beacon .bc-edge.is-on { opacity: 0 !important; pointer-events: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .ui-beacon .bc-tip, .ui-beacon .bc-coin { animation: none; }
 }

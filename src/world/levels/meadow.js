@@ -249,8 +249,9 @@ const SETPIECES = {
     kit.paint(0, -76, 6.5, '#B89A64', 0.45, 2.5);
     kit.paint(-6, -66, 2.2, '#B89A64', 0.5);
     kit.paint(0, -86, 2.5, '#B89A64', 0.45);
-    // perimeter fence 1.5 m (too tall to jump), gap at (0, −60) for the gate
-    const fo = { fit: { h: 1.5 }, height: 1.5, fade: true };
+    // perimeter fence: the model is 1.5 m, the collider 2.0 m (TT5: above the 1.6 m jump, so she cannot leave the field
+    // before the tutorial ends); gap at (0, −60) for the gate
+    const fo = { fit: { h: 1.5 }, height: 2.0, fade: true };
     kit.fence(fence, [x0, z0], [x1, z0], fo);
     kit.fence(fence, [x0, z0], [x0, z1], fo);
     kit.fence(fence, [x1, z0], [x1, z1], fo);
@@ -262,7 +263,7 @@ const SETPIECES = {
     const posts = kit.proc('gate_posts', () => [[cyl(0.11, 0.13, 1.9, -2.15, 0, 0), C.woodDark], [cyl(0.11, 0.13, 1.9, 2.15, 0, 0), C.woodDark],
       [box(0.3, 0.1, 0.3, -2.15, 1.92, 0), C.wood], [box(0.3, 0.1, 0.3, 2.15, 1.92, 0), C.wood]]);
     kit.place(posts, 0, z1, { collider: false, jitter: 0, fade: true });     // the `start` camera sits just behind them
-    for (const sx of [-2.15, 2.15]) kit.collider({ x: sx, z: z1, r: 0.16, y0: kit.h(sx, z1) - 0.5, y1: kit.h(sx, z1) + 1.9 });
+    for (const sx of [-2.15, 2.15]) kit.collider({ x: sx, z: z1, r: 0.16, y0: kit.h(sx, z1) - 0.5, y1: kit.h(sx, z1) + 2.0 });   // TT5: 2.0 m
     const leafTpl = kit.proc('gate_leaf', () => gateLeafParts(4.0));
     const leaf = kit.mesh(leafTpl, { name: 'practiceGate' });
     leaf.userData.camFade = true; leaf.userData.camFadeBox = true;   // the rails fade like the posts / fence when they cross her (box test: she shows between them)
@@ -271,7 +272,7 @@ const SETPIECES = {
     hinge.add(leaf);
     kit.object(hinge);
     const gy = kit.h(0, z1);
-    const gateCol = { ax: -2.05, az: z1, bx: 2.05, bz: z1, r: 0.12, y0: gy - 0.5, y1: gy + 1.5, walkable: false, gate: 'practice' };
+    const gateCol = { ax: -2.05, az: z1, bx: 2.05, bz: z1, r: 0.12, y0: gy - 0.5, y1: gy + 2.0, walkable: false, gate: 'practice' };   // TT5: 2.0 m (leaf model 1.45 m)
     kit.collider(gateCol);
     let open = 0, target01 = 0, opened = false, refreshFade = false;   // refreshFade: settled, move the leaf's fade boxes
     const setOpen = (on, instant) => {

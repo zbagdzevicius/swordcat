@@ -226,9 +226,10 @@ const SETPIECES = {
       // the short wall stubs between the gate and the first chords
       kit.anchor('south_gate', 0, -WALL_R, undefined, 0);
     }
-    // the road outside: hedges keep her on it between the gate and the level edge
+    // the road outside: hedges keep her on it between the gate and the level edge (TT5: 1.9 m collider over the 1.3 m
+    // model, above the 1.6 m jump)
     const hedge = await kit.tpl(M.hedge);
-    if (hedge) for (const sx of [-1, 1]) kit.fence(hedge, [sx * 4.2, -63], [sx * 4.2, -68.5], { fit: { h: 1.3 }, height: 1.4, walkable: false, depthScale: 3, jitter: 0.06, clear: 0.8 });
+    if (hedge) for (const sx of [-1, 1]) kit.fence(hedge, [sx * 4.2, -63], [sx * 4.2, -68.5], { fit: { h: 1.3 }, height: 1.9, walkable: false, depthScale: 3, jitter: 0.06, clear: 0.8 });
   },
 
   /** Main-street and quarter houses (KayKit, 6–9 m), garden fences, flower boxes, bunting, street lanterns, trees. */

@@ -422,7 +422,24 @@ export function ghostPaw() {
 export function sticker(color, inner) {
   return `<svg class="ico-sticker" viewBox="0 0 88 88" aria-hidden="true"><circle cx="44" cy="44" r="40" fill="#FFFFFF" stroke="${COCOA}" stroke-width="2"/>`
     + `<circle cx="44" cy="44" r="34.5" fill="${color}"/><path d="M22 30a26 26 0 0 1 22-14" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity=".55"/>`
-    + `<g transform="translate(24 24) scale(1.25)">${inner}</g></svg>`;
+    + stickerInner(inner) + '</svg>';
+}
+
+/**
+ * TT5 B: the sticker's inner icon. The icons are whole `<svg>` strings; nested without a size they filled the 88 unit
+ * box from (24, 24) and drew off the disc. Give a nested `<svg>` an explicit 40 x 40 box centred on the disc (the inline
+ * style beats any class width rule); plain shapes keep the old 24 unit group. Pure.
+ * @param {string} inner
+ */
+export function stickerInner(inner) {
+  const s = String(inner ?? '').trim();
+  if (!s) return '';
+  if (/^<svg[\s>]/i.test(s)) {
+    const open = s.slice(0, s.indexOf('>'))
+      .replace(/\s(?:x|y|width|height|style|preserveAspectRatio)="[^"]*"/gi, '');
+    return `${open} x="24" y="24" width="40" height="40" preserveAspectRatio="xMidYMid meet" style="width:40px;height:40px;overflow:visible">${s.slice(s.indexOf('>') + 1)}`;
+  }
+  return `<g transform="translate(29 29) scale(1.25)">${s}</g>`;
 }
 
 /** A tick in a mint disc (chip success, WA §7.5). */

@@ -144,6 +144,7 @@ export default [
       await t.G(() => {
         const g = window.__GAME__, c = g.ctx, p = c.player;
         p.pos.y += 4; p.prevPos.copy(p.pos); p.vel.set(0, 0, 0); p.onGround = false;
+        p.coyoteT = 0; p.jumpBuf = 0;   // TT5: PLAYER.coyote is 0.15 s (9 frames), so the press below is an air press
         c.input.setDevice?.('kbm');
         window.__twirlLog = { states: [], minVy: 0, t0: 0, t1: 0, maxT: 0 };
         const off = c.bus.on('player:jump', () => {});

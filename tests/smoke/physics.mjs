@@ -517,7 +517,7 @@ export default [
         const hop = await recStop(t);
         const hr = await rise(hop);
         const maxRise = Math.max(...hr.map((r) => r[0])), under = hr.filter((r) => r[1] < -1e-3).length;
-        const apex = 7.4 ** 2 / (2 * 22);
+        const apex = 8.4 ** 2 / (2 * 22);   // TT5 preset B (PLAYER.jumpV 8.4)
         t.assert(hop.length > 20 && Math.max(...hop.map((s) => along(s.pos))) > 1.5, `she never reached the bank (furthest ${Math.max(...hop.map((s) => along(s.pos))).toFixed(2)} m)`);
         // every take-off is from ground she stood on (never from a slide on the face), and that ground is no higher
         // than the walkable foot

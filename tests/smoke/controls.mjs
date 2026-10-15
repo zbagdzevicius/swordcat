@@ -311,9 +311,10 @@ export default [
       if (!cb) return;
       await page.mouse.click(cb[0], cb[1]);
       await until(t, () => (window.__GAME__.ctx.ui.menus.has('controls') ? true : null), null, { sim: 2, real: 6000 });
-      const box = (a) => t.G((x) => { const b = document.querySelector(`.ctl-bind[data-act="${x}"]`); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, txt: b.textContent, dis: b.disabled }; }, a);
+      const box = (a) => t.G((x) => { const b = document.querySelector(`.ctl-bind[data-act="${x}"]`); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, txt: b.textContent, glyph: [...b.querySelectorAll('[data-glyph]')].map((e) => e.dataset.glyph).join(' '), aria: b.getAttribute('aria-label'), dis: b.disabled }; }, a);
       const g0 = await box('guard');
-      t.assert(g0 && g0.txt === 'RMB' && !g0.dis, `the Stand button shows RMB (${JSON.stringify(g0)})`);
+      // TT6: a mouse with the right button lit, read out as words (never "RMB")
+      t.assert(g0 && g0.glyph === 'mouse-right' && /Right mouse button/.test(g0.aria) && !/RMB/.test(g0.txt) && !g0.dis, `the Shield button shows the right mouse button icon (${JSON.stringify(g0)})`);
       await shot(t, 'rebind-01-card');
       const msg = () => t.G(() => document.querySelector('.ctl-msg')?.textContent ?? '');
       await page.mouse.click(g0.x, g0.y);
@@ -327,7 +328,7 @@ export default [
       await t.G(() => { window.dispatchEvent(new KeyboardEvent('keydown', { code: 'F5', key: 'F5', bubbles: true, cancelable: true })); });
       t.assert(/F5 belongs to the browser/.test(await msg()), `F5 is refused (${await msg()})`);
       await t.G(() => { window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW', key: 'w', ctrlKey: true, bubbles: true, cancelable: true })); });
-      t.assert(/Ctrl\+W/.test(await msg()), `Ctrl+W is refused (${await msg()})`);
+      t.assert(/Control \+ W/.test(await msg()), `Ctrl+W is refused, said in words (${await msg()})`);
       await page.keyboard.press('KeyW');
       t.assert(/walks/.test(await msg()), `W (walking) is refused (${await msg()})`);
       await page.keyboard.press('Escape');

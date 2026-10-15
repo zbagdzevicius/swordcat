@@ -339,6 +339,10 @@ export class Player extends ScriptedActorMixin(Actor) {
     out.holyReady = this.shards >= (ATTACKS.holy.minShards ?? 1) && (this.valor ?? 0) >= PLAYER.charge.holyMinValor;
     out.grit = this.grit; out.gritMax = this.gritMax;
     out.guard = this.state === 'guard';
+    // TT6 the Shield icon states: the parry window is open (a fresh press), a whiffed tap's lockout
+    const gs = this.guardState;
+    out.parryOpen = !!gs.guarding && gs.parryT <= gs.parryWindow && !(gs.lockoutT > 0);
+    out.lockout = gs.lockoutT > 0;
     out.interact = !!this.ctx.levels?.current?._interact;
     out.charge = this.charge; out.chargeTier = this.chargeTier;
     // lock states (§10.1: desaturated + a lock pip) and the Stand slot's parry flash

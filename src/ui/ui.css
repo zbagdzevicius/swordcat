@@ -1749,3 +1749,91 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
   max-width: 3.2em; white-space: normal; line-height: 1; text-align: center; border-radius: 10px; }
 /* the offer placed by messages.js (off the HUD block and the touch buttons) */
 .ui-offer.is-placed { left: var(--ofx); top: var(--ofy); right: auto; margin: 0; }
+
+/* ---- TT6 input glyphs (ui/inputGlyph.js): icons for the device in use, never "RMB" / "LB" text */
+.ig { display: inline-flex; align-items: center; justify-content: center; position: relative; vertical-align: middle; line-height: 1; flex: none; }
+/* .ig .ig-svg beats the ui root's `.ui-root svg { width: 100% }` */
+.ig-svg { --igh: 1.5em; }
+.ig .ig-svg { display: block; height: var(--igh); width: calc(var(--igh) * var(--igr, 1)); overflow: visible; filter: drop-shadow(0 1px 0 #5A3B2E55); }
+.ig--mouse .ig-svg { --igh: 1.7em; }
+.ig--pad .ig-svg, .ig--gesture .ig-svg { --igh: 1.5em; }
+.ig-a11y { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ig-wrap { display: inline-flex; align-items: center; gap: .28em; vertical-align: middle; white-space: nowrap; margin: 0 .12em; }
+.ig-group { display: inline-flex; align-items: center; gap: .16em; }
+.ig-sep { font-weight: 800; opacity: .55; font-size: max(16px, .9em); }
+.ig-x { font-weight: 700; font-size: max(16px, .85em); }
+.ig-lbl { font-weight: 800; }
+kbd.ig-key { margin: 0; min-width: 1.75em; }
+kbd.ig-key--wide { padding: 0 .5em; }
+/* touch: a mini copy of the on-screen candy button with its real icon */
+.ig-tb { display: inline-flex; align-items: center; justify-content: center; width: 1.75em; height: 1.75em; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #FFFFFF, var(--cream, #FFF6E6) 60%, #FCE3CC); border: 2px solid var(--cocoa, #5A3A2E); box-shadow: 0 2px 0 #5A3B2E55; }
+.ig-tb--attack { background: radial-gradient(circle at 35% 30%, #FFE3EC, var(--pink, #FF8FB1) 60%, var(--pinkDeep, #E0567F)); }
+.ig-tb > svg { width: 62%; height: auto; display: block; }
+.ig-tb .ig-bang { font-weight: 900; color: var(--cocoa, #5A3A2E); font-size: 1.05em; }
+.ig--cue > svg { height: 1.6em; width: auto; display: block; filter: drop-shadow(0 0 3px #FFD34D) drop-shadow(0 1px 0 #5A3B2E55); }
+.ig-na { opacity: .45; font-weight: 700; }
+/* the Controls card: icons sit centred, never overflow a cell (390 × 844) */
+.ctl-row > span { min-width: 0; }
+.ctl-ig { flex-wrap: wrap; justify-content: center; row-gap: .15em; white-space: normal; }
+.ctl-bind .ig-wrap, .ctl-bind .ig { pointer-events: none; }
+.ctl-head > span { display: flex; justify-content: center; }
+.menu--controls .ctl-table { flex: 0 0 auto; }
+.menu--controls .menu-panel > .menu-body { overflow-y: auto; overscroll-behavior: contain; }
+/* touch players get no keyboard-only lines (preset picker, "Click a key", the Sticky Keys tip, Reset keys) */
+.menu--controls.is-touch :is(.ctl-preset, .ctl-msg, .ctl-note, .ctl-reset) { display: none; }
+@media (max-height: 460px) and (orientation: landscape) {
+  .menu--controls .ctl-table { max-height: none; overflow: visible; }
+  .menu--controls .menu-panel > .menu-body { max-height: calc(100vh - 6.5em); }
+  .menu--controls .ctl-row { padding: .1em .4em; }
+}
+@media (max-width: 480px) {
+  .menu--controls .ctl-row { grid-template-columns: minmax(0, 1.25fr) repeat(3, minmax(0, 1fr)); gap: .3em; padding: .2em .3em; font-size: .92em; }
+  .menu--controls .ctl-head .ico-dev { width: 2.1em; }
+}
+/* the ability-bar corner badge holds an icon: a keycap reads as its plain letter inside the white pill */
+.ab-key .ig-key { all: unset; font: inherit; }
+.ab-key .ig-svg { --igh: 20px; }
+.ab-key .ig--mouse .ig-svg { --igh: 22px; }
+.ab-key:has(.ig--mouse, .ig--pad, .ig--keys) { padding: 1px 3px; }
+.ab-tip-k { justify-self: end; align-self: start; display: inline-flex; }
+/* the hold-ring prompt, the riposte chip, the kitten key, the interact seal, the ghost-paw demo */
+.pr-key .ig-svg { --igh: 1.9em; }
+.pr-key .ig-tb { width: 2.2em; height: 2.2em; }
+.hud-comp .comp-key:has(.ig--mouse, .ig--pad) { background: none; border-color: transparent; box-shadow: none; }
+.hud-comp .comp-key .ig-key { all: unset; font: inherit; }
+.ui-tag .tag-seal b .ig-svg { --igh: 1.45em; filter: none; }
+.gp-key .ig-svg { --igh: 2.1em; }
+.gp-key .ig-tb { width: 2.3em; height: 2.3em; }
+.hud-guide .ig-svg { --igh: 1.45em; }
+.cin-skip-chip .ig-svg, .load-tip .ig-svg { --igh: 1.3em; }
+/* the Shield slot shows its state: the paw shield glows while held, gold while the parry window is open, grey on a whiff */
+.ab-guard.is-active { background: radial-gradient(circle at 35% 30%, #FFFFFF, #FFE3EC 60%, #FFB9CD); box-shadow: 0 0 0 3px #FF8FB188, 0 0 14px #FF8FB1; }
+.ab-guard.is-parry { box-shadow: 0 0 0 3px #FFD34D, 0 0 16px #FFD34D; }
+.ab-guard.is-lockout .ab-ico { opacity: .55; filter: grayscale(1); }
+.ico-pawshield[data-state="active"], .ico-pawshield[data-state="parry"] { overflow: visible; }
+.tbtn[data-shield="active"] { box-shadow: 0 0 0 4px #FF8FB1AA, 0 0 18px #FF8FB1; }
+.tbtn[data-shield="parry"] { box-shadow: 0 0 0 4px #FFD34D, 0 0 18px #FFD34D; }
+.tbtn[data-shield="broken"] .tb-ico, .tbtn[data-shield="lockout"] .tb-ico { opacity: .6; }
+.ig .ig-svg { max-width: none; flex: none; }
+.ig--keys .ig-svg { --igh: 1.6em; }
+/* the Controls card: bigger icons (the card is the place to learn them) */
+.menu--controls .ctl-row:not(.ctl-head) .ig-svg { --igh: 2.1em; }
+.menu--controls .ctl-row .ig--mouse .ig-svg { --igh: 2.3em; }
+.menu--controls .ctl-row .ig--keys .ig-svg { --igh: 2.2em; }
+.menu--controls .ctl-row .ig-tb { width: 2.3em; height: 2.3em; }
+@media (max-width: 480px) {
+  .menu--controls .ctl-row:not(.ctl-head) .ig-svg { --igh: 1.7em; }
+  .menu--controls .ctl-row .ig--mouse .ig-svg { --igh: 1.9em; }
+  .menu--controls .ctl-row .ig--keys .ig-svg { --igh: 1.8em; }
+  .menu--controls .ctl-row .ig-tb { width: 1.9em; height: 1.9em; }
+  .menu--controls .ctl-row kbd.ig-key { font-size: max(16px, .8em); padding: 0 .3em; min-width: 1.6em; }
+  .menu--controls .ctl-row > span { overflow: hidden; }
+}
+/* pad: the button icon is its own badge (a coloured face button, a bumper), bigger and with no white pill */
+.ability-bar.is-pad .ab-key:has(.ig) { background: none; border-color: transparent; box-shadow: none; padding: 0; max-width: none; bottom: -12px; }
+.ability-bar.is-pad .ab-key .ig-svg { --igh: 25px; filter: drop-shadow(0 1px 0 #fff) drop-shadow(0 0 1px #fff); }
+.ability-bar.is-pad .ab-key .ig-group { gap: 1px; }
+.ability-bar.is-pad .ab-key .ig-group .ig-svg { --igh: 19px; }
+/* combos ("Space ×2", "LB + X", "Esc / P") wrap inside a narrow cell instead of spilling out */
+.menu--controls .ctl-ig .ig-group { flex-wrap: wrap; justify-content: center; row-gap: .15em; max-width: 100%; }

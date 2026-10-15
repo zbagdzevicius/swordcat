@@ -78,6 +78,8 @@ export const ACTION_CODE = { guard: 'RMB', dodge: 'ShiftLeft', jump: 'Space', in
 /** Plain-text keycap labels as `guide().prompt` shows them (innerText: "Hold RMB to block", "LMB Bonk"). */
 const PLAIN_LABELS = [
   [/(^|[^\w])(LMB)(?=$|[^\w])/, 'attack'], [/⚔/, 'attack'], [/(^|[^\w])(WASD)(?=$|[^\w])/, 'move'], [/(^|[^\w])(RMB)(?=$|[^\w])/, 'guard'],
+  // TT6: the prompts draw input icons; their text is plain words ("Right mouse button", "Space bar", "Shift key")
+  [/Left mouse button/i, 'attack'], [/Right mouse button/i, 'guard'], [/W A S D keys/, 'move'],
   [/(^|[^\w])Space(?=$|[^\w])/, 'jump'], [/(^|[^\w])Shift(?=$|[^\w])/, 'dodge'], [/(^|[^\w])Enter(?=$|[^\w])/, 'confirm'],
   // single-letter keycaps only as an isolated capital (not "a" / "I" in a sentence)
   [/(^|[\s|(])F(?=$|[\s|)])/, 'trick'], [/(^|[\s|(])E(?=$|[\s|)])/, 'interact'], [/(^|[\s|(])Q(?=$|[\s|)])/, 'guard'],
@@ -85,7 +87,7 @@ const PLAIN_LABELS = [
   [/(^|[\s|(])R(?=$|[\s|)])/, 'milk'], [/(^|[\s|(])C(?=$|[\s|)])/, 'meow'], [/(^|[\s|(])V(?=$|[\s|)])/, 'golden'],
   [/(^|[\s|(])J(?=$|[\s|)])/, 'attack'],
   // touch button names (§15.3)
-  [/\bStand\b|🛡/, 'guard'], [/\bTumble\b/, 'dodge'], [/\bJump\b/, 'jump'], [/\bMeow\b/, 'meow'], [/\bKitten\b(?! mode)/, 'ability'],
+  [/\bStand\b|🛡|Shield button/, 'guard'], [/Sword button/, 'attack'], [/Roll button/, 'dodge'], [/Use button/, 'interact'], [/\bTumble\b/, 'dodge'], [/\bJump\b/, 'jump'], [/\bMeow\b/, 'meow'], [/\bKitten\b(?! mode)/, 'ability'],
   [/\bSnack\b/, 'milk'], [/\bGolden\b/, 'golden'], [/(^|\s)!(?=$|\s)/, 'interact'],
 ];
 

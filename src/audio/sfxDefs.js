@@ -22,6 +22,14 @@ export const ZZFX_DEFS = {
   hyenaLaugh: [0.7, 0, 880, 0.01, 0.05, 0.06, 1, 1.5, 4, 0, 0, 0, 0, 0.25, 0, 0, 0, 0.8, 0.02, 0, -3000],
   /** babble fallback blip */
   blip: [0.5, 0, 520, 0.005, 0.03, 0.04, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+  /** TT6 the Pink Paw shield: a soft bubble "bloop" as it pops up (layered on the chainmail guardOn). */
+  shieldUp: [0.5, 0, 420, 0.005, 0.04, 0.08, 0, 1.6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0.7, 0.02, 0, 0],
+  /** TT6 a blow lands on the shield: a soft rubbery "boing" (layered on the metal block). */
+  shieldBoing: [0.6, 0, 240, 0.005, 0.03, 0.12, 1, 1.2, -3, 0, 120, 0.03, 0, 0, 4, 0, 0, 0.6, 0.03, 0, -2400],
+  /** TT6 a parry: a bright two-note chime (layered on the clash and ring). */
+  shieldChime: [0.55, 0, 1320, 0.004, 0.06, 0.25, 0, 1, 0, 0, 440, 0.06, 0, 0, 0, 0, 0.04, 0.8, 0.02, 0.1, 0],
+  /** TT6 the shield breaks (no Grit left): a soft falling pop. */
+  shieldPop: [0.6, 0, 700, 0.004, 0.02, 0.18, 4, 1, -8, 0, 0, 0, 0, 0.6, 0, 0, 0, 0.5, 0.02, 0, -1800],
   /** ART §9.3: the charge fizzle is a soft noise "pfft" (0.12 s, low-passed at 1.2 kHz), not a digital glitch. */
   pfft: [0.6, 0, 300, 0.008, 0.03, 0.08, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.6, 0.02, 0, -1200],
   /**

@@ -16,7 +16,8 @@
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
 import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS } from '../core/config.js';
 import { el, flag, setText, setVar, pulse } from './dom.js';
-import { tx, esc, actionGlyph, presetGlyph, codeLabel, PRESET_IDS, keyCapInner } from './text.js';
+import { tx, esc, actionGlyph, presetGlyph, codeLabel, PRESET_IDS, glyphHtml, glyphWords } from './text.js';
+import { codeWords } from './inputGlyph.js';
 import { SETTINGS, SETTING_GROUPS, visibleSettings, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS,
   REBIND_ACTIONS, rebindAction, rebindRefusal } from './settings.js';
 import { defaultState } from '../core/GameState.js';
@@ -609,7 +610,10 @@ export class Menus {
   openControls() {
     const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
     const layer = this.top?.layer ?? 'modal';
-    const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}`);
+    const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}${dev === 'touch' ? ' is-touch' : ''}`);
+    const ps = ctx.input?.padKind === 'ps';
+    /** TT6: a cell is an input icon (mouse with a lit button, keycap, pad button, the touch button), never "RMB". */
+    const cellHtml = (g, d, act) => (g === '—' ? '<span class="ctl-na" aria-label="not used">—</span>' : glyphHtml(g, d, { action: act, ps: d === 'pad' && ps, cls: 'ctl-ig' }));
     const presetDef = SETTINGS.find((d) => d.key === 'controlPreset');
     const active = () => ctx.input?.preset ?? ctx.state?.settings?.controlPreset ?? 'hybrid';
     let preset = active();
@@ -618,9 +622,11 @@ export class Menus {
     pick.innerHTML = `<span class="srow-lbl">${esc(tx(ctx, 'ui.controls.preset'))}</span><div class="srow-ctl"><span class="ch"><span class="ch-l">◀</span><span class="ch-val"></span><span class="ch-r">▶</span></span></div>`;
     const msg = el('div', 'ctl-msg', { parent: body, attrs: { 'aria-live': 'polite' } });
     const tbl = el('div', 'ctl-table menu-scroll', { parent: body });
-    const devs = ['kbm', 'pad', 'touch'];
+    // TT6: the device in use comes first (a phone player reads the touch column first)
+    const devs = [dev, ...['kbm', 'pad', 'touch'].filter((d) => d !== dev)];
+    const devName = { kbm: 'Keyboard and mouse', pad: 'Gamepad', touch: 'Touch' };
     const head = el('div', 'ctl-row ctl-head', { parent: tbl });
-    head.innerHTML = `<span></span>${devs.map((d) => `<span class="${d === dev ? 'is-dev' : ''}">${d === 'kbm' ? I.keyboardIco() : d === 'pad' ? I.padIco() : I.touchIco()}</span>`).join('')}`;
+    head.innerHTML = `<span></span>${devs.map((d) => `<span class="${d === dev ? 'is-dev' : ''}" role="img" aria-label="${devName[d]}" title="${devName[d]}">${d === 'kbm' ? I.keyboardIco() : d === 'pad' ? I.padIco() : I.touchIco()}</span>`).join('')}`;
     /** @type {Map<string, { row: HTMLElement, kbm: HTMLElement, bind: HTMLButtonElement|null, label: string }>} */
     const rows = new Map();
     const bindItems = [];
@@ -638,8 +644,7 @@ export class Menus {
             bindItems.push({ el: bind, disabled: false, activate: () => capture(act) });
           }
         } else {
-          const g = actionGlyph(act, d);
-          cell.innerHTML = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${keyCapInner(g)}</kbd>`;
+          cell.innerHTML = cellHtml(actionGlyph(act, d), d, act);
         }
       }
       rows.set(act, { row, kbm, bind, label: lbl.split(' · ')[0] });
@@ -654,9 +659,10 @@ export class Menus {
       const bindings = ctx.state?.settings?.bindings ?? null;
       for (const [act, r] of rows) {
         const g = presetGlyph(act, preset, bindings);
-        const cap = g === '—' ? '<span class="ctl-na">—</span>' : `<kbd class="ui-key${act === 'attack' ? ' ui-key--sword' : ''}">${keyCapInner(g)}</kbd>`;
+        const cap = cellHtml(g, 'kbm', act);
         if (r.bind) {
           r.bind.innerHTML = cap;
+          r.bind.setAttribute('aria-label', `${r.label}: ${glyphWords(g, 'kbm') || 'not set'}. Change key`);
           flag(r.bind, 'is-disabled', !live);
           r.bind.disabled = !live;
           const it = bindItems.find((x) => x.el === r.bind);
@@ -686,7 +692,7 @@ export class Menus {
     const finish = (act, code) => {
       const lbl = rows.get(act)?.label ?? act;
       const why = rebindRefusal(code, { wasd: ctx.input?.wasd !== false });
-      if (why) { say(why === 'walk' ? 'ui.controls.walk' : 'ui.controls.refused', { key: codeLabel(code) }); this.sfx('ui.error'); return; }
+      if (why) { say(why === 'walk' ? 'ui.controls.walk' : 'ui.controls.refused', { key: codeWords(code, codeLabel(code)) }); this.sfx('ui.error'); return; }
       const table = ctx.input?.keyTable ?? {};
       const r = rebindAction(table, ctx.state?.settings?.bindings ?? null, act, code);
       stop(code.startsWith('Mouse'));
@@ -694,8 +700,8 @@ export class Menus {
       this.sfx('ui.confirm');
       if (r.swapped.length) {
         const other = r.swapped.find((a) => rows.has(a)) ?? r.swapped[0];
-        say('ui.controls.swapped', { other: rows.get(other)?.label ?? other, key: presetGlyph(other, active(), r.bindings) });
-      } else say('ui.controls.saved', { action: lbl, key: codeLabel(code) });
+        say('ui.controls.swapped', { other: rows.get(other)?.label ?? other, key: glyphWords(presetGlyph(other, active(), r.bindings), 'kbm') });
+      } else say('ui.controls.saved', { action: lbl, key: codeWords(code, codeLabel(code)) });
       draw();
     };
     const capture = (act) => {
@@ -706,7 +712,7 @@ export class Menus {
         ev.preventDefault(); ev.stopImmediatePropagation();
         if (ev.repeat) return;
         if (ev.code === 'Escape') { stop(); say('ui.controls.rebindHint'); return; }
-        if (ev.ctrlKey || ev.metaKey || ev.altKey) { say('ui.controls.refused', { key: (ev.ctrlKey ? 'Ctrl+' : ev.metaKey ? 'Meta+' : 'Alt+') + codeLabel(ev.code) }); this.sfx('ui.error'); return; }
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) { say('ui.controls.refused', { key: (ev.ctrlKey ? 'Control + ' : ev.metaKey ? 'Command + ' : 'Alt + ') + codeWords(ev.code, codeLabel(ev.code)) }); this.sfx('ui.error'); return; }
         finish(act, ev.code);
       };
       c.onMouse = (ev) => { ev.preventDefault(); ev.stopImmediatePropagation(); finish(act, 'Mouse' + ev.button); };

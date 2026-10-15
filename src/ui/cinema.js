@@ -15,7 +15,7 @@
 import { E } from '../core/events.js';
 import { FADE_COLOR } from '../core/config.js';
 import { el, flag, setText, setHtml, setVar, pulse } from './dom.js';
-import { tx, txt, chapterInfo, esc } from './text.js';
+import { tx, txt, chapterInfo, esc, glyphify } from './text.js';
 import * as I from './icons.js';
 import { loadingTipCount } from '../story/strings.js';
 
@@ -253,7 +253,7 @@ export class Cinema {
     const on = f > 0;
     flag(this.skip, 'is-on', on);
     if (!on) return;
-    if (label) setText(this.skipTxt, label);
+    if (label) setHtml(this.skipTxt, label);                   // TT6: the device's input icons (glyphify HTML)
     this.skipRing.setAttribute('stroke-dashoffset', (I.RING_LEN * (1 - Math.min(1, f))).toFixed(1));
   }
 
@@ -290,7 +290,8 @@ export class Cinema {
     if (i === this._tipI) i = (i + 1) % CINEMA.tipCount;
     this._tipI = i;
     const key = `loading.tip.${i + 1}`;
-    setText(this.loadTip, this.ctx.strings?.has?.(key) ? tx(this.ctx, key) : '');
+    // TT6: tips name inputs with the device's icons ("[H] to stand still" draws the H keycap)
+    setHtml(this.loadTip, this.ctx.strings?.has?.(key) ? glyphify(tx(this.ctx, key), this.ctx.input?.device ?? 'kbm', this.ctx.input) : '');
   }
 
   _progress(p) {

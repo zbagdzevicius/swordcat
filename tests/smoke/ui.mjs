@@ -230,16 +230,26 @@ const messagesBlock = {
         // 02 Pink Bow friend card
         await G((ev) => window.__GAME__.ctx.bus.emit(ev, { kind: 'friend', id: 'bow' }), E);
         await wait(450); await check('02-pinkbow');
-        // an Attack tap (or a world click) after 0.8 s keeps the card; a tap on the card skips it
+        // an Attack tap (or a world click) after 0.8 s keeps the card; a tap on the card skips it. Load-proof (verify r2:
+        // a slow screenshot let the card run out before the check): the card's clock is set to 0.9 s before each
+        // tap, and the check counts skips instead of reading whether the card is still up.
         await wait(450);
+        const rewind = () => G(() => {
+          const q = window.__GAME__.ctx.ui.celebrations.q, c = q.cur;
+          if (!q.__skips) { q.__skips = { n: 0 }; const o = q.skip.bind(q); q.skip = () => { const r = o(); if (r) q.__skips.n++; return r; }; }
+          if (c && !c.flying) c.t = 0.9;
+          return !!c && !c.flying;
+        });
+        t.assert(await rewind(), `${tag}: the Pink Bow card is up for the tap checks`);
         const atk = await G(() => { const b = document.querySelector('.touch-root .tbtn.tb-attack'); if (!b) return null; const r = b.getBoundingClientRect(); return r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; });
         if (touch && atk) await pg.touchscreen.tap(atk.x, atk.y); else await pg.mouse.click(Math.round(W * 0.25), Math.round(H * 0.8));
         await wait(100);
-        t.assert(await G(() => { const c = window.__GAME__.ctx.ui.celebrations.q.cur; return !!c && !c.flying; }), `${tag}: an attack tap does not skip the card`);
+        t.assert(await G(() => window.__GAME__.ctx.ui.celebrations.q.__skips.n === 0), `${tag}: an attack tap does not skip the card`);
+        await rewind();
         const cr = await G(() => { const r = document.querySelector('.cel-card.is-on .cel-pop')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; });
         if (cr) { if (touch) await pg.touchscreen.tap(cr.x, cr.y); else await pg.mouse.click(cr.x, cr.y); }
         await wait(80);
-        t.assert(await G(() => { const c = window.__GAME__.ctx.ui.celebrations.q.cur; return !c || c.flying; }), `${tag}: a tap on the card skips it`);
+        t.assert(await G(() => window.__GAME__.ctx.ui.celebrations.q.__skips.n === 1), `${tag}: a tap on the card skips it`);
         await wait(800);
         // 03 / 04 a burst: sticker + kitten card + three toasts in the same second
         await G((ev) => {
@@ -371,7 +381,7 @@ export default [
       t.assert(s1.boss && /GRIZZLECHOP/.test(s1.bossName ?? ''), `boss bar shown (${s1.bossName})`);
       t.assert(/1\/3/.test(s1.obj), `objective line "${s1.obj}"`);
       t.assert(s1.toasts >= 2, `toasts shown: ${s1.toasts}`);
-      t.assert(/ui-key/.test(s1.hint), 'tutorial hint renders keycaps');
+      t.assert(/ui-key|data-glyph/.test(s1.hint), 'tutorial hint renders input glyphs (TT6: keycaps or icons)');
       // the counter shows state.fish: the start spawn sits on a placed fish line, so a magnet fish may land meanwhile
       t.assert(s1.fish === String(await inPage(t, () => window.__GAME__.ctx.state.fish)) && +s1.fish >= 42, `fish counter ${s1.fish}`);
       t.assert(s1.comp || s1.compN === 0, `companion portrait shown for the active companion (${s1.compN})`);
@@ -1010,7 +1020,7 @@ export default [
       await t.wait(600);
       // ---- the bar: 8 slots with hybrid corner glyphs; HUD milk + companion portrait hidden (they live in the bar)
       const bar = await inPage(t, () => {
-        const b = document.querySelector('.ability-bar'), key = (id) => b.querySelector(`.ab-${id} .ab-key`)?.textContent;
+        const b = document.querySelector('.ability-bar'), key = (id) => b.querySelector(`.ab-${id} .ab-key [data-glyph]`)?.dataset.glyph;   // TT6: icons, not text
         const r = b.getBoundingClientRect();
         return { on: b.classList.contains('is-on'), slots: b.querySelectorAll('.ab-slot').length, keys: Object.fromEntries(['guard', 'dodge', 'jump', 'ability', 'golden', 'milk', 'meow', 'interact'].map((k) => [k, key(k)])),
           milkHud: getComputedStyle(document.querySelector('.hud-milk')).display, cx: r.x + r.width / 2, w: innerWidth, bottom: innerHeight - r.bottom,
@@ -1020,9 +1030,14 @@ export default [
       t.assert(bar.on && bar.slots >= 8, `the ability bar shows its slots on desktop (${bar.slots}; TT3 may add the Paw Trick slot)`);
       t.assert(Math.abs(bar.cx - bar.w / 2) < 4 && bar.bottom < 40, 'bottom centre');
       t.assert(bar.slot >= 47.5, `slots ≥ 48 px (${bar.slot})`);
-      // TOKENTAILS-PLAN §11.2 hybrid: RMB Stand, Shift Tumble, Space jump, G kitten
-      t.assert(bar.keys.guard === 'RMB' && bar.keys.dodge === 'Shift' && bar.keys.jump === 'Space' && bar.keys.ability === 'G' && bar.keys.golden === 'V'
-        && bar.keys.milk === 'R' && bar.keys.meow === 'C' && bar.keys.interact === 'E', `hybrid glyphs ${JSON.stringify(bar.keys)}`);
+      // TOKENTAILS-PLAN §11.2 hybrid: RMB Stand, Shift Tumble, Space jump, G kitten (TT6: drawn as a mouse with the right
+      // button lit, keycaps; the slot's aria-label says it in words)
+      t.assert(bar.keys.guard === 'mouse-right' && bar.keys.dodge === 'key-shift' && bar.keys.jump === 'key-space' && bar.keys.ability === 'key-g' && bar.keys.golden === 'key-v'
+        && bar.keys.milk === 'key-r' && bar.keys.meow === 'key-c' && bar.keys.interact === 'key-e', `hybrid glyphs ${JSON.stringify(bar.keys)}`);
+      const aria = await inPage(t, () => document.querySelector('.ab-guard')?.getAttribute('aria-label'));
+      t.assert(aria === 'Shield: Right mouse button', `the Shield slot reads in plain words (${aria})`);
+      const vis = await inPage(t, () => { const c = document.querySelector('.ability-bar').cloneNode(true); c.querySelectorAll('svg').forEach((x) => x.remove()); return c.textContent; });
+      t.assert(!/\b(RMB|LMB|LB|RB)\b/.test(vis), `no input jargon on the bar (${JSON.stringify(vis)})`);
       t.assert(bar.milkHud === 'none', 'the HUD milk row moved into the bar');
       // ---- Tumble: the dodge slot sweeps (0.2 s)
       await page.mouse.move(700, 300);
@@ -1065,7 +1080,7 @@ export default [
       await page.mouse.move(sr.x, sr.y);
       await t.wait(300);
       const tip = await inPage(t, () => { const e = document.querySelector('.ab-tip'); return { on: e.classList.contains('is-on'), text: e.textContent }; });
-      t.assert(tip.on && /Stand/.test(tip.text) && /RMB/.test(tip.text), `tooltip "${tip.text}"`);
+      t.assert(tip.on && /Shield/.test(tip.text) && /Right mouse button/.test(tip.text) && !/RMB/.test(tip.text), `tooltip "${tip.text}"`);   // TT6: the icon's words
       await fontAudit(t, 'ability bar + tooltip');
       await shot(t, '41-ability-tip');
       await page.mouse.move(640, 300);
@@ -1081,9 +1096,9 @@ export default [
       t.assert(grit.arc && grit.slot && grit.segs >= 1, `Grit arc + active Stand slot (${JSON.stringify(grit)})`);
       // ---- presets: glyphs follow the bindings (diablo: Space = Tumble, RMB = Stand)
       await inPage(t, () => { const g = window.__GAME__, c = g.ctx; c.state.settings.controlPreset = 'diablo'; c.bus.emit(g.E.SETTINGS_CHANGED, { key: 'controlPreset', value: 'diablo' }); });
-      for (let k = 0; k < 30 && (await inPage(t, () => document.querySelector('.ab-dodge .ab-key').textContent)) !== 'Space'; k++) await t.wait(100);
-      const dk = await inPage(t, () => ({ dodge: document.querySelector('.ab-dodge .ab-key').textContent, guard: document.querySelector('.ab-guard .ab-key').textContent, preset: window.__GAME__.ctx.input.preset, mode: window.__GAME__.mode, cam: window.__GAME__.ctx.cam.modeName, bar: document.querySelector('.ability-bar').className, ev: window.__GAME__.events.slice(-15) }));
-      t.assert(dk.dodge === 'Space' && dk.guard === 'RMB', `diablo glyphs ${JSON.stringify(dk)}`);
+      for (let k = 0; k < 30 && (await inPage(t, () => document.querySelector('.ab-dodge .ab-key [data-glyph]')?.dataset.glyph)) !== 'key-space'; k++) await t.wait(100);
+      const dk = await inPage(t, () => ({ dodge: document.querySelector('.ab-dodge .ab-key [data-glyph]')?.dataset.glyph, guard: document.querySelector('.ab-guard .ab-key [data-glyph]')?.dataset.glyph, preset: window.__GAME__.ctx.input.preset, mode: window.__GAME__.mode, cam: window.__GAME__.ctx.cam.modeName, bar: document.querySelector('.ability-bar').className, ev: window.__GAME__.events.slice(-15) }));
+      t.assert(dk.dodge === 'key-space' && dk.guard === 'mouse-right', `diablo glyphs ${JSON.stringify(dk)}`);
       await inPage(t, () => { const g = window.__GAME__, c = g.ctx; c.state.settings.controlPreset = 'hybrid'; c.bus.emit(g.E.SETTINGS_CHANGED, { key: 'controlPreset', value: 'hybrid' }); });
       // ---- §10.2 cursors: ground paw, sword over a foe, ×2 size, high contrast (no kitten around: Mochi is an NPC pick)
       await inPage(t, () => window.__GAME__.ctx.companions.setActive([]));
@@ -1137,13 +1152,14 @@ export default [
       // ---- controls card per preset (◀ ▶ flips the KBM column)
       await inPage(t, () => { const ui = window.__GAME__.ctx.ui; ui.pause(); ui.menus.openControls(); });
       await t.wait(500);
-      const card0 = await inPage(t, () => ({ head: document.querySelector('.ctl-preset .ch-val')?.textContent, move: [...document.querySelectorAll('.ctl-row')].find((r) => /^Move/.test(r.textContent))?.textContent }));
+      const card0 = await inPage(t, () => ({ head: document.querySelector('.ctl-preset .ch-val')?.textContent, move: [...([...document.querySelectorAll('.ctl-row')].find((r) => /^Move/.test(r.textContent))?.querySelectorAll(':scope > span:nth-child(2) [data-glyph]') ?? [])].map((e) => e.dataset.glyph).join(' / ') }));
       await inPage(t, () => { const s = window.__GAME__.ctx.ui.menus.top; s.items[0].adjust(1); s.items[0].adjust(1); });
       await t.wait(200);
-      const card1 = await inPage(t, () => ({ head: document.querySelector('.ctl-preset .ch-val')?.textContent, move: [...document.querySelectorAll('.ctl-row')].find((r) => /^Move/.test(r.textContent))?.textContent }));
+      const card1 = await inPage(t, () => ({ head: document.querySelector('.ctl-preset .ch-val')?.textContent, move: [...([...document.querySelectorAll('.ctl-row')].find((r) => /^Move/.test(r.textContent))?.querySelectorAll(':scope > span:nth-child(2) [data-glyph]') ?? [])].map((e) => e.dataset.glyph).join(' / ') }));
       t.log(`controls card ${JSON.stringify(card0)} → ${JSON.stringify(card1)}`);
-      t.assert(/Hybrid/.test(card0.head) && /WASD/.test(card0.move) && !/RMB/.test(card0.move), `card: hybrid page, Move = WASD (TT3 §11.2) (${card0.move})`);
-      t.assert(/Diablo/.test(card1.head) && /LMB \/ WASD/.test(card1.move), 'card: diablo page');
+      // TT6: the keyboard-and-mouse column is icons (data-glyph): the WASD cluster, a mouse with the left button lit
+      t.assert(/Hybrid/.test(card0.head) && card0.move === 'key-wasd', `card: hybrid page, Move = WASD (TT3 §11.2) (${card0.move})`);
+      t.assert(/Diablo/.test(card1.head) && card1.move === 'mouse-left / key-wasd', `card: diablo page (${card1.move})`);
       await fontAudit(t, 'controls card');
       await shot(t, '44-controls-card-diablo');
       // ---- settings: the §10.7 rows; invertY hidden in iso

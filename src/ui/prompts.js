@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { E } from '../core/events.js';
 import { el, flag, setHtml, setText, setVar, place, pulse } from './dom.js';
-import { tx, txt, glyphify, actionGlyph } from './text.js';
+import { tx, txt, glyphify, actionGlyph, actionGlyphHtml, actionWords } from './text.js';
 import * as I from './icons.js';
 import { Guide } from './guide.js';
 import { sameLine } from './messages.js';
@@ -137,9 +137,11 @@ export class Prompts {
   _drawTag() {
     if (!this.target) return;
     // §10.4: the tag carries the device glyph ("Tap" / "E" / "Y")
-    setText(this.tagKey, this.device === 'touch' ? tx(this.ctx, 'ui.tag.tap') : actionGlyph('interact', this.device, this.ctx.input));
+    // TT6: a pad shows the Y button glyph (an icon), a keyboard its key letter, touch "Tap"
+    if (this.device === 'pad') setHtml(this.tagKey, actionGlyphHtml('interact', 'pad', this.ctx.input));
+    else setText(this.tagKey, this.device === 'touch' ? tx(this.ctx, 'ui.tag.tap') : actionGlyph('interact', this.device, this.ctx.input));
     setText(this.tagTxt, tagLabel(this.ctx, this.target.kind, this.tagPrompt));
-    flag(this.tag, 'is-long', this.tagKey.textContent.length > 2);
+    flag(this.tag, 'is-long', this.device !== 'pad' && this.tagKey.textContent.length > 2);
   }
 
   // ------------------------------------------------------------------ story:prompt
@@ -169,7 +171,8 @@ export class Prompts {
     const p = this.prState;
     if (!p) return;
     const act = p.action === 'chargeRelease' ? 'attack' : p.action === 'guard' ? 'guard' : p.action ?? 'interact';
-    setText(this.prKey, actionGlyph(act, this.device, this.ctx.input));
+    setHtml(this.prKey, actionGlyphHtml(act, this.device, this.ctx.input));      // TT6: an icon, never "RMB"
+    this.prKey.setAttribute?.('aria-label', actionWords(act, this.device, this.ctx.input));
     const t = p.textKey ? txt(this.ctx, p.textKey) : '';
     setHtml(this.prTxt, glyphify(t, this.device, this.ctx.input));
   }

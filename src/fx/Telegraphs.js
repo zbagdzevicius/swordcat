@@ -867,6 +867,20 @@ export class Telegraphs {
     return out.copy(L.origin).setY(L.origin.y + 0.9);
   }
 
+  /**
+   * TT6 the parry cue: the Pink Paw shield over a parry-able foe's head (fx/ShieldBubble draws it), small through the
+   * wind-up, popping big and gold at the "ting" 0.25 s before the strike: "Tap [Shield] when the pink shield pops".
+   * → true when a cue was pushed (the white "!" is then left out).
+   */
+  _shieldCue(L, head, alpha, gold) {
+    const sc = this.shieldCues;
+    if (!sc?.pushCue) return false;
+    const left = (L.n.duration ?? 0) - L.t;
+    const k = left <= 0.25 ? Math.min(1, (0.25 - left) / 0.08) : 0;
+    sc.pushCue(head.x, head.y, head.z, k, gold, alpha);
+    return true;
+  }
+
   _headPoint(L, out, lift) {
     if (L.actor && detached(L.actor)) return out.set(L.actor.pos.x, L.actor.pos.y + (L.actor.height ?? 1) + lift, L.actor.pos.z);
     if (L.actor) return headPoint(L.actor, out, lift);
@@ -894,7 +908,7 @@ export class Telegraphs {
         M.push(_p.x, _p.y, _p.z, (0.62 + 0.5 * flash) * popS * tw, MARK.STAR4, _white, (3.2 + 3 * flash) * ki, alpha, t * 0.8, pattern);
         M.push(_p.x, _p.y, _p.z, 0.28 * popS, MARK.SOFT, _white, 2.0 * ki, alpha * 0.7);
         this._headPoint(L, _q, 0.32 + 0.04 * Math.sin(t * 9));
-        M.push(_q.x, _q.y, _q.z, 0.34 * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
+        if (!this._shieldCue(L, _q, alpha, false)) M.push(_q.x, _q.y, _q.z, 0.34 * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
         break;
       }
       case 'gold': {
@@ -903,6 +917,7 @@ export class Telegraphs {
         _col.copy(L.color);
         M.push(_p.x, _p.y, _p.z, (0.9 + 0.5 * flash) * popS, MARK.STAR8, _col, (2.8 + 2.5 * flash) * ki, alpha, t * 1.1, pattern);
         M.push(_p.x, _p.y, _p.z, 0.45 * popS, MARK.STAR4, _white, 2.4 * ki, alpha * 0.9, -t * 0.6, 0);
+        this._headPoint(L, _q, 0.32); this._shieldCue(L, _q, alpha, true);     // TT6: a gold parry cue
         break;
       }
       case 'red': {
@@ -960,7 +975,7 @@ export class Telegraphs {
         T.push(_p.x, _p.y, _p.z, -I.glintPx * popS * tw * fl, MARK.STAR4, _white, 3.2 + 3 * flash, alpha, t * 0.8, pattern);
         T.push(_p.x, _p.y, _p.z, -I.glintPx * 0.5 * popS, MARK.SOFT, _white, 2.0, alpha * 0.7);
         this._headPoint(L, _q, I.exclLift + 0.04 * Math.sin(t * 9));
-        T.push(_q.x, _q.y, _q.z, -I.exclPx * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
+        if (!this._shieldCue(L, _q, alpha, false)) T.push(_q.x, _q.y, _q.z, -I.exclPx * popS, MARK.EXCL, _white, 1.15, alpha, 0, pattern, 1.25);
         break;
       }
       case 'gold': {
@@ -969,6 +984,7 @@ export class Telegraphs {
         _col.copy(L.color);
         T.push(_p.x, _p.y, _p.z, -I.goldPx * popS * fl, MARK.STAR8, _col, 2.8 + 2.5 * flash, alpha, t * 1.1, pattern);
         T.push(_p.x, _p.y, _p.z, -I.goldPx * 0.5 * popS, MARK.STAR4, _white, 2.4, alpha * 0.9, -t * 0.6, 0);
+        this._headPoint(L, _q, I.exclLift); this._shieldCue(L, _q, alpha, true);   // TT6: a gold parry cue
         break;
       }
       case 'red': {

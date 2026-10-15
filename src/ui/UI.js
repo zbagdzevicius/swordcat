@@ -769,7 +769,7 @@ export class UI {
   _skipText() {
     const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
     const key = dev !== 'kbm' && ctx.strings?.has?.(`prompt.skip.${dev}`) ? `prompt.skip.${dev}` : 'prompt.skip';
-    return glyphify(tx(ctx, key), dev, ctx.input).replace(/<[^>]*>/g, '');
+    return glyphify(tx(ctx, key), dev, ctx.input);            // TT6: icons (a keycap, the pad Menu button), never "RMB"
   }
 
   /** The Skip chip's screen rectangle while it shows (G1's `__GAME__.guide()` reads it), else null. */

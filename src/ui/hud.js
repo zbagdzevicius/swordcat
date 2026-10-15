@@ -13,7 +13,7 @@ import { PLAYER, HUD as HUD_CFG } from '../core/config.js';
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
 import { el, setText, setHtml, flag, setVar, pulse, place } from './dom.js';
-import { tx, txt, glyphify, heartStates, frac, objectiveText, levelKittens, levelLetterId, actionGlyph, esc } from './text.js';
+import { tx, txt, glyphify, glyphText, heartStates, frac, objectiveText, levelKittens, levelLetterId, actionGlyph, actionGlyphHtml, esc } from './text.js';
 import { clipObjective, isPhone } from './beacon.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
@@ -536,7 +536,8 @@ export class Hud {
         setVar(this.compEl, '--sig', SIGNATURE[id] ?? '#D9B26A');
       }
       const dev = ctx.input?.device ?? 'kbm';
-      setText(this.compKey, actionGlyph('ability', dev, ctx.input));
+      const ck = `${dev}|${ctx.input?.padKind}|${actionGlyph('ability', dev, ctx.input)}`;
+      if (v.compKey !== ck) { v.compKey = ck; setHtml(this.compKey, actionGlyphHtml('ability', dev, ctx.input)); }   // TT6: an icon
       flag(this.compEl, 'is-nap', (c.napT ?? 0) > 0);
     }
   }
@@ -556,7 +557,7 @@ export class Hud {
     if (key !== this._guideKey) {
       this._guideKey = key;
       this.guideRaw = text;                // TT5: the line as written ([action] tokens kept; prompts.js dedupes the hint)
-      this.guideText = text.replace(/\[([^\]]+)\]/g, (m, a) => actionGlyph(a.trim().toLowerCase(), dev, ctx.input) || a);
+      this.guideText = glyphText(text, dev, ctx.input);      // TT6: plain words ("right mouse button"), never "RMB"
       setHtml(this.guideTxt, text ? glyphify(text, dev, ctx.input) : '');
       flag(this.guideEl, 'is-on', !!text);
     }
@@ -773,8 +774,8 @@ export class Hud {
     flag(this.riposte, 'is-on', !!rt);
     if (rt) {
       const sp = this._proj(rt, (rt.height ?? 1) + 0.9, W, H);
-      const key = actionGlyph('attack', ctx.input?.device ?? 'kbm', ctx.input);
-      setHtml(this.riposte, `<kbd class="ui-key ui-key--sword">${esc(key)}</kbd><span>${esc(tx(ctx, 'hud.riposte'))}</span>`);
+      const dev = ctx.input?.device ?? 'kbm', rk = `${dev}|${actionGlyph('attack', dev, ctx.input)}`;
+      if (this._riposteK !== rk) { this._riposteK = rk; setHtml(this.riposte, `${actionGlyphHtml('attack', dev, ctx.input)}<span>${esc(tx(ctx, 'hud.riposte'))}</span>`); }
       if (sp) place(this.riposte, sp.x, sp.y); else place(this.riposte, W * 0.5, H * 0.38);
     }
   }

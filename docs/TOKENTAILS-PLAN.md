@@ -743,6 +743,10 @@ flaky audio check.
 
 K implements this table in `INPUT` (config.js). Every other package reads action names only, never key codes.
 
+The table uses code names. Since TT6 the player sees icons, never these names: `src/ui/inputGlyph.js` turns each label
+into a mouse with the right button lit, a keycap, a pad button or the touch button icon, with plain words for screen
+readers (see STATUS.md, TT6).
+
 | Action (`INPUT` name) | Keyboard and mouse | Touch | Gamepad (standard layout) |
 |---|---|---|---|
 | move | WASD / arrows (click-to-move stays in `moba` and `diablo`) | floating stick, tap ground | L-stick |

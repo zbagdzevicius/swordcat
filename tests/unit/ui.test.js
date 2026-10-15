@@ -80,19 +80,27 @@ test('device glyphs: keyboard / pad / touch (§6.6, §15)', () => {
   assert.equal(actionGlyph('trick', 'touch'), ':3');
   assert.equal(actionGlyph('attack', 'touch'), '⚔');
   assert.equal(actionGlyph('nope', 'pad'), 'nope');
+  // TT6: tokens render as input icons (data-glyph = the abstract glyph id; aria-label = plain words), never "RMB"
   const k = glyphify('Press [Space] to jump', 'kbm');
-  assert.match(k, /<kbd class="ui-key">Space<\/kbd>/);
+  assert.match(k, /data-glyph="key-space"[^>]*aria-label="Space bar"[^>]*>Space<\/kbd>/);
   const p = glyphify('Press [Jump] to jump', 'pad');
-  assert.match(p, /<kbd class="ui-key">A<\/kbd>/);
-  assert.match(glyphify('Press [Jump] to jump', 'kbm'), /<kbd class="ui-key">Space<\/kbd>/, 'semantic tokens resolve through the bindings');
-  assert.match(glyphify('[Trick] Toss the coin', 'kbm'), /<kbd class="ui-key">F<\/kbd>/);
-  assert.match(glyphify('[Trick] Toss the coin', 'pad'), /<kbd class="ui-key">RT<\/kbd>/);
-  assert.match(glyphify('[Trick] Toss the coin', 'touch'), /<kbd class="ui-key">:3<\/kbd>/);
-  assert.match(glyphify('Hold [Stand]', 'kbm'), /<kbd class="ui-key">RMB<\/kbd>/, 'the Stand prompt says RMB');
-  assert.match(glyphify('Hold [Esc] or [P]', 'pad'), /Start/);
-  assert.match(glyphify('Hold [Stand]', 'touch'), /<kbd class="ui-key">Stand<\/kbd>/);
-  assert.match(glyphify('Swing ⚔ ×3', 'kbm'), /ui-key--sword">LMB</);
-  assert.match(glyphify('[Weird] <b>', 'kbm'), /<kbd class="ui-key">Weird<\/kbd> &lt;b&gt;/);
+  assert.match(p, /data-glyph="pad-a"[^>]*aria-label="A button"/);
+  assert.match(glyphify('Press [Jump] to jump', 'kbm'), /data-glyph="key-space"/, 'semantic tokens resolve through the bindings');
+  assert.match(glyphify('[Trick] Toss the coin', 'kbm'), /data-glyph="key-f"[^>]*>F<\/kbd>/);
+  assert.match(glyphify('[Trick] Toss the coin', 'pad'), /data-glyph="pad-rt"[^>]*aria-label="Right trigger"/);
+  assert.match(glyphify('[Trick] Toss the coin', 'touch'), /data-glyph="touch-trick"/);
+  const stand = glyphify('Hold [Stand]', 'kbm');
+  assert.match(stand, /data-glyph="mouse-right"[^>]*role="img"[^>]*aria-label="Right mouse button"/, 'the Stand is a mouse with the right button lit');
+  assert.match(stand, /<span class="ig-lbl">Shield<\/span>/, 'with the plain word next to it');
+  assert.doesNotMatch(stand, /RMB/);
+  assert.match(glyphify('Hold [Esc] or [P]', 'pad'), /data-glyph="pad-start"[^>]*aria-label="Menu button"/);
+  assert.equal(glyphify('Hold [Esc] or [P]', 'pad').match(/data-glyph="pad-start"/g).length, 1, 'the same pad button is shown once');
+  assert.match(glyphify('Hold [Stand]', 'touch'), /data-glyph="touch-guard"[^>]*aria-label="Shield button"/);
+  assert.match(glyphify('Hold [Stand]', 'touch'), /ico-pawshield/, 'the touch glyph is the real Shield button icon');
+  assert.match(glyphify('Swing ⚔ ×3', 'kbm'), /data-glyph="mouse-left"/);
+  assert.match(glyphify('[Weird] <b>', 'kbm'), /data-glyph="text-weird"[^>]*>Weird<\/kbd> &lt;b&gt;/);
+  for (const d of ['kbm', 'pad', 'touch']) for (const t of ['Hold [Stand]', 'Bonk [Attack]', '[Golden]', '[Trick]', '[Ability]', 'Tap ⚔', 'Tap 🛡'])
+    assert.doesNotMatch(glyphify(t, d).replace(/<svg[\s\S]*?<\/svg>/g, ''), /\b(RMB|LMB|MMB|LB|RB|LT|RT|L3|R3|Bksp)\b/, `${d} ${t}: no jargon`);
 });
 
 test('numbers: time, hearts with halves, safe fractions', () => {
@@ -671,13 +679,13 @@ test('§12 ui 3 glyphs: preset-aware tokens resolve through the active bindings'
   assert.equal(actionGlyph('zoom', 'kbm', hy), 'Wheel');                     // gestures never come from bindings
   assert.equal(actionGlyph('guard', 'pad', hy), 'LB');                       // pad glyphs ignore KBM bindings
   // semantic tokens follow the preset; a literal key token follows a rebinding that moved the action off it
-  assert.match(glyphify('Hold [Stand].', 'kbm', di), /<kbd class="ui-key">RMB<\/kbd>/);
-  assert.match(glyphify('Hold [Stand].', 'kbm', hy), /<kbd class="ui-key">RMB<\/kbd>/);
-  assert.match(glyphify('Hold [Stand].', 'kbm', fakeInput('hybrid', 'kbm', { guard: ['KeyN', 'KeyQ'] })), /<kbd class="ui-key">N<\/kbd>/, 'a rebound Stand shows its new key');
-  assert.match(glyphify('Jump [Jump].', 'touch', hy), />Jump</);
+  assert.match(glyphify('Hold [Stand].', 'kbm', di), /data-glyph="mouse-right"/);
+  assert.match(glyphify('Hold [Stand].', 'kbm', hy), /data-glyph="mouse-right"/);
+  assert.match(glyphify('Hold [Stand].', 'kbm', fakeInput('hybrid', 'kbm', { guard: ['KeyN', 'KeyQ'] })), /data-glyph="key-n"[^>]*>N<\/kbd>/, 'a rebound Stand shows its new key');
+  assert.match(glyphify('Jump [Jump].', 'touch', hy), /data-glyph="touch-jump"/);
   assert.match(glyphify('Press [Space].', 'kbm', hy), />Space</);
   assert.match(glyphify('Press [Space].', 'kbm', fakeInput('hybrid', 'kbm', { jump: ['KeyN'] })), />N</);
-  assert.match(glyphify('Snip [Attack] x3', 'kbm', ko), /ui-key--sword">J</);
+  assert.match(glyphify('Snip [Attack] x3', 'kbm', ko), /data-glyph="key-j"[^>]*>J</);
   // custom rebinding wins over the preset
   assert.equal(actionGlyph('jump', 'kbm', fakeInput('hybrid', 'kbm', { jump: ['KeyT'] })), 'T');
   // the ability bar corner glyph

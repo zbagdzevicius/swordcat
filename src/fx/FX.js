@@ -51,6 +51,7 @@ import { SunRays } from './SunRays.js';
 import { Lanterns } from './Lanterns.js';
 import { Encounters } from './Encounters.js';
 import { ShopSparkle } from './ShopSparkle.js';
+import { ShieldBubble } from './ShieldBubble.js';
 import { toVec3, resolveActor, resolveAnchor, isActor, actorWorldPos, headPoint, weaponPoint, groundY, visualDt } from './util.js';
 
 /** Every `burst` kind fx draws (anything else falls back to a sparkle). */
@@ -200,6 +201,10 @@ export class FX {
     // CONTROLS_SPEC §7.3 / §10.3: hero + aim ring, Stand fan, selection / hover / aggro rings, order markers, ability aim
     this.decals = new GroundDecals(ctx);
     this.decals.init(scene);
+    // TT6 the Pink Paw shield she holds up while guarding, and the parry cue over a winding-up foe
+    this.shieldFx = new ShieldBubble(ctx);
+    this.shieldFx.init(scene);
+    this.telegraphs.shieldCues = this.shieldFx;
     // CONTROLS_SPEC §4.2 ground mist sheets (the iso play camera's misty screen edges)
     this.groundMist = new GroundMist(ctx);
     this.groundMist.init(scene, ctx.quality);
@@ -538,7 +543,7 @@ export class FX {
     this.particles?.clear(); this.trail?.clear(); this.numbers?.clear(); this.telegraphs?.clear(); this.holyFx?.clear();
     this.helmets?.clear(); this.mist?.clearWalls(); this.hordeFx?.clear(); this.screen?.clear();
     this.shock?.clear(); this.webs?.clear(); this.sunRays?.clear(); this.lanterns?.clear(); this.encounters?.clear(); this.shop?.clear();
-    this.beats?.clear(); this.decals?.setGhostPaw(null);
+    this.beats?.clear(); this.decals?.setGhostPaw(null); this.shieldFx?.clear();
     this.dizzy.clear(); this._later.length = 0; this._arena.on = false;
   }
 
@@ -601,7 +606,9 @@ export class FX {
     this.holyFx.render(dt, frameDt);
     this.screen.holy = this.holyFx.bloomLevel;
     this.screen.golden = !!p?.golden && p.alive !== false;
+    this.shieldFx?.beginCues();
     this.telegraphs.render(dt);
+    this.shieldFx?.render(dt);
     this._dizzyMarks(dt);
     // drift ×2 in Meme Cam; also ×2 while Standing Ground pays out (§7.3 "the mist speeds up around her")
     this.mist.speedMul = this._memeMist ? (PLAYER.memeCam.mist ?? 2) : p?.standingGround && p.alive !== false ? 2 : 1;
@@ -639,7 +646,7 @@ export class FX {
       this.holyFx?.fields[0]?.points, this.holyFx?.arcs[0]?.mesh, this.helmets?.list[0], this.telegraphs?.decalBatch?.mesh,
       this.telegraphs?.lineBatch?.mesh, this.mist?.ambient?.mesh, this.hordeFx?.mesh, this.ambient?.points,
       this.shock?.rings[0]?.mesh, this.shock?.cracks[0]?.mesh, this.webs?.mesh, this.sunRays?.follow.mesh, this.groundMist?.mesh,
-      this.decals?.mesh, this.blobs?.mesh, this.butterflies?.mesh, this.lightPools?.mesh, this.clouds?.mesh].filter(Boolean);
+      this.decals?.mesh, this.shieldFx?.bubble, this.shieldFx?.sprite, this.shieldFx?.cueSprites[0], this.blobs?.mesh, this.butterflies?.mesh, this.lightPools?.mesh, this.clouds?.mesh].filter(Boolean);
   }
 
   /**
@@ -689,7 +696,7 @@ export class FX {
     this.particles?.dispose(); this.marks?.dispose(); this.marksTop?.dispose(); this.trail?.dispose(); this.numbers?.dispose(); this.telegraphs?.dispose();
     this.holyFx?.dispose(); this.helmets?.dispose(); this.mist?.dispose(); this.hordeFx?.dispose(); this.ambient?.dispose(); this.screen?.dispose();
     this.shock?.dispose(); this.webs?.dispose(); this.sunRays?.dispose(); this.lanterns?.dispose(); this.encounters?.clear(); this.shop?.dispose();
-    this.decals?.dispose(); this.groundMist?.dispose();
+    this.decals?.dispose(); this.groundMist?.dispose(); this.shieldFx?.dispose();
     this.blobs?.dispose(); this.butterflies?.dispose(); this.lightPools?.dispose(); this.clouds?.dispose(); this.debugFrame?.dispose();
     this.beats?.clear();
     this.dizzy.clear(); this._later.length = 0;
@@ -786,7 +793,7 @@ export class FX {
         }
         return;
       }
-      case 'block': this.counts.blocks++; this._guardSparks(h.target, '#F4F8FF', 10); if (h.target === ctx.player) this.decals?.flash('block'); return;
+      case 'block': this.counts.blocks++; this._guardSparks(h.target, '#FFE3EC', 10); if (h.target === ctx.player) { this.decals?.flash('block'); this.shieldFx?.block(); } return;
       case 'blockNpc': this.counts.blocks++; this._sparks(_p, dir, 8, '#F4F8FF', 1); return;
       case 'parryNpc':
         this.particles.single(_p, { shape: SHAPE.RING, color: '#FFD34D', intensity: 2.2, size0: 0.2, size1: 1.2, life: 0.22, grow: GROW.OUT });
@@ -835,8 +842,12 @@ export class FX {
 
   _guardBreak(pl) {
     if (!isActor(pl)) return;
-    this._guardSparks(pl, '#E9EEF6', 8);
-    this._shards(_p, 9, '#C9D1DA', 1);
+    this.shieldFx?.shatter();
+    this._guardSparks(pl, '#FFE3EC', 8);
+    this._shards(_p, 9, '#FF8FB1', 1);
+    // TT6: the paw shield pops into pink hearts and petals
+    this.particles.burst(_p, { n: 7, shape: SHAPE.HEART, color: '#FF8FB1', intensity: 1.4, size: [0.12, 0.18], sizeEnd: 0.4, life: [0.5, 0.8],
+      speed: [1.6, 3.0], up: 1.4, spread: Math.PI, gravity: 3, drag: 1.6, spin: 4, fade: FADE.HOLD });
     this.particles.single(_p, { shape: SHAPE.RING, color: '#FFFFFF', intensity: 1.8, size0: 0.3, size1: 1.6, life: 0.22, grow: GROW.OUT });
   }
 
@@ -861,6 +872,9 @@ export class FX {
     P.burst(_p, { additive: true, n: gold ? 10 : 6, shape: SHAPE.STAR4, color: '#FFE9A8', intensity: 2.4, size: [0.1, 0.18], sizeEnd: 0.3,
       life: [0.4, 0.7], speed: [1.2, 2.6], spread: Math.PI, drag: 2.5, fade: FADE.TWINKLE });
     this.bloomSpike(gold ? 1.1 : 0.9, gold ? 0.35 : 0.25);
+    this.shieldFx?.parry();
+    // TT6: a gold paw ring flat on the ground around her (the shield's parry flash)
+    if (pl) { actorWorldPos(pl, _q); P.single(_q.setY(_q.y + 0.08), { shape: SHAPE.RING, color: '#FFD34D', intensity: 2.2, size0: 0.4, size1: 2.4, life: 0.32, grow: GROW.OUT }); }
     if (isActor(p?.attacker) && !p.projectile) this.dizzyFor(p.attacker, gold ? PLAYER.guard.goldParryStagger : PLAYER.guard.parryStagger * 0.8);
     // WA §5.3: "Ting!" over her, "PARRY!" over the attacker (every parry)
     this.word('parry');

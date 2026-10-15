@@ -67,9 +67,14 @@ export const SFX = {
   block:           { files: seq('impact/impactMetal_medium_', 0, 4, 3), vol: 0.8 },
   parry:           { files: seq('sword/sword_clash_', 1, 10), vol: 0.9, also: ['parryRing'] },
   parryRing:       { files: ['impact/metal_ringing'], vol: 0.45 },
-  guardBreak:      { files: ['impact/metal_small1'], vol: 0.85, also: ['guardBreakPlate'] },
+  guardBreak:      { files: ['impact/metal_small1'], vol: 0.85, also: ['guardBreakPlate', 'shieldPop'] },
   guardBreakPlate: { files: ['impact/impactPlate_heavy_000'], vol: 0.9 },
-  guardOn:         { files: ['impact/chainmail1'], vol: 0.22, minGap: 0.25 },
+  guardOn:         { files: ['impact/chainmail1'], vol: 0.22, minGap: 0.25, also: ['shieldUp'] },
+  // TT6 the Pink Paw shield (zzfx, no files): bloop up, boing on a block, chime on a parry, pop on a break
+  shieldUp:        { files: [], zzfx: 'shieldUp', vol: 0.4, rateVar: 0.03 },
+  shieldBoing:     { files: [], zzfx: 'shieldBoing', vol: 0.45, rateVar: 0.05 },
+  shieldChime:     { files: [], zzfx: 'shieldChime', vol: 0.4 },
+  shieldPop:       { files: [], zzfx: 'shieldPop', vol: 0.5 },
   chargeT1:        { files: ['pickup/powerup_rise01'], vol: 1, rateVar: 0 },
   chargeT2:        { files: ['pickup/powerup_rise03'], vol: 0.9, rateVar: 0 },
   // ART §9.3: a soft noise "pfft" + a low bubble, not a digital glitch
@@ -546,7 +551,7 @@ export function bindSfx(am) {
   on(E.PLAYER_LAND, ({ impact = 0 }) => am.play2D('land', { volume: Math.min(1, 0.45 + Math.max(0, impact) / 14) }));
   on(E.PLAYER_GUARD, ({ on: isOn }) => { if (isOn) am.play2D('guardOn'); });
   on(E.PLAYER_GRIT, ({ broken }) => { if (broken) am.play2D('guardBreak'); });
-  on(E.PLAYER_PARRY, ({ gold }) => am.play2D('parry', gold ? { rate: 1.12, volume: 1 } : undefined));
+  on(E.PLAYER_PARRY, ({ gold }) => { am.play2D('parry', gold ? { rate: 1.12, volume: 1 } : undefined); am.play2D('shieldChime', gold ? { rate: 1.2 } : undefined); });   // TT6 the paw shield chimes
   on(E.PLAYER_DAMAGED, ({ amount = 1 }) => { if (amount > 0) am.play2D('hurt'); });
   on(E.PLAYER_DIED, () => am.play2D('faint'));
   on(E.PLAYER_LIFE_LOST, () => am.play2D('respawnBoing'));            // WA §5.7: wipe purr at 1.2 s, boing at 1.55 s
@@ -562,7 +567,8 @@ export function bindSfx(am) {
     const tgt = h.target, pos = h.position ?? posOf(tgt);
     if (!pos) return;
     if (h.blocked) {                                               // her parries sound via player:parry
-      if (isPlayer(tgt)) am.play2D('block'); else am.play3D(h.parried ? 'parry' : 'block', pos);
+      // TT6: a boing off the Pink Paw shield on her blocks
+      if (isPlayer(tgt)) { am.play2D('block'); am.play2D('shieldBoing'); } else am.play3D(h.parried ? 'parry' : 'block', pos);
       return;
     }
     const av = h.attacker ? enemyVoiceFor(actorTypeId(h.attacker)) : null;

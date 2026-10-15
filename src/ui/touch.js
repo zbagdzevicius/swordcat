@@ -27,6 +27,8 @@ import { tx } from './text.js';
 import { portraitSVG } from './portraits.js';
 import { companionJoined } from './reveal.js';
 import { computeLayout, buttonAt, inDeadRing, inStickZone, classifyGesture, stickVector as stickVec, clampTs, clampStickBase, TRICK_BUTTON } from './touchLayout.js';
+import { ACTION_LABEL } from './inputGlyph.js';
+import { shieldSlotState } from './abilityBar.js';
 import * as I from './icons.js';
 import tricksCss from './tricks.css?inline';
 
@@ -136,6 +138,8 @@ export class TouchControls {
     for (const b of BUTTONS) {
       const e = el('div', `tbtn ${b.cls}`, { parent: this.cluster, html: `${b.ring ? I.ring('tb-ring') : ''}<span class="tb-ico">${b.icon()}</span>` });
       e.dataset.action = b.action;
+      // TT6: plain words for screen readers and long-press titles (the icon is the label on screen)
+      e.setAttribute('role', 'button'); e.setAttribute('aria-label', ACTION_LABEL[b.action] ?? b.action);
       this.btns.set(b.action, e);
       this._wireButton(e, b);
     }
@@ -690,6 +694,14 @@ export class TouchControls {
       flag(ab, 'is-cd', left > 0);
     }
     this._trickRender();
+    // TT6: the Shield button shows the same states as the in-world paw shield and the bar slot
+    if (p?.guardState) {
+      const gs = p.guardState, q = this._shQ ?? (this._shQ = {});
+      q.guard = p.state === 'guard'; q.parryOpen = !!gs.guarding && gs.parryT <= gs.parryWindow && !(gs.lockoutT > 0);
+      q.lockout = gs.lockoutT > 0; q.grit = p.grit; q.gritMax = p.gritMax;
+      const ss = shieldSlotState(q), sk = `${ss.state}|${ss.cracks}`, gb = this.btns.get('guard');
+      if (gb._sk !== sk) { gb._sk = sk; gb.querySelector('.tb-ico').innerHTML = I.shield(ss.state, { cracks: ss.cracks }); gb.dataset.shield = ss.state; }
+    }
     // contextual buttons
     flag(this.btns.get('interact'), 'is-hidden', !this.interactOn);
     const goldReady = !!p && (p.valor ?? 0) >= PLAYER.valor.max && (ctx.state?.shards ?? 0) >= 2 && !p.golden;

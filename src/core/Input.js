@@ -51,6 +51,8 @@ export class Input {
     this.relockOnResume = false;
     this._lockLost = false;
     this.padConnected = false;
+    /** TT6: 'xbox' | 'ps' (from Gamepad.id; ui draws PlayStation shapes for 'ps') */
+    this.padKind = 'xbox'; this._padId = null;
     /** Seconds (sim) since any input activity / any look input (Meme Cam idle, camera auto-follow). */
     this.idleTime = 0; this.lookIdleTime = 0;
     this._activity = false; this._lookActivity = false;
@@ -413,6 +415,8 @@ export class Input {
       for (const p of pads) {
         if (!p || !p.connected) continue;
         any = true;
+        // TT6 input glyphs: PlayStation pads get their own button shapes (cross, circle, square, triangle, L1 / R1)
+        if (p.id !== this._padId) { this._padId = p.id; this.padKind = /playstation|dualshock|dualsense|sony|054c/i.test(String(p.id ?? '')) ? 'ps' : 'xbox'; }
         for (let i = 0; i < p.buttons.length && i < merged.length; i++) {
           const b = p.buttons[i];
           if (b.pressed || b.value > INPUT.triggerThreshold) merged[i] = true;

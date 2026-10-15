@@ -1106,7 +1106,8 @@ test('telegraphs in the iso camera: glints and "!" go to the overlay at a consta
   ctx.fx.telegraph({ kind: 'aim', actor: rat, shape: 'line', duration: 1.0, dir: [0, 0, -1], size: 18 });
   await frames(ctx, 4);
   const top = ctx.fx.marksTop;
-  assert.ok(top.count >= 3, `overlay marks ${top.count}`);
+  assert.ok(top.count >= 2, `overlay marks ${top.count}`);
+  assert.equal(ctx.fx.shieldFx.shown.cues, 1, 'TT6: the parry "!" is now the Pink Paw shield cue over the foe');
   const sizes = Array.from(top.aPar.array.slice(0, top.count * 4)).filter((_, i) => i % 4 === 0);
   assert.ok(sizes.every((s) => s < 0), 'px-sized');
   const line = ctx.fx.telegraphs.lines.find((l) => l.busy);

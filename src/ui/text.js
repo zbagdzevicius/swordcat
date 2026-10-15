@@ -4,6 +4,9 @@
 import { LEVEL_IDS, KITTENS_BY_LEVEL, INPUT } from '../core/config.js';
 import { S as STORY_STRINGS } from '../story/strings.js';
 import { sword as swordIcon } from './icons.js';
+import { glyphHtml, glyphWords, shieldCueHtml, ACTION_LABEL } from './inputGlyph.js';
+
+export { glyphHtml, glyphWords, ACTION_LABEL };
 
 /**
  * UI copy the ui needs that strings.js (story) does not carry yet (requested in requests/ui.md). strings.js wins as
@@ -102,14 +105,14 @@ export const UI_STRINGS = Object.freeze({
   'ui.settings.resetConfirm': 'Reset every setting to its default?',
   'ui.controls.title': 'Controls',
   // ---- CONTROLS_SPEC §10.1 ability-bar tooltips (title · one-line rule) and §10.7 settings rows
-  'bar.guard': 'The Stand · Hold to block. Raise it just as a blow lands to parry. Snaps to the nearest threat.',
+  'bar.guard': 'Shield · Hold to raise your pink paw shield and block. Tap it just as a blow lands to parry. Turns to the nearest threat.',
   'bar.dodge': 'Tumble · A quick roll: nothing can hurt you mid-tumble.',
   'bar.jump': 'Jump · Hop fences and gaps. Attack in the air to Pounce.',
-  'bar.ability': 'Kitten ability · Tap to cast at the cursor, hold to aim, let go to cast.',
+  'bar.ability': 'Kitten power · Tap to cast at the cursor, hold to aim, let go to cast.',
   'bar.golden': 'Golden Hour · At full Valor: the sun is on your side.',
   'bar.milk': 'Snack Break · Heals 2 hearts. Don’t get hit while you munch.',
   'bar.meow': 'Meow · Hidden kittens answer. So do cows.',
-  'bar.interact': 'Interact · Talk, open, rescue. Lit when something is near.',
+  'bar.interact': 'Use · Talk, open, rescue. Lit when something is near.',
   'bar.holy': 'Holy Slash ready: hold Attack until it turns gold.',
   'ui.controls.preset': 'Keyboard and mouse',
   'ui.controls.na': '—',
@@ -122,7 +125,7 @@ export const UI_STRINGS = Object.freeze({
   'ui.controls.saved': '{action}: {key}',
   'ui.controls.reset': 'Reset keys to default',
   'ui.controls.resetDone': 'Keys back to default.',
-  'ui.controls.sticky': 'Tip: on Windows, pressing Shift 5 times may open Sticky Keys. K or the back mouse button also Tumble.',
+  'ui.controls.sticky': 'Tip: on Windows, pressing Shift 5 times may open Sticky Keys. K or the back side button of the mouse also roll.',
   'pause.controls': 'Controls',
   'ui.tag.tap': 'Tap',
   'ui.touch.edit': 'Edit touch layout',
@@ -408,11 +411,30 @@ export function presetGlyph(action, preset = 'hybrid', bindings = null) {
  */
 export function keyCapInner(label) { return label === '⚔' ? `${swordIcon('#FFFFFF')}<span class="ui-key-a11y">⚔</span>` : esc(label); }
 
-/** One `[token]` → keycap HTML for `device`. Unknown tokens stay as written. */
-function tokenHtml(inner, device, input) {
-  const parts = inner.split(/\s+/);
-  const head = parts[0], rest = parts.slice(1).join(' ');
-  const act = TOKEN_ACTION[head.toLowerCase()];
+/**
+ * TT6: the input glyph (icon) HTML for an action on a device, bindings and preset aware: a mouse with the right
+ * button lit for the hybrid Shield, a pad bumper, the touch Shield button. `o.label` true adds the plain word.
+ * @param {string} action @param {'kbm'|'pad'|'touch'} [device] @param {any} [input] @param {{ label?: boolean|string, cls?: string }} [o]
+ */
+export function actionGlyphHtml(action, device = 'kbm', input = null, o = {}) {
+  return glyphHtml(actionGlyph(action, device, input), device, { action, ps: device === 'pad' && input?.padKind === 'ps', ...o });
+}
+
+/** TT6: plain words for an action's input ("right mouse button", "left bumper", "Shield button"). Never "RMB". */
+export function actionWords(action, device = 'kbm', input = null) {
+  return glyphWords(actionGlyph(action, device, input), device, device === 'pad' && input?.padKind === 'ps');
+}
+
+/** TT6: semantic tokens that get their plain word beside the icon ("Hold [Stand]" → "Hold [mouse] Shield"). */
+const INLINE_WORD = new Set(['guard', 'attack', 'dodge', 'jump', 'interact', 'ability', 'golden', 'trick', 'milk']);
+
+/**
+ * The label a `[token]` resolves to on `device`, and its action (null for an unknown token). Pure.
+ * @returns {{ label: string, act: string|null, sem: boolean }}
+ */
+export function tokenLabel(inner, device = 'kbm', input = null) {
+  const head = String(inner ?? '').trim().split(/\s+/)[0];
+  const act = TOKEN_ACTION[head.toLowerCase()] ?? null;
   const sem = SEMANTIC.has(head.toLowerCase());
   // semantic tokens ([Stand], [Attack] …) always resolve; a literal keyboard token ([Space]) resolves through the
   // bindings only when the preset / rebinding moved that action off the written key
@@ -424,31 +446,56 @@ function tokenHtml(inner, device, input) {
       if (codes.length && !codes.some((c) => codeLabel(c).toLowerCase() === head.toLowerCase())) label = actionGlyph(act, device, input);
     }
   }
-  const cls = act === 'attack' ? 'ui-key ui-key--sword' : 'ui-key';
-  return `<kbd class="${cls}">${keyCapInner(label)}</kbd>${rest ? `<span class="ui-key-x">${esc(rest)}</span>` : ''}`;
+  return { label, act, sem };
+}
+
+/** One `[token]` → glyph HTML for `device` (TT6 icons; `plain` = the sentence without tokens, for the word rule). */
+function tokenHtml(inner, device, input, plain = '') {
+  const parts = inner.split(/\s+/);
+  const head = parts[0], rest = parts.slice(1).join(' ');
+  if (head.toLowerCase() === 'shieldcue') return shieldCueHtml() + (rest ? `<span class="ui-key-x">${esc(rest)}</span>` : '');
+  const { label, act, sem } = tokenLabel(inner, device, input);
+  const word = act && sem && INLINE_WORD.has(act) && !plain.toLowerCase().includes(String(ACTION_LABEL[act] ?? '').toLowerCase());
+  const html = glyphHtml(label, device, { action: act ?? undefined, label: word ? ACTION_LABEL[act] : null, ps: device === 'pad' && input?.padKind === 'ps' });
+  return `${html}${rest ? `<span class="ui-key-x">${esc(rest)}</span>` : ''}`;
 }
 
 /**
- * Tutorial / prompt text → HTML with device glyphs: `[Space]` becomes a keycap ("Space" / "A" / "Jump"), a bare ⚔
- * becomes the attack chip, `*x*` becomes emphasis. Everything else is escaped.
+ * Tutorial / prompt text → HTML with device glyphs (TT6 icons): `[Stand]` becomes a mouse with the right button lit
+ * plus "Shield" (a bumper on a pad, the Shield button on touch), `[Space]` a keycap, `[ShieldCue]` the pink shield the
+ * player sees over a foe, a bare ⚔ / 🛡 the attack / Shield glyph, `*x*` emphasis. Everything else is escaped.
  * @param {string} text @param {'kbm'|'pad'|'touch'} [device]
  */
 export function glyphify(text, device = 'kbm', input = null) {
   const str = String(text ?? '');
+  const plain = str.replace(/\[[^\]]+\]/g, ' ');
   let out = '', last = 0;
   const re = /\[([^\]]+)\]/g;
   let m;
+  let prev = null, prevEnd = -1;
   while ((m = re.exec(str))) {
-    out += plainGlyphs(str.slice(last, m.index), device, input);
-    out += tokenHtml(m[1].trim(), device, input);
-    last = m.index + m[0].length;
+    const gap = str.slice(last, m.index);
+    const html = tokenHtml(m[1].trim(), device, input, plain);
+    // "[Esc] or [P]" on a pad is the same button twice: show it once (TT6)
+    if (prev === html && prevEnd === last && /^\s*(?:or|\/)\s*$/.test(gap)) { last = m.index + m[0].length; prevEnd = last; continue; }
+    out += plainGlyphs(gap, device, input) + html;
+    prev = html; last = m.index + m[0].length; prevEnd = last;
   }
   out += plainGlyphs(str.slice(last), device, input);
   return out;
 }
 
+/** Text with `[tokens]` → plain words for text-only places ("Hold right mouse button to skip"). Pure. */
+export function glyphText(text, device = 'kbm', input = null) {
+  return String(text ?? '').replace(/\[([^\]]+)\]/g, (m, inner) => {
+    if (inner.trim().toLowerCase() === 'shieldcue') return 'the pink shield';
+    const { label, act } = tokenLabel(inner, device, input);
+    return act ? glyphWords(label, device, device === 'pad' && input?.padKind === 'ps') : inner;
+  }).replace(/⚔/g, () => actionWords('attack', device, input)).replace(/🛡/g, () => actionWords('guard', device, input));
+}
+
 function plainGlyphs(s, device, input) {
-  return rich(s).replace(/⚔/g, `<kbd class="ui-key ui-key--sword">${keyCapInner(actionGlyph('attack', device, input))}</kbd>`);
+  return rich(s).replace(/⚔/g, () => actionGlyphHtml('attack', device, input)).replace(/🛡/g, () => actionGlyphHtml('guard', device, input));
 }
 
 // ------------------------------------------------------------------ numbers

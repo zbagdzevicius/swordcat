@@ -539,7 +539,7 @@ test('TT3: lesson copy names the new keys (keyboard, pad, touch); no Right-click
   registerOnboardingStrings();
   assert.equal(t('tut.bonk'), 'Bonk it 3 times! [Attack]');
   assert.equal(t('tut.stand'), 'Hold [Stand] to block Sir Wobble!');
-  assert.equal(t('tut.parry'), 'Tap [Stand] when you see the shield!');
+  assert.equal(t('tut.parry'), 'Tap [Stand] when [ShieldCue] pops!');   // TT6: the pink shield over the foe
   assert.equal(t('tut.move'), 'Race Pearl to the dummy! [Move]');
   assert.equal(t('tut.jump'), 'Little fence? Hop it! [Jump]');
   for (const [k, v] of Object.entries(ONBOARDING_STRINGS)) assert.ok(!/right-click|\[Space\]|\[F\]|\[Q\]|\bCtrl\b|\bAlt\b|\bF1\b|or J\b/i.test(v), `${k}: "${v}"`);

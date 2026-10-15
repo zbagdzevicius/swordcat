@@ -26,18 +26,52 @@ export function heart(state = 'full') {
 }
 
 const SHIELD_PATH = 'M12 1.5 21.5 4.4V12c0 6.6-4.2 11.4-9.5 14.4C6.7 23.4 2.5 18.6 2.5 12V4.4Z';
-/** Grit pip: a small steel heater shield (§14.2). @param {'full'|'empty'|'cracked'} state */
+/** The paw-shield outline (24 × 28 box): the HUD icon, the touch button, the input glyph and the in-world bubble share it. */
+export const PAW_SHIELD_PATH = SHIELD_PATH;
+/** Paw-shield colours (Pink Paw pink, a deep-pink ribbon rim, a cream paw; gold while the parry window is open). */
+export const PAW_SHIELD = Object.freeze({ hi: '#FFC4D4', fill: '#FF8FB1', rim: '#C2457A', paw: '#FFF6EC', gold: '#F2B53A', grey: '#C9C2C6', greyRim: '#6E6468', ink: '#5A2232' });
+/** Paw print parts inside the shield box: [pad cx, cy, rx, ry] and the four toes [cx, cy, r]. */
+const PS_PAD = [12, 16.6, 3.5, 2.9];
+const PS_TOES = [[8.2, 12.4, 1.45], [10.6, 10.3, 1.5], [13.4, 10.3, 1.5], [15.8, 12.4, 1.45]];
+/** The Shield states (shieldLook / the HUD): ready, active (held), parry (window open), lockout, broken; `cracks` 0..2. */
+export const SHIELD_STATES = Object.freeze(['ready', 'active', 'parry', 'lockout', 'broken']);
+
+/**
+ * The Pink Paw shield (TT6): a pink heater shield with a cream paw print and a deep-pink ribbon rim. One shape for the
+ * touch button, the ability-bar slot, the Grit pips, the input glyph and the in-world bubble (fx/ShieldBubble.js), so
+ * "[icon] to shield" points at something the player sees. `state`: 'ready' | 'active' (a soft halo) | 'parry' (gold
+ * rim) | 'lockout' / 'broken' (grey); `cracks` 1..2 draws Grit lost.
+ * @param {string} [state] @param {{ cracks?: number, cls?: string }} [o]
+ */
+export function pawShield(state = 'ready', o = {}) {
+  const g = uid('ps'), C = PAW_SHIELD;
+  const grey = state === 'lockout' || state === 'broken';
+  const rim = state === 'parry' ? C.gold : grey ? C.greyRim : C.rim;
+  const halo = state === 'active' || state === 'parry'
+    ? `<path d="${SHIELD_PATH}" fill="none" stroke="${state === 'parry' ? C.gold : C.fill}" stroke-width="5" stroke-linejoin="round" opacity=".45"/>` : '';
+  const fill = grey ? C.grey : `url(#${g})`;
+  const cracks = Math.max(0, Math.min(2, o.cracks | 0)) + (state === 'broken' ? 2 : 0);
+  let crack = '';
+  if (cracks >= 1) crack += `<path d="M12 3.2 10.4 8.2 13 10.6 11 15" fill="none" stroke="${C.ink}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity=".75"/>`;
+  if (cracks >= 2) crack += `<path d="M19.6 6.5 16.4 9.8 17.6 13.4 14.6 18.5" fill="none" stroke="${C.ink}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity=".75"/>`;
+  return `<svg class="ico-shield ico-pawshield${o.cls ? ` ${o.cls}` : ''}" viewBox="0 0 24 28" aria-hidden="true" data-state="${state}">`
+    + `<defs><linearGradient id="${g}" x1="0" y1="0" x2=".4" y2="1"><stop offset="0" stop-color="${C.hi}"/><stop offset="1" stop-color="${C.fill}"/></linearGradient></defs>`
+    + halo
+    + `<path d="${SHIELD_PATH}" fill="${fill}" stroke="${rim}" stroke-width="${state === 'parry' ? 2.2 : 1.7}" stroke-linejoin="round"/>`
+    + `<path d="M12 4.2 19.2 6.4V12c0 5-3.1 8.7-7.2 11.1C7.9 20.7 4.8 17 4.8 12V6.4Z" fill="none" stroke="#FFFFFF" stroke-width="1" stroke-linejoin="round" opacity="${grey ? '.35' : '.6'}"/>`
+    + `<g fill="${grey ? '#EEE8EA' : C.paw}" stroke="${grey ? C.greyRim : C.rim}" stroke-width=".7">`
+    + `<ellipse cx="${PS_PAD[0]}" cy="${PS_PAD[1]}" rx="${PS_PAD[2]}" ry="${PS_PAD[3]}"/>`
+    + PS_TOES.map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}"/>`).join('')
+    + `</g>${crack}</svg>`;
+}
+
+/** Grit pip: a small paw shield (§14.2; TT6 pink like the Shield). @param {'full'|'empty'|'cracked'} state */
 export function gritShield(state = 'full') {
-  const g = uid('gs');
   if (state === 'empty' || state === 'cracked') {
-    const crack = state === 'cracked' ? '<path d="M12 3 10 9.5 13.5 12 10.5 17.5 12.5 25" fill="none" stroke="#2A2E35" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' : '';
-    return `<svg class="ico-grit" viewBox="0 0 24 28" aria-hidden="true"><path d="${SHIELD_PATH}" fill="#3A2A1F" fill-opacity="${state === 'cracked' ? '.55' : '.35'}" stroke="#4E535A" stroke-width="1.6" stroke-linejoin="round"/>${crack}</svg>`;
+    const crack = state === 'cracked' ? `<path d="M12 3 10 9.5 13.5 12 10.5 17.5 12.5 25" fill="none" stroke="${PAW_SHIELD.ink}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` : '';
+    return `<svg class="ico-grit" viewBox="0 0 24 28" aria-hidden="true"><path d="${SHIELD_PATH}" fill="#3A2A1F" fill-opacity="${state === 'cracked' ? '.55' : '.35'}" stroke="${PAW_SHIELD.greyRim}" stroke-width="1.6" stroke-linejoin="round"/>${crack}</svg>`;
   }
-  return `<svg class="ico-grit" viewBox="0 0 24 28" aria-hidden="true"><defs><linearGradient id="${g}" x1="0" y1="0" x2="1" y2="1">`
-    + '<stop offset="0" stop-color="#F4F6F9"/><stop offset=".55" stop-color="#B7BEC8"/><stop offset="1" stop-color="#7C838E"/></linearGradient></defs>'
-    + `<path d="${SHIELD_PATH}" fill="url(#${g})" stroke="#4E535A" stroke-width="1.6" stroke-linejoin="round"/>`
-    + '<path d="M12 4.5V23.5M5 11h14" stroke="#D9B26A" stroke-width="1.8" stroke-linecap="round" opacity=".9"/>'
-    + '<path d="M6 6.4 9.5 5.3" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity=".8"/></svg>';
+  return pawShield('ready', { cls: 'ico-grit' }).replace('class="ico-shield ico-pawshield ico-grit"', 'class="ico-grit ico-pawshield"');
 }
 
 /** Brand palette for the currency and snack icons (mint leaves; the Token Tails catnip's lilac flower spike). */
@@ -196,13 +230,8 @@ export function sword(color = '#E7EAEE') {
     + `<path d="M11 21 5.5 26.5" stroke="#6B4429" stroke-width="3.2" stroke-linecap="round"/><circle cx="4.6" cy="27.4" r="2.2" fill="${GOLD}" stroke="${INK}" stroke-width="1.2"/></svg>`;
 }
 
-/** Shield (touch Stand button). */
-export function shield() {
-  const g = uid('sh');
-  return `<svg class="ico-shield" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="${g}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F4F6F9"/><stop offset="1" stop-color="#8E949E"/></linearGradient></defs>`
-    + `<path d="M16 2.5 27.5 6v9c0 7.4-5 12.6-11.5 15C9.5 27.6 4.5 22.4 4.5 15V6Z" fill="url(#${g})" stroke="${INK}" stroke-width="1.8" stroke-linejoin="round"/>`
-    + `<path d="M16 6.5v19M9 13.5h14" stroke="${PINK_DEEP}" stroke-width="2.4" stroke-linecap="round"/></svg>`;
-}
+/** Shield (touch Shield button, ability bar): the Pink Paw shield (TT6). */
+export function shield(state = 'ready', o = {}) { return pawShield(state, o); }
 
 /** Cape (cape unlock toast). */
 export function cape(color = '#FFF3E2', hem = GOLD) {

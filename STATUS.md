@@ -68,6 +68,10 @@ mouse keys (13 actions; a used key swaps; Ctrl, Alt, Meta, F-keys and Esc are re
 | Stop | H | — | — |
 | Pause; hold to skip cutscenes | Esc or P | Start | ❚❚ |
 
+The table uses short code names (RMB, LB). Players never see them: since TT6 every prompt, the ability bar, the
+Controls card and the touch buttons draw input icons (a mouse with the right button lit, keycaps, pad buttons, the real
+touch button icons) for the device in use, with plain words for screen readers. See "TT6" at the end.
+
 Shift is the Tumble key on purpose (§11.7 #6): on Windows, five quick Shift presses can open the Sticky Keys dialog, so
 K and the back mouse button Tumble too, and the controls card says so.
 
@@ -509,3 +513,31 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
 - **Tests.** `npm run test:unit` 1219. Smoke `treat:link`, `treat:panel` and `shelter:*` pass, with every write to
   tokentails.com mocked or blocked. No real treat was sent.
 - **Open.** See §12.7 in the plan.
+
+## TT6: input icons and a visible shield (2026-10-16)
+- **Why.** The founder could not read "RMB", and "Tap RMB when you see the shield" pointed at a shield nobody could see.
+- **Input icons.** `src/ui/inputGlyph.js` draws every input for the device in use (`input.device`, the last one used):
+  a mouse with the left or right button lit, keycaps, a WASD cluster, Xbox face buttons in colour (PlayStation shapes
+  and L1 / R1 when `Gamepad.id` says so), bumpers, triggers, sticks and the D-pad, and on touch the real on-screen
+  button icons and gesture icons. Each icon has `role="img"`, an aria-label and a title in plain words ("Right mouse
+  button"), and `data-glyph` for tests. `glyphify` (`[Stand]`) and the bar, Controls card, prompts, riposte chip,
+  kitten key, interact tag, ghost-paw demo, skip ring and loading tips all use it. Bindings did not change.
+- **Plain labels.** The Controls card says Shield, Roll, Use and Kitten power. Rebind messages say "Right mouse button"
+  and "Control + W". The touch buttons have aria-labels.
+- **Controls card.** The device in use comes first. On touch the preset row, "Click a key", the Sticky Keys tip and
+  "Reset keys" are hidden. Fixed: no rows at 844 x 390, and keycaps spilling out of cells at 390 x 844.
+- **The Pink Paw shield.** One shape (`icons.pawShield`): a pink heater shield with a cream paw. While Clem guards it
+  floats in front of her inside a soft pink bubble (`src/fx/ShieldBubble.js`): it pops in, goes gold while the parry
+  window is open, ripples on a block, cracks per Grit lost, greys on a whiffed tap and bursts into pink hearts on a
+  break. Sounds (zzfx): a bloop up, a boing on a block, a chime on a parry, a pop on a break. The bar slot, the touch
+  button and the Grit pips show the same shield and its state (ready, active, parry, lockout, broken). There is no
+  cooldown; the 0.3 s lockout and a broken guard are the "not ready" states.
+- **Parry cue.** A parry-able wind-up now shows the pink shield over the foe's head (it replaces the white "!"). It pops
+  big and gold at the "ting", 0.25 s before the strike. The lesson says "Tap [mouse] Shield when [pink shield] pops!".
+- **Tests.** `tests/unit/glyphs.test.js` (7). Smoke `glyphs:shield` (the shield shows while guarding, icons per device,
+  the parry cue, the touch Controls card at 1280 x 720, 844 x 390 and 390 x 844). The `ui` and `controls` smoke blocks
+  check `data-glyph` instead of "RMB".
+- **Cost.** The shield adds 2 draws while guarding (shield and bubble are sprites) and one shader program (the fog-off
+  sprite, warmed under the veil). `perf:programs` low is now 29 / 30 in the meadow and 30 / 30 at the gate.
+- **Not changed.** The objective line under Pearl's bubble
+  is still hidden on phones during the parry lesson (Pearl's line names the pink shield instead).

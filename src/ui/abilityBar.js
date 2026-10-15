@@ -14,14 +14,14 @@
 import { E } from '../core/events.js';
 import { SIGNATURE } from '../characters/palette.js';
 import { el, flag, setVar, setText, pulse } from './dom.js';
-import { tx, actionGlyph, codeLabel, preferredCode } from './text.js';
+import { tx, actionGlyph, codeLabel, preferredCode, glyphHtml, glyphWords, ACTION_LABEL } from './text.js';
 import { portraitSVG } from './portraits.js';
 import { companionJoined } from './reveal.js';
 import * as I from './icons.js';
 
 /** Slot rows: action, icon, divider before. */
 const SLOTS = [
-  { id: 'guard', icon: () => I.shield(), tip: 'bar.guard' },
+  { id: 'guard', icon: () => I.pawShield('ready'), tip: 'bar.guard' },
   { id: 'dodge', icon: () => I.tumble(), tip: 'bar.dodge' },
   { id: 'jump', icon: () => I.jump(), tip: 'bar.jump' },
   { id: 'ability', icon: () => '', tip: 'bar.ability' },
@@ -58,6 +58,29 @@ export function slotGlyph(input, action) {
   if (dev === 'pad') return actionGlyph(action, 'pad');
   const key = preferredCode(action, input?.codesFor?.(action) ?? []);
   return key ? codeLabel(key) : actionGlyph(action, 'kbm');
+}
+
+/** TT6: the slot's corner glyph as an icon (a mouse with the right button lit, a pad bumper, a keycap letter). */
+export function slotGlyphHtml(input, action) {
+  const dev = input?.device === 'pad' ? 'pad' : 'kbm';
+  return glyphHtml(slotGlyph(input, action), dev, { ps: dev === 'pad' && input?.padKind === 'ps' });
+}
+
+/** TT6: plain words for the slot's input ("Right mouse button"), for aria labels. */
+export function slotGlyphWords(input, action) {
+  const dev = input?.device === 'pad' ? 'pad' : 'kbm';
+  return glyphWords(slotGlyph(input, action), dev, dev === 'pad' && input?.padKind === 'ps');
+}
+
+/**
+ * TT6 the Shield slot's look: 'ready' | 'active' (held) | 'parry' (the parry window is open) | 'lockout' (a whiffed
+ * tap, 0.3 s) | 'broken' (no Grit); `cracks` = Grit lost (0..2). Pure on abilityState.
+ * @param {{ guard?: boolean, parryOpen?: boolean, lockout?: boolean, grit?: number, gritMax?: number }} s
+ */
+export function shieldSlotState(s) {
+  const max = s?.gritMax ?? 3, g = Math.max(0, s?.grit ?? max);
+  const state = g <= 0 ? 'broken' : s?.lockout ? 'lockout' : s?.guard ? (s.parryOpen ? 'parry' : 'active') : 'ready';
+  return { state, cracks: Math.max(0, Math.min(2, max - g)) };
 }
 
 /**
@@ -141,10 +164,10 @@ export class AbilityBar {
     this._tipId = id;
     const raw = tx(this.ctx, key), i = raw.indexOf(' · ');
     const head = i > 0 ? raw.slice(0, i) : raw, body = i > 0 ? raw.slice(i + 3) : '';
-    const key2 = slotGlyph(this.ctx.input, id);
+    const key2 = slotGlyphHtml(this.ctx.input, id);
     this.tip.innerHTML = '';
     el('b', 'ab-tip-h', { parent: this.tip, text: head });
-    if (key2) el('kbd', 'ui-key', { parent: this.tip, text: key2 });
+    if (key2) el('span', 'ab-tip-k', { parent: this.tip, html: key2 });
     if (body) el('span', 'ab-tip-b', { parent: this.tip, text: body });
     const sl = this.slots.get(id).el;
     setVar(this.tip, '--x', `${sl.offsetLeft + sl.offsetWidth / 2}px`);
@@ -201,6 +224,14 @@ export class AbilityBar {
     if (this._keysDue) this._keyT = 0.5;
     const gd = this._set('guard', 0, 0);
     flag(gd, 'is-active', !!s.guard); flag(gd, 'is-broken', (s.grit ?? 1) <= 0); flag(gd, 'is-holy', !!s.holyReady);
+    // TT6: the Shield icon shows its state (the same paw shield Clem holds up in the world)
+    const ss = shieldSlotState(s), sk = `${ss.state}|${ss.cracks}`;
+    if (this._shieldK !== sk) {
+      this._shieldK = sk;
+      this.slots.get('guard').ico.innerHTML = I.pawShield(ss.state, { cracks: ss.cracks });
+      gd.dataset.shield = ss.state;
+      flag(gd, 'is-parry', ss.state === 'parry'); flag(gd, 'is-lockout', ss.state === 'lockout');
+    }
     this._set('dodge', s.dodgeCd, s.dodgeMax);
     this._set('jump', 0, 0);
     this._set('meow', s.meowCd, s.meowMax);
@@ -283,10 +314,10 @@ export class AbilityBar {
     if (!id) return;
     this._tipId = 'trick';
     const head = tr.text(`trick.${id}.name`), body = String(tr.text(`trick.${id}.hint`)).replace(/\[[A-Za-z]+\]\s*/g, '');
-    const key2 = slotGlyph(this.ctx.input, 'trick');
+    const key2 = slotGlyphHtml(this.ctx.input, 'trick');
     this.tip.innerHTML = '';
     el('b', 'ab-tip-h', { parent: this.tip, text: head });
-    if (key2) el('kbd', 'ui-key', { parent: this.tip, text: key2 });
+    if (key2) el('span', 'ab-tip-k', { parent: this.tip, html: key2 });
     el('span', 'ab-tip-b', { parent: this.tip, text: body });
     const sl = this.trickSlot.el;
     setVar(this.tip, '--x', `${sl.offsetLeft + sl.offsetWidth / 2}px`);
@@ -313,7 +344,14 @@ export class AbilityBar {
     sl.lastCd = on ? cd : 0;
     const n = cd >= 1 ? Math.ceil(cd) : 0;                       // the label on whole seconds only
     if (sl.n !== n) { sl.n = n; setText(sl.num, n ? String(n) : ''); }
-    if (this._keysDue) setText(sl.key, slotGlyph(this.ctx.input, id));   // key glyphs re-read at 2 Hz (no per-frame strings)
+    if (this._keysDue) {                                         // key glyphs re-read at 2 Hz (no per-frame strings)
+      const k = `${this.ctx.input?.device}|${this.ctx.input?.padKind}|${slotGlyph(this.ctx.input, id)}`;
+      if (sl.keyK !== k) {
+        sl.keyK = k;
+        sl.key.innerHTML = slotGlyphHtml(this.ctx.input, id);
+        sl.el.setAttribute?.('aria-label', `${ACTION_LABEL[id] ?? id}: ${slotGlyphWords(this.ctx.input, id)}`);
+      }
+    }
     return sl.el;
   }
 

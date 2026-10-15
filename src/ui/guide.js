@@ -15,7 +15,7 @@
 // The bubble is `pointer-events: none` and never a SafeFrame occluder. Old prompts (no `speaker`) keep prompts.js's card.
 import * as THREE from 'three';
 import { el, flag, setText, setHtml, setVar, place, pulse } from './dom.js';
-import { tx, txt, glyphify, actionGlyph } from './text.js';
+import { tx, txt, glyphify, actionGlyphHtml } from './text.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 
@@ -88,7 +88,7 @@ export class Guide {
     this.tickEl.innerHTML = I.tick();
     this.dotsEl = this.root.querySelector('.gd-dots');
     this.dotEls = [];
-    this.paw = el('div', 'ui-ghostpaw', { parent, html: `<div class="gp-ring"></div><div class="gp-hand">${I.ghostPaw()}</div><kbd class="ui-key gp-key"></kbd>` });
+    this.paw = el('div', 'ui-ghostpaw', { parent, html: `<div class="gp-ring"></div><div class="gp-hand">${I.ghostPaw()}</div><span class="gp-key"></span>` });
     this.pawKey = this.paw.querySelector('.gp-key');
     this.model = new GuideModel();
     this.open = false;
@@ -218,7 +218,7 @@ export class Guide {
       flag(this.paw, 'is-hold', demo === 'hold');
       flag(this.paw, 'is-swipe', demo === 'swipe');
       flag(this.paw, 'is-key', kbm);
-      setText(this.pawKey, kbm && p.action ? actionGlyph(p.action === 'chargeRelease' ? 'attack' : p.action, this.device, this.ctx.input) : '');
+      setHtml(this.pawKey, kbm && p.action ? actionGlyphHtml(p.action === 'chargeRelease' ? 'attack' : p.action, this.device, this.ctx.input) : '');
       flag(this.paw, 'is-on', true);
       pulse(this.paw, 'is-play');
       try { this.ctx.audio?.play2D?.('ghostPawPip'); } catch { /* audio optional */ }

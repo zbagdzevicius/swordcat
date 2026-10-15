@@ -44,7 +44,7 @@ export function treatView(card, state, { embedded }) {
     return { ...base, phase: 'link', message: T.linkNote, links: [{ href: giveHref(name), label: T.link }] };
   }
   switch (card?.phase) {
-    case 'sending': return { ...base, phase: 'sending', message: T.sending, button: { id: 'send', label: T.sending, disabled: true } };
+    case 'sending': return { ...base, phase: 'sending', message: null, button: { id: 'send', label: T.sending, disabled: true } };
     case 'sent': {
       const links = [];
       if (card.explorerUrl) links.push({ href: card.explorerUrl, label: T.explorer });

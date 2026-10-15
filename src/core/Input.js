@@ -579,7 +579,7 @@ export class Input {
     }, { passive: !this.iso });
     on(window, 'auxclick', (e) => { if (e.button === 1 || e.button === 3 || e.button === 4) e.preventDefault(); });
     on(document, 'pointerlockchange', () => this._onPointerLockChange(document.pointerLockElement === canvas));
-    on(window, 'touchstart', () => { this._touchT = nowMs(); this.setDevice('touch'); }, { passive: true });
+    on(window, 'touchstart', () => this.noteTouch(), { passive: true });
     on(window, 'gamepadconnected', () => { this.padConnected = true; this._padLive = true; });
     on(window, 'gamepaddisconnected', () => this.releaseAll());
   }
@@ -615,6 +615,9 @@ export class Input {
     this._listeners.length = 0;
     if (typeof document !== 'undefined' && document.pointerLockElement === this.canvas) document.exitPointerLock?.();
   }
+
+  /** A touch began (on window, or on a DOM layer that stops propagation, such as the shelter card). */
+  noteTouch() { this._touchT = nowMs(); this.setDevice('touch'); }
 
   /**
    * Track the mouse (CSS px): ndc relative to the canvas, travel and speed. §6.1: speed is the NET displacement over

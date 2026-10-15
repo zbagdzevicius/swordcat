@@ -97,6 +97,9 @@ export class ShelterCard {
     this.contBtn = root.querySelector('.sh-continue');
     // the game must not read these taps as world clicks (or celebrate skips)
     for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'touchstart', 'click', 'wheel']) root.addEventListener(ev, (e) => e.stopPropagation(), { passive: ev !== 'click' });
+    // A tap on the card never reaches window's touchstart, so stamp the touch here too. Otherwise the compatibility
+    // mousemove after the tap flips the HUD to keyboard hints.
+    root.addEventListener('touchstart', () => this.ctx.input?.noteTouch?.(), { passive: true });
     this.contBtn.addEventListener('click', () => this.close());
     this.actionsEl.addEventListener('shelter:actions-changed', () => this._rebuildNav());
     // One action per press: Enter on a focused button or link already clicks it natively (a real user gesture, so a

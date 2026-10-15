@@ -63,8 +63,10 @@ test('treat: every panel state renders with both lines; buttons only where they 
     assert.equal(v.phase, k, k);
     assert.equal(v.free, TREAT_COPY.free, `${k} free line`); assert.equal(v.custody, TREAT_COPY.custody, `${k} custody line`);
   }
-  assert.equal(views.open.button.label, 'Send Judas a treat');
+  assert.equal(views.open.button.label, 'Send Pink Paw a treat for Judas');
   assert.equal(views.sending.button.disabled, true);
+  assert.equal(views.sending.message, null, 'sending shows once, on the button only');
+  assert.equal(views.sending.button.label, TREAT_COPY.sending);
   assert.equal(views.sent.button, null);
   assert.equal(views.sent.message, 'Treat sent! 0.01 USDC is on its way to Pink Paw (Rožinė pėdutė).');
   assert.deepEqual(views.sent.links.map((l) => l.label), ['View on explorer', 'Receipt']);
@@ -189,7 +191,7 @@ test('treat: installTreatPanel wires the card events and the bridge end to end (
   bus.emit(EV_CARD_OPEN, { slot: 'pickles', kind: 'lost', cat: JUDAS, actionsEl });
   const panel = actionsEl.children[0];
   assert.equal(panel.dataset.treatPhase, 'open');
-  assert.match(text(panel), /Send Judas a treat/);
+  assert.match(text(panel), /Send Pink Paw a treat for Judas/);
   assert.match(text(panel), /It is free for you\./); assert.match(text(panel), /until handover\./);
   find(panel, (n) => n.dataset.treat === 'send').listeners.click({ stopPropagation() {} });
   const req = parent.sent.at(-1);

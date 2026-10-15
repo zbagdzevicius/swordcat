@@ -93,7 +93,7 @@ export default [
           // open → Enter sends → sent
           t.assert(await openFakeCard(frame) === 'open', `[${vp.tag}] the card opens on the open state`);
           const txt = await panelText(frame);
-          t.assert(/Send Judas a treat/.test(txt) && /It is free for you\./.test(txt) && /until handover\./.test(txt), `[${vp.tag}] open: button, free line, custody line`);
+          t.assert(/Send Pink Paw a treat for Judas/.test(txt) && /It is free for you\./.test(txt) && /until handover\./.test(txt), `[${vp.tag}] open: button, free line, custody line`);
           t.assert(!/adopt/i.test(txt), `[${vp.tag}] no "adopt"`);
           await shoot(t, page, `${vp.tag}-1-open`);
           await page.evaluate(() => { window.__reply = { kind: 'sent', amountLabel: '0.01 USDC', explorerUrl: 'https://explorer.arc.io/tx/0xfeed', receiptPath: '/shelter-payouts/receipt?chain=5042&tx=0xfeed' }; });

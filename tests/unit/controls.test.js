@@ -362,3 +362,11 @@ test('TT3 Input + rebinding: a rebound Stand drives `guard`; the old key no long
   inp._keyDown(key('KeyQ'));
   assert.ok(inp.down('guard'), 'Q still stands');
 });
+
+test('TT4 fix: a touch noted by the shelter card keeps the device on touch through the compatibility mousemove', () => {
+  const st = { settings: { controlPreset: 'hybrid', bindings: {} } };
+  const inp = new Input({ state: st, params: {}, bus: { emit() {}, on: () => () => {} } });
+  inp.noteTouch();
+  assert.equal(inp.device, 'touch');
+  assert.ok(inp._touchT > -Infinity, 'the touch time is stamped, so window mousemove skips _pointerAt for 800 ms');
+});

@@ -32,6 +32,7 @@ import { lineText } from './lines.js';
 import { COMPANION_IDS, SERVICE_IDS, SERVICE_FLAGS, SERVICE_SCENES, groundY, lodOrigin } from './steering.js';
 import { buildRopePost, buildRope, buildCarrier } from './dressing.js';
 import { CRACKED_LOCKS, TIPPED_CARTS } from './rescues.js';
+import { emitCatSaved } from '../shelter/roster.js';
 
 export const HIDES = Object.freeze(['meow', 'cage', 'stand', 'break', 'climb']);
 
@@ -576,6 +577,7 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
     const at = (this.cage ? this.home : this.pos).clone();
     if (this.cage) at.y += this.perchY > 0 ? this.perchY : 0;
     this.ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: this.kittenId, position: at });
+    emitCatSaved(this.ctx, this.kittenId, 'lost');                // TT4 §12.3: once per save (the rescued guard above)
     this.visual?.setExpression('happy');
     const line = lineText(this.ctx, 'kitten.' + this.kittenId);
     this.bubble.show(line, RESCUE.leaveAfter + REUNION.boop + 0.6);
@@ -654,7 +656,11 @@ export class LostKitten extends ScriptedActorMixin(Actor) {
       if (this.serviceDone) return;
       this.serviceDone = true;
       const st = this.ctx.state;
-      if (flag && st && !st.getFlag?.(flag)) this.ctx.story?.flag ? this.ctx.story.flag(flag, true) : st.setFlag?.(flag, true);
+      if (flag && st && !st.getFlag?.(flag)) {
+        if (this.ctx.story?.flag) this.ctx.story.flag(flag, true);
+        else { st.setFlag?.(flag, true); this.ctx.bus.emit(E.FLAG_SET, { key: flag, value: true }); }   // TT4: listeners hear the no-story path too
+      }
+      emitCatSaved(this.ctx, id, 'service');                     // TT4 §12.3: once per save (the serviceDone guard), after the scene
       if (this.opts.stay) { this.stateName = 'stay'; return; }
       this.stateName = 'rescued'; this.leaveT = RESCUE.leaveAfter - 0.6;
     };

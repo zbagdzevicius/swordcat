@@ -171,7 +171,7 @@ async function screens(t, w, h) {
   await reset(t);
 }
 
-/** The kitten rescue card shows the fictional bio (`.kit-bio`) inside its line for a Pink Paw-named kitten, none otherwise. */
+/** TT4 §12.1 item 5: a real Pink Paw cat fills every slot, so the kitten rescue card never shows a made-up bio (`.kit-bio`). */
 async function rescueBio(t) {
   const card = (id) => inPage(t, (kid) => new Promise((done) => {
     const g = window.__GAME__, t0 = performance.now();
@@ -183,7 +183,7 @@ async function rescueBio(t) {
       // TT4: and only once the card on screen is THIS kitten's (`_start` filled it): a leftover card's line was read
       // as "shown" before the muffin card started (a race under load: bio null)
       const cel = g.ctx.ui.celebrations, mine = cel?.lastStarted?.vars?.kitten === kid && cel?.q?.cur === cel.lastStarted;
-      const txt = line?.textContent ?? '', shown = !!c && mine && txt.length > 0 && (kid !== 'biscuit' || !/Raudvis/.test(txt));
+      const txt = line?.textContent ?? '', shown = !!c && mine && txt.length > 0;
       if (shown || performance.now() - t0 > 4000) return done({ shown, lineOn: !!line?.classList.contains('is-on'), bio: line?.querySelector('.kit-bio')?.textContent ?? null });
       requestAnimationFrame(tick);
     };
@@ -191,11 +191,11 @@ async function rescueBio(t) {
   }), id);
   const a = await card('muffin');
   t.log(`rescue card muffin: ${JSON.stringify(a)}`);
-  t.assert(a.shown && a.lineOn && /Raudvis/.test(a.bio ?? '') && /Bell Tower/.test(a.bio ?? ''), `rescue card: Raudvis bio inside the line (${a.bio})`);
+  t.assert(a.shown && a.lineOn && a.bio == null, `rescue card: no made-up bio next to a real cat (${a.bio})`);
   await shot(t, 'rescue-bio-1280x720');
   await t.wait(400);
   const b = await card('biscuit');
-  t.assert(b.shown && b.bio == null, `rescue card: no bio for a kitten without one (${b.bio})`);
+  t.assert(b.shown && b.bio == null, `rescue card: no bio for biscuit either (${b.bio})`);
   await inPage(t, () => { const c = window.__GAME__.ctx.ui.celebrations; c?.q?.clear?.(); c?._end?.(); });
 }
 

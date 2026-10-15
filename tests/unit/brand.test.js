@@ -169,12 +169,12 @@ test('§10.10 item 10: banned words over strings.js, text.js, LICENSES.md, index
 });
 
 test('§10.5 credits: the Pink Paw lines exactly, one source, a new-tab link, the fiction note', () => {
-  assert.equal(strings.t('credits.pinkpaw'), 'Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.');
+  assert.equal(strings.t('credits.pinkpaw'), 'The kittens you save carry the names and photos of real cats at Pink Paw (Rožinė pėdutė) in Kaunas. Their adventures here are made up.');
   assert.equal(strings.t('credits.pinkpaw.about'), "Pink Paw (Rožinė pėdutė) is a real cat shelter in Lithuania and Token Tails' partner shelter. Meet its cats at tokentails.com.");
   assert.equal(strings.t('credits.fiction'), 'The Pink Paw Rescue House, Pawsbury and Purrhaven Isle are made up.');
   // one source: text.js reads the Pink Paw line from strings.js (no second copy of the sentence)
   assert.equal(UI_STRINGS['credits.pinkpaw'], strings.t('credits.pinkpaw'));
-  assert.ok(!read('src/ui/text.js').includes('Four kittens here share'), 'no duplicated literal in text.js');
+  assert.ok(!read('src/ui/text.js').includes('The kittens you save carry'), 'no duplicated literal in text.js');
   const ctx = ctxS();
   const top = creditsTopHtml(ctx), pp = creditsPinkPawHtml(ctx);
   assert.ok(top.includes('cr-team') && top.includes('cr-pinkpaw'));
@@ -315,7 +315,7 @@ test('§10.10 item 10: no Pink Paw logo, shelter art or promo card art anywhere 
       if (SKIP.has(e.name)) continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { walk(p); continue; }
-      if (/shelters?[\\/]|pink-?paw\.(webp|png|jpe?g|svg)$|cat-promo/i.test(path.relative(ROOT, p))) bad.push(path.relative(ROOT, p));
+      if (/shelters?[\\/].*\.(webp|png|jpe?g|gif|svg)$|pink-?paw\.(webp|png|jpe?g|svg)$|cat-promo/i.test(path.relative(ROOT, p))) bad.push(path.relative(ROOT, p));   // TT4: src/shelter/ is code; public/pink-paw/ = licensed cat photos
       else if (forbidden.size && /\.(webp|png|jpe?g|gif|svg)$/i.test(e.name) && forbidden.has(hash(p))) bad.push(path.relative(ROOT, p));
     }
   };

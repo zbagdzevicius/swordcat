@@ -126,6 +126,11 @@ export const E = Object.freeze({
   // ---- Phase TT3: Paw Tricks (TOKENTAILS-PLAN §11.4; additive) ----
   TRICK_UNLOCKED: 'trick:unlocked',         // { id: 'coin'|'twirl'|'cloud', bark }  bark false = a quiet catch-up on load (no hint)
   TRICK_USED: 'trick:used',                 // { id }  a Paw Trick fired
+
+  // ---- Phase TT4: real shelter cats and treats (TOKENTAILS-PLAN §12; additive) ----
+  CAT_SAVED: 'cat:saved',                   // { slot, kind: 'lost'|'squire'|'service', catId?, catName? }  once per save (lost, squire after its join, service after its scene)
+  SHELTER_CARD_OPEN: 'shelter:card-open',   // { slot, kind, cat: { id, name, status, photo, art }|null, actionsEl, alreadySaved }  the rescued cat card opened (T mounts the treat panel in actionsEl)
+  SHELTER_CARD_CLOSE: 'shelter:card-close', // { slot }  the card closed (Continue)
 });
 
 /** Every known event string (EventBus warns on unknown names). */

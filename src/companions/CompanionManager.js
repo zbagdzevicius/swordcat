@@ -49,6 +49,7 @@ import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } f
 import { AbilityIndicator } from './AbilityIndicator.js';
 import { setBubbleSafeInsets } from './Bubble.js';
 import { PartyLife } from './party.js';
+import { emitCatSaved } from '../shelter/roster.js';
 
 const _slot = { x: 0, z: 0 };
 const _ex = { x: 0, z: 0, mag: 0, source: '' };
@@ -207,6 +208,7 @@ export class CompanionManager {
     const st = this.ctx.state;
     const fresh = !!st && !st.companions.unlocked.includes(id);
     if (st && fresh) st.companions.unlocked.push(id);
+    if (fresh) emitCatSaved(this.ctx, id, 'squire');            // TT4 §12.3: once per squire, after its join scene
     const caged = at ?? this.actors.find((a) => a instanceof LostKitten && a.kittenId === id) ?? null;
     if (this.active.some((c) => c.kittenId === id)) { if (caged && this.actors.includes(caged)) this.despawn(caged); return true; }
     // a squire who just joined takes the slot (§5.4 D-02 / D-04: the newcomer fights beside her; the one swapped out

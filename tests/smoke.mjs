@@ -99,6 +99,20 @@ fs.mkdirSync(SHOTS, { recursive: true });
 // embed blocks frame the game from a page.route()-served host page (http://localhost:3000); Chromium's Local Network
 // Access checks would block that routed (treated as public) page from framing the local game server
 const browser = await chromium.launch({ headless: !ARGS.includes('--headed'), args: [...GPU_ARGS, '--disable-features=LocalNetworkAccessChecks'] });
+// TT4 safety net: a smoke run must never send a real treat. Every non-GET request to a tokentails.com host is aborted
+// unless a block's own route answered it first (block routes are registered later, so they run first).
+let blockedPosts = 0;
+const guardWrites = (target) => target.route(/^https?:\/\/([a-z0-9-]+\.)*tokentails\.com\//i, (route) => {
+  const m = route.request().method();
+  if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return route.fallback();
+  blockedPosts++;
+  console.warn(`[smoke] blocked ${m} ${route.request().url()}`);
+  return route.abort('blockedbyclient');
+});
+for (const name of ['newContext', 'newPage']) {
+  const orig = browser[name].bind(browser);
+  browser[name] = async (...a) => { const t = await orig(...a); await guardWrites(t); return t; };
+}
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => fail(`pageerror: ${e.message}`));
 page.on('console', (m) => {
@@ -314,5 +328,6 @@ try {
 await browser.close();
 if (server) await new Promise((r) => server.httpServer.close(r));
 console.log(`(${((Date.now() - t0) / 1000).toFixed(1)}s, screenshots in tests/shots/)`);
+console.log(`[smoke] write requests to tokentails.com blocked by the safety net: ${blockedPosts}`);
 if (errors.length) { console.error('SMOKE FAIL\n' + errors.join('\n')); process.exit(1); }
 console.log('SMOKE OK');

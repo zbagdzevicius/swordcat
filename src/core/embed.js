@@ -8,6 +8,10 @@
 //   host → game: hello (→ ready), session { signedIn } (stored only, never a token), audio { muted }, pause, resume
 //   game → host: ready { version }, level-complete { levelId, time, kittens, catnip, lives, rank },
 //                kitten-rescued { kittenId }, paused { paused }
+// TT4 §12.2 (additive): game → host cat-saved { slot, kind, catId?, catName? }, treat-request { requestId, slot, catId?,
+//   catName }; host → game treat-state { rail, sentToday, amountLabel? }, treat-result { requestId, kind, explorerUrl?,
+//   receiptPath?, amountLabel? }. Both directions are length-checked; explorer links must be https, receipt paths must
+//   start with /shelter-payouts/receipt?. No free text crosses. The treat panel (src/shelter/treat.js) is installed here.
 // Security: a message is accepted only when event.source === window.parent and event.origin is in the allowlist
 // (VITE_EMBED_ORIGINS, comma-separated; default below; plus the page's own origin when the parent is same-origin). The first valid `hello` fixes the host origin; after that only
 // that origin is accepted and every post goes to it (never '*'). Nothing is posted before the first `hello`, so the
@@ -17,12 +21,82 @@
 // (`--embed-gut` in src/ui/ui.css).
 // The parsing / decision helpers are pure (tests/unit/embed.test.js); the DOM / game glue is installEmbedBridge().
 import { E } from './events.js';
+import { installTreatPanel } from '../shelter/treat.js';
 
 export const EMBED_NS = 'tt-swordcat';
 export const EMBED_VERSION = 1;
 export const DEFAULT_EMBED_ORIGINS = 'https://tokentails.com,https://www.tokentails.com,http://localhost:3000';
 /** host → game message types (anything else is ignored) */
-export const HOST_TYPES = Object.freeze(['hello', 'session', 'audio', 'pause', 'resume']);
+export const HOST_TYPES = Object.freeze(['hello', 'session', 'audio', 'pause', 'resume', 'treat-state', 'treat-result']);
+/** CAT_SAVED (R owns events.js; the literal is the §12.3 contract fallback) */
+export const EV_CAT_SAVED = E.CAT_SAVED ?? 'cat:saved';
+
+// ------------------------------------------------------------------ TT4 treat messages (§12.2), pure checks
+export const TREAT_RAILS = Object.freeze(['checking', 'live', 'exhausted', 'soon']);
+export const TREAT_KINDS = Object.freeze(['sent', 'already-today', 'paused', 'budget-spent', 'failed', 'retry', 'not-eligible', 'signed-out']);
+export const SAVE_KINDS = Object.freeze(['lost', 'squire', 'service']);
+const RECEIPT_PREFIX = '/shelter-payouts/receipt?';
+const REQ_ID = /^[A-Za-z0-9_-]{1,40}$/;
+/** an amount like "0.01 USDC", "$0.01" or "€0.01" */
+const AMOUNT = /^[$€]?[0-9]{1,6}(\.[0-9]{1,6})?( [A-Za-z.]{2,8})?$/;
+const str = (v, max) => (typeof v === 'string' && v.length > 0 && v.length <= max ? v : null);
+
+/** `amountLabel` or null. Pure. */
+export function cleanAmount(v) { const s = str(v, 24); return s && AMOUNT.test(s) ? s : null; }
+
+/** An https URL (≤ 300 chars), else null. Pure. */
+export function cleanExplorerUrl(v) {
+  const s = str(v, 300);
+  if (!s) return null;
+  try { const u = new URL(s); return u.protocol === 'https:' && !u.username && !u.password ? u.href : null; } catch { return null; }
+}
+
+/** A same-site receipt path `/shelter-payouts/receipt?…` (≤ 200 chars), else null. Pure. */
+export function cleanReceiptPath(v) {
+  const s = str(v, 200);
+  if (!s || !s.startsWith(RECEIPT_PREFIX) || /[\s\\]/.test(s)) return null;
+  return s;
+}
+
+/** host `treat-state` → { rail, sentToday, amountLabel? } or null. Pure. */
+export function parseTreatState(m) {
+  if (!m || !TREAT_RAILS.includes(m.rail) || typeof m.sentToday !== 'boolean') return null;
+  const out = { rail: m.rail, sentToday: m.sentToday };
+  const a = cleanAmount(m.amountLabel);
+  if (a) out.amountLabel = a;
+  return out;
+}
+
+/** host `treat-result` → { requestId, kind, explorerUrl?, receiptPath?, amountLabel? } or null. Pure. */
+export function parseTreatResult(m) {
+  if (!m || typeof m.requestId !== 'string' || !REQ_ID.test(m.requestId) || !TREAT_KINDS.includes(m.kind)) return null;
+  const out = { requestId: m.requestId, kind: m.kind };
+  const x = cleanExplorerUrl(m.explorerUrl); if (x) out.explorerUrl = x;
+  const r = cleanReceiptPath(m.receiptPath); if (r) out.receiptPath = r;
+  const a = cleanAmount(m.amountLabel); if (a) out.amountLabel = a;
+  return out;
+}
+
+/** CAT_SAVED payload → the `cat-saved` message, or null. Pure. */
+export function catSavedPayload(p) {
+  const slot = str(p?.slot, 64);
+  if (!slot || !SAVE_KINDS.includes(p?.kind)) return null;
+  const out = { slot, kind: p.kind };
+  const id = str(p.catId ?? p.cat?.id, 64); if (id) out.catId = id;
+  const name = str(p.catName ?? p.cat?.name, 32); if (name) out.catName = name;
+  return out;
+}
+
+/** The panel's request → the `treat-request` message, or null. Pure. */
+export function treatRequestPayload(p) {
+  const requestId = typeof p?.requestId === 'string' && REQ_ID.test(p.requestId) ? p.requestId : null;
+  const slot = typeof p?.slot === 'string' && p.slot.length <= 64 ? p.slot : null;
+  const catName = str(p?.catName, 32);
+  if (!requestId || slot === null || !catName) return null;
+  const out = { requestId, slot, catName };
+  const id = str(p.catId, 64); if (id) out.catId = id;
+  return out;
+}
 
 /** Is `win` framed? (cross-origin safe: comparing window proxies never throws, but a stub might) */
 export function isFramed(win = typeof window !== 'undefined' ? window : undefined) {
@@ -122,8 +196,14 @@ export function createBridge({ parent, allowed, actions = {} }) {
     readyPending: false,
     readySent: false,
     posted: 0,
+    /** treat listeners ({ state(s), result(r) }); see onTreat */
+    treatSubs: new Set(),
+    /** the last valid treat-state (replayed to a panel that subscribes later) */
+    treatState: null,
     /** Post `type` to the host (only after the handshake, only to the host origin). */
     post(type, payload) {
+      if (type === 'treat-request') { payload = treatRequestPayload(payload); if (!payload) return false; }
+      else if (type === 'cat-saved') { payload = catSavedPayload(payload); if (!payload) return false; }
       if (!b.hostOrigin || !parent?.postMessage) return false;
       try { parent.postMessage(envelope(type, payload), b.hostOrigin); b.posted++; return true; } catch { return false; }
     },
@@ -151,9 +231,28 @@ export function createBridge({ parent, allowed, actions = {} }) {
         case 'resume':
           if (actions.isPaused?.()) actions.resume?.(); else b.post('paused', { paused: false });
           break;
+        case 'treat-state': {
+          const s = parseTreatState(msg);
+          if (!s) return null;
+          b.treatState = s;
+          for (const sub of b.treatSubs) { try { sub.state?.(s); } catch (e) { console.warn('[embed] treat-state', e); } }
+          break;
+        }
+        case 'treat-result': {
+          const r = parseTreatResult(msg);
+          if (!r) return null;
+          for (const sub of b.treatSubs) { try { sub.result?.(r); } catch (e) { console.warn('[embed] treat-result', e); } }
+          break;
+        }
         default: return null;
       }
       return msg.type;
+    },
+    /** Subscribe to treat-state / treat-result ({ state, result }). The last state is replayed. Returns unsubscribe. */
+    onTreat(sub) {
+      b.treatSubs.add(sub);
+      if (b.treatState) { try { sub.state?.(b.treatState); } catch { /* */ } }
+      return () => b.treatSubs.delete(sub);
     },
     /** game:ready → answer a hello that came early. */
     onGameReady() { if (b.readyPending) b.sendReady(); },
@@ -209,6 +308,7 @@ export function installEmbedBridge(game, { win = typeof window !== 'undefined' ?
     offs.push(bus.on(E.GAME_READY, () => { ready = true; bridge.onGameReady(); }));
     offs.push(bus.on(E.LEVEL_RESULTS, (p) => bridge.post('level-complete', levelCompletePayload(p))));
     offs.push(bus.on(E.KITTEN_RESCUED, (p) => { if (p?.kittenId) bridge.post('kitten-rescued', { kittenId: p.kittenId }); }));
+    offs.push(bus.on(EV_CAT_SAVED, (p) => bridge.post('cat-saved', p)));
     // one `paused` per real change (a ui resume can pass through mode 'menu' twice in one step)
     let lastPaused = null;
     offs.push(bus.on(E.GAME_PAUSE, (p) => {
@@ -220,6 +320,13 @@ export function installEmbedBridge(game, { win = typeof window !== 'undefined' ?
     // a mute that arrived before the audio system existed is applied once it does
     offs.push(bus.on(E.GAME_READY, () => { if (bridge.muted !== null) actions.mute(bridge.muted); }));
   } else ready = true;
-  bridge.dispose = () => { win.removeEventListener('message', onMessage); for (const off of offs) { try { off?.(); } catch { /* */ } } };
+  let treat = null;
+  try { treat = installTreatPanel(game, { bridge, doc: win.document }); } catch (e) { console.warn('[embed] treat panel', e); }
+  bridge.treat = treat;
+  bridge.dispose = () => {
+    win.removeEventListener('message', onMessage);
+    for (const off of offs) { try { off?.(); } catch { /* */ } }
+    try { treat?.uninstall?.(); } catch { /* */ }
+  };
   return bridge;
 }

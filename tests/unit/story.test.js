@@ -79,7 +79,7 @@ test('Token Tails IP: title, world, currency, Snack Break, Photo Cam, credits, t
   const kittenNames = Object.keys(S).filter((k) => /^name\.(biscuit|noodle|button|pickles|pebble|sprout|waffles|toffee|muffin|tater|mittens|socks|juniper|bramble|fennel|bean|crumpet|dumpling)$/.test(k)).map((k) => t(k));
   assert.equal(kittenNames.length, 18);
   for (const n of ['Judas', 'Raudvis', 'Zare', 'Simas']) assert.ok(kittenNames.includes(n), n);
-  assert.equal(t('credits.pinkpaw'), 'Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.');
+  assert.equal(t('credits.pinkpaw'), 'The kittens you save carry the names and photos of real cats at Pink Paw (Rožinė pėdutė) in Kaunas. Their adventures here are made up.');
   assert.equal(UI_STRINGS['credits.pinkpaw'], t('credits.pinkpaw'));
   assert.equal(UI_STRINGS['credits.team'], t('credits.team'));
   assert.equal(UI_STRINGS['title.foot'], t('title.foot'));

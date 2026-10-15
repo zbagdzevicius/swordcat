@@ -1,0 +1,21 @@
+/* src/shelter/treat.css  (owner: T, TT4 §12.2) — the treat panel inside the rescued cat card (R's card.css owns the card).
+   Injected once by treat.js. Parchment and gold like the Token Tails panels; text stays >= 16px on phones. */
+.tt-treat {
+  display: flex; flex-direction: column; align-items: center; gap: .45em; width: 100%;
+  margin: .4em 0 .2em; padding: .6em .8em .55em; border-radius: var(--r-m, 20px);
+  background: #FFF3D0CC; border: 2px dashed var(--tt-ink2, #7A4A22); color: var(--tt-ink, #4A1D08);
+  text-align: center; pointer-events: auto;
+}
+.tt-treat-head { font-weight: 900; letter-spacing: .02em; font-size: max(16px, 1em); }
+.tt-treat-msg { margin: 0; font-size: max(16px, .95em); font-weight: 700; line-height: 1.25; }
+.tt-treat-msg--sent { color: #2E7D57; }
+.tt-treat-msg--error { color: #B23A48; }
+.tt-treat-btn { min-height: 44px; }
+.tt-treat-btn:focus-visible, .tt-treat-link:focus-visible { outline: 3px solid var(--tt-love, #FF7AA2); outline-offset: 3px; }
+.tt-treat-links { display: flex; flex-wrap: wrap; justify-content: center; gap: .4em 1em; }
+.tt-treat-link {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 .4em;
+  color: var(--tt-ink, #4A1D08); font-weight: 800; text-decoration: underline; text-underline-offset: 3px; font-size: max(16px, .95em);
+}
+.tt-treat-note { margin: 0; font-size: max(16px, .8em); line-height: 1.2; color: var(--tt-ink2, #7A4A22); }
+.tt-treat-custody { font-style: italic; }

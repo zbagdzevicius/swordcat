@@ -16,6 +16,7 @@ import { BRAND } from '../core/brand.js';
  */
 export function kittenBio(ctx, id) {
   if (!id || !Object.prototype.hasOwnProperty.call(BRAND.pinkPawKittens, id)) return '';
+  if (realCat(ctx, id)) return '';                                // TT4 §12.1 item 5: no made-up bio next to a real cat
   const key = `kitten.${id}.bio`, s = tx(ctx, key);
   return s && s !== key ? s : '';
 }
@@ -29,6 +30,29 @@ export function rescueBioHtml(ctx, id) {
   const bio = kittenBio(ctx, id);
   if (!bio) return '';
   return `<p class="kit-bio"><b class="kit-bio-name">${esc(tx(ctx, `name.${id}`))}</b> ${esc(bio)}</p>`;
+}
+
+/** The real Pink Paw cat in a save slot (TT4, ctx.shelter roster), or null. Pure. */
+export function realCat(ctx, id) {
+  try { return ctx?.shelter?.getCat?.(id) ?? null; } catch { return null; }
+}
+
+/** A local or https image path from the roster, resolved for an <img> (relative paths stay relative). */
+function catImgSrc(u) {
+  if (typeof u !== 'string' || !u) return null;
+  if (/^https:\/\//.test(u)) return u;
+  return /^[\w./-]+$/.test(u) ? u.replace(/^\//, '') : null;
+}
+
+/**
+ * TT4: the real cat's photo (else its card art) as an <img> for the Kittens grid, '' when the slot has no real cat.
+ * The procedural portrait stays the fallback (onerror swaps the img out). Pure.
+ * @param {any} ctx @param {string} id @param {string} [cls]
+ */
+export function catPhotoHtml(ctx, id, cls = 'kit-photo') {
+  const c = realCat(ctx, id), src = catImgSrc(c?.photo ?? c?.art ?? null);
+  if (!src) return '';
+  return `<img class="${cls}" src="${esc(src)}" alt="${esc(c.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">`;
 }
 
 /** Speaker id → species for non-cats (prefix match). */

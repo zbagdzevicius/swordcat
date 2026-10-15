@@ -50,6 +50,7 @@ import { Occluders } from './occluders.js';
 import { Celebrate } from './celebrate.js';
 import { KittenOffer } from './offer.js';
 import { FlyIcons } from './flyIcons.js';
+import { installShelter } from '../shelter/card.js';
 
 export const UI_TIMING = Object.freeze({ skipHold: 1.0, skipRingAfter: 0.12, pauseTap: 0.3, tutorialTap: 0.35, gameOverDelay: 1.4, vigilDelay: 0.9, splashOut: 0.45 });
 
@@ -152,7 +153,7 @@ export class UI {
   openMainMenu() { this.menus?.openMain(); }
 
   /** True while a ui screen owns input (title, menus, results, the touch layout editor). */
-  get busy() { return !!(this.menus?.active || this.results?.open || this.touchEditor); }
+  get busy() { return !!(this.menus?.active || this.results?.open || this.touchEditor || this.shelterCard?.open); }
 
   async init() {
     if (!hasDom()) return;
@@ -197,6 +198,8 @@ export class UI {
     this.results = new Results(ctx, this.root, { sfx: (id, o) => this.sfx(id, o), onClose: () => this._giveBackMode() });
     this.celebrations = new Celebrate(ctx, this.root, this);
     this.offer = new KittenOffer(ctx, this.root, this);
+    // TT4 §12.3: real Pink Paw cats in the save slots (ctx.shelter) and the rescued cat card after each save
+    try { this.shelterCard = installShelter(ctx, this).card; } catch (e) { console.warn('[ui] shelter roster failed', e); this.shelterCard = null; }
     this.fly = new FlyIcons(ctx, this.root, (k) => this.homeRect(k), (k) => this.bumpHome(k));
     this.menus = new Menus(ctx, this.root, this);
     this.touch = new TouchControls(ctx, this.touchHost, this.root);
@@ -713,6 +716,8 @@ export class UI {
     if (!this.root) return;
     const ctx = this.ctx, input = ctx.input, mode = ctx.game.mode, story = ctx.story;
     if (this.results.open) { this.results.update(dt, input); return; }
+    // TT4: the rescued cat card owns input while open; a queued one opens once the celebration and any scene are done
+    if (this.shelterCard && !this.menus.active && this.shelterCard.update(dt, input) && this.shelterCard.open) return;
     if (this.menus.active) { this.menus.update(input, dt); return; }
     if (this.touchEditor) { if (input?.pressed?.('back') || input?.pressed?.('pause')) this.touchEditor.close(false); return; }
     if (!input || ctx.levels?.loading) return;

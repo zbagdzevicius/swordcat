@@ -1,0 +1,41 @@
+/* src/shelter/card.css  (owner: R, TT4 §12.3): the rescued cat card. Uses the ui's tokens (ui.css :root). */
+.sh-card { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center;
+  padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom)); background: #5A3B2E66;
+  pointer-events: auto; font-family: var(--f-body, 'Nunito', sans-serif); color: var(--ink, #5A3B2E); }
+.sh-card.is-on { display: flex; animation: sh-in .22s var(--ease-pop, ease-out) both; }
+@keyframes sh-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+.sh-sheet { display: flex; gap: 18px; align-items: stretch; width: min(720px, 100%); max-height: 100%; overflow: auto;
+  background: var(--parch, #FFF8EE); border: 3px solid var(--edge, #C9A27E); border-radius: var(--r-l, 28px);
+  box-shadow: var(--sh-pop, 0 12px 24px #5A3B2E26); padding: 18px; }
+.sh-pic { flex: 0 0 auto; width: min(40%, 260px); aspect-ratio: 3 / 4; border-radius: var(--r-m, 20px); overflow: hidden;
+  background: var(--parch2, #FCEBD6); border: 2px solid var(--edge, #C9A27E); display: flex; align-items: center; justify-content: center; }
+.sh-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sh-portrait { width: 80%; }
+.sh-portrait svg { width: 100%; height: auto; display: block; }
+.sh-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.sh-kicker { font-family: var(--f-head, sans-serif); font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  font-size: max(14px, .78em); color: var(--pinkDark, #B8557A); }
+.sh-name { margin: 0; font-family: var(--f-head, sans-serif); font-weight: 800; font-size: 2em; line-height: 1.05; overflow-wrap: anywhere; }
+.sh-status { align-self: flex-start; padding: .2em .8em; border-radius: 999px; background: #FFE3EC; color: var(--pinkDark, #B8557A);
+  font-weight: 700; font-size: max(15px, .9em); }
+.sh-meet { margin: 0; font-size: max(15px, .95em); color: var(--ink2, #8A6656); }
+.sh-actions { display: flex; flex-direction: column; gap: 8px; }
+.sh-actions:empty { display: none; }
+.sh-continue { margin-top: auto; align-self: stretch; min-height: 48px; border-radius: 999px; border: 2px solid var(--ink, #5A3B2E);
+  background: #fff; color: var(--ink, #5A3B2E); font: inherit; font-weight: 800; font-size: max(16px, 1em); cursor: pointer; }
+.sh-card .is-focus { outline: 3px solid var(--goldDeep, #E8A93A); outline-offset: 2px; }
+.sh-card button:focus-visible, .sh-card a:focus-visible { outline: 3px solid var(--goldDeep, #E8A93A); outline-offset: 2px; }
+@media (max-width: 560px), (max-height: 420px) and (orientation: landscape) {
+  .sh-sheet { gap: 12px; padding: 14px; }
+  .sh-name { font-size: 1.6em; }
+}
+@media (max-width: 560px) {
+  .sh-sheet { flex-direction: column; align-items: center; }
+  .sh-pic { width: min(52vw, 220px); }
+  .sh-body { width: 100%; text-align: center; }
+  .sh-status { align-self: center; }
+}
+/* the Kittens grid (ui/menus.js) shows the real cat's photo over the procedural portrait, and its live status */
+.kit-face { position: relative; }
+.kit-face .kit-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.kit-status { font-size: max(14px, .66em); font-weight: 700; color: var(--pinkDark, #B8557A); }

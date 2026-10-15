@@ -6,6 +6,7 @@ import { KITTEN_IDS, MODEL_FIT, QUALITY } from './config.js';
 import { measure, resolveFit } from './Assets.js';
 import { uViewport } from './uniforms.js';
 import { UBER_GROUPS } from './uber.js';
+import { emitCatSaved, slotKind, SLOTS } from '../shelter/roster.js';
 import * as IsoRig from '../camera/IsoRig.js';
 import * as CutsceneCamera from '../camera/CutsceneCamera.js';
 
@@ -144,6 +145,32 @@ export function installDebug(game) {
     cutsceneCamera: CutsceneCamera,
     spawn: (type, x, z) => ctx.enemies.spawn(type, new THREE.Vector3(x, 0, z)),
     kittens: (n) => { ctx.state.kittens = KITTEN_IDS.slice(0, n); },
+    /**
+     * TT4 §12.3 (R): the real Pink Paw roster and the rescued cat card. `roster()` = slot → { id, name, status, photo,
+     * art }; `save(slot)` runs a save the way the game does (a lost kitten joins the save + the celebration, a squire
+     * unlocks, a service kitten sets its flag), so CAT_SAVED fires once and the card queues; `card()` = what the card
+     * shows; `close()` presses Continue.
+     */
+    shelter: {
+      roster: () => Object.fromEntries(SLOTS.map((s) => [s, ctx.shelter?.getCat?.(s) ?? null])),
+      live: () => !!ctx.shelter?.live,
+      fetches: () => ctx.shelter?.fetches ?? 0,
+      save: (slot) => {
+        const kind = slotKind(slot);
+        if (!kind) return false;
+        if (kind === 'squire') return !!ctx.companions?.unlock?.(slot);
+        if (kind === 'lost') {
+          if (ctx.state.kittens.includes(slot)) return false;
+          ctx.state.addKitten?.(slot) ?? ctx.state.kittens.push(slot);
+          ctx.bus.emit(E.KITTEN_RESCUED, { kittenId: slot, position: ctx.player?.pos?.clone?.() });
+        }
+        return emitCatSaved(ctx, slot, kind);
+      },
+      /** Turn the card on in a ?test run (it is off there by default). */
+      cards: (on = true) => { const c = ctx.ui?.shelterCard; if (c) c.enabled = !!on; return !!c; },
+      card: () => ctx.ui?.shelterCard?.snapshot?.() ?? null,
+      close: () => { ctx.ui?.shelterCard?.close?.(); return true; },
+    },
     objective: (id) => ctx.objectives.progress(id),
     /**
      * TOKENTAILS-PLAN §10.7 (G1): what a player can see of the guide, in CSS px: `{ phase, target: { id, kind, textKey }

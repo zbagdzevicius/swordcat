@@ -114,6 +114,9 @@ Zare, Simas** (the names `tokentails-swordcat/client/components/yourcat/pinkPawP
 add one line: "Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures
 are made up." No money, donation, impact or chain words in the game (Token Tails CLAIMS R2, R3, R8, R9, R10).
 
+**Superseded by §12 (Phase TT4, founder request 2026-10-15):** every saved cat is a real Pink Paw cat, and the
+rescue card offers a sponsored treat. The money call still happens only in the host; the game carries the treat copy.
+
 ### 2.6 Look and feel
 
 - Fonts: Nunito (body) and Passion One (titles) from `tokentails-swordcat/client/public/fonts/` (OFL; licence
@@ -1052,3 +1055,211 @@ Smoke triage (K): the 4 fence-hop blocks follow the TT2 rule (one hop link by th
 meadow's own rats first; `enemies:onscreen-rule` searches both sides of the screen; `world:fog-audit` treats the §4.2
 table as a ceiling with a 30 % floor (forest_day and gate_dusk were lifted for readability); `audio:unlock` waits for a
 still camera focus. Integration fixes are listed in `requests/RESOLVED.md` (Phase TT3 integration).
+
+## 12. Phase TT4: real shelter cats and treats
+
+Founder request (2026-10-15): every cat saved in the game is a real Pink Paw cat. After each save the player can have
+Token Tails send Pink Paw a treat, as in Catnip Heist, but without leaving the game. The game is part of Token Tails and
+the landing page mentions it. Time box: about 2 hours for the whole phase. No gold-plating.
+
+### 12.1 Decisions (defaults, no founder answer needed)
+
+1. **Slots.** 25 save slots get a real cat: 18 lost kittens (12 reachable, 6 in the bog and keep stubs, mapped but never
+   promised), 3 squires (mochi, sage, clover) and 4 service kittens (marmalade, tofu, earlgrey, pip).
+2. **The game owns the roster.** On tokentails.com the game frame is same-origin, and CORS allows
+   `https://tokentails.com`, so the game itself GETs `https://api.tokentails.com/shelter/rozine-pedute/gallery`.
+   On any other host (localhost, www, preview) it makes no API call and uses the bundled snapshot. The host sends no cat
+   data. This keeps R and E independent.
+3. **Picking cats.** Use `atShelter` only (WAITING or RECOVERING). pickles, pebble, muffin and socks stay Judas, Simas,
+   Raudvis and Zare. Every other slot takes the next cat from a shuffle seeded per install. The shuffle skips names
+   already used, duplicate names in the gallery and odd names: the name must match `^\p{L}[\p{L} '-]{1,15}$`, and a
+   small blocklist (starting with "VIagra") is skipped. The roster is assigned once, kept in localStorage
+   (`swordcat.shelter.v1`), and re-checked against the live gallery at boot. A slot not yet saved whose cat left the
+   shelter gets a new cat. A saved slot keeps its name but shows no status and no treat button.
+4. **Status copy.** WAITING shows "Waiting for a home". RECOVERING shows "Recovering". Snapshot cats show no status.
+   The words "adopt" and "adopted" never appear. No cat from the `adopted` list is ever shown.
+5. **Real facts only.** The game's dialogue stays fiction with the real name. The fiction bios (`kitten.<id>.bio`) are
+   hidden whenever a real cat fills the slot. The card's only fact line is the status, plus "Meet her at Pink Paw,
+   Kaunas." (or "Meet him", or "Meet them" when unknown; the gallery has no sex field, so the default is "Meet them").
+   New credits line: "The kittens you save carry the names and photos of real cats at Pink Paw (Rožinė pėdutė) in
+   Kaunas. Their adventures here are made up."
+6. **Looks.** The procedural 3D kittens stay. Only the 4 named kittens keep their matched coats. Other cats are not
+   recoloured from photos (not cheap enough). The real photo appears in the card and the Kittens grid.
+7. **Treat goes through the host.** The game shows the treat panel; the host makes the call. Embedded, the game posts
+   `treat-request`, and the host calls the existing `sendTreat()` in `client/components/codex/impact/treat.ts`
+   (signed-in first, then guest, `source: "page"`) and posts back `treat-result`. Tokens never enter the frame. Not
+   embedded, the panel shows a link, "Send a treat on Token Tails", which opens
+   `https://tokentails.com/shelter-payouts/give?cat=<name>` in a new tab. The game itself never POSTs anything.
+8. **One treat a day.** The backend allows one treat per player per UTC day. Once the host reports `sentToday`, later
+   cards show "Today's treat is on its way to Pink Paw. Back tomorrow." with no button.
+9. **Source value.** `source: "page"`. A `swordcat` source would need `shared/**` and backend edits (not allowed).
+   Reported in 12.6.
+10. **Landing.** A compact `SwordcatSection` after the Heist section. It uses `/swordcat-game/og.jpg` as a lazy still
+    (no video; `funding/` media is never linked or copied). It is gated by `swordcatEnabled() && !isAppBuild()`, so
+    production stays unchanged until the founder sets `NEXT_PUBLIC_SWORDCAT`. No release date, no hero change.
+
+### 12.2 Bridge additions (v1 stays, all additive)
+
+Game → host:
+
+| type | payload | when |
+|---|---|---|
+| `cat-saved` | `{ slot, kind: 'lost'\|'squire'\|'service', catId?, catName? }` | every save (`CAT_SAVED` game event) |
+| `treat-request` | `{ requestId, slot, catId?, catName }` | the player presses "Send {name} a treat" |
+
+Host → game:
+
+| type | payload | game does |
+|---|---|---|
+| `treat-state` | `{ rail: 'checking'\|'live'\|'exhausted'\|'soon', sentToday: boolean, amountLabel?: string }` | stores it; sent after `ready` and after every result |
+| `treat-result` | `{ requestId, kind: 'sent'\|'already-today'\|'paused'\|'budget-spent'\|'failed'\|'retry'\|'not-eligible'\|'signed-out', explorerUrl?, receiptPath?, amountLabel? }` | updates the open panel |
+
+Limits: `slot` and `catId` are at most 64 characters, `catName` at most 32, `requestId` at most 40. `explorerUrl` must be
+https. `receiptPath` must start with `/shelter-payouts/receipt?`. Free-text messages are never sent across. Both
+sides drop anything that fails these checks. `kitten-rescued` stays for back-compat.
+
+Panel states, as the game shows them:
+- open: "Send {name} a treat"
+- sending
+- sent: "Treat sent! {amountLabel} is on its way to Pink Paw (Rožinė pėdutė).", plus "View on explorer" and
+  "Receipt" (new tab)
+- already: "Token Tails already sent your treat today. Come back tomorrow."
+- exhausted: "Today's treats are gone, back at 00:00 UTC."
+- soon (paused or not deployed): "Real shelter treats open soon."
+- error (failed, retry, not-eligible or signed-out): "The treat could not be sent. Your game progress is safe." with
+  "Try again" for `retry` and `failed`
+
+Every state carries the line "Token Tails sends the treat. It is free for you." and the custody line
+"Held by Token Tails for the shelter until handover."
+
+### 12.3 Packages (strict file ownership)
+
+Requests to another package go to `requests/shelter-<pkg>.md` in the repo that owns the file.
+
+#### R: Roster (game repo `/Users/zygimantasbagdzevicius/me/swordcat`)
+
+Owns:
+- new `src/shelter/roster.js` (fetch, cache, pick, persist, `getCat(slot)`, `statusLabel`), `src/shelter/snapshot.js`
+  (generated), `scripts/snapshot-shelter.mjs`
+- new `src/shelter/card.js` and `card.css` (the rescued cat card)
+- `public/pink-paw/{judas,raudvis,zare,simas}-{card,photo}.webp` (copied from `client/public/heist-game/assets/images/pink-paw/`)
+- `src/core/events.js` (`CAT_SAVED`, `SHELTER_CARD_OPEN`, `SHELTER_CARD_CLOSE`), `src/core/debug.js` (`__GAME__.shelter`)
+- `src/story/strings.js` (name override map read by `t()`, credits line, card copy), `src/core/brand.js`
+- `src/companions/LostKitten.js` (emit `CAT_SAVED` for lost and service saves; the `FLAG_SET` fix in `_serviceRescue`),
+  `src/companions/CompanionManager.js` (emit `CAT_SAVED` for squires after the join scene)
+- `src/ui/portraits.js` (hide fiction bios, show photo), `src/ui/menus.js` (Kittens grid: photo, real name, status),
+  `src/ui/celebrate.js` and `src/ui/UI.js` (open the card after the celebration, queue bursts)
+- tests: `tests/unit/shelter-roster.test.js`, `tests/unit/brand.test.js`, `tests/unit/story.test.js`, smoke
+  `tests/smoke/shelter.mjs`
+
+Card contract: after the celebration (and any join scene), R's card opens. It pauses the game like a lesson card, shows
+the real photo (or art, else the procedural portrait), the name, the status and "Meet them at Pink Paw, Kaunas.", and has a
+"Continue" button (Esc or pad B). It emits `SHELTER_CARD_OPEN { slot, kind, cat, actionsEl }`. `actionsEl` is a
+nav-able container inside the card where T mounts its button and panel. Closing emits `SHELTER_CARD_CLOSE`. Saves that
+arrive in a burst (the cage holding Tater, Mittens and Pip) show one after another. The card never blocks progress:
+Continue always works, including while a treat is sending.
+
+Acceptance:
+1. All 19 reachable saves show a real name in the dialogue, the bubbles, the card, the Kittens grid and the results.
+   Unit test over every slot id.
+2. The roster never holds two equal names, an adopted cat, or a blocklisted or odd name. Same seed, same roster.
+   Live data that drops a cat re-picks only unsaved slots.
+3. No GET happens outside tokentails.com. The snapshot works offline. The GET is cached and sent once per boot, with
+   `credentials: 'omit'`. The gallery fetch is stubbed in unit tests.
+4. `CAT_SAVED` fires exactly once for every lost, squire and service save, including the service fallback path.
+5. No "adopt", no em dash and no fiction bio next to a real cat (`story.test.js` banned words).
+6. The smoke `shelter:card` block passes for a lost kitten, a squire and a service kitten, with screenshots read at
+   1280×720 and 390×844. CDN images are route-intercepted to local files, so smoke makes no outside request.
+7. `npm run test:unit` is green.
+
+#### T: Treat (game repo `/Users/zygimantasbagdzevicius/me/swordcat`)
+
+Owns:
+- new `src/shelter/treat.js` (panel state machine, mounts on `SHELTER_CARD_OPEN`), `src/shelter/treatCopy.js`,
+  `src/shelter/treat.css`
+- `src/core/embed.js` (`cat-saved` and `treat-request` out; `treat-state` and `treat-result` in; checks from 12.2;
+  add the new types to `HOST_TYPES`)
+- tests: `tests/unit/treat.test.js`, `tests/unit/embed.test.js`, smoke `tests/smoke/treat.mjs`
+- T registers `__GAME__.treat` from its own module behind `import.meta.env.VITE_SWORDCAT_DEBUG`, not in `debug.js`
+
+Until R lands, T codes against the 12.3 card contract with a fake `SHELTER_CARD_OPEN` in its tests.
+
+Acceptance:
+1. One treat per save: after `sent`, the button is gone for that card. While `sentToday` is true, every later card
+   shows the "already" line and no button.
+2. Every state in 12.2 renders, and each carries the free line and the custody line.
+3. A `treat-result` with an unknown `requestId` is ignored. A request still unanswered after 15 s shows the error state
+   with "Try again".
+4. Not embedded: no `postMessage`, no fetch, only the new-tab link. Embedded: never a link, never `'*'`.
+5. Works with keyboard (Enter sends, Esc continues), touch and pad (A sends, B continues). Continue always works.
+6. The unit tests stub `postMessage` and fetch. The smoke `treat:panel` block fakes the host with an `?embed=1`
+   parent page that answers `treat-result`. Every `**/shelter/donate**` route is intercepted. No real POST.
+7. `npm run test:unit` is green.
+
+#### E: Embed and landing (host worktree `/Users/zygimantasbagdzevicius/me/tokentails-swordcat`)
+
+Owns:
+- `client/components/swordcat/bridge.ts` (new types, parse limits), `client/components/swordcat/SwordcatHost.tsx`
+  (`onCatSaved` for analytics and a dev log; `onTreatRequest` calls `sendTreat()`, one call in flight, dedupe by
+  `requestId`, posts `treat-result`; reads `GET /shelter/donate/status` and `fetchDonateMe()`, maps them to
+  `treat-state`, and sends that after `ready` and after each result; on `sent`, emits the existing `treat_sent`
+  analytics event; reads `?from=` and strips it like `heist/session.ts`)
+- `client/components/swordcat/flags.ts`, `client/components/shared/GameSelectModal.tsx` (picker card copy: "Every cat you
+  save is a real Pink Paw cat")
+- new `client/components/landing/SwordcatSection.tsx`, `client/pages/index.tsx` (insert after the Heist boundary)
+- tests: `client/__test__/swordcat-{bridge,host}.test.ts(x)`, `game-select-modal.test.tsx`, new
+  `landing-swordcat-section.test.tsx`, and `landing-routing.test.tsx` if it lists the sections
+
+Landing copy:
+- label: "Early access"
+- heading: `SWORDCAT_TITLE`
+- line: "Save lost kittens with a tiny knight. Every cat you save is a real cat at Pink Paw in Kaunas."
+- beat (rail live): "Save one, and Token Tails can send Pink Paw a free treat. Held by Token Tails for the shelter until
+  handover."
+- one CTA: "Play {SWORDCAT_TITLE}", linking to `/swordcat?from=landing_swordcat`
+
+Acceptance:
+1. With the flags off, the landing, the picker and `/swordcat` render exactly as today (tests).
+2. The bridge parses the new types and drops oversized or wrong-typed fields and non-https explorer URLs.
+3. The host maps every `TreatSend` kind to `treat-result` and never sends a token or free text. `sendTreat` is mocked
+   with `fetchImpl` in the tests, and there is no request to api.tokentails.com.
+4. The landing section is hidden when the flag is off and in the app build. It has one link, no "adopt", no em dash,
+   and no number that is not read live.
+5. `npx tsc --noEmit`, `npx eslint <changed files>` and `npm test` (jest) are green.
+
+### 12.4 Integration order
+
+1. This section is the frozen contract. R, T and E run in parallel. R and T share the repo but have no file in
+   common.
+2. Game integration (after R and T):
+   - `npm run test:unit`
+   - `npm run build:test`
+   - `SMOKE_PORT=54xx SMOKE_ONLY=shelter,treat,embed,brand npm run smoke`
+   - read the shots
+   - fix through requests
+3. `npm run build:tokentails` copies the build to `client/public/swordcat-game/`. The integrator owns that folder.
+4. Host end to end: `next dev -p 55xx` with `NEXT_PUBLIC_SWORDCAT=1 NEXT_PUBLIC_SWORDCAT_PICKER=1`. In Playwright,
+   route `**/shelter/donate**` POSTs to a fake `{txHash, explorerUrl}`, open `/` and `/swordcat`, save the meadow kitten
+   (through debug hooks), press "Send a treat", and see the sent state. Screenshots go to
+   `scratchpad/pinkpaw-shelter/<agent>/` and must be read. Kill the server afterwards.
+5. Commit locally in both repos ("TT4: real shelter cats and treats"). Never commit `client/.vitest/` or
+   `client/next-env.d.ts`. No push.
+6. Update STATUS.md and add 12.7 Status.
+
+### 12.5 Acceptance for the phase
+
+The founder can play `/swordcat` with the flag on. Every reachable save shows a real Pink Paw cat with a photo and its
+live status. Each save offers a free sponsored treat in the game, with no redirect, the custody line and the
+one-a-day rule. Landing and picker point to the game. With the flag off, production is unchanged.
+
+### 12.6 Known gaps to report (not fixed here)
+
+- **Signed-out treats.** The guest treat route answers 503 in production until `TRUST_PROXY` or `CF_ORIGIN_SECRET`
+  is set (tracker, Bet #3). Signed-out players see the error state; signed-in players can send.
+- **No `swordcat` donate source.** No `swordcat` value in `DONATE_SOURCES` and no `swordcat_open` analytics event.
+  Both need `shared/**` edits.
+- **App export size.** `client/scripts/prune-app-export.mjs` does not prune `public/swordcat-game` (63 MB) from the
+  app export.
+- **Title approval.** Pink Paw has not approved the title "Pink Paw Knight". Going live needs the founder to set
+  `NEXT_PUBLIC_SWORDCAT` (and `_PICKER`) in Vercel.
+- **Catnip Heist redirect.** The Heist still opens a new tab to give a treat. Left as is.

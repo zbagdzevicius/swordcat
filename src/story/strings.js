@@ -529,10 +529,19 @@ export const S = {
   'postcredits.pilfer1': d('The posts...'),
   'postcredits.pilfer2': d("...And this time, it's yours."),
   'ending.caption': d('And the sun came home.'),
+
+  // ================================================================== TT4 §12.1: the rescued cat card (src/shelter/card.js)
+  // The only facts: the cat's real name, photo and live status (from the Pink Paw gallery) and where the shelter is.
+  'shelter.card.kicker': d('A real cat at Pink Paw'),
+  'shelter.card.meet': d('Meet them at Pink Paw, Kaunas.'),
+  'shelter.card.continue': d('Continue'),
+  'shelter.status.WAITING': d('Waiting for a home'),
+  'shelter.status.RECOVERING': d('Recovering'),
   'credits.title': d('Credits'),
   'credits.thanks': d('Thank you for playing.'),
   'credits.assets': d('Asset attribution'),
-  'credits.pinkpaw': d('Four kittens here share their names with real cats at Pink Paw (Rožinė pėdutė). Their adventures are made up.'),
+  // TOKENTAILS-PLAN §12.1 item 5 (TT4): every saved kitten carries a real Pink Paw cat's name and photo
+  'credits.pinkpaw': d(`The kittens you save carry the names and photos of real cats at ${BRAND.shelterName} (${BRAND.shelterLocal}) in Kaunas. Their adventures here are made up.`),
   // TOKENTAILS-PLAN §10.5: the only facts about Pink Paw the game states (true: a real Lithuanian cat shelter, Token
   // Tails' partner shelter); nothing about numbers, places or what play does
   'credits.pinkpaw.about': d(`${BRAND.shelterName} (${BRAND.shelterLocal}) is a real cat shelter in Lithuania and Token Tails' partner shelter. Meet its cats at ${BRAND.site}.`),
@@ -1000,8 +1009,48 @@ export function fill(s, vars) {
 /** Resolve `key` with `{name}` placeholders filled from `vars`. Missing keys return the key itself. */
 export function t(key, vars = null) {
   const row = Object.prototype.hasOwnProperty.call(S, key) ? S[key] : null;
-  return fill(row ? pick(row) : String(key), vars);
+  return row ? realize(fill(pick(row), vars)) : fill(String(key), vars);
 }
+
+// ================================================================== TT4 §12.1: real Pink Paw names (src/shelter/roster.js)
+/** The 25 save slots whose display name a real cat replaces. */
+const REAL_SLOTS = ['biscuit', 'noodle', 'button', 'pickles', 'pebble', 'sprout', 'waffles', 'toffee', 'muffin', 'tater', 'mittens',
+  'socks', 'juniper', 'bramble', 'fennel', 'bean', 'crumpet', 'dumpling', 'mochi', 'sage', 'clover', 'marmalade', 'tofu', 'earlgrey', 'pip'];
+/** slot → the name the story text uses for it today ("Sir Marmalade" is "Marmalade"; the four named cats' current names). */
+const STORY_NAMES = Object.fromEntries(REAL_SLOTS.map((id) => [id, String(S[`name.${id}`]?.default ?? id).replace(/^Sir /, '')]));
+/** Words that are a place, not the kitten ("Bramble Gate"). */
+const NOT_A_NAME = { Bramble: '(?! Gate)' };
+/** @type {Map<string, string>} story name → real name */
+const REAL = new Map();
+let realRe = null;
+
+/**
+ * Give save slots their real cats' names (TT4): `map` is slot id → real name. Every row resolved by t() then shows the
+ * real name wherever the story used the slot's name (speaker ribbons, bubbles, cards, toasts, the Kittens grid). Pass
+ * {} to go back to the story names. Returns the number of names set.
+ * @param {Record<string, string>} map
+ */
+export function setRealNames(map) {
+  REAL.clear();
+  for (const [id, name] of Object.entries(map ?? {})) {
+    if (!REAL_SLOTS.includes(id) || typeof name !== 'string' || !name.trim()) continue;
+    const from = STORY_NAMES[id];
+    if (from && from !== name) REAL.set(from, name.trim());
+    if (id === 'marmalade') REAL.set('Sir Marmalade', name.trim());          // a real cat gets no made-up title
+  }
+  const keys = [...REAL.keys()].sort((a, b) => b.length - a.length).map((k) => `${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}${NOT_A_NAME[k] ?? ''}`);
+  realRe = keys.length ? new RegExp(`(?<![\\p{L}])(?:${keys.join('|')})(?![\\p{L}])`, 'gu') : null;
+  return REAL.size;
+}
+
+/** The text with story names swapped for real names (one pass, so a real name is never swapped again). Pure. */
+export function realize(s) {
+  if (!realRe || typeof s !== 'string') return s;
+  return s.replace(realRe, (m) => REAL.get(m) ?? m);
+}
+
+/** The story name a slot had before a real cat filled it ('Mochi', 'Earl Grey'). */
+export function storyName(id) { return STORY_NAMES[id] ?? null; }
 
 /** Is `key` a strings row? */
 export function has(key) { return Object.prototype.hasOwnProperty.call(S, key); }

@@ -23,7 +23,7 @@ import { defaultState } from '../core/GameState.js';
 import { portraitSVG } from './portraits.js';
 import * as I from './icons.js';
 import { REWARD_ART } from './celebrate.js';
-import { rescueBioHtml } from './portraits.js';
+import { rescueBioHtml, realCat, catPhotoHtml } from './portraits.js';
 import { CONTEXT_JINGLES } from '../audio/musicMap.js';
 import { BRAND } from '../core/brand.js';
 
@@ -127,7 +127,11 @@ export function kittenCells(ctx) {
   return KITTEN_IDS.map((id) => {
     const level = Object.keys(KITTENS_BY_LEVEL).find((l) => KITTENS_BY_LEVEL[l].includes(id)) ?? null;
     const found = have.has(id);
-    return { id, found, name: found ? tx(ctx, `name.${id}`) : tx(ctx, 'pause.missing'), where: found && level ? tx(ctx, `region.${level}`) : '' };
+    // TT4 §12.1: a found kitten shows its real Pink Paw cat's name and live status (status '' for snapshot cats)
+    const cat = found ? realCat(ctx, id) : null;
+    const st = cat && !cat.gone && cat.status ? tx(ctx, `shelter.status.${cat.status}`) : '';
+    return { id, found, name: found ? (cat?.name ?? tx(ctx, `name.${id}`)) : tx(ctx, 'pause.missing'), where: found && level ? tx(ctx, `region.${level}`) : '',
+      status: st.startsWith('shelter.') ? '' : st };
   });
 }
 
@@ -865,8 +869,9 @@ export class Menus {
     const grid = el('div', 'kit-grid', { parent: body });
     const items = cells.map((c) => {
       const cell = el('div', `mi kit-cell${c.found ? ' is-found' : ''}`, { parent: grid });
-      cell.innerHTML = `<div class="kit-face">${c.found ? portraitSVG(c.id, { expression: 'happy' }) : '<span class="kit-q">?</span>'}</div>`
-        + `<div class="kit-name">${esc(c.name)}</div><div class="kit-where">${esc(c.where)}</div>${c.found ? rescueBioHtml(ctx, c.id) : ''}`;
+      cell.innerHTML = `<div class="kit-face">${c.found ? portraitSVG(c.id, { expression: 'happy' }) + catPhotoHtml(ctx, c.id) : '<span class="kit-q">?</span>'}</div>`
+        + `<div class="kit-name">${esc(c.name)}</div><div class="kit-where">${esc(c.where)}</div>`
+        + `${c.status ? `<div class="kit-status">${esc(c.status)}</div>` : ''}${c.found ? rescueBioHtml(ctx, c.id) : ''}`;
       return { el: cell };
     });
     items.push(this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }));

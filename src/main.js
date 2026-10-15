@@ -4,6 +4,7 @@
 import { embedActive, markEmbed, installEmbedBridge } from './core/embed.js';
 import { installPreloadErrorReload, showRecovery } from './core/recovery.js';
 import { Game, dropSplash } from './core/Game.js';
+import { installTreatPanel } from './shelter/treat.js';
 
 const embedded = embedActive(location.search, window);
 if (embedded) markEmbed(document);
@@ -14,6 +15,7 @@ const game = new Game(host);
 
 const started = game.start();
 if (embedded) installEmbedBridge(game);
+else installTreatPanel(game); // outside the Token Tails frame: the card links to the give page in a new tab
 
 started.catch((e) => {
   console.error('[boot] failed to start', e);

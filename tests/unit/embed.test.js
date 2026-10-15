@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   EMBED_NS, EMBED_VERSION, DEFAULT_EMBED_ORIGINS, HOST_TYPES, isFramed, wantsEmbed, embedActive, markEmbed, parseOrigins,
   embedOrigins, acceptMessage, envelope, levelCompletePayload, createBridge, installEmbedBridge,
+  parseTreatState, parseTreatResult, catSavedPayload, treatRequestPayload, cleanExplorerUrl, cleanReceiptPath, cleanAmount, EV_CAT_SAVED,
 } from '../../src/core/embed.js';
 import { EventBus } from '../../src/core/EventBus.js';
 import { E } from '../../src/core/events.js';
@@ -50,7 +51,7 @@ test('embed: acceptMessage ignores a wrong source, a wrong origin, unknown types
   assert.equal(acceptMessage({ source: parent, origin: HOST, data: msg('pause') }, { parent, allowed: ALLOWED }), null, 'nothing but hello before the handshake');
   assert.equal(acceptMessage({ source: parent, origin: 'http://localhost:3000', data: msg('pause') }, { parent, allowed: ALLOWED, hostOrigin: HOST }), null, 'after the handshake only the host origin');
   assert.equal(acceptMessage({ source: parent, origin: HOST, data: msg('pause') }, { parent, allowed: ALLOWED, hostOrigin: HOST })?.type, 'pause');
-  assert.deepEqual(HOST_TYPES, ['hello', 'session', 'audio', 'pause', 'resume']);
+  assert.deepEqual(HOST_TYPES, ['hello', 'session', 'audio', 'pause', 'resume', 'treat-state', 'treat-result']);
 });
 
 test('embed: hello → ready posted to the exact host origin (never "*"); nothing posts before the handshake', () => {
@@ -154,4 +155,77 @@ test('embed: level:results → level-complete (fish → catnip); installEmbedBri
   // not framed → no bridge
   const top = { addEventListener() {} }; top.parent = top;
   assert.equal(installEmbedBridge(game, { win: top, allowed: ALLOWED }), null);
+});
+
+// ------------------------------------------------------------------ TT4 §12.2 treat messages
+test('embed TT4: treat-state / treat-result parsing drops wrong types, long fields and non-https links', () => {
+  assert.deepEqual(parseTreatState({ rail: 'live', sentToday: false, amountLabel: '0.01 USDC' }), { rail: 'live', sentToday: false, amountLabel: '0.01 USDC' });
+  assert.deepEqual(parseTreatState({ rail: 'soon', sentToday: true, amountLabel: '<b>free</b>' }), { rail: 'soon', sentToday: true });
+  assert.equal(parseTreatState({ rail: 'open', sentToday: false }), null);
+  assert.equal(parseTreatState({ rail: 'live', sentToday: 'yes' }), null);
+  assert.equal(cleanAmount('$0.01'), '$0.01'); assert.equal(cleanAmount('0.01 USDC.e'), '0.01 USDC.e');
+  assert.equal(cleanAmount('Send money now to ...'), null); assert.equal(cleanAmount('x'.repeat(30)), null);
+  assert.equal(cleanExplorerUrl('https://explorer.arc.io/tx/0xabc'), 'https://explorer.arc.io/tx/0xabc');
+  assert.equal(cleanExplorerUrl('http://explorer.arc.io/tx/0xabc'), null);
+  assert.equal(cleanExplorerUrl('javascript:alert(1)'), null);
+  assert.equal(cleanExplorerUrl('https://u:p@evil.example/'), null);
+  assert.equal(cleanExplorerUrl('https://e.io/' + 'a'.repeat(400)), null);
+  assert.equal(cleanReceiptPath('/shelter-payouts/receipt?chain=5042&tx=0xabc'), '/shelter-payouts/receipt?chain=5042&tx=0xabc');
+  assert.equal(cleanReceiptPath('//evil.example/shelter-payouts/receipt?'), null);
+  assert.equal(cleanReceiptPath('https://evil.example/shelter-payouts/receipt?x'), null);
+  const ok = { requestId: 't-abc-1', kind: 'sent', explorerUrl: 'https://explorer.arc.io/tx/0x1', receiptPath: '/shelter-payouts/receipt?chain=5042&tx=0x1', amountLabel: '0.01 USDC' };
+  assert.deepEqual(parseTreatResult(ok), ok);
+  assert.deepEqual(parseTreatResult({ ...ok, explorerUrl: 'http://x.io', receiptPath: '/elsewhere', message: 'free text' }), { requestId: 't-abc-1', kind: 'sent', amountLabel: '0.01 USDC' });
+  assert.equal(parseTreatResult({ ...ok, kind: 'adopted' }), null);
+  assert.equal(parseTreatResult({ ...ok, requestId: 'x'.repeat(41) }), null);
+  assert.equal(parseTreatResult({ ...ok, requestId: 'a b' }), null);
+});
+
+test('embed TT4: cat-saved / treat-request payloads keep only bounded fields', () => {
+  assert.deepEqual(catSavedPayload({ slot: 'pickles', kind: 'lost', cat: { id: '6a3055e21d6649b19b03688a', name: 'Judas', photo: 'https://x' } }),
+    { slot: 'pickles', kind: 'lost', catId: '6a3055e21d6649b19b03688a', catName: 'Judas' });
+  assert.deepEqual(catSavedPayload({ slot: 'mochi', kind: 'squire' }), { slot: 'mochi', kind: 'squire' });
+  assert.equal(catSavedPayload({ slot: 'mochi', kind: 'boss' }), null);
+  assert.equal(catSavedPayload({ slot: 'x'.repeat(65), kind: 'lost' }), null);
+  assert.deepEqual(catSavedPayload({ slot: 's', kind: 'lost', catName: 'n'.repeat(33) }), { slot: 's', kind: 'lost' });
+  assert.deepEqual(treatRequestPayload({ requestId: 't-1', slot: 'pickles', catId: 'id1', catName: 'Judas', token: 'fbSECRET' }),
+    { requestId: 't-1', slot: 'pickles', catId: 'id1', catName: 'Judas' });
+  assert.equal(treatRequestPayload({ requestId: 't-1', slot: 'pickles', catName: '' }), null);
+  assert.equal(treatRequestPayload({ requestId: 'bad id', slot: 'pickles', catName: 'Judas' }), null);
+});
+
+test('embed TT4: the bridge relays treat-state / treat-result to subscribers and posts cat-saved, never to *', () => {
+  const parent = fakeParent();
+  const b = createBridge({ parent, allowed: ALLOWED });
+  const ev = (type, extra = {}, origin = HOST) => ({ source: parent, origin, data: msg(type, extra) });
+  assert.equal(b.post('treat-request', { requestId: 't-1', slot: 'a', catName: 'Judas' }), false, 'nothing before hello');
+  assert.equal(b.handle(ev('treat-state', { rail: 'live', sentToday: false })), null, 'nothing but hello before the handshake');
+  b.handle(ev('hello'));
+  const got = { states: [], results: [] };
+  const off = b.onTreat({ state: (s) => got.states.push(s), result: (r) => got.results.push(r) });
+  assert.equal(b.handle(ev('treat-state', { rail: 'live', sentToday: false, amountLabel: '0.01 USDC' })), 'treat-state');
+  assert.equal(b.handle(ev('treat-state', { rail: 'bogus', sentToday: false })), null);
+  assert.equal(b.handle(ev('treat-result', { requestId: 't-1', kind: 'sent' }, 'https://evil.example')), null);
+  assert.equal(b.handle(ev('treat-result', { requestId: 't-1', kind: 'sent' })), 'treat-result');
+  assert.deepEqual(got.states, [{ rail: 'live', sentToday: false, amountLabel: '0.01 USDC' }]);
+  assert.deepEqual(got.results, [{ requestId: 't-1', kind: 'sent' }]);
+  // a late subscriber gets the last state replayed
+  const late = []; b.onTreat({ state: (s) => late.push(s) });
+  assert.equal(late.length, 1);
+  off();
+  assert.equal(b.post('treat-request', { requestId: 't-2', slot: 'a', catName: 'Judas', accesstoken: 'fbX' }), true);
+  assert.deepEqual(parent.sent.at(-1).data, envelope('treat-request', { requestId: 't-2', slot: 'a', catName: 'Judas' }));
+  assert.equal(b.post('cat-saved', { slot: 'a', kind: 'nope' }), false);
+  assert.ok(parent.sent.every((s) => s.origin === HOST));
+
+  // installEmbedBridge forwards CAT_SAVED
+  const p2 = fakeParent(), listeners = new Map();
+  const win = { parent: p2, addEventListener: (t, f) => listeners.set(t, f), removeEventListener: (t) => listeners.delete(t) };
+  const bus = new EventBus();
+  const bridge = installEmbedBridge({ mode: 'play', ctx: { bus } }, { win, allowed: ALLOWED });
+  listeners.get('message')({ source: p2, origin: HOST, data: msg('hello') });
+  bus.emit(E.GAME_READY, {});
+  bus.emit(EV_CAT_SAVED, { slot: 'pebble', kind: 'lost', cat: { id: '6a304e8f1d6649b19b036500', name: 'Simas' } });
+  assert.deepEqual(p2.sent.at(-1).data, envelope('cat-saved', { slot: 'pebble', kind: 'lost', catId: '6a304e8f1d6649b19b036500', catName: 'Simas' }));
+  bridge.dispose();
 });

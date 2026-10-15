@@ -52,3 +52,7 @@
   .sh-continue { position: sticky; bottom: 0; margin-top: 4px; min-height: 44px; box-shadow: 0 -10px 0 var(--parch, #FFF8EE), 0 10px 0 var(--parch, #FFF8EE); z-index: 1; }
   .sh-body::after { content: ''; display: block; height: 8px; flex: none; }
 }
+/* the sticky Continue sits on the sheet's foot there: its focus ring goes inside the pill, not past the sheet edge */
+@media (max-height: 420px) and (orientation: landscape) {
+  .sh-card .sh-continue.is-focus, .sh-card .sh-continue:focus-visible { outline-offset: -6px; }
+}

@@ -47,7 +47,7 @@ import { CATS, visualDt } from '../characters/index.js';
 
 import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } from './abilityAim.js';
 import { AbilityIndicator } from './AbilityIndicator.js';
-import { setBubbleSafeInsets, setBubbleHush } from './Bubble.js';
+import { setBubbleSafeInsets, setBubbleHush, setBubblePlayer } from './Bubble.js';
 import { PartyLife } from './party.js';
 import { emitCatSaved } from '../shelter/roster.js';
 
@@ -73,6 +73,8 @@ export class CompanionManager {
     setBubbleSafeInsets(() => ctx.ui?.safeInsets);
     // TT5: no world bubble draws behind a modal's scrim (shelter card, results, offer)
     setBubbleHush(() => !!ctx.ui?.messages?.p0);
+    // TT5: a bubble that is not hers steps off Clem, and a newer bubble off an older one
+    setBubblePlayer(() => ctx.player);
     this.ctx = ctx;
     /** @type {Companion[]} */
     this.active = [];

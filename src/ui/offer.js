@@ -133,6 +133,9 @@ export class KittenOffer {
       }
     }
     if (!this.open) return;
+    // the HUD or the touch buttons moved (play just started, rotation, layout edit): find a free spot again
+    const m = this.ui?.messages, v = this.ui?.screenOccluders?.()?.version;
+    if (m && v !== undefined && v !== m.offerVer) m.placeOffer?.(this.root);
     flag(this.root, 'is-dim', !vis);
     if ((this.t += dt) >= OFFER.ttl) this._close(false);
   }

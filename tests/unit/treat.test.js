@@ -63,6 +63,7 @@ test('treat: every panel state renders with both lines; buttons only where they 
     already: treatView(card(), { ...live, sentToday: true }, { embedded: true }),
     exhausted: treatView(card(), { ...live, rail: 'exhausted' }, { embedded: true }),
     soon: treatView(card(), { ...live, rail: 'soon' }, { embedded: true }),
+    paused: treatView(card(), { ...live, rail: 'paused' }, { embedded: true }),
     error: treatView(card({ phase: 'error', retry: true }), live, { embedded: true }),
     link: treatView(card(), live, { embedded: false }),
   };
@@ -79,6 +80,8 @@ test('treat: every panel state renders with both lines; buttons only where they 
   assert.deepEqual(views.sent.links.map((l) => l.label), ['View on explorer', 'Receipt']);
   assert.equal(views.already.button, null); assert.equal(views.already.message, TREAT_COPY.already);
   assert.equal(views.exhausted.button, null); assert.equal(views.soon.button, null);
+  assert.equal(views.paused.button, null); assert.equal(views.paused.message, 'Treats are paused right now.');
+  assert.equal(views.soon.message, 'Real shelter treats open soon.');
   assert.equal(views.error.button.label, 'Try again'); assert.equal(views.error.message, TREAT_COPY.error);
   assert.equal(treatView(card({ phase: 'error', retry: false }), live, { embedded: true }).button, null, 'signed-out / not-eligible: no retry');
   // checking (no treat-state yet) still lets the player try: the host answers with the real outcome
@@ -100,7 +103,7 @@ test('treat: every panel state renders with both lines; buttons only where they 
 test('treat: result kinds map to phases; unknown kinds are null', () => {
   assert.deepEqual(phaseForResult('sent'), { phase: 'sent', retry: false });
   assert.deepEqual(phaseForResult('already-today'), { phase: 'already', retry: false });
-  assert.deepEqual(phaseForResult('paused'), { phase: 'soon', retry: false });
+  assert.deepEqual(phaseForResult('paused'), { phase: 'paused', retry: false });
   assert.deepEqual(phaseForResult('budget-spent'), { phase: 'exhausted', retry: false });
   assert.deepEqual(phaseForResult('failed'), { phase: 'error', retry: true });
   assert.deepEqual(phaseForResult('retry'), { phase: 'error', retry: true });
@@ -260,7 +263,9 @@ test('treat TT5: rail and today row reads map like the /swordcat host', () => {
   assert.deepEqual(api.railOf(STATUS_LIVE), { rail: 'live', amountLabel: '0.01 USDC' });
   assert.deepEqual(api.railOf({ ...STATUS_LIVE, railState: 'exhausted', treatsLeftToday: 0, chains: [] }), { rail: 'exhausted' });
   assert.deepEqual(api.railOf({ ...STATUS_LIVE, treatsLeftToday: 0, chains: [] }), { rail: 'exhausted' });
-  assert.deepEqual(api.railOf({ enabled: false, railState: 'paused' }), { rail: 'soon' });
+  assert.deepEqual(api.railOf({ enabled: false, railState: 'paused' }), { rail: 'paused' });
+  assert.deepEqual(api.railOf({ enabled: true, railState: 'paused' }), { rail: 'paused' });
+  assert.deepEqual(api.railOf({ enabled: false, railState: 'not-deployed' }), { rail: 'soon' });
   assert.deepEqual(api.railOf({ enabled: false }), { rail: 'soon' });
   assert.deepEqual(api.railOf(null), { rail: 'soon' });
   // main chain spent, another chain open: send on that chain
@@ -392,7 +397,7 @@ test('treat TT5: direct mode states: already from the read, used up, paused, ret
   e.ctl.send(); await tick();
   assert.equal(e.ctl.view().phase, 'error'); assert.equal(e.ctl.view().button.label, 'Try again');
   e.ctl.send(); await tick();
-  assert.equal(e.ctl.view().phase, 'soon');
+  assert.equal(e.ctl.view().phase, 'paused');
   // a transport that throws is a retry
   const f = directCtl({ answers: [Promise.reject(new Error('boom'))] }); f.ctl.open(card()); await f.ctl.refresh();
   f.ctl.send(); await tick();

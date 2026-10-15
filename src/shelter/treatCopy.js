@@ -17,6 +17,7 @@ export const TREAT_COPY = Object.freeze({
   already: 'Token Tails already sent your treat today. Come back tomorrow.',
   exhausted: "Today's treats are gone, back at 00:00 UTC.",
   soon: 'Real shelter treats open soon.',
+  paused: 'Treats are paused right now.',
   error: 'The treat could not be sent. Your game progress is safe.',
   retry: 'Try again',
   checking: "Checking today's treat…",

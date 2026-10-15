@@ -32,7 +32,7 @@ export const HOST_TYPES = Object.freeze(['hello', 'session', 'audio', 'pause', '
 export const EV_CAT_SAVED = E.CAT_SAVED ?? 'cat:saved';
 
 // ------------------------------------------------------------------ TT4 treat messages (§12.2), pure checks
-export const TREAT_RAILS = Object.freeze(['checking', 'live', 'exhausted', 'soon']);
+export const TREAT_RAILS = Object.freeze(['checking', 'live', 'exhausted', 'paused', 'soon']);
 export const TREAT_KINDS = Object.freeze(['sent', 'already-today', 'paused', 'budget-spent', 'failed', 'retry', 'not-eligible', 'signed-out']);
 export const SAVE_KINDS = Object.freeze(['lost', 'squire', 'service']);
 const RECEIPT_PREFIX = '/shelter-payouts/receipt?';

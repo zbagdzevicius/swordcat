@@ -161,6 +161,7 @@ test('embed: level:results → level-complete (fish → catnip); installEmbedBri
 test('embed TT4: treat-state / treat-result parsing drops wrong types, long fields and non-https links', () => {
   assert.deepEqual(parseTreatState({ rail: 'live', sentToday: false, amountLabel: '0.01 USDC' }), { rail: 'live', sentToday: false, amountLabel: '0.01 USDC' });
   assert.deepEqual(parseTreatState({ rail: 'soon', sentToday: true, amountLabel: '<b>free</b>' }), { rail: 'soon', sentToday: true });
+  assert.deepEqual(parseTreatState({ rail: 'paused', sentToday: false }), { rail: 'paused', sentToday: false });
   assert.equal(parseTreatState({ rail: 'open', sentToday: false }), null);
   assert.equal(parseTreatState({ rail: 'live', sentToday: 'yes' }), null);
   assert.equal(cleanAmount('$0.01'), '$0.01'); assert.equal(cleanAmount('0.01 USDC.e'), '0.01 USDC.e');

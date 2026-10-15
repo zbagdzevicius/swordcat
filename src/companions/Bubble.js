@@ -74,7 +74,58 @@ export function clampShift(ax, ay, l, r, b, t, mx, my, myLo = my, myHi = my) {
   return { dx: axis(ax, l, r, mx, mx), dy: axis(ay, b, t, myLo, myHi) };
 }
 
+/**
+ * TT5 (founder: "banners overlap too much"): two bubbles never cover each other, and a bubble that is not hers never
+ * covers Clem. Her own bubble keeps its place over her head; every other bubble steps out of the way of hers and of
+ * the older ones (the nearest free spot above, below or beside them); an older one never moves for a newer one.
+ * `setBubblePlayer` (CompanionManager) gives her `{ object3d, pos, height }`.
+ * @type {null | (() => any)}
+ */
+let playerOf = null;
+/** @param {null | (() => any)} fn */
+export function setBubblePlayer(fn) { playerOf = typeof fn === 'function' ? fn : null; }
+/** Bubbles that are showing (TextSprite, kind 'bubble'); each keeps its last screen rect in NDC. */
+const LIVE = new Set();
+let showSeq = 0;
+/** NDC gap kept between two stacked boxes (about 6 px on a 720 px screen). */
+const STACK_GAP = 0.016;
+
+/**
+ * Pure: where box `me` ({x0, x1, y0, y1}, NDC) goes so it covers none of `obs`. Candidates: where it is, and just
+ * above, below, left and right of each box; those inside `lim` ({top, bottom, left, right}) are kept. The nearest free
+ * one wins (distance in screen units: `aspect` = width / height; above beats below beats beside on a tie). With no free
+ * spot it stays where it is. Returns `{ dx, dy }`.
+ * @param {{x0:number,x1:number,y0:number,y1:number}} me @param {{x0:number,x1:number,y0:number,y1:number}[]} obs
+ * @param {{top:number,bottom:number,left:number,right:number}} lim @param {number} [aspect] @param {number} [gap]
+ */
+export function stackPlace(me, obs, lim, aspect = 1, gap = STACK_GAP) {
+  const gx = gap / Math.max(0.2, aspect);
+  const free = (dx, dy) => {
+    const x0 = me.x0 + dx, x1 = me.x1 + dx, y0 = me.y0 + dy, y1 = me.y1 + dy;
+    if (y1 > lim.top + 1e-9 || y0 < lim.bottom - 1e-9 || x0 < lim.left - 1e-9 || x1 > lim.right + 1e-9) return false;
+    for (const o of obs) {
+      if (Math.min(x1, o.x1 + gx * 0.5) - Math.max(x0, o.x0 - gx * 0.5) > 0 && Math.min(y1, o.y1 + gap * 0.5) - Math.max(y0, o.y0 - gap * 0.5) > 0) return false;
+    }
+    return true;
+  };
+  const out = { dx: 0, dy: 0 };
+  if (free(0, 0)) return out;
+  let best = Infinity;
+  const consider = (dx, dy, bias) => {
+    const cost = Math.hypot(dx * aspect, dy) + bias;
+    if (cost < best && free(dx, dy)) { best = cost; out.dx = dx; out.dy = dy; }
+  };
+  for (const o of obs) {
+    consider(0, o.y1 + gap - me.y0, 0);
+    consider(0, o.y0 - gap - me.y1, 1e-6);
+    consider(o.x0 - gx - me.x1, 0, 2e-6);
+    consider(o.x1 + gx - me.x0, 0, 2e-6);
+  }
+  return out;
+}
+
 const _anchor = new THREE.Vector3();
+const _pv = new THREE.Vector3();
 const _size = new THREE.Vector2();
 const _sx = new THREE.Vector3(), _sy = new THREE.Vector3();
 
@@ -100,6 +151,8 @@ export class TextSprite {
     /** the speaker is off screen: the bubble is pinned to the screen edge (§10.2.9) */
     this.pinned = false;
     this.sprite = null; this.canvas = null; this.tex = null; this.aspect = 1;
+    /** TT5: show order (older bubbles keep their place) and the last drawn body rect in NDC (stacking) */
+    this.seq = 0; this.rank = 1; this.ndc = { x0: 0, x1: 0, y0: 0, y1: 0, ok: false };
     if (!HAS_DOM()) return;
     this.canvas = document.createElement('canvas');
     this.canvas.width = 512; this.canvas.height = kind === 'zzz' ? 256 : 256;
@@ -126,13 +179,15 @@ export class TextSprite {
 
   /** Show `text` for `dur` seconds (Infinity = until hide()). */
   show(text, dur = 1.6) {
+    if (!this.on || text !== this.text) this.seq = ++showSeq;
     this.on = true; this.t = 0; this.dur = dur; this.opacity = 1;
+    if (this.kind === 'bubble') { this.ndc.ok = false; LIVE.add(this); }
     if (this.sprite && text !== this.text) { this.sprite.center.set(0.5, 0); this._draw(text, this.canvas.width / 2); }
     this.text = text;
     if (this.sprite) this.sprite.visible = true;
   }
 
-  hide() { this.on = false; this.t = 0; if (this.sprite) this.sprite.visible = false; }
+  hide() { this.on = false; this.t = 0; if (this.sprite) this.sprite.visible = false; LIVE.delete(this); this.ndc.ok = false; }
 
   get visible() { return this.on; }
 
@@ -168,12 +223,60 @@ export class TextSprite {
     try { si = safeInsetsOf?.(); } catch { si = null; }
     const k = si?.h > 0 ? ph / si.h : 1;
     const insB = Math.min(ph * 0.45, Math.max(0, (si?.bottom ?? 0) * k)), insT = Math.min(ph * 0.45, Math.max(0, (si?.bubbleTop ?? si?.top ?? 0) * k));
-    const { dx, dy } = clampShift(_anchor.x, _anchor.y, l, r, b, t, (BUBBLE_MARGIN_PX * 2) / pw, (BUBBLE_MARGIN_PX * 2) / ph,
-      ((insB + BUBBLE_MARGIN_PX) * 2) / ph, ((insT + BUBBLE_MARGIN_PX) * 2) / ph);
+    const myLo = ((insB + BUBBLE_MARGIN_PX) * 2) / ph, myHi = ((insT + BUBBLE_MARGIN_PX) * 2) / ph;
+    let { dx, dy } = clampShift(_anchor.x, _anchor.y, l, r, b, t, (BUBBLE_MARGIN_PX * 2) / pw, (BUBBLE_MARGIN_PX * 2) / ph, myLo, myHi);
+    // TT5: off her own bubble, the older bubbles and Clem herself (her own bubble only keeps off her other one)
+    const me = this.ndc, own = this._own();
+    this.rank = own ? 0 : 1;
+    me.x0 = _anchor.x + dx + l; me.x1 = _anchor.x + dx + r; me.y0 = _anchor.y + dy + b; me.y1 = _anchor.y + dy + t;
+    const obs = this._obs ?? (this._obs = []);
+    obs.length = 0;
+    for (const o of LIVE) {
+      if (o === this || !o.ndc.ok || !o.sprite?.visible || o.opacity < 0.05) continue;
+      if (o.rank > this.rank || (o.rank === this.rank && o.seq > this.seq)) continue;
+      obs.push(o.ndc);
+    }
+    const pb = own ? null : this._playerBox(camera, pw, ph);
+    if (pb) obs.push(pb);
+    if (obs.length) {
+      const mx = (BUBBLE_MARGIN_PX * 2) / pw, lim = this._lim ?? (this._lim = { top: 0, bottom: 0, left: 0, right: 0 });
+      lim.top = 1 - myHi; lim.bottom = -1 + myLo; lim.left = -1 + mx; lim.right = 1 - mx;
+      const at = stackPlace(me, obs, lim, pw / ph);
+      if (at.dx || at.dy) { dx += at.dx; dy += at.dy; me.x0 += at.dx; me.x1 += at.dx; me.y0 += at.dy; me.y1 += at.dy; }
+    }
+    me.ok = true;
     sp.center.set(0.5 - dx / W, -dy / H);
     // tail tip stays on the speaker (canvas u = center.x), kept inside the body's rounded corners
     const want = Math.round(Math.min(body.x + body.w - 34, Math.max(body.x + 34, sp.center.x * cw)) / 4) * 4;
     if (want !== this.tailX) this._draw(this.text, want);
+  }
+
+  /** Is this Clem's own bubble (parented under her)? */
+  _own() {
+    let pl = null;
+    try { pl = playerOf?.(); } catch { pl = null; }
+    const o3 = pl?.object3d;
+    if (!o3) return false;
+    for (let n = this.object.parent; n; n = n.parent) if (n === o3) return true;
+    return false;
+  }
+
+  /** Clem's body box in NDC (feet to just over her ears), or null (no player, a pinned bubble). */
+  _playerBox(camera, pw, ph) {
+    let pl = null;
+    try { pl = playerOf?.(); } catch { pl = null; }
+    const pos = pl?.pos;
+    if (!pos || this.pinned) return null;
+    const box = this._pbox ?? (this._pbox = { x0: 0, x1: 0, y0: 0, y1: 0 });
+    _pv.set(pos.x, pos.y, pos.z).project(camera);
+    if (!(Math.abs(_pv.z) <= 1)) return null;
+    const fx = _pv.x, fy = _pv.y;
+    _pv.set(pos.x, pos.y + (pl.height ?? 1) * 1.05, pos.z).project(camera);
+    const hy = _pv.y, hNdc = Math.abs(hy - fy);
+    if (!(hNdc > 0)) return null;
+    const half = hNdc * 0.45 * (ph / pw);
+    box.x0 = fx - half; box.x1 = fx + half; box.y0 = Math.min(fy, hy); box.y1 = Math.max(fy, hy);
+    return box;
   }
 
   _draw(text, tailX = this.canvas.width / 2) {
@@ -243,6 +346,7 @@ export class TextSprite {
   }
 
   dispose() {
+    LIVE.delete(this);
     this.object.removeFromParent();
     this.tex?.dispose(); this.sprite?.material.dispose();
     this.sprite = null; this.canvas = null;

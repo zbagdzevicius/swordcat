@@ -293,6 +293,17 @@ const messagesBlock = {
         await G(() => { const g = window.__GAME__, o = g.ctx.ui.offer; g.ctx.state.setFlag('seen.offer.kitten', false); o.offer(); });
         await wait(450);
         await pg.screenshot({ path: path.join(dir, `${tag}-06-offer.png`) });
+        // the bubble and chips stay off the pause button, the HUD parts (faded or not) and the touch buttons
+        const ofHits = await G(() => {
+          const R = (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+          const frac = (a, b) => { const ix = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), iy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y); if (ix <= 1 || iy <= 1) return 0; const o = ix * iy; return Math.max(o / (a.w * a.h), o / (b.w * b.h)); };
+          const parts = [...document.querySelectorAll('.ui-offer.is-on .of-bubble, .ui-offer.is-on .of-chip')].map(R);
+          const hud = [...document.querySelectorAll('.hud-portrait, .hud-hearts, .hud-valor, .hud-grit, .hud-tr > *, .tb-pause, .touch-root .touch-cluster .tbtn:not(.is-hidden)')].filter((e) => e.offsetParent !== null);
+          const out = [];
+          for (const a of parts) for (const e of hud) { const f = frac(a, R(e)); if (f > 0.04) out.push(`${e.className.split(' ').slice(0, 2).join('.')} ${Math.round(f * 100)}%`); }
+          return out;
+        });
+        t.assert(!ofHits.length, `${tag}: the offer covers no HUD or touch button (${ofHits.join(' | ')})`);
         await G(() => window.__GAME__.ctx.ui.celebrate('card', 'golden'));
         await wait(300);
         t.assert(await G(() => !document.querySelector('.cel-card.is-on') && window.__GAME__.ctx.ui.celebrations.q.items.length === 1), `${tag}: a card waits while the offer is up`);

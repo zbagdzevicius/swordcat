@@ -23,6 +23,7 @@ export const MSG = Object.freeze({
   toastLinger: 0.3,           // s the hint keeps waiting after the last toast has gone (no fade back over a leaving one)
   dockScales: Object.freeze([0.8, 0.66]),
   clemH: 1.3,                 // m: her height for the screen box
+  stickPad: 36,               // px: the camera thumb pad around the joystick zone (touch.js stickRest), not kept clear by the offer
 });
 
 /** Viewport classes the CSS sizes the card for. Pure. */
@@ -244,6 +245,7 @@ export class Messages {
     const r = root.getBoundingClientRect();
     if (!(r.width > 0)) return null;
     const at = this._place(Math.ceil(r.width), Math.ceil(r.height), true);
+    this.offerVer = this.ui.screenOccluders?.()?.version ?? 0;
     if (!at || at.scale !== 1) return null;           // no free spot at full size: keep the CSS place (chips stay 44 px)
     root.style.setProperty('--ofx', `${at.x}px`); root.style.setProperty('--ofy', `${at.y}px`);
     root.classList.add('is-placed');
@@ -266,7 +268,25 @@ export class Messages {
     const avoid = this._avoid; avoid.length = 0;
     // (the offer's `chip` rects are skipped: the offer is a modal and never shares the screen with a card, and the
     // occluder list is re-measured at 4 Hz, so a just-closed offer could still be in it)
-    for (const q of ui.screenOccluders?.()?.rects ?? []) if (q.kind !== 'chip') avoid.push({ x: q.x, y: q.y, w: q.w, h: q.h });
+    // measured now, not the 4 Hz cache: the offer can open on the frame play starts, before the HUD and the pause
+    // button were measured (it then sat over them on landscape phones). For the offer the joystick zone counts without
+    // its camera thumb pad (the stick itself is what a chip must not sit on).
+    const occ = ui.occluders?.measure?.() ?? ui.screenOccluders?.();
+    const pad = full ? MSG.stickPad : 0;
+    for (const q of occ?.rects ?? []) {
+      if (q.kind === 'chip') continue;
+      const p = q.kind === 'stick' ? Math.min(pad, q.w / 4, q.h / 4) : 0;
+      avoid.push({ x: q.x + p, y: q.y + p, w: q.w - 2 * p, h: q.h - 2 * p });
+    }
+    // the HUD corners and the pause button straight from the DOM too (the occluder list skips them while the HUD or
+    // the touch layer is not in play mode)
+    for (const e of [ui.hud?.tlEl, ui.hud?.trEl, ui.touch?.pauseBtn]) { const q = rect(e); if (q) avoid.push({ x: q.left, y: q.top, w: q.width, h: q.height }); }
+    // each HUD part on its own as well (a box may clip a corner of the block by 2 % and still cover the Valor bar by
+    // 7 %), faded or not: the calm HUD fades a part out and back in while the box stays up
+    for (const e of [...(ui.hud?.tlParts ?? []), ...(ui.hud?.trParts ?? [])]) {
+      if (!e?.isConnected || e.offsetParent === null) continue;
+      const q = e.getBoundingClientRect(); if (q.width > 0 && q.height > 0) avoid.push({ x: q.left, y: q.top, w: q.width, h: q.height });
+    }
     for (const e of [ui.hud?.guideEl, ui.hud?.bossEl, ui.prompts?.hintEl, ui.prompts?.guide?.root]) { const q = rect(e); if (q) avoid.push({ x: q.left, y: q.top, w: q.width, h: q.height }); }
     const chip = ui.skipChipRect?.();
     if (chip && chip.w > 0) avoid.push({ x: chip.x, y: chip.y, w: chip.w, h: chip.h });

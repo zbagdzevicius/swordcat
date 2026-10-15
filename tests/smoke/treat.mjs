@@ -329,7 +329,7 @@ export default [
             await state('5-already', () => { cfg.me = { status: 200, body: { today: { status: 'CONFIRMED' } } }; }, 'already');
             cfg.me = { status: 200, body: { today: null } };
             await state('6-used-up', () => { cfg.status = { status: 200, body: { ...LIVE, railState: 'exhausted', treatsLeftToday: 0, chains: [] } }; }, 'exhausted');
-            await state('7-paused', () => { cfg.status = { status: 200, body: { enabled: false, railState: 'paused' } }; }, 'soon');
+            await state('7-paused', () => { cfg.status = { status: 200, body: { enabled: false, railState: 'paused' } }; }, 'paused');
             cfg.status = { status: 200, body: LIVE };
             // a bare 429 (the limiter) → Try again → 429 DONATE_ALREADY_TODAY → already
             cfg.post = { status: 429, body: { statusCode: 429, message: 'ThrottlerException: Too Many Requests' } };

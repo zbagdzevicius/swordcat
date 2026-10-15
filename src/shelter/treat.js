@@ -24,7 +24,7 @@ export const TREAT_TIMEOUT_MS = 15000;
 /** DOM event the panel dispatches (bubbling) on `actionsEl` after each render, so the card rebuilds its nav items. */
 export const ACTIONS_CHANGED = 'shelter:actions-changed';
 
-const RAILS = ['checking', 'live', 'exhausted', 'soon'];
+const RAILS = ['checking', 'live', 'exhausted', 'paused', 'soon'];
 const AT_SHELTER = ['WAITING', 'RECOVERING'];
 
 /** Does this card get a treat panel? A real cat at the shelter (or a bundled snapshot cat, status null). Pure. */
@@ -62,6 +62,7 @@ export function treatView(card, state, { embedded, mode } = {}) {
     case 'already': return { ...base, phase: 'already', message: T.already };
     case 'exhausted': return { ...base, phase: 'exhausted', message: T.exhausted };
     case 'soon': return { ...base, phase: 'soon', message: T.soon };
+    case 'paused': return { ...base, phase: 'paused', message: T.paused };
     case 'error': return { ...base, phase: 'error', message: T.error, button: card.retry ? { id: 'send', label: T.retry } : null };
     default: break;
   }
@@ -71,6 +72,7 @@ export function treatView(card, state, { embedded, mode } = {}) {
   }
   if (state?.sentToday) return { ...base, phase: 'already', message: T.already };
   if (state?.rail === 'exhausted') return { ...base, phase: 'exhausted', message: T.exhausted };
+  if (state?.rail === 'paused') return { ...base, phase: 'paused', message: T.paused };
   if (state?.rail === 'soon') return { ...base, phase: 'soon', message: T.soon };
   return { ...base, phase: 'open', button: { id: 'send', label: name ? T.send(name) : T.sendPlain } };
 }
@@ -80,7 +82,7 @@ export function phaseForResult(kind) {
   switch (kind) {
     case 'sent': return { phase: 'sent', retry: false };
     case 'already-today': return { phase: 'already', retry: false };
-    case 'paused': return { phase: 'soon', retry: false };
+    case 'paused': return { phase: 'paused', retry: false };
     case 'budget-spent': return { phase: 'exhausted', retry: false };
     case 'failed': case 'retry': return { phase: 'error', retry: true };
     case 'not-eligible': case 'signed-out': return { phase: 'error', retry: false };
@@ -223,7 +225,7 @@ export function createTreatController({ embedded, mode, post = () => false, dire
       }
       if (r.kind === 'sent' || r.kind === 'already-today') c.state = { ...c.state, sentToday: true };
       if (r.kind === 'budget-spent') c.state = { ...c.state, rail: 'exhausted' };
-      if (r.kind === 'paused') c.state = { ...c.state, rail: 'soon' };
+      if (r.kind === 'paused') c.state = { ...c.state, rail: 'paused' };
       onChange(card);
       return true;
     },

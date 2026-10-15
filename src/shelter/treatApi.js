@@ -59,7 +59,7 @@ export function receiptUrl(chainId, txHash) {
 /**
  * `GET /shelter/donate/status` body → the game's rail `{ rail, chainId?, amountLabel? }`. Pure.
  * Unreadable: `soon`. Main chain live with treats left: `live`. Else another open chain: `live` on it. Exhausted, or
- * live with none left: `exhausted`. Paused or not deployed: `soon`.
+ * live with none left: `exhausted`. Paused: `paused` (the Heist's words too). Not deployed: `soon`.
  */
 export function railOf(raw) {
   if (!isObj(raw)) return { rail: 'soon' };
@@ -74,6 +74,7 @@ export function railOf(raw) {
   const open = chains.find((c) => c.main !== true && c.enabled === true && c.railState === 'live' && count(c.treatsLeftToday) > 0);
   if (open && Number.isSafeInteger(Number(open.chainId)) && Number(open.chainId) > 0) return withAmount(open, Number(open.chainId));
   if (enabled && (state === 'exhausted' || state === 'live')) return { rail: 'exhausted' };
+  if (state === 'paused') return { rail: 'paused' };
   return { rail: 'soon' };
 }
 

@@ -1873,3 +1873,26 @@ test('Token Tails: the Token Tails cat keeps the Rescue House in hub mode; it on
   assert.equal(tt.speakerName, 'TEXT:name.ttcat');
   assert.equal(m.hub.residents.filter((r) => r.npcId === 'tokentails_cat').length, 1, 'one keeper');
 });
+
+test('Bubble TT5: stackPlace moves a newer bubble to the nearest free spot off older ones and Clem', async () => {
+  const { stackPlace } = await import('../../src/companions/Bubble.js');
+  const lim = { top: 0.9, bottom: -0.9, left: -0.95, right: 0.95 };
+  const me = { x0: -0.2, x1: 0.2, y0: 0.0, y1: 0.2 };
+  assert.deepEqual(stackPlace(me, [], lim), { dx: 0, dy: 0 }, 'nothing to dodge');
+  assert.deepEqual(stackPlace(me, [{ x0: 0.3, x1: 0.5, y0: 0, y1: 0.2 }], lim), { dx: 0, dy: 0 }, 'side by side: no shift');
+  const up = stackPlace(me, [{ x0: -0.25, x1: 0.25, y0: -0.05, y1: 0.15 }], lim, 1, 0.02);
+  assert.ok(Math.abs(up.dy - 0.17) < 1e-9 && up.dx === 0, `up over the older one (${JSON.stringify(up)})`);
+  const down = stackPlace({ x0: -0.2, x1: 0.2, y0: 0.6, y1: 0.85 }, [{ x0: -0.25, x1: 0.25, y0: 0.55, y1: 0.8 }], lim, 1, 0.02);
+  assert.ok(Math.abs(down.dy - (0.55 - 0.02 - 0.85)) < 1e-9, `down when the top has no room (${JSON.stringify(down)})`);
+  // a narrow box beside it: stepping aside is nearer than over it
+  const side = stackPlace(me, [{ x0: 0.15, x1: 0.3, y0: -0.4, y1: 0.6 }], lim, 1, 0.02);
+  assert.ok(side.dy === 0 && side.dx < 0 && me.x1 + side.dx <= 0.15, `aside (${JSON.stringify(side)})`);
+  // the top full, three bubbles: the newest lands clear of both, never back into one of them
+  const obs = [{ x0: -0.53, x1: -0.12, y0: -0.22, y1: 0.08 }, { x0: -0.48, x1: -0.08, y0: 0.1, y1: 0.33 }];
+  const m3 = { x0: -0.43, x1: -0.03, y0: -0.25, y1: -0.08 };
+  const t3 = stackPlace(m3, obs, { ...lim, top: 0.35 }, 16 / 9, 0.016);
+  const b3 = { x0: m3.x0 + t3.dx, x1: m3.x1 + t3.dx, y0: m3.y0 + t3.dy, y1: m3.y1 + t3.dy };
+  for (const o of obs) assert.ok(b3.x1 <= o.x0 || b3.x0 >= o.x1 || b3.y1 <= o.y0 || b3.y0 >= o.y1, `clear of ${JSON.stringify(o)} (${JSON.stringify(t3)})`);
+  // no free spot at all: it stays
+  assert.deepEqual(stackPlace(me, [{ x0: -1, x1: 1, y0: -1, y1: 1 }], lim), { dx: 0, dy: 0 });
+});

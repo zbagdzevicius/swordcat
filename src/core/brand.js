@@ -34,7 +34,7 @@ export const BRAND = Object.freeze({
   title,
   titleCaps: title.toUpperCase(),
   subtitle: 'A Token Tails Adventure',
-  tagline: 'One tiny knight. Eighteen lost kittens. One warm Rescue House.',
+  tagline: 'One tiny knight. Twelve lost kittens. One warm Rescue House.',
   usePinkPawName: USE_PINK_PAW_NAME,
   fallbackTitle: FALLBACK_TITLE,
   shelterName: 'Pink Paw',

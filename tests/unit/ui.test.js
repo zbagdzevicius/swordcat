@@ -241,8 +241,9 @@ test('Pause → Letters: one per level, text only when found', () => {
 test('Continue sub-line and the credits markdown renderer', () => {
   const ctx = ctx0();
   assert.equal(continueSub(ctx, null), '');
-  assert.equal(continueSub(ctx, { levelId: 'forest', kittens: 5 }), `Whiskerwood · 5/${KITTEN_IDS.length}`);
-  assert.equal(continueSub(ctx, { levelId: 'meadow', kittens: ['a', 'b'] }), `Purrdale Meadows · 2/${KITTEN_IDS.length}`);
+  // only reachable kittens count: bog and keep are stubs, so the line can reach 12/12
+  assert.equal(continueSub(ctx, { levelId: 'forest', kittens: 5 }), 'Whiskerwood · 5/12');
+  assert.equal(continueSub(ctx, { levelId: 'meadow', kittens: ['a', 'b'] }), 'Purrdale Meadows · 2/12');
   const html = licensesHtml('# Title\n\nSome **bold** text <script>\n\n| a | b |\n|---|---|\n| x | y |\n- item\n');
   assert.ok(!/<script>/.test(html), 'escaped');
   assert.match(html, /Title/);

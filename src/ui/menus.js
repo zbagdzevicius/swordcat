@@ -14,7 +14,7 @@
 //
 // One stack of screens; keyboard / gamepad navigate through input actions (navUp/Down/Left/Right, confirm, back,
 // pause) with hold-repeat, the mouse hovers + clicks, touch taps. `MenuNav` is the pure focus model (node-tested).
-import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS } from '../core/config.js';
+import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS, REACHABLE_KITTEN_IDS } from '../core/config.js';
 import { el, flag, setText, setVar, pulse } from './dom.js';
 import { tx, esc, actionGlyph, presetGlyph, codeLabel, PRESET_IDS, glyphHtml, glyphWords } from './text.js';
 import { codeWords } from './inputGlyph.js';
@@ -833,7 +833,7 @@ export class Menus {
     const inBoss = !!ctx.enemies?.boss && ctx.enemies.boss.alive !== false;
     const items = [
       this._button(body, tx(ctx, 'pause.resume'), () => this.ui.resume()),
-      this._button(body, tx(ctx, 'pause.kittens'), () => this.openKittens(), { sub: tx(ctx, 'pause.kittensCount', { n: (st?.kittens ?? []).length, max: KITTEN_IDS.length }) }),
+      this._button(body, tx(ctx, 'pause.kittens'), () => this.openKittens(), { sub: tx(ctx, 'pause.kittensCount', { n: (st?.kittens ?? []).length, max: REACHABLE_KITTEN_IDS.length }) }),
       this._button(body, tx(ctx, 'pause.letters'), () => this.openLetters(), { sub: tx(ctx, 'pause.lettersCount', { n: (st?.letters ?? []).filter((l) => /^l\d$/.test(l)).length, max: LEVEL_IDS.length }) }),
       this._button(body, tx(ctx, 'menu.stickers'), () => this.openStickers(), { sub: tx(ctx, 'ui.stickers.count', { n: stickerCells(ctx).filter((c) => c.owned).length, max: STICKER_IDS.length }) }),
       this._button(body, tx(ctx, 'pause.settings'), () => this.openSettings()),
@@ -969,12 +969,12 @@ export class Menus {
   dispose() { for (const off of this._domOffs) off(); this.root.remove(); }
 }
 
-/** Continue button sub-line: "Purrdale Meadows · 5/18 kittens" from a save summary / resume point. Pure. */
+/** Continue button sub-line: "Purrdale Meadows · 5/12" from a save summary / resume point (reachable kittens only). Pure. */
 export function continueSub(ctx, sum) {
   if (!sum?.levelId) return '';
   const region = tx(ctx, `region.${sum.levelId}`);
   const n = Array.isArray(sum.kittens) ? sum.kittens.length : Number.isFinite(sum.kittens) ? sum.kittens : ctx.state?.kittens?.length;
-  return Number.isFinite(n) ? `${region} · ${n}/${KITTEN_IDS.length}` : region;
+  return Number.isFinite(n) ? `${region} · ${n}/${REACHABLE_KITTEN_IDS.length}` : region;
 }
 
 /**

@@ -44,7 +44,7 @@ test('BRAND: frozen, the title in one place, derived caps, Pink Paw names behind
   assert.equal(BRAND.title, 'Pink Paw Knight');
   assert.equal(BRAND.titleCaps, BRAND.title.toUpperCase());
   assert.equal(BRAND.subtitle, 'A Token Tails Adventure');
-  assert.equal(BRAND.tagline, 'One tiny knight. Eighteen lost kittens. One warm Rescue House.');
+  assert.equal(BRAND.tagline, 'One tiny knight. Twelve lost kittens. One warm Rescue House.');
   assert.equal(BRAND.usePinkPawName, true);
   assert.equal(BRAND.rescueHouse, 'Pink Paw Rescue House');
   assert.equal(BRAND.fallbackRescueHouse, 'Pawsbury Rescue House');

@@ -411,6 +411,10 @@ export const KITTEN_IDS = ['biscuit', 'noodle', 'button', 'pickles', 'pebble', '
   'tater', 'mittens', 'socks', 'juniper', 'bramble', 'fennel', 'bean', 'crumpet', 'dumpling'];
 export const KITTENS_BY_LEVEL = { meadow: KITTEN_IDS.slice(0, 3), forest: KITTEN_IDS.slice(3, 6), town: KITTEN_IDS.slice(6, 9),
   gate: KITTEN_IDS.slice(9, 12), bog: KITTEN_IDS.slice(12, 15), keep: KITTEN_IDS.slice(15, 18) };
+/** Levels that are still bootable stubs with no kittens in them (STATUS.md Known issues). */
+export const STUB_LEVEL_IDS = ['bog', 'keep'];
+/** The kittens a player can rescue today (12 until bog and keep ship). Progress counts and public copy use this. */
+export const REACHABLE_KITTEN_IDS = KITTEN_IDS.filter((id) => !STUB_LEVEL_IDS.some((l) => KITTENS_BY_LEVEL[l].includes(id)));
 
 /** Game modes (§19.1 A7). */
 export const MODES = ['play', 'dialog', 'cutscene', 'menu', 'memecam'];

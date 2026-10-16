@@ -514,6 +514,37 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
   tokentails.com mocked or blocked. No real treat was sent.
 - **Open.** See §12.7 in the plan.
 
+## TT5: in-modal treat, one message board, higher jumps (2026-10-15 to 10-16; docs/TOKENTAILS-PLAN.md §13)
+- **Why.** The founder asked to send a treat from the cat card without leaving the game, for message banners that do
+  not overlap on phones or desktops, and for higher jumps.
+- **Treat in the card.** Embedded in Token Tails (`/swordcat`) the host sends the treat through the bridge, as in TT4
+  (signed in first, then guest). Standalone on tokentails.com (`/swordcat-game/`) the card calls the guest route
+  itself (`src/shelter/treatApi.js`): checking, ready, sending, sent with a receipt link in a new tab, already sent
+  today, used up (back 00:00 UTC), paused ("Treats are paused right now."), soon, failed with retry. Every state shows
+  the free line and "Held by Token Tails for the shelter until handover." Off tokentails.com (localhost, other hosts,
+  CORS blocked) the card shows a new-tab link and Copy link. The game tab never navigates.
+- **One message board** (`src/ui/messages.js`). Modals, cards, toasts and damage words no longer stack. A card is
+  placed off the HUD, the touch buttons, Clem and live bubbles, keeps its spot while it is free, and is skipped only
+  by a tap on it or Enter. A phone card never shrinks below 80%. On phones world bubbles wait hidden under a centre
+  card with their timers paused; on tablets and desktops they step off the card and the toasts. Bubbles never cover
+  each other or Clem, and toasts stay off the companion portrait. The Kitten-mode offer stays off the HUD and pause.
+- **Before / after.** `scratchpad/inline-treats/m/before/` vs `m/after/` (6 sizes; e.g. `phone-land-03-burst-sticker`:
+  two stacked toasts plus the sticker label over the jump button before, one "Kitten found" card after). Sweep after
+  `5c8c588`: no overlaps at 6 sizes (`fix3/out/`).
+- **Jumps.** `jumpV` 7.4 to 8.4 (apex 1.245 m to 1.604 m), coyote 0.12 to 0.15 s, buffer 0.15 to 0.20 s, release cut
+  0.5 to 0.65 and only after 0.12 s of rise (a keyboard tap peaks about 1.17 m and clears the 1.0 m fence),
+  `fallGravityMul` 1.35 to 1.5, `hardLandSpeed` 9 to 12.5, mushroom bounce 9 to 10, jump assist dv 1.2 to 1.5 and
+  max rise 1.1 to 1.4 m. A buffered jump is no longer cut to a 0.31 m hop. The twirl gives low gravity only while
+  falling (no twirl super-jump). Invisible walls in meadow, forest and town were raised so she cannot leave the lanes.
+- **Fixed.** The sticker icon stays on its disc. The edge coin avoids touch buttons, the HUD and the objective pill. A
+  queued shelter card waits on a nearby fight for at most 25 s. The sticky Continue focus ring stays inside its pill.
+  The card pop-in stays on screen. A bubble goes below its speaker only as a last resort.
+- **Tests.** `npm run test:unit` 1274 of 1274. Smoke `ui:messages`, `companions:*`, `treat:*` and `player:jumps` pass,
+  with every write to tokentails.com mocked or blocked. No real treat was sent.
+- **Not changed.** On the host `/swordcat` page the analytics consent card still covers the treat button on 844 x 390
+  until answered (the game now pauses while it is open). One sweep sample on 390 x 844 caught a bubble 9 ms after the
+  shelter card closed while the camera panned; it was clear by 800 ms.
+
 ## TT6: input icons and a visible shield (2026-10-16)
 - **Why.** The founder could not read "RMB", and "Tap RMB when you see the shield" pointed at a shield nobody could see.
 - **Input icons.** `src/ui/inputGlyph.js` draws every input for the device in use (`input.device`, the last one used):

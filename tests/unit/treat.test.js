@@ -34,7 +34,7 @@ test('treat: copy has the free line and the custody line, no adopt, no em dash, 
   assert.doesNotMatch(all, /—/);
   assert.doesNotMatch(all, /\btoken\b(?! tails)/i);
   assert.equal(TREAT_COPY.free, 'Token Tails sends a free treat. You pay nothing.');
-  assert.equal(TREAT_COPY.custody, 'Held by Token Tails for the shelter until handover.');
+  assert.equal(TREAT_COPY.custody, "The treat goes to Pink Paw's wallet.");
   const src = fs.readFileSync(new URL('../../src/shelter/treat.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /\bfetch\(/, 'treat.js never fetches; treatApi.js does, only in direct mode');
   assert.doesNotMatch(src, /shelter-payouts\/give/, 'the old give-page link is gone');
@@ -208,7 +208,7 @@ test('treat: installTreatPanel wires the card events and the bridge end to end (
   const panel = actionsEl.children[0];
   assert.equal(panel.dataset.treatPhase, 'open');
   assert.match(text(panel), /Send Pink Paw a treat for Judas/);
-  assert.match(text(panel), /Token Tails sends a free treat\./); assert.match(text(panel), /until handover\./);
+  assert.match(text(panel), /Token Tails sends a free treat\./); assert.match(text(panel), /The treat goes to Pink Paw's wallet\./);
   find(panel, (n) => n.dataset.treat === 'send').listeners.click({ stopPropagation() {} });
   const req = parent.sent.at(-1);
   assert.equal(req.o, 'https://tokentails.com');

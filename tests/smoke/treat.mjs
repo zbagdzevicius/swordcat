@@ -99,7 +99,7 @@ export default [
           // open → Enter sends → sent
           t.assert(await openFakeCard(frame) === 'open', `[${vp.tag}] the card opens on the open state`);
           const txt = await panelText(frame);
-          t.assert(/Send Pink Paw a treat for Judas/.test(txt) && /Token Tails sends a free treat\./.test(txt) && /until handover\./.test(txt), `[${vp.tag}] open: button, free line, custody line`);
+          t.assert(/Send Pink Paw a treat for Judas/.test(txt) && /Token Tails sends a free treat\./.test(txt) && /The treat goes to Pink Paw's wallet\./.test(txt), `[${vp.tag}] open: button, free line, custody line`);
           t.assert(!/adopt/i.test(txt), `[${vp.tag}] no "adopt"`);
           await shoot(t, page, `${vp.tag}-1-open`);
           await page.evaluate(() => { window.__reply = { kind: 'sent', amountLabel: '0.01 USDC', explorerUrl: 'https://explorer.arc.io/tx/0xfeed', receiptPath: '/shelter-payouts/receipt?chain=5042&tx=0xfeed' }; });
@@ -181,7 +181,7 @@ export default [
       const html = await page.evaluate(() => document.querySelector('.tt-treat').innerHTML);
       t.assert(!/shelter-payouts\/give/.test(html), 'no /shelter-payouts/give link');
       const txt = await panelText(page.mainFrame());
-      t.assert(/Play on tokentails\.com\/swordcat to send a free treat\. Opens in a new tab\./.test(txt) && /until handover\./.test(txt), `link copy (${txt.replace(/\n/g, ' | ')})`);
+      t.assert(/Play on tokentails\.com\/swordcat to send a free treat\. Opens in a new tab\./.test(txt) && /The treat goes to Pink Paw's wallet\./.test(txt), `link copy (${txt.replace(/\n/g, ' | ')})`);
       t.assert(!(await page.evaluate(() => !!document.querySelector('.tt-treat [data-treat="send"]'))), 'no send button outside tokentails.com');
       await shoot(t, page, 'link');
       await page.click('.tt-treat [data-treat="copy"]');
@@ -263,7 +263,7 @@ export default [
         };
         const custody = async (label) => {
           const txt = await page.evaluate(() => document.querySelector('.tt-treat')?.innerText ?? '');
-          t.assert(/Held by Token Tails for the shelter until handover\./.test(txt) && /Token Tails sends a free treat\./.test(txt) && !/adopt/i.test(txt) && !/—/.test(txt), `[${vp.tag}] ${label}: free + custody lines, no adopt (${txt.replace(/\n/g, ' | ')})`);
+          t.assert(/The treat goes to Pink Paw's wallet\./.test(txt) && /Token Tails sends a free treat\./.test(txt) && !/adopt/i.test(txt) && !/—/.test(txt), `[${vp.tag}] ${label}: free + custody lines, no adopt (${txt.replace(/\n/g, ' | ')})`);
           return txt;
         };
         try {

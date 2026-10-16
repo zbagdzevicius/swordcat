@@ -5,7 +5,7 @@
 export const TREAT_COPY = Object.freeze({
   heading: 'Send a free treat',
   free: 'Token Tails sends a free treat. You pay nothing.',
-  custody: 'Held by Token Tails for the shelter until handover.',
+  custody: "The treat goes to Pink Paw's wallet.",
   send: (name) => `Send Pink Paw a treat for ${name}`,
   sendPlain: 'Send Pink Paw a treat',
   sending: 'Sending the treat…',

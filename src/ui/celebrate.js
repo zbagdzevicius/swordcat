@@ -364,10 +364,11 @@ export class Celebrate {
       this._start(c);
     }
     if (ev.fly && !skipped) this._fly(ev.fly);
-    // TT5: re-place a showing card at 4 Hz (the objective line or the HUD can change under it)
+    // TT5: re-place a showing card at 10 Hz (the objective line or the HUD can change under it, and Clem walks under it
+    // when the camera pans after a modal); it keeps its spot while that is still free (messages.js cardPlace `keep`)
     const c = this.q.cur;
     if (c && !c.flying && !c.toast && (this._placeT = (this._placeT ?? 0) - dt) <= 0) {
-      this._placeT = 0.25;
+      this._placeT = 0.1;
       if (c.t > 0.15) this.ui?.messages?.placeCard?.(this.card, this.pop);
     }
     if (ev.done) { this._end(); if (this._homeKey) this.ui?.bumpHome?.(this._homeKey); this._homeKey = null; }

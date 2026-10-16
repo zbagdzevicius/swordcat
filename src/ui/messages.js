@@ -12,7 +12,12 @@
 //    hint wait too (one box at a time). In combat a card becomes an icon toast (celebrate.js).
 //  • Root classes (written on change only): `msg-p0`, `msg-card`, `msg-toast` (a toast is up or just left), `msg-phone`,
 //    `vp-<kind>`. ui.css hides the lower layers with them.
-// DOM reads: one rect per placed card, plus Clem's screen point. No per-frame allocation in `update`.
+//  • World speech bubbles (companions/Bubble.js) under a modal, and on phones under a centre card, wait hidden with
+//    their clocks held (`bubbleHold`); on bigger screens they step off the card and the toasts (`bubbleBlocks`) and
+//    the card is placed off the live bubbles (TT5 verify round: the kitten's thank-you line sat under her card).
+// DOM reads: one rect per placed card, plus Clem's screen point, plus the card and toast boxes at 10 Hz while one is
+// up. No per-frame allocation in `update`.
+import { liveBubbleRects } from '../companions/Bubble.js';
 
 /** Levels, timings and layout numbers (CSS px / seconds). */
 export const MSG = Object.freeze({
@@ -22,6 +27,9 @@ export const MSG = Object.freeze({
   cardTopVh: 0.12,            // the card slot starts at max(top-centre column bottom + gap, 12vh)
   toastLinger: 0.3,           // s the hint keeps waiting after the last toast has gone (no fade back over a leaving one)
   dockScales: Object.freeze([0.8, 0.66]),
+  phoneMinScale: 0.8,         // a phone card never docks below this (at 0.66 its line was about 10 px)
+  popOver: 0.04,              // half of the card's 8 % pop-in overshoot, kept inside the screen on each side
+  blockRate: 0.1,             // s between two reads of the card / toast boxes the bubbles keep off
   clemH: 1.3,                 // m: her height for the screen box
   stickPad: 36,               // px: the camera thumb pad around the joystick zone (touch.js stickRest), not kept clear by the offer
 });
@@ -56,26 +64,42 @@ export function sameLine(a, b) {
 
 /**
  * Where the centre card goes. Pure. Tries, in order: centred under `top`; the left column; the right column (both under
- * their HUD corner); centred under Clem; centred above her. The first spot whose box covers no `avoid` rect and not
- * Clem by more than MSG.overlapMax wins. With no free spot it docks smaller (MSG.dockScales) and takes the best one.
+ * their HUD corner); centred under Clem; centred above her; then any free spot, nearest the top centre ('free'). The
+ * first spot whose box covers no `avoid` rect and not Clem by more than MSG.overlapMax wins. With no free spot it docks
+ * smaller (MSG.dockScales, not below `minScale`) and takes the best one.
  * @param {{ W: number, H: number, top: number, w: number, h: number, avoid?: {x:number,y:number,w:number,h:number}[],
- *   clem?: {x:number,y:number,w:number,h:number}|null, leftTop?: number, rightTop?: number, gutter?: number }} s
+ *   clem?: {x:number,y:number,w:number,h:number}|null, leftTop?: number, rightTop?: number, gutter?: number,
+ *   full?: boolean, minScale?: number, keep?: {x:number,y:number,w:number,h:number,scale:number,spot:string}|null }} s
+ *   `minScale`: the smallest dock scale tried (phones: MSG.phoneMinScale); `keep`: the card's current spot, kept while
+ *   it is still free
  * @returns {{ x: number, y: number, w: number, h: number, scale: number, spot: string, score: number }}
  */
 export function cardPlace(s) {
   const g = s.gutter ?? MSG.gutter, W = s.W, H = s.H, avoid = s.avoid ?? [], clem = s.clem ?? null;
   let best = null;
-  for (const scale of s.full ? [1] : [1, ...MSG.dockScales]) {
+  const min = s.minScale ?? 0;
+  // the spot it already has stays while it is still free (a card that hops at every re-place reads as a glitch)
+  const k = s.keep;
+  if (k && !s.full && Math.abs(k.w - Math.round(s.w * k.scale)) <= 1 && Math.abs(k.h - Math.round(s.h * k.scale)) <= 1
+    && k.x >= 0 && k.y >= s.top - 0.5 && k.x + k.w <= W && k.y + k.h <= H) {
+    let score = clem ? overlapFrac(k, clem) : 0;
+    for (const r of avoid) { const f = overlapFrac(k, r); if (f > score) score = f; }
+    if (score <= MSG.overlapMax) return { x: k.x, y: k.y, w: k.w, h: k.h, scale: k.scale, spot: k.spot, score };
+  }
+  for (const scale of s.full ? [1] : [1, ...MSG.dockScales.filter((k) => k >= min - 1e-9)]) {
     const w = Math.round(s.w * scale), h = Math.round(s.h * scale);
     const cx = Math.round((W - w) / 2);
+    // the pop-in overshoots to 108 % (ui.css celPop): keep that inside the screen too (Golden Hour poked past a
+    // tablet's right edge while it popped in the right column)
+    const px = g + Math.ceil(w * MSG.popOver), py = g + Math.ceil(h * MSG.popOver);
     const spots = [
       ['centre', cx, s.top],
-      ['left', g, Math.max(s.top, s.leftTop ?? s.top)],
-      ['right', W - g - w, Math.max(s.top, s.rightTop ?? s.top)],
+      ['left', px, Math.max(s.top, s.leftTop ?? s.top)],
+      ['right', W - px - w, Math.max(s.top, s.rightTop ?? s.top)],
     ];
     if (clem) spots.push(['under', cx, clem.y + clem.h + MSG.gap], ['over', cx, clem.y - MSG.gap - h]);
     for (const [spot, x0, y0] of spots) {
-      const x = Math.max(g, Math.min(W - g - w, x0)), y = Math.max(g, Math.min(H - g - h, y0));
+      const x = Math.max(px, Math.min(W - px - w, x0)), y = Math.max(g, Math.min(H - py - h, y0));
       if (y < s.top - 0.5 && spot !== 'over') continue;
       const box = { x, y, w, h };
       let score = clem ? overlapFrac(box, clem) : 0;
@@ -84,6 +108,22 @@ export function cardPlace(s) {
       if (score <= MSG.overlapMax) return cand;
       if (!best || score < best.score - 1e-6) best = cand;
     }
+    // no named spot is free: any free spot at this size, nearest the top-centre one (a landscape phone has room
+    // between the HUD and the touch buttons that none of the named spots hits; the card sat on the pause button)
+    const sx = Math.max(8, Math.round(W / 24)), sy = Math.max(8, Math.round(H / 24));
+    let grid = null, cost = Infinity;
+    for (let y = Math.max(g, s.top); y <= H - py - h; y += sy) {
+      for (let x = px; x <= W - px - w; x += sx) {
+        const c = Math.abs(y - s.top) + 0.5 * Math.abs(x - cx);
+        if (c >= cost) continue;
+        const box = { x, y, w, h };
+        let score = clem ? overlapFrac(box, clem) : 0;
+        if (score > MSG.overlapMax) continue;
+        for (const r of avoid) { const f = overlapFrac(box, r); if (f > score) score = f; if (score > MSG.overlapMax) break; }
+        if (score <= MSG.overlapMax) { cost = c; grid = { x, y, w, h, scale, spot: 'free', score }; }
+      }
+    }
+    if (grid) return grid;
   }
   return best;
 }
@@ -145,6 +185,11 @@ export class Messages {
     this.placed = null;            // last card placement (tests / smoke)
     this._clem = { x: 0, y: 0, w: 0, h: 0 };
     this._avoid = [];
+    this._bubbles = [];
+    /** what world bubbles keep off (Bubble.js setBubbleBlockers): canvas CSS px */
+    this.blocks = { w: 0, h: 0, rects: [] };
+    this._blockT = 0;
+    this._blockPool = [{ x: 0, y: 0, w: 0, h: 0 }, { x: 0, y: 0, w: 0, h: 0 }];
   }
 
   /** Per frame, before the renderers draw (UI.render). */
@@ -176,6 +221,48 @@ export class Messages {
       this._flag(root, 'msg-results', b.has('results'));
       for (const k of ['phone-portrait', 'phone-land', 'tablet', 'desktop']) this._flag(root, `vp-${k}`, this.kind === k);
     }
+    this._measureBlocks(dt);
+  }
+
+  /**
+   * World bubbles wait (hidden, clocks held) under a modal, and on phones under a centre card, including the frame
+   * between two queued cards (a line popped up for one frame there).
+   */
+  bubbleHold() {
+    if (this.p0) return true;
+    if (!this.phone) return false;
+    const q = this.ui.celebrations?.q;
+    return this.card || (!q?.cur && (q?.items?.length ?? 0) > 0);
+  }
+
+  /** The boxes world bubbles keep off: `{ w, h, rects }` in canvas CSS px (see _measureBlocks). */
+  bubbleBlocks() { return this.blocks; }
+
+  /** The centre card and the toast stack, re-read at 1 / MSG.blockRate Hz while either is up; empty otherwise. */
+  _measureBlocks(dt) {
+    const b = this.blocks;
+    if (!this.card && !this.toast) { b.rects.length = 0; this._blockT = 0; return; }
+    if ((this._blockT -= dt) > 0 || !hasDom()) return;
+    this._blockT = MSG.blockRate;
+    b.rects.length = 0;
+    const cv = this.ctx.renderer?.domElement;
+    const c = cv?.getBoundingClientRect?.() ?? { left: 0, top: 0, width: innerWidth, height: innerHeight };
+    if (!(c.width > 0 && c.height > 0)) return;
+    b.w = c.width; b.h = c.height;
+    const add = (e) => {
+      if (!e?.isConnected) return;
+      const q = e.getBoundingClientRect();
+      if (!(q.width > 0 && q.height > 0)) return;
+      const cs = getComputedStyle(e);
+      if (cs.visibility === 'hidden' || cs.display === 'none' || +cs.opacity < 0.05) return;
+      const o = this._blockPool[b.rects.length] ?? (this._blockPool[b.rects.length] = { x: 0, y: 0, w: 0, h: 0 });
+      o.x = q.left - c.left; o.y = q.top - c.top; o.w = q.width; o.h = q.height;
+      b.rects.push(o);
+    };
+    if (this.card) add(this.ui.celebrations?.pop);
+    // each toast on its own (the stack's box spans the whole top column on a desktop)
+    const tr = this.ui.toasts?.root;
+    if (this.toast && tr?.children) for (let i = 0; i < tr.children.length && i < 4; i++) add(tr.children[i]);
   }
 
   _flag(e, c, on) {
@@ -218,10 +305,16 @@ export class Messages {
     if (!hasDom() || !card || !pop) return null;
     for (const k of ['phone-portrait', 'phone-land', 'tablet', 'desktop']) card.classList.toggle(`vp-${k}`, this.kind === k);
     card.style.setProperty('--cs', '1');
+    // the layout size, not the box on screen: during the pop-in (scale .4 to 1.08) the screen box is the wrong size,
+    // which docked a card smaller on a landscape phone or sent it over Clem
     const r = pop.getBoundingClientRect();
-    if (!(r.width > 0)) return null;
-    const at = this._place(Math.ceil(r.width), Math.ceil(r.height));
+    const w = pop.offsetWidth || r.width, h = pop.offsetHeight || r.height;
+    if (!(w > 0)) return null;
+    const cur = this.ui.celebrations?.q?.cur ?? null;
+    const keep = cur && cur === this._placedFor ? this.placed : null;
+    const at = this._place(Math.ceil(w), Math.ceil(h), false, keep);
     if (!at) return null;
+    this._placedFor = cur;
     card.style.setProperty('--cx', `${Math.round(at.x + at.w / 2)}px`);
     card.style.setProperty('--cy', `${Math.round(at.y)}px`);
     card.style.setProperty('--cs', at.scale.toFixed(2));
@@ -253,7 +346,7 @@ export class Messages {
   }
 
   /** cardPlace for a w × h box with the live HUD / touch / Clem rects. */
-  _place(w, h, full = false) {
+  _place(w, h, full = false, keep = null) {
     const ui = this.ui, W = innerWidth, H = innerHeight;
     const rect = (e) => {
       if (!e || e.offsetParent === null) return null;
@@ -297,8 +390,16 @@ export class Messages {
       if (q && slot.classList.contains('is-phone')) avoid.push({ x: q.left, y: q.top, w: q.width, h: q.height });
       else if (q) top = Math.max(top, Math.ceil(q.bottom + MSG.gap));
     }
+    // tablets and desktops: off the world bubbles that are up now (the kitten's thank-you line rises with her card); on
+    // phones the bubbles wait under the card instead (bubbleHold)
+    if (!this.phone && !full) {
+      const cv = this.ctx.renderer?.domElement;
+      const c = cv?.getBoundingClientRect?.() ?? { left: 0, top: 0, width: W, height: H };
+      const bs = this._bubbles; bs.length = 0;
+      if (c.width > 0) for (const q of liveBubbleRects(bs, c.width, c.height)) avoid.push({ x: q.x + c.left, y: q.y + c.top, w: q.w, h: q.h });
+    }
     const tl = rect(ui.hud?.tlEl), tr = rect(ui.hud?.trEl);
-    return cardPlace({ W, H, top, w, h, avoid, clem: this.clemRect(), full,
+    return cardPlace({ W, H, top, w, h, avoid, clem: this.clemRect(), full, keep, minScale: this.phone ? MSG.phoneMinScale : 0,
       leftTop: tl ? Math.ceil(tl.bottom + MSG.gap) : top, rightTop: tr ? Math.ceil(tr.bottom + MSG.gap) : top });
   }
 

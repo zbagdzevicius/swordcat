@@ -47,7 +47,7 @@ import { CATS, visualDt } from '../characters/index.js';
 
 import { planAbility, explicitAim, cursorGround, newPlan, abilityShape, CAST } from './abilityAim.js';
 import { AbilityIndicator } from './AbilityIndicator.js';
-import { setBubbleSafeInsets, setBubbleHush, setBubblePlayer } from './Bubble.js';
+import { setBubbleSafeInsets, setBubbleHush, setBubblePlayer, setBubbleBlockers } from './Bubble.js';
 import { PartyLife } from './party.js';
 import { emitCatSaved } from '../shelter/roster.js';
 
@@ -72,7 +72,10 @@ export class CompanionManager {
     // every speech bubble (ours, NPCs', story/enemy barks) stays clear of the HUD's safe insets (ability bar, boss plate)
     setBubbleSafeInsets(() => ctx.ui?.safeInsets);
     // TT5: no world bubble draws behind a modal's scrim (shelter card, results, offer)
-    setBubbleHush(() => !!ctx.ui?.messages?.p0);
+    // (TT5 verify round: and on phones under a centre card; the line waits with its clock held, ui/messages.js)
+    setBubbleHush(() => !!(ctx.ui?.messages?.bubbleHold?.() ?? ctx.ui?.messages?.p0));
+    // tablets and desktops: bubbles step off the centre card and the toasts
+    setBubbleBlockers(() => ctx.ui?.messages?.bubbleBlocks?.() ?? null);
     // TT5: a bubble that is not hers steps off Clem, and a newer bubble off an older one
     setBubblePlayer(() => ctx.player);
     this.ctx = ctx;

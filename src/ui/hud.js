@@ -639,6 +639,9 @@ export class Hud {
     if (tl && tl.height > 0) top = tl.bottom;
     const hr = this.heartsEl.getBoundingClientRect?.();
     if (hr && hr.height > 0) top = Math.max(top, this._statsBottom(hr.bottom));
+    // the companion portrait under the left block (a toast covered 8 % of it on a 667 × 375 phone)
+    const cp = this.compEl?.isConnected && this.compEl.offsetParent !== null ? this.compEl.getBoundingClientRect?.() : null;
+    if (cp && cp.height > 0 && cp.top < H / 2) top = Math.max(top, cp.bottom);
     if (this.guideEl.classList.contains('is-on') && this.guideEl.classList.contains('is-under')) {
       const g = this.guideEl.getBoundingClientRect?.();
       if (g && g.height > 0) top = Math.max(top, g.bottom);

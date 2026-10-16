@@ -217,3 +217,71 @@ test('TT5 CSS: lower layers hide under a modal; the hint waits for toasts; Conti
   const sh = read('src/shelter/card.css');
   assert.match(sh, /max-height: 420px\) and \(orientation: landscape\)[\s\S]*\.sh-continue \{ position: sticky; bottom: 0;/);
 });
+
+test('TT5 verify: world bubbles wait under a modal, and on phones under a centre card; bigger screens keep them up', () => {
+  const ui = { celebrations: { q: { cur: null, items: [] }, busy: false }, toasts: { q: { shown: [] } }, shelterCard: { open: false, queue: [] }, results: { open: false }, offer: { open: false } };
+  const m = new Messages({}, ui);
+  m.update(0.016);
+  assert.equal(m.bubbleHold(), false);
+  ui.shelterCard.open = true; m.update(0.016);
+  assert.equal(m.bubbleHold(), true, 'a modal hushes them');
+  ui.shelterCard.open = false; ui.celebrations.q.cur = { started: true }; m.update(0.016);
+  m.phone = false;
+  assert.equal(m.bubbleHold(), false, 'desktop: a card leaves them up (they step off it instead)');
+  m.phone = true;
+  assert.equal(m.bubbleHold(), true, 'phone: they wait while the card is up');
+  ui.celebrations.q.cur = null; m.update(0.016); m.phone = true;
+  assert.equal(m.bubbleHold(), false, 'and come back when it goes');
+  assert.deepEqual(m.bubbleBlocks().rects, [], 'nothing to keep off with no card and no toast');
+});
+
+test('TT5 verify: a phone card never docks below MSG.phoneMinScale (its line stays readable)', () => {
+  // only a two-thirds card fits above the bottom band: without a floor it docks that small, a phone stops at 0.8
+  const avoid = [{ x: 0, y: 200, w: 844, h: 190 }];
+  const any = cardPlace({ W: 844, H: 390, top: 60, w: 360, h: 200, avoid });
+  assert.equal(any.scale, MSG.dockScales[MSG.dockScales.length - 1], 'without a floor it docks to the smallest');
+  const phone = cardPlace({ W: 844, H: 390, top: 60, w: 360, h: 200, avoid, minScale: MSG.phoneMinScale });
+  assert.equal(phone.scale, MSG.phoneMinScale, `phone floor (${phone.scale})`);
+  // a free spot still wins at full size
+  const free = cardPlace({ W: 844, H: 390, top: 60, w: 360, h: 200, avoid: [], minScale: MSG.phoneMinScale });
+  assert.equal(free.scale, 1);
+});
+
+test('TT5 verify: phone bubbles also wait in the frame between two queued cards; the pop-in stays on screen', () => {
+  const ui = { celebrations: { q: { cur: null, items: [{ kind: 'card' }] }, busy: true }, toasts: { q: { shown: [] } }, shelterCard: { open: false, queue: [] }, results: { open: false }, offer: { open: false } };
+  const m = new Messages({}, ui);
+  m.update(0.016); m.phone = true;
+  assert.equal(m.bubbleHold(), true, 'a card is next: still waiting');
+  ui.celebrations.q.items = []; m.update(0.016); m.phone = true;
+  assert.equal(m.bubbleHold(), false);
+  // the right column keeps the 108 % pop inside the screen
+  const at = cardPlace({ W: 1024, H: 768, top: 90, w: 300, h: 180, avoid: [{ x: 0, y: 0, w: 700, h: 768 }] });
+  assert.equal(at.spot, 'right');
+  assert.ok(at.x + at.w + at.w * MSG.popOver <= 1024 - MSG.gutter + 1e-9, `right edge with the overshoot (${JSON.stringify(at)})`);
+});
+
+test('TT5 verify: a re-placed card keeps its spot while it is free, and moves when Clem walks under it', () => {
+  const base = { W: 1024, H: 768, top: 90, w: 300, h: 200 };
+  const first = cardPlace({ ...base, avoid: [{ x: 362, y: 90, w: 300, h: 200 }] });
+  assert.notEqual(first.spot, 'centre');
+  // the centre is free again, but the card stays where it is
+  const again = cardPlace({ ...base, avoid: [], keep: first });
+  assert.deepEqual([again.x, again.y, again.spot], [first.x, first.y, first.spot]);
+  // Clem under it now: it moves
+  const clem = { x: first.x + 100, y: first.y + 60, w: 60, h: 80 };
+  const moved = cardPlace({ ...base, avoid: [], clem, keep: first });
+  assert.ok(overlapFrac(moved, clem) <= MSG.overlapMax, `off Clem (${JSON.stringify(moved)})`);
+  // a different size (new content) is placed afresh
+  const fresh = cardPlace({ ...base, h: 260, avoid: [], keep: first });
+  assert.equal(fresh.spot, 'centre');
+});
+
+test('TT5 verify: with every named spot taken the card finds a free one at full size before it docks', () => {
+  // 844 × 390: the top band (HUD, pause) and the right touch column are taken; Clem is low on the left
+  const avoid = [{ x: 0, y: 0, w: 844, h: 140 }, { x: 600, y: 0, w: 244, h: 390 }];
+  const clem = { x: 240, y: 280, w: 40, h: 60 };
+  const at = cardPlace({ W: 844, H: 390, top: 60, w: 290, h: 90, avoid, clem, minScale: MSG.phoneMinScale });
+  assert.equal(at.scale, 1, JSON.stringify(at));
+  assert.ok(at.score <= MSG.overlapMax, JSON.stringify(at));
+  for (const r of [...avoid, clem]) assert.ok(overlapFrac(at, r) <= MSG.overlapMax, `off ${JSON.stringify(r)}: ${JSON.stringify(at)}`);
+});

@@ -1882,8 +1882,12 @@ test('Bubble TT5: stackPlace moves a newer bubble to the nearest free spot off o
   assert.deepEqual(stackPlace(me, [{ x0: 0.3, x1: 0.5, y0: 0, y1: 0.2 }], lim), { dx: 0, dy: 0 }, 'side by side: no shift');
   const up = stackPlace(me, [{ x0: -0.25, x1: 0.25, y0: -0.05, y1: 0.15 }], lim, 1, 0.02);
   assert.ok(Math.abs(up.dy - 0.17) < 1e-9 && up.dx === 0, `up over the older one (${JSON.stringify(up)})`);
-  const down = stackPlace({ x0: -0.2, x1: 0.2, y0: 0.6, y1: 0.85 }, [{ x0: -0.25, x1: 0.25, y0: 0.55, y1: 0.8 }], lim, 1, 0.02);
-  assert.ok(Math.abs(down.dy - (0.55 - 0.02 - 0.85)) < 1e-9, `down when the top has no room (${JSON.stringify(down)})`);
+  // the top has no room: beside it (TT5 verify: a box moved down has its tail pointing away from the speaker) ...
+  const aside = stackPlace({ x0: -0.2, x1: 0.2, y0: 0.6, y1: 0.85 }, [{ x0: -0.25, x1: 0.25, y0: 0.55, y1: 0.8 }], lim, 1, 0.02);
+  assert.ok(aside.dy === 0 && aside.dx !== 0, `aside when the top has no room (${JSON.stringify(aside)})`);
+  // ... and down only when there is no room beside it either
+  const down = stackPlace({ x0: -0.2, x1: 0.2, y0: 0.6, y1: 0.85 }, [{ x0: -0.25, x1: 0.25, y0: 0.55, y1: 0.8 }], { ...lim, left: -0.3, right: 0.3 }, 1, 0.02);
+  assert.ok(Math.abs(down.dy - (0.55 - 0.02 - 0.85)) < 1e-9, `down when the top and the sides have no room (${JSON.stringify(down)})`);
   // a narrow box beside it: stepping aside is nearer than over it
   const side = stackPlace(me, [{ x0: 0.15, x1: 0.3, y0: -0.4, y1: 0.6 }], lim, 1, 0.02);
   assert.ok(side.dy === 0 && side.dx < 0 && me.x1 + side.dx <= 0.15, `aside (${JSON.stringify(side)})`);
@@ -1895,4 +1899,48 @@ test('Bubble TT5: stackPlace moves a newer bubble to the nearest free spot off o
   for (const o of obs) assert.ok(b3.x1 <= o.x0 || b3.x0 >= o.x1 || b3.y1 <= o.y0 || b3.y0 >= o.y1, `clear of ${JSON.stringify(o)} (${JSON.stringify(t3)})`);
   // no free spot at all: it stays
   assert.deepEqual(stackPlace(me, [{ x0: -1, x1: 1, y0: -1, y1: 1 }], lim), { dx: 0, dy: 0 });
+});
+
+test('Bubble TT5 verify: a hushed line waits with its clock held, then plays in full', async () => {
+  const { TextSprite, setBubbleHush } = await import('../../src/companions/Bubble.js');
+  const ts = new TextSprite();
+  ts.sprite = { material: { opacity: 1 }, scale: { set() {} }, position: {}, visible: true };
+  ts.on = true; ts.t = 0; ts.dur = 1.6; ts.aspect = 2;
+  let hush = true;
+  setBubbleHush(() => hush);
+  try {
+    for (let i = 0; i < 10; i++) ts.update(0.5);
+    assert.equal(ts.t, 0, 'clock held under the card');
+    assert.equal(ts.on, true, 'still waiting, not timed out');
+    assert.equal(ts.sprite.material.opacity, 0, 'drawn transparent while hushed');
+    hush = false;
+    ts.update(0.5);
+    assert.equal(ts.t, 0.5);
+    assert.ok(ts.sprite.material.opacity > 0.9, 'shows once the card is gone');
+    ts.update(1.2);
+    assert.equal(ts.on, false, 'then times out as usual');
+  } finally { setBubbleHush(null); }
+});
+
+test('Bubble TT5 verify: liveBubbleRects reports showing bubbles in CSS px; stackPlace moves down only when it must', async () => {
+  const { TextSprite, liveBubbleRects, setBubbleHush, stackPlace, DOWN_BIAS } = await import('../../src/companions/Bubble.js');
+  const ts = new TextSprite();
+  ts.canvas = { width: 512, height: 256, getContext: () => null };
+  ts.sprite = { material: { opacity: 1 }, scale: { set() {} }, position: {}, visible: false, center: { set() {} } };
+  ts.show('Mrrp!');
+  Object.assign(ts.ndc, { x0: -0.5, x1: 0, y0: 0, y1: 0.5, ok: true });
+  try {
+    assert.deepEqual(liveBubbleRects([], 1000, 500), [{ x: 250, y: 125, w: 250, h: 125 }]);
+    setBubbleHush(() => true);
+    assert.deepEqual(liveBubbleRects([], 1000, 500), [], 'hushed bubbles are not on screen');
+    setBubbleHush(null);
+    ts.hide();
+    assert.deepEqual(liveBubbleRects([], 1000, 500), [], 'hidden');
+  } finally { setBubbleHush(null); ts.hide(); }
+  // an obstacle (Clem, the card) right on the bubble: a spot above wins over a nearer one below
+  const lim = { top: 0.9, bottom: -0.9, left: -0.95, right: 0.95 };
+  const me = { x0: -0.2, x1: 0.2, y0: 0.0, y1: 0.2 };
+  const at = stackPlace(me, [{ x0: -0.3, x1: 0.3, y0: -0.05, y1: 0.3 }], lim, 1, 0.02);
+  assert.ok(at.dy > 0 && at.dx === 0, `up, not down (${JSON.stringify(at)})`);
+  assert.ok(DOWN_BIAS > 0.1);
 });

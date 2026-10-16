@@ -56,6 +56,45 @@ export function setBubbleHush(fn) { hushOf = typeof fn === 'function' ? fn : nul
 export function bubblesHushed() { try { return !!hushOf?.(); } catch { return false; } }
 
 /**
+ * TT5 verify round: screen boxes no world bubble may sit on (the centre card and the toast stack on tablets and
+ * desktops; on phones a card hushes the bubbles instead, `setBubbleHush`). The function returns `{ w, h, rects }`:
+ * `rects` in CSS px of the canvas, measured on a `w` × `h` canvas (null = none). Set once by the CompanionManager.
+ * @type {null | (() => ({ w: number, h: number, rects: {x:number,y:number,w:number,h:number}[] } | null | undefined))}
+ */
+let blocksOf = null;
+/** @param {null | (() => ({ w: number, h: number, rects: {x:number,y:number,w:number,h:number}[] } | null | undefined))} fn */
+export function setBubbleBlockers(fn) { blocksOf = typeof fn === 'function' ? fn : null; }
+/** NDC boxes of the blockers, reused (no per-frame allocation). */
+const BLOCK_NDC = [];
+/** @returns {number} how many BLOCK_NDC entries are filled */
+function blockerBoxes() {
+  let b = null;
+  try { b = blocksOf?.(); } catch { b = null; }
+  const n = b?.w > 0 && b?.h > 0 && Array.isArray(b.rects) ? b.rects.length : 0;
+  for (let i = 0; i < n; i++) {
+    const r = b.rects[i], o = BLOCK_NDC[i] ?? (BLOCK_NDC[i] = { x0: 0, x1: 0, y0: 0, y1: 0 });
+    o.x0 = (r.x / b.w) * 2 - 1; o.x1 = ((r.x + r.w) / b.w) * 2 - 1;
+    o.y1 = 1 - (r.y / b.h) * 2; o.y0 = 1 - ((r.y + r.h) / b.h) * 2;
+  }
+  return n;
+}
+
+/**
+ * The showing bubbles' last screen boxes, in CSS px of a `w` × `h` canvas (the centre card stays off them on tablets
+ * and desktops, ui/messages.js). Hushed or faded bubbles are left out. Pushes into `out` and returns it.
+ * @param {{x:number,y:number,w:number,h:number}[]} out @param {number} w @param {number} h
+ */
+export function liveBubbleRects(out, w, h) {
+  if (bubblesHushed()) return out;
+  for (const o of LIVE) {
+    const n = o.ndc;
+    if (!n.ok || !o.sprite?.visible || o.opacity < 0.05) continue;
+    out.push({ x: ((n.x0 + 1) / 2) * w, y: ((1 - n.y1) / 2) * h, w: ((n.x1 - n.x0) / 2) * w, h: ((n.y1 - n.y0) / 2) * h });
+  }
+  return out;
+}
+
+/**
  * Pure clamp: how far (in NDC) to shift a bubble so its rect stays inside the screen minus a margin.
  * The rect is given relative to the anchor (the speaker's projected point): x from ax+l to ax+r, y from ay+b to ay+t.
  * A rect larger than the usable span is centred in it. Returns {dx, dy}.
@@ -89,6 +128,8 @@ const LIVE = new Set();
 let showSeq = 0;
 /** NDC gap kept between two stacked boxes (about 6 px on a 720 px screen). */
 const STACK_GAP = 0.016;
+/** Extra cost of moving a bubble down (its tail then points away from the speaker), in NDC screen units. */
+export const DOWN_BIAS = 0.3;
 
 /**
  * Pure: where box `me` ({x0, x1, y0, y1}, NDC) goes so it covers none of `obs`. Candidates: where it is, and just
@@ -115,9 +156,11 @@ export function stackPlace(me, obs, lim, aspect = 1, gap = STACK_GAP) {
     const cost = Math.hypot(dx * aspect, dy) + bias;
     if (cost < best && free(dx, dy)) { best = cost; out.dx = dx; out.dy = dy; }
   };
+  // A box moved below its anchor has its tail pointing down, away from the speaker: only when nothing above or
+  // beside is near (DOWN_BIAS in screen units).
   for (const o of obs) {
     consider(0, o.y1 + gap - me.y0, 0);
-    consider(0, o.y0 - gap - me.y1, 1e-6);
+    consider(0, o.y0 - gap - me.y1, DOWN_BIAS);
     consider(o.x0 - gx - me.x1, 0, 2e-6);
     consider(o.x1 + gx - me.x0, 0, 2e-6);
   }
@@ -238,6 +281,9 @@ export class TextSprite {
     }
     const pb = own ? null : this._playerBox(camera, pw, ph);
     if (pb) obs.push(pb);
+    // the centre card and the toasts (tablet / desktop; a phone hushes bubbles under a card instead)
+    const nb = blockerBoxes();
+    for (let i = 0; i < nb; i++) obs.push(BLOCK_NDC[i]);
     if (obs.length) {
       const mx = (BUBBLE_MARGIN_PX * 2) / pw, lim = this._lim ?? (this._lim = { top: 0, bottom: 0, left: 0, right: 0 });
       lim.top = 1 - myHi; lim.bottom = -1 + myLo; lim.left = -1 + mx; lim.right = 1 - mx;
@@ -326,7 +372,10 @@ export class TextSprite {
   /** Per rendered frame (visual only). */
   update(dt) {
     if (!this.on || !this.sprite) return;
-    this.t += dt;
+    // TT5 verify round: a hushed line waits with its clock held (under a modal, and on phones under a centre card), so
+    // the kitten's "You're safe now" still shows in full once the card has gone
+    const held = this.kind === 'bubble' && this.dur !== Infinity && bubblesHushed();
+    if (!held) this.t += dt;
     if (this.t >= this.dur) { this.hide(); return; }
     const s = this.baseScale;
     if (this.kind === 'zzz') {

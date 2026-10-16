@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
-  treatView, treatEligible, phaseForResult, createTreatController, newRequestId, installTreatPanel, TREAT_TIMEOUT_MS,
+  treatView, treatEligible, phaseForResult, createTreatController, newRequestId, installTreatPanel, TREAT_TIMEOUT_MS, standaloneMode,
   EV_CARD_OPEN, EV_CARD_CLOSE,
 } from '../../src/shelter/treat.js';
 import { TREAT_COPY, PLAY_URL } from '../../src/shelter/treatCopy.js';
@@ -107,8 +107,8 @@ test('treat: result kinds map to phases; unknown kinds are null', () => {
   assert.deepEqual(phaseForResult('budget-spent'), { phase: 'exhausted', retry: false });
   assert.deepEqual(phaseForResult('failed'), { phase: 'error', retry: true });
   assert.deepEqual(phaseForResult('retry'), { phase: 'error', retry: true });
-  assert.deepEqual(phaseForResult('signed-out'), { phase: 'error', retry: false });
-  assert.deepEqual(phaseForResult('not-eligible'), { phase: 'error', retry: false });
+  assert.deepEqual(phaseForResult('signed-out'), { phase: 'signed-out', retry: false });
+  assert.deepEqual(phaseForResult('not-eligible'), { phase: 'not-eligible', retry: false });
   assert.equal(phaseForResult('whatever'), null);
   const id = newRequestId();
   assert.match(id, /^[A-Za-z0-9_-]{1,40}$/);
@@ -148,10 +148,9 @@ test('treat: unknown requestIds are ignored; no answer in 15 s shows Try again',
   timers.fire();
   assert.equal(ctl.view().phase, 'error');
   assert.equal(ctl.view().button.label, 'Try again');
-  // a late answer to the timed-out request is ignored
-  assert.equal(ctl.result({ requestId: 't-1', kind: 'sent' }), false);
-  // Try again sends a fresh request
+  // Try again sends a fresh request; a late answer to the replaced request is ignored
   assert.equal(ctl.send(), 't-2');
+  assert.equal(ctl.result({ requestId: 't-1', kind: 'sent' }), false);
   assert.equal(ctl.result({ requestId: 't-2', kind: 'already-today' }), true);
   assert.equal(ctl.view().phase, 'already');
   assert.equal(ctl.state.sentToday, true);
@@ -257,6 +256,17 @@ test('treat TT5: directAllowed only on https://tokentails.com', () => {
   assert.equal(api.directAllowed({ protocol: 'http:', hostname: 'localhost' }), false);
   assert.equal(api.directAllowed({ protocol: 'https:', hostname: 'tokentails.com.evil.io' }), false);
   assert.equal(api.directAllowed(null), false);
+});
+
+test('treat: directAllowed refuses a third-party frame, allows unframed and same-origin frames', () => {
+  const loc = { protocol: 'https:', hostname: 'tokentails.com' };
+  const top = {}; top.parent = top; top.location = { origin: 'https://tokentails.com' };
+  assert.equal(api.directAllowed(loc, top), true, 'unframed');
+  const same = { location: { origin: 'https://tokentails.com' }, parent: { location: { origin: 'https://tokentails.com' } } };
+  assert.equal(api.directAllowed(loc, same), true, 'same-origin frame');
+  const cross = { location: { origin: 'https://tokentails.com' }, parent: { get location() { throw new Error('SecurityError'); } } };
+  assert.equal(api.directAllowed(loc, cross), false, 'framed by another site');
+  assert.equal(standaloneMode(loc, cross), 'link');
 });
 
 test('treat TT5: rail and today row reads map like the /swordcat host', () => {
@@ -402,7 +412,7 @@ test('treat TT5: direct mode states: already from the read, used up, paused, ret
   const f = directCtl({ answers: [Promise.reject(new Error('boom'))] }); f.ctl.open(card()); await f.ctl.refresh();
   f.ctl.send(); await tick();
   assert.equal(f.ctl.view().phase, 'error');
-  // no answer: the 15 s timer shows Try again, the late answer is ignored
+  // no answer: the 15 s timer shows Try again, the late answer still applies
   let late;
   const g = directCtl({ answers: [new Promise((r) => { late = r; })] }); g.ctl.open(card()); await g.ctl.refresh();
   g.ctl.send();
@@ -410,7 +420,7 @@ test('treat TT5: direct mode states: already from the read, used up, paused, ret
   g.timers.fire();
   assert.equal(g.ctl.view().phase, 'error'); assert.equal(g.ctl.view().button.label, 'Try again');
   late({ kind: 'sent' }); await tick();
-  assert.equal(g.ctl.view().phase, 'error', 'a late answer after the timeout is ignored');
+  assert.equal(g.ctl.view().phase, 'sent', 'a late answer after the timeout still lands on the card');
   // reads are cached for RAIL_TTL_MS
   let reads = 0;
   const h = createTreatController({ mode: 'direct', direct: { readRail: async () => { reads++; return { rail: 'live' }; }, readMe: async () => ({ sentToday: false }), send: async () => ({ kind: 'sent' }) } });
@@ -434,4 +444,32 @@ test('treat TT5: link mode never sends; Copy link reports back; installTreatPane
   const parent = { postMessage() {} };
   const e = installTreatPanel({ ctx: { bus } }, { doc: docTT, bridge: createBridge({ parent, allowed: ['https://tokentails.com'] }) });
   assert.equal(e.mode, 'embedded', 'the frame always uses the bridge'); e.uninstall();
+});
+
+test('treat: a slow send that times out and then lands shows sent, not an error', () => {
+  const { ctl, timers } = ctlWith();
+  const c = ctl.open(card());
+  ctl.send();
+  timers.fire();
+  assert.equal(ctl.view().phase, 'error');
+  assert.equal(ctl.result({ requestId: 't-1', kind: 'sent', explorerUrl: 'https://explorer.arc.io/tx/0x1' }), true);
+  assert.equal(c.phase, 'sent');
+  assert.equal(ctl.state.sentToday, true);
+  assert.equal(ctl.result({ requestId: 't-1', kind: 'sent' }), false, 'answered once');
+});
+
+test('treat: signed-out and not-eligible show their own next step, not the generic error', () => {
+  const live = { rail: 'live', sentToday: false };
+  const so = treatView(card({ phase: 'signed-out' }), live, { embedded: true });
+  assert.equal(so.message, "Sign in on tokentails.com to send today's treat.");
+  assert.equal(so.button, null);
+  assert.equal(so.free, 'Token Tails sends a free treat. You pay nothing.');
+  assert.ok(so.custody);
+  const ne = treatView(card({ phase: 'not-eligible' }), live, { embedded: true });
+  assert.equal(ne.message, 'This account cannot send a treat yet.');
+  assert.equal(ne.button, null);
+  const { ctl } = ctlWith();
+  ctl.open(card()); ctl.send();
+  assert.equal(ctl.result({ requestId: 't-1', kind: 'signed-out' }), true);
+  assert.equal(ctl.view().message, "Sign in on tokentails.com to send today's treat.");
 });

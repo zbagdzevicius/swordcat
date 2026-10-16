@@ -19,6 +19,8 @@ export const TREAT_COPY = Object.freeze({
   soon: 'Real shelter treats open soon.',
   paused: 'Treats are paused right now.',
   error: 'The treat could not be sent. Your game progress is safe.',
+  signedOut: "Sign in on tokentails.com to send today's treat.",
+  notEligible: 'This account cannot send a treat yet.',
   retry: 'Try again',
   checking: "Checking today's treat…",
   link: 'Open tokentails.com/swordcat',

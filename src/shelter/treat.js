@@ -21,6 +21,7 @@ export const MODES = Object.freeze(['embedded', 'direct', 'link']);
 export const RAIL_TTL_MS = 60000;
 /** A request with no answer after this long shows the error state with "Try again". */
 export const TREAT_TIMEOUT_MS = 15000;
+// After the timeout the request stays pending: a late answer for the card's latest request still applies.
 /** DOM event the panel dispatches (bubbling) on `actionsEl` after each render, so the card rebuilds its nav items. */
 export const ACTIONS_CHANGED = 'shelter:actions-changed';
 
@@ -63,6 +64,8 @@ export function treatView(card, state, { embedded, mode } = {}) {
     case 'exhausted': return { ...base, phase: 'exhausted', message: T.exhausted };
     case 'soon': return { ...base, phase: 'soon', message: T.soon };
     case 'paused': return { ...base, phase: 'paused', message: T.paused };
+    case 'signed-out': return { ...base, phase: 'signed-out', message: T.signedOut };
+    case 'not-eligible': return { ...base, phase: 'not-eligible', message: T.notEligible };
     case 'error': return { ...base, phase: 'error', message: T.error, button: card.retry ? { id: 'send', label: T.retry } : null };
     default: break;
   }
@@ -85,7 +88,8 @@ export function phaseForResult(kind) {
     case 'paused': return { phase: 'paused', retry: false };
     case 'budget-spent': return { phase: 'exhausted', retry: false };
     case 'failed': case 'retry': return { phase: 'error', retry: true };
-    case 'not-eligible': case 'signed-out': return { phase: 'error', retry: false };
+    case 'not-eligible': return { phase: 'not-eligible', retry: false };
+    case 'signed-out': return { phase: 'signed-out', retry: false };
     default: return null;
   }
 }
@@ -173,7 +177,8 @@ export function createTreatController({ embedded, mode, post = () => false, dire
       if (c.mode === 'link' || !card) return null;
       const v = c.view(card);
       if (!v?.button || v.button.disabled || v.button.id !== 'send') return null;
-      if (c.mode === 'direct' && (pending.size > 0 || !c.direct?.send)) return null; // one send in flight per game
+      const live = [...pending.values()].some((e) => !e.timedOut);
+      if (c.mode === 'direct' && (live || !c.direct?.send)) return null; // one send in flight per game
       const requestId = idFn();
       if (c.mode === 'embedded') {
         const payload = { requestId, slot: card.slot ?? '', catName: card.cat.name };
@@ -188,7 +193,8 @@ export function createTreatController({ embedded, mode, post = () => false, dire
       const entry = { card, timer: null };
       entry.timer = tm.set(() => {
         if (pending.get(requestId) !== entry) return;
-        pending.delete(requestId);
+        // keep the entry: a slow send can still land, and its late answer must still reach this card
+        entry.timedOut = true;
         if (card.requestId === requestId && card.phase === 'sending') { Object.assign(card, { phase: 'error', retry: true }); onChange(card); }
       }, timeoutMs);
       pending.set(requestId, entry);
@@ -312,9 +318,9 @@ export async function copyText(text, doc = typeof document !== 'undefined' ? doc
   } catch { return false; }
 }
 
-/** The standalone mode for this page: 'direct' on https://tokentails.com, else 'link'. */
-export function standaloneMode(loc = typeof location !== 'undefined' ? location : null) {
-  return directAllowed(loc) ? 'direct' : 'link';
+/** The standalone mode for this page: 'direct' on https://tokentails.com (unframed or same-origin frame), else 'link'. */
+export function standaloneMode(loc = typeof location !== 'undefined' ? location : null, win = typeof window !== 'undefined' ? window : undefined) {
+  return directAllowed(loc, win) ? 'direct' : 'link';
 }
 
 /**

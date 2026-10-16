@@ -17,10 +17,26 @@ const READ_TIMEOUT_MS = 10000;
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const AMOUNT = /^[$€]?[0-9]{1,6}(\.[0-9]{1,6})?( [A-Za-z.]{2,8})?$/;
 
-/** May this page call the treat API itself? Unframed or not, https and a host the API's CORS allows. Pure. */
-export function directAllowed(loc = typeof location !== 'undefined' ? location : null) {
+/**
+ * May this page call the treat API itself? https, a host the API's CORS allows, and not framed by another site (a
+ * same-origin parent is fine). A third-party frame gets the link mode, so it cannot spend sponsored treats.
+ * Pure apart from reading `win`.
+ */
+export function directAllowed(loc = typeof location !== 'undefined' ? location : null, win = typeof window !== 'undefined' ? window : undefined) {
   if (!loc) return false;
-  return loc.protocol === 'https:' && API_HOSTS.includes(String(loc.hostname ?? '').toLowerCase());
+  if (loc.protocol !== 'https:' || !API_HOSTS.includes(String(loc.hostname ?? '').toLowerCase())) return false;
+  return !framedByOther(win);
+}
+
+/** Is `win` inside a frame whose parent is another origin? A cross-origin parent throws on `location`. */
+export function framedByOther(win) {
+  try {
+    if (!win || win.parent == null || win.parent === win) return false;
+  } catch { return true; }
+  try {
+    const o = win.location?.origin, po = win.parent.location?.origin;
+    return !(typeof o === 'string' && o && o !== 'null' && o === po);
+  } catch { return true; }
 }
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);

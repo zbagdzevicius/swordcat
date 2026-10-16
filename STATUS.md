@@ -192,7 +192,7 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
   merged `vite.config.js` comment is split; dev port 5175 (5173 is catnip-heist's); preview stays 4173.
 - **Embed bridge** (`src/core/embed.js`, §5.5): `?embed=1` inside a frame sets `<html data-embed="1">` before boot;
   v1 envelope `{ ns: 'tt-swordcat', v: 1, type }`; source must be `window.parent`, origin in `VITE_EMBED_ORIGINS`
-  (default tokentails.com, www, localhost:3000); the first `hello` fixes the host origin and every post goes only to it.
+  (default tokentails.com and www; localhost:3000 only in dev and test builds); the first `hello` fixes the host origin and every post goes only to it.
   hello → ready, session (stored), audio (master mute through `params.mute` + `audio.setVolumes`), pause / resume (ui
   pause menu, else `game.pause`), level-complete / kitten-rescued / paused out. Unit: `tests/unit/embed.test.js`; smoke:
   `embed:bridge`, `embed:wrong-origin`.
@@ -301,7 +301,8 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
   - Text: `companions/lines.js` milk fallbacks now say tuna snack; the LICENSES.md opening names the © Token Tails logo
     as the one exception; the `vite.config.js` SMOKE_NOHMR comment is corrected (no watcher means a stale transform
     cache); the build makes `og:image` / `twitter:image` absolute and adds `og:url` (`scripts/social-meta.mjs`;
-    `VITE_SITE_URL`, default `https://tokentails.com/swordcat-game/`).
+    `VITE_SITE_URL`, default `https://tokentails.com/swordcat-game/`; og:url is the host page
+    `https://tokentails.com/swordcat`, `VITE_PAGE_URL` overrides it, since 2026-10-16).
 - **Checks (2026-10-14, final pass):** `npm run build` and `npm run build:test` OK (bundle budgets within the gated limits). Before the rename, on the items 1–8 code: `npm run test:unit` 1087/1087 and full `npm run smoke` run A 258/258 with 0 failures (2986 s); run B was stopped at block 242/258 with 0 failures so far (wrap-up). After the A/B edits: `npm run test:unit` 1088/1088; smoke has not been rerun. Built heap was not re-measured.
 - **Superseded "still open" (first fix pass):** the items in this bullet were rerun or closed in TT2 (below): smoke ×2,
   `build:tokentails` measured, flag-ON `/swordcat` checked, Clem's maroon band gone (close-up read).
@@ -426,7 +427,7 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
     is 2 places in 2 repos (`brand.js`, tokentails `components/swordcat/title.ts`). (5) Real Pink Paw cats' made-up
     bios show on the rescue card with no nearby "made up" label (credits only). (6) Founder's 5180 dev server is down
     (agents may not restart it). (7) tokentails worktree: revert `client/next-env.d.ts`, drop `client/.vitest/`
-    before any commit; production embed allowlist still lists `localhost:3000`. (8) Everything is uncommitted.
+    before any commit; production embed allowlist still lists `localhost:3000` (fixed 2026-10-16: dev and test builds only). (8) Everything is uncommitted.
 
 ## TT3 (integrated 2026-10-15; docs/TOKENTAILS-PLAN.md §11)
 - **Controls (K).** The §11.2 table is live: `hybrid` walks on WASD, LMB attacks (LMB on a foe or a breakable gives
@@ -597,3 +598,15 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
   a mouse button. The riposte chip ("[sword] Riposte!") used to sit cut off in the top-left corner, because its pulse
   animation reset the placement. It now shows next to the foe.
 
+
+### Launch review fixes (2026-10-16)
+- **Slow treat.** A treat request that passes the 15 s timeout stays pending. The card shows Try again, but a late
+  answer for its latest request still lands, so a slow send that went out shows "Treat sent!" and not an error.
+- **Treat copy.** `signed-out` and `not-eligible` answers have their own line and no button, in place of the generic error.
+- **Third-party frames.** The standalone game sends the guest treat itself only when it is unframed or framed by its
+  own origin (`directAllowed`); any other frame gets the link mode. Production builds no longer trust
+  `http://localhost:3000` (dev server and test builds only).
+- **Share link.** og:url is `https://tokentails.com/swordcat` (the folder URL 404s on Next.js).
+- **Kitten count.** Tagline, meta description and share card say twelve lost kittens; the Continue line and the pause
+  menu count out of the 12 reachable kittens (`REACHABLE_KITTEN_IDS`) until bog and keep ship. The kitten grid still
+  lists all 18 slots.

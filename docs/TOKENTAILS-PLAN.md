@@ -246,7 +246,7 @@ Game → host:
 | `paused` | `{ paused }` | `GAME_PAUSE` |
 
 Security: the game accepts messages only when `event.source === window.parent` and `event.origin` is in an
-allowlist (`VITE_EMBED_ORIGINS`, default `https://tokentails.com,https://www.tokentails.com,http://localhost:3000`),
+allowlist (`VITE_EMBED_ORIGINS`, default `https://tokentails.com,https://www.tokentails.com`; `http://localhost:3000` is added only in the dev server and test builds),
 and posts to that exact origin, never `'*'`. The host accepts only `event.source === iframe.contentWindow` and
 `event.origin === new URL(NEXT_PUBLIC_SWORDCAT_URL, location.href).origin`. The host never sends the
 `accesstoken` or Firebase token. In embed mode the game hides its own Fullscreen and Quit menu items
@@ -493,7 +493,7 @@ The dead `ctx.fx.guideArrow` call and the chart/barn sparkle ticks are removed i
 | Title constant | `GAME_TITLE` + ~8 hard-coded copies per repo | `src/core/brand.js` `BRAND` (title, titleCaps, subtitle, tagline, shelter names, rescue house names, Pink Paw kitten names, site); `strings.js`, `icons.js`, `Overlay.js`, `recovery.js` import it; `index.html` uses `%GAME_TITLE%` placeholders replaced by `vite.config.js` `transformIndexHtml`; LICENSES.md says "this game". Token Tails: `client/components/swordcat/title.ts` `SWORDCAT_TITLE` used by the page, host, picker and tests | G3, TT2 |
 | Loading splash | ginger paw #F4A462 | ivory #F3EEE6 paw, white highlight, pink beans #FF7AA2/#FFB3C7, maroon #4A1D08 outline | G3 |
 | Loading tips | mechanics only | add 2–3 fiction tips ("The Token Tails Cat keeps a warm spot for every kitten you bring home.") | G3 |
-| Title | gold Passion One logo, 28 px pixel-logo pill | + tagline `BRAND.tagline` ("One tiny knight. Eighteen lost kittens. One warm Rescue House."), small `logo-text.webp` wordmark on wide screens (copied, © Token Tails in LICENSES.md), "Skip practice" link, short procedural coin-ding + meow jingle on reveal | G3 |
+| Title | gold Passion One logo, 28 px pixel-logo pill | + tagline `BRAND.tagline` ("One tiny knight. Twelve lost kittens. One warm Rescue House."; twelve until bog and keep ship), small `logo-text.webp` wordmark on wide screens (copied, © Token Tails in LICENSES.md), "Skip practice" link, short procedural coin-ding + meow jingle on reveal | G3 |
 | Cursor | ginger paw | ivory paw, pink beans, maroon outline | G3 |
 | Dialogue portraits | Clem `['#F2A65A','#FFF1DC']` | `['#F3EEE6','#FFF1DC']` with crimson #B3212F accents | G3 |
 | Canvas fonts | Fredoka on plates, bubbles, cutscene signs | plates Passion One 900 for ASCII words with per-character Nunito fallback; bubbles and signs Nunito 700/800 | G4 (plates, signs), G1 (bubbles) |
@@ -1259,7 +1259,9 @@ one-a-day rule. Landing and picker point to the game. With the flag off, product
 ### 12.6 Known gaps to report (not fixed here)
 
 - **Signed-out treats.** The guest treat route answers 503 in production until `TRUST_PROXY` or `CF_ORIGIN_SECRET`
-  is set (tracker, Bet #3). Signed-out players see the error state; signed-in players can send.
+  is set (tracker, Bet #3). That 503 shows as "Treats are paused right now"; signed-in players can send. A 401 / 403 /
+  `GUEST_FORBIDDEN` answer now says "Sign in on tokentails.com to send today's treat." and `not-eligible` says "This
+  account cannot send a treat yet." (2026-10-16), instead of the generic error.
 - **No `swordcat` donate source.** No `swordcat` value in `DONATE_SOURCES` and no `swordcat_open` analytics event.
   Both need `shared/**` edits.
 - **App export size.** `client/scripts/prune-app-export.mjs` does not prune `public/swordcat-game` (63 MB) from the

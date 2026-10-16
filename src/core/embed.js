@@ -13,7 +13,7 @@
 //   receiptPath?, amountLabel? }. Both directions are length-checked; explorer links must be https, receipt paths must
 //   start with /shelter-payouts/receipt?. No free text crosses. The treat panel (src/shelter/treat.js) is installed here.
 // Security: a message is accepted only when event.source === window.parent and event.origin is in the allowlist
-// (VITE_EMBED_ORIGINS, comma-separated; default below; plus the page's own origin when the parent is same-origin). The first valid `hello` fixes the host origin; after that only
+// (VITE_EMBED_ORIGINS, comma-separated; default below, localhost:3000 only in dev and test builds; plus the page's own origin when the parent is same-origin). The first valid `hello` fixes the host origin; after that only
 // that origin is accepted and every post goes to it (never '*'). Nothing is posted before the first `hello`, so the
 // host keeps saying hello until it hears `ready` (no hard stop: a slow phone may need well over 10 s to boot); a hello
 // before game:ready is answered on game:ready, every later one at once (the host's reconnect after a frame reload).
@@ -25,7 +25,9 @@ import { installTreatPanel } from '../shelter/treat.js';
 
 export const EMBED_NS = 'tt-swordcat';
 export const EMBED_VERSION = 1;
-export const DEFAULT_EMBED_ORIGINS = 'https://tokentails.com,https://www.tokentails.com,http://localhost:3000';
+export const DEFAULT_EMBED_ORIGINS = 'https://tokentails.com,https://www.tokentails.com';
+/** Added to the default list only in the dev server and test builds (VITE_SWORDCAT_DEBUG); never in production. */
+export const DEV_EMBED_ORIGINS = 'http://localhost:3000';
 /** host → game message types (anything else is ignored) */
 export const HOST_TYPES = Object.freeze(['hello', 'session', 'audio', 'pause', 'resume', 'treat-state', 'treat-result']);
 /** CAT_SAVED (R owns events.js; the literal is the §12.3 contract fallback) */
@@ -132,11 +134,14 @@ export function parseOrigins(raw) {
   return out;
 }
 
-/** The configured allowlist (VITE_EMBED_ORIGINS at build time, else the default). */
+/** The configured allowlist (VITE_EMBED_ORIGINS at build time, else the default; localhost only in dev / test builds). */
 export function embedOrigins(env) {
   let e = env;
   if (e === undefined) { try { e = import.meta.env; } catch { e = {}; } }
-  return parseOrigins(e?.VITE_EMBED_ORIGINS);
+  const raw = e?.VITE_EMBED_ORIGINS;
+  if (typeof raw === 'string' && raw.trim()) return parseOrigins(raw);
+  const dev = e?.DEV === true || !!e?.VITE_SWORDCAT_DEBUG;
+  return parseOrigins(dev ? `${DEFAULT_EMBED_ORIGINS},${DEV_EMBED_ORIGINS}` : DEFAULT_EMBED_ORIGINS);
 }
 
 /**

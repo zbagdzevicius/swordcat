@@ -19,11 +19,14 @@ function fakeParent() {
 }
 
 test('embed: allowlist parsing normalises origins and falls back to the default', () => {
-  assert.deepEqual(ALLOWED, ['https://tokentails.com', 'https://www.tokentails.com', 'http://localhost:3000']);
+  assert.deepEqual(ALLOWED, ['https://tokentails.com', 'https://www.tokentails.com'], 'production default: no localhost');
   assert.deepEqual(parseOrigins(' https://a.example/path/ , not a url,http://localhost:3000/ ,https://a.example'), ['https://a.example', 'http://localhost:3000']);
   assert.deepEqual(parseOrigins(''), ALLOWED); assert.deepEqual(parseOrigins(undefined), ALLOWED);
   assert.deepEqual(embedOrigins({ VITE_EMBED_ORIGINS: 'https://swordcat.tokentails.com' }), ['https://swordcat.tokentails.com']);
   assert.deepEqual(embedOrigins({}), ALLOWED);
+  assert.deepEqual(embedOrigins({ PROD: true, DEV: false }), ALLOWED, 'a production build never trusts localhost');
+  assert.deepEqual(embedOrigins({ DEV: true }), [...ALLOWED, 'http://localhost:3000']);
+  assert.deepEqual(embedOrigins({ VITE_SWORDCAT_DEBUG: '1' }), [...ALLOWED, 'http://localhost:3000'], 'test builds keep the smoke host');
 });
 
 test('embed: mode = framed + ?embed=1; markEmbed sets <html data-embed="1">', () => {

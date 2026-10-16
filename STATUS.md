@@ -47,7 +47,8 @@ The smoke refuses to run without `dist-test/` (it needs `window.__GAME__`, which
 A fixed-yaw three-quarter top-down camera (38° FOV, ~50° pitch, 12.4 m on desktop, 12 m on phones, portrait 50° / 58°)
 follows her; you never steer the camera. Keyboard + mouse uses the `hybrid` preset (TOKENTAILS-PLAN §11.2, TT3).
 Settings → Controls also offers `moba` (RMB moves, Shift+RMB queues, Space tumbles, T jumps), `diablo` (LMB moves),
-`mouseOnly` (RMB moves) and `keyboardOnly`. No binding uses Ctrl, Alt, Meta or an F-key, and a key pressed with Ctrl
+`mouseOnly` (RMB moves) and `keyboardOnly`. Players see them as Standard, Right-click moves, Left-click moves, Mouse
+only and Keyboard only. No binding uses Ctrl, Alt, Meta or an F-key, and a key pressed with Ctrl
 or Meta held does nothing in the game (Ctrl+W and Ctrl+D stay the browser's). Pause → Controls rebinds keyboard and
 mouse keys (13 actions; a used key swaps; Ctrl, Alt, Meta, F-keys and Esc are refused; "Reset keys to default").
 
@@ -563,12 +564,36 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
   break. Sounds (zzfx): a bloop up, a boing on a block, a chime on a parry, a pop on a break. The bar slot, the touch
   button and the Grit pips show the same shield and its state (ready, active, parry, lockout, broken). There is no
   cooldown; the 0.3 s lockout and a broken guard are the "not ready" states.
-- **Parry cue.** A parry-able wind-up now shows the pink shield over the foe's head (it replaces the white "!"). It pops
-  big and gold at the "ting", 0.25 s before the strike. The lesson says "Tap [mouse] Shield when [pink shield] pops!".
-- **Tests.** `tests/unit/glyphs.test.js` (7). Smoke `glyphs:shield` (the shield shows while guarding, icons per device,
+- **Parry cue.** A parry-able wind-up now shows a gold shield with a pink "!" over the foe's head (it replaces the
+  white "!"). It pops big at the "ting", 0.25 s before the strike. The lesson says "Tap [mouse] Shield when [gold
+  shield] pops!".
+- **Tests.** `tests/unit/glyphs.test.js` (11). Smoke `glyphs:shield` (the shield shows while guarding, icons per device,
   the parry cue, the touch Controls card at 1280 x 720, 844 x 390 and 390 x 844). The `ui` and `controls` smoke blocks
   check `data-glyph` instead of "RMB".
 - **Cost.** The shield adds 2 draws while guarding (shield and bubble are sprites) and one shader program (the fog-off
   sprite, warmed under the veil). `perf:programs` low is now 29 / 30 in the meadow and 30 / 30 at the gate.
-- **Not changed.** The objective line under Pearl's bubble
-  is still hidden on phones during the parry lesson (Pearl's line names the pink shield instead).
+
+### TT6 fix round (2026-10-16, after the new-player test and the critic)
+- **Phone lessons.** The lesson line with the icons now shows on phones. Before, the line and the chip in Pearl's
+  bubble each hid because the other said the same thing, so a touch player saw no instruction once the bubble folded.
+  Now phones keep the line and drop the chip; desktops keep the chip (`hud.js` / `guide.js` `is-dup`).
+- **Shield faces the strike.** While Shield is held, a strike about to land (0.7 s, 5 m) turns Clem to face it at
+  720 degrees a second, on keyboard and mouse and on a pad (`Player._guardThreatYaw`). Before, holding Shield with
+  the pointer on the other side let Sir Wobble hit her with no reason given. Pearl now says "Shield up!".
+- **Two shields.** The parry cue is gold with a pink "!" (`icons.alertShield`), so it never looks like Clem's own pink
+  shield. It sits 30 px higher. Pearl: "Tap your shield when his gold shield pops!".
+- **Kitten offer.** On a desktop or tablet, the lesson line stays on screen while "Want gentler bonks?" shows. A
+  phone still hides it for those few seconds: a short landscape screen has no room for both.
+- **Ability bar.** Shift is a plain arrow keycap and Space a short bar, so they fit their slots. Pad buttons sit on the
+  slot's corner, and "LB + X" draws two small icons. The Grit pips are mini paw shields.
+- **Words.** The Controls card uses the words of the device in use ("tap a foe" on touch, "click a foe" on a
+  computer). No row says "Esc cancels". The keyboard layouts are named Standard, Right-click moves, Left-click moves,
+  Mouse only and Keyboard only. A gamepad player no longer sees the layout picker or "Click a key".
+- **Narrow phones.** At 390 px wide each Controls row puts its label on its own line, with the three icons under it.
+- **Parry and block look.** The shield draws over the parry flash, "Ting!" floats higher, a perfect parry adds a wide
+  white ring, a block punches the shield out with a pink ring, and the break hearts are bigger. Empty Grit pips are
+  pale with a brown rim, so they read on grass.
+- **Other.** World speech bubbles keep off the touch buttons. The interact tag draws an icon if Interact is bound to
+  a mouse button. The riposte chip ("[sword] Riposte!") used to sit cut off in the top-left corner, because its pulse
+  animation reset the placement. It now shows next to the foe.
+

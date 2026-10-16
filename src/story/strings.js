@@ -190,7 +190,7 @@ export const S = {
   'pearl.fence': d('Over here! Hop!'),
   'pearl.sack': d("Don't get bonked by Sir Sacky!"),
   'pearl.roll.ok': d('Whoa! Nothing can touch you mid-roll!'),
-  'pearl.wobble': d('Sir Wobble wants a fight! Block him!'),
+  'pearl.wobble': d('Sir Wobble wants a fight! Shield up!'),
   'pearl.parry': d('Sneaky one! Tap it right on the sparkle!'),
   'pearl.parry.letgo': d('Let go, then tap it right on the sparkle!'),
   'pearl.parry.ok': d("PARRY! He didn't see that coming!"),

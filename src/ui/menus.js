@@ -18,7 +18,7 @@ import { KITTEN_IDS, KITTENS_BY_LEVEL, LEVEL_IDS } from '../core/config.js';
 import { el, flag, setText, setVar, pulse } from './dom.js';
 import { tx, esc, actionGlyph, presetGlyph, codeLabel, PRESET_IDS, glyphHtml, glyphWords } from './text.js';
 import { codeWords } from './inputGlyph.js';
-import { SETTINGS, SETTING_GROUPS, visibleSettings, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS,
+import { SETTINGS, SETTING_GROUPS, visibleSettings, readSetting, stepSetting, formatSetting, applySetting, settingLocked, sliderFrac, sliderFromFrac, resetSettings, CONTROL_ROWS, controlRowLabel,
   REBIND_ACTIONS, rebindAction, rebindRefusal } from './settings.js';
 import { defaultState } from '../core/GameState.js';
 import { portraitSVG } from './portraits.js';
@@ -610,7 +610,7 @@ export class Menus {
   openControls() {
     const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
     const layer = this.top?.layer ?? 'modal';
-    const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}${dev === 'touch' ? ' is-touch' : ''}`);
+    const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}${dev === 'touch' ? ' is-touch' : dev === 'pad' ? ' is-pad' : ''}`);
     const ps = ctx.input?.padKind === 'ps';
     /** TT6: a cell is an input icon (mouse with a lit button, keycap, pad button, the touch button), never "RMB". */
     const cellHtml = (g, d, act) => (g === '—' ? '<span class="ctl-na" aria-label="not used">—</span>' : glyphHtml(g, d, { action: act, ps: d === 'pad' && ps, cls: 'ctl-ig' }));
@@ -632,7 +632,7 @@ export class Menus {
     const bindItems = [];
     for (const [act, label] of CONTROL_ROWS) {
       const row = el('div', 'ctl-row', { parent: tbl, attrs: { 'data-act': act } });
-      const lbl = controlLabel(ctx, act, label);
+      const lbl = controlLabel(ctx, act, controlRowLabel(act, label, dev));
       el('span', 'ctl-lbl', { parent: row, text: lbl });
       let kbm = null, bind = null;
       for (const d of devs) {
@@ -744,10 +744,10 @@ export class Menus {
       draw();
     }, { cls: 'btn--plain ctl-reset' });
     draw();
+    // TT6 fix round: touch and pad players get no keyboard-only lines (ui.css hides them), so focus skips them too
+    const kbmOnly = dev === 'kbm' ? [{ el: pick, disabled: false, adjust: step, activate: () => step(1) }, ...bindItems, resetIt] : [];
     const items = [
-      { el: pick, disabled: false, adjust: step, activate: () => step(1) },
-      ...bindItems,
-      resetIt,
+      ...kbmOnly,
       this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }),
     ];
     const s = this._wire({ id: 'controls', el: e, items, layer, focus: 0 });

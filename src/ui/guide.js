@@ -201,8 +201,9 @@ export class Guide {
     if (!c) return;
     // §10.2.6: the HUD objective line already says the chip's words: phones drop the chip (guidance.css) so the bubble
     // stays small and off Clem
-    const ok = this.ctx.ui?.beacon?.objective?.textKey;
-    flag(this.root, 'is-dup', !!ok && ok === c.p?.textKey);
+    // TT6 fix: only while the HUD pill is really showing (on a desktop the pill steps aside for the chip, hud.js)
+    const ok = this.ctx.ui?.beacon?.objective?.textKey, pill = this.ctx.ui?.hud?.guideEl?.classList;
+    flag(this.root, 'is-dup', !!ok && ok === c.p?.textKey && !!pill?.contains('is-on') && !pill.contains('is-dup'));
     c.t += dt;
     if (c.doneT > 0 && (c.doneT -= dt) <= 0) { this.hide(); return; }
     const p = c.p;

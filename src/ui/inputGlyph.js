@@ -213,9 +213,16 @@ export function glyphAtom(atom, device = 'kbm', ps = false) {
 }
 
 /** HTML for one resolved atom (a keycap or an SVG chip), with aria and the abstract id. */
-function atomHtml(g) {
+function atomHtml(g, compact = false) {
   const w = esc(g.words);
   if (g.kind === 'key') {
+    // compact (the ability-bar corner badge): Shift is its arrow, Space a short space-bar bracket (they spilled out of
+    // their 56 px slots as "⇧ Shift" / "Space")
+    if (compact && g.id === 'key-shift') return `<kbd class="ui-key ig ig-key" data-glyph="${g.id}" aria-label="${w}" title="${w}">⇧</kbd>`;
+    if (compact && g.id === 'key-space') {
+      return `<kbd class="ui-key ig ig-key ig-key--bar" data-glyph="${g.id}" aria-label="${w}" title="${w}">`
+        + '<svg class="ig-spacebar" viewBox="0 0 20 10" aria-hidden="true"><path d="M2.5 2.5v4.5h15V2.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></kbd>';
+    }
     const wide = g.cap.length > 3 ? ' ig-key--wide' : '';
     return `<kbd class="ui-key ig ig-key${wide}" data-glyph="${g.id}" aria-label="${w}" title="${w}">${esc(g.cap)}</kbd>`;
   }
@@ -251,9 +258,10 @@ export function labelParts(label) {
 
 /**
  * The glyph HTML for a text label on a device. `o.action` (optional) adds `data-action`; `o.label` adds the plain
- * word next to the icon ("[mouse] Shield"); `o.ps` draws PlayStation buttons. '—' (no binding) stays a dash.
+ * word next to the icon ("[mouse] Shield"); `o.ps` draws PlayStation buttons; `o.compact` draws Shift as ⇧ and Space
+ * as a short bar (the ability-bar badges). '—' (no binding) stays a dash.
  * @param {string} label @param {'kbm'|'pad'|'touch'} [device]
- * @param {{ action?: string, label?: string|boolean, ps?: boolean, cls?: string }} [o]
+ * @param {{ action?: string, label?: string|boolean, ps?: boolean, cls?: string, compact?: boolean }} [o]
  */
 export function glyphHtml(label, device = 'kbm', o = {}) {
   const L = String(label ?? '');
@@ -266,7 +274,7 @@ export function glyphHtml(label, device = 'kbm', o = {}) {
     if (p.word) { html += `<span class="ig-x">${esc(p.word)}</span>`; words.push(p.word === '×2' ? 'twice' : p.word); continue; }
     const g = glyphAtom(p.atom, device, !!o.ps);
     if (!g) continue;
-    html += atomHtml(g);
+    html += atomHtml(g, !!o.compact);
     words.push(g.words);
   }
   const lbl = o.label === true ? ACTION_LABEL[o.action] : (typeof o.label === 'string' ? o.label : null);
@@ -303,10 +311,10 @@ export function codeWords(code, label) {
 
 /**
  * The Shield cue icon inline in text ("Tap [Stand] when [ShieldCue] pops!"): the Pink Paw shield the player sees over
- * a foe (fx Telegraphs) and on the HUD.
+ * a foe (fx Telegraphs): gold with a pink "!", unlike Clem's own pink shield.
  */
 export function shieldCueHtml() {
-  return `<span class="ig ig--cue" data-glyph="shield-cue" role="img" aria-label="pink shield" title="pink shield">${I.pawShield('parry')}<span class="ig-a11y">pink shield</span></span>`;
+  return `<span class="ig ig--cue" data-glyph="shield-cue" role="img" aria-label="gold warning shield" title="gold warning shield">${I.alertShield()}<span class="ig-a11y">gold warning shield</span></span>`;
 }
 
 /** Is this a PlayStation pad id (Gamepad.id)? Pure. */

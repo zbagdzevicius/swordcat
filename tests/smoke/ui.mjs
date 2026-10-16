@@ -1158,8 +1158,8 @@ export default [
       const card1 = await inPage(t, () => ({ head: document.querySelector('.ctl-preset .ch-val')?.textContent, move: [...([...document.querySelectorAll('.ctl-row')].find((r) => /^Move/.test(r.textContent))?.querySelectorAll(':scope > span:nth-child(2) [data-glyph]') ?? [])].map((e) => e.dataset.glyph).join(' / ') }));
       t.log(`controls card ${JSON.stringify(card0)} → ${JSON.stringify(card1)}`);
       // TT6: the keyboard-and-mouse column is icons (data-glyph): the WASD cluster, a mouse with the left button lit
-      t.assert(/Hybrid/.test(card0.head) && card0.move === 'key-wasd', `card: hybrid page, Move = WASD (TT3 §11.2) (${card0.move})`);
-      t.assert(/Diablo/.test(card1.head) && card1.move === 'mouse-left / key-wasd', `card: diablo page (${card1.move})`);
+      t.assert(/Standard/.test(card0.head) && card0.move === 'key-wasd', `card: hybrid page, Move = WASD (TT3 §11.2) (${card0.move})`);
+      t.assert(/Left-click moves/.test(card1.head) && card1.move === 'mouse-left / key-wasd', `card: diablo page (${card1.move})`);
       await fontAudit(t, 'controls card');
       await shot(t, '44-controls-card-diablo');
       // ---- settings: the §10.7 rows; invertY hidden in iso

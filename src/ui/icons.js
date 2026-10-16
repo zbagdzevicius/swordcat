@@ -65,11 +65,34 @@ export function pawShield(state = 'ready', o = {}) {
     + `</g>${crack}</svg>`;
 }
 
+/**
+ * The parry cue (TT6 fix round): the shield that pops over a foe's head before a parry-able strike. Gold all over with a
+ * pink "!" badge, so it never reads as Clem's own pink shield (the critic saw two pink shields in one spot). The lesson
+ * line draws the same icon (inputGlyph shieldCueHtml). `pop` adds a gold halo (the "ting").
+ * @param {{ pop?: boolean, cls?: string }} [o]
+ */
+export function alertShield(o = {}) {
+  const g = uid('as');
+  const halo = o.pop ? `<path d="${SHIELD_PATH}" fill="none" stroke="#FFE27A" stroke-width="5" stroke-linejoin="round" opacity=".55"/>` : '';
+  return `<svg class="ico-shield ico-alertshield${o.cls ? ` ${o.cls}` : ''}" viewBox="-1 -1 27 30" aria-hidden="true" data-state="cue">`
+    + `<defs><linearGradient id="${g}" x1="0" y1="0" x2=".4" y2="1"><stop offset="0" stop-color="#FFF4B8"/><stop offset="1" stop-color="#FFC23D"/></linearGradient></defs>`
+    + halo
+    + `<path d="${SHIELD_PATH}" fill="url(#${g})" stroke="#9A5B12" stroke-width="1.9" stroke-linejoin="round"/>`
+    + `<g fill="#FFFFFF" stroke="#9A5B12" stroke-width=".7">`
+    + `<ellipse cx="${PS_PAD[0]}" cy="${PS_PAD[1]}" rx="${PS_PAD[2]}" ry="${PS_PAD[3]}"/>`
+    + PS_TOES.map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}"/>`).join('')
+    + '</g>'
+    + `<circle cx="20.2" cy="4.6" r="4.4" fill="${PAW_SHIELD.rim}" stroke="#FFFFFF" stroke-width="1.2"/>`
+    + '<path d="M20.2 2.2V5.4" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round"/><circle cx="20.2" cy="7.3" r=".95" fill="#FFFFFF"/>'
+    + '</svg>';
+}
+
 /** Grit pip: a small paw shield (§14.2; TT6 pink like the Shield). @param {'full'|'empty'|'cracked'} state */
 export function gritShield(state = 'full') {
   if (state === 'empty' || state === 'cracked') {
     const crack = state === 'cracked' ? `<path d="M12 3 10 9.5 13.5 12 10.5 17.5 12.5 25" fill="none" stroke="${PAW_SHIELD.ink}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` : '';
-    return `<svg class="ico-grit" viewBox="0 0 24 28" aria-hidden="true"><path d="${SHIELD_PATH}" fill="#3A2A1F" fill-opacity="${state === 'cracked' ? '.55' : '.35'}" stroke="${PAW_SHIELD.greyRim}" stroke-width="1.6" stroke-linejoin="round"/>${crack}</svg>`;
+    // TT6 fix round: a pale cream shield with a cocoa rim (the dark olive one had no contrast on grass)
+    return `<svg class="ico-grit" viewBox="0 0 24 28" aria-hidden="true"><path d="${SHIELD_PATH}" fill="#FFF6EC" fill-opacity="${state === 'cracked' ? '.8' : '.6'}" stroke="#5A3B2E" stroke-width="1.8" stroke-linejoin="round"/>${crack}</svg>`;
   }
   return pawShield('ready', { cls: 'ico-grit' }).replace('class="ico-shield ico-pawshield ico-grit"', 'class="ico-grit ico-pawshield"');
 }

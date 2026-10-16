@@ -63,7 +63,7 @@ export function slotGlyph(input, action) {
 /** TT6: the slot's corner glyph as an icon (a mouse with the right button lit, a pad bumper, a keycap letter). */
 export function slotGlyphHtml(input, action) {
   const dev = input?.device === 'pad' ? 'pad' : 'kbm';
-  return glyphHtml(slotGlyph(input, action), dev, { ps: dev === 'pad' && input?.padKind === 'ps' });
+  return glyphHtml(slotGlyph(input, action), dev, { ps: dev === 'pad' && input?.padKind === 'ps', compact: true });
 }
 
 /** TT6: plain words for the slot's input ("Right mouse button"), for aria labels. */
@@ -247,7 +247,8 @@ export class AbilityBar {
     if (this.gritPips._k !== gk) {
       this.gritPips._k = gk;
       let h = '';
-      for (let i = 0; i < (s.gritMax ?? 3); i++) h += `<i class="${i < (s.grit ?? 0) ? 'f' : ''}"></i>`;
+      // TT6 fix round: mini paw shields like the HUD pips (grey squares read as missing-character boxes)
+      for (let i = 0; i < (s.gritMax ?? 3); i++) h += I.gritShield(i < (s.grit ?? 0) ? 'full' : 'empty');
       this.gritPips.innerHTML = h;
     }
     // kitten slot: portrait, cooldown, zzz

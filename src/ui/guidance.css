@@ -57,10 +57,9 @@
 .ui-ghostpaw .ico-ghostpaw > g:nth-of-type(2) { fill: #FF7AA2; }
 .ui-ghostpaw .gp-ring { border-color: #FF7AA2; box-shadow: 0 0 0 2px #4A1D08; }
 
-/* ---- phones: the guide bubble keeps off Clem (the objective line carries the chip's words, guide.js `is-dup`) */
-@media (max-height: 480px), (max-width: 480px) {
-  .ui-guide.is-dup .gd-chip { display: none; }
-}
+/* ---- phones: the guide bubble keeps off Clem (the objective line carries the chip's words, guide.js `is-dup`, set
+   only while that line is showing) */
+.ui-guide.is-dup .gd-chip { display: none; }
 @media (max-height: 480px) and (orientation: landscape) {
   .ui-guide { left: auto; right: calc(16px + env(safe-area-inset-right)); margin: 0; top: max(112px, calc(var(--tc-b, 0px) + 8px));
     width: min(300px, 36vw); align-items: flex-end; }

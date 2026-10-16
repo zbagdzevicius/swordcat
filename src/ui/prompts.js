@@ -138,10 +138,12 @@ export class Prompts {
     if (!this.target) return;
     // §10.4: the tag carries the device glyph ("Tap" / "E" / "Y")
     // TT6: a pad shows the Y button glyph (an icon), a keyboard its key letter, touch "Tap"
-    if (this.device === 'pad') setHtml(this.tagKey, actionGlyphHtml('interact', 'pad', this.ctx.input));
-    else setText(this.tagKey, this.device === 'touch' ? tx(this.ctx, 'ui.tag.tap') : actionGlyph('interact', this.device, this.ctx.input));
+    // (TT6 fix round: a keyboard binding that is not one key letter, such as a mouse button, draws its icon, never "RMB")
+    const kg = this.device === 'kbm' ? actionGlyph('interact', 'kbm', this.ctx.input) : '';
+    if (this.device === 'pad' || (this.device === 'kbm' && kg.length > 1)) setHtml(this.tagKey, actionGlyphHtml('interact', this.device, this.ctx.input));
+    else setText(this.tagKey, this.device === 'touch' ? tx(this.ctx, 'ui.tag.tap') : kg);
     setText(this.tagTxt, tagLabel(this.ctx, this.target.kind, this.tagPrompt));
-    flag(this.tag, 'is-long', this.device !== 'pad' && this.tagKey.textContent.length > 2);
+    flag(this.tag, 'is-long', this.device !== 'pad' && !this.tagKey.querySelector?.('.ig') && this.tagKey.textContent.length > 2);
   }
 
   // ------------------------------------------------------------------ story:prompt

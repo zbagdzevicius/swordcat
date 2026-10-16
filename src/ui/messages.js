@@ -219,6 +219,7 @@ export class Messages {
       this._flag(root, 'msg-phone', this.phone);
       this._flag(root, 'msg-shelter', b.has('shelter'));
       this._flag(root, 'msg-results', b.has('results'));
+      this._flag(root, 'msg-offer', b.has('offer'));
       for (const k of ['phone-portrait', 'phone-land', 'tablet', 'desktop']) this._flag(root, `vp-${k}`, this.kind === k);
     }
     this._measureBlocks(dt);
@@ -238,10 +239,12 @@ export class Messages {
   /** The boxes world bubbles keep off: `{ w, h, rects }` in canvas CSS px (see _measureBlocks). */
   bubbleBlocks() { return this.blocks; }
 
-  /** The centre card and the toast stack, re-read at 1 / MSG.blockRate Hz while either is up; empty otherwise. */
+  /** The centre card, the toast stack and (on touch) the on-screen buttons, re-read at 1 / MSG.blockRate Hz; else empty. */
   _measureBlocks(dt) {
     const b = this.blocks;
-    if (!this.card && !this.toast) { b.rects.length = 0; this._blockT = 0; return; }
+    // TT6 fix round: on touch the on-screen buttons count too (a "Psst" bubble's tail sat on the Shield button)
+    const tl = (this.ctx.input?.device ?? 'kbm') === 'touch' ? this.ui.touch?.layout?.buttons : null;
+    if (!this.card && !this.toast && !tl) { b.rects.length = 0; this._blockT = 0; return; }
     if ((this._blockT -= dt) > 0 || !hasDom()) return;
     this._blockT = MSG.blockRate;
     b.rects.length = 0;
@@ -260,6 +263,15 @@ export class Messages {
       b.rects.push(o);
     };
     if (this.card) add(this.ui.celebrations?.pop);
+    if (tl) {
+      for (const k in tl) {
+        const t = tl[k];
+        if (!(t?.r > 0)) continue;
+        const o = this._blockPool[b.rects.length] ?? (this._blockPool[b.rects.length] = { x: 0, y: 0, w: 0, h: 0 });
+        o.x = t.x - t.r - c.left; o.y = t.y - t.r - c.top; o.w = o.h = 2 * t.r;
+        b.rects.push(o);
+      }
+    }
     // each toast on its own (the stack's box spans the whole top column on a desktop)
     const tr = this.ui.toasts?.root;
     if (this.toast && tr?.children) for (let i = 0; i < tr.children.length && i < 4; i++) add(tr.children[i]);

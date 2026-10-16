@@ -11,12 +11,12 @@
 //   lockout   grey and dim (a whiffed tap, 0.3 s)
 //   break     shatters into pink hearts and petals, then is gone for the stagger
 //   parry hit a gold flash and a gold paw ring
-// The parry cue: while a parry-able foe winds up, the same shield floats over its head (small), and pops big and gold
-// at the "ting" 0.25 s before the strike (Telegraphs pushes the cue; constant screen size, drawn on top).
+// The parry cue: while a parry-able foe winds up, a gold shield with a pink "!" (icons.alertShield, unlike her pink one)
+// floats well over its head (small), and pops big with a halo at the "ting" 0.25 s before the strike (Telegraphs pushes the cue; constant screen size, drawn on top).
 // Cost: 2 draws while guarding (shield sprite + bubble sprite), 1 per cue sprite while a cue shows; nothing otherwise.
 // Sprites only (fog off, a map): no shader program of its own (PERF programs-per-level budget).
 import * as THREE from 'three';
-import { pawShield } from '../ui/icons.js';
+import { pawShield, alertShield } from '../ui/icons.js';
 import { actorWorldPos } from './util.js';
 
 /** Tunables (pure data; tests read them). */
@@ -31,6 +31,7 @@ export const SHIELD_FX = Object.freeze({
   cuePx: 34,             // parry cue height (CSS px) over a winding-up foe
   cuePopPx: 58,          // ... at the ting
   cueLift: 0.55,         // m over the head
+  cueLiftPx: 30,         // CSS px further up the screen (it sat on Clem's own shield when she stood behind the foe)
   cueMax: 4,
 });
 
@@ -77,7 +78,7 @@ export class ShieldBubble {
     this.group = false; this.sprite = null; this.bubble = null;
     /** state-key → { tex, ready } (lazily rasterised paw-shield icons) */
     this.tex = new Map();
-    this.t = 0; this.wasOn = false; this.popT = 1; this.rippleT = 1; this.flashT = 1; this.goldT = 1;
+    this.t = 0; this.wasOn = false; this.popT = 1; this.rippleT = 1; this.flashT = 1; this.goldT = 1; this.goldBig = 0.3;
     /** parry cues pushed by Telegraphs this frame */
     this.cues = [];
     this._nCues = 0;
@@ -94,7 +95,7 @@ export class ShieldBubble {
     const sm = new THREE.SpriteMaterial({ map: null, transparent: true, depthTest: false, depthWrite: false, fog: false });
     this.sprite = new THREE.Sprite(sm);
     this.sprite.name = 'fx:pawShield'; this.sprite.visible = false;
-    this.sprite.renderOrder = 6;
+    this.sprite.renderOrder = 8;            // over the parry / block particles (7): the gold shield stays visible
     this.sprite.center.set(0.5, 0.45);
     // the same sprite program as the shield (fog off, a map): the bubble adds no shader program
     this.bubbleMat = new THREE.SpriteMaterial({ map: bubbleTexture(), color: new THREE.Color('#FF8FB1'), transparent: true, depthWrite: false, fog: false });
@@ -122,9 +123,10 @@ export class ShieldBubble {
     this.tex.set(key, e);
     if (typeof document === 'undefined' || typeof Image === 'undefined') return e;
     const [st, cr] = key.split('|');
-    const state = st === 'cue' ? 'ready' : st === 'cueGold' ? 'parry' : st;
+    const cue = st === 'cue' || st === 'cueGold';
     const W = 120, H = 140;
-    const svg = pawShield(state, { cracks: +cr || 0 })
+    // the cue is the gold "!" shield (icons.alertShield), never Clem's pink one
+    const svg = (cue ? alertShield({ pop: st === 'cueGold' }) : pawShield(st, { cracks: +cr || 0 }))
       .replace('<svg ', `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" `);
     const cv = document.createElement('canvas');
     cv.width = W + 16; cv.height = H + 16;
@@ -149,7 +151,7 @@ export class ShieldBubble {
   /** A blow landed on her shield (combat:hit blocked, her the target). */
   block() { this.rippleT = 0; this.flashT = 0; this.counts.blocks++; }
   /** She parried: a gold flash on the shield. */
-  parry() { this.goldT = 0; this.flashT = 0; this.counts.parries++; }
+  parry(perfect = false) { this.goldT = 0; this.flashT = 0; this.goldBig = perfect ? 0.55 : 0.3; this.counts.parries++; }
   /** Grit ran out: the shield shatters (FX draws the hearts and petals). */
   shatter() { this.counts.breaks++; this.popT = 1; this.wasOn = false; }
 
@@ -194,10 +196,11 @@ export class ShieldBubble {
       const rip = this.rippleT < 1 ? Math.sin(this.rippleT * Math.PI) : 0;
       const gold = this.goldT < 1 ? 1 - this.goldT : 0;
       // squash in: wide then tall
-      const sx = pop * (1 + 0.18 * (1 - this.popT)) * (1 + 0.16 * rip + 0.25 * gold);
-      const sy = pop * (1 - 0.12 * (1 - this.popT)) * (1 + 0.16 * rip + 0.25 * gold);
+      // (TT6 fix round: a stronger block punch, a bigger gold pop on a perfect parry)
+      const sx = pop * (1 + 0.18 * (1 - this.popT)) * (1 + 0.3 * rip + this.goldBig * gold);
+      const sy = pop * (1 - 0.12 * (1 - this.popT)) * (1 + 0.3 * rip + this.goldBig * gold);
       const bob = 0.02 * Math.sin(this.t * 5);
-      const ah = SHIELD_FX.ahead + 0.08 * rip;
+      const ah = SHIELD_FX.ahead + 0.16 * rip;
       this.sprite.position.set(_p.x + Math.sin(f) * ah, _p.y + h * SHIELD_FX.chest + bob, _p.z + Math.cos(f) * ah);
       this.sprite.scale.set(SHIELD_FX.size * (120 / 140) * 1.12 * sx, SHIELD_FX.size * 1.12 * sy, 1);
       const key = `${gold > 0 ? 'parry' : look.state}|${look.cracks}`;
@@ -205,7 +208,7 @@ export class ShieldBubble {
       const ready = e.ready ? e : this._texFor(`active|0`);
       if (this.sprite.material.map !== ready.tex) { this.sprite.material.map = ready.tex; this.sprite.material.needsUpdate = true; }
       this.sprite.material.opacity = ready.ready ? (look.state === 'lockout' ? 0.6 : 0.97) : 0;
-      this.bubble.scale.setScalar(2 * SHIELD_FX.bubbleR * pop * (1 + 0.06 * rip));
+      this.bubble.scale.setScalar(2 * SHIELD_FX.bubbleR * pop * (1 + 0.14 * rip));
       const BM = this.bubbleMat, fl = this.flashT < 1 ? 1 - this.flashT : 0;
       BM.color.set(gold > 0 || look.state === 'parry' ? '#FFD34D' : look.state === 'lockout' ? '#C9C2C6' : '#FF8FB1');
       if (fl > 0) BM.color.lerp(_white, 0.5 * fl);
@@ -234,7 +237,9 @@ export class ShieldBubble {
         : cam.isOrthographicCamera ? (cam.top - cam.bottom) / (cam.zoom || 1) / H : 2 / H;
       const hgt = px * 1.12 * k;
       s.scale.set(hgt * (136 / 156), hgt, 1);
-      s.position.set(c.x, c.y, c.z);
+      // lifted along the camera's up axis by a constant number of screen px
+      _up.setFromMatrixColumn(cam.matrixWorld, 1).multiplyScalar(SHIELD_FX.cueLiftPx * k);
+      s.position.set(c.x + _up.x, c.y + _up.y, c.z + _up.z);
       s.material.opacity = Math.max(0, Math.min(1, c.alpha));
       s.visible = true;
     }
@@ -259,4 +264,5 @@ export class ShieldBubble {
 
 const _p = new THREE.Vector3();
 const _v = new THREE.Vector3();
+const _up = new THREE.Vector3();
 const _white = new THREE.Color('#FFFFFF');

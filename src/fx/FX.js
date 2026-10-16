@@ -793,7 +793,13 @@ export class FX {
         }
         return;
       }
-      case 'block': this.counts.blocks++; this._guardSparks(h.target, '#FFE3EC', 10); if (h.target === ctx.player) { this.decals?.flash('block'); this.shieldFx?.block(); } return;
+      case 'block': this.counts.blocks++; this._guardSparks(h.target, '#FFE3EC', 10);
+        if (h.target === ctx.player) {
+          this.decals?.flash('block'); this.shieldFx?.block();
+          // TT6 fix round: a pink ring off the shield, so a block reads apart from the plain held shield
+          this.particles.single(_p, { shape: SHAPE.RING, color: '#FF8FB1', intensity: 2.0, size0: 0.3, size1: 1.3, life: 0.24, grow: GROW.OUT });
+        }
+        return;
       case 'blockNpc': this.counts.blocks++; this._sparks(_p, dir, 8, '#F4F8FF', 1); return;
       case 'parryNpc':
         this.particles.single(_p, { shape: SHAPE.RING, color: '#FFD34D', intensity: 2.2, size0: 0.2, size1: 1.2, life: 0.22, grow: GROW.OUT });
@@ -846,8 +852,9 @@ export class FX {
     this._guardSparks(pl, '#FFE3EC', 8);
     this._shards(_p, 9, '#FF8FB1', 1);
     // TT6: the paw shield pops into pink hearts and petals
-    this.particles.burst(_p, { n: 7, shape: SHAPE.HEART, color: '#FF8FB1', intensity: 1.4, size: [0.12, 0.18], sizeEnd: 0.4, life: [0.5, 0.8],
-      speed: [1.6, 3.0], up: 1.4, spread: Math.PI, gravity: 3, drag: 1.6, spin: 4, fade: FADE.HOLD });
+    // (TT6 fix round: bigger and slower hearts, the critic could barely spot them at 1280 × 720)
+    this.particles.burst(_p, { n: 9, shape: SHAPE.HEART, color: '#FF8FB1', intensity: 1.6, size: [0.22, 0.3], sizeEnd: 0.55, life: [0.7, 1.0],
+      speed: [1.4, 2.6], up: 1.6, spread: Math.PI, gravity: 2.4, drag: 1.6, spin: 3, fade: FADE.HOLD });
     this.particles.single(_p, { shape: SHAPE.RING, color: '#FFFFFF', intensity: 1.8, size0: 0.3, size1: 1.6, life: 0.22, grow: GROW.OUT });
   }
 
@@ -872,7 +879,9 @@ export class FX {
     P.burst(_p, { additive: true, n: gold ? 10 : 6, shape: SHAPE.STAR4, color: '#FFE9A8', intensity: 2.4, size: [0.1, 0.18], sizeEnd: 0.3,
       life: [0.4, 0.7], speed: [1.2, 2.6], spread: Math.PI, drag: 2.5, fade: FADE.TWINKLE });
     this.bloomSpike(gold ? 1.1 : 0.9, gold ? 0.35 : 0.25);
-    this.shieldFx?.parry();
+    this.shieldFx?.parry(gold);
+    // TT6 fix round: a perfect parry gets a second, wider white ring (the two parries looked the same)
+    if (gold) P.single(_p, { shape: SHAPE.RING, color: '#FFFFFF', intensity: 2.6, size0: 0.5, size1: 2.8, life: 0.4, grow: GROW.OUT });
     // TT6: a gold paw ring flat on the ground around her (the shield's parry flash)
     if (pl) { actorWorldPos(pl, _q); P.single(_q.setY(_q.y + 0.08), { shape: SHAPE.RING, color: '#FFD34D', intensity: 2.2, size0: 0.4, size1: 2.4, life: 0.32, grow: GROW.OUT }); }
     if (isActor(p?.attacker) && !p.projectile) this.dizzyFor(p.attacker, gold ? PLAYER.guard.goldParryStagger : PLAYER.guard.parryStagger * 0.8);

@@ -564,14 +564,16 @@ export class Hud {
     const uiRoot = ctx.ui?.root;
     if (!text) { if (uiRoot) flag(uiRoot, 'has-guide-under', false); return; }
     flag(this.guideEl, 'is-dim', !!ctx.ui?.beacon?.dim);
-    // TT4: while a guide bubble (Pearl's practice lines) shows the same line in its chip, the pill steps aside (the
-    // controls pass saw every practice step twice)
-    const gp = ctx.ui?.prompts?.guide, gc = gp?.open ? gp.cur?.p : null;
-    flag(this.guideEl, 'is-dup', !!gc?.textKey && txt(ctx, gc.textKey, gc.vars) === raw);
-    if ((this._guidePosT -= dt) > 0) return;
-    this._guidePosT = 0.25;
     const W = typeof innerWidth === 'number' ? innerWidth : 1280, H = typeof innerHeight === 'number' ? innerHeight : 720;
     const under = isPhone(dev, W, H);
+    // TT4: while a guide bubble (Pearl's practice lines) shows the same line in its chip, the pill steps aside (the
+    // controls pass saw every practice step twice). TT6 fix: on phones the pill is the one that stays (it carries the
+    // input icons and never folds) and guide.js drops the chip instead; the two rules used to hide both.
+    const gp = ctx.ui?.prompts?.guide, gc = gp?.open ? gp.cur?.p : null;
+    // (and while the Kitten-mode offer is up, which hides Pearl's bubble, the pill shows: the lesson line stays readable)
+    flag(this.guideEl, 'is-dup', !under && !ctx.ui?.offer?.open && !!gc?.textKey && txt(ctx, gc.textKey, gc.vars) === raw);
+    if ((this._guidePosT -= dt) > 0) return;
+    this._guidePosT = 0.25;
     flag(this.guideEl, 'is-under', under);
     // (under the hearts it leaves the top-centre column: .hud-tc is transformed, so it is positioned from the hud root)
     const home = under ? this.root : this.tcEl;

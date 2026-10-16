@@ -1,12 +1,12 @@
 // tests/unit/glyphs.test.js — TT6: input glyphs (no "RMB" / "LB" text for players) and the visible Pink Paw shield.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { glyphAtom, glyphHtml, glyphWords, labelParts, codeWords, ACTION_LABEL, isPlayStationPad, TOUCH_ICONS } from '../../src/ui/inputGlyph.js';
+import { glyphAtom, glyphHtml, glyphWords, labelParts, codeWords, ACTION_LABEL, isPlayStationPad, TOUCH_ICONS, shieldCueHtml } from '../../src/ui/inputGlyph.js';
 import { actionGlyph, actionGlyphHtml, actionWords, glyphText, presetGlyph, PRESET_IDS, ACTION_GLYPH } from '../../src/ui/text.js';
 import { shieldSlotState, slotGlyphHtml, slotGlyphWords } from '../../src/ui/abilityBar.js';
-import { pawShield, SHIELD_STATES, gritShield, shield } from '../../src/ui/icons.js';
+import { pawShield, SHIELD_STATES, gritShield, shield, alertShield } from '../../src/ui/icons.js';
 import { shieldLook, SHIELD_FX } from '../../src/fx/ShieldBubble.js';
-import { CONTROL_ROWS } from '../../src/ui/settings.js';
+import { CONTROL_ROWS, controlRowLabel, SETTINGS } from '../../src/ui/settings.js';
 import { S } from '../../src/story/strings.js';
 import { ONBOARDING_STRINGS } from '../../src/story/strings.onboarding.js';
 
@@ -72,7 +72,7 @@ test('TT6 every action on every device and preset renders without jargon (icons 
   assert.match(h, /role="img" aria-label="Right mouse button" title="Right mouse button"/);
   assert.equal(actionWords('guard', 'pad'), 'Left bumper');
   assert.equal(glyphText('Hold [Stand] to block', 'kbm'), 'Hold Right mouse button to block');
-  assert.equal(glyphText('Tap [Stand] when [ShieldCue] pops!', 'touch'), 'Tap Shield button when the pink shield pops!');
+  assert.equal(glyphText('Tap [Stand] when [ShieldCue] pops!', 'touch'), 'Tap Shield button when the gold shield pops!');
 });
 
 test('TT6 the Shield copy points at something visible; no shield emoji, no "when you see the shield"', () => {
@@ -113,4 +113,45 @@ test('TT6 the ability-bar corner badge is an icon with plain-words aria', () => 
   assert.equal(slotGlyphWords(hy, 'guard'), 'Right mouse button');
   assert.match(slotGlyphHtml({ device: 'pad', padKind: 'ps' }, 'guard'), />L1</);
   assert.equal(actionGlyph('guard', 'kbm', hy), 'RMB', 'the binding (an internal id) is unchanged');
+});
+
+test('TT6 fix round: the parry cue is a gold "!" shield, not a second pink one; the lesson icon is the same', () => {
+  const a = alertShield();
+  assert.match(a, /data-state="cue"/);
+  assert.match(a, /#FFC23D/);                        // gold body
+  assert.doesNotMatch(a, /#FF8FB1/);                 // never Clem's pink fill
+  assert.match(a, /<circle cx="20.2" cy="4.6"/);     // the "!" badge
+  assert.match(alertShield({ pop: true }), /#FFE27A/);
+  const h = shieldCueHtml();
+  assert.match(h, /data-glyph="shield-cue"/); assert.match(h, /ico-alertshield/); assert.match(h, /aria-label="gold warning shield"/);
+  assert.match(glyphText('Tap [Stand] when [ShieldCue] pops!', 'kbm'), /when the gold shield pops!$/);
+  assert.doesNotMatch(ONBOARDING_STRINGS['pearl.parry'] ?? '', /pink one/);
+  assert.doesNotMatch(S['pearl.wobble']?.default ?? '', /Block/);
+});
+
+test('TT6 fix round: compact bar keycaps (Shift is its arrow, Space a short bar); words stay plain', () => {
+  const sh = glyphHtml('Shift', 'kbm', { compact: true });
+  assert.match(sh, />⇧<\/kbd>/); assert.match(sh, /aria-label="Shift key"/); assert.doesNotMatch(sh, /⇧ Shift/);
+  const sp = glyphHtml('Space', 'kbm', { compact: true });
+  assert.match(sp, /ig-key--bar/); assert.match(sp, /aria-label="Space bar"/); assert.doesNotMatch(noSvg(sp), />Space</);
+  assert.match(glyphHtml('Shift', 'kbm'), /⇧ Shift/);            // the Controls card keeps the full keycap
+  const input = { device: 'kbm', codesFor: (a) => (a === 'dodge' ? ['ShiftLeft', 'KeyK'] : a === 'jump' ? ['Space'] : []) };
+  assert.match(slotGlyphHtml(input, 'dodge'), />⇧<\/kbd>/);
+  assert.match(slotGlyphHtml(input, 'jump'), /ig-key--bar/);
+});
+
+test('TT6 fix round: Controls rows use the words of the device in use; preset names have no genre jargon', () => {
+  const lbl = (a, d) => controlRowLabel(a, CONTROL_ROWS.find(([x]) => x === a)[1], d);
+  assert.match(lbl('attack', 'kbm'), /click a foe/);
+  assert.match(lbl('attack', 'touch'), /tap a foe/); assert.doesNotMatch(lbl('attack', 'touch'), /click/i);
+  assert.doesNotMatch(lbl('attack', 'pad'), /click|tap/i);
+  for (const [a, l] of CONTROL_ROWS) assert.doesNotMatch(l, /\bEsc\b|click/i, `${a}: ${l}`);
+  const preset = SETTINGS.find((d) => d.key === 'controlPreset');
+  for (const o of preset.optionLabels) assert.doesNotMatch(o, /Hybrid|MOBA|Diablo/);
+});
+
+test('TT6 fix round: Grit pips are paw shields; the empty one is pale (it read as dark olive on grass)', () => {
+  assert.match(gritShield('full'), /ico-pawshield/);
+  assert.match(gritShield('empty'), /fill="#FFF6EC"/);
+  assert.match(gritShield('cracked'), /fill="#FFF6EC"/);
 });

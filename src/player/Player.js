@@ -186,7 +186,8 @@ export class Player extends ScriptedActorMixin(Actor) {
     const now = this.ctx.game?.time ?? 0;
     if (!force && now - this._wordT < HIT_WORDS.every - 1e-6) return false;
     this._wordT = now;
-    const at = _v.set(this.pos.x, this.pos.y + this.height + HIT_WORDS.lift, this.pos.z);
+    // TT6 fix round: "Ting!" floats higher than the other words, clear of the gold-rimmed shield in front of her
+    const at = _v.set(this.pos.x, this.pos.y + this.height + HIT_WORDS.lift + (key === 'parry' ? 0.55 : 0), this.pos.z);
     const fx = this.ctx.fx;
     try {
       if (typeof fx?.word === 'function') fx.word(at, text, { kind: key, actor: this });
@@ -1213,20 +1214,35 @@ export class Player extends ScriptedActorMixin(Actor) {
   _faceActor(a) { this.facing = Math.atan2(a.pos.x - this.pos.x, a.pos.z - this.pos.z); }
 
   /**
+   * TT6 fix round (the new-player test): while the Stand is held, a parry-able strike about to land (AIM.standSnapLead
+   * s, within AIM.standSnapRange m) turns her to face it, on KBM and pad too, not only on the press. Before, holding
+   * Shield with the cursor on the other side let Sir Wobble hit her with no reason given. → the yaw to face, or null.
+   */
+  _guardThreatYaw() {
+    const nx = this.ctx.combat?.nextParryable?.(this, AIM.standSnapRange);
+    if (!nx || !threatSnap(this.pos, [nx], this.ctx.game.time, _snapOut)) return null;
+    const at = _snapOut.at;
+    return at ? Math.atan2(at.x - this.pos.x, at.z - this.pos.z) : null;
+  }
+
+  /**
    * Held verbs that keep turning toward the aim (§6.2 / §8.1): the charge (540°/s toward the cursor / drag / RS) and
-   * the Stand (KBM: toward the cursor at 360°/s once it moved 30 px; touch: auto-faces the soonest threat; pad: RS).
+   * the Stand (KBM: toward the cursor at 360°/s once it moved 30 px; touch: auto-faces the soonest threat; pad: RS;
+   * KBM and pad also turn to a strike about to land, _guardThreatYaw).
    * Returns true when it set the facing (locomote must not turn her).
    */
   aimTurn(dt, kind) {
     if (this.ctx.cam?.isIso === false) return false;
     const input = this.ctx.input, dev = input?.device;
     let yaw = null;
-    const rate = kind === 'charge' ? AIM.chargeTurn : PLAYER.guard.turnRate;
+    let rate = kind === 'charge' ? AIM.chargeTurn : PLAYER.guard.turnRate;
     if (kind === 'guard') {
       if (dev === 'touch' && this.ctx.state?.settings?.standAutoFace !== false) {
         const nx = this.ctx.combat?.nextParryable?.(this, 6);
         const t = nx?.pos ? { pos: nx.pos } : nx?.attacker ?? this.lockTarget();   // a bolt: face the bolt
         if (t?.pos) yaw = Math.atan2(t.pos.x - this.pos.x, t.pos.z - this.pos.z);
+      } else if ((yaw = this._guardThreatYaw()) != null) {
+        rate *= 2;                                                  // 720°/s: faced well before the 0.7 s lead runs out
       } else if (dev === 'kbm') {
         const P = input.pointer, g = this._guardPtr;
         if (!g.armed && P && Math.hypot(P.x - g.x, P.y - g.y) >= AIM.cursorReaimPx) g.armed = true;

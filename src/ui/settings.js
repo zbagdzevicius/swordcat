@@ -37,7 +37,7 @@ export const SETTINGS = Object.freeze([
   { key: 'autoStand', type: 'toggle', label: 'settings.autoStand', group: 'controls' },
   // CONTROLS_SPEC §10.7: the iso controls
   { key: 'controlPreset', type: 'choice', label: 'settings.controlPreset', group: 'controls', dev: 'kbm', options: ['hybrid', 'moba', 'diablo', 'mouseOnly', 'keyboardOnly'],
-    optionLabels: ['Hybrid', 'MOBA', 'Diablo', 'Mouse only', 'Keyboard only'] },
+    optionLabels: ['Standard', 'Right-click moves', 'Left-click moves', 'Mouse only', 'Keyboard only'] },   // TT6: plain names, no genre jargon
   // AUTOCAM §10.3 / §10.4 / §12 camera rows (IMPLEMENTATION_PLAN §7.4; camLockMode replaces the camLock toggle, X19)
   { key: 'camZoom', type: 'slider', label: 'settings.camZoom', group: 'camera', min: 0.7, max: 1.4, step: 0.05, fmt: 'mul' },
   { key: 'camZoomPortrait', type: 'slider', label: 'settings.camZoomPortrait', group: 'camera', cam: 'iso', dev: 'touch', min: 0.7, max: 1.4, step: 0.05, fmt: 'mul' },
@@ -235,14 +235,23 @@ export function resetSettings(ctx, defaults) {
  * strings carries it (menus.js controlLabel); the label here is the built-in fallback.
  */
 export const CONTROL_ROWS = Object.freeze([
-  ['move', 'Move'], ['attack', 'Attack · hold to charge · click a foe'], ['guard', 'Shield · tap just in time to parry'],
+  ['move', 'Move'], ['attack', 'Attack · hold to charge'], ['guard', 'Shield · tap just in time to parry'],
   ['jump', 'Jump · Attack in the air: Pounce'], ['dodge', 'Roll · hold to sprint'], ['interact', 'Use · talk, open'],
-  ['trick', 'Paw Trick · hold to aim, Esc cancels'], ['trick1', 'Pick Paw Trick 1'], ['trick2', 'Pick Paw Trick 2'], ['trick3', 'Pick Paw Trick 3'],
+  ['trick', 'Paw Trick · tap to cast, hold to aim'], ['trick1', 'Pick Paw Trick 1'], ['trick2', 'Pick Paw Trick 2'], ['trick3', 'Pick Paw Trick 3'],
   ['twirl', 'Ribbon Twirl · jump again in the air, hold'],
   ['ability', 'Kitten power'], ['milk', 'Snack Break'], ['meow', 'Meow'], ['golden', 'Golden Hour · or Shield + Attack'],
   ['lockon', 'Select / cycle target'], ['attackMove', 'Attack-move'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'],
   ['peek', 'Peek ahead · show ranges'], ['pause', 'Pause · hold to skip scenes'],
 ]);
+
+/**
+ * TT6 fix round: row labels in the words of the device in use (touch players never read "click"). Rows not listed
+ * here use CONTROL_ROWS. Pure. @param {string} act @param {string} label @param {Dev} dev
+ */
+export function controlRowLabel(act, label, dev) {
+  if (act === 'attack') return dev === 'kbm' ? 'Attack · hold to charge · click a foe' : dev === 'touch' ? 'Attack · hold to charge · tap a foe' : label;
+  return label;
+}
 
 // ------------------------------------------------------------------ TT3 §11.5 K8: keyboard and mouse rebinding
 /** The actions the Controls card can rebind (keyboard and mouse only; the pad keeps the standard layout). */

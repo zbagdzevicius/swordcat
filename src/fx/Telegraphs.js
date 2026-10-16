@@ -868,8 +868,8 @@ export class Telegraphs {
   }
 
   /**
-   * TT6 the parry cue: the Pink Paw shield over a parry-able foe's head (fx/ShieldBubble draws it), small through the
-   * wind-up, popping big and gold at the "ting" 0.25 s before the strike: "Tap [Shield] when the pink shield pops".
+   * TT6 the parry cue: the gold "!" shield over a parry-able foe's head (fx/ShieldBubble draws it), small through the
+   * wind-up, popping big with a halo at the "ting" 0.25 s before the strike: "Tap [Shield] when [cue] pops".
    * → true when a cue was pushed (the white "!" is then left out).
    */
   _shieldCue(L, head, alpha, gold) {

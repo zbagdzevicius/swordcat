@@ -1,9 +1,12 @@
 // tests/smoke/glyphs.mjs  (owner: ui + fx, TT6) — no player has to decode "RMB":
 //   glyphs:shield   holding the Shield (Q) shows the Pink Paw shield in the world (fx sprite + bubble visible), the bar
 //                   slot goes "active"; the parry lesson line draws a mouse with the right button lit + "Shield" + the
-//                   pink shield cue, then the touch Shield button icon on touch and the left bumper on a pad; a parry-able
+//                   gold shield cue, then the touch Shield button icon on touch and the left bumper on a pad; a parry-able
 //                   wind-up shows the shield cue over the foe; the Controls card on touch shows icon rows and no
 //                   keyboard-only lines, at 1280 × 720, 844 × 390 and 390 × 844. Shots → tests/shots/glyphs/*.png.
+//   glyphs:phoneLesson  (TT6 fix round) the parry lesson on a phone, 844 × 390 and 390 × 844: once Pearl's bubble has
+//                   folded, the lesson line with the Shield button icon and the gold cue icon is still on screen (the
+//                   line and the bubble chip used to hide each other); the cue in the world is the gold "!" shield.
 export default [
   {
     name: 'glyphs:shield', order: 96, level: 'meadow', spawn: 'start', timeout: 120000,
@@ -35,14 +38,14 @@ export default [
       };
       const kbm = await line('kbm');
       t.log(`kbm line ${JSON.stringify(kbm)}`);
-      t.assert(kbm && kbm.glyphs.includes('mouse-right') && kbm.glyphs.includes('shield-cue') && /Shield/.test(kbm.text), `kbm: mouse with the right button lit + Shield + the pink shield (${JSON.stringify(kbm)})`);
+      t.assert(kbm && kbm.glyphs.includes('mouse-right') && kbm.glyphs.includes('shield-cue') && /Shield/.test(kbm.text), `kbm: mouse with the right button lit + Shield + the gold shield cue (${JSON.stringify(kbm)})`);
       t.assert(kbm && !/\bRMB\b|\bLMB\b/.test(kbm.text), 'kbm: no RMB / LMB text');
       const pad = await line('pad');
       t.assert(pad && pad.glyphs.includes('pad-lb') && pad.aria.includes('Left bumper'), `pad: the left bumper icon (${JSON.stringify(pad)})`);
       const touch = await line('touch');
       t.assert(touch && touch.glyphs.includes('touch-guard') && touch.aria.includes('Shield button'), `touch: the Shield button icon (${JSON.stringify(touch)})`);
       await t.G(() => { const g = window.__GAME__; g.ctx.bus.emit(g.E.PROMPT, { kind: 'tutorial', id: 'smoke-glyph', textKey: 'tut.parry', step: 1, done: true }); g.ctx.input.setDevice('kbm'); });
-      // ---- a parry-able wind-up: the pink shield cue pops over the foe (no "!")
+      // ---- a parry-able wind-up: the gold "!" shield cue pops over the foe
       await t.G(() => { const g = window.__GAME__, p = g.ctx.player.pos; g.ctx.fx.telegraph({ kind: 'parry', position: [p.x + 2, p.y, p.z + 2], duration: 1.2 }); });
       await t.wait(300);
       const cue = await t.G(() => ({ cues: window.__GAME__.ctx.fx.shieldFx.shown.cues, vis: window.__GAME__.ctx.fx.shieldFx.cueSprites.filter((s) => s.visible).length }));
@@ -70,6 +73,38 @@ export default [
       }
       await t.viewport(1280, 720);
       await t.G(() => { const g = window.__GAME__; g.ctx.ui.menus.pop?.(); g.ctx.ui.resume(); g.ctx.input.setDevice('kbm'); });
+    },
+  },
+  {
+    name: 'glyphs:phoneLesson', order: 97, level: 'meadow', spawn: 'start', timeout: 120000,
+    async run(t) {
+      for (const [w, h] of [[844, 390], [390, 844]]) {
+        await t.viewport(w, h);
+        await t.G(async () => {
+          const g = window.__GAME__, c = g.ctx, s = c.state;
+          g.story.skip(); c.story.queue.length = 0; s.flags = {};
+          for (const k of ['prologue.start', 'sticker.bonk', 'sticker.bow', 'sticker.stand']) s.setFlag(k, true);
+          await g.loadLevel('meadow', 'practice');
+          g.story.skip(); g.setMode('play'); g.god(true); c.input.setDevice('touch');
+        });
+        await t.wait(1500);
+        await t.G(() => { const g = window.__GAME__, tg = g.ctx.story.guideTarget?.(); g.ctx.input.setDevice('touch'); if (tg) { g.ctx.player.pos.x = tg.x; g.ctx.player.pos.z = tg.z; } });
+        // Pearl's bubble folds after a few seconds: the line must still be there
+        await t.wait(6500);
+        const r = await t.G(() => {
+          const e = document.querySelector('.hud-guide'), cs = e && getComputedStyle(e), b = e?.getBoundingClientRect();
+          const chip = document.querySelector('.ui-guide.is-on .gd-chip'), chipShown = !!chip && getComputedStyle(chip).display !== 'none' && chip.getBoundingClientRect().width > 0;
+          return { on: !!e?.classList.contains('is-on'), vis: cs?.visibility, op: cs ? +cs.opacity : 0, inView: !!b && b.width > 0 && b.bottom > 0 && b.top < innerHeight,
+            glyphs: [...(e?.querySelectorAll('[data-glyph]') ?? [])].map((x) => x.dataset.glyph), chipShown, folded: !!document.querySelector('.ui-guide.is-folded') };
+        });
+        t.log(`phone lesson ${w}x${h} ${JSON.stringify(r)}`);
+        t.assert(r.on && r.vis === 'visible' && r.op > 0.5 && r.inView, `${w}x${h}: the lesson line is visible after the bubble folds (${JSON.stringify(r)})`);
+        t.assert(r.glyphs.includes('touch-guard') && r.glyphs.includes('shield-cue'), `${w}x${h}: the line draws the Shield button and the gold cue (${r.glyphs})`);
+        t.assert(!r.chipShown, `${w}x${h}: the bubble chip does not repeat the line`);
+        await t.shot(`glyphs/phone-lesson-${w}x${h}`);
+      }
+      await t.viewport(1280, 720);
+      await t.G(() => window.__GAME__.ctx.input.setDevice('kbm'));
     },
   },
 ];

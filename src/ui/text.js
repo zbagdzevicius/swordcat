@@ -118,14 +118,14 @@ export const UI_STRINGS = Object.freeze({
   'ui.controls.na': '—',
   // TT3 §11.5 K8: the rebinding screen (keyboard and mouse only)
   'ui.controls.rebindHint': 'Click a key to change it.',
-  'ui.controls.press': 'Press a key or mouse button for {action}. Esc cancels.',
+  'ui.controls.press': 'Press a key or mouse button for {action}. Press the Esc key to stop.',
   'ui.controls.refused': '{key} belongs to the browser. Pick another key.',
   'ui.controls.walk': '{key} walks. Pick another key.',
   'ui.controls.swapped': 'Swapped: {other} now uses {key}.',
   'ui.controls.saved': '{action}: {key}',
   'ui.controls.reset': 'Reset keys to default',
   'ui.controls.resetDone': 'Keys back to default.',
-  'ui.controls.sticky': 'Tip: on Windows, pressing Shift 5 times may open Sticky Keys. K or the back side button of the mouse also roll.',
+  'ui.controls.sticky': 'Tip: on Windows, pressing Shift 5 times may open Sticky Keys. K or the back side button of the mouse also rolls.',
   'pause.controls': 'Controls',
   'ui.tag.tap': 'Tap',
   'ui.touch.edit': 'Edit touch layout',
@@ -462,7 +462,7 @@ function tokenHtml(inner, device, input, plain = '') {
 
 /**
  * Tutorial / prompt text → HTML with device glyphs (TT6 icons): `[Stand]` becomes a mouse with the right button lit
- * plus "Shield" (a bumper on a pad, the Shield button on touch), `[Space]` a keycap, `[ShieldCue]` the pink shield the
+ * plus "Shield" (a bumper on a pad, the Shield button on touch), `[Space]` a keycap, `[ShieldCue]` the gold "!" shield the
  * player sees over a foe, a bare ⚔ / 🛡 the attack / Shield glyph, `*x*` emphasis. Everything else is escaped.
  * @param {string} text @param {'kbm'|'pad'|'touch'} [device]
  */
@@ -488,7 +488,7 @@ export function glyphify(text, device = 'kbm', input = null) {
 /** Text with `[tokens]` → plain words for text-only places ("Hold right mouse button to skip"). Pure. */
 export function glyphText(text, device = 'kbm', input = null) {
   return String(text ?? '').replace(/\[([^\]]+)\]/g, (m, inner) => {
-    if (inner.trim().toLowerCase() === 'shieldcue') return 'the pink shield';
+    if (inner.trim().toLowerCase() === 'shieldcue') return 'the gold shield';
     const { label, act } = tokenLabel(inner, device, input);
     return act ? glyphWords(label, device, device === 'pad' && input?.padKind === 'ps') : inner;
   }).replace(/⚔/g, () => actionWords('attack', device, input)).replace(/🛡/g, () => actionWords('guard', device, input));

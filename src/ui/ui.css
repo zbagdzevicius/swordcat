@@ -209,8 +209,11 @@ kbd.ui-key--sword { text-shadow: 0 1px 0 var(--pinkDark); }
 .ret-pips i.f, .hud-epips i.f { background: linear-gradient(#FF8A7A, #E04646); }
 .hud-riposte { position: absolute; left: 0; top: 0; display: none; align-items: center; gap: .3em; padding: .2em .7em .25em .3em; margin: -1em 0 0 -3.2em;
   border-radius: 999px; font-family: var(--f-head); font-weight: 700; color: #fff; background: linear-gradient(#F9C2D1, #E88AA6); border: 2px solid var(--pinkDark);
-  text-shadow: 0 1px 0 var(--pinkDark); box-shadow: 0 3px 0 var(--pinkDark), 0 0 14px #FFE3A3; animation: pop .5s var(--ease-pop) infinite alternate; white-space: nowrap; }
+  text-shadow: 0 1px 0 var(--pinkDark); box-shadow: 0 3px 0 var(--pinkDark), 0 0 14px #FFE3A3; animation: ripPop .5s var(--ease-pop) infinite alternate; white-space: nowrap; }
 .hud-riposte.is-on { display: flex; }
+/* TT6 fix round: the pulse animates `scale`, not `transform` (hud.js places the chip with transform, and the old `pop`
+   keyframes reset it, so the chip sat cut off in the top-left corner) */
+@keyframes ripPop { 0% { scale: 1; } 35% { scale: 1.12; } 70% { scale: .97; } 100% { scale: 1; } }
 
 /* ------------------------------------------------------------------ threat arrows (§8.1) + kitten pings */
 .ui-arrows { position: absolute; inset: 0; pointer-events: none; }
@@ -913,9 +916,9 @@ body.ui-touch .hud-tc { top: calc(20px + 72px * .62 * var(--ui-ts, 1) + env(safe
 .ab-key { position: absolute; min-width: 20px; text-align: center; font-size: 16px; white-space: nowrap; line-height: 1.1; pointer-events: none; z-index: 2; right: -9px; bottom: -11px; padding: 0 4px 1px; letter-spacing: -.02em; }
 .ab-key:empty { display: none; }
 .ability-bar.is-pad .ab-key { border-radius: 50%; min-width: 22px; padding: 2px 3px; }
-.ab-grit { position: absolute; left: 4px; top: 3px; display: flex; gap: 2px; pointer-events: none; }
-.ab-grit i { width: 7px; height: 7px; border-radius: 2px; background: #9AA0A6; border: 1px solid #2A1E18; }
-.ab-grit i.f { background: #E8EEF4; }
+.ab-grit { position: absolute; left: 3px; top: 2px; display: flex; gap: 1px; pointer-events: none; }
+/* TT6 fix round: mini paw shields (icons.gritShield), like the Grit pips under the hearts */
+.ab-grit .ico-grit { width: 10px; height: 12px; display: block; }
 .ab-count { position: absolute; right: -6px; top: -10px; font-weight: 800; font-size: 16px; color: #FFF6E6; background: #6B4A2B; border-radius: 9px; padding: 0 5px; line-height: 1.2; pointer-events: none; }
 .ab-guard.is-active { background: radial-gradient(circle at 35% 30%, #FFFFFF, #DCE4EC 60%, #AEB8C4); }
 .ab-guard.is-broken .ab-ico { opacity: .45; }
@@ -1697,6 +1700,10 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
    left: the hint waits where they share a column), msg-phone, vp-*. Toasts held by messages.js get .is-held. */
 .ui-toasts.is-held { visibility: hidden; }
 .ui-root.msg-p0 :is(.ui-toasts, .ui-hint, .ui-guide, .ui-celebrate, .ui-prompt, .ui-tag, .hud-guide, .ui-ghostpaw, .ui-beacon) { visibility: hidden !important; }
+/* TT6 fix round: on a desktop or tablet the Kitten-mode offer is a small bubble, not a scrim: the lesson line stays
+   (the new-player test saw the offer replace the parry lesson line mid-drill). Phones keep the old rule: a short
+   landscape screen has no room for both off the HUD and the touch buttons. */
+.ui-root.msg-p0.msg-offer:not(.msg-phone):not(.msg-shelter):not(.msg-results) .hud-guide { visibility: visible !important; }
 .ui-root.msg-shelter .ui-offer, .ui-root.msg-results .ui-offer { visibility: hidden !important; }
 .ui-root.msg-card .ui-guide .gd-bubble { position: absolute; top: 0; opacity: 0; transform: scale(.92) translateY(-6px); }
 .ui-root.msg-card .ui-guide .gd-dots { display: none; }
@@ -1781,7 +1788,7 @@ kbd.ig-key--wide { padding: 0 .5em; }
 .menu--controls .ctl-table { flex: 0 0 auto; }
 .menu--controls .menu-panel > .menu-body { overflow-y: auto; overscroll-behavior: contain; }
 /* touch players get no keyboard-only lines (preset picker, "Click a key", the Sticky Keys tip, Reset keys) */
-.menu--controls.is-touch :is(.ctl-preset, .ctl-msg, .ctl-note, .ctl-reset) { display: none; }
+.menu--controls:is(.is-touch, .is-pad) :is(.ctl-preset, .ctl-msg, .ctl-note, .ctl-reset) { display: none; }
 @media (max-height: 460px) and (orientation: landscape) {
   .menu--controls .ctl-table { max-height: none; overflow: visible; }
   .menu--controls .menu-panel > .menu-body { max-height: calc(100vh - 6.5em); }
@@ -1837,3 +1844,29 @@ kbd.ig-key--wide { padding: 0 .5em; }
 .ability-bar.is-pad .ab-key .ig-group .ig-svg { --igh: 19px; }
 /* combos ("Space ×2", "LB + X", "Esc / P") wrap inside a narrow cell instead of spilling out */
 .menu--controls .ctl-ig .ig-group { flex-wrap: wrap; justify-content: center; row-gap: .15em; max-width: 100%; }
+
+/* ---- TT6 fix round: the bar badges stay inside their slots */
+.ab-key .ig-key--bar { display: inline-flex; align-items: center; }
+.ab-key .ig-spacebar { width: 20px; height: 10px; display: block; }
+.ab-key:has(.ig-key--bar) { padding: 3px 5px 4px; }
+/* pad: every badge sits on the slot's bottom-right corner (centred, the D-pad crosses covered the Snack and Meow art) */
+.ability-bar.is-pad .ab-key:has(.ig) { right: -8px; left: auto; transform: none; bottom: -10px; }
+.ability-bar.is-pad .ab-key .ig-svg { --igh: 22px; }
+.ability-bar.is-pad .ab-key .ig[data-glyph^="pad-dpad"] .ig-svg { --igh: 20px; }
+/* a combo ("LB + X", PlayStation "L1 + square"): two small icons with no "+" (the slot's aria label says "plus") */
+.ability-bar.is-pad .ab-key .ig-group { gap: 0; }
+.ability-bar.is-pad .ab-key .ig-group .ig-sep { display: none; }
+.ability-bar.is-pad .ab-key .ig-group .ig-svg { --igh: 17px; }
+/* TT6 fix round: on a narrow phone each action is two lines: the label across the card, then the three device icons
+   under it (labels wrapped to 3 or 4 lines in a quarter-width column, and Shift touched its cell edges) */
+@media (max-width: 480px) {
+  .menu--controls .ctl-row { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: .15em; padding: .25em .3em .3em; }
+  .menu--controls .ctl-row > span.ctl-lbl { grid-column: 1 / -1; padding: 0 .2em; line-height: 1.2; }
+  .menu--controls .ctl-head > span:first-child { display: none; }
+  .menu--controls .ctl-row:not(.ctl-head) .ig-svg { --igh: 1.6em; }
+  .menu--controls .ctl-row .ig--mouse .ig-svg { --igh: 1.75em; }
+  .menu--controls .ctl-row .ig--keys .ig-svg { --igh: 1.6em; }
+  .menu--controls .ctl-row .ig-tb { width: 1.75em; height: 1.75em; }
+  .menu--controls .ctl-row kbd.ig-key { min-width: 1.5em; line-height: 1.35; }
+  .menu--controls .ctl-row > span:not(.ctl-lbl) { padding: .15em .2em; }
+}

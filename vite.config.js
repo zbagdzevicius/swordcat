@@ -22,7 +22,7 @@ export default defineConfig({
     // TOKENTAILS-PLAN §10.4: index.html's %GAME_TITLE% / %GAME_SUBTITLE% / … placeholders come from src/core/brand.js
     // (dev and build; 'pre' so it runs before Vite's own %ENV% replacement)
     { name: 'tt-brand', transformIndexHtml: { order: 'pre', handler: (html) => brandHtml(html, BRAND) } },
-    { name: 'tt-social-meta', apply: 'build', transformIndexHtml: (html) => absoluteSocialUrls(html, process.env.VITE_SITE_URL) },
+    { name: 'tt-social-meta', apply: 'build', transformIndexHtml: (html) => absoluteSocialUrls(html, process.env.VITE_SITE_URL, process.env.VITE_PAGE_URL) },
   ],
   base: './',                       // relative paths: dist/ works from any static host or subfolder
   build: {

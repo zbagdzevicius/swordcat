@@ -6,6 +6,11 @@
 // founder decision 2026-10-14: same origin at tokentails.com/swordcat-game/). The dev server keeps the relative tags.
 
 export const DEFAULT_SITE_URL = 'https://tokentails.com/swordcat-game/';
+/**
+ * The page people share: og:url on the default host. Next.js serves no directory index, so the build folder URL
+ * (DEFAULT_SITE_URL) 404s; the /swordcat host page is the real page. VITE_PAGE_URL overrides it.
+ */
+export const DEFAULT_PAGE_URL = 'https://tokentails.com/swordcat';
 
 /**
  * index.html carries the game's name only as placeholders (TOKENTAILS-PLAN §10.4: one title constant): `%GAME_TITLE%`,
@@ -35,12 +40,22 @@ export function siteUrl(raw) {
   } catch { return null; }
 }
 
-/** index.html → the same with absolute og:image / twitter:image and an og:url (added once). Pure. */
-export function absoluteSocialUrls(html, site = DEFAULT_SITE_URL) {
+/** An absolute http(s) page URL (kept as given, no trailing slash added), or null. Pure. */
+export function pageUrl(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try { const u = new URL(raw.trim()); return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null; } catch { return null; }
+}
+
+/**
+ * index.html → the same with absolute og:image / twitter:image and an og:url (added once). og:url is `page` when given,
+ * else the /swordcat host page on the default host, else the build's own folder on a custom host. Pure.
+ */
+export function absoluteSocialUrls(html, site = DEFAULT_SITE_URL, page) {
   const base = siteUrl(site) ?? DEFAULT_SITE_URL;
+  const canonical = pageUrl(page) ?? (base === DEFAULT_SITE_URL ? DEFAULT_PAGE_URL : base);
   let out = html.replace(/(<meta (?:property="og:image"|name="twitter:image") content=")(?!https?:)([^"]+)(")/g,
     (_, a, p, b) => `${a}${new URL(p.replace(/^\.?\//, ''), base).href}${b}`);
-  if (!/property="og:url"/.test(out)) out = out.replace(/(\s*)(<meta property="og:type"[^>]*>)/, `$1$2$1<meta property="og:url" content="${base}">`);
+  if (!/property="og:url"/.test(out)) out = out.replace(/(\s*)(<meta property="og:type"[^>]*>)/, `$1$2$1<meta property="og:url" content="${canonical}">`);
   return out;
 }
 

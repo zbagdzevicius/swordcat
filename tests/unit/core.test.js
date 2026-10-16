@@ -995,6 +995,10 @@ test('§2.6: the build gives the share card absolute image URLs and an og:url (V
   assert.match(def, new RegExp(`property="og:image" content="${DEFAULT_SITE_URL}og\\.jpg"`));
   assert.match(def, new RegExp(`name="twitter:image" content="${DEFAULT_SITE_URL}og\\.jpg"`));
   assert.equal((def.match(/property="og:url"/g) ?? []).length, 1);
+  // the folder URL 404s on Next.js (no directory index): og:url is the /swordcat host page
+  assert.match(def, /property="og:url" content="https:\/\/tokentails\.com\/swordcat"/);
+  assert.doesNotMatch(def, /property="og:url" content="[^"]*swordcat-game/);
+  assert.match(absoluteSocialUrls(html, undefined, 'https://games.example.com/play'), /property="og:url" content="https:\/\/games\.example\.com\/play"/);
   const own = absoluteSocialUrls(html, 'https://games.example.com/knight');
   assert.match(own, /property="og:image" content="https:\/\/games\.example\.com\/knight\/og\.jpg"/);
   assert.match(own, /property="og:url" content="https:\/\/games\.example\.com\/knight\/"/);

@@ -138,9 +138,10 @@ export function namedActions(text, device = 'mouse') {
 }
 
 /** Is a fight prompt shown? (the attack glyph is named, or fight words). Pure. */
-export function isFightPrompt(prompt, objective) {
+export function isFightPrompt(prompt, objective, device = 'mouse') {
   const t = `${prompt ?? ''} ${objective ?? ''}`;
-  return namedActions(t).has('attack') || /\b(rats?|foes?|bonk|defeat|beat|chase off|scare off)\b/i.test(t.replace(/<[^>]+>/g, ''));
+  // TT6: on touch the line reads "Sword button" (an icon's words, no ⚔ glyph), a touch-only name
+  return namedActions(t, device).has('attack') || /\b(rats?|foes?|bonk|defeat|beat|chase off|scare off)\b/i.test(t.replace(/<[^>]+>/g, ''));
 }
 
 /** Does the text ask to hold (not tap) the key? Pure. */
@@ -194,6 +195,8 @@ async function oneRun(browser, base, { device, skip, seed }) {
   const portrait = device === 'portrait';
   const { width: W, height: H } = VIEW[device];
   const context = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: touch, isMobile: touch, deviceScaleFactor: touch ? 2 : 1 });
+  // never a real write (a treat, analytics): every request that is not a read is answered here
+  await context.route('**/*', (r) => { const m = r.request().method(); if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return r.fallback(); return r.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); });
   const page = await context.newPage();
   const cdp = touch ? await context.newCDPSession(page) : null;
   const errors = [];
@@ -366,7 +369,7 @@ async function oneRun(browser, base, { device, skip, seed }) {
           const lblDev = touch ? 'touch' : device;   // portrait runs are touch runs (🛡 / ⚔ labels)
           const named = namedActions(g.prompt, lblDev).size ? namedActions(g.prompt, lblDev) : namedActions(g.objective, lblDev);
           const hitFight = !has('--strict') && now - hitT < 4 && !inScene;
-          const fight = (isFightPrompt(g.prompt, g.objective) || hitFight) && !inScene;
+          const fight = (isFightPrompt(g.prompt, g.objective, lblDev) || hitFight) && !inScene;
           let mv = moveTarget(g, W, H);
           if (mv && touch && mv.src !== 'badge') {
             // what is under each candidate (a visual check a player makes): skip points a button / panel covers

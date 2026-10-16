@@ -20,8 +20,8 @@ export const ACTION_LABEL = Object.freeze({
   attack: 'Attack', guard: 'Shield', dodge: 'Roll', jump: 'Jump', interact: 'Use', confirm: 'OK', back: 'Back',
   ability: 'Kitten power', milk: 'Snack', meow: 'Meow', golden: 'Golden Hour', pause: 'Pause', lockon: 'Pick target',
   move: 'Move', wasd: 'Move', look: 'Look', aim: 'Aim', recenter: 'Center camera', centre: 'Center camera', zoom: 'Zoom',
-  attackMove: 'Attack-move', stop: 'Stop', camLock: 'Camera lock', trick: 'Paw Trick', trick1: 'Paw Trick 1',
-  trick2: 'Paw Trick 2', trick3: 'Paw Trick 3', sprint: 'Sprint', peek: 'Peek ahead', ranges: 'Ranges', twirl: 'Twirl',
+  attackMove: 'Walk and fight', stop: 'Stop', camLock: 'Camera lock', trick: 'Paw Trick', trick1: 'Paw Trick 1',
+  trick2: 'Paw Trick 2', trick3: 'Paw Trick 3', sprint: 'Sprint', peek: 'Look ahead', ranges: 'Ranges', twirl: 'Twirl',
 });
 
 // ------------------------------------------------------------------ colours

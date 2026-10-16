@@ -235,13 +235,13 @@ export function resetSettings(ctx, defaults) {
  * strings carries it (menus.js controlLabel); the label here is the built-in fallback.
  */
 export const CONTROL_ROWS = Object.freeze([
-  ['move', 'Move'], ['attack', 'Attack · hold to charge'], ['guard', 'Shield · tap just in time to parry'],
+  ['move', 'Move'], ['attack', 'Attack · hold to charge'], ['guard', 'Shield · tap just in time to bounce hits back'],
   ['jump', 'Jump · Attack in the air: Pounce'], ['dodge', 'Roll · hold to sprint'], ['interact', 'Use · talk, open'],
   ['trick', 'Paw Trick · tap to cast, hold to aim'], ['trick1', 'Pick Paw Trick 1'], ['trick2', 'Pick Paw Trick 2'], ['trick3', 'Pick Paw Trick 3'],
   ['twirl', 'Ribbon Twirl · jump again in the air, hold'],
   ['ability', 'Kitten power'], ['milk', 'Snack Break'], ['meow', 'Meow'], ['golden', 'Golden Hour · or Shield + Attack'],
-  ['lockon', 'Select / cycle target'], ['attackMove', 'Attack-move'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'],
-  ['peek', 'Peek ahead · show ranges'], ['pause', 'Pause · hold to skip scenes'],
+  ['lockon', 'Pick a foe · press again for the next'], ['attackMove', 'Walk there, fight on the way'], ['stop', 'Stop'], ['zoom', 'Zoom'], ['camLock', 'Camera lock'],
+  ['peek', 'Look ahead · show how far foes reach'], ['pause', 'Pause · hold to skip scenes'],
 ]);
 
 /**

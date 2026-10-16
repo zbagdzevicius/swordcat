@@ -1241,7 +1241,8 @@ kbd.ui-key--sword .ico-sword { width: 1.25em; height: 1.25em; vertical-align: -.
 .gd-bubble { position: relative; display: flex; align-items: center; gap: .55em; padding: .45em .9em .45em .45em; border-radius: 16px; background: #FFF8EE;
   border: 2px solid var(--cocoa); box-shadow: 0 4px 0 #5A3B2E26; transition: opacity .2s, transform .2s; transform-origin: 50% 100%; }
 .ui-guide:not(.has-say) .gd-bubble { display: none; }
-.ui-guide.is-folded .gd-bubble { position: absolute; top: 0; opacity: 0; transform: scale(.92) translateY(-6px); }
+/* folding is instant: a 0.2 s fade left the old speech line showing through the lesson line (TT6 verify) */
+.ui-guide.is-folded .gd-bubble { position: absolute; top: 0; opacity: 0; visibility: hidden; transition: none; transform: scale(.92) translateY(-6px); }
 .gd-face { width: 44px; height: 44px; flex: none; border-radius: 50%; overflow: hidden; background: #FFE9D6; border: 2px solid var(--cocoa); }
 .gd-face svg { width: 112%; margin: -6% 0 0 -6%; }
 .gd-bubble::before { content: ''; position: absolute; left: 26px; bottom: -9px; width: 14px; height: 14px; background: #FFF8EE; border: 2px solid var(--cocoa);
@@ -1705,7 +1706,7 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
    landscape screen has no room for both off the HUD and the touch buttons. */
 .ui-root.msg-p0.msg-offer:not(.msg-phone):not(.msg-shelter):not(.msg-results) .hud-guide { visibility: visible !important; }
 .ui-root.msg-shelter .ui-offer, .ui-root.msg-results .ui-offer { visibility: hidden !important; }
-.ui-root.msg-card .ui-guide .gd-bubble { position: absolute; top: 0; opacity: 0; transform: scale(.92) translateY(-6px); }
+.ui-root.msg-card .ui-guide .gd-bubble { position: absolute; top: 0; opacity: 0; visibility: hidden; transition: none; transform: scale(.92) translateY(-6px); }
 .ui-root.msg-card .ui-guide .gd-dots { display: none; }
 .ui-root.msg-phone.msg-card .ui-hint, .ui-root.msg-phone.msg-toast .ui-hint, .ui-root.msg-toast:has(.hud-toast-slot.is-phone) .ui-hint { opacity: 0 !important; pointer-events: none; }
 .ui-root .ui-hint { transition: opacity .2s ease; }
@@ -1765,6 +1766,8 @@ html[data-embed="1"] .title-wordmark { top: calc(14px + var(--embed-gut, 56px));
 .ig--mouse .ig-svg { --igh: 1.7em; }
 .ig--pad .ig-svg, .ig--gesture .ig-svg { --igh: 1.5em; }
 .ig-a11y { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ig-nb { white-space: nowrap; }
+.ig-nb > .ig-wrap { margin-right: .02em; }
 .ig-wrap { display: inline-flex; align-items: center; gap: .28em; vertical-align: middle; white-space: nowrap; margin: 0 .12em; }
 .ig-group { display: inline-flex; align-items: center; gap: .16em; }
 .ig-sep { font-weight: 800; opacity: .55; font-size: max(16px, .9em); }
@@ -1787,6 +1790,10 @@ kbd.ig-key--wide { padding: 0 .5em; }
 .ctl-head > span { display: flex; justify-content: center; }
 .menu--controls .ctl-table { flex: 0 0 auto; }
 .menu--controls .menu-panel > .menu-body { overflow-y: auto; overscroll-behavior: contain; }
+/* the list scrolls as one (a 64vh table let its last rows spill under the Back button); Back sits under the list */
+.menu--controls .ctl-table { max-height: none; }
+.menu--controls .menu-panel > .menu-body { padding: 0 4px 6px; }
+.menu--controls .menu-panel > .ctl-back { flex: none; margin-top: .6em; }
 /* touch players get no keyboard-only lines (preset picker, "Click a key", the Sticky Keys tip, Reset keys) */
 .menu--controls:is(.is-touch, .is-pad) :is(.ctl-preset, .ctl-msg, .ctl-note, .ctl-reset) { display: none; }
 @media (max-height: 460px) and (orientation: landscape) {

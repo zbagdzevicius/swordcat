@@ -46,8 +46,8 @@ The smoke refuses to run without `dist-test/` (it needs `window.__GAME__`, which
 ## Controls (iso camera, research/CONTROLS_SPEC.md; `?cam=classic` keeps the old orbit camera)
 A fixed-yaw three-quarter top-down camera (38° FOV, ~50° pitch, 12.4 m on desktop, 12 m on phones, portrait 50° / 58°)
 follows her; you never steer the camera. Keyboard + mouse uses the `hybrid` preset (TOKENTAILS-PLAN §11.2, TT3).
-Settings → Controls also offers `moba` (RMB moves, Shift+RMB queues, Space tumbles, T jumps), `diablo` (LMB moves),
-`mouseOnly` (RMB moves) and `keyboardOnly`. Players see them as Standard, Right-click moves, Left-click moves, Mouse
+Settings → Controls also offers `moba` (right-click moves, Shift + right-click queues, Space tumbles, T jumps), `diablo` (left-click
+moves), `mouseOnly` (right-click moves) and `keyboardOnly`. Players see them as Standard, Right-click moves, Left-click moves, Mouse
 only and Keyboard only. No binding uses Ctrl, Alt, Meta or an F-key, and a key pressed with Ctrl
 or Meta held does nothing in the game (Ctrl+W and Ctrl+D stay the browser's). Pause → Controls rebinds keyboard and
 mouse keys (13 actions; a used key swaps; Ctrl, Alt, Meta, F-keys and Esc are refused; "Reset keys to default").
@@ -55,21 +55,21 @@ mouse keys (13 actions; a used key swaps; Ctrl, Alt, Meta, F-keys and Esc are re
 | Action | Keyboard / mouse | Gamepad | Touch |
 |---|---|---|---|
 | Move | WASD / arrows (click-to-move in `moba` / `diablo` / `mouseOnly`) | left stick | floating joystick (left side), or tap / long-press the ground |
-| Attack, hold to charge (Holy) | LMB, toward the cursor (J) | X (aim with RS) | ⚔ tap / hold, drag to aim |
-| Attack order | LMB on a foe (walks in, auto-chains); X + click = attack-move | none | tap a foe |
-| Stand (hold) / parry (timing) | RMB, Q or L: snaps to the incoming threat (RMB over the HUD too) | LB or RB | 🛡 hold |
-| Tumble; hold = sprint | Shift (K, Mouse 4): toward WASD, else the cursor; held 0.18 s = sprint | B (hold) | Tumble button (hold), or swipe the free ground |
+| Attack, hold to charge (Holy) | left mouse button, toward the cursor (J) | X (aim with the right stick) | ⚔ tap / hold, drag to aim |
+| Attack order | left-click a foe (walks in, keeps hitting); X + click = walk there and fight on the way | none | tap a foe |
+| Shield (hold) / parry (tap in time) | right mouse button, Q or L: turns to the incoming hit (right-click over the HUD too) | left or right bumper | Shield button, hold |
+| Roll; hold = sprint | Shift (K, back side mouse button): toward WASD, else the cursor; held 0.18 s = sprint | B (hold) | Tumble button (hold), or swipe the free ground |
 | Jump (Attack in the air = Pounce) | Space | A | Jump |
-| Interact / talk | click it (LMB), or E | Y | tap it, or "!" |
-| Paw Trick (tap = cast, hold = aim) / pick one | F / 1, 2, 3 | RT / hold RT + D-pad ← → ↑ | ":3" / long press ":3" |
-| Kitten ability | G: tap = cast at the cursor, hold = aim | LT (+ RS) | portrait tap = smart cast, drag = aim, ✕ cancels |
-| Milk / Meow / Golden Hour | R / C / V (or Stand + Attack within 0.1 s) | D-pad ↑ / D-pad ↓ / LB + X within 0.1 s | buttons |
-| Select / cycle target | LMB on a foe, Tab (Shift+Tab back) | R3, D-pad ← → | tap a foe |
-| Zoom / camera lock / centre / peek + ranges | wheel / Y / Home / Z or MMB | View cycles / none / none / L3 held + RS | pinch |
+| Use / talk | left-click it, or E | Y | tap it, or "!" |
+| Paw Trick (tap = cast, hold = aim) / pick one | F / 1, 2, 3 | right trigger / hold right trigger + D-pad ← → ↑ | ":3" / long press ":3" |
+| Kitten power | G: tap = cast at the cursor, hold = aim | left trigger (+ right stick) | portrait tap = smart cast, drag = aim, ✕ cancels |
+| Snack / Meow / Golden Hour | R / C / V (or Shield + Attack within 0.1 s) | D-pad ↑ / D-pad ↓ / left bumper + X within 0.1 s | buttons |
+| Pick a foe / the next one | left-click a foe, Tab (Shift+Tab back) | press the right stick, D-pad ← → | tap a foe |
+| Zoom / camera lock / centre / look ahead + foe reach | wheel / Y / Home / Z or wheel click | View cycles / none / none / hold the pressed left stick + right stick | pinch |
 | Stop | H | — | — |
 | Pause; hold to skip cutscenes | Esc or P | Start | ❚❚ |
 
-The table uses short code names (RMB, LB). Players never see them: since TT6 every prompt, the ability bar, the
+The table uses plain words. Players see icons, not words: since TT6 every prompt, the ability bar, the
 Controls card and the touch buttons draw input icons (a mouse with the right button lit, keycaps, pad buttons, the real
 touch button icons) for the device in use, with plain words for screen readers. See "TT6" at the end.
 
@@ -598,6 +598,33 @@ The game is now **Pink Paw Knight, a Token Tails game** (internal ids stay `swor
   a mouse button. The riposte chip ("[sword] Riposte!") used to sit cut off in the top-left corner, because its pulse
   animation reset the placement. It now shows next to the foe.
 
+
+### TT6 verify round (2026-10-16, after the second new-player test and the verifier)
+- **Bolt prompt.** It said "Parry the bolt to send it back!" with no input. It now reads "Tap [Shield icon] Shield as
+  the bolt hits: it flies back!" on every device. Mochi says "Shield up right as it hits!".
+- **Plain words.** No player line says parry or riposte any more. "Nice timing! [Attack] now for a free hit!". Valor
+  is "the sword meter". The gold star hint and loading tip 1 point at the gold shield. Controls rows: "Pick a foe ·
+  press again for the next", "Walk there, fight on the way", "Look ahead · show how far foes reach". Settings: "Shield
+  up by itself", "Swipe to roll", "Shield timing ring", "Hit back after good timing by itself".
+- **Title gear.** The Settings gear on the title screen opened nothing and started the game, on click and on tap. The
+  story's "press any key" now skips the gear and the "Skip practice" link, and waits while a screen is open over the
+  title (`StoryManager._onGesture`, `_titleTick`).
+- **"Ting!" and her bubble.** Clem's parry line now waits 0.8 s (`PARRY_BARK_DELAY`), after the word has faded.
+- **Pearl's folded bubble.** It now folds at once. Its 0.2 s fade showed the old line through the lesson line.
+- **Punctuation.** A full stop after an icon stays next to it ("snack [R]." had a gap and could wrap alone).
+- **Phones.** The lesson line wraps into two even lines beside the Skip chip. The folded step dots keep clear of the
+  Skip chip. The touch Skip chip says "hold here". The interact tag stays 16 px inside the screen, and on touch its
+  seal shows the "!" of the Use button.
+- **Controls card.** Back sits under the scrolling list (its ends were cut and it covered the last row at 390 x 844).
+- **HUD names.** The Grit pips and the Valor sword have a title and an aria-label.
+- **Onboarding bot.** The touch run stuck at the cart because the bot read "Sword button" as a keyboard-only word
+  after TT6 and never swung. `isFightPrompt` now uses the device. The bot also answers every non-GET request itself.
+  Touch, no skip, seeds 1 and 2: pass, done in 158 s.
+- **Tests.** Unit 1284 / 1284 (3 new in `glyphs.test.js`). Smoke glyphs, guidance, controls, ui, story and flow: all
+  pass. `story:tutorial` failed once inside the long run and passed twice alone and with the story area. 0 writes to
+  tokentails.com.
+- **Not changed.** The gamepad column still draws LB and RT inside bumper and trigger shapes (the standard look, with
+  plain-word aria labels). The Paw Trick touch icon stays the ":3" coin of the on-screen button.
 
 ### Launch review fixes (2026-10-16)
 - **Slow treat.** A treat request that passes the 15 s timeout stays pending. The card shows Try again, but a late

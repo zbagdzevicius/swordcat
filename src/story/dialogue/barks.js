@@ -23,6 +23,8 @@ export const KITTEN_REPLY_DELAY = 1.8;
 export const KITTEN_REPLY_RANGE = 10;
 /** A speaker that moves farther than this in one rendered frame (teleport, respawn) drops its bubble (m). */
 export const BUBBLE_JUMP = 4;
+/** Her parry line waits this long (s): the "Ting!" word (fx DAMAGE_FX.wordLife 0.8 s) has faded by then. */
+export const PARRY_BARK_DELAY = 0.8;
 /** The sneeze bark's own minimum spacing (§6.1: 1 per 90 s). */
 export const SNEEZE_GAP = 90;
 
@@ -152,7 +154,8 @@ export class BarkDirector {
     on(E.ENEMY_ALERTED, (p) => this._onAlert(p?.enemy));
     on(E.PLAYER_GUARD, (p) => { if (p?.on) this.clem('stand'); });
     on(E.PLAYER_VALOR, (p) => { if (p?.reason === 'stand' && p.delta > 0 && !this.standingSaid) { this.standingSaid = !!this.clem('standingGround'); } });
-    on(E.PLAYER_PARRY, () => this.clem('parry'));
+    // her parry line waits for the "Ting!" word over her head to fade (it sat on top of the bubble)
+    on(E.PLAYER_PARRY, () => this.later(PARRY_BARK_DELAY, () => this.clem('parry')));
     on(E.PLAYER_HOLY, () => this.clem('holy'));
     on(E.PLAYER_GOLDEN, (p) => { if (p?.on) this.clem('golden'); });
     on(E.PLAYER_STILL_STANDING, () => this.clem('stillStanding'));

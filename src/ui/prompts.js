@@ -16,6 +16,7 @@ const HINT_CALM = 2;      // s clear before a faded hint card comes back
 const HINT_POLL = 0.1;    // s between occlusion checks
 const HINT_PAD = 24;      // px around the card that still counts as covering a foe
 const TAG_ABOVE = 1.25;   // m above the target where the interaction tag sits
+const TAG_EDGE = 16;      // px: the tag never comes closer than this to a screen edge
 const TAG_BELOW = -0.15;  // m: the fallback anchor under the target when the top band is taken (the boss bar)
 const TAG_GAP = 10;       // px kept clear under the boss bar / objective line
 const TAG_SIDE = 70;      // px either side of that column that still counts (half a tag)
@@ -141,9 +142,11 @@ export class Prompts {
     // (TT6 fix round: a keyboard binding that is not one key letter, such as a mouse button, draws its icon, never "RMB")
     const kg = this.device === 'kbm' ? actionGlyph('interact', 'kbm', this.ctx.input) : '';
     if (this.device === 'pad' || (this.device === 'kbm' && kg.length > 1)) setHtml(this.tagKey, actionGlyphHtml('interact', this.device, this.ctx.input));
-    else setText(this.tagKey, this.device === 'touch' ? tx(this.ctx, 'ui.tag.tap') : kg);
+    // touch: the "!" of the on-screen Use button, so the seal and the button match (it said "Tap")
+    else setText(this.tagKey, this.device === 'touch' ? '!' : kg);
     setText(this.tagTxt, tagLabel(this.ctx, this.target.kind, this.tagPrompt));
     flag(this.tag, 'is-long', this.device !== 'pad' && !this.tagKey.querySelector?.('.ig') && this.tagKey.textContent.length > 2);
+    this._tagW = 0;                                     // re-measured on the next shown frame
   }
 
   // ------------------------------------------------------------------ story:prompt
@@ -233,7 +236,11 @@ export class Prompts {
               _v.set(px, py + TAG_BELOW, pz).project(cam);
               y = tagY(yA, (-_v.y * 0.5 + 0.5) * H, this._keepTop);
             }
-            place(this.tag, x, y);
+            // keep the whole tag 16 px inside the screen (at 390 x 844 it ran off the left edge)
+            if (!this._tagW) this._tagW = this.tag.firstElementChild?.offsetWidth ?? 0;
+            const half = this._tagW / 2, W = window.innerWidth;
+            const cx = half > 0 && W > 2 * (half + TAG_EDGE) ? Math.min(W - TAG_EDGE - half, Math.max(TAG_EDGE + half, x)) : x;
+            place(this.tag, cx, y);
           }
         }
       }

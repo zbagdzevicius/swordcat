@@ -528,6 +528,9 @@ export class StoryManager {
     if (HAS_DOM()) {
       this._onGesture = (e) => {
         if (e?.repeat) return;                                       // a held key's auto-repeat is not a new press
+        // the title's Settings gear and "Skip practice" link are their own buttons, not "press any key" (they used to
+        // start the game before Settings could open)
+        if (this.title.active && e?.target?.closest?.('.title-gear, .title-skip')) return;
         this._gestures++;
         if (this.title.active && this.title.t >= TITLE_ACCEPT_AFTER && !this.title.pressed) { try { ctx.audio?.unlock?.(); } catch { /* optional */ } }
       };
@@ -733,6 +736,8 @@ export class StoryManager {
     const pad = this.ctx.input?.anyActivity?.() && this.ctx.input.device === 'pad';
     // PERF S2t: the press counts once the prompt is up (CS-00 waits on game.playReady behind the logo)
     if (T.t < TITLE_ACCEPT_AFTER || T.ready === false) { this._gestureSeen = this._gestures; return; }
+    // a screen open over the title (Settings, Controls from the gear) owns every key and tap until it closes
+    if ((this.ctx.ui?.menus?.stack?.length ?? 0) > 0) { this._gestureSeen = this._gestures; return; }
     if (this._gestures !== this._gestureSeen || pad) {
       this._gestureSeen = this._gestures;
       T.pressed = true;

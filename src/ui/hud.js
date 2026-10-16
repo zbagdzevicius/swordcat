@@ -201,8 +201,9 @@ export class Hud {
     this.livesN = this.livesEl.querySelector('.lives-n');
     const stats = el('div', 'hud-stats', { parent: tl });
     this.heartsEl = el('div', 'hud-hearts', { parent: stats });
-    this.gritEl = el('div', 'hud-grit', { parent: stats });
-    this.valorEl = el('div', 'hud-valor', { parent: stats, html: valorSvg() + `<span class="valor-sun">${I.sun()}</span>` });
+    // plain words on hover and for screen readers: the pips and the sword had no name a new player could read
+    this.gritEl = el('div', 'hud-grit', { parent: stats, attrs: { role: 'img', title: 'Shield strength', 'aria-label': 'Shield strength' } });
+    this.valorEl = el('div', 'hud-valor', { parent: stats, attrs: { role: 'img', title: 'Valor: hold your shield near foes to fill it', 'aria-label': 'Valor meter' }, html: valorSvg() + `<span class="valor-sun">${I.sun()}</span>` });
     this.vFill = this.valorEl.querySelector('.v-fill');
     this.vGold = this.valorEl.querySelector('.v-gold');
     this.vShine = this.valorEl.querySelector('.v-shine');

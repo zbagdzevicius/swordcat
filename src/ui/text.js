@@ -133,8 +133,8 @@ export const UI_STRINGS = Object.freeze({
   'ui.touch.done': 'Done',
   'ui.touch.reset': 'Reset',
   'settings.camLock': 'Camera follows her',
-  'settings.autoRiposte': 'Auto-Riposte',
-  'settings.standAutoFace': 'Stand turns to the threat',
+  'settings.autoRiposte': 'Hit back after good timing by itself',
+  'settings.standAutoFace': 'Shield turns to the hit',
   'settings.hapticTaps': 'Vibrate on button taps',
   'settings.cursorSize': 'Cursor size',
   'settings.cursorContrast': 'High-contrast cursor',
@@ -478,8 +478,10 @@ export function glyphify(text, device = 'kbm', input = null) {
     const html = tokenHtml(m[1].trim(), device, input, plain);
     // "[Esc] or [P]" on a pad is the same button twice: show it once (TT6)
     if (prev === html && prevEnd === last && /^\s*(?:or|\/)\s*$/.test(gap)) { last = m.index + m[0].length; prevEnd = last; continue; }
-    out += plainGlyphs(gap, device, input) + html;
-    prev = html; last = m.index + m[0].length; prevEnd = last;
+    // a full stop or "!" right after a glyph stays on its line and sits close (it read "snack (R) ." before)
+    const end = m.index + m[0].length, punct = /^[.,!?:;]+/.exec(str.slice(end))?.[0] ?? '';
+    out += plainGlyphs(gap, device, input) + (punct ? `<span class="ig-nb">${html}${esc(punct)}</span>` : html);
+    prev = html; last = end + punct.length; prevEnd = last;
   }
   out += plainGlyphs(str.slice(last), device, input);
   return out;

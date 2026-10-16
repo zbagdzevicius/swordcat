@@ -46,7 +46,7 @@ export const ONBOARDING_STRINGS = Object.freeze({
   'onb.skip': 'Skip ▸▸',
   'onb.skip.hold': 'hold [Esc] / [P]',
   'onb.skip.hold.pad': 'hold [Start]',
-  'onb.skip.hold.touch': 'hold',
+  'onb.skip.hold.touch': 'hold here',
 
   // ---- the first fight (rats spill into the practice field after the mist)
   'onb.fight': 'Bonk the rats! [Attack]',

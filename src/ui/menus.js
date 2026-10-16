@@ -610,7 +610,7 @@ export class Menus {
   openControls() {
     const ctx = this.ctx, dev = ctx.input?.device ?? 'kbm';
     const layer = this.top?.layer ?? 'modal';
-    const { e, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}${dev === 'touch' ? ' is-touch' : dev === 'pad' ? ' is-pad' : ''}`);
+    const { e, p: panel, body } = this._panel('controls', tx(ctx, 'ui.controls.title'), `menu--wide${layer === 'title' ? ' menu--title' : ''}${dev === 'touch' ? ' is-touch' : dev === 'pad' ? ' is-pad' : ''}`);
     const ps = ctx.input?.padKind === 'ps';
     /** TT6: a cell is an input icon (mouse with a lit button, keycap, pad button, the touch button), never "RMB". */
     const cellHtml = (g, d, act) => (g === '—' ? '<span class="ctl-na" aria-label="not used">—</span>' : glyphHtml(g, d, { action: act, ps: d === 'pad' && ps, cls: 'ctl-ig' }));
@@ -748,7 +748,8 @@ export class Menus {
     const kbmOnly = dev === 'kbm' ? [{ el: pick, disabled: false, adjust: step, activate: () => step(1) }, ...bindItems, resetIt] : [];
     const items = [
       ...kbmOnly,
-      this._button(body, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain' }),
+      // under the scrolling list, not in it: the list clipped its rounded ends and it sat over the last row (390 x 844)
+      this._button(panel, tx(ctx, 'menu.back'), () => this.pop(), { cls: 'btn--plain ctl-back' }),
     ];
     const s = this._wire({ id: 'controls', el: e, items, layer, focus: 0 });
     s.onClose = () => stop();

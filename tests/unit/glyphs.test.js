@@ -155,3 +155,28 @@ test('TT6 fix round: Grit pips are paw shields; the empty one is pale (it read a
   assert.match(gritShield('empty'), /fill="#FFF6EC"/);
   assert.match(gritShield('cracked'), /fill="#FFF6EC"/);
 });
+
+test('TT6 verify round: every in-game parry line names its input and shows no gamer word', async () => {
+  const { glyphify } = await import('../../src/ui/text.js');
+  const t = (k) => S[k]?.default ?? '';
+  for (const k of ['tut.reflect', 'tut.reflect.touch', 'tut.valor', 'tut.gold']) assert.match(t(k), /\[Stand\]/, k);
+  for (const d of ['kbm', 'pad', 'touch']) {
+    const h = glyphify('Tap [Stand] as the bolt hits: it flies back!', d);
+    assert.match(h, /data-glyph="(mouse-right|pad-lb|touch-guard|[a-z-]+)"/, d);
+    assert.doesNotMatch(noSvg(h).replace(/<[^>]+>/g, ' '), /\b(parry|riposte)\b/i, d);
+  }
+  for (const [, label] of CONTROL_ROWS) assert.doesNotMatch(label, /parry|attack-move|cycle target|ranges\b/i, label);
+});
+
+test('TT6 verify round: a full stop after a glyph stays glued to it (no "snack (R) ." gap)', async () => {
+  const { glyphify } = await import('../../src/ui/text.js');
+  const h = glyphify('Grab a tuna snack [Snack].', 'kbm');
+  assert.match(h, /<span class="ig-nb">[\s\S]*<\/span>\.<\/span>$/);
+  assert.match(glyphify('Hold [Esc] or [P] to skip', 'pad'), /data-glyph="pad-start"/);
+});
+
+test('TT6 verify round: her parry line waits for the "Ting!" word to fade', async () => {
+  const { PARRY_BARK_DELAY } = await import('../../src/story/dialogue/barks.js');
+  const { DAMAGE_FX } = await import('../../src/fx/DamageNumbers.js');
+  assert.ok(PARRY_BARK_DELAY >= DAMAGE_FX.wordLife, `${PARRY_BARK_DELAY} < ${DAMAGE_FX.wordLife}`);
+});

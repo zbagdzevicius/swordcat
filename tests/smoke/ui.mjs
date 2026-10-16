@@ -1166,7 +1166,7 @@ export default [
       await inPage(t, () => { const m = window.__GAME__.ctx.ui.menus; m.pop(); m.openSettings(); });
       await t.wait(400);
       const rows = await inPage(t, () => [...document.querySelectorAll('.srow .srow-lbl')].map((e) => e.textContent));
-      t.assert(rows.some((r) => /Cursor size/.test(r)) && rows.some((r) => /High-contrast/.test(r)) && rows.some((r) => /Auto-Riposte/.test(r)) && rows.some((r) => /Camera (follows|lock)/.test(r)), `new settings rows (${rows.length}: K7 camLockMode row)`);
+      t.assert(rows.some((r) => /Cursor size/.test(r)) && rows.some((r) => /High-contrast/.test(r)) && rows.some((r) => /Hit back after good timing/.test(r)) && rows.some((r) => /Camera (follows|lock)/.test(r)), `new settings rows (${rows.length}: K7 camLockMode row)`);
       t.assert(!rows.some((r) => /invert/i.test(r)), 'invertY hidden in iso');
       await inPage(t, () => window.__GAME__.ctx.ui.resume());
       await t.wait(300);
